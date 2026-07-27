@@ -1,11 +1,11 @@
 import { Schema, model } from "mongoose";
 
-export type PlaceType = "osm" | "a11y" | "bathroom" | "welfare" | "parking";
+export type PlaceType = "osm" | "a11y" | "bathroom" | "welfare" | "parking" | "google";
 export type ReviewStatus = "active" | "deleted";
 
 export interface IReview {
   _id: string;
-  osmId: string;
+  placeId: string;
   placeType: PlaceType;
   userId: string;
   rating: number;
@@ -21,10 +21,10 @@ export interface IReview {
 
 const reviewSchema = new Schema<IReview>(
   {
-    osmId: { type: String, required: true },
+    placeId: { type: String, required: true },
     placeType: {
       type: String,
-      enum: ["osm", "a11y", "bathroom", "welfare", "parking"],
+      enum: ["osm", "a11y", "bathroom", "welfare", "parking", "google"],
       required: true,
     },
     userId: { type: String, required: true },
@@ -43,8 +43,8 @@ const reviewSchema = new Schema<IReview>(
   { timestamps: true },
 );
 
-reviewSchema.index({ osmId: 1, placeType: 1, userId: 1 }, { unique: true });
-reviewSchema.index({ osmId: 1, placeType: 1, status: 1 });
+reviewSchema.index({ placeId: 1, placeType: 1, userId: 1 }, { unique: true });
+reviewSchema.index({ placeId: 1, placeType: 1, status: 1 });
 reviewSchema.index({ userId: 1, createdAt: -1 });
 
 const Review = model<IReview>("Review", reviewSchema);

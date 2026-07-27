@@ -3,6 +3,11 @@ import request from "supertest";
 import { ResponseCode } from "../../types/code";
 import { REVIEW_MSG } from "../../constants/messages";
 
+vi.mock("../../config/auth", async () => {
+  const { createAuthModuleMock } = await import("../../../tests/helpers/auth-mock");
+  return createAuthModuleMock();
+});
+
 vi.mock("./review.service", async (orig) => ({
   ...((await orig()) as object),
   createReview: vi.fn(),
@@ -31,7 +36,7 @@ const VALID_REVIEW = {
   createdAt: new Date(),
 };
 const VALID_CREATE_BODY = {
-  osmId: "node/123456",
+  placeId: "node/123456",
   placeType: "osm",
   passageWidthRating: 4,
   toiletRating: 4,
@@ -39,7 +44,7 @@ const VALID_CREATE_BODY = {
   serviceRating: 4,
   comment: "不錯",
 };
-const VALID_LIST_QUERY = { osmId: "node/123456", placeType: "osm" };
+const VALID_LIST_QUERY = { placeId: "node/123456", placeType: "osm" };
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -92,8 +97,8 @@ describe("POST /api/v1/a11y/reviews", () => {
     expect(vi.mocked(service.createReview)).not.toHaveBeenCalled();
   });
 
-  it("returns 400 when osmId is missing", async () => {
-    const { osmId: _, ...body } = VALID_CREATE_BODY;
+  it("returns 400 when placeId is missing", async () => {
+    const { placeId: _, ...body } = VALID_CREATE_BODY;
     const res = await request(app).post(BASE).set("Authorization", AUTH).send(body);
     expect(res.status).toBe(ResponseCode.INVALID_INPUT);
     expect(vi.mocked(service.createReview)).not.toHaveBeenCalled();
@@ -120,11 +125,11 @@ describe("GET /api/v1/a11y/reviews", () => {
     expect(res.status).toBe(200);
     expect(res.body.data.items).toHaveLength(1);
     expect(vi.mocked(service.findByPlace)).toHaveBeenCalledWith(
-      expect.objectContaining({ osmId: "node/123456", placeType: "osm", page: 1, limit: 10 }),
+      expect.objectContaining({ placeId: "node/123456", placeType: "osm", page: 1, limit: 10 }),
     );
   });
 
-  it("returns 400 when osmId is missing", async () => {
+  it("returns 400 when placeId is missing", async () => {
     const res = await request(app).get(BASE).query({ placeType: "osm" });
     expect(res.status).toBe(ResponseCode.INVALID_INPUT);
     expect(vi.mocked(service.findByPlace)).not.toHaveBeenCalled();
@@ -291,7 +296,7 @@ describe("GET /api/v1/a11y/reviews/summary", () => {
     expect(res.body.data.summary).toBeNull();
   });
 
-  it("returns 400 when osmId is missing", async () => {
+  it("returns 400 when placeId is missing", async () => {
     const res = await request(app).get(`${BASE}/summary`).query({ placeType: "osm" });
     expect(res.status).toBe(ResponseCode.INVALID_INPUT);
     expect(vi.mocked(service.getAiSummary)).not.toHaveBeenCalled();

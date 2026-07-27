@@ -1,5 +1,9 @@
 # 地點搜尋（Place Search）後端實作計劃
 
+> ⚠️ **本文已被 `docs/specs/FUNCTIONAL_SPEC_PLACE_SEARCH_UNIFIED.md` 取代（2026-07-27）。**
+> 本文描述的是只有 Google 的第一版；現行實作已改為 Nominatim + Google 兩路合併，
+> id 加前綴、`details` 路由參數改為 `:id`、回傳欄位大幅擴充。請以新文件為準。
+
 > 目標：讓前端搜尋框在 OSM 覆蓋不足時，能透過 Google Places 找到店家／地點。
 > 本計劃的核心不是「串 Google」（adapter 已串好），而是**回傳格式統一**與**無障礙資訊如何呈現**。
 

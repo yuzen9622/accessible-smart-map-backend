@@ -278,6 +278,13 @@ export async function autocompletePlaces(
   }
 }
 
+export interface GoogleAddressComponents {
+  road: string | null;
+  district: string | null;
+  city: string | null;
+  postcode: string | null;
+}
+
 export interface GooglePlaceDetails {
   id: string;
   name: string;
@@ -286,6 +293,32 @@ export interface GooglePlaceDetails {
   rating: number | null;
   wheelchair: "yes" | "no" | null;
   wheelchairPartial: boolean;
+  types: string[];
+  addressComponents: GoogleAddressComponents;
+}
+
+/**
+ * Reduces Google's addressComponents array to the four parts the UI renders.
+ * Taiwanese addresses put the city at administrative_area_level_1 and the
+ * district at level_3, but coverage varies, so each slot falls back through the
+ * neighbouring component types rather than assuming one shape.
+ */
+function toAddressComponents(raw: unknown): GoogleAddressComponents {
+  const components = Array.isArray(raw) ? raw : [];
+  const pick = (...wanted: string[]): string | null => {
+    for (const type of wanted) {
+      const hit = components.find((c: any) => Array.isArray(c?.types) && c.types.includes(type));
+      const text = hit?.longText ?? hit?.shortText;
+      if (typeof text === "string" && text.trim() !== "") return text;
+    }
+    return null;
+  };
+  return {
+    road: pick("route", "street_address"),
+    district: pick("administrative_area_level_3", "administrative_area_level_2", "sublocality_level_1", "sublocality"),
+    city: pick("administrative_area_level_1", "locality"),
+    postcode: pick("postal_code"),
+  };
 }
 
 /**
@@ -315,7 +348,7 @@ export async function getPlaceDetails(
         headers: {
           "X-Goog-Api-Key": key,
           "X-Goog-FieldMask":
-            "id,displayName,formattedAddress,location,rating,accessibilityOptions",
+            "id,displayName,formattedAddress,location,rating,accessibilityOptions,types,addressComponents",
         },
       },
     );
@@ -345,6 +378,8 @@ export async function getPlaceDetails(
       rating: typeof p.rating === "number" ? p.rating : null,
       wheelchair,
       wheelchairPartial,
+      types: Array.isArray(p.types) ? (p.types as string[]) : [],
+      addressComponents: toAddressComponents(p.addressComponents),
     };
   } catch {
     return null;

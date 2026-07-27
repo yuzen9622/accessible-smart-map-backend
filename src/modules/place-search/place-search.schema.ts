@@ -37,38 +37,102 @@ const AccessibilitySchema = z
   .strict()
   .openapi("PlaceAccessibility");
 
+const PlaceSourceSchema = z.enum(["osm", "google"]);
+
 export const AutocompleteItemSchema = z
   .object({
-    placeId: z.string().openapi({ example: "ChIJ..." }),
+    id: z
+      .string()
+      .openapi({ example: "osm:node:123456", description: "前綴 id：google:<id> 或 osm:<type>:<id>" }),
+    source: PlaceSourceSchema.openapi({ example: "osm" }),
     primaryText: z.string().openapi({ example: "台北101" }),
     secondaryText: z
       .string()
       .nullable()
-      .openapi({ example: "台北市信義區", description: "通常為地址/行政區" }),
+      .openapi({ example: "台北市信義區", description: "OSM 為完整地址；Google 為預測副標" }),
+    placeClass: z
+      .string()
+      .nullable()
+      .openapi({ example: "tourism", description: "OSM 字彙的 class，供前端選圖示" }),
+    placeType: z.string().nullable().openapi({ example: "attraction" }),
+    typeLabel: z.string().nullable().openapi({ example: "景點", description: "中文類型標籤" }),
+    location: PlaceGeoPointSchema.nullable().openapi({
+      description: "OSM 有座標；Google 預測階段恆為 null",
+    }),
+    distanceMeters: z
+      .number()
+      .nullable()
+      .openapi({ example: 1200, description: "有座標且帶使用者座標時才計算" }),
   })
   .strict()
   .openapi("AutocompleteItem");
 
+const AddressComponentsSchema = z
+  .object({
+    road: z.string().nullable().openapi({ example: "信義路五段" }),
+    district: z.string().nullable().openapi({ example: "信義區" }),
+    city: z.string().nullable().openapi({ example: "臺北市" }),
+    postcode: z.string().nullable().openapi({ example: "110" }),
+  })
+  .strict()
+  .openapi("PlaceAddressComponents");
+
+const NearbyFacilityBriefSchema = z
+  .object({
+    id: z.string().openapi({ example: "66a1f2c3e4b5a6d7c8e9f0d4" }),
+    name: z.string().openapi({ example: "市政府站無障礙廁所" }),
+    address: z.string().nullable().openapi({ example: "台北市信義區市府路45號" }),
+    category: z.string().openapi({ example: "toilet" }),
+    typeLabel: z.string().openapi({ example: "無障礙廁所" }),
+    distanceMeters: z.number().openapi({ example: 120 }),
+  })
+  .strict()
+  .openapi("NearbyFacilityBrief");
+
 export const PlaceResultSchema = z
   .object({
-    id: z.string().openapi({ example: "ChIJ...", description: "穩定 id：google place_id" }),
-    source: z
-      .enum(["google", "osm", "metro", "campus", "bathroom", "parking", "local"])
-      .openapi({ example: "google" }),
+    id: z.string().openapi({ example: "google:ChIJ...", description: "前綴 id" }),
+    source: PlaceSourceSchema.openapi({ example: "google" }),
     name: z.string().openapi({ example: "台北101" }),
-    address: z.string().nullable().openapi({ example: "台北市信義區信義路五段7號" }),
+    fullAddress: z.string().nullable().openapi({ example: "台北市信義區信義路五段7號" }),
+    addressComponents: AddressComponentsSchema,
     location: PlaceGeoPointSchema,
-    category: z.string().nullable().openapi({ example: null }),
+    placeClass: z.string().nullable().openapi({ example: "tourism" }),
+    placeType: z.string().nullable().openapi({ example: "attraction" }),
+    typeLabel: z.string().nullable().openapi({ example: "景點" }),
     distanceMeters: z
       .number()
       .nullable()
       .openapi({ example: 1200, description: "帶使用者座標時才計算" }),
     rating: z.number().nullable().openapi({ example: 4.5, description: "Google 才有" }),
     accessibility: AccessibilitySchema,
+    nearbyFacilities: z
+      .object({
+        toilets: z.array(NearbyFacilityBriefSchema),
+        metro: z.array(NearbyFacilityBriefSchema),
+      })
+      .strict()
+      .openapi("PlaceNearbyFacilities"),
+    reviewKey: z
+      .object({
+        placeId: z.string().openapi({ example: "node/123456" }),
+        placeType: z
+          .enum(["osm", "a11y", "bathroom", "welfare", "parking", "google"])
+          .openapi({ example: "osm" }),
+      })
+      .strict()
+      .openapi("PlaceReviewKey"),
+    externalLinks: z
+      .object({
+        osm: z.string().nullable().openapi({ example: "https://www.openstreetmap.org/node/123456" }),
+        google: z.string().nullable().openapi({ example: null }),
+      })
+      .strict()
+      .openapi("PlaceExternalLinks"),
     attribution: z
       .string()
       .nullable()
-      .openapi({ example: "Powered by Google", description: "資料來源授權標註" }),
+      .openapi({ example: "© OpenStreetMap contributors", description: "資料來源授權標註" }),
   })
   .strict()
   .openapi("PlaceResult");
@@ -82,12 +146,30 @@ export const AutocompleteQuerySchema = z
       .openapi({ example: "b2c3d4e5-...", description: "前端產生的 session UUID，綁定計費" }),
     lat: coordString("latitude").optional().openapi({ example: "25.0330" }),
     lng: coordString("longitude").optional().openapi({ example: "121.5654" }),
+    sources: z
+      .string()
+      .regex(/^(osm|google)(,(osm|google))*$/, "sources 只接受 osm / google，以逗號分隔")
+      .optional()
+      .openapi({ example: "osm,google", description: "來源白名單，預設兩者皆啟用" }),
+    limit: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(20)
+      .optional()
+      .openapi({ example: 8, description: "合併後的結果上限，預設 8" }),
   })
   .strict();
 
 export const DetailsParamsSchema = z
   .object({
-    placeId: z.string().min(1).openapi({ example: "ChIJ..." }),
+    id: z
+      .string()
+      .regex(
+        /^(google:.+|osm:(node|way|relation):\d+)$/,
+        "id 必須是 google:<placeId> 或 osm:<node|way|relation>:<id>",
+      )
+      .openapi({ example: "osm:node:123456" }),
   })
   .strict();
 
@@ -130,11 +212,11 @@ registry.registerPath({
   tags: ["Accessibility"],
   summary: "地點搜尋自動完成",
   description:
-    "逐字輸入時呼叫，回傳 Google Places 預測清單（純文字，不含座標或無障礙資訊）。帶 sessiontoken 與後續 details 綁成一次計費。座標偏好可選。",
+    "逐字輸入時呼叫，合併 OSM（Nominatim）與 Google Places 兩路預測並去重。不含無障礙資訊；OSM 筆帶座標，Google 筆的 location 恆為 null。帶 sessiontoken 與後續 details 綁成一次 Google 計費。",
   request: { query: AutocompleteQuerySchema },
   responses: {
     200: {
-      description: "預測清單（Google 失敗時優雅降級為空陣列）",
+      description: "預測清單（任一來源失敗時只掉該來源，仍回 200）",
       content: { "application/json": { schema: AutocompleteResponseSchema } },
     },
     400: { description: "缺少 q 或參數不合法" },
@@ -144,18 +226,18 @@ registry.registerPath({
 
 registry.registerPath({
   method: "get",
-  path: "/a11y/search/details/{placeId}",
+  path: "/a11y/search/details/{id}",
   tags: ["Accessibility"],
   summary: "地點詳情與無障礙判定",
   description:
-    "使用者點選某筆預測後呼叫，取座標與欄位並就近查本地無障礙資料，回傳單一 PlaceResult（含三態無障礙徽章）。帶與 autocomplete 相同的 sessiontoken 結束該計費 session。",
+    "使用者點選某筆預測後呼叫，依 id 前綴分派到 Google Place Details 或 OSM lookup，取座標與欄位並就近查本地無障礙資料，回傳單一 PlaceResult（含三態徽章與附近設施）。osm: 開頭的 id 不會呼叫 Google、不消耗 session token。",
   request: { params: DetailsParamsSchema, query: DetailsQuerySchema },
   responses: {
     200: {
       description: "地點詳情",
       content: { "application/json": { schema: PlaceDetailsResponseSchema } },
     },
-    400: { description: "缺少 placeId 或參數不合法" },
+    400: { description: "id 前綴不合法或參數不合法" },
     404: { description: "查無此地點或無可用座標" },
     500: { description: "伺服器錯誤" },
   },

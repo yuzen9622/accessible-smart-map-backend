@@ -4,13 +4,13 @@ import { registry } from "../../openapi/registry";
 
 extendZodWithOpenApi(z);
 
-const PLACE_TYPES = ["osm", "a11y", "bathroom", "welfare", "parking"] as const;
+const PLACE_TYPES = ["osm", "a11y", "bathroom", "welfare", "parking", "google"] as const;
 
 export const PlaceTypeSchema = z.enum(PLACE_TYPES);
 
 export const CreateReviewSchema = z
   .object({
-    osmId: z.string().min(1).openapi({ example: "node/123456" }),
+    placeId: z.string().min(1).openapi({ example: "node/123456" }),
     placeType: PlaceTypeSchema.openapi({ example: "osm" }),
     passageWidthRating: z.coerce.number().int().min(1).max(5).openapi({ example: 4 }),
     toiletRating: z.coerce.number().int().min(1).max(5).openapi({ example: 4 }),
@@ -32,7 +32,7 @@ export const UpdateReviewSchema = z
 
 export const ListReviewsQuerySchema = z
   .object({
-    osmId: z.string().min(1).openapi({ example: "node/123456" }),
+    placeId: z.string().min(1).openapi({ example: "node/123456" }),
     placeType: PlaceTypeSchema.openapi({ example: "osm" }),
     page: z.coerce.number().int().min(1).default(1).openapi({ example: 1 }),
     limit: z.coerce.number().int().min(1).max(50).default(10).openapi({ example: 10 }),
@@ -41,7 +41,7 @@ export const ListReviewsQuerySchema = z
 
 export const SummaryQuerySchema = z
   .object({
-    osmId: z.string().min(1).openapi({ example: "node/123456" }),
+    placeId: z.string().min(1).openapi({ example: "node/123456" }),
     placeType: PlaceTypeSchema.openapi({ example: "osm" }),
   })
   .strict();

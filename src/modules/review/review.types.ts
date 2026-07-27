@@ -10,7 +10,7 @@ export interface ServiceResult<T = unknown> {
 }
 
 export interface CreateReviewInput {
-  osmId: string;
+  placeId: string;
   placeType: PlaceType;
   passageWidthRating: number;
   toiletRating: number;
@@ -28,14 +28,14 @@ export interface UpdateReviewInput {
 }
 
 export interface ReviewQueryParams {
-  osmId: string;
+  placeId: string;
   placeType: PlaceType;
   page: number;
   limit: number;
 }
 
 export interface ReviewSummaryInput {
-  osmId: string;
+  placeId: string;
   placeType: PlaceType;
 }
 

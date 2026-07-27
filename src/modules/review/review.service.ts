@@ -28,7 +28,7 @@ export async function createReview(
   input: CreateReviewInput,
 ): Promise<ServiceResult> {
   const existing = await Review.findOne({
-    osmId: input.osmId,
+    placeId: input.placeId,
     placeType: input.placeType,
     userId,
     status: "active",
@@ -40,7 +40,7 @@ export async function createReview(
   const rating = (input.passageWidthRating + input.toiletRating + input.elevatorRating + input.serviceRating) / 4;
 
   const review = await Review.create({
-    osmId: input.osmId,
+    placeId: input.placeId,
     placeType: input.placeType,
     userId,
     rating,
@@ -71,8 +71,8 @@ export async function createReview(
 }
 
 export async function findByPlace(params: ReviewQueryParams): Promise<ServiceResult<ReviewListResult>> {
-  const { osmId, placeType, page, limit } = params;
-  const filter = { osmId, placeType, status: "active" };
+  const { placeId, placeType, page, limit } = params;
+  const filter = { placeId, placeType, status: "active" };
 
   const [items, totalCount] = await Promise.all([
     Review.find(filter)
@@ -172,10 +172,10 @@ export async function deleteReview(id: string, userId: string): Promise<ServiceR
 }
 
 export async function getAiSummary(
-  osmId: string,
+  placeId: string,
   placeType: string,
 ): Promise<ServiceResult<ReviewSummaryResult>> {
-  const filter = { osmId, placeType, status: "active" };
+  const filter = { placeId, placeType, status: "active" };
 
   const [reviews, totalCount] = await Promise.all([
     Review.find(filter)

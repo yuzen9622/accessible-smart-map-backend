@@ -52,7 +52,7 @@ export async function deleteReview(req: Request, res: Response) {
 
 export async function getAiSummary(req: Request, res: Response) {
   const query = req.validated?.query as ReviewSummaryInput;
-  const result = await service.getAiSummary(query.osmId, query.placeType);
+  const result = await service.getAiSummary(query.placeId, query.placeType);
   return send(res, result);
 }
 

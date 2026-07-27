@@ -8,18 +8,50 @@ import {
   getPlaceDetails,
   type GooglePlaceDetails,
 } from "../../adapters/google.adapter";
+import { searchOsmPlaces } from "../../adapters/photon.adapter";
+import { lookupOsmPlace } from "../../adapters/nominatim.adapter";
+import type { OsmPlace } from "../../types/osm";
+import type { PlaceType as ReviewPlaceType } from "../../model/review.model";
 import { redisGet, redisSet } from "../../config/redis";
 import { haversineMeters } from "../../utils/geo";
+import {
+  buildGooglePlaceId,
+  buildOsmPlaceId,
+  googleTypesToClassType,
+  normalizeName,
+  parsePlaceId,
+  toReviewOsmId,
+  typeLabelOf,
+  type GeoPoint,
+  type PlaceSource,
+} from "./place-search.types";
 
 const AC_CACHE_PREFIX = "ps:ac:";
 const AC_CACHE_TTL_SEC = 120;
+const OSM_SEARCH_CACHE_PREFIX = "ps:osm:";
+const OSM_SEARCH_CACHE_TTL_SEC = 300;
+const OSM_DETAILS_CACHE_PREFIX = "ps:osmd:";
+const OSM_DETAILS_CACHE_TTL_SEC = 600;
 const A11Y_NEARBY_RADIUS_M = 50;
+const NEARBY_LIST_RADIUS_M = 300;
+const NEARBY_LIST_LIMIT = 4;
+const DEFAULT_AUTOCOMPLETE_LIMIT = 8;
+const PER_SOURCE_LIMIT = 5;
 const GOOGLE_ATTRIBUTION = "Powered by Google";
+const OSM_ATTRIBUTION = "© OpenStreetMap contributors";
+
+export const ALL_SOURCES: PlaceSource[] = ["osm", "google"];
 
 export interface AutocompleteItem {
-  placeId: string;
+  id: string;
+  source: PlaceSource;
   primaryText: string;
   secondaryText: string | null;
+  placeClass: string | null;
+  placeType: string | null;
+  typeLabel: string | null;
+  location: GeoPoint | null;
+  distanceMeters: number | null;
 }
 
 export interface PlaceAccessibility {
@@ -29,16 +61,39 @@ export interface PlaceAccessibility {
   source: "local-db" | "google" | "none";
 }
 
-export interface PlaceResult {
+export interface NearbyFacilityBrief {
   id: string;
-  source: "google" | "osm" | "metro" | "campus" | "bathroom" | "parking" | "local";
   name: string;
   address: string | null;
-  location: { type: "Point"; coordinates: [number, number] };
-  category: string | null;
+  category: string;
+  typeLabel: string;
+  distanceMeters: number;
+}
+
+export interface PlaceResult {
+  id: string;
+  source: PlaceSource;
+  name: string;
+  fullAddress: string | null;
+  addressComponents: {
+    road: string | null;
+    district: string | null;
+    city: string | null;
+    postcode: string | null;
+  };
+  location: GeoPoint;
+  placeClass: string | null;
+  placeType: string | null;
+  typeLabel: string | null;
   distanceMeters: number | null;
   rating: number | null;
   accessibility: PlaceAccessibility;
+  nearbyFacilities: {
+    toilets: NearbyFacilityBrief[];
+    metro: NearbyFacilityBrief[];
+  };
+  reviewKey: { placeId: string; placeType: ReviewPlaceType };
+  externalLinks: { osm: string | null; google: string | null };
   attribution: string | null;
 }
 
@@ -56,13 +111,106 @@ function roundCoarse(n?: number): string {
   return Number.isFinite(n) ? (n as number).toFixed(2) : "";
 }
 
+function toGeoPoint(latitude: number, longitude: number): GeoPoint {
+  return { type: "Point", coordinates: [longitude, latitude] };
+}
+
+function distanceFrom(
+  lat: number | undefined,
+  lng: number | undefined,
+  targetLat: number,
+  targetLng: number,
+): number | null {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return Math.round(haversineMeters(lat as number, lng as number, targetLat, targetLng));
+}
+
 /**
- * Returns place-name predictions for a partial query. Cheap by design: no
- * coordinate or accessibility resolution. Short-TTL Redis cache keyed on query
- * plus coarse coordinates (session token is intentionally excluded — predictions
- * are token-independent). Degrades to an empty array on any Google failure.
+ * Nominatim results for a query, behind a longer-lived cache than the merged
+ * autocomplete response — OSM data changes slowly and every cache hit is one
+ * fewer request against the 1/sec budget the adapter has to respect.
+ */
+async function cachedOsmSearch(q: string, lat?: number, lng?: number): Promise<OsmPlace[]> {
+  const cacheKey = `${OSM_SEARCH_CACHE_PREFIX}${q}:${roundCoarse(lat)}:${roundCoarse(lng)}`;
+  const cached = await redisGet(cacheKey);
+  if (cached) {
+    try {
+      return JSON.parse(cached) as OsmPlace[];
+    } catch {
+      /* treat malformed cache as a miss */
+    }
+  }
+  const places = await searchOsmPlaces(q, {
+    latitude: lat,
+    longitude: lng,
+    limit: PER_SOURCE_LIMIT,
+  });
+  if (places.length > 0) {
+    await redisSet(cacheKey, JSON.stringify(places), OSM_SEARCH_CACHE_TTL_SEC);
+  }
+  return places;
+}
+
+function osmToItem(place: OsmPlace, lat?: number, lng?: number): AutocompleteItem {
+  return {
+    id: buildOsmPlaceId(place.osmType, place.osmId),
+    source: "osm",
+    primaryText: place.name,
+    secondaryText: place.displayName || null,
+    placeClass: place.placeClass,
+    placeType: place.placeType,
+    typeLabel: typeLabelOf(place.placeType),
+    location: toGeoPoint(place.latitude, place.longitude),
+    distanceMeters: distanceFrom(lat, lng, place.latitude, place.longitude),
+  };
+}
+
+/**
+ * Merges the two prediction lists into one ranked, de-duplicated list.
  *
- * @param params Query text, optional session token, and optional bias coordinates.
+ * Cross-source de-duplication can only compare normalized names: Google's
+ * autocomplete carries no coordinates, so there is nothing else to match on.
+ * Differently-worded names for one place therefore still yield two entries.
+ * When names do collide the OSM entry wins — it has coordinates, a distance and
+ * a permalink, and costs nothing.
+ */
+function mergeItems(
+  osmItems: AutocompleteItem[],
+  googleItems: AutocompleteItem[],
+  q: string,
+  limit: number,
+): AutocompleteItem[] {
+  const seen = new Set<string>();
+  const merged: AutocompleteItem[] = [];
+  for (const item of [...osmItems, ...googleItems]) {
+    const key = normalizeName(item.primaryText);
+    if (key === "" || seen.has(key)) continue;
+    seen.add(key);
+    merged.push(item);
+  }
+
+  const prefix = normalizeName(q);
+  const rank = (item: AutocompleteItem) => {
+    const isPrefix = normalizeName(item.primaryText).startsWith(prefix);
+    const sourceRank = item.source === "osm" ? 0 : 1;
+    return (isPrefix ? 0 : 2) + sourceRank * 0.5;
+  };
+  return merged
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => rank(a.item) - rank(b.item) || a.index - b.index)
+    .slice(0, limit)
+    .map((entry) => entry.item);
+}
+
+/**
+ * Returns place-name predictions for a partial query, merged from OSM and
+ * Google. Cheap by design: no coordinate resolution for Google and no
+ * accessibility lookup for either source. Short-TTL Redis cache keyed on the
+ * enabled sources plus query and coarse coordinates (session token is
+ * intentionally excluded — predictions are token-independent). Each source
+ * degrades independently, so one failing upstream never empties the response.
+ *
+ * @param params Query text, optional session token, bias coordinates, source filter and cap.
  * @returns The predicted places.
  */
 export async function autocomplete(params: {
@@ -70,9 +218,13 @@ export async function autocomplete(params: {
   sessionToken?: string;
   lat?: number;
   lng?: number;
+  sources?: PlaceSource[];
+  limit?: number;
 }): Promise<AutocompleteItem[]> {
   const { q, sessionToken, lat, lng } = params;
-  const cacheKey = `${AC_CACHE_PREFIX}${q}:${roundCoarse(lat)}:${roundCoarse(lng)}`;
+  const sources = params.sources?.length ? params.sources : ALL_SOURCES;
+  const limit = params.limit ?? DEFAULT_AUTOCOMPLETE_LIMIT;
+  const cacheKey = `${AC_CACHE_PREFIX}${[...sources].sort().join(",")}:${limit}:${q}:${roundCoarse(lat)}:${roundCoarse(lng)}`;
 
   const cached = await redisGet(cacheKey);
   if (cached) {
@@ -83,17 +235,31 @@ export async function autocomplete(params: {
     }
   }
 
-  const suggestions = await autocompletePlaces(q, {
-    sessionToken,
-    latitude: lat,
-    longitude: lng,
-  });
-  const items: AutocompleteItem[] = suggestions.map((s) => ({
-    placeId: s.placeId,
-    primaryText: s.primaryText,
-    secondaryText: s.secondaryText,
-  }));
+  const [osmResult, googleResult] = await Promise.allSettled([
+    sources.includes("osm") ? cachedOsmSearch(q, lat, lng) : Promise.resolve([]),
+    sources.includes("google")
+      ? autocompletePlaces(q, { sessionToken, latitude: lat, longitude: lng })
+      : Promise.resolve([]),
+  ]);
 
+  const osmItems =
+    osmResult.status === "fulfilled" ? osmResult.value.map((p) => osmToItem(p, lat, lng)) : [];
+  const googleItems: AutocompleteItem[] =
+    googleResult.status === "fulfilled"
+      ? googleResult.value.slice(0, PER_SOURCE_LIMIT).map((s) => ({
+          id: buildGooglePlaceId(s.placeId),
+          source: "google" as const,
+          primaryText: s.primaryText,
+          secondaryText: s.secondaryText,
+          placeClass: null,
+          placeType: null,
+          typeLabel: null,
+          location: null,
+          distanceMeters: null,
+        }))
+      : [];
+
+  const items = mergeItems(osmItems, googleItems, q, limit);
   await redisSet(cacheKey, JSON.stringify(items), AC_CACHE_TTL_SEC);
   return items;
 }
@@ -109,6 +275,91 @@ async function countNearbyFacilities(lat: number, lng: number): Promise<number> 
     campusService.findFacilitiesNearby(lat, lng, A11Y_NEARBY_RADIUS_M).catch(() => []),
   ]);
   return metro.length + osm.length + bathroom.length + parking.length + campus.length;
+}
+
+/** Classifies a metro facility name the way the a11y module does. */
+function metroCategory(name: string): { category: string; typeLabel: string } {
+  if (name.includes("電梯")) return { category: "elevator", typeLabel: "電梯" };
+  if (name.includes("坡道")) return { category: "ramp", typeLabel: "坡道" };
+  return { category: "other", typeLabel: "無障礙設施" };
+}
+
+function coordsOf(doc: { location?: { coordinates?: number[] } }): [number, number] | null {
+  const coordinates = doc.location?.coordinates;
+  if (!coordinates || coordinates.length < 2) return null;
+  const [lng, lat] = coordinates;
+  return Number.isFinite(lat) && Number.isFinite(lng) ? [lat, lng] : null;
+}
+
+/**
+ * The nearby accessible toilets and metro entrance facilities a place detail
+ * card renders. `a11y.service` has no reusable equivalent — its `findNearby*`
+ * helpers cap toilets at five and blend three sources into their metro bucket —
+ * so these are dedicated queries returning exactly the shape the card needs.
+ */
+async function findNearbyFacilities(
+  lat: number,
+  lng: number,
+): Promise<{ toilets: NearbyFacilityBrief[]; metro: NearbyFacilityBrief[] }> {
+  const geoQuery = makeGeoQuery(lng, lat, NEARBY_LIST_RADIUS_M);
+  const [bathrooms, osmToilets, metro] = await Promise.all([
+    BathroomModel.find({ type: "無障礙廁所", location: geoQuery })
+      .limit(NEARBY_LIST_LIMIT)
+      .lean()
+      .catch(() => []),
+    OsmA11y.find({ category: "toilet", location: geoQuery })
+      .limit(NEARBY_LIST_LIMIT)
+      .lean()
+      .catch(() => []),
+    A11y.find({ location: geoQuery })
+      .limit(NEARBY_LIST_LIMIT)
+      .lean()
+      .catch(() => []),
+  ]);
+
+  const toBrief = (
+    id: string,
+    name: string,
+    address: string | null,
+    category: string,
+    typeLabel: string,
+    doc: { location?: { coordinates?: number[] } },
+  ): NearbyFacilityBrief | null => {
+    const coords = coordsOf(doc);
+    if (!coords) return null;
+    return {
+      id,
+      name,
+      address,
+      category,
+      typeLabel,
+      distanceMeters: Math.round(haversineMeters(lat, lng, coords[0], coords[1])),
+    };
+  };
+
+  const toilets = [
+    ...bathrooms.map((doc: any) =>
+      toBrief(String(doc._id), doc.name, doc.address ?? null, "toilet", "無障礙廁所", doc),
+    ),
+    ...osmToilets.map((doc: any) =>
+      toBrief(String(doc._id), doc.name ?? "無障礙廁所", null, "toilet", "無障礙廁所", doc),
+    ),
+  ]
+    .filter((brief): brief is NearbyFacilityBrief => brief !== null)
+    .sort((a, b) => a.distanceMeters - b.distanceMeters)
+    .slice(0, NEARBY_LIST_LIMIT);
+
+  const metroBriefs = metro
+    .map((doc: any) => {
+      const name = doc["出入口電梯/無障礙坡道名稱"] ?? "捷運無障礙設施";
+      const { category, typeLabel } = metroCategory(name);
+      return toBrief(String(doc._id), name, null, category, typeLabel, doc);
+    })
+    .filter((brief): brief is NearbyFacilityBrief => brief !== null)
+    .sort((a, b) => a.distanceMeters - b.distanceMeters)
+    .slice(0, NEARBY_LIST_LIMIT);
+
+  return { toilets, metro: metroBriefs };
 }
 
 /**
@@ -144,59 +395,122 @@ async function computeAccessibility(
   return { status: "unknown", wheelchair: null, nearbyFacilityCount, source: "none" };
 }
 
-function googleToLocation(d: GooglePlaceDetails & { location: { latitude: number; longitude: number } }) {
+type ResolvedPlace = Omit<PlaceResult, "accessibility" | "nearbyFacilities" | "distanceMeters">;
+
+function googleToResolved(
+  id: string,
+  d: GooglePlaceDetails & { location: { latitude: number; longitude: number } },
+): ResolvedPlace {
+  const { placeClass, placeType } = googleTypesToClassType(d.types);
   return {
-    type: "Point" as const,
-    coordinates: [d.location.longitude, d.location.latitude] as [number, number],
+    id,
+    source: "google",
+    name: d.name,
+    fullAddress: d.formattedAddress,
+    addressComponents: d.addressComponents,
+    location: toGeoPoint(d.location.latitude, d.location.longitude),
+    placeClass,
+    placeType,
+    typeLabel: typeLabelOf(placeType),
+    rating: d.rating,
+    reviewKey: { placeId: d.id, placeType: "google" },
+    externalLinks: {
+      osm: null,
+      google: `https://www.google.com/maps/place/?q=place_id:${encodeURIComponent(d.id)}`,
+    },
+    attribution: GOOGLE_ATTRIBUTION,
   };
+}
+
+function osmToResolved(id: string, p: OsmPlace): ResolvedPlace {
+  return {
+    id,
+    source: "osm",
+    name: p.name,
+    fullAddress: p.displayName || null,
+    addressComponents: p.address,
+    location: toGeoPoint(p.latitude, p.longitude),
+    placeClass: p.placeClass,
+    placeType: p.placeType,
+    typeLabel: typeLabelOf(p.placeType),
+    rating: null,
+    reviewKey: { placeId: toReviewOsmId(p.osmType, p.osmId), placeType: "osm" },
+    externalLinks: {
+      osm: `https://www.openstreetmap.org/${p.osmType}/${p.osmId}`,
+      google: null,
+    },
+    attribution: OSM_ATTRIBUTION,
+  };
+}
+
+/** OSM place lookups are cacheable — unlike Google's, their terms permit it. */
+async function cachedOsmLookup(
+  osmType: OsmPlace["osmType"],
+  osmId: string,
+): Promise<OsmPlace | null> {
+  const cacheKey = `${OSM_DETAILS_CACHE_PREFIX}${osmType}:${osmId}`;
+  const cached = await redisGet(cacheKey);
+  if (cached) {
+    try {
+      return JSON.parse(cached) as OsmPlace;
+    } catch {
+      /* treat malformed cache as a miss */
+    }
+  }
+  const place = await lookupOsmPlace(osmType, osmId);
+  if (place) await redisSet(cacheKey, JSON.stringify(place), OSM_DETAILS_CACHE_TTL_SEC);
+  return place;
 }
 
 /**
  * Resolves a selected place id to a full PlaceResult: coordinates, distance from
- * the user (when supplied), and the computed accessibility badge. Returns null
- * when the place is unresolvable or has no usable coordinates (controller → 404).
- * Not cached — Google terms disallow persisting non-id fields, and details is
- * called once per selection.
+ * the user, the accessibility badge and the nearby-facility lists. Dispatches on
+ * the id prefix, so an OSM place never touches Google and never consumes the
+ * autocomplete session token. Returns null when the place is unresolvable or has
+ * no usable coordinates (controller → 404).
  *
- * @param params Place id, optional session token, and optional user coordinates.
+ * Google results are deliberately not cached — their terms disallow persisting
+ * anything but the place id.
+ *
+ * @param params Prefixed place id, optional session token, and optional user coordinates.
  * @returns The resolved place, or null.
  */
 export async function details(params: {
-  placeId: string;
+  id: string;
   sessionToken?: string;
   lat?: number;
   lng?: number;
 }): Promise<PlaceResult | null> {
-  const { placeId, sessionToken, lat, lng } = params;
+  const { id, sessionToken, lat, lng } = params;
+  const parsed = parsePlaceId(id);
+  if (!parsed) return null;
 
-  const d = await getPlaceDetails(placeId, { sessionToken });
-  if (!d || !d.location) return null;
+  let resolved: ResolvedPlace;
+  let googleWheelchair: "yes" | "no" | null = null;
+  let googleWheelchairPartial = false;
 
-  const placeLat = d.location.latitude;
-  const placeLng = d.location.longitude;
+  if (parsed.source === "google") {
+    const d = await getPlaceDetails(parsed.googlePlaceId, { sessionToken });
+    if (!d || !d.location) return null;
+    resolved = googleToResolved(id, d as GooglePlaceDetails & { location: { latitude: number; longitude: number } });
+    googleWheelchair = d.wheelchair;
+    googleWheelchairPartial = d.wheelchairPartial;
+  } else {
+    const p = await cachedOsmLookup(parsed.osmType, parsed.osmId);
+    if (!p) return null;
+    resolved = osmToResolved(id, p);
+  }
 
-  const hasUserCoords = Number.isFinite(lat) && Number.isFinite(lng);
-  const distanceMeters = hasUserCoords
-    ? Math.round(haversineMeters(lat as number, lng as number, placeLat, placeLng))
-    : null;
-
-  const accessibility = await computeAccessibility(
-    placeLat,
-    placeLng,
-    d.wheelchair,
-    d.wheelchairPartial,
-  );
+  const [placeLng, placeLat] = resolved.location.coordinates;
+  const [accessibility, nearbyFacilities] = await Promise.all([
+    computeAccessibility(placeLat, placeLng, googleWheelchair, googleWheelchairPartial),
+    findNearbyFacilities(placeLat, placeLng),
+  ]);
 
   return {
-    id: d.id,
-    source: "google",
-    name: d.name,
-    address: d.formattedAddress,
-    location: googleToLocation(d as GooglePlaceDetails & { location: { latitude: number; longitude: number } }),
-    category: null,
-    distanceMeters,
-    rating: d.rating,
+    ...resolved,
+    distanceMeters: distanceFrom(lat, lng, placeLat, placeLng),
     accessibility,
-    attribution: GOOGLE_ATTRIBUTION,
+    nearbyFacilities,
   };
 }

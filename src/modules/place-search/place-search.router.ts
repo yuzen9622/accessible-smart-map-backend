@@ -17,7 +17,7 @@ export function createPlaceSearchRouter(): Router {
     autocomplete,
   );
   router.get(
-    "/search/details/:placeId",
+    "/search/details/:id",
     detailsLimiter,
     validateRequest({ params: DetailsParamsSchema, query: DetailsQuerySchema }),
     details,
