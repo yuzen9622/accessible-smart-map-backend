@@ -16,7 +16,10 @@ export default defineConfig({
       OPENAI_API_KEY: "test-dummy",
       // Lets buildAuthorizationHeader() sign tokens the auth middleware can
       // verify (tests/helpers/test-helpers.ts) for route-level integration tests.
+      // The refresh secret is needed too: the auth endpoints issue an access and
+      // a refresh token together, and jwt.sign throws on an empty secret.
       JWT_ACCESS_SECRET: "test-access-secret",
+      JWT_REFRESH_SECRET: "test-refresh-secret",
     },
   },
 });

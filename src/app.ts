@@ -30,6 +30,12 @@ import { generateOpenAPIDocument } from "./openapi/document";
 
 const app: Express = express();
 
+// Number of reverse proxies in front of the app. Rate limiters key on req.ip,
+// so leaving this unset makes every request share the proxy's IP and one bucket.
+// It must stay a hop count rather than `true`, otherwise a client can spoof
+// X-Forwarded-For to get a fresh bucket per request.
+app.set("trust proxy", Number(process.env.TRUST_PROXY_HOPS ?? 1));
+
 app.use(
   helmet({
     contentSecurityPolicy: false,

@@ -171,3 +171,25 @@ export const LINE_MSG = {
   RECOVERABLE_ASK:
     "系統暫時有點忙，麻煩您再說一次剛剛的需求，謝謝！",
 } as const;
+
+/**
+ * Shared user-facing strings for the authentication endpoints. Credential
+ * failures deliberately reuse one message so the response cannot be used to
+ * discover which email addresses are registered.
+ */
+export const AUTH_MSG = {
+  REGISTERED: "註冊成功，請至信箱點擊驗證連結後即可登入",
+  REGISTERED_EMAIL_FAILED: "註冊成功，但驗證信寄送失敗，請稍後重新寄送驗證信",
+  EMAIL_TAKEN: "此電子郵件已被註冊",
+  INVALID_CREDENTIALS: "電子郵件或密碼錯誤",
+  EMAIL_NOT_VERIFIED: "請先完成電子郵件驗證後再登入",
+  EMAIL_VERIFIED: "電子郵件驗證成功",
+  INVALID_TOKEN: "連結無效或已過期，請重新申請",
+  VERIFICATION_SENT: "若該電子郵件尚待驗證，我們已重新寄出驗證信",
+  RESET_SENT: "若該電子郵件已註冊，我們已寄出密碼重設信",
+  RESET_EMAIL_FAILED: "密碼重設信寄送失敗，請稍後再試",
+  PASSWORD_RESET: "密碼已重設，請使用新密碼登入",
+  PASSWORD_CHANGED: "密碼已更新，其他裝置的登入狀態已失效",
+  PASSWORD_REQUIRED: "請提供目前的密碼",
+  RATE_LIMITED: "操作過於頻繁，請稍後再試",
+} as const;
