@@ -1,6 +1,6 @@
 import http from "http";
 import { WebSocketServer, WebSocket, RawData } from "ws";
-import { verifyAccessToken } from "../../config/jwt";
+import { authenticateToken } from "../../config/auth";
 import { createLiveBridge, LiveBridge } from "./live-bridge";
 import { NavPositionSchema, NavSetRouteSchema, type NavPosition } from "./navigation.schema";
 
@@ -12,6 +12,10 @@ export const CONTROL_FRAME_MAX_BYTES = 8 * 1024;
 const SESSION_END_BYPASS_MAX_BYTES = 1024;
 const CONTROL_FRAMES_PER_SEC = 40;
 const CONTROL_FRAMES_BURST = 80;
+// Frames accepted while the session.start token is still being authenticated.
+// The per-connection rate buckets only apply after authentication, so this caps
+// what an unauthenticated peer can make the server hold in memory.
+const AUTH_QUEUE_MAX_FRAMES = 32;
 const CONTROL_BYTES_PER_SEC = 320 * 1024;
 const CONTROL_BYTES_BURST = 640 * 1024;
 const CONTROL_MSGS_PER_SEC = 20;
@@ -94,6 +98,8 @@ function parseUserLocation(
  */
 function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
   let authenticated = false;
+  let authInFlight: Promise<void> | null = null;
+  let authQueue: { data: RawData; isBinary: boolean }[] = [];
   let userId: string | null = null;
   let bridge: LiveBridge | null = null;
   let missedPongs = 0;
@@ -144,14 +150,13 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
       ws.close(4401, "unauthorized");
       return;
     }
-    const result = verifyAccessToken(parsed.token);
-    const decodedUser =
-      result.success && "decoded" in result ? result.decoded?.user : undefined;
-    const id = decodedUser?._id;
-    if (typeof id !== "string" || !id) {
+    const result = await authenticateToken(parsed.token);
+    if (!result.ok) {
+      authQueue = [];
       ws.close(4401, "unauthorized");
       return;
     }
+    const id = result.userId;
     authenticated = true;
     const generation = ++connGen;
     clearTimeout(authTimer);
@@ -161,6 +166,31 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
     if (existing) existing.ws.close(4409, "superseded");
     const connection: VoiceConnection = { ws, bridge: null };
     connections.set(id, connection);
+
+    // Replay the frames that arrived mid-authentication before the bridge is
+    // started, so they are buffered into pendingRouteToken/pendingPosition the
+    // same way they would be on a synchronous handshake. Starting the bridge
+    // first would let them reach a live bridge one by one instead.
+    const queued = authQueue;
+    authQueue = [];
+    for (const frame of queued) {
+      if (ws.readyState !== WebSocket.OPEN) break;
+      if (frame.isBinary) bridge?.sendAudio(rawDataToBuffer(frame.data));
+      else handleControlMessage(frame.data);
+    }
+
+    // Deliberately not awaited: the session is authenticated from here on, so
+    // control frames that arrive while the Live bridge is still connecting must
+    // reach handleControlMessage and be buffered rather than queue behind it.
+    void startBridge(id, generation, connection, userLocation);
+  };
+
+  const startBridge = async (
+    id: string,
+    generation: number,
+    connection: VoiceConnection,
+    userLocation: ReturnType<typeof parseUserLocation>,
+  ): Promise<void> => {
     try {
       const createdBridge = await createLiveBridge({ ws, userId: id, userLocation });
       if (disposed
@@ -260,7 +290,18 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
 
   ws.on("message", (data: RawData, isBinary: boolean) => {
     if (!authenticated) {
-      void handleAuthMessage(data, isBinary);
+      // Authentication now hits the database, so frames sent straight after
+      // session.start can arrive mid-check. Hold them until it settles instead
+      // of treating them as a malformed handshake and dropping the connection.
+      if (authInFlight) {
+        if (authQueue.length >= AUTH_QUEUE_MAX_FRAMES) {
+          ws.close(4401, "unauthorized");
+          return;
+        }
+        authQueue.push({ data, isBinary });
+        return;
+      }
+      authInFlight = handleAuthMessage(data, isBinary);
       return;
     }
     if (isBinary) {

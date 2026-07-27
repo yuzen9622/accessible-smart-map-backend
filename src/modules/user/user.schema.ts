@@ -10,18 +10,71 @@ registry.registerComponent("securitySchemes", "BearerAuth", {
   bearerFormat: "JWT",
 });
 
-export const LoginBodySchema = z
+const PasswordSchema = z
+  .string()
+  .min(8, "密碼至少 8 個字元")
+  .refine((value) => Buffer.byteLength(value, "utf8") <= 72, {
+    message: "密碼不可超過 72 個位元組",
+  })
+  .refine((value) => /[A-Za-z]/.test(value) && /[0-9]/.test(value), {
+    message: "密碼需同時包含英文字母與數字",
+  })
+  .openapi({
+    description: "至少 8 字元、最多 72 位元組（bcrypt 上限），需含英文字母與數字",
+    example: "taipei2026",
+  });
+
+export const GoogleAuthBodySchema = z
   .object({
-    name: z.string().min(1).openapi({ example: "Jane Doe" }),
-    email: z.string().email().openapi({ example: "jane@example.com" }),
-    avatar: z.string().url().optional().openapi({ example: "https://example.com/avatar.png" }),
-    client_id: z.string().min(1).openapi({ description: "OAuth 提供者的 sub/uid" }),
+    idToken: z
+      .string()
+      .min(1)
+      .openapi({ description: "Google Sign-In 發給前端的 ID token，由後端驗證" }),
   })
   .strict();
 
-export const TokenBodySchema = z
+export const RegisterBodySchema = z
   .object({
-    token: z.string().min(1).openapi({ description: "欲重新簽發的現有存取權杖" }),
+    name: z.string().min(1).max(60).openapi({ example: "Jane Doe" }),
+    email: z.string().email().openapi({ example: "jane@example.com" }),
+    password: PasswordSchema,
+  })
+  .strict();
+
+export const LoginBodySchema = z
+  .object({
+    email: z.string().email().openapi({ example: "jane@example.com" }),
+    password: z.string().min(1),
+  })
+  .strict();
+
+export const EmailBodySchema = z
+  .object({
+    email: z.string().email().openapi({ example: "jane@example.com" }),
+  })
+  .strict();
+
+export const VerifyEmailBodySchema = z
+  .object({
+    token: z.string().min(1).openapi({ description: "驗證信連結中的一次性權杖" }),
+  })
+  .strict();
+
+export const ResetPasswordBodySchema = z
+  .object({
+    token: z.string().min(1).openapi({ description: "重設信連結中的一次性權杖" }),
+    password: PasswordSchema,
+  })
+  .strict();
+
+export const ChangePasswordBodySchema = z
+  .object({
+    currentPassword: z
+      .string()
+      .min(1)
+      .optional()
+      .openapi({ description: "帳號尚無密碼（純 Google 登入）時可省略" }),
+    newPassword: PasswordSchema,
   })
   .strict();
 
@@ -48,7 +101,16 @@ const UserSchema = z
     name: z.string().openapi({ example: "Jane Doe" }),
     avatar: z.string().url().optional().openapi({ example: "https://example.com/avatar.png" }),
     email: z.string().email().openapi({ example: "jane@example.com" }),
-    client_id: z.string().openapi({ example: "google-oauth2|10293847" }),
+    client_id: z
+      .string()
+      .nullable()
+      .optional()
+      .openapi({ description: "Google sub；純帳密註冊的帳號為 null", example: "10293847" }),
+    authProviders: z
+      .array(z.enum(["google", "local"]))
+      .openapi({ description: "此帳號可用的登入方式", example: ["local"] }),
+    emailVerified: z.boolean().openapi({ example: true }),
+    tokenVersion: z.number().openapi({ description: "改密碼時遞增，用於撤銷舊權杖", example: 0 }),
     lineUserId: z.string().nullable().optional().openapi({ example: "U1234567890abcdef" }),
     createdAt: z.string().openapi({ example: "2026-01-15T08:30:00.000Z" }),
     updatedAt: z.string().openapi({ example: "2026-06-03T11:45:00.000Z" }),
@@ -83,11 +145,17 @@ export const LoginResponseSchema = apiResponse(
   }),
 ).openapi("LoginResponse");
 
-export const TokenResponseSchema = apiResponse(
+export const RegisterResponseSchema = apiResponse(
   z.object({
-    user: UserSchema,
+    emailSent: z.boolean().openapi({ description: "驗證信是否確實寄出" }),
   }),
-).openapi("TokenResponse");
+).openapi("RegisterResponse");
+
+export const ChangePasswordResponseSchema = apiResponse(
+  z.object({ user: UserSchema }),
+).openapi("ChangePasswordResponse");
+
+export const MessageResponseSchema = apiResponse().openapi("MessageResponse");
 
 export const RefreshResponseSchema = apiResponse(
   z.object({
@@ -118,55 +186,175 @@ export const LogoutResponseSchema = apiResponse().openapi("LogoutResponse");
 
 export const ErrorResponseSchema = apiResponse().openapi("ErrorResponse");
 
+const errorResponse = (description: string) => ({
+  description,
+  content: { "application/json": { schema: ErrorResponseSchema } },
+});
+
 registry.registerPath({
   method: "post",
-  path: "/user/login",
+  path: "/user/auth/google",
   tags: ["User"],
-  summary: "OAuth 登入",
-  description: "以 OAuth 提供者建立或更新使用者，回傳存取權杖並設定 refreshToken cookie。",
+  summary: "Google 登入",
+  description:
+    "後端以 GOOGLE_CLIENT_ID 驗證前端傳來的 Google ID token，身分僅取自驗證後的 payload。" +
+    "同 email 的既有帳號會自動連結；若該帳號原為未驗證的帳密帳號，其密碼會被移除並撤銷既有權杖。",
   request: {
-    body: {
-      content: { "application/json": { schema: LoginBodySchema } },
-      required: true,
-    },
+    body: { content: { "application/json": { schema: GoogleAuthBodySchema } }, required: true },
   },
   responses: {
     200: {
       description: "存取權杖於 body，refresh 權杖於 cookie",
       content: { "application/json": { schema: LoginResponseSchema } },
     },
-    400: {
-      description: "缺少必填欄位",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-    500: {
-      description: "伺服器錯誤",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
+    400: errorResponse("缺少 idToken"),
+    401: errorResponse("ID token 無效"),
+    500: errorResponse("伺服器錯誤或未設定 GOOGLE_CLIENT_ID"),
   },
 });
 
 registry.registerPath({
   method: "post",
-  path: "/user/token",
+  path: "/user/auth/register",
   tags: ["User"],
-  summary: "重新簽發權杖",
-  description: "驗證未過期的存取權杖，重新簽發新的存取與 refresh 權杖。",
+  summary: "帳密註冊",
+  description:
+    "建立帳密帳號並寄出驗證信。**不會回傳權杖**：必須先完成信箱驗證才能登入。",
   request: {
-    body: {
-      content: { "application/json": { schema: TokenBodySchema } },
-      required: true,
-    },
+    body: { content: { "application/json": { schema: RegisterBodySchema } }, required: true },
   },
   responses: {
     200: {
-      description: "新的存取與 refresh 權杖",
-      content: { "application/json": { schema: TokenResponseSchema } },
+      description: "註冊成功，驗證信已寄出（emailSent 表示是否確實寄出）",
+      content: { "application/json": { schema: RegisterResponseSchema } },
     },
-    401: {
-      description: "權杖無效或已過期",
-      content: { "application/json": { schema: ErrorResponseSchema } },
+    400: errorResponse("欄位格式錯誤或密碼不符規則"),
+    409: errorResponse("此電子郵件已被註冊"),
+    429: errorResponse("註冊請求過於頻繁"),
+    500: errorResponse("伺服器錯誤"),
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/user/auth/login",
+  tags: ["User"],
+  summary: "帳密登入",
+  description:
+    "以電子郵件與密碼登入。帳號不存在與密碼錯誤回傳完全相同的 401，以避免洩漏哪些信箱已註冊。",
+  request: {
+    body: { content: { "application/json": { schema: LoginBodySchema } }, required: true },
+  },
+  responses: {
+    200: {
+      description: "存取權杖於 body，refresh 權杖於 cookie",
+      content: { "application/json": { schema: LoginResponseSchema } },
     },
+    400: errorResponse("欄位格式錯誤"),
+    401: errorResponse("電子郵件或密碼錯誤（data.reason = INVALID_CREDENTIALS）"),
+    403: errorResponse("信箱尚未驗證（data.reason = EMAIL_NOT_VERIFIED）"),
+    429: errorResponse("登入請求過於頻繁"),
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/user/auth/verify-email",
+  tags: ["User"],
+  summary: "驗證電子郵件",
+  description: "以驗證信中的一次性權杖完成驗證，並直接回傳登入權杖。",
+  request: {
+    body: { content: { "application/json": { schema: VerifyEmailBodySchema } }, required: true },
+  },
+  responses: {
+    200: {
+      description: "驗證成功並登入",
+      content: { "application/json": { schema: LoginResponseSchema } },
+    },
+    401: errorResponse("連結無效或已過期"),
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/user/auth/verify-email/resend",
+  tags: ["User"],
+  summary: "重寄驗證信",
+  description: "無論該信箱是否存在或已驗證，一律回傳 200，以避免信箱列舉。",
+  request: {
+    body: { content: { "application/json": { schema: EmailBodySchema } }, required: true },
+  },
+  responses: {
+    200: {
+      description: "已受理",
+      content: { "application/json": { schema: MessageResponseSchema } },
+    },
+    429: errorResponse("請求過於頻繁"),
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/user/auth/password/forgot",
+  tags: ["User"],
+  summary: "申請密碼重設",
+  description:
+    "無論該信箱是否存在，一律回傳 200，以避免信箱列舉。未驗證的帳號同樣可申請——" +
+    "能收到信即代表擁有該信箱，這也是信箱被他人搶先註冊時的自救途徑。",
+  request: {
+    body: { content: { "application/json": { schema: EmailBodySchema } }, required: true },
+  },
+  responses: {
+    200: {
+      description: "已受理",
+      content: { "application/json": { schema: MessageResponseSchema } },
+    },
+    429: errorResponse("請求過於頻繁"),
+    503: errorResponse("重設信寄送失敗"),
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/user/auth/password/reset",
+  tags: ["User"],
+  summary: "重設密碼",
+  description:
+    "以重設信中的一次性權杖設定新密碼。成功後信箱一併標記為已驗證，並撤銷所有既有權杖。",
+  request: {
+    body: { content: { "application/json": { schema: ResetPasswordBodySchema } }, required: true },
+  },
+  responses: {
+    200: {
+      description: "密碼已重設並登入",
+      content: { "application/json": { schema: LoginResponseSchema } },
+    },
+    400: errorResponse("新密碼不符規則"),
+    401: errorResponse("連結無效或已過期"),
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/user/auth/password",
+  tags: ["User"],
+  summary: "變更密碼",
+  description:
+    "變更已登入帳號的密碼並撤銷其他既有權杖（回應會附上新的權杖）。" +
+    "帳號尚無密碼（純 Google 登入）時可省略 currentPassword，即為新增密碼登入方式。",
+  security: [{ BearerAuth: [] }],
+  request: {
+    body: { content: { "application/json": { schema: ChangePasswordBodySchema } }, required: true },
+  },
+  responses: {
+    200: {
+      description: "密碼已更新，並回傳新權杖",
+      content: { "application/json": { schema: ChangePasswordResponseSchema } },
+    },
+    400: errorResponse("新密碼不符規則或缺少 currentPassword"),
+    401: errorResponse("目前密碼錯誤"),
+    403: errorResponse("未授權"),
+    429: errorResponse("請求過於頻繁"),
   },
 });
 

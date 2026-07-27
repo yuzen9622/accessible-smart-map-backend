@@ -22,33 +22,31 @@ async function generateLineLinkCode(): Promise<string> {
 }
 
 /**
- * Look up a user by client_id, creating the user and a default config on first
- * login.
+ * Look up a user by id.
  *
- * @param input User details ({ name, email, avatar?, client_id }) from the OAuth provider.
- * @returns The user document and its config (a fresh default for new users).
+ * @param userId MongoDB user _id.
+ * @returns The user, or null when no such user exists.
  */
-export async function findOrCreateUser(input: {
-  name: string;
-  email: string;
-  avatar?: string;
-  client_id: string;
-}): Promise<{ user: IUser; config: IConfig | null }> {
-  let user = await User.findOne({ client_id: input.client_id });
-  let config = await Config.findOne({ user_id: user?._id });
-  if (!user) {
-    user = new User(input);
-    config = new Config({ user_id: user._id });
-    await Promise.all([config.save(), user.save()]);
-  }
-  return { user, config };
+export async function getUserById(userId: string): Promise<IUser | null> {
+  return User.findById(userId);
 }
 
+/**
+ * Look up a user and its config by id.
+ *
+ * Both lookups are keyed on the user _id and short-circuit when the user is
+ * missing: querying Config with an undefined user_id would match every document
+ * and hand back an unrelated user's settings.
+ *
+ * @param userId MongoDB user _id.
+ * @returns The user and its config, both null when the user does not exist.
+ */
 export async function getUserWithConfig(
-  client_id: string,
+  userId: string,
 ): Promise<{ user: IUser | null; config: IConfig | null }> {
-  const user = await User.findOne({ client_id });
-  const config = await Config.findOne({ user_id: user?._id });
+  const user = await User.findById(userId);
+  if (!user) return { user: null, config: null };
+  const config = await Config.findOne({ user_id: user._id });
   return { user, config };
 }
 

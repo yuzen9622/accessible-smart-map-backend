@@ -3,77 +3,22 @@ import { ApiResponse } from "../../types/response";
 import { ResponseCode, ResponseMessage } from "../../types/code";
 import { sendResponse } from "../../config/lib";
 import { IConfig, IUser } from "../../types";
-import {
-  createAccessToken,
-  createRefreshToken,
-  verifyAccessToken,
-  verifyRefreshToken,
-} from "../../config/jwt";
+import { createAccessToken, createRefreshToken, verifyRefreshToken } from "../../config/jwt";
 import * as userService from "./user.service";
 
-async function login(
-  req: Request,
-  res: Response<ApiResponse<{ user: IUser }>>
-) {
+async function info(req: Request, res: Response<ApiResponse<{ user: IUser | null; config: IConfig | null }>>) {
   try {
-    const { name, email, avatar, client_id } = await req.body;
-    if (!client_id || !email || !name) {
-      return sendResponse(
-        res,
-        false,
-        "error",
-        ResponseCode.INVALID_INPUT,
-        ResponseMessage.INVALID_INPUT
-      );
+    const userId = req.auth?.userId;
+    if (!userId) {
+      return sendResponse(res, false, "error", ResponseCode.FORBIDDEN, ResponseMessage.FORBIDDEN);
     }
-    const { user, config } = await userService.findOrCreateUser({
-      name,
-      email,
-      avatar,
-      client_id,
-    });
 
-    const accessToken = createAccessToken(user);
-    const refreshToken = createRefreshToken(user);
-
-    return sendResponse(
-      res,
-      true,
-      "success",
-      ResponseCode.OK,
-      ResponseMessage.OK,
-      { user, config },
-      accessToken,
-      refreshToken
-    );
-  } catch (error) {
-    console.error(error);
-    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, ResponseMessage.INTERNAL_ERROR);
-  }
-}
-
-async function info(req: Request, res: Response<ApiResponse<{ user: IUser }>>) {
-  try {
-    const authHeader = req.headers.authorization;
-    const token = authHeader && authHeader.split(" ")[1];
-    if (!token) {
-      throw new Error("No token provided");
+    const { user, config } = await userService.getUserWithConfig(userId);
+    if (!user) {
+      return sendResponse(res, false, "error", ResponseCode.NOT_FOUND, ResponseMessage.NOT_FOUND);
     }
-    const verify = verifyAccessToken(token);
-    if (verify.decoded) {
-      const { user, config } = await userService.getUserWithConfig(
-        verify.decoded.user.client_id,
-      );
-      return sendResponse(
-        res,
-        true,
-        "success",
-        ResponseCode.OK,
-        ResponseMessage.OK,
-        { user: user!, config }
-      );
-    }
-    throw new Error("Invalid token");
+
+    return sendResponse(res, true, "success", ResponseCode.OK, ResponseMessage.OK, { user, config });
   } catch (error) {
     console.error(error);
     return sendResponse(
@@ -202,70 +147,35 @@ async function config(req: Request, res: Response) {
   }
 }
 
-async function token(
-  req: Request,
-  res: Response<ApiResponse<{ user: IUser }>>
-) {
+async function refresh(req: Request, res: Response<ApiResponse<{ user: IUser }>>) {
   try {
-    const { token } = await req.body;
+    const { refreshToken } = req.cookies ?? {};
 
-    const verify = verifyAccessToken(token);
-    if (!verify.success || !verify?.decoded) {
-      throw new Error("Invalid refresh token");
-    }
-    console.log(verify);
-    const newAccessToken = createAccessToken(verify.decoded.user);
-    const newRefreshToken = createRefreshToken(verify.decoded.user);
-    return sendResponse(
-      res,
-      true,
-      "success",
-      ResponseCode.OK,
-      ResponseMessage.OK,
-      { user: verify.decoded.user },
-      newAccessToken,
-      newRefreshToken
-    );
-  } catch (error) {
-    console.log("no refresh token" + error);
-    return sendResponse(
-      res,
-      false,
-      "error",
-      ResponseCode.UNAUTHORIZED,
-      ResponseMessage.UNAUTHORIZED
-    );
-  }
-}
-
-async function refresh(
-  req: Request,
-  res: Response<ApiResponse<{ user: IUser }>>
-) {
-  try {
-    const { refreshToken } = await req.cookies;
-    console.log(refreshToken);
-
-    const verify = verifyRefreshToken(refreshToken);
+    const verify = verifyRefreshToken(refreshToken ?? "");
     if (!verify.success || !verify.decoded) {
       res.cookie("refreshToken", "", { maxAge: 0 });
       throw new Error("Invalid refresh token");
     }
-    console.log(verify);
-    const newAccessToken = createAccessToken(verify.decoded.user);
-    const newRefreshToken = createRefreshToken(verify.decoded.user);
+
+    const claimed = verify.decoded.user as IUser | undefined;
+    const user = claimed?._id ? await userService.getUserById(String(claimed._id)) : null;
+    if (!user || Number(user.tokenVersion ?? 0) !== Number(claimed?.tokenVersion ?? -1)) {
+      res.cookie("refreshToken", "", { maxAge: 0 });
+      throw new Error("Revoked refresh token");
+    }
+
     return sendResponse(
       res,
       true,
       "success",
       ResponseCode.OK,
       ResponseMessage.OK,
-      { user: verify.decoded.user },
-      newAccessToken,
-      newRefreshToken
+      { user },
+      createAccessToken(user),
+      createRefreshToken(user)
     );
   } catch (error) {
-    console.log("no refresh token" + error);
+    console.error("[user] refresh 失敗", error);
     return sendResponse(
       res,
       false,
@@ -284,4 +194,5 @@ async function logout(req: Request, res: Response) {
     return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, "Logout failed");
   }
 }
-export { login, token, refresh, info, lineLinkCode, config, updateConfig, logout };
+
+export { refresh, info, lineLinkCode, config, updateConfig, logout };

@@ -1,15 +1,34 @@
+export type AuthProvider = "google" | "local";
+
 export interface IUser {
   _id: string;
   name: string;
   avatar?: string;
   email: string;
-  client_id: string;
+  client_id?: string | null;
+  passwordHash?: string;
+  authProviders: AuthProvider[];
+  emailVerified: boolean;
+  tokenVersion: number;
   lineUserId?: string | null;
   settings?: {
     memoryEnabled?: boolean;
   };
   createdAt: string;
   updatedAt: string;
+}
+
+export type AuthTokenType = "email_verify" | "password_reset";
+
+export interface IAuthToken {
+  _id: string;
+  userId: string;
+  type: AuthTokenType;
+  tokenHash: string;
+  expiresAt: Date;
+  usedAt?: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 export interface IConfig {

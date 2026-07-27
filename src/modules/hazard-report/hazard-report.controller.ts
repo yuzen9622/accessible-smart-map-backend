@@ -3,7 +3,7 @@ import type { Request, Response } from "express";
 import { sendResponse } from "../../config/lib";
 import { ResponseCode } from "../../types/code";
 import { HAZARD_MSG, HAZARD_REASON } from "../../constants/messages";
-import { verifyAccessToken } from "../../config/jwt";
+import { authenticateToken } from "../../config/auth";
 import * as service from "./hazard-report.service";
 import type {
   ConfirmAction,
@@ -34,12 +34,11 @@ function parseStatusList(raw?: string): string[] | undefined {
   return list.length ? list : undefined;
 }
 
-function resolveIdentity(req: Request): string {
+async function resolveIdentity(req: Request): Promise<string> {
   const token = req.headers.authorization?.split(" ")[1];
   if (token) {
-    const verify = verifyAccessToken(token);
-    const userId = verify.decoded?.user?._id;
-    if (userId) return String(userId);
+    const result = await authenticateToken(token);
+    if (result.ok) return result.userId;
   }
   const ip = req.ip ?? "unknown";
   return "ip:" + crypto.createHash("sha256").update(ip).digest("hex").slice(0, 32);
@@ -65,7 +64,7 @@ async function createReport(req: Request, res: Response) {
   };
 
   const result = await service.createReport({
-    reporterId: resolveIdentity(req),
+    reporterId: await resolveIdentity(req),
     hazardType: body.hazardType,
     latitude: body.latitude,
     longitude: body.longitude,
@@ -127,7 +126,7 @@ async function confirmReport(req: Request, res: Response) {
   const result = await service.confirmReport({
     reportId: req.params.id,
     action: body.action,
-    voterId: resolveIdentity(req),
+    voterId: await resolveIdentity(req),
   });
   return send(res, result);
 }

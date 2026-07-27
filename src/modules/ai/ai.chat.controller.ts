@@ -3,7 +3,7 @@ import { model } from "../../config/ai";
 import { sendResponse } from "../../config/lib";
 import { ResponseCode, ResponseMessage } from "../../types/code";
 import { MSG, ERROR_MESSAGE } from "../../constants/messages";
-import { verifyAccessToken } from "../../config/jwt";
+import { authenticateToken } from "../../config/auth";
 import { runChatAgent, toGeminiHistory, type OAIMessage } from "./ai-chat.service";
 import { getMemorySettings, searchMemoriesForPrompt } from "./memory.service";
 import { CHAT_SYSTEM_PROMPT, withUserLocation, withCurrentDate } from "../../config/ai/chat-prompt";
@@ -13,20 +13,18 @@ function sendSse(res: Response, event: string, data: unknown): void {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
-function resolveAuthUser(req: Request): { user: IUser | null; expired: boolean; invalid: boolean } {
+async function resolveAuthUser(
+  req: Request,
+): Promise<{ user: IUser | null; expired: boolean; invalid: boolean }> {
   const authHeader = req.headers.authorization;
   if (!authHeader) return { user: null, expired: false, invalid: false };
   const token = authHeader.split(" ")[1];
   if (!token) return { user: null, expired: false, invalid: false };
-  const v = verifyAccessToken(token);
-  if (v.expired) {
-    return { user: null, expired: true, invalid: false };
+  const result = await authenticateToken(token);
+  if (!result.ok) {
+    return { user: null, expired: result.expired, invalid: !result.expired };
   }
-  if (!v.success || !v.decoded) {
-    return { user: null, expired: false, invalid: true };
-  }
-  const user = (v.decoded as { user?: IUser }).user ?? null;
-  return { user, expired: false, invalid: false };
+  return { user: result.user, expired: false, invalid: false };
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -68,7 +66,7 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
     userLocation?: { latitude: number; longitude: number };
   };
 
-  const authResult = resolveAuthUser(req);
+  const authResult = await resolveAuthUser(req);
   if (authResult.expired) {
     return sendResponse(res, false, "error", ResponseCode.UNAUTHORIZED, ResponseMessage.UNAUTHORIZED);
   }

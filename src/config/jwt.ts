@@ -4,23 +4,45 @@ import jwt, {
   TokenExpiredError,
 } from "jsonwebtoken";
 import { IUser } from "../types/index";
-const createAccessToken = (user: IUser): string => {
-  const userObj = JSON.parse(JSON.stringify(user));
-  delete userObj.__v;
 
-  return jwt.sign({ user: userObj }, process.env.JWT_ACCESS_SECRET ?? "", {
-    expiresIn: "60m",
-  });
+const ACCESS_TOKEN_TTL = "60m";
+const REFRESH_TOKEN_TTL = "1d";
+
+/**
+ * Reduce a user document to the fields that are safe to expose in a token or an
+ * API response. Anything not listed here (notably passwordHash) never leaves
+ * the server.
+ *
+ * @param user User document or plain object.
+ * @returns A plain object containing only publicly shareable user fields.
+ */
+const toPublicUser = (user: IUser): IUser => {
+  const source = typeof (user as any)?.toObject === "function" ? (user as any).toObject() : user;
+  return {
+    _id: String(source._id),
+    name: source.name,
+    avatar: source.avatar,
+    email: source.email,
+    client_id: source.client_id ?? null,
+    authProviders: source.authProviders ?? [],
+    emailVerified: Boolean(source.emailVerified),
+    tokenVersion: Number(source.tokenVersion ?? 0),
+    lineUserId: source.lineUserId ?? null,
+    settings: source.settings,
+    createdAt: source.createdAt,
+    updatedAt: source.updatedAt,
+  };
 };
 
-const createRefreshToken = (user: IUser): string => {
-  const userObj = JSON.parse(JSON.stringify(user));
-  delete userObj.__v;
-
-  return jwt.sign({ user: userObj }, process.env.JWT_REFRESH_SECRET ?? "", {
-    expiresIn: "1d",
+const createAccessToken = (user: IUser): string =>
+  jwt.sign({ user: toPublicUser(user) }, process.env.JWT_ACCESS_SECRET ?? "", {
+    expiresIn: ACCESS_TOKEN_TTL,
   });
-};
+
+const createRefreshToken = (user: IUser): string =>
+  jwt.sign({ user: toPublicUser(user) }, process.env.JWT_REFRESH_SECRET ?? "", {
+    expiresIn: REFRESH_TOKEN_TTL,
+  });
 
 const verifyAccessToken = (token: string) => {
   try {
@@ -53,6 +75,7 @@ const verifyRefreshToken = (token: string) => {
 };
 
 export {
+  toPublicUser,
   createAccessToken,
   createRefreshToken,
   verifyAccessToken,

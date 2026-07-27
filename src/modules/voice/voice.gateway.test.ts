@@ -4,6 +4,11 @@ import jwt from "jsonwebtoken";
 import WebSocket from "ws";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
+vi.mock("../../config/auth", async () => {
+  const { createAuthModuleMock } = await import("../../../tests/helpers/auth-mock");
+  return createAuthModuleMock();
+});
+
 vi.mock("./live-bridge", () => ({
   createLiveBridge: vi.fn(async () => ({
     sendAudio: vi.fn(),

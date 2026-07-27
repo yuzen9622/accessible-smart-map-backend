@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import request from "supertest";
 
+vi.mock("../../config/auth", async () => {
+  const { createAuthModuleMock } = await import("../../../tests/helpers/auth-mock");
+  return createAuthModuleMock();
+});
+
 vi.mock("./emergency-contact.service", () => ({
   listContacts: vi.fn(),
   createContact: vi.fn(),

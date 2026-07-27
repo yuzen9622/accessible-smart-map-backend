@@ -1,34 +1,43 @@
 import { type NextFunction, type Request, type Response } from "express";
 import { sendResponse } from "../config/lib";
 import { ResponseCode, ResponseMessage } from "../types/code";
-import { verifyAccessToken } from "../config/jwt";
-import type { IUser } from "../types";
-const middleware = (req: Request, res: Response, next: NextFunction) => {
-  const authHeader = req.headers.authorization;
-  const token = authHeader && authHeader.split(" ")[1];
-  const validRoute = ["/login", "/token", "/refresh", "/logout"];
+import { authenticateToken } from "../config/auth";
 
-  const verify = verifyAccessToken(token ?? "");
+const PUBLIC_ROUTES = [
+  "/auth/google",
+  "/auth/register",
+  "/auth/login",
+  "/auth/verify-email",
+  "/auth/verify-email/resend",
+  "/auth/password/forgot",
+  "/auth/password/reset",
+  "/refresh",
+  "/logout",
+];
 
-  if (validRoute.includes(req.path)) {
+const middleware = async (req: Request, res: Response, next: NextFunction) => {
+  if (PUBLIC_ROUTES.includes(req.path)) {
     next();
     return;
   }
 
-  if (verify.expired) {
-    console.log("Token expired", verify, token);
-    return sendResponse(res, false, "error", ResponseCode.UNAUTHORIZED, ResponseMessage.UNAUTHORIZED);
+  const authHeader = req.headers.authorization;
+  const token = authHeader && authHeader.split(" ")[1];
+
+  const result = await authenticateToken(token ?? "");
+
+  if (!result.ok) {
+    return sendResponse(
+      res,
+      false,
+      "error",
+      result.expired ? ResponseCode.UNAUTHORIZED : ResponseCode.FORBIDDEN,
+      result.expired ? ResponseMessage.UNAUTHORIZED : ResponseMessage.FORBIDDEN
+    );
   }
 
-  if (!verify.decoded) {
-    console.log(req.path);
-    return sendResponse(res, false, "error", ResponseCode.FORBIDDEN, ResponseMessage.FORBIDDEN);
-  }
+  req.auth = { userId: result.userId, user: result.user };
 
-  const user = verify.decoded.user as IUser;
-  req.auth = { userId: String(user?._id ?? ""), user };
-
-  console.log(`${req.method} ${req.url}`);
   next();
 };
 export default middleware;
