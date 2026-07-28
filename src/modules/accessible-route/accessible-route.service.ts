@@ -447,6 +447,7 @@ async function enrichTopRoutes(
  * @param mode Accessibility mode for exclusion and scoring.
  * @param format Response shape; "compact" dedupes facilities route-level.
  * @param departureTime Departure time used by the realtime transit overlay.
+ * @param envPromise Environment lookup started alongside route planning.
  * @returns The top-3 finalized routes.
  */
 async function finalizeRoutes(
@@ -456,6 +457,7 @@ async function finalizeRoutes(
   mode: AccessibilityMode,
   format: "standard" | "compact" = "standard",
   departureTime?: Date,
+  envPromise?: Promise<EnvConditions | undefined>,
 ): Promise<AccessibleRoute[]> {
   const PRERANK_N = 8;
   const t: Record<string, number> = {};
@@ -481,11 +483,15 @@ async function finalizeRoutes(
   // factor into the score. Never let an env failure break routing.
   let env: EnvConditions | undefined;
   try {
-    env = await getWeatherAndAirQuality(destination.lat, destination.lng);
+    env = envPromise
+      ? await envPromise
+      : await getWeatherAndAirQuality(destination.lat, destination.lng);
   } catch (err) {
     console.warn("[accessible-route] environment lookup failed", err);
     env = undefined;
   }
+  t.env = Date.now() - t0;
+  t0 = Date.now();
   // Stage 3: score with the enriched facility data + rank → final top-3.
   const top = scoreAndRank(topN, mode, env).slice(0, 3);
   t.rank = Date.now() - t0;
@@ -1031,6 +1037,8 @@ export async function findAccessibleRoutes(
   const waypoints = opts.waypoints ?? [];
   const { planOtpRoute } = await import("./planners/otp-routing");
   const t0 = Date.now();
+  const envPromise = getWeatherAndAirQuality(destination.lat, destination.lng)
+    .catch(() => undefined);
 
   if (!waypoints.length) {
     const otpRoutes = await planOtpRoute(origin, destination, {
@@ -1050,6 +1058,7 @@ export async function findAccessibleRoutes(
       mode,
       opts.format,
       opts.departureTime,
+      envPromise,
     );
   }
 
@@ -1092,5 +1101,6 @@ export async function findAccessibleRoutes(
     mode,
     opts.format,
     opts.departureTime,
+    envPromise,
   );
 }

@@ -5,6 +5,10 @@ vi.mock("../../config/fetch", () => ({
   tdxFetch: vi.fn().mockResolvedValue({ ok: true, json: async () => [] }),
 }));
 
+vi.mock("../environment/environment.service", () => ({
+  getWeatherAndAirQuality: vi.fn().mockResolvedValue({}),
+}));
+
 // Mock the driving planner (dynamic-imported by the service) — override only
 // planValhallaRoute; keep ValhallaRoutingError so `instanceof` checks stay valid.
 vi.mock("./planners/valhalla-routing", () => ({
@@ -56,6 +60,7 @@ import { findNearbyParking, findNearby } from "../a11y/a11y.service";
 import { planOtpRoute, planOtpWalk } from "./planners/otp-routing";
 import { getCity } from "../../adapters/google.adapter";
 import { ResponseCode } from "../../types/code";
+import { getWeatherAndAirQuality } from "../environment/environment.service";
 
 const driveRequest = {
   travelMode: "drive" as const,
@@ -92,6 +97,7 @@ beforeEach(() => {
   vi.mocked(findNearby).mockResolvedValue({ nearbyOsm: [] } as any);
   vi.mocked(planOtpRoute).mockResolvedValue([]);
   vi.mocked(planOtpWalk).mockResolvedValue([]);
+  vi.mocked(getWeatherAndAirQuality).mockResolvedValue({});
 });
 
 describe("planAccessibleRouteFromRequest driving a11y highlights append", () => {
@@ -123,6 +129,7 @@ describe("planAccessibleRouteFromRequest driving a11y highlights append", () => 
     expect(highlights.some((h) => h.includes("身障停車格"))).toBe(true);
   });
 });
+
 
 describe("planAccessibleRouteFromRequest parking-aware arrival", () => {
   it("routes to the parking anchor with the true dest as finalWalkTarget (drive)", async () => {
@@ -546,4 +553,3 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
     expect(res.error).toContain("找不到連通的公車或捷運路線");
   });
 });
-

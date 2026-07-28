@@ -53,7 +53,13 @@ export type {
 };
 
 const OTP_TIMEOUT_MS = Number(process.env.OTP_TIMEOUT_MS ?? 30_000);
-const OTP_NUM_ITINERARIES = 15;
+const OTP_NUM_ITINERARIES = 8;
+const OTP_NUM_ITINERARIES_WIDE = 15;
+const OTP_SEARCH_WINDOW_S = Number(process.env.OTP_SEARCH_WINDOW_S ?? 3600);
+const OTP_SEARCH_WINDOW_WIDE_S = Number(
+  process.env.OTP_SEARCH_WINDOW_WIDE_S ?? 28800,
+);
+const OTP_MIN_DISTINCT_ROUTES = 3;
 
 const otpAgent = new http.Agent({ keepAlive: true });
 const otpAgentHttps = new https.Agent({ keepAlive: true });
@@ -217,7 +223,8 @@ query Plan(
   $fromLat: Float!, $fromLon: Float!,
   $toLat: Float!, $toLon: Float!,
   $date: String!, $time: String!,
-  $wheelchair: Boolean!, $numItineraries: Int!, $walkSpeed: Float
+  $wheelchair: Boolean!, $numItineraries: Int!, $walkSpeed: Float,
+  $searchWindow: Long
 ) {
   plan(
     from: { lat: $fromLat, lon: $fromLon }
@@ -227,6 +234,7 @@ query Plan(
     wheelchair: $wheelchair
     walkSpeed: $walkSpeed
     numItineraries: $numItineraries
+    searchWindow: $searchWindow
     transportModes: [${PLAN_TRANSPORT_MODES}]
     locale: "zh-TW"
   ) {
@@ -266,6 +274,8 @@ async function queryOtpPlan(
   departure: Date,
   wheelchair: boolean,
   walkSpeed: number,
+  numItineraries: number,
+  searchWindowSec: number,
 ): Promise<OtpItinerary[]> {
   const baseUrl = process.env.OTP_BASE_URL ?? "http://localhost:8080";
   const response = await otpClient.post(`${baseUrl}/otp/routers/default/index/graphql`, {
@@ -279,7 +289,8 @@ async function queryOtpPlan(
       time: hhmm(departure.getTime()),
       wheelchair,
       walkSpeed,
-      numItineraries: OTP_NUM_ITINERARIES,
+      numItineraries,
+      searchWindow: searchWindowSec,
     },
   });
   const json = response.data as {
@@ -820,7 +831,10 @@ function itineraryUsable(it: OtpItinerary, maxTransfers?: number): boolean {
   return true;
 }
 
-
+function isTimeout(err: unknown): boolean {
+  const code = (err as { code?: string } | null)?.code;
+  return code === "ECONNABORTED" || code === "ETIMEDOUT";
+}
 
 /**
  * Plan transit routes via the OTP2 sidecar. Output is AccessibleRoute-compatible
@@ -846,8 +860,16 @@ export async function planOtpRoute(
 
   const tm: Record<string, number> = {};
   const t0 = Date.now();
+  let failureRecorded = false;
+  const recordPlanFailure = () => {
+    if (failureRecorded) return;
+    failureRecorded = true;
+    planBreaker.recordFailure();
+  };
 
   let firstItineraries: OtpItinerary[] = [];
+  let primarySucceeded = false;
+  let primaryTimedOut = false;
   try {
     firstItineraries = await queryOtpPlan(
       origin,
@@ -855,14 +877,31 @@ export async function planOtpRoute(
       departure,
       wheelchair,
       walkSpeed,
+      OTP_NUM_ITINERARIES,
+      OTP_SEARCH_WINDOW_S,
     );
+    primarySucceeded = true;
     planBreaker.recordSuccess();
   } catch (err) {
-    planBreaker.recordFailure();
-    console.warn("[otp-routing] primary query failed, attempting stop snap", err);
+    recordPlanFailure();
+    primaryTimedOut = isTimeout(err);
+    if (primaryTimedOut) {
+      tm.primaryTimedOut = 1;
+      console.warn("[otp-routing] primary query timed out", err);
+    } else {
+      console.warn("[otp-routing] primary query failed, attempting stop snap", err);
+    }
   }
   tm.otpFirst = Date.now() - t0;
+  if (primaryTimedOut) {
+    console.log(
+      "[route-timing] otp",
+      JSON.stringify({ ...tm, snapped: false, routes: 0 }),
+    );
+    return [];
+  }
   let itineraries = firstItineraries;
+  let effectiveWindowSec = OTP_SEARCH_WINDOW_S;
 
   const maxTransfers = opts?.maxTransfers;
   let snapPre: WalkLeg | null = null;
@@ -879,6 +918,50 @@ export async function planOtpRoute(
 
   const hasBusLeg = (its: OtpItinerary[]) =>
     its.some((it) => it.legs.some((l) => l.mode === "BUS"));
+
+  if (primarySucceeded) {
+    const distinctRouteSignatures = new Set(
+      itineraries
+        .filter((it) => itineraryUsable(it, maxTransfers))
+        .map((it) =>
+          it.legs
+            .filter(isTransitLeg)
+            .map((leg) => leg.route?.shortName ?? leg.mode)
+            .join("+"),
+        )
+        .filter(Boolean),
+    ).size;
+    if (distinctRouteSignatures < OTP_MIN_DISTINCT_ROUTES) {
+      const tWide = Date.now();
+      try {
+        itineraries = await queryOtpPlan(
+          origin,
+          destination,
+          departure,
+          wheelchair,
+          walkSpeed,
+          OTP_NUM_ITINERARIES_WIDE,
+          OTP_SEARCH_WINDOW_WIDE_S,
+        );
+        effectiveWindowSec = OTP_SEARCH_WINDOW_WIDE_S;
+        planBreaker.recordSuccess();
+        tm.otpWide = Date.now() - tWide;
+      } catch (err) {
+        tm.otpWide = Date.now() - tWide;
+        if (isTimeout(err)) {
+          recordPlanFailure();
+          tm.primaryTimedOut = 1;
+          console.warn("[otp-routing] wide query timed out", err);
+          console.log(
+            "[route-timing] otp",
+            JSON.stringify({ ...tm, snapped: false, routes: 0 }),
+          );
+          return [];
+        }
+        console.warn("[otp-routing] wide query failed, retaining narrow result", err);
+      }
+    }
+  }
 
   const straightDistM = haversineCoords(
     [origin.lng, origin.lat],
@@ -903,6 +986,8 @@ export async function planOtpRoute(
           departure,
           wheelchair,
           walkSpeed,
+          OTP_NUM_ITINERARIES,
+          effectiveWindowSec,
         );
         tm.otpRetry = Date.now() - tRetry;
         if (hasUsableTransit(retryItineraries)) {
@@ -933,7 +1018,16 @@ export async function planOtpRoute(
           );
         }
       } catch (err) {
-        planBreaker.recordFailure();
+        recordPlanFailure();
+        if (isTimeout(err)) {
+          tm.primaryTimedOut = 1;
+          console.warn("[otp-routing] snap retry timed out", err);
+          console.log(
+            "[route-timing] otp",
+            JSON.stringify({ ...tm, snapped: false, routes: 0 }),
+          );
+          return [];
+        }
         console.warn("[otp-routing] snap retry failed, falling back to walk-only", err);
       }
     }
@@ -1028,5 +1122,5 @@ export async function planOtpRoute(
       routes: out.length,
     }),
   );
-  return out.slice(0, opts?.limit ?? OTP_NUM_ITINERARIES);
+  return out.slice(0, opts?.limit ?? OTP_NUM_ITINERARIES_WIDE);
 }

@@ -1,6 +1,8 @@
 {
   "routingDefaults": {
-    "walkReluctance": 3.0,
+    "walk": {
+      "reluctance": 2.0
+    },
     "wheelchairAccessibility": {
       "trip": {
         "onlyConsiderAccessible": false,
@@ -15,7 +17,7 @@
       },
       "maxSlope": 0.083
     },
-    "searchWindow": "8h",
+    "searchWindow": "1h",
     "numItineraries": 5,
     "accessEgress": {
       "maxDuration": "30m"

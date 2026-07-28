@@ -8,8 +8,13 @@ vi.mock("./planners/otp-routing", () => ({
   isOtpCircuitOpen: vi.fn(() => false),
 }));
 
+vi.mock("../environment/environment.service", () => ({
+  getWeatherAndAirQuality: vi.fn().mockResolvedValue({}),
+}));
+
 import { findAccessibleRoutes } from "./accessible-route.service";
 import * as otp from "./planners/otp-routing";
+import { getWeatherAndAirQuality } from "../environment/environment.service";
 
 const mockPlan = vi.mocked(otp.planOtpRoute);
 
@@ -41,6 +46,7 @@ function walkOnlySegment(id: string, minutes: number): AccessibleRoute {
 beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(otp.isOtpCircuitOpen).mockReturnValue(false);
+  vi.mocked(getWeatherAndAirQuality).mockResolvedValue({});
 });
 
 describe("findAccessibleRoutes transit waypoint chaining", () => {
