@@ -24,5 +24,18 @@
     },
     "maxDirectStreetDuration": "30m",
     "streetRoutingTimeout": "2s"
+  },
+  "transit": {
+    "transferCacheRequests": [
+      { "modes": "WALK" },
+      { "modes": "WALK", "walk": { "speed": 1.3 } },
+      { "modes": "WALK", "walk": { "speed": 1.0 } },
+      { "modes": "WALK", "walk": { "speed": 0.9 } },
+      {
+        "modes": "WALK",
+        "walk": { "speed": 0.8 },
+        "wheelchairAccessibility": { "enabled": true }
+      }
+    ]
   }
 }
