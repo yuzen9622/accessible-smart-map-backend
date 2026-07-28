@@ -22,6 +22,16 @@ export enum TaiwanCityEn {
   PenghuCounty = "PenghuCounty",
   LienchiangCounty = "LienchiangCounty",
 }
+
+/** TDX 公車 API 的兩組 endpoint scope：市區公車 / 公路客運。 */
+export type BusApiType = "City" | "InterCity";
+
+/** 一次公車查詢的候選 scope：要打哪組 endpoint、用哪個路線名。 */
+export type BusRouteQueryScope = {
+  type: BusApiType;
+  routeId: string;
+};
+
 export type BusStop = {
   StopUID: string;
   StopID: string;

@@ -1,4 +1,9 @@
-import { BusRealtimeNearbyStop, BusRoute } from "../types/transit";
+import {
+  BusApiType,
+  BusRealtimeNearbyStop,
+  BusRoute,
+  BusRouteQueryScope,
+} from "../types/transit";
 
 /**
  * Pure transit text / route helpers — stop-name normalization, route-name
@@ -131,31 +136,27 @@ export function formatRouteName(routeName: string): string {
 }
 
 /**
- * 自動偵測要查詢的公車 API 類型（市區 or 公路）
- * @param fullName 例如 "1619B經中港路不經竹科"、"綠1"、"307"
- * @returns { type: "City" | "InterCity", routeId: string }
+ * 產生一次公車查詢要依序嘗試的候選 scope（市區 / 公路 × 路線名變體）。
+ *
+ * TDX 的 City / InterCity 歸屬無法從路線號碼推導 —— 兩邊都有 4 位數路線且互不
+ * 重疊（0557 是新竹縣市區公車、0968 是公路客運），所以這裡刻意不猜號碼，只用
+ * 呼叫方實際給的 city 決定嘗試順序，由呼叫端依序打到有資料為止。
+ *
+ * @param fullName 使用者給的路線名，例如 "1619B經中港路不經竹科"、"綠1"、"0557"
+ * @param city 呼叫方指定的城市；未指定或為 "InterCity" 時只查公路客運
+ * @returns 依嘗試順序排列、已去重的候選 scope
  */
-export function detectBusApiType(fullName: string): {
-  type: "City" | "InterCity";
-  routeId: string;
-} {
-  const routeId = fullName.match(/^[A-Z]?\d+[A-Z]?/)?.[0] ?? fullName.trim();
+export function busRouteQueryCandidates(
+  fullName: string,
+  city?: string | null
+): BusRouteQueryScope[] {
+  const names = [
+    ...new Set([formatRouteName(fullName), fullName.trim()].filter(Boolean)),
+  ];
+  const types: BusApiType[] =
+    city && city !== "InterCity" ? ["City", "InterCity"] : ["InterCity"];
 
-  let type: "City" | "InterCity";
-
-  if (/^1\d{3}[A-Z]?$/.test(routeId)) {
-    type = "InterCity";
-  } else if (/^\d{4,}$/.test(routeId)) {
-    type = "InterCity";
-  } else if (/[\u4e00-\u9fa5]/.test(routeId)) {
-    type = "City";
-  } else if (/^\d{1,3}$/.test(routeId)) {
-    type = "City";
-  } else {
-    type = "City";
-  }
-  const formatRouteId = formatRouteName(fullName);
-  return { type, routeId: formatRouteId };
+  return types.flatMap((type) => names.map((routeId) => ({ type, routeId })));
 }
 
 /**

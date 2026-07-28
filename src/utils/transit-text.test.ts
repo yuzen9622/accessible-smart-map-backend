@@ -1,5 +1,59 @@
 import { describe, it, expect } from "vitest";
-import { formatWalkStepInstruction } from "./transit-text";
+import {
+  busRouteQueryCandidates,
+  formatWalkStepInstruction,
+} from "./transit-text";
+
+describe("busRouteQueryCandidates", () => {
+  it("有帶城市時先試市區、再退回公路（不從路線號碼猜歸屬）", () => {
+    // 0557 是新竹縣「市區公車」、0968 是「公路客運」，兩者號碼形狀完全一樣，
+    // 所以候選順序只能由呼叫方給的 city 決定，不能靠號碼判斷。
+    expect(busRouteQueryCandidates("0557", "HsinchuCounty")).toEqual([
+      { type: "City", routeId: "0557" },
+      { type: "InterCity", routeId: "0557" },
+    ]);
+    expect(busRouteQueryCandidates("0968", "HsinchuCounty")).toEqual([
+      { type: "City", routeId: "0968" },
+      { type: "InterCity", routeId: "0968" },
+    ]);
+  });
+
+  it("四位數與三位數路線得到相同的候選形狀", () => {
+    expect(busRouteQueryCandidates("307", "Taipei")).toEqual([
+      { type: "City", routeId: "307" },
+      { type: "InterCity", routeId: "307" },
+    ]);
+    expect(busRouteQueryCandidates("1717", "Taipei")).toEqual([
+      { type: "City", routeId: "1717" },
+      { type: "InterCity", routeId: "1717" },
+    ]);
+  });
+
+  it("沒帶城市或指定 InterCity 時只查公路客運", () => {
+    expect(busRouteQueryCandidates("1619")).toEqual([
+      { type: "InterCity", routeId: "1619" },
+    ]);
+    expect(busRouteQueryCandidates("1619", "InterCity")).toEqual([
+      { type: "InterCity", routeId: "1619" },
+    ]);
+  });
+
+  it("路線名含贅字時，格式化後的名稱與原始名稱都是候選", () => {
+    expect(busRouteQueryCandidates("1619B經中港路不經竹科", "Taichung")).toEqual([
+      { type: "City", routeId: "1619B" },
+      { type: "City", routeId: "1619B經中港路不經竹科" },
+      { type: "InterCity", routeId: "1619B" },
+      { type: "InterCity", routeId: "1619B經中港路不經竹科" },
+    ]);
+  });
+
+  it("格式化後與原始名稱相同時不重複產生候選", () => {
+    expect(busRouteQueryCandidates("綠1", "Taichung")).toEqual([
+      { type: "City", routeId: "綠1" },
+      { type: "InterCity", routeId: "綠1" },
+    ]);
+  });
+});
 
 describe("formatWalkStepInstruction", () => {
   it("formats DEPART with street name", () => {

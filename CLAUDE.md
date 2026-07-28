@@ -124,7 +124,7 @@ Agent tools include `findGooglePlaces`, `findA11yPlaces`, `planAccessibleRoute`,
 
 ### TDX transit API
 
-`TdxTokenManager` (exported as the `tdxTokenManager` singleton) in `src/adapters/tdx.adapter.ts` handles OAuth2 `client_credentials` token acquisition + caching for the Taiwan transport data platform. All TDX HTTP calls go through `tdxFetch()` in `src/config/fetch.ts`, which attaches the Bearer token and retries once on 401. Bus route type (city vs. inter-city) is auto-detected from the route name by `detectBusApiType()` in `src/utils/transit-text.ts`.
+`TdxTokenManager` (exported as the `tdxTokenManager` singleton) in `src/adapters/tdx.adapter.ts` handles OAuth2 `client_credentials` token acquisition + caching for the Taiwan transport data platform. All TDX HTTP calls go through `tdxFetch()` in `src/config/fetch.ts`, which attaches the Bearer token and retries once on 401. Bus route type (city vs. inter-city) is **never inferred from the route name** — TDX has 4-digit routes on both sides with zero overlap (`0557` is a HsinchuCounty city bus, `0968` is inter-city). Instead `busRouteQueryCandidates()` (`src/utils/transit-text.ts`) emits ordered candidate scopes from the caller-supplied `city`, and `fetchRouteScoped()` (`src/modules/transit/bus.service.ts`) probes them in order, taking the first that returns usable rows and memoizing the winning scope for 6 hours.
 
 ### MongoDB models (`src/model/*.model.ts`)
 

@@ -13,6 +13,8 @@ export const busUrl = {
     "https://tdx.transportdata.tw/api/basic/v2/Bus/Schedule/City",
   cityVehicleUrl:
     "https://tdx.transportdata.tw/api/basic/v2/Bus/Vehicle/City",
+  interCityScheduleUrl:
+    "https://tdx.transportdata.tw/api/basic/v2/Bus/Schedule/InterCity",
   interCityStopOfRouteUrl:
     "https://tdx.transportdata.tw/api/basic/v2/Bus/StopOfRoute/InterCity/",
   interCityEstimatedTimeOfArrivalUrl:

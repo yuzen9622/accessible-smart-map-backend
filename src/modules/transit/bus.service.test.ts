@@ -215,3 +215,130 @@ describe("searchBusStops — 站牌關鍵字搜尋", () => {
     expect(result.status).toBe(500);
   });
 });
+
+describe("City / InterCity scope 探測（不從路線號碼寫死判斷）", () => {
+  function mockTdxByUrl(rowsFor: (url: string) => unknown[]) {
+    tdxFetchMock.mockImplementation(async (url: string) => ({
+      ok: true,
+      json: async () => rowsFor(url),
+    }));
+  }
+
+  const stopRow = (stopName: string) => ({
+    StopName: { Zh_tw: stopName },
+    Direction: 0,
+    EstimateTime: 300,
+    StopStatus: 0,
+  });
+
+  it("4 位數的市區公車（新竹縣 0557）打 City endpoint，不再誤送公路客運", async () => {
+    mockTdxByUrl((url) =>
+      url.includes("/EstimatedTimeOfArrival/City/HsinchuCounty/0557")
+        ? [stopRow("蓮華寺")]
+        : [],
+    );
+
+    const result = await getBusArrivalAtStop({
+      routeName: "0557",
+      stopName: "蓮華寺",
+      city: TaiwanCityEn.HsinchuCounty,
+      direction: 0,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.arrivals[0]).toMatchObject({ stopName: "蓮華寺", estimateMinutes: 5 });
+    expect(tdxFetchMock).toHaveBeenCalledTimes(1);
+    expect(tdxFetchMock.mock.calls[0][0]).toContain(
+      "/EstimatedTimeOfArrival/City/HsinchuCounty/0557",
+    );
+  });
+
+  it("市區查不到時退回公路客運（0968 走 InterCity）", async () => {
+    mockTdxByUrl((url) =>
+      url.includes("/Streaming/InterCity/0968") ? [stopRow("竹東")] : [],
+    );
+
+    const result = await getBusArrivalAtStop({
+      routeName: "0968",
+      stopName: "竹東",
+      city: TaiwanCityEn.HsinchuCounty,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(tdxFetchMock).toHaveBeenCalledTimes(2);
+    expect(tdxFetchMock.mock.calls[0][0]).toContain("/City/HsinchuCounty/0968");
+    expect(tdxFetchMock.mock.calls[1][0]).toContain("/Streaming/InterCity/0968");
+  });
+
+  it("記住命中的 scope，同一路線再查只打一次 TDX", async () => {
+    mockTdxByUrl((url) =>
+      url.includes("/Streaming/InterCity/2011") ? [stopRow("斗六")] : [],
+    );
+
+    await getBusArrivalAtStop({
+      routeName: "2011",
+      stopName: "斗六",
+      city: TaiwanCityEn.YunlinCounty,
+    });
+    expect(tdxFetchMock).toHaveBeenCalledTimes(2);
+
+    tdxFetchMock.mockClear();
+    const again = await getBusArrivalAtStop({
+      routeName: "2011",
+      stopName: "斗六",
+      city: TaiwanCityEn.YunlinCounty,
+    });
+
+    expect(again.ok).toBe(true);
+    expect(tdxFetchMock).toHaveBeenCalledTimes(1);
+    expect(tdxFetchMock.mock.calls[0][0]).toContain("/Streaming/InterCity/2011");
+  });
+
+  it("兩個 scope 都有同名路線時，以「查得到目標站牌」的那個為準", async () => {
+    mockTdxByUrl((url) =>
+      url.includes("/Streaming/InterCity/5606")
+        ? [stopRow("內灣")]
+        : [stopRow("完全不同的站")],
+    );
+
+    const result = await getBusArrivalAtStop({
+      routeName: "5606",
+      stopName: "內灣",
+      city: TaiwanCityEn.HsinchuCounty,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.arrivals[0].stopName).toBe("內灣");
+  });
+
+  it("某個候選 endpoint 拋錯時仍會試完其他候選", async () => {
+    tdxFetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("/City/HsinchuCounty/5623")) throw new Error("TDX 429");
+      return { ok: true, json: async () => [stopRow("竹東")] };
+    });
+
+    const result = await getBusArrivalAtStop({
+      routeName: "5623",
+      stopName: "竹東",
+      city: TaiwanCityEn.HsinchuCounty,
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("所有候選 endpoint 都失敗時回 500", async () => {
+    tdxFetchMock.mockRejectedValue(new Error("TDX 500"));
+
+    const result = await getBusArrivalAtStop({
+      routeName: "5624",
+      stopName: "竹東",
+      city: TaiwanCityEn.HsinchuCounty,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.status).toBe(500);
+  });
+});

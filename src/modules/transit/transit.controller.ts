@@ -1,5 +1,4 @@
 import { sendResponse } from "../../config/lib";
-import { detectBusApiType } from "../../utils/transit-text";
 import { ResponseCode } from "../../types/code";
 import { MSG, ERROR_MESSAGE, TRANSIT_MSG } from "../../constants/messages";
 import { ApiResponse } from "../../types/response";
