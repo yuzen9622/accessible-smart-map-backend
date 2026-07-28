@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("axios", () => ({ default: { post: vi.fn() } }));
+vi.mock("axios", () => ({ default: { post: vi.fn(), get: vi.fn() } }));
 
 import axios from "axios";
-import { searchPlaces } from "./google.adapter";
+import { autocompletePlaces, getPlaceDetails, searchPlaces } from "./google.adapter";
 
 const mockPost = axios.post as unknown as ReturnType<typeof vi.fn>;
+const mockGet = axios.get as unknown as ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -75,5 +76,45 @@ describe("searchPlaces distance ordering", () => {
     });
 
     expect(places.map((place) => place.name)).toEqual(["最近站", "較遠站"]);
+  });
+});
+
+describe("place language", () => {
+  it("defaults autocomplete predictions to zh-TW", async () => {
+    mockPost.mockResolvedValue({ data: { suggestions: [] } });
+
+    await autocompletePlaces("台北");
+
+    expect(mockPost).toHaveBeenCalledWith(
+      "https://places.googleapis.com/v1/places:autocomplete",
+      expect.objectContaining({ languageCode: "zh-TW", regionCode: "TW" }),
+      expect.any(Object),
+    );
+  });
+
+  it("asks for predictions in the requested language", async () => {
+    mockPost.mockResolvedValue({ data: { suggestions: [] } });
+
+    await autocompletePlaces("taipei", { lang: "en" });
+
+    expect(mockPost).toHaveBeenCalledWith(
+      "https://places.googleapis.com/v1/places:autocomplete",
+      expect.objectContaining({ languageCode: "en" }),
+      expect.any(Object),
+    );
+  });
+
+  it("sends languageCode on place details alongside the session token", async () => {
+    mockGet.mockResolvedValue({
+      data: { id: "ChIJ123", displayName: { text: "Taipei 101" }, location: { latitude: 25.03, longitude: 121.56 } },
+    });
+
+    const details = await getPlaceDetails("ChIJ123", { sessionToken: "tok", lang: "en" });
+
+    expect(mockGet).toHaveBeenCalledWith(
+      "https://places.googleapis.com/v1/places/ChIJ123",
+      expect.objectContaining({ params: { languageCode: "en", sessionToken: "tok" } }),
+    );
+    expect(details?.name).toBe("Taipei 101");
   });
 });

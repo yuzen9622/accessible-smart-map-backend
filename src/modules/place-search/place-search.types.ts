@@ -1,4 +1,5 @@
 import type { OsmType } from "../../types/osm";
+import { DEFAULT_LANG, type SupportedLang } from "../../types/lang";
 
 export type PlaceSource = "osm" | "google";
 
@@ -107,7 +108,7 @@ export function googleTypesToClassType(types: string[]): ClassType {
   return { placeClass: null, placeType: first ?? null };
 }
 
-const TYPE_LABELS: Record<string, string> = {
+const TYPE_LABELS_ZH: Record<string, string> = {
   station: "車站",
   subway_entrance: "捷運出入口",
   halt: "車站",
@@ -166,14 +167,102 @@ const TYPE_LABELS: Record<string, string> = {
   yes: "地點",
 };
 
+const TYPE_LABELS_EN: Record<string, string> = {
+  station: "Station",
+  subway_entrance: "Metro entrance",
+  halt: "Station",
+  bus_stop: "Bus stop",
+  bus_station: "Bus terminal",
+  restaurant: "Restaurant",
+  fast_food: "Fast food",
+  cafe: "Café",
+  bakery: "Bakery",
+  bar: "Bar",
+  hospital: "Hospital",
+  clinic: "Clinic",
+  dentist: "Dentist",
+  pharmacy: "Pharmacy",
+  school: "School",
+  kindergarten: "Kindergarten",
+  college: "College",
+  university: "University",
+  library: "Library",
+  bank: "Bank",
+  atm: "ATM",
+  post_office: "Post office",
+  police: "Police station",
+  fire_station: "Fire station",
+  townhall: "Town hall",
+  parking: "Parking",
+  fuel: "Petrol station",
+  toilets: "Restroom",
+  hotel: "Hotel",
+  hostel: "Hostel",
+  museum: "Museum",
+  attraction: "Attraction",
+  viewpoint: "Viewpoint",
+  park: "Park",
+  garden: "Garden",
+  playground: "Playground",
+  sports_centre: "Sports centre",
+  swimming_pool: "Swimming pool",
+  mall: "Shopping mall",
+  department_store: "Department store",
+  supermarket: "Supermarket",
+  convenience: "Convenience store",
+  marketplace: "Market",
+  place_of_worship: "Place of worship",
+  temple: "Temple",
+  theatre: "Theatre",
+  cinema: "Cinema",
+  residential: "Residential",
+  house: "House",
+  apartments: "Apartments",
+  suburb: "District",
+  neighbourhood: "Neighbourhood",
+  city: "City",
+  town: "Town",
+  village: "Village",
+  yes: "Place",
+};
+
 /**
- * Resolves the human-readable Chinese label for a place type. The frontend can
- * render this directly instead of maintaining its own type→label table.
+ * Resolves the human-readable label for a place type in the requested language.
+ * The frontend can render this directly instead of maintaining its own
+ * type→label table per locale.
  *
  * @param placeType The OSM-style place type.
+ * @param lang The response language; defaults to zh-TW.
  * @returns The label, or null when the type has no known translation.
  */
-export function typeLabelOf(placeType: string | null): string | null {
+export function typeLabelOf(
+  placeType: string | null,
+  lang: SupportedLang = DEFAULT_LANG,
+): string | null {
   if (!placeType) return null;
-  return TYPE_LABELS[placeType] ?? null;
+  const table = lang === "en" ? TYPE_LABELS_EN : TYPE_LABELS_ZH;
+  return table[placeType] ?? null;
+}
+
+const FACILITY_LABELS: Record<string, Record<SupportedLang, string>> = {
+  elevator: { "zh-TW": "電梯", en: "Elevator" },
+  ramp: { "zh-TW": "坡道", en: "Ramp" },
+  toilet: { "zh-TW": "無障礙廁所", en: "Accessible restroom" },
+  metro: { "zh-TW": "捷運無障礙設施", en: "Metro accessible facility" },
+  other: { "zh-TW": "無障礙設施", en: "Accessible facility" },
+};
+
+/**
+ * Resolves the label for a nearby accessibility facility category. Doubles as
+ * the fallback display name for records whose own name field is empty.
+ *
+ * @param category The facility category key.
+ * @param lang The response language; defaults to zh-TW.
+ * @returns The label, falling back to the generic facility wording.
+ */
+export function facilityLabelOf(
+  category: string,
+  lang: SupportedLang = DEFAULT_LANG,
+): string {
+  return (FACILITY_LABELS[category] ?? FACILITY_LABELS.other)[lang];
 }

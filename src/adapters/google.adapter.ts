@@ -1,4 +1,5 @@
 import axios from "axios";
+import { DEFAULT_LANG, type SupportedLang } from "../types/lang";
 
 const MAPS_KEY = () => process.env.GOOGLE_MAPS_API_KEY ?? "";
 
@@ -235,19 +236,24 @@ export interface AutocompleteSuggestion {
  * any failure or when the API key is missing.
  *
  * @param input Partial free-text query typed by the user.
- * @param opts Session token and optional bias coordinates.
+ * @param opts Session token, optional bias coordinates and response language.
  * @returns The predicted places (place predictions only; query predictions dropped).
  */
 export async function autocompletePlaces(
   input: string,
-  opts: { sessionToken?: string; latitude?: number; longitude?: number } = {},
+  opts: {
+    sessionToken?: string;
+    latitude?: number;
+    longitude?: number;
+    lang?: SupportedLang;
+  } = {},
 ): Promise<AutocompleteSuggestion[]> {
   const key = MAPS_KEY();
   if (!key) return [];
 
   const body: Record<string, unknown> = {
     input,
-    languageCode: "zh-TW",
+    languageCode: opts.lang ?? DEFAULT_LANG,
     regionCode: "TW",
   };
   if (opts.sessionToken) body.sessionToken = opts.sessionToken;
@@ -327,17 +333,17 @@ function toAddressComponents(raw: unknown): GoogleAddressComponents {
  * the place has no usable coordinates.
  *
  * @param placeId The Google place id to resolve.
- * @param opts Session token to bind billing to the preceding autocomplete calls.
+ * @param opts Session token to bind billing to the preceding autocomplete calls, and response language.
  * @returns The place details, or null.
  */
 export async function getPlaceDetails(
   placeId: string,
-  opts: { sessionToken?: string } = {},
+  opts: { sessionToken?: string; lang?: SupportedLang } = {},
 ): Promise<GooglePlaceDetails | null> {
   const key = MAPS_KEY();
   if (!key) return null;
 
-  const params: Record<string, string> = {};
+  const params: Record<string, string> = { languageCode: opts.lang ?? DEFAULT_LANG };
   if (opts.sessionToken) params.sessionToken = opts.sessionToken;
 
   try {

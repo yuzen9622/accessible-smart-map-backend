@@ -84,6 +84,7 @@ describe("GET /a11y/search/autocomplete", () => {
       lng: undefined,
       sources: undefined,
       limit: undefined,
+      lang: "zh-TW",
     });
   });
 
@@ -101,7 +102,25 @@ describe("GET /a11y/search/autocomplete", () => {
       lng: 121.565,
       sources: undefined,
       limit: undefined,
+      lang: "zh-TW",
     });
+  });
+
+  it("normalizes the lang tag before handing it to the service", async () => {
+    vi.mocked(service.autocomplete).mockResolvedValue([]);
+
+    await request(app).get(`${BASE}/search/autocomplete`).query({ q: "台北", lang: "en-US" });
+
+    expect(service.autocomplete).toHaveBeenCalledWith(expect.objectContaining({ lang: "en" }));
+  });
+
+  it("returns 400 on an unsupported lang tag", async () => {
+    const res = await request(app)
+      .get(`${BASE}/search/autocomplete`)
+      .query({ q: "台北", lang: "ja" });
+
+    expect(res.status).toBe(400);
+    expect(service.autocomplete).not.toHaveBeenCalled();
   });
 
   it("forwards the parsed source whitelist and limit", async () => {
@@ -166,7 +185,20 @@ describe("GET /a11y/search/details/:id", () => {
       sessionToken: "tok",
       lat: 25.03,
       lng: 121.5,
+      lang: "zh-TW",
     });
+  });
+
+  it("forwards the requested language and answers 404 in it", async () => {
+    vi.mocked(service.details).mockResolvedValue(null);
+
+    const res = await request(app)
+      .get(`${BASE}/search/details/osm:node:1`)
+      .query({ lang: "en" });
+
+    expect(res.status).toBe(404);
+    expect(res.body.message).toBe("Place not found");
+    expect(service.details).toHaveBeenCalledWith(expect.objectContaining({ lang: "en" }));
   });
 
   it("accepts an osm id", async () => {

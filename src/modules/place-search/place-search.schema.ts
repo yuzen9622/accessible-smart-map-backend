@@ -7,6 +7,25 @@ extendZodWithOpenApi(z);
 const coordString = (label: string) =>
   z.string().regex(/^-?\d+(\.\d+)?$/, `Must be a valid ${label}`);
 
+/**
+ * Response language. Accepts any zh-* / en-* tag — the controller normalizes
+ * `zh-tw`, `zh-Hant-TW` and `en-US` — while anything else is a 400 rather than
+ * a silent fallback, so a typo surfaces instead of quietly returning Chinese.
+ *
+ * The primary subtag is spelled out as character classes rather than carrying an
+ * `i` flag: zod-to-openapi copies the flag into the emitted `pattern`, which is
+ * not valid JSON Schema and breaks client-side validators.
+ */
+const langString = () =>
+  z
+    .string()
+    .regex(/^([Zz][Hh]|[Ee][Nn])(-[A-Za-z0-9]+)*$/, "lang 只接受 zh-TW 或 en")
+    .optional()
+    .openapi({
+      example: "zh-TW",
+      description: "回傳語言，zh-TW（預設）或 en。影響名稱、地址與 typeLabel。",
+    });
+
 const PlaceGeoPointSchema = z
   .object({
     type: z.literal("Point").openapi({ example: "Point" }),
@@ -158,6 +177,7 @@ export const AutocompleteQuerySchema = z
       .max(20)
       .optional()
       .openapi({ example: 8, description: "合併後的結果上限，預設 8" }),
+    lang: langString(),
   })
   .strict();
 
@@ -181,6 +201,7 @@ export const DetailsQuerySchema = z
       .openapi({ example: "b2c3d4e5-...", description: "與 autocomplete 相同的 session UUID" }),
     lat: coordString("latitude").optional().openapi({ example: "25.0330" }),
     lng: coordString("longitude").optional().openapi({ example: "121.5654" }),
+    lang: langString(),
   })
   .strict();
 
@@ -212,7 +233,7 @@ registry.registerPath({
   tags: ["Accessibility"],
   summary: "地點搜尋自動完成",
   description:
-    "逐字輸入時呼叫，合併 OSM（Nominatim）與 Google Places 兩路預測並去重。不含無障礙資訊；OSM 筆帶座標，Google 筆的 location 恆為 null。帶 sessiontoken 與後續 details 綁成一次 Google 計費。",
+    "逐字輸入時呼叫，合併 OSM（Nominatim）與 Google Places 兩路預測並去重。不含無障礙資訊；OSM 筆帶座標，Google 筆的 location 恆為 null。帶 sessiontoken 與後續 details 綁成一次 Google 計費。`lang=en` 時 Google 預測與 typeLabel 回英文，OSM 名稱取決於該物件是否有 name:en tag，沒有則回退原名。",
   request: { query: AutocompleteQuerySchema },
   responses: {
     200: {
@@ -230,7 +251,7 @@ registry.registerPath({
   tags: ["Accessibility"],
   summary: "地點詳情與無障礙判定",
   description:
-    "使用者點選某筆預測後呼叫，依 id 前綴分派到 Google Place Details 或 OSM lookup，取座標與欄位並就近查本地無障礙資料，回傳單一 PlaceResult（含三態徽章與附近設施）。osm: 開頭的 id 不會呼叫 Google、不消耗 session token。",
+    "使用者點選某筆預測後呼叫，依 id 前綴分派到 Google Place Details 或 OSM lookup，取座標與欄位並就近查本地無障礙資料，回傳單一 PlaceResult（含三態徽章與附近設施）。osm: 開頭的 id 不會呼叫 Google、不消耗 session token。`lang=en` 時名稱、地址與 typeLabel 回英文；nearbyFacilities 的 name／address 來自本地中文資料集，僅 typeLabel 會翻譯。",
   request: { params: DetailsParamsSchema, query: DetailsQuerySchema },
   responses: {
     200: {

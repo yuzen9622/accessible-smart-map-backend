@@ -58,6 +58,29 @@ describe("searchOsmPlaces", () => {
     ]);
   });
 
+  it("asks Photon for English names and builds an English-order address", async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        features: [
+          feature({
+            name: "Taipei 101",
+            street: "Section 5, Xinyi Road",
+            district: "Xinyi District",
+            city: "Taipei City",
+          }),
+        ],
+      },
+    });
+
+    const places = await searchOsmPlaces("taipei", { lang: "en" });
+
+    expect(mockGet).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ params: expect.objectContaining({ lang: "en" }) }),
+    );
+    expect(places[0].displayName).toBe("7 Section 5, Xinyi Road, Xinyi District, Taipei City");
+  });
+
   it("sends the bias coordinates and over-fetches to survive country filtering", async () => {
     mockGet.mockResolvedValue({ data: { features: [] } });
 

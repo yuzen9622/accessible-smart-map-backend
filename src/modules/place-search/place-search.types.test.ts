@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildGooglePlaceId,
   buildOsmPlaceId,
+  facilityLabelOf,
   googleTypesToClassType,
   normalizeName,
   parsePlaceId,
@@ -93,5 +94,25 @@ describe("typeLabelOf", () => {
     expect(typeLabelOf("attraction")).toBe("景點");
     expect(typeLabelOf("zoo")).toBeNull();
     expect(typeLabelOf(null)).toBeNull();
+  });
+
+  it("serves the English table when asked, with the same key coverage", () => {
+    expect(typeLabelOf("station", "en")).toBe("Station");
+    expect(typeLabelOf("attraction", "en")).toBe("Attraction");
+    expect(typeLabelOf("zoo", "en")).toBeNull();
+    expect(typeLabelOf(null, "en")).toBeNull();
+  });
+});
+
+describe("facilityLabelOf", () => {
+  it("labels facility categories per language", () => {
+    expect(facilityLabelOf("elevator")).toBe("電梯");
+    expect(facilityLabelOf("elevator", "en")).toBe("Elevator");
+    expect(facilityLabelOf("toilet", "en")).toBe("Accessible restroom");
+  });
+
+  it("falls back to the generic wording for unknown categories", () => {
+    expect(facilityLabelOf("teleporter")).toBe("無障礙設施");
+    expect(facilityLabelOf("teleporter", "en")).toBe("Accessible facility");
   });
 });

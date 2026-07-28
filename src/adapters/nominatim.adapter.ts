@@ -7,6 +7,7 @@ import {
   type OsmPlace,
   type OsmType,
 } from "../types/osm";
+import { DEFAULT_LANG, type SupportedLang } from "../types/lang";
 
 const BASE_URL = () => process.env.NOMINATIM_BASE_URL ?? "https://nominatim.openstreetmap.org";
 const USER_AGENT = () =>
@@ -99,9 +100,14 @@ export function parseOsmLookupId(value: string): { osmType: OsmType; osmId: stri
  *
  * @param osmType The OSM object type.
  * @param osmId The numeric OSM id as a string.
+ * @param opts Response language.
  * @returns The place, or null.
  */
-export async function lookupOsmPlace(osmType: OsmType, osmId: string): Promise<OsmPlace | null> {
+export async function lookupOsmPlace(
+  osmType: OsmType,
+  osmId: string,
+  opts: { lang?: SupportedLang } = {},
+): Promise<OsmPlace | null> {
   if (!(await awaitSlot())) return null;
 
   try {
@@ -112,7 +118,10 @@ export async function lookupOsmPlace(osmType: OsmType, osmId: string): Promise<O
         addressdetails: 1,
       },
       timeout: REQUEST_TIMEOUT_MS,
-      headers: { "User-Agent": USER_AGENT(), "Accept-Language": "zh-TW" },
+      headers: {
+        "User-Agent": USER_AGENT(),
+        "Accept-Language": opts.lang ?? DEFAULT_LANG,
+      },
     });
     if (!Array.isArray(response.data) || response.data.length === 0) return null;
     return toOsmPlace(response.data[0]);

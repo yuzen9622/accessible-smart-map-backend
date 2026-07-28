@@ -119,7 +119,33 @@ describe("autocomplete", () => {
       sessionToken: "tok",
       latitude: 25.03,
       longitude: 121.5,
+      lang: "zh-TW",
     });
+  });
+
+  it("passes the language to both upstreams and labels types in it", async () => {
+    vi.mocked(searchOsmPlaces).mockResolvedValue([osmPlace()] as any);
+    vi.mocked(autocompletePlaces).mockResolvedValue([]);
+
+    const items = await service.autocomplete({ q: "taipei", lang: "en" });
+
+    expect(searchOsmPlaces).toHaveBeenCalledWith("taipei", expect.objectContaining({ lang: "en" }));
+    expect(autocompletePlaces).toHaveBeenCalledWith("taipei", expect.objectContaining({ lang: "en" }));
+    expect(items[0].typeLabel).toBe("Attraction");
+  });
+
+  it("keys the caches per language so locales never share an entry", async () => {
+    vi.mocked(searchOsmPlaces).mockResolvedValue([]);
+    vi.mocked(autocompletePlaces).mockResolvedValue([]);
+
+    await service.autocomplete({ q: "台北" });
+    await service.autocomplete({ q: "台北", lang: "en" });
+
+    const keys = vi.mocked(redisGet).mock.calls.map(([key]) => key);
+    expect(keys.some((k) => k.startsWith("ps:ac:zh-TW:"))).toBe(true);
+    expect(keys.some((k) => k.startsWith("ps:ac:en:"))).toBe(true);
+    expect(keys.some((k) => k.startsWith("ps:osm:zh-TW:"))).toBe(true);
+    expect(keys.some((k) => k.startsWith("ps:osm:en:"))).toBe(true);
   });
 
   it("drops the Google entry when both sources return the same normalized name", async () => {
@@ -282,7 +308,7 @@ describe("details", () => {
 
     const result = await service.details({ id: "osm:node:123456" });
 
-    expect(lookupOsmPlace).toHaveBeenCalledWith("node", "123456");
+    expect(lookupOsmPlace).toHaveBeenCalledWith("node", "123456", { lang: "zh-TW" });
     expect(getPlaceDetails).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       id: "osm:node:123456",

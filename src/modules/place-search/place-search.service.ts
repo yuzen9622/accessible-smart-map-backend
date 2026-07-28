@@ -17,6 +17,7 @@ import { haversineMeters } from "../../utils/geo";
 import {
   buildGooglePlaceId,
   buildOsmPlaceId,
+  facilityLabelOf,
   googleTypesToClassType,
   normalizeName,
   parsePlaceId,
@@ -25,6 +26,7 @@ import {
   type GeoPoint,
   type PlaceSource,
 } from "./place-search.types";
+import { DEFAULT_LANG, type SupportedLang } from "../../types/lang";
 
 const AC_CACHE_PREFIX = "ps:ac:";
 const AC_CACHE_TTL_SEC = 120;
@@ -128,10 +130,17 @@ function distanceFrom(
 /**
  * Nominatim results for a query, behind a longer-lived cache than the merged
  * autocomplete response — OSM data changes slowly and every cache hit is one
- * fewer request against the 1/sec budget the adapter has to respect.
+ * fewer request against the 1/sec budget the adapter has to respect. The
+ * language is part of the key: the same query yields different names per
+ * language, so sharing one entry would serve the wrong locale.
  */
-async function cachedOsmSearch(q: string, lat?: number, lng?: number): Promise<OsmPlace[]> {
-  const cacheKey = `${OSM_SEARCH_CACHE_PREFIX}${q}:${roundCoarse(lat)}:${roundCoarse(lng)}`;
+async function cachedOsmSearch(
+  q: string,
+  lang: SupportedLang,
+  lat?: number,
+  lng?: number,
+): Promise<OsmPlace[]> {
+  const cacheKey = `${OSM_SEARCH_CACHE_PREFIX}${lang}:${q}:${roundCoarse(lat)}:${roundCoarse(lng)}`;
   const cached = await redisGet(cacheKey);
   if (cached) {
     try {
@@ -144,6 +153,7 @@ async function cachedOsmSearch(q: string, lat?: number, lng?: number): Promise<O
     latitude: lat,
     longitude: lng,
     limit: PER_SOURCE_LIMIT,
+    lang,
   });
   if (places.length > 0) {
     await redisSet(cacheKey, JSON.stringify(places), OSM_SEARCH_CACHE_TTL_SEC);
@@ -151,7 +161,12 @@ async function cachedOsmSearch(q: string, lat?: number, lng?: number): Promise<O
   return places;
 }
 
-function osmToItem(place: OsmPlace, lat?: number, lng?: number): AutocompleteItem {
+function osmToItem(
+  place: OsmPlace,
+  lang: SupportedLang,
+  lat?: number,
+  lng?: number,
+): AutocompleteItem {
   return {
     id: buildOsmPlaceId(place.osmType, place.osmId),
     source: "osm",
@@ -159,7 +174,7 @@ function osmToItem(place: OsmPlace, lat?: number, lng?: number): AutocompleteIte
     secondaryText: place.displayName || null,
     placeClass: place.placeClass,
     placeType: place.placeType,
-    typeLabel: typeLabelOf(place.placeType),
+    typeLabel: typeLabelOf(place.placeType, lang),
     location: toGeoPoint(place.latitude, place.longitude),
     distanceMeters: distanceFrom(lat, lng, place.latitude, place.longitude),
   };
@@ -206,11 +221,11 @@ function mergeItems(
  * Returns place-name predictions for a partial query, merged from OSM and
  * Google. Cheap by design: no coordinate resolution for Google and no
  * accessibility lookup for either source. Short-TTL Redis cache keyed on the
- * enabled sources plus query and coarse coordinates (session token is
+ * enabled sources plus language, query and coarse coordinates (session token is
  * intentionally excluded — predictions are token-independent). Each source
  * degrades independently, so one failing upstream never empties the response.
  *
- * @param params Query text, optional session token, bias coordinates, source filter and cap.
+ * @param params Query text, optional session token, bias coordinates, source filter, cap and language.
  * @returns The predicted places.
  */
 export async function autocomplete(params: {
@@ -220,11 +235,13 @@ export async function autocomplete(params: {
   lng?: number;
   sources?: PlaceSource[];
   limit?: number;
+  lang?: SupportedLang;
 }): Promise<AutocompleteItem[]> {
   const { q, sessionToken, lat, lng } = params;
   const sources = params.sources?.length ? params.sources : ALL_SOURCES;
   const limit = params.limit ?? DEFAULT_AUTOCOMPLETE_LIMIT;
-  const cacheKey = `${AC_CACHE_PREFIX}${[...sources].sort().join(",")}:${limit}:${q}:${roundCoarse(lat)}:${roundCoarse(lng)}`;
+  const lang = params.lang ?? DEFAULT_LANG;
+  const cacheKey = `${AC_CACHE_PREFIX}${lang}:${[...sources].sort().join(",")}:${limit}:${q}:${roundCoarse(lat)}:${roundCoarse(lng)}`;
 
   const cached = await redisGet(cacheKey);
   if (cached) {
@@ -236,14 +253,16 @@ export async function autocomplete(params: {
   }
 
   const [osmResult, googleResult] = await Promise.allSettled([
-    sources.includes("osm") ? cachedOsmSearch(q, lat, lng) : Promise.resolve([]),
+    sources.includes("osm") ? cachedOsmSearch(q, lang, lat, lng) : Promise.resolve([]),
     sources.includes("google")
-      ? autocompletePlaces(q, { sessionToken, latitude: lat, longitude: lng })
+      ? autocompletePlaces(q, { sessionToken, latitude: lat, longitude: lng, lang })
       : Promise.resolve([]),
   ]);
 
   const osmItems =
-    osmResult.status === "fulfilled" ? osmResult.value.map((p) => osmToItem(p, lat, lng)) : [];
+    osmResult.status === "fulfilled"
+      ? osmResult.value.map((p) => osmToItem(p, lang, lat, lng))
+      : [];
   const googleItems: AutocompleteItem[] =
     googleResult.status === "fulfilled"
       ? googleResult.value.slice(0, PER_SOURCE_LIMIT).map((s) => ({
@@ -278,10 +297,10 @@ async function countNearbyFacilities(lat: number, lng: number): Promise<number> 
 }
 
 /** Classifies a metro facility name the way the a11y module does. */
-function metroCategory(name: string): { category: string; typeLabel: string } {
-  if (name.includes("電梯")) return { category: "elevator", typeLabel: "電梯" };
-  if (name.includes("坡道")) return { category: "ramp", typeLabel: "坡道" };
-  return { category: "other", typeLabel: "無障礙設施" };
+function metroCategory(name: string): string {
+  if (name.includes("電梯")) return "elevator";
+  if (name.includes("坡道")) return "ramp";
+  return "other";
 }
 
 function coordsOf(doc: { location?: { coordinates?: number[] } }): [number, number] | null {
@@ -296,10 +315,14 @@ function coordsOf(doc: { location?: { coordinates?: number[] } }): [number, numb
  * card renders. `a11y.service` has no reusable equivalent — its `findNearby*`
  * helpers cap toilets at five and blend three sources into their metro bucket —
  * so these are dedicated queries returning exactly the shape the card needs.
+ *
+ * Only the category labels follow the requested language — the `name` and
+ * `address` fields come from local datasets that exist in Chinese only.
  */
 async function findNearbyFacilities(
   lat: number,
   lng: number,
+  lang: SupportedLang,
 ): Promise<{ toilets: NearbyFacilityBrief[]; metro: NearbyFacilityBrief[] }> {
   const geoQuery = makeGeoQuery(lng, lat, NEARBY_LIST_RADIUS_M);
   const [bathrooms, osmToilets, metro] = await Promise.all([
@@ -337,12 +360,13 @@ async function findNearbyFacilities(
     };
   };
 
+  const toiletLabel = facilityLabelOf("toilet", lang);
   const toilets = [
     ...bathrooms.map((doc: any) =>
-      toBrief(String(doc._id), doc.name, doc.address ?? null, "toilet", "無障礙廁所", doc),
+      toBrief(String(doc._id), doc.name, doc.address ?? null, "toilet", toiletLabel, doc),
     ),
     ...osmToilets.map((doc: any) =>
-      toBrief(String(doc._id), doc.name ?? "無障礙廁所", null, "toilet", "無障礙廁所", doc),
+      toBrief(String(doc._id), doc.name ?? toiletLabel, null, "toilet", toiletLabel, doc),
     ),
   ]
     .filter((brief): brief is NearbyFacilityBrief => brief !== null)
@@ -351,9 +375,10 @@ async function findNearbyFacilities(
 
   const metroBriefs = metro
     .map((doc: any) => {
-      const name = doc["出入口電梯/無障礙坡道名稱"] ?? "捷運無障礙設施";
-      const { category, typeLabel } = metroCategory(name);
-      return toBrief(String(doc._id), name, null, category, typeLabel, doc);
+      const rawName = doc["出入口電梯/無障礙坡道名稱"];
+      const name = rawName ?? facilityLabelOf("metro", lang);
+      const category = metroCategory(rawName ?? "");
+      return toBrief(String(doc._id), name, null, category, facilityLabelOf(category, lang), doc);
     })
     .filter((brief): brief is NearbyFacilityBrief => brief !== null)
     .sort((a, b) => a.distanceMeters - b.distanceMeters)
@@ -400,6 +425,7 @@ type ResolvedPlace = Omit<PlaceResult, "accessibility" | "nearbyFacilities" | "d
 function googleToResolved(
   id: string,
   d: GooglePlaceDetails & { location: { latitude: number; longitude: number } },
+  lang: SupportedLang,
 ): ResolvedPlace {
   const { placeClass, placeType } = googleTypesToClassType(d.types);
   return {
@@ -411,7 +437,7 @@ function googleToResolved(
     location: toGeoPoint(d.location.latitude, d.location.longitude),
     placeClass,
     placeType,
-    typeLabel: typeLabelOf(placeType),
+    typeLabel: typeLabelOf(placeType, lang),
     rating: d.rating,
     reviewKey: { placeId: d.id, placeType: "google" },
     externalLinks: {
@@ -422,7 +448,7 @@ function googleToResolved(
   };
 }
 
-function osmToResolved(id: string, p: OsmPlace): ResolvedPlace {
+function osmToResolved(id: string, p: OsmPlace, lang: SupportedLang): ResolvedPlace {
   return {
     id,
     source: "osm",
@@ -432,7 +458,7 @@ function osmToResolved(id: string, p: OsmPlace): ResolvedPlace {
     location: toGeoPoint(p.latitude, p.longitude),
     placeClass: p.placeClass,
     placeType: p.placeType,
-    typeLabel: typeLabelOf(p.placeType),
+    typeLabel: typeLabelOf(p.placeType, lang),
     rating: null,
     reviewKey: { placeId: toReviewOsmId(p.osmType, p.osmId), placeType: "osm" },
     externalLinks: {
@@ -447,8 +473,9 @@ function osmToResolved(id: string, p: OsmPlace): ResolvedPlace {
 async function cachedOsmLookup(
   osmType: OsmPlace["osmType"],
   osmId: string,
+  lang: SupportedLang,
 ): Promise<OsmPlace | null> {
-  const cacheKey = `${OSM_DETAILS_CACHE_PREFIX}${osmType}:${osmId}`;
+  const cacheKey = `${OSM_DETAILS_CACHE_PREFIX}${lang}:${osmType}:${osmId}`;
   const cached = await redisGet(cacheKey);
   if (cached) {
     try {
@@ -457,7 +484,7 @@ async function cachedOsmLookup(
       /* treat malformed cache as a miss */
     }
   }
-  const place = await lookupOsmPlace(osmType, osmId);
+  const place = await lookupOsmPlace(osmType, osmId, { lang });
   if (place) await redisSet(cacheKey, JSON.stringify(place), OSM_DETAILS_CACHE_TTL_SEC);
   return place;
 }
@@ -472,7 +499,7 @@ async function cachedOsmLookup(
  * Google results are deliberately not cached — their terms disallow persisting
  * anything but the place id.
  *
- * @param params Prefixed place id, optional session token, and optional user coordinates.
+ * @param params Prefixed place id, optional session token, optional user coordinates and language.
  * @returns The resolved place, or null.
  */
 export async function details(params: {
@@ -480,8 +507,10 @@ export async function details(params: {
   sessionToken?: string;
   lat?: number;
   lng?: number;
+  lang?: SupportedLang;
 }): Promise<PlaceResult | null> {
   const { id, sessionToken, lat, lng } = params;
+  const lang = params.lang ?? DEFAULT_LANG;
   const parsed = parsePlaceId(id);
   if (!parsed) return null;
 
@@ -490,21 +519,25 @@ export async function details(params: {
   let googleWheelchairPartial = false;
 
   if (parsed.source === "google") {
-    const d = await getPlaceDetails(parsed.googlePlaceId, { sessionToken });
+    const d = await getPlaceDetails(parsed.googlePlaceId, { sessionToken, lang });
     if (!d || !d.location) return null;
-    resolved = googleToResolved(id, d as GooglePlaceDetails & { location: { latitude: number; longitude: number } });
+    resolved = googleToResolved(
+      id,
+      d as GooglePlaceDetails & { location: { latitude: number; longitude: number } },
+      lang,
+    );
     googleWheelchair = d.wheelchair;
     googleWheelchairPartial = d.wheelchairPartial;
   } else {
-    const p = await cachedOsmLookup(parsed.osmType, parsed.osmId);
+    const p = await cachedOsmLookup(parsed.osmType, parsed.osmId, lang);
     if (!p) return null;
-    resolved = osmToResolved(id, p);
+    resolved = osmToResolved(id, p, lang);
   }
 
   const [placeLng, placeLat] = resolved.location.coordinates;
   const [accessibility, nearbyFacilities] = await Promise.all([
     computeAccessibility(placeLat, placeLng, googleWheelchair, googleWheelchairPartial),
-    findNearbyFacilities(placeLat, placeLng),
+    findNearbyFacilities(placeLat, placeLng, lang),
   ]);
 
   return {
