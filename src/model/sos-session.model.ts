@@ -72,6 +72,7 @@ sosSessionSchema.index(
 );
 sosSessionSchema.index({ shareToken: 1 }, { unique: true });
 sosSessionSchema.index({ status: 1, createdAt: 1 });
+sosSessionSchema.index({ userId: 1, createdAt: -1 });
 sosSessionSchema.index({ status: 1, locationUpdatedAt: 1 });
 
 const SosSession = model<ISosSession>("SosSession", sosSessionSchema);

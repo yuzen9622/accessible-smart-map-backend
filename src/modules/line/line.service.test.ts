@@ -10,6 +10,10 @@ vi.mock("../../adapters/line.adapter", () => ({
     text: "controls",
     _sid: sessionId,
   })),
+  buildSosMenuMessage: vi.fn(() => ({ type: "text", text: "menu" })),
+  buildBoundContactsMessage: vi.fn(() => ({ type: "flex", altText: "contacts" })),
+  buildSosHistoryMessage: vi.fn(() => ({ type: "flex", altText: "history" })),
+  buildUnbindConfirmMessage: vi.fn(() => ({ type: "text", text: "confirm" })),
 }));
 
 vi.mock("./line-agent.service", () => ({
@@ -19,6 +23,16 @@ vi.mock("./line-agent.service", () => ({
 vi.mock("./line-memory", () => ({
   getLineChatHistory: vi.fn(),
   appendLineChatTurn: vi.fn(),
+  getPendingRename: vi.fn().mockResolvedValue(null),
+  setPendingRename: vi.fn().mockResolvedValue(undefined),
+  clearPendingRename: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./line-menu.service", () => ({
+  listBoundContacts: vi.fn(),
+  listSosHistory: vi.fn(),
+  renameBoundContact: vi.fn(),
+  unbindContact: vi.fn(),
 }));
 
 vi.mock("../sos/sos.service", () => ({
@@ -60,14 +74,30 @@ vi.mock("../accessible-route/accessible-route.service", () => ({
 
 import { getRoutePreview, handleEvents } from "./line.service";
 import {
+  buildBoundContactsMessage,
   buildClaimedControlsMessage,
+  buildSosHistoryMessage,
+  buildSosMenuMessage,
+  buildUnbindConfirmMessage,
   replyAgentResult,
   replyMessages,
   replyText,
   showLoadingAnimation,
 } from "../../adapters/line.adapter";
 import { runLineAgent } from "./line-agent.service";
-import { appendLineChatTurn, getLineChatHistory } from "./line-memory";
+import {
+  appendLineChatTurn,
+  clearPendingRename,
+  getLineChatHistory,
+  getPendingRename,
+  setPendingRename,
+} from "./line-memory";
+import {
+  listBoundContacts,
+  listSosHistory,
+  renameBoundContact,
+  unbindContact,
+} from "./line-menu.service";
 import {
   acknowledgeSession,
   claimSession,
@@ -114,6 +144,25 @@ beforeEach(() => {
   } as any);
   vi.mocked(getLineChatHistory).mockResolvedValue([]);
   vi.mocked(appendLineChatTurn).mockResolvedValue(undefined);
+  vi.mocked(getPendingRename).mockResolvedValue(null);
+  vi.mocked(setPendingRename).mockResolvedValue(undefined);
+  vi.mocked(clearPendingRename).mockResolvedValue(undefined);
+  vi.mocked(buildSosMenuMessage).mockReturnValue({
+    type: "text",
+    text: "menu",
+  } as any);
+  vi.mocked(buildBoundContactsMessage).mockReturnValue({
+    type: "flex",
+    altText: "contacts",
+  } as any);
+  vi.mocked(buildSosHistoryMessage).mockReturnValue({
+    type: "flex",
+    altText: "history",
+  } as any);
+  vi.mocked(buildUnbindConfirmMessage).mockReturnValue({
+    type: "text",
+    text: "confirm",
+  } as any);
   vi.mocked(runLineAgent).mockResolvedValue({ text: "ok", toolResults: [] });
   vi.mocked(redisSetNx).mockResolvedValue(true);
   vi.mocked(acknowledgeSession).mockResolvedValue({
@@ -706,5 +755,309 @@ describe("line.service — route preview", () => {
       maxTransfers: 2,
       departureTime: "2026-07-09T16:00:00+08:00",
     });
+  });
+});
+
+describe("line.service — SOS information menu", () => {
+  function groupPostbackEvent(data: string): LineEvent {
+    return {
+      type: "postback",
+      replyToken: "rp",
+      source: { type: "group", groupId: "G1" },
+      postback: { data },
+    } as unknown as LineEvent;
+  }
+
+  const boundContact = {
+    contactId: "68f0000000000000000000aa",
+    contactName: "小明",
+    ownerId: "u1",
+    ownerName: "王小明",
+    updatedAt: new Date("2026-07-01T00:00:00Z"),
+  };
+
+  it("replies the menu on the exact trigger without calling the agent", async () => {
+    await handleEvents([textEvent("SOS資訊查詢")]);
+
+    expect(vi.mocked(replyMessages)).toHaveBeenCalledWith("r1", [
+      { type: "text", text: "menu" },
+    ]);
+    expect(vi.mocked(runLineAgent)).not.toHaveBeenCalled();
+    expect(vi.mocked(appendLineChatTurn)).not.toHaveBeenCalled();
+  });
+
+  it("still routes near-miss text to the agent", async () => {
+    await handleEvents([textEvent("SOS 資訊查詢")]);
+
+    expect(vi.mocked(runLineAgent)).toHaveBeenCalled();
+    expect(vi.mocked(buildSosMenuMessage)).not.toHaveBeenCalled();
+  });
+
+  it("lists bound contacts as a carousel", async () => {
+    vi.mocked(listBoundContacts).mockResolvedValue({
+      ok: true,
+      httpCode: ResponseCode.OK,
+      message: "OK",
+      data: [boundContact],
+    });
+
+    await handleEvents([postbackEvent("action=sos_contacts")]);
+
+    expect(vi.mocked(listBoundContacts)).toHaveBeenCalledWith("U1");
+    expect(vi.mocked(buildBoundContactsMessage)).toHaveBeenCalledWith([
+      boundContact,
+    ]);
+    expect(vi.mocked(replyMessages)).toHaveBeenCalledWith("rp", [
+      { type: "flex", altText: "contacts" },
+    ]);
+  });
+
+  it("replies the empty-state message when nothing is bound", async () => {
+    vi.mocked(listBoundContacts).mockResolvedValue({
+      ok: true,
+      httpCode: ResponseCode.OK,
+      message: "OK",
+      data: [],
+    });
+
+    await handleEvents([postbackEvent("action=sos_contacts")]);
+
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith(
+      "rp",
+      LINE_MSG.SOS_NO_CONTACTS,
+    );
+    expect(vi.mocked(buildBoundContactsMessage)).not.toHaveBeenCalled();
+  });
+
+  it("replies the bind prompt and clears any stale rename slot", async () => {
+    await handleEvents([postbackEvent("action=sos_bind_start")]);
+
+    expect(vi.mocked(clearPendingRename)).toHaveBeenCalledWith("U1");
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith(
+      "rp",
+      LINE_MSG.SOS_BIND_PROMPT,
+    );
+  });
+
+  it("replies the static help text", async () => {
+    await handleEvents([postbackEvent("action=sos_help")]);
+
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith("rp", LINE_MSG.SOS_HELP);
+  });
+
+  it("passes the owner filter through to the history query", async () => {
+    vi.mocked(listSosHistory).mockResolvedValue({
+      ok: true,
+      httpCode: ResponseCode.OK,
+      message: "OK",
+      data: {
+        entries: [
+          {
+            sessionId: "s1",
+            ownerId: "u1",
+            ownerName: "王小明",
+            type: "body",
+            status: "resolved",
+            handlingStatus: "resolved",
+            address: "台北車站",
+            createdAt: new Date("2026-07-01T00:00:00Z"),
+            resolvedAt: new Date("2026-07-01T00:30:00Z"),
+            claimedByName: "小明",
+          },
+        ],
+        owners: [{ ownerId: "u1", ownerName: "王小明" }],
+        activeOwnerId: "u1",
+      },
+    });
+
+    await handleEvents([postbackEvent("action=sos_history&owner=u1")]);
+
+    expect(vi.mocked(listSosHistory)).toHaveBeenCalledWith({
+      lineUserId: "U1",
+      ownerId: "u1",
+    });
+    expect(vi.mocked(replyMessages)).toHaveBeenCalledWith("rp", [
+      { type: "flex", altText: "history" },
+    ]);
+  });
+
+  it("replies the empty-state message when there is no history", async () => {
+    vi.mocked(listSosHistory).mockResolvedValue({
+      ok: true,
+      httpCode: ResponseCode.OK,
+      message: "OK",
+      data: { entries: [], owners: [] },
+    });
+
+    await handleEvents([postbackEvent("action=sos_history")]);
+
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith(
+      "rp",
+      LINE_MSG.SOS_NO_HISTORY,
+    );
+  });
+
+  it("asks for confirmation before unbinding", async () => {
+    vi.mocked(listBoundContacts).mockResolvedValue({
+      ok: true,
+      httpCode: ResponseCode.OK,
+      message: "OK",
+      data: [boundContact],
+    });
+
+    await handleEvents([
+      postbackEvent(`action=sos_unbind&cid=${boundContact.contactId}`),
+    ]);
+
+    expect(vi.mocked(buildUnbindConfirmMessage)).toHaveBeenCalledWith(
+      boundContact,
+    );
+    expect(vi.mocked(unbindContact)).not.toHaveBeenCalled();
+  });
+
+  it("rejects a contact id that is not one of the caller's bindings", async () => {
+    vi.mocked(listBoundContacts).mockResolvedValue({
+      ok: true,
+      httpCode: ResponseCode.OK,
+      message: "OK",
+      data: [boundContact],
+    });
+
+    await handleEvents([
+      postbackEvent("action=sos_unbind&cid=68f0000000000000000000bb"),
+    ]);
+
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith(
+      "rp",
+      LINE_MSG.SOS_CONTACT_NOT_FOUND,
+    );
+    expect(vi.mocked(buildUnbindConfirmMessage)).not.toHaveBeenCalled();
+  });
+
+  it("unbinds on confirmation", async () => {
+    vi.mocked(unbindContact).mockResolvedValue({
+      ok: true,
+      httpCode: ResponseCode.OK,
+      message: LINE_MSG.SOS_UNBIND_DONE,
+      data: { ownerName: "王小明" },
+    });
+
+    await handleEvents([
+      postbackEvent(`action=sos_unbind_do&cid=${boundContact.contactId}`),
+    ]);
+
+    expect(vi.mocked(unbindContact)).toHaveBeenCalledWith({
+      lineUserId: "U1",
+      contactId: boundContact.contactId,
+    });
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith(
+      "rp",
+      LINE_MSG.SOS_UNBIND_DONE,
+    );
+  });
+
+  it("answers an unknown sos_ action with the info message", async () => {
+    await handleEvents([postbackEvent("action=sos_unknown")]);
+
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith("rp", LINE_MSG.INFO);
+  });
+
+  it("refuses menu postbacks without an identified user and never queries", async () => {
+    await handleEvents([groupPostbackEvent("action=sos_contacts")]);
+
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith("rp", LINE_MSG.INFO);
+    expect(vi.mocked(listBoundContacts)).not.toHaveBeenCalled();
+    expect(vi.mocked(listSosHistory)).not.toHaveBeenCalled();
+  });
+});
+
+describe("line.service — pending display-name edit", () => {
+  const contactId = "68f0000000000000000000aa";
+
+  it("starts the edit only for the caller's own binding", async () => {
+    vi.mocked(listBoundContacts).mockResolvedValue({
+      ok: true,
+      httpCode: ResponseCode.OK,
+      message: "OK",
+      data: [
+        {
+          contactId,
+          contactName: "小明",
+          ownerId: "u1",
+          ownerName: "王小明",
+        },
+      ],
+    });
+
+    await handleEvents([
+      postbackEvent(`action=sos_contact_rename&cid=${contactId}`),
+    ]);
+
+    expect(vi.mocked(setPendingRename)).toHaveBeenCalledWith("U1", contactId);
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith(
+      "rp",
+      LINE_MSG.SOS_RENAME_PROMPT,
+    );
+  });
+
+  it("applies the next message as the new name and clears the slot", async () => {
+    vi.mocked(getPendingRename).mockResolvedValue(contactId);
+    vi.mocked(renameBoundContact).mockResolvedValue({
+      ok: true,
+      httpCode: ResponseCode.OK,
+      message: "已將顯示名稱改為「阿明」。",
+      data: { name: "阿明" },
+    });
+
+    await handleEvents([textEvent(" 阿明 ")]);
+
+    expect(vi.mocked(renameBoundContact)).toHaveBeenCalledWith({
+      lineUserId: "U1",
+      contactId,
+      name: "阿明",
+    });
+    expect(vi.mocked(clearPendingRename)).toHaveBeenCalledWith("U1");
+    expect(vi.mocked(runLineAgent)).not.toHaveBeenCalled();
+  });
+
+  it("keeps the slot when the name is rejected", async () => {
+    vi.mocked(getPendingRename).mockResolvedValue(contactId);
+    vi.mocked(renameBoundContact).mockResolvedValue({
+      ok: false,
+      httpCode: ResponseCode.INVALID_INPUT,
+      message: LINE_MSG.SOS_RENAME_INVALID,
+    });
+
+    await handleEvents([textEvent("x".repeat(60))]);
+
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith(
+      "r1",
+      LINE_MSG.SOS_RENAME_INVALID,
+    );
+    expect(vi.mocked(clearPendingRename)).not.toHaveBeenCalled();
+  });
+
+  it("cancels on the cancel word without renaming", async () => {
+    vi.mocked(getPendingRename).mockResolvedValue(contactId);
+
+    await handleEvents([textEvent("取消")]);
+
+    expect(vi.mocked(renameBoundContact)).not.toHaveBeenCalled();
+    expect(vi.mocked(clearPendingRename)).toHaveBeenCalledWith("U1");
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith(
+      "r1",
+      LINE_MSG.SOS_RENAME_CANCELLED,
+    );
+  });
+
+  it("lets the menu trigger win over a pending edit", async () => {
+    vi.mocked(getPendingRename).mockResolvedValue(contactId);
+
+    await handleEvents([textEvent("SOS資訊查詢")]);
+
+    expect(vi.mocked(renameBoundContact)).not.toHaveBeenCalled();
+    expect(vi.mocked(replyMessages)).toHaveBeenCalledWith("r1", [
+      { type: "text", text: "menu" },
+    ]);
   });
 });

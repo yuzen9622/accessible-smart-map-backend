@@ -2,7 +2,11 @@ import { webhook } from "@line/bot-sdk";
 import { Types } from "mongoose";
 import EmergencyContact from "../../model/emergency-contact.model";
 import {
+  buildBoundContactsMessage,
   buildClaimedControlsMessage,
+  buildSosHistoryMessage,
+  buildSosMenuMessage,
+  buildUnbindConfirmMessage,
   replyAgentResult,
   replyMessages,
   replyText,
@@ -25,16 +29,31 @@ import { redisSetNx } from "../../config/redis";
 import { ResponseCode } from "../../types/code";
 import { stripLineMarkdown } from "../../utils/strip-line-markdown";
 import type {
+  LineBoundContact,
   LineEvent,
   LineRoutePreviewData,
   LineServiceResult,
 } from "./line.types";
 import type { AccessibilityMode, TravelMode } from "../../types/route";
 import type { OAIMessage } from "../../types/openai-chat";
-import { appendLineChatTurn, getLineChatHistory } from "./line-memory";
+import {
+  appendLineChatTurn,
+  clearPendingRename,
+  getLineChatHistory,
+  getPendingRename,
+  setPendingRename,
+} from "./line-memory";
 import { runLineAgent } from "./line-agent.service";
+import {
+  listBoundContacts,
+  listSosHistory,
+  renameBoundContact,
+  unbindContact,
+} from "./line-menu.service";
 
 const EVENT_DEDUP_TTL_SEC = 3600;
+const SOS_MENU_TRIGGER = "SOS資訊查詢";
+const RENAME_CANCEL_WORD = "取消";
 
 function getUserId(event: LineEvent): string | undefined {
   const source = event.source as webhook.UserSource | undefined;
@@ -211,6 +230,202 @@ async function handleTextMessage(
 }
 
 /**
+ * Applies a pending display-name edit. A format error keeps the pending slot so the
+ * user can simply type again; the cancel word and every terminal outcome clear it.
+ *
+ * @param replyToken One-time reply token from the webhook event.
+ * @param lineUserId The LINE user id of the sender.
+ * @param contactId The emergency-contact id awaiting a new display name.
+ * @param text The trimmed message text.
+ */
+async function handleRenameInput(
+  replyToken: string,
+  lineUserId: string,
+  contactId: string,
+  text: string,
+): Promise<void> {
+  if (text === RENAME_CANCEL_WORD) {
+    await clearPendingRename(lineUserId);
+    await replyText(replyToken, LINE_MSG.SOS_RENAME_CANCELLED);
+    return;
+  }
+
+  const result = await renameBoundContact({ lineUserId, contactId, name: text });
+  if (!result.ok && result.httpCode === ResponseCode.INVALID_INPUT) {
+    await replyText(replyToken, result.message);
+    return;
+  }
+  await clearPendingRename(lineUserId);
+  await replyText(replyToken, result.message);
+}
+
+/**
+ * Routes an inbound text message. The SOS menu trigger and a pending display-name
+ * edit are handled deterministically; everything else falls through to the agent.
+ *
+ * @param replyToken One-time reply token from the webhook event.
+ * @param text The raw message text.
+ * @param lineUserId The LINE user id of the sender, when the source is a user.
+ */
+async function handleTextEvent(
+  replyToken: string,
+  text: string,
+  lineUserId?: string,
+): Promise<void> {
+  const trimmed = text.trim();
+  if (trimmed === SOS_MENU_TRIGGER) {
+    await replyMessages(replyToken, [buildSosMenuMessage()]);
+    return;
+  }
+
+  if (lineUserId) {
+    let pendingContactId: string | null = null;
+    try {
+      pendingContactId = await getPendingRename(lineUserId);
+    } catch (error) {
+      console.error("[line.service] pending rename lookup failed", error);
+    }
+    if (pendingContactId) {
+      try {
+        await handleRenameInput(
+          replyToken,
+          lineUserId,
+          pendingContactId,
+          trimmed,
+        );
+      } catch (error) {
+        console.error("[line.service] rename handling failed", error);
+        await replyText(replyToken, LINE_MSG.INFO);
+      }
+      return;
+    }
+  }
+
+  await handleTextMessage(replyToken, text, lineUserId);
+}
+
+/**
+ * Looks up one of the caller's own bound contacts by id. Returns null when the id
+ * is not among this LINE account's bindings, so a forged postback id can never
+ * reach another user's record.
+ *
+ * @param lineUserId The LINE user id of the caller.
+ * @param contactId The contact id carried by the postback.
+ * @returns The matching bound contact, or null.
+ */
+async function findOwnBoundContact(
+  lineUserId: string,
+  contactId: string | null,
+): Promise<LineBoundContact | null> {
+  if (!contactId) return null;
+  const result = await listBoundContacts(lineUserId);
+  return (
+    result.data?.find((contact) => contact.contactId === contactId) ?? null
+  );
+}
+
+/**
+ * Handles the SOS information menu postbacks (`action=sos_*`). These carry no
+ * session id, but they do require an identified LINE user: every query is scoped
+ * by `lineUserId`, so the caller is resolved before this function runs.
+ *
+ * @param replyToken One-time reply token from the webhook event.
+ * @param action The parsed postback action.
+ * @param params The parsed postback parameters.
+ * @param lineUserId The LINE user id of the caller.
+ */
+async function handleMenuPostback(
+  replyToken: string,
+  action: string,
+  params: URLSearchParams,
+  lineUserId: string,
+): Promise<void> {
+  try {
+    if (action === "sos_menu") {
+      await replyMessages(replyToken, [buildSosMenuMessage()]);
+      return;
+    }
+    if (action === "sos_help") {
+      await replyText(replyToken, LINE_MSG.SOS_HELP);
+      return;
+    }
+    if (action === "sos_bind_start") {
+      await clearPendingRename(lineUserId);
+      await replyText(replyToken, LINE_MSG.SOS_BIND_PROMPT);
+      return;
+    }
+
+    await showLoadingAnimation(lineUserId).catch(() => {});
+
+    if (action === "sos_contacts") {
+      const result = await listBoundContacts(lineUserId);
+      if (!result.ok || !result.data?.length) {
+        await replyText(replyToken, LINE_MSG.SOS_NO_CONTACTS);
+        return;
+      }
+      await replyMessages(replyToken, [
+        buildBoundContactsMessage(result.data),
+      ]);
+      return;
+    }
+
+    if (action === "sos_history") {
+      const result = await listSosHistory({
+        lineUserId,
+        ownerId: params.get("owner") ?? undefined,
+      });
+      if (!result.ok || !result.data) {
+        await replyText(replyToken, result.message);
+        return;
+      }
+      if (!result.data.entries.length) {
+        await replyText(replyToken, LINE_MSG.SOS_NO_HISTORY);
+        return;
+      }
+      await replyMessages(replyToken, [buildSosHistoryMessage(result.data)]);
+      return;
+    }
+
+    if (action === "sos_contact_rename") {
+      const contact = await findOwnBoundContact(lineUserId, params.get("cid"));
+      if (!contact) {
+        await replyText(replyToken, LINE_MSG.SOS_CONTACT_NOT_FOUND);
+        return;
+      }
+      await setPendingRename(lineUserId, contact.contactId);
+      await replyText(replyToken, LINE_MSG.SOS_RENAME_PROMPT);
+      return;
+    }
+
+    if (action === "sos_unbind") {
+      const contact = await findOwnBoundContact(lineUserId, params.get("cid"));
+      if (!contact) {
+        await replyText(replyToken, LINE_MSG.SOS_CONTACT_NOT_FOUND);
+        return;
+      }
+      await replyMessages(replyToken, [buildUnbindConfirmMessage(contact)]);
+      return;
+    }
+
+    if (action === "sos_unbind_do") {
+      const contactId = params.get("cid");
+      if (!contactId) {
+        await replyText(replyToken, LINE_MSG.SOS_CONTACT_NOT_FOUND);
+        return;
+      }
+      const result = await unbindContact({ lineUserId, contactId });
+      await replyText(replyToken, result.message);
+      return;
+    }
+
+    await replyText(replyToken, LINE_MSG.INFO);
+  } catch (error) {
+    console.error("[line.service] menu postback handling failed", error);
+    await replyText(replyToken, LINE_MSG.INFO);
+  }
+}
+
+/**
  * Detects whether an SOS action observed an already-resolved / not-active session,
  * so every postback action can be normalized to one unified "resolved" reply. Narrows
  * `ServiceResult.data` (typed `unknown`) with an object guard before reading `reason`.
@@ -229,8 +444,11 @@ function observedResolved(result: ServiceResult): boolean {
 }
 
 /**
- * Handles an SOS control postback from a notification or claim-controls message.
- * Each action maps to a deterministic SOS service call (never the agent). Malformed
+ * Handles a postback event. `sos_*` actions belong to the SOS information menu and
+ * are dispatched before the session checks below, since they carry no session id —
+ * they still require an identified LINE user because every menu query is scoped by
+ * `lineUserId`. Every other action is an SOS control postback from a notification or
+ * claim-controls message, and maps to a deterministic SOS service call (never the agent). Malformed
  * postbacks are answered with the generic info message without any session lookup;
  * once the action is known-valid, an authorization-preserving pre-check replies with
  * the unified "resolved" message for an already-closed session (and unauthorized
@@ -248,6 +466,15 @@ async function handlePostback(event: webhook.PostbackEvent): Promise<void> {
   const sid = params.get("sid");
   const value = params.get("v");
   const lineUserId = getUserId(event);
+
+  if (action?.startsWith("sos_")) {
+    if (!lineUserId) {
+      await replyText(replyToken, LINE_MSG.INFO);
+      return;
+    }
+    await handleMenuPostback(replyToken, action, params, lineUserId);
+    return;
+  }
 
   if (!sid || !lineUserId) {
     await replyText(replyToken, LINE_MSG.INFO);
@@ -362,7 +589,7 @@ async function handleEvent(event: LineEvent): Promise<void> {
       if (!event.replyToken) return;
       const lineUserId = getUserId(event);
       if (message.type === "text") {
-        await handleTextMessage(event.replyToken, message.text, lineUserId);
+        await handleTextEvent(event.replyToken, message.text, lineUserId);
         return;
       }
       if (message.type === "location") {

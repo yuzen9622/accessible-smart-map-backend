@@ -1,6 +1,12 @@
 import { messagingApi } from "@line/bot-sdk";
 import { LINE_MSG, SOS_TYPE_LABEL } from "../constants/messages";
+import { taipeiHHmm, taipeiYmdDash } from "../config/taipei-time";
 import type { SosType } from "../modules/sos/sos.types";
+import type {
+  LineBoundContact,
+  LineSosHistoryData,
+  LineSosHistoryEntry,
+} from "../modules/line/line.types";
 
 let client: messagingApi.MessagingApiClient | null = null;
 
@@ -199,6 +205,305 @@ export function buildClaimedControlsMessage(
         },
       ],
     },
+  };
+}
+
+const MAX_CAROUSEL_BUBBLES = 10;
+
+/**
+ * Builds the SOS information menu: one text message carrying the four
+ * quick-reply postback entries the family user can tap instead of typing.
+ *
+ * @returns A LINE text message with the menu quick replies.
+ */
+export function buildSosMenuMessage(): messagingApi.TextMessage {
+  return {
+    type: "text",
+    text: LINE_MSG.SOS_MENU_PROMPT,
+    quickReply: {
+      items: [
+        {
+          type: "action",
+          action: {
+            type: "postback",
+            label: "綁定的使用者",
+            data: "action=sos_contacts",
+            displayText: "查看目前綁定的使用者",
+          },
+        },
+        {
+          type: "action",
+          action: {
+            type: "postback",
+            label: "新增綁定",
+            data: "action=sos_bind_start",
+            displayText: "新增綁定使用者",
+            inputOption: "openKeyboard",
+          },
+        },
+        {
+          type: "action",
+          action: {
+            type: "postback",
+            label: "使用方式",
+            data: "action=sos_help",
+            displayText: "查看 SOS 使用方式",
+          },
+        },
+        {
+          type: "action",
+          action: {
+            type: "postback",
+            label: "求助歷史",
+            data: "action=sos_history",
+            displayText: "查看求助歷史",
+          },
+        },
+      ],
+    },
+  };
+}
+
+/**
+ * Builds one bubble per bound emergency-contact record, each carrying rename and
+ * unbind postback buttons scoped to that contact id.
+ *
+ * @param contact One bound contact entry.
+ * @returns A Flex bubble for the carousel.
+ */
+function boundContactBubble(contact: LineBoundContact): messagingApi.FlexBubble {
+  const details: messagingApi.FlexComponent[] = [
+    {
+      type: "text",
+      text: contact.ownerName,
+      weight: "bold",
+      size: "lg",
+      wrap: true,
+    },
+    {
+      type: "text",
+      text: `我的顯示名稱：${contact.contactName}`,
+      size: "sm",
+      color: "#666666",
+      margin: "md",
+      wrap: true,
+    },
+  ];
+  if (contact.updatedAt) {
+    details.push({
+      type: "text",
+      text: `最近更新：${taipeiYmdDash(contact.updatedAt)} ${taipeiHHmm(contact.updatedAt)}`,
+      size: "xs",
+      color: "#999999",
+      margin: "sm",
+    });
+  }
+  return {
+    type: "bubble",
+    body: { type: "box", layout: "vertical", contents: details },
+    footer: {
+      type: "box",
+      layout: "vertical",
+      spacing: "sm",
+      contents: [
+        {
+          type: "button",
+          style: "primary",
+          action: {
+            type: "postback",
+            label: "修改顯示名稱",
+            data: `action=sos_contact_rename&cid=${contact.contactId}`,
+            displayText: `修改「${contact.ownerName}」的顯示名稱`,
+            inputOption: "openKeyboard",
+          },
+        },
+        {
+          type: "button",
+          style: "secondary",
+          action: {
+            type: "postback",
+            label: "解除綁定",
+            data: `action=sos_unbind&cid=${contact.contactId}`,
+            displayText: `解除與「${contact.ownerName}」的綁定`,
+          },
+        },
+      ],
+    },
+  };
+}
+
+/**
+ * Builds the bound-users carousel. Callers handle the empty case with a plain
+ * text message, so this builder assumes at least one contact.
+ *
+ * @param contacts Bound contacts, newest first.
+ * @returns A LINE Flex carousel message.
+ */
+export function buildBoundContactsMessage(
+  contacts: LineBoundContact[],
+): messagingApi.FlexMessage {
+  return {
+    type: "flex",
+    altText: LINE_MSG.SOS_CONTACTS_TITLE,
+    contents: {
+      type: "carousel",
+      contents: contacts.slice(0, MAX_CAROUSEL_BUBBLES).map(boundContactBubble),
+    },
+  };
+}
+
+/**
+ * Builds the confirmation step for releasing a binding, so a single mis-tap never
+ * removes the notification channel.
+ *
+ * @param contact The binding about to be released.
+ * @returns A LINE text message with confirm / cancel quick replies.
+ */
+export function buildUnbindConfirmMessage(
+  contact: LineBoundContact,
+): messagingApi.TextMessage {
+  return {
+    type: "text",
+    text: `確定要解除與「${contact.ownerName}」的綁定嗎？解除後你不會再收到對方的求救通知。`,
+    quickReply: {
+      items: [
+        {
+          type: "action",
+          action: {
+            type: "postback",
+            label: "確定解除",
+            data: `action=sos_unbind_do&cid=${contact.contactId}`,
+            displayText: "確定解除綁定",
+          },
+        },
+        {
+          type: "action",
+          action: {
+            type: "postback",
+            label: "取消",
+            data: "action=sos_menu",
+            displayText: "取消",
+          },
+        },
+      ],
+    },
+  };
+}
+
+/**
+ * Builds one bubble per past SOS session.
+ *
+ * @param entry One history entry.
+ * @returns A Flex bubble for the carousel.
+ */
+function sosHistoryBubble(entry: LineSosHistoryEntry): messagingApi.FlexBubble {
+  const statusLabel = entry.status === "active" ? "進行中" : "已解除";
+  const contents: messagingApi.FlexComponent[] = [
+    {
+      type: "text",
+      text: `${entry.ownerName}・${SOS_TYPE_LABEL[entry.type]}`,
+      weight: "bold",
+      size: "md",
+      wrap: true,
+    },
+    {
+      type: "text",
+      text: entry.createdAt
+        ? `發生時間：${taipeiYmdDash(entry.createdAt)} ${taipeiHHmm(entry.createdAt)}`
+        : "發生時間：未知",
+      size: "sm",
+      color: "#666666",
+      margin: "md",
+      wrap: true,
+    },
+    {
+      type: "text",
+      text: `狀態：${statusLabel}`,
+      size: "sm",
+      color: entry.status === "active" ? "#D32F2F" : "#2E7D32",
+      margin: "sm",
+    },
+  ];
+  if (entry.address) {
+    contents.push({
+      type: "text",
+      text: `地點：${entry.address}`,
+      size: "xs",
+      color: "#999999",
+      margin: "sm",
+      wrap: true,
+    });
+  }
+  if (entry.claimedByName) {
+    contents.push({
+      type: "text",
+      text: `承接者：${entry.claimedByName}`,
+      size: "xs",
+      color: "#999999",
+      margin: "sm",
+      wrap: true,
+    });
+  }
+  if (entry.resolvedAt) {
+    contents.push({
+      type: "text",
+      text: `解除時間：${taipeiYmdDash(entry.resolvedAt)} ${taipeiHHmm(entry.resolvedAt)}`,
+      size: "xs",
+      color: "#999999",
+      margin: "sm",
+    });
+  }
+  return {
+    type: "bubble",
+    body: { type: "box", layout: "vertical", contents },
+  };
+}
+
+/**
+ * Builds the SOS history carousel plus per-owner filter quick replies. The owner
+ * list is already limited by the service layer so the quick-reply cap is never hit.
+ *
+ * @param data History entries and the owners available as filters.
+ * @returns A LINE Flex carousel message.
+ */
+export function buildSosHistoryMessage(
+  data: LineSosHistoryData,
+): messagingApi.FlexMessage {
+  const items: messagingApi.QuickReplyItem[] = [];
+  if (data.activeOwnerId) {
+    items.push({
+      type: "action",
+      action: {
+        type: "postback",
+        label: "全部",
+        data: "action=sos_history",
+        displayText: "查看全部求助歷史",
+      },
+    });
+  }
+  for (const owner of data.owners) {
+    if (owner.ownerId === data.activeOwnerId) continue;
+    items.push({
+      type: "action",
+      action: {
+        type: "postback",
+        label: owner.ownerName.slice(0, 20),
+        data: `action=sos_history&owner=${owner.ownerId}`,
+        displayText: `查看 ${owner.ownerName} 的求助歷史`,
+      },
+    });
+  }
+
+  return {
+    type: "flex",
+    altText: LINE_MSG.SOS_HISTORY_TITLE,
+    contents: {
+      type: "carousel",
+      contents: data.entries
+        .slice(0, MAX_CAROUSEL_BUBBLES)
+        .map(sosHistoryBubble),
+    },
+    ...(items.length ? { quickReply: { items } } : {}),
   };
 }
 

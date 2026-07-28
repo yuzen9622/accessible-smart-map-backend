@@ -15,7 +15,14 @@ vi.mock("@line/bot-sdk", () => ({
   },
 }));
 
-import { replyAgentResult, showLoadingAnimation } from "./line.adapter";
+import {
+  buildBoundContactsMessage,
+  buildSosHistoryMessage,
+  buildSosMenuMessage,
+  buildUnbindConfirmMessage,
+  replyAgentResult,
+  showLoadingAnimation,
+} from "./line.adapter";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -101,5 +108,107 @@ describe("line.adapter — showLoadingAnimation", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("line.adapter — SOS menu builders", () => {
+  const contact = {
+    contactId: "68f0000000000000000000aa",
+    contactName: "小明",
+    ownerId: "u1",
+    ownerName: "王小明",
+    updatedAt: new Date("2026-07-01T04:00:00Z"),
+  };
+
+  it("builds the four menu entries as postbacks", () => {
+    const message = buildSosMenuMessage();
+    const data = (message.quickReply?.items ?? []).map((item) =>
+      item.action.type === "postback" ? item.action.data : undefined,
+    );
+
+    expect(data).toEqual([
+      "action=sos_contacts",
+      "action=sos_bind_start",
+      "action=sos_help",
+      "action=sos_history",
+    ]);
+    expect(data.every((entry) => (entry ?? "").length <= 300)).toBe(true);
+  });
+
+  it("gives every bound contact a rename and an unbind postback", () => {
+    const message = buildBoundContactsMessage([contact]);
+    const carousel = message.contents as { contents: any[] };
+    const buttons = carousel.contents[0].footer.contents;
+
+    expect(carousel.contents).toHaveLength(1);
+    expect(buttons.map((button: any) => button.action.data)).toEqual([
+      `action=sos_contact_rename&cid=${contact.contactId}`,
+      `action=sos_unbind&cid=${contact.contactId}`,
+    ]);
+  });
+
+  it("caps the contacts carousel at ten bubbles", () => {
+    const contacts = Array.from({ length: 14 }, (_, index) => ({
+      ...contact,
+      contactId: `68f00000000000000000${String(index).padStart(4, "0")}`,
+    }));
+
+    const carousel = buildBoundContactsMessage(contacts).contents as {
+      contents: unknown[];
+    };
+
+    expect(carousel.contents).toHaveLength(10);
+  });
+
+  it("asks for confirmation with a distinct confirm postback", () => {
+    const message = buildUnbindConfirmMessage(contact);
+    const data = (message.quickReply?.items ?? []).map((item) =>
+      item.action.type === "postback" ? item.action.data : undefined,
+    );
+
+    expect(data).toEqual([
+      `action=sos_unbind_do&cid=${contact.contactId}`,
+      "action=sos_menu",
+    ]);
+  });
+
+  it("offers an all-owners chip only while a filter is active", () => {
+    const entries = [
+      {
+        sessionId: "s1",
+        ownerId: "u1",
+        ownerName: "王小明",
+        type: "body" as const,
+        status: "resolved" as const,
+        handlingStatus: "resolved",
+        address: "台北車站",
+        createdAt: new Date("2026-07-01T04:00:00Z"),
+        resolvedAt: new Date("2026-07-01T04:30:00Z"),
+        claimedByName: "小明",
+      },
+    ];
+    const owners = [
+      { ownerId: "u1", ownerName: "王小明" },
+      { ownerId: "u2", ownerName: "李小華" },
+    ];
+
+    const filtered = buildSosHistoryMessage({
+      entries,
+      owners,
+      activeOwnerId: "u1",
+    });
+    const unfiltered = buildSosHistoryMessage({ entries, owners });
+
+    expect(
+      (filtered.quickReply?.items ?? []).map((item) =>
+        item.action.type === "postback" ? item.action.data : undefined,
+      ),
+    ).toEqual(["action=sos_history", "action=sos_history&owner=u2"]);
+    expect(
+      (unfiltered.quickReply?.items ?? []).map((item) =>
+        item.action.type === "postback" ? item.action.data : undefined,
+      ),
+    ).toEqual(["action=sos_history&owner=u1", "action=sos_history&owner=u2"]);
+    expect((filtered.quickReply?.items ?? []).length).toBeLessThanOrEqual(13);
   });
 });
