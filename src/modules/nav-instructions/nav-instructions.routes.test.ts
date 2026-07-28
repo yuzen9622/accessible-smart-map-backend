@@ -72,16 +72,75 @@ describe("POST /api/v1/a11y/route/instructions", () => {
   it("returns 400 with the standard envelope for an unsupported leg type", async () => {
     const res = await request(app)
       .post(URL)
-      .send({ route: { ...driveRoute, legs: [{ type: "FERRY" }] } });
+      .send({
+        route: {
+          ...driveRoute,
+          legs: [{ type: "FERRY", polyline: [[121.56, 25.04], [121.55, 25.03]] }],
+        },
+      });
 
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({
       ok: false,
       status: "error",
       code: 400,
-      message: "Invalid request.",
-      data: { errors: expect.any(Array) },
+      data: { reason: "UNSUPPORTED_LEG_TYPE" },
     });
+  });
+
+  it("accepts facilities tagged wheelchair=designated on a transit leg", async () => {
+    const res = await request(app).post(URL).send({
+      route: {
+        ...driveRoute,
+        legs: [
+          {
+            type: "METRO",
+            railSystem: "TRTC",
+            lineName: "TRTC-R",
+            departureStation: "台北101/世貿",
+            arrivalStation: "市政府",
+            rideMinutes: 3,
+            polyline: [[121.5632, 25.0331], [121.5654, 25.0408]],
+            facilityHighlights: [],
+            departureStationA11y: [
+              {
+                osmId: "5964348630",
+                name: "捷運台北101/世貿站5號出口 (電梯)",
+                category: "elevator",
+                wheelchair: "designated",
+                tags: { highway: "elevator", wheelchair: "designated" },
+                location: { type: "Point", coordinates: [121.5632426, 25.0331342] },
+              },
+            ],
+            arrivalStationA11y: [],
+          },
+        ],
+      },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+  });
+
+  it("tolerates unknown route, leg and facility fields the planner may add later", async () => {
+    const res = await request(app).post(URL).send({
+      route: {
+        ...driveRoute,
+        someFutureRouteField: { nested: true },
+        legs: [
+          {
+            ...driveRoute.legs[0],
+            someFutureLegField: 42,
+            a11yFacilities: [
+              { osmId: "1", category: "brand_new_category", wheelchair: "unknown" },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
   });
 
   it("accepts a full Valhalla WALK route and returns compatible dual warnings", async () => {
@@ -98,6 +157,15 @@ describe("POST /api/v1/a11y/route/instructions", () => {
       "WALK_STEPS_UNAVAILABLE",
       "ORS_STEPS_UNAVAILABLE",
     ]);
+  });
+
+  it("accepts a next-day route carrying departureDate", async () => {
+    const res = await request(app)
+      .post(URL)
+      .send({ route: { ...driveRoute, departureDate: "2026-07-29" } });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
   });
 
   it("returns 400 when the strict request body contains an unknown key", async () => {

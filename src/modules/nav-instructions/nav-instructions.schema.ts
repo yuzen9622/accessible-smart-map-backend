@@ -1,18 +1,64 @@
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 import { registry } from "../../openapi/registry";
-import { AccessibleRouteSchema } from "../accessible-route/accessible-route.schema";
 
 extendZodWithOpenApi(z);
 
+const NavCoordSchema = z.tuple([z.number(), z.number()]);
+
+const NavWalkStepSchema = z
+  .looseObject({
+    location: NavCoordSchema,
+    instruction: z.string().optional(),
+    relativeDirection: z.string().optional(),
+    absoluteDirection: z.string().nullish(),
+    streetName: z.string().optional(),
+    bogusName: z.boolean().optional(),
+    distanceM: z.number().optional(),
+  })
+  .openapi("NavWalkStep");
+
+const NavRoadStepSchema = z
+  .looseObject({
+    instruction: z.string(),
+    polyline: z.array(NavCoordSchema),
+    distanceM: z.number().optional(),
+    maneuver: z.string().optional(),
+  })
+  .openapi("NavRoadStep");
+
+const NavLegSchema = z
+  .looseObject({
+    type: z.string(),
+    polyline: z.array(NavCoordSchema),
+    steps: z
+      .array(z.union([NavWalkStepSchema, NavRoadStepSchema]))
+      .optional(),
+    exitInfo: z
+      .looseObject({
+        exitNumber: z.string().optional(),
+        type: z.string().optional(),
+      })
+      .nullish(),
+  })
+  .openapi("NavLeg");
+
+const NavRouteSchema = z
+  .looseObject({
+    routeId: z.string().optional(),
+    legs: z.array(NavLegSchema),
+  })
+  .openapi("NavRoute");
+
 export const NavInstructionsRequestSchema = z
   .object({
-    route: z
-      .lazy(() => AccessibleRouteSchema)
-      .openapi({
-        description:
-          "由 /accessible-route 回傳的路線物件（前端 passthrough）。支援 WALK、DRIVE、MOTORCYCLE、BUS、METRO、THSR、TRA legs。",
-      }),
+    route: NavRouteSchema.openapi({
+      description:
+        "由 /accessible-route 回傳的路線物件（前端原樣 passthrough）；完整欄位見 AccessibleRoute。" +
+        "此處只驗證產生指引時實際讀取的欄位，其餘欄位（設施陣列、評分、未來新增欄位）一律原樣容忍，" +
+        "以免規劃器輸出演進時導航入口誤擋。未支援的 leg 型別與空 legs 由服務層回 400（reason 為 " +
+        "UNSUPPORTED_LEG_TYPE / INVALID_ROUTE_INPUT）。",
+    }),
     userHeading: z
       .number()
       .min(0)
