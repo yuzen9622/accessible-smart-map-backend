@@ -191,11 +191,13 @@ export interface ITdxBusVehicle {
   importedAt: Date;
 }
 
+export type OsmWheelchairValue = "yes" | "designated" | "limited" | "no";
+
 export interface IOsmA11y {
   osmId: string;
   name?: string;
   category: "wheelchair_accessible" | "kerb_cut" | "ramp" | "elevator" | "toilet";
-  wheelchair?: "yes" | "limited" | "no";
+  wheelchair?: OsmWheelchairValue;
   tags: Record<string, string>;
   location: { type: "Point"; coordinates: [number, number] };
   importedAt: Date;

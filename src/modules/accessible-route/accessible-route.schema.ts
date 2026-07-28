@@ -112,9 +112,13 @@ const OsmA11ySchema = z
       .enum(["wheelchair_accessible", "kerb_cut", "ramp", "elevator", "toilet"])
       .openapi({ example: "elevator" }),
     wheelchair: z
-      .enum(["yes", "limited", "no"])
+      .enum(["yes", "designated", "limited", "no"])
       .optional()
-      .openapi({ example: "yes" }),
+      .openapi({
+        example: "yes",
+        description:
+          'OSM wheelchair 標籤值；designated = 專為輪椅設置（等級不低於 yes）',
+      }),
     tags: z
       .record(z.string(), z.string())
       .optional()
@@ -496,6 +500,14 @@ export const AccessibleRouteSchema = z
     accessibilityHighlights: z
       .array(z.string())
       .openapi({ example: ["全程低地板公車", "出入口設有電梯"] }),
+    departureDate: z
+      .string()
+      .optional()
+      .openapi({
+        example: "2026-07-29",
+        description:
+          "僅在今日班次已過、路線滾到隔日最早班次時出現（YYYY-MM-DD）；前端應提示「今日班次已過」。",
+      }),
     accessibilityScore: z
       .number()
       .optional()

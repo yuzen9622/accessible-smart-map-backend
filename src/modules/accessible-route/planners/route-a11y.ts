@@ -93,8 +93,10 @@ export function deriveHighlights(
     tagVal(alightA11y, "traffic_signals:sound", "yes")
   )
     h.push("附近有音響號誌");
-  if (tagVal(boardA11y, "wheelchair", "yes")) h.push("乘車站設施完善");
-  if (tagVal(alightA11y, "wheelchair", "yes")) h.push("下車站設施完善");
+  if (tagVal(boardA11y, "wheelchair", "yes") || tagVal(boardA11y, "wheelchair", "designated"))
+    h.push("乘車站設施完善");
+  if (tagVal(alightA11y, "wheelchair", "yes") || tagVal(alightA11y, "wheelchair", "designated"))
+    h.push("下車站設施完善");
   return h;
 }
 

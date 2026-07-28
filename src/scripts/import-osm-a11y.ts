@@ -8,7 +8,7 @@
 import "dotenv/config";
 import mongoose from "mongoose";
 import OsmA11y from "../model/osm-a11y.model";
-import { IOsmA11y } from "../types";
+import { IOsmA11y, OsmWheelchairValue } from "../types";
 
 const OVERPASS_ENDPOINTS = [
   "https://overpass-api.de/api/interpreter",
@@ -70,6 +70,27 @@ function deriveCategory(
   if (tags["ramp:wheelchair"] === "yes") return "ramp";
   if (tags["amenity"] === "toilets") return "toilet";
   return "wheelchair_accessible";
+}
+
+const WHEELCHAIR_VALUES: readonly OsmWheelchairValue[] = [
+  "yes",
+  "designated",
+  "limited",
+  "no",
+];
+
+/**
+ * Keep only wheelchair tag values the schema knows about. OSM is a free-tag
+ * system, so anything outside the vocabulary (e.g. "unknown", "yes;limited")
+ * is dropped rather than cast through, which would let unmodelled values reach
+ * the API and fail response/request validation downstream.
+ *
+ * @param raw The raw OSM wheelchair tag value.
+ * @returns The recognized value, or undefined when absent/unrecognized.
+ */
+function normalizeWheelchair(raw?: string): OsmWheelchairValue | undefined {
+  const val = raw?.trim().toLowerCase();
+  return WHEELCHAIR_VALUES.find((v) => v === val);
 }
 
 async function fetchOverpass(query: string): Promise<any[]> {
@@ -149,7 +170,7 @@ async function main() {
         osmId: el.type === "way" ? `way/${el.id}` : String(el.id),
         name: tags["name"] ?? tags["name:zh"] ?? tags["name:en"],
         category: deriveCategory(tags),
-        wheelchair: tags["wheelchair"] as IOsmA11y["wheelchair"],
+        wheelchair: normalizeWheelchair(tags["wheelchair"]),
         tags,
         location: { type: "Point", coordinates: [el.lon, el.lat] },
         importedAt: new Date(),

@@ -617,7 +617,9 @@ export function scoreRoute(
     (n) => n.tags?.["toilets:wheelchair"] === "yes"
   );
   const hasWheelchairYes = facilityNodes.some(
-    (n) => n.tags?.["wheelchair"] === "yes"
+    (n) =>
+      n.tags?.["wheelchair"] === "yes" ||
+      n.tags?.["wheelchair"] === "designated"
   );
   const hasAudioSignal = facilityNodes.some(
     (n) => n.tags?.["traffic_signals:sound"] === "yes"

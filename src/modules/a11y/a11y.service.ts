@@ -2,7 +2,13 @@ import A11y from "../../model/a11y.model";
 import BathroomModel from "../../model/bathroom.model";
 import OsmA11y from "../../model/osm-a11y.model";
 import DisabledParkingModel from "../../model/disabled-parking.model";
-import { IA11y, IOsmA11y, IBathroom, IDisabledParking } from "../../types";
+import {
+  IA11y,
+  IOsmA11y,
+  IBathroom,
+  IDisabledParking,
+  OsmWheelchairValue,
+} from "../../types";
 import * as campusService from "../campus/campus.service";
 import type { CampusFacilityPlace } from "../campus/campus.service";
 import { findNearby as findNearbyReports } from "../hazard-report/hazard-report.service";
@@ -122,7 +128,7 @@ export type A11yFacility =
   | (A11yFacilityBase & {
       source: "osm";
       osmId: string;
-      wheelchair: "yes" | "limited" | "no" | null;
+      wheelchair: OsmWheelchairValue | null;
     })
   | (A11yFacilityBase & { source: "campus"; schoolName: string })
   | (A11yFacilityBase & { source: "bathroom" })
@@ -622,7 +628,9 @@ export async function assessQuickAccess(input: {
   );
   const wheelchairTagRatio = taggedOsm.length
     ? Math.round(
-        (taggedOsm.filter((d) => d.wheelchair === "yes").length /
+        (taggedOsm.filter(
+          (d) => d.wheelchair === "yes" || d.wheelchair === "designated",
+        ).length /
           taggedOsm.length) *
           100,
       ) / 100

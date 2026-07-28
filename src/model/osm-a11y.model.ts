@@ -9,7 +9,7 @@ const osmA11ySchema = new Schema<IOsmA11y>({
     enum: ["wheelchair_accessible", "kerb_cut", "ramp", "elevator", "toilet"],
     required: true,
   },
-  wheelchair: { type: String, enum: ["yes", "limited", "no"] },
+  wheelchair: { type: String, enum: ["yes", "designated", "limited", "no"] },
   tags: { type: Schema.Types.Mixed },
   location: {
     type: { type: String, enum: ["Point"], required: true, default: "Point" },
