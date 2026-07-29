@@ -10,9 +10,6 @@ const lineLinkCodeSchema = new Schema<ILineLinkCode>(
   { timestamps: true },
 );
 
-lineLinkCodeSchema.index({ userId: 1 }, { unique: true });
-lineLinkCodeSchema.index({ code: 1 }, { unique: true });
-
 const LineLinkCode = model<ILineLinkCode>("LineLinkCode", lineLinkCodeSchema);
 
 export default LineLinkCode;
