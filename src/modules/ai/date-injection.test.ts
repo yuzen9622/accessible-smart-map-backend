@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import request from "supertest";
 
 vi.mock("./ai-chat.service", () => ({
-  runToolLoop: vi.fn().mockResolvedValue({ text: "ok" }),
+  runChatAgent: vi.fn().mockResolvedValue({ text: "ok" }),
   toGeminiHistory: vi.fn(() => ({ systemInstruction: undefined, contents: [] })),
 }));
 
