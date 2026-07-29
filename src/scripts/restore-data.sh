@@ -65,4 +65,4 @@ docker compose up -d
 echo
 echo "OK  restore complete."
 echo "    If you did NOT copy otp-data/ and valhalla-data/, rebuild them:"
-echo "    src/scripts/build-otp-graph.sh  &&  npm run build:valhalla-tiles"
+echo "    src/scripts/build-otp-graph.sh  &&  pnpm build:valhalla-tiles"

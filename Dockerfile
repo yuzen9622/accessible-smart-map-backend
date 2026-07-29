@@ -5,30 +5,38 @@
 
 # ── builder: full deps + compile TS → dist ──────────────────────────────────
 FROM node:22-bookworm-slim AS builder
-# Set npm network resilience variables (retry on network failure e.g. ECONNRESET)
+# pnpm is the package manager (package.json "scripts" call `pnpm run`); corepack
+# activates the exact version pinned in package.json "packageManager".
+ENV PNPM_HOME=/pnpm
+ENV PATH=$PNPM_HOME:$PATH
+# Set registry network resilience variables (retry on network failure e.g. ECONNRESET)
 ENV NPM_CONFIG_FETCH_RETRIES=5
 ENV NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=20000
 ENV NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=120000
+RUN corepack enable
 WORKDIR /app
-COPY package.json package-lock.json tsconfig.json ./
-# --ignore-scripts skips the `postinstall: npm run build` hook here: src/ isn't
+COPY package.json pnpm-lock.yaml tsconfig.json ./
+# --ignore-scripts skips the `postinstall: pnpm run build` hook here: src/ isn't
 # copied yet, so an automatic build would fail. We build explicitly below.
-RUN --mount=type=cache,target=/root/.npm \
-    npm ci --ignore-scripts
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
+    pnpm install --frozen-lockfile --ignore-scripts
 COPY src ./src
-RUN npm run build
+RUN pnpm run build
 
 # ── runtime: production deps + compiled output only ─────────────────────────
 FROM node:22-bookworm-slim AS runtime
-# Set npm network resilience variables (retry on network failure e.g. ECONNRESET)
+ENV PNPM_HOME=/pnpm
+ENV PATH=$PNPM_HOME:$PATH
+# Set registry network resilience variables (retry on network failure e.g. ECONNRESET)
 ENV NPM_CONFIG_FETCH_RETRIES=5
 ENV NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=20000
 ENV NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=120000
+RUN corepack enable
 WORKDIR /app
 ENV NODE_ENV=production
-COPY package.json package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm \
-    npm ci --omit=dev --ignore-scripts
+COPY package.json pnpm-lock.yaml ./
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
+    pnpm install --prod --frozen-lockfile --ignore-scripts
 COPY --from=builder /app/dist ./dist
 # Drop privileges — the node image ships a non-root `node` user.
 USER node

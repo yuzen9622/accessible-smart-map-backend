@@ -43,6 +43,9 @@ sudo apt install -y git python3 build-essential ca-certificates curl gnupg
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt install -y nodejs
 node -v   # 應為 v22.x（v20 也可）
+
+# 本專案的套件管理器是 pnpm，版本由 package.json 的 packageManager 欄位釘住
+sudo corepack enable
 ```
 
 ### Docker Engine + compose plugin
@@ -140,11 +143,13 @@ OTP_SERVE_XMX=8g          # 125GB RAM，給足
 
 ```bash
 cd /opt/accessible-smart-map-backend
-npm ci            # 含 devDependencies；postinstall 會自動跑 npm run build → dist/
-ls dist/server.js # 確認編譯產物存在
+pnpm install --frozen-lockfile   # 含 devDependencies；postinstall 會自動跑 pnpm run build → dist/
+ls dist/server.js                # 確認編譯產物存在
 ```
 
 > 為什麼裝 devDependencies？`postinstall` 用 `tsc`（devDep）編譯；且 `import:*` 資料灌入腳本走 `ts-node`（devDep）。這台 RAM 充足，不需 prune。
+>
+> `--frozen-lockfile` 保證裝出來的版本與 `pnpm-lock.yaml` 完全一致（lockfile 與 `package.json` 不同步時會直接報錯而不是悄悄升級），部署一律加這個旗標。
 
 ---
 
@@ -173,12 +178,12 @@ mongorestore --uri="$DATABASE_URL" --drop /tmp/mongo-dump/<原db名>
 
 ```bash
 cd /home/nutcai/1111131042/accessible-smart-map-backend
-npm run import:osm          # OSM 無障礙設施
-npm run import:tdx-stops    # 公車站
-npm run import:tdx-metro    # 捷運站
-npm run import:tdx-thsr     # 高鐵站
-npm run import:tdx-tra      # 台鐵站
-npm run import:gtfs-all     # GTFS stops/trips/pathways/levels（OTP 方向反查 + 室內導引用；
+pnpm import:osm          # OSM 無障礙設施
+pnpm import:tdx-stops    # 公車站
+pnpm import:tdx-metro    # 捷運站
+pnpm import:tdx-thsr     # 高鐵站
+pnpm import:tdx-tra      # 台鐵站
+pnpm import:gtfs-all     # GTFS stops/trips/pathways/levels（OTP 方向反查 + 室內導引用；
                             # 排程表 routes/calendar/stop_times/shapes 已隨自製 router 退役，不再匯入）
 ```
 
@@ -293,7 +298,7 @@ curl -s -X POST http://localhost:8000/api/v1/a11y/accessible-route \
 | -------------- | ------------------------------------------------------------- |
 | 看 API log     | `journalctl -u accessible-backend -f`                         |
 | 重啟 API       | `sudo systemctl restart accessible-backend`                   |
-| 更新程式碼     | `git pull && npm ci && sudo systemctl restart accessible-backend` |
+| 更新程式碼     | `git pull && pnpm install --frozen-lockfile && sudo systemctl restart accessible-backend` |
 | OTP 啟停       | `docker compose up -d otp` / `docker stop otp`                |
 | OTP log        | `docker logs otp --tail 30`                                   |
 | 每週重建 graph | cron：`0 4 * * 0`，見下                                       |

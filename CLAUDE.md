@@ -5,12 +5,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-npm run dev        # Dev server with hot reload (nodemon + ts-node via dotenvx)
-npm run build      # Compile TypeScript → dist/ (prebuild runs clean first)
-npm start          # Run compiled dist/server.js
-npm run clean      # Delete dist/
-npm test           # Run tests once (vitest)
-npm run test:watch # Vitest in watch mode
+pnpm install       # Install deps from pnpm-lock.yaml (postinstall runs build)
+pnpm dev           # Dev server with hot reload (nodemon + ts-node via dotenvx)
+pnpm build         # Compile TypeScript → dist/ (prebuild runs clean first)
+pnpm start         # Run compiled dist/server.js
+pnpm clean         # Delete dist/
+pnpm test          # Run tests once (vitest)
+pnpm test:watch    # Vitest in watch mode
 ```
 
 Tests use **vitest**; specs live next to the code as `*.test.ts` (e.g. `src/modules/accessible-route/scoring.test.ts`).
@@ -19,7 +20,9 @@ We support unit tests and route-level integration tests. The integration test ha
 - `buildAuthorizationHeader(user?)` (from `tests/helpers/test-helpers.ts`) signs a JWT token and returns a Bearer header string for authenticated routes.
 - Mock the service layer with `vi.mock` in test files so that the request exercises router + middleware + validation + controller + envelope without touching the network or DB.
 
-Data-import scripts run via dotenvx + ts-node and populate MongoDB from TDX / GTFS / OSM sources — e.g. `npm run import:gtfs-all`, `npm run import:tdx-tra`, `npm run import:osm`. See `package.json` for the full list (`src/scripts/*`).
+The package manager is **pnpm** (pinned by `packageManager` in `package.json`; `pnpm-lock.yaml` is the only lockfile — there is no `package-lock.json`). Use `pnpm`, not npm/yarn: the `build` / `prebuild` / `postinstall` / `build:otp` scripts call `pnpm run` internally, so running them through npm fails.
+
+Data-import scripts run via dotenvx + ts-node and populate MongoDB from TDX / GTFS / OSM sources — e.g. `pnpm import:gtfs-all`, `pnpm import:tdx-tra`, `pnpm import:osm`. See `package.json` for the full list (`src/scripts/*`).
 
 ## Environment Variables
 
@@ -158,5 +161,5 @@ This project enforces a dual-agent review process (Cross-Model Review). During t
      - **Diagnostics**: `locate`, `du`, `df`, `echo` (allowing env vars, rejecting `$()`), `env` / `printenv`, `date`, `whereis`, `which`.
 
 3. **Implementation Restrictions**:
-   - All modifying tools (e.g. `Write`, `Edit`, `apply_patch`) and mutating commands (e.g. `git commit`, `npm run dev`) remain gated and will be blocked until the task plan is fully approved.
+   - All modifying tools (e.g. `Write`, `Edit`, `apply_patch`) and mutating commands (e.g. `git commit`, `pnpm dev`) remain gated and will be blocked until the task plan is fully approved.
 

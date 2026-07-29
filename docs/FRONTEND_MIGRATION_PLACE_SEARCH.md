@@ -131,7 +131,7 @@ POST   /api/v1/a11y/reviews          body: { placeId, placeType, ...ratings }
   注意 `reviewKey.placeId` 與 `PlaceResult.id` **不同**：前者是 `node/123456`（相容既有評論資料），
   後者是 `osm:node:123456`（路由用）。
 
-後端部署時需跑一次 `npm run migrate:review-place-id`（純欄位改名，不動值）。
+後端部署時需跑一次 `pnpm migrate:review-place-id`（純欄位改名，不動值）。
 
 ## 5. 已知限制（UI 需容忍）
 

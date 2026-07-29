@@ -198,15 +198,24 @@ sequenceDiagram
 
 ### 1. 前置需求
 
-確保您的系統已安裝 **Node.js (>= 20)** 與 **npm**。您還需要一個運行中的 **MongoDB** 執行個體，以及選擇性安裝的 **Redis**（用於 API 流量限制）。
+確保您的系統已安裝 **Node.js (>= 20)** 與 **pnpm**。您還需要一個運行中的 **MongoDB** 執行個體，以及選擇性安裝的 **Redis**（用於 API 流量限制）。
+
+本專案的套件管理器是 **pnpm**（版本由 `package.json` 的 `packageManager` 欄位釘住，唯一 lockfile 是 `pnpm-lock.yaml`）。最省事的安裝方式是用 Node 內建的 corepack 自動取得對應版本：
+
+```bash
+corepack enable
+```
 
 ### 2. 安裝依賴
 
-複製專案並安裝必要的 npm 套件：
+複製專案並安裝必要的套件：
 
 ```bash
-npm install
+pnpm install                      # 一般開發用
+pnpm install --frozen-lockfile    # CI / 部署用：完全依照 lockfile，不自動更新
 ```
+
+> 請勿改用 npm 或 yarn：`build` / `prebuild` / `postinstall` / `build:otp` 這些腳本內部會呼叫 `pnpm run`，透過 npm 執行會失敗。
 
 ### 3. 環境變數設定
 
@@ -238,19 +247,19 @@ CWA_API_KEY=your_cwa_key
 
 ```bash
 # 匯入 OpenStreetMap 無障礙設施標籤
-npm run import:osm
+pnpm import:osm
 
 # 匯入台北市無障礙廁所與身障車位資料
-npm run import:bathrooms
-npm run import:parking
+pnpm import:bathrooms
+pnpm import:parking
 
 # 匯入所有 GTFS 軌道運輸網絡資料 (包含捷運站內通道、電梯與樓層)
-npm run import:gtfs-all
+pnpm import:gtfs-all
 
 # 匯入即時公車站點、路線以及捷運車站資訊
-npm run import:tdx-stops
-npm run import:tdx-bus-routes
-npm run import:tdx-metro
+pnpm import:tdx-stops
+pnpm import:tdx-bus-routes
+pnpm import:tdx-metro
 ```
 
 ### 5. 啟動服務
@@ -258,7 +267,7 @@ npm run import:tdx-metro
 啟動開發模式伺服器（支援 nodemon 與 dotenvx 熱重載）：
 
 ```bash
-npm run dev
+pnpm dev
 ```
 
 伺服器將會啟動於 `http://localhost:5000`。您可以造訪 `http://localhost:5000/docs` 查看本地互動式 API 文件 (Scalar UI)。
@@ -276,16 +285,16 @@ docker compose up -d
 
 ## 開發與建構指令
 
-我們使用 npm 腳本來管理所有日常開發與建構工作：
+我們使用 pnpm 腳本來管理所有日常開發與建構工作：
 
-| 腳本名稱             | 終端指令                 | 說明                                    |
-| -------------------- | ------------------------ | --------------------------------------- |
-| `npm run dev`        | `dotenvx run -- nodemon` | 開發模式啟動 (支援熱重載與環境變數載入) |
-| `npm run build`      | `tsc`                    | 編譯 TypeScript 原始碼至 `dist/` 資料夾 |
-| `npm start`          | `node dist/server.js`    | 啟動生產模式伺服器                      |
-| `npm run clean`      | `rimraf dist`            | 清除建構產出的編譯檔案                  |
-| `npm test`           | `vitest run`             | 執行所有單元測試與整合測試              |
-| `npm run test:watch` | `vitest`                 | 以互動式監控模式執行測試                |
+| 腳本名稱          | 終端指令                        | 說明                                    |
+| ----------------- | ------------------------------- | --------------------------------------- |
+| `pnpm dev`        | `dotenvx run -- nodemon`        | 開發模式啟動 (支援熱重載與環境變數載入) |
+| `pnpm build`      | `pnpm run lint:arch && tsc`     | 分層邊界檢查 + 編譯 TypeScript 至 `dist/` |
+| `pnpm start`      | `node dist/server.js`           | 啟動生產模式伺服器                      |
+| `pnpm clean`      | `rimraf dist`                   | 清除建構產出的編譯檔案                  |
+| `pnpm test`       | `vitest run`                    | 執行所有單元測試與整合測試              |
+| `pnpm test:watch` | `vitest`                        | 以互動式監控模式執行測試                |
 
 ---
 
@@ -332,7 +341,7 @@ curl http://localhost:5000/health
 - 路由整合測試使用 **supertest** 模擬真實 Express 路由請求，不需真正連接資料庫或第三方網路。
 - 執行測試套件：
   ```bash
-  npm test
+  pnpm test
   ```
 - 測試檔案與程式碼同級，遵循 `*.test.ts` 的命名規則。
 

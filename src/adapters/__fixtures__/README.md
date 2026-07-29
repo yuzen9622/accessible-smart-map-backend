@@ -10,7 +10,7 @@ used to pin the station-timetable parsing contract to real data.
 - **Source endpoints** (recorded in the file's `sourceTra` / `sourceThsr`):
   `.../v2/Rail/{TRA,THSR}/DailyTimetable/Station/1000/<date>` (臺北).
 - **Captured**: see `capturedAt` in the file. Regenerate with
-  `npm run capture:rail-fixtures` (needs `.env` TDX credentials).
+  `pnpm capture:rail-fixtures` (needs `.env` TDX credentials).
 - **Shape**: both systems return a **top-level array of flat train rows**
   (`TrainNo`, `Direction`, `TrainTypeName.Zh_tw`, `EndingStationName.Zh_tw`,
   `ArrivalTime`, `DepartureTime` — times are `HH:mm`). Wrapper shape, field

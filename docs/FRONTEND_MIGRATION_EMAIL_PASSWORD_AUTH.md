@@ -173,7 +173,7 @@ TTL 1 小時、一次性。密碼規則同註冊。無效 → 401 `INVALID_TOKEN
 
 ## 五、後端部署前置（不是前端的事，但會影響你能不能測）
 
-1. **必須先跑 `npm run migrate:auth`，再重建 image。** 舊的 `client_id_1` 是非 sparse 的 unique index，不換掉的話第二個帳密帳號就會撞 unique 註冊失敗。
+1. **必須先跑 `pnpm migrate:auth`，再重建 image。** 舊的 `client_id_1` 是非 sparse 的 unique index，不換掉的話第二個帳密帳號就會撞 unique 註冊失敗。
 2. 新環境變數：`GOOGLE_CLIENT_ID`、`RESEND_API_KEY`、`RESEND_FROM`、`APP_WEB_BASE_URL`、`TRUST_PROXY_HOPS`。
 3. `RESEND_API_KEY` 未設定時後端不會真的寄信，而是把驗證／重設連結印在 log —— 本機開發可以直接從 log 複製連結測完整流程。
 4. `RESEND_FROM` 的網域（`2026.yuzen.dev`）**必須先在 Resend 完成 DNS 驗證**，否則寄信會被拒。

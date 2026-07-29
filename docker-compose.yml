@@ -116,7 +116,7 @@ services:
       - -lc
       - >-
         test -f /custom_files/active/valhalla.json ||
-        { echo 'Valhalla config missing: run npm run build:valhalla-tiles first' >&2; exit 78; };
+        { echo 'Valhalla config missing: run pnpm build:valhalla-tiles first' >&2; exit 78; };
         exec valhalla_service /custom_files/active/valhalla.json ${VALHALLA_THREADS:-2}
     ports:
       - "127.0.0.1:8002:8002"

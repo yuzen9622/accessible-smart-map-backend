@@ -7,12 +7,13 @@ follows; new code must look like the existing code.
 ## 0) Environment
 
 - OS: macOS · Shell: zsh
-- Package manager: **npm** (do not use pnpm/yarn).
+- Package manager: **pnpm** (do not use npm/yarn). Version pinned by `packageManager` in `package.json`; `pnpm-lock.yaml` is the only lockfile. The `build` / `prebuild` / `postinstall` scripts call `pnpm run` internally, so invoking them through npm fails.
 - Commands:
-  - dev: `npm run dev`
-  - build / typecheck: `npm run build` (runs `lint:arch` then `tsc`)
-  - boundary check only: `npm run lint:arch`
-  - tests: `npm test` (`vitest run`) · watch: `npm run test:watch`; specs live beside code as `*.test.ts`.
+  - install: `pnpm install` (CI/Docker: `pnpm install --frozen-lockfile`)
+  - dev: `pnpm dev`
+  - build / typecheck: `pnpm build` (runs `lint:arch` then `tsc`)
+  - boundary check only: `pnpm lint:arch`
+  - tests: `pnpm test` (`vitest run`) · watch: `pnpm test:watch`; specs live beside code as `*.test.ts`.
 
 ## 1) Mandatory read order before any edit
 
@@ -66,22 +67,22 @@ Project specifics:
 3. Register the router at `modules/<feature>/index.ts` and mount it once in
    `src/app.ts` under `/api/v1`.
 4. Update `.env.example` when adding a required env var.
-5. Run `npm run build` — must be green (this also runs `lint:arch`).
+5. Run `pnpm build` — must be green (this also runs `lint:arch`).
 6. Run and verify any modified or added scripts (like Python tools, build pipelines) locally on actual or mock data to prove correctness before committing.
 
 ## 4) Handoff requirements
 
 - List changed files and why each changed.
 - Confirm the endpoint mount path(s).
-- Confirm `npm run build` result (pass/fail) — "done" means green, not "written".
+- Confirm `pnpm build` result (pass/fail) — "done" means green, not "written".
 - List risks, assumptions, and TODOs.
 
 ## 5) Enforcement (kept honest by tooling, not memory)
 
-- **Import-boundary check:** `npm run lint:arch`
+- **Import-boundary check:** `pnpm lint:arch`
   (`scripts/check-architecture.mjs`) — fails the build when a layer boundary is
   crossed. Grandfather a not-yet-migrated file via its `ALLOWLIST`, and delete
   the entry in the same change that migrates it.
 - **Schema-as-contract:** OpenAPI docs are generated from the request schemas.
-- **Green build gate:** `npm run build` runs the boundary check before `tsc`.
+- **Green build gate:** `pnpm build` runs the boundary check before `tsc`.
 - Rationale for non-obvious decisions lives under `docs/reports/`.
