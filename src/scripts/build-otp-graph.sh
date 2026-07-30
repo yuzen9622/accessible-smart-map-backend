@@ -39,6 +39,13 @@ OSM_MAX_AGE_DAYS=30
 
 WORK_DIR="$(mktemp -d /tmp/otp-build.XXXXXX)"
 VALIDATION_DIR="$(mktemp -d /tmp/otp-validation.XXXXXX)"
+# Injection *inputs* (raw upstream bundles that are read, grafted into feed-1 and
+# then thrown away) MUST live outside WORK_DIR: OTP scans its data directory and
+# ingests every *.zip it finds there as a transit feed of its own. A raw bundle
+# left beside feed-1 therefore loads as a full duplicate network — and since those
+# bundles carry no shapes.txt, whichever trip the planner picks from the duplicate
+# renders as station-to-station straight lines.
+AUX_DIR="$(mktemp -d /tmp/otp-aux.XXXXXX)"
 log() { echo "[build-otp-graph] $(date '+%F %T') $*"; }
 die() { log "FATAL: $*"; exit 1; }
 
@@ -52,7 +59,7 @@ cleanup() {
     log "restarting otp container during cleanup"
     docker compose restart otp || docker restart otp || true
   fi
-  rm -rf "$WORK_DIR" "$VALIDATION_DIR" || true
+  rm -rf "$WORK_DIR" "$VALIDATION_DIR" "$AUX_DIR" || true
   exit "$exit_status"
 }
 
@@ -138,11 +145,11 @@ fi
 # fallback. See inject-trtc-official-gtfs.py.
 sleep 3 # TDX 429s on bursts
 if curl -fsSL --compressed -H "Authorization: Bearer $TOKEN" \
-  -o "$WORK_DIR/trtc-official.gtfs.zip" \
+  -o "$AUX_DIR/trtc-official.gtfs.zip" \
   "https://tdx.transportdata.tw/api/gtfs/V3/Map/GTFS/Static/Rail/TRTC"; then
-  if unzip -l "$WORK_DIR/trtc-official.gtfs.zip" >/dev/null 2>&1; then
+  if unzip -l "$AUX_DIR/trtc-official.gtfs.zip" >/dev/null 2>&1; then
     python3 "$SCRIPT_DIR/inject-trtc-official-gtfs.py" \
-      "$WORK_DIR/feed-1.gtfs.zip" "$WORK_DIR/trtc-official.gtfs.zip" \
+      "$WORK_DIR/feed-1.gtfs.zip" "$AUX_DIR/trtc-official.gtfs.zip" \
       || log "WARN: official TRTC injection failed — continuing (metro block synthesizes 文湖線)"
   else
     log "WARN: official TRTC GTFS is not a valid zip — skipping (metro block synthesizes 文湖線)"
@@ -285,6 +292,19 @@ cp "$OTP_DATA_DIR"/otp-config.json "$OTP_DATA_DIR"/build-config.json \
   "$OTP_DATA_DIR"/router-config.json "$WORK_DIR/" 2>/dev/null \
   || die "OTP config files missing in $OTP_DATA_DIR"
 mv "$OSM_CLIPPED" "$WORK_DIR/taiwan-otp.osm.pbf"
+
+# Nothing but the feeds we validated may be visible to the scanner: OTP loads
+# every *.zip in the data directory as its own transit feed, so a stray bundle
+# silently duplicates a whole network (and duplicates without shapes.txt draw
+# straight lines). Assert positively rather than trusting each download site.
+# Recursive on purpose: the injection steps write working files into WORK_DIR
+# subdirectories, so a future zip-producing step there must trip this too.
+while IFS= read -r zip; do
+  case "${zip#"$WORK_DIR"/}" in
+    feed-*.gtfs.zip) ;;
+    *) die "unexpected zip in the build directory: ${zip#"$WORK_DIR"/} — OTP would ingest it as a duplicate transit feed; injection inputs belong in AUX_DIR" ;;
+  esac
+done < <(find "$WORK_DIR" -type f -name '*.zip')
 
 # The official image's entrypoint hardcodes /var/opentripplanner as the data
 # directory — mount there and pass flags only, never a path.
