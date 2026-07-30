@@ -7,6 +7,123 @@
 
 ---
 
+## ⭐ 全套重建 SOP（自助版 — 2026-07-29 實跑驗證，要重建整份圖資看這段就夠）
+
+下面幾節（§0–§5）是沿用現有 feed 的局部更新流程，檔名與埠號有部分過時（現在主 feed 叫 `feed-1.gtfs.zip`、對外埠是 **18080**、GraphQL 路徑是 `/otp/routers/default/index/graphql`）。**要從 TDX 重抓全台資料、重建整份 graph，只走這一段。**
+
+### 一、開跑前必檢（30 秒，跳過會浪費一小時）
+
+```bash
+cd /Users/yuen/project/taipei-accessible-backend
+df -h /Users/yuen | tail -1      # ★ 可用空間必須 ≥ 8 GiB
+docker ps | grep otp             # otp 在跑沒關係，腳本會自己停
+sed -n '/^CITIES = \[/,/^\]/p' src/scripts/patch_gtfs.py | grep -o '"[A-Za-z]*"' | wc -l   # 應為 22
+```
+
+**磁碟是最常見的殺手。** 建圖瞬時需要約 5 GB（暫存區的 feed 140MB + 裁切 pbf 325MB + 新 graph 1.8GB，換圖時還會複製一份 `graph.obj.prev` 又 1.8GB）。剩不到 5 GiB 就會在最後一步 `No space left on device`，**而且會把 Docker 的儲存區寫壞**（`input/output error`、image 讀不出來、容器起不來），只能重啟 Docker Desktop 才復原。不夠就先 `docker system prune -a -f`。
+
+`CITIES` 必須是完整 22 縣市：patch 會**先刪光 base feed 全部公車**再依 CITIES 重建，縮短名單等於靜默刪掉那些縣市的公車。
+
+### 二、跑
+
+```bash
+cd /Users/yuen/project/taipei-accessible-backend
+set -a; . ./.env; set +a
+caffeinate -dims bash src/scripts/build-otp-graph.sh 2>&1 | tee ~/otp-backup/rebuild-$(date +%m%d).log
+```
+
+- **`caffeinate -dims` 不可省。** 電腦睡眠會讓 build 凍死（症狀：log 停住、`Network error: read operation timed out`、而且 **otp 容器會一起 `Exited(137)` 讓線上服務靜悄悄中斷數小時**）。判別法：`ps -o etime,time -p <pid>`，elapsed 兩小時但 cputime 只有一分鐘 = 被凍住不是在算。
+- 全程約 **25 分鐘**：patch 10 分 → 各項注入 3 分 → 驗證 0.5 分 → graph build 7 分 → 換圖 + healthcheck 2 分。
+- **不要看 `$?` 判斷成功**：`| tee` 會把腳本的退出碼蓋成 tee 的 0。看 log 最後一行。
+
+### 三、跑的時候看這四行
+
+| log 行 | 意義 |
+|---|---|
+| `Route matching: ... 0 unmatched` | **`unmatched` 必須是 0**，非 0 表示有班次被丟掉 |
+| `Shape assignment: ...` | `rejected as unfit` 幾百是正常（守門攔下不貼合的幾何），上千要查 |
+| `stopping otp container for graph build` | 線上服務從這裡開始中斷（約 7 分鐘） |
+| `OTP healthy — build complete` | **成功。** 沒有這行就是沒成功 |
+
+### 四、跑完驗收（三個指令）
+
+```bash
+# 1) 服務覆蓋率閘門（掉 20% 或歸零就報 REGRESSION）
+python3 src/scripts/audit-gtfs-feed.py otp-data/feed-1.gtfs.zip \
+  --baseline ~/otp-backup/feed-<上次成功那份>.gtfs.zip
+
+# 2) 公車幾何退化率（健康值 ~1%，14% 表示 shape 配錯）
+curl -s -X POST http://127.0.0.1:18080/otp/routers/default/index/graphql \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"{ patterns { geometry{lat} stops{gtfsId} route{mode} } }"}' \
+| python3 -c "
+import json,sys,collections
+p=json.load(sys.stdin)['data']['patterns']
+t=collections.Counter(); b=collections.Counter()
+for x in p:
+    m=x['route']['mode']; t[m]+=1
+    if len(x['geometry'] or [])<=len(x['stops']): b[m]+=1
+for m in t: print(f'{m:<9}{b[m]:>5}/{t[m]:<5} ({b[m]/t[m]*100:.1f}%)')"
+
+# 3) 端到端試排（天母 → 台北車站，legs 應含 BUS，且 BUS 的 polyline 點數要遠大於 2）
+#    注意欄位名是 latitude/longitude，不是 lat/lng（後者會被 schema 打回 400）
+curl -s -X POST http://127.0.0.1:8000/api/v1/a11y/accessible-route \
+  -H 'Content-Type: application/json' \
+  -d '{"origin":{"latitude":25.1176,"longitude":121.5316},"destination":{"latitude":25.0478,"longitude":121.5170},"travelMode":"transit"}' \
+| python3 -c "
+import json,sys
+d=json.load(sys.stdin); print('ok=',d.get('ok'))
+for i,r in enumerate(d.get('data',{}).get('routes',[])[:3]):
+    print(f'  路線{i+1}:', [(l['type'], len(l.get('polyline') or [])) for l in r['legs']])"
+```
+
+2026-07-29 重建後的實際輸出（可當對照基準）：
+
+```
+audit:     bus routes=8,615  with service=6,700 (77%)  usable>=6/day=3,528 (40%)
+幾何退化:   BUS 79/6801 (1.2%)   RAIL 2/662 (0.3%)   SUBWAY 95/189 (50.3%)
+           SUBWAY/FERRY/AIRPLANE 高退化是已知的另外兩個議題（合成捷運無 shape、渡輪航空本該排除）
+端到端:     路線1: [('WALK',22),('BUS',41),('WALK',7),('METRO',18),('WALK',20)]
+```
+
+**`audit` 報 REGRESSION 不代表一定要回滾。** `usable>=6/day` 這個指標會因為「班次正確分散到各子路線」而下降 —— 2026-07-29 就出現 `TNN 5→0`、`PEN 13→2`，但實測 TNN 總班次 560→560、PEN 191→191 完全沒變，純粹是分布改變。**判別法：比對該縣市的總班次數**，總量沒掉就是指標假象。更誠實的指標是 audit 開頭的 `with service`（有班次的路線數）。
+
+### 五、失敗了怎麼辦
+
+**先確認你不需要做什麼。** 腳本任何失敗路徑都會：保留舊 graph（`otp-data/` 不動）、把停掉的 otp 自動拉回來、清掉暫存目錄。所以 build 失敗後線上服務是自己會恢復的。
+
+只有這兩種情況要手動處理：
+
+```bash
+# graph 換上去了但 healthcheck 沒過（腳本已自動回滾，若仍異常）
+mv otp-data/graph.obj.prev otp-data/graph.obj && docker compose restart otp
+
+# Docker 儲存區被磁碟寫滿弄壞（症狀:input/output error、image blob 讀不出來）
+# → 先清出空間,再重啟 Docker Desktop,然後 docker compose up -d otp
+```
+
+### 六、失敗模式對照表（都是實際踩過的）
+
+| 症狀 | 真因 | 處理 |
+|---|---|---|
+| log 凍住、CPU 時間遠小於 elapsed、otp 變 `Exited(137)` | 電腦睡眠 | 用 `caffeinate -dims` 包住 |
+| `IncompleteRead` 後整個 patch 失敗 | TDX 回應被截斷 | 已修（納入重試白名單），若重試 5 次耗盡才會致命 |
+| `missing required entity: Agency` | gtfs-validator 報告目錄寫在 OTP 資料目錄裡被當成 GTFS feed | 已修（報告改寫到獨立 temp 目錄） |
+| `No space left on device` + Docker `input/output error` | 磁碟寫滿 | 開跑前檢查 ≥8 GiB |
+| graph build 被 OOM 殺掉 | serve 12g + build 12g > Docker VM 15.6GB | 已修（腳本會在建圖前停 otp） |
+| 只剩 TPE/NWT/THB 三個縣市有公車 | `CITIES` 被縮短 | 還原成 22 縣市重跑 |
+| 公車大量畫直線 | shape 配錯子路線 | 看 `Route matching` 的 `prefix` 是否非 0 |
+
+### 七、成功後做一件事
+
+把這次的 feed 存起來當下次的 baseline，否則下次 audit 沒有東西可比：
+
+```bash
+cp otp-data/feed-1.gtfs.zip ~/otp-backup/feed-1.$(date +%Y%m%d).gtfs.zip
+```
+
+---
+
 ## 0. 指令大全（複製貼上即用）
 
 ### 0.1 一鍵更新（沿用現有主 feed：更新 TRA 班表 → 重建 → 部署 → 驗證）
