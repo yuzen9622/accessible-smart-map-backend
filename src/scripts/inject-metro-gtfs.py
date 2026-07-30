@@ -385,7 +385,19 @@ def main(zip_path, metro_dir):
                 covered.append(f"{rid}({len(rows)}st,{hw_secs // 60}m,shape:{bool(shape_pts)})")
 
         # ── Step 2: Non-gap routes (already have trips, but shape is missing from shapes.txt) ──
+        # A sibling trip's shape on the same route+direction beats anything we can
+        # look up: it is already carried by trips with this stop sequence, so OTP
+        # is known to accept it. find_shape's LineID fallbacks, by contrast, can
+        # return a whole-line geometry for a branch (or the reverse orientation),
+        # which OTP silently discards as unfit — leaving straight lines.
+        sibling_shape = {}
+        for t in trips:
+            sid = t.get("shape_id")
+            if sid and sid in valid_shape_ids:
+                sibling_shape.setdefault((t["route_id"], t.get("direction_id") or ""), sid)
+
         # Check existing trips for missing shape data
+        adopted_sibling_shapes = 0
         injected_native_shapes = 0
         for trip in trips:
             # Skip injected MRT_ trips
@@ -393,28 +405,50 @@ def main(zip_path, metro_dir):
                 continue
             rid = trip["route_id"]
             shape_id = trip.get("shape_id")
-            if not shape_id or shape_id in valid_shape_ids or shape_id in new_shapes:
+            if shape_id and (shape_id in valid_shape_ids or shape_id in new_shapes):
                 continue
-            
+
             # Check if this route is a metro route (type 1)
             route = routes_by_id.get(rid)
             if not route or (route.get("route_type") or "").strip() != "1":
                 continue
-                
+
             # Parse route details
             parsed = parse_route_id(rid)
             if not parsed:
                 continue
             system, line_id, variant, direction = parsed
-            
+
             # Find shapes for this trip
-            direction_id = trip.get("direction_id", direction)
+            # A blank direction_id column is as good as absent: passing "" on to
+            # find_shape defeats its reverse-for-direction-1 check, which would
+            # hang a direction-agnostic shape on the trip backwards.
+            direction_id = trip.get("direction_id") or direction
+
+            # Trips that arrive with no shape_id at all (the official TRTC 文湖線
+            # graft writes an empty one) would otherwise render as station-to-
+            # station straight lines: adopt a sibling's shape, and only mint one
+            # from the Metro API when the route has no usable shape anywhere.
+            if not shape_id:
+                adopted = (sibling_shape.get((rid, direction_id))
+                           or sibling_shape.get((rid, "")))
+                if adopted:
+                    trip["shape_id"] = adopted
+                    adopted_sibling_shapes += 1
+                    continue
+
             shape_pts = find_shape(system, line_id, variant, direction_id)
-            if shape_pts:
-                new_shapes[shape_id] = shape_pts
-                injected_native_shapes += 1
-                # Mark as valid so we don't process it multiple times
-                valid_shape_ids.add(shape_id)
+            if not shape_pts:
+                continue
+            if not shape_id:
+                shape_id = f"{TRIP_PREFIX}NAT_{rid}_{direction_id}"
+                trip["shape_id"] = shape_id
+                if shape_id in valid_shape_ids or shape_id in new_shapes:
+                    continue
+            new_shapes[shape_id] = shape_pts
+            injected_native_shapes += 1
+            # Mark as valid so we don't process it multiple times
+            valid_shape_ids.add(shape_id)
 
         if new_trips:
             calendar.append({
@@ -426,7 +460,8 @@ def main(zip_path, metro_dir):
 
         log(f"injecting: trips={len(new_trips)} stop_times={len(new_st)} "
             f"freq={len(new_freq)} gap_shapes={len(new_shapes) - injected_native_shapes} "
-            f"native_shapes={injected_native_shapes} calendar {start_date}–{end_date}")
+            f"native_shapes={injected_native_shapes} "
+            f"adopted_sibling_shapes={adopted_sibling_shapes} calendar {start_date}–{end_date}")
         log("covered: " + (", ".join(covered) if covered else "(none)"))
         if skipped:
             log("skipped: " + ", ".join(skipped))
@@ -473,6 +508,10 @@ def _rewrite(zip_path, zf, rewritten, new_shapes=None):
                         for shape_id, points in new_shapes.items():
                             for seq, (lat, lon) in enumerate(points, start=1):
                                 wrapper.write(f"{shape_id},{lat},{lon},{seq}\n")
+                        # The wrapper outlives the `with`, so its buffer must be
+                        # pushed down before the zip member closes — otherwise the
+                        # tail (i.e. exactly these injected shapes) is dropped.
+                        wrapper.flush()
                 else:
                     out.writestr(name, zf.read(name))
             
@@ -484,7 +523,8 @@ def _rewrite(zip_path, zf, rewritten, new_shapes=None):
                     for shape_id, points in new_shapes.items():
                         for seq, (lat, lon) in enumerate(points, start=1):
                             wrapper.write(f"{shape_id},{lat},{lon},{seq}\n")
-                            
+                    wrapper.flush()
+
         tmp_path = tmp.name
     os.replace(tmp_path, zip_path)
 
