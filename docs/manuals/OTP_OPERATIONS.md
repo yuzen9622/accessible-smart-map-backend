@@ -77,14 +77,19 @@ for i,r in enumerate(d.get('data',{}).get('routes',[])[:3]):
     print(f'  路線{i+1}:', [(l['type'], len(l.get('polyline') or [])) for l in r['legs']])"
 ```
 
-2026-07-29 重建後的實際輸出（可當對照基準）：
+2026-07-30 重建後的實際輸出（可當對照基準）：
 
 ```
-audit:     bus routes=8,615  with service=6,700 (77%)  usable>=6/day=3,528 (40%)
-幾何退化:   BUS 79/6801 (1.2%)   RAIL 2/662 (0.3%)   SUBWAY 95/189 (50.3%)
-           SUBWAY/FERRY/AIRPLANE 高退化是已知的另外兩個議題（合成捷運無 shape、渡輪航空本該排除）
-端到端:     路線1: [('WALK',22),('BUS',41),('WALK',7),('METRO',18),('WALK',20)]
+幾何退化:   BUS 155/6790 (2.3%)  RAIL 2/663 (0.3%)  SUBWAY 4/100 (4.0%)
+           FERRY/AIRPLANE 100% 是已知議題（本該排除，不影響規劃）
+feeds:     只有 feed 1（404 agencies）—— 出現 feed 2 就是有雜 zip 被吃進去，見下方
+audit:     （07-29 數字，07-30 這次未重跑）bus routes=8,615  with service=6,700 (77%)  usable>=6/day=3,528 (40%)
+端到端:     （07-29）路線1: [('WALK',22),('BUS',41),('WALK',7),('METRO',18),('WALK',20)]
 ```
+
+⚠️ **`{feeds{feedId}}` 只該回一個 feed。** 2026-07-29 那次重建，注入用的 `trtc-official.gtfs.zip` 放在建圖目錄裡被 OTP 當成獨立 feed 吃進去 = 整個北捷重複一份、且那份沒有 shapes.txt，捷運腿隨機變站到站直線。當時記錄的 `SUBWAY 95/189 (50.3%)` 就是這個重複 feed，不是「合成捷運無 shape」。修法：注入輸入改放 `AUX_DIR`，並在建圖前斷言 WORK_DIR 只有 `feed-*.gtfs.zip`（腳本已內建，遞迴檢查）。
+
+已知仍退化的 SUBWAY pattern（4 條，皆為 shape 與站序不吻合被 OTP 丟棄）：`KRTC_R_R_0`（高雄紅線 dir 0）、`TRTC_G_G-3`（小碧潭支線兩向，2 站接駁本來就近似直線）。
 
 **`audit` 報 REGRESSION 不代表一定要回滾。** `usable>=6/day` 這個指標會因為「班次正確分散到各子路線」而下降 —— 2026-07-29 就出現 `TNN 5→0`、`PEN 13→2`，但實測 TNN 總班次 560→560、PEN 191→191 完全沒變，純粹是分布改變。**判別法：比對該縣市的總班次數**，總量沒掉就是指標假象。更誠實的指標是 audit 開頭的 `with service`（有班次的路線數）。
 
