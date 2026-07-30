@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import http.client
 import urllib.error
 import zipfile
 from unittest import mock
@@ -109,13 +110,48 @@ def _freq_route(route_uid="FREQ01", direction=0, windows=None, service_day=None)
     }
 
 
+def _scheduled_route(route_uid, sub_route_uid=None, route_id=None, name=None,
+                     direction=0, trip_id=None, stop_ids=("S1", "S2")):
+    sub_route_uid = sub_route_uid if sub_route_uid is not None else route_uid
+    return {
+        "RouteUID": route_uid,
+        "SubRouteUID": sub_route_uid,
+        "RouteID": route_id or route_uid,
+        "RouteName": {"Zh_tw": name or route_uid},
+        "Direction": direction,
+        "Timetables": [{
+            "TripID": trip_id or f"{sub_route_uid}-trip",
+            "ServiceDay": {"Monday": 1},
+            "StopTimes": [
+                {"StopUID": stop_id, "StopSequence": index,
+                 "ArrivalTime": f"06:{(index - 1) * 10:02d}",
+                 "DepartureTime": f"06:{(index - 1) * 10:02d}"}
+                for index, stop_id in enumerate(stop_ids, start=1)
+            ],
+        }],
+    }
+
+
 def _full_stats():
     return {"freq_only": 0, "no_service_day": 0, "dup_trip": 0, "short_trip": 0,
             "synthesized": 0, "sor_synth": 0, "missing_shape": 0, "freq_trips": 0,
-            "freq_windows": 0, "freq_valhalla_fail": 0, "freq_no_stops": 0}
+            "freq_windows": 0, "freq_valhalla_fail": 0, "freq_no_stops": 0,
+            "route_match_subroute_exact": 0, "route_match_route_exact": 0,
+            "route_match_prefix": 0, "route_match_prefix_ambiguous": 0,
+            "route_match_name": 0, "route_unmatched": 0,
+            "shape_from_subroute": 0, "shape_from_route_uid": 0,
+            "shape_from_reversed": 0, "shape_from_static": 0,
+            "shape_rejected_unfit": 0}
 
 
-def _write_fixture_zip(path, with_frequencies=False):
+def _shape_assigner(stats, route_shapes=None, tdx_shapes=None,
+                    static_shapes=None, stop_coords=None):
+    return patch_gtfs.ShapeAssigner(
+        route_shapes or {}, tdx_shapes or {}, static_shapes or {},
+        stop_coords or {}, stats)
+
+
+def _write_fixture_zip(path, with_frequencies=False, with_stops=True):
     """A minimal GTFS feed: one preserved non-bus (metro) trip, one bus trip that
     patch_gtfs deletes, and the calendar/shapes scaffolding patch_gtfs_zip reads."""
     files = {
@@ -134,6 +170,14 @@ def _write_fixture_zip(path, with_frequencies=False):
         "shapes.txt": ("shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\n"
                        "mshape,25.0,121.5,1\nmshape,25.01,121.51,2\n"),
     }
+    if with_stops:
+        files["stops.txt"] = (
+            "stop_id,stop_name,stop_lat,stop_lon\n"
+            "S1,Stop 1,25.001,121.501\n"
+            "S2,Stop 2,25.002,121.502\n"
+            "S3,Stop 3,25.003,121.503\n"
+            "MS1,Metro 1,25.0,121.5\n"
+            "MS2,Metro 2,25.01,121.51\n")
     if with_frequencies:
         files["frequencies.txt"] = ("trip_id,start_time,end_time,headway_secs,exact_times\n"
                                     "mtrip1,08:00:00,20:00:00,600,0\n")
@@ -181,6 +225,26 @@ class FetchPaginatedApiTests(unittest.TestCase):
             with mock.patch("patch_gtfs.urllib.request.urlopen", side_effect=[exc] * 5):
                 with self.assertRaises(patch_gtfs.TdxFetchError):
                     patch_gtfs.fetch_paginated_api("tok", "http://x", strict=True)
+
+    def test_incomplete_read_is_retried(self):
+        truncated = _ok([])
+        truncated.__enter__.return_value.read.side_effect = http.client.IncompleteRead(b"partial")
+        with mock.patch(
+                "patch_gtfs.urllib.request.urlopen",
+                side_effect=[truncated, _ok([{"x": 1}])]) as up:
+            recs = patch_gtfs.fetch_paginated_api("tok", "http://x", strict=True)
+        self.assertEqual(recs, [{"x": 1}])
+        self.assertEqual(up.call_count, 2)
+
+    def test_incomplete_read_exhausts_retries_raises_fetch_error(self):
+        truncated = _ok([])
+        truncated.__enter__.return_value.read.side_effect = http.client.IncompleteRead(b"partial")
+        with mock.patch(
+                "patch_gtfs.urllib.request.urlopen",
+                side_effect=[truncated] * 5) as up:
+            with self.assertRaises(patch_gtfs.TdxFetchError):
+                patch_gtfs.fetch_paginated_api("tok", "http://x", strict=True)
+        self.assertEqual(up.call_count, 5)
 
     def test_invalid_json_strict_raises_once(self):
         with mock.patch("patch_gtfs.urllib.request.urlopen", side_effect=[_raw(b"<html>oops")]) as up:
@@ -348,6 +412,194 @@ class ShapeAndStopOfRouteTests(unittest.TestCase):
                 patch_gtfs.fetch_stop_of_route("t", "u")
 
 
+class RouteMatchingPrecedenceTests(unittest.TestCase):
+    """R1/R2: exact subroute matching precedes deterministic prefix fallback."""
+
+    def _process(self, route, route_ids, route_list=None):
+        trips, stop_times, stats = [], [], _full_stats()
+        assigner = _shape_assigner(stats)
+        patch_gtfs.process_schedule_records_to_gtfs(
+            [route], trips, stop_times, [], set(),
+            route_list or [{"route_id": route_id} for route_id in route_ids],
+            set(route_ids), set(), stats, {}, assigner, {})
+        return trips, stats
+
+    def test_subroute_exact_wins_over_route_uid_prefix(self):
+        route_ids = {"HSQ008101_0", "HSQ0081A1_0", "HSQ0081B1_0"}
+        route = _scheduled_route("HSQ0081", "HSQ008101", trip_id="0909_1")
+        trips, stats = self._process(route, route_ids)
+        self.assertEqual([trip["route_id"] for trip in trips], ["HSQ008101_0"])
+        self.assertFalse(any(trip["route_id"] == "HSQ0081B1_0" for trip in trips))
+        self.assertEqual(stats["route_match_subroute_exact"], 1)
+
+    def test_route_uid_exact_used_when_no_subroute_route_id(self):
+        route = _scheduled_route("HSQ0081", "HSQ008101")
+        trips, stats = self._process(route, {"HSQ0081_0"})
+        self.assertEqual(trips[0]["route_id"], "HSQ0081_0")
+        self.assertEqual(stats["route_match_route_exact"], 1)
+
+    def test_prefix_match_is_deterministic_and_flagged(self):
+        route = _scheduled_route("HSQ0081", "MISSING")
+        orders = [
+            ["HSQ0081B1_0", "HSQ008101_0", "HSQ0081A1_0"],
+            ["HSQ0081A1_0", "HSQ0081B1_0", "HSQ008101_0"],
+        ]
+        results = []
+        for route_ids in orders:
+            trips, stats = self._process(route, route_ids)
+            results.append(trips[0]["route_id"])
+            self.assertEqual(stats["route_match_prefix"], 1)
+            self.assertEqual(stats["route_match_prefix_ambiguous"], 1)
+        self.assertEqual(results, ["HSQ008101_0", "HSQ008101_0"])
+
+    def test_unmatched_route_counted(self):
+        route = _scheduled_route("UNKNOWN", "UNKNOWN01")
+        trips, stats = self._process(route, {"HSQ008101_0"})
+        self.assertEqual(trips, [])
+        self.assertEqual(stats["route_unmatched"], 1)
+
+
+class ShapeIndexTests(unittest.TestCase):
+    """R3: TDX shape indexing keeps exact subroutes and first-seen route fallback."""
+
+    def test_subroute_key_is_primary_and_route_uid_is_first_wins(self):
+        first = {
+            "RouteUID": "HSQ0081", "SubRouteUID": "HSQ008101", "Direction": 0,
+            "Geometry": "LINESTRING (121.0 24.0, 121.1 24.1)",
+        }
+        second = {
+            "RouteUID": "HSQ0081", "SubRouteUID": "HSQ0081B1", "Direction": 0,
+            "Geometry": "LINESTRING (122.0 25.0, 122.1 25.1)",
+        }
+        index = patch_gtfs.build_shape_index([first, second])
+        self.assertEqual(index[("HSQ008101", 0)][0], (24.0, 121.0))
+        self.assertEqual(index[("HSQ0081B1", 0)][0], (25.0, 122.0))
+        self.assertEqual(index[("HSQ0081", 0)], index[("HSQ008101", 0)])
+
+
+class ShapeFitTests(unittest.TestCase):
+    """R4/R5/R6: candidate order, fit validation, and collision-free IDs."""
+
+    LINE = [(25.0, 121.5), (25.0, 121.52)]
+    STOP_COORDS = {"S1": (25.0, 121.501), "S2": (25.0, 121.519)}
+    OPPOSITE_LINE = [(25.0, 121.52), (25.002, 121.51), (25.0, 121.5)]
+
+    def test_unfit_shape_is_rejected_and_not_emitted(self):
+        stats = _full_stats()
+        assigner = _shape_assigner(
+            stats, tdx_shapes={("SUB", 0): self.LINE},
+            stop_coords={"S1": (25.003, 121.51)})
+        shape_id = assigner.select("ROUTE_0", "SUB", "ROUTE", 0, ["S1"])
+        self.assertEqual(shape_id, "")
+        self.assertEqual(stats["shape_rejected_unfit"], 1)
+        self.assertEqual(assigner.new_shapes, {})
+
+    def test_subroute_shape_preferred_over_inherited_static(self):
+        stats = _full_stats()
+        assigner = _shape_assigner(
+            stats,
+            route_shapes={"ROUTE_0": "static_wrong"},
+            tdx_shapes={("SUB", 0): self.LINE},
+            static_shapes={"static_wrong": [(25.01, 121.5), (25.01, 121.52)]},
+            stop_coords=self.STOP_COORDS)
+        shape_id = assigner.select("ROUTE_0", "SUB", "ROUTE", 0, ["S1", "S2"])
+        self.assertEqual(shape_id, "patched_shp_SUB_0")
+        self.assertEqual(stats["shape_from_subroute"], 1)
+        self.assertIn(shape_id, assigner.new_shapes)
+
+    def test_reversed_opposite_direction_shape_gets_distinct_id(self):
+        """R6: the opposite-direction geometry is emitted with its point sequence
+        reversed, under an ID distinct from the direct candidate's."""
+        stats = _full_stats()
+        assigner = _shape_assigner(
+            stats, tdx_shapes={("SUB", 1): list(self.OPPOSITE_LINE)},
+            stop_coords=self.STOP_COORDS)
+        shape_id = assigner.select("ROUTE_0", "SUB", "ROUTE", 0, ["S1", "S2"])
+        self.assertEqual(shape_id, "patched_shp_SUB_0r")
+        self.assertEqual(stats["shape_from_reversed"], 1)
+        self.assertEqual(assigner.new_shapes[shape_id],
+                         list(reversed(self.OPPOSITE_LINE)))
+        self.assertNotEqual(assigner.new_shapes[shape_id], self.OPPOSITE_LINE)
+
+    def test_missing_stop_coords_does_not_reject(self):
+        stats = _full_stats()
+        assigner = _shape_assigner(stats, tdx_shapes={("SUB", 0): self.LINE})
+        shape_id = assigner.select("ROUTE_0", "SUB", "ROUTE", 0, ["S1", "S2"])
+        self.assertEqual(shape_id, "patched_shp_SUB_0")
+        self.assertEqual(stats["shape_from_subroute"], 1)
+
+    def test_fit_uses_segment_distance_not_vertex_distance(self):
+        stats = _full_stats()
+        long_line = [(25.0, 121.49), (25.0, 121.51)]
+        assigner = _shape_assigner(
+            stats, tdx_shapes={("SUB", 0): long_line},
+            stop_coords={"MID": (25.00018, 121.5)})
+        shape_id = assigner.select("ROUTE_0", "SUB", "ROUTE", 0, ["MID"])
+        self.assertEqual(shape_id, "patched_shp_SUB_0")
+
+    def test_inherited_static_shape_used_when_fit(self):
+        stats = _full_stats()
+        assigner = _shape_assigner(
+            stats, route_shapes={"ROUTE_0": "static_fit"},
+            static_shapes={"static_fit": patch_gtfs.array(
+                "d", [25.0, 121.5, 25.0, 121.52])},
+            stop_coords=self.STOP_COORDS)
+        shape_id = assigner.select("ROUTE_0", "SUB", "ROUTE", 0, ["S1", "S2"])
+        self.assertEqual(shape_id, "static_fit")
+        self.assertNotIn(shape_id, assigner.new_shapes)
+        self.assertEqual(stats["shape_from_static"], 1)
+
+    def test_route_uid_tdx_shape_used_when_no_subroute_shape(self):
+        stats = _full_stats()
+        assigner = _shape_assigner(
+            stats, tdx_shapes={("ROUTE", 0): self.LINE},
+            stop_coords=self.STOP_COORDS)
+        shape_id = assigner.select("ROUTE_0", "SUB", "ROUTE", 0, ["S1", "S2"])
+        self.assertEqual(shape_id, "patched_shp_ROUTE_0")
+        self.assertEqual(stats["shape_from_route_uid"], 1)
+
+    def test_subroutes_sharing_route_id_do_not_overwrite_each_other(self):
+        stats = _full_stats()
+        assigner = _shape_assigner(
+            stats,
+            tdx_shapes={("SUB_A", 0): self.LINE,
+                        ("SUB_B", 0): [(25.001, 121.5), (25.001, 121.52)]})
+        first = assigner.select("SHARED_0", "SUB_A", "ROUTE", 0, ["S1"])
+        second = assigner.select("SHARED_0", "SUB_B", "ROUTE", 0, ["S1"])
+        self.assertEqual({first, second}, {"patched_shp_SUB_A_0", "patched_shp_SUB_B_0"})
+        self.assertEqual(len(assigner.new_shapes), 2)
+
+
+class MatchAndShapeCountersTests(unittest.TestCase):
+    """R7: route-match summary counters reflect every matching branch."""
+
+    def test_all_new_counters_are_populated(self):
+        routes = [
+            _scheduled_route("ROUTE1", "SUB01", trip_id="sub"),
+            _scheduled_route("REX", "NO_SUB", trip_id="route"),
+            _scheduled_route("NO_ROUTE", "PFX", trip_id="prefix"),
+            _scheduled_route("UNKNOWN", "UNKNOWN_SUB", route_id="BY_NAME",
+                             name="Display Name", trip_id="name"),
+        ]
+        route_ids = {"SUB01_0", "REX_0", "PFX_BRANCH_0", "NAME_0"}
+        route_list = [
+            {"route_id": "SUB01_0"},
+            {"route_id": "REX_0"},
+            {"route_id": "PFX_BRANCH_0"},
+            {"route_id": "NAME_0", "route_short_name": "Display Name"},
+        ]
+        stats = _full_stats()
+        assigner = _shape_assigner(stats)
+        trips, stop_times = [], []
+        patch_gtfs.process_schedule_records_to_gtfs(
+            routes, trips, stop_times, [], set(), route_list, route_ids, set(),
+            stats, {}, assigner, {})
+        self.assertEqual(stats["route_match_subroute_exact"], 1)
+        self.assertEqual(stats["route_match_route_exact"], 1)
+        self.assertEqual(stats["route_match_prefix"], 1)
+        self.assertEqual(stats["route_match_name"], 1)
+
+
 @mock.patch("patch_gtfs.time.sleep", lambda *a, **k: None)
 class FetchSourceTests(unittest.TestCase):
     def _run(self, schedule, daily_fetcher, sor_fetcher, shape_fetcher=lambda: []):
@@ -433,20 +685,19 @@ class GtfsOutputTests(unittest.TestCase):
     that a route lacking a profile is skipped (short_trip) rather than aborting."""
 
     def _base_stats(self):
-        return {"freq_only": 0, "no_service_day": 0, "dup_trip": 0,
-                "short_trip": 0, "synthesized": 0, "sor_synth": 0,
-                "missing_shape": 0, "freq_trips": 0, "freq_windows": 0,
-                "freq_valhalla_fail": 0, "freq_no_stops": 0}
+        return _full_stats()
 
     def test_partial_coverage_short_trip_and_trip(self):
         schedule = [_origin_only_route("TEST01"), _origin_only_route("TEST02")]
         daily_profiles = patch_gtfs.build_daily_profiles(
             patch_gtfs._synthesize_from_stop_of_route([_sor_route("TEST01", 3)]))
         new_trips, new_stop_times, stats = [], [], self._base_stats()
+        shape_assigner = _shape_assigner(stats)
         patch_gtfs.process_schedule_records_to_gtfs(
             schedule, new_trips, new_stop_times, [], set(),
             [{"route_id": "TEST01_0"}, {"route_id": "TEST02_0"}],
-            {"TEST01_0", "TEST02_0"}, set(), stats, daily_profiles, {}, {}, {}, {})
+            {"TEST01_0", "TEST02_0"}, set(), stats, daily_profiles,
+            shape_assigner, {})
         trip_routes = {t["route_id"] for t in new_trips}
         self.assertIn("TEST01_0", trip_routes)          # had a profile -> trip produced
         self.assertNotIn("TEST02_0", trip_routes)        # no profile -> skipped
@@ -464,10 +715,11 @@ class SorSynthFallbackTests(unittest.TestCase):
         stats = _full_stats()
         ctx = profile_ctx or mock.patch("patch_gtfs.build_travel_profile", side_effect=_FIXED_PROFILE)
         with ctx:
+            shape_assigner = _shape_assigner(stats)
             patch_gtfs.process_schedule_records_to_gtfs(
                 schedule, new_trips, new_stop_times, [], set(),
                 [{"route_id": r} for r in route_ids], set(route_ids), set(), stats,
-                daily_profiles or {}, {}, {}, {}, sor_index)
+                daily_profiles or {}, shape_assigner, sor_index)
         return new_trips, new_stop_times, stats
 
     @staticmethod
@@ -529,10 +781,11 @@ class SorSynthFallbackTests(unittest.TestCase):
         sor_index = patch_gtfs.build_stop_of_route_index([_sor_route("TEST01", n_stops=3)])
         new_trips, stimes, stats = [], [], _full_stats()
         with mock.patch("patch_gtfs.build_travel_profile", side_effect=_FIXED_PROFILE) as mocked:
+            shape_assigner = _shape_assigner(stats)
             patch_gtfs.process_schedule_records_to_gtfs(
                 [route], new_trips, stimes, [], set(),
                 [{"route_id": "TEST01_0"}], {"TEST01_0"}, set(), stats,
-                {}, {}, {}, {}, sor_index)
+                {}, shape_assigner, sor_index)
         trips = new_trips
         self.assertEqual(mocked.call_count, 1)     # one geometry per subroute
         self.assertEqual(stats["sor_synth"], 2)    # both origin-only trips rescued
@@ -635,10 +888,11 @@ class FrequencyTripGenerationTests(unittest.TestCase):
         stats = _full_stats()
         ctx = profile_ctx or mock.patch("patch_gtfs.build_travel_profile", side_effect=_FIXED_PROFILE)
         with ctx:
+            shape_assigner = _shape_assigner(stats)
             patch_gtfs.process_schedule_records_to_gtfs(
                 schedule, new_trips, new_stop_times, new_freqs, set(),
                 [{"route_id": r} for r in route_ids], set(route_ids), patterns, stats,
-                {}, {}, {}, {}, sor_index)
+                {}, shape_assigner, sor_index)
         return new_trips, new_stop_times, new_freqs, patterns, stats
 
     def test_basic_frequency_trip_and_window(self):
@@ -731,17 +985,18 @@ class FrequencyTripGenerationTests(unittest.TestCase):
 
 
 class FrequencyZipEmissionTests(unittest.TestCase):
-    def _run_patch(self, with_frequencies):
+    def _run_patch(self, with_frequencies, with_stops=True, tdx_shapes=None):
         tmpdir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, tmpdir, ignore_errors=True)
         zip_path = os.path.join(tmpdir, "feed.zip")
-        _write_fixture_zip(zip_path, with_frequencies=with_frequencies)
+        _write_fixture_zip(
+            zip_path, with_frequencies=with_frequencies, with_stops=with_stops)
         with mock.patch("patch_gtfs.build_travel_profile", side_effect=_FIXED_PROFILE):
             patch_gtfs.patch_gtfs_zip(
                 zip_path,
                 schedule_records=[_freq_route("FREQ01")],
                 daily_records=[],
-                tdx_shapes={},
+                tdx_shapes=tdx_shapes or {},
                 sor_records=[_sor_route("FREQ01", n_stops=3)],
                 start_date=datetime.date(2026, 7, 20),
             )
@@ -783,6 +1038,95 @@ class FrequencyZipEmissionTests(unittest.TestCase):
         tids = [r["trip_id"] for r in rows]
         self.assertIn("mtrip1", tids)  # upstream metro row preserved
         self.assertTrue(any(t.startswith("freqpatched_FREQ01_0_") for t in tids))  # bus appended
+
+    def test_missing_stops_file_does_not_crash_or_reject_shape(self):
+        line = [(25.001, 121.501), (25.003, 121.503)]
+        zip_path = self._run_patch(
+            with_frequencies=False, with_stops=False,
+            tdx_shapes={("FREQ01", 0): line})
+        trips = self._read(zip_path, "trips.txt")
+        trip = next(row for row in trips if row["trip_id"].startswith("freqpatched_"))
+        self.assertEqual(trip["shape_id"], "patched_shp_FREQ01_0")
+        shapes = self._read(zip_path, "shapes.txt")
+        self.assertEqual(len([row for row in shapes
+                              if row["shape_id"] == trip["shape_id"]]), 2)
+
+
+class BusShapeGeometryZipTests(unittest.TestCase):
+    """R1/R3/R4/R6: realistic 61-series output keeps trip and shape aligned."""
+
+    def test_hsq_main_subroute_trip_uses_its_own_shape(self):
+        tmpdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmpdir, ignore_errors=True)
+        zip_path = os.path.join(tmpdir, "hsq-feed.zip")
+        files = {
+            "routes.txt": (
+                "route_id,route_type\n"
+                "HSQ008101_0,3\nHSQ0081A1_0,3\nHSQ0081B1_0,3\nM1,1\n"),
+            "trips.txt": (
+                "route_id,service_id,trip_id,direction_id,shape_id\n"
+                "HSQ0081B1_0,old,oldbus,0,old_branch\n"
+                "M1,metro,mtrip,0,mshape\n"),
+            "stop_times.txt": (
+                "trip_id,arrival_time,departure_time,stop_id,stop_sequence\n"
+                "oldbus,06:00:00,06:00:00,S1,1\n"
+                "mtrip,07:00:00,07:00:00,M1,1\n"),
+            "stops.txt": (
+                "stop_id,stop_name,stop_lat,stop_lon\n"
+                "S1,Main 1,24.8000,121.0000\n"
+                "S2,Main 2,24.8000,121.0100\n"
+                "M1,Metro,25.0000,121.5000\n"),
+            "shapes.txt": (
+                "shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\n"
+                "old_branch,24.8100,121.0000,1\n"
+                "old_branch,24.8100,121.0100,2\n"
+                "mshape,25.0000,121.5000,1\n"
+                "mshape,25.0100,121.5100,2\n"),
+            "calendar.txt": (
+                "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\n"
+                "metro,1,1,1,1,1,0,0,20260101,20261231\n"),
+            "calendar_dates.txt": "service_id,date,exception_type\n",
+        }
+        with zipfile.ZipFile(zip_path, "w") as archive:
+            for name, content in files.items():
+                archive.writestr(name, content)
+
+        tdx_shapes = patch_gtfs.build_shape_index([
+            {"RouteUID": "HSQ0081", "SubRouteUID": "HSQ008101", "Direction": 0,
+             "Geometry": "LINESTRING (121.0000 24.8000, 121.0100 24.8000)"},
+            {"RouteUID": "HSQ0081", "SubRouteUID": "HSQ0081B1", "Direction": 0,
+             "Geometry": "LINESTRING (121.0000 24.8100, 121.0100 24.8100)"},
+        ])
+        patch_gtfs.patch_gtfs_zip(
+            zip_path,
+            schedule_records=[
+                _scheduled_route(
+                    "HSQ0081", "HSQ008101", trip_id="0909_1",
+                    stop_ids=("S1", "S2"))],
+            daily_records=[],
+            tdx_shapes=tdx_shapes,
+            sor_records=[],
+            start_date=datetime.date(2026, 7, 20),
+        )
+
+        with zipfile.ZipFile(zip_path, "r") as archive:
+            trips = list(csv.DictReader(io.TextIOWrapper(
+                archive.open("trips.txt"), encoding="utf-8-sig")))
+            shapes = list(csv.DictReader(io.TextIOWrapper(
+                archive.open("shapes.txt"), encoding="utf-8-sig")))
+            stop_times = list(csv.DictReader(io.TextIOWrapper(
+                archive.open("stop_times.txt"), encoding="utf-8-sig")))
+
+        trip = next(row for row in trips if row["trip_id"].endswith("_0909_1"))
+        self.assertEqual(trip["route_id"], "HSQ008101_0")
+        self.assertEqual(trip["shape_id"], "patched_shp_HSQ008101_0")
+        shape_rows = [row for row in shapes if row["shape_id"] == trip["shape_id"]]
+        self.assertEqual(
+            [(row["shape_pt_lat"], row["shape_pt_lon"]) for row in shape_rows],
+            [("24.8", "121.0"), ("24.8", "121.01")])
+        trip_stops = [row["stop_id"] for row in stop_times
+                      if row["trip_id"] == trip["trip_id"]]
+        self.assertEqual(trip_stops, ["S1", "S2"])
 
 
 if __name__ == "__main__":

@@ -4,14 +4,17 @@ import sys
 import csv
 import io
 import json
+import math
 import zipfile
 import datetime
+import http.client
 import urllib.request
 import urllib.parse
 import urllib.error
 import time
 import threading
 import concurrent.futures
+from array import array
 
 # Script to patch a GTFS static feed zip file with Taiwan City + InterCity bus
 # GeneralTimetable (定期班表) data and shape geometry. The regular timetable
@@ -33,6 +36,7 @@ CITIES = [
 ]
 
 CALENDAR_VALID_DAYS = 180
+SHAPE_FIT_TOLERANCE_M = 100
 
 # Valhalla /route accepts a bounded number of locations per request; longer
 # subroutes are split into consecutive chunks that share a boundary stop.
@@ -51,9 +55,12 @@ REQUEST_TIMEOUT = 60
 WEEKDAY_KEYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 GTFS_WEEKDAY_COLS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
-# Transport-layer exceptions that are transient and worth retrying (a socket
-# timeout raised by urlopen()/read() surfaces as one of these).
-TRANSPORT_ERRORS = (urllib.error.URLError, TimeoutError, ConnectionError, OSError)
+# Transport-layer exceptions that are transient and worth retrying. HTTPException
+# covers truncated reads and other HTTP protocol failures outside OSError.
+TRANSPORT_ERRORS = (
+    urllib.error.URLError, http.client.HTTPException, TimeoutError,
+    ConnectionError, OSError,
+)
 
 
 class DailyTimetableUnavailable(Exception):
@@ -555,16 +562,24 @@ def parse_linestring(geom):
         return []
 
 def build_shape_index(shape_records):
-    """Index shape records by (RouteUID, Direction) -> [(lat, lon), ...]."""
+    """Index TDX shapes primarily by subroute and secondarily by RouteUID.
+
+    The RouteUID entry is a first-seen coarse fallback and can represent any
+    subroute when multiple subroutes share a RouteUID. ShapeAssigner therefore
+    validates every indexed geometry against the trip stops before using it.
+    """
     index = {}
     for r in shape_records:
+        suid = r.get("SubRouteUID")
         ruid = r.get("RouteUID")
         direction = r.get("Direction", 0)
-        geom = r.get("Geometry")
-        if ruid and geom:
-            pts = parse_linestring(geom)
-            if pts:
-                index[(ruid, direction)] = pts
+        pts = parse_linestring(r.get("Geometry"))
+        if not pts:
+            continue
+        if suid:
+            index[(suid, direction)] = pts
+        if ruid:
+            index.setdefault((ruid, direction), pts)
     return index
 
 def synthesize_stop_rows(trip_id, timetable, key_uids, direction, daily_profiles):
@@ -765,30 +780,167 @@ def _merge_frequency_windows(windows):
     return merged
 
 
-def _select_shape_id(matched_id, sub_route_uid, route_uid, direction,
-                     route_shape_by_route, tdx_shapes, new_shapes, stats):
-    """Hybrid shape selection: inherit the original static GTFS shape for the
-    route if present, else fall back to the freshly fetched TDX shape index
-    (direct then reversed opposite direction). Increments missing_shape when no
-    geometry is available."""
-    shape_id = route_shape_by_route.get(matched_id, "")
-    if not shape_id:
-        pts = None
+class ShapeAssigner:
+    """Choose and validate geometry for patched trips before OTP sees the feed.
+
+    @param route_shape_by_route Existing route_id to static shape_id mapping.
+    @param tdx_shapes TDX shapes indexed by UID and direction.
+    @param static_shape_points Existing static geometry needed by bus routes.
+    @param stop_coords GTFS stop_id to latitude/longitude mapping.
+    @param stats Mutable patch summary counters.
+    """
+
+    def __init__(self, route_shape_by_route, tdx_shapes, static_shape_points,
+                 stop_coords, stats):
+        self.route_shape_by_route = route_shape_by_route
+        self.tdx_shapes = tdx_shapes
+        self.static_shape_points = static_shape_points
+        self.stop_coords = stop_coords
+        self.stats = stats
+        self.new_shapes = {}
+        self._fit_cache = {}
+        self._flat_cache = {}
+
+    @staticmethod
+    def _flatten(points):
+        """Return geometry as flat latitude/longitude doubles.
+
+        @param points Either an array('d') or an iterable of (lat, lon) pairs.
+        @returns A flat array ordered as lat0, lon0, lat1, lon1, and so on.
+        """
+        if isinstance(points, array):
+            return points
+        flat = array("d")
+        for lat, lon in points:
+            flat.extend((float(lat), float(lon)))
+        return flat
+
+    def _fits(self, points, stop_ids, shape_cache_key):
+        """Return whether every located stop lies within the shape tolerance.
+
+        @param points Shape geometry in flat or pair form.
+        @param stop_ids Ordered GTFS stop identifiers for the trip.
+        @param shape_cache_key Stable identity for fit-result memoization.
+        @returns True when all located stops fit, including no-coordinate feeds.
+        """
+        located_stops = [self.stop_coords[stop_id] for stop_id in stop_ids
+                         if stop_id in self.stop_coords]
+        if not located_stops:
+            return True
+
+        fit_key = (shape_cache_key, tuple(stop_ids))
+        if fit_key in self._fit_cache:
+            return self._fit_cache[fit_key]
+
+        flat = self._flat_cache.get(shape_cache_key)
+        if flat is None:
+            flat = self._flatten(points)
+            self._flat_cache[shape_cache_key] = flat
+        if len(flat) < 4:
+            self._fit_cache[fit_key] = False
+            return False
+
+        point_count = len(flat) // 2
+        lat0 = sum(flat[i] for i in range(0, len(flat), 2)) / point_count
+        kx = 111320 * math.cos(math.radians(lat0))
+        ky = 110540
+        tolerance = SHAPE_FIT_TOLERANCE_M
+        tolerance_sq = tolerance * tolerance
+
+        projected = array("d")
+        for i in range(0, len(flat), 2):
+            projected.extend((flat[i + 1] * kx, flat[i] * ky))
+
+        fits = True
+        for lat, lon in located_stops:
+            px = float(lon) * kx
+            py = float(lat) * ky
+            stop_fits = False
+            for i in range(0, len(projected) - 2, 2):
+                ax, ay = projected[i], projected[i + 1]
+                bx, by = projected[i + 2], projected[i + 3]
+                if (px < min(ax, bx) - tolerance or
+                        px > max(ax, bx) + tolerance or
+                        py < min(ay, by) - tolerance or
+                        py > max(ay, by) + tolerance):
+                    continue
+                dx = bx - ax
+                dy = by - ay
+                length_sq = dx * dx + dy * dy
+                if length_sq:
+                    ratio = ((px - ax) * dx + (py - ay) * dy) / length_sq
+                    ratio = max(0.0, min(1.0, ratio))
+                    nearest_x = ax + ratio * dx
+                    nearest_y = ay + ratio * dy
+                else:
+                    nearest_x, nearest_y = ax, ay
+                dist_x = px - nearest_x
+                dist_y = py - nearest_y
+                if dist_x * dist_x + dist_y * dist_y <= tolerance_sq:
+                    stop_fits = True
+                    break
+            if not stop_fits:
+                fits = False
+                break
+
+        self._fit_cache[fit_key] = fits
+        return fits
+
+    def select(self, matched_id, sub_route_uid, route_uid, direction, stop_ids):
+        """Select the first fitting subroute, route, reversed, or static shape.
+
+        @param matched_id GTFS route_id assigned to the patched trip.
+        @param sub_route_uid TDX SubRouteUID for exact geometry lookup.
+        @param route_uid TDX RouteUID for coarse geometry fallback.
+        @param direction Direction of the patched trip.
+        @param stop_ids Ordered stop identifiers used for fit validation.
+        @returns The selected shape_id, or an empty string when none is usable.
+        """
+        direct_candidates = []
+        reversed_candidates = []
+        seen_keys = set()
         for key_uid in (sub_route_uid, route_uid):
-            if key_uid:
-                if (key_uid, direction) in tdx_shapes:
-                    pts = tdx_shapes[(key_uid, direction)]
-                    break
-                opp_dir = 1 - direction
-                if (key_uid, opp_dir) in tdx_shapes:
-                    pts = tdx_shapes[(key_uid, opp_dir)][::-1]
-                    break
-        if pts:
-            shape_id = f"patched_shp_{matched_id}"
-            new_shapes[shape_id] = pts
+            lookup_key = (key_uid, direction)
+            if key_uid and lookup_key in self.tdx_shapes and lookup_key not in seen_keys:
+                source = "shape_from_subroute" if key_uid == sub_route_uid else "shape_from_route_uid"
+                direct_candidates.append(
+                    (key_uid, self.tdx_shapes[lookup_key], source,
+                     ("tdx", key_uid, direction, False)))
+                seen_keys.add(lookup_key)
+
+        opposite_direction = 1 - direction
+        for key_uid in (sub_route_uid, route_uid):
+            lookup_key = (key_uid, opposite_direction)
+            if key_uid and lookup_key in self.tdx_shapes and lookup_key not in seen_keys:
+                reversed_candidates.append(
+                    (key_uid, self.tdx_shapes[lookup_key][::-1], "shape_from_reversed",
+                     ("tdx", key_uid, opposite_direction, True)))
+                seen_keys.add(lookup_key)
+
+        had_candidate = False
+        for key_uid, points, counter, cache_key in direct_candidates + reversed_candidates:
+            had_candidate = True
+            if not self._fits(points, stop_ids, cache_key):
+                continue
+            reversed_suffix = "r" if counter == "shape_from_reversed" else ""
+            shape_id = f"patched_shp_{key_uid}_{direction}{reversed_suffix}"
+            self.new_shapes[shape_id] = points
+            self.stats[counter] += 1
+            return shape_id
+
+        static_shape_id = self.route_shape_by_route.get(matched_id, "")
+        static_points = self.static_shape_points.get(static_shape_id)
+        if static_points is not None:
+            had_candidate = True
+            if self._fits(static_points, stop_ids, ("static", static_shape_id)):
+                self.stats["shape_from_static"] += 1
+                return static_shape_id
+
+        if had_candidate:
+            self.stats["shape_rejected_unfit"] += 1
         else:
-            stats["missing_shape"] += 1
-    return shape_id
+            self.stats["missing_shape"] += 1
+        return ""
 
 
 def _resolve_sor_stops(route, sor_index):
@@ -806,7 +958,7 @@ def _resolve_sor_stops(route, sor_index):
 
 def _emit_frequency_trip(route, matched_id, stops, profile, new_trips, new_stop_times,
                          new_frequencies, seen_trips, service_patterns, stats,
-                         route_shape_by_route, tdx_shapes, new_shapes):
+                         shape_assigner):
     """Emit one headway template trip per weekday pattern for a freq-only
     subroute: stop_times from the travel profile, and one frequencies.txt row per
     (merged) window."""
@@ -859,8 +1011,9 @@ def _emit_frequency_trip(route, matched_id, stops, profile, new_trips, new_stop_
                 "stop_sequence": str(s["seq"]),
             })
 
-        shape_id = _select_shape_id(matched_id, sub_route_uid, route_uid, direction,
-                                    route_shape_by_route, tdx_shapes, new_shapes, stats)
+        shape_id = shape_assigner.select(
+            matched_id, sub_route_uid, route_uid, direction,
+            [row["stop_id"] for row in stop_rows])
 
         seen_trips.add(trip_id)
         service_patterns.add(pattern)
@@ -886,8 +1039,7 @@ def _emit_frequency_trip(route, matched_id, stops, profile, new_trips, new_stop_
 
 def _generate_frequency_trips(freq_pending, sor_index, new_trips, new_stop_times,
                               new_frequencies, seen_trips, service_patterns, stats,
-                              route_shape_by_route, tdx_shapes, new_shapes,
-                              profile_cache, fail_counter):
+                              shape_assigner, profile_cache, fail_counter):
     """Second pass over the freq-only subroutes collected during the schedule
     loop: resolve StopOfRoute stops, compute Valhalla travel profiles with a
     bounded worker pool, then emit template trips + frequencies rows. Profiles are
@@ -921,15 +1073,19 @@ def _generate_frequency_trips(freq_pending, sor_index, new_trips, new_stop_times
     for route, matched_id, key, stops in resolved:
         _emit_frequency_trip(route, matched_id, stops, profile_cache[key], new_trips,
                              new_stop_times, new_frequencies, seen_trips, service_patterns,
-                             stats, route_shape_by_route, tdx_shapes, new_shapes)
+                             stats, shape_assigner)
 
 
-def process_schedule_records_to_gtfs(records, new_trips, new_stop_times, new_frequencies, seen_trips, route_list, route_ids_set, service_patterns, stats, daily_profiles, route_shape_by_route, tdx_shapes, new_shapes, sor_index):
+def process_schedule_records_to_gtfs(records, new_trips, new_stop_times, new_frequencies,
+                                     seen_trips, route_list, route_ids_set,
+                                     service_patterns, stats, daily_profiles,
+                                     shape_assigner, sor_index):
     # Shared across the origin-only timetable fallback and the frequency pass so a
     # subroute's Valhalla travel-time profile is computed at most once per build.
     profile_cache = {}
     valhalla_fail_counter = [0]
     freq_pending = []
+    sorted_route_ids = sorted(route_ids_set)
     for route in records:
         route_uid = route.get("RouteUID")
         sub_route_uid = route.get("SubRouteUID")
@@ -940,29 +1096,36 @@ def process_schedule_records_to_gtfs(records, new_trips, new_stop_times, new_fre
         suffix = f"_{direction}"
         matched_id = None
 
-        # 1. Match by RouteUID + Direction
-        if route_uid:
-            exact = f"{route_uid}{suffix}"
-            if exact in route_ids_set:
-                matched_id = exact
-            else:
-                for r_id in route_ids_set:
-                    if r_id.startswith(route_uid) and r_id.endswith(suffix):
-                        matched_id = r_id
-                        break
-
-        # 2. Match by SubRouteUID + Direction
-        if not matched_id and sub_route_uid:
+        if sub_route_uid:
             exact = f"{sub_route_uid}{suffix}"
             if exact in route_ids_set:
                 matched_id = exact
-            else:
-                for r_id in route_ids_set:
-                    if r_id.startswith(sub_route_uid) and r_id.endswith(suffix):
-                        matched_id = r_id
-                        break
+                stats["route_match_subroute_exact"] += 1
 
-        # 3. Match by RouteName / RouteID
+        if not matched_id and route_uid:
+            exact = f"{route_uid}{suffix}"
+            if exact in route_ids_set:
+                matched_id = exact
+                stats["route_match_route_exact"] += 1
+
+        if not matched_id and sub_route_uid:
+            candidates = [route_id for route_id in sorted_route_ids
+                          if route_id.startswith(sub_route_uid) and route_id.endswith(suffix)]
+            if candidates:
+                matched_id = candidates[0]
+                stats["route_match_prefix"] += 1
+                if len(candidates) > 1:
+                    stats["route_match_prefix_ambiguous"] += 1
+
+        if not matched_id and route_uid:
+            candidates = [route_id for route_id in sorted_route_ids
+                          if route_id.startswith(route_uid) and route_id.endswith(suffix)]
+            if candidates:
+                matched_id = candidates[0]
+                stats["route_match_prefix"] += 1
+                if len(candidates) > 1:
+                    stats["route_match_prefix_ambiguous"] += 1
+
         if not matched_id:
             for r in route_list:
                 r_id = r["route_id"]
@@ -970,9 +1133,11 @@ def process_schedule_records_to_gtfs(records, new_trips, new_stop_times, new_fre
                 if r_short == name or r_short == route_id_tdx:
                     if r_id.endswith(suffix):
                         matched_id = r_id
+                        stats["route_match_name"] += 1
                         break
 
         if not matched_id:
+            stats["route_unmatched"] += 1
             continue
 
         if route.get("Frequencys"):
@@ -1035,8 +1200,9 @@ def process_schedule_records_to_gtfs(records, new_trips, new_stop_times, new_fre
             seen_trips.add(trip_id)
             service_patterns.add(pattern)
 
-            shape_id = _select_shape_id(matched_id, sub_route_uid, route_uid, direction,
-                                        route_shape_by_route, tdx_shapes, new_shapes, stats)
+            shape_id = shape_assigner.select(
+                matched_id, sub_route_uid, route_uid, direction,
+                [row["stop_id"] for row in stop_rows])
 
             new_trips.append({
                 "route_id": matched_id,
@@ -1049,8 +1215,8 @@ def process_schedule_records_to_gtfs(records, new_trips, new_stop_times, new_fre
 
     _generate_frequency_trips(
         freq_pending, sor_index, new_trips, new_stop_times, new_frequencies,
-        seen_trips, service_patterns, stats, route_shape_by_route, tdx_shapes, new_shapes,
-        profile_cache, valhalla_fail_counter)
+        seen_trips, service_patterns, stats, shape_assigner, profile_cache,
+        valhalla_fail_counter)
     stats["freq_valhalla_fail"] += valhalla_fail_counter[0]
 
 def patch_gtfs_zip(zip_path, schedule_records, daily_records, tdx_shapes, sor_records, start_date):
@@ -1095,6 +1261,33 @@ def patch_gtfs_zip(zip_path, schedule_records, daily_records, tdx_shapes, sor_re
                         kept_trip_ids.add(row["trip_id"])
                     elif row.get("shape_id") and route_id not in route_shape_by_route:
                         route_shape_by_route[route_id] = row["shape_id"]
+
+        stop_coords = {}
+        if "stops.txt" in zin.namelist():
+            with zin.open("stops.txt") as f:
+                text = io.TextIOWrapper(f, encoding="utf-8-sig")
+                for row in csv.DictReader(text):
+                    try:
+                        stop_coords[row["stop_id"]] = (
+                            float(row["stop_lat"]), float(row["stop_lon"]))
+                    except (KeyError, TypeError, ValueError):
+                        continue
+
+        static_shape_points = {}
+        required_static_shapes = set(route_shape_by_route.values())
+        if required_static_shapes and "shapes.txt" in zin.namelist():
+            with zin.open("shapes.txt") as f:
+                text = io.TextIOWrapper(f, encoding="utf-8-sig")
+                for row in csv.DictReader(text):
+                    shape_id = row.get("shape_id")
+                    if shape_id not in required_static_shapes:
+                        continue
+                    try:
+                        lat = float(row["shape_pt_lat"])
+                        lon = float(row["shape_pt_lon"])
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    static_shape_points.setdefault(shape_id, array("d")).extend((lat, lon))
 
         # 3. Extract and preserve all non-bus stop times
         kept_stop_times = []
@@ -1144,16 +1337,24 @@ def patch_gtfs_zip(zip_path, schedule_records, daily_records, tdx_shapes, sor_re
     service_patterns = set()
     stats = {"freq_only": 0, "no_service_day": 0, "dup_trip": 0, "short_trip": 0,
              "synthesized": 0, "sor_synth": 0, "missing_shape": 0, "freq_trips": 0,
-             "freq_windows": 0, "freq_valhalla_fail": 0, "freq_no_stops": 0}
+             "freq_windows": 0, "freq_valhalla_fail": 0, "freq_no_stops": 0,
+             "route_match_subroute_exact": 0, "route_match_route_exact": 0,
+             "route_match_prefix": 0, "route_match_prefix_ambiguous": 0,
+             "route_match_name": 0, "route_unmatched": 0,
+             "shape_from_subroute": 0, "shape_from_route_uid": 0,
+             "shape_from_reversed": 0, "shape_from_static": 0,
+             "shape_rejected_unfit": 0}
     daily_profiles = build_daily_profiles(daily_records)
     sor_index = build_stop_of_route_index(sor_records)
-    new_shapes = {}
+    shape_assigner = ShapeAssigner(
+        route_shape_by_route, tdx_shapes, static_shape_points, stop_coords, stats)
 
     process_schedule_records_to_gtfs(
         schedule_records, new_trips, new_stop_times, new_frequencies, seen_trips,
         route_list, route_ids_set, service_patterns, stats, daily_profiles,
-        route_shape_by_route, tdx_shapes, new_shapes, sor_index
+        shape_assigner, sor_index
     )
+    new_shapes = shape_assigner.new_shapes
 
     print(f"Generated {len(new_trips)} new bus trips and {len(new_stop_times)} new stop times "
           f"({len(service_patterns)} weekly service patterns, valid {cal_start}–{cal_end}; "
@@ -1167,6 +1368,17 @@ def patch_gtfs_zip(zip_path, schedule_records, daily_records, tdx_shapes, sor_re
     print(f"Skipped: {stats['no_service_day']} timetables with no service day, "
           f"{stats['dup_trip']} duplicate trips, {stats['short_trip']} origin-only trips with "
           f"no daily profile and no usable StopOfRoute stops.")
+    print(f"Route matching: {stats['route_match_subroute_exact']} subroute-exact, "
+          f"{stats['route_match_route_exact']} route-exact, "
+          f"{stats['route_match_prefix']} prefix "
+          f"({stats['route_match_prefix_ambiguous']} ambiguous), "
+          f"{stats['route_match_name']} by name, {stats['route_unmatched']} unmatched.")
+    print(f"Shape assignment: {stats['shape_from_subroute']} subroute TDX, "
+          f"{stats['shape_from_route_uid']} route TDX, "
+          f"{stats['shape_from_reversed']} reversed, "
+          f"{stats['shape_from_static']} inherited static, "
+          f"{stats['shape_rejected_unfit']} rejected as unfit, "
+          f"{stats['missing_shape']} with no candidate.")
 
     # 7. Combine kept non-bus + new bus data
     final_trips = kept_trips + new_trips
@@ -1235,6 +1447,7 @@ def patch_gtfs_zip(zip_path, schedule_records, daily_records, tdx_shapes, sor_re
                 for shape_id, points in sorted(new_shapes.items()):
                     for seq, (lat, lon) in enumerate(points, start=1):
                         wrapper.write(f"{shape_id},{lat},{lon},{seq}\n")
+                wrapper.flush()
 
             # Write frequencies.txt unconditionally: canonical header, any
             # upstream rows preserved, then the new bus template windows appended.
