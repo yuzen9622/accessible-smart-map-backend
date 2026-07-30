@@ -4,7 +4,7 @@
 #   1. fetch the TDX GTFS static feed(s)        (every run)
 #   2. refresh + clip the Taiwan OSM extract    (only when older than 30 days)
 #   3. gate on gtfs-validator errors            (abort keeps the old graph)
-#   4. otp --build --save (offline, in a temp dir — serving is untouched)
+#   4. stop serving briefly; otp --build --save offline in a temp dir
 #   5. atomic swap of graph.obj + container restart + healthcheck
 #
 # Required env:
@@ -38,10 +38,31 @@ OTP_IMAGE="opentripplanner/opentripplanner:2.9.0"
 OSM_MAX_AGE_DAYS=30
 
 WORK_DIR="$(mktemp -d /tmp/otp-build.XXXXXX)"
-trap 'rm -rf "$WORK_DIR"' EXIT
-
+VALIDATION_DIR="$(mktemp -d /tmp/otp-validation.XXXXXX)"
 log() { echo "[build-otp-graph] $(date '+%F %T') $*"; }
 die() { log "FATAL: $*"; exit 1; }
+
+OTP_STOPPED_BY_SCRIPT=0
+OTP_RESTART_HANDLED=0
+
+cleanup() {
+  exit_status=$?
+  trap - EXIT INT TERM
+  if [ "$OTP_STOPPED_BY_SCRIPT" -eq 1 ] && [ "$OTP_RESTART_HANDLED" -eq 0 ]; then
+    log "restarting otp container during cleanup"
+    docker compose restart otp || docker restart otp || true
+  fi
+  rm -rf "$WORK_DIR" "$VALIDATION_DIR" || true
+  exit "$exit_status"
+}
+
+on_signal() {
+  exit "$1"
+}
+
+trap cleanup EXIT
+trap 'on_signal 130' INT
+trap 'on_signal 143' TERM
 
 [ -n "${TDX_CLIENT_ID:-}" ] || die "TDX_CLIENT_ID not set"
 [ -n "${TDX_CLIENT_SECRET:-}" ] || die "TDX_CLIENT_SECRET not set"
@@ -70,7 +91,7 @@ for url in $OTP_GTFS_URLS; do
   # the latter build a graph that NPEs on load). See clean-gtfs-feed.py.
   if [ "$i" -eq 1 ]; then
     log "patching feed $i with general (weekly) timetables"
-    python3 "$SCRIPT_DIR/patch_gtfs.py" "$out" || log "WARN: patch_gtfs.py exited non-zero — city bus per-stop timetables may not be applied (see the TDX error/body on stderr above); continuing with the unpatched static schedule"
+    python3 "$SCRIPT_DIR/patch_gtfs.py" "$out" || die "patch_gtfs.py failed, so bus schedule backfill is entirely missing; continuing would produce a graph with unusable bus data that step 5 auto-promotes to production — aborting and keeping the old graph"
   else
     log "skipping timetable patching for feed $i (city-specific static feed)"
   fi
@@ -245,17 +266,21 @@ if [ -f "$OSM_CLIPPED.enriched" ]; then
 fi
 
 # ── 3. Feed validation gate (red light = abort, old graph keeps serving) ──
+# Reports MUST land outside WORK_DIR: OTP scans its data directory and classifies
+# anything named *.gtfs as a transit bundle, so a `validation-feed-1.gtfs` report
+# directory sitting next to the feed makes `otp --build` abort on the report's
+# missing agency.txt.
 if command -v gtfs-validator >/dev/null 2>&1; then
   for zip in "$WORK_DIR"/feed-*.gtfs.zip; do
     log "validating $(basename "$zip")"
-    gtfs-validator -i "$zip" -o "$WORK_DIR/validation-$(basename "$zip" .zip)" \
+    gtfs-validator -i "$zip" -o "$VALIDATION_DIR/$(basename "$zip" .zip)" \
       || die "gtfs-validator reported errors for $zip — keeping old graph"
   done
 else
   log "WARN: gtfs-validator not installed — skipping validation gate"
 fi
 
-# ── 4. Offline build in the temp dir (serving container is untouched) ──
+# ── 4. Brief service interruption: stop OTP for the offline temp-dir build ──
 cp "$OTP_DATA_DIR"/otp-config.json "$OTP_DATA_DIR"/build-config.json \
   "$OTP_DATA_DIR"/router-config.json "$WORK_DIR/" 2>/dev/null \
   || die "OTP config files missing in $OTP_DATA_DIR"
@@ -264,6 +289,18 @@ mv "$OSM_CLIPPED" "$WORK_DIR/taiwan-otp.osm.pbf"
 # The official image's entrypoint hardcodes /var/opentripplanner as the data
 # directory — mount there and pass flags only, never a path.
 log "building graph (this takes a while; heap ${OTP_JAVA_XMX})"
+# An absent container (fresh machine, or after `docker compose down`) is not an
+# error — there is simply no serving heap to reclaim before the build.
+OTP_WAS_RUNNING="$(docker inspect -f '{{.State.Running}}' otp 2>/dev/null || echo absent)"
+if [ "$OTP_WAS_RUNNING" = "true" ]; then
+  log "stopping otp container for graph build"
+  # Claim responsibility BEFORE stopping: `docker stop` takes seconds (graceful
+  # SIGTERM), and a signal arriving during it would otherwise reach cleanup with
+  # the flag still unset, leaving the service stopped with nobody to restart it.
+  # A failed stop then costs one harmless restart of an already-running container.
+  OTP_STOPPED_BY_SCRIPT=1
+  docker stop otp || die "failed to stop otp before graph build — keeping old graph"
+fi
 docker run --rm \
   -e JAVA_TOOL_OPTIONS="-Xmx${OTP_JAVA_XMX}" \
   -v "$WORK_DIR:/var/opentripplanner" \
@@ -281,6 +318,7 @@ mv "$OTP_DATA_DIR/graph.obj.new" "$OTP_DATA_DIR/graph.obj"
 
 log "restarting otp container"
 docker compose restart otp || docker restart otp || die "container restart failed"
+OTP_RESTART_HANDLED=1
 
 log "waiting for healthcheck"
 for attempt in $(seq 1 30); do
