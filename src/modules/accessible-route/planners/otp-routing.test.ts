@@ -147,6 +147,39 @@ describe("OTP PLAN_QUERY searchWindow", () => {
   });
 });
 
+// The OTP `wheelchair` flag is step-free routing, so it must follow the caller's
+// avoidStairs constraint — not the accessibility mode, which only tunes scoring.
+describe("planOtpRoute wheelchair flag follows avoidStairs", () => {
+  beforeEach(() => {
+    post.mockResolvedValue(okResp(threeDistinctTransitItineraries()));
+  });
+
+  it("defaults to mode === wheelchair when avoidStairs is omitted", async () => {
+    await planOtpRoute(origin, destination, { mode: "wheelchair" });
+    expect(post.mock.calls[0][1].variables.wheelchair).toBe(true);
+
+    post.mockClear();
+    await planOtpRoute(origin, destination, { mode: "elderly" });
+    expect(post.mock.calls[0][1].variables.wheelchair).toBe(false);
+  });
+
+  it("turns step-free routing on for a non-wheelchair mode", async () => {
+    await planOtpRoute(origin, destination, {
+      mode: "elderly",
+      avoidStairs: true,
+    });
+    expect(post.mock.calls[0][1].variables.wheelchair).toBe(true);
+  });
+
+  it("lets an explicit false override wheelchair mode", async () => {
+    await planOtpRoute(origin, destination, {
+      mode: "wheelchair",
+      avoidStairs: false,
+    });
+    expect(post.mock.calls[0][1].variables.wheelchair).toBe(false);
+  });
+});
+
 describe("planOtpRoute search windows and timeouts", () => {
   it("uses one narrow query when it already has three distinct transit routes", async () => {
     post.mockResolvedValue(okResp(threeDistinctTransitItineraries()));

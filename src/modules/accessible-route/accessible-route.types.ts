@@ -42,6 +42,23 @@ export interface ModeProfile {
 
 export type DataConfidence = "high" | "medium" | "low";
 
+/**
+ * Hard accessibility constraints for one plan request. Orthogonal to
+ * `AccessibilityMode` (which only tunes weights): these decide whether a route
+ * is *eligible* at all. Callers may send them explicitly (the client's A11y
+ * Profile derives them from e.g. "uses a walker"); when omitted they fall back
+ * to the mode profile's `tier1Required`, which preserves the pre-flag behaviour.
+ */
+export interface A11yConstraints {
+  /** Ask the street engine for step-free paths and drop walk legs through a stairs-only barrier. */
+  avoidStairs: boolean;
+  /** Drop rail legs whose station has facility data but no working elevator. */
+  requireElevator: boolean;
+}
+
+/** Caller-supplied overrides for {@link A11yConstraints}; unset fields fall back to the mode default. */
+export type A11yConstraintOverrides = Partial<A11yConstraints>;
+
 export interface RouteAccessibilityScore {
   totalScore: number;
   label: ScoreLabel;
@@ -67,6 +84,8 @@ export interface FindAccessibleRoutesOptions {
   departureTime?: Date;
   format?: "standard" | "compact";
   waypoints?: LatLng[];
+  avoidStairs?: boolean;
+  requireElevator?: boolean;
 }
 
 export interface PlanRoadRouteOptions {
@@ -98,6 +117,8 @@ export interface PlanRouteRequest {
   mode?: RouteIntent["mode"];
   travelMode?: TravelMode;
   waypoints?: (string | { latitude: number; longitude: number })[];
+  avoidStairs?: boolean;
+  requireElevator?: boolean;
 }
 
 export type PlanRouteResult =

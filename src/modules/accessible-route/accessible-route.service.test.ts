@@ -58,6 +58,7 @@ import { planAccessibleRouteFromRequest } from "./accessible-route.service";
 import { planValhallaRoute, ValhallaRoutingError } from "./planners/valhalla-routing";
 import { findNearbyParking, findNearby } from "../a11y/a11y.service";
 import { planOtpRoute, planOtpWalk } from "./planners/otp-routing";
+import { enrichLegIndoor } from "./planners/route-a11y";
 import { getCity } from "../../adapters/google.adapter";
 import { ResponseCode } from "../../types/code";
 import { getWeatherAndAirQuality } from "../environment/environment.service";
@@ -551,5 +552,289 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
 
     expect(res.status).toBe(ResponseCode.NOT_FOUND);
     expect(res.error).toContain("找不到連通的公車或捷運路線");
+  });
+});
+
+describe("planAccessibleRouteFromRequest — avoidStairs / requireElevator constraints", () => {
+  const origin = { latitude: 25.04, longitude: 121.56 };
+  const destination = { latitude: 25.03, longitude: 121.55 };
+  const transitRequest = { travelMode: "transit" as const, origin, destination };
+
+  // Two rail candidates that differ ONLY in whether the station facility data
+  // mentions an elevator — the exact case requireElevator must discriminate.
+  const metroRoute = (routeName: string, facilityHighlights: string[]) => ({
+    routeId: `otp-${routeName}`,
+    routeName,
+    totalMinutes: 20,
+    transferCount: 0,
+    totalWalkDistanceM: 200,
+    legs: [
+      {
+        type: "METRO",
+        railSystem: "TRTC",
+        lineName: routeName,
+        departureStation: "A 站",
+        arrivalStation: "B 站",
+        departureStationUid: `TRTC-${routeName}-A`,
+        arrivalStationUid: `TRTC-${routeName}-B`,
+        polyline: [
+          [121.56, 25.04],
+          [121.55, 25.03],
+        ],
+        facilityHighlights,
+        departureStationA11y: [],
+        arrivalStationA11y: [],
+      },
+    ],
+    accessibilityHighlights: [],
+  });
+
+  const withElevator = metroRoute("有電梯線", ["A 站有電梯可達月台"]);
+  const withoutElevator = metroRoute("無電梯線", ["A 站僅有樓梯與扶手"]);
+
+  // A walk leg over confirmed stairs with no wheelchair ramp — what avoidStairs drops.
+  const stairsWalkRoute = {
+    routeId: "otp-stairs",
+    routeName: "樓梯線",
+    totalMinutes: 10,
+    transferCount: 0,
+    totalWalkDistanceM: 300,
+    legs: [
+      {
+        type: "WALK",
+        from: "起點",
+        to: "終點",
+        distanceM: 300,
+        minutesEst: 6,
+        polyline: [
+          [121.56, 25.04],
+          [121.55, 25.03],
+        ],
+        a11yFacilities: [
+          { osmId: "way/1", category: "steps", tags: { highway: "steps" } },
+        ],
+      },
+    ],
+    accessibilityHighlights: [],
+  };
+
+  const routeNames = async (body: Parameters<typeof planAccessibleRouteFromRequest>[0]) => {
+    const res = await planAccessibleRouteFromRequest(body);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return [];
+    return res.data.routes.map((r) => r.routeName);
+  };
+
+  it("keeps the elevator-less rail route for elderly mode when no flag is sent", async () => {
+    vi.mocked(planOtpRoute).mockResolvedValue([withElevator, withoutElevator] as any);
+
+    const names = await routeNames({ ...transitRequest, mode: "elderly" });
+
+    expect(names).toContain("無電梯線");
+  });
+
+  it("drops the elevator-less rail route when requireElevator is true", async () => {
+    vi.mocked(planOtpRoute).mockResolvedValue([withElevator, withoutElevator] as any);
+
+    const names = await routeNames({
+      ...transitRequest,
+      mode: "elderly",
+      requireElevator: true,
+    });
+
+    expect(names).toEqual(["有電梯線"]);
+  });
+
+  it("returns the elevator-less route anyway when it is the only candidate", async () => {
+    vi.mocked(planOtpRoute).mockResolvedValue([withoutElevator] as any);
+
+    const names = await routeNames({
+      ...transitRequest,
+      mode: "elderly",
+      requireElevator: true,
+    });
+
+    expect(names).toEqual(["無電梯線"]);
+  });
+
+  it("drops a stairs-only walk leg when avoidStairs is true", async () => {
+    vi.mocked(planOtpRoute).mockResolvedValue([withElevator, stairsWalkRoute] as any);
+
+    const names = await routeNames({
+      ...transitRequest,
+      mode: "elderly",
+      avoidStairs: true,
+    });
+
+    expect(names).toEqual(["有電梯線"]);
+  });
+
+  it("requireElevator alone does not drop the stairs walk leg", async () => {
+    vi.mocked(planOtpRoute).mockResolvedValue([withElevator, stairsWalkRoute] as any);
+
+    const names = await routeNames({
+      ...transitRequest,
+      mode: "elderly",
+      requireElevator: true,
+    });
+
+    expect(names).toContain("樓梯線");
+  });
+
+  it("requests step-free routing from OTP when avoidStairs is true for a non-wheelchair mode", async () => {
+    vi.mocked(planOtpRoute).mockResolvedValue([withElevator] as any);
+
+    await planAccessibleRouteFromRequest({
+      ...transitRequest,
+      mode: "elderly",
+      avoidStairs: true,
+    });
+
+    expect(vi.mocked(planOtpRoute)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ avoidStairs: true }),
+    );
+  });
+
+  it("lets avoidStairs=false relax the wheelchair default at the OTP query", async () => {
+    vi.mocked(planOtpRoute).mockResolvedValue([withElevator] as any);
+
+    await planAccessibleRouteFromRequest({
+      ...transitRequest,
+      mode: "wheelchair",
+      avoidStairs: false,
+    });
+
+    expect(vi.mocked(planOtpRoute)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ avoidStairs: false }),
+    );
+  });
+
+  it("keeps the wheelchair default (both constraints on) when no flag is sent", async () => {
+    vi.mocked(planOtpRoute).mockResolvedValue([withElevator, withoutElevator] as any);
+
+    const names = await routeNames({ ...transitRequest, mode: "wheelchair" });
+
+    expect(names).toEqual(["有電梯線"]);
+    expect(vi.mocked(planOtpRoute)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ avoidStairs: true }),
+    );
+  });
+
+  it("forwards avoidStairs to the OTP walk planner for travelMode=walk", async () => {
+    vi.mocked(planOtpWalk).mockResolvedValue([] as any);
+    vi.mocked(planValhallaRoute).mockResolvedValue({ routes: [] } as any);
+
+    await planAccessibleRouteFromRequest({
+      travelMode: "walk",
+      origin,
+      destination,
+      mode: "elderly",
+      avoidStairs: true,
+    });
+
+    expect(vi.mocked(planOtpWalk)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ mode: "elderly", avoidStairs: true }),
+    );
+  });
+});
+
+// Regression guard for the stage-ordering bug: the planners emit rail legs with
+// facilityHighlights: [] and enrichLegIndoor is what fills them in, so an
+// exclusion that runs before enrichment can never see elevator data. These
+// fixtures deliberately mirror REAL planner output (empty highlights) instead of
+// pre-populating them, which is what let the bug hide.
+describe("requireElevator sees enrichment output, not raw planner output", () => {
+  const origin = { latitude: 25.04, longitude: 121.56 };
+  const destination = { latitude: 25.03, longitude: 121.55 };
+
+  const rawMetroRoute = (routeName: string) => ({
+    routeId: `otp-${routeName}`,
+    routeName,
+    totalMinutes: 20,
+    transferCount: 0,
+    totalWalkDistanceM: 200,
+    legs: [
+      {
+        type: "METRO",
+        railSystem: "TRTC",
+        lineName: routeName,
+        departureStation: "A 站",
+        arrivalStation: "B 站",
+        departureStationUid: `TRTC-${routeName}-A`,
+        arrivalStationUid: `TRTC-${routeName}-B`,
+        polyline: [
+          [121.56, 25.04],
+          [121.55, 25.03],
+        ],
+        facilityHighlights: [],
+        departureStationA11y: [],
+        arrivalStationA11y: [],
+      },
+    ],
+    accessibilityHighlights: [],
+  });
+
+  it("excludes the elevator-less route using highlights written during enrichment", async () => {
+    vi.mocked(planOtpRoute).mockResolvedValue([
+      rawMetroRoute("有電梯線"),
+      rawMetroRoute("無電梯線"),
+    ] as any);
+
+    // Stand in for enrichLegIndoor: fills facilityHighlights per station, exactly
+    // as the real enrichment does — AFTER the planner returned empty arrays.
+    vi.mocked(enrichLegIndoor).mockImplementation(async (leg: any) => {
+      leg.facilityHighlights.push(
+        leg.lineName === "有電梯線"
+          ? "乘車站「A 站」設有電梯"
+          : "乘車站「A 站」僅有樓梯",
+      );
+    });
+
+    const res = await planAccessibleRouteFromRequest({
+      travelMode: "transit",
+      origin,
+      destination,
+      mode: "elderly",
+      requireElevator: true,
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.routes.map((r) => r.routeName)).toEqual(["有電梯線"]);
+  });
+
+  it("keeps both routes when requireElevator is off", async () => {
+    vi.mocked(planOtpRoute).mockResolvedValue([
+      rawMetroRoute("有電梯線"),
+      rawMetroRoute("無電梯線"),
+    ] as any);
+    vi.mocked(enrichLegIndoor).mockImplementation(async (leg: any) => {
+      leg.facilityHighlights.push(
+        leg.lineName === "有電梯線"
+          ? "乘車站「A 站」設有電梯"
+          : "乘車站「A 站」僅有樓梯",
+      );
+    });
+
+    const res = await planAccessibleRouteFromRequest({
+      travelMode: "transit",
+      origin,
+      destination,
+      mode: "elderly",
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.routes.map((r) => r.routeName).sort()).toEqual(
+      ["有電梯線", "無電梯線"].sort(),
+    );
   });
 });

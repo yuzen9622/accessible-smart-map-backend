@@ -101,6 +101,51 @@ describe("POST /api/v1/a11y/accessible-route travel modes + waypoints", () => {
     expect(mockPlan.mock.calls[0][0].travelMode).toBe("transit");
   });
 
+  it("passes avoidStairs + requireElevator through to the service", async () => {
+    mockPlan.mockResolvedValue({ ok: true, data: okData() } as any);
+
+    const res = await request(app)
+      .post(URL)
+      .send({
+        origin: { latitude: 25, longitude: 121 },
+        destination: { latitude: 25.1, longitude: 121.1 },
+        mode: "elderly",
+        avoidStairs: true,
+        requireElevator: false,
+      });
+
+    expect(res.status).toBe(200);
+    expect(mockPlan.mock.calls[0][0].avoidStairs).toBe(true);
+    expect(mockPlan.mock.calls[0][0].requireElevator).toBe(false);
+  });
+
+  it("leaves both a11y flags undefined when omitted, so the mode default applies", async () => {
+    mockPlan.mockResolvedValue({ ok: true, data: okData() } as any);
+
+    await request(app)
+      .post(URL)
+      .send({
+        origin: { latitude: 25, longitude: 121 },
+        destination: { latitude: 25.1, longitude: 121.1 },
+      });
+
+    expect(mockPlan.mock.calls[0][0].avoidStairs).toBeUndefined();
+    expect(mockPlan.mock.calls[0][0].requireElevator).toBeUndefined();
+  });
+
+  it("rejects a non-boolean avoidStairs with 400 before calling the service", async () => {
+    const res = await request(app)
+      .post(URL)
+      .send({
+        origin: { latitude: 25, longitude: 121 },
+        destination: { latitude: 25.1, longitude: 121.1 },
+        avoidStairs: "yes",
+      });
+
+    expect(res.status).toBe(400);
+    expect(mockPlan).not.toHaveBeenCalled();
+  });
+
   it("rejects an invalid travelMode with 400 before calling the service", async () => {
     const res = await request(app)
       .post(URL)

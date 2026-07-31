@@ -14,6 +14,7 @@ import {
   scoreRoute,
   environmentPenalty,
   ENV_PENALTY_CAP,
+  resolveA11yConstraints,
 } from "./scoring";
 import type { IOsmA11y } from "../../types";
 
@@ -291,5 +292,53 @@ describe("scoreRoute environment factor", () => {
       temperature: 24,
     });
     expect(r.components.environmentScore).toBe(100);
+  });
+});
+
+describe("resolveA11yConstraints", () => {
+  it("defaults both flags from the mode profile's tier1Required", () => {
+    expect(resolveA11yConstraints("wheelchair")).toEqual({
+      avoidStairs: true,
+      requireElevator: true,
+    });
+    for (const mode of ["elderly", "visual_impaired", "normal"] as const) {
+      expect(resolveA11yConstraints(mode)).toEqual({
+        avoidStairs: false,
+        requireElevator: false,
+      });
+    }
+  });
+
+  it("treats an undefined override as absent, not as false", () => {
+    expect(
+      resolveA11yConstraints("wheelchair", {
+        avoidStairs: undefined,
+        requireElevator: undefined,
+      }),
+    ).toEqual({ avoidStairs: true, requireElevator: true });
+  });
+
+  it("lets explicit flags raise the constraints for a non-wheelchair mode", () => {
+    expect(
+      resolveA11yConstraints("elderly", {
+        avoidStairs: true,
+        requireElevator: true,
+      }),
+    ).toEqual({ avoidStairs: true, requireElevator: true });
+  });
+
+  it("lets explicit false relax wheelchair mode, per flag", () => {
+    expect(
+      resolveA11yConstraints("wheelchair", { avoidStairs: false }),
+    ).toEqual({ avoidStairs: false, requireElevator: true });
+    expect(
+      resolveA11yConstraints("wheelchair", { requireElevator: false }),
+    ).toEqual({ avoidStairs: true, requireElevator: false });
+  });
+
+  it("falls back to the normal profile for an unknown mode", () => {
+    expect(
+      resolveA11yConstraints("bogus" as Parameters<typeof resolveA11yConstraints>[0]),
+    ).toEqual({ avoidStairs: false, requireElevator: false });
   });
 });

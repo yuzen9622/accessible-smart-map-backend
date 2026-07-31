@@ -55,6 +55,8 @@ export interface PlanOtpRouteOptions {
   maxTransfers?: 0 | 1 | 2;
   mode?: AccessibilityMode;
   limit?: number;
+  /** Request step-free routing from OTP. Defaults to `mode === "wheelchair"`. */
+  avoidStairs?: boolean;
 }
 
 export interface SnapStop {

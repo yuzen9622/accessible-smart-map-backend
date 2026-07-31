@@ -389,17 +389,18 @@ async function queryOtpWalk(
  *
  * @param origin The origin coordinate.
  * @param destination The destination coordinate.
- * @param opts Optional accessibility mode (drives wheelchair routing + walk speed).
+ * @param opts Accessibility mode (drives walk speed) and an optional
+ *   `avoidStairs` override for step-free routing.
  * @returns Walk-only AccessibleRoutes (top 3), or [] when none are usable.
  */
 export async function planOtpWalk(
   origin: { lat: number; lng: number },
   destination: { lat: number; lng: number },
-  opts?: { mode?: AccessibilityMode },
+  opts?: { mode?: AccessibilityMode; avoidStairs?: boolean },
 ): Promise<AccessibleRoute[]> {
   if (walkPlanBreaker.isOpen()) return [];
   const mode = opts?.mode ?? "normal";
-  const wheelchair = mode === "wheelchair";
+  const wheelchair = opts?.avoidStairs ?? mode === "wheelchair";
   const walkSpeed = walkSpeedMps(mode);
 
   let itineraries: OtpItinerary[];
@@ -855,7 +856,7 @@ export async function planOtpRoute(
 
   const departure = opts?.departureTime ?? new Date();
   const mode = opts?.mode ?? "normal";
-  const wheelchair = mode === "wheelchair";
+  const wheelchair = opts?.avoidStairs ?? mode === "wheelchair";
   const walkSpeed = walkSpeedMps(mode);
 
   const tm: Record<string, number> = {};

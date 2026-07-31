@@ -5,6 +5,7 @@ import type { RouteIntent } from "../../types/ai";
 import { ResponseCode } from "../../types/code";
 import { ERROR_MESSAGE } from "../../constants/messages";
 import type {
+  A11yConstraints,
   FindAccessibleRoutesOptions,
   FindDrivingRoutesOptions,
   LatLng,
@@ -21,7 +22,7 @@ import {
   scoreRoute,
   routeCost,
   prerankCost,
-  MODE_PROFILES,
+  resolveA11yConstraints,
   type EnvConditions,
 } from "./scoring";
 import { buildAccessibilitySummary } from "./planners/route-a11y";
@@ -230,30 +231,29 @@ function walkLegHasStairsBarrier(leg: WalkLeg): boolean {
 }
 
 /**
- * Tier-1 exclusion for wheelchair mode: a route is excluded when a rail leg has
- * facility data but no elevator mention, or a walk leg passes a stairs-only
- * barrier. Legs with NO facility data are tolerated (unknown ≠ inaccessible) —
- * over-excluding on missing data would 404 most queries.
+ * Hard-constraint exclusion: with `requireElevator` a route is excluded when a
+ * rail leg has facility data but no working elevator, and with `avoidStairs` when
+ * a walk leg passes a stairs-only barrier. Legs with NO facility data are
+ * tolerated (unknown ≠ inaccessible) — over-excluding on missing data would 404
+ * most queries.
  *
  * @param route Route to evaluate.
- * @param mode Accessibility mode; exclusion only applies when its profile
- *   requires Tier 1 features.
+ * @param constraints Resolved accessibility constraints for the request.
  * @returns Whether the route should be excluded.
  */
 function isRouteExcluded(
   route: AccessibleRoute,
-  mode: AccessibilityMode,
+  constraints: A11yConstraints,
 ): boolean {
-  if (!(MODE_PROFILES[mode] ?? MODE_PROFILES.normal).tier1Required)
-    return false;
+  if (!constraints.avoidStairs && !constraints.requireElevator) return false;
 
   for (const leg of route.legs) {
     if (leg.type === "WALK") {
-      if (walkLegHasStairsBarrier(leg)) return true;
+      if (constraints.avoidStairs && walkLegHasStairsBarrier(leg)) return true;
       continue;
     }
     if (leg.type === "METRO" || leg.type === "THSR" || leg.type === "TRA") {
-      if (leg.facilityHighlights.length > 0) {
+      if (constraints.requireElevator && leg.facilityHighlights.length > 0) {
         const text = leg.facilityHighlights.join("|");
         if (!text.includes("電梯")) return true;
         if (/電梯[^|]*(維修|故障|暫停)/.test(text)) return true;
@@ -264,20 +264,27 @@ function isRouteExcluded(
 }
 
 /**
- * Apply wheelchair Tier-1 exclusion with a graceful fallback: when EVERY
+ * Apply the hard accessibility constraints with a graceful fallback: when EVERY
  * candidate would be excluded, return the originals (a risky route beats a
  * 404) — the low accessibility score + warnings still signal the risk.
  *
  * @param routes Candidate routes to filter.
- * @param mode Accessibility mode driving the exclusion.
+ * @param constraints Resolved accessibility constraints driving the exclusion.
  * @returns The kept routes, or all originals when none survive.
  */
-function applyModeExclusion(
+function applyA11yExclusion(
   routes: AccessibleRoute[],
-  mode: AccessibilityMode,
+  constraints: A11yConstraints,
 ): AccessibleRoute[] {
-  const kept = routes.filter((r) => !isRouteExcluded(r, mode));
-  return kept.length ? kept : routes;
+  const kept = routes.filter((r) => !isRouteExcluded(r, constraints));
+  if (kept.length) return kept;
+  if (routes.length) {
+    console.warn(
+      "[accessible-route] every candidate failed the a11y constraints; returning them anyway",
+      JSON.stringify(constraints),
+    );
+  }
+  return routes;
 }
 
 function transitLegKey(leg: BusLeg | MetroLeg | ThsrLeg | TraLeg): string {
@@ -435,16 +442,18 @@ async function enrichTopRoutes(
 }
 
 /**
- * Shared finalization: dedupe → cross-planner line-level collapse → mode
- * exclusion → mode-aware score + cost ranking → top 3 → unified a11y enrichment
- * (fail-soft) → realtime facility overlay (fail-soft) → realtime transit overlay
+ * Shared finalization: dedupe → cross-planner line-level collapse → proxy
+ * pre-rank → unified a11y enrichment (fail-soft) → hard-constraint exclusion →
+ * mode-aware score + cost ranking → top 3 → realtime facility overlay
+ * (fail-soft) → realtime transit overlay
  * (bus ETA + TRA delays, fail-soft) → facility slimming (runs LAST so scoring
  * and the overlays see full documents).
  *
  * @param routes Candidate routes to finalize.
  * @param origin Journey origin coordinates.
  * @param destination Journey destination coordinates.
- * @param mode Accessibility mode for exclusion and scoring.
+ * @param mode Accessibility mode for scoring.
+ * @param constraints Resolved hard accessibility constraints for exclusion.
  * @param format Response shape; "compact" dedupes facilities route-level.
  * @param departureTime Departure time used by the realtime transit overlay.
  * @param envPromise Environment lookup started alongside route planning.
@@ -455,6 +464,7 @@ async function finalizeRoutes(
   origin: { lat: number; lng: number },
   destination: { lat: number; lng: number },
   mode: AccessibilityMode,
+  constraints: A11yConstraints,
   format: "standard" | "compact" = "standard",
   departureTime?: Date,
   envPromise?: Promise<EnvConditions | undefined>,
@@ -463,10 +473,7 @@ async function finalizeRoutes(
   const t: Record<string, number> = {};
   let t0 = Date.now();
   // Stage 1: cheap accessibility-aware proxy pre-rank (no OSM data) → top-N.
-  const candidates = applyModeExclusion(
-    collapseLogicalDuplicates(deduplicateRoutes(routes)),
-    mode,
-  );
+  const candidates = collapseLogicalDuplicates(deduplicateRoutes(routes));
   const topN = prerankByProxy(candidates, mode).slice(0, PRERANK_N);
   t.prerank = Date.now() - t0;
   t0 = Date.now();
@@ -492,8 +499,15 @@ async function finalizeRoutes(
   }
   t.env = Date.now() - t0;
   t0 = Date.now();
-  // Stage 3: score with the enriched facility data + rank → final top-3.
-  const top = scoreAndRank(topN, mode, env).slice(0, 3);
+  // Stage 3: hard-constraint exclusion, which MUST run after enrichment — the
+  // planners emit rail legs with an empty facilityHighlights and enrichLegIndoor
+  // is what fills in the elevator notes the exclusion reads. Filtering before
+  // Stage 2 silently excluded nothing at all.
+  const eligible = applyA11yExclusion(topN, constraints);
+  t.exclude = Date.now() - t0;
+  t0 = Date.now();
+  // Stage 4: score with the enriched facility data + rank → final top-3.
+  const top = scoreAndRank(eligible, mode, env).slice(0, 3);
   t.rank = Date.now() - t0;
   t0 = Date.now();
   try {
@@ -552,6 +566,8 @@ export async function planAccessibleRouteFromRequest(
   const travelMode = body.travelMode ?? "transit";
   const rawWaypoints = body.waypoints ?? [];
   let mode = body.mode;
+  let requireElevator = body.requireElevator;
+  const avoidStairs = body.avoidStairs;
 
   let intent: RouteIntent | null = null;
   if (query && (!origin || !destination)) {
@@ -579,6 +595,7 @@ export async function planAccessibleRouteFromRequest(
         : intent.from;
     destination = intent.to;
     mode = mode ?? intent.mode;
+    requireElevator = requireElevator ?? intent.preferences?.preferElevator;
     if (!origin) {
       return {
         ok: false,
@@ -662,6 +679,8 @@ export async function planAccessibleRouteFromRequest(
       departureTime: futureDeparture,
       format: format === "compact" ? "compact" : "standard",
       waypoints: waypointsOpt,
+      avoidStairs,
+      requireElevator,
     });
     console.log(
       "[route-timing] request",
@@ -691,7 +710,11 @@ export async function planAccessibleRouteFromRequest(
     if (travelMode === "walk" && !waypointsOpt) {
       try {
         const { planOtpWalk } = await import("./planners/otp-routing");
-        const w = await planOtpWalk(originLatLng, dest, { mode: mode ?? "normal" });
+        const w = await planOtpWalk(originLatLng, dest, {
+          mode: mode ?? "normal",
+          avoidStairs: resolveA11yConstraints(mode ?? "normal", { avoidStairs })
+            .avoidStairs,
+        });
         // OTP results still run the shared walk finalize/enrichment (dedupe →
         // top-3 → nearby elevator/ramp highlight) for parity with Valhalla walk.
         if (w.length) otpWalkRoutes = await finalizeDrivingRoutes(w, "walk", dest);
@@ -1033,6 +1056,10 @@ export async function findAccessibleRoutes(
   opts: FindAccessibleRoutesOptions = {},
 ): Promise<AccessibleRoute[]> {
   const mode = opts.mode ?? "normal";
+  const constraints = resolveA11yConstraints(mode, {
+    avoidStairs: opts.avoidStairs,
+    requireElevator: opts.requireElevator,
+  });
   const maxTransfers = opts.maxTransfers ?? 1;
   const waypoints = opts.waypoints ?? [];
   const { planOtpRoute } = await import("./planners/otp-routing");
@@ -1044,6 +1071,7 @@ export async function findAccessibleRoutes(
     const otpRoutes = await planOtpRoute(origin, destination, {
       maxTransfers,
       mode,
+      avoidStairs: constraints.avoidStairs,
       departureTime: opts.departureTime,
     }).catch((): AccessibleRoute[] => []);
     console.log(
@@ -1056,6 +1084,7 @@ export async function findAccessibleRoutes(
       origin,
       destination,
       mode,
+      constraints,
       opts.format,
       opts.departureTime,
       envPromise,
@@ -1078,6 +1107,7 @@ export async function findAccessibleRoutes(
     const res = await planOtpRoute(from, to, {
       maxTransfers,
       mode,
+      avoidStairs: constraints.avoidStairs,
       departureTime: cursor,
       limit: 1,
     }).catch((): AccessibleRoute[] => []);
@@ -1099,6 +1129,7 @@ export async function findAccessibleRoutes(
     origin,
     destination,
     mode,
+    constraints,
     opts.format,
     opts.departureTime,
     envPromise,

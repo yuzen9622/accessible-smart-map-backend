@@ -16,6 +16,8 @@ import type {
   ModeProfile,
   DataConfidence,
   RouteAccessibilityScore,
+  A11yConstraints,
+  A11yConstraintOverrides,
 } from "./accessible-route.types";
 
 export type {
@@ -23,6 +25,8 @@ export type {
   ModeProfile,
   DataConfidence,
   RouteAccessibilityScore,
+  A11yConstraints,
+  A11yConstraintOverrides,
 };
 
 const TIER1_WEIGHTS: TagWeightMap = {
@@ -360,6 +364,28 @@ export const MODE_PROFILES: Record<AccessibilityMode, ModeProfile> = {
     },
   },
 };
+
+/**
+ * Resolve the hard accessibility constraints for a request. Explicit caller
+ * values always win; an omitted field falls back to the mode profile's
+ * `tier1Required`, so a request that sends neither flag behaves exactly as it
+ * did before the flags existed (wheelchair → both on, others → both off).
+ *
+ * @param mode Accessibility mode supplying the defaults.
+ * @param overrides Caller-supplied flags; `undefined` fields take the default.
+ * @returns The fully resolved constraints.
+ */
+export function resolveA11yConstraints(
+  mode: AccessibilityMode = "normal",
+  overrides?: A11yConstraintOverrides,
+): A11yConstraints {
+  const tier1Required = (MODE_PROFILES[mode] ?? MODE_PROFILES.normal)
+    .tier1Required;
+  return {
+    avoidStairs: overrides?.avoidStairs ?? tier1Required,
+    requireElevator: overrides?.requireElevator ?? tier1Required,
+  };
+}
 
 /**
  * Per-mode walk-distance penalty params: distance up to `freeM` is free, then a
