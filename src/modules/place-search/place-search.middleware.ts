@@ -17,6 +17,19 @@ function makeStore(prefix: string) {
   });
 }
 
+/**
+ * Builds a rate limiter backed by Redis when available.
+ *
+ * `passOnStoreError` lets the request through when the store cannot be reached,
+ * matching the graceful degradation the Redis client is built for: an
+ * unreachable Redis must cost us rate limiting, not the endpoint itself. Without
+ * it express-rate-limit rethrows the store error and the route answers 500.
+ *
+ * @param prefix Redis key prefix isolating this limiter's buckets.
+ * @param limit Maximum requests allowed per window.
+ * @param windowMs Length of the window in milliseconds.
+ * @returns The configured rate limit middleware.
+ */
 function makeLimiter(prefix: string, limit: number, windowMs: number) {
   return rateLimit({
     windowMs,
@@ -24,6 +37,7 @@ function makeLimiter(prefix: string, limit: number, windowMs: number) {
     standardHeaders: true,
     legacyHeaders: false,
     store: makeStore(prefix),
+    passOnStoreError: true,
     handler: (_req: Request, res: Response) =>
       sendResponse(res, false, "error", ResponseCode.TOO_MANY_REQUESTS, RATE_LIMITED_MSG),
   });

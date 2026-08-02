@@ -77,6 +77,18 @@ function makeStore() {
   });
 }
 
+/**
+ * Builds a rate limiter backed by Redis when available.
+ *
+ * `passOnStoreError` lets the request through when the store cannot be reached,
+ * matching the graceful degradation the Redis client is built for: an
+ * unreachable Redis must cost us rate limiting, not the ability to file a hazard
+ * report. Without it express-rate-limit rethrows the store error as a 500.
+ *
+ * @param limit Maximum requests allowed per window.
+ * @param windowMs Length of the window in milliseconds.
+ * @returns The configured rate limit middleware.
+ */
 function makeLimiter(limit: number, windowMs: number) {
   return rateLimit({
     windowMs,
@@ -84,6 +96,7 @@ function makeLimiter(limit: number, windowMs: number) {
     standardHeaders: true,
     legacyHeaders: false,
     store: makeStore(),
+    passOnStoreError: true,
     handler: (_req: Request, res: Response) =>
       sendResponse(
         res,
