@@ -1,4 +1,4 @@
-import express, { Express, Request, Response } from "express";
+import express, { Express, NextFunction, Request, Response } from "express";
 import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
@@ -7,6 +7,7 @@ import { apiReference } from "@scalar/express-api-reference";
 import type { ApiResponse } from "./types/response";
 import { ResponseCode } from "./types/code";
 import { sendResponse } from "./config/lib";
+import { ERROR_MESSAGE } from "./constants/messages";
 import middleware from "./middleware/middleware";
 import { createA11yRouter } from "./modules/a11y";
 import { createAccessibleRouteRouter } from "./modules/accessible-route";
@@ -109,5 +110,86 @@ app.use("*", (req: Request, res: Response<ApiResponse<null>>) => {
     `Method ${req.method} ${req.originalUrl} not found`,
   );
 });
+
+const CLIENT_ERROR_CODES = new Set<number>([
+  ResponseCode.INVALID_INPUT,
+  ResponseCode.UNAUTHORIZED,
+  ResponseCode.FORBIDDEN,
+  ResponseCode.NOT_FOUND,
+  ResponseCode.CONFLICT,
+  ResponseCode.GONE,
+  ResponseCode.TOO_MANY_REQUESTS,
+]);
+
+/**
+ * Classifies an uncaught error into an envelope status and message.
+ *
+ * Framework-level errors — a malformed JSON body, an oversized payload — carry
+ * an HTTP status and set `expose` when their own message is safe to return.
+ * Express's default handler honours both, so ignoring them would report a
+ * client's mistake as a server fault. A 4xx outside `ResponseCode` degrades to
+ * 400 rather than 500, because it is still not our fault.
+ *
+ * @param err The error raised upstream in the chain.
+ * @returns The status code and message to answer with.
+ */
+function classifyError(err: unknown): { code: ResponseCode; message: string } {
+  const candidate = err as {
+    status?: unknown;
+    statusCode?: unknown;
+    message?: unknown;
+    expose?: unknown;
+  };
+  const status =
+    typeof candidate.status === "number" ? candidate.status : candidate.statusCode;
+
+  if (typeof status !== "number" || status < 400 || status > 499) {
+    return { code: ResponseCode.INTERNAL_ERROR, message: ERROR_MESSAGE.INTERNAL };
+  }
+
+  const exposed =
+    candidate.expose === true &&
+    typeof candidate.message === "string" &&
+    candidate.message.length > 0;
+
+  return {
+    code: CLIENT_ERROR_CODES.has(status)
+      ? (status as ResponseCode)
+      : ResponseCode.INVALID_INPUT,
+    message: exposed ? (candidate.message as string) : ERROR_MESSAGE.BAD_REQUEST,
+  };
+}
+
+/**
+ * Terminal error handler, so an uncaught error answers with the standard
+ * envelope instead of Express's default HTML page — which breaks every client
+ * that parses JSON, and leaks a stack trace outside production.
+ *
+ * Errors raised after the response has started (the SSE and streaming routes)
+ * are delegated to Express, which destroys the connection: nothing can be
+ * prepended to bytes already on the wire.
+ *
+ * @param err The error raised upstream in the chain.
+ * @param _req Express request.
+ * @param res Express response.
+ * @param next Express next handler, used only for the headers-sent case.
+ */
+app.use(
+  (
+    err: unknown,
+    _req: Request,
+    res: Response<ApiResponse<null>>,
+    next: NextFunction,
+  ) => {
+    const { code, message } = classifyError(err);
+
+    if (code === ResponseCode.INTERNAL_ERROR) {
+      console.error("[app] unhandled error:", err);
+    }
+
+    if (res.headersSent) return next(err);
+    sendResponse(res, false, "error", code, message);
+  },
+);
 
 export default app;

@@ -25,6 +25,7 @@ export const TRANSIT_MSG = {
 
 export const ERROR_MESSAGE = {
   INTERNAL: "Internal Server Error",
+  BAD_REQUEST: "請求格式錯誤",
   MISSING_PARAMS: "缺少必要參數",
   INTENT_PARSE_FAILED:
     "無法解析您的查詢，請改用『從 A 到 B』的描述或直接提供 origin/destination",
