@@ -3,18 +3,23 @@ import { sendResponse } from "../../config/lib";
 import { ApiResponse } from "../../types/response";
 import { ResponseCode } from "../../types/code";
 import { ERROR_MESSAGE } from "../../constants/messages";
-import { generateNavInstructions } from "./nav-instructions.service";
+import { generateNavInstructionsFromInput } from "./nav-instructions.service";
 
 export async function navInstructions(
   req: Request,
   res: Response<ApiResponse<any>>,
 ) {
   try {
-    const { route, userHeading } = req.validated?.body as {
-      route: { routeId?: string; legs: unknown[] };
+    const { route, routeToken, userHeading } = req.validated?.body as {
+      route?: { routeId?: string; legs: unknown[] };
+      routeToken?: string;
       userHeading?: number;
     };
-    const result = generateNavInstructions(route, userHeading);
+    const result = await generateNavInstructionsFromInput({
+      route,
+      routeToken,
+      userHeading,
+    });
 
     if (!result.ok) {
       return sendResponse(res, false, "error", result.status, result.message, {

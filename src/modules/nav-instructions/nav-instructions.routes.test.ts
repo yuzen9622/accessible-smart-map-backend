@@ -58,15 +58,63 @@ describe("POST /api/v1/a11y/route/instructions", () => {
             type: "depart",
             legType: "DRIVE",
             distanceM: 5200,
+            stairs: false,
           },
           {
             text: "您已抵達目的地",
             type: "arrive",
             legType: "DRIVE",
+            stairs: false,
           },
         ],
       },
     });
+  });
+
+  it("returns stairs metadata and a locally generated warning for WALK guidance", async () => {
+    const res = await request(app).post(URL).send({
+      route: {
+        routeId: "walk-stairs-contract",
+        legs: [{
+          type: "WALK",
+          from: "A",
+          to: "B",
+          distanceM: 80,
+          minutesEst: 2,
+          polyline: [[121.5, 25], [121.501, 25]],
+          a11yFacilities: [],
+          steps: [{
+            instruction: "上游文字不應直接沿用",
+            relativeDirection: "RIGHT",
+            absoluteDirection: "EAST",
+            streetName: "測試階梯路段",
+            bogusName: false,
+            area: false,
+            stairs: true,
+            distanceM: 80,
+            location: [121.5, 25],
+          }],
+        }],
+      },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.instructions[0]).toMatchObject({
+      stairs: true,
+      legType: "WALK",
+    });
+    expect(res.body.data.instructions[0].text).toContain("向右轉");
+    expect(res.body.data.instructions[0].text).toContain("此路段含樓梯");
+    expect(res.body.data.instructions[0].text).not.toContain("上游文字不應直接沿用");
+  });
+
+  it("publishes stairs on the NavInstruction OpenAPI schema", async () => {
+    const res = await request(app).get("/api/v1/openapi.json");
+
+    expect(res.status).toBe(200);
+    expect(res.body.components.schemas.NavInstruction.properties.stairs)
+      .toMatchObject({ type: "boolean" });
+    expect(res.body.components.schemas.NavInstruction.required).toContain("stairs");
   });
 
   it("returns 400 with the standard envelope for an unsupported leg type", async () => {

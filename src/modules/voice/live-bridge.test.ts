@@ -314,9 +314,9 @@ describe("createLiveBridge navigation turn arbiter", () => {
     const newLookup = new Promise<typeof walkRoute>((resolve) => { resolveNew = resolve; });
     getRouteByToken.mockImplementation((token) => token === "old" ? oldLookup : newLookup);
     const oldRoute = structuredClone(walkRoute);
-    oldRoute.legs[0].steps[0].instruction = "舊路線";
+    oldRoute.legs[0].steps[0].streetName = "舊路線";
     const newRoute = structuredClone(walkRoute);
-    newRoute.legs[0].steps[0].instruction = "新路線";
+    newRoute.legs[0].steps[0].streetName = "新路線";
 
     const bridge = await createLiveBridge({ ws, userId: "u" });
     const oldArm = bridge.armRouteToken("old");
@@ -333,7 +333,8 @@ describe("createLiveBridge navigation turn arbiter", () => {
       .filter((value): value is string => typeof value === "string")
       .map((value) => JSON.parse(value));
     const startMessage = messages.find((message) => message.type === "nav.start");
-    expect(startMessage.steps[0].instruction).toBe("新路線");
+    expect(startMessage.steps[0].instruction).toContain("新路線");
+    expect(startMessage.steps[0].instruction).not.toContain("舊路線");
   });
 
   it("processes the latest position on the trailing edge without a third update", async () => {

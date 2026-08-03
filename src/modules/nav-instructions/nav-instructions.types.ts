@@ -45,7 +45,10 @@ export interface NavInstruction {
   distanceM: number | null;
   streetName: string | null;
   legType: NavLegType;
+  stairs: boolean;
+  legIndex: number;
   polylineIndex: number | null;
+  cumulativeDistanceM: number;
 }
 
 export interface NavInstructionsResult {
@@ -58,6 +61,12 @@ export interface NavInstructionsResult {
 export interface NavRouteInput {
   routeId?: string;
   legs: unknown[];
+}
+
+export interface NavInstructionsInput {
+  route?: NavRouteInput;
+  routeToken?: string;
+  userHeading?: number;
 }
 
 export type GenerateNavResult =

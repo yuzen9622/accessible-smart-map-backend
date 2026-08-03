@@ -317,13 +317,21 @@ export class NavigationSession {
         if (item.instruction.type === "arrive") continue;
         resolved.push(this.resolveInstruction(item.instruction, legIndex, route));
       }
-      if (leg.type === "WALK" && !(leg.steps?.length)) {
+      const walkEnd = leg.type === "WALK" ? leg.polyline.at(-1) ?? null : null;
+      const lastLegCoord = [...resolved].reverse().find((step) => (
+        step.legIndex === legIndex && step.coord
+      ))?.coord ?? null;
+      if (
+        leg.type === "WALK" &&
+        walkEnd &&
+        (!lastLegCoord || !sameCoord(lastLegCoord, walkEnd))
+      ) {
         resolved.push({
           instruction: `抵達「${leg.to}」`,
           legIndex,
           legType: "WALK",
           polylineIndex: leg.polyline.length - 1,
-          coord: leg.polyline.at(-1) ?? null,
+          coord: walkEnd,
           isTransit: false,
           distanceM: null,
           kind: "walk_leg_end",
