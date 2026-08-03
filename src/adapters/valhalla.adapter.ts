@@ -1,7 +1,6 @@
 import axios from "axios";
 import {
   VALHALLA_BASE_URL,
-  VALHALLA_LANGUAGE,
   VALHALLA_ROUTE_PATH,
   VALHALLA_TIMEOUT_MS,
 } from "../config/valhalla";
@@ -21,6 +20,7 @@ export interface NormalizedValhallaManeuver {
   beginShapeIndex: number;
   endShapeIndex: number;
   streetNames?: string[];
+  stairs: false;
 }
 
 export interface NormalizedValhallaLeg {
@@ -40,6 +40,7 @@ export interface ComputeValhallaRoutesParams {
   waypoints?: { lat: number; lng: number }[];
   costing: ValhallaCosting;
   computeAlternatives?: boolean;
+  wheelchair?: boolean;
 }
 
 export type ComputeValhallaRoutesResult =
@@ -91,6 +92,7 @@ function normalizeManeuver(value: unknown): NormalizedValhallaManeuver | null {
     timeSec: raw.time,
     beginShapeIndex: begin as number,
     endShapeIndex: end as number,
+    stairs: false,
     ...(Array.isArray(raw.street_names) ? { streetNames: raw.street_names as string[] } : {}),
   };
 }
@@ -125,6 +127,14 @@ export async function computeValhallaRoutes(
 ): Promise<ComputeValhallaRoutesResult> {
   const locations = [params.origin, ...(params.waypoints ?? []), params.destination]
     .map(({ lat, lng }) => ({ lat, lon: lng, type: "break" as const }));
+  const costingOptions: Record<string, unknown> = {
+    exclude_ferries: true,
+    use_ferry: 0,
+  };
+  if (params.costing === "pedestrian" && params.wheelchair) {
+    costingOptions.type = "wheelchair";
+    costingOptions.step_penalty = 600;
+  }
   const body: Record<string, unknown> = {
     locations,
     costing: params.costing,
@@ -132,8 +142,8 @@ export async function computeValhallaRoutes(
     // to an offshore island (e.g. a 新竹→台南 walk hopping via 澎湖/馬公). exclude_ferries
     // is a hard exclusion where the deployment allows it; use_ferry: 0 is the soft
     // fallback that any deployment honors.
-    costing_options: { [params.costing]: { exclude_ferries: true, use_ferry: 0 } },
-    directions_options: { units: "kilometers", language: VALHALLA_LANGUAGE },
+    costing_options: { [params.costing]: costingOptions },
+    directions_options: { units: "kilometers" },
   };
   if (params.computeAlternatives && !params.waypoints?.length) body.alternates = 2;
 

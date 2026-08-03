@@ -45,6 +45,7 @@ export interface WalkStep {
   streetName: string;
   bogusName: boolean;
   area: boolean;
+  stairs: boolean;
   distanceM: number;
   location: [number, number];
 }
@@ -194,6 +195,8 @@ export interface AccessibleRoute {
   transferCount: number;
   legs: (WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg | DriveLeg)[];
   accessibilityHighlights: string[];
+  degraded?: boolean;
+  warnings?: string[];
   departureDate?: string;
   facilities?: Record<string, SlimA11y>;
   accessibilityScore?: number;

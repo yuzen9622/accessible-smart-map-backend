@@ -75,7 +75,6 @@ export interface RouteAccessibilityScore {
 
 export type LatLng = { lat: number; lng: number };
 
-/** Transport modes served by the Valhalla road-routing path (not OTP transit). */
 export type RoadTravelMode = Exclude<TravelMode, "transit">;
 
 export interface FindAccessibleRoutesOptions {
@@ -92,6 +91,8 @@ export interface PlanRoadRouteOptions {
   travelMode: RoadTravelMode;
   waypoints?: LatLng[];
   departureTime?: Date;
+  mode?: AccessibilityMode;
+  avoidStairs?: boolean;
   /** True destination for the tail walk when the drive routes to a proxy arrival point (e.g. disabled parking). */
   finalWalkTarget?: LatLng;
 }
@@ -100,6 +101,8 @@ export interface FindDrivingRoutesOptions {
   travelMode: RoadTravelMode;
   waypoints?: LatLng[];
   departureTime?: Date;
+  mode?: AccessibilityMode;
+  avoidStairs?: boolean;
   /** True destination for the tail walk when `destination` is a proxy arrival point (e.g. disabled parking). */
   finalWalkTarget?: LatLng;
   /** Set when the drive was routed to a disabled parking bay, for the arrival highlight. */

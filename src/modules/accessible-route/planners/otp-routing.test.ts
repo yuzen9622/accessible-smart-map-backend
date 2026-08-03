@@ -145,6 +145,43 @@ describe("OTP PLAN_QUERY searchWindow", () => {
     expect(PLAN_QUERY).toContain("$searchWindow: Long");
     expect(PLAN_QUERY).toContain("searchWindow: $searchWindow");
   });
+
+  it("requests and maps step.feature StairsUse on transit-plan walk legs", async () => {
+    const withStairs = transitItinerary("R1") as any;
+    withStairs.legs.unshift({
+      mode: "WALK",
+      startTime: 0,
+      endTime: 1_000,
+      duration: 1,
+      distance: 20,
+      from: { name: "Origin" },
+      to: { name: "起站" },
+      legGeometry: { points: "" },
+      steps: [{
+        distance: 20,
+        lon: 121.565,
+        lat: 25.041,
+        relativeDirection: "CONTINUE",
+        absoluteDirection: "NORTH",
+        streetName: "圓山市景步道",
+        area: false,
+        bogusName: false,
+        feature: { __typename: "StairsUse" },
+      }],
+    });
+    post.mockResolvedValue(okResp([
+      withStairs,
+      transitItinerary("R2"),
+      transitItinerary("R3"),
+    ]));
+
+    const routes = await planOtpRoute(origin, destination);
+
+    const walkLeg = routes.find((route) => route.routeName === "R1")?.legs[0];
+    expect(PLAN_QUERY).toContain("feature { __typename }");
+    expect(walkLeg?.type).toBe("WALK");
+    expect(walkLeg?.type === "WALK" && walkLeg.steps?.[0].stairs).toBe(true);
+  });
 });
 
 // The OTP `wheelchair` flag is step-free routing, so it must follow the caller's

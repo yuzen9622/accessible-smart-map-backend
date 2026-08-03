@@ -31,6 +31,13 @@ export const ERROR_MESSAGE = {
     "無法解析您的查詢，請改用『從 A 到 B』的描述或直接提供 origin/destination",
 } as const;
 
+export const ROUTE_WARNING = {
+  OTP_WALK_FALLBACK:
+    "OTP 步行規劃暫時不可用，已降級使用 Valhalla 步行路線，指引品質可能不同",
+  STAIRS_CONSTRAINT_UNSATISFIED:
+    "目前候選路線仍包含無坡道樓梯，無法完全滿足避開樓梯條件",
+} as const;
+
 export const MEMORY_MSG = {
   CREATED: "記憶已建立",
   UPDATED: "記憶已更新",

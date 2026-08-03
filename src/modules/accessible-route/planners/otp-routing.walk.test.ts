@@ -6,7 +6,7 @@ vi.mock("axios", () => ({
   default: { create: () => ({ post }), isAxiosError: () => false },
 }));
 
-import { planOtpWalk, isOtpCircuitOpen } from "./otp-routing";
+import { planOtpWalk, planOtpWalkDetailed, isOtpCircuitOpen } from "./otp-routing";
 
 const enc = (pts: [number, number][]) => encode(pts, 5);
 const okResp = (itineraries: unknown[]) => ({
@@ -69,16 +69,97 @@ describe("planOtpWalk", () => {
     expect(r.totalWalkDistanceM).toBe(823);
     expect(r.totalMinutes).toBe(12);
     expect(r.attribution).toBe("© OpenStreetMap contributors");
-    expect(r.legs[0].steps?.[0].instruction).toBe("請沿「信義路」出發");
+    expect(r.legs[0].steps?.[0].instruction).toBe("沿「信義路」出發");
+    expect(r.legs[0].steps?.[0].stairs).toBe(false);
 
     const query: string = post.mock.calls[0][1].query;
     expect(query).toContain("transportModes: [{ mode: WALK }]");
+    expect(query).toContain("feature { __typename }");
     expect(query).not.toContain("TRANSIT");
+  });
+
+  it("maps StairsUse and degrades to the candidate with the fewest stairs", async () => {
+    const twoStairs = walkItin() as any;
+    twoStairs.duration = 600;
+    twoStairs.legs[0].steps = [
+      { ...twoStairs.legs[0].steps[0], feature: { __typename: "StairsUse" } },
+      { ...twoStairs.legs[0].steps[0], lon: 121.564, feature: { __typename: "StairsUse" } },
+    ];
+    const oneStair = walkItin() as any;
+    oneStair.duration = 800;
+    oneStair.legs[0].steps[0].feature = { __typename: "StairsUse" };
+    post.mockResolvedValue(okResp([twoStairs, oneStair]));
+
+    const result = await planOtpWalkDetailed(origin, destination, {
+      avoidStairs: true,
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.routes).toHaveLength(1);
+    expect(result.routes[0].totalMinutes).toBe(13);
+    expect(result.routes[0].degraded).toBe(true);
+    expect(result.routes[0].warnings).toContain(
+      "目前候選路線仍包含無坡道樓梯，無法完全滿足避開樓梯條件",
+    );
+    const step = result.routes[0].legs[0].type === "WALK"
+      ? result.routes[0].legs[0].steps?.[0]
+      : undefined;
+    expect(step?.stairs).toBe(true);
+    expect(step?.instruction).toContain("此路段含樓梯");
+    expect(step?.instruction).not.toContain("823");
+    expect(post.mock.calls[0][1].variables.numItineraries).toBe(8);
+  });
+
+  it("prefers every stair-free candidate when avoidStairs is active", async () => {
+    const stairs = walkItin() as any;
+    stairs.duration = 500;
+    stairs.legs[0].steps[0].feature = { __typename: "StairsUse" };
+    const stepFree = walkItin() as any;
+    stepFree.duration = 900;
+    post.mockResolvedValue(okResp([stairs, stepFree]));
+
+    const result = await planOtpWalkDetailed(origin, destination, {
+      mode: "wheelchair",
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.routes).toHaveLength(1);
+    expect(result.routes[0].totalMinutes).toBe(15);
+    expect(result.routes[0].degraded).toBeUndefined();
   });
 
   it("drops an itinerary with no legs", async () => {
     post.mockResolvedValue(okResp([{ duration: 100, walkDistance: 50, legs: [] }]));
     expect(await planOtpWalk(origin, destination)).toEqual([]);
+  });
+
+  it("logs when OTP returns no walk itineraries", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    post.mockResolvedValue(okResp([]));
+
+    await expect(planOtpWalk(origin, destination)).resolves.toEqual([]);
+
+    expect(warn).toHaveBeenCalledWith(
+      "[otp-routing] walk query returned no itineraries (fail-soft to [])",
+      expect.stringContaining('"wheelchair":false'),
+    );
+    warn.mockRestore();
+  });
+
+  it("distinguishes no-route from an unavailable OTP walk planner", async () => {
+    post.mockResolvedValueOnce(okResp([]));
+    await expect(planOtpWalkDetailed(origin, destination)).resolves.toEqual({
+      status: "no_route",
+      routes: [],
+    });
+
+    post.mockRejectedValueOnce(new Error("down"));
+    await expect(planOtpWalkDetailed(origin, destination)).resolves.toEqual({
+      status: "unavailable",
+      routes: [],
+    });
   });
 
   it("drops an itinerary containing a non-WALK leg", async () => {

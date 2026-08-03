@@ -22,6 +22,7 @@ import { haversineCoords } from "../../../utils/geo";
 import { formatWalkStepInstruction } from "../../../utils/transit-text";
 import { taipeiHHmm, taipeiYmdDash } from "../../../config/taipei-time";
 import { metroLineCode } from "../../../config/transit";
+import { ROUTE_WARNING } from "../../../constants/messages";
 import { walkSpeedMps } from "../scoring";
 import type {
   ITdxMetroStation,
@@ -262,6 +263,7 @@ query Plan(
           streetName
           area
           bogusName
+          feature { __typename }
         }
       }
     }
@@ -342,6 +344,7 @@ query Walk(
           streetName
           area
           bogusName
+          feature { __typename }
         }
       }
     }
@@ -398,7 +401,75 @@ export async function planOtpWalk(
   destination: { lat: number; lng: number },
   opts?: { mode?: AccessibilityMode; avoidStairs?: boolean },
 ): Promise<AccessibleRoute[]> {
-  if (walkPlanBreaker.isOpen()) return [];
+  return (await planOtpWalkDetailed(origin, destination, opts)).routes;
+}
+
+export type OtpWalkPlanResult =
+  | { status: "ok"; routes: AccessibleRoute[] }
+  | { status: "no_route" | "unavailable"; routes: [] };
+
+/**
+ * Count OTP-confirmed stair features across every walking step in a route.
+ * @param route Route whose OTP walking steps are inspected.
+ * @returns The number of steps whose feature union resolves to StairsUse.
+ */
+function routeStairsCount(route: AccessibleRoute): number {
+  return route.legs.reduce((count, leg) => {
+    if (leg.type !== "WALK") return count;
+    return count + (leg.steps ?? []).filter((step) => step.stairs).length;
+  }, 0);
+}
+
+/**
+ * Rank OTP candidates by confirmed stair exposure while preserving OTP order
+ * for ties.
+ * @param routes OTP route candidates.
+ * @returns A new array ordered by ascending confirmed stair count.
+ */
+function rankByStairs(routes: AccessibleRoute[]): AccessibleRoute[] {
+  return routes
+    .map((route, index) => ({ route, index, stairs: routeStairsCount(route) }))
+    .sort((a, b) => a.stairs - b.stairs || a.index - b.index)
+    .map(({ route }) => route);
+}
+
+/**
+ * Keep only step-free walk candidates when available. If every candidate has
+ * confirmed stairs, retain the one with the fewest stair features and expose
+ * an explicit degraded marker plus the shared warning.
+ * @param routes Mapped walk-only OTP candidates.
+ * @returns Up to three step-free routes, or one marked least-stairs route.
+ */
+function selectWalkCandidates(routes: AccessibleRoute[]): AccessibleRoute[] {
+  const ranked = rankByStairs(routes);
+  const stepFree = ranked.filter((route) => routeStairsCount(route) === 0);
+  if (stepFree.length) return stepFree.slice(0, 3);
+  const leastStairs = ranked[0];
+  if (!leastStairs) return [];
+  leastStairs.degraded = true;
+  leastStairs.warnings = [
+    ...new Set([
+      ...(leastStairs.warnings ?? []),
+      ROUTE_WARNING.STAIRS_CONSTRAINT_UNSATISFIED,
+    ]),
+  ];
+  return [leastStairs];
+}
+
+/**
+ * Plan an OTP walk while preserving the distinction between a genuine no-route
+ * result and an unavailable planner for callers that implement marked fallback.
+ * @param origin The origin coordinate.
+ * @param destination The destination coordinate.
+ * @param opts Accessibility mode and optional step-free override.
+ * @returns The route result with an explicit planner status.
+ */
+export async function planOtpWalkDetailed(
+  origin: { lat: number; lng: number },
+  destination: { lat: number; lng: number },
+  opts?: { mode?: AccessibilityMode; avoidStairs?: boolean },
+): Promise<OtpWalkPlanResult> {
+  if (walkPlanBreaker.isOpen()) return { status: "unavailable", routes: [] };
   const mode = opts?.mode ?? "normal";
   const wheelchair = opts?.avoidStairs ?? mode === "wheelchair";
   const walkSpeed = walkSpeedMps(mode);
@@ -410,7 +481,14 @@ export async function planOtpWalk(
   } catch (err) {
     walkPlanBreaker.recordFailure();
     console.warn("[otp-routing] walk query failed (fail-soft to [])", err);
-    return [];
+    return { status: "unavailable", routes: [] };
+  }
+
+  if (!itineraries.length) {
+    console.warn(
+      "[otp-routing] walk query returned no itineraries (fail-soft to [])",
+      JSON.stringify({ origin, destination, wheelchair, walkSpeed }),
+    );
   }
 
   const out: AccessibleRoute[] = [];
@@ -431,9 +509,11 @@ export async function planOtpWalk(
       totalWalkDistanceM,
       attribution: WALK_OSM_ATTRIBUTION,
     });
-    if (out.length >= 3) break;
   }
-  return out;
+  const selected = wheelchair ? selectWalkCandidates(out) : out.slice(0, 3);
+  return selected.length
+    ? { status: "ok", routes: selected }
+    : { status: "no_route", routes: [] };
 }
 
 const RAIL_GEOMETRY_QUERY = `
@@ -664,17 +744,20 @@ function walkLegFrom(leg: OtpLeg, isFirst: boolean, isLast: boolean): WalkLeg {
       const relativeDirection = s.relativeDirection ?? "CONTINUE";
       const streetName = s.streetName ?? "";
       const bogusName = s.bogusName ?? false;
+      const stairs = s.feature?.__typename === "StairsUse";
+      const instruction = formatWalkStepInstruction({
+        relativeDirection,
+        streetName,
+        bogusName,
+      });
       return {
-        instruction: formatWalkStepInstruction({
-          relativeDirection,
-          streetName,
-          bogusName,
-        }),
+        instruction: stairs ? `${instruction}，此路段含樓梯` : instruction,
         relativeDirection,
         absoluteDirection: s.absoluteDirection ?? null,
         streetName,
         bogusName,
         area: s.area ?? false,
+        stairs,
         distanceM: Math.round(s.distance ?? 0),
         location: [s.lon ?? 0, s.lat ?? 0],
       };
@@ -1123,5 +1206,6 @@ export async function planOtpRoute(
       routes: out.length,
     }),
   );
-  return out.slice(0, opts?.limit ?? OTP_NUM_ITINERARIES_WIDE);
+  const ordered = wheelchair ? rankByStairs(out) : out;
+  return ordered.slice(0, opts?.limit ?? OTP_NUM_ITINERARIES_WIDE);
 }

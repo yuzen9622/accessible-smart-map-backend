@@ -10,7 +10,9 @@ import { VALHALLA_OSM_ATTRIBUTION } from "../../../config/valhalla";
 import type { AccessibleRoute, DriveLeg, DriveStep, WalkLeg, WalkStep } from "../../../types/route";
 import type { LatLng, PlanRoadRouteOptions, RoadTravelMode } from "../accessible-route.types";
 import { haversineCoords, haversineMeters } from "../../../utils/geo";
+import { ROUTE_WARNING } from "../../../constants/messages";
 import { ValhallaRoutingError } from "./valhalla-routing.types";
+import { planOtpWalkDetailed } from "./otp-routing";
 
 export { ValhallaRoutingError } from "./valhalla-routing.types";
 
@@ -31,6 +33,7 @@ const MAX_CONNECTOR_CONCURRENCY = 4;
 
 /** A walk-connector body: a WALK leg without its display from/to labels. */
 type WalkConnector = Omit<WalkLeg, "from" | "to">;
+type WalkConnectorResult = { body: WalkConnector | null; degraded: boolean };
 
 const ROUTE_LABEL: Record<RoadTravelMode, string> = {
   drive: "開車",
@@ -150,6 +153,7 @@ function walkSteps(leg: NormalizedValhallaLeg, points: [number, number][]): Walk
       streetName,
       bogusName: streetName.length === 0,
       area: false,
+      stairs: m.stairs,
       distanceM: Math.round(m.lengthKm * 1000),
       location: points[m.beginShapeIndex],
     };
@@ -211,35 +215,70 @@ function mapTrip(trip: NormalizedValhallaTrip, mode: RoadTravelMode, index: numb
 async function planWalkConnector(
   fromAnchor: LatLng,
   toAnchor: LatLng,
-): Promise<WalkConnector | null> {
+  mode: PlanRoadRouteOptions["mode"],
+  avoidStairs: boolean,
+): Promise<WalkConnectorResult> {
+  try {
+    const otp = await planOtpWalkDetailed(fromAnchor, toAnchor, {
+      mode,
+      avoidStairs,
+    });
+    const leg = otp.routes[0]?.legs.find((candidate) => candidate.type === "WALK");
+    if (leg?.type === "WALK" && leg.polyline.length >= 2) {
+      const pStart = leg.polyline[0];
+      const pEnd = leg.polyline.at(-1)!;
+      if (
+        haversineCoords(pStart, [fromAnchor.lng, fromAnchor.lat]) <= CONNECT_TOLERANCE_M &&
+        haversineCoords(pEnd, [toAnchor.lng, toAnchor.lat]) <= CONNECT_TOLERANCE_M
+      ) {
+        const { from: _from, to: _to, ...body } = leg;
+        return { body, degraded: false };
+      }
+    }
+  } catch (error) {
+    console.warn("[valhalla-routing] OTP walk connector failed", error);
+  }
+  console.warn(
+    "[valhalla-routing] OTP walk connector unavailable; falling back to Valhalla",
+    JSON.stringify({ fromAnchor, toAnchor }),
+  );
   try {
     const result = await computeValhallaRoutes({
       origin: fromAnchor, destination: toAnchor, costing: "pedestrian",
+      wheelchair: avoidStairs,
     });
-    if (result.status !== "OK") return null;
+    if (result.status !== "OK") return { body: null, degraded: true };
     const leg = result.trips[0]?.legs[0];
-    if (!leg) return null;
+    if (!leg) return { body: null, degraded: true };
     let points: [number, number][];
     try {
       points = decodeValhallaShape(leg.shapePolyline6);
     } catch {
-      return null;
+      return { body: null, degraded: true };
     }
     const pStart = points[0];
     const pEnd = points.at(-1)!;
-    if (haversineCoords(pStart, [fromAnchor.lng, fromAnchor.lat]) > CONNECT_TOLERANCE_M) return null;
-    if (haversineCoords(pEnd, [toAnchor.lng, toAnchor.lat]) > CONNECT_TOLERANCE_M) return null;
+    if (haversineCoords(pStart, [fromAnchor.lng, fromAnchor.lat]) > CONNECT_TOLERANCE_M) {
+      return { body: null, degraded: true };
+    }
+    if (haversineCoords(pEnd, [toAnchor.lng, toAnchor.lat]) > CONNECT_TOLERANCE_M) {
+      return { body: null, degraded: true };
+    }
     const steps = walkSteps(leg, points);
     return {
-      type: "WALK",
-      distanceM: Math.round(leg.summary.lengthKm * 1000),
-      minutesEst: minutes(leg.summary.timeSec),
-      polyline: points,
-      a11yFacilities: [],
-      ...(steps ? { steps } : {}),
+      degraded: true,
+      body: {
+        type: "WALK",
+        distanceM: Math.round(leg.summary.lengthKm * 1000),
+        minutesEst: minutes(leg.summary.timeSec),
+        polyline: points,
+        a11yFacilities: [],
+        ...(steps ? { steps } : {}),
+      },
     };
-  } catch {
-    return null;
+  } catch (error) {
+    console.warn("[valhalla-routing] Valhalla walk connector fallback failed", error);
+    return { body: null, degraded: true };
   }
 }
 
@@ -281,18 +320,20 @@ async function attachWalkAccessLegs(
   destination: LatLng,
   waypoints: LatLng[],
   finalWalkTarget?: LatLng,
+  mode?: PlanRoadRouteOptions["mode"],
+  avoidStairs = false,
 ): Promise<AccessibleRoute[]> {
   // When the drive was routed to a proxy arrival point (e.g. a disabled parking
   // bay), the tail walk must reach the user's true destination, not the proxy.
   const tailTarget = finalWalkTarget ?? destination;
   const limiter = createLimiter(MAX_CONNECTOR_CONCURRENCY);
-  const cache = new Map<string, Promise<WalkConnector | null>>();
+  const cache = new Map<string, Promise<WalkConnectorResult>>();
   const round = (n: number) => n.toFixed(SNAP_KEY_PRECISION);
   const connector = (from: LatLng, to: LatLng) => {
     const key = `${round(from.lng)},${round(from.lat)}|${round(to.lng)},${round(to.lat)}`;
     let pending = cache.get(key);
     if (!pending) {
-      pending = limiter(() => planWalkConnector(from, to));
+      pending = limiter(() => planWalkConnector(from, to, mode, avoidStairs));
       cache.set(key, pending);
     }
     return pending;
@@ -331,14 +372,18 @@ async function attachWalkAccessLegs(
           })
         : [];
 
-      const head = headPending ? await headPending : null;
-      const tail = tailPending ? await tailPending : null;
+      const headResult = headPending ? await headPending : null;
+      const tailResult = tailPending ? await tailPending : null;
+      const head = headResult?.body ?? null;
+      const tail = tailResult?.body ?? null;
       const wpResolved = await Promise.all(
         wpSlots.map(async (slot) => ({
           index: slot.index,
           gap: slot.gap,
-          in: await slot.inPending,
-          out: await slot.outPending,
+          in: (await slot.inPending).body,
+          out: (await slot.outPending).body,
+          degraded:
+            (await slot.inPending).degraded || (await slot.outPending).degraded,
         })),
       );
       const wpByIndex = new Map(wpResolved.map((slot) => [slot.index, slot]));
@@ -393,6 +438,9 @@ async function attachWalkAccessLegs(
         totalMinutes: route.totalMinutes + walkMinutes,
         totalWalkDistanceM: walkDistanceM,
         accessibilityHighlights: highlights,
+        ...(headResult?.degraded || tailResult?.degraded || wpResolved.some((slot) => slot.degraded)
+          ? { warnings: [...new Set([...(route.warnings ?? []), ROUTE_WARNING.OTP_WALK_FALLBACK])] }
+          : {}),
       };
     }),
   );
@@ -406,6 +454,9 @@ export async function planValhallaRoute(
   const result = await computeValhallaRoutes({
     origin, destination, waypoints: opts.waypoints,
     costing: COSTING[opts.travelMode], computeAlternatives: true,
+    wheelchair:
+      opts.travelMode === "walk" &&
+      (opts.avoidStairs ?? opts.mode === "wheelchair"),
   });
   if (result.status === "NO_ROUTE") return [];
   if (result.status === "UPSTREAM_ERROR") {
@@ -419,5 +470,13 @@ export async function planValhallaRoute(
     throw new ValhallaRoutingError("Malformed Valhalla response");
   }
   if (opts.travelMode === "walk" || routes.length === 0) return routes;
-  return attachWalkAccessLegs(routes, origin, destination, opts.waypoints ?? [], opts.finalWalkTarget);
+  return attachWalkAccessLegs(
+    routes,
+    origin,
+    destination,
+    opts.waypoints ?? [],
+    opts.finalWalkTarget,
+    opts.mode,
+    opts.avoidStairs ?? opts.mode === "wheelchair",
+  );
 }
