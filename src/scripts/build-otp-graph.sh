@@ -244,6 +244,8 @@ npx dotenvx run -- ts-node "$SCRIPT_DIR/generate-gtfs-parents.ts" "$WORK_DIR/fee
 # ── 2. OSM extract (monthly refresh, spec §5) ──
 OSM_CACHE="$OTP_DATA_DIR/taiwan-latest.osm.pbf"
 OSM_CLIPPED="$WORK_DIR/taiwan-clipped.osm.pbf"
+OSM_ENRICHED="${OSM_CLIPPED%.osm.pbf}.enriched.osm.pbf"
+OSM_WALK_SAFE="${OSM_CLIPPED%.osm.pbf}.walk-safe.osm.pbf"
 if [ ! -f "$OSM_CACHE" ] || [ -n "$(find "$OSM_CACHE" -mtime +$OSM_MAX_AGE_DAYS 2>/dev/null)" ]; then
   log "refreshing OSM pbf from Geofabrik"
   curl -fsSL -o "$OSM_CACHE.tmp" "$OTP_OSM_PBF_URL" || die "OSM download failed"
@@ -266,11 +268,19 @@ fi
 # ── 2b. Inject road slopes from DEM GeoTIFFs ──
 log "injecting road slopes from DEM GeoTIFFs..."
 python3 "$SCRIPT_DIR/inject-osm-dem-slopes.py" \
-  "$OSM_CLIPPED" "$OSM_CLIPPED.enriched" "${OTP_DEM_DIR:-$OTP_DATA_DIR/dem}" \
+  "$OSM_CLIPPED" "$OSM_ENRICHED" "${OTP_DEM_DIR:-$OTP_DATA_DIR/dem}" \
   || log "WARN: DEM slope injection failed — continuing"
-if [ -f "$OSM_CLIPPED.enriched" ]; then
-  mv "$OSM_CLIPPED.enriched" "$OSM_CLIPPED"
+if [ -f "$OSM_ENRICHED" ]; then
+  mv "$OSM_ENRICHED" "$OSM_CLIPPED"
 fi
+
+log "hardening pedestrian access tags for expressways and stairs"
+python3 "$SCRIPT_DIR/deny-foot-on-expressways.py" \
+  "$OSM_CLIPPED" "$OSM_WALK_SAFE" \
+  || die "pedestrian access hardening failed — keeping old graph"
+[ -f "$OSM_WALK_SAFE" ] \
+  || die "pedestrian access hardening produced no PBF — keeping old graph"
+mv "$OSM_WALK_SAFE" "$OSM_CLIPPED"
 
 # ── 3. Feed validation gate (red light = abort, old graph keeps serving) ──
 # Reports MUST land outside WORK_DIR: OTP scans its data directory and classifies
