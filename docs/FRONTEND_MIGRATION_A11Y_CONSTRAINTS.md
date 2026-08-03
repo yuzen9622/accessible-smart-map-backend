@@ -1,7 +1,7 @@
 # 前端遷移說明：`avoidStairs` / `requireElevator` 硬性無障礙條件
 
 **影響端點**：`POST /api/v1/a11y/accessible-route`
-**日期**：2026-07-31
+**日期**：2026-08-03
 **性質**：純新增（additive）。兩個欄位都 optional，不送＝行為與今天完全一致，前端可分批上。
 
 ---
@@ -13,14 +13,15 @@
 
 | 欄位 | 型別 | 效果 |
 |---|---|---|
-| `avoidStairs` | `boolean?` | 向路徑引擎（OTP2）索取 step-free 路線 —— OTP 在 wheelchair 模式下不會把 `highway=steps` 排進路徑，所以這是**引擎層**的效果 |
+| `avoidStairs` | `boolean?` | 向 OTP2 索取 step-free 路線；graph build 會把無輪椅坡道例外的 `highway=steps` 補成 `wheelchair=no`，後處理再以 OTP step 的 `feature.__typename === "StairsUse"` 作第二道排除 |
 | `requireElevator` | `boolean?` | 排除「該站有設施資料、但查不到電梯」或「電梯維修／故障／暫停」的捷運／台鐵／高鐵路段（**後處理層**，在設施 enrich 之後執行） |
 
 兩者的作用層不同，這會影響你怎麼解讀結果：
 
-- `avoidStairs` 是**請求引擎不要規劃出樓梯路徑**。生效與否取決於 OSM 的 `highway=steps` 標記是否完整。
-  程式裡另有一道 walk leg 的樓梯排除當保險，但目前大眾運輸流程並不會填入步行段的
-  `a11yFacilities`（所有 planner 都給空陣列），所以那道保險實際上不會觸發 —— 真正在做事的是引擎層。
+- `avoidStairs` 同時有引擎與後處理兩層防線。PBF 前處理會為沒有 `ramp:wheelchair=yes`／
+  `wheelchair=yes` 例外的樓梯補 `wheelchair=no`；後處理只讀 OTP 的 `StairsUse` feature，不再依賴
+  `streetName`。當全部候選都含樓梯時，只回傳樓梯 feature 最少的一條，並以
+  `routes[].degraded: true` 與 `routes[].warnings` 明確標示未完全滿足條件。
 - `requireElevator` 在 OTP 沒有對應參數（北捷 GTFS 目前沒有 pathways 資料），完全靠後處理排除，
   因此它只在設施 enrich 查到該站資料時才會生效。
 
@@ -60,9 +61,9 @@
 
 ## 邊界行為（請據此設計 UI）
 
-1. **條件不會造成 404**。當**所有**候選路線都被條件排除時，後端仍回傳原始候選，
-   而不是回 `NOT_FOUND` —— 有一條有風險的路線比沒有路線可用。
-   這種情況下請依 `routes[].accessibilityScore` 的 `totalScore`、`label` 與 `warnings`
+1. **條件不會造成 404**。當所有候選都含樓梯時，後端回傳樓梯 feature 數最少的一條，
+   而不是回 `NOT_FOUND`；該 route 會有 `degraded: true` 與樓梯 warning。
+   這種情況下請依 `routes[].degraded`、`accessibilityScore`、`accessibilityLabel` 與 `warnings`
    提示風險，不要向使用者宣稱「已完全符合無階梯／有電梯」。
 2. **缺資料不等於不可通行**。設施資料為空的車站／步行段一律**保留**（unknown ≠ inaccessible）。
    `requireElevator` 只在 enrich 查到該站設施資料時才排除；查不到就保留並讓
@@ -70,9 +71,11 @@
    開了條件也可能看不出差異 —— 這是刻意的，不是 bug。
 3. **`travelMode` 覆蓋範圍**：
    - `transit`：`avoidStairs` 走引擎層、`requireElevator` 走後處理排除，兩者都生效。
-   - `walk`：`avoidStairs` 生效（傳給 OTP2 行人查詢）；`requireElevator` 無適用對象。
-   - `drive` / `motorcycle`：兩者都不生效（Valhalla 車行路徑不涉及階梯／電梯），
-     頭尾步行銜接段也尚未套用，屬已知限制。
+   - `walk`：所有正常步行段走 OTP，`avoidStairs` 逐段生效；`requireElevator` 為 no-op。
+   - `drive` / `motorcycle`：車行主體仍由 Valhalla 規劃；頭尾與中途點步行銜接改由 OTP，
+     因此 `avoidStairs` 對這些 WALK legs 生效；`requireElevator` 為 no-op。
+   - OTP 步行規劃不可用時，整段才降級到 Valhalla pedestrian；`avoidStairs` 會帶
+     `type: wheelchair` 與 `step_penalty`，並在 `routes[].warnings` 標示引擎降級。
 
 ## 自然語言查詢（`query`）的互動
 
@@ -86,5 +89,6 @@ body.requireElevator  →  intent.preferences.preferElevator（AI 從語句解�
 
 ## 前端必要調整
 
-無強制項。要讓 A11y Profile 真正影響演算法，就在既有請求上加這兩個欄位；
-其餘欄位、回應結構、`routeToken` 契約皆未改變。
+要讓 A11y Profile 真正影響演算法，就在既有請求上加這兩個欄位。收到
+`routes[].degraded === true` 時必須顯示同一 route 的 `warnings[]`；`degraded` 省略表示未發生這種
+「所有 OTP 候選仍含樓梯」的降級。`routeToken` 契約不變。
