@@ -22,7 +22,7 @@
     "accessEgress": {
       "maxDuration": "30m"
     },
-    "maxDirectStreetDuration": "30m",
+    "maxDirectStreetDuration": "3h",
     "streetRoutingTimeout": "2s"
   },
   "transit": {
