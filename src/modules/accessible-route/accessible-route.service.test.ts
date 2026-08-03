@@ -34,7 +34,7 @@ vi.mock("./planners/route-a11y", () => ({
 // The transit branch dynamic-imports both from the OTP planner.
 vi.mock("./planners/otp-routing", () => ({
   planOtpRoute: vi.fn().mockResolvedValue([]),
-  planOtpWalk: vi.fn(),
+  planOtpWalkDetailed: vi.fn(),
   isOtpCircuitOpen: () => false,
 }));
 
@@ -57,7 +57,7 @@ vi.mock("../../adapters/google.adapter", async (importActual) => {
 import { planAccessibleRouteFromRequest } from "./accessible-route.service";
 import { planValhallaRoute, ValhallaRoutingError } from "./planners/valhalla-routing";
 import { findNearbyParking, findNearby } from "../a11y/a11y.service";
-import { planOtpRoute, planOtpWalk } from "./planners/otp-routing";
+import { planOtpRoute, planOtpWalkDetailed } from "./planners/otp-routing";
 import { enrichLegIndoor } from "./planners/route-a11y";
 import { getCity } from "../../adapters/google.adapter";
 import { ResponseCode } from "../../types/code";
@@ -97,7 +97,10 @@ beforeEach(() => {
   vi.mocked(getCity).mockResolvedValue("Taipei");
   vi.mocked(findNearby).mockResolvedValue({ nearbyOsm: [] } as any);
   vi.mocked(planOtpRoute).mockResolvedValue([]);
-  vi.mocked(planOtpWalk).mockResolvedValue([]);
+  vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+    status: "no_route",
+    routes: [],
+  });
   vi.mocked(getWeatherAndAirQuality).mockResolvedValue({});
 });
 
@@ -256,7 +259,10 @@ describe("planAccessibleRouteFromRequest parking-aware arrival", () => {
   });
 
   it("does not run the parking arrival lookup for walk mode", async () => {
-    vi.mocked(planValhallaRoute).mockResolvedValue([driveRoute([])] as any);
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "ok",
+      routes: [walkRoute()] as any,
+    });
 
     const res = await planAccessibleRouteFromRequest({
       ...driveRequest,
@@ -299,7 +305,10 @@ const walkRoute = () => ({
 
 describe("planAccessibleRouteFromRequest walk mode OTP", () => {
   it("uses the OTP walk route and does not call Valhalla", async () => {
-    vi.mocked(planOtpWalk).mockResolvedValue([walkRoute()] as any);
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "ok",
+      routes: [walkRoute()] as any,
+    });
 
     const res = await planAccessibleRouteFromRequest(walkRequest);
 
@@ -309,7 +318,10 @@ describe("planAccessibleRouteFromRequest walk mode OTP", () => {
   });
 
   it("runs finalize enrichment on the OTP walk route", async () => {
-    vi.mocked(planOtpWalk).mockResolvedValue([walkRoute()] as any);
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "ok",
+      routes: [walkRoute()] as any,
+    });
     vi.mocked(findNearby).mockResolvedValue({
       nearbyOsm: [{ category: "elevator" }],
     } as any);
@@ -321,28 +333,40 @@ describe("planAccessibleRouteFromRequest walk mode OTP", () => {
     expect(highlights.some((h) => h.includes("電梯"))).toBe(true);
   });
 
-  it("falls back to Valhalla when OTP returns no walk route", async () => {
-    vi.mocked(planOtpWalk).mockResolvedValue([]);
+  it("returns 404 when OTP has no route for a walking segment", async () => {
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "no_route",
+      routes: [],
+    });
+
+    const res = await planAccessibleRouteFromRequest(walkRequest);
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.status).toBe(ResponseCode.NOT_FOUND);
+    expect(vi.mocked(planValhallaRoute)).not.toHaveBeenCalled();
+  });
+
+  it("falls back to marked Valhalla when OTP is unavailable", async () => {
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "unavailable",
+      routes: [],
+    });
     vi.mocked(planValhallaRoute).mockResolvedValue([driveRoute([])] as any);
 
     const res = await planAccessibleRouteFromRequest(walkRequest);
 
     expect(res.ok).toBe(true);
     expect(vi.mocked(planValhallaRoute).mock.calls.length).toBeGreaterThan(0);
+    expect(res.data!.routes[0].warnings).toContain(
+      "OTP 步行規劃暫時不可用，已降級使用 Valhalla 步行路線，指引品質可能不同",
+    );
   });
 
-  it("falls back to Valhalla when OTP rejects", async () => {
-    vi.mocked(planOtpWalk).mockRejectedValue(new Error("otp down"));
-    vi.mocked(planValhallaRoute).mockResolvedValue([driveRoute([])] as any);
-
-    const res = await planAccessibleRouteFromRequest(walkRequest);
-
-    expect(res.ok).toBe(true);
-    expect(vi.mocked(planValhallaRoute).mock.calls.length).toBeGreaterThan(0);
-  });
-
-  it("does not call OTP walk for walk + waypoints", async () => {
-    vi.mocked(planValhallaRoute).mockResolvedValue([driveRoute([])] as any);
+  it("plans walk + waypoints as bounded OTP segments and preserves leg boundaries", async () => {
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "ok",
+      routes: [walkRoute()] as any,
+    });
 
     const res = await planAccessibleRouteFromRequest({
       ...walkRequest,
@@ -350,8 +374,10 @@ describe("planAccessibleRouteFromRequest walk mode OTP", () => {
     });
 
     expect(res.ok).toBe(true);
-    expect(vi.mocked(planOtpWalk).mock.calls).toHaveLength(0);
-    expect(vi.mocked(planValhallaRoute).mock.calls.length).toBeGreaterThan(0);
+    expect(vi.mocked(planOtpWalkDetailed)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(planValhallaRoute)).not.toHaveBeenCalled();
+    expect(res.data!.routes[0].legs).toHaveLength(2);
+    expect(res.data!.routes[0].legs.map((leg) => leg.type)).toEqual(["WALK", "WALK"]);
   });
 
   it("does not call OTP walk for drive mode", async () => {
@@ -361,7 +387,7 @@ describe("planAccessibleRouteFromRequest walk mode OTP", () => {
     const res = await planAccessibleRouteFromRequest(driveRequest);
 
     expect(res.ok).toBe(true);
-    expect(vi.mocked(planOtpWalk).mock.calls).toHaveLength(0);
+    expect(vi.mocked(planOtpWalkDetailed).mock.calls).toHaveLength(0);
   });
 });
 
@@ -613,9 +639,38 @@ describe("planAccessibleRouteFromRequest — avoidStairs / requireElevator const
         a11yFacilities: [
           { osmId: "way/1", category: "steps", tags: { highway: "steps" } },
         ],
+        steps: [{
+          relativeDirection: "CONTINUE",
+          absoluteDirection: "NORTH",
+          streetName: "圓山市景步道",
+          bogusName: false,
+          area: false,
+          stairs: true,
+          distanceM: 300,
+          location: [121.56, 25.04],
+        }],
       },
     ],
     accessibilityHighlights: [],
+  };
+  const otpStepsWalkRoute = {
+    ...stairsWalkRoute,
+    routeId: "otp-steps-output",
+    routeName: "OTP steps 樓梯線",
+    legs: [{
+      ...stairsWalkRoute.legs[0],
+      a11yFacilities: [],
+      steps: [{
+        relativeDirection: "CONTINUE",
+        absoluteDirection: "NORTH",
+        streetName: "steps",
+        bogusName: true,
+        area: false,
+        stairs: true,
+        distanceM: 300,
+        location: [121.56, 25.04],
+      }],
+    }],
   };
 
   const routeNames = async (body: Parameters<typeof planAccessibleRouteFromRequest>[0]) => {
@@ -668,6 +723,104 @@ describe("planAccessibleRouteFromRequest — avoidStairs / requireElevator const
 
     expect(names).toEqual(["有電梯線"]);
   });
+
+  it("drops an OTP walk leg whose feature exposes a stairs barrier", async () => {
+    vi.mocked(planOtpRoute).mockResolvedValue([withElevator, otpStepsWalkRoute] as any);
+
+    const names = await routeNames({
+      ...transitRequest,
+      mode: "elderly",
+      avoidStairs: true,
+    });
+
+    expect(names).toEqual(["有電梯線"]);
+  });
+
+  it("does not treat a 1201m step mislabeled as steps as a stairs barrier", async () => {
+    const mislabeledSidewalk = {
+      ...otpStepsWalkRoute,
+      routeId: "otp-mislabeled-sidewalk",
+      routeName: "1201m 人行道",
+      legs: [{
+        ...otpStepsWalkRoute.legs[0],
+        distanceM: 1201,
+        steps: [{
+          ...otpStepsWalkRoute.legs[0].steps[0],
+          streetName: "steps",
+          stairs: false,
+          distanceM: 1201,
+        }],
+      }],
+    };
+    vi.mocked(planOtpRoute).mockResolvedValue([withElevator, mislabeledSidewalk] as any);
+
+    const names = await routeNames({
+      ...transitRequest,
+      mode: "elderly",
+      avoidStairs: true,
+    });
+
+    expect(names).toContain("1201m 人行道");
+  });
+
+  it("returns the fewest-stairs route with degraded metadata when every candidate has stairs", async () => {
+    const twoStairs = {
+      ...otpStepsWalkRoute,
+      routeId: "otp-two-stairs",
+      routeName: "兩段樓梯",
+      legs: [{
+        ...otpStepsWalkRoute.legs[0],
+        steps: [
+          otpStepsWalkRoute.legs[0].steps[0],
+          { ...otpStepsWalkRoute.legs[0].steps[0], location: [121.55, 25.03] },
+        ],
+      }],
+    };
+    vi.mocked(planOtpRoute).mockResolvedValue([twoStairs, otpStepsWalkRoute] as any);
+
+    const result = await planAccessibleRouteFromRequest({
+      ...transitRequest,
+      mode: "elderly",
+      avoidStairs: true,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.routes).toHaveLength(1);
+    expect(result.data.routes[0].routeName).toBe("OTP steps 樓梯線");
+    expect(result.data.routes[0].degraded).toBe(true);
+    expect(result.data.routes[0].warnings).toContain(
+      "目前候選路線仍包含無坡道樓梯，無法完全滿足避開樓梯條件",
+    );
+  });
+
+  it.each(["ramp:wheelchair", "wheelchair"] as const)(
+    "preserves the %s=yes exception for a confirmed stairs feature",
+    async (tag) => {
+      const accessibleSteps = {
+        ...otpStepsWalkRoute,
+        routeId: "otp-ramped-steps",
+        routeName: "有輪椅坡道階梯",
+        legs: [{
+          ...otpStepsWalkRoute.legs[0],
+          a11yFacilities: [{
+            osmId: "way/ramp",
+            category: "ramp",
+            tags: { highway: "steps", [tag]: "yes" },
+          }],
+        }],
+      };
+      vi.mocked(planOtpRoute).mockResolvedValue([accessibleSteps] as any);
+
+      const names = await routeNames({
+        ...transitRequest,
+        mode: "elderly",
+        avoidStairs: true,
+      });
+
+      expect(names).toEqual(["有輪椅坡道階梯"]);
+    },
+  );
 
   it("requireElevator alone does not drop the stairs walk leg", async () => {
     vi.mocked(planOtpRoute).mockResolvedValue([withElevator, stairsWalkRoute] as any);
@@ -727,8 +880,10 @@ describe("planAccessibleRouteFromRequest — avoidStairs / requireElevator const
   });
 
   it("forwards avoidStairs to the OTP walk planner for travelMode=walk", async () => {
-    vi.mocked(planOtpWalk).mockResolvedValue([] as any);
-    vi.mocked(planValhallaRoute).mockResolvedValue({ routes: [] } as any);
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "no_route",
+      routes: [],
+    });
 
     await planAccessibleRouteFromRequest({
       travelMode: "walk",
@@ -738,7 +893,7 @@ describe("planAccessibleRouteFromRequest — avoidStairs / requireElevator const
       avoidStairs: true,
     });
 
-    expect(vi.mocked(planOtpWalk)).toHaveBeenCalledWith(
+    expect(vi.mocked(planOtpWalkDetailed)).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
       expect.objectContaining({ mode: "elderly", avoidStairs: true }),

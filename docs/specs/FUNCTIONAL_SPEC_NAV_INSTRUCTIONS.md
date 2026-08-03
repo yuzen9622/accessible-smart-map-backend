@@ -1,10 +1,12 @@
 # 逐步導航指引資料（語音播報後端支援）
 ## Functional Specification — Nav Instructions Backend Support
 
-**版本**：v1.1.0  
-**狀態**：Implemented — 已實作（2026-06-20，策略 A）  
-**日期**：2026-06-20  
+**版本**：v1.2.0
+**狀態**：Implemented — 已實作（2026-08-03）
+**日期**：2026-08-03
 **作者**：yuzen9622
+
+> v1.2.0 修訂（as-built）：正常情況下所有 WALK legs 均由 OTP 產生；Valhalla pedestrian 僅在 OTP 步行規劃不可用時作為有 `warnings` 的停機備援。`stepBearing()` 改以 maneuver 在 leg polyline 上的位置向前取樣約 20 公尺，取不到幾何才退回 `absoluteDirection`。公開指引新增 `legIndex`、`cumulativeDistanceM`；`distanceM` 明定為「完成本 maneuver 後到下一步前的距離」。文字加入友善距離、無名路段下一個具名目標、長於 300 公尺的中間提示，且後續 WALK leg 的 `DEPART` 不再外洩。端點可傳 `routeToken` 或 `route`，兩者並存時以 `routeToken` 為準。
 
 > v1.1.0 修訂（as-built，已實作）：端點 `POST /api/v1/a11y/route/instructions` 已上線（`src/modules/nav-instructions/`，獨立 `createNavInstructionsRouter()` 直接掛在 `app.ts` 的 `/api/v1/a11y`）。`tsc --noEmit` 乾淨、`nav-instructions.service.test.ts` vitest 23 passed。實作相對本文初稿的調整：
 > ① **service 為純函數而非 class**——`generateNavInstructions(route, userHeading?)` 加上 `calcBearing` / `calcRelativeDirection` / `degToCompassWord` 直接 export（無 `NavInstructionsService` 物件）；常數 `WARN_STEPS_UNAVAILABLE = "ORS_STEPS_UNAVAILABLE"`。
@@ -359,11 +361,11 @@ function calcBearing(
 }
 ```
 
-**各步驟 bearing 的取點邏輯（as-built `stepBearing()`，策略 A）**：
+**各步驟 bearing 的取點邏輯（as-built `stepBearing()`）**：
 
-1. 若 OTP `step.absoluteDirection` 有值（`NORTH` / `NORTHEAST` / …），直接映射為度數（免自算）。
-2. 否則以「本步驟 `location`」與「下一步驟 `location`」兩點 `calcBearing()` 計算。
-3. 皆不可得時，退回 WalkLeg `polyline` 前兩點計算，確保與真實路徑吻合。
+1. 先把 maneuver 的 `location` 以緯度 cos 校正距離吸附到該 leg polyline，且搜尋索引只能向前。
+2. 從該索引沿 polyline 向前累積約 20 公尺，以實際幾何計算 `calcBearing()`。
+3. 只有幾何不足時，才把 OTP `absoluteDirection`（`NORTH` / `NORTHEAST` / …）當 fallback。
 
 > `facility` 類型步驟（`ELEVATOR` / `ENTER_STATION` / `EXIT_STATION`）的 `bearing` 一律填 `null`。
 > 註：初稿假設的 ORS `maneuver.bearing_after` / `way_points` 取點在策略 A 不適用（OTP step 無此欄位）；待策略 B 落地時再依 ORS 結構補上。
@@ -506,7 +508,7 @@ interface NavInstruction {
   relativeDirection: RelativeDirection | null;
 
   /**
-   * 此步驟的距離（公尺）。
+   * 完成本 maneuver 後、到下一步之前要行進的距離（公尺）。
    * "transit_*" 步驟不適用，填 null。
    */
   distanceM: number | null;
@@ -521,11 +523,17 @@ interface NavInstruction {
    */
   legType: "WALK" | "BUS" | "METRO" | "THSR" | "TRA";
 
+  /** 此指引來源在 route.legs 中的索引。 */
+  legIndex: number;
+
   /**
    * 步驟在 WalkLeg.polyline 中的起點索引（僅 "turn" / "depart" 步驟）。
    * 前端可用於在地圖上標注步驟位置。
    */
   polylineIndex: number | null;
+
+  /** 抵達此 maneuver 起點前已累積的可量測行進距離（公尺）。 */
+  cumulativeDistanceM: number;
 }
 ```
 
@@ -584,7 +592,10 @@ const NavInstructionsRequest = z.object({
   route: z.object({
     routeId: z.string().optional(),  // as-built：選用；服務只讀 legs
     legs: z.array(z.any()),          // 詳細型別由 AccessibleRoute 定義
-  }),
+  }).optional(),
+
+  /** /accessible-route 回傳、30 分鐘內有效的 capability；有值時優先。 */
+  routeToken: z.string().trim().min(1).max(256).optional(),
 
   /**
    * 使用者當前朝向（度，正北 = 0，順時針），由陀螺儀取得。
@@ -597,7 +608,7 @@ const NavInstructionsRequest = z.object({
    * 輸出語言（預留，目前僅支援 zh-TW）。
    */
   language: z.enum(["zh-TW"]).default("zh-TW"),
-})
+}).refine((body) => body.route || body.routeToken)
 ```
 
 **請求範例**
@@ -653,7 +664,9 @@ const NavInstructionsRequest = z.object({
         "distanceM": 120,
         "streetName": "中山南路",
         "legType": "WALK",
-        "polylineIndex": 0
+        "legIndex": 0,
+        "polylineIndex": 0,
+        "cumulativeDistanceM": 0
       },
       {
         "type": "turn",
@@ -663,7 +676,9 @@ const NavInstructionsRequest = z.object({
         "distanceM": 85,
         "streetName": "忠孝西路",
         "legType": "WALK",
-        "polylineIndex": 5
+        "legIndex": 0,
+        "polylineIndex": 5,
+        "cumulativeDistanceM": 120
       },
       {
         "type": "facility",
@@ -880,4 +895,4 @@ describe("calcRelativeDirection", () => {
 
 ---
 
-*文件版本 v1.1.0 — as-built（2026-06-20）：端點已實作並掛載（策略 A，OTP steps）；ORS 策略 B 接駁步行 steps 留待後續。初稿 v1.0.0（2026-06-17）。*
+*文件版本 v1.2.0 — as-built（2026-08-03）：全 WALK legs OTP-first、標記式 Valhalla 停機備援、幾何 bearing、公開 leg/進度索引與 routeToken 輸入。初稿 v1.0.0（2026-06-17）。*

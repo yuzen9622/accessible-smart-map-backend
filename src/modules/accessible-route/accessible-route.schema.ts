@@ -102,7 +102,7 @@ export const AccessibleRouteBodySchema = z
       .default("transit")
       .openapi({
         description:
-          "交通工具（與無障礙 mode 正交）：transit（預設，大眾運輸，走 OTP 規劃）、drive（開車）、motorcycle（騎車）、walk（步行）；道路模式走自架 Valhalla，時間為自由流估計，不含即時路況。",
+          "交通工具（與無障礙 mode 正交）：transit（預設，大眾運輸，走 OTP 規劃）、drive（開車）、motorcycle（騎車）、walk（步行）。所有 WALK legs 正常情況均走 OTP；Valhalla 只規劃汽／機車主體，並在 OTP 步行不可用時作標記式停機備援。車行時間為自由流估計，不含即時路況。",
         example: "drive",
       }),
     waypoints: z
@@ -188,6 +188,10 @@ const WalkLegSchema = z
           streetName: z.string(),
           bogusName: z.boolean(),
           area: z.boolean(),
+          stairs: z.boolean().openapi({
+            description:
+              "OTP step.feature 為 StairsUse 時為 true；Valhalla 步行備援固定為 false。僅代表合併 step 內含樓梯，不代表整個 distanceM 都是樓梯。",
+          }),
           distanceM: z.number(),
           location: z.tuple([z.number(), z.number()]),
         }).strict().openapi("WalkStep"),
@@ -516,6 +520,18 @@ export const AccessibleRouteSchema = z
     accessibilityHighlights: z
       .array(z.string())
       .openapi({ example: ["全程低地板公車", "出入口設有電梯"] }),
+    degraded: z.boolean().optional().openapi({
+      example: true,
+      description:
+        "僅在 avoidStairs 生效且 OTP 所有候選仍含樓梯時出現 true；後端已改回傳樓梯特徵數最少的候選，前端必須搭配 warnings 顯示風險。",
+    }),
+    warnings: z
+      .array(z.string())
+      .optional()
+      .openapi({
+        example: ["OTP 步行規劃暫時不可用，已降級使用 Valhalla 步行路線，指引品質可能不同"],
+        description: "路線引擎降級或硬性無障礙條件無法完全滿足時的使用者警示",
+      }),
     departureDate: z
       .string()
       .optional()
@@ -640,7 +656,7 @@ registry.registerPath({
   tags: ["Accessibility"],
   summary: "無障礙路線規劃",
   description:
-    "規劃起訖點間無障礙路線。travelMode=transit（預設）並行搜尋公車、捷運、高鐵與台鐵；drive／motorcycle／walk 走自架 Valhalla（OSM 幾何、自由流時間、不含即時路況）。支援最多 5 個中途點（waypoints），回傳最多 3 筆。",
+    "規劃起訖點間無障礙路線。travelMode=transit（預設）並行搜尋公車、捷運、高鐵與台鐵；walk 與所有步行銜接走 OTP，drive／motorcycle 主體走自架 Valhalla（自由流時間、不含即時路況）。OTP 步行不可用時才以 warnings 標記後降級至 Valhalla pedestrian。支援最多 5 個中途點（waypoints），回傳最多 3 筆。",
   request: {
     body: {
       content: { "application/json": { schema: AccessibleRouteBodySchema } },

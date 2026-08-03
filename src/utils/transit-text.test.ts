@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   busRouteQueryCandidates,
+  formatFriendlyDistance,
   formatWalkStepInstruction,
 } from "./transit-text";
 
@@ -63,7 +64,7 @@ describe("formatWalkStepInstruction", () => {
         streetName: "信義路",
         bogusName: false,
       }),
-    ).toBe("請沿「信義路」出發");
+    ).toBe("沿「信義路」出發");
   });
 
   it("formats DEPART without street name", () => {
@@ -83,7 +84,7 @@ describe("formatWalkStepInstruction", () => {
         streetName: "敦化南路",
         bogusName: false,
       }),
-    ).toBe("在「敦化南路」，請向左轉");
+    ).toBe("向左轉進入「敦化南路」");
   });
 
   it("formats RIGHT without street name", () => {
@@ -93,7 +94,7 @@ describe("formatWalkStepInstruction", () => {
         streetName: "",
         bogusName: true,
       }),
-    ).toBe("請向右轉");
+    ).toBe("向右轉");
   });
 
   it("formats CONTINUE with street name", () => {
@@ -103,7 +104,7 @@ describe("formatWalkStepInstruction", () => {
         streetName: "忠孝東路",
         bogusName: false,
       }),
-    ).toBe("請繼續直行，沿「忠孝東路」前進");
+    ).toBe("沿「忠孝東路」繼續直行");
   });
 
   it("formats ELEVATOR, ENTER_STATION, EXIT_STATION", () => {
@@ -116,5 +117,23 @@ describe("formatWalkStepInstruction", () => {
     expect(
       formatWalkStepInstruction({ relativeDirection: "EXIT_STATION" }),
     ).toBe("請離開車站");
+  });
+
+  it("formats maneuver distance and the next named target", () => {
+    expect(formatFriendlyDistance(12)).toBe("馬上");
+    expect(formatFriendlyDistance(185)).toBe("約 190 公尺");
+    expect(formatFriendlyDistance(1011)).toBe("約 1.0 公里");
+    expect(formatWalkStepInstruction({
+      relativeDirection: "CONTINUE",
+      bogusName: true,
+      distanceM: 185,
+      targetStreetName: "民族西路",
+    })).toBe("直行約 190 公尺至「民族西路」");
+    expect(formatWalkStepInstruction({
+      relativeDirection: "RIGHT",
+      streetName: "民族西路",
+      bogusName: false,
+      distanceM: 1011,
+    })).toBe("向右轉進入「民族西路」，續行約 1.0 公里");
   });
 });

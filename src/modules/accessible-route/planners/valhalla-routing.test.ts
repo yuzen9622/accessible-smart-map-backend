@@ -1,22 +1,30 @@
 import { encode } from "@googlemaps/polyline-codec";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { computeValhallaRoutes } from "../../../adapters/valhalla.adapter";
+import { planOtpWalkDetailed } from "./otp-routing";
 import { decodeValhallaShape, planValhallaRoute, ValhallaRoutingError } from "./valhalla-routing";
 
 vi.mock("../../../adapters/valhalla.adapter", () => ({ computeValhallaRoutes: vi.fn() }));
+vi.mock("./otp-routing", () => ({ planOtpWalkDetailed: vi.fn() }));
 const compute = vi.mocked(computeValhallaRoutes);
+const otpWalk = vi.mocked(planOtpWalkDetailed);
+
+function resetPlannerMocks(): void {
+  vi.resetAllMocks();
+  otpWalk.mockResolvedValue({ status: "unavailable", routes: [] });
+}
 const points: [number, number][] = [[25.041, 121.567], [25.04, 121.565], [25.034, 121.564]];
 const shape = encode(points, 6);
 const normalizedTrip = {
   summary: { lengthKm: 1.5, timeSec: 125 },
   legs: [{ summary: { lengthKm: 1.5, timeSec: 125 }, shapePolyline6: shape, maneuvers: [
-    { type: 1, instruction: "沿道路出發", lengthKm: 0.5, timeSec: 40, beginShapeIndex: 0, endShapeIndex: 1, streetNames: ["信義路"] },
-    { type: 15, instruction: "左轉", lengthKm: 1, timeSec: 85, beginShapeIndex: 1, endShapeIndex: 2 },
+    { type: 1, instruction: "沿道路出發", lengthKm: 0.5, timeSec: 40, beginShapeIndex: 0, endShapeIndex: 1, streetNames: ["信義路"], stairs: false as const },
+    { type: 15, instruction: "左轉", lengthKm: 1, timeSec: 85, beginShapeIndex: 1, endShapeIndex: 2, stairs: false as const },
   ] }],
 };
 
 describe("planValhallaRoute", () => {
-  beforeEach(() => vi.resetAllMocks());
+  beforeEach(resetPlannerMocks);
   it("decodes polyline6 to lng/lat", () => expect(decodeValhallaShape(shape)[0]).toEqual([121.567, 25.041]));
 
   it("maps drive trips and alternatives without traffic fields", async () => {
@@ -33,7 +41,7 @@ describe("planValhallaRoute", () => {
     compute.mockResolvedValue({ status: "OK", trips: [normalizedTrip] });
     const routes = await planValhallaRoute({ lat: 25, lng: 121 }, { lat: 25.1, lng: 121.1 }, { travelMode: "walk" });
     expect(routes[0].legs[0]).toMatchObject({ type: "WALK" });
-    expect(routes[0].legs[0].type === "WALK" && routes[0].legs[0].steps?.[0]).toMatchObject({ instruction: "沿「信義路」出發", location: [121.567, 25.041], relativeDirection: "DEPART" });
+    expect(routes[0].legs[0].type === "WALK" && routes[0].legs[0].steps?.[0]).toMatchObject({ instruction: "沿「信義路」出發", location: [121.567, 25.041], relativeDirection: "DEPART", stairs: false });
   });
 
   it("omits whole-leg steps for out-of-bounds guidance", async () => {
@@ -64,6 +72,26 @@ const pedTripFrom = (o: LL, d: LL, timeSec = 180) => ({
   status: "OK" as const,
   trips: [{ summary: { lengthKm: 0.15, timeSec }, legs: [{ summary: { lengthKm: 0.15, timeSec }, shapePolyline6: encode([[o.lat, o.lng], [d.lat, d.lng]], 6) }] }],
 });
+const otpTripFrom = (o: LL, d: LL) => ({
+  status: "ok" as const,
+  routes: [{
+    routeId: "walk-0",
+    routeName: "步行",
+    totalMinutes: 3,
+    transferCount: 0,
+    totalWalkDistanceM: 150,
+    accessibilityHighlights: [],
+    legs: [{
+      type: "WALK" as const,
+      from: "出發地",
+      to: "目的地",
+      distanceM: 150,
+      minutesEst: 3,
+      polyline: [[o.lng, o.lat], [d.lng, d.lat]] as [number, number][],
+      a11yFacilities: [],
+    }],
+  }],
+});
 const walkLegs = (r: { legs: { type: string }[] }) => r.legs.filter((l) => l.type === "WALK");
 const near = (a: [number, number], b: LL) => Math.abs(a[0] - b.lng) < 1e-6 && Math.abs(a[1] - b.lat) < 1e-6;
 
@@ -73,10 +101,51 @@ const DSNAP: LL = { lat: 25.05, lng: 121.05 };
 const DEST: LL = { lat: 25.052, lng: 121.05 };       // ~222m from DSNAP → tail connector
 
 describe("planValhallaRoute walk access legs", () => {
-  beforeEach(() => vi.resetAllMocks());
+  beforeEach(resetPlannerMocks);
 
   const pedestrianRouter = (fn: (o: LL, d: LL) => any) =>
     compute.mockImplementation(async (p: any) => (p.costing === "pedestrian" ? fn(p.origin, p.destination) : driveTrip([[[OSNAP.lat, OSNAP.lng], [DSNAP.lat, DSNAP.lng]]])));
+
+  it("uses OTP as the primary walk connector without calling Valhalla pedestrian", async () => {
+    otpWalk.mockImplementation(async (origin, destination) =>
+      otpTripFrom(origin, destination),
+    );
+    compute.mockResolvedValue(driveTrip([[[OSNAP.lat, OSNAP.lng], [DSNAP.lat, DSNAP.lng]]]));
+
+    const [route] = await planValhallaRoute(ORIGIN, DSNAP, {
+      travelMode: "drive",
+      mode: "wheelchair",
+      avoidStairs: true,
+    });
+
+    expect(route.legs.map((leg) => leg.type)).toEqual(["WALK", "DRIVE"]);
+    expect(otpWalk).toHaveBeenCalledWith(
+      ORIGIN,
+      OSNAP,
+      { mode: "wheelchair", avoidStairs: true },
+    );
+    expect(compute.mock.calls.filter((call) => call[0].costing === "pedestrian"))
+      .toHaveLength(0);
+    expect(route.warnings).toBeUndefined();
+  });
+
+  it("marks and wheelchair-costs a Valhalla connector fallback", async () => {
+    pedestrianRouter((origin, destination) => pedTripFrom(origin, destination));
+
+    const [route] = await planValhallaRoute(ORIGIN, DSNAP, {
+      travelMode: "drive",
+      mode: "wheelchair",
+      avoidStairs: true,
+    });
+
+    const pedestrianCall = compute.mock.calls.find(
+      (call) => call[0].costing === "pedestrian",
+    );
+    expect(pedestrianCall?.[0].wheelchair).toBe(true);
+    expect(route.warnings).toContain(
+      "OTP 步行規劃暫時不可用，已降級使用 Valhalla 步行路線，指引品質可能不同",
+    );
+  });
 
   it("prepends a head WALK when origin is off the drivable network", async () => {
     pedestrianRouter((o, d) => pedTripFrom(o, d));
@@ -244,7 +313,7 @@ describe("planValhallaRoute walk access legs", () => {
 const PARK: LL = DSNAP;
 
 describe("planValhallaRoute finalWalkTarget (parking-aware tail)", () => {
-  beforeEach(() => vi.resetAllMocks());
+  beforeEach(resetPlannerMocks);
 
   it("targets finalWalkTarget instead of the routing destination", async () => {
     // origin == drive leg start → no head; routing dest == PARK == drive leg end

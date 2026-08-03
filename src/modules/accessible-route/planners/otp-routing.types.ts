@@ -43,6 +43,7 @@ export interface OtpStep {
   streetName?: string | null;
   area?: boolean | null;
   bogusName?: boolean | null;
+  feature?: { __typename?: string } | null;
 }
 export interface OtpItinerary {
   duration: number;

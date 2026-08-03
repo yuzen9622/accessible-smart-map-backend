@@ -14,6 +14,7 @@ const NavWalkStepSchema = z
     absoluteDirection: z.string().nullish(),
     streetName: z.string().optional(),
     bogusName: z.boolean().optional(),
+    stairs: z.boolean().optional(),
     distanceM: z.number().optional(),
   })
   .openapi("NavWalkStep");
@@ -52,12 +53,17 @@ const NavRouteSchema = z
 
 export const NavInstructionsRequestSchema = z
   .object({
-    route: NavRouteSchema.openapi({
+    route: NavRouteSchema.optional().openapi({
       description:
         "由 /accessible-route 回傳的路線物件（前端原樣 passthrough）；完整欄位見 AccessibleRoute。" +
         "此處只驗證產生指引時實際讀取的欄位，其餘欄位（設施陣列、評分、未來新增欄位）一律原樣容忍，" +
         "以免規劃器輸出演進時導航入口誤擋。未支援的 leg 型別與空 legs 由服務層回 400（reason 為 " +
         "UNSUPPORTED_LEG_TYPE / INVALID_ROUTE_INPUT）。",
+    }),
+    routeToken: z.string().trim().min(1).max(256).optional().openapi({
+      description:
+        "由 /accessible-route 回傳、30 分鐘內有效的 routeToken；與 route 同時提供時優先使用 token 對應的伺服器端路線。",
+      example: "M2F1...short-lived-capability",
     }),
     userHeading: z
       .number()
@@ -74,6 +80,9 @@ export const NavInstructionsRequestSchema = z
     }),
   })
   .strict()
+  .refine((body) => body.route !== undefined || body.routeToken !== undefined, {
+    message: "請提供 route 或 routeToken",
+  })
   .openapi("NavInstructionsRequest");
 
 const RelativeDirectionEnum = z
@@ -93,7 +102,9 @@ const NavInstructionSchema = z
     ]),
     bearing: z.number().nullable(),
     relativeDirection: RelativeDirectionEnum.nullable(),
-    distanceM: z.number().nullable(),
+    distanceM: z.number().nullable().openapi({
+      description: "完成本步 maneuver 後、到下一步之前要行進的距離（公尺）",
+    }),
     streetName: z.string().nullable(),
     legType: z.enum([
       "WALK",
@@ -104,7 +115,17 @@ const NavInstructionSchema = z
       "THSR",
       "TRA",
     ]),
+    stairs: z.boolean().openapi({
+      description:
+        "此逐步指引對應的步行段是否含樓梯；非步行指引固定為 false。僅代表該段含樓梯，不代表整個 distanceM 都是樓梯。",
+    }),
+    legIndex: z.number().int().nonnegative().openapi({
+      description: "此指引來源在 route.legs 中的索引",
+    }),
     polylineIndex: z.number().nullable(),
+    cumulativeDistanceM: z.number().nonnegative().openapi({
+      description: "抵達此 maneuver 起點前已累積的可量測行進距離（公尺）",
+    }),
   })
   .openapi("NavInstruction");
 
@@ -147,7 +168,7 @@ registry.registerPath({
   tags: ["Accessibility"],
   summary: "路線逐步導航指引產生",
   description:
-    "將 /accessible-route 回傳的完整路線原樣轉為可語音朗讀的逐步指引。支援 Valhalla 步行、汽車與機車 guidance；若缺少 steps 仍回傳 200 概略指引。WALK 過渡期同時回 WALK_STEPS_UNAVAILABLE 與 legacy ORS_STEPS_UNAVAILABLE，車行回 ROAD_STEPS_UNAVAILABLE。",
+    "以 /accessible-route 回傳的 routeToken（優先）或完整 route 轉為可語音朗讀的逐步指引。所有正常步行段源自 OTP；停機降級的 Valhalla 步行仍支援相同輸出。步行指引以 stairs 標示該段含樓梯並在 text 加入定性提示，不代表整段 distanceM 都是樓梯。若缺少 steps 仍回傳 200 概略指引。WALK 過渡期同時回 WALK_STEPS_UNAVAILABLE 與 legacy ORS_STEPS_UNAVAILABLE，車行回 ROAD_STEPS_UNAVAILABLE。",
   request: {
     body: {
       content: { "application/json": { schema: NavInstructionsRequestSchema } },

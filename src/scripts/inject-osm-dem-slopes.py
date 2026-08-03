@@ -184,11 +184,11 @@ else:
 
         log(f"Beginning DEM slope injection from '{input_pbf}' to '{output_pbf}'...")
         try:
-            writer = osmium.SimpleWriter(output_pbf)
+            writer = osmium.SimpleWriter(osmium.io.File(output_pbf, "pbf"))
             enricher = SlopeEnricher(writer, reader)
             
             # locations=True enables the node cache so Way nodes have coordinates
-            enricher.apply(input_pbf, locations=True)
+            enricher.apply_file(input_pbf, locations=True)
             writer.close()
             log(f"Successfully injected slope tags into {enricher.updated_count} Ways.")
         except Exception as e:

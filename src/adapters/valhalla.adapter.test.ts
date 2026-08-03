@@ -29,7 +29,10 @@ describe("computeValhallaRoutes", () => {
       locations: [{ lat: 25, lon: 121, type: "break" }, { lat: 25.1, lon: 121.1, type: "break" }],
     }), expect.any(Object));
     expect(result.status).toBe("OK");
-    if (result.status === "OK") expect(result.trips).toHaveLength(2);
+    if (result.status === "OK") {
+      expect(result.trips).toHaveLength(2);
+      expect(result.trips[0].legs[0].maneuvers?.[0].stairs).toBe(false);
+    }
   });
 
   it.each(["pedestrian", "auto", "motorcycle"] as const)(
@@ -41,6 +44,26 @@ describe("computeValhallaRoutes", () => {
       expect(body.costing_options[costing]).toEqual({ exclude_ferries: true, use_ferry: 0 });
     },
   );
+
+  it("adds wheelchair costing and a stair penalty for pedestrian fallback", async () => {
+    post.mockResolvedValue({ data: { trip } });
+    await computeValhallaRoutes({
+      origin: { lat: 25, lng: 121 },
+      destination: { lat: 25.1, lng: 121.1 },
+      costing: "pedestrian",
+      wheelchair: true,
+    });
+    expect(post.mock.calls[0][1]).toMatchObject({
+      costing_options: {
+        pedestrian: {
+          type: "wheelchair",
+          step_penalty: 600,
+          exclude_ferries: true,
+          use_ferry: 0,
+        },
+      },
+    });
+  });
 
   it("omits alternatives when waypoints exist", async () => {
     post.mockResolvedValue({ data: { trip } });

@@ -160,40 +160,70 @@ export function busRouteQueryCandidates(
 }
 
 /**
- * 將 WalkStep 的方向與路名轉為中文導航指引文字
+ * Format a maneuver's post-action distance for direct speech output.
+ * @param distanceM Distance travelled after completing the maneuver.
+ * @returns A short Traditional-Chinese distance phrase.
+ */
+export function formatFriendlyDistance(distanceM?: number | null): string {
+  if (distanceM === null || distanceM === undefined || !Number.isFinite(distanceM)) {
+    return "";
+  }
+  if (distanceM < 20) return "馬上";
+  if (distanceM < 1000) return `約 ${Math.round(distanceM / 10) * 10} 公尺`;
+  return `約 ${(distanceM / 1000).toFixed(1)} 公里`;
+}
+
+/**
+ * 將 WalkStep 的方向、路名與動作後距離轉為中文導航指引文字。
+ * @param step 正規化步行 maneuver。
+ * @returns 可直接交給 TTS 的單句指引。
  */
 export function formatWalkStepInstruction(step: {
   relativeDirection?: string | null;
   streetName?: string | null;
   bogusName?: boolean | null;
+  distanceM?: number | null;
+  targetStreetName?: string | null;
 }): string {
   const street = step.streetName?.trim() ?? "";
   const named = !step.bogusName && street !== "";
+  const target = step.targetStreetName?.trim() ?? "";
   const dir = (step.relativeDirection ?? "CONTINUE").toUpperCase();
+  const friendlyDistance = formatFriendlyDistance(step.distanceM);
+  const suffix = !friendlyDistance
+    ? ""
+    : friendlyDistance === "馬上"
+      ? "，馬上接續下一步"
+      : `，續行${friendlyDistance}`;
+  const unnamedContinue = target && friendlyDistance
+    ? friendlyDistance === "馬上"
+      ? `直行後馬上抵達「${target}」`
+      : `直行${friendlyDistance}至「${target}」`
+    : `請繼續直行${suffix}`;
   switch (dir) {
     case "DEPART":
-      return named ? `請沿「${street}」出發` : "請出發";
+      return named ? `沿「${street}」出發${suffix}` : `請出發${suffix}`;
     case "CONTINUE":
     case "STRAIGHT":
-      return named ? `請繼續直行，沿「${street}」前進` : "請繼續直行";
+      return named ? `沿「${street}」繼續直行${suffix}` : unnamedContinue;
     case "LEFT":
-      return named ? `在「${street}」，請向左轉` : "請向左轉";
+      return named ? `向左轉進入「${street}」${suffix}` : `向左轉${suffix}`;
     case "RIGHT":
-      return named ? `在「${street}」，請向右轉` : "請向右轉";
+      return named ? `向右轉進入「${street}」${suffix}` : `向右轉${suffix}`;
     case "SLIGHTLY_LEFT":
-      return "請稍向左偏";
+      return named ? `稍向左轉進入「${street}」${suffix}` : `請稍向左轉${suffix}`;
     case "SLIGHTLY_RIGHT":
-      return "請稍向右偏";
+      return named ? `稍向右轉進入「${street}」${suffix}` : `請稍向右轉${suffix}`;
     case "HARD_LEFT":
-      return "請大幅向左轉";
+      return named ? `大幅向左轉進入「${street}」${suffix}` : `請大幅向左轉${suffix}`;
     case "HARD_RIGHT":
-      return "請大幅向右轉";
+      return named ? `大幅向右轉進入「${street}」${suffix}` : `請大幅向右轉${suffix}`;
     case "UTURN_LEFT":
     case "UTURN_RIGHT":
-      return "請迴轉";
+      return `請迴轉${suffix}`;
     case "CIRCLE_CLOCKWISE":
     case "CIRCLE_COUNTERCLOCKWISE":
-      return "請進入圓環，依指示繞行";
+      return `請進入圓環，依指示繞行${suffix}`;
     case "ELEVATOR":
       return "請進入電梯";
     case "ENTER_STATION":
@@ -201,7 +231,6 @@ export function formatWalkStepInstruction(step: {
     case "EXIT_STATION":
       return "請離開車站";
     default:
-      return named ? `請沿「${street}」前進` : "請繼續前行";
+      return named ? `請沿「${street}」前進${suffix}` : `請繼續前行${suffix}`;
   }
 }
-

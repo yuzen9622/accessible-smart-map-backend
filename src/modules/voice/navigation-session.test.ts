@@ -20,7 +20,9 @@ function walkLeg(points: [number, number][], withSteps = true, from = "起點", 
     a11yFacilities: [],
     ...(withSteps ? {
       steps: points.map((location, index) => ({
-        relativeDirection: index === 0 ? "DEPART" : "CONTINUE",
+        relativeDirection: index === 0
+          ? "DEPART"
+          : index % 2 === 0 ? "LEFT" : "RIGHT",
         absoluteDirection: null,
         streetName: `道路${index}`,
         bogusName: false,
@@ -104,7 +106,7 @@ describe("NavigationSession pure domain state", () => {
     expect(Object.keys(firstStep).sort()).toEqual(["distanceM", "index", "instruction", "isTransit", "legType"].sort());
     expect(nav.takeNextSpeech()).toBeNull();
     nav.onPosition(pos(start));
-    expect(nav.takeNextSpeech()).toBe("步行指引0");
+    expect(nav.takeNextSpeech()).toBe("沿「道路0」出發，續行約 20 公尺，方位約 90 度（東）");
   });
 
   it("advances WALK targets, flushes null arrive text, then emits arrived + stop", () => {
@@ -300,8 +302,22 @@ describe("NavigationSession pure domain state", () => {
       rest.push(speech);
       nav.onTurnComplete();
     }
-    expect(rest.join(" ").match(/步行指引0/g)?.length).toBe(10);
+    expect(rest.join(" ").split(first).length - 1).toBe(10);
     expect(rest.length).toBeLessThanOrEqual(8);
+  });
+
+  it("keeps a terminal geofence when straight fragments are merged", () => {
+    const points = [coord(121), coord(121.0005), coord(121.001)];
+    const leg = walkLeg(points);
+    leg.steps![1].relativeDirection = "CONTINUE";
+    leg.steps![2].relativeDirection = "CONTINUE";
+    const nav = new NavigationSession();
+    nav.armRoute(route([leg]));
+
+    const started = nav.start(pos(points[0]));
+    expect(started.events.some((event) => event.type === "nav.arrived")).toBe(false);
+    const finished = nav.onPosition(pos(points[2]));
+    expect(finished.events.some((event) => event.type === "nav.arrived")).toBe(true);
   });
 
   it("keeps active start/stop/cancel idempotent and ignores work after dispose", () => {
