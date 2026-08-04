@@ -24,6 +24,10 @@ import { taipeiHHmm, taipeiYmdDash } from "../../../config/taipei-time";
 import { metroLineCode } from "../../../config/transit";
 import { ROUTE_WARNING } from "../../../constants/messages";
 import { walkSpeedMps } from "../scoring";
+import {
+  attachInternalSchedule,
+  retainEarliestFutureRoute,
+} from "../route-schedule";
 import type {
   ITdxMetroStation,
   ITdxTrainStation,
@@ -61,7 +65,22 @@ const OTP_SEARCH_WINDOW_WIDE_S = Number(
   process.env.OTP_SEARCH_WINDOW_WIDE_S ?? 28800,
 );
 const OTP_MIN_DISTINCT_ROUTES = 3;
+const OTP_CONTINUATION_MAX_HOPS = 2;
 
+interface OtpRoutingError {
+  code: string;
+}
+
+interface OtpPlanAttempt {
+  itineraries: OtpItinerary[];
+  routingErrors: OtpRoutingError[];
+  anchor: Date;
+}
+
+const OTP_TERMINAL_ROUTING_ERRORS = new Set([
+  "LOCATION_NOT_FOUND",
+  "OUTSIDE_BOUNDS",
+]);
 const otpAgent = new http.Agent({ keepAlive: true });
 const otpAgentHttps = new https.Agent({ keepAlive: true });
 
@@ -267,6 +286,7 @@ query Plan(
         }
       }
     }
+    routingErrors { code }
   }
 }`;
 
@@ -278,7 +298,7 @@ async function queryOtpPlan(
   walkSpeed: number,
   numItineraries: number,
   searchWindowSec: number,
-): Promise<OtpItinerary[]> {
+): Promise<OtpPlanAttempt> {
   const baseUrl = process.env.OTP_BASE_URL ?? "http://localhost:8080";
   const response = await otpClient.post(`${baseUrl}/otp/routers/default/index/graphql`, {
     query: PLAN_QUERY,
@@ -296,13 +316,22 @@ async function queryOtpPlan(
     },
   });
   const json = response.data as {
-    data?: { plan?: { itineraries?: OtpItinerary[] } };
+    data?: {
+      plan?: {
+        itineraries?: OtpItinerary[];
+        routingErrors?: OtpRoutingError[];
+      };
+    };
     errors?: { message?: string }[];
   };
   if (json.errors?.length) {
     throw new Error(`OTP GraphQL: ${json.errors[0]?.message ?? "unknown"}`);
   }
-  return json.data?.plan?.itineraries ?? [];
+  return {
+    itineraries: json.data?.plan?.itineraries ?? [],
+    routingErrors: json.data?.plan?.routingErrors ?? [],
+    anchor: departure,
+  };
 }
 
 const WALK_QUERY = `
@@ -767,7 +796,7 @@ function walkLegFrom(leg: OtpLeg, isFirst: boolean, isLast: boolean): WalkLeg {
 
 function transitLegFrom(
   leg: OtpLeg,
-  estimatedWaitMinutes: number,
+  estimatedWaitMinutes: number | undefined,
   directions: Map<string, 0 | 1>,
 ): BusLeg | MetroLeg | ThsrLeg | TraLeg {
   const routeId = stripFeedId(leg.route?.gtfsId);
@@ -823,7 +852,7 @@ function transitLegFrom(
       departureTime,
       arrivalTime,
       waitInfo,
-      estimatedWaitMinutes,
+      ...(estimatedWaitMinutes === undefined ? {} : { estimatedWaitMinutes }),
       polyline,
       departureStationA11y: [],
       arrivalStationA11y: [],
@@ -846,7 +875,7 @@ function transitLegFrom(
         arrivalTime,
         rideMinutes,
         waitInfo,
-        estimatedWaitMinutes,
+        ...(estimatedWaitMinutes === undefined ? {} : { estimatedWaitMinutes }),
         polyline,
         departureStationA11y: [],
         arrivalStationA11y: [],
@@ -866,7 +895,7 @@ function transitLegFrom(
       arrivalTime,
       rideMinutes,
       waitInfo,
-      estimatedWaitMinutes,
+      ...(estimatedWaitMinutes === undefined ? {} : { estimatedWaitMinutes }),
       polyline,
       departureStationA11y: [],
       arrivalStationA11y: [],
@@ -885,7 +914,7 @@ function transitLegFrom(
     departureTime,
     arrivalTime,
     waitInfo,
-    estimatedWaitMinutes,
+    ...(estimatedWaitMinutes === undefined ? {} : { estimatedWaitMinutes }),
     direction,
     polyline,
     departureStopA11y: [],
@@ -895,13 +924,11 @@ function transitLegFrom(
 }
 
 /**
- * An itinerary is usable iff it has ≥1 transit leg, every transit leg rides a
- * supported mode, and its transfer count (transit legs − 1) is within
- * maxTransfers, and drops any itinerary containing a transit leg whose mode is
- * outside SUPPORTED_TRANSIT_MODES (e.g. AIRPLANE/FERRY). This is the final
- * output filter; the separate stop-snap retry decision is made by
- * hasUsableTransit in planOtpRoute (which checks leg presence and the transfer
- * cap only, not the mode allowlist).
+ * A walk-only itinerary remains usable as the transit planner's fallback. An
+ * itinerary with transit is usable only when every transit mode is supported
+ * and its transfer count is within maxTransfers. planOtpRoute separately stops
+ * temporal continuation only for usable transit, so a saved walk fallback does
+ * not suppress the bounded search for later service.
  *
  * @param it The OTP itinerary to test.
  * @param maxTransfers The transfer cap, or undefined for no cap.
@@ -909,6 +936,9 @@ function transitLegFrom(
  */
 function itineraryUsable(it: OtpItinerary, maxTransfers?: number): boolean {
   const transit = it.legs.filter(isTransitLeg);
+  if (!transit.length) {
+    return it.legs.length > 0 && it.legs.every((leg) => leg.mode === "WALK");
+  }
   if (transit.some((l) => !SUPPORTED_TRANSIT_MODES.has(l.mode))) return false;
   if (maxTransfers !== undefined && transit.length - 1 > maxTransfers)
     return false;
@@ -920,10 +950,29 @@ function isTimeout(err: unknown): boolean {
   return code === "ECONNABORTED" || code === "ETIMEDOUT";
 }
 
+function hasTerminalRoutingError(attempt: OtpPlanAttempt): boolean {
+  return attempt.routingErrors.some((error) =>
+    OTP_TERMINAL_ROUTING_ERRORS.has(error.code),
+  );
+}
+
 /**
  * Plan transit routes via the OTP2 sidecar. Output is AccessibleRoute-compatible
  * and un-enriched (no a11y arrays, no highlights) — finalizeRoutes() handles
- * scoring, enrichment and overlays downstream. Fail-soft: [] on any error.
+ * scoring, enrichment and overlays downstream. A continuation timeout stops the
+ * ladder and records the invocation's single breaker failure; a continuation
+ * non-timeout error stops without touching the breaker. Primary and snap errors,
+ * plus wide timeouts, retain their existing accounting, while recordPlanFailure
+ * guarantees at most one recorded failure per invocation. totalMinutes remains
+ * OTP itinerary duration plus snap walks and excludes the wait from the original
+ * query to a future continuation. Such a route keeps schedule waitInfo but omits
+ * the first transit leg's estimatedWaitMinutes. The continuation gate requires
+ * only that transit remain unusable and no terminal routing error has appeared;
+ * positive no-service evidence is deliberately unnecessary because OTP can
+ * return error-free but unusable itineraries. The named two-hop cap bounds this
+ * rule even when a walk-only fallback exists. Each continuation anchor queries
+ * the original coordinates first and retries the same anchor at snapped
+ * endpoints only when original transit is still unusable.
  *
  * @param origin The [lat, lng] origin.
  * @param destination The [lat, lng] destination.
@@ -951,11 +1000,15 @@ export async function planOtpRoute(
     planBreaker.recordFailure();
   };
 
-  let firstItineraries: OtpItinerary[] = [];
+  let firstAttempt: OtpPlanAttempt = {
+    itineraries: [],
+    routingErrors: [],
+    anchor: departure,
+  };
   let primarySucceeded = false;
   let primaryTimedOut = false;
   try {
-    firstItineraries = await queryOtpPlan(
+    firstAttempt = await queryOtpPlan(
       origin,
       destination,
       departure,
@@ -984,24 +1037,52 @@ export async function planOtpRoute(
     );
     return [];
   }
-  let itineraries = firstItineraries;
+  let itineraries = firstAttempt.itineraries;
+  let selectedAttempt = firstAttempt;
   let effectiveWindowSec = OTP_SEARCH_WINDOW_S;
+  let originalSearchWindowSec = primarySucceeded ? OTP_SEARCH_WINDOW_S : 0;
+  let sawTerminalRoutingError =
+    primarySucceeded && hasTerminalRoutingError(firstAttempt);
 
   const maxTransfers = opts?.maxTransfers;
   let snapPre: WalkLeg | null = null;
   let snapPost: WalkLeg | null = null;
+  let walkFallbackAttempt: OtpPlanAttempt | null = null;
+  let walkFallbackItineraries: OtpItinerary[] = [];
 
   const hasUsableTransit = (its: OtpItinerary[]) =>
-    its.some((it) => {
-      const transit = it.legs.filter(isTransitLeg);
-      return (
-        transit.length > 0 &&
-        (maxTransfers === undefined || transit.length - 1 <= maxTransfers)
-      );
-    });
+    its.some(
+      (it) =>
+        it.legs.some(isTransitLeg) && itineraryUsable(it, maxTransfers),
+    );
+
+  const rememberOriginalWalkFallback = (attempt: OtpPlanAttempt) => {
+    if (walkFallbackItineraries.length) return;
+    const walkOnly = attempt.itineraries.filter(
+      (it) =>
+        !it.legs.some(isTransitLeg) && itineraryUsable(it, maxTransfers),
+    );
+    if (!walkOnly.length) return;
+    walkFallbackAttempt = attempt;
+    walkFallbackItineraries = walkOnly;
+  };
+
+  const observeAttempt = (attempt: OtpPlanAttempt) => {
+    sawTerminalRoutingError ||= hasTerminalRoutingError(attempt);
+  };
 
   const hasBusLeg = (its: OtpItinerary[]) =>
     its.some((it) => it.legs.some((l) => l.mode === "BUS"));
+
+  if (primarySucceeded) rememberOriginalWalkFallback(firstAttempt);
+
+  if (sawTerminalRoutingError) {
+    console.log(
+      "[route-timing] otp",
+      JSON.stringify({ ...tm, snapped: false, routes: 0 }),
+    );
+    return [];
+  }
 
   if (primarySucceeded) {
     const distinctRouteSignatures = new Set(
@@ -1018,7 +1099,7 @@ export async function planOtpRoute(
     if (distinctRouteSignatures < OTP_MIN_DISTINCT_ROUTES) {
       const tWide = Date.now();
       try {
-        itineraries = await queryOtpPlan(
+        const wideAttempt = await queryOtpPlan(
           origin,
           destination,
           departure,
@@ -1027,7 +1108,17 @@ export async function planOtpRoute(
           OTP_NUM_ITINERARIES_WIDE,
           OTP_SEARCH_WINDOW_WIDE_S,
         );
+        observeAttempt(wideAttempt);
+        rememberOriginalWalkFallback(wideAttempt);
+        if (
+          hasUsableTransit(wideAttempt.itineraries) ||
+          !hasUsableTransit(itineraries)
+        ) {
+          itineraries = wideAttempt.itineraries;
+          selectedAttempt = wideAttempt;
+        }
         effectiveWindowSec = OTP_SEARCH_WINDOW_WIDE_S;
+        originalSearchWindowSec = OTP_SEARCH_WINDOW_WIDE_S;
         planBreaker.recordSuccess();
         tm.otpWide = Date.now() - tWide;
       } catch (err) {
@@ -1047,11 +1138,24 @@ export async function planOtpRoute(
     }
   }
 
+  if (!hasUsableTransit(itineraries) && sawTerminalRoutingError) {
+    console.log(
+      "[route-timing] otp",
+      JSON.stringify({ ...tm, snapped: false, routes: 0 }),
+    );
+    return [];
+  }
+
   const straightDistM = haversineCoords(
     [origin.lng, origin.lat],
     [destination.lng, destination.lat],
   );
   const needBusSnap = !hasUsableTransit(itineraries) || (straightDistM <= 3500 && !hasBusLeg(itineraries));
+  let snappedOrigin: { lat: number; lng: number } | null = null;
+  let snappedDestination: { lat: number; lng: number } | null = null;
+  let pendingSnapPre: WalkLeg | null = null;
+  let pendingSnapPost: WalkLeg | null = null;
+  let continuationAllowed = true;
 
   if (needBusSnap) {
     const tSnap = Date.now();
@@ -1062,39 +1166,45 @@ export async function planOtpRoute(
     ]);
     tm.snapLookup = Date.now() - tSnap;
     if (originSnap || destSnap) {
+      snappedOrigin = originSnap ?? origin;
+      snappedDestination = destSnap ?? destination;
+      if (originSnap) {
+        pendingSnapPre = snapWalkLeg(
+          { ...origin, name: "出發地" },
+          originSnap,
+          mode,
+        );
+      }
+      if (destSnap) {
+        pendingSnapPost = snapWalkLeg(
+          destSnap,
+          { ...destination, name: "目的地" },
+          mode,
+        );
+      }
       const tRetry = Date.now();
       try {
-        const retryItineraries = await queryOtpPlan(
-          originSnap ?? origin,
-          destSnap ?? destination,
+        const retryAttempt = await queryOtpPlan(
+          snappedOrigin,
+          snappedDestination,
           departure,
           wheelchair,
           walkSpeed,
           OTP_NUM_ITINERARIES,
           effectiveWindowSec,
         );
+        observeAttempt(retryAttempt);
         tm.otpRetry = Date.now() - tRetry;
-        if (hasUsableTransit(retryItineraries)) {
+        if (hasUsableTransit(retryAttempt.itineraries)) {
           if (!hasUsableTransit(itineraries)) {
-            itineraries = retryItineraries;
+            itineraries = retryAttempt.itineraries;
+            selectedAttempt = retryAttempt;
           } else {
             // Append bus itineraries found via bus stop snap
-            itineraries = [...itineraries, ...retryItineraries];
+            itineraries = [...itineraries, ...retryAttempt.itineraries];
           }
-          if (originSnap) {
-            snapPre = snapWalkLeg(
-              { ...origin, name: "出發地" },
-              originSnap,
-              mode,
-            );
-          }
-          if (destSnap) {
-            snapPost = snapWalkLeg(
-              destSnap,
-              { ...destination, name: "目的地" },
-              mode,
-            );
-          }
+          snapPre = pendingSnapPre;
+          snapPost = pendingSnapPost;
           console.info(
             `[otp-routing] transit plan recovered by stop snap` +
               (originSnap ? ` origin→${originSnap.name}` : "") +
@@ -1103,6 +1213,7 @@ export async function planOtpRoute(
         }
       } catch (err) {
         recordPlanFailure();
+        continuationAllowed = false;
         if (isTimeout(err)) {
           tm.primaryTimedOut = 1;
           console.warn("[otp-routing] snap retry timed out", err);
@@ -1115,6 +1226,110 @@ export async function planOtpRoute(
         console.warn("[otp-routing] snap retry failed, falling back to walk-only", err);
       }
     }
+  }
+
+  if (!hasUsableTransit(itineraries) && sawTerminalRoutingError) {
+    console.log(
+      "[route-timing] otp",
+      JSON.stringify({ ...tm, snapped: false, routes: 0 }),
+    );
+    return [];
+  }
+
+  let continuationHops = 0;
+  let nextContinuationAnchor = new Date(
+    departure.getTime() + originalSearchWindowSec * 1000,
+  );
+  while (
+    continuationAllowed &&
+    !hasUsableTransit(itineraries) &&
+    !sawTerminalRoutingError &&
+    continuationHops < OTP_CONTINUATION_MAX_HOPS
+  ) {
+    continuationHops++;
+    const nextAnchor = nextContinuationAnchor;
+    let originalContinuationAttempt: OtpPlanAttempt;
+    try {
+      originalContinuationAttempt = await queryOtpPlan(
+        origin,
+        destination,
+        nextAnchor,
+        wheelchair,
+        walkSpeed,
+        OTP_NUM_ITINERARIES_WIDE,
+        OTP_SEARCH_WINDOW_WIDE_S,
+      );
+      observeAttempt(originalContinuationAttempt);
+      rememberOriginalWalkFallback(originalContinuationAttempt);
+      planBreaker.recordSuccess();
+      if (sawTerminalRoutingError) break;
+      if (hasUsableTransit(originalContinuationAttempt.itineraries)) {
+        itineraries = originalContinuationAttempt.itineraries;
+        selectedAttempt = originalContinuationAttempt;
+        snapPre = null;
+        snapPost = null;
+        break;
+      }
+    } catch (err) {
+      if (isTimeout(err)) {
+        recordPlanFailure();
+        console.warn("[otp-routing] continuation query timed out", err);
+      } else {
+        console.warn("[otp-routing] continuation query failed", err);
+      }
+      break;
+    }
+
+    if (snappedOrigin && snappedDestination) {
+      try {
+        const snappedContinuationAttempt = await queryOtpPlan(
+          snappedOrigin,
+          snappedDestination,
+          nextAnchor,
+          wheelchair,
+          walkSpeed,
+          OTP_NUM_ITINERARIES_WIDE,
+          OTP_SEARCH_WINDOW_WIDE_S,
+        );
+        observeAttempt(snappedContinuationAttempt);
+        planBreaker.recordSuccess();
+        if (sawTerminalRoutingError) break;
+        if (hasUsableTransit(snappedContinuationAttempt.itineraries)) {
+          itineraries = snappedContinuationAttempt.itineraries;
+          selectedAttempt = snappedContinuationAttempt;
+          snapPre = pendingSnapPre;
+          snapPost = pendingSnapPost;
+          break;
+        }
+      } catch (err) {
+        if (isTimeout(err)) {
+          recordPlanFailure();
+          console.warn("[otp-routing] continuation snap query timed out", err);
+        } else {
+          console.warn("[otp-routing] continuation snap query failed", err);
+        }
+        break;
+      }
+    }
+
+    nextContinuationAnchor = new Date(
+      nextAnchor.getTime() + OTP_SEARCH_WINDOW_WIDE_S * 1000,
+    );
+  }
+
+  if (!hasUsableTransit(itineraries) && sawTerminalRoutingError) {
+    console.log(
+      "[route-timing] otp",
+      JSON.stringify({ ...tm, snapped: false, routes: 0 }),
+    );
+    return [];
+  }
+
+  if (!hasUsableTransit(itineraries) && walkFallbackAttempt) {
+    itineraries = walkFallbackItineraries;
+    selectedAttempt = walkFallbackAttempt;
+    snapPre = null;
+    snapPost = null;
   }
 
   const allTripIds = [
@@ -1132,6 +1347,8 @@ export async function planOtpRoute(
   tm.directions = Date.now() - tDir;
 
   const out: AccessibleRoute[] = [];
+  const isFutureScheduled =
+    selectedAttempt.anchor.getTime() > departure.getTime();
   for (const [i, it] of itineraries.entries()) {
     if (!itineraryUsable(it, maxTransfers)) continue;
     const transitOtpLegs = it.legs.filter(isTransitLeg);
@@ -1139,6 +1356,7 @@ export async function planOtpRoute(
     const legs: (WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg)[] = [];
     const transitLegs: (BusLeg | MetroLeg | ThsrLeg | TraLeg)[] = [];
     let clockMs = departure.getTime();
+    let transitLegIndex = 0;
     for (const [j, leg] of it.legs.entries()) {
       if (!isTransitLeg(leg)) {
         if ((leg.distance ?? 0) > 0) {
@@ -1154,7 +1372,14 @@ export async function planOtpRoute(
         0,
         Math.round((leg.startTime - clockMs) / 60000),
       );
-      const mapped = transitLegFrom(leg, waitMinutes, directions);
+      const mapped = transitLegFrom(
+        leg,
+        isFutureScheduled && transitLegIndex === 0
+          ? undefined
+          : waitMinutes,
+        directions,
+      );
+      transitLegIndex++;
       clockMs = leg.endTime;
       legs.push(mapped);
       transitLegs.push(mapped);
@@ -1172,10 +1397,10 @@ export async function planOtpRoute(
           .join(" → ")
       : "步行路線";
 
-  const queryDate = ymdDash(departure);
-  const firstDepDate = transitOtpLegs.length > 0
-    ? ymdDash(new Date(transitOtpLegs[0].startTime))
-    : queryDate;
+    const queryDate = ymdDash(departure);
+    const firstDepDate = transitOtpLegs.length > 0
+      ? ymdDash(new Date(transitOtpLegs[0].startTime))
+      : queryDate;
 
     if (snapPre) legs.unshift({ ...snapPre });
     if (snapPost) legs.push({ ...snapPost });
@@ -1186,7 +1411,14 @@ export async function planOtpRoute(
       ? (stripFeedId(transitOtpLegs[0].trip?.gtfsId) || "unknown")
       : "walk";
 
-    out.push({
+    const scheduledDepartureTime =
+      it.legs[0]?.startTime ??
+      transitOtpLegs[0]?.startTime ??
+      selectedAttempt.anchor.getTime();
+    const scheduledEndTime =
+      (it.legs[it.legs.length - 1]?.endTime ?? scheduledDepartureTime) +
+      (snapPost?.minutesEst ?? 0) * 60_000;
+    const route = {
       routeId: `otp-${i}-${tripIdToken}`,
       routeName,
       totalMinutes: Math.max(1, Math.round(it.duration / 60)) + snapMinutes,
@@ -1194,9 +1426,16 @@ export async function planOtpRoute(
       legs,
       accessibilityHighlights: [],
       ...(firstDepDate !== queryDate ? { departureDate: firstDepDate } : {}),
-    });
+    } satisfies AccessibleRoute;
+    out.push(
+      attachInternalSchedule(
+        route,
+        scheduledDepartureTime,
+        scheduledEndTime,
+        isFutureScheduled,
+      ),
+    );
   }
-
 
   console.log(
     "[route-timing] otp",
@@ -1207,5 +1446,9 @@ export async function planOtpRoute(
     }),
   );
   const ordered = wheelchair ? rankByStairs(out) : out;
-  return ordered.slice(0, opts?.limit ?? OTP_NUM_ITINERARIES_WIDE);
+  return retainEarliestFutureRoute(
+    ordered,
+    out,
+    opts?.limit ?? OTP_NUM_ITINERARIES_WIDE,
+  );
 }

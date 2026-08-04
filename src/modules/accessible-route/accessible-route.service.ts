@@ -29,6 +29,10 @@ import { buildAccessibilitySummary } from "./planners/route-a11y";
 import { getWeatherAndAirQuality } from "../environment/environment.service";
 import { haversineMeters } from "../../utils/geo";
 import { attachRouteTokens } from "./route-token.service";
+import {
+  attachInternalSchedule,
+  retainEarliestFutureRoute,
+} from "./route-schedule";
 
 import type {
   AccessibilityMode,
@@ -436,7 +440,25 @@ function collapseLogicalDuplicates(
     }
     const key = transitLegs.map(logicalLegKey).join("::");
     const prev = best.get(key);
-    if (!prev || r.totalMinutes < prev.totalMinutes) best.set(key, r);
+    if (!prev) {
+      best.set(key, r);
+      continue;
+    }
+    const prevFuture =
+      prev._isFutureScheduled &&
+      typeof prev._scheduledDepartureTime === "number";
+    const routeFuture =
+      r._isFutureScheduled &&
+      typeof r._scheduledDepartureTime === "number";
+    if (
+      (routeFuture &&
+        (!prevFuture ||
+          (r._scheduledDepartureTime as number) <
+            (prev._scheduledDepartureTime as number))) ||
+      (!routeFuture && !prevFuture && r.totalMinutes < prev.totalMinutes)
+    ) {
+      best.set(key, r);
+    }
   }
   return [...best.values(), ...walkOnly];
 }
@@ -562,10 +584,14 @@ async function finalizeRoutes(
   // Stage 1: cheap accessibility-aware proxy pre-rank (no OSM data) → top-N.
   const candidates = collapseLogicalDuplicates(deduplicateRoutes(routes));
   const proxyRanked = prerankByProxy(candidates, mode);
-  const topN = (constraints.avoidStairs
+  const proxyEligible = constraints.avoidStairs
     ? prioritizeStepFreeRoutes(proxyRanked)
-    : proxyRanked
-  ).slice(0, PRERANK_N);
+    : proxyRanked;
+  const topN = retainEarliestFutureRoute(
+    proxyEligible,
+    proxyEligible,
+    PRERANK_N,
+  );
   t.prerank = Date.now() - t0;
   t0 = Date.now();
   // Stage 2: a11y enrichment (Mongo) BEFORE scoring, so facility data is real
@@ -598,7 +624,11 @@ async function finalizeRoutes(
   t.exclude = Date.now() - t0;
   t0 = Date.now();
   // Stage 4: score with the enriched facility data + rank → final top-3.
-  const top = scoreAndRank(eligible, mode, env).slice(0, 3);
+  const top = retainEarliestFutureRoute(
+    scoreAndRank(eligible, mode, env),
+    eligible,
+    3,
+  );
   t.rank = Date.now() - t0;
   t0 = Date.now();
   try {
@@ -1171,15 +1201,37 @@ function mergeAdjacentWalkLegs(
   return out;
 }
 
+/**
+ * Combine sequential transit segments while keeping movement duration separate
+ * from service-wait time and propagating the first segment's public date plus
+ * the complete journey's internal absolute schedule.
+ *
+ * @param segments Ordered routes selected for each waypoint segment.
+ * @returns One combined route with merged adjacent walk legs.
+ */
 function combineSegments(segments: AccessibleRoute[]): AccessibleRoute {
-  return {
+  const combined = {
     routeId: `combined-${segments.map((s) => s.routeId).join("-")}`,
     routeName: segments.map((s) => s.routeName).join(" → "),
     totalMinutes: segments.reduce((sum, s) => sum + s.totalMinutes, 0),
     transferCount: segments.reduce((sum, s) => sum + s.transferCount, 0),
     legs: mergeAdjacentWalkLegs(segments.flatMap((s) => s.legs)),
     accessibilityHighlights: segments.flatMap((s) => s.accessibilityHighlights ?? []),
-  };
+    ...(segments[0]?.departureDate
+      ? { departureDate: segments[0].departureDate }
+      : {}),
+  } satisfies AccessibleRoute;
+  const departureTime = segments[0]?._scheduledDepartureTime;
+  const endTime = segments[segments.length - 1]?._scheduledEndTime;
+  if (typeof departureTime !== "number" || typeof endTime !== "number") {
+    return combined;
+  }
+  return attachInternalSchedule(
+    combined,
+    departureTime,
+    endTime,
+    segments.some((segment) => segment._isFutureScheduled),
+  );
 }
 
 type WalkSegmentsResult =
@@ -1333,7 +1385,11 @@ export async function findAccessibleRoutes(
     if (!res.length) return [];
     const best = res[0];
     segments.push(best);
-    cursor = new Date(cursor.getTime() + best.totalMinutes * 60_000);
+    const segmentEndTime =
+      typeof best._scheduledEndTime === "number"
+        ? best._scheduledEndTime
+        : cursor.getTime() + best.totalMinutes * 60_000;
+    cursor = new Date(segmentEndTime);
   }
   console.log(
     "[route-timing] planners",

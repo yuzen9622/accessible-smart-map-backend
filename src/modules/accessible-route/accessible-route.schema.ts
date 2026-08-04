@@ -272,9 +272,10 @@ const BusLegSchema = z
       description: "HH:mm 預定到站時間（未知時省略）",
     }),
     waitInfo: WaitInfoSchema,
-    estimatedWaitMinutes: z.number().openapi({
+    estimatedWaitMinutes: z.number().optional().openapi({
       example: 6,
-      description: "數值化的等待估計（分鐘），保留供向後相容與排序計算",
+      description:
+        "數值化的等待估計（分鐘）；未來排定路線的首段省略，應改讀 departureDate 與 departureTime",
     }),
     direction: z
       .union([z.literal(0), z.literal(1)])
@@ -324,7 +325,7 @@ const MetroLegSchema = z
       description: "HH:mm 預定到站時間（未知時省略）",
     }),
     waitInfo: WaitInfoSchema,
-    estimatedWaitMinutes: z.number().openapi({ example: 3 }),
+    estimatedWaitMinutes: z.number().optional().openapi({ example: 3 }),
     polyline: z.array(z.tuple([z.number(), z.number()])).openapi({
       example: [
         [121.567, 25.041],
@@ -353,7 +354,7 @@ const ThsrLegSchema = z
     arrivalTime: z.string().openapi({ example: "09:47", description: "HH:mm" }),
     rideMinutes: z.number().openapi({ example: 47 }),
     waitInfo: WaitInfoSchema,
-    estimatedWaitMinutes: z.number().openapi({ example: 8 }),
+    estimatedWaitMinutes: z.number().optional().openapi({ example: 8 }),
     polyline: z.array(z.tuple([z.number(), z.number()])).openapi({
       example: [
         [121.516, 25.013],
@@ -387,7 +388,7 @@ const TraLegSchema = z
     arrivalTime: z.string().openapi({ example: "09:02", description: "HH:mm" }),
     rideMinutes: z.number().openapi({ example: 32 }),
     waitInfo: WaitInfoSchema,
-    estimatedWaitMinutes: z.number().openapi({ example: 12 }),
+    estimatedWaitMinutes: z.number().optional().openapi({ example: 12 }),
     polyline: z.array(z.tuple([z.number(), z.number()])).openapi({
       example: [
         [121.516, 25.013],

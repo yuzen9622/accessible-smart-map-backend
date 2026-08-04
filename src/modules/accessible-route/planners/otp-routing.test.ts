@@ -45,19 +45,26 @@ import {
 const origin = { lat: 25.041, lng: 121.565 };
 const destination = { lat: 25.033, lng: 121.564 };
 
-const okResp = (itineraries: unknown[]) => ({
-  data: { data: { plan: { itineraries } } },
+const okResp = (
+  itineraries: unknown[],
+  routingErrors: { code: string }[] = [],
+) => ({
+  data: { data: { plan: { itineraries, routingErrors } } },
 });
 
-const transitItinerary = (routeName: string) => ({
-  duration: 600,
+const transitItinerary = (
+  routeName: string,
+  startTime = 1_000,
+  durationSec = 600,
+) => ({
+  duration: durationSec,
   walkDistance: 0,
   legs: [
     {
       mode: "BUS",
-      startTime: 1_000,
-      endTime: 601_000,
-      duration: 600,
+      startTime,
+      endTime: startTime + durationSec * 1_000,
+      duration: durationSec,
       distance: 5_000,
       from: {
         name: "起站",
@@ -106,6 +113,16 @@ const walkOnlyItinerary = () => ({
   ],
 });
 
+const overTransferItinerary = (startTime: number) => {
+  const first = transitItinerary("SNAP_BAD_1", startTime, 600) as any;
+  const second = transitItinerary("SNAP_BAD_2", startTime + 660_000, 600) as any;
+  return {
+    duration: 1_260,
+    walkDistance: 0,
+    legs: [...first.legs, ...second.legs],
+  };
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   busLean.mockResolvedValue([]);
@@ -144,6 +161,10 @@ describe("OTP PLAN_QUERY searchWindow", () => {
   it("declares and passes searchWindow", () => {
     expect(PLAN_QUERY).toContain("$searchWindow: Long");
     expect(PLAN_QUERY).toContain("searchWindow: $searchWindow");
+  });
+
+  it("requests routing error codes used by the continuation ladder", () => {
+    expect(PLAN_QUERY).toContain("routingErrors { code }");
   });
 
   it("requests and maps step.feature StairsUse on transit-plan walk legs", async () => {
@@ -244,6 +265,270 @@ describe("planOtpRoute search windows and timeouts", () => {
     });
   });
 
+  it("keeps a usable narrow route when the wide result is empty", async () => {
+    post
+      .mockResolvedValueOnce(okResp([transitItinerary("R1")]))
+      .mockResolvedValueOnce(okResp([]));
+
+    const routes = await planOtpRoute(origin, destination);
+
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(routes.map((route) => route.routeName)).toEqual(["R1"]);
+  });
+
+  it("continues to the next service day and preserves absolute schedule semantics", async () => {
+    const departureTime = new Date("2030-01-01T13:51:00.000Z");
+    const scheduledDeparture = new Date("2030-01-01T22:20:00.000Z").getTime();
+    const noTransit = [{ code: "NO_TRANSIT_CONNECTION_IN_SEARCH_WINDOW" }];
+    post
+      .mockResolvedValueOnce(okResp([], noTransit))
+      .mockResolvedValueOnce(okResp([], noTransit))
+      .mockResolvedValueOnce(
+        okResp([transitItinerary("NEXT", scheduledDeparture, 2_400)]),
+      );
+
+    const routes = await planOtpRoute(origin, destination, { departureTime });
+
+    expect(post).toHaveBeenCalledTimes(3);
+    expect(post.mock.calls[2][1].variables).toMatchObject({
+      date: "2030-01-02",
+      time: "05:51",
+      searchWindow: 28800,
+    });
+    expect(routes[0].departureDate).toBe("2030-01-02");
+    expect(routes[0]._scheduledDepartureTime).toBe(scheduledDeparture);
+    expect(routes[0]._scheduledEndTime).toBe(scheduledDeparture + 2_400_000);
+    expect(routes[0]._isFutureScheduled).toBe(true);
+    expect(routes[0].legs[0]).toMatchObject({
+      type: "BUS",
+      departureTime: "06:20",
+      waitInfo: { time: "06:20", source: "schedule" },
+    });
+    expect(routes[0].legs[0]).not.toHaveProperty("estimatedWaitMinutes");
+    expect(JSON.stringify(routes[0])).not.toContain("_scheduledDepartureTime");
+  });
+
+  it("continues later on the same day without adding departureDate", async () => {
+    const departureTime = new Date("2029-12-31T18:00:00.000Z");
+    const scheduledDeparture = new Date("2030-01-01T06:00:00.000Z").getTime();
+    const noTransit = [{ code: "NO_TRANSIT_CONNECTION_IN_SEARCH_WINDOW" }];
+    post
+      .mockResolvedValueOnce(okResp([], noTransit))
+      .mockResolvedValueOnce(okResp([], noTransit))
+      .mockResolvedValueOnce(
+        okResp([transitItinerary("LATER", scheduledDeparture, 1_800)]),
+      );
+
+    const routes = await planOtpRoute(origin, destination, { departureTime });
+
+    expect(post.mock.calls[2][1].variables).toMatchObject({
+      date: "2030-01-01",
+      time: "10:00",
+    });
+    expect(routes[0].departureDate).toBeUndefined();
+    expect(routes[0]._scheduledDepartureTime).toBe(scheduledDeparture);
+    expect(routes[0].legs[0]).toMatchObject({
+      type: "BUS",
+      departureTime: "14:00",
+    });
+    expect(routes[0].legs[0]).not.toHaveProperty("estimatedWaitMinutes");
+  });
+
+  it("retains the earliest continuation when stairs ranking would drop it", async () => {
+    const departureTime = new Date("2030-01-01T13:51:00.000Z");
+    const firstDeparture = new Date("2030-01-01T22:20:00.000Z").getTime();
+    const noTransit = [{ code: "NO_TRANSIT_CONNECTION_IN_SEARCH_WINDOW" }];
+    const earliest = transitItinerary("EARLY", firstDeparture) as any;
+    earliest.legs.unshift({
+      mode: "WALK",
+      startTime: firstDeparture - 60_000,
+      endTime: firstDeparture,
+      duration: 60,
+      distance: 20,
+      from: { name: "Origin" },
+      to: { name: "起站" },
+      legGeometry: { points: "" },
+      steps: [{
+        distance: 20,
+        lon: 121.565,
+        lat: 25.041,
+        relativeDirection: "CONTINUE",
+        absoluteDirection: "NORTH",
+        streetName: "樓梯",
+        area: false,
+        bogusName: false,
+        feature: { __typename: "StairsUse" },
+      }],
+    });
+    const continuationRoutes = [
+      earliest,
+      transitItinerary("LATE1", firstDeparture + 60_000),
+      transitItinerary("LATE2", firstDeparture + 120_000),
+      transitItinerary("LATE3", firstDeparture + 180_000),
+    ];
+    post
+      .mockResolvedValueOnce(okResp([], noTransit))
+      .mockResolvedValueOnce(okResp([], noTransit))
+      .mockResolvedValueOnce(okResp(continuationRoutes));
+
+    const routes = await planOtpRoute(origin, destination, {
+      departureTime,
+      avoidStairs: true,
+      limit: 3,
+    });
+
+    expect(routes).toHaveLength(3);
+    expect(routes[0].routeName).toBe("EARLY");
+  });
+
+  it("orders continuation routes by the first OTP leg instead of first transit", async () => {
+    const departureTime = new Date("2030-01-01T13:51:00.000Z");
+    const routeStart = new Date("2030-01-01T22:20:00.000Z").getTime();
+    const noTransit = [{ code: "NO_TRANSIT_CONNECTION_IN_SEARCH_WINDOW" }];
+    const earlyRoute = transitItinerary("EARLY_START", routeStart + 17 * 60_000) as any;
+    earlyRoute.duration = 2_400;
+    earlyRoute.legs.unshift({
+      mode: "WALK",
+      startTime: routeStart,
+      endTime: routeStart + 17 * 60_000,
+      duration: 17 * 60,
+      distance: 1_000,
+      from: { name: "Origin" },
+      to: { name: "起站" },
+      legGeometry: { points: "" },
+      steps: [],
+    });
+    const earlierBusLaterStart = transitItinerary(
+      "EARLIER_BUS",
+      routeStart + 5 * 60_000,
+    );
+    post
+      .mockResolvedValueOnce(okResp([], noTransit))
+      .mockResolvedValueOnce(okResp([], noTransit))
+      .mockResolvedValueOnce(okResp([earlierBusLaterStart, earlyRoute]));
+
+    const routes = await planOtpRoute(origin, destination, { departureTime });
+
+    expect(routes[0].routeName).toBe("EARLY_START");
+    expect(routes[0]._scheduledDepartureTime).toBe(routeStart);
+    expect(routes[0].legs.find((leg) => leg.type === "BUS")).toMatchObject({
+      departureTime: "06:37",
+    });
+  });
+
+  it("continues after an error-free snap result contains only over-transfer itineraries", async () => {
+    const departureTime = new Date("2030-01-01T13:51:00.000Z");
+    const scheduledDeparture = new Date("2030-01-01T22:20:00.000Z").getTime();
+    busLean.mockResolvedValue([
+      {
+        location: { coordinates: [121.566, 25.042] },
+        stopName: { Zh_tw: "接駁站" },
+      },
+    ]);
+    post
+      .mockResolvedValueOnce(okResp([]))
+      .mockResolvedValueOnce(okResp([]))
+      .mockResolvedValueOnce(okResp([overTransferItinerary(scheduledDeparture)], []))
+      .mockResolvedValueOnce(
+        okResp([transitItinerary("ORIGINAL", scheduledDeparture, 2_400)]),
+      );
+
+    const routes = await planOtpRoute(origin, destination, {
+      departureTime,
+      maxTransfers: 0,
+    });
+
+    expect(post).toHaveBeenCalledTimes(4);
+    expect(post.mock.calls[2][1].variables).toMatchObject({
+      fromLat: 25.042,
+      fromLon: 121.566,
+      toLat: 25.042,
+      toLon: 121.566,
+    });
+    expect(post.mock.calls[3][1].variables).toMatchObject({
+      fromLat: origin.lat,
+      fromLon: origin.lng,
+      toLat: destination.lat,
+      toLon: destination.lng,
+      date: "2030-01-02",
+      time: "05:51",
+    });
+    expect(routes[0].routeName).toBe("ORIGINAL");
+    expect(routes[0].legs[0]).toMatchObject({ type: "BUS" });
+    expect(routes[0].legs.at(-1)).toMatchObject({ type: "BUS" });
+  });
+
+  it("tries original coordinates before snapped coordinates at one continuation anchor", async () => {
+    const departureTime = new Date("2030-01-01T13:51:00.000Z");
+    const scheduledDeparture = new Date("2030-01-01T22:20:00.000Z").getTime();
+    const noTransit = [{ code: "NO_TRANSIT_CONNECTION_IN_SEARCH_WINDOW" }];
+    busLean.mockResolvedValue([
+      {
+        location: { coordinates: [121.566, 25.042] },
+        stopName: { Zh_tw: "接駁站" },
+      },
+    ]);
+    post
+      .mockResolvedValueOnce(okResp([], noTransit))
+      .mockResolvedValueOnce(okResp([], noTransit))
+      .mockResolvedValueOnce(okResp([overTransferItinerary(scheduledDeparture)], []))
+      .mockResolvedValueOnce(okResp([], noTransit))
+      .mockResolvedValueOnce(
+        okResp([transitItinerary("SNAPPED", scheduledDeparture, 2_400)]),
+      );
+
+    const routes = await planOtpRoute(origin, destination, {
+      departureTime,
+      maxTransfers: 0,
+    });
+
+    expect(post).toHaveBeenCalledTimes(5);
+    expect(post.mock.calls[3][1].variables).toMatchObject({
+      fromLat: origin.lat,
+      fromLon: origin.lng,
+      toLat: destination.lat,
+      toLon: destination.lng,
+      date: "2030-01-02",
+      time: "05:51",
+    });
+    expect(post.mock.calls[4][1].variables).toMatchObject({
+      fromLat: 25.042,
+      fromLon: 121.566,
+      toLat: 25.042,
+      toLon: 121.566,
+      date: "2030-01-02",
+      time: "05:51",
+    });
+    expect(routes[0].legs[0]).toMatchObject({ type: "WALK", from: "出發地" });
+    expect(routes[0].legs.at(-1)).toMatchObject({ type: "WALK", to: "目的地" });
+    expect(routes[0]._scheduledEndTime).toBeGreaterThan(
+      scheduledDeparture + 2_400_000,
+    );
+  });
+
+  it("stops the continuation ladder after a continuation timeout", async () => {
+    const noTransit = [{ code: "NO_TRANSIT_CONNECTION_IN_SEARCH_WINDOW" }];
+    post
+      .mockResolvedValueOnce(okResp([], noTransit))
+      .mockResolvedValueOnce(okResp([], noTransit))
+      .mockRejectedValueOnce({ code: "ETIMEDOUT" });
+
+    await expect(planOtpRoute(origin, destination)).resolves.toEqual([]);
+    expect(post).toHaveBeenCalledTimes(3);
+  });
+
+  it("caps the continuation ladder at two hops", async () => {
+    const noTransit = [{ code: "NO_TRANSIT_CONNECTION_IN_SEARCH_WINDOW" }];
+    post.mockResolvedValue(okResp([], noTransit));
+
+    await expect(planOtpRoute(origin, destination)).resolves.toEqual([]);
+
+    expect(post).toHaveBeenCalledTimes(4);
+    expect(post.mock.calls[2][1].variables.time).not.toBe(
+      post.mock.calls[3][1].variables.time,
+    );
+  });
+
   it("retries a WALK-only narrow result with the wide window", async () => {
     post
       .mockResolvedValueOnce(okResp([walkOnlyItinerary()]))
@@ -255,12 +540,38 @@ describe("planOtpRoute search windows and timeouts", () => {
     expect(post.mock.calls[1][1].variables.searchWindow).toBe(28800);
   });
 
+  it("returns a WALK-only itinerary when no transit result replaces it", async () => {
+    post
+      .mockResolvedValueOnce(okResp([walkOnlyItinerary()]))
+      .mockResolvedValueOnce(okResp([]));
+
+    const routes = await planOtpRoute(origin, destination);
+
+    expect(routes).toHaveLength(1);
+    expect(routes[0]).toMatchObject({
+      routeName: "步行路線",
+      transferCount: 0,
+    });
+    expect(routes[0].legs).toHaveLength(1);
+    expect(routes[0].legs[0]).toMatchObject({ type: "WALK" });
+  });
+
   it("returns immediately after a primary timeout", async () => {
     post.mockRejectedValueOnce({ code: "ECONNABORTED" });
 
     await expect(planOtpRoute(origin, destination)).resolves.toEqual([]);
     expect(post).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["LOCATION_NOT_FOUND", "OUTSIDE_BOUNDS"])(
+    "short-circuits the terminal routing error %s",
+    async (code) => {
+      post.mockResolvedValueOnce(okResp([], [{ code }]));
+
+      await expect(planOtpRoute(origin, destination)).resolves.toEqual([]);
+      expect(post).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("keeps the snap flow after a non-timeout primary error", async () => {
     busLean.mockResolvedValue([
@@ -302,6 +613,27 @@ describe("planOtpRoute search windows and timeouts", () => {
     await expect(planOtpRoute(origin, destination)).resolves.toHaveLength(3);
     expect(post).toHaveBeenCalledTimes(3);
     expect(post.mock.calls[2][1].variables.searchWindow).toBe(3600);
+  });
+
+  it("advances continuation from the narrow window after a non-timeout wide error", async () => {
+    const departureTime = new Date("2030-01-01T13:51:00.000Z");
+    const noTransit = [{ code: "NO_TRANSIT_CONNECTION_IN_SEARCH_WINDOW" }];
+    const scheduledDeparture = new Date("2030-01-01T15:20:00.000Z").getTime();
+    post
+      .mockResolvedValueOnce(okResp([], noTransit))
+      .mockRejectedValueOnce({ code: "ERR_BAD_RESPONSE" })
+      .mockResolvedValueOnce(
+        okResp([transitItinerary("AFTER_GAP", scheduledDeparture)]),
+      );
+
+    const routes = await planOtpRoute(origin, destination, { departureTime });
+
+    expect(routes[0].routeName).toBe("AFTER_GAP");
+    expect(post.mock.calls[2][1].variables).toMatchObject({
+      date: "2030-01-01",
+      time: "22:51",
+      searchWindow: 28800,
+    });
   });
 
   it("records at most one breaker failure per plan call", async () => {

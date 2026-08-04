@@ -22,7 +22,13 @@ const origin = { lat: 25.04, lng: 121.56 };
 const waypoint = { lat: 25.05, lng: 121.55 };
 const destination = { lat: 25.03, lng: 121.57 };
 
-function walkOnlySegment(id: string, minutes: number): AccessibleRoute {
+function walkOnlySegment(
+  id: string,
+  minutes: number,
+  scheduledDepartureTime: number,
+  scheduledEndTime = scheduledDepartureTime + minutes * 60_000,
+  departureDate?: string,
+): AccessibleRoute {
   return {
     routeId: id,
     routeName: id,
@@ -40,6 +46,10 @@ function walkOnlySegment(id: string, minutes: number): AccessibleRoute {
       },
     ],
     accessibilityHighlights: [],
+    _scheduledDepartureTime: scheduledDepartureTime,
+    _scheduledEndTime: scheduledEndTime,
+    _isFutureScheduled: scheduledDepartureTime < scheduledEndTime - minutes * 60_000,
+    ...(departureDate ? { departureDate } : {}),
   };
 }
 
@@ -53,8 +63,16 @@ describe("findAccessibleRoutes transit waypoint chaining", () => {
   it("plans segments sequentially, propagating arrival time to the next segment", async () => {
     const departureTime = new Date("2030-01-01T10:00:00Z");
     mockPlan
-      .mockResolvedValueOnce([walkOnlySegment("seg1", 10)])
-      .mockResolvedValueOnce([walkOnlySegment("seg2", 12)]);
+      .mockResolvedValueOnce([
+        walkOnlySegment("seg1", 10, departureTime.getTime()),
+      ])
+      .mockResolvedValueOnce([
+        walkOnlySegment(
+          "seg2",
+          12,
+          departureTime.getTime() + 10 * 60_000,
+        ),
+      ]);
 
     const routes = await findAccessibleRoutes(origin, destination, "Taipei" as any, {
       waypoints: [waypoint],
@@ -88,10 +106,15 @@ describe("findAccessibleRoutes transit waypoint chaining", () => {
   });
 
   it("merges adjacent WALK legs across multiple waypoints", async () => {
+    const firstDeparture = Date.now();
     mockPlan
-      .mockResolvedValueOnce([walkOnlySegment("s1", 5)])
-      .mockResolvedValueOnce([walkOnlySegment("s2", 6)])
-      .mockResolvedValueOnce([walkOnlySegment("s3", 7)]);
+      .mockResolvedValueOnce([walkOnlySegment("s1", 5, firstDeparture)])
+      .mockResolvedValueOnce([
+        walkOnlySegment("s2", 6, firstDeparture + 5 * 60_000),
+      ])
+      .mockResolvedValueOnce([
+        walkOnlySegment("s3", 7, firstDeparture + 11 * 60_000),
+      ]);
 
     const routes = await findAccessibleRoutes(origin, destination, "Taipei" as any, {
       waypoints: [waypoint, { lat: 25.06, lng: 121.54 }],
@@ -105,7 +128,7 @@ describe("findAccessibleRoutes transit waypoint chaining", () => {
 
   it("returns [] when any segment has no route", async () => {
     mockPlan
-      .mockResolvedValueOnce([walkOnlySegment("seg1", 10)])
+      .mockResolvedValueOnce([walkOnlySegment("seg1", 10, Date.now())])
       .mockResolvedValueOnce([]); // second segment unroutable
 
     const routes = await findAccessibleRoutes(origin, destination, "Taipei" as any, {
@@ -116,12 +139,70 @@ describe("findAccessibleRoutes transit waypoint chaining", () => {
   });
 
   it("uses a single OTP query when there are no waypoints (unchanged path)", async () => {
-    mockPlan.mockResolvedValueOnce([walkOnlySegment("direct", 15)]);
+    mockPlan.mockResolvedValueOnce([
+      walkOnlySegment("direct", 15, Date.now()),
+    ]);
 
     const routes = await findAccessibleRoutes(origin, destination, "Taipei" as any, {});
 
     expect(mockPlan).toHaveBeenCalledTimes(1);
     expect(routes).toHaveLength(1);
     expect(routes[0].totalMinutes).toBe(15);
+  });
+
+  it("advances a waypoint cursor from the absolute rolled end and propagates departureDate", async () => {
+    const departureTime = new Date("2030-01-01T13:51:00.000Z");
+    const rolledDeparture = new Date("2030-01-01T22:20:00.000Z").getTime();
+    const rolledEnd = new Date("2030-01-01T23:05:00.000Z").getTime();
+    mockPlan
+      .mockResolvedValueOnce([
+        walkOnlySegment(
+          "rolled-seg1",
+          20,
+          rolledDeparture,
+          rolledEnd,
+          "2030-01-02",
+        ),
+      ])
+      .mockResolvedValueOnce([
+        walkOnlySegment("seg2", 12, rolledEnd),
+      ]);
+
+    const routes = await findAccessibleRoutes(origin, destination, "Taipei" as any, {
+      waypoints: [waypoint],
+      departureTime,
+    });
+
+    expect(mockPlan.mock.calls[1][2]?.departureTime).toEqual(new Date(rolledEnd));
+    expect(routes[0].departureDate).toBe("2030-01-02");
+    expect(routes[0]._scheduledDepartureTime).toBe(rolledDeparture);
+    expect(routes[0]._scheduledEndTime).toBe(rolledEnd + 12 * 60_000);
+  });
+
+  it("falls back to segment duration when internal end timing is unavailable", async () => {
+    const departureTime = new Date("2030-01-01T10:00:00.000Z");
+    const first = walkOnlySegment("legacy-seg1", 10, departureTime.getTime());
+    delete first._scheduledEndTime;
+    mockPlan
+      .mockResolvedValueOnce([first])
+      .mockResolvedValueOnce([
+        walkOnlySegment(
+          "seg2",
+          12,
+          departureTime.getTime() + 10 * 60_000,
+        ),
+      ]);
+
+    const routes = await findAccessibleRoutes(origin, destination, "Taipei" as any, {
+      waypoints: [waypoint],
+      departureTime,
+    });
+
+    expect(mockPlan).toHaveBeenCalledTimes(2);
+    expect(mockPlan.mock.calls[1][2]?.departureTime).toEqual(
+      new Date(departureTime.getTime() + 10 * 60_000),
+    );
+    expect(routes).toHaveLength(1);
+    expect(routes[0].totalMinutes).toBe(22);
   });
 });

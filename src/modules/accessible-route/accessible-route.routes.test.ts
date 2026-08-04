@@ -53,6 +53,51 @@ describe("POST /api/v1/a11y/accessible-route travel modes + waypoints", () => {
     expect(res.body.data.routes[0].routeToken).toBe("high-entropy-capability");
   });
 
+  it("returns 200 with a next-service-day scheduled departure", async () => {
+    mockPlan.mockResolvedValue({
+      ok: true,
+      data: okData({
+        routes: [{
+          routeId: "otp-next-day",
+          routeName: "NEXT",
+          totalMinutes: 40,
+          transferCount: 0,
+          departureDate: "2030-01-02",
+          legs: [{
+            type: "BUS",
+            routeName: "NEXT",
+            departureStop: "東南國中",
+            arrivalStop: "台中科大",
+            departureTime: "06:20",
+            arrivalTime: "07:00",
+            waitInfo: { time: "06:20", source: "schedule" },
+            direction: 0,
+            polyline: [],
+            departureStopA11y: [],
+            arrivalStopA11y: [],
+          }],
+          accessibilityHighlights: [],
+        }],
+      }),
+    } as any);
+
+    const res = await request(app).post(URL).send({
+      origin: { latitude: 23.80409, longitude: 120.4517439 },
+      destination: { latitude: 24.1497433, longitude: 120.6837712 },
+      travelMode: "transit",
+      departureTime: "2030-01-01T21:51:00+08:00",
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.routes[0]).toMatchObject({
+      departureDate: "2030-01-02",
+      legs: [{ departureTime: "06:20" }],
+    });
+    expect(res.body.data.routes[0].legs[0]).not.toHaveProperty(
+      "estimatedWaitMinutes",
+    );
+  });
+
   it("echoes travelMode + waypoints for a drive request", async () => {
     mockPlan.mockResolvedValue({
       ok: true,

@@ -33,8 +33,8 @@
  * runs even outside the realtime window.
  *
  * Realtime only makes sense for "departing now": the overlay is skipped when
- * the requested departureTime is more than 15 minutes from now, and for
- * routes rolled to the next service day (departureDate set). Entirely
+ * the route's absolute scheduled departure is more than 15 minutes after the
+ * requested departureTime (or now when omitted). Entirely
  * fail-soft: responses are cached 30 s, every error is swallowed — a TDX
  * outage never degrades routing. Disable with USE_REALTIME_TRANSIT=false.
  */
@@ -332,7 +332,7 @@ async function overlayBusEta(route: AccessibleRoute): Promise<void> {
   if (candidates.length) {
     const pick =
       candidates.find((c) => c.dir === leg.direction) ?? candidates[0];
-    const prevWait = leg.estimatedWaitMinutes;
+    const prevWait = leg.estimatedWaitMinutes ?? 0;
     const minutes = Math.round(pick.est / 60);
     leg.waitInfo = pick.live
       ? { time: minutes, source: "realtime" }
@@ -511,7 +511,7 @@ async function applyTraDelays(
     if (delay === undefined) continue;
 
     if (delay > 0) {
-      const minutes = leg.estimatedWaitMinutes + delay;
+      const minutes = (leg.estimatedWaitMinutes ?? 0) + delay;
       leg.waitInfo = { time: minutes, source: "realtime" };
       leg.estimatedWaitMinutes = minutes;
       const note = `⚠️ 列車 ${leg.trainNo} 誤點約 ${delay} 分`;
@@ -522,7 +522,10 @@ async function applyTraDelays(
         totalAdjusted = true;
       }
     } else {
-      leg.waitInfo = { time: leg.estimatedWaitMinutes, source: "realtime" };
+      leg.waitInfo = {
+        time: leg.estimatedWaitMinutes ?? 0,
+        source: "realtime",
+      };
     }
   }
 }
@@ -755,7 +758,9 @@ export async function recoverRailTrainNos(
   ]);
   await Promise.all(
     routes.flatMap((r) => {
-      const date = r.departureDate ?? taipeiYmdDash();
+      const date = typeof r._scheduledDepartureTime === "number"
+        ? taipeiYmdDash(new Date(r._scheduledDepartureTime))
+        : r.departureDate ?? taipeiYmdDash();
       return r.legs.map((leg) => {
         if (leg.type === "TRA" && traIdx) {
           return recoverRailLeg(leg, date, traIdx, fetchOdTimetable).catch(
@@ -786,7 +791,12 @@ export async function overlayRealtimeTransit(
 ): Promise<void> {
   if (process.env.USE_REALTIME_TRANSIT === "false") return;
 
-  const live = routes.filter((r) => !r.departureDate);
+  const referenceTime = opts.departureTime?.getTime() ?? Date.now();
+  const live = routes.filter(
+    (route) =>
+      typeof route._scheduledDepartureTime !== "number" ||
+      route._scheduledDepartureTime <= referenceTime + MAX_DEPARTURE_SKEW_MS,
+  );
   if (!live.length) return;
 
   const needsTra = live.some((r) => r.legs.some((l) => l.type === "TRA"));

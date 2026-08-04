@@ -86,7 +86,7 @@ export interface BusLeg {
   departureTime?: string;
   arrivalTime?: string;
   waitInfo: WaitInfo;
-  estimatedWaitMinutes: number;
+  estimatedWaitMinutes?: number;
   direction: 0 | 1;
   polyline: [number, number][];
   departureStopA11y: IOsmA11y[];
@@ -112,7 +112,7 @@ export interface MetroLeg {
   departureTime?: string;
   arrivalTime?: string;
   waitInfo: WaitInfo;
-  estimatedWaitMinutes: number;
+  estimatedWaitMinutes?: number;
   polyline: [number, number][];
   departureStationA11y: IOsmA11y[];
   arrivalStationA11y: IOsmA11y[];
@@ -132,7 +132,7 @@ export interface ThsrLeg {
   arrivalTime: string;
   rideMinutes: number;
   waitInfo: WaitInfo;
-  estimatedWaitMinutes: number;
+  estimatedWaitMinutes?: number;
   polyline: [number, number][];
   departureStationA11y: IOsmA11y[];
   arrivalStationA11y: IOsmA11y[];
@@ -153,7 +153,7 @@ export interface TraLeg {
   arrivalTime: string;
   rideMinutes: number;
   waitInfo: WaitInfo;
-  estimatedWaitMinutes: number;
+  estimatedWaitMinutes?: number;
   polyline: [number, number][];
   departureStationA11y: IOsmA11y[];
   arrivalStationA11y: IOsmA11y[];
@@ -198,6 +198,9 @@ export interface AccessibleRoute {
   degraded?: boolean;
   warnings?: string[];
   departureDate?: string;
+  _scheduledDepartureTime?: number;
+  _scheduledEndTime?: number;
+  _isFutureScheduled?: boolean;
   facilities?: Record<string, SlimA11y>;
   accessibilityScore?: number;
   accessibilityLabel?: "excellent" | "good" | "fair" | "poor" | "critical";

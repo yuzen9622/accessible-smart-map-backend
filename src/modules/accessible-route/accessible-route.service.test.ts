@@ -513,6 +513,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
   });
 
   it("測試 Case C: 帶途經點公車路線規劃 (政大 ➔ 中正紀念堂 ➔ 台北車站)", async () => {
+    const segmentStart = Date.now();
     const seg1Route = {
       routeId: "seg1",
       routeName: "羅斯福路幹線 (段1)",
@@ -524,6 +525,9 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
         { type: "WALK", from: "公車站", to: "中正紀念堂", distanceM: 50, minutesEst: 1, polyline: [], a11yFacilities: [] },
       ],
       accessibilityHighlights: [],
+      _scheduledDepartureTime: segmentStart,
+      _scheduledEndTime: segmentStart + 15 * 60_000,
+      _isFutureScheduled: false,
     };
 
     const seg2Route = {
@@ -537,6 +541,9 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
         { type: "WALK", from: "公車站", to: "台北車站", distanceM: 50, minutesEst: 1, polyline: [], a11yFacilities: [] },
       ],
       accessibilityHighlights: [],
+      _scheduledDepartureTime: segmentStart + 15 * 60_000,
+      _scheduledEndTime: segmentStart + 25 * 60_000,
+      _isFutureScheduled: false,
     };
 
     vi.mocked(planOtpRoute)
@@ -578,6 +585,105 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
 
     expect(res.status).toBe(ResponseCode.NOT_FOUND);
     expect(res.error).toContain("找不到連通的公車或捷運路線");
+  });
+
+  it("keeps the earliest continued departure through findAccessibleRoutes and finalizeRoutes", async () => {
+    const firstDeparture = new Date("2030-01-01T22:20:00.000Z").getTime();
+    const route = (
+      index: number,
+      scheduledDepartureTime: number,
+      totalMinutes: number,
+      walkDistanceM: number,
+    ) => ({
+      routeId: `future-${index}`,
+      routeName: `F${index}`,
+      totalMinutes,
+      transferCount: 0,
+      legs: [
+        ...(walkDistanceM > 0
+          ? [{
+              type: "WALK" as const,
+              from: "出發地",
+              to: "起站",
+              distanceM: walkDistanceM,
+              minutesEst: 120,
+              polyline: [],
+              a11yFacilities: [],
+            }]
+          : []),
+        {
+          type: "BUS" as const,
+          routeName: `F${index}`,
+          departureStop: `起站${index}`,
+          arrivalStop: `終站${index}`,
+          departureStopId: `TPE-A${index}`,
+          arrivalStopId: `TPE-B${index}`,
+          departureTime: index === 0 ? "06:20" : `06:${20 + index}`,
+          arrivalTime: "07:00",
+          waitInfo: {
+            time: index === 0 ? "06:20" : `06:${20 + index}`,
+            source: "schedule" as const,
+          },
+          direction: 0 as const,
+          polyline: [],
+          departureStopA11y: [],
+          arrivalStopA11y: [],
+        },
+      ],
+      accessibilityHighlights: [],
+      departureDate: "2030-01-02",
+      _scheduledDepartureTime: scheduledDepartureTime,
+      _scheduledEndTime: scheduledDepartureTime + totalMinutes * 60_000,
+      _isFutureScheduled: true,
+    });
+    const earliestRoute = route(0, firstDeparture, 300, 10_000);
+    const logicalDuplicate = route(
+      99,
+      firstDeparture + 30 * 60_000,
+      5,
+      0,
+    );
+    logicalDuplicate.routeName = "F0";
+    const duplicateBusLeg = logicalDuplicate.legs.find(
+      (leg) => leg.type === "BUS",
+    );
+    if (duplicateBusLeg?.type === "BUS") duplicateBusLeg.routeName = "F0";
+    const candidates = [
+      earliestRoute,
+      logicalDuplicate,
+      ...Array.from({ length: 8 }, (_, index) =>
+        route(
+          index + 1,
+          firstDeparture + (index + 1) * 60_000,
+          10 + index,
+          0,
+        ),
+      ),
+    ];
+    vi.mocked(planOtpRoute).mockResolvedValue(candidates);
+
+    const res = await planAccessibleRouteFromRequest({
+      travelMode: "transit",
+      origin: nccuOrigin,
+      destination: mainStationDest,
+      departureTime: "2030-01-01T13:51:00.000Z",
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.routes).toHaveLength(3);
+    expect(res.data.routes[0].routeId).toBe("future-0");
+    expect(res.data.routes.map((candidate) => candidate.routeId)).not.toContain(
+      "future-99",
+    );
+    expect(new Set(res.data.routes.map((candidate) => candidate.routeName)).size).toBe(3);
+    const earliest = res.data.routes.find((candidate) => candidate.routeId === "future-0");
+    expect(earliest).toBeDefined();
+    expect(earliest?.departureDate).toBe("2030-01-02");
+    expect(earliest?.legs.find((leg) => leg.type === "BUS")).toMatchObject({
+      departureTime: "06:20",
+      waitInfo: { time: "06:20", source: "schedule" },
+    });
   });
 });
 
