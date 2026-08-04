@@ -12,6 +12,8 @@ EXPRESSWAY_HIGHWAYS = {
     "trunk_link",
 }
 
+PBF_SUFFIXES = (".osm.pbf", ".pbf")
+
 
 def rewritten_tags(source):
     """Return updated tags and the applied hardening rule names."""
@@ -35,6 +37,26 @@ def rewritten_tags(source):
     return tags, applied
 
 
+def open_writer(osmium, output_pbf):
+    """Open a PBF writer on either the pyosmium 3.x or 4.x SimpleWriter API."""
+    try:
+        return osmium.SimpleWriter(osmium.io.File(output_pbf, "pbf"))
+    except TypeError:
+        if not output_pbf.endswith(PBF_SUFFIXES):
+            raise SystemExit(
+                "this pyosmium build infers the output format from the file "
+                f"name — give the output a .osm.pbf suffix (got {output_pbf})"
+            )
+        return osmium.SimpleWriter(output_pbf)
+
+
+def with_tags(osmium, way, tags):
+    """Return a writable copy of the way carrying replacement tags."""
+    if hasattr(way, "replace"):
+        return way.replace(tags=tags)
+    return osmium.osm.mutable.Way(way, tags=tags)
+
+
 def make_handler(osmium, writer):
     """Build the pyosmium handler that rewrites ways and preserves other entities."""
     class WalkSafetyHandler(osmium.SimpleHandler):
@@ -52,7 +74,7 @@ def make_handler(osmium, writer):
                 self.expressway_count += 1
             if "steps" in applied:
                 self.steps_count += 1
-            writer.add_way(way.replace(tags=tags) if applied else way)
+            writer.add_way(with_tags(osmium, way, tags) if applied else way)
 
         def relation(self, relation):
             writer.add_relation(relation)
@@ -81,7 +103,7 @@ def main(argv=None):
             "pyosmium is required for walk-safety preprocessing"
         ) from error
 
-    writer = osmium.SimpleWriter(osmium.io.File(output_pbf, "pbf"))
+    writer = open_writer(osmium, output_pbf)
     handler = make_handler(osmium, writer)
     try:
         handler.apply_file(input_pbf)
