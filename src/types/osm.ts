@@ -7,6 +7,20 @@ export interface OsmAddress {
   postcode: string | null;
 }
 
+export type OsmTags = Record<string, string>;
+
+/**
+ * Keeps only the string-to-string entries an OSM tag map is allowed to carry.
+ * Upstreams and legacy cache records can omit tags or hold an unexpected
+ * shape, both of which normalize to an empty map rather than unsafe evidence.
+ */
+export function normalizeOsmTags(value: unknown): OsmTags {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).filter(([, tagValue]) => typeof tagValue === "string"),
+  ) as OsmTags;
+}
+
 /**
  * A place sourced from OpenStreetMap, normalized so callers never see which
  * upstream produced it. Two adapters emit this shape: Photon answers
@@ -22,6 +36,7 @@ export interface OsmPlace {
   placeClass: string | null;
   placeType: string | null;
   address: OsmAddress;
+  tags: OsmTags;
 }
 
 export const OSM_TYPE_BY_PREFIX: Record<string, OsmType> = {

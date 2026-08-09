@@ -299,6 +299,8 @@ export interface GooglePlaceDetails {
   rating: number | null;
   wheelchair: "yes" | "no" | null;
   wheelchairPartial: boolean;
+  wheelchairAccessibleEntrance: boolean | null;
+  wheelchairAccessibleRestroom: boolean | null;
   types: string[];
   addressComponents: GoogleAddressComponents;
 }
@@ -367,13 +369,29 @@ export async function getPlaceDetails(
         ? { latitude: rawLocation.latitude as number, longitude: rawLocation.longitude as number }
         : null;
 
-    const a11y = p.accessibilityOptions ?? {};
-    const entrance = a11y.wheelchairAccessibleEntrance;
-    const wheelchair = entrance === true ? "yes" : entrance === false ? "no" : null;
+    const rawAccessibilityOptions = p.accessibilityOptions;
+    const a11y =
+      rawAccessibilityOptions && typeof rawAccessibilityOptions === "object"
+        ? (rawAccessibilityOptions as Record<string, unknown>)
+        : {};
+    const wheelchairAccessibleEntrance =
+      typeof a11y.wheelchairAccessibleEntrance === "boolean"
+        ? a11y.wheelchairAccessibleEntrance
+        : null;
+    const wheelchairAccessibleRestroom =
+      typeof a11y.wheelchairAccessibleRestroom === "boolean"
+        ? a11y.wheelchairAccessibleRestroom
+        : null;
+    const wheelchair =
+      wheelchairAccessibleEntrance === true
+        ? "yes"
+        : wheelchairAccessibleEntrance === false
+          ? "no"
+          : null;
     const wheelchairPartial =
-      entrance !== true &&
+      wheelchairAccessibleEntrance !== true &&
       (a11y.wheelchairAccessibleParking === true ||
-        a11y.wheelchairAccessibleRestroom === true ||
+        wheelchairAccessibleRestroom === true ||
         a11y.wheelchairAccessibleSeating === true);
 
     return {
@@ -384,6 +402,8 @@ export async function getPlaceDetails(
       rating: typeof p.rating === "number" ? p.rating : null,
       wheelchair,
       wheelchairPartial,
+      wheelchairAccessibleEntrance,
+      wheelchairAccessibleRestroom,
       types: Array.isArray(p.types) ? (p.types as string[]) : [],
       addressComponents: toAddressComponents(p.addressComponents),
     };

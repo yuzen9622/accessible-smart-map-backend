@@ -3,6 +3,7 @@ import {
   PREFIX_BY_OSM_TYPE,
   OSM_TYPE_BY_PREFIX,
   firstOsmValue,
+  normalizeOsmTags,
   type OsmAddress,
   type OsmPlace,
   type OsmType,
@@ -38,6 +39,20 @@ async function awaitSlot(): Promise<boolean> {
   return true;
 }
 
+interface NominatimLookupRaw {
+  osm_type?: unknown;
+  osm_id?: unknown;
+  lat?: unknown;
+  lon?: unknown;
+  display_name?: unknown;
+  name?: unknown;
+  address?: Record<string, unknown>;
+  class?: unknown;
+  category?: unknown;
+  type?: unknown;
+  extratags?: unknown;
+}
+
 function toAddress(raw: Record<string, unknown> | undefined): OsmAddress {
   const a = raw ?? {};
   return {
@@ -48,9 +63,11 @@ function toAddress(raw: Record<string, unknown> | undefined): OsmAddress {
   };
 }
 
-function toOsmPlace(raw: any): OsmPlace | null {
-  const osmType = raw?.osm_type as OsmType | undefined;
-  const osmId = raw?.osm_id;
+function toOsmPlace(raw: NominatimLookupRaw | null | undefined): OsmPlace | null {
+  if (!raw) return null;
+
+  const osmType = raw.osm_type as OsmType | undefined;
+  const osmId = raw.osm_id;
   if (!osmType || !PREFIX_BY_OSM_TYPE[osmType] || osmId === undefined || osmId === null) return null;
 
   const latitude = Number(raw.lat);
@@ -58,8 +75,10 @@ function toOsmPlace(raw: any): OsmPlace | null {
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
 
   const displayName = typeof raw.display_name === "string" ? raw.display_name : "";
+  const rawType = typeof raw.type === "string" ? raw.type : undefined;
   const name =
-    firstOsmValue(raw.name, raw.address?.[raw.type], displayName.split(",")[0]) ?? displayName;
+    firstOsmValue(raw.name, rawType ? raw.address?.[rawType] : undefined, displayName.split(",")[0]) ??
+    displayName;
   if (!name) return null;
 
   return {
@@ -72,6 +91,7 @@ function toOsmPlace(raw: any): OsmPlace | null {
     placeClass: firstOsmValue(raw.class, raw.category),
     placeType: firstOsmValue(raw.type),
     address: toAddress(raw.address),
+    tags: normalizeOsmTags(raw.extratags),
   };
 }
 
@@ -111,11 +131,12 @@ export async function lookupOsmPlace(
   if (!(await awaitSlot())) return null;
 
   try {
-    const response = await axios.get(`${BASE_URL()}/lookup`, {
+    const response = await axios.get<NominatimLookupRaw[]>(`${BASE_URL()}/lookup`, {
       params: {
         osm_ids: toOsmLookupId(osmType, osmId),
         format: "jsonv2",
         addressdetails: 1,
+        extratags: 1,
       },
       timeout: REQUEST_TIMEOUT_MS,
       headers: {

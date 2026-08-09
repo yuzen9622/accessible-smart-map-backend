@@ -76,6 +76,7 @@ function toOsmPlace(feature: any, lang: SupportedLang): OsmPlace | null {
     placeClass: firstOsmValue(p.osm_key),
     placeType: firstOsmValue(p.osm_value),
     address: toAddress(p),
+    tags: {},
   };
 }
 

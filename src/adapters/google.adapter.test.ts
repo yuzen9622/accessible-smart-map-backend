@@ -118,3 +118,91 @@ describe("place language", () => {
     expect(details?.name).toBe("Taipei 101");
   });
 });
+
+describe("place details accessibility", () => {
+  it("preserves explicit false accessibility options", async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        id: "ChIJ123",
+        displayName: { text: "台北101" },
+        location: { latitude: 25.03, longitude: 121.56 },
+        accessibilityOptions: {
+          wheelchairAccessibleEntrance: false,
+          wheelchairAccessibleRestroom: false,
+        },
+      },
+    });
+
+    const details = await getPlaceDetails("ChIJ123");
+
+    expect(details).toMatchObject({
+      wheelchair: "no",
+      wheelchairPartial: false,
+      wheelchairAccessibleEntrance: false,
+      wheelchairAccessibleRestroom: false,
+    });
+  });
+
+  it("normalizes missing accessibility options to null", async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        id: "ChIJ123",
+        displayName: { text: "台北101" },
+        location: { latitude: 25.03, longitude: 121.56 },
+      },
+    });
+
+    const details = await getPlaceDetails("ChIJ123");
+
+    expect(details).toMatchObject({
+      wheelchair: null,
+      wheelchairPartial: false,
+      wheelchairAccessibleEntrance: null,
+      wheelchairAccessibleRestroom: null,
+    });
+  });
+
+  it("marks a restroom-only place as partially wheelchair accessible", async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        id: "ChIJ124",
+        displayName: { text: "無障礙廁所站" },
+        location: { latitude: 25.03, longitude: 121.56 },
+        accessibilityOptions: { wheelchairAccessibleRestroom: true },
+      },
+    });
+
+    const details = await getPlaceDetails("ChIJ124");
+
+    expect(details).toMatchObject({
+      wheelchair: null,
+      wheelchairAccessibleEntrance: null,
+      wheelchairAccessibleRestroom: true,
+      wheelchairPartial: true,
+    });
+  });
+
+  it("keeps wheelchairPartial when restroom combines with parking or seating and no entrance", async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        id: "ChIJ125",
+        displayName: { text: "複合商場" },
+        location: { latitude: 25.03, longitude: 121.56 },
+        accessibilityOptions: {
+          wheelchairAccessibleRestroom: true,
+          wheelchairAccessibleParking: true,
+          wheelchairAccessibleSeating: true,
+        },
+      },
+    });
+
+    const details = await getPlaceDetails("ChIJ125");
+
+    expect(details).toMatchObject({
+      wheelchair: null,
+      wheelchairAccessibleEntrance: null,
+      wheelchairAccessibleRestroom: true,
+      wheelchairPartial: true,
+    });
+  });
+});

@@ -10,7 +10,7 @@ import {
 } from "../../adapters/google.adapter";
 import { searchOsmPlaces } from "../../adapters/photon.adapter";
 import { lookupOsmPlace } from "../../adapters/nominatim.adapter";
-import type { OsmPlace } from "../../types/osm";
+import { normalizeOsmTags, type OsmPlace } from "../../types/osm";
 import type { PlaceType as ReviewPlaceType } from "../../model/review.model";
 import { redisGet, redisSet } from "../../config/redis";
 import { haversineMeters } from "../../utils/geo";
@@ -19,6 +19,7 @@ import {
   buildOsmPlaceId,
   facilityLabelOf,
   googleTypesToClassType,
+  mapOsmAccessibilityTags,
   normalizeName,
   parsePlaceId,
   toReviewOsmId,
@@ -59,8 +60,12 @@ export interface AutocompleteItem {
 export interface PlaceAccessibility {
   status: "accessible" | "limited" | "unknown";
   wheelchair: "yes" | "limited" | "no" | null;
+  wheelchairAccess: boolean | null;
+  elevator: boolean | null;
+  ramp: boolean | null;
+  accessibleToilet: boolean | null;
   nearbyFacilityCount: number;
-  source: "local-db" | "google" | "none";
+  source: "local-db" | "google" | "osm" | "none";
 }
 
 export interface NearbyFacilityBrief {
@@ -127,6 +132,13 @@ function distanceFrom(
   return Math.round(haversineMeters(lat as number, lng as number, targetLat, targetLng));
 }
 
+/** Adds an empty tag map to pre-tags Redis entries while rejecting malformed values. */
+function normalizeCachedOsmPlace(value: unknown): OsmPlace | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const place = value as Omit<OsmPlace, "tags"> & { tags?: unknown };
+  return { ...place, tags: normalizeOsmTags(place.tags) };
+}
+
 /**
  * Nominatim results for a query, behind a longer-lived cache than the merged
  * autocomplete response — OSM data changes slowly and every cache hit is one
@@ -144,7 +156,11 @@ async function cachedOsmSearch(
   const cached = await redisGet(cacheKey);
   if (cached) {
     try {
-      return JSON.parse(cached) as OsmPlace[];
+      const parsed: unknown = JSON.parse(cached);
+      if (Array.isArray(parsed)) {
+        const places = parsed.map(normalizeCachedOsmPlace);
+        if (places.every((place): place is OsmPlace => place !== null)) return places;
+      }
     } catch {
       /* treat malformed cache as a miss */
     }
@@ -387,37 +403,58 @@ async function findNearbyFacilities(
   return { toilets, metro: metroBriefs };
 }
 
+interface PlaceAccessibilitySignals {
+  source: "google" | "osm";
+  wheelchair: PlaceAccessibility["wheelchair"];
+  wheelchairAccess: boolean | null;
+  elevator: boolean | null;
+  ramp: boolean | null;
+  accessibleToilet: boolean | null;
+  wheelchairPartial: boolean;
+}
+
 /**
- * Derives the three-state accessibility badge from local facility density and
- * Google's wheelchair signal. Local data wins; Google is the fallback signal.
- * Honest by design: absence of both is reported as `unknown`, never faked.
+ * Derives the badge only from evidence explicitly attached to this place.
+ * Nearby records remain useful for display, but are never evidence that the
+ * place itself is accessible.
  */
 async function computeAccessibility(
   lat: number,
   lng: number,
-  googleWheelchair: "yes" | "no" | null,
-  googleWheelchairPartial: boolean,
+  signals: PlaceAccessibilitySignals,
 ): Promise<PlaceAccessibility> {
   const nearbyFacilityCount = await countNearbyFacilities(lat, lng);
+  const hasOwnSignal =
+    signals.wheelchairPartial ||
+    [
+      signals.wheelchairAccess,
+      signals.elevator,
+      signals.ramp,
+      signals.accessibleToilet,
+    ].some((value) => value !== null);
+  const status =
+    signals.wheelchairAccess === true
+      ? "accessible"
+      : signals.wheelchairPartial
+        ? "limited"
+        : "unknown";
+  const wheelchair =
+    signals.wheelchairAccess === true
+      ? "yes"
+      : signals.wheelchairPartial
+        ? "limited"
+        : signals.wheelchair;
 
-  if (nearbyFacilityCount > 0) {
-    return {
-      status: "accessible",
-      wheelchair: googleWheelchair,
-      nearbyFacilityCount,
-      source: "local-db",
-    };
-  }
-  if (googleWheelchair === "yes") {
-    return { status: "accessible", wheelchair: "yes", nearbyFacilityCount, source: "google" };
-  }
-  if (googleWheelchairPartial) {
-    return { status: "limited", wheelchair: "limited", nearbyFacilityCount, source: "google" };
-  }
-  if (googleWheelchair === "no") {
-    return { status: "unknown", wheelchair: "no", nearbyFacilityCount, source: "google" };
-  }
-  return { status: "unknown", wheelchair: null, nearbyFacilityCount, source: "none" };
+  return {
+    status,
+    wheelchair,
+    wheelchairAccess: signals.wheelchairAccess,
+    elevator: signals.elevator,
+    ramp: signals.ramp,
+    accessibleToilet: signals.accessibleToilet,
+    nearbyFacilityCount,
+    source: hasOwnSignal ? signals.source : "none",
+  };
 }
 
 type ResolvedPlace = Omit<PlaceResult, "accessibility" | "nearbyFacilities" | "distanceMeters">;
@@ -479,7 +516,8 @@ async function cachedOsmLookup(
   const cached = await redisGet(cacheKey);
   if (cached) {
     try {
-      return JSON.parse(cached) as OsmPlace;
+      const place = normalizeCachedOsmPlace(JSON.parse(cached) as unknown);
+      if (place) return place;
     } catch {
       /* treat malformed cache as a miss */
     }
@@ -515,8 +553,7 @@ export async function details(params: {
   if (!parsed) return null;
 
   let resolved: ResolvedPlace;
-  let googleWheelchair: "yes" | "no" | null = null;
-  let googleWheelchairPartial = false;
+  let accessibilitySignals: PlaceAccessibilitySignals;
 
   if (parsed.source === "google") {
     const d = await getPlaceDetails(parsed.googlePlaceId, { sessionToken, lang });
@@ -526,17 +563,32 @@ export async function details(params: {
       d as GooglePlaceDetails & { location: { latitude: number; longitude: number } },
       lang,
     );
-    googleWheelchair = d.wheelchair;
-    googleWheelchairPartial = d.wheelchairPartial;
+    const wheelchairAccess = d.wheelchairAccessibleEntrance ?? null;
+    const accessibleToilet = d.wheelchairAccessibleRestroom ?? null;
+    accessibilitySignals = {
+      source: "google",
+      wheelchair: d.wheelchair,
+      wheelchairAccess,
+      elevator: null,
+      ramp: null,
+      accessibleToilet,
+      wheelchairPartial: d.wheelchairPartial,
+    };
   } else {
     const p = await cachedOsmLookup(parsed.osmType, parsed.osmId, lang);
     if (!p) return null;
     resolved = osmToResolved(id, p, lang);
+    const osmAccessibility = mapOsmAccessibilityTags(p.tags, p.placeClass, p.placeType);
+    accessibilitySignals = {
+      source: "osm",
+      ...osmAccessibility,
+      wheelchairPartial: osmAccessibility.wheelchair === "limited",
+    };
   }
 
   const [placeLng, placeLat] = resolved.location.coordinates;
   const [accessibility, nearbyFacilities] = await Promise.all([
-    computeAccessibility(placeLat, placeLng, googleWheelchair, googleWheelchairPartial),
+    computeAccessibility(placeLat, placeLng, accessibilitySignals),
     findNearbyFacilities(placeLat, placeLng, lang),
   ]);
 

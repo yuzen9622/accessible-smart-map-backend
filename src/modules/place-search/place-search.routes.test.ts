@@ -49,8 +49,12 @@ const placeResult = (): service.PlaceResult => ({
   accessibility: {
     status: "accessible",
     wheelchair: "yes",
+    wheelchairAccess: true,
+    elevator: null,
+    ramp: null,
+    accessibleToilet: null,
     nearbyFacilityCount: 3,
-    source: "local-db",
+    source: "google",
   },
   nearbyFacilities: { toilets: [], metro: [] },
   reviewKey: { placeId: "ChIJ123", placeType: "google" },
@@ -179,7 +183,13 @@ describe("GET /a11y/search/details/:id", () => {
       .query({ sessiontoken: "tok", lat: "25.03", lng: "121.5" });
 
     expect(res.status).toBe(200);
-    expect(res.body.data).toEqual(data);
+    expect(res.body).toMatchObject({ ok: true, status: "success", code: 200, data });
+    expect(res.body.data.accessibility).toMatchObject({
+      wheelchairAccess: true,
+      elevator: null,
+      ramp: null,
+      accessibleToilet: null,
+    });
     expect(service.details).toHaveBeenCalledWith({
       id: "google:ChIJ123",
       sessionToken: "tok",
@@ -240,5 +250,22 @@ describe("GET /a11y/search/details/:id", () => {
 
     expect(res.status).toBe(404);
     expect(res.body.ok).toBe(false);
+  });
+});
+
+describe("place-search OpenAPI", () => {
+  it("publishes the details path and four nullable PlaceAccessibility properties", async () => {
+    const res = await request(app).get("/api/v1/openapi.json");
+
+    expect(res.status).toBe(200);
+    expect(res.body.paths["/a11y/search/details/{id}"]).toHaveProperty("get");
+    const props = res.body.components.schemas.PlaceAccessibility.properties;
+    expect(props).toMatchObject({
+      wheelchairAccess: { type: "boolean", nullable: true },
+      elevator: { type: "boolean", nullable: true },
+      ramp: { type: "boolean", nullable: true },
+      accessibleToilet: { type: "boolean", nullable: true },
+    });
+    expect(props.source.enum).toContain("osm");
   });
 });

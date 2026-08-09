@@ -39,19 +39,56 @@ const AccessibilitySchema = z
   .object({
     status: z
       .enum(["accessible", "limited", "unknown"])
-      .openapi({ example: "unknown", description: "無障礙判定：accessible / limited / unknown" }),
+      .openapi({
+        example: "unknown",
+        description: "場所本身的無障礙判定；附近設施不會改變此判定。",
+      }),
     wheelchair: z
       .enum(["yes", "limited", "no"])
       .nullable()
-      .openapi({ example: null, description: "輪椅可用性；無資料為 null" }),
+      .openapi({ example: null, description: "既有輪椅可用性欄位；無資料為 null" }),
+    wheelchairAccess: z
+      .boolean()
+      .nullable()
+      .openapi({
+        example: null,
+        description: "場所本身輪椅可進入：true=來源明確確認有，false=來源明確確認沒有，null=未調查或來源無法判斷。",
+      }),
+    elevator: z
+      .boolean()
+      .nullable()
+      .openapi({
+        example: null,
+        description: "場所本身電梯：true=來源明確確認有，false=來源明確確認沒有，null=未調查或來源無法判斷。",
+      }),
+    ramp: z
+      .boolean()
+      .nullable()
+      .openapi({
+        example: null,
+        description: "場所本身坡道：true=來源明確確認有，false=來源明確確認沒有，null=未調查或來源無法判斷。",
+      }),
+    accessibleToilet: z
+      .boolean()
+      .nullable()
+      .openapi({
+        example: null,
+        description: "場所本身無障礙廁所：true=來源明確確認有，false=來源明確確認沒有，null=未調查或來源無法判斷。",
+      }),
     nearbyFacilityCount: z
       .number()
       .int()
       .nonnegative()
-      .openapi({ example: 0, description: "本地 DB 半徑內的無障礙設施數" }),
+      .openapi({
+        example: 0,
+        description: "本地 DB 半徑內的無障礙設施數，僅供附近設施展示，不是場所本身的無障礙證據。",
+      }),
     source: z
-      .enum(["local-db", "google", "none"])
-      .openapi({ example: "none", description: "無障礙判定的資料來源" }),
+      .enum(["local-db", "google", "osm", "none"])
+      .openapi({
+        example: "none",
+        description: "場所本身無障礙訊號的資料來源；附近本地設施不會作為場所證據。",
+      }),
   })
   .strict()
   .openapi("PlaceAccessibility");
@@ -251,7 +288,7 @@ registry.registerPath({
   tags: ["Accessibility"],
   summary: "地點詳情與無障礙判定",
   description:
-    "使用者點選某筆預測後呼叫，依 id 前綴分派到 Google Place Details 或 OSM lookup，取座標與欄位並就近查本地無障礙資料，回傳單一 PlaceResult（含三態徽章與附近設施）。osm: 開頭的 id 不會呼叫 Google、不消耗 session token。`lang=en` 時名稱、地址與 typeLabel 回英文；nearbyFacilities 的 name／address 來自本地中文資料集，僅 typeLabel 會翻譯。",
+    "使用者點選某筆預測後呼叫，依 id 前綴分派到 Google Place Details 或 OSM lookup，取座標與欄位並就近查本地無障礙資料，回傳單一 PlaceResult（含三態徽章與附近設施）。nearbyFacilityCount 與 nearbyFacilities 僅展示附近資料，不是場所本身的無障礙證據，也不會推導 accessibility.status。osm: 開頭的 id 不會呼叫 Google、不消耗 session token。`lang=en` 時名稱、地址與 typeLabel 回英文；nearbyFacilities 的 name／address 來自本地中文資料集，僅 typeLabel 會翻譯。",
   request: { params: DetailsParamsSchema, query: DetailsQuerySchema },
   responses: {
     200: {

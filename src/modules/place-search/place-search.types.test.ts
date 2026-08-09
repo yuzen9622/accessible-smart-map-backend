@@ -4,6 +4,7 @@ import {
   buildOsmPlaceId,
   facilityLabelOf,
   googleTypesToClassType,
+  mapOsmAccessibilityTags,
   normalizeName,
   parsePlaceId,
   toReviewOsmId,
@@ -101,6 +102,76 @@ describe("typeLabelOf", () => {
     expect(typeLabelOf("attraction", "en")).toBe("Attraction");
     expect(typeLabelOf("zoo", "en")).toBeNull();
     expect(typeLabelOf(null, "en")).toBeNull();
+  });
+});
+
+describe("mapOsmAccessibilityTags", () => {
+  it("keeps missing and limited wheelchair tags out of boolean false", () => {
+    expect(mapOsmAccessibilityTags({})).toEqual({
+      wheelchair: null,
+      wheelchairAccess: null,
+      elevator: null,
+      ramp: null,
+      accessibleToilet: null,
+    });
+    expect(mapOsmAccessibilityTags({ wheelchair: "limited" })).toMatchObject({
+      wheelchair: "limited",
+      wheelchairAccess: null,
+    });
+    expect(mapOsmAccessibilityTags({ wheelchair: "no" })).toMatchObject({
+      wheelchair: "no",
+      wheelchairAccess: false,
+    });
+  });
+
+  it("recognizes explicit facility tags and highway=elevator", () => {
+    expect(
+      mapOsmAccessibilityTags({
+        highway: "elevator",
+        "wheelchair:ramp": "no",
+        "toilet:wheelchair": "yes",
+      }),
+    ).toMatchObject({
+      elevator: true,
+      ramp: false,
+      accessibleToilet: true,
+    });
+  });
+
+  it("reads the standard ramp:wheelchair key first", () => {
+    expect(mapOsmAccessibilityTags({ "ramp:wheelchair": "no" })).toMatchObject({ ramp: false });
+    expect(mapOsmAccessibilityTags({ "ramp:wheelchair": "yes" })).toMatchObject({ ramp: true });
+  });
+
+  it("keeps reading the legacy wheelchair:ramp alias", () => {
+    expect(mapOsmAccessibilityTags({ "wheelchair:ramp": "yes" })).toMatchObject({ ramp: true });
+  });
+
+  it("maps class=highway,type=elevator to elevator even with empty extratags", () => {
+    expect(mapOsmAccessibilityTags({}, "highway", "elevator")).toMatchObject({
+      elevator: true,
+      wheelchairAccess: null,
+      ramp: null,
+      accessibleToilet: null,
+    });
+  });
+
+  it("never treats arbitrary class/type pairs as accessibility evidence", () => {
+    expect(mapOsmAccessibilityTags({}, "amenity", "restaurant")).toMatchObject({
+      elevator: null,
+    });
+    expect(mapOsmAccessibilityTags({}, "highway", "bus_stop")).toMatchObject({
+      elevator: null,
+    });
+    expect(mapOsmAccessibilityTags({}, "railway", "station")).toMatchObject({
+      elevator: null,
+    });
+  });
+
+  it("lets an explicit elevator tag override the highway=elevator classification", () => {
+    expect(mapOsmAccessibilityTags({ elevator: "no" }, "highway", "elevator")).toMatchObject({
+      elevator: false,
+    });
   });
 });
 

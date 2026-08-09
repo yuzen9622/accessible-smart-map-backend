@@ -1,4 +1,4 @@
-import type { OsmType } from "../../types/osm";
+import type { OsmTags, OsmType } from "../../types/osm";
 import { DEFAULT_LANG, type SupportedLang } from "../../types/lang";
 
 export type PlaceSource = "osm" | "google";
@@ -49,6 +49,82 @@ export function parsePlaceId(value: string): ParsedPlaceId | null {
 /** The `<type>/<id>` form the review module has stored for OSM places all along. */
 export function toReviewOsmId(osmType: OsmType, osmId: string): string {
   return `${osmType}/${osmId}`;
+}
+
+export interface OsmAccessibilityMapping {
+  wheelchair: "yes" | "limited" | "no" | null;
+  wheelchairAccess: boolean | null;
+  elevator: boolean | null;
+  ramp: boolean | null;
+  accessibleToilet: boolean | null;
+}
+
+function normalizedTagValue(tags: OsmTags, key: string): string | undefined {
+  const value = tags[key];
+  return typeof value === "string" ? value.trim().toLowerCase() : undefined;
+}
+
+function toExplicitA11yBoolean(value: string | undefined): boolean | null {
+  if (["yes", "designated", "true", "1"].includes(value ?? "")) return true;
+  if (["no", "false", "0"].includes(value ?? "")) return false;
+  return null;
+}
+
+function firstExplicitA11yBoolean(tags: OsmTags, keys: string[]): boolean | null {
+  for (const key of keys) {
+    const value = toExplicitA11yBoolean(normalizedTagValue(tags, key));
+    if (value !== null) return value;
+  }
+  return null;
+}
+
+/**
+ * Maps OSM's place-level accessibility tags to explicit three-state evidence.
+ * Unknown, limited and omitted tags stay null: a missing tag never means no.
+ *
+ * The place classification participates only where OSM itself encodes a
+ * facility as the object's primary feature: an elevator mapped as
+ * `highway=elevator` surfaces as `class=highway, type=elevator` from
+ * Nominatim, so it maps to `elevator: true` even when extratags are empty.
+ * No other class/type pair is ever treated as evidence.
+ */
+export function mapOsmAccessibilityTags(
+  tags: OsmTags,
+  placeClass?: string | null,
+  placeType?: string | null,
+): OsmAccessibilityMapping {
+  const wheelchairTag = normalizedTagValue(tags, "wheelchair");
+  const wheelchair =
+    wheelchairTag === "yes" || wheelchairTag === "designated"
+      ? "yes"
+      : wheelchairTag === "no"
+        ? "no"
+        : wheelchairTag === "limited"
+          ? "limited"
+          : null;
+  const directElevatorTag = normalizedTagValue(tags, "elevator");
+  const classifiedElevator = placeClass === "highway" && placeType === "elevator";
+
+  return {
+    wheelchair,
+    wheelchairAccess: wheelchair === "yes" ? true : wheelchair === "no" ? false : null,
+    elevator:
+      directElevatorTag === undefined
+        ? normalizedTagValue(tags, "highway") === "elevator" || classifiedElevator
+          ? true
+          : null
+        : toExplicitA11yBoolean(directElevatorTag),
+    ramp: firstExplicitA11yBoolean(tags, [
+      "ramp:wheelchair",
+      "wheelchair:ramp",
+      "entrance:ramp",
+      "ramp",
+    ]),
+    accessibleToilet: firstExplicitA11yBoolean(tags, [
+      "toilets:wheelchair",
+      "toilet:wheelchair",
+    ]),
+  };
 }
 
 export { normalizePlaceName as normalizeName } from "../../utils/place-name";

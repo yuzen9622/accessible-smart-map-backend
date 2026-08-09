@@ -55,6 +55,8 @@ const googleDetails = (overrides: Partial<any> = {}) => ({
   rating: 4.5,
   wheelchair: null,
   wheelchairPartial: false,
+  wheelchairAccessibleEntrance: null,
+  wheelchairAccessibleRestroom: null,
   types: ["shopping_mall", "point_of_interest"],
   addressComponents: {
     road: "信義路五段",
@@ -75,8 +77,15 @@ const osmPlace = (overrides: Partial<any> = {}) => ({
   placeClass: "tourism",
   placeType: "attraction",
   address: { road: "信義路五段", district: "信義區", city: "臺北市", postcode: "110" },
+  tags: {},
   ...overrides,
 });
+
+const legacyOsmPlace = () => {
+  const place = osmPlace();
+  delete place.tags;
+  return place;
+};
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -331,13 +340,19 @@ describe("details", () => {
     expect(await service.details({ id: "osm:way:999" })).toBeNull();
   });
 
-  it("caches the OSM lookup and reuses it on the next call", async () => {
-    vi.mocked(redisGet).mockResolvedValueOnce(JSON.stringify(osmPlace()));
+  it("normalizes a legacy cached OSM lookup with no tags", async () => {
+    vi.mocked(redisGet).mockResolvedValueOnce(JSON.stringify(legacyOsmPlace()));
     stubAllModelsEmpty();
 
     const result = await service.details({ id: "osm:node:123456" });
 
     expect(result?.name).toBe("台北101");
+    expect(result?.accessibility).toMatchObject({
+      wheelchairAccess: null,
+      elevator: null,
+      ramp: null,
+      accessibleToilet: null,
+    });
     expect(lookupOsmPlace).not.toHaveBeenCalled();
   });
 
@@ -392,38 +407,112 @@ describe("details", () => {
   });
 
   describe("accessibility", () => {
-    it("is accessible/local-db when a local facility is nearby", async () => {
-      vi.mocked(getPlaceDetails).mockResolvedValue(googleDetails({ wheelchair: null }) as any);
+    it("keeps an untagged place unknown/none even when nearby facilities exist", async () => {
+      vi.mocked(getPlaceDetails).mockResolvedValue(googleDetails() as any);
       stubAllModelsEmpty();
       stubFind(A11y as any, [{ _id: "e1" }]);
 
       const r = await service.details({ id: "google:ChIJ123" });
-      expect(r?.accessibility).toMatchObject({
-        status: "accessible",
-        source: "local-db",
+
+      expect(r?.accessibility).toEqual({
+        status: "unknown",
+        wheelchair: null,
+        wheelchairAccess: null,
+        elevator: null,
+        ramp: null,
+        accessibleToilet: null,
         nearbyFacilityCount: 1,
+        source: "none",
       });
     });
 
-    it("is accessible/google when Google reports wheelchair yes and no local data", async () => {
-      vi.mocked(getPlaceDetails).mockResolvedValue(googleDetails({ wheelchair: "yes" }) as any);
+    it("is accessible/google when Google explicitly reports a wheelchair entrance", async () => {
+      vi.mocked(getPlaceDetails).mockResolvedValue(
+        googleDetails({ wheelchair: "yes", wheelchairAccessibleEntrance: true }) as any,
+      );
       stubAllModelsEmpty();
 
       const r = await service.details({ id: "google:ChIJ123" });
+
       expect(r?.accessibility).toMatchObject({
         status: "accessible",
         wheelchair: "yes",
+        wheelchairAccess: true,
+        elevator: null,
+        ramp: null,
+        accessibleToilet: null,
         source: "google",
       });
     });
 
-    it("is limited/google when Google reports partial accessibility", async () => {
+    it("preserves Google explicit false accessibility options", async () => {
+      vi.mocked(getPlaceDetails).mockResolvedValue(
+        googleDetails({
+          wheelchair: "no",
+          wheelchairAccessibleEntrance: false,
+          wheelchairAccessibleRestroom: false,
+        }) as any,
+      );
+      stubAllModelsEmpty();
+
+      const r = await service.details({ id: "google:ChIJ123" });
+
+      expect(r?.accessibility).toMatchObject({
+        status: "unknown",
+        wheelchair: "no",
+        wheelchairAccess: false,
+        elevator: null,
+        ramp: null,
+        accessibleToilet: false,
+        source: "google",
+      });
+    });
+
+    it("returns null Google fields when the upstream has no accessibility options", async () => {
+      vi.mocked(getPlaceDetails).mockResolvedValue(googleDetails() as any);
+      stubAllModelsEmpty();
+
+      const r = await service.details({ id: "google:ChIJ123" });
+
+      expect(r?.accessibility).toMatchObject({
+        status: "unknown",
+        wheelchair: null,
+        wheelchairAccess: null,
+        elevator: null,
+        ramp: null,
+        accessibleToilet: null,
+        source: "none",
+      });
+    });
+
+    it("keeps the adapter wheelchairPartial for a restroom-only Google place", async () => {
+      vi.mocked(getPlaceDetails).mockResolvedValue(
+        googleDetails({
+          wheelchairAccessibleRestroom: true,
+          wheelchairPartial: true,
+        }) as any,
+      );
+      stubAllModelsEmpty();
+
+      const r = await service.details({ id: "google:ChIJ123" });
+
+      expect(r?.accessibility).toMatchObject({
+        status: "limited",
+        wheelchair: "limited",
+        wheelchairAccess: null,
+        accessibleToilet: true,
+        source: "google",
+      });
+    });
+
+    it("is limited/google when the upstream provides a partial wheelchair signal", async () => {
       vi.mocked(getPlaceDetails).mockResolvedValue(
         googleDetails({ wheelchair: "no", wheelchairPartial: true }) as any,
       );
       stubAllModelsEmpty();
 
       const r = await service.details({ id: "google:ChIJ123" });
+
       expect(r?.accessibility).toMatchObject({
         status: "limited",
         wheelchair: "limited",
@@ -431,29 +520,119 @@ describe("details", () => {
       });
     });
 
-    it("is unknown with wheelchair no when Google reports not accessible", async () => {
-      vi.mocked(getPlaceDetails).mockResolvedValue(
-        googleDetails({ wheelchair: "no", wheelchairPartial: false }) as any,
-      );
-      stubAllModelsEmpty();
-
-      const r = await service.details({ id: "google:ChIJ123" });
-      expect(r?.accessibility).toMatchObject({
-        status: "unknown",
-        wheelchair: "no",
-        source: "google",
-      });
-    });
-
-    it("is unknown/none for an OSM place with no local facilities", async () => {
-      vi.mocked(lookupOsmPlace).mockResolvedValue(osmPlace() as any);
+    it("returns four null fields for an OSM place with no accessibility tags", async () => {
+      vi.mocked(lookupOsmPlace).mockResolvedValue(osmPlace({ tags: {} }) as any);
       stubAllModelsEmpty();
 
       const r = await service.details({ id: "osm:node:123456" });
+
       expect(r?.accessibility).toMatchObject({
         status: "unknown",
         wheelchair: null,
+        wheelchairAccess: null,
+        elevator: null,
+        ramp: null,
+        accessibleToilet: null,
         source: "none",
+      });
+    });
+
+    it("maps OSM wheelchair=no to explicit false", async () => {
+      vi.mocked(lookupOsmPlace).mockResolvedValue(
+        osmPlace({ tags: { wheelchair: "no" } }) as any,
+      );
+      stubAllModelsEmpty();
+
+      const r = await service.details({ id: "osm:node:123456" });
+
+      expect(r?.accessibility).toMatchObject({
+        status: "unknown",
+        wheelchair: "no",
+        wheelchairAccess: false,
+        source: "osm",
+      });
+    });
+
+    it("keeps OSM wheelchair=limited as null evidence and a limited status", async () => {
+      vi.mocked(lookupOsmPlace).mockResolvedValue(
+        osmPlace({ tags: { wheelchair: "limited" } }) as any,
+      );
+      stubAllModelsEmpty();
+
+      const r = await service.details({ id: "osm:node:123456" });
+
+      expect(r?.accessibility).toMatchObject({
+        status: "limited",
+        wheelchair: "limited",
+        wheelchairAccess: null,
+        source: "osm",
+      });
+    });
+
+    it("maps OSM elevator=no and highway=elevator to explicit evidence", async () => {
+      vi.mocked(lookupOsmPlace).mockResolvedValue(
+        osmPlace({ tags: { "elevator": "no", "highway": "elevator" } }) as any,
+      );
+      stubAllModelsEmpty();
+
+      const r = await service.details({ id: "osm:node:123456" });
+
+      expect(r?.accessibility).toMatchObject({
+        elevator: false,
+        source: "osm",
+      });
+    });
+
+    it("maps a Nominatim highway=elevator classification even with empty extratags", async () => {
+      vi.mocked(lookupOsmPlace).mockResolvedValue(
+        osmPlace({
+          placeClass: "highway",
+          placeType: "elevator",
+          tags: {},
+        }) as any,
+      );
+      stubAllModelsEmpty();
+
+      const r = await service.details({ id: "osm:node:123456" });
+
+      expect(r?.accessibility).toMatchObject({
+        status: "unknown",
+        wheelchairAccess: null,
+        elevator: true,
+        ramp: null,
+        accessibleToilet: null,
+        source: "osm",
+      });
+    });
+
+    it("does not treat arbitrary OSM class/type pairs as elevator evidence", async () => {
+      vi.mocked(lookupOsmPlace).mockResolvedValue(
+        osmPlace({ tags: {}, placeClass: "amenity", placeType: "restaurant" }) as any,
+      );
+      stubAllModelsEmpty();
+
+      const r = await service.details({ id: "osm:node:123456" });
+
+      expect(r?.accessibility).toMatchObject({
+        elevator: null,
+        source: "none",
+      });
+    });
+
+    it("maps explicit OSM ramp and toilet evidence without inferring wheelchair access", async () => {
+      vi.mocked(lookupOsmPlace).mockResolvedValue(
+        osmPlace({ tags: { ramp: "no", "toilets:wheelchair": "yes" } }) as any,
+      );
+      stubAllModelsEmpty();
+
+      const r = await service.details({ id: "osm:node:123456" });
+
+      expect(r?.accessibility).toMatchObject({
+        status: "unknown",
+        wheelchairAccess: null,
+        ramp: false,
+        accessibleToilet: true,
+        source: "osm",
       });
     });
   });

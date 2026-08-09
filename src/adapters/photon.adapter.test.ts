@@ -54,6 +54,7 @@ describe("searchOsmPlaces", () => {
           city: "台北市",
           postcode: "11049",
         },
+        tags: {},
       },
     ]);
   });
