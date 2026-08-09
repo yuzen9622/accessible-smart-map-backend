@@ -3,6 +3,7 @@ import { getCity, getCoordinates } from "../../adapters/google.adapter";
 import { parseRouteIntent } from "../ai/ai.service";
 import type { RouteIntent } from "../../types/ai";
 import { ResponseCode } from "../../types/code";
+import { getServiceCoverageConfig } from "../../config/coverage";
 import { ERROR_MESSAGE, ROUTE_WARNING } from "../../constants/messages";
 import type {
   A11yConstraints,
@@ -33,6 +34,7 @@ import {
   attachInternalSchedule,
   retainEarliestFutureRoute,
 } from "./route-schedule";
+import { preflightAccessibleRoute } from "./accessible-route.failure";
 
 import type {
   AccessibilityMode,
@@ -772,6 +774,14 @@ export async function planAccessibleRouteFromRequest(
 
   const lat = originCoords.latitude;
   const lng = originCoords.longitude;
+  const originLatLng: LatLng = { lat, lng };
+  const dest: LatLng = { lat: destCoords.latitude, lng: destCoords.longitude };
+
+  const preflight = preflightAccessibleRoute(
+    [originLatLng, ...waypoints, dest],
+    getServiceCoverageConfig(),
+  );
+  if (!preflight.ok) return preflight;
 
   const tCity = Date.now();
   const city = ((await resolveCityFromStops(lat, lng)) ??
@@ -786,8 +796,6 @@ export async function planAccessibleRouteFromRequest(
       ? parsedDeparture
       : undefined;
 
-  const originLatLng: LatLng = { lat, lng };
-  const dest: LatLng = { lat: destCoords.latitude, lng: destCoords.longitude };
   const waypointsOpt = waypoints.length ? waypoints : undefined;
 
   const tPlan = Date.now();

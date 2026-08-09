@@ -19,6 +19,7 @@ import type {
 } from "../../types/route";
 import type { RouteIntent } from "../../types/ai";
 import type { TaiwanCityEn } from "../../types/transit";
+import type { RouteFailureData } from "./accessible-route.failure";
 
 export type TagWeightMap = Record<string, Record<string, number>>;
 
@@ -137,6 +138,11 @@ export type PlanRouteResult =
         intent?: RouteIntent;
       };
     }
-  | { ok: false; status: ResponseCode; error: string };
+  | {
+      ok: false;
+      status: ResponseCode;
+      error: string;
+      data?: RouteFailureData;
+    };
 
 export type AnyLeg = WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg | DriveLeg;

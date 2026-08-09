@@ -41,9 +41,7 @@ vi.mock("./planners/otp-routing", () => ({
 // DB isolation: resolveCityFromStops does findOne().select().lean().
 vi.mock("../../model/bus-stop.model", () => ({
   default: {
-    findOne: () => ({
-      select: () => ({ lean: () => Promise.resolve({ city: "Taipei" }) }),
-    }),
+    findOne: vi.fn(),
   },
 }));
 
@@ -60,6 +58,8 @@ import { findNearbyParking, findNearby } from "../a11y/a11y.service";
 import { planOtpRoute, planOtpWalkDetailed } from "./planners/otp-routing";
 import { enrichLegIndoor } from "./planners/route-a11y";
 import { getCity } from "../../adapters/google.adapter";
+import BusStopModel from "../../model/bus-stop.model";
+import { ROUTE_MSG, ROUTE_REASON } from "../../constants/messages";
 import { ResponseCode } from "../../types/code";
 import { getWeatherAndAirQuality } from "../environment/environment.service";
 
@@ -94,6 +94,9 @@ const hasParkingGuide = (hl: string[]) =>
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.mocked(BusStopModel.findOne).mockReturnValue({
+    select: () => ({ lean: () => Promise.resolve({ city: "Taipei" }) }),
+  } as any);
   vi.mocked(getCity).mockResolvedValue("Taipei");
   vi.mocked(findNearby).mockResolvedValue({ nearbyOsm: [] } as any);
   vi.mocked(planOtpRoute).mockResolvedValue([]);
@@ -102,6 +105,27 @@ beforeEach(() => {
     routes: [],
   });
   vi.mocked(getWeatherAndAirQuality).mockResolvedValue({});
+});
+
+describe("planAccessibleRouteFromRequest preflight", () => {
+  it("short-circuits before city resolution and planner calls", async () => {
+    const res = await planAccessibleRouteFromRequest({
+      travelMode: "transit",
+      origin: { latitude: 25.04, longitude: 121.56 },
+      waypoints: [{ latitude: 27, longitude: 121.56 }],
+      destination: { latitude: 25.03, longitude: 121.55 },
+    });
+
+    expect(res).toEqual({
+      ok: false,
+      status: ResponseCode.UNPROCESSABLE_ENTITY,
+      error: ROUTE_MSG.OUT_OF_COVERAGE,
+      data: { reason: ROUTE_REASON.OUT_OF_COVERAGE },
+    });
+    expect(vi.mocked(BusStopModel.findOne)).not.toHaveBeenCalled();
+    expect(vi.mocked(getCity)).not.toHaveBeenCalled();
+    expect(vi.mocked(planOtpRoute)).not.toHaveBeenCalled();
+  });
 });
 
 describe("planAccessibleRouteFromRequest driving a11y highlights append", () => {

@@ -38,6 +38,26 @@ export const ROUTE_WARNING = {
     "目前候選路線仍包含無坡道樓梯，無法完全滿足避開樓梯條件",
 } as const;
 
+/**
+ * Stable domain reason codes for accessible-route failures. These stay in
+ * `data.reason`; the envelope `code` remains the HTTP status.
+ */
+export const ROUTE_REASON = {
+  OUT_OF_RANGE: "OUT_OF_RANGE",
+  OUT_OF_COVERAGE: "OUT_OF_COVERAGE",
+  NO_ACCESSIBLE_ROUTE: "NO_ACCESSIBLE_ROUTE",
+  NO_ROUTE: "NO_ROUTE",
+  UPSTREAM_TIMEOUT: "UPSTREAM_TIMEOUT",
+} as const;
+
+export const ROUTE_MSG = {
+  OUT_OF_RANGE: "起點與終點距離過遠",
+  OUT_OF_COVERAGE: "本服務目前涵蓋台灣",
+  NO_ACCESSIBLE_ROUTE: "找不到符合無障礙需求的路線",
+  NO_ROUTE: "找不到可行路線",
+  UPSTREAM_TIMEOUT: "路線規劃服務逾時，請稍後再試",
+} as const satisfies Record<keyof typeof ROUTE_REASON, string>;
+
 export const MEMORY_MSG = {
   CREATED: "記憶已建立",
   UPDATED: "記憶已更新",

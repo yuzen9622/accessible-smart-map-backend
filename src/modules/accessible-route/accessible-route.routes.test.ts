@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import request from "supertest";
+import { ROUTE_MSG, ROUTE_REASON } from "../../constants/messages";
+import { ResponseCode } from "../../types/code";
 
 // Mock only the service seam; the request still exercises router + validation
 // + controller + envelope (schema defaults / rejections happen before the mock).
@@ -313,5 +315,69 @@ describe("POST /api/v1/a11y/accessible-route travel modes + waypoints", () => {
 
     expect(res.status).toBe(503);
     expect(res.body.ok).toBe(false);
+  });
+
+  it("maps a service 422 outcome and preserves exact failure data", async () => {
+    mockPlan.mockResolvedValue({
+      ok: false,
+      status: ResponseCode.UNPROCESSABLE_ENTITY,
+      error: ROUTE_MSG.OUT_OF_RANGE,
+      data: {
+        reason: ROUTE_REASON.OUT_OF_RANGE,
+        maxDistanceKm: 100,
+      },
+    });
+
+    const res = await request(app)
+      .post(URL)
+      .send({
+        origin: { latitude: 25, longitude: 121 },
+        destination: { latitude: 25.1, longitude: 121.1 },
+      });
+
+    expect(res.status).toBe(ResponseCode.UNPROCESSABLE_ENTITY);
+    expect(res.body).toMatchObject({
+      ok: false,
+      status: "error",
+      code: ResponseCode.UNPROCESSABLE_ENTITY,
+      message: ROUTE_MSG.OUT_OF_RANGE,
+    });
+    expect(res.body.data).toEqual({
+      reason: ROUTE_REASON.OUT_OF_RANGE,
+      maxDistanceKm: 100,
+    });
+  });
+});
+
+describe("accessible-route OpenAPI", () => {
+  it("publishes the 422 reason contract without losing validation errors", async () => {
+    const res = await request(app).get("/api/v1/openapi.json");
+
+    expect(res.status).toBe(200);
+    expect(
+      res.body.paths["/a11y/accessible-route"].post.responses["422"],
+    ).toMatchObject({
+      description: expect.stringContaining(ROUTE_REASON.OUT_OF_RANGE),
+    });
+    expect(res.body.components.schemas.RouteFailureData).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        reason: { enum: Object.values(ROUTE_REASON) },
+        maxDistanceKm: { type: "number" },
+      },
+    });
+    expect(
+      res.body.components.schemas.ErrorResponse.properties.data.anyOf,
+    ).toEqual(
+      expect.arrayContaining([
+        { $ref: "#/components/schemas/RouteFailureData" },
+        expect.objectContaining({
+          properties: expect.objectContaining({
+            errors: expect.objectContaining({ type: "array" }),
+          }),
+        }),
+      ]),
+    );
   });
 });

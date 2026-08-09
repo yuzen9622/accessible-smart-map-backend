@@ -13,7 +13,14 @@ export async function accessibleRoute(
     const result = await planAccessibleRouteForHttp(req.body);
 
     if (!result.ok) {
-      return sendResponse(res, false, "error", result.status, result.error);
+      return sendResponse(
+        res,
+        false,
+        "error",
+        result.status,
+        result.error,
+        result.data,
+      );
     }
 
     return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, result.data);

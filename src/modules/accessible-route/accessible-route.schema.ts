@@ -1,6 +1,7 @@
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 import { registry } from "../../openapi/registry";
+import { ROUTE_MSG, ROUTE_REASON } from "../../constants/messages";
 import { RouteIntentSchema } from "../ai/ai.schema";
 
 extendZodWithOpenApi(z);
@@ -638,6 +639,47 @@ export const AccessibleRouteResponseSchema = z
   })
   .openapi("AccessibleRouteResponse");
 
+export const RouteFailureDataSchema = z
+  .object({
+    reason: z
+      .enum([
+        ROUTE_REASON.OUT_OF_RANGE,
+        ROUTE_REASON.OUT_OF_COVERAGE,
+        ROUTE_REASON.NO_ACCESSIBLE_ROUTE,
+        ROUTE_REASON.NO_ROUTE,
+        ROUTE_REASON.UPSTREAM_TIMEOUT,
+      ])
+      .openapi({
+        description:
+          `${ROUTE_REASON.OUT_OF_RANGE}: ${ROUTE_MSG.OUT_OF_RANGE}；` +
+          `${ROUTE_REASON.OUT_OF_COVERAGE}: ${ROUTE_MSG.OUT_OF_COVERAGE}。` +
+          "其餘 reason 保留供後續路線引擎失敗分類使用。",
+      }),
+    maxDistanceKm: z
+      .number()
+      .optional()
+      .openapi({
+        example: 100,
+        description:
+          "僅 reason=OUT_OF_RANGE 時出現；此次請求允許的相鄰點總距離上限（公里）。",
+      }),
+  })
+  .strict()
+  .openapi("RouteFailureData");
+
+const ValidationErrorDataSchema = z
+  .object({
+    errors: z.array(
+      z
+        .object({
+          path: z.string().openapi({ example: "origin" }),
+          message: z.string().openapi({ example: "Invalid input" }),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
 export const ErrorResponseSchema = z
   .object({
     ok: z.boolean().openapi({ example: false }),
@@ -646,9 +688,12 @@ export const ErrorResponseSchema = z
     message: z
       .string()
       .openapi({ example: "缺少參數或座標無法解析" }),
-    data: z.unknown().optional(),
+    data: z
+      .union([RouteFailureDataSchema, ValidationErrorDataSchema])
+      .optional(),
     accessToken: z.string().optional(),
   })
+  .strict()
   .openapi("ErrorResponse");
 
 registry.registerPath({
@@ -674,6 +719,12 @@ registry.registerPath({
     },
     400: {
       description: "缺少參數或座標無法解析",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    422: {
+      description:
+        `${ROUTE_REASON.OUT_OF_RANGE}（${ROUTE_MSG.OUT_OF_RANGE}）或 ` +
+        `${ROUTE_REASON.OUT_OF_COVERAGE}（${ROUTE_MSG.OUT_OF_COVERAGE}）`,
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     404: {
