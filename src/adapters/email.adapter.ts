@@ -1,8 +1,26 @@
 const RESEND_ENDPOINT = "https://api.resend.com/emails";
 const REQUEST_TIMEOUT_MS = 10_000;
+/** 密碼重設頁在前端的路徑（含語言前綴）。 */
+const PASSWORD_RESET_PATH = "/zh-TW/reset-password";
 
 function appBaseUrl(): string {
   return (process.env.APP_WEB_BASE_URL ?? "http://localhost:3000").replace(/\/+$/, "");
+}
+
+/**
+ * Build the password-reset page URL on the web frontend.
+ *
+ * The base URL defaults to `APP_WEB_BASE_URL` with trailing slashes stripped
+ * (falling back to localhost when unset). The one-time token is
+ * percent-encoded so tokens containing `+`, `/`, `=`, `&`, … survive the
+ * query string intact.
+ *
+ * @param token Raw reset token.
+ * @param baseUrl Overridable base URL (kept injectable for tests).
+ */
+export function buildPasswordResetUrl(token: string, baseUrl = appBaseUrl()): string {
+  const normalizedBase = baseUrl.replace(/\/+$/, "");
+  return `${normalizedBase}${PASSWORD_RESET_PATH}?token=${encodeURIComponent(token)}`;
 }
 
 function layout(title: string, bodyHtml: string): string {
@@ -105,7 +123,7 @@ export async function sendPasswordResetEmail(input: {
   name: string;
   token: string;
 }): Promise<void> {
-  const url = `${appBaseUrl()}/reset-password?token=${encodeURIComponent(input.token)}`;
+  const url = buildPasswordResetUrl(input.token);
   await sendEmail({
     to: input.to,
     subject: "重設你的密碼",
