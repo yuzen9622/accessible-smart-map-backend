@@ -10,19 +10,50 @@ import { haversineMeters } from "../../utils/geo";
 export type RouteFailureReason =
   (typeof ROUTE_REASON)[keyof typeof ROUTE_REASON];
 
-export interface RouteFailureData {
-  reason: RouteFailureReason;
+export interface RouteFailureData<Reason extends RouteFailureReason = RouteFailureReason> {
+  reason: Reason;
   maxDistanceKm?: number;
 }
 
+type RouteFailureStatus<Reason extends RouteFailureReason> =
+  Reason extends typeof ROUTE_REASON.UPSTREAM_TIMEOUT
+    ? ResponseCode.SERVICE_UNAVAILABLE
+    : ResponseCode.UNPROCESSABLE_ENTITY;
+
+export type RouteFailureResult<Reason extends RouteFailureReason = RouteFailureReason> = {
+  ok: false;
+  status: RouteFailureStatus<Reason>;
+  error: string;
+  data: RouteFailureData<Reason>;
+};
+
 export type RoutePreflightResult =
   | { ok: true }
-  | {
-      ok: false;
-      status: ResponseCode.UNPROCESSABLE_ENTITY;
-      error: string;
-      data: RouteFailureData;
-    };
+  | RouteFailureResult<
+      | typeof ROUTE_REASON.OUT_OF_RANGE
+      | typeof ROUTE_REASON.OUT_OF_COVERAGE
+    >;
+
+/**
+ * Build a stable route-engine failure envelope from one domain reason. The
+ * reason determines both its localized message and its HTTP status, so callers
+ * cannot accidentally return a 404 or a mismatched message for an engine
+ * outcome.
+ */
+export function routeFailure<Reason extends RouteFailureReason>(
+  reason: Reason,
+  extra: Omit<RouteFailureData<Reason>, "reason"> = {},
+): RouteFailureResult<Reason> {
+  const status = reason === ROUTE_REASON.UPSTREAM_TIMEOUT
+    ? ResponseCode.SERVICE_UNAVAILABLE
+    : ResponseCode.UNPROCESSABLE_ENTITY;
+  return {
+    ok: false,
+    status: status as RouteFailureStatus<Reason>,
+    error: ROUTE_MSG[reason],
+    data: { reason, ...extra } as RouteFailureData<Reason>,
+  };
+}
 
 /**
  * Validates normalized origin, waypoint, and destination coordinates before a
@@ -34,12 +65,7 @@ export function preflightAccessibleRoute(
   coverage: ServiceCoverageConfig,
 ): RoutePreflightResult {
   if (!points.every((point) => isWithinServiceCoverage(point, coverage.bbox))) {
-    return {
-      ok: false,
-      status: ResponseCode.UNPROCESSABLE_ENTITY,
-      error: ROUTE_MSG.OUT_OF_COVERAGE,
-      data: { reason: ROUTE_REASON.OUT_OF_COVERAGE },
-    };
+    return routeFailure(ROUTE_REASON.OUT_OF_COVERAGE);
   }
 
   let distanceKm = 0;
@@ -52,15 +78,9 @@ export function preflightAccessibleRoute(
   }
 
   if (distanceKm > coverage.maxRouteDistanceKm) {
-    return {
-      ok: false,
-      status: ResponseCode.UNPROCESSABLE_ENTITY,
-      error: ROUTE_MSG.OUT_OF_RANGE,
-      data: {
-        reason: ROUTE_REASON.OUT_OF_RANGE,
-        maxDistanceKm: coverage.maxRouteDistanceKm,
-      },
-    };
+    return routeFailure(ROUTE_REASON.OUT_OF_RANGE, {
+      maxDistanceKm: coverage.maxRouteDistanceKm,
+    });
   }
 
   return { ok: true };

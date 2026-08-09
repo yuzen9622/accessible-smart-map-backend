@@ -298,12 +298,13 @@ describe("POST /api/v1/a11y/accessible-route travel modes + waypoints", () => {
     expect(res.body.data.routes[0].accessibilityHighlights).toHaveLength(2);
   });
 
-  it("maps a service 503 outcome to HTTP 503", async () => {
+  it("maps UPSTREAM_TIMEOUT to the exact HTTP 503 envelope", async () => {
     mockPlan.mockResolvedValue({
       ok: false,
-      status: 503,
-      error: "路線規劃服務暫時忙線，請稍後再試",
-    } as any);
+      status: ResponseCode.SERVICE_UNAVAILABLE,
+      error: ROUTE_MSG.UPSTREAM_TIMEOUT,
+      data: { reason: ROUTE_REASON.UPSTREAM_TIMEOUT },
+    });
 
     const res = await request(app)
       .post(URL)
@@ -313,8 +314,14 @@ describe("POST /api/v1/a11y/accessible-route travel modes + waypoints", () => {
         travelMode: "drive",
       });
 
-    expect(res.status).toBe(503);
-    expect(res.body.ok).toBe(false);
+    expect(res.status).toBe(ResponseCode.SERVICE_UNAVAILABLE);
+    expect(res.body).toEqual({
+      ok: false,
+      status: "error",
+      code: ResponseCode.SERVICE_UNAVAILABLE,
+      message: ROUTE_MSG.UPSTREAM_TIMEOUT,
+      data: { reason: ROUTE_REASON.UPSTREAM_TIMEOUT },
+    });
   });
 
   it("maps a service 422 outcome and preserves exact failure data", async () => {
@@ -347,18 +354,49 @@ describe("POST /api/v1/a11y/accessible-route travel modes + waypoints", () => {
       maxDistanceKm: 100,
     });
   });
+  it.each([
+    [ROUTE_REASON.NO_ROUTE, ROUTE_MSG.NO_ROUTE],
+    [ROUTE_REASON.NO_ACCESSIBLE_ROUTE, ROUTE_MSG.NO_ACCESSIBLE_ROUTE],
+  ] as const)("maps %s to the exact HTTP 422 envelope", async (reason, message) => {
+    mockPlan.mockResolvedValue({
+      ok: false,
+      status: ResponseCode.UNPROCESSABLE_ENTITY,
+      error: message,
+      data: { reason },
+    });
+
+    const res = await request(app).post(URL).send({
+      origin: { latitude: 25, longitude: 121 },
+      destination: { latitude: 25.1, longitude: 121.1 },
+    });
+
+    expect(res.status).toBe(ResponseCode.UNPROCESSABLE_ENTITY);
+    expect(res.body).toEqual({
+      ok: false,
+      status: "error",
+      code: ResponseCode.UNPROCESSABLE_ENTITY,
+      message,
+      data: { reason },
+    });
+  });
 });
 
 describe("accessible-route OpenAPI", () => {
-  it("publishes the 422 reason contract without losing validation errors", async () => {
+  it("publishes 422 route reasons, the 503 timeout reason, and no stale route 404", async () => {
     const res = await request(app).get("/api/v1/openapi.json");
 
     expect(res.status).toBe(200);
-    expect(
-      res.body.paths["/a11y/accessible-route"].post.responses["422"],
-    ).toMatchObject({
-      description: expect.stringContaining(ROUTE_REASON.OUT_OF_RANGE),
-    });
+    const responses = res.body.paths["/a11y/accessible-route"].post.responses;
+    for (const reason of [
+      ROUTE_REASON.OUT_OF_RANGE,
+      ROUTE_REASON.OUT_OF_COVERAGE,
+      ROUTE_REASON.NO_ACCESSIBLE_ROUTE,
+      ROUTE_REASON.NO_ROUTE,
+    ]) {
+      expect(responses["422"].description).toContain(reason);
+    }
+    expect(responses["503"].description).toContain(ROUTE_REASON.UPSTREAM_TIMEOUT);
+    expect(responses["404"]).toBeUndefined();
     expect(res.body.components.schemas.RouteFailureData).toMatchObject({
       type: "object",
       additionalProperties: false,

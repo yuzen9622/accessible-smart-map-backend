@@ -652,8 +652,10 @@ export const RouteFailureDataSchema = z
       .openapi({
         description:
           `${ROUTE_REASON.OUT_OF_RANGE}: ${ROUTE_MSG.OUT_OF_RANGE}；` +
-          `${ROUTE_REASON.OUT_OF_COVERAGE}: ${ROUTE_MSG.OUT_OF_COVERAGE}。` +
-          "其餘 reason 保留供後續路線引擎失敗分類使用。",
+          `${ROUTE_REASON.OUT_OF_COVERAGE}: ${ROUTE_MSG.OUT_OF_COVERAGE}；` +
+          `${ROUTE_REASON.NO_ACCESSIBLE_ROUTE}: ${ROUTE_MSG.NO_ACCESSIBLE_ROUTE}；` +
+          `${ROUTE_REASON.NO_ROUTE}: ${ROUTE_MSG.NO_ROUTE}；` +
+          `${ROUTE_REASON.UPSTREAM_TIMEOUT}: ${ROUTE_MSG.UPSTREAM_TIMEOUT}。`,
       }),
     maxDistanceKm: z
       .number()
@@ -723,12 +725,10 @@ registry.registerPath({
     },
     422: {
       description:
-        `${ROUTE_REASON.OUT_OF_RANGE}（${ROUTE_MSG.OUT_OF_RANGE}）或 ` +
-        `${ROUTE_REASON.OUT_OF_COVERAGE}（${ROUTE_MSG.OUT_OF_COVERAGE}）`,
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-    404: {
-      description: "查無相連的路線（大眾運輸各段無解或行車路線無法規劃）",
+        `${ROUTE_REASON.OUT_OF_RANGE}（${ROUTE_MSG.OUT_OF_RANGE}）、` +
+        `${ROUTE_REASON.OUT_OF_COVERAGE}（${ROUTE_MSG.OUT_OF_COVERAGE}）、` +
+        `${ROUTE_REASON.NO_ACCESSIBLE_ROUTE}（${ROUTE_MSG.NO_ACCESSIBLE_ROUTE}）或 ` +
+        `${ROUTE_REASON.NO_ROUTE}（${ROUTE_MSG.NO_ROUTE}）`,
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     500: {
@@ -737,7 +737,8 @@ registry.registerPath({
     },
     503: {
       description:
-        "路線規劃服務暫時忙線（OTP 斷路器開啟或 Valhalla 上游錯誤）",
+        `${ROUTE_REASON.UPSTREAM_TIMEOUT}（${ROUTE_MSG.UPSTREAM_TIMEOUT}）：` +
+        "OTP 或 Valhalla 路線規劃上游暫時不可用",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },

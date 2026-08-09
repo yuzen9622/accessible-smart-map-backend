@@ -4,8 +4,10 @@
  * Queries a sidecar OpenTripPlanner 2.x server (GTFS GraphQL API) and maps its
  * itineraries into AccessibleRoute so they enter the same finalizeRoutes()
  * pipeline as the GTFS graph and TDX MaaS planners. This planner does NO a11y
- * enrichment (the orchestrator enriches the final top-3) and never throws: any
- * failure returns [] so the other planners' results still serve.
+ * enrichment (the orchestrator enriches the final top-3). Its detailed API
+ * distinguishes a genuine no-route result from an unavailable upstream; the
+ * compatibility array wrapper returns that outcome's routes. Internal mapping
+ * defects are not collapsed into an empty result.
  *
  * Endpoint: POST {OTP_BASE_URL}/otp/gtfs/v1  (GraphQL)
  */
@@ -956,35 +958,42 @@ function hasTerminalRoutingError(attempt: OtpPlanAttempt): boolean {
   );
 }
 
+export type OtpRoutePlanResult =
+  | { status: "ok"; routes: AccessibleRoute[] }
+  | { status: "no_route" | "unavailable"; routes: [] };
+
 /**
- * Plan transit routes via the OTP2 sidecar. Output is AccessibleRoute-compatible
- * and un-enriched (no a11y arrays, no highlights) — finalizeRoutes() handles
- * scoring, enrichment and overlays downstream. A continuation timeout stops the
- * ladder and records the invocation's single breaker failure; a continuation
- * non-timeout error stops without touching the breaker. Primary and snap errors,
- * plus wide timeouts, retain their existing accounting, while recordPlanFailure
- * guarantees at most one recorded failure per invocation. totalMinutes remains
- * OTP itinerary duration plus snap walks and excludes the wait from the original
- * query to a future continuation. Such a route keeps schedule waitInfo but omits
- * the first transit leg's estimatedWaitMinutes. The continuation gate requires
- * only that transit remain unusable and no terminal routing error has appeared;
- * positive no-service evidence is deliberately unnecessary because OTP can
- * return error-free but unusable itineraries. The named two-hop cap bounds this
- * rule even when a walk-only fallback exists. Each continuation anchor queries
- * the original coordinates first and retries the same anchor at snapped
- * endpoints only when original transit is still unusable.
- *
- * @param origin The [lat, lng] origin.
- * @param destination The [lat, lng] destination.
- * @param opts Planning options (departure time, transfer cap, mode, limit).
- * @returns The planned AccessibleRoute-compatible routes.
+ * Compatibility wrapper for array-based callers. New route-engine code should
+ * use {@link planOtpRouteDetailed} to preserve no-route versus unavailable.
  */
 export async function planOtpRoute(
   origin: { lat: number; lng: number },
   destination: { lat: number; lng: number },
   opts?: PlanOtpRouteOptions,
 ): Promise<AccessibleRoute[]> {
-  if (planBreaker.isOpen()) return [];
+  return (await planOtpRouteDetailed(origin, destination, opts)).routes;
+}
+
+/**
+ * Plan transit routes via the OTP2 sidecar with an explicit terminal outcome.
+ * Output routes remain AccessibleRoute-compatible and un-enriched —
+ * finalizeRoutes() handles scoring, enrichment and overlays downstream. The
+ * existing query ladder, schedule semantics, and route ordering are retained.
+ * Upstream request failures are reported as unavailable only when no usable
+ * route survives; a continuation failure may therefore preserve an existing
+ * transit or walk-fallback route.
+ *
+ * @param origin The [lat, lng] origin.
+ * @param destination The [lat, lng] destination.
+ * @param opts Planning options (departure time, transfer cap, mode, limit).
+ * @returns Routes with an explicit ok, no-route, or unavailable outcome.
+ */
+export async function planOtpRouteDetailed(
+  origin: { lat: number; lng: number },
+  destination: { lat: number; lng: number },
+  opts?: PlanOtpRouteOptions,
+): Promise<OtpRoutePlanResult> {
+  if (planBreaker.isOpen()) return { status: "unavailable", routes: [] };
 
   const departure = opts?.departureTime ?? new Date();
   const mode = opts?.mode ?? "normal";
@@ -994,6 +1003,7 @@ export async function planOtpRoute(
   const tm: Record<string, number> = {};
   const t0 = Date.now();
   let failureRecorded = false;
+  let sawUpstreamFailure = false;
   const recordPlanFailure = () => {
     if (failureRecorded) return;
     failureRecorded = true;
@@ -1020,6 +1030,7 @@ export async function planOtpRoute(
     primarySucceeded = true;
     planBreaker.recordSuccess();
   } catch (err) {
+    sawUpstreamFailure = true;
     recordPlanFailure();
     primaryTimedOut = isTimeout(err);
     if (primaryTimedOut) {
@@ -1035,7 +1046,7 @@ export async function planOtpRoute(
       "[route-timing] otp",
       JSON.stringify({ ...tm, snapped: false, routes: 0 }),
     );
-    return [];
+    return { status: "unavailable", routes: [] };
   }
   let itineraries = firstAttempt.itineraries;
   let selectedAttempt = firstAttempt;
@@ -1076,15 +1087,7 @@ export async function planOtpRoute(
 
   if (primarySucceeded) rememberOriginalWalkFallback(firstAttempt);
 
-  if (sawTerminalRoutingError) {
-    console.log(
-      "[route-timing] otp",
-      JSON.stringify({ ...tm, snapped: false, routes: 0 }),
-    );
-    return [];
-  }
-
-  if (primarySucceeded) {
+  if (primarySucceeded && !sawTerminalRoutingError) {
     const distinctRouteSignatures = new Set(
       itineraries
         .filter((it) => itineraryUsable(it, maxTransfers))
@@ -1122,35 +1125,27 @@ export async function planOtpRoute(
         planBreaker.recordSuccess();
         tm.otpWide = Date.now() - tWide;
       } catch (err) {
+        sawUpstreamFailure = true;
         tm.otpWide = Date.now() - tWide;
         if (isTimeout(err)) {
           recordPlanFailure();
           tm.primaryTimedOut = 1;
           console.warn("[otp-routing] wide query timed out", err);
-          console.log(
-            "[route-timing] otp",
-            JSON.stringify({ ...tm, snapped: false, routes: 0 }),
-          );
-          return [];
+        } else {
+          console.warn("[otp-routing] wide query failed, retaining narrow result", err);
         }
-        console.warn("[otp-routing] wide query failed, retaining narrow result", err);
       }
     }
-  }
-
-  if (!hasUsableTransit(itineraries) && sawTerminalRoutingError) {
-    console.log(
-      "[route-timing] otp",
-      JSON.stringify({ ...tm, snapped: false, routes: 0 }),
-    );
-    return [];
   }
 
   const straightDistM = haversineCoords(
     [origin.lng, origin.lat],
     [destination.lng, destination.lat],
   );
-  const needBusSnap = !hasUsableTransit(itineraries) || (straightDistM <= 3500 && !hasBusLeg(itineraries));
+  const needBusSnap =
+    !sawTerminalRoutingError &&
+    (!hasUsableTransit(itineraries) ||
+      (straightDistM <= 3500 && !hasBusLeg(itineraries)));
   let snappedOrigin: { lat: number; lng: number } | null = null;
   let snappedDestination: { lat: number; lng: number } | null = null;
   let pendingSnapPre: WalkLeg | null = null;
@@ -1212,28 +1207,17 @@ export async function planOtpRoute(
           );
         }
       } catch (err) {
+        sawUpstreamFailure = true;
         recordPlanFailure();
         continuationAllowed = false;
         if (isTimeout(err)) {
           tm.primaryTimedOut = 1;
           console.warn("[otp-routing] snap retry timed out", err);
-          console.log(
-            "[route-timing] otp",
-            JSON.stringify({ ...tm, snapped: false, routes: 0 }),
-          );
-          return [];
+        } else {
+          console.warn("[otp-routing] snap retry failed, falling back to walk-only", err);
         }
-        console.warn("[otp-routing] snap retry failed, falling back to walk-only", err);
       }
     }
-  }
-
-  if (!hasUsableTransit(itineraries) && sawTerminalRoutingError) {
-    console.log(
-      "[route-timing] otp",
-      JSON.stringify({ ...tm, snapped: false, routes: 0 }),
-    );
-    return [];
   }
 
   let continuationHops = 0;
@@ -1262,7 +1246,6 @@ export async function planOtpRoute(
       observeAttempt(originalContinuationAttempt);
       rememberOriginalWalkFallback(originalContinuationAttempt);
       planBreaker.recordSuccess();
-      if (sawTerminalRoutingError) break;
       if (hasUsableTransit(originalContinuationAttempt.itineraries)) {
         itineraries = originalContinuationAttempt.itineraries;
         selectedAttempt = originalContinuationAttempt;
@@ -1270,7 +1253,9 @@ export async function planOtpRoute(
         snapPost = null;
         break;
       }
+      if (sawTerminalRoutingError) break;
     } catch (err) {
+      sawUpstreamFailure = true;
       if (isTimeout(err)) {
         recordPlanFailure();
         console.warn("[otp-routing] continuation query timed out", err);
@@ -1293,7 +1278,6 @@ export async function planOtpRoute(
         );
         observeAttempt(snappedContinuationAttempt);
         planBreaker.recordSuccess();
-        if (sawTerminalRoutingError) break;
         if (hasUsableTransit(snappedContinuationAttempt.itineraries)) {
           itineraries = snappedContinuationAttempt.itineraries;
           selectedAttempt = snappedContinuationAttempt;
@@ -1301,7 +1285,9 @@ export async function planOtpRoute(
           snapPost = pendingSnapPost;
           break;
         }
+        if (sawTerminalRoutingError) break;
       } catch (err) {
+        sawUpstreamFailure = true;
         if (isTimeout(err)) {
           recordPlanFailure();
           console.warn("[otp-routing] continuation snap query timed out", err);
@@ -1315,14 +1301,6 @@ export async function planOtpRoute(
     nextContinuationAnchor = new Date(
       nextAnchor.getTime() + OTP_SEARCH_WINDOW_WIDE_S * 1000,
     );
-  }
-
-  if (!hasUsableTransit(itineraries) && sawTerminalRoutingError) {
-    console.log(
-      "[route-timing] otp",
-      JSON.stringify({ ...tm, snapped: false, routes: 0 }),
-    );
-    return [];
   }
 
   if (!hasUsableTransit(itineraries) && walkFallbackAttempt) {
@@ -1446,9 +1424,14 @@ export async function planOtpRoute(
     }),
   );
   const ordered = wheelchair ? rankByStairs(out) : out;
-  return retainEarliestFutureRoute(
+  const routes = retainEarliestFutureRoute(
     ordered,
     out,
     opts?.limit ?? OTP_NUM_ITINERARIES_WIDE,
   );
+  if (routes.length) return { status: "ok", routes };
+  if (sawTerminalRoutingError) return { status: "no_route", routes: [] };
+  return sawUpstreamFailure
+    ? { status: "unavailable", routes: [] }
+    : { status: "no_route", routes: [] };
 }

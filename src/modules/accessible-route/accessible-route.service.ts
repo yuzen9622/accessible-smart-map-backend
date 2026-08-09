@@ -4,17 +4,27 @@ import { parseRouteIntent } from "../ai/ai.service";
 import type { RouteIntent } from "../../types/ai";
 import { ResponseCode } from "../../types/code";
 import { getServiceCoverageConfig } from "../../config/coverage";
-import { ERROR_MESSAGE, ROUTE_WARNING } from "../../constants/messages";
+import {
+  ERROR_MESSAGE,
+  ROUTE_REASON,
+  ROUTE_WARNING,
+} from "../../constants/messages";
 import type {
   A11yConstraints,
   FindAccessibleRoutesOptions,
+  FindAccessibleRoutesResult,
   FindDrivingRoutesOptions,
   LatLng,
   PlanRouteRequest,
   PlanRouteResult,
   RoadTravelMode,
 } from "./accessible-route.types";
-export type { FindAccessibleRoutesOptions, PlanRouteRequest, PlanRouteResult };
+export type {
+  FindAccessibleRoutesOptions,
+  FindAccessibleRoutesResult,
+  PlanRouteRequest,
+  PlanRouteResult,
+};
 
 import type { IOsmA11y } from "../../types";
 import { TaiwanCityEn } from "../../types/transit";
@@ -34,7 +44,10 @@ import {
   attachInternalSchedule,
   retainEarliestFutureRoute,
 } from "./route-schedule";
-import { preflightAccessibleRoute } from "./accessible-route.failure";
+import {
+  preflightAccessibleRoute,
+  routeFailure,
+} from "./accessible-route.failure";
 
 import type {
   AccessibilityMode,
@@ -800,55 +813,86 @@ export async function planAccessibleRouteFromRequest(
 
   const tPlan = Date.now();
   let routes: AccessibleRoute[];
-
-  if (travelMode === "transit") {
-    routes = await findAccessibleRoutes(originLatLng, dest, city, {
-      mode: mode ?? "normal",
-      maxTransfers: (maxTransfers ?? 2) as 0 | 1 | 2,
-      departureTime: futureDeparture,
-      format: format === "compact" ? "compact" : "standard",
-      waypoints: waypointsOpt,
-      avoidStairs,
-      requireElevator,
-    });
+  const logRequestTiming = () =>
     console.log(
       "[route-timing] request",
       JSON.stringify({ geocode: geocodeMs, city: cityMs, plan: Date.now() - tPlan }),
     );
-    if (!routes.length) {
-      const { isOtpCircuitOpen } = await import("./planners/otp-routing");
-      if (isOtpCircuitOpen()) {
-        return {
-          ok: false,
-          status: ResponseCode.SERVICE_UNAVAILABLE,
-          error: "路線規劃服務暫時忙線，請稍後再試",
-        };
-      }
-      return {
-        ok: false,
-        status: ResponseCode.NOT_FOUND,
-        error:
-          "找不到連通的公車或捷運路線，請嘗試擴大搜尋範圍或確認出發地/目的地",
-      };
+
+  if (travelMode === "transit") {
+    const transitMode = mode ?? "normal";
+    const constraints = resolveA11yConstraints(transitMode, {
+      avoidStairs,
+      requireElevator,
+    });
+    const transitOptions: FindAccessibleRoutesOptions = {
+      mode: transitMode,
+      maxTransfers: (maxTransfers ?? 2) as 0 | 1 | 2,
+      departureTime: futureDeparture,
+      format: format === "compact" ? "compact" : "standard",
+      waypoints: waypointsOpt,
+      avoidStairs: constraints.avoidStairs,
+      requireElevator: constraints.requireElevator,
+    };
+    const transit = await findAccessibleRoutesDetailed(
+      originLatLng,
+      dest,
+      city,
+      transitOptions,
+    );
+    if (transit.status === "unavailable") {
+      logRequestTiming();
+      return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT);
     }
+    if (transit.status === "no_route") {
+      if (constraints.avoidStairs) {
+        const relaxed = await findAccessibleRoutesDetailed(
+          originLatLng,
+          dest,
+          city,
+          {
+            ...transitOptions,
+            avoidStairs: false,
+            requireElevator: false,
+          },
+        );
+        logRequestTiming();
+        if (relaxed.status === "unavailable") {
+          return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT);
+        }
+        if (relaxed.status === "ok" && relaxed.routes.length) {
+          return routeFailure(ROUTE_REASON.NO_ACCESSIBLE_ROUTE);
+        }
+        return routeFailure(ROUTE_REASON.NO_ROUTE);
+      }
+      logRequestTiming();
+      return routeFailure(ROUTE_REASON.NO_ROUTE);
+    }
+    routes = transit.routes;
+    logRequestTiming();
   } else if (travelMode === "walk") {
     const roadMode = mode ?? "normal";
     const constraints = resolveA11yConstraints(roadMode, { avoidStairs });
+    const walkPoints = [originLatLng, ...waypoints, dest];
     const otpWalk = await planOtpWalkSegments(
-      [originLatLng, ...waypoints, dest],
+      walkPoints,
       roadMode,
       constraints.avoidStairs,
     );
     if (otpWalk.status === "no_route") {
-      console.log(
-        "[route-timing] request",
-        JSON.stringify({ geocode: geocodeMs, city: cityMs, plan: Date.now() - tPlan }),
-      );
-      return {
-        ok: false,
-        status: ResponseCode.NOT_FOUND,
-        error: "找不到可行的步行路線，請確認出發地、中途點與目的地",
-      };
+      if (constraints.avoidStairs) {
+        const relaxed = await planOtpWalkSegments(walkPoints, roadMode, false);
+        logRequestTiming();
+        if (relaxed.status === "unavailable") {
+          return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT);
+        }
+        if (relaxed.status === "ok" && relaxed.routes.length) {
+          return routeFailure(ROUTE_REASON.NO_ACCESSIBLE_ROUTE);
+        }
+        return routeFailure(ROUTE_REASON.NO_ROUTE);
+      }
+      logRequestTiming();
+      return routeFailure(ROUTE_REASON.NO_ROUTE);
     }
     if (otpWalk.status === "ok") {
       routes = await finalizeDrivingRoutes(otpWalk.routes, "walk", dest);
@@ -865,13 +909,11 @@ export async function planAccessibleRouteFromRequest(
         avoidStairs: constraints.avoidStairs,
       });
       if (outcome.kind === "unavailable") {
-        return {
-          ok: false,
-          status: ResponseCode.SERVICE_UNAVAILABLE,
-          error: "路線規劃服務暫時忙線，請稍後再試",
-        };
+        logRequestTiming();
+        return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT);
       }
       if (outcome.kind === "error") {
+        logRequestTiming();
         return {
           ok: false,
           status: ResponseCode.INTERNAL_ERROR,
@@ -879,11 +921,8 @@ export async function planAccessibleRouteFromRequest(
         };
       }
       if (outcome.kind === "empty") {
-        return {
-          ok: false,
-          status: ResponseCode.NOT_FOUND,
-          error: "找不到可行的步行路線，請確認出發地、中途點與目的地",
-        };
+        logRequestTiming();
+        return routeFailure(ROUTE_REASON.NO_ROUTE);
       }
       routes = outcome.routes.map((route) => ({
         ...route,
@@ -892,10 +931,7 @@ export async function planAccessibleRouteFromRequest(
         ],
       }));
     }
-    console.log(
-      "[route-timing] request",
-      JSON.stringify({ geocode: geocodeMs, city: cityMs, plan: Date.now() - tPlan }),
-    );
+    logRequestTiming();
   } else {
     const roadMode = mode ?? "normal";
     const constraints = resolveA11yConstraints(roadMode, { avoidStairs });
@@ -951,16 +987,9 @@ export async function planAccessibleRouteFromRequest(
         avoidStairs: constraints.avoidStairs,
       });
     }
-    console.log(
-      "[route-timing] request",
-      JSON.stringify({ geocode: geocodeMs, city: cityMs, plan: Date.now() - tPlan }),
-    );
+    logRequestTiming();
     if (outcome.kind === "unavailable") {
-      return {
-        ok: false,
-        status: ResponseCode.SERVICE_UNAVAILABLE,
-        error: "路線規劃服務暫時忙線，請稍後再試",
-      };
+      return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT);
     }
     if (outcome.kind === "error") {
       return {
@@ -970,11 +999,7 @@ export async function planAccessibleRouteFromRequest(
       };
     }
     if (outcome.kind === "empty") {
-      return {
-        ok: false,
-        status: ResponseCode.NOT_FOUND,
-        error: "找不到可行的行車或步行路線，請確認出發地與目的地",
-      };
+      return routeFailure(ROUTE_REASON.NO_ROUTE);
     }
     routes = outcome.routes;
   }
@@ -1328,12 +1353,46 @@ async function planOtpWalkSegments(
   };
 }
 
+const OTP_TRANSPORT_ERROR_CODES = new Set([
+  "ECONNABORTED",
+  "ETIMEDOUT",
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "EPIPE",
+  "ERR_NETWORK",
+  "ERR_BAD_RESPONSE",
+]);
+
+function isOtpPlannerTransportFailure(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: unknown; isAxiosError?: unknown };
+  return candidate.isAxiosError === true ||
+    (typeof candidate.code === "string" &&
+      OTP_TRANSPORT_ERROR_CODES.has(candidate.code));
+}
+
+/** Compatibility wrapper for array-based callers. */
 export async function findAccessibleRoutes(
+  origin: LatLng,
+  destination: LatLng,
+  city: TaiwanCityEn,
+  opts: FindAccessibleRoutesOptions = {},
+): Promise<AccessibleRoute[]> {
+  return (await findAccessibleRoutesDetailed(origin, destination, city, opts)).routes;
+}
+
+/**
+ * Plan transit routes while preserving upstream-unavailable versus genuine
+ * no-route outcomes across every waypoint segment.
+ */
+export async function findAccessibleRoutesDetailed(
   origin: LatLng,
   destination: LatLng,
   _city: TaiwanCityEn,
   opts: FindAccessibleRoutesOptions = {},
-): Promise<AccessibleRoute[]> {
+): Promise<FindAccessibleRoutesResult> {
   const mode = opts.mode ?? "normal";
   const constraints = resolveA11yConstraints(mode, {
     avoidStairs: opts.avoidStairs,
@@ -1341,25 +1400,39 @@ export async function findAccessibleRoutes(
   });
   const maxTransfers = opts.maxTransfers ?? 1;
   const waypoints = opts.waypoints ?? [];
-  const { planOtpRoute } = await import("./planners/otp-routing");
+  const { planOtpRouteDetailed } = await import("./planners/otp-routing");
+  const runOtpSegment = async (
+    from: LatLng,
+    to: LatLng,
+    segmentOpts: Parameters<typeof planOtpRouteDetailed>[2],
+  ): Promise<FindAccessibleRoutesResult> => {
+    try {
+      return await planOtpRouteDetailed(from, to, segmentOpts);
+    } catch (error) {
+      if (!isOtpPlannerTransportFailure(error)) throw error;
+      console.warn("[accessible-route] OTP transit planner transport failure", error);
+      return { status: "unavailable", routes: [] };
+    }
+  };
   const t0 = Date.now();
   const envPromise = getWeatherAndAirQuality(destination.lat, destination.lng)
     .catch(() => undefined);
 
   if (!waypoints.length) {
-    const otpRoutes = await planOtpRoute(origin, destination, {
+    const otp = await runOtpSegment(origin, destination, {
       maxTransfers,
       mode,
       avoidStairs: constraints.avoidStairs,
       departureTime: opts.departureTime,
-    }).catch((): AccessibleRoute[] => []);
+    });
     console.log(
       "[route-timing] planners",
       JSON.stringify({ otp: Date.now() - t0 }),
     );
-    if (!otpRoutes.length) return [];
-    return finalizeRoutes(
-      otpRoutes,
+    if (otp.status !== "ok") return otp;
+    if (!otp.routes.length) return { status: "no_route", routes: [] };
+    const routes = await finalizeRoutes(
+      otp.routes,
       origin,
       destination,
       mode,
@@ -1368,6 +1441,9 @@ export async function findAccessibleRoutes(
       opts.departureTime,
       envPromise,
     );
+    return routes.length
+      ? { status: "ok", routes }
+      : { status: "no_route", routes: [] };
   }
 
   // Multi-waypoint transit: plan each origin→wp→…→dest segment sequentially,
@@ -1383,15 +1459,16 @@ export async function findAccessibleRoutes(
   let cursor = opts.departureTime ?? new Date();
   const segments: AccessibleRoute[] = [];
   for (const [from, to] of segmentPairs) {
-    const res = await planOtpRoute(from, to, {
+    const result = await runOtpSegment(from, to, {
       maxTransfers,
       mode,
       avoidStairs: constraints.avoidStairs,
       departureTime: cursor,
       limit: 1,
-    }).catch((): AccessibleRoute[] => []);
-    if (!res.length) return [];
-    const best = res[0];
+    });
+    if (result.status !== "ok") return result;
+    const best = result.routes[0];
+    if (!best) return { status: "no_route", routes: [] };
     segments.push(best);
     const segmentEndTime =
       typeof best._scheduledEndTime === "number"
@@ -1407,7 +1484,7 @@ export async function findAccessibleRoutes(
     }),
   );
   const combined = combineSegments(segments);
-  return finalizeRoutes(
+  const routes = await finalizeRoutes(
     [combined],
     origin,
     destination,
@@ -1417,4 +1494,7 @@ export async function findAccessibleRoutes(
     opts.departureTime,
     envPromise,
   );
+  return routes.length
+    ? { status: "ok", routes }
+    : { status: "no_route", routes: [] };
 }

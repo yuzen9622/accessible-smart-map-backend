@@ -22,6 +22,7 @@ vi.mock("./planners/otp-routing", async (importActual) => {
   return {
     ...actual,
     planOtpRoute: vi.fn(),
+    planOtpRouteDetailed: vi.fn(),
     planOtpWalkDetailed: vi.fn(),
     isOtpCircuitOpen: vi.fn().mockReturnValue(false),
   };

@@ -40,6 +40,7 @@ import {
   PLAN_QUERY,
   SUPPORTED_TRANSIT_MODES,
   planOtpRoute,
+  planOtpRouteDetailed,
 } from "./otp-routing";
 
 const origin = { lat: 25.041, lng: 121.565 };
@@ -276,6 +277,19 @@ describe("planOtpRoute search windows and timeouts", () => {
     expect(routes.map((route) => route.routeName)).toEqual(["R1"]);
   });
 
+  it("keeps a usable narrow route when the wide query times out", async () => {
+    post
+      .mockResolvedValueOnce(okResp([transitItinerary("R1")]))
+      .mockRejectedValueOnce({ code: "ECONNABORTED" });
+
+    const result = await planOtpRouteDetailed(origin, destination);
+
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.routes.map((route) => route.routeName)).toEqual(["R1"]);
+    expect(post).toHaveBeenCalledTimes(2);
+  });
+
   it("continues to the next service day and preserves absolute schedule semantics", async () => {
     const departureTime = new Date("2030-01-01T13:51:00.000Z");
     const scheduledDeparture = new Date("2030-01-01T22:20:00.000Z").getTime();
@@ -506,15 +520,52 @@ describe("planOtpRoute search windows and timeouts", () => {
     );
   });
 
-  it("stops the continuation ladder after a continuation timeout", async () => {
+  it("reports unavailable when a continuation timeout leaves no usable route", async () => {
     const noTransit = [{ code: "NO_TRANSIT_CONNECTION_IN_SEARCH_WINDOW" }];
     post
       .mockResolvedValueOnce(okResp([], noTransit))
       .mockResolvedValueOnce(okResp([], noTransit))
       .mockRejectedValueOnce({ code: "ETIMEDOUT" });
 
-    await expect(planOtpRoute(origin, destination)).resolves.toEqual([]);
+    await expect(planOtpRouteDetailed(origin, destination)).resolves.toEqual({
+      status: "unavailable",
+      routes: [],
+    });
     expect(post).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps a usable walk fallback when a continuation times out", async () => {
+    const noTransit = [{ code: "NO_TRANSIT_CONNECTION_IN_SEARCH_WINDOW" }];
+    post
+      .mockResolvedValueOnce(okResp([walkOnlyItinerary()], noTransit))
+      .mockResolvedValueOnce(okResp([], noTransit))
+      .mockRejectedValueOnce({ code: "ETIMEDOUT" });
+
+    const result = await planOtpRouteDetailed(origin, destination);
+
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.routes).toHaveLength(1);
+    expect(result.routes[0].routeName).toBe("步行路線");
+  });
+
+  it("reports no_route after successful queries produce no usable itinerary", async () => {
+    post.mockResolvedValue(okResp([]));
+
+    await expect(planOtpRouteDetailed(origin, destination)).resolves.toEqual({
+      status: "no_route",
+      routes: [],
+    });
+  });
+
+  it("reports successful routes and keeps the array wrapper compatible", async () => {
+    post.mockResolvedValue(okResp(threeDistinctTransitItineraries()));
+
+    const detailed = await planOtpRouteDetailed(origin, destination);
+
+    expect(detailed.status).toBe("ok");
+    if (detailed.status !== "ok") return;
+    await expect(planOtpRoute(origin, destination)).resolves.toEqual(detailed.routes);
   });
 
   it("caps the continuation ladder at two hops", async () => {
@@ -556,22 +607,54 @@ describe("planOtpRoute search windows and timeouts", () => {
     expect(routes[0].legs[0]).toMatchObject({ type: "WALK" });
   });
 
-  it("returns immediately after a primary timeout", async () => {
+  it("reports unavailable immediately after a primary timeout", async () => {
     post.mockRejectedValueOnce({ code: "ECONNABORTED" });
 
-    await expect(planOtpRoute(origin, destination)).resolves.toEqual([]);
+    await expect(planOtpRouteDetailed(origin, destination)).resolves.toEqual({
+      status: "unavailable",
+      routes: [],
+    });
     expect(post).toHaveBeenCalledTimes(1);
   });
 
   it.each(["LOCATION_NOT_FOUND", "OUTSIDE_BOUNDS"])(
-    "short-circuits the terminal routing error %s",
+    "returns no_route for terminal routing error %s without a usable itinerary",
     async (code) => {
       post.mockResolvedValueOnce(okResp([], [{ code }]));
 
-      await expect(planOtpRoute(origin, destination)).resolves.toEqual([]);
+      await expect(planOtpRouteDetailed(origin, destination)).resolves.toEqual({
+        status: "no_route",
+        routes: [],
+      });
       expect(post).toHaveBeenCalledTimes(1);
     },
   );
+
+  it("returns a usable itinerary that accompanies a terminal routing error", async () => {
+    post.mockResolvedValueOnce(
+      okResp([transitItinerary("R1")], [{ code: "LOCATION_NOT_FOUND" }]),
+    );
+
+    const result = await planOtpRouteDetailed(origin, destination);
+
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.routes.map((route) => route.routeName)).toEqual(["R1"]);
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns a walk fallback that accompanies a terminal routing error", async () => {
+    post.mockResolvedValueOnce(
+      okResp([walkOnlyItinerary()], [{ code: "LOCATION_NOT_FOUND" }]),
+    );
+
+    const result = await planOtpRouteDetailed(origin, destination);
+
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.routes.map((route) => route.routeName)).toEqual(["步行路線"]);
+    expect(post).toHaveBeenCalledTimes(1);
+  });
 
   it("keeps the snap flow after a non-timeout primary error", async () => {
     busLean.mockResolvedValue([
@@ -589,13 +672,56 @@ describe("planOtpRoute search windows and timeouts", () => {
     expect(post.mock.calls.length).toBeGreaterThan(1);
   });
 
-  it("returns after a wide-query timeout without issuing a snap query", async () => {
+  it("reports unavailable only after a wide timeout when later queries leave no usable route", async () => {
     post
       .mockResolvedValueOnce(okResp([]))
+      .mockRejectedValueOnce({ code: "ECONNABORTED" })
       .mockRejectedValueOnce({ code: "ECONNABORTED" });
 
-    await expect(planOtpRoute(origin, destination)).resolves.toEqual([]);
-    expect(post).toHaveBeenCalledTimes(2);
+    await expect(planOtpRouteDetailed(origin, destination)).resolves.toEqual({
+      status: "unavailable",
+      routes: [],
+    });
+    expect(post).toHaveBeenCalledTimes(3);
+  });
+
+  it("reports unavailable after a snap retry timeout leaves no usable output", async () => {
+    busLean.mockResolvedValue([
+      {
+        location: { coordinates: [121.565, 25.041] },
+        stopName: { Zh_tw: "公車站" },
+      },
+    ]);
+    post
+      .mockResolvedValueOnce(okResp([]))
+      .mockResolvedValueOnce(okResp([]))
+      .mockRejectedValueOnce({ code: "ETIMEDOUT" });
+
+    await expect(planOtpRouteDetailed(origin, destination)).resolves.toEqual({
+      status: "unavailable",
+      routes: [],
+    });
+    expect(post).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps a walk fallback when the snap retry times out", async () => {
+    busLean.mockResolvedValue([
+      {
+        location: { coordinates: [121.565, 25.041] },
+        stopName: { Zh_tw: "公車站" },
+      },
+    ]);
+    post
+      .mockResolvedValueOnce(okResp([walkOnlyItinerary()]))
+      .mockResolvedValueOnce(okResp([]))
+      .mockRejectedValueOnce({ code: "ETIMEDOUT" });
+
+    const result = await planOtpRouteDetailed(origin, destination);
+
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.routes.map((route) => route.routeName)).toEqual(["步行路線"]);
+    expect(post).toHaveBeenCalledTimes(3);
   });
 
   it("keeps the narrow window for snap after a non-timeout wide-query error", async () => {
@@ -670,6 +796,9 @@ describe("planOtpRoute search windows and timeouts", () => {
       isolatedOtpRouting.planOtpRoute(origin, destination),
     ).resolves.toEqual([]);
     expect(isolatedOtpRouting.isOtpCircuitOpen()).toBe(true);
+    await expect(
+      isolatedOtpRouting.planOtpRouteDetailed(origin, destination),
+    ).resolves.toEqual({ status: "unavailable", routes: [] });
     expect(isolatedPost).toHaveBeenCalledTimes(6);
 
     vi.doUnmock("axios");

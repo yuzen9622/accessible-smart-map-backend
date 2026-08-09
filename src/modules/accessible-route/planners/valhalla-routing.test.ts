@@ -5,7 +5,10 @@ import { planOtpWalkDetailed } from "./otp-routing";
 import { decodeValhallaShape, planValhallaRoute, ValhallaRoutingError } from "./valhalla-routing";
 
 vi.mock("../../../adapters/valhalla.adapter", () => ({ computeValhallaRoutes: vi.fn() }));
-vi.mock("./otp-routing", () => ({ planOtpWalkDetailed: vi.fn() }));
+vi.mock("./otp-routing", () => ({
+  planOtpRouteDetailed: vi.fn(),
+  planOtpWalkDetailed: vi.fn(),
+}));
 const compute = vi.mocked(computeValhallaRoutes);
 const otpWalk = vi.mocked(planOtpWalkDetailed);
 

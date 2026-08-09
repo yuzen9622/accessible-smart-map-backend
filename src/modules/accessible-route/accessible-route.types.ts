@@ -88,6 +88,11 @@ export interface FindAccessibleRoutesOptions {
   requireElevator?: boolean;
 }
 
+/** Detailed transit planner outcome for callers that must distinguish no route from an unavailable upstream. */
+export type FindAccessibleRoutesResult =
+  | { status: "ok"; routes: AccessibleRoute[] }
+  | { status: "no_route" | "unavailable"; routes: [] };
+
 export interface PlanRoadRouteOptions {
   travelMode: RoadTravelMode;
   waypoints?: LatLng[];

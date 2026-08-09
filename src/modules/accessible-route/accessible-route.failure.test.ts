@@ -3,12 +3,41 @@ import type { ServiceCoverageConfig } from "../../config/coverage";
 import { ROUTE_MSG, ROUTE_REASON } from "../../constants/messages";
 import { ResponseCode } from "../../types/code";
 import { haversineMeters } from "../../utils/geo";
-import { preflightAccessibleRoute } from "./accessible-route.failure";
+import {
+  preflightAccessibleRoute,
+  routeFailure,
+} from "./accessible-route.failure";
 
 const taiwanCoverage: ServiceCoverageConfig = {
   bbox: [117.9, 21.85, 122.6, 26.55],
   maxRouteDistanceKm: 100,
 };
+
+describe("routeFailure", () => {
+  it("maps route-engine no-route reasons to 422 with their centralized messages", () => {
+    expect(routeFailure(ROUTE_REASON.NO_ROUTE)).toEqual({
+      ok: false,
+      status: ResponseCode.UNPROCESSABLE_ENTITY,
+      error: ROUTE_MSG.NO_ROUTE,
+      data: { reason: ROUTE_REASON.NO_ROUTE },
+    });
+    expect(routeFailure(ROUTE_REASON.NO_ACCESSIBLE_ROUTE)).toEqual({
+      ok: false,
+      status: ResponseCode.UNPROCESSABLE_ENTITY,
+      error: ROUTE_MSG.NO_ACCESSIBLE_ROUTE,
+      data: { reason: ROUTE_REASON.NO_ACCESSIBLE_ROUTE },
+    });
+  });
+
+  it("maps an upstream timeout to 503 with its centralized message", () => {
+    expect(routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT)).toEqual({
+      ok: false,
+      status: ResponseCode.SERVICE_UNAVAILABLE,
+      error: ROUTE_MSG.UPSTREAM_TIMEOUT,
+      data: { reason: ROUTE_REASON.UPSTREAM_TIMEOUT },
+    });
+  });
+});
 
 describe("preflightAccessibleRoute", () => {
   it("rejects an out-of-coverage waypoint before evaluating total distance", () => {

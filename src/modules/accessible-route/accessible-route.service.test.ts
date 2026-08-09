@@ -34,6 +34,7 @@ vi.mock("./planners/route-a11y", () => ({
 // The transit branch dynamic-imports both from the OTP planner.
 vi.mock("./planners/otp-routing", () => ({
   planOtpRoute: vi.fn().mockResolvedValue([]),
+  planOtpRouteDetailed: vi.fn(),
   planOtpWalkDetailed: vi.fn(),
   isOtpCircuitOpen: () => false,
 }));
@@ -55,7 +56,7 @@ vi.mock("../../adapters/google.adapter", async (importActual) => {
 import { planAccessibleRouteFromRequest } from "./accessible-route.service";
 import { planValhallaRoute, ValhallaRoutingError } from "./planners/valhalla-routing";
 import { findNearbyParking, findNearby } from "../a11y/a11y.service";
-import { planOtpRoute, planOtpWalkDetailed } from "./planners/otp-routing";
+import { planOtpRouteDetailed, planOtpWalkDetailed } from "./planners/otp-routing";
 import { enrichLegIndoor } from "./planners/route-a11y";
 import { getCity } from "../../adapters/google.adapter";
 import BusStopModel from "../../model/bus-stop.model";
@@ -68,6 +69,9 @@ const driveRequest = {
   origin: { latitude: 25.04, longitude: 121.56 },
   destination: { latitude: 25.03, longitude: 121.55 },
 };
+
+const otpTransitOk = (routes: any[]) => ({ status: "ok" as const, routes });
+const otpTransitNoRoute = () => ({ status: "no_route" as const, routes: [] });
 
 // Well-formed parking doc: the caller reads location.coordinates + placeName.
 const parkingFixture = [
@@ -99,7 +103,7 @@ beforeEach(() => {
   } as any);
   vi.mocked(getCity).mockResolvedValue("Taipei");
   vi.mocked(findNearby).mockResolvedValue({ nearbyOsm: [] } as any);
-  vi.mocked(planOtpRoute).mockResolvedValue([]);
+  vi.mocked(planOtpRouteDetailed).mockResolvedValue(otpTransitNoRoute());
   vi.mocked(planOtpWalkDetailed).mockResolvedValue({
     status: "no_route",
     routes: [],
@@ -124,7 +128,7 @@ describe("planAccessibleRouteFromRequest preflight", () => {
     });
     expect(vi.mocked(BusStopModel.findOne)).not.toHaveBeenCalled();
     expect(vi.mocked(getCity)).not.toHaveBeenCalled();
-    expect(vi.mocked(planOtpRoute)).not.toHaveBeenCalled();
+    expect(vi.mocked(planOtpRouteDetailed)).not.toHaveBeenCalled();
   });
 });
 
@@ -240,25 +244,30 @@ describe("planAccessibleRouteFromRequest parking-aware arrival", () => {
     expect(hasParkingGuide(res.data!.routes[0].accessibilityHighlights)).toBe(false);
   });
 
-  it("returns NOT_FOUND when both the parking bay and the true dest are unreachable", async () => {
+  it("returns 422 NO_ROUTE when both the parking bay and true destination are unreachable", async () => {
     vi.mocked(findNearbyParking).mockResolvedValue(parkingFixture as any);
     vi.mocked(planValhallaRoute).mockResolvedValue([] as any);
 
-    const res = await planAccessibleRouteFromRequest(driveRequest);
-
-    expect(res.ok).toBe(false);
-    expect(res.status).toBe(ResponseCode.NOT_FOUND);
+    await expect(planAccessibleRouteFromRequest(driveRequest)).resolves.toEqual({
+      ok: false,
+      status: ResponseCode.UNPROCESSABLE_ENTITY,
+      error: ROUTE_MSG.NO_ROUTE,
+      data: { reason: ROUTE_REASON.NO_ROUTE },
+    });
+    expect(vi.mocked(planValhallaRoute)).toHaveBeenCalledTimes(2);
   });
 
-  it("does NOT retry (and stays 503) when the first plan is upstream-unavailable", async () => {
+  it("returns 503 UPSTREAM_TIMEOUT without retrying when the first plan is unavailable", async () => {
     vi.mocked(findNearbyParking).mockResolvedValue(parkingFixture as any);
     vi.mocked(planValhallaRoute).mockRejectedValue(new ValhallaRoutingError("upstream"));
 
-    const res = await planAccessibleRouteFromRequest(driveRequest);
-
+    await expect(planAccessibleRouteFromRequest(driveRequest)).resolves.toEqual({
+      ok: false,
+      status: ResponseCode.SERVICE_UNAVAILABLE,
+      error: ROUTE_MSG.UPSTREAM_TIMEOUT,
+      data: { reason: ROUTE_REASON.UPSTREAM_TIMEOUT },
+    });
     expect(vi.mocked(planValhallaRoute).mock.calls).toHaveLength(1);
-    expect(res.ok).toBe(false);
-    expect(res.status).toBe(ResponseCode.SERVICE_UNAVAILABLE);
   });
 
   it("does NOT retry (and stays 500) when the first plan errors", async () => {
@@ -357,17 +366,85 @@ describe("planAccessibleRouteFromRequest walk mode OTP", () => {
     expect(highlights.some((h) => h.includes("電梯"))).toBe(true);
   });
 
-  it("returns 404 when OTP has no route for a walking segment", async () => {
+  it("returns 422 NO_ROUTE when OTP has no route without an effective stair constraint", async () => {
     vi.mocked(planOtpWalkDetailed).mockResolvedValue({
       status: "no_route",
       routes: [],
     });
 
-    const res = await planAccessibleRouteFromRequest(walkRequest);
-
-    expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.status).toBe(ResponseCode.NOT_FOUND);
+    await expect(planAccessibleRouteFromRequest(walkRequest)).resolves.toEqual({
+      ok: false,
+      status: ResponseCode.UNPROCESSABLE_ENTITY,
+      error: ROUTE_MSG.NO_ROUTE,
+      data: { reason: ROUTE_REASON.NO_ROUTE },
+    });
     expect(vi.mocked(planValhallaRoute)).not.toHaveBeenCalled();
+  });
+
+  it("proves a stair constraint caused no route with one relaxed OTP retry", async () => {
+    vi.mocked(planOtpWalkDetailed)
+      .mockResolvedValueOnce({ status: "no_route", routes: [] })
+      .mockResolvedValueOnce({ status: "ok", routes: [walkRoute()] as any });
+
+    await expect(planAccessibleRouteFromRequest({
+      ...walkRequest,
+      mode: "elderly",
+      avoidStairs: true,
+    })).resolves.toEqual({
+      ok: false,
+      status: ResponseCode.UNPROCESSABLE_ENTITY,
+      error: ROUTE_MSG.NO_ACCESSIBLE_ROUTE,
+      data: { reason: ROUTE_REASON.NO_ACCESSIBLE_ROUTE },
+    });
+    expect(vi.mocked(planOtpWalkDetailed)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(planOtpWalkDetailed).mock.calls[0][2]).toEqual({
+      mode: "elderly",
+      avoidStairs: true,
+    });
+    expect(vi.mocked(planOtpWalkDetailed).mock.calls[1][2]).toEqual({
+      mode: "elderly",
+      avoidStairs: false,
+    });
+  });
+
+  it("returns 503 UPSTREAM_TIMEOUT when the relaxed OTP walk retry is unavailable", async () => {
+    vi.mocked(planOtpWalkDetailed)
+      .mockResolvedValueOnce({ status: "no_route", routes: [] })
+      .mockResolvedValueOnce({ status: "unavailable", routes: [] });
+
+    await expect(planAccessibleRouteFromRequest({
+      ...walkRequest,
+      mode: "elderly",
+      avoidStairs: true,
+    })).resolves.toEqual({
+      ok: false,
+      status: ResponseCode.SERVICE_UNAVAILABLE,
+      error: ROUTE_MSG.UPSTREAM_TIMEOUT,
+      data: { reason: ROUTE_REASON.UPSTREAM_TIMEOUT },
+    });
+  });
+
+  it("returns structured failures when the OTP-unavailable Valhalla fallback cannot route", async () => {
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "unavailable",
+      routes: [],
+    });
+    vi.mocked(planValhallaRoute)
+      .mockRejectedValueOnce(new ValhallaRoutingError("upstream"))
+      .mockResolvedValueOnce([] as any);
+
+    await expect(planAccessibleRouteFromRequest(walkRequest)).resolves.toEqual({
+      ok: false,
+      status: ResponseCode.SERVICE_UNAVAILABLE,
+      error: ROUTE_MSG.UPSTREAM_TIMEOUT,
+      data: { reason: ROUTE_REASON.UPSTREAM_TIMEOUT },
+    });
+    await expect(planAccessibleRouteFromRequest(walkRequest)).resolves.toEqual({
+      ok: false,
+      status: ResponseCode.UNPROCESSABLE_ENTITY,
+      error: ROUTE_MSG.NO_ROUTE,
+      data: { reason: ROUTE_REASON.NO_ROUTE },
+    });
   });
 
   it("falls back to marked Valhalla when OTP is unavailable", async () => {
@@ -464,7 +541,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
   };
 
   it("測試 Case A: 政大 ➔ 台北車站 (輪椅模式公車路徑規劃)", async () => {
-    vi.mocked(planOtpRoute).mockResolvedValue([rooseveltBusRoute] as any);
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue(otpTransitOk([rooseveltBusRoute] as any));
 
     const req = {
       travelMode: "transit" as const,
@@ -485,7 +562,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
     expect(primaryRoute.transferCount).toBe(0);
     expect(primaryRoute.legs.some((l) => l.type === "BUS")).toBe(true);
 
-    expect(vi.mocked(planOtpRoute)).toHaveBeenCalledWith(
+    expect(vi.mocked(planOtpRouteDetailed)).toHaveBeenCalledWith(
       { lat: nccuOrigin.latitude, lng: nccuOrigin.longitude },
       { lat: mainStationDest.latitude, lng: mainStationDest.longitude },
       expect.objectContaining({ mode: "wheelchair" })
@@ -518,7 +595,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
       accessibilityHighlights: ["全線低底盤公車"],
     };
 
-    vi.mocked(planOtpRoute).mockResolvedValue([bus307Route] as any);
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue(otpTransitOk([bus307Route] as any));
 
     const req = {
       travelMode: "transit" as const,
@@ -570,9 +647,9 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
       _isFutureScheduled: false,
     };
 
-    vi.mocked(planOtpRoute)
-      .mockResolvedValueOnce([seg1Route] as any)
-      .mockResolvedValueOnce([seg2Route] as any);
+    vi.mocked(planOtpRouteDetailed)
+      .mockResolvedValueOnce(otpTransitOk([seg1Route] as any))
+      .mockResolvedValueOnce(otpTransitOk([seg2Route] as any));
 
     const req = {
       travelMode: "transit" as const,
@@ -593,22 +670,130 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
     expect(res.data.routes[0].routeName).toContain("信義幹線");
   });
 
-  it("測試 Case D: 無可行公車/大眾運輸路線時回傳 404 (NOT_FOUND)", async () => {
-    vi.mocked(planOtpRoute).mockResolvedValue([]);
+  it("returns 422 NO_ROUTE when transit has no usable route without effective constraints", async () => {
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue(otpTransitNoRoute());
 
-    const req = {
-      travelMode: "transit" as const,
-      origin: { latitude: 24.00, longitude: 120.00 }, // 偏遠山區/外海
+    const res = await planAccessibleRouteFromRequest({
+      travelMode: "transit",
+      origin: { latitude: 24.00, longitude: 120.00 },
       destination: { latitude: 24.01, longitude: 120.01 },
-    };
+    });
 
-    const res = await planAccessibleRouteFromRequest(req);
+    expect(res).toEqual({
+      ok: false,
+      status: ResponseCode.UNPROCESSABLE_ENTITY,
+      error: ROUTE_MSG.NO_ROUTE,
+      data: { reason: ROUTE_REASON.NO_ROUTE },
+    });
+  });
 
-    expect(res.ok).toBe(false);
-    if (res.ok) return;
+  it("returns 503 UPSTREAM_TIMEOUT when transit detailed planning is unavailable", async () => {
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue({
+      status: "unavailable",
+      routes: [],
+    });
 
-    expect(res.status).toBe(ResponseCode.NOT_FOUND);
-    expect(res.error).toContain("找不到連通的公車或捷運路線");
+    await expect(planAccessibleRouteFromRequest({
+      travelMode: "transit",
+      origin: nccuOrigin,
+      destination: mainStationDest,
+    })).resolves.toEqual({
+      ok: false,
+      status: ResponseCode.SERVICE_UNAVAILABLE,
+      error: ROUTE_MSG.UPSTREAM_TIMEOUT,
+      data: { reason: ROUTE_REASON.UPSTREAM_TIMEOUT },
+    });
+  });
+
+  it("proves avoidStairs caused no route when requireElevator is also set", async () => {
+    vi.mocked(planOtpRouteDetailed)
+      .mockResolvedValueOnce(otpTransitNoRoute())
+      .mockResolvedValueOnce(otpTransitOk([rooseveltBusRoute] as any));
+
+    await expect(planAccessibleRouteFromRequest({
+      travelMode: "transit",
+      origin: nccuOrigin,
+      destination: mainStationDest,
+      mode: "elderly",
+      avoidStairs: true,
+      requireElevator: true,
+    })).resolves.toEqual({
+      ok: false,
+      status: ResponseCode.UNPROCESSABLE_ENTITY,
+      error: ROUTE_MSG.NO_ACCESSIBLE_ROUTE,
+      data: { reason: ROUTE_REASON.NO_ACCESSIBLE_ROUTE },
+    });
+    expect(vi.mocked(planOtpRouteDetailed)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(planOtpRouteDetailed).mock.calls[0][2]).toMatchObject({
+      avoidStairs: true,
+    });
+    expect(vi.mocked(planOtpRouteDetailed).mock.calls[1][2]).toMatchObject({
+      avoidStairs: false,
+    });
+  });
+
+  it("returns 422 NO_ROUTE without retry for requireElevator-only no route", async () => {
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue(otpTransitNoRoute());
+
+    await expect(planAccessibleRouteFromRequest({
+      travelMode: "transit",
+      origin: nccuOrigin,
+      destination: mainStationDest,
+      mode: "elderly",
+      requireElevator: true,
+    })).resolves.toEqual({
+      ok: false,
+      status: ResponseCode.UNPROCESSABLE_ENTITY,
+      error: ROUTE_MSG.NO_ROUTE,
+      data: { reason: ROUTE_REASON.NO_ROUTE },
+    });
+    expect(vi.mocked(planOtpRouteDetailed)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(planOtpRouteDetailed).mock.calls[0][2]).toMatchObject({
+      avoidStairs: false,
+    });
+    expect(vi.mocked(planOtpRouteDetailed).mock.calls[0][2]).not.toHaveProperty(
+      "requireElevator",
+    );
+  });
+
+  it("returns 422 NO_ROUTE when the relaxed avoidStairs retry also has no route", async () => {
+    vi.mocked(planOtpRouteDetailed)
+      .mockResolvedValueOnce(otpTransitNoRoute())
+      .mockResolvedValueOnce(otpTransitNoRoute());
+
+    await expect(planAccessibleRouteFromRequest({
+      travelMode: "transit",
+      origin: nccuOrigin,
+      destination: mainStationDest,
+      mode: "elderly",
+      avoidStairs: true,
+    })).resolves.toEqual({
+      ok: false,
+      status: ResponseCode.UNPROCESSABLE_ENTITY,
+      error: ROUTE_MSG.NO_ROUTE,
+      data: { reason: ROUTE_REASON.NO_ROUTE },
+    });
+    expect(vi.mocked(planOtpRouteDetailed)).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns 503 UPSTREAM_TIMEOUT when the relaxed avoidStairs retry is unavailable", async () => {
+    vi.mocked(planOtpRouteDetailed)
+      .mockResolvedValueOnce(otpTransitNoRoute())
+      .mockResolvedValueOnce({ status: "unavailable", routes: [] });
+
+    await expect(planAccessibleRouteFromRequest({
+      travelMode: "transit",
+      origin: nccuOrigin,
+      destination: mainStationDest,
+      mode: "elderly",
+      avoidStairs: true,
+    })).resolves.toEqual({
+      ok: false,
+      status: ResponseCode.SERVICE_UNAVAILABLE,
+      error: ROUTE_MSG.UPSTREAM_TIMEOUT,
+      data: { reason: ROUTE_REASON.UPSTREAM_TIMEOUT },
+    });
+    expect(vi.mocked(planOtpRouteDetailed)).toHaveBeenCalledTimes(2);
   });
 
   it("keeps the earliest continued departure through findAccessibleRoutes and finalizeRoutes", async () => {
@@ -684,7 +869,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
         ),
       ),
     ];
-    vi.mocked(planOtpRoute).mockResolvedValue(candidates);
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue(otpTransitOk(candidates));
 
     const res = await planAccessibleRouteFromRequest({
       travelMode: "transit",
@@ -811,7 +996,7 @@ describe("planAccessibleRouteFromRequest — avoidStairs / requireElevator const
   };
 
   it("keeps the elevator-less rail route for elderly mode when no flag is sent", async () => {
-    vi.mocked(planOtpRoute).mockResolvedValue([withElevator, withoutElevator] as any);
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue(otpTransitOk([withElevator, withoutElevator] as any));
 
     const names = await routeNames({ ...transitRequest, mode: "elderly" });
 
@@ -819,7 +1004,7 @@ describe("planAccessibleRouteFromRequest — avoidStairs / requireElevator const
   });
 
   it("drops the elevator-less rail route when requireElevator is true", async () => {
-    vi.mocked(planOtpRoute).mockResolvedValue([withElevator, withoutElevator] as any);
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue(otpTransitOk([withElevator, withoutElevator] as any));
 
     const names = await routeNames({
       ...transitRequest,
@@ -831,7 +1016,7 @@ describe("planAccessibleRouteFromRequest — avoidStairs / requireElevator const
   });
 
   it("returns the elevator-less route anyway when it is the only candidate", async () => {
-    vi.mocked(planOtpRoute).mockResolvedValue([withoutElevator] as any);
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue(otpTransitOk([withoutElevator] as any));
 
     const names = await routeNames({
       ...transitRequest,
@@ -843,7 +1028,7 @@ describe("planAccessibleRouteFromRequest — avoidStairs / requireElevator const
   });
 
   it("drops a stairs-only walk leg when avoidStairs is true", async () => {
-    vi.mocked(planOtpRoute).mockResolvedValue([withElevator, stairsWalkRoute] as any);
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue(otpTransitOk([withElevator, stairsWalkRoute] as any));
 
     const names = await routeNames({
       ...transitRequest,
@@ -855,7 +1040,7 @@ describe("planAccessibleRouteFromRequest — avoidStairs / requireElevator const
   });
 
   it("drops an OTP walk leg whose feature exposes a stairs barrier", async () => {
-    vi.mocked(planOtpRoute).mockResolvedValue([withElevator, otpStepsWalkRoute] as any);
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue(otpTransitOk([withElevator, otpStepsWalkRoute] as any));
 
     const names = await routeNames({
       ...transitRequest,
@@ -882,7 +1067,7 @@ describe("planAccessibleRouteFromRequest — avoidStairs / requireElevator const
         }],
       }],
     };
-    vi.mocked(planOtpRoute).mockResolvedValue([withElevator, mislabeledSidewalk] as any);
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue(otpTransitOk([withElevator, mislabeledSidewalk] as any));
 
     const names = await routeNames({
       ...transitRequest,
@@ -906,7 +1091,7 @@ describe("planAccessibleRouteFromRequest — avoidStairs / requireElevator const
         ],
       }],
     };
-    vi.mocked(planOtpRoute).mockResolvedValue([twoStairs, otpStepsWalkRoute] as any);
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue(otpTransitOk([twoStairs, otpStepsWalkRoute] as any));
 
     const result = await planAccessibleRouteFromRequest({
       ...transitRequest,
@@ -940,7 +1125,7 @@ describe("planAccessibleRouteFromRequest — avoidStairs / requireElevator const
           }],
         }],
       };
-      vi.mocked(planOtpRoute).mockResolvedValue([accessibleSteps] as any);
+      vi.mocked(planOtpRouteDetailed).mockResolvedValue(otpTransitOk([accessibleSteps] as any));
 
       const names = await routeNames({
         ...transitRequest,
@@ -953,7 +1138,7 @@ describe("planAccessibleRouteFromRequest — avoidStairs / requireElevator const
   );
 
   it("requireElevator alone does not drop the stairs walk leg", async () => {
-    vi.mocked(planOtpRoute).mockResolvedValue([withElevator, stairsWalkRoute] as any);
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue(otpTransitOk([withElevator, stairsWalkRoute] as any));
 
     const names = await routeNames({
       ...transitRequest,
@@ -965,7 +1150,7 @@ describe("planAccessibleRouteFromRequest — avoidStairs / requireElevator const
   });
 
   it("requests step-free routing from OTP when avoidStairs is true for a non-wheelchair mode", async () => {
-    vi.mocked(planOtpRoute).mockResolvedValue([withElevator] as any);
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue(otpTransitOk([withElevator] as any));
 
     await planAccessibleRouteFromRequest({
       ...transitRequest,
@@ -973,7 +1158,7 @@ describe("planAccessibleRouteFromRequest — avoidStairs / requireElevator const
       avoidStairs: true,
     });
 
-    expect(vi.mocked(planOtpRoute)).toHaveBeenCalledWith(
+    expect(vi.mocked(planOtpRouteDetailed)).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
       expect.objectContaining({ avoidStairs: true }),
@@ -981,7 +1166,7 @@ describe("planAccessibleRouteFromRequest — avoidStairs / requireElevator const
   });
 
   it("lets avoidStairs=false relax the wheelchair default at the OTP query", async () => {
-    vi.mocked(planOtpRoute).mockResolvedValue([withElevator] as any);
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue(otpTransitOk([withElevator] as any));
 
     await planAccessibleRouteFromRequest({
       ...transitRequest,
@@ -989,7 +1174,7 @@ describe("planAccessibleRouteFromRequest — avoidStairs / requireElevator const
       avoidStairs: false,
     });
 
-    expect(vi.mocked(planOtpRoute)).toHaveBeenCalledWith(
+    expect(vi.mocked(planOtpRouteDetailed)).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
       expect.objectContaining({ avoidStairs: false }),
@@ -997,12 +1182,12 @@ describe("planAccessibleRouteFromRequest — avoidStairs / requireElevator const
   });
 
   it("keeps the wheelchair default (both constraints on) when no flag is sent", async () => {
-    vi.mocked(planOtpRoute).mockResolvedValue([withElevator, withoutElevator] as any);
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue(otpTransitOk([withElevator, withoutElevator] as any));
 
     const names = await routeNames({ ...transitRequest, mode: "wheelchair" });
 
     expect(names).toEqual(["有電梯線"]);
-    expect(vi.mocked(planOtpRoute)).toHaveBeenCalledWith(
+    expect(vi.mocked(planOtpRouteDetailed)).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
       expect.objectContaining({ avoidStairs: true }),
@@ -1068,10 +1253,10 @@ describe("requireElevator sees enrichment output, not raw planner output", () =>
   });
 
   it("excludes the elevator-less route using highlights written during enrichment", async () => {
-    vi.mocked(planOtpRoute).mockResolvedValue([
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue(otpTransitOk([
       rawMetroRoute("有電梯線"),
       rawMetroRoute("無電梯線"),
-    ] as any);
+    ] as any));
 
     // Stand in for enrichLegIndoor: fills facilityHighlights per station, exactly
     // as the real enrichment does — AFTER the planner returned empty arrays.
@@ -1097,10 +1282,10 @@ describe("requireElevator sees enrichment output, not raw planner output", () =>
   });
 
   it("keeps both routes when requireElevator is off", async () => {
-    vi.mocked(planOtpRoute).mockResolvedValue([
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue(otpTransitOk([
       rawMetroRoute("有電梯線"),
       rawMetroRoute("無電梯線"),
-    ] as any);
+    ] as any));
     vi.mocked(enrichLegIndoor).mockImplementation(async (leg: any) => {
       leg.facilityHighlights.push(
         leg.lineName === "有電梯線"
