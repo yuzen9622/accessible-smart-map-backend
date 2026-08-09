@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import type { ServiceCoverageConfig } from "../../config/coverage";
 import { sendResponse } from "../../config/lib";
 import { ApiResponse } from "../../types/response";
 import { ResponseCode } from "../../types/code";
@@ -12,6 +13,18 @@ async function getAllFacilities(req: Request, res: Response<ApiResponse<A11yFaci
       category?: A11yCategory[];
     };
     const data = await a11yService.findAllFacilities(category);
+    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
+  } catch {
+    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, ERROR_MESSAGE.INTERNAL);
+  }
+}
+
+function getServiceCoverage(
+  _req: Request,
+  res: Response<ApiResponse<ServiceCoverageConfig>>,
+) {
+  try {
+    const data = a11yService.getServiceCoverage();
     return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
   } catch {
     return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, ERROR_MESSAGE.INTERNAL);
@@ -109,6 +122,7 @@ async function quickAssess(req: Request, res: Response<ApiResponse<any>>) {
 
 export {
   getAllFacilities,
+  getServiceCoverage,
   getBathrooms,
   getRamps,
   getElevators,

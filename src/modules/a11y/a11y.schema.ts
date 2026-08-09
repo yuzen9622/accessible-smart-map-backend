@@ -5,6 +5,8 @@ import { A11Y_CATEGORIES } from "./a11y.service";
 
 extendZodWithOpenApi(z);
 
+export const ServiceCoverageQuerySchema = z.object({}).strict();
+
 export const NearbyA11yQuerySchema = z
   .object({
     lat: z
@@ -283,6 +285,54 @@ export const InvalidInputResponseSchema = ApiResponseSchema(
     .openapi("ValidationErrorData"),
   "InvalidInputResponse"
 );
+
+export const ServiceCoverageDataSchema = z
+  .object({
+    bbox: z
+      .tuple([z.number(), z.number(), z.number(), z.number()])
+      .openapi({
+        example: [117.9, 21.85, 122.6, 26.55],
+        description:
+          "服務涵蓋範圍的外接矩形，固定順序為 [minLng, minLat, maxLng, maxLat]，對應部署時 OTP/Valhalla 實際圖資涵蓋範圍（可經 SERVICE_COVERAGE_BBOX 裁切為單一城市）。",
+      }),
+    maxRouteDistanceKm: z.number().int().positive().openapi({
+      example: 100,
+      description: "單次路線規劃允許的最長距離（公里），必須為正整數。",
+    }),
+  })
+  .strict()
+  .openapi("ServiceCoverageData");
+
+export const ServiceCoverageResponseSchema = ApiResponseSchema(
+  ServiceCoverageDataSchema,
+  "ServiceCoverageResponse"
+);
+
+registry.registerPath({
+  method: "get",
+  path: "/a11y/coverage",
+  tags: ["Accessibility"],
+  summary: "服務涵蓋範圍",
+  description:
+    "公開回傳部署的靜態服務涵蓋設定，不需驗證。bbox 順序固定為 [minLng, minLat, maxLng, maxLat]，反映 OTP/Valhalla 實際圖資涵蓋範圍（可能經 SERVICE_COVERAGE_BBOX 裁切為單一城市）；maxRouteDistanceKm 為單次路線最長距離（公里）。不接受任何 query 參數。",
+  security: [],
+  request: { query: ServiceCoverageQuerySchema },
+  responses: {
+    200: {
+      description: "服務涵蓋設定",
+      content: {
+        "application/json": { schema: ServiceCoverageResponseSchema },
+      },
+    },
+    400: {
+      description: "未知 query 參數",
+      content: {
+        "application/json": { schema: InvalidInputResponseSchema },
+      },
+    },
+    500: { description: "伺服器錯誤" },
+  },
+});
 
 export const AllBathroomsResponseSchema = ApiResponseSchema(
   z.array(A11yFacilitySchema),

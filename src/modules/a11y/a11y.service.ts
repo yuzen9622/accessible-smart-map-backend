@@ -1,3 +1,8 @@
+import { getServiceCoverageConfig } from "../../config/coverage";
+import type {
+  ServiceCoverageBbox,
+  ServiceCoverageConfig,
+} from "../../config/coverage";
 import A11y from "../../model/a11y.model";
 import BathroomModel from "../../model/bathroom.model";
 import OsmA11y from "../../model/osm-a11y.model";
@@ -12,6 +17,18 @@ import {
 import * as campusService from "../campus/campus.service";
 import type { CampusFacilityPlace } from "../campus/campus.service";
 import { findNearby as findNearbyReports } from "../hazard-report/hazard-report.service";
+
+/**
+ * Returns a clone of the deployment's static service-coverage settings.
+ * This endpoint deliberately performs no database or external I/O.
+ */
+export function getServiceCoverage(): ServiceCoverageConfig {
+  const config = getServiceCoverageConfig();
+  return {
+    bbox: [...config.bbox] as ServiceCoverageBbox,
+    maxRouteDistanceKm: config.maxRouteDistanceKm,
+  };
+}
 
 export type A11yPlace = Omit<IA11y, "_id"> & {
   _id?: unknown;

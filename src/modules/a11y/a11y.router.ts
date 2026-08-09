@@ -4,6 +4,7 @@ import {
   getBathrooms,
   getRamps,
   getElevators,
+  getServiceCoverage,
   nearbyA11y,
   nearbyParking,
   getA11yPlace,
@@ -12,6 +13,7 @@ import {
 import { validateRequest } from "../../middleware/validate-request.middleware";
 import {
   AllFacilitiesQuerySchema,
+  ServiceCoverageQuerySchema,
   NearbyA11yQuerySchema,
   A11yPlaceQuerySchema,
   ParkingNearbyQuerySchema,
@@ -20,6 +22,11 @@ import {
 
 export function createA11yRouter(): Router {
   const router = Router();
+  router.get(
+    "/coverage",
+    validateRequest({ query: ServiceCoverageQuerySchema }),
+    getServiceCoverage
+  );
   router.get(
     "/all-facilities",
     validateRequest({ query: AllFacilitiesQuerySchema }),

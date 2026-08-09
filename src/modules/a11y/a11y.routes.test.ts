@@ -9,18 +9,29 @@ vi.mock("./a11y.service", async () => {
     findBathroomFacilities: vi.fn(),
     findRampFacilities: vi.fn(),
     findElevatorFacilities: vi.fn(),
+    getServiceCoverage: vi.fn(),
     assessQuickAccess: vi.fn(),
   };
 });
 
 import { buildTestApp } from "../../../tests/helpers/test-helpers";
 import * as service from "./a11y.service";
+import {
+  DEFAULT_SERVICE_COVERAGE_BBOX,
+  MAX_ROUTE_DISTANCE_KM,
+} from "../../config/coverage";
+import type { ServiceCoverageConfig } from "../../config/coverage";
 import { ERROR_MESSAGE } from "../../constants/messages";
 
 const app = buildTestApp();
 const BASE = "/api/v1/a11y";
 
 const GEO = { type: "Point" as const, coordinates: [121.5, 25.03] as [number, number] };
+
+const coverage: ServiceCoverageConfig = {
+  bbox: [...DEFAULT_SERVICE_COVERAGE_BBOX] as ServiceCoverageConfig["bbox"],
+  maxRouteDistanceKm: MAX_ROUTE_DISTANCE_KM,
+};
 
 const facility = (id: string, source: string): any => ({
   _id: id,
@@ -166,6 +177,73 @@ describe("a11y facility list routes", () => {
   it("GET /all-places is removed and returns 404", async () => {
     const res = await request(app).get(`${BASE}/all-places`);
     expect(res.status).toBe(404);
+  });
+});
+
+describe("GET /coverage", () => {
+  it("returns the complete static coverage data through the public envelope", async () => {
+    vi.mocked(service.getServiceCoverage).mockReturnValue(coverage);
+
+    const res = await request(app).get(`${BASE}/coverage`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      ok: true,
+      status: "success",
+      code: 200,
+      data: coverage,
+    });
+    expect(res.body.data).toEqual(coverage);
+    expect(vi.mocked(service.getServiceCoverage)).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an unknown query key with the standard 400 validation envelope", async () => {
+    const res = await request(app).get(`${BASE}/coverage?unexpected=true`);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ ok: false, status: "error", code: 400 });
+    expect(Array.isArray(res.body.data.errors)).toBe(true);
+    expect(res.body.data.errors.length).toBeGreaterThan(0);
+    expect(vi.mocked(service.getServiceCoverage)).not.toHaveBeenCalled();
+  });
+
+  it("returns a fixed 500 envelope when the coverage service throws", async () => {
+    const secret = "SENSITIVE_COVERAGE_CONFIGURATION";
+    vi.mocked(service.getServiceCoverage).mockImplementation(() => {
+      throw new Error(secret);
+    });
+
+    const res = await request(app).get(`${BASE}/coverage`);
+
+    expect(res.status).toBe(500);
+    expect(res.body).toMatchObject({
+      ok: false,
+      status: "error",
+      code: 500,
+      message: ERROR_MESSAGE.INTERNAL,
+    });
+    expect(JSON.stringify(res.body)).not.toContain(secret);
+  });
+
+  it("publishes the coverage path and its data schema in OpenAPI", async () => {
+    const res = await request(app).get("/api/v1/openapi.json");
+
+    expect(res.status).toBe(200);
+    expect(res.body.paths["/a11y/coverage"]).toHaveProperty("get");
+    const props =
+      res.body.components.schemas.ServiceCoverageData.properties;
+    expect(props).toMatchObject({
+      bbox: expect.objectContaining({
+        description: expect.stringContaining("[minLng, minLat, maxLng, maxLat]"),
+      }),
+      maxRouteDistanceKm: expect.objectContaining({
+        type: "integer",
+        description: expect.stringContaining("公里"),
+      }),
+    });
+    const maxKm = props.maxRouteDistanceKm;
+    expect(maxKm.minimum ?? maxKm.exclusiveMinimum).toBeGreaterThanOrEqual(0);
+    expect(props.supportedRegions).toBeUndefined();
   });
 });
 
