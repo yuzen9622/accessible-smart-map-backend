@@ -13,6 +13,7 @@ vi.mock("./user.middleware", () => {
     registerLimiter: passthrough,
     resendLimiter: passthrough,
     forgotLimiter: passthrough,
+    resetLimiter: passthrough,
     passwordLimiter: passthrough,
   };
 });
@@ -256,26 +257,28 @@ describe("POST /user/auth/verify-email/resend", () => {
 });
 
 describe("POST /user/auth/password/forgot", () => {
-  it("returns 200 without revealing whether the address is registered", async () => {
+  it("returns 202 without revealing whether the address is registered", async () => {
     vi.mocked(service.requestPasswordReset).mockResolvedValue(undefined);
 
     const res = await request(app)
       .post(`${BASE}/password/forgot`)
       .send({ email: "nobody@example.com" });
 
-    expect(res.status).toBe(ResponseCode.OK);
+    expect(res.status).toBe(ResponseCode.ACCEPTED);
     expect(res.body.message).toBe(AUTH_MSG.RESET_SENT);
   });
 
-  it("returns 503 when the reset email cannot be delivered", async () => {
-    vi.mocked(service.requestPasswordReset).mockRejectedValue(new Error("resend down"));
+  it("returns 503 when the durable queue cannot accept the request", async () => {
+    vi.mocked(service.requestPasswordReset).mockRejectedValue(new Error("queue down"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     const res = await request(app)
       .post(`${BASE}/password/forgot`)
       .send({ email: "jane@example.com" });
 
     expect(res.status).toBe(ResponseCode.SERVICE_UNAVAILABLE);
-    expect(res.body.message).toBe(AUTH_MSG.RESET_EMAIL_FAILED);
+    expect(res.body.message).toBe(AUTH_MSG.RESET_QUEUE_UNAVAILABLE);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
   });
 });
 

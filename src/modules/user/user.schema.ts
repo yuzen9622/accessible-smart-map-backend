@@ -299,18 +299,19 @@ registry.registerPath({
   tags: ["User"],
   summary: "申請密碼重設",
   description:
-    "無論該信箱是否存在，一律回傳 200，以避免信箱列舉。未驗證的帳號同樣可申請——" +
-    "能收到信即代表擁有該信箱，這也是信箱被他人搶先註冊時的自救途徑。",
+    "所有格式正確的信箱都先寫入同一個 durable queue，成功受理回傳相同的 202，以避免信箱列舉。" +
+    "Queue 無法寫入時，無論帳號是否存在都回 503。背景 worker 對本地密碼帳號寄重設連結；" +
+    "Google-only 帳號只寄 Google 登入與帳戶救援說明，不簽發本站重設權杖。",
   request: {
     body: { content: { "application/json": { schema: EmailBodySchema } }, required: true },
   },
   responses: {
-    200: {
-      description: "已受理",
+    202: {
+      description: "已寫入帳號協助 queue",
       content: { "application/json": { schema: MessageResponseSchema } },
     },
     429: errorResponse("請求過於頻繁"),
-    503: errorResponse("重設信寄送失敗"),
+    503: errorResponse("帳號協助 queue 暫時無法受理"),
   },
 });
 
@@ -320,7 +321,8 @@ registry.registerPath({
   tags: ["User"],
   summary: "重設密碼",
   description:
-    "以重設信中的一次性權杖設定新密碼。成功後信箱一併標記為已驗證，並撤銷所有既有權杖。",
+    "以本地密碼帳號重設信中的一次性權杖設定新密碼。Google-only 帳號不能透過此流程新增本站密碼。" +
+    "成功後信箱一併標記為已驗證，並撤銷所有既有權杖。",
   request: {
     body: { content: { "application/json": { schema: ResetPasswordBodySchema } }, required: true },
   },
@@ -331,6 +333,7 @@ registry.registerPath({
     },
     400: errorResponse("新密碼不符規則"),
     401: errorResponse("連結無效或已過期"),
+    429: errorResponse("密碼重設嘗試過於頻繁"),
   },
 });
 

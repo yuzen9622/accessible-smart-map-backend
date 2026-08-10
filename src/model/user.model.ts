@@ -14,6 +14,21 @@ const userSchema = new Schema<IUser>(
     },
     emailVerified: { type: Boolean, default: false },
     tokenVersion: { type: Number, default: 0 },
+    passwordResetTokens: {
+      type: [
+        new Schema(
+          {
+            jobId: { type: String, required: true },
+            tokenHash: { type: String, required: true },
+            expiresAt: { type: Date, required: true },
+            consumedAt: { type: Date },
+          },
+          { _id: false },
+        ),
+      ],
+      select: false,
+      default: [],
+    },
     lineUserId: { type: String, default: null },
     settings: {
       memoryEnabled: { type: Boolean, default: false },

@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import User from "../model/user.model";
+import AuthToken from "../model/auth-token.model";
 
 const LEGACY_INDEXES = [
   { name: "client_id_1", field: "client_id" },
@@ -72,6 +73,49 @@ async function main() {
     { $unset: { client_id: "" } },
   );
   console.log(`removed null client_id from ${stripped.modifiedCount} user(s)`);
+
+  // Password-reset tokens now live on the User document so token consumption
+  // and password mutation are one atomic update. Invalidate legacy cross-
+  // collection links; users can safely request a new queued reset email.
+  const tokenCollection = AuthToken.collection;
+  const invalidatedResetTokens = await tokenCollection.deleteMany({ type: "password_reset" });
+  console.log(`invalidated ${invalidatedResetTokens.deletedCount} legacy password reset token(s)`);
+
+  // Email-verification rotation keeps one token per (userId,type). Remove any
+  // historical race-created duplicates before enforcing uniqueness.
+  const duplicateGroups = await tokenCollection
+    .aggregate<{ _id: { userId: string; type: string }; ids: unknown[] }>([
+      { $sort: { createdAt: -1, _id: -1 } },
+      {
+        $group: {
+          _id: { userId: "$userId", type: "$type" },
+          ids: { $push: "$_id" },
+        },
+      },
+      { $match: { "ids.1": { $exists: true } } },
+    ])
+    .toArray();
+
+  let duplicateTokensRemoved = 0;
+  for (const group of duplicateGroups) {
+    const duplicates = group.ids.slice(1);
+    const result = await tokenCollection.deleteMany({ _id: { $in: duplicates as any[] } });
+    duplicateTokensRemoved += result.deletedCount;
+  }
+  console.log(`removed ${duplicateTokensRemoved} duplicate auth token(s)`);
+
+  const tokenIndexName = "userId_1_type_1";
+  const tokenIndexes = await tokenCollection.indexes();
+  const tokenIndex = tokenIndexes.find((index) => index.name === tokenIndexName);
+  if (tokenIndex && tokenIndex.unique !== true) {
+    await tokenCollection.dropIndex(tokenIndexName);
+    console.log(`dropped non-unique auth token index ${tokenIndexName}`);
+  }
+  await tokenCollection.createIndex(
+    { userId: 1, type: 1 },
+    { name: tokenIndexName, unique: true },
+  );
+  console.log("ensured unique auth token index on userId + type");
 
   await mongoose.disconnect();
 }

@@ -1,6 +1,7 @@
 export enum ResponseCode {
   OK = 200,
   CREATED = 201,
+  ACCEPTED = 202,
   UPDATED = 204,
   INVALID_INPUT = 400,
   FORBIDDEN = 403,
@@ -17,6 +18,7 @@ export enum ResponseCode {
 export const ResponseMessage: Record<keyof typeof ResponseCode, string> = {
   OK: "OK",
   CREATED: "Created",
+  ACCEPTED: "Accepted",
   UPDATED: "Updated",
   INVALID_INPUT: "Invalid input",
   FORBIDDEN: "Forbidden",

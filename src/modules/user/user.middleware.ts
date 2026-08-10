@@ -29,14 +29,19 @@ function makeStore(prefix: string) {
  * @param windowMs Length of the window in milliseconds.
  * @returns The configured rate limit middleware.
  */
-function makeLimiter(prefix: string, limit: number, windowMs: number) {
+function makeLimiter(
+  prefix: string,
+  limit: number,
+  windowMs: number,
+  passOnStoreError = true,
+) {
   return rateLimit({
     windowMs,
     limit,
     standardHeaders: true,
     legacyHeaders: false,
     store: makeStore(prefix),
-    passOnStoreError: true,
+    passOnStoreError,
     handler: (_req: Request, res: Response) =>
       sendResponse(res, false, "error", ResponseCode.TOO_MANY_REQUESTS, AUTH_MSG.RATE_LIMITED),
   });
@@ -46,4 +51,7 @@ export const loginLimiter = makeLimiter("auth-login-rl:", 10, 15 * 60 * 1000);
 export const registerLimiter = makeLimiter("auth-register-rl:", 5, 60 * 60 * 1000);
 export const resendLimiter = makeLimiter("auth-resend-rl:", 3, 60 * 60 * 1000);
 export const forgotLimiter = makeLimiter("auth-forgot-rl:", 3, 60 * 60 * 1000);
+// Password verification performs bcrypt before token lookup; fail closed on a
+// configured Redis store outage so attackers cannot bypass this CPU guard.
+export const resetLimiter = makeLimiter("auth-reset-rl:", 10, 60 * 60 * 1000, false);
 export const passwordLimiter = makeLimiter("auth-password-rl:", 10, 60 * 60 * 1000);

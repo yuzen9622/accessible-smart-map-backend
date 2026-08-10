@@ -1,3 +1,5 @@
+import { GOOGLE_ACCOUNT_RECOVERY_URL } from "../config/email";
+
 const RESEND_ENDPOINT = "https://api.resend.com/emails";
 const REQUEST_TIMEOUT_MS = 10_000;
 /** 密碼重設頁在前端的路徑（含語言前綴）。 */
@@ -39,8 +41,8 @@ function layout(title: string, bodyHtml: string): string {
 /**
  * Send one transactional email through Resend.
  *
- * When RESEND_API_KEY is absent the message is logged instead of sent, so local
- * development and tests can exercise the full flow without a mail provider.
+ * RESEND_API_KEY is required. Missing credentials fail closed so queue workers
+ * retry instead of dropping mail or leaking one-time tokens into logs.
  *
  * @param input Recipient, subject, HTML body and plain-text fallback.
  * @throws When Resend is configured but rejects the request.
@@ -50,15 +52,13 @@ export async function sendEmail(input: {
   subject: string;
   html: string;
   text: string;
+  idempotencyKey?: string;
 }): Promise<void> {
   const apiKey = process.env.RESEND_API_KEY;
   const from = process.env.RESEND_FROM ?? "no-reply@2026.yuzen.dev";
 
   if (!apiKey) {
-    console.warn(
-      `[email] RESEND_API_KEY 未設定，未實際寄信。收件人=${input.to} 主旨=${input.subject}\n${input.text}`
-    );
-    return;
+    throw new Error("RESEND_API_KEY is not configured");
   }
 
   const controller = new AbortController();
@@ -69,6 +69,7 @@ export async function sendEmail(input: {
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
+        ...(input.idempotencyKey ? { "Idempotency-Key": input.idempotencyKey } : {}),
       },
       body: JSON.stringify({
         from,
@@ -122,6 +123,7 @@ export async function sendPasswordResetEmail(input: {
   to: string;
   name: string;
   token: string;
+  idempotencyKey?: string;
 }): Promise<void> {
   const url = buildPasswordResetUrl(input.token);
   await sendEmail({
@@ -135,5 +137,30 @@ export async function sendPasswordResetEmail(input: {
        <p style="margin:0;font-size:13px;color:#52606d;">若這不是你本人的操作，請忽略此信，你的密碼不會有任何變動。</p>`
     ),
     text: `${input.name} 你好，請開啟以下連結重設密碼（1 小時內有效，僅能使用一次）：\n${url}\n\n若這不是你本人的操作，請忽略此信。`,
+    idempotencyKey: input.idempotencyKey,
+  });
+}
+
+/**
+ * Tell a Google-only account owner that this app has no password to reset.
+ * This message deliberately contains no app reset token or reset-page link.
+ */
+export async function sendGooglePasswordResetGuidanceEmail(input: {
+  to: string;
+  name: string;
+  idempotencyKey?: string;
+}): Promise<void> {
+  await sendEmail({
+    to: input.to,
+    subject: "你的帳號使用 Google 登入",
+    html: layout(
+      "請使用 Google 登入",
+      `<p style="margin:0 0 16px;line-height:1.7;">${input.name} 你好，此帳號目前使用 Google 登入，因此沒有本站密碼可供重設。</p>
+       <p style="margin:0 0 24px;line-height:1.7;">請回到登入頁選擇「使用 Google 登入」。若你忘記的是 Google 帳戶密碼，請使用下方的 Google 帳戶救援服務。</p>
+       <p style="margin:0 0 24px;"><a href="${GOOGLE_ACCOUNT_RECOVERY_URL}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:8px;">前往 Google 帳戶救援</a></p>
+       <p style="margin:0;font-size:13px;color:#52606d;">若想為本站新增密碼登入方式，請先使用 Google 登入，再到帳號設定中新增密碼。</p>`
+    ),
+    text: `${input.name} 你好，此帳號目前使用 Google 登入，因此沒有本站密碼可供重設。\n\n請回到登入頁選擇「使用 Google 登入」。若你忘記的是 Google 帳戶密碼，請前往 Google 帳戶救援：\n${GOOGLE_ACCOUNT_RECOVERY_URL}\n\n若想為本站新增密碼登入方式，請先使用 Google 登入，再到帳號設定中新增密碼。`,
+    idempotencyKey: input.idempotencyKey,
   });
 }

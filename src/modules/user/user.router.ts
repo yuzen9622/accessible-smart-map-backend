@@ -16,6 +16,7 @@ import {
   registerLimiter,
   resendLimiter,
   forgotLimiter,
+  resetLimiter,
   passwordLimiter,
 } from "./user.middleware";
 import {
@@ -65,6 +66,7 @@ export function createUserRouter(): Router {
   );
   router.post(
     "/auth/password/reset",
+    resetLimiter,
     validateRequest({ body: ResetPasswordBodySchema }),
     resetPassword,
   );

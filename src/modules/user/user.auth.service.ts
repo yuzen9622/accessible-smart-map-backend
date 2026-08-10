@@ -4,13 +4,23 @@ import { OAuth2Client } from "google-auth-library";
 import User from "../../model/user.model";
 import Config from "../../model/config.model";
 import AuthToken from "../../model/auth-token.model";
-import { sendPasswordResetEmail, sendVerificationEmail } from "../../adapters/email.adapter";
+import {
+  sendGooglePasswordResetGuidanceEmail,
+  sendPasswordResetEmail,
+  sendVerificationEmail,
+} from "../../adapters/email.adapter";
 import { toPublicUser } from "../../config/jwt";
 import type { AuthTokenType, IConfig, IUser } from "../../types";
+import {
+  enqueuePasswordAssistance,
+  getOrSetPasswordResetExpiry,
+  renewPasswordAssistanceLease,
+} from "./user.password-assistance.queue";
 
 const BCRYPT_COST = 12;
 const EMAIL_VERIFY_TTL_MS = 24 * 60 * 60 * 1000;
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000;
+const DB_OPERATION_MAX_MS = 10_000;
 
 /**
  * A hash of a value nobody can supply, compared against when the account does
@@ -52,15 +62,79 @@ async function issueAuthToken(userId: string, type: AuthTokenType): Promise<stri
   const raw = crypto.randomBytes(32).toString("base64url");
   const ttl = type === "email_verify" ? EMAIL_VERIFY_TTL_MS : PASSWORD_RESET_TTL_MS;
 
-  await AuthToken.deleteMany({ userId, type });
-  await AuthToken.create({
-    userId,
-    type,
-    tokenHash: hashToken(raw),
-    expiresAt: new Date(Date.now() + ttl),
-  });
+  await AuthToken.findOneAndUpdate(
+    { userId, type },
+    {
+      $set: {
+        tokenHash: hashToken(raw),
+        expiresAt: new Date(Date.now() + ttl),
+        usedAt: null,
+      },
+    },
+    {
+      upsert: true,
+      new: true,
+      runValidators: true,
+      setDefaultsOnInsert: true,
+      maxTimeMS: DB_OPERATION_MAX_MS,
+    },
+  );
 
   return raw;
+}
+
+/**
+ * Add or refresh this job's reset token without invalidating links from other
+ * queued jobs. Consumed entries remain until expiry so a crashed job cannot
+ * recreate a token that was already used.
+ */
+async function issuePasswordResetToken(input: {
+  userId: string;
+  rawToken: string;
+  expiresAt: Date;
+  jobId: string;
+}): Promise<string | null> {
+  const now = new Date();
+  const user = await User.findOneAndUpdate(
+    {
+      _id: input.userId,
+      authProviders: "local",
+      passwordResetTokens: {
+        $not: { $elemMatch: { jobId: input.jobId, consumedAt: { $exists: true } } },
+      },
+    },
+    [
+      {
+        $set: {
+          passwordResetTokens: {
+            $concatArrays: [
+              {
+                $filter: {
+                  input: { $ifNull: ["$passwordResetTokens", []] },
+                  as: "token",
+                  cond: {
+                    $and: [
+                      { $gt: ["$$token.expiresAt", now] },
+                      { $ne: ["$$token.jobId", input.jobId] },
+                    ],
+                  },
+                },
+              },
+              [
+                {
+                  jobId: input.jobId,
+                  tokenHash: hashToken(input.rawToken),
+                  expiresAt: input.expiresAt,
+                },
+              ],
+            ],
+          },
+        },
+      },
+    ],
+    { new: true, maxTimeMS: DB_OPERATION_MAX_MS },
+  );
+  return user ? input.rawToken : null;
 }
 
 /**
@@ -72,15 +146,19 @@ async function issueAuthToken(userId: string, type: AuthTokenType): Promise<stri
  * @throws AuthError INVALID_TOKEN when the token is unknown, expired or already used.
  */
 async function consumeAuthToken(raw: string, type: AuthTokenType) {
-  const record = await AuthToken.findOne({ tokenHash: hashToken(raw), type });
-  if (!record || record.usedAt || record.expiresAt.getTime() <= Date.now()) {
-    throw new AuthError("INVALID_TOKEN");
-  }
+  const record = await AuthToken.findOneAndDelete(
+    {
+      tokenHash: hashToken(raw),
+      type,
+      usedAt: null,
+      expiresAt: { $gt: new Date() },
+    },
+    { maxTimeMS: DB_OPERATION_MAX_MS },
+  );
+  if (!record) throw new AuthError("INVALID_TOKEN");
 
-  const user = await User.findById(record.userId);
+  const user = await User.findById(record.userId, null, { maxTimeMS: DB_OPERATION_MAX_MS });
   if (!user) throw new AuthError("INVALID_TOKEN");
-
-  await AuthToken.deleteOne({ _id: record._id });
   return user;
 }
 
@@ -130,6 +208,7 @@ export async function registerLocalUser(input: {
   await ensureConfig(user._id);
 
   const token = await issueAuthToken(String(user._id), "email_verify");
+  if (!token) throw new Error("Failed to issue email verification token");
   try {
     await sendVerificationEmail({ to: email, name: user.name, token });
     return { emailSent: true };
@@ -202,6 +281,7 @@ export async function resendVerificationEmail(rawEmail: string): Promise<void> {
   if (!user || user.emailVerified) return;
 
   const token = await issueAuthToken(String(user._id), "email_verify");
+  if (!token) throw new Error("Failed to issue email verification token");
   try {
     await sendVerificationEmail({ to: email, name: user.name, token });
   } catch (error) {
@@ -212,20 +292,88 @@ export async function resendVerificationEmail(rawEmail: string): Promise<void> {
 /**
  * Start the password reset flow.
  *
- * Unverified accounts are eligible on purpose: whoever controls the inbox owns
- * the account, which is how a legitimate owner reclaims an address that someone
- * else registered first.
+ * Persist a password-assistance request before the API acknowledges it.
+ * Every syntactically valid address follows this same queue-write path, so the
+ * HTTP status cannot reveal account existence or provider type.
  *
- * @param rawEmail Address to send the reset link to.
- * @throws When the account exists but the reset email could not be delivered.
+ * @param rawEmail Address supplied by the requester.
+ * @throws When the durable queue cannot accept the request.
  */
 export async function requestPasswordReset(rawEmail: string): Promise<void> {
-  const email = normalizeEmail(rawEmail);
-  const user = await User.findOne({ email });
+  await enqueuePasswordAssistance(normalizeEmail(rawEmail));
+}
+
+/**
+ * Resolve one queued password-assistance request in the background.
+ *
+ * Unverified local accounts remain eligible because inbox control proves
+ * ownership. Google-only accounts receive provider guidance without an app
+ * reset token, while unknown addresses intentionally produce no email.
+ */
+export async function processPasswordAssistance(input: {
+  email: string;
+  jobId: string;
+  leaseToken: string;
+}): Promise<void> {
+  const email = normalizeEmail(input.email);
+  const idempotencyKey = `password-assistance/${input.jobId}`;
+  const user = await User.findOne({ email }, null, { maxTimeMS: DB_OPERATION_MAX_MS });
   if (!user) return;
 
-  const token = await issueAuthToken(String(user._id), "password_reset");
-  await sendPasswordResetEmail({ to: email, name: user.name, token });
+  if (!user.authProviders.includes("local")) {
+    if (user.authProviders.includes("google")) {
+      const ownsLease = await renewPasswordAssistanceLease({
+        jobId: input.jobId,
+        leaseToken: input.leaseToken,
+      });
+      if (!ownsLease) throw new Error("Password assistance lease lost before dispatch");
+      await sendGooglePasswordResetGuidanceEmail({
+        to: email,
+        name: user.name,
+        idempotencyKey,
+      });
+    }
+    return;
+  }
+
+  // Persist this job's first expiry under its lease. Retries reuse the exact
+  // timestamp rather than extending a previously delivered link indefinitely.
+  const tokenExpiresAt = await getOrSetPasswordResetExpiry({
+    jobId: input.jobId,
+    leaseToken: input.leaseToken,
+    ttlMs: PASSWORD_RESET_TTL_MS,
+  });
+  if (!tokenExpiresAt) throw new Error("Password assistance lease lost before token rotation");
+  if (tokenExpiresAt.getTime() <= Date.now()) return;
+
+  const tokenSecret = process.env.PASSWORD_RESET_TOKEN_SECRET;
+  if (!tokenSecret || Buffer.byteLength(tokenSecret, "utf8") < 32) {
+    throw new Error("PASSWORD_RESET_TOKEN_SECRET must contain at least 32 bytes");
+  }
+  const stableToken = crypto
+    .createHmac("sha256", tokenSecret)
+    .update(`password-assistance:${input.jobId}`)
+    .digest("base64url");
+  const token = await issuePasswordResetToken({
+    userId: String(user._id),
+    rawToken: stableToken,
+    expiresAt: tokenExpiresAt,
+    jobId: input.jobId,
+  });
+  if (!token) return;
+
+  const ownsLease = await renewPasswordAssistanceLease({
+    jobId: input.jobId,
+    leaseToken: input.leaseToken,
+  });
+  if (!ownsLease) throw new Error("Password assistance lease lost before dispatch");
+
+  await sendPasswordResetEmail({
+    to: email,
+    name: user.name,
+    token,
+    idempotencyKey,
+  });
 }
 
 /**
@@ -242,13 +390,51 @@ export async function resetPassword(input: {
   token: string;
   password: string;
 }): Promise<{ user: IUser; config: IConfig | null }> {
-  const user = await consumeAuthToken(input.token, "password_reset");
-
-  user.passwordHash = await bcrypt.hash(input.password, BCRYPT_COST);
-  user.emailVerified = true;
-  user.tokenVersion = Number(user.tokenVersion ?? 0) + 1;
-  if (!user.authProviders.includes("local")) user.authProviders.push("local");
-  await user.save();
+  // Hash first so a local CPU failure cannot consume an otherwise valid token.
+  // Token validation, provider guard, password write, revocation increment and
+  // token removal then happen in one atomic update on the same User document.
+  const passwordHash = await bcrypt.hash(input.password, BCRYPT_COST);
+  const now = new Date();
+  const user = await User.findOneAndUpdate(
+    {
+      passwordResetTokens: {
+        $elemMatch: {
+          tokenHash: hashToken(input.token),
+          expiresAt: { $gt: now },
+          consumedAt: { $exists: false },
+        },
+      },
+      authProviders: "local",
+    },
+    [
+      {
+        $set: {
+          passwordHash: { $literal: passwordHash },
+          emailVerified: true,
+          tokenVersion: { $add: [{ $ifNull: ["$tokenVersion", 0] }, 1] },
+          // Each queued email owns an independent one-time token. Consume only
+          // the matching entry: another link may be in flight, and consuming it
+          // before dispatch would make the newest delivered email immediately
+          // invalid. The consumed tombstone blocks this job from recreating it.
+          passwordResetTokens: {
+            $map: {
+              input: { $ifNull: ["$passwordResetTokens", []] },
+              as: "token",
+              in: {
+                $cond: [
+                  { $eq: ["$$token.tokenHash", hashToken(input.token)] },
+                  { $mergeObjects: ["$$token", { consumedAt: now }] },
+                  "$$token",
+                ],
+              },
+            },
+          },
+        },
+      },
+    ],
+    { new: true, maxTimeMS: DB_OPERATION_MAX_MS },
+  );
+  if (!user) throw new AuthError("INVALID_TOKEN");
 
   const config = await ensureConfig(user._id);
   return { user: toPublicUser(user), config };

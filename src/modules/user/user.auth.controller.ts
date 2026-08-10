@@ -150,19 +150,20 @@ async function resendVerification(req: Request, res: Response) {
 }
 
 async function forgotPassword(req: Request, res: Response) {
+  const { email } = req.validated!.body as { email: string };
   try {
-    const { email } = req.validated!.body as { email: string };
     await authService.requestPasswordReset(email);
-    return sendResponse(res, true, "success", ResponseCode.OK, AUTH_MSG.RESET_SENT);
+    return sendResponse(res, true, "success", ResponseCode.ACCEPTED, AUTH_MSG.RESET_SENT);
   } catch (error) {
-    if (error instanceof AuthError) return sendAuthError(res, error);
-    console.error("[auth] 密碼重設信寄送失敗", error);
+    // Queue insertion is account-independent, so a 503 here reports only that
+    // the durable queue is unavailable and cannot reveal account/provider state.
+    console.error("[auth] 帳號協助 queue 無法受理", error);
     return sendResponse(
       res,
       false,
       "error",
       ResponseCode.SERVICE_UNAVAILABLE,
-      AUTH_MSG.RESET_EMAIL_FAILED
+      AUTH_MSG.RESET_QUEUE_UNAVAILABLE,
     );
   }
 }

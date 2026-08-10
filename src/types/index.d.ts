@@ -10,6 +10,12 @@ export interface IUser {
   authProviders: AuthProvider[];
   emailVerified: boolean;
   tokenVersion: number;
+  passwordResetTokens?: Array<{
+    jobId: string;
+    tokenHash: string;
+    expiresAt: Date;
+    consumedAt?: Date;
+  }>;
   lineUserId?: string | null;
   settings?: {
     memoryEnabled?: boolean;
@@ -27,6 +33,23 @@ export interface IAuthToken {
   tokenHash: string;
   expiresAt: Date;
   usedAt?: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export type PasswordAssistanceJobStatus = "pending" | "processing" | "failed";
+
+export interface IPasswordAssistanceJob {
+  _id: string;
+  email: string;
+  status: PasswordAssistanceJobStatus;
+  attempts: number;
+  availableAt: Date;
+  lockedAt?: Date | null;
+  leaseToken?: string | null;
+  tokenExpiresAt?: Date | null;
+  lastError?: string;
+  expiresAt: Date;
   createdAt: Date;
   updatedAt: Date;
 }
