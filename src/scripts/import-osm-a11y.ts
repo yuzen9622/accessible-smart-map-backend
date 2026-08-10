@@ -9,11 +9,8 @@ import "dotenv/config";
 import mongoose from "mongoose";
 import OsmA11y from "../model/osm-a11y.model";
 import { IOsmA11y, OsmWheelchairValue } from "../types";
+import { fetchOverpassElements } from "../adapters/overpass.adapter";
 
-const OVERPASS_ENDPOINTS = [
-  "https://overpass-api.de/api/interpreter",
-  "https://overpass.kumi.systems/api/interpreter",
-];
 const DELAY_MS = 6000;
 
 const QUERIES: { label: string; query: string }[] = [
@@ -93,32 +90,6 @@ function normalizeWheelchair(raw?: string): OsmWheelchairValue | undefined {
   return WHEELCHAIR_VALUES.find((v) => v === val);
 }
 
-async function fetchOverpass(query: string): Promise<any[]> {
-  let lastError: Error | null = null;
-  for (const url of OVERPASS_ENDPOINTS) {
-    try {
-      const resp = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          "Accept": "application/json",
-          "User-Agent": "accessible-smart-map-backend/1.0 (accessibility data import)",
-        },
-        body: `data=${encodeURIComponent(query)}`,
-      });
-      if (!resp.ok) {
-        lastError = new Error(`Overpass HTTP ${resp.status} from ${url}: ${await resp.text()}`);
-        continue;
-      }
-      const json = (await resp.json()) as { elements?: any[] };
-      return json.elements ?? [];
-    } catch (err) {
-      lastError = err as Error;
-    }
-  }
-  throw lastError!;
-}
-
 function sleep(ms: number) {
   return new Promise<void>((r) => setTimeout(r, ms));
 }
@@ -138,7 +109,9 @@ async function main() {
 
     let elements: any[];
     try {
-      elements = await fetchOverpass(query);
+      elements = await fetchOverpassElements(query, {
+        userAgent: "accessible-smart-map-backend/1.0 (accessibility data import)",
+      });
     } catch (err) {
       console.error(`  Error: ${(err as Error).message}`);
       await sleep(DELAY_MS);

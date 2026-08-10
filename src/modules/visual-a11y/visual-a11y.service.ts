@@ -1,10 +1,6 @@
 import VisualA11yModel from "../../model/visual-a11y.model";
 import { IVisualA11y } from "../../types";
-
-const OVERPASS_ENDPOINTS = [
-  "https://overpass-api.de/api/interpreter",
-  "https://overpass.kumi.systems/api/interpreter",
-];
+import { fetchOverpassElements } from "../../adapters/overpass.adapter";
 
 const BBOX = "24.95,121.45,25.12,121.62";
 
@@ -62,28 +58,10 @@ function parseTactilePaving(
 }
 
 async function fetchOverpass(query: string): Promise<any[]> {
-  let lastError: Error | null = null;
-  for (const url of OVERPASS_ENDPOINTS) {
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Accept: "application/json",
-        "User-Agent":
-          "accessible-smart-map-backend/1.0 (visual-a11y sync)",
-      },
-      body: `data=${encodeURIComponent(query)}`,
-    });
-    if (!resp.ok) {
-      lastError = new Error(
-        `Overpass HTTP ${resp.status} from ${url}: ${await resp.text()}`
-      );
-      continue;
-    }
-    const json = (await resp.json()) as { elements?: any[] };
-    return json.elements ?? [];
-  }
-  throw lastError!;
+  return fetchOverpassElements(query, {
+    userAgent: "accessible-smart-map-backend/1.0 (visual-a11y sync)",
+    timeoutMs: 40_000, // queries declare [timeout:25]; leave headroom for queueing
+  });
 }
 
 function sleep(ms: number) {
