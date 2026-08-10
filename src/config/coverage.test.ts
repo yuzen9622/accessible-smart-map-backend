@@ -7,9 +7,12 @@ import {
 } from "./coverage";
 
 const ORIGINAL_SERVICE_COVERAGE_BBOX = process.env.SERVICE_COVERAGE_BBOX;
+const ORIGINAL_SERVICE_MAX_ROUTE_DISTANCE_KM =
+  process.env.SERVICE_MAX_ROUTE_DISTANCE_KM;
 
 beforeEach(() => {
   delete process.env.SERVICE_COVERAGE_BBOX;
+  delete process.env.SERVICE_MAX_ROUTE_DISTANCE_KM;
 });
 
 afterEach(() => {
@@ -17,6 +20,12 @@ afterEach(() => {
     delete process.env.SERVICE_COVERAGE_BBOX;
   } else {
     process.env.SERVICE_COVERAGE_BBOX = ORIGINAL_SERVICE_COVERAGE_BBOX;
+  }
+  if (ORIGINAL_SERVICE_MAX_ROUTE_DISTANCE_KM === undefined) {
+    delete process.env.SERVICE_MAX_ROUTE_DISTANCE_KM;
+  } else {
+    process.env.SERVICE_MAX_ROUTE_DISTANCE_KM =
+      ORIGINAL_SERVICE_MAX_ROUTE_DISTANCE_KM;
   }
 });
 
@@ -41,6 +50,33 @@ describe("getServiceCoverageConfig", () => {
 
     expect(() => getServiceCoverageConfig()).toThrowError(
       /Invalid SERVICE_COVERAGE_BBOX: expected minLng,minLat,maxLng,maxLat/,
+    );
+  });
+
+  it("reads a custom SERVICE_MAX_ROUTE_DISTANCE_KM on each call", () => {
+    process.env.SERVICE_MAX_ROUTE_DISTANCE_KM = "120";
+    expect(getServiceCoverageConfig().maxRouteDistanceKm).toBe(120);
+
+    process.env.SERVICE_MAX_ROUTE_DISTANCE_KM = "0.5";
+    expect(getServiceCoverageConfig().maxRouteDistanceKm).toBe(0.5);
+  });
+
+  it("ignores a blank SERVICE_MAX_ROUTE_DISTANCE_KM and uses the default", () => {
+    process.env.SERVICE_MAX_ROUTE_DISTANCE_KM = "   ";
+    expect(getServiceCoverageConfig().maxRouteDistanceKm).toBe(
+      MAX_ROUTE_DISTANCE_KM,
+    );
+  });
+
+  it("fails fast when SERVICE_MAX_ROUTE_DISTANCE_KM is invalid", () => {
+    process.env.SERVICE_MAX_ROUTE_DISTANCE_KM = "abc";
+    expect(() => getServiceCoverageConfig()).toThrowError(
+      /Invalid SERVICE_MAX_ROUTE_DISTANCE_KM/,
+    );
+
+    process.env.SERVICE_MAX_ROUTE_DISTANCE_KM = "-10";
+    expect(() => getServiceCoverageConfig()).toThrowError(
+      /Invalid SERVICE_MAX_ROUTE_DISTANCE_KM/,
     );
   });
 });

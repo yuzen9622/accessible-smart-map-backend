@@ -22,7 +22,14 @@ export const DEFAULT_SERVICE_COVERAGE_BBOX: ServiceCoverageBbox = [
   26.55,
 ];
 
-export const MAX_ROUTE_DISTANCE_KM = 100;
+/**
+ * Default single-route straight-line distance limit (km). Rated to cover the
+ * whole default Taiwan bbox (max corner-to-corner diagonal ≈ 700 km) so
+ * intercity trips (e.g. THSR Taipei→Kaohsiung) keep working like the original
+ * system, which had no distance cap. Real feasibility is decided by the
+ * routing engines; this guard only rejects clearly absurd input.
+ */
+export const MAX_ROUTE_DISTANCE_KM = 750;
 
 function cloneBbox(bbox: ServiceCoverageBbox): ServiceCoverageBbox {
   return [bbox[0], bbox[1], bbox[2], bbox[3]];
@@ -64,10 +71,20 @@ function parseServiceCoverageBbox(value: string): ServiceCoverageBbox {
   return [minLng, minLat, maxLng, maxLat];
 }
 
+function parseMaxRouteDistanceKm(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(
+      `Invalid SERVICE_MAX_ROUTE_DISTANCE_KM: expected a positive number of kilometers, got "${value}"`,
+    );
+  }
+  return parsed;
+}
+
 /**
- * Resolves the current service-coverage settings. The optional bbox override is
- * read on every call so deployment configuration errors fail immediately rather
- * than silently widening coverage.
+ * Resolves the current service-coverage settings. The optional bbox and max
+ * route distance overrides are read on every call so deployment configuration
+ * errors fail immediately rather than silently widening coverage.
  */
 export function getServiceCoverageConfig(): ServiceCoverageConfig {
   const configuredBbox = process.env.SERVICE_COVERAGE_BBOX;
@@ -76,9 +93,15 @@ export function getServiceCoverageConfig(): ServiceCoverageConfig {
       ? cloneBbox(DEFAULT_SERVICE_COVERAGE_BBOX)
       : parseServiceCoverageBbox(configuredBbox);
 
+  const configuredMaxDistance = process.env.SERVICE_MAX_ROUTE_DISTANCE_KM;
+  const maxRouteDistanceKm =
+    configuredMaxDistance == null || configuredMaxDistance.trim() === ""
+      ? MAX_ROUTE_DISTANCE_KM
+      : parseMaxRouteDistanceKm(configuredMaxDistance);
+
   return {
     bbox,
-    maxRouteDistanceKm: MAX_ROUTE_DISTANCE_KM,
+    maxRouteDistanceKm,
   };
 }
 
