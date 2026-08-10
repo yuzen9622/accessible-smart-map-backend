@@ -260,6 +260,7 @@ pnpm import:gtfs-all
 pnpm import:tdx-stops
 pnpm import:tdx-bus-routes
 pnpm import:tdx-metro
+build:valhalla-tiles
 ```
 
 ### 5. 啟動服務
