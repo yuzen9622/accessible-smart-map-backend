@@ -243,25 +243,58 @@ CWA_API_KEY=your_cwa_key
 
 ### 4. 匯入空間與大眾運輸數據
 
-在運行前，需要先執行指令將 TDX、GTFS 與 OpenStreetMap 的空間數據匯入至您的 MongoDB 資料庫：
+App 需要 MongoDB 內具備 a11y 地點、公車站、捷運/台鐵/高鐵站與 GTFS 室內網絡等資料才完整。資料來源分為兩類：**本地檔案**（`data/` 下已 commit 的 CSV / GTFS feed，不需外部 API）與**外部 API**（TDX / Overpass / Google）。所有 `import:*` 腳本透過 `dotenvx` 載入 `.env`，執行前請先確認 `DATABASE_URL`（與 TDX 相關腳本尚需 `TDX_CLIENT_ID` / `TDX_CLIENT_SECRET`）已設定。
+
+**核心資料（App 運作必需）**：
 
 ```bash
-# 匯入 OpenStreetMap 無障礙設施標籤
+# OSM 無障礙設施（Overpass API）
 pnpm import:osm
 
-# 匯入台北市無障礙廁所與身障車位資料
-pnpm import:bathrooms
-pnpm import:parking
-
-# 匯入所有 GTFS 軌道運輸網絡資料 (包含捷運站內通道、電梯與樓層)
-pnpm import:gtfs-all
-
-# 匯入即時公車站點、路線以及捷運車站資訊
+# TDX：公車站、公車路線、公車車籍（低地板/輪椅辨識，預設六都）
 pnpm import:tdx-stops
 pnpm import:tdx-bus-routes
+pnpm import:tdx-bus-vehicles
+
+# TDX：捷運站、高鐵站、台鐵站
 pnpm import:tdx-metro
-build:valhalla-tiles
+pnpm import:tdx-thsr
+pnpm import:tdx-tra
+
+# GTFS 軌道運輸網絡（捷運站內通道、電梯、樓層；讀取 data/gtfs）
+pnpm import:gtfs-all
 ```
+
+**功能資料（依需求補充）**：
+
+```bash
+# 台北市無障礙廁所（data/bathrooms CSV）
+pnpm import:bathrooms
+
+# 新北市身障停車格（data/disabled-parking CSV）
+pnpm import:parking
+
+# 全國身心障礙福利機構（data/welfare CSV + Google 地理編碼，需 GOOGLE_MAPS_API_KEY）
+pnpm import:welfare
+
+# 教育部校園無障礙（cam.moe.gov.tw 爬蟲，耗時較長；灌完後再補搜尋名稱與設施細節）
+pnpm import:campus-a11y
+pnpm backfill:campus-search
+pnpm import:campus-facility-detail
+
+# OSM 視覺無障礙（有聲號誌、導盲磚；Overpass API）
+pnpm import:visual-a11y
+
+# RAG 知識庫向量化（data/rag → Chroma 向量資料庫，需 Chroma 容器）
+pnpm import:rag
+```
+
+**注意事項**：
+
+- **TDX 限流**：TDX 連續呼叫 4–6 次即觸發 429，腳本內建請求間隔；若遇 429，請等待幾分鐘後重跑該支腳本。
+- **部署環境**：建議從本機 `mongodump` 搬 dump 至伺服器（`mongorestore`），避免在伺服器重打 TDX / Overpass；完整流程見 `docs/manuals/DEPLOY_UBUNTU.md` Phase 4。
+- `import:gtfs-all` 僅匯入 levels / stops / trips / pathways（室內導引用）；排程表資料（routes/calendar/stop_times/shapes）已隨自製 GTFS router 退役，改由 OTP 直接讀取 `data/gtfs` feed，不需（也不應）匯入 Mongo。
+- 路由引擎圖資（OTP graph、Valhalla tiles）不屬於 Mongo 資料，透過 `pnpm build:otp` / `pnpm build:valhalla-tiles` 另建，見 `docs/manuals/OTP_OPERATIONS.md`。
 
 ### 5. 啟動服務
 
