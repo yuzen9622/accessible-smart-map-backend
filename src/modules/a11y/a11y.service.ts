@@ -420,7 +420,7 @@ export async function findNearby(lat: number, lng: number, radiusM = 150) {
   const [nearbyMetroA11y, nearbyBathroom, nearbyOsm, nearbyParking, nearbyCampus] =
     await Promise.all([
       A11y.find({ location: geoQuery }).lean(),
-      BathroomModel.find({ type: "無障礙廁所", location: makeGeoQuery(lng, lat, 150) }),
+      BathroomModel.find({ type: "無障礙廁所", location: geoQuery }),
       OsmA11y.find({ location: geoQuery }).lean(),
       DisabledParkingModel.find({ location: geoQuery }),
       campusService.findFacilitiesNearby(lat, lng, radiusM),

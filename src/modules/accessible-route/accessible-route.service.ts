@@ -304,6 +304,27 @@ function walkLegHasConfirmedHandrail(route: AccessibleRoute, leg: WalkLeg): bool
 }
 
 /**
+ * Same barrier check as `walkLegHasStairsBarrier`, but resolving the
+ * wheelchair-ramp exemption through `legFacilitiesEvenAfterCompacting` so it
+ * still sees the exemption tag after `compactRoutes` has emptied
+ * `leg.a11yFacilities`. Used only by the post-finalization needsHandrail
+ * check; the pre-slim `avoidStairs` filtering keeps using the plain version
+ * since it always runs before any slimming happens.
+ *
+ * @param route The route `leg` belongs to.
+ * @param leg Walk leg to inspect.
+ */
+function walkLegHasStairsBarrierAfterCompacting(route: AccessibleRoute, leg: WalkLeg): boolean {
+  const hasAccessibleRamp = legFacilitiesEvenAfterCompacting(route, leg).some(
+    (f) =>
+      f.tags?.["highway"] === "steps" &&
+      (f.tags?.["ramp:wheelchair"] === "yes" || f.tags?.["wheelchair"] === "yes"),
+  );
+  if (hasAccessibleRamp) return false;
+  return (leg.steps ?? []).some((step) => step.stairs);
+}
+
+/**
  * `compactRoutes` (opt-in `format: "compact"`) empties every leg's
  * `a11yFacilities` and moves the documents into `route.facilities`, keyed by
  * osmId, leaving `leg.a11yRefs` as the pointer back. Any check that runs
@@ -352,6 +373,8 @@ async function applyExtraA11yAnnotations(
     needsAccessibleToilet?: boolean;
     needsHandrail?: boolean;
     maxSlopePercent?: number;
+    /** True when a nominal "walk" request actually got routed via Valhalla (no elevation data) instead of OTP. */
+    routedByEngineWithNoElevationData?: boolean;
   },
 ): Promise<{
   slopeConstraint?: { requestedMaxPercent: number; enforced: boolean; note: string };
@@ -387,7 +410,7 @@ async function applyExtraA11yAnnotations(
       const hasUnconfirmedHandrailStairs = r.legs.some(
         (leg) =>
           leg.type === "WALK" &&
-          walkLegHasStairsBarrier(leg) &&
+          walkLegHasStairsBarrierAfterCompacting(r, leg) &&
           !walkLegHasConfirmedHandrail(r, leg),
       );
       if (hasUnconfirmedHandrailStairs) {
@@ -403,7 +426,11 @@ async function applyExtraA11yAnnotations(
     | undefined;
   if (opts.maxSlopePercent !== undefined) {
     const requestedMaxPercent = opts.maxSlopePercent;
-    if (travelMode === "drive" || travelMode === "motorcycle") {
+    if (
+      travelMode === "drive" ||
+      travelMode === "motorcycle" ||
+      opts.routedByEngineWithNoElevationData
+    ) {
       slopeConstraint = {
         requestedMaxPercent,
         enforced: false,
@@ -993,6 +1020,10 @@ export async function planAccessibleRouteFromRequest(
 
   const tPlan = Date.now();
   let routes: AccessibleRoute[];
+  // Set when a nominal "walk" request actually got routed via Valhalla (no
+  // elevation data) instead of OTP, so slopeConstraint reporting isn't fooled
+  // by the request's travelMode into claiming the OTP 8.3% default applied.
+  let routedByEngineWithNoElevationData = false;
   const logRequestTiming = () =>
     console.log(
       "[route-timing] request",
@@ -1110,6 +1141,7 @@ export async function planAccessibleRouteFromRequest(
           ...new Set([...(route.warnings ?? []), ROUTE_WARNING.OTP_WALK_FALLBACK]),
         ],
       }));
+      routedByEngineWithNoElevationData = true;
     }
     logRequestTiming();
   } else {
@@ -1188,6 +1220,7 @@ export async function planAccessibleRouteFromRequest(
     needsAccessibleToilet,
     needsHandrail,
     maxSlopePercent,
+    routedByEngineWithNoElevationData,
   });
 
   return {

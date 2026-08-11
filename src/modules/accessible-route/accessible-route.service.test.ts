@@ -468,6 +468,31 @@ describe("planAccessibleRouteFromRequest walk mode OTP", () => {
     );
   });
 
+  it("reports slopeConstraint enforced=false when a nominal walk request actually fell back to Valhalla", async () => {
+    // travelMode stays "walk" on the request, but the route was actually
+    // produced by Valhalla (no elevation data) via the OTP-unavailable
+    // fallback above -- the slope report must reflect the real engine, not
+    // the nominal travelMode.
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "unavailable",
+      routes: [],
+    });
+    vi.mocked(planValhallaRoute).mockResolvedValue([driveRoute([])] as any);
+
+    const res = await planAccessibleRouteFromRequest({
+      ...walkRequest,
+      maxSlopePercent: 10,
+      avoidStairs: true,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.data!.slopeConstraint).toEqual({
+      requestedMaxPercent: 10,
+      enforced: false,
+      note: ROUTE_WARNING.SLOPE_LIMIT_NOT_ENFORCED_NO_ELEVATION,
+    });
+  });
+
   it("plans walk + waypoints as bounded OTP segments and preserves leg boundaries", async () => {
     vi.mocked(planOtpWalkDetailed).mockResolvedValue({
       status: "ok",
@@ -709,6 +734,36 @@ describe("planAccessibleRouteFromRequest — needsHandrail", () => {
         ],
         facilities: {
           "way/1": { osmId: "way/1", tags: { highway: "steps", handrail: "yes" } },
+        },
+      },
+    ] as any);
+    vi.mocked(findNearbyParking).mockResolvedValue([] as any);
+
+    const res = await planAccessibleRouteFromRequest({ ...driveRequest, needsHandrail: true });
+
+    expect(res.ok).toBe(true);
+    expect(res.data!.routes[0].warnings ?? []).not.toContain(
+      ROUTE_WARNING.STAIRS_HANDRAIL_UNKNOWN,
+    );
+  });
+
+  it("honors a compacted ramp exemption too, not just a11yFacilities", async () => {
+    // Same indirection as above, but for the ramp-wheelchair exemption that
+    // zeroes out the stairs count entirely -- it must also resolve through
+    // route.facilities/a11yRefs after compacting, or a ramp-accessible
+    // "stairs" leg would be wrongly treated as an unconfirmed-handrail barrier.
+    vi.mocked(planValhallaRoute).mockResolvedValue([
+      {
+        ...driveRoute([]),
+        legs: [
+          {
+            ...stairsLeg(),
+            a11yFacilities: [],
+            a11yRefs: ["way/1"],
+          },
+        ],
+        facilities: {
+          "way/1": { osmId: "way/1", tags: { highway: "steps", "ramp:wheelchair": "yes" } },
         },
       },
     ] as any);
