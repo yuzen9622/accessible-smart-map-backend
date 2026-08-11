@@ -1,6 +1,6 @@
-import type { PlaceType } from "../../model/review.model";
+import type { EntranceAccessibility, PlaceType } from "../../model/review.model";
 
-export type { PlaceType };
+export type { EntranceAccessibility, PlaceType };
 
 export interface ServiceResult<T = unknown> {
   ok: boolean;
@@ -9,7 +9,15 @@ export interface ServiceResult<T = unknown> {
   data?: T;
 }
 
-export interface CreateReviewInput {
+export interface StructuredAccessibilityReviewInput {
+  entranceAccessibility?: EntranceAccessibility;
+  toiletTurningRoom?: boolean;
+  wheelchairTableHeight?: boolean;
+  adequateAisleWidth?: boolean;
+  staffHelpfulnessRating?: number;
+}
+
+export interface CreateReviewInput extends StructuredAccessibilityReviewInput {
   placeId: string;
   placeType: PlaceType;
   passageWidthRating: number;
@@ -19,7 +27,7 @@ export interface CreateReviewInput {
   comment?: string;
 }
 
-export interface UpdateReviewInput {
+export interface UpdateReviewInput extends StructuredAccessibilityReviewInput {
   passageWidthRating?: number;
   toiletRating?: number;
   elevatorRating?: number;
@@ -32,6 +40,7 @@ export interface ReviewQueryParams {
   placeType: PlaceType;
   page: number;
   limit: number;
+  minAggregateScore?: number;
 }
 
 export interface ReviewSummaryInput {
@@ -39,7 +48,7 @@ export interface ReviewSummaryInput {
   placeType: PlaceType;
 }
 
-export interface ReviewItem {
+export interface ReviewItem extends StructuredAccessibilityReviewInput {
   _id: string;
   userId: string;
   rating: number;
@@ -47,6 +56,7 @@ export interface ReviewItem {
   toiletRating: number;
   elevatorRating: number;
   serviceRating: number;
+  aggregateAccessibilityScore?: number;
   comment?: string;
   createdAt: Date;
 }

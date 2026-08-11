@@ -32,6 +32,12 @@ const VALID_REVIEW = {
   toiletRating: 4,
   elevatorRating: 4,
   serviceRating: 4,
+  entranceAccessibility: "step_free" as const,
+  toiletTurningRoom: true,
+  wheelchairTableHeight: true,
+  adequateAisleWidth: true,
+  staffHelpfulnessRating: 4,
+  aggregateAccessibilityScore: 4.2,
   comment: "不錯",
   createdAt: new Date(),
 };
@@ -42,6 +48,11 @@ const VALID_CREATE_BODY = {
   toiletRating: 4,
   elevatorRating: 4,
   serviceRating: 4,
+  entranceAccessibility: "step_free",
+  toiletTurningRoom: true,
+  wheelchairTableHeight: true,
+  adequateAisleWidth: true,
+  staffHelpfulnessRating: 4,
   comment: "不錯",
 };
 const VALID_LIST_QUERY = { placeId: "node/123456", placeType: "osm" };
@@ -67,8 +78,23 @@ describe("POST /api/v1/a11y/reviews", () => {
 
     expect(res.status).toBe(ResponseCode.CREATED);
     expect(res.body.ok).toBe(true);
-    expect(res.body.message).toBe(REVIEW_MSG.CREATED);
-    expect(vi.mocked(service.createReview)).toHaveBeenCalledOnce();
+    expect(res.body).toMatchObject({
+      ok: true,
+      status: "success",
+      code: ResponseCode.CREATED,
+      message: REVIEW_MSG.CREATED,
+      data: { review: { aggregateAccessibilityScore: 4.2 } },
+    });
+    expect(vi.mocked(service.createReview)).toHaveBeenCalledWith(
+      "user-abc",
+      expect.objectContaining({
+        entranceAccessibility: "step_free",
+        toiletTurningRoom: true,
+        wheelchairTableHeight: true,
+        adequateAisleWidth: true,
+        staffHelpfulnessRating: 4,
+      }),
+    );
   });
 
   it("returns 400 when already reviewed", async () => {
@@ -92,6 +118,43 @@ describe("POST /api/v1/a11y/reviews", () => {
       .post(BASE)
       .set("Authorization", AUTH)
       .send({ ...VALID_CREATE_BODY, passageWidthRating: 6 });
+
+    expect(res.status).toBe(ResponseCode.INVALID_INPUT);
+    expect(vi.mocked(service.createReview)).not.toHaveBeenCalled();
+  });
+
+  it("returns the standard validation envelope for an invalid structured enum", async () => {
+    const res = await request(app)
+      .post(BASE)
+      .set("Authorization", AUTH)
+      .send({ ...VALID_CREATE_BODY, entranceAccessibility: "stairs" });
+
+    expect(res.status).toBe(ResponseCode.INVALID_INPUT);
+    expect(res.body).toMatchObject({
+      ok: false,
+      status: "error",
+      code: ResponseCode.INVALID_INPUT,
+      message: "Invalid request.",
+      data: { errors: expect.any(Array) },
+    });
+    expect(vi.mocked(service.createReview)).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 for a structured rating outside its range", async () => {
+    const res = await request(app)
+      .post(BASE)
+      .set("Authorization", AUTH)
+      .send({ ...VALID_CREATE_BODY, staffHelpfulnessRating: 6 });
+
+    expect(res.status).toBe(ResponseCode.INVALID_INPUT);
+    expect(vi.mocked(service.createReview)).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 for an unknown structured field", async () => {
+    const res = await request(app)
+      .post(BASE)
+      .set("Authorization", AUTH)
+      .send({ ...VALID_CREATE_BODY, untrustedScore: 5 });
 
     expect(res.status).toBe(ResponseCode.INVALID_INPUT);
     expect(vi.mocked(service.createReview)).not.toHaveBeenCalled();
@@ -129,6 +192,28 @@ describe("GET /api/v1/a11y/reviews", () => {
     );
   });
 
+  it("passes a numeric minAggregateScore filter to the service", async () => {
+    vi.mocked(service.findByPlace).mockResolvedValue({
+      ok: true,
+      httpCode: ResponseCode.OK,
+      message: REVIEW_MSG.LIST_OK,
+      data: { items: [VALID_REVIEW], avgRating: 4, totalCount: 1, page: 1, totalPages: 1 },
+    });
+
+    const res = await request(app).get(BASE).query({ ...VALID_LIST_QUERY, minAggregateScore: "3.5" });
+
+    expect(res.status).toBe(ResponseCode.OK);
+    expect(vi.mocked(service.findByPlace)).toHaveBeenCalledWith(
+      expect.objectContaining({ minAggregateScore: 3.5 }),
+    );
+  });
+
+  it("returns 400 for minAggregateScore outside its bounds", async () => {
+    const res = await request(app).get(BASE).query({ ...VALID_LIST_QUERY, minAggregateScore: 5.1 });
+    expect(res.status).toBe(ResponseCode.INVALID_INPUT);
+    expect(vi.mocked(service.findByPlace)).not.toHaveBeenCalled();
+  });
+
   it("returns 400 when placeId is missing", async () => {
     const res = await request(app).get(BASE).query({ placeType: "osm" });
     expect(res.status).toBe(ResponseCode.INVALID_INPUT);
@@ -151,20 +236,42 @@ describe("PATCH /api/v1/a11y/reviews/:id", () => {
       ok: true,
       httpCode: ResponseCode.OK,
       message: REVIEW_MSG.UPDATED,
-      data: { review: { ...VALID_REVIEW, passageWidthRating: 5 } },
+      data: {
+        review: {
+          ...VALID_REVIEW,
+          passageWidthRating: 5,
+          entranceAccessibility: "ramp",
+          staffHelpfulnessRating: 5,
+          aggregateAccessibilityScore: 4.3,
+        },
+      },
     });
 
     const res = await request(app)
       .patch(`${BASE}/${validId}`)
       .set("Authorization", AUTH)
-      .send({ passageWidthRating: 5 });
+      .send({
+        passageWidthRating: 5,
+        entranceAccessibility: "ramp",
+        staffHelpfulnessRating: 5,
+      });
 
     expect(res.status).toBe(200);
-    expect(res.body.message).toBe(REVIEW_MSG.UPDATED);
+    expect(res.body).toMatchObject({
+      ok: true,
+      status: "success",
+      code: ResponseCode.OK,
+      message: REVIEW_MSG.UPDATED,
+      data: { review: { aggregateAccessibilityScore: 4.3 } },
+    });
     expect(vi.mocked(service.updateReview)).toHaveBeenCalledWith(
       validId,
       "user-abc",
-      expect.objectContaining({ passageWidthRating: 5 }),
+      expect.objectContaining({
+        passageWidthRating: 5,
+        entranceAccessibility: "ramp",
+        staffHelpfulnessRating: 5,
+      }),
     );
   });
 
