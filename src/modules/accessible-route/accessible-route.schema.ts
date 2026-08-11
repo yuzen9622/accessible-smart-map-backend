@@ -52,7 +52,7 @@ export const AccessibleRouteBodySchema = z
       .optional()
       .openapi({
         description:
-          "無障礙模式。調整評分權重（elderly 提升 Tier 1+2；visual_impaired 將導盲磚／語音號誌列為關鍵）、轉乘懲罰（wheelchair ×2、elderly ×1.5）與輪椅 Tier-1 路線排除；未填時沿用 query 解析結果，再退回 normal。",
+          "無障礙模式。調整評分權重（elderly 提升 Tier 1+2；visual_impaired 將導盲磚／語音號誌列為關鍵）、轉乘懲罰（wheelchair ×2、elderly ×1.5）與輪椅 Tier-1 路線排除。未填時沿用 query 解析結果；若仍未定且帶有效 Bearer token，改用登入者已儲存的無障礙偏好（GET /user/a11y-profile）推導；最後退回 normal。",
         example: "wheelchair",
       }),
     avoidStairs: z
@@ -60,7 +60,7 @@ export const AccessibleRouteBodySchema = z
       .optional()
       .openapi({
         description:
-          "硬性條件：要求無階梯路徑。true 時向路徑引擎索取 step-free 路線，並排除經過純樓梯障礙（highway=steps 且無輪椅坡道）的步行段。未填時預設為 mode==='wheelchair'，故舊有請求行為不變。",
+          "硬性條件：要求無階梯路徑。true 時向路徑引擎索取 step-free 路線，並排除經過純樓梯障礙（highway=steps 且無輪椅坡道）的步行段。未填時：若帶有效 token 且已儲存的偏好設為不能上下階梯，則預設 true；否則預設為 mode==='wheelchair'，故舊有請求行為不變。",
         example: true,
       }),
     requireElevator: z
@@ -68,7 +68,7 @@ export const AccessibleRouteBodySchema = z
       .optional()
       .openapi({
         description:
-          "硬性條件：要求車站有可用電梯。true 時排除「有設施資料但查無電梯」或「電梯維修／故障／暫停」的捷運／台鐵／高鐵路段；設施資料為空的車站視為未知而保留。未填時預設為 mode==='wheelchair'。當所有候選路線都被排除時仍會回傳原候選（有路線優於 404），並以較低的無障礙分數與 warnings 標示風險。",
+          "硬性條件：要求車站有可用電梯。true 時排除「有設施資料但查無電梯」或「電梯維修／故障／暫停」的捷運／台鐵／高鐵路段；設施資料為空的車站視為未知而保留。未填時：若帶有效 token 且已儲存的偏好要求電梯，則預設 true；否則預設為 mode==='wheelchair'。當所有候選路線都被排除時仍會回傳原候選（有路線優於 404），並以較低的無障礙分數與 warnings 標示風險。",
         example: true,
       }),
     maxTransfers: z

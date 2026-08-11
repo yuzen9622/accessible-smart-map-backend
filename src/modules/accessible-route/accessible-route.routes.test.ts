@@ -3,6 +3,11 @@ import request from "supertest";
 import { ROUTE_MSG, ROUTE_REASON } from "../../constants/messages";
 import { ResponseCode } from "../../types/code";
 
+vi.mock("../../config/auth", async () => {
+  const { createAuthModuleMock } = await import("../../../tests/helpers/auth-mock");
+  return createAuthModuleMock();
+});
+
 // Mock only the service seam; the request still exercises router + validation
 // + controller + envelope (schema defaults / rejections happen before the mock).
 vi.mock("./accessible-route.service", async (importActual) => {
@@ -11,12 +16,13 @@ vi.mock("./accessible-route.service", async (importActual) => {
   return { ...actual, planAccessibleRouteForHttp: vi.fn() };
 });
 
-import { buildTestApp } from "../../../tests/helpers/test-helpers";
+import { buildTestApp, buildAuthorizationHeader } from "../../../tests/helpers/test-helpers";
 import * as service from "./accessible-route.service";
 
 const app = buildTestApp();
 const URL = "/api/v1/a11y/accessible-route";
 const mockPlan = vi.mocked(service.planAccessibleRouteForHttp);
+const AUTH = buildAuthorizationHeader({ _id: "user-abc", email: "user@test.com" });
 
 const okData = (overrides: Record<string, unknown> = {}) => ({
   origin: { lat: 25.04, lng: 121.56 },
@@ -417,5 +423,37 @@ describe("accessible-route OpenAPI", () => {
         }),
       ]),
     );
+  });
+});
+
+describe("POST /api/v1/a11y/accessible-route optional auth", () => {
+  const body = { origin: "台北車站", destination: "台北101" };
+
+  it("works anonymously with no Authorization header", async () => {
+    mockPlan.mockResolvedValue({ ok: true, data: okData() });
+
+    const res = await request(app).post(URL).send(body);
+
+    expect(res.status).toBe(200);
+    expect(mockPlan).toHaveBeenCalledWith(expect.objectContaining({ userId: undefined }));
+  });
+
+  it("passes the authenticated userId through to the planner", async () => {
+    mockPlan.mockResolvedValue({ ok: true, data: okData() });
+
+    const res = await request(app).post(URL).set("Authorization", AUTH).send(body);
+
+    expect(res.status).toBe(200);
+    expect(mockPlan).toHaveBeenCalledWith(expect.objectContaining({ userId: "user-abc" }));
+  });
+
+  it("returns 403 for a garbage Bearer token instead of silently going anonymous", async () => {
+    const res = await request(app)
+      .post(URL)
+      .set("Authorization", "Bearer not-a-real-jwt")
+      .send(body);
+
+    expect(res.status).toBe(403);
+    expect(mockPlan).not.toHaveBeenCalled();
   });
 });

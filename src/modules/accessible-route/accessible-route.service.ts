@@ -1,6 +1,7 @@
 import BusStopModel from "../../model/bus-stop.model";
 import { getCity, getCoordinates } from "../../adapters/google.adapter";
 import { parseRouteIntent } from "../ai/ai.service";
+import { getA11yProfile } from "../user/user.service";
 import type { RouteIntent } from "../../types/ai";
 import { ResponseCode } from "../../types/code";
 import { getServiceCoverageConfig } from "../../config/coverage";
@@ -703,7 +704,7 @@ export async function planAccessibleRouteFromRequest(
   const rawWaypoints = body.waypoints ?? [];
   let mode = body.mode;
   let requireElevator = body.requireElevator;
-  const avoidStairs = body.avoidStairs;
+  let avoidStairs = body.avoidStairs;
 
   let intent: RouteIntent | null = null;
   if (query && (!origin || !destination)) {
@@ -738,6 +739,25 @@ export async function planAccessibleRouteFromRequest(
         status: ResponseCode.INVALID_INPUT,
         error: "查詢使用了『目前位置』，請一併提供 userLocation 座標",
       };
+    }
+  }
+
+  // Lowest-priority fallback: an explicit body value or an AI-parsed intent
+  // both reflect this specific trip and win over the account's saved profile.
+  if (body.userId && (mode === undefined || avoidStairs === undefined || requireElevator === undefined)) {
+    try {
+      const profile = await getA11yProfile(body.userId);
+      if (mode === undefined) {
+        if (profile.mobilityAid === "manual_wheelchair" || profile.mobilityAid === "power_wheelchair") {
+          mode = "wheelchair";
+        } else if (profile.visualAssistance === true) {
+          mode = "visual_impaired";
+        }
+      }
+      if (avoidStairs === undefined && profile.canUseStairs === false) avoidStairs = true;
+      if (requireElevator === undefined && profile.needsElevator === true) requireElevator = true;
+    } catch (err) {
+      console.error("[accessible-route] failed to load caller's a11y profile, ignoring", err);
     }
   }
 

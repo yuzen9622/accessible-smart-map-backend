@@ -39,6 +39,10 @@ vi.mock("./planners/otp-routing", () => ({
   isOtpCircuitOpen: () => false,
 }));
 
+vi.mock("../user/user.service", () => ({
+  getA11yProfile: vi.fn(),
+}));
+
 // DB isolation: resolveCityFromStops does findOne().select().lean().
 vi.mock("../../model/bus-stop.model", () => ({
   default: {
@@ -57,6 +61,7 @@ import { planAccessibleRouteFromRequest } from "./accessible-route.service";
 import { planValhallaRoute, ValhallaRoutingError } from "./planners/valhalla-routing";
 import { findNearbyParking, findNearby } from "../a11y/a11y.service";
 import { planOtpRouteDetailed, planOtpWalkDetailed } from "./planners/otp-routing";
+import { getA11yProfile } from "../user/user.service";
 import { enrichLegIndoor } from "./planners/route-a11y";
 import { getCity } from "../../adapters/google.adapter";
 import BusStopModel from "../../model/bus-stop.model";
@@ -489,6 +494,77 @@ describe("planAccessibleRouteFromRequest walk mode OTP", () => {
 
     expect(res.ok).toBe(true);
     expect(vi.mocked(planOtpWalkDetailed).mock.calls).toHaveLength(0);
+  });
+});
+
+describe("planAccessibleRouteFromRequest — caller's saved a11y profile fills unset preferences", () => {
+  beforeEach(() => {
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "ok",
+      routes: [walkRoute()] as any,
+    });
+  });
+
+  it("defaults avoidStairs=true and mode=wheelchair from a wheelchair-user profile", async () => {
+    vi.mocked(getA11yProfile).mockResolvedValue({
+      mobilityAid: "manual_wheelchair",
+      canUseStairs: false,
+      maxSlopePercent: null,
+      needsAccessibleToilet: null,
+      needsElevator: true,
+      needsHandrail: null,
+      visualAssistance: null,
+      preferredFontScale: null,
+    });
+
+    await planAccessibleRouteFromRequest({ ...walkRequest, userId: "user-1" });
+
+    expect(getA11yProfile).toHaveBeenCalledWith("user-1");
+    expect(vi.mocked(planOtpWalkDetailed)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ mode: "wheelchair", avoidStairs: true }),
+    );
+  });
+
+  it("does not override an explicitly-set avoidStairs/mode with the profile", async () => {
+    vi.mocked(getA11yProfile).mockResolvedValue({
+      mobilityAid: "manual_wheelchair",
+      canUseStairs: false,
+      maxSlopePercent: null,
+      needsAccessibleToilet: null,
+      needsElevator: null,
+      needsHandrail: null,
+      visualAssistance: null,
+      preferredFontScale: null,
+    });
+
+    await planAccessibleRouteFromRequest({
+      ...walkRequest,
+      userId: "user-1",
+      mode: "normal",
+      avoidStairs: false,
+    });
+
+    expect(vi.mocked(planOtpWalkDetailed)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ mode: "normal", avoidStairs: false }),
+    );
+  });
+
+  it("does not look up a profile when the request is anonymous", async () => {
+    await planAccessibleRouteFromRequest(walkRequest);
+
+    expect(getA11yProfile).not.toHaveBeenCalled();
+  });
+
+  it("ignores a failed profile lookup and still plans the route", async () => {
+    vi.mocked(getA11yProfile).mockRejectedValue(new Error("db down"));
+
+    const res = await planAccessibleRouteFromRequest({ ...walkRequest, userId: "user-1" });
+
+    expect(res.ok).toBe(true);
   });
 });
 

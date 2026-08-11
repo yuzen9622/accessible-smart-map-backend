@@ -128,6 +128,8 @@ export interface PlanRouteRequest {
   waypoints?: (string | { latitude: number; longitude: number })[];
   avoidStairs?: boolean;
   requireElevator?: boolean;
+  /** Authenticated caller's id, set by the controller from an optional Bearer token; never client-supplied. */
+  userId?: string;
 }
 
 export type PlanRouteResult =
