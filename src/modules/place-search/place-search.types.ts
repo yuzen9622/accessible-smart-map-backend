@@ -241,6 +241,30 @@ const TYPE_LABELS_ZH: Record<string, string> = {
   town: "鄉鎮",
   village: "村里",
   yes: "地點",
+  motorway: "高速公路",
+  trunk: "快速道路",
+  primary: "主要道路",
+  secondary: "次要道路",
+  tertiary: "市區道路",
+  unclassified: "一般道路",
+  service: "巷弄道路",
+  living_street: "商店衝道",
+  pedestrian: "行人專用道",
+  footway: "人行道",
+  cycleway: "自行車道",
+  path: "小徑",
+};
+
+const CLASS_FALLBACK_LABELS: Record<string, Record<SupportedLang, string>> = {
+  highway: { "zh-TW": "道路", en: "Road" },
+  amenity: { "zh-TW": "設施", en: "Facility" },
+  shop: { "zh-TW": "商店", en: "Shop" },
+  tourism: { "zh-TW": "旅遊地點", en: "Tourism spot" },
+  leisure: { "zh-TW": "休閒場所", en: "Leisure venue" },
+  railway: { "zh-TW": "軌道設施", en: "Rail facility" },
+  building: { "zh-TW": "建築物", en: "Building" },
+  office: { "zh-TW": "辦公場所", en: "Office" },
+  place: { "zh-TW": "地點", en: "Place" },
 };
 
 const TYPE_LABELS_EN: Record<string, string> = {
@@ -300,6 +324,18 @@ const TYPE_LABELS_EN: Record<string, string> = {
   town: "Town",
   village: "Village",
   yes: "Place",
+  motorway: "Motorway",
+  trunk: "Trunk road",
+  primary: "Primary road",
+  secondary: "Secondary road",
+  tertiary: "Tertiary road",
+  unclassified: "Minor road",
+  service: "Service road",
+  living_street: "Living street",
+  pedestrian: "Pedestrian street",
+  footway: "Footway",
+  cycleway: "Cycleway",
+  path: "Path",
 };
 
 /**
@@ -307,17 +343,25 @@ const TYPE_LABELS_EN: Record<string, string> = {
  * The frontend can render this directly instead of maintaining its own
  * type→label table per locale.
  *
+ * Unmapped types never leak their raw OSM/Google vocabulary to the user: when
+ * the specific type has no translation, this falls back to a generic label
+ * for its class (e.g. an unmapped `highway=*` type shows "道路"/"Road"), and
+ * only returns null when neither the type nor the class is recognized.
+ *
  * @param placeType The OSM-style place type.
+ * @param placeClass The OSM-style place class, used as a fallback bucket.
  * @param lang The response language; defaults to zh-TW.
- * @returns The label, or null when the type has no known translation.
+ * @returns The label, or null when neither type nor class is recognized.
  */
 export function typeLabelOf(
   placeType: string | null,
+  placeClass: string | null = null,
   lang: SupportedLang = DEFAULT_LANG,
 ): string | null {
-  if (!placeType) return null;
   const table = lang === "en" ? TYPE_LABELS_EN : TYPE_LABELS_ZH;
-  return table[placeType] ?? null;
+  if (placeType && table[placeType]) return table[placeType];
+  if (placeClass && CLASS_FALLBACK_LABELS[placeClass]) return CLASS_FALLBACK_LABELS[placeClass][lang];
+  return null;
 }
 
 const FACILITY_LABELS: Record<string, Record<SupportedLang, string>> = {

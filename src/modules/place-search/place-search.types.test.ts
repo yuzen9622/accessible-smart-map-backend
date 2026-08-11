@@ -90,7 +90,7 @@ describe("googleTypesToClassType", () => {
 });
 
 describe("typeLabelOf", () => {
-  it("translates known types and returns null otherwise", () => {
+  it("translates known types and returns null when neither type nor class is known", () => {
     expect(typeLabelOf("station")).toBe("車站");
     expect(typeLabelOf("attraction")).toBe("景點");
     expect(typeLabelOf("zoo")).toBeNull();
@@ -98,10 +98,21 @@ describe("typeLabelOf", () => {
   });
 
   it("serves the English table when asked, with the same key coverage", () => {
-    expect(typeLabelOf("station", "en")).toBe("Station");
-    expect(typeLabelOf("attraction", "en")).toBe("Attraction");
-    expect(typeLabelOf("zoo", "en")).toBeNull();
-    expect(typeLabelOf(null, "en")).toBeNull();
+    expect(typeLabelOf("station", null, "en")).toBe("Station");
+    expect(typeLabelOf("attraction", null, "en")).toBe("Attraction");
+    expect(typeLabelOf("zoo", null, "en")).toBeNull();
+    expect(typeLabelOf(null, null, "en")).toBeNull();
+  });
+
+  it("falls back to a class-level label instead of leaking a raw unmapped type", () => {
+    expect(typeLabelOf("unclassified_weird_value", "highway")).toBe("道路");
+    expect(typeLabelOf("unclassified_weird_value", "highway", "en")).toBe("Road");
+    expect(typeLabelOf("some_unmapped_shop", "shop")).toBe("商店");
+    expect(typeLabelOf("tertiary", "highway")).toBe("市區道路");
+  });
+
+  it("returns null when both type and class are unknown", () => {
+    expect(typeLabelOf("zoo", "unknown_class")).toBeNull();
   });
 });
 

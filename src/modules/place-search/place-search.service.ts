@@ -192,7 +192,7 @@ function osmToItem(
     secondaryText: place.displayName || null,
     placeClass: place.placeClass,
     placeType: place.placeType,
-    typeLabel: typeLabelOf(place.placeType, lang),
+    typeLabel: typeLabelOf(place.placeType, place.placeClass, lang),
     location: toGeoPoint(place.latitude, place.longitude),
     distanceMeters: distanceFrom(lat, lng, place.latitude, place.longitude),
   };
@@ -489,7 +489,7 @@ function googleToResolved(
     location: toGeoPoint(d.location.latitude, d.location.longitude),
     placeClass,
     placeType,
-    typeLabel: typeLabelOf(placeType, lang),
+    typeLabel: typeLabelOf(placeType, placeClass, lang),
     rating: d.rating,
     reviewKey: { placeId: d.id, placeType: "google" },
     externalLinks: {
@@ -510,7 +510,7 @@ function osmToResolved(id: string, p: OsmPlace, lang: SupportedLang): ResolvedPl
     location: toGeoPoint(p.latitude, p.longitude),
     placeClass: p.placeClass,
     placeType: p.placeType,
-    typeLabel: typeLabelOf(p.placeType, lang),
+    typeLabel: typeLabelOf(p.placeType, p.placeClass, lang),
     rating: null,
     reviewKey: { placeId: toReviewOsmId(p.osmType, p.osmId), placeType: "osm" },
     externalLinks: {
