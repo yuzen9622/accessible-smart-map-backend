@@ -10,7 +10,7 @@ import type {
   PhotoMimeType,
   ServiceResult,
 } from "./hazard-report.types";
-import type { HazardType } from "../../types";
+import type { HazardSeverity, HazardType } from "../../types";
 
 const ALLOWED_STATUS = ["pending", "verified", "rejected", "expired"];
 
@@ -58,17 +58,21 @@ async function createReport(req: Request, res: Response) {
 
   const body = req.validated?.body as {
     hazardType: HazardType;
+    severity: HazardSeverity;
     latitude: number;
     longitude: number;
     description?: string;
+    expectedUntil?: string;
   };
 
   const result = await service.createReport({
     reporterId: await resolveIdentity(req),
     hazardType: body.hazardType,
+    severity: body.severity,
     latitude: body.latitude,
     longitude: body.longitude,
     description: body.description,
+    expectedUntil: body.expectedUntil,
     photo: {
       buffer: req.file.buffer,
       mimeType: req.file.mimetype as PhotoMimeType,

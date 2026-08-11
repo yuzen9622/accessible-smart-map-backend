@@ -5,11 +5,16 @@ import { registry } from "../../openapi/registry";
 extendZodWithOpenApi(z);
 
 const HAZARD_TYPES = ["obstacle", "construction", "data_error"] as const;
+const SEVERITIES = ["blocking", "difficult", "minor"] as const;
 const STATUSES = ["pending", "verified", "rejected", "expired"] as const;
+const MAX_EXPECTED_UNTIL_DAYS = 180;
 
 export const CreateHazardReportSchema = z
   .object({
     hazardType: z.enum(HAZARD_TYPES).openapi({ example: "obstacle" }),
+    severity: z
+      .enum(SEVERITIES)
+      .openapi({ example: "difficult", description: "blocking=完全無法通行, difficult=可通行但困難, minor=輕微影響" }),
     latitude: z.coerce.number().min(-90).max(90).openapi({ example: 25.033 }),
     longitude: z.coerce.number().min(-180).max(180).openapi({ example: 121.5654 }),
     description: z
@@ -17,6 +22,20 @@ export const CreateHazardReportSchema = z
       .max(500)
       .optional()
       .openapi({ example: "人行道上有施工鐵板未固定" }),
+    expectedUntil: z
+      .string()
+      .datetime()
+      .optional()
+      .refine(
+        (value) => {
+          if (!value) return true;
+          const date = new Date(value);
+          const now = Date.now();
+          return date.getTime() > now && date.getTime() <= now + MAX_EXPECTED_UNTIL_DAYS * 86_400_000;
+        },
+        { message: `expectedUntil 必須在未來且不超過 ${MAX_EXPECTED_UNTIL_DAYS} 天` },
+      )
+      .openapi({ example: "2026-09-30T00:00:00.000Z", description: "預計此障礙持續到何時；未提供時依 hazardType 使用預設有效期" }),
   })
   .strict();
 
@@ -66,6 +85,11 @@ const HazardReportSchema = z
     _id: z.string().openapi({ example: "6670abc123def4567890abcd" }),
     reporterId: z.string().optional().openapi({ example: "665f0011aa22bb33cc44dd55" }),
     hazardType: z.enum(HAZARD_TYPES).openapi({ example: "obstacle" }),
+    severity: z.enum(SEVERITIES).openapi({ example: "difficult" }),
+    expectedUntil: z
+      .string()
+      .nullable()
+      .openapi({ example: null, description: "預計此障礙持續到何時；null 表示依預設有效期自動過期" }),
     reportedLocation: GeoPointSchema,
     description: z.string().optional().openapi({ example: "人行道上有施工鐵板未固定" }),
     photoUrl: z

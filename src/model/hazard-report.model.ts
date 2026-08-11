@@ -17,6 +17,12 @@ const hazardReportSchema = new Schema<IHazardReport>(
       enum: ["obstacle", "construction", "data_error"],
       required: true,
     },
+    severity: {
+      type: String,
+      enum: ["blocking", "difficult", "minor"],
+      required: true,
+    },
+    expectedUntil: { type: Date, default: null },
     description: { type: String, maxlength: 500, default: null },
     photoUrl: { type: String, required: true },
     photoStoragePath: { type: String, required: true },

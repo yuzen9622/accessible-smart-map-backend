@@ -1,4 +1,4 @@
-import type { AiVerdict, HazardType } from "../../types";
+import type { AiVerdict, HazardSeverity, HazardType } from "../../types";
 
 export type PhotoMimeType = "image/jpeg" | "image/png";
 
@@ -21,9 +21,11 @@ export interface ServiceResult<T = unknown> {
 export interface CreateReportInput {
   reporterId: string;
   hazardType: HazardType;
+  severity: HazardSeverity;
   latitude: number;
   longitude: number;
   description?: string;
+  expectedUntil?: string;
   photo: UploadedPhoto;
 }
 

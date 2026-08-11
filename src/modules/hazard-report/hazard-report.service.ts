@@ -121,18 +121,22 @@ export async function createReport(input: CreateReportInput): Promise<ServiceRes
     return fail(ResponseCode.INTERNAL_ERROR, "UPLOAD_FAILED");
   }
 
+  const expectedUntil = input.expectedUntil ? new Date(input.expectedUntil) : null;
+
   const doc = await HazardReport.create({
     _id,
     reporterId: input.reporterId,
     reportedLocation: { type: "Point", coordinates: [input.longitude, input.latitude] },
     hazardType: input.hazardType,
+    severity: input.severity,
+    expectedUntil,
     description: input.description ?? null,
     photoUrl: uploaded.url,
     photoStoragePath: uploaded.storagePath,
     exifValidation: exif,
     aiVerification: { verdict: "skipped", confidence: 0, reason: "影像辨識進行中" },
     status: "pending",
-    expiredAt: new Date(now.getTime() + EXPIRY_MS[input.hazardType]),
+    expiredAt: expectedUntil ?? new Date(now.getTime() + EXPIRY_MS[input.hazardType]),
   });
 
   void verifyHazardReport(

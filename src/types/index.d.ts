@@ -318,6 +318,7 @@ export interface IVisualA11y {
 }
 
 export type HazardType = "obstacle" | "construction" | "data_error";
+export type HazardSeverity = "blocking" | "difficult" | "minor";
 export type AiVerdict = "verified" | "suspicious" | "rejected" | "skipped";
 export type HazardStatus = "pending" | "verified" | "rejected" | "expired";
 
@@ -326,6 +327,8 @@ export interface IHazardReport {
   reporterId: string;
   reportedLocation: { type: "Point"; coordinates: [number, number] };
   hazardType: HazardType;
+  severity: HazardSeverity;
+  expectedUntil: Date | null;
   description?: string;
   photoUrl: string;
   photoStoragePath: string;
