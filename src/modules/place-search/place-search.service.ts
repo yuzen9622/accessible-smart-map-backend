@@ -75,6 +75,8 @@ export interface NearbyFacilityBrief {
   category: string;
   typeLabel: string;
   distanceMeters: number;
+  source: "government" | "osm";
+  lastVerifiedAt: string | null;
 }
 
 export interface PlaceResult {
@@ -363,6 +365,8 @@ async function findNearbyFacilities(
     category: string,
     typeLabel: string,
     doc: { location?: { coordinates?: number[] } },
+    source: "government" | "osm",
+    lastVerifiedAt: Date | undefined,
   ): NearbyFacilityBrief | null => {
     const coords = coordsOf(doc);
     if (!coords) return null;
@@ -373,16 +377,18 @@ async function findNearbyFacilities(
       category,
       typeLabel,
       distanceMeters: Math.round(haversineMeters(lat, lng, coords[0], coords[1])),
+      source,
+      lastVerifiedAt: lastVerifiedAt ? lastVerifiedAt.toISOString() : null,
     };
   };
 
   const toiletLabel = facilityLabelOf("toilet", lang);
   const toilets = [
     ...bathrooms.map((doc: any) =>
-      toBrief(String(doc._id), doc.name, doc.address ?? null, "toilet", toiletLabel, doc),
+      toBrief(String(doc._id), doc.name, doc.address ?? null, "toilet", toiletLabel, doc, "government", undefined),
     ),
     ...osmToilets.map((doc: any) =>
-      toBrief(String(doc._id), doc.name ?? toiletLabel, null, "toilet", toiletLabel, doc),
+      toBrief(String(doc._id), doc.name ?? toiletLabel, null, "toilet", toiletLabel, doc, "osm", doc.importedAt),
     ),
   ]
     .filter((brief): brief is NearbyFacilityBrief => brief !== null)
@@ -394,7 +400,16 @@ async function findNearbyFacilities(
       const rawName = doc["出入口電梯/無障礙坡道名稱"];
       const name = rawName ?? facilityLabelOf("metro", lang);
       const category = metroCategory(rawName ?? "");
-      return toBrief(String(doc._id), name, null, category, facilityLabelOf(category, lang), doc);
+      return toBrief(
+        String(doc._id),
+        name,
+        null,
+        category,
+        facilityLabelOf(category, lang),
+        doc,
+        "government",
+        undefined,
+      );
     })
     .filter((brief): brief is NearbyFacilityBrief => brief !== null)
     .sort((a, b) => a.distanceMeters - b.distanceMeters)

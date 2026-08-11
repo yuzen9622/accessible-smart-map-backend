@@ -141,6 +141,16 @@ const NearbyFacilityBriefSchema = z
     category: z.string().openapi({ example: "toilet" }),
     typeLabel: z.string().openapi({ example: "無障礙廁所" }),
     distanceMeters: z.number().openapi({ example: 120 }),
+    source: z
+      .enum(["government", "osm"])
+      .openapi({ example: "government", description: "這筆設施資料的來源資料集" }),
+    lastVerifiedAt: z
+      .string()
+      .nullable()
+      .openapi({
+        example: null,
+        description: "資料集匯入/更新時間；來源本身不附時間戳記時為 null，不代表資料是最新的。",
+      }),
   })
   .strict()
   .openapi("NearbyFacilityBrief");
