@@ -1,5 +1,14 @@
 import { Router } from "express";
-import { refresh, info, lineLinkCode, config, updateConfig, logout } from "./user.controller";
+import {
+  refresh,
+  info,
+  lineLinkCode,
+  config,
+  updateConfig,
+  logout,
+  getA11yProfile,
+  updateA11yProfile,
+} from "./user.controller";
 import {
   register,
   login,
@@ -29,6 +38,7 @@ import {
   ChangePasswordBodySchema,
   ConfigBodySchema,
   UpdateConfigBodySchema,
+  UpdateA11yProfileBodySchema,
 } from "./user.schema";
 
 export function createUserRouter(): Router {
@@ -85,6 +95,12 @@ export function createUserRouter(): Router {
     "/config/update",
     validateRequest({ body: UpdateConfigBodySchema }),
     updateConfig,
+  );
+  router.get("/a11y-profile", getA11yProfile);
+  router.put(
+    "/a11y-profile",
+    validateRequest({ body: UpdateA11yProfileBodySchema }),
+    updateA11yProfile,
   );
   router.post("/logout", logout);
 

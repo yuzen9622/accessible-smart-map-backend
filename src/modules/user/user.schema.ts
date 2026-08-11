@@ -174,6 +174,49 @@ export const ConfigResponseSchema = apiResponse(ConfigSchema.nullable()).openapi
 
 export const UpdateConfigResponseSchema = apiResponse(ConfigSchema).openapi("UpdateConfigResponse");
 
+const MOBILITY_AIDS = ["manual_wheelchair", "power_wheelchair", "walker", "none"] as const;
+
+const A11yProfileSchema = z
+  .object({
+    mobilityAid: z
+      .enum(MOBILITY_AIDS)
+      .nullable()
+      .openapi({ example: "manual_wheelchair", description: "行動輔具類型；null 表示尚未設定" }),
+    canUseStairs: z
+      .boolean()
+      .nullable()
+      .openapi({ example: false, description: "能否自行上下階梯" }),
+    maxSlopePercent: z
+      .number()
+      .min(0)
+      .max(100)
+      .nullable()
+      .openapi({ example: 5, description: "可接受的最大坡度百分比" }),
+    needsAccessibleToilet: z.boolean().nullable().openapi({ example: true }),
+    needsElevator: z.boolean().nullable().openapi({ example: true }),
+    needsHandrail: z.boolean().nullable().openapi({ example: false }),
+    visualAssistance: z
+      .boolean()
+      .nullable()
+      .openapi({ example: false, description: "是否需要視障相關輔助（導盲磚、語音號誌等）" }),
+    preferredFontScale: z
+      .number()
+      .min(0.5)
+      .max(3)
+      .nullable()
+      .openapi({ example: 1.25, description: "前端字體縮放倍率偏好" }),
+  })
+  .strict()
+  .openapi("A11yProfile");
+
+export const UpdateA11yProfileBodySchema = A11yProfileSchema.partial().openapi(
+  "UpdateA11yProfileBody",
+);
+
+export const A11yProfileResponseSchema = apiResponse(A11yProfileSchema).openapi(
+  "A11yProfileResponse",
+);
+
 export const LineLinkCodeResponseSchema = apiResponse(
   z.object({
     bindCode: z.string().openapi({ example: "A1B2C3" }),
@@ -484,6 +527,49 @@ registry.registerPath({
       description: "伺服器錯誤",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/user/a11y-profile",
+  tags: ["User"],
+  summary: "取得使用者無障礙偏好",
+  description: "首次呼叫時若尚無設定，會自動建立一筆欄位皆為 null 的空白設定；不從要求使用者重新填寫一次。",
+  security: [{ BearerAuth: [] }],
+  responses: {
+    200: {
+      description: "無障礙偏好（未設定的欄位為 null）",
+      content: { "application/json": { schema: A11yProfileResponseSchema } },
+    },
+    401: { description: "未提供或已過期的 token" },
+    403: { description: "token 無效" },
+    500: { description: "伺服器錯誤" },
+  },
+});
+
+registry.registerPath({
+  method: "put",
+  path: "/user/a11y-profile",
+  tags: ["User"],
+  summary: "更新使用者無障礙偏好",
+  description: "部分更新，只改傳入的欄位；未包含在 body 裡的欄位保持不變。",
+  security: [{ BearerAuth: [] }],
+  request: {
+    body: {
+      content: { "application/json": { schema: UpdateA11yProfileBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      description: "更新後的完整偏好",
+      content: { "application/json": { schema: A11yProfileResponseSchema } },
+    },
+    400: { description: "參數不合法" },
+    401: { description: "未提供或已過期的 token" },
+    403: { description: "token 無效" },
+    500: { description: "伺服器錯誤" },
   },
 });
 

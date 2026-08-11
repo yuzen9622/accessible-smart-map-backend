@@ -54,12 +54,26 @@ export interface IPasswordAssistanceJob {
   updatedAt: Date;
 }
 
+export type MobilityAid = "manual_wheelchair" | "power_wheelchair" | "walker" | "none";
+
+export interface IA11yProfile {
+  mobilityAid: MobilityAid | null;
+  canUseStairs: boolean | null;
+  maxSlopePercent: number | null;
+  needsAccessibleToilet: boolean | null;
+  needsElevator: boolean | null;
+  needsHandrail: boolean | null;
+  visualAssistance: boolean | null;
+  preferredFontScale: number | null;
+}
+
 export interface IConfig {
   language: string;
   darkMode: "light" | "dark" | "system";
   themeColor: string;
   fontSize: string;
   notifications: boolean;
+  accessibility: IA11yProfile;
   user_id: Schema.Types.ObjectId;
 }
 

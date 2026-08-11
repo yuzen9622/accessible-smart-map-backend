@@ -3,7 +3,7 @@ import Config from "../../model/config.model";
 import LineLinkCode from "../../model/line-link-code.model";
 import { buildBindUrl } from "../../adapters/line.adapter";
 import crypto from "crypto";
-import type { IUser, IConfig } from "../../types";
+import type { IUser, IConfig, IA11yProfile } from "../../types";
 
 const LINE_LINK_CODE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 const LINE_LINK_CODE_LENGTH = 6;
@@ -63,6 +63,57 @@ export async function updateConfig(
     if (value !== undefined) updateFields[key] = value;
   }
   return Config.findOneAndUpdate({ user_id }, { $set: updateFields }, { new: true });
+}
+
+const DEFAULT_A11Y_PROFILE: IA11yProfile = {
+  mobilityAid: null,
+  canUseStairs: null,
+  maxSlopePercent: null,
+  needsAccessibleToilet: null,
+  needsElevator: null,
+  needsHandrail: null,
+  visualAssistance: null,
+  preferredFontScale: null,
+};
+
+/**
+ * Reads the caller's accessibility profile, creating an empty Config document
+ * (all fields null/default) on first access so onboarding always has
+ * something to read and write.
+ *
+ * @param userId The authenticated user's id.
+ * @returns The accessibility profile, defaulting every field to null when unset.
+ */
+export async function getA11yProfile(userId: string): Promise<IA11yProfile> {
+  const config = await Config.findOneAndUpdate(
+    { user_id: userId },
+    { $setOnInsert: { user_id: userId } },
+    { new: true, upsert: true },
+  );
+  return { ...DEFAULT_A11Y_PROFILE, ...(config.accessibility ?? {}) };
+}
+
+/**
+ * Merges the given fields into the caller's accessibility profile.
+ *
+ * @param userId The authenticated user's id.
+ * @param fields Partial profile fields to set; `undefined` values are left untouched.
+ * @returns The full profile after the update.
+ */
+export async function updateA11yProfile(
+  userId: string,
+  fields: Partial<IA11yProfile>,
+): Promise<IA11yProfile> {
+  const updateFields: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(fields)) {
+    if (value !== undefined) updateFields[`accessibility.${key}`] = value;
+  }
+  const config = await Config.findOneAndUpdate(
+    { user_id: userId },
+    { $set: updateFields, $setOnInsert: { user_id: userId } },
+    { new: true, upsert: true },
+  );
+  return { ...DEFAULT_A11Y_PROFILE, ...(config.accessibility ?? {}) };
 }
 
 export async function issueLineLinkCode(userId: string): Promise<{

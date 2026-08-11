@@ -195,4 +195,45 @@ async function logout(req: Request, res: Response) {
   }
 }
 
-export { refresh, info, lineLinkCode, config, updateConfig, logout };
+async function getA11yProfile(req: Request, res: Response) {
+  try {
+    const profile = await userService.getA11yProfile(req.auth!.userId);
+    return sendResponse(res, true, "success", ResponseCode.OK, ResponseMessage.OK, profile);
+  } catch (error) {
+    console.error(error);
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      ResponseMessage.INTERNAL_ERROR
+    );
+  }
+}
+
+async function updateA11yProfile(req: Request, res: Response) {
+  try {
+    const profile = await userService.updateA11yProfile(req.auth!.userId, req.body);
+    return sendResponse(res, true, "success", ResponseCode.OK, ResponseMessage.OK, profile);
+  } catch (error) {
+    console.error(error);
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      ResponseMessage.INTERNAL_ERROR
+    );
+  }
+}
+
+export {
+  refresh,
+  info,
+  lineLinkCode,
+  config,
+  updateConfig,
+  logout,
+  getA11yProfile,
+  updateA11yProfile,
+};
