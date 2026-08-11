@@ -98,7 +98,8 @@ registry.registerPath({
   tags: ["VisualA11y"],
   summary: "同步 OSM 視障設施資料",
   description:
-    "從 OpenStreetMap Overpass API 拉取最新有聲號誌與導盲磚資料，upsert 進 MongoDB。",
+    "從 OpenStreetMap Overpass API 拉取最新有聲號誌與導盲磚資料，upsert 進 MongoDB。需登入，避免任意人觸發全國性 Overpass 投詢。",
+  security: [{ bearerAuth: [] }],
   responses: {
     200: {
       description: "同步結果",
@@ -106,6 +107,8 @@ registry.registerPath({
         "application/json": { schema: VisualA11ySyncResponseSchema },
       },
     },
+    401: { description: "未提供或已過期的 token" },
+    403: { description: "token 無效" },
     500: { description: "伺服器錯誤" },
   },
 });
