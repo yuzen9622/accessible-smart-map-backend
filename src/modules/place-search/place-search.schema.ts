@@ -118,7 +118,10 @@ export const AutocompleteItemSchema = z
     distanceMeters: z
       .number()
       .nullable()
-      .openapi({ example: 1200, description: "有座標且帶使用者座標時才計算" }),
+      .openapi({
+        example: 1200,
+        description: "直線距離（公式直線距離，非實際行走距離），相對於查詢參數 lat/lng 計算；未帶 lat/lng 或地點本身無座標時為 null。",
+      }),
   })
   .strict()
   .openapi("AutocompleteItem");
@@ -169,7 +172,10 @@ export const PlaceResultSchema = z
     distanceMeters: z
       .number()
       .nullable()
-      .openapi({ example: 1200, description: "帶使用者座標時才計算" }),
+      .openapi({
+        example: 1200,
+        description: "直線距離（公式直線距離，非實際行走距離），相對於查詢參數 lat/lng 計算；未帶 lat/lng 時為 null。",
+      }),
     rating: z.number().nullable().openapi({ example: 4.5, description: "Google 才有" }),
     accessibility: AccessibilitySchema,
     nearbyFacilities: z
@@ -210,8 +216,18 @@ export const AutocompleteQuerySchema = z
       .string()
       .optional()
       .openapi({ example: "b2c3d4e5-...", description: "前端產生的 session UUID，綁定計費" }),
-    lat: coordString("latitude").optional().openapi({ example: "25.0330" }),
-    lng: coordString("longitude").optional().openapi({ example: "121.5654" }),
+    lat: coordString("latitude")
+      .optional()
+      .openapi({
+        example: "25.0330",
+        description: "距離計算的基準點緯度；不限定是使用者裝置 GPS，可以是地圖中心或任何參考座標，未提供時 distanceMeters 回 null。",
+      }),
+    lng: coordString("longitude")
+      .optional()
+      .openapi({
+        example: "121.5654",
+        description: "距離計算的基準點經度；與 lat 成對使用。",
+      }),
     sources: z
       .string()
       .regex(/^(osm|google)(,(osm|google))*$/, "sources 只接受 osm / google，以逗號分隔")
@@ -246,8 +262,18 @@ export const DetailsQuerySchema = z
       .string()
       .optional()
       .openapi({ example: "b2c3d4e5-...", description: "與 autocomplete 相同的 session UUID" }),
-    lat: coordString("latitude").optional().openapi({ example: "25.0330" }),
-    lng: coordString("longitude").optional().openapi({ example: "121.5654" }),
+    lat: coordString("latitude")
+      .optional()
+      .openapi({
+        example: "25.0330",
+        description: "距離計算的基準點緯度；不限定是使用者裝置 GPS，可以是地圖中心或任何參考座標，未提供時 distanceMeters 回 null。",
+      }),
+    lng: coordString("longitude")
+      .optional()
+      .openapi({
+        example: "121.5654",
+        description: "距離計算的基準點經度；與 lat 成對使用。",
+      }),
     lang: langString(),
   })
   .strict();
