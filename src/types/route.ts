@@ -7,7 +7,7 @@
  * types DOWNWARD, with no upward import and no runtime circular dependency.
  */
 
-import type { IOsmA11y } from "./index";
+import type { HazardSeverity, HazardType, IOsmA11y } from "./index";
 
 export type AccessibilityMode =
   | "wheelchair"
@@ -28,6 +28,50 @@ export interface SlimA11y {
   wheelchair?: IOsmA11y["wheelchair"];
   location: IOsmA11y["location"];
   tags?: Record<string, string>;
+}
+
+/** One verified, community-confirmed hazard positioned relative to a planned route. */
+export interface RouteHazard {
+  id: string;
+  hazardType: HazardType;
+  severity: HazardSeverity;
+  description?: string;
+  location: { lat: number; lng: number };
+  /** Shortest distance from the route's ground-level polyline to the hazard, in metres. */
+  distanceM: number;
+}
+
+/**
+ * Confirmed-hazard findings for one route. `avoided` is populated only on the
+ * selected candidate, and only for hazards that actually sit on another
+ * candidate of the same request, so the claim "this route avoids it" is always
+ * backed by evidence.
+ */
+export interface RouteHazardAdvisory {
+  onRoute: RouteHazard[];
+  avoided: RouteHazard[];
+  blockingOnRoute: number;
+  penaltyPoints: number;
+}
+
+export interface WalkRestPoint {
+  type: "accessible_toilet";
+  /** Distance from the WALK leg start to the closest point on its routed geometry, in metres. */
+  distanceM: number;
+}
+
+/**
+ * Explicit, source-backed WALK-leg accessibility observations. `null` and
+ * `unknown` mean the current route data carries no measurement for that
+ * dimension; they must never be rendered as zero / favourable conditions.
+ */
+export interface WalkA11yDetails {
+  maxSlopePercent: number | null;
+  crossings: number | null;
+  crossingsWithCurbRamp: number | null;
+  minPathWidthCm: number | null;
+  surfaceType: "paved" | "gravel" | "unknown";
+  restPoints: WalkRestPoint[];
 }
 
 export interface WaitInfo {
@@ -56,7 +100,7 @@ export interface IntermediateStop {
   location?: [number, number];
 }
 
-export interface WalkLeg {
+export interface WalkLeg extends WalkA11yDetails {
   type: "WALK";
   a11yRefs?: string[];
   from: string;
@@ -215,6 +259,7 @@ export interface AccessibleRoute {
     environmentScore?: number;
   };
   accessibilitySummary?: string;
+  hazardAdvisory?: RouteHazardAdvisory;
   attribution?: string;
   /** Short-lived bearer capability for arming voice navigation. */
   routeToken?: string;

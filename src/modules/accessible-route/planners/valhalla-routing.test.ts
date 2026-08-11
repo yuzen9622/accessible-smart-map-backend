@@ -43,7 +43,15 @@ describe("planValhallaRoute", () => {
   it("maps walk steps using true shape locations", async () => {
     compute.mockResolvedValue({ status: "OK", trips: [normalizedTrip] });
     const routes = await planValhallaRoute({ lat: 25, lng: 121 }, { lat: 25.1, lng: 121.1 }, { travelMode: "walk" });
-    expect(routes[0].legs[0]).toMatchObject({ type: "WALK" });
+    expect(routes[0].legs[0]).toMatchObject({
+      type: "WALK",
+      maxSlopePercent: null,
+      crossings: null,
+      crossingsWithCurbRamp: null,
+      minPathWidthCm: null,
+      surfaceType: "unknown",
+      restPoints: [],
+    });
     expect(routes[0].legs[0].type === "WALK" && routes[0].legs[0].steps?.[0]).toMatchObject({ instruction: "沿「信義路」出發", location: [121.567, 25.041], relativeDirection: "DEPART", stairs: false });
   });
 
@@ -148,6 +156,15 @@ describe("planValhallaRoute walk access legs", () => {
     expect(route.warnings).toContain(
       "OTP 步行規劃暫時不可用，已降級使用 Valhalla 步行路線，指引品質可能不同",
     );
+    expect(route.legs[0]).toMatchObject({
+      type: "WALK",
+      maxSlopePercent: null,
+      crossings: null,
+      crossingsWithCurbRamp: null,
+      minPathWidthCm: null,
+      surfaceType: "unknown",
+      restPoints: [],
+    });
   });
 
   it("prepends a head WALK when origin is off the drivable network", async () => {

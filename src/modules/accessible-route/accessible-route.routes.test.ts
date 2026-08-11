@@ -18,6 +18,7 @@ vi.mock("./accessible-route.service", async (importActual) => {
 
 import { buildTestApp, buildAuthorizationHeader } from "../../../tests/helpers/test-helpers";
 import * as service from "./accessible-route.service";
+import { AccessibleRouteSchema } from "./accessible-route.schema";
 
 const app = buildTestApp();
 const URL = "/api/v1/a11y/accessible-route";
@@ -59,6 +60,48 @@ describe("POST /api/v1/a11y/accessible-route travel modes + waypoints", () => {
     });
     expect(res.status).toBe(200);
     expect(res.body.data.routes[0].routeToken).toBe("high-entropy-capability");
+  });
+
+  it("serializes the additive strict confirmed-hazard advisory contract", async () => {
+    const route = {
+      routeId: "hazard-route",
+      routeName: "避開施工替代路線",
+      totalMinutes: 22,
+      transferCount: 0,
+      legs: [],
+      accessibilityHighlights: [],
+      hazardAdvisory: {
+        onRoute: [],
+        avoided: [
+          {
+            id: "confirmed-1",
+            hazardType: "construction",
+            severity: "blocking",
+            description: "人行道施工中",
+            location: { lat: 25.041, lng: 121.567 },
+            distanceM: 7.5,
+          },
+        ],
+        blockingOnRoute: 0,
+        penaltyPoints: 0,
+      },
+    };
+    mockPlan.mockResolvedValue({ ok: true, data: okData({ routes: [route] }) } as any);
+
+    const res = await request(app).post(URL).send({
+      origin: { latitude: 25, longitude: 121 },
+      destination: { latitude: 25.1, longitude: 121.1 },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.routes[0].hazardAdvisory).toEqual(route.hazardAdvisory);
+    expect(AccessibleRouteSchema.safeParse(route).success).toBe(true);
+    expect(
+      AccessibleRouteSchema.safeParse({
+        ...route,
+        hazardAdvisory: { ...route.hazardAdvisory, unrecognized: true },
+      }).success,
+    ).toBe(false);
   });
 
   it("returns 200 with a next-service-day scheduled departure", async () => {
@@ -422,6 +465,28 @@ describe("accessible-route OpenAPI", () => {
           }),
         }),
       ]),
+    );
+    expect(res.body.components.schemas.RouteHazardAdvisory).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        onRoute: { type: "array" },
+        avoided: { type: "array" },
+        blockingOnRoute: { type: "integer" },
+        penaltyPoints: { type: "number" },
+      },
+    });
+    expect(res.body.components.schemas.WalkLeg.properties).toEqual(
+      expect.objectContaining({
+        maxSlopePercent: expect.any(Object),
+        crossings: expect.any(Object),
+        crossingsWithCurbRamp: expect.any(Object),
+        minPathWidthCm: expect.any(Object),
+        surfaceType: expect.objectContaining({
+          enum: ["paved", "gravel", "unknown"],
+        }),
+        restPoints: expect.objectContaining({ type: "array" }),
+      }),
     );
   });
 });

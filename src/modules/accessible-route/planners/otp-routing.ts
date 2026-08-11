@@ -55,6 +55,7 @@ import type {
   PlanOtpRouteOptions,
   SnapStop,
 } from "./otp-routing.types";
+import { unknownWalkA11yDetails } from "./walk-a11y";
 export type {
   PlanOtpRouteOptions,
 };
@@ -729,6 +730,7 @@ function snapWalkLeg(
       [to.lng, to.lat],
     ],
     a11yFacilities: [],
+    ...unknownWalkA11yDetails(),
     exitInfo: null,
   };
 }
@@ -770,6 +772,7 @@ function walkLegFrom(leg: OtpLeg, isFirst: boolean, isLast: boolean): WalkLeg {
     minutesEst: Math.max(1, Math.round(durationSec / 60)),
     polyline: decodeOtpPolyline(leg.legGeometry?.points),
     a11yFacilities: [],
+    ...unknownWalkA11yDetails(),
     exitInfo: null,
     steps: (leg.steps ?? []).map((s): WalkStep => {
       const relativeDirection = s.relativeDirection ?? "CONTINUE";

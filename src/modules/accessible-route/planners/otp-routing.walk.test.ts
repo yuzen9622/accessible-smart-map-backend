@@ -71,6 +71,14 @@ describe("planOtpWalk", () => {
     expect(r.attribution).toBe("© OpenStreetMap contributors");
     expect(r.legs[0].steps?.[0].instruction).toBe("沿「信義路」出發");
     expect(r.legs[0].steps?.[0].stairs).toBe(false);
+    expect(r.legs[0]).toMatchObject({
+      maxSlopePercent: null,
+      crossings: null,
+      crossingsWithCurbRamp: null,
+      minPathWidthCm: null,
+      surfaceType: "unknown",
+      restPoints: [],
+    });
 
     const query: string = post.mock.calls[0][1].query;
     expect(query).toContain("transportModes: [{ mode: WALK }]");

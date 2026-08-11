@@ -13,6 +13,7 @@ import { haversineCoords, haversineMeters } from "../../../utils/geo";
 import { ROUTE_WARNING } from "../../../constants/messages";
 import { ValhallaRoutingError } from "./valhalla-routing.types";
 import { planOtpWalkDetailed } from "./otp-routing";
+import { unknownWalkA11yDetails } from "./walk-a11y";
 
 export { ValhallaRoutingError } from "./valhalla-routing.types";
 
@@ -174,6 +175,7 @@ function mapTrip(trip: NormalizedValhallaTrip, mode: RoadTravelMode, index: numb
         distanceM: Math.round(leg.summary.lengthKm * 1000),
         minutesEst: minutes(leg.summary.timeSec),
         polyline: points, a11yFacilities: [],
+        ...unknownWalkA11yDetails(),
         ...(walkSteps(leg, points) ? { steps: walkSteps(leg, points) } : {}),
       };
     }
@@ -273,6 +275,7 @@ async function planWalkConnector(
         minutesEst: minutes(leg.summary.timeSec),
         polyline: points,
         a11yFacilities: [],
+        ...unknownWalkA11yDetails(),
         ...(steps ? { steps } : {}),
       },
     };

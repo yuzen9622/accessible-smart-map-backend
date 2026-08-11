@@ -58,8 +58,13 @@ vi.mock("./route-token.service", async (importActual) => {
   };
 });
 
+vi.mock("../hazard-report/hazard-report.service", () => ({
+  findConfirmedHazardsWithin: vi.fn(),
+}));
+
 import { buildTestApp } from "../../../tests/helpers/test-helpers";
 import { planOtpWalkDetailed } from "./planners/otp-routing";
+import { findConfirmedHazardsWithin } from "../hazard-report/hazard-report.service";
 
 const app = buildTestApp();
 const URL = "/api/v1/a11y/accessible-route";
@@ -67,6 +72,7 @@ const otpWalk = vi.mocked(planOtpWalkDetailed);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(findConfirmedHazardsWithin).mockResolvedValue([]);
   otpWalk.mockResolvedValue({
     status: "ok",
     routes: [{

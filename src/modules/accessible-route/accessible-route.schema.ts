@@ -205,6 +205,45 @@ const WalkLegSchema = z
       ],
     }),
     a11yFacilities: z.array(OsmA11ySchema),
+    maxSlopePercent: z.number().nonnegative().nullable().openapi({
+      example: null,
+      description:
+        "由此 WALK leg 已附帶的 OSM incline 標籤取最大絕對坡度百分比；null = 目前沒有可用量測，不是 0% 或平坦。現行路徑引擎的高程/坡度覆蓋稀疏，前端必須顯示未知。",
+    }),
+    crossings: z.number().int().nonnegative().nullable().openapi({
+      example: null,
+      description:
+        "此 WALK leg 已附帶 OSM 設施中明確標記的 crossing 數；null = 沒有可用 crossing 觀測，不能解讀為沒有路口。",
+    }),
+    crossingsWithCurbRamp: z.number().int().nonnegative().nullable().openapi({
+      example: null,
+      description:
+        "上述已觀測 crossing 中，明確帶 kerb_cut／dropped_kerb／坡道標籤者；null = 沒有正向的坡道觀測，不能解讀為 0。",
+    }),
+    minPathWidthCm: z.number().positive().nullable().openapi({
+      example: null,
+      description:
+        "此 WALK leg 已附帶 OSM width 標籤的最小路徑寬度（公分）；null = 沒有可用量測，不是 0 公分。",
+    }),
+    surfaceType: z.enum(["paved", "gravel", "unknown"]).openapi({
+      example: "unknown",
+      description:
+        "由目前附帶的 OSM surface 標籤保守歸類；unknown = 缺少或互相衝突的來源，不能假定鋪面品質。",
+    }),
+    restPoints: z
+      .array(
+        z
+          .object({
+            type: z.literal("accessible_toilet"),
+            distanceM: z.number().nonnegative(),
+          })
+          .strict(),
+      )
+      .openapi({
+        example: [],
+        description:
+          "只列出已附帶且明確標記為無障礙的 OSM 廁所。distanceM 為從 WALK 起點至該點最近路線位置的進度，不含繞行；空陣列不代表沿途沒有廁所。",
+      }),
     steps: z
       .array(
         z.object({
@@ -520,6 +559,46 @@ const ScoreComponentsSchema = z
   }).strict()
   .openapi("ScoreComponents");
 
+const RouteHazardSchema = z
+  .object({
+    id: z.string().openapi({ example: "67f0a6c5c0e08c4fd4bc1d2a" }),
+    hazardType: z
+      .enum(["obstacle", "construction", "data_error"])
+      .openapi({ example: "construction" }),
+    severity: z
+      .enum(["blocking", "difficult", "minor"])
+      .openapi({ example: "blocking" }),
+    description: z.string().optional().openapi({ example: "人行道施工中" }),
+    location: CoordSchema.openapi({
+      example: { lat: 25.0411, lng: 121.5674 },
+      description: "已確認回報的位置。",
+    }),
+    distanceM: z.number().nonnegative().openapi({
+      example: 8.4,
+      description: "此障礙到路線地面幾何的最短距離（公尺）。",
+    }),
+  })
+  .strict()
+  .openapi("RouteHazard");
+
+const RouteHazardAdvisorySchema = z
+  .object({
+    onRoute: z.array(RouteHazardSchema).openapi({
+      description: "與此路線 WALK／DRIVE／MOTORCYCLE 地面幾何相交的已確認障礙。",
+    }),
+    avoided: z.array(RouteHazardSchema).openapi({
+      description:
+        "僅在此路線是選定候選且同一障礙已被證實相交於另一候選、但未相交於此路線時出現；空陣列不表示系統已檢查到沒有其他障礙。",
+    }),
+    blockingOnRoute: z.number().int().nonnegative().openapi({ example: 1 }),
+    penaltyPoints: z.number().nonnegative().openapi({
+      example: 1000,
+      description: "本次候選排序使用的已確認障礙懲罰點數；越高代表影響越大。",
+    }),
+  })
+  .strict()
+  .openapi("RouteHazardAdvisory");
+
 export const AccessibleRouteSchema = z
   .object({
     routeId: z.string().openapi({ example: "route-001" }),
@@ -560,6 +639,10 @@ export const AccessibleRouteSchema = z
         example: ["OTP 步行規劃暫時不可用，已降級使用 Valhalla 步行路線，指引品質可能不同"],
         description: "路線引擎降級或硬性無障礙條件無法完全滿足時的使用者警示",
       }),
+    hazardAdvisory: RouteHazardAdvisorySchema.optional().openapi({
+      description:
+        "選填：只有已成功查到仍有效、verified 且至少一人確認的回報，並可用候選的地面幾何精確比對時才出現。欄位缺席表示本次未有可安全主張的比對結果，不代表沒有障礙。",
+    }),
     departureDate: z
       .string()
       .optional()
