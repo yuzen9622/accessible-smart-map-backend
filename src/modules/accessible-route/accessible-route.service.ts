@@ -394,7 +394,7 @@ async function applyExtraA11yAnnotations(
         requestedMaxPercent,
         enforced,
         note: !wheelchairEngaged
-          ? "此路線未啟用輪椊模式（avoidStairs 為 false），伺服器未套用任何坡度限制"
+          ? "此路線未啟用輪椅模式（avoidStairs 為 false），伺服器未套用任何坡度限制"
           : enforced
             ? `伺服器已套用 ${OTP_SERVER_MAX_SLOPE_PERCENT}% 上限（等於或寬於您的設定）`
             : ROUTE_WARNING.SLOPE_LIMIT_STRICTER_THAN_SERVER_DEFAULT,
@@ -883,8 +883,10 @@ export async function planAccessibleRouteFromRequest(
           mode = "visual_impaired";
         }
       }
-      if (avoidStairs === undefined && profile.canUseStairs === false) avoidStairs = true;
-      if (requireElevator === undefined && profile.needsElevator === true) requireElevator = true;
+      if (avoidStairs === undefined && profile.canUseStairs !== null) avoidStairs = !profile.canUseStairs;
+      if (requireElevator === undefined && profile.needsElevator !== null) {
+        requireElevator = profile.needsElevator;
+      }
       if (needsAccessibleToilet === undefined && profile.needsAccessibleToilet === true) {
         needsAccessibleToilet = true;
       }

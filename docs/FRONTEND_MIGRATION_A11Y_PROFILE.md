@@ -48,29 +48,29 @@ PUT  /api/v1/user/a11y-profile     （需登入，部分更新，只改傳入欄
 
 ## 四、`maxSlopePercent`：誠實回報是否真的有篩選（重要）
 
-這一項**目前無法真正影響選路**，原因是基礎設施限制（已確認，不是偵懶）：
+這一項**目前無法真正影響選路**，原因是基礎設施限制（已確認，不是偷懶）：
 
-- **開車/驅驛車（Valhalla）**：伺服器**完全沒有地形高程資料**（`valhalla.json` 有寫 `elevation` 路徑，但那個目錄從未被挣入容器、也從未實際存在過）。沒有高程資料，就沒有坡度可以篩，這不是寫代碼能解決的問題。
-- **大眾運輸/步行（OTP）**：伺服器目前固定套用 8.3%（ADA 標準）作為輪椊模式的上限，**且只有在 `avoidStairs`/輪椊模式實際啟用時才會套用**；現有 API 也不支援每次請求自訂數值（需要從 OTP 舊版 `plan` query 改用新版 `planConnection` query 才能偷接受自訂坡度，屬於核心路徑引擎的協議層級改動，不是一次小修改）。即使有高程資料，OTP 的坡度計算也只能埋一部分依賴 OSM 的 `incline` 標記，而台灣道路有標記坡度的比例非常低。
+- **開車/駕駛車（Valhalla）**：伺服器**完全沒有地形高程資料**（`valhalla.json` 有寫 `elevation` 路徑，但那個目錄從未被掛進容器、也從未實際存在過）。沒有高程資料，就沒有坡度可以篩，這不是寫代碼能解決的問題。
+- **大眾運輸/步行（OTP）**：伺服器目前固定套用 8.3%（ADA 標準）作為輪椅模式的上限，**且只有在 `avoidStairs`/輪椅模式實際啟用時才會套用**；現有 API 也不支援每次請求自訂數值（需要從 OTP 舊版 `plan` query 改用新版 `planConnection` query 才能接受每次請求自訂坡度，屬於核心路徑引擎的協議層級改動，不是一次小修改）。即使有高程資料，OTP 的坡度計算也只能有一部分依賴 OSM 的 `incline` 標記，而台灣道路有標記坡度的比例非常低。
 
-因此回應不会假裝這項生效，而是回傳一個誠實的 `data.slopeConstraint` 物件：
+因此回應不會假裝這項生效，而是回傳一個誠實的 `data.slopeConstraint` 物件：
 
 ```jsonc
 {
   "slopeConstraint": {
     "requestedMaxPercent": 5,
     "enforced": false, // 真的有被套用時才是 true
-    "note": "大眾運輸/步行路線引擎目前固定以 8.3% 作為輪椊模式上限，無法套用您要求的更嚴格數值"
+    "note": "大眾運輸/步行路線引擎目前固定以 8.3% 作為輪椅模式上限，無法套用您要求的更嚴格數值"
   }
 }
 ```
 
-**前端一定要檢查 `enforced`**，不能只看有沒有傳 `maxSlopePercent`。`enforced: false` 時建議將 `note` 直接顯示給使用者，讓他知道這個設定目前沒有实際作用，而不是讓他以為系統已經幫他避開陳坡。
+**前端一定要檢查 `enforced`**，不能只看有沒有傳 `maxSlopePercent`。`enforced: false` 時建議將 `note` 直接顯示給使用者，讓他知道這個設定目前沒有實際作用，而不是讓他以為系統已經幫他避開陡坡。
 
-**若未來要讓這項真正生效，需要的基礎建設（已確認的需求，需單狜排程）：**
-1. 为台灣下載/建置 SRTM 或同等級 DEM 地形高程資料，並正確挣入 Valhalla 容器的 `/data/valhalla/elevation/`，重建 tiles。Valhalla 本身對行人模式只有軟性避山權重（`use_hills`），沒有硬性百分比上限，還需自己後處理回傳的每段坡度來實現硬篩選。
-2. 為OTP graph build 配上 `elevationBucket`（目前 `otp-data/build-config.json` 沒有），讓坡度計算不完全依賴稀疏的 OSM incline 標記。
-3. 將 otp-routing.ts 從舊版 `plan` GraphQL query 改寫成新版 `planConnection` query（支援每次請求自訂 `wheelchairAccessibility.maxSlope`）——這是一個會改變核心路徑規劃邏輯的重构，需要單狜規劃與充分測試。
+**若未來要讓這項真正生效，需要的基礎建設（已確認的需求，需獨立排程）：**
+1. 為台灣下載/建置 SRTM 或同等級 DEM 地形高程資料，並正確掛進 Valhalla 容器的 `/data/valhalla/elevation/`，重建 tiles。Valhalla 本身對行人模式只有軟性避山權重（`use_hills`），沒有硬性百分比上限，還需自己後處理回傳的每段坡度來實現硬篩選。
+2. 為 OTP graph build 配上 `elevationBucket`（目前 `otp-data/build-config.json` 沒有），讓坡度計算不完全依賴稀疏的 OSM incline 標記。
+3. 將 otp-routing.ts 從舊版 `plan` GraphQL query 改寫成新版 `planConnection` query（支援每次請求自訂 `wheelchairAccessibility.maxSlope`）——這是一個會改變核心路徑規劃邏輯的重構，需要獨立規劃與充分測試。
 
 ## 五、`preferredFontScale`
 

@@ -17,10 +17,15 @@ const hazardReportSchema = new Schema<IHazardReport>(
       enum: ["obstacle", "construction", "data_error"],
       required: true,
     },
+    // Not `required` at the DB layer: the create-report Zod schema already
+    // requires it for every new submission, but reports created before this
+    // field existed have no value, and a hard-required path would throw on
+    // their next confirm/deny save(). The default only protects those legacy
+    // documents; every path that creates a report always supplies one.
     severity: {
       type: String,
       enum: ["blocking", "difficult", "minor"],
-      required: true,
+      default: "difficult",
     },
     expectedUntil: { type: Date, default: null },
     description: { type: String, maxlength: 500, default: null },

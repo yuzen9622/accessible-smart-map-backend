@@ -248,7 +248,7 @@ const TYPE_LABELS_ZH: Record<string, string> = {
   tertiary: "市區道路",
   unclassified: "一般道路",
   service: "巷弄道路",
-  living_street: "商店衝道",
+  living_street: "商店街",
   pedestrian: "行人專用道",
   footway: "人行道",
   cycleway: "自行車道",

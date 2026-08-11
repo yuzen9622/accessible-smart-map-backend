@@ -60,7 +60,7 @@ export const AccessibleRouteBodySchema = z
       .optional()
       .openapi({
         description:
-          "硬性條件：要求無階梯路徑。true 時向路徑引擎索取 step-free 路線，並排除經過純樓梯障礙（highway=steps 且無輪椅坡道）的步行段。未填時：若帶有效 token 且已儲存的偏好設為不能上下階梯，則預設 true；否則預設為 mode==='wheelchair'，故舊有請求行為不變。",
+          "硬性條件：要求無階梯路徑。true 時向路徑引擎索取 step-free 路線，並排除經過純樓梯障礙（highway=steps 且無輪椅坡道）的步行段。未填時：若帶有效 token 且已儲存的偏好有明確設定 canUseStairs，則據此推導（不能上下階梯→true，能上下階梯→false）；否則預設為 mode==='wheelchair'，故舊有請求行為不變。",
         example: true,
       }),
     requireElevator: z
@@ -68,7 +68,7 @@ export const AccessibleRouteBodySchema = z
       .optional()
       .openapi({
         description:
-          "硬性條件：要求車站有可用電梯。true 時排除「有設施資料但查無電梯」或「電梯維修／故障／暫停」的捷運／台鐵／高鐵路段；設施資料為空的車站視為未知而保留。未填時：若帶有效 token 且已儲存的偏好要求電梯，則預設 true；否則預設為 mode==='wheelchair'。當所有候選路線都被排除時仍會回傳原候選（有路線優於 404），並以較低的無障礙分數與 warnings 標示風險。",
+          "硬性條件：要求車站有可用電梯。true 時排除「有設施資料但查無電梯」或「電梯維修／故障／暫停」的捷運／台鐵／高鐵路段；設施資料為空的車站視為未知而保留。未填時：若帶有效 token 且已儲存的偏好有明確設定 needsElevator，則直接套用該值；否則預設為 mode==='wheelchair'。當所有候選路線都被排除時仍會回傳原候選（有路線優於 404），並以較低的無障礙分數與 warnings 標示風險。",
         example: true,
       }),
     needsAccessibleToilet: z
@@ -657,7 +657,7 @@ export const AccessibleRouteDataSchema = z
         enforced: z
           .boolean()
           .openapi({ description: "要求的坡度上限是否真的被路徑引擎執行" }),
-        note: z.string().openapi({ example: "大眾運輸/步行路線引擎目前固定以 8.3% 作為輪椊模式上限，無法套用您要求的更嚴格數值" }),
+        note: z.string().openapi({ example: "大眾運輸/步行路線引擎目前固定以 8.3% 作為輪椅模式上限，無法套用您要求的更嚴格數值" }),
       })
       .optional()
       .openapi({
@@ -743,7 +743,8 @@ registry.registerPath({
   tags: ["Accessibility"],
   summary: "無障礙路線規劃",
   description:
-    "規劃起訖點間無障礙路線。travelMode=transit（預設）並行搜尋公車、捷運、高鐵與台鐵；walk 與所有步行銜接走 OTP，drive／motorcycle 主體走自架 Valhalla（自由流時間、不含即時路況）。OTP 步行不可用時才以 warnings 標記後降級至 Valhalla pedestrian。支援最多 5 個中途點（waypoints），回傳最多 3 筆。",
+    "規劃起訖點間無障礙路線。travelMode=transit（預設）並行搜尋公車、捷運、高鐵與台鐵；walk 與所有步行銜接走 OTP，drive／motorcycle 主體走自架 Valhalla（自由流時間、不含即時路況）。OTP 步行不可用時才以 warnings 標記後降級至 Valhalla pedestrian。支援最多 5 個中途點（waypoints），回傳最多 3 筆。選填帶 Bearer token：帶時，未明確傳入的 mode/avoidStairs/requireElevator/needsAccessibleToilet/needsHandrail/maxSlopePercent 會從登入者已儲存的 a11y-profile 推導；不帶則完全公開不受影響；帶但無效/過期回 401/403。",
+  security: [{ bearerAuth: [] }, {}],
   request: {
     body: {
       content: { "application/json": { schema: AccessibleRouteBodySchema } },
@@ -762,6 +763,8 @@ registry.registerPath({
       description: "缺少參數或座標無法解析",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
+    401: { description: "帶了 Bearer token 但已過期" },
+    403: { description: "Bearer token 無效" },
     422: {
       description:
         `${ROUTE_REASON.OUT_OF_RANGE}（${ROUTE_MSG.OUT_OF_RANGE}）、` +

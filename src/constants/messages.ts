@@ -41,9 +41,9 @@ export const ROUTE_WARNING = {
   STAIRS_HANDRAIL_UNKNOWN:
     "路線包含樓梯段落，OSM 資料未確認此處是否有扶手，請自行確認",
   SLOPE_LIMIT_NOT_ENFORCED_NO_ELEVATION:
-    "驅驛車/機車路線引擎目前無地形高程資料，無法依坡度篩選路徑，您設定的坡度上限未被實際執行",
+    "開車/機車路線引擎目前無地形高程資料，無法依坡度篩選路徑，您設定的坡度上限未被實際執行",
   SLOPE_LIMIT_STRICTER_THAN_SERVER_DEFAULT:
-    "大眾運輸/步行路線引擎目前固定以 8.3% 作為輪椊模式上限，無法套用您要求的更嚴格數值；且受限於 OSM 坡度標記稀疏，實際執行範圍有限",
+    "大眾運輸/步行路線引擎目前固定以 8.3% 作為輪椅模式上限，無法套用您要求的更嚴格數值；且受限於 OSM 坡度標記稀疏，實際執行範圍有限",
 } as const;
 
 /**

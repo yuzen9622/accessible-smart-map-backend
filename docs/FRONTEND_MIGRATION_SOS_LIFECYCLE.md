@@ -67,6 +67,8 @@ es.onerror = () => {
 
 - `POST /sessions`、`PATCH /sessions/:id/location`、`PATCH /sessions/:id/resolve`：**路徑、請求 body、既有回應欄位皆不變**。
 - `GET /sessions/:id/public` → **`GET /sessions/:token/public`（破壞性變更，見下方「公開追蹤連結安全性修復」）**。
+- 新的生命週期欄位（`handlingStatus`、`acknowledgements`、`claimedByName`、`timeline` 等）只在新的 `GET /sessions/:id` 與 SSE 快照中提供；舊端點回應維持精簡。
+- `resolveSession` 現在是原子冪等：重複呼叫（或家人已先解除）回 200 且不再重複推播。
 
 ## 二之一、公開追蹤連結安全性修復（破壞性變更，前端必須配合）
 
@@ -82,8 +84,6 @@ es.onerror = () => {
 2. 若前端是直接解析 LINE 推送連結中的 `sos=` 參數來呼叫 `GET /sessions/:id/public`，不需要改程式碼（連結本身已改為 shareToken，直接拿來拼 URL 即可），但若有別的地方用 `sessionId` 拼這支 API 就需要修改。
 3. 既有已發出、尚未過期的舊連結（用 sessionId 拼成）在上線後會**立即失效**（404），因為後端不再接受 sessionId 查詢。若需要不中斷過渡，請告訴我，可討論短暫雙軌支援（但不建議，因為 sessionId 查詢本身就是漏洞）。
 4. **建議上線順序**：後端先上線（舊連結立即失效）→ 前端將組連結邏輯改用 shareToken 並部署 → 確認新求救的追蹤連結可正常開啟。若介意短暫窗口期內舊連結失效，可協調同步部署時間。
-- 新的生命週期欄位（`handlingStatus`、`acknowledgements`、`claimedByName`、`timeline` 等）只在新的 `GET /sessions/:id` 與 SSE 快照中提供；舊端點回應維持精簡。
-- `resolveSession` 現在是原子冪等：重複呼叫（或家人已先解除）回 200 且不再重複推播。
 
 ## 三、UI 建議（對應需求閉環）
 

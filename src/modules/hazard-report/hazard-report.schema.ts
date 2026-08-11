@@ -184,9 +184,11 @@ registry.registerPath({
           schema: z.object({
             photo: z.string().openapi({ type: "string", format: "binary" }),
             hazardType: z.enum(HAZARD_TYPES),
+            severity: z.enum(SEVERITIES),
             latitude: z.number(),
             longitude: z.number(),
             description: z.string().optional(),
+            expectedUntil: z.string().datetime().optional(),
           }),
         },
       },

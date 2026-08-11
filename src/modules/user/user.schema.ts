@@ -535,7 +535,7 @@ registry.registerPath({
   path: "/user/a11y-profile",
   tags: ["User"],
   summary: "取得使用者無障礙偏好",
-  description: "首次呼叫時若尚無設定，會自動建立一筆欄位皆為 null 的空白設定；不從要求使用者重新填寫一次。",
+  description: "首次呼叫時若尚無設定，會自動建立一筆欄位皆為 null 的空白設定；不會因此要求使用者重新填寫一次。",
   security: [{ BearerAuth: [] }],
   responses: {
     200: {

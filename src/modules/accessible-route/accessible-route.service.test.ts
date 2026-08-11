@@ -527,6 +527,29 @@ describe("planAccessibleRouteFromRequest — caller's saved a11y profile fills u
     );
   });
 
+  it("defaults avoidStairs=false when the profile explicitly says canUseStairs:true", async () => {
+    vi.mocked(getA11yProfile).mockResolvedValue({
+      mobilityAid: "manual_wheelchair",
+      canUseStairs: true,
+      maxSlopePercent: null,
+      needsAccessibleToilet: null,
+      needsElevator: null,
+      needsHandrail: null,
+      visualAssistance: null,
+      preferredFontScale: null,
+    });
+
+    await planAccessibleRouteFromRequest({ ...walkRequest, userId: "user-1" });
+
+    // mode still comes from mobilityAid, but avoidStairs must NOT fall through
+    // to the mode-tier default (which would force it back to true).
+    expect(vi.mocked(planOtpWalkDetailed)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ mode: "wheelchair", avoidStairs: false }),
+    );
+  });
+
   it("does not override an explicitly-set avoidStairs/mode with the profile", async () => {
     vi.mocked(getA11yProfile).mockResolvedValue({
       mobilityAid: "manual_wheelchair",
@@ -1253,6 +1276,26 @@ describe("planAccessibleRouteFromRequest — avoidStairs / requireElevator const
     });
 
     expect(names).toEqual(["有電梯線"]);
+  });
+
+  it("a wheelchair-mode profile with needsElevator:false does NOT force requireElevator to true", async () => {
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue(otpTransitOk([withElevator, withoutElevator] as any));
+    vi.mocked(getA11yProfile).mockResolvedValue({
+      mobilityAid: "manual_wheelchair",
+      canUseStairs: null,
+      maxSlopePercent: null,
+      needsAccessibleToilet: null,
+      needsElevator: false,
+      needsHandrail: null,
+      visualAssistance: null,
+      preferredFontScale: null,
+    });
+
+    // mode is unset -> mobilityAid derives mode='wheelchair', whose tier default
+    // would force requireElevator=true; the profile's explicit false must win.
+    const names = await routeNames({ ...transitRequest, userId: "user-1" });
+
+    expect(names).toEqual(["有電梯線", "無電梯線"]);
   });
 
   it("returns the elevator-less route anyway when it is the only candidate", async () => {

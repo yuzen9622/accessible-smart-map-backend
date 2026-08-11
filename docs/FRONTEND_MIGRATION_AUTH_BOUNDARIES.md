@@ -17,6 +17,7 @@
 | 提交障礙回報 | `POST /api/v1/a11y/reports` | 有 token → `userId`；無 token → `"ip:" + sha256(ip)`，兩者都會計入去重與投票防重 |
 | 確認／否認回報 | `POST /api/v1/a11y/reports/:id/confirm` | 同上識別邏輯 |
 | AI 對話 | `POST /api/v1/ai/chat` | 有 token → 對話會參考使用者記憶；無 token → 純匿名對話仍可用；**過期 token 回 401、無效 token 回 403**（不會靜默降級為匿名） |
+| 規劃路線 | `POST /api/v1/a11y/accessible-route` | 有 token → 未明確傳的 `mode`/`avoidStairs`/`requireElevator`/`needsAccessibleToilet`/`needsHandrail`/`maxSlopePercent` 會從已儲存的 `a11y-profile` 推導；無 token → 完全不受影響；**過期/無效 token 同樣回 401/403**，不會靜默降級為匿名 |
 
 ## 完整清單
 
@@ -37,6 +38,7 @@
 | GET | `/info` | **PROTECTED** |
 | POST | `/line-link-code` | **PROTECTED** |
 | POST | `/config`、`/config/update` | **PROTECTED** |
+| GET / PUT | `/a11y-profile` | **PROTECTED** |
 | GET / POST / DELETE | `/emergency-contacts...` | **PROTECTED**（全部三支） |
 
 ### `/api/v1/sos`
@@ -48,16 +50,16 @@
 | PATCH | `/sessions/:id/resolve` | **PROTECTED** |
 | GET | `/sessions/:id` | **PROTECTED**（僅本人） |
 | GET | `/sessions/:id/stream` | **PROTECTED**（SSE，僅本人） |
-| GET | `/sessions/:id/public` | PUBLIC（求救頁面追蹤用，見下方安全性附註） |
+| GET | `/sessions/:token/public` | PUBLIC（求救頁面追蹤用，用 `shareToken` 查詢，非 session id） |
 
-> ⚠️ **安全性附註（追蹤中修復）**：`/sessions/:id/public` 目前用**原始 session id** 查詢，而非設計上應使用的高熵 `shareToken`。修復需同步調整前端追蹤連結的參數，暫不在本次變更中處理，另行安排。
+> ✅ **已修復（破壞性變更）**：路徑已從 `/sessions/:id/public` 改為 `/sessions/:token/public`，並改用高熵 `shareToken`（`POST /sessions` 回應裡本來就有的欄位）查詢，不再接受原始 session id。詳情與前端需要改的地方見 `docs/FRONTEND_MIGRATION_SOS_LIFECYCLE.md`。
 
 ### `/api/v1/a11y`（含 accessible-route、hazard-report、review、place-search、campus、welfare、environment、visual-a11y、nav-instructions 等子模組）
 
 | Method | Path | 登入需求 |
 |---|---|---|
 | GET | `/coverage`、`/all-facilities`、`/all-bathrooms`、`/all-ramps`、`/all-elevators`、`/nearby-a11y`、`/quick-assess`、`/parking/nearby`、`/place` | PUBLIC |
-| POST | `/accessible-route` | PUBLIC |
+| POST | `/accessible-route` | PUBLIC_OPTIONAL_AUTH（有 token 時套用已儲存的 a11y-profile 作為未明確傳入欄位的預設值；過期/無效 token 回 401/403） |
 | POST | `/route/instructions` | PUBLIC |
 | POST | `/reports` | PUBLIC_OPTIONAL_AUTH |
 | GET | `/reports`、`/reports/:id` | PUBLIC |

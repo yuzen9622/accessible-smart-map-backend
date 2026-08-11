@@ -31,6 +31,7 @@ const A11Y_TAG_WHITELIST = new Set<string>([
   "highway",
   "ramp:wheelchair",
   "ramp",
+  "handrail",
   "kerb",
   "smoothness",
   "surface",
