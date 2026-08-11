@@ -304,10 +304,11 @@ registry.registerPath({
 
 registry.registerPath({
   method: "get",
-  path: "/sos/sessions/{id}/public",
+  path: "/sos/sessions/{token}/public",
   tags: ["SOS"],
   summary: "公開追蹤頁查詢（無需登入）",
-  request: { params: SessionIdParamSchema },
+  description: "以高熵 shareToken（建立事件時回傳，非 session id）查詢，避免可被猜測/列舉的 ObjectId 暴露即時位置。",
+  request: { params: ShareTokenParamSchema },
   responses: {
     200: {
       description: "即時位置",

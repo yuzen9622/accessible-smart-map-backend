@@ -63,9 +63,25 @@ es.onerror = () => {
 
 > 注意：`EventSource` 無法自訂 Header，若你的登入 token 走 Authorization Header 而非 cookie，請改用支援 header 的 SSE polyfill（如 `@microsoft/fetch-event-source`）帶上 `Authorization`；或在斷線時以 `GET /sessions/:id` 輪詢替代。後端 SSE 路由與其他 SOS 路由一樣走 JWT middleware。
 
-## 二、既有 API 的變化（非破壞）
+## 二、既有 API 的變化（其中一項破壞，見下方安全性修復）
 
-- `POST /sessions`、`PATCH /sessions/:id/location`、`PATCH /sessions/:id/resolve`、`GET /sessions/:id/public`：**路徑、請求 body、既有回應欄位皆不變**。
+- `POST /sessions`、`PATCH /sessions/:id/location`、`PATCH /sessions/:id/resolve`：**路徑、請求 body、既有回應欄位皆不變**。
+- `GET /sessions/:id/public` → **`GET /sessions/:token/public`（破壞性變更，見下方「公開追蹤連結安全性修復」）**。
+
+## 二之一、公開追蹤連結安全性修復（破壞性變更，前端必須配合）
+
+**問題**：之前實作的 `GET /api/v1/sos/sessions/:id/public` 實際上是用原始 session id（MongoDB ObjectId）查詢，並非設計上應該使用的高熵 `shareToken`。ObjectId 不是加密安全隨機值（同一時段建立的 session id 彼此相鄰、可被列舉），意味著陌生人有機會猜到別人正在求救的即時 GPS 位置。已修復。
+
+**後端變更**：
+- Endpoint 路徑改為 `GET /api/v1/sos/sessions/:token/public`，`:token` 是建立 SOS session 時回傳的 `shareToken`（32 字元十六進位字串，128-bit 熵），**不是** `sessionId`。
+- `POST /sessions` 回應的 `shareToken` 欄位未變，一直都有回傳，只是之前沒被用到。
+- LINE 推送給家人的追蹤連結（`{PUBLIC_TRACKING_BASE_URL}/zh-TW?sos=...`）同步改用 `shareToken`。
+
+**前端需要改的地方**：
+1. 若前端曾自行用 `POST /sessions` 回傳的 `sessionId` 拼追蹤連結（例如 `/zh-TW?sos=${sessionId}`），**改成用同一筆回應裡的 `shareToken`**。
+2. 若前端是直接解析 LINE 推送連結中的 `sos=` 參數來呼叫 `GET /sessions/:id/public`，不需要改程式碼（連結本身已改為 shareToken，直接拿來拼 URL 即可），但若有別的地方用 `sessionId` 拼這支 API 就需要修改。
+3. 既有已發出、尚未過期的舊連結（用 sessionId 拼成）在上線後會**立即失效**（404），因為後端不再接受 sessionId 查詢。若需要不中斷過渡，請告訴我，可討論短暫雙軌支援（但不建議，因為 sessionId 查詢本身就是漏洞）。
+4. **建議上線順序**：後端先上線（舊連結立即失效）→ 前端將組連結邏輯改用 shareToken 並部署 → 確認新求救的追蹤連結可正常開啟。若介意短暫窗口期內舊連結失效，可協調同步部署時間。
 - 新的生命週期欄位（`handlingStatus`、`acknowledgements`、`claimedByName`、`timeline` 等）只在新的 `GET /sessions/:id` 與 SSE 快照中提供；舊端點回應維持精簡。
 - `resolveSession` 現在是原子冪等：重複呼叫（或家人已先解除）回 200 且不再重複推播。
 
