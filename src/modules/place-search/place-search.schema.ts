@@ -120,7 +120,7 @@ export const AutocompleteItemSchema = z
       .nullable()
       .openapi({
         example: 1200,
-        description: "直線距離（公式直線距離，非實際行走距離），相對於查詢參數 lat/lng 計算；未帶 lat/lng 或地點本身無座標時為 null。",
+        description: "直線距離（haversine 公式計算，非實際行走距離），相對於查詢參數 lat/lng 計算；未帶 lat/lng 或地點本身無座標時為 null。",
       }),
   })
   .strict()
@@ -174,7 +174,7 @@ export const PlaceResultSchema = z
       .nullable()
       .openapi({
         example: 1200,
-        description: "直線距離（公式直線距離，非實際行走距離），相對於查詢參數 lat/lng 計算；未帶 lat/lng 時為 null。",
+        description: "直線距離（haversine 公式計算，非實際行走距離），相對於查詢參數 lat/lng 計算；未帶 lat/lng 時為 null。",
       }),
     rating: z.number().nullable().openapi({ example: 4.5, description: "Google 才有" }),
     accessibility: AccessibilitySchema,

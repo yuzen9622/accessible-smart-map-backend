@@ -4,7 +4,7 @@ import { registry } from "../../openapi/registry";
 
 extendZodWithOpenApi(z);
 
-registry.registerComponent("securitySchemes", "BearerAuth", {
+registry.registerComponent("securitySchemes", "bearerAuth", {
   type: "http",
   scheme: "bearer",
   bearerFormat: "JWT",
@@ -388,7 +388,7 @@ registry.registerPath({
   description:
     "變更已登入帳號的密碼並撤銷其他既有權杖（回應會附上新的權杖）。" +
     "帳號尚無密碼（純 Google 登入）時可省略 currentPassword，即為新增密碼登入方式。",
-  security: [{ BearerAuth: [] }],
+  security: [{ bearerAuth: [] }],
   request: {
     body: { content: { "application/json": { schema: ChangePasswordBodySchema } }, required: true },
   },
@@ -428,7 +428,7 @@ registry.registerPath({
   tags: ["User"],
   summary: "目前使用者資料",
   description: "回傳已驗證使用者的個資與偏好設定，需有效 Bearer 權杖。",
-  security: [{ BearerAuth: [] }],
+  security: [{ bearerAuth: [] }],
   responses: {
     200: {
       description: "使用者與設定物件",
@@ -455,7 +455,7 @@ registry.registerPath({
   tags: ["User"],
   summary: "取得 LINE 帳號綁定碼",
   description: "由已登入使用者產生一次性 LINE 綁定碼，供使用者在 LINE Bot 中傳送綁定。",
-  security: [{ BearerAuth: [] }],
+  security: [{ bearerAuth: [] }],
   responses: {
     200: {
       description: "綁定碼與官方加好友連結",
@@ -478,7 +478,7 @@ registry.registerPath({
   tags: ["User"],
   summary: "取得使用者設定",
   description: "依 user_id 取得偏好設定，需有效 Bearer 權杖。",
-  security: [{ BearerAuth: [] }],
+  security: [{ bearerAuth: [] }],
   request: {
     body: {
       content: { "application/json": { schema: ConfigBodySchema } },
@@ -507,7 +507,7 @@ registry.registerPath({
   tags: ["User"],
   summary: "更新使用者偏好",
   description: "部分更新使用者設定，除 user_id 外皆選填，只改傳入欄位。",
-  security: [{ BearerAuth: [] }],
+  security: [{ bearerAuth: [] }],
   request: {
     body: {
       content: { "application/json": { schema: UpdateConfigBodySchema } },
@@ -536,7 +536,7 @@ registry.registerPath({
   tags: ["User"],
   summary: "取得使用者無障礙偏好",
   description: "首次呼叫時若尚無設定，會自動建立一筆欄位皆為 null 的空白設定；不會因此要求使用者重新填寫一次。",
-  security: [{ BearerAuth: [] }],
+  security: [{ bearerAuth: [] }],
   responses: {
     200: {
       description: "無障礙偏好（未設定的欄位為 null）",
@@ -554,7 +554,7 @@ registry.registerPath({
   tags: ["User"],
   summary: "更新使用者無障礙偏好",
   description: "部分更新，只改傳入的欄位；未包含在 body 裡的欄位保持不變。",
-  security: [{ BearerAuth: [] }],
+  security: [{ bearerAuth: [] }],
   request: {
     body: {
       content: { "application/json": { schema: UpdateA11yProfileBodySchema } },

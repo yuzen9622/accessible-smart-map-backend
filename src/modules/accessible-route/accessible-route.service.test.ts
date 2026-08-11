@@ -687,6 +687,40 @@ describe("planAccessibleRouteFromRequest — needsHandrail", () => {
       ROUTE_WARNING.STAIRS_HANDRAIL_UNKNOWN,
     );
   });
+
+  it("still finds a confirmed handrail after compactRoutes moves it into route.facilities", async () => {
+    // Mirrors what compactRoutes() does: leg.a11yFacilities emptied, the
+    // document moved into route-level `facilities` keyed by osmId, and the
+    // leg left with an `a11yRefs` pointer. The handrail check must resolve
+    // through that indirection instead of only looking at leg.a11yFacilities.
+    // Uses drive mode because its finalize pipeline (dedupe + highlight
+    // attach) keeps the same route object reference, unlike walk mode's
+    // combineWalkSegments which rebuilds a route from a fixed field list and
+    // would silently drop a hand-rolled `facilities` field in a fixture.
+    vi.mocked(planValhallaRoute).mockResolvedValue([
+      {
+        ...driveRoute([]),
+        legs: [
+          {
+            ...stairsLeg(),
+            a11yFacilities: [],
+            a11yRefs: ["way/1"],
+          },
+        ],
+        facilities: {
+          "way/1": { osmId: "way/1", tags: { highway: "steps", handrail: "yes" } },
+        },
+      },
+    ] as any);
+    vi.mocked(findNearbyParking).mockResolvedValue([] as any);
+
+    const res = await planAccessibleRouteFromRequest({ ...driveRequest, needsHandrail: true });
+
+    expect(res.ok).toBe(true);
+    expect(res.data!.routes[0].warnings ?? []).not.toContain(
+      ROUTE_WARNING.STAIRS_HANDRAIL_UNKNOWN,
+    );
+  });
 });
 
 describe("planAccessibleRouteFromRequest — maxSlopePercent honesty check", () => {

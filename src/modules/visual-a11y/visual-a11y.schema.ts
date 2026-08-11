@@ -98,7 +98,7 @@ registry.registerPath({
   tags: ["VisualA11y"],
   summary: "同步 OSM 視障設施資料",
   description:
-    "從 OpenStreetMap Overpass API 拉取最新有聲號誌與導盲磚資料，upsert 進 MongoDB。需登入，避免任意人觸發全國性 Overpass 投詢。",
+    "從 OpenStreetMap Overpass API 拉取最新有聲號誌與導盲磚資料，upsert 進 MongoDB。需登入，避免任意人觸發全國性 Overpass 查詢。",
   security: [{ bearerAuth: [] }],
   responses: {
     200: {

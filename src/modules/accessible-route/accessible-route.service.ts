@@ -297,10 +297,32 @@ function walkLegHasStairsBarrier(leg: WalkLeg): boolean {
  * a leg without a confirmed handrail may still have one; it's simply unknown.
  * @param leg Walk leg to inspect.
  */
-function walkLegHasConfirmedHandrail(leg: WalkLeg): boolean {
-  return leg.a11yFacilities.some(
+function walkLegHasConfirmedHandrail(route: AccessibleRoute, leg: WalkLeg): boolean {
+  return legFacilitiesEvenAfterCompacting(route, leg).some(
     (f) => f.tags?.["highway"] === "steps" && f.tags?.["handrail"] === "yes",
   );
+}
+
+/**
+ * `compactRoutes` (opt-in `format: "compact"`) empties every leg's
+ * `a11yFacilities` and moves the documents into `route.facilities`, keyed by
+ * osmId, leaving `leg.a11yRefs` as the pointer back. Any check that runs
+ * after finalization (like the handrail check above) must resolve through
+ * that indirection or it will only ever see an empty array.
+ *
+ * @param route The route `leg` belongs to (source of `facilities` when compacted).
+ * @param leg Walk leg to resolve facilities for.
+ */
+function legFacilitiesEvenAfterCompacting(
+  route: AccessibleRoute,
+  leg: WalkLeg,
+): Array<{ tags?: Record<string, string> }> {
+  if (leg.a11yFacilities.length) return leg.a11yFacilities;
+  const refs = (leg as unknown as { a11yRefs?: string[] }).a11yRefs;
+  if (!refs?.length || !route.facilities) return [];
+  return refs
+    .map((id) => route.facilities?.[id])
+    .filter((f): f is NonNullable<typeof f> => Boolean(f));
 }
 
 const OTP_SERVER_MAX_SLOPE_PERCENT = 8.3;
@@ -366,7 +388,7 @@ async function applyExtraA11yAnnotations(
         (leg) =>
           leg.type === "WALK" &&
           walkLegHasStairsBarrier(leg) &&
-          !walkLegHasConfirmedHandrail(leg),
+          !walkLegHasConfirmedHandrail(r, leg),
       );
       if (hasUnconfirmedHandrailStairs) {
         r.warnings = [

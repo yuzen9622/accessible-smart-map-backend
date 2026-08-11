@@ -1,6 +1,6 @@
 # 前端遷移說明：SOS 緊急事件完整生命週期 + LINE agent 化
 
-本次後端變更把 LINE 家人機器人從「意圖狀態機」改為 tool-loop agent，並補齊緊急事件的完整閉環（家人確認 → 承接 → 協作 → 網頁即時回饋 → 解除結案 → 完整歷程）。**對前端（求救者網頁端）而言，新增了即時串流與事件詳情兩支 API；既有四支 SOS API 的路徑與請求不變**，僅回應多了生命週期欄位。LINE 家人端的互動由後端負責，前端無需處理。
+本次後端變更把 LINE 家人機器人從「意圖狀態機」改為 tool-loop agent，並補齊緊急事件的完整閉環（家人確認 → 承接 → 協作 → 網頁即時回饋 → 解除結案 → 完整歷程）。**對前端（求救者網頁端）而言，新增了即時串流與事件詳情兩支 API；既有 `POST /sessions`、`PATCH /sessions/:id/location`、`PATCH /sessions/:id/resolve` 三支的路徑與請求不變**，僅回應多了生命週期欄位；公開追蹤頁 `GET /sessions/:id/public` 則因安全性修復改為 `GET /sessions/:token/public`（見下方「公開追蹤連結安全性修復」）。LINE 家人端的互動由後端負責，前端無需處理。
 
 ## 一、新增 API
 
