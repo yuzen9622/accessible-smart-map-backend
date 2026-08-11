@@ -59,6 +59,7 @@ import type {
   ThsrLeg,
   TraLeg,
   AccessibleRoute,
+  TravelMode,
 } from "../../types/route";
 export type {
   SlimA11y,
@@ -288,6 +289,123 @@ function walkLegStairsCount(leg: WalkLeg): number {
  */
 function walkLegHasStairsBarrier(leg: WalkLeg): boolean {
   return walkLegStairsCount(leg) > 0;
+}
+
+/**
+ * Whether a walk leg's stairs feature is explicitly OSM-tagged with a handrail.
+ * OSM `handrail` tagging is sparse, so this can only ever confirm presence —
+ * a leg without a confirmed handrail may still have one; it's simply unknown.
+ * @param leg Walk leg to inspect.
+ */
+function walkLegHasConfirmedHandrail(leg: WalkLeg): boolean {
+  return leg.a11yFacilities.some(
+    (f) => f.tags?.["highway"] === "steps" && f.tags?.["handrail"] === "yes",
+  );
+}
+
+const OTP_SERVER_MAX_SLOPE_PERCENT = 8.3;
+
+/**
+ * Best-effort annotation pass for the three account-profile fields that have
+ * no dedicated routing-engine input: accessible-toilet proximity at the
+ * destination, stairs-handrail confirmation, and a maxSlopePercent request.
+ * Never fails the request — a lookup error is logged and skipped.
+ *
+ * @param routes Routes to annotate in place with highlights/warnings.
+ * @param dest Journey destination, used for the toilet proximity check.
+ * @param travelMode The engine that produced `routes` — determines whether any
+ *   slope enforcement is even possible.
+ * @param mode Resolved accessibility mode (drives the OTP wheelchair flag).
+ * @param avoidStairs Resolved avoidStairs/wheelchair flag actually sent to the engine.
+ * @param opts The three profile-only preferences to check.
+ * @returns `slopeConstraint` metadata when `maxSlopePercent` was requested.
+ */
+async function applyExtraA11yAnnotations(
+  routes: AccessibleRoute[],
+  dest: LatLng,
+  travelMode: TravelMode,
+  mode: AccessibilityMode | undefined,
+  avoidStairs: boolean | undefined,
+  opts: {
+    needsAccessibleToilet?: boolean;
+    needsHandrail?: boolean;
+    maxSlopePercent?: number;
+  },
+): Promise<{
+  slopeConstraint?: { requestedMaxPercent: number; enforced: boolean; note: string };
+}> {
+  if (!routes.length) return {};
+
+  if (opts.needsAccessibleToilet) {
+    try {
+      const { findNearby } = await import("../a11y/a11y.service");
+      const near = await findNearby(dest.lat, dest.lng, 300);
+      const osmToiletCount = (near.nearbyOsm ?? []).filter(
+        (p: IOsmA11y) => p.category === "toilet",
+      ).length;
+      const total = (near.nearbyBathroom?.length ?? 0) + osmToiletCount;
+      const note =
+        total > 0
+          ? `目的地附近有 ${total} 處無障礙廁所`
+          : ROUTE_WARNING.NO_ACCESSIBLE_TOILET_NEARBY;
+      for (const r of routes) {
+        if (total > 0) {
+          r.accessibilityHighlights = [...r.accessibilityHighlights, note];
+        } else {
+          r.warnings = [...new Set([...(r.warnings ?? []), note])];
+        }
+      }
+    } catch (err) {
+      console.error("[accessible-route] accessible-toilet lookup failed, skipping", err);
+    }
+  }
+
+  if (opts.needsHandrail) {
+    for (const r of routes) {
+      const hasUnconfirmedHandrailStairs = r.legs.some(
+        (leg) =>
+          leg.type === "WALK" &&
+          walkLegHasStairsBarrier(leg) &&
+          !walkLegHasConfirmedHandrail(leg),
+      );
+      if (hasUnconfirmedHandrailStairs) {
+        r.warnings = [
+          ...new Set([...(r.warnings ?? []), ROUTE_WARNING.STAIRS_HANDRAIL_UNKNOWN]),
+        ];
+      }
+    }
+  }
+
+  let slopeConstraint:
+    | { requestedMaxPercent: number; enforced: boolean; note: string }
+    | undefined;
+  if (opts.maxSlopePercent !== undefined) {
+    const requestedMaxPercent = opts.maxSlopePercent;
+    if (travelMode === "drive" || travelMode === "motorcycle") {
+      slopeConstraint = {
+        requestedMaxPercent,
+        enforced: false,
+        note: ROUTE_WARNING.SLOPE_LIMIT_NOT_ENFORCED_NO_ELEVATION,
+      };
+    } else {
+      const wheelchairEngaged = avoidStairs ?? mode === "wheelchair";
+      const enforced = wheelchairEngaged && requestedMaxPercent >= OTP_SERVER_MAX_SLOPE_PERCENT;
+      slopeConstraint = {
+        requestedMaxPercent,
+        enforced,
+        note: !wheelchairEngaged
+          ? "此路線未啟用輪椊模式（avoidStairs 為 false），伺服器未套用任何坡度限制"
+          : enforced
+            ? `伺服器已套用 ${OTP_SERVER_MAX_SLOPE_PERCENT}% 上限（等於或寬於您的設定）`
+            : ROUTE_WARNING.SLOPE_LIMIT_STRICTER_THAN_SERVER_DEFAULT,
+      };
+    }
+    for (const r of routes) {
+      r.warnings = [...new Set([...(r.warnings ?? []), slopeConstraint!.note])];
+    }
+  }
+
+  return { slopeConstraint };
 }
 
 /**
@@ -705,6 +823,9 @@ export async function planAccessibleRouteFromRequest(
   let mode = body.mode;
   let requireElevator = body.requireElevator;
   let avoidStairs = body.avoidStairs;
+  let needsAccessibleToilet = body.needsAccessibleToilet;
+  let needsHandrail = body.needsHandrail;
+  let maxSlopePercent = body.maxSlopePercent;
 
   let intent: RouteIntent | null = null;
   if (query && (!origin || !destination)) {
@@ -744,7 +865,15 @@ export async function planAccessibleRouteFromRequest(
 
   // Lowest-priority fallback: an explicit body value or an AI-parsed intent
   // both reflect this specific trip and win over the account's saved profile.
-  if (body.userId && (mode === undefined || avoidStairs === undefined || requireElevator === undefined)) {
+  if (
+    body.userId &&
+    (mode === undefined ||
+      avoidStairs === undefined ||
+      requireElevator === undefined ||
+      needsAccessibleToilet === undefined ||
+      needsHandrail === undefined ||
+      maxSlopePercent === undefined)
+  ) {
     try {
       const profile = await getA11yProfile(body.userId);
       if (mode === undefined) {
@@ -756,6 +885,13 @@ export async function planAccessibleRouteFromRequest(
       }
       if (avoidStairs === undefined && profile.canUseStairs === false) avoidStairs = true;
       if (requireElevator === undefined && profile.needsElevator === true) requireElevator = true;
+      if (needsAccessibleToilet === undefined && profile.needsAccessibleToilet === true) {
+        needsAccessibleToilet = true;
+      }
+      if (needsHandrail === undefined && profile.needsHandrail === true) needsHandrail = true;
+      if (maxSlopePercent === undefined && profile.maxSlopePercent !== null) {
+        maxSlopePercent = profile.maxSlopePercent ?? undefined;
+      }
     } catch (err) {
       console.error("[accessible-route] failed to load caller's a11y profile, ignoring", err);
     }
@@ -1024,6 +1160,12 @@ export async function planAccessibleRouteFromRequest(
     routes = outcome.routes;
   }
 
+  const { slopeConstraint } = await applyExtraA11yAnnotations(routes, dest, travelMode, mode, avoidStairs, {
+    needsAccessibleToilet,
+    needsHandrail,
+    maxSlopePercent,
+  });
+
   return {
     ok: true,
     data: {
@@ -1034,6 +1176,7 @@ export async function planAccessibleRouteFromRequest(
       ...(waypoints.length ? { waypoints } : {}),
       routes,
       ...(intent ? { intent } : {}),
+      ...(slopeConstraint ? { slopeConstraint } : {}),
     },
   };
 }

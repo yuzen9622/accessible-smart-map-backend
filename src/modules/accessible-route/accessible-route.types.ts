@@ -128,6 +128,9 @@ export interface PlanRouteRequest {
   waypoints?: (string | { latitude: number; longitude: number })[];
   avoidStairs?: boolean;
   requireElevator?: boolean;
+  needsAccessibleToilet?: boolean;
+  needsHandrail?: boolean;
+  maxSlopePercent?: number;
   /** Authenticated caller's id, set by the controller from an optional Bearer token; never client-supplied. */
   userId?: string;
 }
@@ -143,6 +146,12 @@ export type PlanRouteResult =
         waypoints?: LatLng[];
         routes: AccessibleRoute[];
         intent?: RouteIntent;
+        /** Present only when the caller (or their profile) requested a maxSlopePercent; tells them whether it could actually be enforced. */
+        slopeConstraint?: {
+          requestedMaxPercent: number;
+          enforced: boolean;
+          note: string;
+        };
       };
     }
   | {

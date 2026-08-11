@@ -71,6 +71,32 @@ export const AccessibleRouteBodySchema = z
           "硬性條件：要求車站有可用電梯。true 時排除「有設施資料但查無電梯」或「電梯維修／故障／暫停」的捷運／台鐵／高鐵路段；設施資料為空的車站視為未知而保留。未填時：若帶有效 token 且已儲存的偏好要求電梯，則預設 true；否則預設為 mode==='wheelchair'。當所有候選路線都被排除時仍會回傳原候選（有路線優於 404），並以較低的無障礙分數與 warnings 標示風險。",
         example: true,
       }),
+    needsAccessibleToilet: z
+      .boolean()
+      .optional()
+      .openapi({
+        description:
+          "軟性偏好：若為 true，會檢查目的地附近是否有登記的無障礙廁所，有則加進 accessibilityHighlights，查無資料則加進 warnings（不代表確定沒有，只是資料庫沒登記）。未填時：若帶有效 token 且已儲存的偏好要求，則預設 true。不影響路線本身的選路。",
+        example: true,
+      }),
+    needsHandrail: z
+      .boolean()
+      .optional()
+      .openapi({
+        description:
+          "軟性偏好：若為 true，路線中若有樓梯段且 OSM 資料未標記該樓梯有扶手（handrail=yes），會在 warnings 提示「需自行確認扶手」。OSM 扶手標記涵蓋率低，多數樓梯會落入此提示。未填時：若帶有效 token 且已儲存的偏好要求，則預設 true。不影響路線本身的選路。",
+        example: false,
+      }),
+    maxSlopePercent: z
+      .number()
+      .min(0)
+      .max(100)
+      .optional()
+      .openapi({
+        description:
+          "偏好的最大坡度百分比。⚠️ 目前僅供參考、非硬性篩選：大眾運輸／步行（OTP）僅在 avoidStairs 生效時套用伺服器固定的 8.3% ADA 上限，無法套用更嚴格的自訂數值；開車／騎車（Valhalla）目前完全沒有地形高程資料，此欄位對該路線引擎無任何效果。回應會在 data.slopeConstraint 誠實回報是否真的被套用，避免誤以為篩選生效。未填時：若帶有效 token 且已儲存的偏好設定，則套用該值。",
+        example: 5,
+      }),
     maxTransfers: z
       .number()
       .int()
@@ -625,6 +651,19 @@ export const AccessibleRouteDataSchema = z
       description:
         "僅當請求使用自然語言 query 時出現；包含由查詢解析出的 RouteIntent（起點、終點、模式、出發時間、偏好）。",
     }),
+    slopeConstraint: z
+      .object({
+        requestedMaxPercent: z.number().openapi({ example: 5 }),
+        enforced: z
+          .boolean()
+          .openapi({ description: "要求的坡度上限是否真的被路徑引擎執行" }),
+        note: z.string().openapi({ example: "大眾運輸/步行路線引擎目前固定以 8.3% 作為輪椊模式上限，無法套用您要求的更嚴格數值" }),
+      })
+      .optional()
+      .openapi({
+        description:
+          "僅當請求或 profile 帶有 maxSlopePercent 時出現；誠實回報該限制是否真的被執行，避免前端誤以為坡度篩選已生效。",
+      }),
   })
   .openapi("AccessibleRouteData");
 

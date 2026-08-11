@@ -65,7 +65,7 @@ import { getA11yProfile } from "../user/user.service";
 import { enrichLegIndoor } from "./planners/route-a11y";
 import { getCity } from "../../adapters/google.adapter";
 import BusStopModel from "../../model/bus-stop.model";
-import { ROUTE_MSG, ROUTE_REASON } from "../../constants/messages";
+import { ROUTE_MSG, ROUTE_REASON, ROUTE_WARNING } from "../../constants/messages";
 import { ResponseCode } from "../../types/code";
 import { getWeatherAndAirQuality } from "../environment/environment.service";
 
@@ -565,6 +565,170 @@ describe("planAccessibleRouteFromRequest — caller's saved a11y profile fills u
     const res = await planAccessibleRouteFromRequest({ ...walkRequest, userId: "user-1" });
 
     expect(res.ok).toBe(true);
+  });
+});
+
+describe("planAccessibleRouteFromRequest — needsAccessibleToilet", () => {
+  beforeEach(() => {
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "ok",
+      routes: [walkRoute()] as any,
+    });
+  });
+
+  it("adds a highlight when an accessible toilet is found near the destination", async () => {
+    vi.mocked(findNearby).mockResolvedValue({
+      nearbyOsm: [{ category: "toilet" }],
+      nearbyBathroom: [{ name: "x" }],
+    } as any);
+
+    const res = await planAccessibleRouteFromRequest({
+      ...walkRequest,
+      needsAccessibleToilet: true,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.data!.routes[0].accessibilityHighlights.some((h) => h.includes("廁所"))).toBe(
+      true,
+    );
+  });
+
+  it("adds a warning instead when no accessible toilet is found nearby", async () => {
+    vi.mocked(findNearby).mockResolvedValue({ nearbyOsm: [], nearbyBathroom: [] } as any);
+
+    const res = await planAccessibleRouteFromRequest({
+      ...walkRequest,
+      needsAccessibleToilet: true,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.data!.routes[0].warnings).toContain(ROUTE_WARNING.NO_ACCESSIBLE_TOILET_NEARBY);
+  });
+
+  it("does nothing when needsAccessibleToilet is not requested", async () => {
+    const res = await planAccessibleRouteFromRequest(walkRequest);
+
+    expect(res.ok).toBe(true);
+    expect(res.data!.routes[0].warnings ?? []).not.toContain(
+      ROUTE_WARNING.NO_ACCESSIBLE_TOILET_NEARBY,
+    );
+  });
+});
+
+describe("planAccessibleRouteFromRequest — needsHandrail", () => {
+  const stairsLeg = () => ({
+    type: "WALK",
+    from: "A",
+    to: "B",
+    distanceM: 50,
+    minutesEst: 1,
+    polyline: [],
+    steps: [{ stairs: true }],
+    a11yFacilities: [{ tags: { highway: "steps" } }],
+  });
+
+  beforeEach(() => {
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "ok",
+      routes: [{ ...walkRoute(), legs: [stairsLeg()] }] as any,
+    });
+  });
+
+  it("warns when a stairs leg has no OSM-confirmed handrail", async () => {
+    const res = await planAccessibleRouteFromRequest({ ...walkRequest, needsHandrail: true });
+
+    expect(res.ok).toBe(true);
+    expect(res.data!.routes[0].warnings).toContain(ROUTE_WARNING.STAIRS_HANDRAIL_UNKNOWN);
+  });
+
+  it("does not warn when the stairs are OSM-tagged with a handrail", async () => {
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "ok",
+      routes: [
+        {
+          ...walkRoute(),
+          legs: [
+            {
+              ...stairsLeg(),
+              a11yFacilities: [{ tags: { highway: "steps", handrail: "yes" } }],
+            },
+          ],
+        },
+      ] as any,
+    });
+
+    const res = await planAccessibleRouteFromRequest({ ...walkRequest, needsHandrail: true });
+
+    expect(res.ok).toBe(true);
+    expect(res.data!.routes[0].warnings ?? []).not.toContain(
+      ROUTE_WARNING.STAIRS_HANDRAIL_UNKNOWN,
+    );
+  });
+});
+
+describe("planAccessibleRouteFromRequest — maxSlopePercent honesty check", () => {
+  beforeEach(() => {
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "ok",
+      routes: [walkRoute()] as any,
+    });
+    vi.mocked(planValhallaRoute).mockResolvedValue([driveRoute([])] as any);
+    vi.mocked(findNearbyParking).mockResolvedValue([] as any);
+  });
+
+  it("reports enforced=false for drive mode (no elevation data)", async () => {
+    const res = await planAccessibleRouteFromRequest({ ...driveRequest, maxSlopePercent: 5 });
+
+    expect(res.ok).toBe(true);
+    expect(res.data!.slopeConstraint).toEqual({
+      requestedMaxPercent: 5,
+      enforced: false,
+      note: ROUTE_WARNING.SLOPE_LIMIT_NOT_ENFORCED_NO_ELEVATION,
+    });
+  });
+
+  it("reports enforced=false for walk mode when avoidStairs/wheelchair isn't engaged", async () => {
+    const res = await planAccessibleRouteFromRequest({
+      ...walkRequest,
+      maxSlopePercent: 5,
+      avoidStairs: false,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.data!.slopeConstraint!.enforced).toBe(false);
+  });
+
+  it("reports enforced=true when the request is looser than the server's 8.3% ADA default", async () => {
+    const res = await planAccessibleRouteFromRequest({
+      ...walkRequest,
+      maxSlopePercent: 10,
+      avoidStairs: true,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.data!.slopeConstraint!.enforced).toBe(true);
+  });
+
+  it("reports enforced=false when the request is stricter than the server's fixed default", async () => {
+    const res = await planAccessibleRouteFromRequest({
+      ...walkRequest,
+      maxSlopePercent: 3,
+      avoidStairs: true,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.data!.slopeConstraint).toEqual({
+      requestedMaxPercent: 3,
+      enforced: false,
+      note: ROUTE_WARNING.SLOPE_LIMIT_STRICTER_THAN_SERVER_DEFAULT,
+    });
+  });
+
+  it("omits slopeConstraint entirely when maxSlopePercent isn't requested", async () => {
+    const res = await planAccessibleRouteFromRequest(walkRequest);
+
+    expect(res.ok).toBe(true);
+    expect(res.data!.slopeConstraint).toBeUndefined();
   });
 });
 
