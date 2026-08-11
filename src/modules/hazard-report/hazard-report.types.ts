@@ -46,6 +46,19 @@ export interface MyReportsInput {
   cursor?: string;
 }
 
+/**
+ * A hazard report that is safe to act on automatically: AI/community verified,
+ * confirmed by at least one other person, and not yet past its expiry.
+ */
+export interface ConfirmedHazard {
+  id: string;
+  hazardType: HazardType;
+  severity: HazardSeverity;
+  description?: string;
+  /** GeoJSON order: [lng, lat]. */
+  coordinates: [number, number];
+}
+
 export type ConfirmAction = "confirm" | "deny";
 
 export interface ConfirmInput {
