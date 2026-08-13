@@ -103,7 +103,8 @@ describe("password assistance durable queue", () => {
           },
         },
       ],
-      { new: true, maxTimeMS: 10_000 },
+      // mongoose 9 requires explicit opt-in for aggregation update pipelines.
+      { new: true, updatePipeline: true, maxTimeMS: 10_000 },
     );
     expect(expiry).toEqual(fixedExpiry);
   });

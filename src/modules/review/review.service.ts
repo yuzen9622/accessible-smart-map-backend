@@ -1,6 +1,7 @@
 import Review, {
 	type EntranceAccessibility,
 	type IReview,
+	type PlaceType,
 } from "../../model/review.model";
 import { googleGenAi, model } from "../../config/ai";
 import { reviewSummaryConfig } from "../../config/ai/config";
@@ -277,7 +278,7 @@ export async function findByPlace(
 	const filter = {
 		placeId,
 		placeType,
-		status: "active",
+		status: "active" as const,
 		...(minAggregateScore !== undefined
 			? {
 					$expr: {
@@ -400,9 +401,9 @@ export async function deleteReview(
 
 export async function getAiSummary(
 	placeId: string,
-	placeType: string,
+	placeType: PlaceType,
 ): Promise<ServiceResult<ReviewSummaryResult>> {
-	const filter = { placeId, placeType, status: "active" };
+	const filter = { placeId, placeType, status: "active" as const };
 
 	const [reviews, totalCount] = await Promise.all([
 		Review.find(filter)

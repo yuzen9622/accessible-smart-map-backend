@@ -1,4 +1,4 @@
-import type { FilterQuery } from "mongoose";
+import type { QueryFilter } from "mongoose";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
 import UserMemory, { type IUserMemory } from "../../model/user-memory.model";
 import User from "../../model/user.model";
@@ -49,7 +49,7 @@ async function invalidateCache(userId: string): Promise<void> {
   await redisDel(cacheKey(userId));
 }
 
-function activeMemoryFilter(userId: string): FilterQuery<IUserMemory> {
+function activeMemoryFilter(userId: string): QueryFilter<IUserMemory> {
   return {
     userId,
     $or: [{ deletedAt: { $exists: false } }, { deletedAt: null }],

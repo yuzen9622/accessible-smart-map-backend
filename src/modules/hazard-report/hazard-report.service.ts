@@ -5,7 +5,7 @@ import { parsePhotoExif } from "./hazard-report.parse";
 import { verifyHazardReport } from "./hazard-report.ai-verify";
 import { ResponseCode } from "../../types/code";
 import { HAZARD_MSG, HAZARD_REASON, MSG } from "../../constants/messages";
-import type { HazardType, IHazardReport } from "../../types";
+import type { HazardStatus, HazardType, IHazardReport } from "../../types";
 import type {
 	ConfirmedHazard,
 	ConfirmInput,
@@ -196,7 +196,7 @@ export async function createReport(
 		: null;
 
 	const doc = await HazardReport.create({
-		_id,
+		_id: _id.toString(),
 		reporterId: input.reporterId,
 		reportedLocation: {
 			type: "Point",
@@ -205,7 +205,7 @@ export async function createReport(
 		hazardType: input.hazardType,
 		severity: input.severity,
 		expectedUntil,
-		description: input.description ?? null,
+		description: input.description ?? undefined,
 		photoUrl: uploaded.url,
 		photoStoragePath: uploaded.storagePath,
 		exifValidation: exif,
@@ -249,9 +249,9 @@ export async function findNearby(
 		MAX_NEARBY_RADIUS_M,
 	);
 	const limit = Math.min(input.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
-	const statusFilter = input.status?.length
+	const statusFilter = (input.status?.length
 		? input.status
-		: DEFAULT_NEARBY_STATUS;
+		: DEFAULT_NEARBY_STATUS) as HazardStatus[];
 
 	const reports = await HazardReport.find({
 		reportedLocation: {
