@@ -72,18 +72,23 @@ app.get("/health", (_req: Request, res: Response) => {
 	});
 });
 
-app.get("/api/v1/openapi.json", (_req: Request, res: Response) => {
-	res.setHeader("Content-Type", "application/json");
-	res.send(generateOpenAPIDocument());
-});
+// API docs (Scalar UI + OpenAPI schema) are a route/schema map for attackers:
+// expose them everywhere except production. Tests run with NODE_ENV=test, so
+// the supertest coverage of /api/v1/openapi.json keeps working.
+if (process.env.NODE_ENV !== "production") {
+	app.get("/api/v1/openapi.json", (_req: Request, res: Response) => {
+		res.setHeader("Content-Type", "application/json");
+		res.send(generateOpenAPIDocument());
+	});
 
-app.use(
-	"/docs",
-	apiReference({
-		url: "/api/v1/openapi.json",
-		theme: "default",
-	}),
-);
+	app.use(
+		"/docs",
+		apiReference({
+			url: "/api/v1/openapi.json",
+			theme: "default",
+		}),
+	);
+}
 
 app.use("/api/v1/user", middleware, createUserRouter());
 app.use("/api/v1/user", middleware, createEmergencyContactRouter());
