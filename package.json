@@ -108,10 +108,11 @@
         "@types/pdf-parse": "^1.1.5",
         "@types/supertest": "^7.2.0",
         "@types/ws": "^8.18.1",
+        "@typescript/native": "npm:typescript@^7.0.2",
         "nodemon": "^3.0.1",
         "supertest": "^7.2.2",
         "ts-node": "^10.9.1",
-        "typescript": "^5.1.6",
+        "typescript": "npm:@typescript/typescript6@^6.0.2",
         "vitest": "^4.1.9"
     }
 }
