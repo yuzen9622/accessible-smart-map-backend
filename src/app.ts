@@ -1,4 +1,9 @@
-import express, { type Express, type NextFunction, type Request, type Response } from "express";
+import express, {
+	type Express,
+	type NextFunction,
+	type Request,
+	type Response,
+} from "express";
 import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
@@ -38,14 +43,14 @@ const app: Express = express();
 app.set("trust proxy", Number(process.env.TRUST_PROXY_HOPS ?? 1));
 
 app.use(
-  helmet({
-    contentSecurityPolicy: false,
-  }),
+	helmet({
+		contentSecurityPolicy: false,
+	}),
 );
 
 const corsOrigins = process.env.CORS_ORIGINS?.split(",")
-  .map((o) => o.trim())
-  .filter(Boolean) ?? ["http://localhost:3000"];
+	.map((o) => o.trim())
+	.filter(Boolean) ?? ["http://localhost:3000"];
 app.use(cors({ origin: corsOrigins, credentials: true }));
 
 app.use(morgan("common"));
@@ -60,24 +65,24 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 app.get("/health", (_req: Request, res: Response) => {
-  res.status(ResponseCode.OK).json({
-    status: "OK",
-    message: "Server is running",
-    timestamp: new Date().toISOString(),
-  });
+	res.status(ResponseCode.OK).json({
+		status: "OK",
+		message: "Server is running",
+		timestamp: new Date().toISOString(),
+	});
 });
 
 app.get("/api/v1/openapi.json", (_req: Request, res: Response) => {
-  res.setHeader("Content-Type", "application/json");
-  res.send(generateOpenAPIDocument());
+	res.setHeader("Content-Type", "application/json");
+	res.send(generateOpenAPIDocument());
 });
 
 app.use(
-  "/docs",
-  apiReference({
-    url: "/api/v1/openapi.json",
-    theme: "default",
-  }),
+	"/docs",
+	apiReference({
+		url: "/api/v1/openapi.json",
+		theme: "default",
+	}),
 );
 
 app.use("/api/v1/user", middleware, createUserRouter());
@@ -98,27 +103,27 @@ app.use("/api/v1/air", createAirRouter());
 app.use("/api/v1/ai", createAiRouter());
 
 if (process.env.VOICE_POC_ENABLED === "true") {
-  app.use("/api/v1/voice", createVoiceRouter());
+	app.use("/api/v1/voice", createVoiceRouter());
 }
 
 app.use("/{*splat}", (req: Request, res: Response<ApiResponse<null>>) => {
-  sendResponse(
-    res,
-    false,
-    "error",
-    ResponseCode.NOT_FOUND,
-    `Method ${req.method} ${req.originalUrl} not found`,
-  );
+	sendResponse(
+		res,
+		false,
+		"error",
+		ResponseCode.NOT_FOUND,
+		`Method ${req.method} ${req.originalUrl} not found`,
+	);
 });
 
 const CLIENT_ERROR_CODES = new Set<number>([
-  ResponseCode.INVALID_INPUT,
-  ResponseCode.UNAUTHORIZED,
-  ResponseCode.FORBIDDEN,
-  ResponseCode.NOT_FOUND,
-  ResponseCode.CONFLICT,
-  ResponseCode.GONE,
-  ResponseCode.TOO_MANY_REQUESTS,
+	ResponseCode.INVALID_INPUT,
+	ResponseCode.UNAUTHORIZED,
+	ResponseCode.FORBIDDEN,
+	ResponseCode.NOT_FOUND,
+	ResponseCode.CONFLICT,
+	ResponseCode.GONE,
+	ResponseCode.TOO_MANY_REQUESTS,
 ]);
 
 /**
@@ -134,30 +139,37 @@ const CLIENT_ERROR_CODES = new Set<number>([
  * @returns The status code and message to answer with.
  */
 function classifyError(err: unknown): { code: ResponseCode; message: string } {
-  const candidate = err as {
-    status?: unknown;
-    statusCode?: unknown;
-    message?: unknown;
-    expose?: unknown;
-  };
-  const status =
-    typeof candidate.status === "number" ? candidate.status : candidate.statusCode;
+	const candidate = err as {
+		status?: unknown;
+		statusCode?: unknown;
+		message?: unknown;
+		expose?: unknown;
+	};
+	const status =
+		typeof candidate.status === "number"
+			? candidate.status
+			: candidate.statusCode;
 
-  if (typeof status !== "number" || status < 400 || status > 499) {
-    return { code: ResponseCode.INTERNAL_ERROR, message: ERROR_MESSAGE.INTERNAL };
-  }
+	if (typeof status !== "number" || status < 400 || status > 499) {
+		return {
+			code: ResponseCode.INTERNAL_ERROR,
+			message: ERROR_MESSAGE.INTERNAL,
+		};
+	}
 
-  const exposed =
-    candidate.expose === true &&
-    typeof candidate.message === "string" &&
-    candidate.message.length > 0;
+	const exposed =
+		candidate.expose === true &&
+		typeof candidate.message === "string" &&
+		candidate.message.length > 0;
 
-  return {
-    code: CLIENT_ERROR_CODES.has(status)
-      ? (status as ResponseCode)
-      : ResponseCode.INVALID_INPUT,
-    message: exposed ? (candidate.message as string) : ERROR_MESSAGE.BAD_REQUEST,
-  };
+	return {
+		code: CLIENT_ERROR_CODES.has(status)
+			? (status as ResponseCode)
+			: ResponseCode.INVALID_INPUT,
+		message: exposed
+			? (candidate.message as string)
+			: ERROR_MESSAGE.BAD_REQUEST,
+	};
 }
 
 /**
@@ -175,21 +187,21 @@ function classifyError(err: unknown): { code: ResponseCode; message: string } {
  * @param next Express next handler, used only for the headers-sent case.
  */
 app.use(
-  (
-    err: unknown,
-    _req: Request,
-    res: Response<ApiResponse<null>>,
-    next: NextFunction,
-  ) => {
-    const { code, message } = classifyError(err);
+	(
+		err: unknown,
+		_req: Request,
+		res: Response<ApiResponse<null>>,
+		next: NextFunction,
+	) => {
+		const { code, message } = classifyError(err);
 
-    if (code === ResponseCode.INTERNAL_ERROR) {
-      console.error("[app] unhandled error:", err);
-    }
+		if (code === ResponseCode.INTERNAL_ERROR) {
+			console.error("[app] unhandled error:", err);
+		}
 
-    if (res.headersSent) return next(err);
-    sendResponse(res, false, "error", code, message);
-  },
+		if (res.headersSent) return next(err);
+		sendResponse(res, false, "error", code, message);
+	},
 );
 
 export default app;
