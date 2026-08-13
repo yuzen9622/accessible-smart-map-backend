@@ -110,7 +110,7 @@
 ## 執行紀錄（2026-08-13，全部完成）
 
 | 步驟 | 內容 | 結果與驗證 |
-|---|---|---|
+| --- | --- | --- |
 | 0 | 基線 | build ✅ 95 files / 1168 tests ✅ |
 | 1 | mongoose 8.24.0 → 8.24.3（GHSA-664h） | ✅ build + tests |
 | 2 | @google-cloud/vision 6.0.0 + protobufjs 7.6.5（GHSA-f38q/j3f2） | ✅ build + tests；`pnpm why` 確認唯一 protobufjs 7.6.5 |
@@ -124,9 +124,11 @@
 | 10 | 收尾 | audit **0 vulnerabilities**；docker build（node:22）✅；outdated 僅剩計劃外 zod-to-openapi 9 / @types/node 26 |
 
 ### 決策紀錄
+
 1. **typescript 7**：採方案 A（side-by-side），且 `moduleResolution` 用 `bundler` 而非 node16——node16 對本 CJS 專案會要求 31 處 import 改動（副檔名 / resolution-mode / dynamic import），bundler 組合（module commonjs）在 TS7 下允許且零改動。
 2. **ioredis**：`protocol: 2`（RESP2）保守保留。
 3. **mongoose**：升 9（最大化）。`writeConcern` 型別被刪但 runtime 仍轉發 → cast 保留語意；update pipeline 需 `updatePipeline: true`（runtime 預設 throw）。
 
 ### 環境變更（本機）
+
 - 手動啟動 homebrew mongod（`/opt/homebrew/bin/mongod --dbpath /opt/homebrew/var/mongodb --port 27018 --auth --fork`）並建 `app` 使用者（MONGO_ROOT_PASSWORD）；`diagnostic.data` 損壞已備份重建。
