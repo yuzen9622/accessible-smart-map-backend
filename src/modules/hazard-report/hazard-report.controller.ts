@@ -103,7 +103,7 @@ async function getNearbyReports(req: Request, res: Response) {
 }
 
 async function getReport(req: Request, res: Response) {
-  const result = await service.findById(req.params.id);
+  const result = await service.findById(req.params.id as string);
   return send(res, result);
 }
 
@@ -128,7 +128,7 @@ async function getMyReports(req: Request, res: Response) {
 async function confirmReport(req: Request, res: Response) {
   const body = req.validated?.body as { action: ConfirmAction };
   const result = await service.confirmReport({
-    reportId: req.params.id,
+    reportId: req.params.id as string,
     action: body.action,
     voterId: await resolveIdentity(req),
   });

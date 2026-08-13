@@ -1,4 +1,4 @@
-import express, { Express, NextFunction, Request, Response } from "express";
+import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
@@ -101,7 +101,7 @@ if (process.env.VOICE_POC_ENABLED === "true") {
   app.use("/api/v1/voice", createVoiceRouter());
 }
 
-app.use("*", (req: Request, res: Response<ApiResponse<null>>) => {
+app.use("/{*splat}", (req: Request, res: Response<ApiResponse<null>>) => {
   sendResponse(
     res,
     false,

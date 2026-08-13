@@ -46,7 +46,17 @@ export function validateRequest(schemas: ValidateSchemas) {
 
     req.validated = validated;
     if ("body" in validated) req.body = validated.body;
-    if ("query" in validated) req.query = validated.query as Request["query"];
+    if ("query" in validated) {
+      // Express 5: req.query is a prototype getter (parsed lazily from the URL)
+      // and can no longer be assigned. Shadow it with an own property so
+      // controllers keep reading the validated, coerced value from req.query.
+      Object.defineProperty(req, "query", {
+        value: validated.query,
+        configurable: true,
+        enumerable: true,
+        writable: true,
+      });
+    }
     if ("params" in validated) req.params = validated.params as Request["params"];
     next();
   };
