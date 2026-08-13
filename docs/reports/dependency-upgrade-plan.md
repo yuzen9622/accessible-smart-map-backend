@@ -104,3 +104,29 @@
 1. **typescript 7**：方案 A（TS7 tsc + typescript6 給 ts-node/編輯器，雙編譯器）vs 方案 B（升 6.x 暫緩 7）。無安全影響，純工具鏈。
 2. **ioredis RESP3**：Redis 伺服器版本 ≥6 才支援 RESP3；若伺服器版本不明 → 保守 `protocol: 2`。
 3. **mongoose 9**：修漏洞最低只要 8.24.1；升 9 是最大化選擇（本計劃預設執行，若想保守可停在 8.24.1）。
+
+---
+
+## 執行紀錄（2026-08-13，全部完成）
+
+| 步驟 | 內容 | 結果與驗證 |
+|---|---|---|
+| 0 | 基線 | build ✅ 95 files / 1168 tests ✅ |
+| 1 | mongoose 8.24.0 → 8.24.3（GHSA-664h） | ✅ build + tests |
+| 2 | @google-cloud/vision 6.0.0 + protobufjs 7.6.5（GHSA-f38q/j3f2） | ✅ build + tests；`pnpm why` 確認唯一 protobufjs 7.6.5 |
+| 3 | 批次：google-auth-library 11.0.2、mammoth 1.12.1、ws 8.21.3、dotenvx 2.21.0、storage 7.22.0、scalar 0.10.13 + `pnpm.overrides` gaxios ^7.3.1 / teeny-request ^11.0.1（修 uuid）、minimatch→brace-expansion 5.0.9、nanoid 5.1.16 | ✅ build + tests；audit 從 11 → 2 個 |
+| 4 | ioredis 6.0.0 + `protocol: 2` | ✅ build + tests |
+| 5 | @google/genai 2.17.0（breaking 僅 Interactions） | ✅ 零程式碼改動，tsc 一次過 |
+| 6 | openai 7.4.0（breaking 僅 Node ≥22） | ✅ 零程式碼改動 |
+| 7 | express 5.2.1 + @types/express 5（GHSA-v422） | ✅ 改 3 檔（app.ts `/{*splat}`、validate-request `defineProperty` 遮蔽 query getter、hazard params `as string`）+ @types/express override；server 實測 health/docs/openapi/404/400/async 錯誤轉交 |
+| 8 | mongoose 9.9.2 | ✅ 改 4 檔（FilterQuery→QueryFilter、create 嚴格型別、updatePipeline opt-in、writeConcern cast）+ 測試契約更新；**實測 DB 路由 200**（welfare/reviews，本機 mongod 27018） |
+| 9 | typescript 7.0.2（方案 A） | ✅ `typescript`→`@typescript/typescript6`（ts-node/編輯器）+ `@typescript/native`→`typescript@7`（build）；tsconfig：`moduleResolution: bundler`（TS7 移除 node10）+ `types: ["*"]`；ts-node script 實跑 ✅ |
+| 10 | 收尾 | audit **0 vulnerabilities**；docker build（node:22）✅；outdated 僅剩計劃外 zod-to-openapi 9 / @types/node 26 |
+
+### 決策紀錄
+1. **typescript 7**：採方案 A（side-by-side），且 `moduleResolution` 用 `bundler` 而非 node16——node16 對本 CJS 專案會要求 31 處 import 改動（副檔名 / resolution-mode / dynamic import），bundler 組合（module commonjs）在 TS7 下允許且零改動。
+2. **ioredis**：`protocol: 2`（RESP2）保守保留。
+3. **mongoose**：升 9（最大化）。`writeConcern` 型別被刪但 runtime 仍轉發 → cast 保留語意；update pipeline 需 `updatePipeline: true`（runtime 預設 throw）。
+
+### 環境變更（本機）
+- 手動啟動 homebrew mongod（`/opt/homebrew/bin/mongod --dbpath /opt/homebrew/var/mongodb --port 27018 --auth --fork`）並建 `app` 使用者（MONGO_ROOT_PASSWORD）；`diagnostic.data` 損壞已備份重建。
