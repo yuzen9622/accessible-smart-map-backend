@@ -74,7 +74,7 @@
         "express-rate-limit": "^8.6.2",
         "google-auth-library": "^11.0.2",
         "helmet": "^8.3.0",
-        "ioredis": "^5.11.1",
+        "ioredis": "^6.0.0",
         "jsonwebtoken": "^9.0.2",
         "mammoth": "^1.12.1",
         "mime": "^4.1.0",

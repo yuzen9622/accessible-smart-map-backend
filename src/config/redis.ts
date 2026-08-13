@@ -17,6 +17,7 @@ if (process.env.REDIS_URL) {
     enableOfflineQueue: false,
     maxRetriesPerRequest: 0,
     connectTimeout: 3000,
+    protocol: 2, // keep the RESP2 wire protocol (ioredis 6 defaults to RESP3, which needs Redis >= 6)
   });
 
   redisClient.on("error", (err: Error) => {
