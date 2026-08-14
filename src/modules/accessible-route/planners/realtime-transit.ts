@@ -41,6 +41,7 @@
 
 import { tdxFetch } from "../../../config/fetch";
 import { busUrl, trainUrl, traUrl, thsrUrl } from "../../../config/transit";
+import { escapeODataLiteral } from "../../../utils/transit-text";
 import { fetchRailLegGeometry } from "./otp-routing";
 import { gtfsTimeToSeconds, secondsToHHmm } from "./gtfs-time";
 import { taipeiSecondsOfDay, taipeiYmdDash } from "../../../config/taipei-time";
@@ -195,8 +196,8 @@ function etaUrl(leg: BusLeg): string | null {
     return null;
   }
   const query =
-    `?$format=JSON&$filter=contains(StopName/Zh_tw,'${leg.departureStop}')` +
-    ` or contains(StopName/Zh_tw,'${leg.arrivalStop}')`;
+    `?$format=JSON&$filter=contains(StopName/Zh_tw,'${escapeODataLiteral(leg.departureStop)}')` +
+    ` or contains(StopName/Zh_tw,'${escapeODataLiteral(leg.arrivalStop)}')`;
   if (prefix === "THB") {
     return `${busUrl.interCityEstimatedTimeOfArrivalUrl}/${leg.routeName}${query}`;
   }

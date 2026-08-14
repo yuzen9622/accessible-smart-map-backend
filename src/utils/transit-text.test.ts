@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   busRouteQueryCandidates,
+  escapeODataLiteral,
   formatFriendlyDistance,
   formatWalkStepInstruction,
 } from "./transit-text";
@@ -135,5 +136,17 @@ describe("formatWalkStepInstruction", () => {
       bogusName: false,
       distanceM: 1011,
     })).toBe("向右轉進入「民族西路」，續行約 1.0 公里");
+  });
+});
+
+describe("escapeODataLiteral", () => {
+  it("doubles single quotes inside a value", () => {
+    expect(escapeODataLiteral("307")).toBe("307");
+    expect(escapeODataLiteral("綠1")).toBe("綠1");
+    expect(escapeODataLiteral("It's a route")).toBe("It''s a route");
+    expect(escapeODataLiteral("' or contains(RouteName/Zh_tw,'x")).toBe(
+      "'' or contains(RouteName/Zh_tw,''x",
+    );
+    expect(escapeODataLiteral("''''")).toBe("''''''''");
   });
 });

@@ -1,4 +1,4 @@
-import {
+import type {
   BusApiType,
   BusRealtimeNearbyStop,
   BusRoute,
@@ -16,7 +16,7 @@ export function normalizeStopName(name?: string): string {
   if (!name) return "";
   return name
     .normalize("NFKC")
-    .replace(/[\(（][^）\)]*[\)）]/g, "")
+    .replace(/[(（][^）)]*[)）]/g, "")
     .replace(/站/g, "")
     .replace(/\s+/g, "")
     .replace(/臺/g, "台")
@@ -121,7 +121,7 @@ export function formatRouteName(routeName: string): string {
     "環",
   ];
 
-  const withoutBrackets = routeName.replace(/[\(（][^）\)]*[\)）]/g, "");
+  const withoutBrackets = routeName.replace(/[(（][^）)]*[)）]/g, "");
 
   return withoutBrackets
     .split("")
@@ -133,6 +133,20 @@ export function formatRouteName(routeName: string): string {
       return false;
     })
     .join("");
+}
+
+/**
+ * Escape a value for embedding inside a single-quoted OData string literal.
+ *
+ * OData (and SQL) escape a literal quote by doubling it, so an attacker who
+ * controls the value cannot terminate the string and inject filter operators
+ * (e.g. `eq '' or contains(RouteName/Zh_tw,'x`) into TDX $filter expressions.
+ *
+ * @param value The raw value to embed.
+ * @returns The value with every single quote doubled.
+ */
+export function escapeODataLiteral(value: string): string {
+  return value.replace(/'/g, "''");
 }
 
 /**

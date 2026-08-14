@@ -15,6 +15,7 @@
 import {
   busRouteQueryCandidates,
   equalStopName,
+  escapeODataLiteral,
   formatRouteName,
 } from "../../utils/transit-text";
 import { busUrl } from "../../config/transit";
@@ -24,8 +25,8 @@ import { taipeiHHmm } from "../../config/taipei-time";
 import BusRouteModel from "../../model/bus-route.model";
 import BusVehicleModel from "../../model/bus-vehicle.model";
 import BusStopModel from "../../model/bus-stop.model";
-import { BusRouteQueryScope, TaiwanCityEn } from "../../types/transit";
-import { ITdxBusVehicle } from "../../types";
+import type { BusRouteQueryScope, TaiwanCityEn } from "../../types/transit";
+import type { ITdxBusVehicle } from "../../types";
 import {
   cityFromAlias,
   yesNoLabel,
@@ -261,8 +262,8 @@ export async function getBusRouteInfo(params: {
       city,
       ({ type, routeId: id }) =>
         type === "City"
-          ? `${busUrl.stopOfRouteUrl}/${city}?$format=JSON&$filter=RouteName/Zh_tw eq '${id}'`
-          : `${busUrl.interCityStopOfRouteUrl}?$format=JSON&$filter=RouteName/Zh_tw eq '${id}'`,
+          ? `${busUrl.stopOfRouteUrl}/${city}?$format=JSON&$filter=RouteName/Zh_tw eq '${escapeODataLiteral(id)}'`
+          : `${busUrl.interCityStopOfRouteUrl}?$format=JSON&$filter=RouteName/Zh_tw eq '${escapeODataLiteral(id)}'`,
     );
     if (!live.length) {
       return { ok: false, error: `找不到路線「${params.routeName}」的站序資料`, status: 404 };
@@ -580,8 +581,8 @@ export async function getBusTimetable(params: {
       city,
       ({ type, routeId: id }) =>
         type === "City"
-          ? `${busUrl.cityScheduleUrl}/${city}?$format=JSON&$filter=RouteName/Zh_tw eq '${id}'`
-          : `${busUrl.interCityScheduleUrl}?$format=JSON&$filter=RouteName/Zh_tw eq '${id}'`,
+          ? `${busUrl.cityScheduleUrl}/${city}?$format=JSON&$filter=RouteName/Zh_tw eq '${escapeODataLiteral(id)}'`
+          : `${busUrl.interCityScheduleUrl}?$format=JSON&$filter=RouteName/Zh_tw eq '${escapeODataLiteral(id)}'`,
     );
     if (!records.length) {
       return { ok: false, error: `找不到路線「${params.routeName}」的時刻表`, status: 404 };
@@ -667,7 +668,7 @@ export async function getBusRealtimeOnRoute(params: {
       ({ type, routeId: id }) =>
         type === "City"
           ? `${busUrl.cityRealtimeByFrequencyUrl}/${city}/${id}?$format=JSON${dirFilter}`
-          : `${busUrl.interCityRealTimeByFrequencyUrl}?$format=JSON&$filter=RouteName/Zh_tw eq '${id}'${interCityDirFilter}`,
+          : `${busUrl.interCityRealTimeByFrequencyUrl}?$format=JSON&$filter=RouteName/Zh_tw eq '${escapeODataLiteral(id)}'${interCityDirFilter}`,
     );
     if (!records.length) {
       return {
@@ -714,7 +715,7 @@ export async function getBusRealtimeOnRoute(params: {
  */
 export async function searchBusRoutes(keyword: string): Promise<BusSearchRouteResult> {
   try {
-    const escaped = keyword.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+    const escaped = keyword.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
     const routes = await BusRouteModel.aggregate([
       {
         $match: {
@@ -773,7 +774,7 @@ export async function searchBusRoutes(keyword: string): Promise<BusSearchRouteRe
  */
 export async function searchBusStops(keyword: string): Promise<BusStopSearchRouteResult> {
   try {
-    const escaped = keyword.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
+    const escaped = keyword.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
     const stops = await BusStopModel.aggregate([
       {
         $match: {
