@@ -69,11 +69,15 @@ export const ParkingNearbyQuerySchema = z
 			.openapi({ example: "121.4000" }),
 		radius: z
 			.string()
-			.regex(/^\d{1,4}$/, "Must be a positive integer (metres), at most 9999")
+			.regex(/^\d+$/, "Must be a positive integer (metres)")
+			.refine((v) => {
+				const n = Number(v);
+				return n >= 1 && n <= 5000;
+			}, "半徑需介於 1 到 5000 公尺")
 			.optional()
 			.openapi({
 				example: "300",
-				description: "搜尋半徑（公尺），預設 300，上限 5000",
+				description: "搜尋半徑（公尺），預設 300，上限 5000（超過回 400）",
 			}),
 	})
 	.strict();

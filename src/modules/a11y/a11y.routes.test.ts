@@ -10,6 +10,7 @@ vi.mock("./a11y.service", async () => {
     findRampFacilities: vi.fn(),
     findElevatorFacilities: vi.fn(),
     getServiceCoverage: vi.fn(),
+    findNearbyParking: vi.fn(),
     assessQuickAccess: vi.fn(),
   };
 });
@@ -244,6 +245,46 @@ describe("GET /coverage", () => {
     const maxKm = props.maxRouteDistanceKm;
     expect(maxKm.minimum ?? maxKm.exclusiveMinimum).toBeGreaterThanOrEqual(0);
     expect(props.supportedRegions).toBeUndefined();
+  });
+});
+
+describe("GET /parking/nearby", () => {
+  it("accepts the 5000-metre upper bound and passes it to the service", async () => {
+    vi.mocked(service.findNearbyParking).mockResolvedValue([] as any);
+
+    const res = await request(app).get(
+      `${BASE}/parking/nearby?lat=25.033&lng=121.565&radius=5000`,
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      ok: true,
+      status: "success",
+      code: 200,
+      data: [],
+    });
+    expect(vi.mocked(service.findNearbyParking)).toHaveBeenCalledWith(
+      25.033,
+      121.565,
+      5000,
+    );
+  });
+
+  it("rejects a radius above 5000 before calling the service", async () => {
+    const res = await request(app).get(
+      `${BASE}/parking/nearby?lat=25.033&lng=121.565&radius=6000`,
+    );
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      ok: false,
+      status: "error",
+      code: 400,
+      message: "Invalid request.",
+    });
+    expect(Array.isArray(res.body.data.errors)).toBe(true);
+    expect(res.body.data.errors.length).toBeGreaterThan(0);
+    expect(vi.mocked(service.findNearbyParking)).not.toHaveBeenCalled();
   });
 });
 
