@@ -4,6 +4,7 @@ import {
   escapeODataLiteral,
   formatFriendlyDistance,
   formatWalkStepInstruction,
+  odataUrlLiteral,
 } from "./transit-text";
 
 describe("busRouteQueryCandidates", () => {
@@ -148,5 +149,23 @@ describe("escapeODataLiteral", () => {
       "'' or contains(RouteName/Zh_tw,''x",
     );
     expect(escapeODataLiteral("''''")).toBe("''''''''");
+  });
+});
+
+describe("odataUrlLiteral", () => {
+  it("preserves a normal route name", () => {
+    expect(odataUrlLiteral("307")).toBe("307");
+  });
+
+  it("doubles single quotes without percent-encoding them", () => {
+    expect(odataUrlLiteral("It's")).toBe("It''s");
+  });
+
+  it("percent-encodes query-rewriting characters", () => {
+    expect(odataUrlLiteral("x&$top=10000")).toBe("x%26%24top%3D10000");
+  });
+
+  it("percent-encodes Chinese values as UTF-8", () => {
+    expect(odataUrlLiteral("臺北市")).toBe("%E8%87%BA%E5%8C%97%E5%B8%82");
   });
 });

@@ -4,7 +4,7 @@ import { getCityZh } from "../../adapters/google.adapter";
 import { googleGenAi, model } from "../../config/ai";
 import { airConfig } from "../../config/ai/config";
 import { airContents } from "../../config/ai/contents";
-import { escapeODataLiteral } from "../../utils/transit-text";
+import { odataUrlLiteral } from "../../utils/transit-text";
 
 export type { AirReading, AirData };
 
@@ -14,7 +14,7 @@ export async function getAirData(lat: number, lng: number): Promise<AirData | nu
   const staUrl =
     `https://sta.ci.taiwan.gov.tw/STA_AirQuality_EPAIoT/v1.0/Datastreams` +
     `?$expand=Thing,Observations($orderby=phenomenonTime desc;$top=1)` +
-    `&$filter=name eq 'PM2.5' and Thing/properties/city eq '${escapeODataLiteral(city)}'`;
+    `&$filter=name eq 'PM2.5' and Thing/properties/city eq '${odataUrlLiteral(city)}'`;
 
   const staRes = await fetch(staUrl);
   const staData = (await staRes.json()) as STAApiResponse;

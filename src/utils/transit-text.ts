@@ -150,6 +150,17 @@ export function escapeODataLiteral(value: string): string {
 }
 
 /**
+ * Escape an OData string literal, then percent-encode it for use in a URL so
+ * the value cannot terminate the literal or rewrite the query string.
+ *
+ * @param value The raw value to embed.
+ * @returns The OData-escaped, percent-encoded URL literal.
+ */
+export function odataUrlLiteral(value: string): string {
+  return encodeURIComponent(escapeODataLiteral(value));
+}
+
+/**
  * 產生一次公車查詢要依序嘗試的候選 scope（市區 / 公路 × 路線名變體）。
  *
  * TDX 的 City / InterCity 歸屬無法從路線號碼推導 —— 兩邊都有 4 位數路線且互不

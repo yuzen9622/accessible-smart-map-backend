@@ -15,7 +15,7 @@
 import {
   busRouteQueryCandidates,
   equalStopName,
-  escapeODataLiteral,
+  odataUrlLiteral,
   formatRouteName,
 } from "../../utils/transit-text";
 import { busUrl } from "../../config/transit";
@@ -262,8 +262,8 @@ export async function getBusRouteInfo(params: {
       city,
       ({ type, routeId: id }) =>
         type === "City"
-          ? `${busUrl.stopOfRouteUrl}/${city}?$format=JSON&$filter=RouteName/Zh_tw eq '${escapeODataLiteral(id)}'`
-          : `${busUrl.interCityStopOfRouteUrl}?$format=JSON&$filter=RouteName/Zh_tw eq '${escapeODataLiteral(id)}'`,
+          ? `${busUrl.stopOfRouteUrl}/${city}?$format=JSON&$filter=RouteName/Zh_tw eq '${odataUrlLiteral(id)}'`
+          : `${busUrl.interCityStopOfRouteUrl}?$format=JSON&$filter=RouteName/Zh_tw eq '${odataUrlLiteral(id)}'`,
     );
     if (!live.length) {
       return { ok: false, error: `找不到路線「${params.routeName}」的站序資料`, status: 404 };
@@ -321,8 +321,8 @@ export async function getBusArrivalAtStop(params: {
       city,
       ({ type, routeId: id }) =>
         type === "City"
-          ? `${busUrl.cityEstimatedTimeOfArrivalUrl}/${city}/${id}?$format=JSON${dirFilter}`
-          : `${busUrl.interCityEstimatedTimeOfArrivalUrl}/${id}?$format=JSON${dirFilter}`,
+          ? `${busUrl.cityEstimatedTimeOfArrivalUrl}/${city}/${encodeURIComponent(id)}?$format=JSON${dirFilter}`
+          : `${busUrl.interCityEstimatedTimeOfArrivalUrl}/${encodeURIComponent(id)}?$format=JSON${dirFilter}`,
       hasStop,
     );
     const matched = records.filter((r: any) =>
@@ -431,8 +431,8 @@ export async function getBusRouteDetail(params: {
     try {
       const eta = await fetchRouteScoped(routeName, city, ({ type, routeId: id }) =>
         type === "City"
-          ? `${busUrl.cityEstimatedTimeOfArrivalUrl}/${city}/${id}?$format=JSON`
-          : `${busUrl.interCityEstimatedTimeOfArrivalUrl}/${id}?$format=JSON`,
+          ? `${busUrl.cityEstimatedTimeOfArrivalUrl}/${city}/${encodeURIComponent(id)}?$format=JSON`
+          : `${busUrl.interCityEstimatedTimeOfArrivalUrl}/${encodeURIComponent(id)}?$format=JSON`,
       );
       etaRecords = eta.records;
       etaScope = eta.scope;
@@ -581,8 +581,8 @@ export async function getBusTimetable(params: {
       city,
       ({ type, routeId: id }) =>
         type === "City"
-          ? `${busUrl.cityScheduleUrl}/${city}?$format=JSON&$filter=RouteName/Zh_tw eq '${escapeODataLiteral(id)}'`
-          : `${busUrl.interCityScheduleUrl}?$format=JSON&$filter=RouteName/Zh_tw eq '${escapeODataLiteral(id)}'`,
+          ? `${busUrl.cityScheduleUrl}/${city}?$format=JSON&$filter=RouteName/Zh_tw eq '${odataUrlLiteral(id)}'`
+          : `${busUrl.interCityScheduleUrl}?$format=JSON&$filter=RouteName/Zh_tw eq '${odataUrlLiteral(id)}'`,
     );
     if (!records.length) {
       return { ok: false, error: `找不到路線「${params.routeName}」的時刻表`, status: 404 };
@@ -667,8 +667,8 @@ export async function getBusRealtimeOnRoute(params: {
       city,
       ({ type, routeId: id }) =>
         type === "City"
-          ? `${busUrl.cityRealtimeByFrequencyUrl}/${city}/${id}?$format=JSON${dirFilter}`
-          : `${busUrl.interCityRealTimeByFrequencyUrl}?$format=JSON&$filter=RouteName/Zh_tw eq '${escapeODataLiteral(id)}'${interCityDirFilter}`,
+          ? `${busUrl.cityRealtimeByFrequencyUrl}/${city}/${encodeURIComponent(id)}?$format=JSON${dirFilter}`
+          : `${busUrl.interCityRealTimeByFrequencyUrl}?$format=JSON&$filter=RouteName/Zh_tw eq '${odataUrlLiteral(id)}'${interCityDirFilter}`,
     );
     if (!records.length) {
       return {
