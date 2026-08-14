@@ -69,9 +69,12 @@ export const ParkingNearbyQuerySchema = z
 			.openapi({ example: "121.4000" }),
 		radius: z
 			.string()
-			.regex(/^\d+$/, "Must be a positive integer (metres)")
+			.regex(/^\d{1,4}$/, "Must be a positive integer (metres), at most 9999")
 			.optional()
-			.openapi({ example: "300", description: "搜尋半徑（公尺），預設 300" }),
+			.openapi({
+				example: "300",
+				description: "搜尋半徑（公尺），預設 300，上限 5000",
+			}),
 	})
 	.strict();
 
@@ -92,34 +95,22 @@ export const A11ySchema = z
 			.string()
 			.openapi({ example: "台北車站 M8 出口電梯" }),
 		location: GeoPointSchema,
-		source: z
-			.enum(["metro", "osm"])
-			.openapi({
-				example: "metro",
-				description: "資料來源：北捷官方資料或 OSM",
-			}),
-		osmId: z
-			.string()
-			.optional()
-			.openapi({
-				example: "12342946149",
-				description:
-					"source 為 osm 時的 OSM 節點 id，可用於 /a11y/place 查詳情",
-			}),
-		wheelchair: z
-			.enum(["yes", "limited", "no"])
-			.optional()
-			.openapi({
-				example: "yes",
-				description: "source 為 osm 時的輪椅可用性標記",
-			}),
-		category: z
-			.enum(["elevator", "ramp"])
-			.optional()
-			.openapi({
-				example: "elevator",
-				description: "source 為 osm 時的設施類別",
-			}),
+		source: z.enum(["metro", "osm"]).openapi({
+			example: "metro",
+			description: "資料來源：北捷官方資料或 OSM",
+		}),
+		osmId: z.string().optional().openapi({
+			example: "12342946149",
+			description: "source 為 osm 時的 OSM 節點 id，可用於 /a11y/place 查詳情",
+		}),
+		wheelchair: z.enum(["yes", "limited", "no"]).optional().openapi({
+			example: "yes",
+			description: "source 為 osm 時的輪椅可用性標記",
+		}),
+		category: z.enum(["elevator", "ramp"]).optional().openapi({
+			example: "elevator",
+			description: "source 為 osm 時的設施類別",
+		}),
 	})
 	.openapi("A11y");
 
@@ -152,13 +143,10 @@ export const A11yFacilitySchema = z
 				location: GeoPointSchema,
 				category: A11yCategoryEnum,
 				source: z.literal("metro"),
-				exitName: z
-					.string()
-					.nullable()
-					.openapi({
-						example: "M8",
-						description: "出口代號，無法解析時為 null",
-					}),
+				exitName: z.string().nullable().openapi({
+					example: "M8",
+					description: "出口代號，無法解析時為 null",
+				}),
 			})
 			.strict(),
 		z
@@ -168,12 +156,10 @@ export const A11yFacilitySchema = z
 				location: GeoPointSchema,
 				category: A11yCategoryEnum,
 				source: z.literal("osm"),
-				osmId: z
-					.string()
-					.openapi({
-						example: "12342946149",
-						description: "可用於 /a11y/place 查詳情",
-					}),
+				osmId: z.string().openapi({
+					example: "12342946149",
+					description: "可用於 /a11y/place 查詳情",
+				}),
 				wheelchair: z
 					.enum(["yes", "limited", "no"])
 					.nullable()
@@ -260,13 +246,10 @@ export const DisabledParkingSchema = z
 		chargeType: z.string().optional().openapi({ example: "假日計時收費" }),
 		spaceLabel: z.string().optional().openapi({ example: "身汽1" }),
 		isMarked: z.boolean().openapi({ example: true }),
-		source: z
-			.string()
-			.optional()
-			.openapi({
-				example: "tdx",
-				description: "資料來源（tdx / ntpc / taipei）",
-			}),
+		source: z.string().optional().openapi({
+			example: "tdx",
+			description: "資料來源（tdx / ntpc / taipei）",
+		}),
 		externalId: z
 			.string()
 			.optional()

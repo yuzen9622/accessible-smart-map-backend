@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { IA11y, IOsmA11y } from "../../types";
+import type { IA11y, IOsmA11y } from "../../types";
 import type { CampusFacilityPlace } from "../campus/campus.service";
 import {
   campusToA11yPlace,
@@ -165,6 +165,7 @@ import {
   findAllFacilities,
   findBathroomFacilities,
   findElevatorFacilities,
+  findNearbyParking,
   findRampFacilities,
 } from "./a11y.service";
 import { A11yFacilitySchema } from "./a11y.schema";
@@ -631,5 +632,37 @@ describe("buildQuickAssessSummary", () => {
   it("states limited info when no facilities nearby", () => {
     const s = buildQuickAssessSummary(counts(), 0, "difficult", "wheelchair", 200);
     expect(s).toContain("資訊有限");
+  });
+});
+
+describe("findNearbyParking", () => {
+  it("caps the client-supplied radius at 5000m and limits results to 50", async () => {
+    const chain = makeChain([{ _id: "p1", placeName: "x", location: GEO }]);
+    vi.mocked(DisabledParkingModel.find).mockReturnValue(chain as never);
+
+    const result = await findNearbyParking(25.03, 121.56, 9999999);
+
+    expect(vi.mocked(DisabledParkingModel.find)).toHaveBeenCalledWith({
+      location: {
+        $near: {
+          $geometry: { type: "Point", coordinates: [121.56, 25.03] },
+          $maxDistance: 5000,
+        },
+      },
+    });
+    expect(chain.limit).toHaveBeenCalledWith(50);
+    expect(result).toEqual([{ _id: "p1", placeName: "x", location: GEO }]);
+  });
+
+  it("keeps radii below the cap unchanged", async () => {
+    const chain = makeChain([]);
+    vi.mocked(DisabledParkingModel.find).mockReturnValue(chain as never);
+
+    await findNearbyParking(25.03, 121.56, 300);
+
+    const arg = vi.mocked(DisabledParkingModel.find).mock.calls[0][0] as {
+      location: { $near: { $maxDistance: number } };
+    };
+    expect(arg.location.$near.$maxDistance).toBe(300);
   });
 });
