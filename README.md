@@ -239,6 +239,7 @@ DATABASE_URL=your_mongodb_connection_uri
 TDX_CLIENT_ID=your_tdx_id
 TDX_CLIENT_SECRET=your_tdx_secret
 CWA_API_KEY=your_cwa_key
+MOENV_API_KEY=your_moenv_api_key
 ```
 
 ### 4. 匯入空間與大眾運輸數據
@@ -271,8 +272,13 @@ pnpm import:gtfs-all
 # 台北市無障礙廁所（data/bathrooms CSV）
 pnpm import:bathrooms
 
-# 新北市身障停車格（data/disabled-parking CSV）
+# 新北市身障停車格（data/disabled-parking CSV，TWD97 轉 WGS84）
 pnpm import:parking
+
+# 全台停車資料（TDX advanced 空間查詢網格掃描：身障停車格 → DisabledParking、
+# 一般路邊停車格 → ParkingSpace、路外停車場 → ParkingLot）
+# 約 2,600 次 TDX 呼叫、5–10 分鐘；可帶 --cities=臺北市,臺中市 只掃部分縣市
+pnpm import:parking-tdx
 
 # 全國身心障礙福利機構（data/welfare CSV + Google 地理編碼，需 GOOGLE_MAPS_API_KEY）
 pnpm import:welfare
@@ -291,7 +297,7 @@ pnpm import:rag
 
 **注意事項**：
 
-- **TDX 限流**：TDX 連續呼叫 4–6 次即觸發 429，腳本內建請求間隔；若遇 429，請等待幾分鐘後重跑該支腳本。
+- **TDX 限流**：TDX 連續呼叫 4–6 次即觸發 429，腳本內建請求間隔；若遇 429，請等待幾分鐘後重跑該支腳本。（`import:parking-tdx` 走 advanced 層，實測約 2,600 次呼叫無 429，腳本另有網路錯誤重試。）
 - **部署環境**：建議從本機 `mongodump` 搬 dump 至伺服器（`mongorestore`），避免在伺服器重打 TDX / Overpass；完整流程見 `docs/manuals/DEPLOY_UBUNTU.md` Phase 4。
 - `import:gtfs-all` 僅匯入 levels / stops / trips / pathways（室內導引用）；排程表資料（routes/calendar/stop_times/shapes）已隨自製 GTFS router 退役，改由 OTP 直接讀取 `data/gtfs` feed，不需（也不應）匯入 Mongo。
 - 路由引擎圖資（OTP graph、Valhalla tiles）不屬於 Mongo 資料，透過 `pnpm build:otp` / `pnpm build:valhalla-tiles` 另建，見 `docs/manuals/OTP_OPERATIONS.md`。
@@ -374,9 +380,11 @@ curl http://localhost:5000/health
 
 - 路由整合測試使用 **supertest** 模擬真實 Express 路由請求，不需真正連接資料庫或第三方網路。
 - 執行測試套件：
+
   ```bash
   pnpm test
   ```
+
 - 測試檔案與程式碼同級，遵循 `*.test.ts` 的命名規則。
 
 ---
