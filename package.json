@@ -15,6 +15,7 @@
     "eval:routing": "npx dotenvx run -- ts-node src/scripts/eval-tool-routing.ts",
     "generate:gtfs-parents": "npx dotenvx run -- ts-node src/scripts/generate-gtfs-parents.ts",
     "hazard:expire": "npx dotenvx run -- ts-node src/scripts/expire-hazard-reports.ts",
+    "import:a11y-metro": "npx dotenvx run -- ts-node src/scripts/import-a11y-metro.ts",
     "import:bathrooms": "npx dotenvx run -- ts-node src/scripts/import-bathrooms.ts",
     "import:campus-a11y": "npx dotenvx run -- ts-node src/scripts/import-campus-a11y.ts",
     "import:campus-facility-detail": "npx dotenvx run -- ts-node src/scripts/import-campus-facility-detail.ts",
