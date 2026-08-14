@@ -1,44 +1,28 @@
-export interface STAObservation {
-  "@iot.selfLink": string;
-  "@iot.id": number;
-  phenomenonTime: string;
-  resultTime: string;
-  result: number;
-}
-
-export interface STAThingProperties {
-  city?: string;
-  areaType?: string;
-  areaDescription?: string;
-  stationID?: string;
-  stationName?: string;
-  area?: string;
-}
-
-export interface STAThing {
-  "@iot.id": number;
-  "@iot.selfLink": string;
-  description?: string;
-  name?: string;
-  properties: STAThingProperties;
-}
-
-export interface STADatastream {
-  "@iot.id": number;
-  "@iot.selfLink": string;
-  name: string;
-  description?: string;
-  observedArea?: {
-    type: string;
-    coordinates: [number, number];
-  };
-  Thing: STAThing;
-  Observations: STAObservation[];
-}
-
-export interface STAApiResponse {
-  "@odata.count": number;
-  value: STADatastream[];
+export interface MOENVAirQualityRecord {
+  sitename: string;
+  county: string;
+  aqi?: string;
+  pollutant?: string;
+  status?: string;
+  so2?: string;
+  co?: string;
+  o3?: string;
+  o3_8hr?: string;
+  pm10?: string;
+  "pm2.5"?: string;
+  no2?: string;
+  nox?: string;
+  no?: string;
+  wind_speed?: string;
+  wind_direc?: string;
+  publishtime?: string;
+  co_8hr?: string;
+  "pm2.5_avg"?: string;
+  pm10_avg?: string;
+  so2_avg?: string;
+  longitude?: string;
+  latitude?: string;
+  siteid?: string;
 }
 
 export interface AIResponse {

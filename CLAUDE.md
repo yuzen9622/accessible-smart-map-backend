@@ -45,6 +45,7 @@ Copy `.env.example` to `.env`. Required variables:
 | `GEMINI_API_URL` | OpenAI-compatible base URL for the AI API (default: Gemini's `/v1beta/openai` endpoint) |
 | `GEMINI_MODEL` | Model name used by all AI features (default: `gemini-3-flash-preview`) |
 | `CWA_API_KEY` | 中央氣象署 CWA open-data key — weather block of `/a11y/environment` |
+| `MOENV_API_KEY` | 環境部環境資料開放平臺 AQI key（免費註冊會員後取得） |
 
 ## Architecture
 

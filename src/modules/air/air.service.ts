@@ -1,34 +1,114 @@
-import type { STAApiResponse, AIResponse } from "../../types/air";
+import type { MOENVAirQualityRecord, AIResponse } from "../../types/air";
 import type { AirReading, AirData } from "./air.types";
-import { getCityZh } from "../../adapters/google.adapter";
 import { googleGenAi, model } from "../../config/ai";
 import { airConfig } from "../../config/ai/config";
 import { airContents } from "../../config/ai/contents";
-import { odataUrlLiteral } from "../../utils/transit-text";
 
 export type { AirReading, AirData };
 
+const MOENV_AIR_QUALITY_URL = "https://data.moenv.gov.tw/api/v2/aqx_p_432";
+const AIR_DATA_CACHE_TTL_MS = 10 * 60 * 1000;
+const EARTH_RADIUS_METERS = 6_371_000;
+
+let airDataCache: { records: MOENVAirQualityRecord[]; expiresAt: number } | null = null;
+
+function isMOENVAirQualityRecord(value: unknown): value is MOENVAirQualityRecord {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.sitename === "string" && typeof record.county === "string";
+}
+
+function parseNumber(value: unknown): number | undefined {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function haversineDistanceMeters(
+  lat1: number,
+  lng1: number,
+  lat2: number,
+  lng2: number,
+): number {
+  const latitudeDelta = ((lat2 - lat1) * Math.PI) / 180;
+  const longitudeDelta = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(latitudeDelta / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(longitudeDelta / 2) ** 2;
+  return EARTH_RADIUS_METERS * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+async function getMOENVAirQualityRecords(): Promise<MOENVAirQualityRecord[] | null> {
+  const apiKey = process.env.MOENV_API_KEY;
+  if (!apiKey) return null;
+
+  if (airDataCache && airDataCache.expiresAt > Date.now()) {
+    return airDataCache.records;
+  }
+
+  try {
+    const url = new URL(MOENV_AIR_QUALITY_URL);
+    url.searchParams.set("api_key", apiKey);
+    url.searchParams.set("limit", "1000");
+    url.searchParams.set("format", "JSON");
+
+    const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    if (!response.ok) return null;
+
+    const data: unknown = await response.json();
+    if (!Array.isArray(data)) return null;
+
+    const records = data.filter(isMOENVAirQualityRecord);
+    airDataCache = {
+      records,
+      expiresAt: Date.now() + AIR_DATA_CACHE_TTL_MS,
+    };
+    return records;
+  } catch {
+    return null;
+  }
+}
+
 export async function getAirData(lat: number, lng: number): Promise<AirData | null> {
-  const city = await getCityZh(lat, lng);
+  const records = await getMOENVAirQualityRecords();
+  if (!records) return null;
 
-  const staUrl =
-    `https://sta.ci.taiwan.gov.tw/STA_AirQuality_EPAIoT/v1.0/Datastreams` +
-    `?$expand=Thing,Observations($orderby=phenomenonTime desc;$top=1)` +
-    `&$filter=name eq 'PM2.5' and Thing/properties/city eq '${odataUrlLiteral(city)}'`;
+  const readings = records
+    .map((record) => {
+      const pm25 = parseNumber(record["pm2.5"]);
+      if (pm25 === undefined) return null;
 
-  const staRes = await fetch(staUrl);
-  const staData = (await staRes.json()) as STAApiResponse;
+      const longitude = parseNumber(record.longitude);
+      const latitude = parseNumber(record.latitude);
+      const coordinates: [number, number] | undefined =
+        longitude === undefined || latitude === undefined
+          ? undefined
+          : [longitude, latitude];
+      const reading: AirReading = {
+        area: record.sitename,
+        pm25,
+        coordinates,
+        city: record.county,
+      };
 
-  const readings: AirReading[] = staData.value
-    .map((item) => ({
-      area: item.Thing?.properties?.area ?? item.Thing?.properties?.areaDescription ?? null,
-      pm25: item.Observations?.[0]?.result ?? null,
-      coordinates: item.observedArea?.coordinates,
-      city: item.Thing?.properties?.city ?? null,
-    }))
-    .filter((v): v is AirReading => v.pm25 !== null);
+      return {
+        reading,
+        distance: coordinates
+          ? haversineDistanceMeters(lat, lng, coordinates[1], coordinates[0])
+          : Number.POSITIVE_INFINITY,
+      };
+    })
+    .filter((value): value is { reading: AirReading; distance: number } => value !== null)
+    .sort((a, b) => a.distance - b.distance)
+    .slice(0, 5)
+    .map(({ reading }) => reading);
 
   if (!readings.length) return null;
+
+  const city = readings[0].city;
+  if (!city) return null;
 
   return { city, readings };
 }
