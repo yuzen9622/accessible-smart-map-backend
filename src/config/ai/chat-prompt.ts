@@ -5,9 +5,9 @@
  * eval automatically instead of drifting between the two.
  */
 import {
-  AGENT_IDENTITY,
-  ANSWER_FACT_RULE,
-  ANSWER_UNCERTAINTY_RULE,
+	AGENT_IDENTITY,
+	ANSWER_FACT_RULE,
+	ANSWER_UNCERTAINTY_RULE,
 } from "./agent-prompt-shared";
 import { taipeiYmdDash, taipeiWeekday } from "../taipei-time";
 
@@ -24,7 +24,7 @@ export const CHAT_SYSTEM_PROMPT = `${AGENT_IDENTITY}。
 - findA11yPlaces：查無障礙設施位置（捷運電梯出口、無障礙廁所、坡道/導盲磚等）。**不含**身障停車位（停車位用 findNearbyParking）。
 - findCampusAccessibility：查校園／大學校區的無障礙設施摘要，回傳 campusId。
 - getCampusAccessibilityDetails：依 campusId 回傳單一校區的完整設施清單。
-- findNearbyParking：查附近身障（身心障礙者專用）停車位。
+- findNearbyParking：查附近停車位（身障專用格或一般路邊格），依使用者需求選 type：身障者找專用車位 → disabled、一般汽車 → standard、未明說 → all（身障格優先）。
 - planAccessibleRoute：回傳整段交通路線的**摘要**（候選路線、含哪些公車/捷運、轉乘次數、預估時間、無障礙評分）——要「怎麼去／有哪些走法」時用；也可作為「兩地間有哪些公車」的候選來源，之後再串公車工具比時間。
 - getNavInstructions：回傳**逐步**導航指引（直行幾公尺、右轉、在哪站上車）——要「每一步怎麼走／帶我走／step by step」時用。與 planAccessibleRoute 的差別＝逐步 vs 摘要。
 - findNearbyBusStops：回傳某地點附近的公車站牌及各站「真實經過的路線清單」。**不要自己猜路線號碼**，先用它拿到真實路線再查時間。
@@ -68,12 +68,12 @@ export const CHAT_SYSTEM_PROMPT = `${AGENT_IDENTITY}。
  * @returns The prompt with a location block appended when `loc` is present
  */
 export function withUserLocation(
-  prompt: string,
-  loc?: { latitude: number; longitude: number },
+	prompt: string,
+	loc?: { latitude: number; longitude: number },
 ): string {
-  return loc
-    ? `${prompt}\n\n【使用者目前位置】緯度 ${loc.latitude}，經度 ${loc.longitude}`
-    : prompt;
+	return loc
+		? `${prompt}\n\n【使用者目前位置】緯度 ${loc.latitude}，經度 ${loc.longitude}`
+		: prompt;
 }
 
 const WEEKDAY_ZH = ["日", "一", "二", "三", "四", "五", "六"];
@@ -87,8 +87,11 @@ const WEEKDAY_ZH = ["日", "一", "二", "三", "四", "五", "六"];
  * @param now Reference instant (defaults to now)
  * @returns The prompt with a current-date block appended
  */
-export function withCurrentDate(prompt: string, now: Date = new Date()): string {
-  const date = taipeiYmdDash(now);
-  const weekday = WEEKDAY_ZH[taipeiWeekday(now)];
-  return `${prompt}\n\n【今天日期】${date}（Asia/Taipei，週${weekday}）。相對日期（明天、後天、週五）一律以此換算成 YYYY-MM-DD；「週X」指最近的未來該日，若今天就是週X 則指今天。`;
+export function withCurrentDate(
+	prompt: string,
+	now: Date = new Date(),
+): string {
+	const date = taipeiYmdDash(now);
+	const weekday = WEEKDAY_ZH[taipeiWeekday(now)];
+	return `${prompt}\n\n【今天日期】${date}（Asia/Taipei，週${weekday}）。相對日期（明天、後天、週五）一律以此換算成 YYYY-MM-DD；「週X」指最近的未來該日，若今天就是週X 則指今天。`;
 }
