@@ -291,6 +291,9 @@ pnpm import:campus-facility-detail
 # OSM 視覺無障礙（有聲號誌、導盲磚；Overpass API）
 pnpm import:visual-a11y
 
+# 北捷車站出入口無障礙電梯/坡道 GPS（data/metro-a11y CSV，台北市資料大平臺）
+pnpm import:a11y-metro
+
 # RAG 知識庫向量化（data/rag → Chroma 向量資料庫，需 Chroma 容器）
 pnpm import:rag
 ```
