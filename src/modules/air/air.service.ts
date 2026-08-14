@@ -7,8 +7,6 @@ import { airContents } from "../../config/ai/contents";
 
 export type { AirReading, AirData };
 
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-
 export async function getAirData(lat: number, lng: number): Promise<AirData | null> {
   const city = await getCityZh(lat, lng);
 
@@ -73,8 +71,13 @@ export async function getAirQualityWithAI(
     config: airConfig,
   });
 
-  return JSON.parse(
-    aiResponse?.candidates?.[0].content?.parts?.[0].text ??
-      '{"description":"此區域沒有空氣品質監測器喔!","quality":""}',
-  ) as AIResponse;
+  const raw = aiResponse?.candidates?.[0].content?.parts?.[0].text ?? "";
+  try {
+    return JSON.parse(raw) as AIResponse;
+  } catch {
+    return {
+      description: "此區域沒有空氣品質監測器喔!",
+      quality: "",
+    };
+  }
 }

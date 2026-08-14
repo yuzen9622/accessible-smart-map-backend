@@ -44,6 +44,7 @@ export interface STAApiResponse {
 export interface AIResponse {
   description: string;
   quality:
+    | ""
     | "GOOD"
     | "MODERATE"
     | "UNHEALTHY_SENSITIVE"
