@@ -7,11 +7,13 @@ import A11y from "../../model/a11y.model";
 import BathroomModel from "../../model/bathroom.model";
 import OsmA11y from "../../model/osm-a11y.model";
 import DisabledParkingModel from "../../model/disabled-parking.model";
+import ParkingSpaceModel from "../../model/parking-space.model";
 import type {
 	IA11y,
 	IOsmA11y,
 	IBathroom,
 	IDisabledParking,
+	IParkingSpace,
 	OsmWheelchairValue,
 } from "../../types";
 import * as campusService from "../campus/campus.service";
@@ -420,17 +422,90 @@ export async function findBathroomFacilities(): Promise<A11yFacility[]> {
 const PARKING_MAX_RADIUS_M = 5000;
 const PARKING_MAX_RESULTS = 50;
 
+export type ParkingKind = "disabled" | "standard";
+
+/**
+ * Disabled-bay shape plus a `type` discriminator; standard bays are mapped into
+ * the same shape so one response array can carry both collections.
+ */
+export type ParkingNearbyItem = IDisabledParking & {
+	type: ParkingKind;
+	segmentId?: string;
+	spaceType?: number;
+	hasChargingPoint?: boolean;
+};
+
+function disabledParkingToItem(doc: IDisabledParking): ParkingNearbyItem {
+	return { ...doc, type: "disabled" };
+}
+
+function parkingSpaceToItem(doc: IParkingSpace): ParkingNearbyItem {
+	return {
+		_id: doc._id,
+		city: doc.city,
+		district: doc.city,
+		areacode: "",
+		quantity: 1,
+		placeName: `一般停車格（${doc.externalId}）`,
+		chargeType: "",
+		spaceLabel: "",
+		isMarked: false,
+		source: "tdx",
+		externalId: doc.externalId,
+		location: doc.location,
+		importedAt: doc.importedAt,
+		type: "standard",
+		segmentId: doc.segmentId,
+		spaceType: doc.spaceType,
+		hasChargingPoint: doc.hasChargingPoint,
+	};
+}
+
+/**
+ * @param type which collection(s) to search; defaults to `all`, which queries
+ * both and fills the result set with standard bays only after every disabled
+ * bay is included, so disabled bays are never crowded out by the shared cap
+ */
 export async function findNearbyParking(
 	lat: number,
 	lng: number,
 	radiusM = 300,
-) {
+	type: ParkingKind | "all" = "all",
+): Promise<ParkingNearbyItem[]> {
 	const cappedRadius = Math.min(radiusM, PARKING_MAX_RADIUS_M);
-	return DisabledParkingModel.find({
-		location: makeGeoQuery(lng, lat, cappedRadius),
-	})
-		.limit(PARKING_MAX_RESULTS)
-		.lean();
+	const geoQuery = makeGeoQuery(lng, lat, cappedRadius);
+
+	if (type === "disabled") {
+		const disabled = await DisabledParkingModel.find({ location: geoQuery })
+			.limit(PARKING_MAX_RESULTS)
+			.lean();
+		return (disabled as IDisabledParking[]).map(disabledParkingToItem);
+	}
+
+	if (type === "standard") {
+		const standard = await ParkingSpaceModel.find({ location: geoQuery })
+			.limit(PARKING_MAX_RESULTS)
+			.lean();
+		return (standard as IParkingSpace[]).map(parkingSpaceToItem);
+	}
+
+	const [disabled, standard] = await Promise.all([
+		DisabledParkingModel.find({ location: geoQuery })
+			.limit(PARKING_MAX_RESULTS)
+			.lean(),
+		ParkingSpaceModel.find({ location: geoQuery })
+			.limit(PARKING_MAX_RESULTS)
+			.lean(),
+	]);
+	const items = (disabled as IDisabledParking[]).map(disabledParkingToItem);
+	const remaining = PARKING_MAX_RESULTS - items.length;
+	if (remaining <= 0) return items;
+	return [
+		...items,
+		...(standard as IParkingSpace[])
+			.slice(0, remaining)
+			.map(parkingSpaceToItem),
+	];
 }
 
 export async function findNearby(lat: number, lng: number, radiusM = 150) {

@@ -79,6 +79,11 @@ export const ParkingNearbyQuerySchema = z
 				example: "300",
 				description: "搜尋半徑（公尺），預設 300，上限 5000（超過回 400）",
 			}),
+		type: z.enum(["disabled", "standard", "all"]).optional().openapi({
+			example: "all",
+			description:
+				"停車格種類：all 身障格＋一般路邊格（預設，身障格優先）、disabled 僅身障格、standard 僅一般路邊格",
+		}),
 	})
 	.strict();
 
@@ -512,8 +517,27 @@ registry.registerPath({
 	},
 });
 
+export const ParkingNearbyItemSchema = DisabledParkingSchema.extend({
+	type: z.enum(["disabled", "standard"]).openapi({
+		example: "disabled",
+		description: "disabled 身障停車格、standard 一般路邊停車格",
+	}),
+	segmentId: z.string().optional().openapi({
+		example: "TPE-0001",
+		description: "一般停車格所屬路段代碼（僅 standard）",
+	}),
+	spaceType: z.number().optional().openapi({
+		example: 1,
+		description: "一般停車格車格類型代碼（僅 standard）",
+	}),
+	hasChargingPoint: z.boolean().optional().openapi({
+		example: false,
+		description: "一般停車格是否附充電座（僅 standard）",
+	}),
+}).openapi("ParkingNearbyItem");
+
 export const ParkingNearbyResponseSchema = ApiResponseSchema(
-	z.array(DisabledParkingSchema),
+	z.array(ParkingNearbyItemSchema),
 	"ParkingNearbyResponse",
 );
 
@@ -521,15 +545,15 @@ registry.registerPath({
 	method: "get",
 	path: "/a11y/parking/nearby",
 	tags: ["Accessibility"],
-	summary: "鄰近身障停車格",
+	summary: "鄰近停車格",
 	description:
-		"回傳指定座標附近的身障汽車停車格（預設半徑 300 公尺，可用 radius 覆寫）。",
+		"回傳指定座標附近的停車格（預設半徑 300 公尺，可用 radius 覆寫；預設同時回身障與一般路邊停車格，身障格優先，可用 type 限定只查其中一種）。",
 	request: {
 		query: ParkingNearbyQuerySchema,
 	},
 	responses: {
 		200: {
-			description: "鄰近身障停車格清單",
+			description: "鄰近停車格清單",
 			content: { "application/json": { schema: ParkingNearbyResponseSchema } },
 		},
 		400: { description: "缺少或無效的經緯度" },
