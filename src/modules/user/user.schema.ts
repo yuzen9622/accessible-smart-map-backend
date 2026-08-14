@@ -78,15 +78,10 @@ export const ChangePasswordBodySchema = z
   })
   .strict();
 
-export const ConfigBodySchema = z
-  .object({
-    user_id: z.string().min(1).openapi({ description: "MongoDB 使用者 _id" }),
-  })
-  .strict();
+export const ConfigBodySchema = z.object({}).strict();
 
 export const UpdateConfigBodySchema = z
   .object({
-    user_id: z.string().min(1),
     language: z.string().optional().openapi({ example: "zh-TW" }),
     darkMode: z.enum(["light", "dark", "system"]).optional(),
     themeColor: z.string().optional().openapi({ example: "#3B82F6" }),

@@ -1,8 +1,8 @@
-import { Request, Response } from "express";
-import { ApiResponse } from "../../types/response";
+import type { Request, Response } from "express";
+import type { ApiResponse } from "../../types/response";
 import { ResponseCode, ResponseMessage } from "../../types/code";
 import { sendResponse } from "../../config/lib";
-import { IConfig, IUser } from "../../types";
+import type { IConfig, IUser } from "../../types";
 import { createAccessToken, createRefreshToken, verifyRefreshToken } from "../../config/jwt";
 import * as userService from "./user.service";
 
@@ -71,17 +71,17 @@ async function lineLinkCode(req: Request, res: Response<ApiResponse<{
 
 async function updateConfig(req: Request, res: Response<ApiResponse<IConfig>>) {
   try {
-    const { user_id, ...rest } = req.body;
-    if (!user_id) {
+    const userId = req.auth?.userId;
+    if (!userId) {
       return sendResponse(
         res,
         false,
         "error",
-        ResponseCode.INVALID_INPUT,
-        ResponseMessage.INVALID_INPUT
+        ResponseCode.FORBIDDEN,
+        ResponseMessage.FORBIDDEN
       );
     }
-    const config = await userService.updateConfig(user_id, rest);
+    const config = await userService.updateConfig(userId, req.body);
 
     if (!config) {
       return sendResponse(
@@ -115,17 +115,17 @@ async function updateConfig(req: Request, res: Response<ApiResponse<IConfig>>) {
 
 async function config(req: Request, res: Response) {
   try {
-    const { user_id } = req.body;
-    if (!user_id) {
+    const userId = req.auth?.userId;
+    if (!userId) {
       return sendResponse(
         res,
         false,
         "error",
-        ResponseCode.INVALID_INPUT,
-        ResponseMessage.INVALID_INPUT
+        ResponseCode.FORBIDDEN,
+        ResponseMessage.FORBIDDEN
       );
     }
-    const userConfig = await userService.getConfig(user_id);
+    const userConfig = await userService.getConfig(userId);
 
     return sendResponse(
       res,
@@ -186,7 +186,7 @@ async function refresh(req: Request, res: Response<ApiResponse<{ user: IUser }>>
   }
 }
 
-async function logout(req: Request, res: Response) {
+async function logout(_req: Request, res: Response) {
   try {
     res.cookie("refreshToken", "", { maxAge: 0 });
     return sendResponse(res, true, "success", ResponseCode.OK, "Logout successful");

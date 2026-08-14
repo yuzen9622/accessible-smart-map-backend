@@ -18,7 +18,7 @@ function findRedundancies(obj: any, path = ""): string[] {
   }
 
   // Check for __v
-  if (Object.prototype.hasOwnProperty.call(obj, "__v")) {
+  if (Object.hasOwn(obj, "__v")) {
     warnings.push(`${path ? path + "." : ""}__v (Mongoose internal version key)`);
   }
 
@@ -28,8 +28,8 @@ function findRedundancies(obj: any, path = ""): string[] {
     typeof obj.location === "object" &&
     obj.location.type === "Point" &&
     Array.isArray(obj.location.coordinates);
-  const hasSeparateCoordsZh = Object.prototype.hasOwnProperty.call(obj, "經度") && Object.prototype.hasOwnProperty.call(obj, "緯度");
-  const hasSeparateCoordsEn = Object.prototype.hasOwnProperty.call(obj, "latitude") && Object.prototype.hasOwnProperty.call(obj, "longitude");
+  const hasSeparateCoordsZh = Object.hasOwn(obj, "經度") && Object.hasOwn(obj, "緯度");
+  const hasSeparateCoordsEn = Object.hasOwn(obj, "latitude") && Object.hasOwn(obj, "longitude");
 
   if (hasLocation && hasSeparateCoordsZh) {
     warnings.push(`${path ? path + "." : ""}Duplicate coordinates: both "經度"/"緯度" and "location.coordinates" are present`);
@@ -172,7 +172,7 @@ async function runTests() {
   await runTest("Get User Config", "POST /api/v1/user/config", async () => {
     const res = await axios.post(
       `${BASE_URL}/api/v1/user/config`,
-      { user_id: testUserId },
+      {},
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
     assert.equal(res.status, 200);
@@ -188,7 +188,7 @@ async function runTests() {
   await runTest("Update User Config", "POST /api/v1/user/config/update", async () => {
     const res = await axios.post(
       `${BASE_URL}/api/v1/user/config/update`,
-      { user_id: testUserId, language: "en", darkMode: "dark" },
+      { language: "en", darkMode: "dark" },
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
     assert.equal(res.status, 200);
