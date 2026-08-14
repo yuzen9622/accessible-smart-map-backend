@@ -1171,6 +1171,7 @@ export async function planRouteToSosVictim(args: {
       ok: true,
       ownerName: sessionResult.ownerName,
       sessionId: sessionResult.session._id,
+      shareToken: sessionResult.session.shareToken,
       destination: {
         lat: sessionResult.session.lat,
         lng: sessionResult.session.lng,

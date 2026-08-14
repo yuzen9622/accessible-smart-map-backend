@@ -1,4 +1,4 @@
-import { webhook } from "@line/bot-sdk";
+import type { webhook } from "@line/bot-sdk";
 import { Types } from "mongoose";
 import EmergencyContact from "../../model/emergency-contact.model";
 import {
@@ -69,7 +69,7 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function routePreviewUrl(sessionId?: string): string | undefined {
+function routePreviewUrl(previewToken?: string): string | undefined {
   const explicitBase = process.env.PUBLIC_LIFF_ROUTE_BASE_URL?.trim();
   const fallbackBase = process.env.PUBLIC_TRACKING_BASE_URL?.trim();
   const base =
@@ -78,7 +78,7 @@ function routePreviewUrl(sessionId?: string): string | undefined {
   if (!base) return undefined;
   try {
     const url = new URL(base);
-    if (sessionId) url.searchParams.set("sessionId", sessionId);
+    if (previewToken) url.searchParams.set("sessionId", previewToken);
     return url.toString();
   } catch {
     return undefined;
@@ -169,7 +169,7 @@ function routeCardFromToolResults(
     origin: isSos ? "你分享的位置" : "你的位置",
     destination,
     options,
-    liffUrl: routePreviewUrl(asString(result.sessionId)),
+    liffUrl: routePreviewUrl(asString(result.shareToken)),
   };
 }
 
@@ -631,18 +631,31 @@ export async function handleEvents(events: LineEvent[]): Promise<void> {
   }
 }
 
+/**
+ * Resolves the route preview for a LINE route-preview URL.
+ *
+ * The URL carries the SOS session's high-entropy shareToken (32 hex chars,
+ * generated at session creation) — never the low-entropy Mongo ObjectId, which
+ * is guessable/enumerable and would leak the victim's and contact's locations.
+ *
+ * @param previewToken The shareToken from the route-preview query.
+ * @returns Route preview data or a failure envelope.
+ */
 export async function getRoutePreview(
-  sessionId: string,
+  previewToken: string,
   travelMode?: TravelMode,
   mode?: AccessibilityMode,
   departureTime?: string,
 ): Promise<LineServiceResult<LineRoutePreviewData>> {
-  if (!Types.ObjectId.isValid(sessionId)) {
+  if (!/^[0-9a-f]{32}$/.test(previewToken)) {
     return fail(ResponseCode.NOT_FOUND, "找不到進行中的求救紀錄");
   }
 
-  const session = await SosSession.findById(sessionId).lean();
-  if (!session || session.status !== "active") {
+  const session = await SosSession.findOne({
+    shareToken: previewToken,
+    status: "active",
+  }).lean();
+  if (!session) {
     return fail(ResponseCode.NOT_FOUND, "找不到進行中的求救紀錄");
   }
 

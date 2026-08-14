@@ -58,6 +58,7 @@ vi.mock("../../model/emergency-contact.model", () => ({
 vi.mock("../../model/sos-session.model", () => ({
   default: {
     findById: vi.fn(),
+    findOne: vi.fn(),
   },
 }));
 
@@ -121,6 +122,7 @@ const contactModel = EmergencyContact as unknown as {
 };
 const sosSessionModel = SosSession as unknown as {
   findById: ReturnType<typeof vi.fn>;
+  findOne: ReturnType<typeof vi.fn>;
 };
 const userModel = User as unknown as {
   find: ReturnType<typeof vi.fn>;
@@ -321,6 +323,7 @@ describe("line.service — text message (agent loop)", () => {
           result: {
             ok: true,
             sessionId: "s1",
+            shareToken: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
             destination: { address: "台北車站" },
             routes: [
               {
@@ -345,7 +348,7 @@ describe("line.service — text message (agent loop)", () => {
         options: [
           { label: "無障礙路線", time: "約 12 分鐘", detail: "步行 → 公車 307" },
         ],
-        liffUrl: "https://liff.example.com/route?sessionId=s1",
+        liffUrl: "https://liff.example.com/route?sessionId=a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
       },
     );
   });
@@ -621,14 +624,16 @@ describe("line.service — unfollow", () => {
 });
 
 describe("line.service — route preview", () => {
+  const previewToken = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6";
+
   it("plans a route from the latest bound contact location to an active SOS session", async () => {
-    const sessionId = "68ef6e5b7f7f3a3b78f51291";
-    sosSessionModel.findById.mockReturnValue({
+    sosSessionModel.findOne.mockReturnValue({
       lean: () =>
         Promise.resolve({
-          _id: sessionId,
+          _id: "68ef6e5b7f7f3a3b78f51291",
           userId: "u1",
           status: "active",
+          shareToken: previewToken,
           lat: 25.0478,
           lng: 121.5171,
           address: "台北車站",
@@ -649,9 +654,13 @@ describe("line.service — route preview", () => {
       select: () => ({ lean: () => Promise.resolve({ name: "王小明" }) }),
     });
 
-    const result = await getRoutePreview(sessionId);
+    const result = await getRoutePreview(previewToken);
 
     expect(result.ok).toBe(true);
+    expect(sosSessionModel.findOne).toHaveBeenCalledWith({
+      shareToken: previewToken,
+      status: "active",
+    });
     expect(vi.mocked(planAccessibleRouteFromRequest)).toHaveBeenCalledWith({
       origin: { latitude: 25.03, longitude: 121.56 },
       destination: { latitude: 25.0478, longitude: 121.5171 },
@@ -661,7 +670,7 @@ describe("line.service — route preview", () => {
       departureTime: undefined,
     });
     expect(result.data).toMatchObject({
-      sessionId,
+      sessionId: "68ef6e5b7f7f3a3b78f51291",
       ownerName: "王小明",
       origin: { lat: 25.03, lng: 121.56 },
       destination: { lat: 25.0478, lng: 121.5171 },
@@ -672,28 +681,31 @@ describe("line.service — route preview", () => {
   });
 
   it("returns 404 when the session is not active", async () => {
-    sosSessionModel.findById.mockReturnValue({
-      lean: () =>
-        Promise.resolve({
-          _id: "68ef6e5b7f7f3a3b78f51291",
-          status: "resolved",
-        }),
-    });
+    sosSessionModel.findOne.mockReturnValue({ lean: () => Promise.resolve(null) });
 
-    const result = await getRoutePreview("68ef6e5b7f7f3a3b78f51291");
+    const result = await getRoutePreview(previewToken);
 
     expect(result.ok).toBe(false);
     expect(result.httpCode).toBe(ResponseCode.NOT_FOUND);
     expect(vi.mocked(planAccessibleRouteFromRequest)).not.toHaveBeenCalled();
   });
 
+  it("returns 404 for a malformed preview token", async () => {
+    const result = await getRoutePreview("68ef6e5b7f7f3a3b78f51291");
+
+    expect(result.ok).toBe(false);
+    expect(result.httpCode).toBe(ResponseCode.NOT_FOUND);
+    expect(sosSessionModel.findOne).not.toHaveBeenCalled();
+  });
+
   it("returns 400 when no bound contact has shared a location", async () => {
-    sosSessionModel.findById.mockReturnValue({
+    sosSessionModel.findOne.mockReturnValue({
       lean: () =>
         Promise.resolve({
           _id: "68ef6e5b7f7f3a3b78f51291",
           userId: "u1",
           status: "active",
+          shareToken: previewToken,
           lat: 25.0478,
           lng: 121.5171,
         }),
@@ -704,7 +716,7 @@ describe("line.service — route preview", () => {
       }),
     });
 
-    const result = await getRoutePreview("68ef6e5b7f7f3a3b78f51291");
+    const result = await getRoutePreview(previewToken);
 
     expect(result.ok).toBe(false);
     expect(result.httpCode).toBe(ResponseCode.INVALID_INPUT);
@@ -712,13 +724,13 @@ describe("line.service — route preview", () => {
   });
 
   it("passes travelMode, mode, and departureTime to planAccessibleRouteFromRequest", async () => {
-    const sessionId = "68ef6e5b7f7f3a3b78f51291";
-    sosSessionModel.findById.mockReturnValue({
+    sosSessionModel.findOne.mockReturnValue({
       lean: () =>
         Promise.resolve({
-          _id: sessionId,
+          _id: "68ef6e5b7f7f3a3b78f51291",
           userId: "u1",
           status: "active",
+          shareToken: previewToken,
           lat: 25.0478,
           lng: 121.5171,
           address: "台北車站",
@@ -740,7 +752,7 @@ describe("line.service — route preview", () => {
     });
 
     const result = await getRoutePreview(
-      sessionId,
+      previewToken,
       "drive",
       "wheelchair",
       "2026-07-09T16:00:00+08:00",

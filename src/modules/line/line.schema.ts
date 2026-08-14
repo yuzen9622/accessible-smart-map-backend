@@ -7,10 +7,14 @@ extendZodWithOpenApi(z);
 
 export const RoutePreviewQuerySchema = z
   .object({
-    sessionId: z.string().min(1).openapi({
-      description: "SOS session ID from the LINE route preview URL.",
-      example: "6a4e797394fbb1b1721c8b81",
-    }),
+    sessionId: z
+      .string()
+      .regex(/^[0-9a-f]{32}$/, "sessionId 必須是 32 位元 hex 的 SOS share token")
+      .openapi({
+        description:
+          "SOS session 的 shareToken（32 位元 hex，建立 session 時產生），取自 LINE 路線預覽 URL。",
+        example: "6a4e797394fbb1b1721c8b810c2d3e4f",
+      }),
     travelMode: z
       .enum(["transit", "drive", "motorcycle", "walk"])
       .optional()

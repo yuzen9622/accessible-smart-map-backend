@@ -81,10 +81,10 @@ describe("GET /line/route-preview", () => {
   });
 
   it("delegates to the service and returns the route preview envelope", async () => {
-    const res = await request(app).get("/api/v1/line/route-preview?sessionId=s1");
+    const res = await request(app).get("/api/v1/line/route-preview?sessionId=a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6");
 
     expect(res.status).toBe(ResponseCode.OK);
-    expect(vi.mocked(service.getRoutePreview)).toHaveBeenCalledWith("s1", undefined, undefined, undefined);
+    expect(vi.mocked(service.getRoutePreview)).toHaveBeenCalledWith("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6", undefined, undefined, undefined);
     expect(res.body).toMatchObject({
       ok: true,
       status: "success",
@@ -101,7 +101,7 @@ describe("GET /line/route-preview", () => {
       message: "找不到進行中的求救紀錄",
     } as any);
 
-    const res = await request(app).get("/api/v1/line/route-preview?sessionId=missing");
+    const res = await request(app).get("/api/v1/line/route-preview?sessionId=f1f2f3f4f5f6f7f8f9f0f1f2f3f4f5f6");
 
     expect(res.status).toBe(ResponseCode.NOT_FOUND);
     expect(res.body).toMatchObject({
