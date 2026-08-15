@@ -38,7 +38,9 @@ const makeA11yFacility = (category: string, name: string): IOsmA11y => ({
   category: category as any,
   name,
   wheelchair: "yes",
+  tags: {},
   location: { type: "Point", coordinates: dummyLoc },
+  importedAt: new Date(),
 });
 
 const walk = (distanceM: number, a11yFacilities: IOsmA11y[] = []): WalkLeg => ({
@@ -49,6 +51,12 @@ const walk = (distanceM: number, a11yFacilities: IOsmA11y[] = []): WalkLeg => ({
   minutesEst: Math.max(1, Math.round(distanceM / 48)),
   polyline: [dummyLoc, dummyLoc],
   a11yFacilities,
+  maxSlopePercent: null,
+  crossings: null,
+  crossingsWithCurbRamp: null,
+  minPathWidthCm: null,
+  surfaceType: "unknown",
+  restPoints: [],
 });
 
 const bus = (
@@ -77,10 +85,14 @@ const metro = (lineName: string, dep: string, arr: string): MetroLeg => ({
   type: "METRO",
   railSystem: "TRTC",
   lineName,
+  lineId: `TRTC-${lineName}`,
+  lineUid: `TRTC-${lineName}`,
   departureStation: dep,
   arrivalStation: arr,
-  departureStationUID: `TRTC-${dep}`,
-  arrivalStationUID: `TRTC-${arr}`,
+  departureStationUid: `TRTC-${dep}`,
+  arrivalStationUid: `TRTC-${arr}`,
+  direction: 0,
+  stopsCount: 2,
   departureTime: "10:00",
   arrivalTime: "10:15",
   rideMinutes: 15,
@@ -89,6 +101,7 @@ const metro = (lineName: string, dep: string, arr: string): MetroLeg => ({
   polyline: [dummyLoc, dummyLoc],
   departureStationA11y: [makeA11yFacility("elevator", `${dep}電梯`)],
   arrivalStationA11y: [makeA11yFacility("elevator", `${arr}電梯`)],
+  facilityHighlights: [],
 });
 
 describe("台北市主要公車路線評分與排序測試 (Taipei Bus Route Scoring & Ranking)", () => {
@@ -129,11 +142,11 @@ describe("台北市主要公車路線評分與排序測試 (Taipei Bus Route Sco
     const ranked = scoreAndRank([route307, routeStandardBus], "wheelchair");
 
     expect(ranked[0].routeId).toBe("taipei-bus-307");
-    expect(ranked[0].accessibilityScore).toBeGreaterThan(
-      ranked[1].accessibilityScore,
+    expect(ranked[0].accessibilityScore!).toBeGreaterThan(
+      ranked[1].accessibilityScore!,
     );
-    expect(ranked[0].totalWalkDistanceM).toBe(180);
-    expect(ranked[1].totalWalkDistanceM).toBe(550);
+    expect(ranked[0].totalWalkDistanceM!).toBe(180);
+    expect(ranked[1].totalWalkDistanceM!).toBe(550);
   });
 
   it("測試 2: 羅斯福路幹線 vs 251 路線（政大 → 台北車站）輪椅情境 Flip 排序", () => {
@@ -158,8 +171,8 @@ describe("台北市主要公車路線評分與排序測試 (Taipei Bus Route Sco
     const ranked = scoreAndRank([routeRoosevelt, route251], "wheelchair");
 
     expect(ranked[0].routeId).toBe("r1-roosevelt");
-    expect(ranked[0].totalWalkDistanceM).toBeLessThan(
-      ranked[1].totalWalkDistanceM,
+    expect(ranked[0].totalWalkDistanceM!).toBeLessThan(
+      ranked[1].totalWalkDistanceM!,
     );
     expect(ranked[0].scoreComponents?.walkPenalty).toBeLessThan(
       ranked[1].scoreComponents?.walkPenalty ?? Infinity,

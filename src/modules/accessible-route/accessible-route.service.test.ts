@@ -100,6 +100,20 @@ import {
 import { ResponseCode } from "../../types/code";
 import { getWeatherAndAirQuality } from "../environment/environment.service";
 import { getMetroAlerts } from "../transit/metro.service";
+import type { PlanRouteResult } from "./accessible-route.types";
+import type { OtpRoutePlanResult } from "./planners/otp-routing";
+
+/**
+ * Narrow a successful plan result to its payload. The tests below assert
+ * `res.ok === true` before reading these fields, but TypeScript cannot follow
+ * an `expect()` call, so the union needs an explicit (non-any) narrowing.
+ */
+const okData = (res: PlanRouteResult) =>
+  res.data as Extract<PlanRouteResult, { ok: true }>["data"];
+
+/** Narrow a failed plan result to its status code (see `okData`). */
+const errStatus = (res: PlanRouteResult) =>
+  (res as Extract<PlanRouteResult, { ok: false }>).status;
 
 const driveRequest = {
   travelMode: "drive" as const,
@@ -108,7 +122,10 @@ const driveRequest = {
 };
 
 const otpTransitOk = (routes: any[]) => ({ status: "ok" as const, routes });
-const otpTransitNoRoute = () => ({ status: "no_route" as const, routes: [] });
+const otpTransitNoRoute = (): OtpRoutePlanResult => ({
+  status: "no_route" as const,
+  routes: [],
+});
 
 // Well-formed parking doc: the caller reads location.coordinates + placeName.
 const parkingFixture = [
@@ -182,8 +199,8 @@ describe("planAccessibleRouteFromRequest driving a11y highlights append", () => 
     const res = await planAccessibleRouteFromRequest(driveRequest);
 
     expect(res.ok).toBe(true);
-    expect(res.data!.travelMode).toBe("drive");
-    const highlights = res.data!.routes[0].accessibilityHighlights;
+    expect(okData(res).travelMode).toBe("drive");
+    const highlights = okData(res).routes[0].accessibilityHighlights;
     expect(highlights).toContain(walkHint);
     expect(highlights.some((h) => h.includes("身障停車格"))).toBe(true);
   });
@@ -199,7 +216,7 @@ describe("planAccessibleRouteFromRequest driving a11y highlights append", () => 
     const res = await planAccessibleRouteFromRequest(driveRequest);
 
     expect(res.ok).toBe(true);
-    const highlights = res.data!.routes[0].accessibilityHighlights;
+    const highlights = okData(res).routes[0].accessibilityHighlights;
     expect(highlights).toContain(warning);
     expect(highlights.some((h) => h.includes("身障停車格"))).toBe(true);
   });
@@ -219,10 +236,10 @@ describe("planAccessibleRouteFromRequest parking-aware arrival", () => {
     expect(opts.finalWalkTarget!.lng).toBeCloseTo(121.55);
 
     expect(res.ok).toBe(true);
-    expect(hasParkingGuide(res.data!.routes[0].accessibilityHighlights)).toBe(
+    expect(hasParkingGuide(okData(res).routes[0].accessibilityHighlights)).toBe(
       true,
     );
-    expect(res.data!.destination).toEqual({ lat: 25.03, lng: 121.55 });
+    expect(okData(res).destination).toEqual({ lat: 25.03, lng: 121.55 });
   });
 
   it("applies the same treatment to motorcycle", async () => {
@@ -240,7 +257,7 @@ describe("planAccessibleRouteFromRequest parking-aware arrival", () => {
     expect(opts.finalWalkTarget!.lat).toBeCloseTo(25.03);
     expect(opts.finalWalkTarget!.lng).toBeCloseTo(121.55);
     expect(res.ok).toBe(true);
-    expect(hasParkingGuide(res.data!.routes[0].accessibilityHighlights)).toBe(
+    expect(hasParkingGuide(okData(res).routes[0].accessibilityHighlights)).toBe(
       true,
     );
   });
@@ -256,7 +273,7 @@ describe("planAccessibleRouteFromRequest parking-aware arrival", () => {
     expect(dest.lng).toBeCloseTo(121.55);
     expect(opts.finalWalkTarget).toBeUndefined();
     expect(res.ok).toBe(true);
-    expect(hasParkingGuide(res.data!.routes[0].accessibilityHighlights)).toBe(
+    expect(hasParkingGuide(okData(res).routes[0].accessibilityHighlights)).toBe(
       false,
     );
   });
@@ -272,7 +289,7 @@ describe("planAccessibleRouteFromRequest parking-aware arrival", () => {
     expect(dest.lng).toBeCloseTo(121.55);
     expect(opts.finalWalkTarget).toBeUndefined();
     expect(res.ok).toBe(true);
-    expect(hasParkingGuide(res.data!.routes[0].accessibilityHighlights)).toBe(
+    expect(hasParkingGuide(okData(res).routes[0].accessibilityHighlights)).toBe(
       false,
     );
   });
@@ -291,7 +308,7 @@ describe("planAccessibleRouteFromRequest parking-aware arrival", () => {
     expect(calls[1][1].lng).toBeCloseTo(121.55);
     expect(calls[1][2].finalWalkTarget).toBeUndefined();
     expect(res.ok).toBe(true);
-    expect(hasParkingGuide(res.data!.routes[0].accessibilityHighlights)).toBe(
+    expect(hasParkingGuide(okData(res).routes[0].accessibilityHighlights)).toBe(
       false,
     );
   });
@@ -336,7 +353,7 @@ describe("planAccessibleRouteFromRequest parking-aware arrival", () => {
 
     expect(vi.mocked(planValhallaRoute).mock.calls).toHaveLength(1);
     expect(res.ok).toBe(false);
-    expect(res.status).toBe(ResponseCode.INTERNAL_ERROR);
+    expect(errStatus(res)).toBe(ResponseCode.INTERNAL_ERROR);
   });
 
   it("does not run the parking lookup for transit", async () => {
@@ -404,8 +421,8 @@ describe("planAccessibleRouteFromRequest walk mode OTP", () => {
     const res = await planAccessibleRouteFromRequest(walkRequest);
 
     expect(res.ok).toBe(true);
-    expect(res.data!.routes[0].routeName).toBe("步行");
-    expect(res.data!.routes[0].legs[0]).toMatchObject({
+    expect(okData(res).routes[0].routeName).toBe("步行");
+    expect(okData(res).routes[0].legs[0]).toMatchObject({
       type: "WALK",
       maxSlopePercent: null,
       crossings: null,
@@ -429,7 +446,7 @@ describe("planAccessibleRouteFromRequest walk mode OTP", () => {
     const res = await planAccessibleRouteFromRequest(walkRequest);
 
     expect(res.ok).toBe(true);
-    const highlights = res.data!.routes[0].accessibilityHighlights;
+    const highlights = okData(res).routes[0].accessibilityHighlights;
     expect(highlights.some((h) => h.includes("電梯"))).toBe(true);
   });
 
@@ -529,7 +546,7 @@ describe("planAccessibleRouteFromRequest walk mode OTP", () => {
 
     expect(res.ok).toBe(true);
     expect(vi.mocked(planValhallaRoute).mock.calls.length).toBeGreaterThan(0);
-    expect(res.data!.routes[0].warnings).toContain(
+    expect(okData(res).routes[0].warnings).toContain(
       "OTP 步行規劃暫時不可用，已降級使用 Valhalla 步行路線，指引品質可能不同",
     );
   });
@@ -552,7 +569,7 @@ describe("planAccessibleRouteFromRequest walk mode OTP", () => {
     });
 
     expect(res.ok).toBe(true);
-    expect(res.data!.slopeConstraint).toEqual({
+    expect(okData(res).slopeConstraint).toEqual({
       requestedMaxPercent: 10,
       enforced: false,
       note: ROUTE_WARNING.SLOPE_LIMIT_NOT_ENFORCED_NO_ELEVATION,
@@ -573,8 +590,8 @@ describe("planAccessibleRouteFromRequest walk mode OTP", () => {
     expect(res.ok).toBe(true);
     expect(vi.mocked(planOtpWalkDetailed)).toHaveBeenCalledTimes(2);
     expect(vi.mocked(planValhallaRoute)).not.toHaveBeenCalled();
-    expect(res.data!.routes[0].legs).toHaveLength(2);
-    expect(res.data!.routes[0].legs.map((leg) => leg.type)).toEqual([
+    expect(okData(res).routes[0].legs).toHaveLength(2);
+    expect(okData(res).routes[0].legs.map((leg) => leg.type)).toEqual([
       "WALK",
       "WALK",
     ]);
@@ -709,7 +726,7 @@ describe("planAccessibleRouteFromRequest — needsAccessibleToilet", () => {
 
     expect(res.ok).toBe(true);
     expect(
-      res.data!.routes[0].accessibilityHighlights.some((h) =>
+      okData(res).routes[0].accessibilityHighlights.some((h) =>
         h.includes("廁所"),
       ),
     ).toBe(true);
@@ -727,7 +744,7 @@ describe("planAccessibleRouteFromRequest — needsAccessibleToilet", () => {
     });
 
     expect(res.ok).toBe(true);
-    expect(res.data!.routes[0].warnings).toContain(
+    expect(okData(res).routes[0].warnings).toContain(
       ROUTE_WARNING.NO_ACCESSIBLE_TOILET_NEARBY,
     );
   });
@@ -736,7 +753,7 @@ describe("planAccessibleRouteFromRequest — needsAccessibleToilet", () => {
     const res = await planAccessibleRouteFromRequest(walkRequest);
 
     expect(res.ok).toBe(true);
-    expect(res.data!.routes[0].warnings ?? []).not.toContain(
+    expect(okData(res).routes[0].warnings ?? []).not.toContain(
       ROUTE_WARNING.NO_ACCESSIBLE_TOILET_NEARBY,
     );
   });
@@ -768,7 +785,7 @@ describe("planAccessibleRouteFromRequest — needsHandrail", () => {
     });
 
     expect(res.ok).toBe(true);
-    expect(res.data!.routes[0].warnings).toContain(
+    expect(okData(res).routes[0].warnings).toContain(
       ROUTE_WARNING.STAIRS_HANDRAIL_UNKNOWN,
     );
   });
@@ -795,7 +812,7 @@ describe("planAccessibleRouteFromRequest — needsHandrail", () => {
     });
 
     expect(res.ok).toBe(true);
-    expect(res.data!.routes[0].warnings ?? []).not.toContain(
+    expect(okData(res).routes[0].warnings ?? []).not.toContain(
       ROUTE_WARNING.STAIRS_HANDRAIL_UNKNOWN,
     );
   });
@@ -835,7 +852,7 @@ describe("planAccessibleRouteFromRequest — needsHandrail", () => {
     });
 
     expect(res.ok).toBe(true);
-    expect(res.data!.routes[0].warnings ?? []).not.toContain(
+    expect(okData(res).routes[0].warnings ?? []).not.toContain(
       ROUTE_WARNING.STAIRS_HANDRAIL_UNKNOWN,
     );
   });
@@ -871,7 +888,7 @@ describe("planAccessibleRouteFromRequest — needsHandrail", () => {
     });
 
     expect(res.ok).toBe(true);
-    expect(res.data!.routes[0].warnings ?? []).not.toContain(
+    expect(okData(res).routes[0].warnings ?? []).not.toContain(
       ROUTE_WARNING.STAIRS_HANDRAIL_UNKNOWN,
     );
   });
@@ -894,7 +911,7 @@ describe("planAccessibleRouteFromRequest — maxSlopePercent honesty check", () 
     });
 
     expect(res.ok).toBe(true);
-    expect(res.data!.slopeConstraint).toEqual({
+    expect(okData(res).slopeConstraint).toEqual({
       requestedMaxPercent: 5,
       enforced: false,
       note: ROUTE_WARNING.SLOPE_LIMIT_NOT_ENFORCED_NO_ELEVATION,
@@ -909,7 +926,7 @@ describe("planAccessibleRouteFromRequest — maxSlopePercent honesty check", () 
     });
 
     expect(res.ok).toBe(true);
-    expect(res.data!.slopeConstraint!.enforced).toBe(false);
+    expect(okData(res).slopeConstraint!.enforced).toBe(false);
   });
 
   it("reports enforced=true when the request is looser than the server's 8.3% ADA default", async () => {
@@ -920,7 +937,7 @@ describe("planAccessibleRouteFromRequest — maxSlopePercent honesty check", () 
     });
 
     expect(res.ok).toBe(true);
-    expect(res.data!.slopeConstraint!.enforced).toBe(true);
+    expect(okData(res).slopeConstraint!.enforced).toBe(true);
   });
 
   it("reports enforced=false when the request is stricter than the server's fixed default", async () => {
@@ -931,7 +948,7 @@ describe("planAccessibleRouteFromRequest — maxSlopePercent honesty check", () 
     });
 
     expect(res.ok).toBe(true);
-    expect(res.data!.slopeConstraint).toEqual({
+    expect(okData(res).slopeConstraint).toEqual({
       requestedMaxPercent: 3,
       enforced: false,
       note: ROUTE_WARNING.SLOPE_LIMIT_STRICTER_THAN_SERVER_DEFAULT,
@@ -942,7 +959,7 @@ describe("planAccessibleRouteFromRequest — maxSlopePercent honesty check", () 
     const res = await planAccessibleRouteFromRequest(walkRequest);
 
     expect(res.ok).toBe(true);
-    expect(res.data!.slopeConstraint).toBeUndefined();
+    expect(okData(res).slopeConstraint).toBeUndefined();
   });
 });
 

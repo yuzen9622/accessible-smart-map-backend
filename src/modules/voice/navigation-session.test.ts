@@ -23,6 +23,12 @@ function walkLeg(
     minutesEst: 2,
     polyline: points,
     a11yFacilities: [],
+    maxSlopePercent: null,
+    crossings: null,
+    crossingsWithCurbRamp: null,
+    minPathWidthCm: null,
+    surfaceType: "unknown",
+    restPoints: [],
     ...(withSteps
       ? {
           steps: points.map((location, index) => ({
@@ -32,6 +38,7 @@ function walkLeg(
             streetName: `道路${index}`,
             bogusName: false,
             area: false,
+            stairs: false,
             distanceM: 20,
             location,
             instruction: `步行指引${index}`,
@@ -459,7 +466,12 @@ describe("navigation geometry uses [lng, lat]", () => {
 describe("navigation-session domain purity", () => {
   it("does not import transport or Gemini sessions", async () => {
     const source = await import("fs/promises").then((fs) =>
-      fs.readFile(new URL("./navigation-session.ts", import.meta.url), "utf8"),
+      fs.readFile(
+        // `import.meta.url` is unavailable under the repo's commonjs target;
+        // resolve the sibling file from the compiled module's location instead.
+        new URL(`file://${__dirname}/navigation-session.ts`),
+        "utf8",
+      ),
     );
     expect(source).not.toMatch(/from ["']ws["']/);
     expect(source).not.toContain("@google/genai");

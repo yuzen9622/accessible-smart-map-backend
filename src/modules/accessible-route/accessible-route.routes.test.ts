@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import request from "supertest";
 import { ROUTE_MSG, ROUTE_REASON } from "../../constants/messages";
 import { ResponseCode } from "../../types/code";
+import { TaiwanCityEn } from "../../types/transit";
 
 vi.mock("../../config/auth", async () => {
   const { createAuthModuleMock } =
@@ -35,8 +36,8 @@ const AUTH = buildAuthorizationHeader({
 const okData = (overrides: Record<string, unknown> = {}) => ({
   origin: { lat: 25.04, lng: 121.56 },
   destination: { lat: 25.03, lng: 121.55 },
-  city: "Taipei",
-  travelMode: "transit",
+  city: TaiwanCityEn.Taipei,
+  travelMode: "transit" as const,
   routes: [],
   ...overrides,
 });

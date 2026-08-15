@@ -1,5 +1,6 @@
 import { encode } from "@googlemaps/polyline-codec";
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { WalkLeg } from "../../../types/route";
 
 const { post } = vi.hoisted(() => ({ post: vi.fn() }));
 vi.mock("axios", () => ({
@@ -69,12 +70,14 @@ describe("planOtpWalk", () => {
     expect(r.routeName).toBe("步行");
     expect(r.transferCount).toBe(0);
     expect(r.legs[0].type).toBe("WALK");
-    expect(r.legs[0].from).toBe("出發地");
+    expect((r.legs[0] as WalkLeg).from).toBe("出發地");
     expect(r.totalWalkDistanceM).toBe(823);
     expect(r.totalMinutes).toBe(12);
     expect(r.attribution).toBe("© OpenStreetMap contributors");
-    expect(r.legs[0].steps?.[0].instruction).toBe("沿「信義路」出發");
-    expect(r.legs[0].steps?.[0].stairs).toBe(false);
+    expect((r.legs[0] as WalkLeg).steps?.[0].instruction).toBe(
+      "沿「信義路」出發",
+    );
+    expect((r.legs[0] as WalkLeg).steps?.[0].stairs).toBe(false);
     expect(r.legs[0]).toMatchObject({
       maxSlopePercent: null,
       crossings: null,

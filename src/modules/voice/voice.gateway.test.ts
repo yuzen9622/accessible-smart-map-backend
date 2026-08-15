@@ -235,7 +235,7 @@ describe("voice gateway", () => {
     const ready = waitForJson(ws);
     sendSessionStart(ws, "voice-user-nav");
     await ready;
-    const bridge = await mockCreateLiveBridge.mock.results.at(-1).value;
+    const bridge = await mockCreateLiveBridge.mock.results.at(-1)!.value;
     ws.send(JSON.stringify({ type: "nav.setRoute", routeToken: "capability" }));
     ws.send(
       JSON.stringify({
@@ -277,7 +277,7 @@ describe("voice gateway", () => {
     const ready = waitForJson(ws);
     sendSessionStart(ws, "voice-user-oversized");
     await ready;
-    const bridge = await mockCreateLiveBridge.mock.results.at(-1).value;
+    const bridge = await mockCreateLiveBridge.mock.results.at(-1)!.value;
     ws.send(
       JSON.stringify({ type: "nav.setRoute", routeToken: "x".repeat(9_000) }),
     );
@@ -350,7 +350,7 @@ describe("voice gateway", () => {
     const ready = waitForJson(ws);
     sendSessionStart(ws, "voice-user-position-flood");
     await ready;
-    const bridge = await mockCreateLiveBridge.mock.results.at(-1).value;
+    const bridge = await mockCreateLiveBridge.mock.results.at(-1)!.value;
     for (let i = 0; i < 50; i++) {
       ws.send(
         JSON.stringify({

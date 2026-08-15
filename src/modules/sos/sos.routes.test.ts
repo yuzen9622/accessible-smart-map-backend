@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import request from "supertest";
+import type { Readable } from "stream";
+import type * as supertestTypes from "supertest";
 
 vi.mock("../../config/auth", async () => {
   const { createAuthModuleMock } =
@@ -237,16 +239,16 @@ describe("GET /sos/sessions/:id/stream (SSE)", () => {
           .buffer(false)
           .parse(
             (
-              res: NodeJS.ReadableStream & {
-                statusCode: number;
-                headers: Record<string, string>;
-              },
+              res: supertestTypes.Response,
+              _callback: (err: Error | null, body: unknown) => void,
             ) => {
               resolve({
                 statusCode: res.statusCode,
                 contentType: res.headers["content-type"] ?? "",
               });
-              res.destroy();
+              // superagent's Response typings don't surface `destroy`, but with
+              // `.buffer(false)` the underlying object is a raw node stream.
+              (res as unknown as Readable).destroy();
             },
           );
         req.on("error", () => {

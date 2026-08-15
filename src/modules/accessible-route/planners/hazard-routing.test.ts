@@ -20,6 +20,12 @@ const walkLeg = (polyline: [number, number][]): WalkLeg => ({
   minutesEst: 2,
   polyline,
   a11yFacilities: [],
+  maxSlopePercent: null,
+  crossings: null,
+  crossingsWithCurbRamp: null,
+  minPathWidthCm: null,
+  surfaceType: "unknown",
+  restPoints: [],
 });
 
 const walkRoute = (

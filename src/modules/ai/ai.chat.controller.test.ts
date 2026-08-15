@@ -22,7 +22,10 @@ beforeEach(() => {
 
 describe("POST /api/v1/ai/chat 不再走舊 fallback，直接用 runChatAgent 的文字", () => {
   it("T4：non-streaming 回傳 loopResult.text，且不呼叫 fallback generateContent", async () => {
-    vi.mocked(runChatAgent).mockResolvedValue({ text: "測試答案" });
+    vi.mocked(runChatAgent).mockResolvedValue({
+      text: "測試答案",
+      toolResults: [],
+    });
     const genSpy = vi.spyOn(googleGenAi.models, "generateContent");
 
     const res = await request(app)
@@ -35,7 +38,10 @@ describe("POST /api/v1/ai/chat 不再走舊 fallback，直接用 runChatAgent �
   });
 
   it("T5：streaming 送 event: token + event: done，且不呼叫 fallback generateContentStream", async () => {
-    vi.mocked(runChatAgent).mockResolvedValue({ text: "串流答案" });
+    vi.mocked(runChatAgent).mockResolvedValue({
+      text: "串流答案",
+      toolResults: [],
+    });
     const streamSpy = vi.spyOn(googleGenAi.models, "generateContentStream");
 
     const res = await request(app)

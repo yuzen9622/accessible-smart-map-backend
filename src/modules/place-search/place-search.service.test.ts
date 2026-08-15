@@ -93,7 +93,9 @@ const osmPlace = (overrides: Partial<any> = {}) => ({
 
 const legacyOsmPlace = () => {
   const place = osmPlace();
-  delete place.tags;
+  // `delete` needs an optional property; the legacy fixture intentionally
+  // omits `tags` to exercise the tolerant parsing path.
+  delete (place as { tags?: Record<string, string> }).tags;
   return place;
 };
 

@@ -106,6 +106,12 @@ beforeEach(() => {
               [121.55, 25.03],
             ],
             a11yFacilities: [],
+            maxSlopePercent: null,
+            crossings: null,
+            crossingsWithCurbRamp: null,
+            minPathWidthCm: null,
+            surfaceType: "unknown",
+            restPoints: [],
             steps: [
               {
                 instruction: "沿「圓山市景步道」繼續直行，此路段含樓梯",

@@ -166,7 +166,7 @@ describe("POST /user/auth/login", () => {
 
     expect(res.status).toBe(ResponseCode.OK);
     expect(res.body.accessToken).toBeTruthy();
-    expect(res.headers["set-cookie"].join()).toContain("refreshToken=");
+    expect(String(res.headers["set-cookie"])).toContain("refreshToken=");
     expect(res.body.data.user.email).toBe("jane@example.com");
   });
 

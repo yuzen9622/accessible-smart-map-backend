@@ -98,6 +98,12 @@ describe("walk geometry helpers", () => {
         [121.0006, 25],
       ],
       a11yFacilities: [],
+      maxSlopePercent: null,
+      crossings: null,
+      crossingsWithCurbRamp: null,
+      minPathWidthCm: null,
+      surfaceType: "unknown",
+      restPoints: [],
       steps: [
         {
           relativeDirection: "DEPART",
@@ -131,6 +137,12 @@ const walkWithSteps = (): WalkLeg => ({
   ],
   a11yFacilities: [],
   exitInfo: null,
+  maxSlopePercent: null,
+  crossings: null,
+  crossingsWithCurbRamp: null,
+  minPathWidthCm: null,
+  surfaceType: "unknown",
+  restPoints: [],
   steps: [
     {
       relativeDirection: "DEPART",
@@ -403,6 +415,12 @@ describe("generateNavInstructions", () => {
       minutesEst: 16,
       polyline,
       a11yFacilities: [],
+      maxSlopePercent: null,
+      crossings: null,
+      crossingsWithCurbRamp: null,
+      minPathWidthCm: null,
+      surfaceType: "unknown",
+      restPoints: [],
       steps: [
         {
           relativeDirection: "DEPART",
@@ -509,6 +527,12 @@ describe("generateNavInstructions", () => {
         [121.52, 25.05],
       ],
       a11yFacilities: [],
+      maxSlopePercent: null,
+      crossings: null,
+      crossingsWithCurbRamp: null,
+      minPathWidthCm: null,
+      surfaceType: "unknown",
+      restPoints: [],
       exitInfo: null,
     };
     const result = generateNavInstructions({ legs: [leg] });

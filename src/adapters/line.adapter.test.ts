@@ -125,7 +125,7 @@ describe("line.adapter — SOS menu builders", () => {
   it("builds the four menu entries as postbacks", () => {
     const message = buildSosMenuMessage();
     const data = (message.quickReply?.items ?? []).map((item) =>
-      item.action.type === "postback" ? item.action.data : undefined,
+      item.action?.type === "postback" ? item.action.data : undefined,
     );
 
     expect(data).toEqual([
@@ -165,7 +165,7 @@ describe("line.adapter — SOS menu builders", () => {
   it("asks for confirmation with a distinct confirm postback", () => {
     const message = buildUnbindConfirmMessage(contact);
     const data = (message.quickReply?.items ?? []).map((item) =>
-      item.action.type === "postback" ? item.action.data : undefined,
+      item.action?.type === "postback" ? item.action.data : undefined,
     );
 
     expect(data).toEqual([
@@ -203,12 +203,12 @@ describe("line.adapter — SOS menu builders", () => {
 
     expect(
       (filtered.quickReply?.items ?? []).map((item) =>
-        item.action.type === "postback" ? item.action.data : undefined,
+        item.action?.type === "postback" ? item.action.data : undefined,
       ),
     ).toEqual(["action=sos_history", "action=sos_history&owner=u2"]);
     expect(
       (unfiltered.quickReply?.items ?? []).map((item) =>
-        item.action.type === "postback" ? item.action.data : undefined,
+        item.action?.type === "postback" ? item.action.data : undefined,
       ),
     ).toEqual(["action=sos_history&owner=u1", "action=sos_history&owner=u2"]);
     expect((filtered.quickReply?.items ?? []).length).toBeLessThanOrEqual(13);

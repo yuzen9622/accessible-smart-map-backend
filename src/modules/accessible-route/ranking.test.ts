@@ -22,6 +22,12 @@ const walk = (distanceM: number): WalkLeg => ({
   minutesEst: Math.max(1, Math.round(distanceM / 48)),
   polyline: [],
   a11yFacilities: [],
+  maxSlopePercent: null,
+  crossings: null,
+  crossingsWithCurbRamp: null,
+  minPathWidthCm: null,
+  surfaceType: "unknown",
+  restPoints: [],
 });
 
 const bus = (routeName: string): BusLeg => ({

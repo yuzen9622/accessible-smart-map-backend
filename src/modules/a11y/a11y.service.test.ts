@@ -865,7 +865,8 @@ describe("findNearbyParking", () => {
 
     await findNearbyParking(25.03, 121.56, 300);
 
-    const arg = vi.mocked(DisabledParkingModel.find).mock.calls[0][0] as {
+    const arg = vi.mocked(DisabledParkingModel.find).mock
+      .calls[0][0] as unknown as {
       location: { $near: { $maxDistance: number } };
     };
     expect(arg.location.$near.$maxDistance).toBe(300);
@@ -877,7 +878,8 @@ describe("findNearbyParking", () => {
 
     await findNearbyParking(25.03, 121.56);
 
-    const arg = vi.mocked(DisabledParkingModel.find).mock.calls[0][0] as {
+    const arg = vi.mocked(DisabledParkingModel.find).mock
+      .calls[0][0] as unknown as {
       location: { $near: { $maxDistance: number } };
     };
     expect(arg.location.$near.$maxDistance).toBe(1000);
@@ -934,7 +936,8 @@ describe("findNearbyParking", () => {
 
     await findNearbyParking(25.03, 121.56, 9999999, "standard");
 
-    const arg = vi.mocked(ParkingSpaceModel.find).mock.calls[0][0] as {
+    const arg = vi.mocked(ParkingSpaceModel.find).mock
+      .calls[0][0] as unknown as {
       location: { $near: { $maxDistance: number } };
     };
     expect(arg.location.$near.$maxDistance).toBe(5000);

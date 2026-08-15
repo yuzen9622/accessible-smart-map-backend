@@ -18,7 +18,7 @@ function findRedundancies(obj: any, path = ""): string[] {
   }
 
   // Check for __v
-  if (Object.hasOwn(obj, "__v")) {
+  if (Object.prototype.hasOwnProperty.call(obj, "__v")) {
     warnings.push(
       `${path ? path + "." : ""}__v (Mongoose internal version key)`,
     );
@@ -31,9 +31,11 @@ function findRedundancies(obj: any, path = ""): string[] {
     obj.location.type === "Point" &&
     Array.isArray(obj.location.coordinates);
   const hasSeparateCoordsZh =
-    Object.hasOwn(obj, "經度") && Object.hasOwn(obj, "緯度");
+    Object.prototype.hasOwnProperty.call(obj, "經度") &&
+    Object.prototype.hasOwnProperty.call(obj, "緯度");
   const hasSeparateCoordsEn =
-    Object.hasOwn(obj, "latitude") && Object.hasOwn(obj, "longitude");
+    Object.prototype.hasOwnProperty.call(obj, "latitude") &&
+    Object.prototype.hasOwnProperty.call(obj, "longitude");
 
   if (hasLocation && hasSeparateCoordsZh) {
     warnings.push(

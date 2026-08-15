@@ -49,8 +49,8 @@ describe("rowToParking", () => {
     expect(doc!.placeName).toBe("商港八路");
     expect(doc!.spaceLabel).toBe("身汽1");
     expect(doc!.isMarked).toBe(true);
-    expect(doc!.location.coordinates[0]).toBeCloseTo(doc!.longitude, 6);
-    expect(doc!.location.coordinates[1]).toBeCloseTo(doc!.latitude, 6);
+    expect(doc!.location.coordinates[0]).toBeCloseTo(doc!.longitude!, 6);
+    expect(doc!.location.coordinates[1]).toBeCloseTo(doc!.latitude!, 6);
     expect(doc!.longitude).toBeGreaterThan(121.3);
     expect(doc!.latitude).toBeGreaterThan(25.0);
   });
