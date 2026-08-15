@@ -5,7 +5,7 @@ import { RedisStore } from "rate-limit-redis";
 import { sendResponse } from "../../config/lib";
 import { ResponseCode } from "../../types/code";
 import { HAZARD_MSG, HAZARD_REASON } from "../../constants/messages";
-import { redisClient } from "../../config/redis";
+import { redisClient, redisReady } from "../../config/redis";
 
 const MAX_PHOTO_MB = Number(process.env.HAZARD_PHOTO_MAX_SIZE_MB ?? 10);
 
@@ -81,8 +81,13 @@ function makeStore() {
 	if (!client) return undefined;
 	return new RedisStore({
 		prefix: "hazard-rl:",
-		sendCommand: (...args: string[]) =>
-			client.call(...(args as [string, ...string[]])) as Promise<never>,
+		sendCommand: async (...args: string[]) => {
+			// RedisStore issues its SCRIPT LOAD at construction (module load),
+			// racing the lazy client's async connect; wait for readiness so the
+			// store initializes once instead of failing open forever.
+			await redisReady();
+			return client.call(...(args as [string, ...string[]])) as Promise<never>;
+		},
 	});
 }
 

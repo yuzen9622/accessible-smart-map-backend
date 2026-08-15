@@ -3,7 +3,7 @@ import { rateLimit } from "express-rate-limit";
 import { RedisStore } from "rate-limit-redis";
 import { sendResponse } from "../../config/lib";
 import { ResponseCode } from "../../types/code";
-import { redisClient } from "../../config/redis";
+import { redisClient, redisReady } from "../../config/redis";
 
 const RATE_LIMITED_MSG = "搜尋請求過於頻繁，請稍後再試";
 
@@ -12,8 +12,13 @@ function makeStore(prefix: string) {
   if (!client) return undefined;
   return new RedisStore({
     prefix,
-    sendCommand: (...args: string[]) =>
-      client.call(...(args as [string, ...string[]])) as Promise<never>,
+    sendCommand: async (...args: string[]) => {
+      // RedisStore issues its SCRIPT LOAD at construction (module load),
+      // racing the lazy client's async connect; wait for readiness so the
+      // store initializes once instead of failing open forever.
+      await redisReady();
+      return client.call(...(args as [string, ...string[]])) as Promise<never>;
+    },
   });
 }
 
@@ -39,9 +44,19 @@ function makeLimiter(prefix: string, limit: number, windowMs: number) {
     store: makeStore(prefix),
     passOnStoreError: true,
     handler: (_req: Request, res: Response) =>
-      sendResponse(res, false, "error", ResponseCode.TOO_MANY_REQUESTS, RATE_LIMITED_MSG),
+      sendResponse(
+        res,
+        false,
+        "error",
+        ResponseCode.TOO_MANY_REQUESTS,
+        RATE_LIMITED_MSG,
+      ),
   });
 }
 
-export const autocompleteLimiter = makeLimiter("place-search-ac-rl:", 120, 60 * 1000);
+export const autocompleteLimiter = makeLimiter(
+  "place-search-ac-rl:",
+  120,
+  60 * 1000,
+);
 export const detailsLimiter = makeLimiter("place-search-dt-rl:", 60, 60 * 1000);

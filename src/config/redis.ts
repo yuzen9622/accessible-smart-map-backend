@@ -22,10 +22,7 @@ if (process.env.REDIS_URL) {
 
 	redisClient.on("error", (err: Error) => {
 		if (!logged) {
-			console.warn(
-				"[Redis] connection error — walk cache disabled:",
-				err.message,
-			);
+			console.warn("[Redis] connection error — walk cache disabled:", err.message);
 			logged = true;
 		}
 	});
@@ -36,6 +33,58 @@ if (process.env.REDIS_URL) {
 }
 
 export { redisClient };
+
+let readyPromise: Promise<void> | null = null;
+
+/**
+ * Resolves once the shared Redis client is connected and ready, bounded by
+ * `timeoutMs`. Rejects when Redis is not configured, the connection attempt
+ * errors, or the timeout elapses — callers keep their fail-open behavior.
+ *
+ * Needed because rate-limit-redis issues its `SCRIPT LOAD` when the store is
+ * constructed (module load), which races the client's async connect: with
+ * `enableOfflineQueue: false` the command is rejected before the stream is
+ * writable, permanently breaking the store. Waiting for readiness first fixes
+ * that race without buffering commands.
+ *
+ * Concurrent callers share a single pending promise (one listener pair), which
+ * is reset once it settles so a later connection failure can be retried.
+ *
+ * @param timeoutMs How long to wait for a ready connection before rejecting.
+ * @returns A promise that resolves once the client reports `ready`.
+ */
+export function redisReady(timeoutMs = 5000): Promise<void> {
+	if (!redisClient) return Promise.reject(new Error("Redis not configured"));
+	const client = redisClient;
+	if (client.status === "ready") return Promise.resolve();
+	if (!readyPromise) {
+		readyPromise = new Promise<void>((resolve, reject) => {
+			let timer: NodeJS.Timeout | undefined;
+			const cleanup = () => {
+				if (timer) clearTimeout(timer);
+				client.off("ready", onReady);
+				client.off("error", onError);
+			};
+			const onReady = () => {
+				cleanup();
+				resolve();
+			};
+			const onError = (err: Error) => {
+				cleanup();
+				reject(err);
+			};
+			timer = setTimeout(() => {
+				cleanup();
+				reject(new Error(`Redis not ready within ${timeoutMs}ms`));
+			}, timeoutMs);
+			client.once("ready", onReady);
+			client.once("error", onError);
+		}).finally(() => {
+			readyPromise = null;
+		});
+	}
+	return readyPromise;
+}
 
 /**
  * Returns the stored string, or null on miss / unavailable / error.
