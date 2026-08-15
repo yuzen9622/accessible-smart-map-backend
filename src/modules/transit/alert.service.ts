@@ -1,6 +1,6 @@
 import { tdxFetch } from "../../config/fetch";
 import { alertUrl, metroUrl } from "../../config/transit";
-import BusRouteModel from "../../model/bus-route.model";
+import { findBusRoutesByName } from "./alert.repository";
 import { ResponseCode } from "../../types/code";
 import { equalStopName, formatRouteName } from "../../utils/transit-text";
 import {
@@ -301,12 +301,10 @@ function dirMatch(
 export async function resolveBusRouteKeys(
   ctx: Extract<TransitContext, { mode: "bus" }>,
 ): Promise<BusRouteKeys | null> {
-  const docs = await BusRouteModel.find({
-    city: ctx.city,
-    "routeName.Zh_tw": {
-      $in: [formatRouteName(ctx.routeName), ctx.routeName.trim()],
-    },
-  }).lean();
+  const docs = await findBusRoutesByName(ctx.city, [
+    formatRouteName(ctx.routeName),
+    ctx.routeName.trim(),
+  ]);
   if (!docs.length) return null;
 
   const scoped =

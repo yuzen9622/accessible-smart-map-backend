@@ -1,7 +1,12 @@
 import { Types } from "mongoose";
-import EmergencyContact from "../../model/emergency-contact.model";
-import SosSession from "../../model/sos-session.model";
-import User from "../../model/user.model";
+import {
+  findBoundContactOwner,
+  findBoundContacts,
+  findSosHistory,
+  findUserNames,
+  releaseBoundContact,
+  renameBoundContact as renameBoundContactRow,
+} from "./line-menu.repository";
 import { LINE_MSG } from "../../constants/messages";
 import { ResponseCode } from "../../types/code";
 import type {
@@ -43,10 +48,7 @@ interface BoundContactDoc {
  * @returns The bound contact documents, newest first.
  */
 async function boundContactDocs(lineUserId: string): Promise<BoundContactDoc[]> {
-  return EmergencyContact.find({ lineUserId, bindStatus: "bound" })
-    .sort({ updatedAt: -1 })
-    .select("name userId updatedAt")
-    .lean() as unknown as Promise<BoundContactDoc[]>;
+  return findBoundContacts(lineUserId) as unknown as Promise<BoundContactDoc[]>;
 }
 
 /**
@@ -57,9 +59,7 @@ async function boundContactDocs(lineUserId: string): Promise<BoundContactDoc[]> 
  */
 async function ownerNames(ownerIds: string[]): Promise<Map<string, string>> {
   if (!ownerIds.length) return new Map();
-  const owners = (await User.find({ _id: { $in: ownerIds } })
-    .select("name")
-    .lean()) as unknown as Array<{ _id: unknown; name?: string }>;
+  const owners = await findUserNames(ownerIds);
   return new Map(
     owners.map((owner) => [String(owner._id), owner.name ?? "未命名使用者"]),
   );
@@ -117,15 +117,12 @@ export async function renameBoundContact(
   }
   if (!Types.ObjectId.isValid(input.contactId)) return notFound();
 
-  const result = await EmergencyContact.updateOne(
-    {
-      _id: input.contactId,
-      lineUserId: input.lineUserId,
-      bindStatus: "bound",
-    },
-    { $set: { name } },
+  const renamed = await renameBoundContactRow(
+    input.contactId,
+    input.lineUserId,
+    name,
   );
-  if (!result.matchedCount) return notFound();
+  if (!renamed) return notFound();
 
   return {
     ok: true,
@@ -156,33 +153,17 @@ export async function unbindContact(
   if (!input.lineUserId) return notFound();
   if (!Types.ObjectId.isValid(input.contactId)) return notFound();
 
-  const contact = (await EmergencyContact.findOne({
-    _id: input.contactId,
-    lineUserId: input.lineUserId,
-    bindStatus: "bound",
-  })
-    .select("userId")
-    .lean()) as unknown as { userId: string } | null;
+  const contact = await findBoundContactOwner(
+    input.contactId,
+    input.lineUserId,
+  );
   if (!contact) return notFound();
 
-  const result = await EmergencyContact.updateOne(
-    {
-      _id: input.contactId,
-      lineUserId: input.lineUserId,
-      bindStatus: "bound",
-    },
-    {
-      $set: {
-        bindStatus: "pending",
-        lineUserId: null,
-        lastLineLat: null,
-        lastLineLng: null,
-        lastLineLocationUpdatedAt: null,
-      },
-      $unset: { bindCode: "", bindCodeExpiresAt: "" },
-    },
+  const released = await releaseBoundContact(
+    input.contactId,
+    input.lineUserId,
   );
-  if (!result.matchedCount) return notFound();
+  if (!released) return notFound();
 
   const names = await ownerNames([contact.userId]);
   return {
@@ -226,15 +207,11 @@ export async function listSosHistory(
     ownerName: names.get(ownerId) as string,
   }));
 
-  const sessions = (await SosSession.find({
-    userId: input.ownerId ? input.ownerId : { $in: ownerIds },
-  })
-    .sort({ createdAt: -1 })
-    .limit(MAX_HISTORY_ENTRIES)
-    .select(
-      "userId type status handlingStatus address createdAt resolvedAt claimedByName",
-    )
-    .lean()) as unknown as Array<
+  const sessions = (await findSosHistory(
+    input.ownerId,
+    ownerIds,
+    MAX_HISTORY_ENTRIES,
+  )) as unknown as Array<
     Omit<LineSosHistoryEntry, "sessionId" | "ownerId" | "ownerName"> & {
       _id: unknown;
       userId: string;

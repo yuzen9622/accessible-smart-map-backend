@@ -4,6 +4,7 @@ vi.mock("../../model/hazard-report.model", () => ({
 	default: {
 		findOne: vi.fn(),
 		findById: vi.fn(),
+		findOneAndUpdate: vi.fn(),
 		find: vi.fn(),
 		create: vi.fn(),
 	},
@@ -35,27 +36,31 @@ import {
 const hazardReportModel = HazardReport as unknown as {
 	findOne: ReturnType<typeof vi.fn>;
 	findById: ReturnType<typeof vi.fn>;
+	findOneAndUpdate: ReturnType<typeof vi.fn>;
 	find: ReturnType<typeof vi.fn>;
 	create: ReturnType<typeof vi.fn>;
 };
 
 const REPORT_ID = "66a1f2c3e4b5a6d7c8e9f0d4";
 
+/** A `.lean()`-terminated query chain resolving to `value`. */
+function leanChain(value: unknown) {
+	const chain = { select: vi.fn(), lean: vi.fn() };
+	chain.select.mockReturnValue(chain);
+	chain.lean.mockResolvedValue(value);
+	return chain;
+}
+
 function duplicateReport(reporterId: string) {
 	return {
+		_id: REPORT_ID,
 		reporterId,
 		confirmedBy: [] as string[],
 		deniedBy: [] as string[],
 		confirmCount: 0,
 		denyCount: 0,
 		status: "verified",
-		save: vi.fn().mockResolvedValue(undefined),
-		toObject: vi.fn(() => ({
-			reporterId,
-			confirmedBy: [],
-			deniedBy: [],
-			photoStoragePath: "reports/test.jpg",
-		})),
+		photoStoragePath: "reports/test.jpg",
 	};
 }
 
@@ -96,7 +101,7 @@ beforeEach(() => {
 
 describe("hazard report confirmations", () => {
 	it("does not deduplicate against an expired pending or verified report", async () => {
-		hazardReportModel.findOne.mockResolvedValue(undefined);
+		hazardReportModel.findOne.mockReturnValue(leanChain(null));
 		vi.mocked(uploadHazardPhoto).mockRejectedValue(new Error("test upload abort"));
 
 		await createReport(createInput("reporter-1"));
@@ -109,33 +114,38 @@ describe("hazard report confirmations", () => {
 
 	it("does not turn a same-reporter duplicate submission into a confirmation", async () => {
 		const report = duplicateReport("reporter-1");
-		hazardReportModel.findOne.mockResolvedValue(report);
+		hazardReportModel.findOne.mockReturnValue(leanChain(report));
 
 		const result = await createReport(createInput("reporter-1"));
 
 		expect(result).toMatchObject({ ok: true, data: { merged: true } });
 		expect(report.confirmCount).toBe(0);
 		expect(report.confirmedBy).toEqual([]);
-		expect(report.save).not.toHaveBeenCalled();
+		expect(hazardReportModel.findOneAndUpdate).not.toHaveBeenCalled();
 	});
 
 	it("records a duplicate submission from another reporter as identity-bearing confirmation", async () => {
 		const report = duplicateReport("reporter-1");
-		hazardReportModel.findOne.mockResolvedValue(report);
+		hazardReportModel.findOne.mockReturnValue(leanChain(report));
+		hazardReportModel.findOneAndUpdate.mockReturnValue(
+			leanChain({ ...report, confirmCount: 1, confirmedBy: ["confirmer-2"] }),
+		);
 
 		await createReport(createInput("confirmer-2"));
 
 		expect(hazardReportModel.findOne).toHaveBeenCalledWith(expect.objectContaining({
 			expiredAt: { $gt: expect.any(Date) },
 		}));
-		expect(report.confirmCount).toBe(1);
-		expect(report.confirmedBy).toEqual(["confirmer-2"]);
-		expect(report.save).toHaveBeenCalledOnce();
+		expect(hazardReportModel.findOneAndUpdate).toHaveBeenCalledWith(
+			{ _id: REPORT_ID },
+			{ $inc: { confirmCount: 1 }, $push: { confirmedBy: "confirmer-2" } },
+			{ returnDocument: "after" },
+		);
 	});
 
 	it("rejects a reporter's own confirmation", async () => {
 		const report = duplicateReport("reporter-1");
-		hazardReportModel.findById.mockResolvedValue(report);
+		hazardReportModel.findById.mockReturnValue(leanChain(report));
 
 		const result = await confirmReport({
 			reportId: REPORT_ID,
@@ -150,7 +160,7 @@ describe("hazard report confirmations", () => {
 		});
 		expect(report.confirmCount).toBe(0);
 		expect(report.confirmedBy).toEqual([]);
-		expect(report.save).not.toHaveBeenCalled();
+		expect(hazardReportModel.findOneAndUpdate).not.toHaveBeenCalled();
 	});
 
 	it("only returns verified, unexpired reports with a distinct confirmer", async () => {

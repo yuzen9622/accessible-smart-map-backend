@@ -3,12 +3,22 @@ import type {
 	ServiceCoverageBbox,
 	ServiceCoverageConfig,
 } from "../../config/coverage";
-import A11y from "../../model/a11y.model";
-import BathroomModel from "../../model/bathroom.model";
-import OsmA11y from "../../model/osm-a11y.model";
-import DisabledParkingModel from "../../model/disabled-parking.model";
-import ParkingLotModel from "../../model/parking-lot.model";
-import ParkingSpaceModel from "../../model/parking-space.model";
+import {
+	findAccessibleBathrooms,
+	findAllDisabledParking,
+	findAllMetroExits,
+	findDisabledParkingNear,
+	findMetroElevators,
+	findMetroRamps,
+	findNearbyA11yRows,
+	findNearbyA11yRowsLimited,
+	findOsmByCategory,
+	findOsmByIds,
+	findOsmFeatures,
+	findParkingLotsNear,
+	findParkingSpacesNear,
+	findQuickAssessRows,
+} from "./a11y.repository";
 import type {
 	IA11y,
 	IOsmA11y,
@@ -299,26 +309,12 @@ export async function findAllFacilities(
 		: null;
 	const [metro, osm, campus, bathroom, parking] = await Promise.all([
 		!want || want.has("elevator") || want.has("ramp") || want.has("other")
-			? A11y.find().sort({ _id: 1 }).limit(A11Y_MAX_RESULTS).lean()
+			? findAllMetroExits(A11Y_MAX_RESULTS)
 			: [],
-		osmCategories
-			? osmCategories.length > 0
-				? OsmA11y.find({ category: { $in: osmCategories } })
-						.sort({ _id: 1 })
-						.limit(A11Y_MAX_RESULTS)
-						.lean()
-				: []
-			: OsmA11y.find().sort({ _id: 1 }).limit(A11Y_MAX_RESULTS).lean(),
+		findOsmFeatures(osmCategories, A11Y_MAX_RESULTS),
 		campusService.findAllFacilities(),
-		!want || want.has("toilet")
-			? BathroomModel.find({ type: "無障礙廁所" })
-					.sort({ _id: 1 })
-					.limit(A11Y_MAX_RESULTS)
-					.lean()
-			: [],
-		!want || want.has("parking")
-			? DisabledParkingModel.find().sort({ _id: 1 }).limit(A11Y_MAX_RESULTS).lean()
-			: [],
+		!want || want.has("toilet") ? findAccessibleBathrooms(A11Y_MAX_RESULTS) : [],
+		!want || want.has("parking") ? findAllDisabledParking(A11Y_MAX_RESULTS) : [],
 	]);
 	const facilities = [
 		...metro.map(metroToFacility),
@@ -336,14 +332,8 @@ export async function findAllFacilities(
  */
 export async function findElevatorFacilities(): Promise<A11yFacility[]> {
 	const [metro, osm, campus] = await Promise.all([
-		A11y.find({ "出入口電梯/無障礙坡道名稱": { $regex: "電梯" } })
-			.sort({ _id: 1 })
-			.limit(A11Y_MAX_RESULTS)
-			.lean(),
-		OsmA11y.find({ category: "elevator" })
-			.sort({ _id: 1 })
-			.limit(A11Y_MAX_RESULTS)
-			.lean(),
+		findMetroElevators(A11Y_MAX_RESULTS),
+		findOsmByCategory("elevator", A11Y_MAX_RESULTS),
 		campusService.findAllFacilities(),
 	]);
 	return [
@@ -362,19 +352,8 @@ export async function findElevatorFacilities(): Promise<A11yFacility[]> {
  */
 export async function findRampFacilities(): Promise<A11yFacility[]> {
 	const [metro, osm, campus] = await Promise.all([
-		A11y.find({
-			$and: [
-				{ "出入口電梯/無障礙坡道名稱": { $regex: "坡道" } },
-				{ "出入口電梯/無障礙坡道名稱": { $not: /電梯/ } },
-			],
-		})
-			.sort({ _id: 1 })
-			.limit(A11Y_MAX_RESULTS)
-			.lean(),
-		OsmA11y.find({ category: "ramp" })
-			.sort({ _id: 1 })
-			.limit(A11Y_MAX_RESULTS)
-			.lean(),
+		findMetroRamps(A11Y_MAX_RESULTS),
+		findOsmByCategory("ramp", A11Y_MAX_RESULTS),
 		campusService.findAllFacilities(),
 	]);
 	return [
@@ -393,14 +372,8 @@ export async function findRampFacilities(): Promise<A11yFacility[]> {
  */
 export async function findBathroomFacilities(): Promise<A11yFacility[]> {
 	const [bathroom, osm, campus] = await Promise.all([
-		BathroomModel.find({ type: "無障礙廁所" })
-			.sort({ _id: 1 })
-			.limit(A11Y_MAX_RESULTS)
-			.lean(),
-		OsmA11y.find({ category: "toilet" })
-			.sort({ _id: 1 })
-			.limit(A11Y_MAX_RESULTS)
-			.lean(),
+		findAccessibleBathrooms(A11Y_MAX_RESULTS),
+		findOsmByCategory("toilet", A11Y_MAX_RESULTS),
 		campusService.findAllFacilities(),
 	]);
 	return [
@@ -510,15 +483,8 @@ export async function findNearbyParking(
 
 	if (type === "disabled") {
 		const [disabled, lots] = await Promise.all([
-			DisabledParkingModel.find({ location: geoQuery })
-				.limit(PARKING_MAX_RESULTS)
-				.lean(),
-			ParkingLotModel.find({
-				position: geoQuery,
-				...DISABLED_CAPACITY_FILTER,
-			})
-				.limit(PARKING_MAX_RESULTS)
-				.lean(),
+			findDisabledParkingNear(lat, lng, cappedRadius, PARKING_MAX_RESULTS),
+			findParkingLotsNear(lat, lng, cappedRadius, PARKING_MAX_RESULTS, true),
 		]);
 		const items = (disabled as IDisabledParking[]).map(disabledParkingToItem);
 		const remaining = PARKING_MAX_RESULTS - items.length;
@@ -531,12 +497,8 @@ export async function findNearbyParking(
 
 	if (type === "standard") {
 		const [standard, lots] = await Promise.all([
-			ParkingSpaceModel.find({ location: geoQuery })
-				.limit(PARKING_MAX_RESULTS)
-				.lean(),
-			ParkingLotModel.find({ position: geoQuery })
-				.limit(PARKING_MAX_RESULTS)
-				.lean(),
+			findParkingSpacesNear(lat, lng, cappedRadius, PARKING_MAX_RESULTS),
+			findParkingLotsNear(lat, lng, cappedRadius, PARKING_MAX_RESULTS, false),
 		]);
 		const items = (standard as IParkingSpace[]).map(parkingSpaceToItem);
 		const remaining = PARKING_MAX_RESULTS - items.length;
@@ -548,15 +510,9 @@ export async function findNearbyParking(
 	}
 
 	const [disabled, lots, standard] = await Promise.all([
-		DisabledParkingModel.find({ location: geoQuery })
-			.limit(PARKING_MAX_RESULTS)
-			.lean(),
-		ParkingLotModel.find({ position: geoQuery })
-			.limit(PARKING_MAX_RESULTS)
-			.lean(),
-		ParkingSpaceModel.find({ location: geoQuery })
-			.limit(PARKING_MAX_RESULTS)
-			.lean(),
+		findDisabledParkingNear(lat, lng, cappedRadius, PARKING_MAX_RESULTS),
+		findParkingLotsNear(lat, lng, cappedRadius, PARKING_MAX_RESULTS, false),
+		findParkingSpacesNear(lat, lng, cappedRadius, PARKING_MAX_RESULTS),
 	]);
 	const items = (disabled as IDisabledParking[]).map(disabledParkingToItem);
 	let remaining = PARKING_MAX_RESULTS - items.length;
@@ -574,20 +530,16 @@ export async function findNearbyParking(
 }
 
 export async function findNearby(lat: number, lng: number, radiusM = 150) {
-	const geoQuery = makeGeoQuery(lng, lat, radiusM);
-	const [
-		nearbyMetroA11y,
-		nearbyBathroom,
-		nearbyOsm,
-		nearbyParking,
-		nearbyCampus,
-	] = await Promise.all([
-		A11y.find({ location: geoQuery }).lean(),
-		BathroomModel.find({ type: "無障礙廁所", location: geoQuery }),
-		OsmA11y.find({ location: geoQuery }).lean(),
-		DisabledParkingModel.find({ location: geoQuery }),
+	const [rows, nearbyCampus] = await Promise.all([
+		findNearbyA11yRows(lat, lng, radiusM),
 		campusService.findFacilitiesNearby(lat, lng, radiusM),
 	]);
+	const {
+		metro: nearbyMetroA11y,
+		bathroom: nearbyBathroom,
+		osm: nearbyOsm,
+		parking: nearbyParking,
+	} = rows;
 	return {
 		nearbyMetroA11y: mergeA11yPlaces(
 			nearbyMetroA11y,
@@ -605,25 +557,16 @@ export async function findNearbyLimited(
 	lng: number,
 	radiusM = 300,
 ) {
-	const geoQuery = makeGeoQuery(lng, lat, radiusM);
-	const [
-		nearbyMetroA11y,
-		nearbyBathroom,
-		nearbyOsm,
-		nearbyParking,
-		nearbyCampus,
-	] = await Promise.all([
-		A11y.find({ location: geoQuery }).limit(10).lean(),
-		BathroomModel.find({
-			type: "無障礙廁所",
-			location: makeGeoQuery(lng, lat, 150),
-		})
-			.limit(5)
-			.lean(),
-		OsmA11y.find({ location: geoQuery }).limit(15).lean(),
-		DisabledParkingModel.find({ location: geoQuery }).limit(10).lean(),
+	const [rows, nearbyCampus] = await Promise.all([
+		findNearbyA11yRowsLimited(lat, lng, radiusM, 150),
 		campusService.findFacilitiesNearby(lat, lng, radiusM),
 	]);
+	const {
+		metro: nearbyMetroA11y,
+		bathroom: nearbyBathroom,
+		osm: nearbyOsm,
+		parking: nearbyParking,
+	} = rows;
 	return {
 		nearbyMetroA11y: mergeA11yPlaces(
 			nearbyMetroA11y,
@@ -637,7 +580,7 @@ export async function findNearbyLimited(
 }
 
 export async function findByOsmIds(ids: string[]) {
-	return OsmA11y.find({ osmId: { $in: ids } }).lean();
+	return findOsmByIds(ids);
 }
 
 export type QuickAssessMode =
@@ -787,15 +730,12 @@ export async function assessQuickAccess(input: {
 		),
 	);
 
-	const geoQuery = makeGeoQuery(lng, lat, radiusM);
-	const [metro, osm, bathroom, parking, campus, hazard] = await Promise.all([
-		A11y.find({ location: geoQuery }).lean(),
-		OsmA11y.find({ location: geoQuery }).lean(),
-		BathroomModel.find({ type: "無障礙廁所", location: geoQuery }).lean(),
-		DisabledParkingModel.find({ location: geoQuery }).lean(),
+	const [rows, campus, hazard] = await Promise.all([
+		findQuickAssessRows(lat, lng, radiusM),
 		campusService.findFacilitiesNearby(lat, lng, radiusM),
 		findNearbyReports({ lat, lng, radius: radiusM }).catch(() => null),
 	]);
+	const { metro, osm, bathroom, parking } = rows;
 
 	const counts: QuickAssessFacilityCount = {
 		elevator: 0,

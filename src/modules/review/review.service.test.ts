@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../../model/review.model", () => ({
 	default: {
 		findOne: vi.fn(),
+		findOneAndUpdate: vi.fn(),
 		create: vi.fn(),
 		find: vi.fn(),
 		countDocuments: vi.fn(),
@@ -23,11 +24,20 @@ import { createReview, findByPlace, updateReview } from "./review.service";
 
 const reviewModel = Review as unknown as {
 	findOne: ReturnType<typeof vi.fn>;
+	findOneAndUpdate: ReturnType<typeof vi.fn>;
 	create: ReturnType<typeof vi.fn>;
 	find: ReturnType<typeof vi.fn>;
 	countDocuments: ReturnType<typeof vi.fn>;
 	aggregate: ReturnType<typeof vi.fn>;
 };
+
+/** A `.lean()`-terminated query chain resolving to `value`. */
+function leanChain(value: unknown) {
+	const chain = { select: vi.fn(), lean: vi.fn() };
+	chain.select.mockReturnValue(chain);
+	chain.lean.mockResolvedValue(value);
+	return chain;
+}
 
 const CREATED_AT = new Date("2026-08-11T00:00:00.000Z");
 
@@ -51,12 +61,11 @@ beforeEach(() => {
 
 describe("createReview", () => {
 	it("materializes an aggregate score from legacy rating and present structured evidence", async () => {
-		reviewModel.findOne.mockResolvedValue(null);
-		reviewModel.create.mockImplementation(async (review) => ({
-			_id: "new-review",
-			createdAt: CREATED_AT,
-			...review,
-		}));
+		reviewModel.findOne.mockReturnValue(leanChain(null));
+		reviewModel.create.mockImplementation(async (review) => {
+			const doc = { _id: "new-review", createdAt: CREATED_AT, ...review };
+			return { ...doc, toObject: () => doc };
+		});
 
 		const result = await createReview("user-1", {
 			placeId: "node/123456",
@@ -109,9 +118,11 @@ describe("updateReview", () => {
 			staffHelpfulnessRating: 3,
 			aggregateAccessibilityScore: undefined as number | undefined,
 			createdAt: CREATED_AT,
-			save: vi.fn().mockResolvedValue(undefined),
 		};
-		reviewModel.findOne.mockResolvedValue(review);
+		reviewModel.findOne.mockReturnValue(leanChain(review));
+		reviewModel.findOneAndUpdate.mockImplementation((_q, update) =>
+			leanChain({ ...review, ...(update as { $set: object }).$set }),
+		);
 
 		const result = await updateReview(review._id, "user-1", {
 			serviceRating: 5,
@@ -119,9 +130,14 @@ describe("updateReview", () => {
 			staffHelpfulnessRating: 5,
 		});
 
-		expect(review.rating).toBe(4.25);
-		expect(review.aggregateAccessibilityScore).toBe(3.5);
-		expect(review.save).toHaveBeenCalledOnce();
+		const persisted = (
+			reviewModel.findOneAndUpdate.mock.calls[0][1] as {
+				$set: Record<string, unknown>;
+			}
+		).$set;
+		expect(persisted.rating).toBe(4.25);
+		expect(persisted.aggregateAccessibilityScore).toBe(3.5);
+		expect(reviewModel.findOneAndUpdate).toHaveBeenCalledOnce();
 		expect(result.data).toMatchObject({
 			review: {
 				rating: 4.25,
@@ -141,16 +157,24 @@ describe("updateReview", () => {
 			serviceRating: 4,
 			aggregateAccessibilityScore: undefined as number | undefined,
 			createdAt: CREATED_AT,
-			save: vi.fn().mockResolvedValue(undefined),
 		};
-		reviewModel.findOne.mockResolvedValue(review);
+		reviewModel.findOne.mockReturnValue(leanChain(review));
+		reviewModel.findOneAndUpdate.mockImplementation((_q, update) =>
+			leanChain({ ...review, ...(update as { $set: object }).$set }),
+		);
 
 		const result = await updateReview(review._id, "user-1", {
 			adequateAisleWidth: true,
 		});
 
+		const persisted = (
+			reviewModel.findOneAndUpdate.mock.calls[0][1] as {
+				$set: Record<string, unknown>;
+			}
+		).$set;
+		expect(persisted.rating).toBeUndefined();
 		expect(review.rating).toBe(3.7);
-		expect(review.aggregateAccessibilityScore).toBe(4.4);
+		expect(persisted.aggregateAccessibilityScore).toBe(4.4);
 		expect(result.data).toMatchObject({
 			review: {
 				rating: 3.7,

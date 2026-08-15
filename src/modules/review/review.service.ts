@@ -1,8 +1,17 @@
-import Review, {
+import {
+	activeReviewExists,
+	averageRating,
+	findActiveReviewById,
+	findRatingsForSummary,
+	findReviewPage,
+	insertReview,
+	softDeleteReview,
+	updateActiveReview,
 	type EntranceAccessibility,
 	type IReview,
 	type PlaceType,
-} from "../../model/review.model";
+	type ReviewRecord,
+} from "./review.repository";
 import { googleGenAi, model } from "../../config/ai";
 import { reviewSummaryConfig } from "../../config/ai/config";
 import { reviewSummaryContents } from "../../config/ai/contents";
@@ -24,19 +33,6 @@ const MAX_REVIEW_SCORE = 5;
 const SCORE_ROUNDING_FACTOR = 10;
 const LEGACY_RATING_DIMENSION_COUNT = 4;
 
-// MongoDB's $round uses banker's rounding, unlike Math.round. Ratings are
-// positive, so this mirrors the response's one-decimal Math.round fallback.
-const LEGACY_RATING_ROUNDING_EXPR = {
-	$divide: [
-		{
-			$floor: {
-				$add: [{ $multiply: ["$rating", SCORE_ROUNDING_FACTOR] }, 0.5],
-			},
-		},
-		SCORE_ROUNDING_FACTOR,
-	],
-};
-
 const ENTRANCE_ACCESSIBILITY_SCORES: Record<EntranceAccessibility, number> = {
 	step_free: MAX_REVIEW_SCORE,
 	ramp: 4,
@@ -56,25 +52,6 @@ type AggregateScoreEvidence = Pick<
 	| "wheelchairTableHeight"
 	| "adequateAisleWidth"
 	| "staffHelpfulnessRating"
->;
-
-type ReviewRecord = Pick<
-	IReview,
-	| "_id"
-	| "userId"
-	| "rating"
-	| "passageWidthRating"
-	| "toiletRating"
-	| "elevatorRating"
-	| "serviceRating"
-	| "entranceAccessibility"
-	| "toiletTurningRoom"
-	| "wheelchairTableHeight"
-	| "adequateAisleWidth"
-	| "staffHelpfulnessRating"
-	| "aggregateAccessibilityScore"
-	| "comment"
-	| "createdAt"
 >;
 
 function ok<T>(
@@ -230,12 +207,11 @@ export async function createReview(
 	userId: string,
 	input: CreateReviewInput,
 ): Promise<ServiceResult> {
-	const existing = await Review.findOne({
-		placeId: input.placeId,
-		placeType: input.placeType,
+	const existing = await activeReviewExists(
+		input.placeId,
+		input.placeType,
 		userId,
-		status: "active",
-	});
+	);
 	if (existing) {
 		return fail(ResponseCode.INVALID_INPUT, REVIEW_MSG.ALREADY_REVIEWED);
 	}
@@ -246,7 +222,7 @@ export async function createReview(
 		rating,
 	});
 
-	const review = await Review.create({
+	const review = await insertReview({
 		placeId: input.placeId,
 		placeType: input.placeType,
 		userId,
@@ -275,43 +251,13 @@ export async function findByPlace(
 	params: ReviewQueryParams,
 ): Promise<ServiceResult<ReviewListResult>> {
 	const { placeId, placeType, page, limit, minAggregateScore } = params;
-	const filter = {
-		placeId,
-		placeType,
-		status: "active" as const,
-		...(minAggregateScore !== undefined
-			? {
-					$expr: {
-						$gte: [
-							{
-								$ifNull: [
-									"$aggregateAccessibilityScore",
-									LEGACY_RATING_ROUNDING_EXPR,
-								],
-							},
-							minAggregateScore,
-						],
-					},
-				}
-			: {}),
-	};
+	const filter = { placeId, placeType, minAggregateScore };
 
-	const [items, totalCount] = await Promise.all([
-		Review.find(filter)
-			.sort({ createdAt: -1 })
-			.skip((page - 1) * limit)
-			.limit(limit)
-			.lean(),
-		Review.countDocuments(filter),
-	]);
+	const { items, totalCount } = await findReviewPage(filter, page, limit);
 
 	let avgRating: number | null = null;
 	if (totalCount > 0) {
-		const agg = await Review.aggregate([
-			{ $match: filter },
-			{ $group: { _id: null, avg: { $avg: "$rating" } } },
-		]);
-		avgRating = agg[0]?.avg != null ? Math.round(agg[0].avg * 10) / 10 : null;
+		avgRating = await averageRating(filter);
 	}
 
 	return ok(
@@ -331,13 +277,19 @@ export async function updateReview(
 	userId: string,
 	patch: UpdateReviewInput,
 ): Promise<ServiceResult> {
-	const review = await Review.findOne({ _id: id, status: "active" });
-	if (!review) {
+	const stored = await findActiveReviewById(id);
+	if (!stored) {
 		return fail(ResponseCode.NOT_FOUND, REVIEW_MSG.NOT_FOUND);
 	}
-	if (review.userId !== userId) {
+	if (stored.userId !== userId) {
 		return fail(ResponseCode.FORBIDDEN, REVIEW_MSG.FORBIDDEN);
 	}
+
+	// The patch is applied to a local copy so the recomputed rating and
+	// aggregate score see the same merged state the mutated document used to,
+	// then persisted as one `$set`.
+	const review = { ...stored } as ReviewRecord & Record<string, unknown>;
+	const changes: Record<string, unknown> = {};
 
 	const legacyRatingChanged =
 		patch.passageWidthRating !== undefined ||
@@ -345,47 +297,44 @@ export async function updateReview(
 		patch.elevatorRating !== undefined ||
 		patch.serviceRating !== undefined;
 
-	if (patch.passageWidthRating !== undefined)
-		review.passageWidthRating = patch.passageWidthRating;
-	if (patch.toiletRating !== undefined)
-		review.toiletRating = patch.toiletRating;
-	if (patch.elevatorRating !== undefined)
-		review.elevatorRating = patch.elevatorRating;
-	if (patch.serviceRating !== undefined)
-		review.serviceRating = patch.serviceRating;
-	if (patch.entranceAccessibility !== undefined)
-		review.entranceAccessibility = patch.entranceAccessibility;
-	if (patch.toiletTurningRoom !== undefined)
-		review.toiletTurningRoom = patch.toiletTurningRoom;
-	if (patch.wheelchairTableHeight !== undefined)
-		review.wheelchairTableHeight = patch.wheelchairTableHeight;
-	if (patch.adequateAisleWidth !== undefined)
-		review.adequateAisleWidth = patch.adequateAisleWidth;
-	if (patch.staffHelpfulnessRating !== undefined) {
-		review.staffHelpfulnessRating = patch.staffHelpfulnessRating;
-	}
-	if (patch.comment !== undefined) review.comment = patch.comment;
+	const apply = <K extends keyof UpdateReviewInput>(key: K) => {
+		if (patch[key] === undefined) return;
+		review[key as string] = patch[key];
+		changes[key as string] = patch[key];
+	};
+	apply("passageWidthRating");
+	apply("toiletRating");
+	apply("elevatorRating");
+	apply("serviceRating");
+	apply("entranceAccessibility");
+	apply("toiletTurningRoom");
+	apply("wheelchairTableHeight");
+	apply("adequateAisleWidth");
+	apply("staffHelpfulnessRating");
+	apply("comment");
 
 	if (legacyRatingChanged) {
 		review.rating = calculateLegacyRating(review);
+		changes.rating = review.rating;
 	}
 
 	const aggregateAccessibilityScore =
 		calculateAggregateAccessibilityScore(review);
 	if (aggregateAccessibilityScore !== undefined) {
 		review.aggregateAccessibilityScore = aggregateAccessibilityScore;
+		changes.aggregateAccessibilityScore = aggregateAccessibilityScore;
 	}
 
-	await review.save();
+	const saved = (await updateActiveReview(id, changes)) ?? review;
 
-	return ok({ review: toReviewItem(review) }, REVIEW_MSG.UPDATED);
+	return ok({ review: toReviewItem(saved) }, REVIEW_MSG.UPDATED);
 }
 
 export async function deleteReview(
 	id: string,
 	userId: string,
 ): Promise<ServiceResult> {
-	const review = await Review.findOne({ _id: id, status: "active" });
+	const review = await findActiveReviewById(id);
 	if (!review) {
 		return fail(ResponseCode.NOT_FOUND, REVIEW_MSG.NOT_FOUND);
 	}
@@ -393,8 +342,7 @@ export async function deleteReview(
 		return fail(ResponseCode.FORBIDDEN, REVIEW_MSG.FORBIDDEN);
 	}
 
-	review.status = "deleted";
-	await review.save();
+	await softDeleteReview(id);
 
 	return ok(null, REVIEW_MSG.DELETED);
 }
@@ -403,24 +351,15 @@ export async function getAiSummary(
 	placeId: string,
 	placeType: PlaceType,
 ): Promise<ServiceResult<ReviewSummaryResult>> {
-	const filter = { placeId, placeType, status: "active" as const };
-
-	const [reviews, totalCount] = await Promise.all([
-		Review.find(filter)
-			.select("rating comment")
-			.sort({ createdAt: -1 })
-			.limit(50)
-			.lean(),
-		Review.countDocuments(filter),
-	]);
+	const { reviews, totalCount } = await findRatingsForSummary(
+		placeId,
+		placeType,
+		50,
+	);
 
 	let avgRating: number | null = null;
 	if (totalCount > 0) {
-		const agg = await Review.aggregate([
-			{ $match: filter },
-			{ $group: { _id: null, avg: { $avg: "$rating" } } },
-		]);
-		avgRating = agg[0]?.avg != null ? Math.round(agg[0].avg * 10) / 10 : null;
+		avgRating = await averageRating({ placeId, placeType });
 	}
 
 	if (totalCount < MIN_REVIEWS_FOR_AI_SUMMARY) {

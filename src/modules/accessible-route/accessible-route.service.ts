@@ -1,4 +1,4 @@
-import BusStopModel from "../../model/bus-stop.model";
+import { findNearestStopCity } from "./accessible-route.repository";
 import { getCity, getCoordinates } from "../../adapters/google.adapter";
 import { parseRouteIntent } from "./route-intent.port";
 import { getA11yProfile } from "../user/user.service";
@@ -1044,10 +1044,7 @@ export async function resolveCityFromStops(
 	lng: number,
 ): Promise<string | null> {
 	try {
-		const stop = await BusStopModel.findOne(nearQuery([lng, lat], 50_000))
-			.select("city")
-			.lean<{ city?: string }>();
-		return stop?.city ?? null;
+		return await findNearestStopCity(lat, lng, 50_000);
 	} catch {
 		return null;
 	}

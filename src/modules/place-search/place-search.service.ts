@@ -1,7 +1,7 @@
-import A11y from "../../model/a11y.model";
-import BathroomModel from "../../model/bathroom.model";
-import OsmA11y from "../../model/osm-a11y.model";
-import DisabledParkingModel from "../../model/disabled-parking.model";
+import {
+  countFacilitiesNearby,
+  findNearbyFacilityRows,
+} from "./place-search.repository";
 import * as campusService from "../campus/campus.service";
 import {
   autocompletePlaces,
@@ -11,7 +11,7 @@ import {
 import { searchOsmPlaces } from "../../adapters/photon.adapter";
 import { lookupOsmPlace } from "../../adapters/nominatim.adapter";
 import { normalizeOsmTags, type OsmPlace } from "../../types/osm";
-import type { PlaceType as ReviewPlaceType } from "../../model/review.model";
+import type { PlaceType as ReviewPlaceType } from "./place-search.repository";
 import { redisGet, redisSet } from "../../config/redis";
 import { haversineMeters } from "../../utils/geo";
 import {
@@ -104,15 +104,6 @@ export interface PlaceResult {
   reviewKey: { placeId: string; placeType: ReviewPlaceType };
   externalLinks: { osm: string | null; google: string | null };
   attribution: string | null;
-}
-
-function makeGeoQuery(lng: number, lat: number, radiusM: number) {
-  return {
-    $near: {
-      $geometry: { type: "Point", coordinates: [lng, lat] },
-      $maxDistance: radiusM,
-    },
-  };
 }
 
 /** Coarse coordinate bucket (~1km) so nearby queries share the same cache key. */
@@ -303,15 +294,17 @@ export async function autocomplete(params: {
 
 /** Counts local accessibility facilities within the given radius of a point. */
 async function countNearbyFacilities(lat: number, lng: number): Promise<number> {
-  const geoQuery = makeGeoQuery(lng, lat, A11Y_NEARBY_RADIUS_M);
-  const [metro, osm, bathroom, parking, campus] = await Promise.all([
-    A11y.find({ location: geoQuery }).lean().catch(() => []),
-    OsmA11y.find({ location: geoQuery }).lean().catch(() => []),
-    BathroomModel.find({ type: "無障礙廁所", location: geoQuery }).lean().catch(() => []),
-    DisabledParkingModel.find({ location: geoQuery }).lean().catch(() => []),
+  const [counts, campus] = await Promise.all([
+    countFacilitiesNearby(lat, lng, A11Y_NEARBY_RADIUS_M),
     campusService.findFacilitiesNearby(lat, lng, A11Y_NEARBY_RADIUS_M).catch(() => []),
   ]);
-  return metro.length + osm.length + bathroom.length + parking.length + campus.length;
+  return (
+    counts.metro +
+    counts.osm +
+    counts.bathroom +
+    counts.parking +
+    campus.length
+  );
 }
 
 /** Classifies a metro facility name the way the a11y module does. */
@@ -342,21 +335,12 @@ async function findNearbyFacilities(
   lng: number,
   lang: SupportedLang,
 ): Promise<{ toilets: NearbyFacilityBrief[]; metro: NearbyFacilityBrief[] }> {
-  const geoQuery = makeGeoQuery(lng, lat, NEARBY_LIST_RADIUS_M);
-  const [bathrooms, osmToilets, metro] = await Promise.all([
-    BathroomModel.find({ type: "無障礙廁所", location: geoQuery })
-      .limit(NEARBY_LIST_LIMIT)
-      .lean()
-      .catch(() => []),
-    OsmA11y.find({ category: "toilet", location: geoQuery })
-      .limit(NEARBY_LIST_LIMIT)
-      .lean()
-      .catch(() => []),
-    A11y.find({ location: geoQuery })
-      .limit(NEARBY_LIST_LIMIT)
-      .lean()
-      .catch(() => []),
-  ]);
+  const { bathrooms, osmToilets, metro } = await findNearbyFacilityRows(
+    lat,
+    lng,
+    NEARBY_LIST_RADIUS_M,
+    NEARBY_LIST_LIMIT,
+  );
 
   const toBrief = (
     id: string,

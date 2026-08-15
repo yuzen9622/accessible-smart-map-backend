@@ -22,9 +22,14 @@ import { busUrl } from "../../config/transit";
 import { tdxFetch } from "../../config/fetch";
 import { getCity } from "../../adapters/google.adapter";
 import { taipeiHHmm } from "../../config/taipei-time";
-import BusRouteModel from "../../model/bus-route.model";
-import BusVehicleModel from "../../model/bus-vehicle.model";
-import BusStopModel from "../../model/bus-stop.model";
+import {
+  findRouteNamesBySubRoute,
+  findRoutesByName,
+  findStopsNearby,
+  findVehiclesByPlate,
+  searchRoutesByKeyword,
+  searchStopsByKeyword,
+} from "./bus.repository";
 import type { BusRouteQueryScope, TaiwanCityEn } from "../../types/transit";
 import type { ITdxBusVehicle } from "../../types";
 import {
@@ -179,7 +184,7 @@ async function lowFloorMap(
 ): Promise<Map<string, ITdxBusVehicle>> {
   const uniq = [...new Set(plates.filter((p): p is string => !!p && p !== "-1"))];
   if (!uniq.length) return new Map();
-  const docs = await BusVehicleModel.find({ plateNumb: { $in: uniq } }).lean();
+  const docs = await findVehiclesByPlate(uniq);
   return new Map(
     docs.map((d): [string, ITdxBusVehicle] => [d.plateNumb, d as ITdxBusVehicle]),
   );
@@ -228,11 +233,7 @@ export async function getBusRouteInfo(params: {
   const names = [...new Set([routeId, params.routeName.trim()].filter(Boolean))];
 
   try {
-    const query =
-      city === "InterCity"
-        ? { "routeName.Zh_tw": { $in: names } }
-        : { city, "routeName.Zh_tw": { $in: names } };
-    const docs = await BusRouteModel.find(query).lean();
+    const docs = await findRoutesByName(city, names);
 
     if (docs.length) {
       const normalized: NormalizedRoute[] = docs.map((d) => ({
@@ -715,31 +716,7 @@ export async function getBusRealtimeOnRoute(params: {
  */
 export async function searchBusRoutes(keyword: string): Promise<BusSearchRouteResult> {
   try {
-    const escaped = keyword.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
-    const routes = await BusRouteModel.aggregate([
-      {
-        $match: {
-          "routeName.Zh_tw": { $regex: escaped, $options: "i" }
-        }
-      },
-      {
-        $group: {
-          _id: {
-            routeName: "$routeName.Zh_tw",
-            city: "$city"
-          },
-          subRoutes: {
-            $push: {
-              direction: "$direction",
-              stops: "$stops"
-            }
-          }
-        }
-      },
-      {
-        $limit: 50
-      }
-    ]);
+    const routes = await searchRoutesByKeyword(keyword, 50);
 
     const result = routes.map((r) => {
       const dir0 = r.subRoutes.find((sr: any) => sr.direction === 0) || r.subRoutes[0];
@@ -774,28 +751,14 @@ export async function searchBusRoutes(keyword: string): Promise<BusSearchRouteRe
  */
 export async function searchBusStops(keyword: string): Promise<BusStopSearchRouteResult> {
   try {
-    const escaped = keyword.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
-    const stops = await BusStopModel.aggregate([
-      {
-        $match: {
-          "stopName.Zh_tw": { $regex: escaped, $options: "i" },
-        },
-      },
-      {
-        $limit: 250,
-      },
-    ]);
+    const stops = await searchStopsByKeyword(keyword, 250);
 
     if (!stops.length) {
       return { ok: true, stops: [] };
     }
 
     const allSubRouteIds = [...new Set(stops.flatMap((s) => s.subRouteIds || []))];
-    const routes = await BusRouteModel.find({
-      "subRouteName.Zh_tw": { $in: allSubRouteIds },
-    })
-      .select("subRouteName.Zh_tw routeName.Zh_tw")
-      .lean();
+    const routes = await findRouteNamesBySubRoute(allSubRouteIds);
 
     const routeMap = new Map<string, string>();
     for (const r of routes) {
@@ -853,19 +816,7 @@ export async function getNearbyStops(params: {
   try {
     // Expand the aggregate limit since we will merge stops with the same name in memory
     const queryLimit = limit * 5;
-    const stops = await BusStopModel.aggregate([
-      {
-        $geoNear: {
-          near: { type: "Point", coordinates: [lng, lat] },
-          distanceField: "distance",
-          maxDistance: radius,
-          spherical: true,
-        },
-      },
-      {
-        $limit: queryLimit,
-      },
-    ]);
+    const stops = await findStopsNearby(lat, lng, radius, queryLimit);
 
     if (!stops.length) {
       return { ok: true, stops: [] };
@@ -873,11 +824,7 @@ export async function getNearbyStops(params: {
 
     // Collect all subRouteIds (which are actually route/sub-route names, e.g., "2", "307")
     const allSubRouteIds = [...new Set(stops.flatMap((s) => s.subRouteIds || []))];
-    const routes = await BusRouteModel.find({
-      "subRouteName.Zh_tw": { $in: allSubRouteIds },
-    })
-      .select("subRouteName.Zh_tw routeName.Zh_tw")
-      .lean();
+    const routes = await findRouteNamesBySubRoute(allSubRouteIds);
 
     const routeMap = new Map<string, string>();
     for (const r of routes) {

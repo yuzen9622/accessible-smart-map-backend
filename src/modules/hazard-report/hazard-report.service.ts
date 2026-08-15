@@ -1,5 +1,17 @@
-import { Types, type HydratedDocument } from "mongoose";
-import HazardReport from "../../model/hazard-report.model";
+import { Types } from "mongoose";
+import {
+	addConfirmation,
+	addDenial,
+	findActiveDuplicate,
+	findConfirmedWithin,
+	findNearbyReports,
+	findPublicReportById,
+	findReportById,
+	findReportsByReporter,
+	insertReport,
+	type HazardGeoProjection,
+	type HazardReportRecord,
+} from "./hazard-report.repository";
 import { uploadHazardPhoto } from "../../adapters/gcs.adapter";
 import { parsePhotoExif } from "./hazard-report.parse";
 import { verifyHazardReport } from "./hazard-report.ai-verify";
@@ -27,38 +39,6 @@ const EXPIRY_MS: Record<HazardType, number> = {
 	obstacle: 6 * HOUR_MS,
 	construction: 7 * DAY_MS,
 	data_error: 30 * DAY_MS,
-};
-
-const EARTH_RADIUS_M = 6_371_000;
-
-type HazardGeoProjection = Pick<
-	IHazardReport,
-	| "_id"
-	| "hazardType"
-	| "severity"
-	| "description"
-	| "reportedLocation"
-	| "reporterId"
-	| "confirmedBy"
-	| "status"
-	| "expiredAt"
->;
-
-const INDEPENDENT_CONFIRMATION_EXPR = {
-	$gt: [
-		{
-			$size: {
-				$filter: {
-					input: {
-						$cond: [{ $isArray: "$confirmedBy" }, "$confirmedBy", []],
-					},
-					as: "voterId",
-					cond: { $ne: ["$$voterId", "$reporterId"] },
-				},
-			},
-		},
-		0,
-	],
 };
 
 function hasIndependentConfirmation(
@@ -89,8 +69,6 @@ function isRouteEligibleHazard(
 	);
 }
 
-const PUBLIC_SELECT = "-reporterId -photoStoragePath -confirmedBy -deniedBy";
-const MINE_SELECT = "-photoStoragePath -confirmedBy -deniedBy";
 const DEFAULT_NEARBY_STATUS = ["pending", "verified"];
 
 function fail(
@@ -107,10 +85,10 @@ function fail(
 }
 
 function toView(
-	doc: HydratedDocument<IHazardReport>,
+	doc: HazardReportRecord,
 	includeReporter: boolean,
 ): Record<string, unknown> {
-	const obj = doc.toObject() as unknown as Record<string, unknown>;
+	const obj = { ...doc } as unknown as Record<string, unknown>;
 	delete obj.photoStoragePath;
 	delete obj.confirmedBy;
 	delete obj.deniedBy;
@@ -147,34 +125,28 @@ export async function createReport(
 		return fail(ResponseCode.INVALID_INPUT, "EXIF_GPS_MISMATCH");
 	}
 
-	const existing = await HazardReport.findOne({
-		reportedLocation: {
-			$near: {
-				$geometry: {
-					type: "Point",
-					coordinates: [input.longitude, input.latitude],
-				},
-				$maxDistance: DEDUP_RADIUS_M,
-			},
-		},
-		hazardType: input.hazardType,
-		status: { $in: ["pending", "verified"] },
-		expiredAt: { $gt: now },
-	});
+	const existing = await findActiveDuplicate(
+		input.latitude,
+		input.longitude,
+		DEDUP_RADIUS_M,
+		input.hazardType,
+		now,
+	);
 	if (existing) {
+		let merged = existing;
 		if (
 			input.reporterId !== existing.reporterId &&
 			!existing.confirmedBy.includes(input.reporterId)
 		) {
-			existing.confirmCount += 1;
-			existing.confirmedBy.push(input.reporterId);
-			await existing.save();
+			merged =
+				(await addConfirmation(String(existing._id), input.reporterId)) ??
+				existing;
 		}
 		return {
 			ok: true,
 			httpCode: ResponseCode.OK,
 			message: HAZARD_MSG.MERGED,
-			data: { merged: true, report: toView(existing, false) },
+			data: { merged: true, report: toView(merged, false) },
 		};
 	}
 
@@ -195,7 +167,7 @@ export async function createReport(
 		? new Date(input.expectedUntil)
 		: null;
 
-	const doc = await HazardReport.create({
+	const doc = await insertReport({
 		_id: _id.toString(),
 		reporterId: input.reporterId,
 		reportedLocation: {
@@ -220,7 +192,7 @@ export async function createReport(
 	});
 
 	void verifyHazardReport(
-		doc.id,
+		_id.toString(),
 		input.photo.buffer,
 		input.photo.mimeType,
 		input.hazardType,
@@ -253,19 +225,14 @@ export async function findNearby(
 		? input.status
 		: DEFAULT_NEARBY_STATUS) as HazardStatus[];
 
-	const reports = await HazardReport.find({
-		reportedLocation: {
-			$near: {
-				$geometry: { type: "Point", coordinates: [input.lng, input.lat] },
-				$maxDistance: radius,
-			},
-		},
-		status: { $in: statusFilter },
-		...(input.hazardType ? { hazardType: input.hazardType } : {}),
-	})
-		.select(PUBLIC_SELECT)
-		.limit(limit)
-		.lean();
+	const reports = await findNearbyReports(
+		input.lat,
+		input.lng,
+		radius,
+		statusFilter,
+		input.hazardType,
+		limit,
+	);
 
 	return {
 		ok: true,
@@ -303,21 +270,7 @@ export async function findConfirmedHazardsWithin(
 	limit: number,
 ): Promise<ConfirmedHazard[]> {
 	const now = new Date();
-	const docs = await HazardReport.find({
-		reportedLocation: {
-			$geoWithin: {
-				$centerSphere: [[center.lng, center.lat], radiusM / EARTH_RADIUS_M],
-			},
-		},
-		status: "verified",
-		expiredAt: { $gt: now },
-		$expr: INDEPENDENT_CONFIRMATION_EXPR,
-	})
-		.select(
-			"hazardType severity description reportedLocation reporterId confirmedBy status expiredAt",
-		)
-		.limit(limit)
-		.lean<HazardGeoProjection[]>();
+	const docs = await findConfirmedWithin(center, radiusM, limit, now);
 
 	return docs
 		.filter((doc) => isRouteEligibleHazard(doc, now))
@@ -340,7 +293,7 @@ export async function findById(id: string): Promise<ServiceResult> {
 	if (!Types.ObjectId.isValid(id)) {
 		return fail(ResponseCode.INVALID_INPUT, "INVALID_ID");
 	}
-	const report = await HazardReport.findById(id).select(PUBLIC_SELECT).lean();
+	const report = await findPublicReportById(id);
 	if (!report) {
 		return fail(ResponseCode.NOT_FOUND, "REPORT_NOT_FOUND");
 	}
@@ -361,18 +314,15 @@ export async function findById(id: string): Promise<ServiceResult> {
  */
 export async function findMine(input: MyReportsInput): Promise<ServiceResult> {
 	const limit = Math.min(input.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
-	const query: Record<string, unknown> = { reporterId: input.reporterId };
-	if (input.status?.length) query.status = { $in: input.status };
-	if (input.hazardType) query.hazardType = input.hazardType;
-	if (input.cursor && Types.ObjectId.isValid(input.cursor)) {
-		query._id = { $lt: new Types.ObjectId(input.cursor) };
-	}
-
-	const reports = await HazardReport.find(query)
-		.select(MINE_SELECT)
-		.sort({ createdAt: -1 })
-		.limit(limit)
-		.lean();
+	const reports = await findReportsByReporter(
+		input.reporterId,
+		{
+			statuses: input.status,
+			hazardType: input.hazardType,
+			cursor: input.cursor,
+		},
+		limit,
+	);
 
 	const nextCursor =
 		reports.length === limit ? String(reports[reports.length - 1]._id) : null;
@@ -398,7 +348,7 @@ export async function confirmReport(
 	if (!Types.ObjectId.isValid(input.reportId)) {
 		return fail(ResponseCode.INVALID_INPUT, "INVALID_ID");
 	}
-	const report = await HazardReport.findById(input.reportId);
+	const report = await findReportById(input.reportId);
 	if (!report) {
 		return fail(ResponseCode.NOT_FOUND, "REPORT_NOT_FOUND");
 	}
@@ -415,14 +365,11 @@ export async function confirmReport(
 		return fail(ResponseCode.INVALID_INPUT, "ALREADY_VOTED");
 	}
 
-	if (input.action === "confirm") {
-		report.confirmCount += 1;
-		report.confirmedBy.push(input.voterId);
-	} else {
-		report.denyCount += 1;
-		report.deniedBy.push(input.voterId);
-	}
-	await report.save();
+	const updated =
+		input.action === "confirm"
+			? await addConfirmation(input.reportId, input.voterId)
+			: await addDenial(input.reportId, input.voterId);
+	const counts = updated ?? report;
 
 	return {
 		ok: true,
@@ -432,8 +379,8 @@ export async function confirmReport(
 		data: {
 			reportId: input.reportId,
 			action: input.action,
-			confirmCount: report.confirmCount,
-			denyCount: report.denyCount,
+			confirmCount: counts.confirmCount,
+			denyCount: counts.denyCount,
 		},
 	};
 }

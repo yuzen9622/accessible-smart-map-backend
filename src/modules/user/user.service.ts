@@ -1,6 +1,11 @@
-import User from "../../model/user.model";
-import Config from "../../model/config.model";
-import LineLinkCode from "../../model/line-link-code.model";
+import {
+  findConfigByUserId,
+  findUserById,
+  lineLinkCodeExists,
+  updateConfigByUserId,
+  upsertConfigByUserId,
+  upsertLineLinkCode,
+} from "./user.repository";
 import { buildBindUrl } from "../../adapters/line.adapter";
 import crypto from "crypto";
 import type { IUser, IConfig, IA11yProfile } from "../../types";
@@ -15,7 +20,7 @@ async function generateLineLinkCode(): Promise<string> {
     for (let i = 0; i < LINE_LINK_CODE_LENGTH; i++) {
       code += LINE_LINK_CODE_ALPHABET[crypto.randomInt(LINE_LINK_CODE_ALPHABET.length)];
     }
-    const exists = await LineLinkCode.exists({ code });
+    const exists = await lineLinkCodeExists(code);
     if (!exists) return code;
   }
   throw new Error("Failed to generate a unique LINE link code");
@@ -28,7 +33,7 @@ async function generateLineLinkCode(): Promise<string> {
  * @returns The user, or null when no such user exists.
  */
 export async function getUserById(userId: string): Promise<IUser | null> {
-  return User.findById(userId);
+  return findUserById(userId);
 }
 
 /**
@@ -44,14 +49,14 @@ export async function getUserById(userId: string): Promise<IUser | null> {
 export async function getUserWithConfig(
   userId: string,
 ): Promise<{ user: IUser | null; config: IConfig | null }> {
-  const user = await User.findById(userId);
+  const user = await findUserById(userId);
   if (!user) return { user: null, config: null };
-  const config = await Config.findOne({ user_id: user._id });
+  const config = await findConfigByUserId(user._id);
   return { user, config };
 }
 
 export async function getConfig(user_id: string): Promise<IConfig | null> {
-  return Config.findOne({ user_id });
+  return findConfigByUserId(user_id);
 }
 
 export async function updateConfig(
@@ -62,7 +67,7 @@ export async function updateConfig(
   for (const [key, value] of Object.entries(fields)) {
     if (value !== undefined) updateFields[key] = value;
   }
-  return Config.findOneAndUpdate({ user_id }, { $set: updateFields }, { returnDocument: "after" });
+  return updateConfigByUserId(user_id, updateFields);
 }
 
 const DEFAULT_A11Y_PROFILE: IA11yProfile = {
@@ -85,11 +90,7 @@ const DEFAULT_A11Y_PROFILE: IA11yProfile = {
  * @returns The accessibility profile, defaulting every field to null when unset.
  */
 export async function getA11yProfile(userId: string): Promise<IA11yProfile> {
-  const config = await Config.findOneAndUpdate(
-    { user_id: userId },
-    { $setOnInsert: { user_id: userId } },
-    { returnDocument: "after", upsert: true },
-  );
+  const config = await upsertConfigByUserId(userId);
   return { ...DEFAULT_A11Y_PROFILE, ...(config.accessibility ?? {}) };
 }
 
@@ -108,11 +109,7 @@ export async function updateA11yProfile(
   for (const [key, value] of Object.entries(fields)) {
     if (value !== undefined) updateFields[`accessibility.${key}`] = value;
   }
-  const config = await Config.findOneAndUpdate(
-    { user_id: userId },
-    { $set: updateFields, $setOnInsert: { user_id: userId } },
-    { returnDocument: "after", upsert: true },
-  );
+  const config = await upsertConfigByUserId(userId, updateFields);
   return { ...DEFAULT_A11Y_PROFILE, ...(config.accessibility ?? {}) };
 }
 
@@ -121,7 +118,7 @@ export async function issueLineLinkCode(userId: string): Promise<{
   bindCodeExpiresAt: Date;
   bindUrl: string;
 }> {
-  const user = await User.findById(userId);
+  const user = await findUserById(userId);
   if (!user) {
     throw new Error("User not found");
   }
@@ -129,11 +126,7 @@ export async function issueLineLinkCode(userId: string): Promise<{
   const bindCode = await generateLineLinkCode();
   const bindCodeExpiresAt = new Date(Date.now() + LINE_LINK_CODE_TTL_MS);
 
-  await LineLinkCode.findOneAndUpdate(
-    { userId },
-    { $set: { code: bindCode, expiresAt: bindCodeExpiresAt } },
-    { upsert: true, returnDocument: "after" },
-  );
+  await upsertLineLinkCode(userId, bindCode, bindCodeExpiresAt);
 
   return {
     bindCode,

@@ -1,4 +1,8 @@
-import VisualA11yModel from "../../model/visual-a11y.model";
+import {
+  findNearbyVisualA11y,
+  upsertVisualA11yBatch,
+  type VisualA11yUpsert,
+} from "./visual-a11y.repository";
 import { IVisualA11y } from "../../types";
 import { fetchOverpassElements } from "../../adapters/overpass.adapter";
 
@@ -14,15 +18,6 @@ const QUERIES: { type: IVisualA11y["type"]; query: string }[] = [
     query: `[out:json][timeout:25];node["tactile_paving"="yes"](${BBOX});out body;`,
   },
 ];
-
-function makeGeoQuery(lng: number, lat: number, radiusM: number) {
-  return {
-    $near: {
-      $geometry: { type: "Point", coordinates: [lng, lat] },
-      $maxDistance: radiusM,
-    },
-  };
-}
 
 function parseBool(v?: string): boolean | null {
   if (v === "yes") return true;
@@ -74,11 +69,7 @@ export async function findNearby(
   radiusM = 500,
   type?: IVisualA11y["type"]
 ) {
-  const filter: Record<string, unknown> = {
-    location: makeGeoQuery(lng, lat, radiusM),
-  };
-  if (type) filter.type = type;
-  return VisualA11yModel.find(filter).lean();
+  return findNearbyVisualA11y(lat, lng, radiusM, type);
 }
 
 export async function syncFromOverpass(): Promise<{
@@ -99,36 +90,26 @@ export async function syncFromOverpass(): Promise<{
 
     if (nodes.length === 0) continue;
 
-    const ops = nodes.map((el) => {
+    const ops: VisualA11yUpsert[] = nodes.map((el) => {
       const tags: Record<string, string> = el.tags ?? {};
       const properties =
         type === "audio_signal"
           ? parseAudioSignal(tags)
           : parseTactilePaving(tags);
-      const doc = {
+      return {
         osmNodeId: el.id as number,
         type,
         location: { type: "Point" as const, coordinates: [el.lon, el.lat] as [number, number] },
         properties,
         updatedAt: new Date(),
       };
-      return {
-        updateOne: {
-          filter: { osmNodeId: doc.osmNodeId, type: doc.type },
-          update: { $set: doc },
-          upsert: true,
-        },
-      };
     });
 
     const CHUNK = 500;
     for (let j = 0; j < ops.length; j += CHUNK) {
-      const result = await VisualA11yModel.bulkWrite(
-        ops.slice(j, j + CHUNK),
-        { ordered: false }
-      );
-      totalInserted += result.upsertedCount;
-      totalUpdated += result.modifiedCount;
+      const result = await upsertVisualA11yBatch(ops.slice(j, j + CHUNK));
+      totalInserted += result.inserted;
+      totalUpdated += result.updated;
     }
   }
 
