@@ -44,6 +44,8 @@ import {
 	type WalkA11yFacility,
 } from "./planners/walk-a11y";
 import { getWeatherAndAirQuality } from "../environment/environment.service";
+import { getMetroAlerts } from "../transit/metro.service";
+import type { MetroAlert, MetroAlertResult } from "../../types/transit";
 import { haversineMeters } from "../../utils/geo";
 import { attachRouteTokens } from "./route-token.service";
 import {
@@ -156,13 +158,11 @@ function walkFacilitiesForDetails(
 function hasWalkA11yDetails(leg: WalkLeg): boolean {
 	const candidate = leg as Partial<WalkLeg>;
 	return (
-		Object.getOwnPropertyDescriptor(candidate, "maxSlopePercent") !==
-			undefined &&
+		Object.getOwnPropertyDescriptor(candidate, "maxSlopePercent") !== undefined &&
 		Object.getOwnPropertyDescriptor(candidate, "crossings") !== undefined &&
 		Object.getOwnPropertyDescriptor(candidate, "crossingsWithCurbRamp") !==
 			undefined &&
-		Object.getOwnPropertyDescriptor(candidate, "minPathWidthCm") !==
-			undefined &&
+		Object.getOwnPropertyDescriptor(candidate, "minPathWidthCm") !== undefined &&
 		Object.getOwnPropertyDescriptor(candidate, "surfaceType") !== undefined &&
 		Array.isArray(candidate.restPoints)
 	);
@@ -216,8 +216,7 @@ function legDataCoverageRatio(r: AccessibleRoute): number {
 		if (leg.type === "WALK") {
 			if (leg.a11yFacilities.length) withData++;
 		} else if (leg.type === "BUS") {
-			if (leg.departureStopA11y.length || leg.arrivalStopA11y.length)
-				withData++;
+			if (leg.departureStopA11y.length || leg.arrivalStopA11y.length) withData++;
 		} else if (
 			leg.type === "METRO" ||
 			leg.type === "THSR" ||
@@ -337,8 +336,7 @@ function walkLegStairsCount(leg: WalkLeg): number {
 	const hasAccessibleRamp = leg.a11yFacilities.some(
 		(f) =>
 			f.tags?.["highway"] === "steps" &&
-			(f.tags?.["ramp:wheelchair"] === "yes" ||
-				f.tags?.["wheelchair"] === "yes"),
+			(f.tags?.["ramp:wheelchair"] === "yes" || f.tags?.["wheelchair"] === "yes"),
 	);
 	if (hasAccessibleRamp) return 0;
 	return (leg.steps ?? []).filter((step) => step.stairs).length;
@@ -386,8 +384,7 @@ function walkLegHasStairsBarrierAfterCompacting(
 	const hasAccessibleRamp = legFacilitiesEvenAfterCompacting(route, leg).some(
 		(f) =>
 			f.tags?.["highway"] === "steps" &&
-			(f.tags?.["ramp:wheelchair"] === "yes" ||
-				f.tags?.["wheelchair"] === "yes"),
+			(f.tags?.["ramp:wheelchair"] === "yes" || f.tags?.["wheelchair"] === "yes"),
 	);
 	if (hasAccessibleRamp) return false;
 	return (leg.steps ?? []).some((step) => step.stairs);
@@ -491,10 +488,7 @@ async function applyExtraA11yAnnotations(
 			);
 			if (hasUnconfirmedHandrailStairs) {
 				r.warnings = [
-					...new Set([
-						...(r.warnings ?? []),
-						ROUTE_WARNING.STAIRS_HANDRAIL_UNKNOWN,
-					]),
+					...new Set([...(r.warnings ?? []), ROUTE_WARNING.STAIRS_HANDRAIL_UNKNOWN]),
 				];
 			}
 		}
@@ -518,16 +512,15 @@ async function applyExtraA11yAnnotations(
 		} else {
 			const wheelchairEngaged = avoidStairs ?? mode === "wheelchair";
 			const enforced =
-				wheelchairEngaged &&
-				requestedMaxPercent >= OTP_SERVER_MAX_SLOPE_PERCENT;
+				wheelchairEngaged && requestedMaxPercent >= OTP_SERVER_MAX_SLOPE_PERCENT;
 			slopeConstraint = {
 				requestedMaxPercent,
 				enforced,
-				note: !wheelchairEngaged
-					? "此路線未啟用輪椅模式（avoidStairs 為 false），伺服器未套用任何坡度限制"
-					: enforced
+				note: wheelchairEngaged
+					? enforced
 						? `伺服器已套用 ${OTP_SERVER_MAX_SLOPE_PERCENT}% 上限（等於或寬於您的設定）`
-						: ROUTE_WARNING.SLOPE_LIMIT_STRICTER_THAN_SERVER_DEFAULT,
+						: ROUTE_WARNING.SLOPE_LIMIT_STRICTER_THAN_SERVER_DEFAULT
+					: "此路線未啟用輪椅模式（avoidStairs 為 false），伺服器未套用任何坡度限制",
 			};
 		}
 		for (const r of routes) {
@@ -714,8 +707,7 @@ function collapseLogicalDuplicates(
 			continue;
 		}
 		const prevFuture =
-			prev._isFutureScheduled &&
-			typeof prev._scheduledDepartureTime === "number";
+			prev._isFutureScheduled && typeof prev._scheduledDepartureTime === "number";
 		const routeFuture =
 			r._isFutureScheduled && typeof r._scheduledDepartureTime === "number";
 		if (
@@ -772,16 +764,10 @@ async function enrichTopRoutes(
 					const { board, alight } = legA11y(leg);
 					const boardCoords = leg.polyline[0];
 					const alightCoords = leg.polyline[leg.polyline.length - 1];
-					if (
-						(!board.length || !alight.length) &&
-						boardCoords &&
-						alightCoords
-					) {
+					if ((!board.length || !alight.length) && boardCoords && alightCoords) {
 						const [boardA11y, alightA11y] = await Promise.all([
 							board.length ? Promise.resolve(board) : nearbyA11y(boardCoords),
-							alight.length
-								? Promise.resolve(alight)
-								: nearbyA11y(alightCoords),
+							alight.length ? Promise.resolve(alight) : nearbyA11y(alightCoords),
 						]);
 						attachA11yToLeg(leg, boardA11y, alightA11y);
 					}
@@ -1017,9 +1003,7 @@ async function finalizeRoutes(
 	t.hazard = Date.now() - t0;
 	t0 = Date.now();
 	try {
-		const { overlayFacilityStatus } = await import(
-			"./planners/facility-status"
-		);
+		const { overlayFacilityStatus } = await import("./planners/facility-status");
 		await overlayFacilityStatus(top, mode);
 	} catch (err) {
 		console.warn("[accessible-route] facility status overlay failed", err);
@@ -1069,6 +1053,93 @@ export async function resolveCityFromStops(
 	}
 }
 
+/** Every METRO leg across the planned routes, in route order. */
+function metroLegsOf(routes: AccessibleRoute[]): MetroLeg[] {
+	const legs: MetroLeg[] = [];
+	for (const route of routes) {
+		for (const leg of route.legs) if (leg.type === "METRO") legs.push(leg);
+	}
+	return legs;
+}
+
+/** Distinct rail systems the planned routes actually ride. */
+function metroRailSystemsInRoutes(routes: AccessibleRoute[]): string[] {
+	return [...new Set(metroLegsOf(routes).map((leg) => leg.railSystem))];
+}
+
+/**
+ * Strip the `${railSystem}-` / `${railSystem}_` prefix so leg uids
+ * (`TRTC-R10` legacy TDX, `TRTC_R10` GTFS-built) compare against TDX alert
+ * scope ids, which carry the bare id (`R10`, `R`).
+ */
+function normalizeStationId(id: string): string {
+	const sep = id.includes("_") ? "_" : id.includes("-") ? "-" : null;
+	return sep === null ? id : id.slice(id.indexOf(sep) + 1);
+}
+
+/**
+ * Attach current TDX metro alerts to every METRO leg they touch (by station or
+ * line), and return the non-empty per-system results for the response envelope.
+ * Best-effort: a rail system whose lookup fails is simply dropped.
+ *
+ * @param routes Planned routes; matching METRO legs are mutated in place.
+ * @returns One entry per rail system that has at least one alert.
+ */
+export async function attachMetroAlerts(
+	routes: AccessibleRoute[],
+): Promise<MetroAlertResult[]> {
+	const metroLegs = metroLegsOf(routes);
+	if (!metroLegs.length) return [];
+
+	const railSystems = metroRailSystemsInRoutes(routes);
+	const settled = await Promise.allSettled(
+		railSystems.map((system) => getMetroAlerts(system)),
+	);
+
+	const alertsBySystem = new Map<string, MetroAlertResult>();
+	settled.forEach((outcome, index) => {
+		const system = railSystems[index];
+		if (outcome.status === "rejected") {
+			console.warn(
+				`[accessible-route] metro alerts unavailable for ${system}`,
+				outcome.reason,
+			);
+			return;
+		}
+		const result = outcome.value.find((item) => item.railSystem === system);
+		if (result?.alerts.length) alertsBySystem.set(system, result);
+	});
+	if (!alertsBySystem.size) return [];
+
+	for (const leg of metroLegs) {
+		const result = alertsBySystem.get(leg.railSystem);
+		if (!result) continue;
+		const stationIds = new Set(
+			[
+				leg.departureStationUid,
+				leg.arrivalStationUid,
+				...(leg.intermediateStops ?? []).map((stop) => stop.stationUid),
+			]
+				.filter((uid): uid is string => Boolean(uid))
+				.map(normalizeStationId),
+		);
+		const lineIds = new Set(
+			[leg.lineUid, leg.lineId]
+				.filter((uid): uid is string => Boolean(uid))
+				.map(normalizeStationId),
+		);
+		const matched: MetroAlert[] = result.alerts.filter(
+			(alert) =>
+				alert.stations.some((station) =>
+					stationIds.has(normalizeStationId(station.id)),
+				) || alert.lines.some((line) => lineIds.has(normalizeStationId(line))),
+		);
+		if (matched.length) leg.alerts = matched;
+	}
+
+	return [...alertsBySystem.values()];
+}
+
 export async function planAccessibleRouteFromRequest(
 	body: PlanRouteRequest,
 ): Promise<PlanRouteResult> {
@@ -1092,8 +1163,7 @@ export async function planAccessibleRouteFromRequest(
 			return {
 				ok: false,
 				status: ResponseCode.INTERNAL_ERROR,
-				error:
-					"語意解析服務暫時無法使用，請稍後再試或直接提供 origin/destination",
+				error: "語意解析服務暫時無法使用，請稍後再試或直接提供 origin/destination",
 			};
 		}
 		if (!intent) {
@@ -1360,10 +1430,7 @@ export async function planAccessibleRouteFromRequest(
 			routes = outcome.routes.map((route) => ({
 				...route,
 				warnings: [
-					...new Set([
-						...(route.warnings ?? []),
-						ROUTE_WARNING.OTP_WALK_FALLBACK,
-					]),
+					...new Set([...(route.warnings ?? []), ROUTE_WARNING.OTP_WALK_FALLBACK]),
 				],
 			}));
 			routedByEngineWithNoElevationData = true;
@@ -1455,6 +1522,17 @@ export async function planAccessibleRouteFromRequest(
 		},
 	);
 
+	// Advisory overlay only — a failed alert lookup must never fail the plan.
+	let metroAlerts: MetroAlertResult[] = [];
+	try {
+		metroAlerts = await attachMetroAlerts(routes);
+	} catch (err) {
+		console.warn(
+			"[accessible-route] metro alerts lookup failed; continuing without alerts",
+			err,
+		);
+	}
+
 	return {
 		ok: true,
 		data: {
@@ -1466,6 +1544,7 @@ export async function planAccessibleRouteFromRequest(
 			routes,
 			...(intent ? { intent } : {}),
 			...(slopeConstraint ? { slopeConstraint } : {}),
+			...(metroAlerts.length ? { metroAlerts } : {}),
 		},
 	};
 }
@@ -1488,11 +1567,7 @@ export async function planAccessibleRouteForHttp(
 /** Sum of road/walk leg distances (metres) — driving routes only. */
 function driveTotalDistanceM(r: AccessibleRoute): number {
 	return r.legs.reduce((sum, leg) => {
-		if (
-			leg.type === "WALK" ||
-			leg.type === "DRIVE" ||
-			leg.type === "MOTORCYCLE"
-		)
+		if (leg.type === "WALK" || leg.type === "DRIVE" || leg.type === "MOTORCYCLE")
 			return sum + leg.distanceM;
 		return sum;
 	}, 0);
@@ -1546,11 +1621,7 @@ async function attachDrivingA11yHighlights(
 	// nearby-parking count (avoids a duplicate lookup and an overlapping highlight).
 	if (skipParkingHighlight) return;
 	const { findNearbyParking } = await import("../a11y/a11y.service");
-	const parking = await findNearbyParking(
-		destination.lat,
-		destination.lng,
-		300,
-	);
+	const parking = await findNearbyParking(destination.lat, destination.lng, 300);
 	if (parking.length) {
 		const hl = `目的地 300m 內有 ${parking.length} 處身障停車格`;
 		for (const r of routes)

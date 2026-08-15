@@ -478,6 +478,7 @@ export async function planAccessibleRoute(args: {
 			city: result.data.city,
 			mode: validMode,
 			routes: result.data.routes.slice(0, 3).map(summarizeRoute),
+			metroAlerts: result.data.metroAlerts ?? [],
 		});
 	} catch (error: any) {
 		console.error("[agent-tool:planAccessibleRoute]", error);
@@ -1172,8 +1173,7 @@ export async function getActiveSosContext(
 			? {
 					sessionId: String(sessions[0]._id),
 					ownerUserId: String(sessions[0].userId),
-					ownerName:
-						userNameById.get(String(sessions[0].userId)) ?? "未知使用者",
+					ownerName: userNameById.get(String(sessions[0].userId)) ?? "未知使用者",
 					type: sessions[0].type,
 					status: sessions[0].status,
 					address: sessions[0].address ?? null,
@@ -1690,9 +1690,7 @@ export async function saveMemory(args: {
 			args.content.trim(),
 			args.category as "preference" | "place" | "habit" | "context",
 			{
-				source: args.explicitMemoryRequest
-					? "explicit_user"
-					: "agent_suggested",
+				source: args.explicitMemoryRequest ? "explicit_user" : "agent_suggested",
 				requireMemoryEnabled: false,
 			},
 		);

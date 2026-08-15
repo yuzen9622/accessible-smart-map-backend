@@ -853,10 +853,7 @@ describe("getNavInstructions", () => {
 			destination: "B",
 			routeIndex: 99,
 		});
-		expect(mockGenNav).toHaveBeenCalledWith(
-			{ legs: fakeRoute.legs },
-			undefined,
-		);
+		expect(mockGenNav).toHaveBeenCalledWith({ legs: fakeRoute.legs }, undefined);
 	});
 
 	it("傳遞 userHeading 給 generateNavInstructions", async () => {
@@ -919,8 +916,7 @@ describe("LINE SOS tools", () => {
 	it("getActiveSosContext 回傳 trackingUrl", async () => {
 		mockEmergencyContactFind.mockReturnValue({
 			select: () => ({
-				lean: () =>
-					Promise.resolve([{ _id: "c1", userId: "u1", name: "王小明" }]),
+				lean: () => Promise.resolve([{ _id: "c1", userId: "u1", name: "王小明" }]),
 			}),
 		});
 		mockUserFind.mockReturnValue({
@@ -957,8 +953,7 @@ describe("LINE SOS tools", () => {
 	it("getSosLiveLocation 回傳前端 trackingUrl", async () => {
 		mockEmergencyContactFind.mockReturnValue({
 			select: () => ({
-				lean: () =>
-					Promise.resolve([{ _id: "c1", userId: "u1", name: "王小明" }]),
+				lean: () => Promise.resolve([{ _id: "c1", userId: "u1", name: "王小明" }]),
 			}),
 		});
 		mockSosSessionFindById.mockReturnValue({
@@ -1002,8 +997,7 @@ describe("LINE SOS tools", () => {
 		});
 		mockEmergencyContactFind.mockReturnValue({
 			select: () => ({
-				lean: () =>
-					Promise.resolve([{ _id: "c1", userId: "u1", name: "王小明" }]),
+				lean: () => Promise.resolve([{ _id: "c1", userId: "u1", name: "王小明" }]),
 			}),
 		});
 		mockSosSessionFindById.mockReturnValue({
@@ -1168,8 +1162,7 @@ describe("executeLocalTool dispatches new tools", () => {
 		});
 		mockEmergencyContactFind.mockReturnValue({
 			select: () => ({
-				lean: () =>
-					Promise.resolve([{ _id: "c1", userId: "u1", name: "王小明" }]),
+				lean: () => Promise.resolve([{ _id: "c1", userId: "u1", name: "王小明" }]),
 			}),
 		});
 		mockSosSessionFindById.mockReturnValue({

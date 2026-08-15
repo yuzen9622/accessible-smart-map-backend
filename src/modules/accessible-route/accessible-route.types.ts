@@ -18,7 +18,7 @@ import type {
   DriveLeg,
 } from "../../types/route";
 import type { RouteIntent } from "../../types/ai";
-import type { TaiwanCityEn } from "../../types/transit";
+import type { MetroAlertResult, TaiwanCityEn } from "../../types/transit";
 import type { RouteFailureData } from "./accessible-route.failure";
 
 export type TagWeightMap = Record<string, Record<string, number>>;
@@ -152,6 +152,8 @@ export type PlanRouteResult =
           enforced: boolean;
           note: string;
         };
+        /** Present only when a ridden metro system currently has alerts; per-leg copies sit on the METRO legs. */
+        metroAlerts?: MetroAlertResult[];
       };
     }
   | {
