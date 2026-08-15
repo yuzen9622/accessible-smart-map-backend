@@ -8,7 +8,7 @@ vi.mock("../../model/metro-station.model", () => ({
 import { tdxFetch } from "../../config/fetch";
 import { metroUrl } from "../../config/transit";
 import MetroStationModel from "../../model/metro-station.model";
-import { getMetroAlerts } from "./metro.service";
+import { clearMetroAlertsCache, getMetroAlerts } from "./metro.service";
 
 const tdxFetchMock = tdxFetch as unknown as ReturnType<typeof vi.fn>;
 const stationFindMock = MetroStationModel.find as unknown as ReturnType<
@@ -32,6 +32,7 @@ function mockStations(rows: unknown[]) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  clearMetroAlertsCache();
   tdxFetchMock.mockResolvedValue(tdxResponse());
   mockStations([]);
 });
@@ -45,6 +46,7 @@ describe("getMetroAlerts", () => {
     for (const system of systems) {
       expect(tdxFetchMock).toHaveBeenCalledWith(
         `${metroUrl.alertUrl(system)}?$format=JSON`,
+        { signal: expect.any(AbortSignal) },
       );
     }
   });
@@ -55,6 +57,7 @@ describe("getMetroAlerts", () => {
     expect(tdxFetchMock).toHaveBeenCalledTimes(1);
     expect(tdxFetchMock).toHaveBeenCalledWith(
       `${metroUrl.alertUrl("TRTC")}?$format=JSON`,
+      { signal: expect.any(AbortSignal) },
     );
   });
 
@@ -125,5 +128,27 @@ describe("getMetroAlerts", () => {
         ],
       },
     ]);
+  });
+
+  it("快取未過期時不再打 TDX", async () => {
+    await getMetroAlerts("TRTC");
+    const second = await getMetroAlerts("TRTC");
+
+    expect(tdxFetchMock).toHaveBeenCalledTimes(1);
+    expect(second).toEqual([
+      {
+        railSystem: "TRTC",
+        updatedAt: "2026-08-15T10:00:00+08:00",
+        alerts: [],
+      },
+    ]);
+  });
+
+  it("clearMetroAlertsCache() 後會重新打 TDX", async () => {
+    await getMetroAlerts("TRTC");
+    clearMetroAlertsCache();
+    await getMetroAlerts("TRTC");
+
+    expect(tdxFetchMock).toHaveBeenCalledTimes(2);
   });
 });

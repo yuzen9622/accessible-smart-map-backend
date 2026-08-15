@@ -1,6 +1,9 @@
 import { tdxFetch } from "../../config/fetch";
 import { metroUrl } from "../../config/transit";
 import MetroStationModel from "../../model/metro-station.model";
+import type { MetroAlert, MetroAlertResult } from "../../types/transit";
+
+export type { MetroAlert, MetroAlertResult };
 
 const SUPPORTED_METRO_SYSTEMS = [
   "TRTC",
@@ -31,33 +34,40 @@ interface TdxMetroAlertResponse {
   Alerts: TdxMetroAlert[];
 }
 
-export interface MetroAlert {
-  alertId: string;
-  title: string;
-  description: string;
-  status: number;
-  stations: Array<{ id: string; name: string | null }>;
-  lines: string[];
-  publishTime: string;
-  updateTime: string;
-}
-
-export interface MetroAlertResult {
-  railSystem: string;
-  updatedAt: string;
-  alerts: MetroAlert[];
-}
-
 const NORMAL_ALERT_TITLES = new Set(["正常營運", "目前全線正常營運"]);
+
+/** TDX refreshes the alert feed once a minute, so a shorter TTL only adds load. */
+const METRO_ALERT_CACHE_TTL_MS = 60_000;
+const METRO_ALERT_FETCH_TIMEOUT_MS = 5_000;
+const alertCache = new Map<
+  string,
+  { data: TdxMetroAlertResponse; expiresAt: number }
+>();
+
+/** Drop every cached alert payload (tests, or a forced refresh). */
+export function clearMetroAlertsCache(): void {
+  alertCache.clear();
+}
 
 async function fetchMetroAlerts(
   railSystem: string,
 ): Promise<TdxMetroAlertResponse> {
+  const cached = alertCache.get(railSystem);
+  if (cached && cached.expiresAt > Date.now()) return cached.data;
+
+  // Fail-open guard: a hanging TDX request must never stall route planning,
+  // which awaits these lookups through Promise.allSettled.
   const response = await tdxFetch(
     `${metroUrl.alertUrl(railSystem)}?$format=JSON`,
+    { signal: AbortSignal.timeout(METRO_ALERT_FETCH_TIMEOUT_MS) },
   );
   if (!response.ok) throw new Error(`TDX ${response.status}`);
-  return (await response.json()) as TdxMetroAlertResponse;
+  const data = (await response.json()) as TdxMetroAlertResponse;
+  alertCache.set(railSystem, {
+    data,
+    expiresAt: Date.now() + METRO_ALERT_CACHE_TTL_MS,
+  });
+  return data;
 }
 
 /**

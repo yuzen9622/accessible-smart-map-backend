@@ -205,8 +205,13 @@ export type TdxThsrGeneralTimetableItem = {
       DepartureTime: string;
     }>;
     ServiceDay?: {
-      Sunday: boolean; Monday: boolean; Tuesday: boolean;
-      Wednesday: boolean; Thursday: boolean; Friday: boolean; Saturday: boolean;
+      Sunday: boolean;
+      Monday: boolean;
+      Tuesday: boolean;
+      Wednesday: boolean;
+      Thursday: boolean;
+      Friday: boolean;
+      Saturday: boolean;
     };
   };
 };
@@ -247,8 +252,13 @@ export type TdxTraGeneralTimetableItem = {
       DepartureTime: string;
     }>;
     ServiceDay?: {
-      Sunday: boolean; Monday: boolean; Tuesday: boolean;
-      Wednesday: boolean; Thursday: boolean; Friday: boolean; Saturday: boolean;
+      Sunday: boolean;
+      Monday: boolean;
+      Tuesday: boolean;
+      Wednesday: boolean;
+      Thursday: boolean;
+      Friday: boolean;
+      Saturday: boolean;
     };
   };
 };
@@ -260,4 +270,23 @@ export type TdxTraStationFacility = {
     FacilityName?: { Zh_tw: string };
     Quantity?: number;
   }>;
+};
+
+/** One abnormal metro operating alert, station ids resolved to names when known. */
+export type MetroAlert = {
+  alertId: string;
+  title: string;
+  description: string;
+  status: number;
+  stations: Array<{ id: string; name: string | null }>;
+  lines: string[];
+  publishTime: string;
+  updateTime: string;
+};
+
+/** Alerts of one metro rail system, with the upstream payload's update time. */
+export type MetroAlertResult = {
+  railSystem: string;
+  updatedAt: string;
+  alerts: MetroAlert[];
 };

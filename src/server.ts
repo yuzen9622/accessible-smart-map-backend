@@ -3,17 +3,34 @@ import app from "./app";
 import mongoose from "mongoose";
 import { startHazardExpiryJob } from "./modules/hazard-report/hazard-report.expire";
 import { attachVoiceWebSocket } from "./modules/voice";
+import { attachAlertWebSocket } from "./modules/transit/alert.gateway";
 import { startPasswordAssistanceWorker } from "./modules/user/user.password-assistance.worker";
+import { startAlertIngestion } from "./modules/transit/alert.ingest";
+import { mqttConfig } from "./config/mqtt";
+import type { TdxMqttHandle } from "./adapters/tdx-mqtt.adapter";
 const PORT = process.env.PORT || 3000;
 let passwordAssistanceTimer: NodeJS.Timeout | undefined;
+let mqttHandle: TdxMqttHandle | undefined;
 
 const server = http.createServer(app);
 attachVoiceWebSocket(server);
+attachAlertWebSocket(server);
 server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
   console.log(`Health check: http://localhost:${PORT}/health`);
 });
+
+if (mqttConfig.enabled) {
+  startAlertIngestion()
+    .then((handle) => {
+      mqttHandle = handle;
+      console.log("TDX MQTT connected");
+    })
+    .catch((err) => {
+      console.error("TDX MQTT failed", err);
+    });
+}
 const uri = process.env.DATABASE_URL ?? "";
 
 mongoose
@@ -27,20 +44,19 @@ mongoose
     console.error("Error connecting to MongoDB:", err);
   });
 
-process.on("SIGTERM", () => {
-  console.log("SIGTERM received");
+function shutdown(signalLog: string): void {
+  console.log(signalLog);
   if (passwordAssistanceTimer) clearInterval(passwordAssistanceTimer);
-  server.close(() => {
-    console.log("Process terminated");
-  });
-});
+  void (async () => {
+    if (mqttHandle) await mqttHandle.stop();
+    server.close(() => {
+      console.log("Process terminated");
+    });
+  })();
+}
 
-process.on("SIGINT", () => {
-  console.log("\nSIGINT received");
-  if (passwordAssistanceTimer) clearInterval(passwordAssistanceTimer);
-  server.close(() => {
-    console.log("Process terminated");
-  });
-});
+process.on("SIGTERM", () => shutdown("SIGTERM received"));
+
+process.on("SIGINT", () => shutdown("\nSIGINT received"));
 
 export default server;

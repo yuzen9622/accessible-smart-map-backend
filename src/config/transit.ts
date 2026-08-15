@@ -11,8 +11,7 @@ export const busUrl = {
     "https://tdx.transportdata.tw/api/basic/v2/Bus/EstimatedTimeOfArrival/City",
   cityScheduleUrl:
     "https://tdx.transportdata.tw/api/basic/v2/Bus/Schedule/City",
-  cityVehicleUrl:
-    "https://tdx.transportdata.tw/api/basic/v2/Bus/Vehicle/City",
+  cityVehicleUrl: "https://tdx.transportdata.tw/api/basic/v2/Bus/Vehicle/City",
   interCityScheduleUrl:
     "https://tdx.transportdata.tw/api/basic/v2/Bus/Schedule/InterCity",
   interCityStopOfRouteUrl:
@@ -21,6 +20,15 @@ export const busUrl = {
     "https://tdx.transportdata.tw/api/basic/v2/Bus/EstimatedTimeOfArrival/Streaming/InterCity",
   interCityRealTimeByFrequencyUrl:
     "https://tdx.transportdata.tw/api/basic/v2/Bus/RealTimeByFrequency/Streaming/InterCity",
+};
+
+export const alertUrl = {
+  busCityUrl: (city: string) =>
+    `https://tdx.transportdata.tw/api/basic/v2/Bus/Alert/City/${city}`,
+  busInterCityUrl:
+    "https://tdx.transportdata.tw/api/basic/v2/Bus/Alert/InterCity",
+  traAlertUrl: "https://tdx.transportdata.tw/api/basic/v3/Rail/TRA/Alert",
+  thsrAlertUrl: "https://tdx.transportdata.tw/api/basic/v2/Rail/THSR/AlertInfo",
 };
 
 export const trainUrl = {

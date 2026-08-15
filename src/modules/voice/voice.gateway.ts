@@ -1,8 +1,13 @@
-import http from "http";
-import { WebSocketServer, WebSocket, RawData } from "ws";
+import type http from "http";
+import { WebSocketServer, WebSocket, type RawData } from "ws";
+import { registerWsRoute } from "../../config/ws-upgrade";
 import { authenticateToken } from "../../config/auth";
-import { createLiveBridge, LiveBridge } from "./live-bridge";
-import { NavPositionSchema, NavSetRouteSchema, type NavPosition } from "./navigation.schema";
+import { createLiveBridge, type LiveBridge } from "./live-bridge";
+import {
+  NavPositionSchema,
+  NavSetRouteSchema,
+  type NavPosition,
+} from "./navigation.schema";
 
 const VOICE_WS_PATH = "/api/v1/voice/ws";
 const DEFAULT_AUTH_TIMEOUT_MS = 5000;
@@ -40,7 +45,10 @@ class TokenBucket {
   private tokens: number;
   private updatedAt = Date.now();
 
-  constructor(private readonly refillPerSec: number, private readonly capacity: number) {
+  constructor(
+    private readonly refillPerSec: number,
+    private readonly capacity: number,
+  ) {
     this.tokens = capacity;
   }
 
@@ -80,8 +88,10 @@ function parseUserLocation(
 ): { latitude: number; longitude: number } | undefined {
   if (!value || typeof value !== "object") return undefined;
   const { latitude, longitude } = value as Record<string, unknown>;
-  if (typeof latitude !== "number" || typeof longitude !== "number") return undefined;
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return undefined;
+  if (typeof latitude !== "number" || typeof longitude !== "number")
+    return undefined;
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude))
+    return undefined;
   if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
     return undefined;
   }
@@ -107,10 +117,22 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
   let connGen = 0;
   let pendingRouteToken: string | null = null;
   let pendingPosition: NavPosition | null = null;
-  const frameBucket = new TokenBucket(CONTROL_FRAMES_PER_SEC, CONTROL_FRAMES_BURST);
-  const byteBucket = new TokenBucket(CONTROL_BYTES_PER_SEC, CONTROL_BYTES_BURST);
-  const controlBucket = new TokenBucket(CONTROL_MSGS_PER_SEC, CONTROL_MSGS_BURST);
-  const positionBucket = new TokenBucket(POSITION_MSGS_PER_SEC, POSITION_MSGS_BURST);
+  const frameBucket = new TokenBucket(
+    CONTROL_FRAMES_PER_SEC,
+    CONTROL_FRAMES_BURST,
+  );
+  const byteBucket = new TokenBucket(
+    CONTROL_BYTES_PER_SEC,
+    CONTROL_BYTES_BURST,
+  );
+  const controlBucket = new TokenBucket(
+    CONTROL_MSGS_PER_SEC,
+    CONTROL_MSGS_BURST,
+  );
+  const positionBucket = new TokenBucket(
+    POSITION_MSGS_PER_SEC,
+    POSITION_MSGS_BURST,
+  );
 
   const sendJson = (payload: Record<string, unknown>): void => {
     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload));
@@ -129,7 +151,10 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
     ws.ping();
   }, HEARTBEAT_INTERVAL_MS);
 
-  const handleAuthMessage = async (data: RawData, isBinary: boolean): Promise<void> => {
+  const handleAuthMessage = async (
+    data: RawData,
+    isBinary: boolean,
+  ): Promise<void> => {
     if (isBinary) {
       ws.close(4401, "unauthorized");
       return;
@@ -192,11 +217,17 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
     userLocation: ReturnType<typeof parseUserLocation>,
   ): Promise<void> => {
     try {
-      const createdBridge = await createLiveBridge({ ws, userId: id, userLocation });
-      if (disposed
-        || generation !== connGen
-        || ws.readyState !== WebSocket.OPEN
-        || connections.get(id) !== connection) {
+      const createdBridge = await createLiveBridge({
+        ws,
+        userId: id,
+        userLocation,
+      });
+      if (
+        disposed ||
+        generation !== connGen ||
+        ws.readyState !== WebSocket.OPEN ||
+        connections.get(id) !== connection
+      ) {
         createdBridge.close();
         return;
       }
@@ -252,9 +283,15 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
     }
     if (parsed?.type === "nav.setRoute") {
       if (!controlBucket.take()) return;
-      const result = NavSetRouteSchema.safeParse({ routeToken: parsed.routeToken });
+      const result = NavSetRouteSchema.safeParse({
+        routeToken: parsed.routeToken,
+      });
       if (!result.success) {
-        sendJson({ type: "nav.error", code: "NAV_ROUTE_INVALID", message: "路線憑證格式無效" });
+        sendJson({
+          type: "nav.error",
+          code: "NAV_ROUTE_INVALID",
+          message: "路線憑證格式無效",
+        });
         return;
       }
       if (bridge) void bridge.armRouteToken(result.data.routeToken);
@@ -281,7 +318,9 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
       bridge?.cancelNav();
       return;
     }
-    console.warn(`[voice] ignoring unexpected message type: ${String(parsed?.type)}`);
+    console.warn(
+      `[voice] ignoring unexpected message type: ${String(parsed?.type)}`,
+    );
   };
 
   ws.on("pong", () => {
@@ -344,19 +383,12 @@ export function attachVoiceWebSocket(
   options: AttachVoiceWebSocketOptions = {},
 ): void {
   const authTimeoutMs = options.authTimeoutMs ?? DEFAULT_AUTH_TIMEOUT_MS;
-  const wss = new WebSocketServer({ noServer: true, maxPayload: VOICE_MAX_PAYLOAD_BYTES });
-
-  server.on("upgrade", (request, socket, head) => {
-    const pathname = new URL(request.url ?? "", "http://localhost").pathname;
-    if (pathname !== VOICE_WS_PATH) {
-      socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
-      socket.destroy();
-      return;
-    }
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      wss.emit("connection", ws, request);
-    });
+  const wss = new WebSocketServer({
+    noServer: true,
+    maxPayload: VOICE_MAX_PAYLOAD_BYTES,
   });
+
+  registerWsRoute(server, { path: VOICE_WS_PATH, wss });
 
   wss.on("connection", (ws: WebSocket) => {
     handleConnection(ws, authTimeoutMs);

@@ -1,0 +1,429 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../../config/fetch", () => ({ tdxFetch: vi.fn() }));
+vi.mock("../../model/bus-route.model", () => ({ default: { find: vi.fn() } }));
+
+import { tdxFetch } from "../../config/fetch";
+import BusRouteModel from "../../model/bus-route.model";
+import { clearTransitAlertsCache, getTransitAlerts } from "./alert.service";
+import { upsertAlertSnapshot } from "./alert.store";
+
+const tdxFetchMock = tdxFetch as unknown as ReturnType<typeof vi.fn>;
+const routeFindMock = BusRouteModel.find as unknown as ReturnType<typeof vi.fn>;
+
+function mockTdxJson(payload: unknown): void {
+  tdxFetchMock.mockResolvedValue({ ok: true, json: async () => payload });
+}
+
+function mockBusRoutes(rows: unknown[]): void {
+  routeFindMock.mockReturnValue({ lean: () => Promise.resolve(rows) });
+}
+
+function busRouteDocument(overrides: Record<string, unknown> = {}) {
+  return {
+    routeId: "0100",
+    subRouteName: { Zh_tw: "總站→成德高中" },
+    direction: 0,
+    ...overrides,
+  };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  clearTransitAlertsCache();
+});
+
+describe("getTransitAlerts", () => {
+  it("matches a bus alert by Scope.Routes RouteID", async () => {
+    mockBusRoutes([busRouteDocument()]);
+    mockTdxJson([
+      {
+        AlertID: "bus-route-id",
+        Title: "改道",
+        Description: "路線改道",
+        Status: 2,
+        Scope: {
+          Routes: [
+            {
+              RouteID: "0100",
+              RouteName: { Zh_tw: "總站→成德高中" },
+              Direction: 0,
+            },
+          ],
+        },
+      },
+    ]);
+
+    const result = await getTransitAlerts({
+      mode: "bus",
+      city: "Taipei",
+      routeName: "307",
+      direction: 0,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.alerts).toHaveLength(1);
+    expect(result.alerts[0]).toMatchObject({
+      alertId: "bus-route-id",
+      matchKind: "route",
+    });
+  });
+
+  it("matches a direction-scoped bus alert when the user omits direction", async () => {
+    mockBusRoutes([busRouteDocument()]);
+    mockTdxJson([
+      {
+        AlertID: "bus-omit-dir",
+        Title: "改道",
+        Description: "去程改道",
+        Status: 2,
+        Scope: {
+          Routes: [
+            {
+              RouteID: "0100",
+              RouteName: { Zh_tw: "總站→成德高中" },
+              Direction: 0,
+            },
+          ],
+        },
+      },
+    ]);
+
+    const result = await getTransitAlerts({
+      mode: "bus",
+      city: "Taipei",
+      routeName: "307",
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.alerts).toHaveLength(1);
+    expect(result.alerts[0]).toMatchObject({
+      alertId: "bus-omit-dir",
+      matchKind: "route",
+    });
+  });
+
+  it("does not treat bus Direction 2 (迴圈) as a wildcard direction", async () => {
+    mockBusRoutes([busRouteDocument()]);
+    mockTdxJson([
+      {
+        AlertID: "bus-loop",
+        Title: "改道",
+        Description: "迴圈改道",
+        Status: 2,
+        Scope: {
+          Routes: [
+            {
+              RouteID: "0100",
+              RouteName: { Zh_tw: "總站→成德高中" },
+              Direction: 2,
+            },
+          ],
+        },
+      },
+    ]);
+
+    const result = await getTransitAlerts({
+      mode: "bus",
+      city: "Taipei",
+      routeName: "307",
+      direction: 0,
+    });
+
+    expect(result).toMatchObject({ ok: true, alerts: [] });
+  });
+
+  it("matches a bus alert RouteName against the resolved sub-route terminal name", async () => {
+    mockBusRoutes([busRouteDocument({ routeId: "different-route-id" })]);
+    mockTdxJson([
+      {
+        AlertID: "bus-route-name",
+        Title: "改道",
+        Description: "路線改道",
+        Status: 2,
+        Scope: {
+          Routes: [
+            {
+              RouteID: "unrelated",
+              RouteName: { Zh_tw: "總站→成德高中" },
+              Direction: 0,
+            },
+          ],
+        },
+      },
+    ]);
+
+    const result = await getTransitAlerts({
+      mode: "bus",
+      city: "Taipei",
+      routeName: "307",
+      direction: 0,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.alerts[0]).toMatchObject({
+      alertId: "bus-route-name",
+      matchKind: "route",
+    });
+  });
+
+  it("matches a bus alert stop by stopUid", async () => {
+    mockBusRoutes([busRouteDocument()]);
+    mockTdxJson([
+      {
+        AlertID: "bus-stop",
+        Title: "取消停靠",
+        Description: "本站不停靠",
+        Status: 2,
+        Scope: {
+          Stops: [{ StopID: "STOP-1", StopName: { Zh_tw: "市政府" } }],
+        },
+      },
+    ]);
+
+    const result = await getTransitAlerts({
+      mode: "bus",
+      city: "Taipei",
+      routeName: "307",
+      stopUid: "STOP-1",
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.alerts[0]).toMatchObject({
+      alertId: "bus-stop",
+      matchKind: "stop",
+    });
+  });
+
+  it("filters normal bus alerts with Status === 1", async () => {
+    mockBusRoutes([busRouteDocument()]);
+    mockTdxJson([
+      {
+        AlertID: "bus-normal",
+        Title: "正常",
+        Description: "正常營運",
+        Status: 1,
+        Scope: {
+          Routes: [
+            {
+              RouteID: "0100",
+              RouteName: { Zh_tw: "總站→成德高中" },
+              Direction: 0,
+            },
+          ],
+        },
+      },
+    ]);
+
+    const result = await getTransitAlerts({
+      mode: "bus",
+      city: "Taipei",
+      routeName: "307",
+      direction: 0,
+    });
+
+    expect(result).toMatchObject({ ok: true, alerts: [] });
+  });
+
+  it("matches a metro line when Scope.Lines uses object records", async () => {
+    mockTdxJson({
+      Alerts: [
+        {
+          AlertID: "metro-line-object",
+          Title: "異常",
+          Description: "紅線異常",
+          Status: 2,
+          Scope: {
+            Lines: [{ LineID: "R", LineName: { Zh_tw: "淡水信義線" } }],
+          },
+        },
+      ],
+    });
+
+    const result = await getTransitAlerts({
+      mode: "metro",
+      railSystem: "TRTC",
+      lineCode: "R",
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.alerts[0]).toMatchObject({
+      alertId: "metro-line-object",
+      matchKind: "line",
+    });
+  });
+
+  it("matches a metro line when Scope.Lines uses string records", async () => {
+    mockTdxJson({
+      Alerts: [
+        {
+          AlertID: "metro-line-string",
+          Title: "異常",
+          Description: "紅線異常",
+          Status: 2,
+          Scope: { Lines: ["R"] },
+        },
+      ],
+    });
+
+    const result = await getTransitAlerts({
+      mode: "metro",
+      railSystem: "TRTC",
+      lineCode: "R",
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.alerts[0]).toMatchObject({
+      alertId: "metro-line-string",
+      matchKind: "line",
+    });
+  });
+
+  it("matches a metro station in Scope.Stations", async () => {
+    mockTdxJson({
+      Alerts: [
+        {
+          AlertID: "metro-station",
+          Title: "電梯維修",
+          Description: "R10 電梯維修",
+          Status: 2,
+          Scope: {
+            Stations: [{ StationID: "R10", StationName: { Zh_tw: "中山" } }],
+          },
+        },
+      ],
+    });
+
+    const result = await getTransitAlerts({
+      mode: "metro",
+      railSystem: "TRTC",
+      stationIds: ["R10"],
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.alerts[0]).toMatchObject({
+      alertId: "metro-station",
+      matchKind: "station",
+    });
+  });
+
+  it("matches a TRA alert by TrainNo", async () => {
+    mockTdxJson({
+      Alerts: [
+        {
+          AlertID: "tra-train",
+          Title: "延誤",
+          Description: "列車延誤",
+          Status: 2,
+          Direction: 0,
+          Scope: { Trains: [{ TrainNo: "123" }] },
+        },
+      ],
+    });
+
+    const result = await getTransitAlerts({
+      mode: "tra",
+      trainNo: "123",
+      direction: 0,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.alerts[0]).toMatchObject({
+      alertId: "tra-train",
+      matchKind: "train",
+    });
+  });
+
+  it("matches a THSR alert section that covers the requested OD", async () => {
+    mockTdxJson([
+      {
+        AlertID: "thsr-section",
+        Title: "全停",
+        Description: "區間停駛",
+        Status: "X",
+        Direction: 0,
+        Scope: {
+          LineSections: [
+            {
+              LineID: "THSR",
+              StartingStationID: "1000",
+              EndingStationID: "1200",
+            },
+          ],
+        },
+      },
+    ]);
+
+    const result = await getTransitAlerts({
+      mode: "thsr",
+      direction: 0,
+      fromStationId: "1050",
+      toStationId: "1100",
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.alerts[0]).toMatchObject({
+      alertId: "thsr-section",
+      matchKind: "section",
+    });
+  });
+
+  it("filters alerts whose EndTime has passed", async () => {
+    mockTdxJson({
+      Alerts: [
+        {
+          AlertID: "expired-metro",
+          Title: "過期異常",
+          Description: "不應顯示",
+          Status: 2,
+          EndTime: "2000-01-01T00:00:00+08:00",
+          Scope: { Lines: ["R"] },
+        },
+      ],
+    });
+
+    const result = await getTransitAlerts({
+      mode: "metro",
+      railSystem: "TRTC",
+      lineCode: "R",
+    });
+
+    expect(result).toMatchObject({ ok: true, alerts: [] });
+  });
+
+  it("serves a fresh store snapshot without calling TDX", async () => {
+    upsertAlertSnapshot(
+      "metro:TRTC",
+      [
+        {
+          AlertID: "metro-from-mqtt",
+          Title: "\u7570\u5e38",
+          Description: "\u7d05\u7dda\u7570\u5e38",
+          Status: 2,
+          Scope: { Lines: ["R"] },
+        },
+      ],
+      "mqtt",
+    );
+
+    const result = await getTransitAlerts({
+      mode: "metro",
+      railSystem: "TRTC",
+      lineCode: "R",
+    });
+
+    expect(tdxFetchMock).not.toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.alerts[0]).toMatchObject({ alertId: "metro-from-mqtt" });
+  });
+});
