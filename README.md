@@ -330,14 +330,20 @@ docker compose up -d
 
 我們使用 pnpm 腳本來管理所有日常開發與建構工作：
 
-| 腳本名稱          | 終端指令                    | 說明                                      |
-| ----------------- | --------------------------- | ----------------------------------------- |
-| `pnpm dev`        | `dotenvx run -- nodemon`    | 開發模式啟動 (支援熱重載與環境變數載入)   |
-| `pnpm build`      | `pnpm run lint:arch && tsc` | 分層邊界檢查 + 編譯 TypeScript 至 `dist/` |
-| `pnpm start`      | `node dist/server.js`       | 啟動生產模式伺服器                        |
-| `pnpm clean`      | `rimraf dist`               | 清除建構產出的編譯檔案                    |
-| `pnpm test`       | `vitest run`                | 執行所有單元測試與整合測試                |
-| `pnpm test:watch` | `vitest`                    | 以互動式監控模式執行測試                  |
+| 腳本名稱            | 終端指令                                  | 說明                                      |
+| ------------------- | ----------------------------------------- | ----------------------------------------- |
+| `pnpm dev`          | `dotenvx run -- nodemon`                  | 開發模式啟動 (支援熱重載與環境變數載入)   |
+| `pnpm build`        | `pnpm run lint:arch && tsc`               | 分層邊界檢查 + 編譯 TypeScript 至 `dist/` |
+| `pnpm start`        | `node dist/server.js`                     | 啟動生產模式伺服器                        |
+| `pnpm clean`        | `rimraf dist`                             | 清除建構產出的編譯檔案                    |
+| `pnpm test`         | `vitest run`                              | 執行所有單元測試與整合測試                |
+| `pnpm test:watch`   | `vitest`                                  | 以互動式監控模式執行測試                  |
+| `pnpm lint`         | `eslint .`                                | 檢查程式碼品質 (ESLint flat config)       |
+| `pnpm lint:fix`     | `eslint . --fix`                          | 自動修復可修正的 lint 問題                |
+| `pnpm format`       | `prettier --write .`                      | 以 Prettier 統一整份程式碼風格            |
+| `pnpm format:check` | `prettier --check .`                      | 檢查格式是否與 Prettier 一致              |
+| `pnpm typecheck`    | `tsc -p tsconfig.typecheck.json --noEmit` | 型別檢查（含測試檔）                      |
+| `pnpm lint:arch`    | `node src/scripts/check-architecture.mjs` | 分層邊界檢查（build 前自動跑）            |
 
 ---
 
@@ -389,6 +395,23 @@ curl http://localhost:5000/health
   ```
 
 - 測試檔案與程式碼同級，遵循 `*.test.ts` 的命名規則。
+
+### 持續整合（GitHub Actions）
+
+PR 與 push 至 `main` 時，GitHub Actions 會依序執行以下檢查（`.github/workflows/ci.yml`）：
+
+| CI 步驟                     | 本機對應指令                     |
+| --------------------------- | -------------------------------- |
+| 安裝依賴（frozen lockfile） | `pnpm install --frozen-lockfile` |
+| 架構邊界檢查                | `pnpm run lint:arch`             |
+| 建構                        | `pnpm run build`                 |
+| Lint                        | `pnpm run lint`                  |
+| 格式檢查                    | `pnpm run format:check`          |
+| 型別檢查（含測試檔）        | `pnpm run typecheck`             |
+| 測試                        | `pnpm test`                      |
+| 依賴安全稽核（high 以上）   | `pnpm audit --audit-level high`  |
+
+提交前亦可使用 pre-commit hook（husky + lint-staged）自動對 **已暫存** 的檔案執行 `prettier --write` 與 `eslint --fix`，不需要手動跑完整檢查。
 
 ---
 
