@@ -3,14 +3,17 @@ import { WebSocketServer, WebSocket, type RawData } from "ws";
 import { registerWsRoute } from "../../config/ws-upgrade";
 import { getTransitAlerts, type TransitContext } from "./alert.service";
 import { onAlertSnapshotUpdate } from "./alert.store";
+import {
+  AlertClientMessageSchema,
+  describeIssues,
+  type AlertClientMessage,
+} from "./alert.ws.schema";
 
 export const ALERT_WS_PATH = "/api/v1/transit/alerts/ws";
 
 const ALERT_MAX_PAYLOAD_BYTES = 64 * 1024;
 
-type ClientMessage =
-  | { type: "subscribe"; ctx: TransitContext }
-  | { type: "unsubscribe" };
+type ClientMessage = AlertClientMessage;
 
 export function keyRelevantToContext(
   key: string,
@@ -33,24 +36,36 @@ export function keyRelevantToContext(
   }
 }
 
+/**
+ * Validates one client frame against the WebSocket contract.
+ *
+ * A rejected frame is reported on the server log and then ignored, which is
+ * what this gateway has always done: it never sends an error frame and never
+ * closes the socket over a bad message.
+ *
+ * @param raw The received frame
+ * @returns The parsed message, or null when it does not satisfy the contract
+ */
 function parseClientMessage(raw: RawData): ClientMessage | null {
-  let parsed: unknown;
+  let payload: unknown;
   try {
-    parsed = JSON.parse(raw.toString());
+    payload = JSON.parse(raw.toString());
   } catch {
+    console.warn("[transit-alerts] ignoring unparseable message");
     return null;
   }
-  if (!parsed || typeof parsed !== "object") return null;
-  const message = parsed as Record<string, unknown>;
-  if (message.type === "unsubscribe") return { type: "unsubscribe" };
-  if (
-    message.type === "subscribe" &&
-    message.ctx &&
-    typeof message.ctx === "object"
-  ) {
-    return { type: "subscribe", ctx: message.ctx as TransitContext };
+  const result = AlertClientMessageSchema.safeParse(payload);
+  if (!result.success) {
+    console.warn(
+      `[transit-alerts] ignoring invalid message: ${describeIssues(result.error)}`,
+    );
+    return null;
   }
-  return null;
+  if (result.data.type === "unsubscribe") return { type: "unsubscribe" };
+  return {
+    type: "subscribe",
+    ctx: result.data.ctx as unknown as TransitContext,
+  };
 }
 
 export function attachAlertWebSocket(server: http.Server): void {

@@ -3,11 +3,16 @@ import { WebSocketServer, WebSocket, type RawData } from "ws";
 import { registerWsRoute } from "../../config/ws-upgrade";
 import { authenticateToken } from "../../config/auth";
 import { createLiveBridge, type LiveBridge } from "./live-bridge";
+import { type NavPosition } from "./navigation.schema";
 import {
-  NavPositionSchema,
-  NavSetRouteSchema,
-  type NavPosition,
-} from "./navigation.schema";
+  NavCancelMessageSchema,
+  NavPositionMessageSchema,
+  NavSetRouteMessageSchema,
+  SessionEndMessageSchema,
+  SessionStartMessageSchema,
+  UserLocationSchema,
+  describeIssues,
+} from "./voice.ws.schema";
 
 const VOICE_WS_PATH = "/api/v1/voice/ws";
 const DEFAULT_AUTH_TIMEOUT_MS = 5000;
@@ -83,19 +88,20 @@ function rawDataToBuffer(data: RawData): Buffer {
  * @param value The raw userLocation value from the client.
  * @returns A validated latitude/longitude pair, or undefined.
  */
+/**
+ * Reads the optional starting position off a `session.start` frame.
+ *
+ * An unusable location is dropped rather than rejected: the handshake still
+ * succeeds, the session just starts without a position.
+ *
+ * @param value The raw `userLocation` field
+ * @returns The validated coordinates, or undefined
+ */
 function parseUserLocation(
   value: unknown,
 ): { latitude: number; longitude: number } | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const { latitude, longitude } = value as Record<string, unknown>;
-  if (typeof latitude !== "number" || typeof longitude !== "number")
-    return undefined;
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude))
-    return undefined;
-  if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
-    return undefined;
-  }
-  return { latitude, longitude };
+  const result = UserLocationSchema.safeParse(value);
+  return result.success ? result.data : undefined;
 }
 
 /**
@@ -171,11 +177,15 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
       ws.close(4401, "unauthorized");
       return;
     }
-    if (parsed?.type !== "session.start" || typeof parsed.token !== "string") {
+    const handshake = SessionStartMessageSchema.safeParse(parsed);
+    if (!handshake.success) {
+      console.warn(
+        `[voice] rejecting handshake: ${describeIssues(handshake.error)}`,
+      );
       ws.close(4401, "unauthorized");
       return;
     }
-    const result = await authenticateToken(parsed.token);
+    const result = await authenticateToken(handshake.data.token);
     if (!result.ok) {
       authQueue = [];
       ws.close(4401, "unauthorized");
@@ -186,7 +196,7 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
     const generation = ++connGen;
     clearTimeout(authTimer);
     userId = id;
-    const userLocation = parseUserLocation(parsed.userLocation);
+    const userLocation = parseUserLocation(handshake.data.userLocation);
     const existing = connections.get(id);
     if (existing) existing.ws.close(4409, "superseded");
     const connection: VoiceConnection = { ws, bridge: null };
@@ -269,7 +279,7 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
       console.warn("[voice] ignoring unparseable text message");
       return;
     }
-    if (parsed?.type === "session.end") {
+    if (SessionEndMessageSchema.safeParse(parsed).success) {
       disposed = true;
       connGen++;
       pendingRouteToken = null;
@@ -283,10 +293,11 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
     }
     if (parsed?.type === "nav.setRoute") {
       if (!controlBucket.take()) return;
-      const result = NavSetRouteSchema.safeParse({
-        routeToken: parsed.routeToken,
-      });
+      const result = NavSetRouteMessageSchema.safeParse(parsed);
       if (!result.success) {
+        console.warn(
+          `[voice] rejecting nav.setRoute: ${describeIssues(result.error)}`,
+        );
         sendJson({
           type: "nav.error",
           code: "NAV_ROUTE_INVALID",
@@ -300,18 +311,19 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
     }
     if (parsed?.type === "nav.position") {
       if (!positionBucket.take()) return;
-      const result = NavPositionSchema.safeParse({
-        latitude: parsed.latitude,
-        longitude: parsed.longitude,
-        ...(parsed.heading === undefined ? {} : { heading: parsed.heading }),
-        ...(parsed.accuracy === undefined ? {} : { accuracy: parsed.accuracy }),
-      });
-      if (!result.success) return;
-      if (bridge) bridge.updatePosition(result.data);
-      else pendingPosition = result.data;
+      const result = NavPositionMessageSchema.safeParse(parsed);
+      if (!result.success) {
+        console.warn(
+          `[voice] ignoring nav.position: ${describeIssues(result.error)}`,
+        );
+        return;
+      }
+      const { type: _type, ...position } = result.data;
+      if (bridge) bridge.updatePosition(position);
+      else pendingPosition = position;
       return;
     }
-    if (parsed?.type === "nav.cancel") {
+    if (NavCancelMessageSchema.safeParse(parsed).success) {
       if (!controlBucket.take()) return;
       pendingRouteToken = null;
       pendingPosition = null;
