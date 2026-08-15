@@ -61,7 +61,9 @@ const corsOrigins = process.env.CORS_ORIGINS?.split(",")
   .filter(Boolean) ?? ["http://localhost:3000"];
 app.use(cors({ origin: corsOrigins, credentials: true }));
 
-app.use(morgan("common"));
+if (process.env.NODE_ENV !== "test") {
+  app.use(morgan("common"));
+}
 app.use(cookieParser());
 
 // LINE webhook is the one exception that must mount BEFORE express.json():
