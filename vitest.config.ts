@@ -21,5 +21,33 @@ export default defineConfig({
       JWT_ACCESS_SECRET: "test-access-secret",
       JWT_REFRESH_SECRET: "test-refresh-secret",
     },
+    coverage: {
+      provider: "v8",
+      // Covers the whole src/ tree — Vitest 4 automatically folds in files no
+      // test imports when a full run happens. Test files, setup files and the
+      // vitest config are excluded automatically by Vitest itself.
+      include: ["src/**/*.ts"],
+      // Coordinator-approved exclusions (2026-08-15) — do not extend further:
+      exclude: [
+        // One-off import/migration/eval/smoke CLI scripts that require live
+        // external services (TDX, GTFS feeds, DB, Redis); not runtime business
+        // modules reachable from the API.
+        "src/scripts/**",
+        // Pure type declarations — no runtime statements.
+        "src/types/**",
+        // Pure barrel re-exports that only register each module's router.
+        "src/modules/*/index.ts",
+      ],
+      reporter: ["text", "json-summary", "html"],
+      // Coordinator-approved global thresholds (baseline lock, 2026-08-15):
+      // ratchet up, never down. `vitest run --coverage` exits non-zero when
+      // any metric drops below, which gates CI.
+      thresholds: {
+        statements: 68,
+        branches: 58,
+        functions: 70,
+        lines: 70,
+      },
+    },
   },
 });

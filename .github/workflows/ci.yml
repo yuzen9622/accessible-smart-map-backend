@@ -43,8 +43,10 @@ jobs:
       - name: Typecheck (incl. tests)
         run: pnpm run typecheck
 
-      - name: Test
-        run: pnpm test
+      # Runs the full suite AND applies the coverage thresholds from
+      # vitest.config.ts — exits non-zero below threshold, so this gates.
+      - name: Test with coverage gate
+        run: pnpm run test:coverage
 
       - name: Audit (high and above)
         run: pnpm audit --audit-level high
