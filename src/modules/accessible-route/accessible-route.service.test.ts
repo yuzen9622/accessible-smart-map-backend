@@ -19,7 +19,13 @@ vi.mock("./planners/valhalla-routing", () => ({
 // Spread-actual: only override the a11y hooks the driving path calls.
 vi.mock("../a11y/a11y.service", async (importActual) => {
 	const actual = await importActual<typeof import("../a11y/a11y.service")>();
-	return { ...actual, findNearbyParking: vi.fn(), findNearby: vi.fn() };
+	return { ...actual, findNearbyParking: vi.fn() };
+});
+
+vi.mock("../a11y/a11y.orchestration", async (importActual) => {
+	const actual =
+		await importActual<typeof import("../a11y/a11y.orchestration")>();
+	return { ...actual, findNearby: vi.fn() };
 });
 
 // Mock route-a11y to isolate Mongo DB calls during transit route enrichment
@@ -75,7 +81,8 @@ import {
 	planValhallaRoute,
 	ValhallaRoutingError,
 } from "./planners/valhalla-routing";
-import { findNearbyParking, findNearby } from "../a11y/a11y.service";
+import { findNearbyParking } from "../a11y/a11y.service";
+import { findNearby } from "../a11y/a11y.orchestration";
 import {
 	planOtpRouteDetailed,
 	planOtpWalkDetailed,

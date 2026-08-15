@@ -6,18 +6,29 @@ vi.mock("./a11y.service", async () => {
 		await vi.importActual<typeof import("./a11y.service")>("./a11y.service");
 	return {
 		...actual,
+		getServiceCoverage: vi.fn(),
+		findNearbyParking: vi.fn(),
+	};
+});
+
+vi.mock("./a11y.orchestration", async () => {
+	const actual =
+		await vi.importActual<typeof import("./a11y.orchestration")>(
+			"./a11y.orchestration",
+		);
+	return {
+		...actual,
 		findAllFacilities: vi.fn(),
 		findBathroomFacilities: vi.fn(),
 		findRampFacilities: vi.fn(),
 		findElevatorFacilities: vi.fn(),
-		getServiceCoverage: vi.fn(),
-		findNearbyParking: vi.fn(),
 		assessQuickAccess: vi.fn(),
 	};
 });
 
 import { buildTestApp } from "../../../tests/helpers/test-helpers";
 import * as service from "./a11y.service";
+import * as orchestration from "./a11y.orchestration";
 import {
 	DEFAULT_SERVICE_COVERAGE_BBOX,
 	MAX_ROUTE_DISTANCE_KM,
@@ -65,7 +76,7 @@ describe("a11y facility list routes", () => {
 	for (const { path, fn, source } of cases) {
 		it(`GET ${path} returns 200 with the service output echoed through the envelope`, async () => {
 			const data = [facility(`${fn}-1`, source)];
-			vi.mocked(service[fn]).mockResolvedValue(data as any);
+			vi.mocked(orchestration[fn]).mockResolvedValue(data as any);
 
 			const res = await request(app).get(`${BASE}${path}`);
 
@@ -76,12 +87,12 @@ describe("a11y facility list routes", () => {
 				code: 200,
 			});
 			expect(res.body.data).toEqual(data);
-			expect(vi.mocked(service[fn])).toHaveBeenCalledTimes(1);
+			expect(vi.mocked(orchestration[fn])).toHaveBeenCalledTimes(1);
 		});
 
 		it(`GET ${path} returns a 500 envelope with the fixed internal message when the service throws`, async () => {
 			const secret = "SENSITIVE_DB_CONNECTION_STRING_LEAK";
-			vi.mocked(service[fn]).mockRejectedValue(new Error(secret));
+			vi.mocked(orchestration[fn]).mockRejectedValue(new Error(secret));
 
 			const res = await request(app).get(`${BASE}${path}`);
 
@@ -98,52 +109,52 @@ describe("a11y facility list routes", () => {
 
 	describe("GET /all-facilities category filter", () => {
 		it("passes the parsed whitelist to the service", async () => {
-			vi.mocked(service.findAllFacilities).mockResolvedValue([]);
+			vi.mocked(orchestration.findAllFacilities).mockResolvedValue([]);
 
 			const res = await request(app).get(
 				`${BASE}/all-facilities?category=elevator,ramp`,
 			);
 
 			expect(res.status).toBe(200);
-			expect(vi.mocked(service.findAllFacilities)).toHaveBeenCalledWith([
+			expect(vi.mocked(orchestration.findAllFacilities)).toHaveBeenCalledWith([
 				"elevator",
 				"ramp",
 			]);
 		});
 
 		it("passes undefined to the service when the param is omitted", async () => {
-			vi.mocked(service.findAllFacilities).mockResolvedValue([]);
+			vi.mocked(orchestration.findAllFacilities).mockResolvedValue([]);
 
 			const res = await request(app).get(`${BASE}/all-facilities`);
 
 			expect(res.status).toBe(200);
-			expect(vi.mocked(service.findAllFacilities)).toHaveBeenCalledWith(
+			expect(vi.mocked(orchestration.findAllFacilities)).toHaveBeenCalledWith(
 				undefined,
 			);
 		});
 
 		it("dedupes repeated categories", async () => {
-			vi.mocked(service.findAllFacilities).mockResolvedValue([]);
+			vi.mocked(orchestration.findAllFacilities).mockResolvedValue([]);
 
 			const res = await request(app).get(
 				`${BASE}/all-facilities?category=elevator,elevator`,
 			);
 
 			expect(res.status).toBe(200);
-			expect(vi.mocked(service.findAllFacilities)).toHaveBeenCalledWith([
+			expect(vi.mocked(orchestration.findAllFacilities)).toHaveBeenCalledWith([
 				"elevator",
 			]);
 		});
 
 		it("trims whitespace around tokens", async () => {
-			vi.mocked(service.findAllFacilities).mockResolvedValue([]);
+			vi.mocked(orchestration.findAllFacilities).mockResolvedValue([]);
 
 			const res = await request(app).get(
 				`${BASE}/all-facilities?category=%20elevator%20,%20ramp%20`,
 			);
 
 			expect(res.status).toBe(200);
-			expect(vi.mocked(service.findAllFacilities)).toHaveBeenCalledWith([
+			expect(vi.mocked(orchestration.findAllFacilities)).toHaveBeenCalledWith([
 				"elevator",
 				"ramp",
 			]);
@@ -172,22 +183,22 @@ describe("a11y facility list routes", () => {
 				});
 				expect(Array.isArray(res.body.data.errors)).toBe(true);
 				expect(res.body.data.errors.length).toBeGreaterThan(0);
-				expect(vi.mocked(service.findAllFacilities)).not.toHaveBeenCalled();
+				expect(vi.mocked(orchestration.findAllFacilities)).not.toHaveBeenCalled();
 			});
 		}
 	});
 
 	it("wires each path to its own service function", async () => {
-		vi.mocked(service.findAllFacilities).mockResolvedValue([
+		vi.mocked(orchestration.findAllFacilities).mockResolvedValue([
 			facility("A", "metro"),
 		] as any);
-		vi.mocked(service.findBathroomFacilities).mockResolvedValue([
+		vi.mocked(orchestration.findBathroomFacilities).mockResolvedValue([
 			facility("B", "bathroom"),
 		] as any);
-		vi.mocked(service.findRampFacilities).mockResolvedValue([
+		vi.mocked(orchestration.findRampFacilities).mockResolvedValue([
 			facility("R", "osm"),
 		] as any);
-		vi.mocked(service.findElevatorFacilities).mockResolvedValue([
+		vi.mocked(orchestration.findElevatorFacilities).mockResolvedValue([
 			facility("E", "campus"),
 		] as any);
 
@@ -361,7 +372,7 @@ describe("GET /quick-assess", () => {
 			radiusM: 200,
 			mode: "wheelchair",
 		};
-		vi.mocked(service.assessQuickAccess).mockResolvedValue(result as any);
+		vi.mocked(orchestration.assessQuickAccess).mockResolvedValue(result as any);
 
 		const res = await request(app).get(
 			`${BASE}/quick-assess?lat=25.033&lng=121.565&mode=wheelchair`,
@@ -370,12 +381,12 @@ describe("GET /quick-assess", () => {
 		expect(res.status).toBe(200);
 		expect(res.body).toMatchObject({ ok: true, status: "success", code: 200 });
 		expect(res.body.data).toEqual(result);
-		expect(vi.mocked(service.assessQuickAccess)).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(orchestration.assessQuickAccess)).toHaveBeenCalledTimes(1);
 	});
 
 	it("returns 400 when lat/lng are missing", async () => {
 		const res = await request(app).get(`${BASE}/quick-assess`);
 		expect(res.status).toBe(400);
-		expect(vi.mocked(service.assessQuickAccess)).not.toHaveBeenCalled();
+		expect(vi.mocked(orchestration.assessQuickAccess)).not.toHaveBeenCalled();
 	});
 });

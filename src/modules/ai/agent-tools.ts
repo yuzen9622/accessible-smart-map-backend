@@ -1,4 +1,5 @@
 import * as a11yService from "../a11y/a11y.service";
+import * as a11yOrchestration from "../a11y/a11y.orchestration";
 import * as busService from "../transit/bus.service";
 import * as metroService from "../transit/metro.service";
 import * as trainService from "../transit/train.service";
@@ -104,7 +105,7 @@ export async function findA11yPlaces(args: {
 	}
 
 	try {
-		const places = await a11yService.findNearbyLimited(
+		const places = await a11yOrchestration.findNearbyLimited(
 			searchLat,
 			searchLng,
 			searchRange,
@@ -1401,7 +1402,7 @@ export async function findSosNearbyA11yPlaces(
 		if (!result?.session) {
 			return JSON.stringify({ ok: false, error: "找不到可查詢的 SOS session" });
 		}
-		const places = await a11yService.findNearbyLimited(
+		const places = await a11yOrchestration.findNearbyLimited(
 			result.session.lat,
 			result.session.lng,
 			args.range ?? 300,

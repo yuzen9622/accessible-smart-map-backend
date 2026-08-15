@@ -32,8 +32,16 @@ vi.mock("../a11y/a11y.service", async (importActual) => {
   const actual = await importActual<typeof import("../a11y/a11y.service")>();
   return {
     ...actual,
-    findNearby: vi.fn().mockResolvedValue({ nearbyOsm: [] }),
     findNearbyParking: vi.fn().mockResolvedValue([]),
+  };
+});
+
+vi.mock("../a11y/a11y.orchestration", async (importActual) => {
+  const actual =
+    await importActual<typeof import("../a11y/a11y.orchestration")>();
+  return {
+    ...actual,
+    findNearby: vi.fn().mockResolvedValue({ nearbyOsm: [] }),
   };
 });
 

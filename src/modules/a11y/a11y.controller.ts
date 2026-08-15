@@ -5,6 +5,7 @@ import type { ApiResponse } from "../../types/response";
 import { ResponseCode } from "../../types/code";
 import { MSG, ERROR_MESSAGE } from "../../constants/messages";
 import * as a11yService from "./a11y.service";
+import * as a11yOrchestration from "./a11y.orchestration";
 import type { A11yCategory, A11yFacility } from "./a11y.service";
 
 async function getAllFacilities(
@@ -15,7 +16,7 @@ async function getAllFacilities(
 		const { category } = (req.validated?.query ?? {}) as {
 			category?: A11yCategory[];
 		};
-		const data = await a11yService.findAllFacilities(category);
+		const data = await a11yOrchestration.findAllFacilities(category);
 		return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
 	} catch {
 		return sendResponse(
@@ -51,7 +52,7 @@ async function getBathrooms(
 	res: Response<ApiResponse<A11yFacility[]>>,
 ) {
 	try {
-		const data = await a11yService.findBathroomFacilities();
+		const data = await a11yOrchestration.findBathroomFacilities();
 		return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
 	} catch {
 		return sendResponse(
@@ -69,7 +70,7 @@ async function getRamps(
 	res: Response<ApiResponse<A11yFacility[]>>,
 ) {
 	try {
-		const data = await a11yService.findRampFacilities();
+		const data = await a11yOrchestration.findRampFacilities();
 		return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
 	} catch {
 		return sendResponse(
@@ -87,7 +88,7 @@ async function getElevators(
 	res: Response<ApiResponse<A11yFacility[]>>,
 ) {
 	try {
-		const data = await a11yService.findElevatorFacilities();
+		const data = await a11yOrchestration.findElevatorFacilities();
 		return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
 	} catch {
 		return sendResponse(
@@ -141,7 +142,7 @@ async function getA11yPlace(req: Request, res: Response<ApiResponse<any>>) {
 async function nearbyA11y(req: Request, res: Response<ApiResponse<any>>) {
 	try {
 		const { lat, lng } = req.query;
-		const result = await a11yService.findNearby(
+		const result = await a11yOrchestration.findNearby(
 			Number(lat as string),
 			Number(lng as string),
 		);
@@ -191,7 +192,7 @@ async function quickAssess(req: Request, res: Response<ApiResponse<any>>) {
 			mode?: a11yService.QuickAssessMode;
 			radius?: string;
 		};
-		const result = await a11yService.assessQuickAccess({
+		const result = await a11yOrchestration.assessQuickAccess({
 			lat: Number(lat),
 			lng: Number(lng),
 			mode,

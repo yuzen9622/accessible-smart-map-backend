@@ -453,7 +453,7 @@ async function applyExtraA11yAnnotations(
 
 	if (opts.needsAccessibleToilet) {
 		try {
-			const { findNearby } = await import("../a11y/a11y.service");
+			const { findNearby } = await import("../a11y/a11y.orchestration");
 			const near = await findNearby(dest.lat, dest.lng, 300);
 			const osmToiletCount = (near.nearbyOsm ?? []).filter(
 				(p: IOsmA11y) => p.category === "toilet",
@@ -1603,7 +1603,7 @@ async function attachDrivingA11yHighlights(
 ): Promise<void> {
 	if (!routes.length) return;
 	if (travelMode === "walk") {
-		const { findNearby } = await import("../a11y/a11y.service");
+		const { findNearby } = await import("../a11y/a11y.orchestration");
 		const near = await findNearby(destination.lat, destination.lng, 200);
 		const structures = (near.nearbyOsm ?? []).filter(
 			(p) => p.category === "elevator" || p.category === "ramp",

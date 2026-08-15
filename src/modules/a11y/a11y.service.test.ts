@@ -1,11 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { IA11y, IOsmA11y } from "../../types";
 import type { CampusFacilityPlace } from "../campus/campus.service";
-import {
-	campusToA11yPlace,
-	mergeA11yPlaces,
-	osmToA11yPlace,
-} from "./a11y.service";
+import { mergeA11yPlaces, osmToA11yPlace } from "./a11y.service";
+import { campusToA11yPlace } from "./a11y.orchestration";
 
 function makeCampusFacility(
 	overrides: Partial<CampusFacilityPlace> = {},
@@ -167,13 +164,13 @@ import DisabledParkingModel from "../../model/disabled-parking.model";
 import ParkingLotModel from "../../model/parking-lot.model";
 import ParkingSpaceModel from "../../model/parking-space.model";
 import * as campusService from "../campus/campus.service";
+import { findNearbyParking } from "./a11y.service";
 import {
 	findAllFacilities,
 	findBathroomFacilities,
 	findElevatorFacilities,
-	findNearbyParking,
 	findRampFacilities,
-} from "./a11y.service";
+} from "./a11y.orchestration";
 import { A11yFacilitySchema } from "./a11y.schema";
 
 const GEO = {
