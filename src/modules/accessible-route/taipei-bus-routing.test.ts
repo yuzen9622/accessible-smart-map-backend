@@ -4,7 +4,6 @@ import type {
   AccessibleRoute,
   WalkLeg,
   BusLeg,
-  TraLeg,
   MetroLeg,
 } from "../../types/route";
 import type { IOsmA11y } from "../../types";

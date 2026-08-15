@@ -252,7 +252,7 @@ async function fetchNearBy(
 		let res: Response;
 		try {
 			res = await tdxFetch(url);
-		} catch (err) {
+		} catch (_err) {
 			// 網路層失敗（ECONNRESET 等）：退避後重試
 			console.warn(
 				`  net-retry ${attempt + 1}/4 ${kind} @ ${lat.toFixed(2)},${lon.toFixed(2)}`,

@@ -34,7 +34,6 @@ import {
 const BCRYPT_COST = 12;
 const EMAIL_VERIFY_TTL_MS = 24 * 60 * 60 * 1000;
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000;
-const DB_OPERATION_MAX_MS = 10_000;
 
 /**
  * A hash of a value nobody can supply, compared against when the account does

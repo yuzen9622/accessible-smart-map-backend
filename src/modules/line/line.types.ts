@@ -1,5 +1,4 @@
 import type { webhook } from "@line/bot-sdk";
-import type { AccessibleRoute } from "../accessible-route/accessible-route.service";
 import type { PlanRouteResult } from "../accessible-route/accessible-route.service";
 import type { ResponseCode } from "../../types/code";
 import type { SosType } from "../sos/sos.types";

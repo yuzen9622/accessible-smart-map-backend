@@ -190,7 +190,7 @@ async function logout(_req: Request, res: Response) {
   try {
     res.cookie("refreshToken", "", { maxAge: 0 });
     return sendResponse(res, true, "success", ResponseCode.OK, "Logout successful");
-  } catch (error) {
+  } catch (_error) {
     return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, "Logout failed");
   }
 }

@@ -18,7 +18,7 @@
 import "dotenv/config";
 import fs from "fs";
 import path from "path";
-import pdf = require("pdf-parse");
+import pdf from "pdf-parse";
 import mammoth from "mammoth";
 import {
   ingestKnowledgeBatch,

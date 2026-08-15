@@ -1,5 +1,4 @@
 import type { webhook } from "@line/bot-sdk";
-import { Types } from "mongoose";
 import {
   findActiveSessionByShareToken,
   findLatestLocatedContact,

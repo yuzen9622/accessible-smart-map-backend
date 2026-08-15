@@ -1122,7 +1122,7 @@ export async function bindLineAccountCode(
 }
 
 export async function getActiveSosContext(
-	args: {},
+	args: object,
 	lineUserId?: string,
 ): Promise<string> {
 	if (!lineUserId) {

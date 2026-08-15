@@ -45,7 +45,7 @@ async function main() {
   }
 
   // Ensure location_type and parent_station headers exist
-  let newHeaders = [...headers];
+  const newHeaders = [...headers];
   if (locTypeIdx === -1) {
     locTypeIdx = newHeaders.length;
     newHeaders.push("location_type");
@@ -60,11 +60,10 @@ async function main() {
 
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i];
-    const parts = line.split(",");
-    let parsed: string[] = [];
+    const parsed: string[] = [];
     let current = "";
     let inQuotes = false;
-    for (let char of line) {
+    for (const char of line) {
       if (char === '"') inQuotes = !inQuotes;
       else if (char === ',' && !inQuotes) { parsed.push(current); current = ""; }
       else current += char;
@@ -149,11 +148,10 @@ async function main() {
       continue;
     }
     
-    const parts = st.originalLine.split(",");
-    let parsed: string[] = [];
+    const parsed: string[] = [];
     let current = "";
     let inQuotes = false;
-    for (let char of st.originalLine) {
+    for (const char of st.originalLine) {
       if (char === '"') inQuotes = !inQuotes;
       else if (char === ',' && !inQuotes) { parsed.push(current); current = ""; }
       else current += char;

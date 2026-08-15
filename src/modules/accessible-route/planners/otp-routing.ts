@@ -47,10 +47,7 @@ import type {
   WaitInfo,
 } from "../../../types/route";
 import type {
-  OtpStop,
-  OtpPlace,
   OtpLeg,
-  OtpStep,
   OtpItinerary,
   PlanOtpRouteOptions,
   SnapStop,

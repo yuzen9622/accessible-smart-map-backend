@@ -1,6 +1,6 @@
 import { sendResponse } from "../../config/lib";
 import { ResponseCode } from "../../types/code";
-import { MSG, ERROR_MESSAGE, TRANSIT_MSG } from "../../constants/messages";
+import { MSG, TRANSIT_MSG } from "../../constants/messages";
 import type { ApiResponse } from "../../types/response";
 import type { Response, Request } from "express";
 import type { TaiwanCityEn } from "../../types/transit";
@@ -204,14 +204,14 @@ async function getTransitAlertsHandler(
   }
 }
 
-async function getTrainData(req: Request, res: Response<ApiResponse<null>>) {
-  const { arrival_stop, departure_stop, train_no } = req.query;
+async function getTrainData(req: Request, _res: Response<ApiResponse<null>>) {
+  void req.query;
 }
 async function getHighSpeedTrainData(
   req: Request,
-  res: Response<ApiResponse<null>>,
+  _res: Response<ApiResponse<null>>,
 ) {
-  const { type, detail } = req.query;
+  void req.query;
 }
 
 async function searchBusRoutesHandler(

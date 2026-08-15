@@ -105,15 +105,6 @@ export function mergeA11yPlaces(
 	];
 }
 
-function makeGeoQuery(lng: number, lat: number, radiusM: number) {
-	return {
-		$near: {
-			$geometry: { type: "Point", coordinates: [lng, lat] },
-			$maxDistance: radiusM,
-		},
-	};
-}
-
 export type A11ySource = "metro" | "osm" | "campus" | "bathroom" | "parking";
 export const A11Y_CATEGORIES = [
 	"elevator",
@@ -404,15 +395,6 @@ function parkingLotToItem(doc: IParkingLot): ParkingLotNearbyItem {
 }
 
 /**
- * Lots whose disabled capacity can be confirmed from the parsed fields
- * (`disabledSpaces > 0` or explicit `wheelchairAccessible` flag) — used to keep
- * `type=disabled` results accessibility-true instead of dumping every car park.
- */
-const DISABLED_CAPACITY_FILTER = {
-	$or: [{ disabledSpaces: { $gt: 0 } }, { wheelchairAccessible: true }],
-};
-
-/**
  * @param type which collection(s) to search; defaults to `all`, which queries
  * disabled bays, off-street car parks (lots) and standard bays together and
  * fills the shared cap in that priority order. `disabled` also includes lots
@@ -425,7 +407,6 @@ export async function findNearbyParking(
 	type: ParkingKind | "all" = "all",
 ): Promise<ParkingNearbyResult[]> {
 	const cappedRadius = Math.min(radiusM, PARKING_MAX_RADIUS_M);
-	const geoQuery = makeGeoQuery(lng, lat, cappedRadius);
 
 	if (type === "disabled") {
 		const [disabled, lots] = await Promise.all([

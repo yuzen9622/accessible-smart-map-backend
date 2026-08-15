@@ -272,9 +272,6 @@ function toFacilityPlace(
   };
 }
 
-const FACILITY_PLACE_FIELDS =
-  "schoolId branchId schoolName branchName facilities";
-
 /**
  * Every campus accessibility facility (across all campuses) that has its own
  * coordinates, flattened into standalone places. Used to merge campus data into

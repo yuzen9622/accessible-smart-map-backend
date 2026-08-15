@@ -56,8 +56,6 @@ const DEFAULT_TRAVERSAL_SEC: Record<number, number> = {
   7: 5,
 };
 
-const WHEELCHAIR_BLOCKED_MODES = new Set([2]);
-
 const ESCALATOR_WHEELCHAIR_PENALTY = 120;
 
 const STATION_MATCH_RADIUS_M = 600;

@@ -374,8 +374,7 @@ async function runPool(testCases: TestCase[]): Promise<TestResult[]> {
 function generateReport(results: TestResult[], durationMs: number): string {
   const total = results.length;
   const passed = results.filter((r) => r.success && r.statusCode === 200).length;
-  const failed = total - passed;
-  
+
   // Latency metrics
   const validLatencies = results.map((r) => r.latencyMs);
   const avgLatency = validLatencies.reduce((a, b) => a + b, 0) / total;
@@ -406,10 +405,8 @@ function generateReport(results: TestResult[], durationMs: number): string {
 
   // Transit Modes Statistics (Across all successful routes)
   const modeCounts: { [mode: string]: number } = { WALK: 0, BUS: 0, METRO: 0, TRA: 0, THSR: 0 };
-  let totalRoutesPlanned = 0;
   results.forEach((r) => {
     if (r.success) {
-      totalRoutesPlanned += r.routesCount;
       r.transitModes.forEach((m) => {
         if (modeCounts[m] !== undefined) {
           modeCounts[m]++;

@@ -112,17 +112,6 @@ function createLimiter(limit: number) {
 	};
 }
 
-function nearQuery(coords: [number, number], maxDistM: number) {
-	return {
-		location: {
-			$near: {
-				$geometry: { type: "Point", coordinates: coords },
-				$maxDistance: maxDistM,
-			},
-		},
-	};
-}
-
 function collectRouteFacilities(r: AccessibleRoute): IOsmA11y[] {
 	return r.legs.flatMap((leg) => {
 		if (leg.type === "WALK") return leg.a11yFacilities;

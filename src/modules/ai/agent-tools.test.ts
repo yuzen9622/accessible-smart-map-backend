@@ -123,7 +123,6 @@ import {
 	bindEmergencyContactCode,
 	bindLineAccountCode,
 } from "./agent-tools";
-import * as trainService from "../transit/train.service";
 import * as metroService from "../transit/metro.service";
 
 const mockGetCoordinates = getCoordinates as unknown as ReturnType<
@@ -163,8 +162,6 @@ const mockEmergencyContactFind = EmergencyContact.find as unknown as ReturnType<
 >;
 const mockEmergencyContactFindOne =
 	EmergencyContact.findOne as unknown as ReturnType<typeof vi.fn>;
-const mockEmergencyContactUpdateMany =
-	EmergencyContact.updateMany as unknown as ReturnType<typeof vi.fn>;
 const mockLineLinkFindOne = LineLinkCode.findOne as unknown as ReturnType<
 	typeof vi.fn
 >;
@@ -172,9 +169,6 @@ const mockLineLinkDeleteOne = LineLinkCode.deleteOne as unknown as ReturnType<
 	typeof vi.fn
 >;
 const mockSosSessionFindById = SosSession.findById as unknown as ReturnType<
-	typeof vi.fn
->;
-const mockSosSessionFindOne = SosSession.findOne as unknown as ReturnType<
 	typeof vi.fn
 >;
 const mockSosSessionFind = SosSession.find as unknown as ReturnType<
