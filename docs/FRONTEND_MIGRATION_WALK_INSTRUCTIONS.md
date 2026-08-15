@@ -29,18 +29,18 @@ token 過期或無效時回 400，`data.reason` 為 `INVALID_ROUTE_TOKEN`。
 
 每筆 WALK route／step 新增：
 
-| 欄位 | 型別 | 語意 |
-|---|---|---|
-| `routes[].degraded` | `boolean?` | 僅在 `avoidStairs` 生效且所有 OTP 候選仍含樓梯時為 `true`；此時回傳的是樓梯 feature 最少的候選，必須同步顯示 `warnings[]` |
-| `routes[].legs[].steps[].stairs` | `boolean` | OTP `step.feature` 為 `StairsUse` 時為 `true`；Valhalla 備援固定為 `false`。只表示合併 step 內含樓梯，不代表整個 `distanceM` 都是樓梯 |
+| 欄位                             | 型別       | 語意                                                                                                                                  |
+| -------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `routes[].degraded`              | `boolean?` | 僅在 `avoidStairs` 生效且所有 OTP 候選仍含樓梯時為 `true`；此時回傳的是樓梯 feature 最少的候選，必須同步顯示 `warnings[]`             |
+| `routes[].legs[].steps[].stairs` | `boolean`  | OTP `step.feature` 為 `StairsUse` 時為 `true`；Valhalla 備援固定為 `false`。只表示合併 step 內含樓梯，不代表整個 `distanceM` 都是樓梯 |
 
 每筆 `instructions[]` 新增：
 
-| 欄位 | 型別 | 語意 |
-|---|---|---|
+| 欄位                    | 型別      | 語意                                                                                                                 |
+| ----------------------- | --------- | -------------------------------------------------------------------------------------------------------------------- |
 | `instructions[].stairs` | `boolean` | 該逐步指引對應的步行段含樓梯時為 `true`；非步行指引固定為 `false`。只代表該段含樓梯，不代表整個 `distanceM` 都是樓梯 |
-| `legIndex` | `number` | 此指引來源在 `route.legs` 中的索引；`polylineIndex` 必須搭配它才能找到正確 polyline |
-| `cumulativeDistanceM` | `number` | 抵達此 maneuver 起點前已累積的可量測行進距離，可作進度顯示 |
+| `legIndex`              | `number`  | 此指引來源在 `route.legs` 中的索引；`polylineIndex` 必須搭配它才能找到正確 polyline                                  |
+| `cumulativeDistanceM`   | `number`  | 抵達此 maneuver 起點前已累積的可量測行進距離，可作進度顯示                                                           |
 
 `distanceM` 的語意固定為：**完成本步 maneuver 後，到下一步之前要行進的距離**。不要顯示成「走 `distanceM` 公尺後再做本步轉彎」。
 

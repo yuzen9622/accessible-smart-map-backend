@@ -35,7 +35,7 @@ export function tm2ToWgs84(x: number, y: number): [number, number] {
  */
 export function rowToParking(
   cols: string[],
-  city: string
+  city: string,
 ): Omit<IDisabledParking, "_id"> | null {
   if (cols.length < 9) return null;
 

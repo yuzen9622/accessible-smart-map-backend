@@ -7,7 +7,10 @@ import { searchOsmPlaces } from "./photon.adapter";
 
 const mockGet = axios.get as unknown as ReturnType<typeof vi.fn>;
 
-const feature = (overrides: Record<string, unknown> = {}, geometry?: unknown) => ({
+const feature = (
+  overrides: Record<string, unknown> = {},
+  geometry?: unknown,
+) => ({
   type: "Feature",
   properties: {
     osm_type: "W",
@@ -24,7 +27,10 @@ const feature = (overrides: Record<string, unknown> = {}, geometry?: unknown) =>
     countrycode: "TW",
     ...overrides,
   },
-  geometry: geometry ?? { type: "Point", coordinates: [121.5644995, 25.0338352] },
+  geometry: geometry ?? {
+    type: "Point",
+    coordinates: [121.5644995, 25.0338352],
+  },
 });
 
 beforeEach(() => {
@@ -36,7 +42,10 @@ describe("searchOsmPlaces", () => {
   it("normalizes a feature into an OsmPlace with a Taiwanese-order address", async () => {
     mockGet.mockResolvedValue({ data: { features: [feature()] } });
 
-    const places = await searchOsmPlaces("台北1", { latitude: 25.033, longitude: 121.565 });
+    const places = await searchOsmPlaces("台北1", {
+      latitude: 25.033,
+      longitude: 121.565,
+    });
 
     expect(places).toEqual([
       {
@@ -77,20 +86,34 @@ describe("searchOsmPlaces", () => {
 
     expect(mockGet).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ params: expect.objectContaining({ lang: "en" }) }),
+      expect.objectContaining({
+        params: expect.objectContaining({ lang: "en" }),
+      }),
     );
-    expect(places[0].displayName).toBe("7 Section 5, Xinyi Road, Xinyi District, Taipei City");
+    expect(places[0].displayName).toBe(
+      "7 Section 5, Xinyi Road, Xinyi District, Taipei City",
+    );
   });
 
   it("sends the bias coordinates and over-fetches to survive country filtering", async () => {
     mockGet.mockResolvedValue({ data: { features: [] } });
 
-    await searchOsmPlaces("台北", { latitude: 25.033, longitude: 121.565, limit: 3 });
+    await searchOsmPlaces("台北", {
+      latitude: 25.033,
+      longitude: 121.565,
+      limit: 3,
+    });
 
     expect(mockGet).toHaveBeenCalledWith(
       "https://photon.komoot.io/api/",
       expect.objectContaining({
-        params: { q: "台北", limit: 9, lang: "default", lat: 25.033, lon: 121.565 },
+        params: {
+          q: "台北",
+          limit: 9,
+          lang: "default",
+          lat: 25.033,
+          lon: 121.565,
+        },
       }),
     );
   });
@@ -102,7 +125,9 @@ describe("searchOsmPlaces", () => {
 
     expect(mockGet).toHaveBeenCalledWith(
       "https://photon.komoot.io/api/",
-      expect.objectContaining({ params: { q: "台北", limit: 15, lang: "default" } }),
+      expect.objectContaining({
+        params: { q: "台北", limit: 15, lang: "default" },
+      }),
     );
   });
 
@@ -186,7 +211,9 @@ describe("searchOsmPlaces", () => {
       ["W", "way"],
       ["R", "relation"],
     ] as const) {
-      mockGet.mockResolvedValue({ data: { features: [feature({ osm_type: prefix })] } });
+      mockGet.mockResolvedValue({
+        data: { features: [feature({ osm_type: prefix })] },
+      });
       const [place] = await searchOsmPlaces("q");
       expect(place.osmType).toBe(expected);
     }
@@ -208,7 +235,9 @@ describe("searchOsmPlaces", () => {
 
   it("falls back to the street when a feature carries no name", async () => {
     mockGet.mockResolvedValue({
-      data: { features: [feature({ name: undefined, housenumber: undefined })] },
+      data: {
+        features: [feature({ name: undefined, housenumber: undefined })],
+      },
     });
 
     const [place] = await searchOsmPlaces("q");
@@ -253,6 +282,9 @@ describe("searchOsmPlaces", () => {
 
     await searchOsmPlaces("台北");
 
-    expect(mockGet).toHaveBeenCalledWith("http://photon:2322/api/", expect.any(Object));
+    expect(mockGet).toHaveBeenCalledWith(
+      "http://photon:2322/api/",
+      expect.any(Object),
+    );
   });
 });

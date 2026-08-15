@@ -10,10 +10,16 @@ vi.mock("@line/bot-sdk", async (orig) => {
     ...actual,
     middleware: () => (req: any, _res: any, next: any) => {
       if (req.headers["x-line-signature"] !== "valid-sig") {
-        return next(new actual.SignatureValidationFailed("signature validation failed"));
+        return next(
+          new actual.SignatureValidationFailed("signature validation failed"),
+        );
       }
       try {
-        req.body = JSON.parse(Buffer.isBuffer(req.body) ? req.body.toString() : JSON.stringify(req.body));
+        req.body = JSON.parse(
+          Buffer.isBuffer(req.body)
+            ? req.body.toString()
+            : JSON.stringify(req.body),
+        );
       } catch {
         req.body = {};
       }
@@ -61,7 +67,13 @@ describe("POST /line/webhook", () => {
   });
 
   it("acks 200 and delegates events to the service on a valid signature", async () => {
-    const events = [{ type: "follow", replyToken: "r1", source: { type: "user", userId: "U1" } }];
+    const events = [
+      {
+        type: "follow",
+        replyToken: "r1",
+        source: { type: "user", userId: "U1" },
+      },
+    ];
     const res = await request(app)
       .post(URL)
       .set("Content-Type", "application/json")
@@ -81,10 +93,17 @@ describe("GET /line/route-preview", () => {
   });
 
   it("delegates to the service and returns the route preview envelope", async () => {
-    const res = await request(app).get("/api/v1/line/route-preview?sessionId=a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6");
+    const res = await request(app).get(
+      "/api/v1/line/route-preview?sessionId=a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
+    );
 
     expect(res.status).toBe(ResponseCode.OK);
-    expect(vi.mocked(service.getRoutePreview)).toHaveBeenCalledWith("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6", undefined, undefined, undefined);
+    expect(vi.mocked(service.getRoutePreview)).toHaveBeenCalledWith(
+      "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
+      undefined,
+      undefined,
+      undefined,
+    );
     expect(res.body).toMatchObject({
       ok: true,
       status: "success",
@@ -101,7 +120,9 @@ describe("GET /line/route-preview", () => {
       message: "找不到進行中的求救紀錄",
     } as any);
 
-    const res = await request(app).get("/api/v1/line/route-preview?sessionId=f1f2f3f4f5f6f7f8f9f0f1f2f3f4f5f6");
+    const res = await request(app).get(
+      "/api/v1/line/route-preview?sessionId=f1f2f3f4f5f6f7f8f9f0f1f2f3f4f5f6",
+    );
 
     expect(res.status).toBe(ResponseCode.NOT_FOUND);
     expect(res.body).toMatchObject({

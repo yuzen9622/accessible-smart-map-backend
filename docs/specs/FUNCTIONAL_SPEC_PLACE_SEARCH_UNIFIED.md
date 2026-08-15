@@ -30,12 +30,10 @@
 
 ## 1. 關鍵釐清：「OSM place」指的是 Nominatim
 
-
-| 名稱                              | 是什麼                   | 涵蓋                                                     | 本次角色                              |
-| ------------------------------- | --------------------- | ------------------------------------------------------ | --------------------------------- |
-| **Nominatim**（前端現用）             | OSM 官方地理編碼服務（外部 HTTP） | 全部 POI／道路／行政區                                          | ✅ 搜尋來源之一，**本次要新增 adapter**（⚠️ 實作後修正為 Photon 負責搜尋、Nominatim 只負責 lookup，見 §12） |
-| `**osm-a11y` collection**（後端現有） | 我們匯入的無障礙設施            | 只有 elevator/ramp/toilet/kerb_cut/wheelchair_accessible | ❌ 不是通用 POI，搜「台北101」恆 0 筆；維持只當徽章依據 |
-
+| 名稱                                  | 是什麼                            | 涵蓋                                                     | 本次角色                                                                                                    |
+| ------------------------------------- | --------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| **Nominatim**（前端現用）             | OSM 官方地理編碼服務（外部 HTTP） | 全部 POI／道路／行政區                                   | ✅ 搜尋來源之一，**本次要新增 adapter**（⚠️ 實作後修正為 Photon 負責搜尋、Nominatim 只負責 lookup，見 §12） |
+| `**osm-a11y` collection**（後端現有） | 我們匯入的無障礙設施              | 只有 elevator/ramp/toilet/kerb_cut/wheelchair_accessible | ❌ 不是通用 POI，搜「台北101」恆 0 筆；維持只當徽章依據                                                     |
 
 ---
 
@@ -51,7 +49,7 @@
 **非目標**
 
 - **本地 collection 不作為搜尋結果**（metro/campus/bathroom/parking/welfare/bus 全部不進清單）。
-本地資料只做兩件事：`accessibility` 徽章、`nearbyFacilities` 列表。
+  本地資料只做兩件事：`accessibility` 徽章、`nearbyFacilities` 列表。
 - 不做全文檢索引擎，不動 `$text` / Atlas Search。
 - 不把 Google 欄位落地進 DB（ToS 僅允許存 `place_id`）。
 - 不改前端；交付契約與遷移說明，前端另案。
@@ -68,7 +66,7 @@ osm:<osmType>:<osmId>        // 例 osm:node:123456
 ```
 
 - **OSM 用冒號不用斜線**：Nominatim 慣用 `node/123456`，但斜線會切斷 Express 的 `:id` 路徑參數。
-對外 id 一律 `osm:node:123456`，需要還原成 `node/123456` 時（Nominatim lookup、review key）在 service 內轉換。
+  對外 id 一律 `osm:node:123456`，需要還原成 `node/123456` 時（Nominatim lookup、review key）在 service 內轉換。
 - `source` 收斂為 `"google" | "osm"`，刪掉從未使用的 5 個值。
 - 路由參數改名 `:id`，schema 以 regex 驗前綴白名單，未知前綴 → 400。
 - 這是**破壞性變更**（現行吃裸 id）。依專案慣例可接受，交付遷移說明。
@@ -79,21 +77,19 @@ osm:<osmType>:<osmId>        // 例 osm:node:123456
 
 ### 4.1 前端需求對照（必填欄位的出處）
 
-
-| 前端使用處                                       | 前端欄位                                                           | 後端欄位                                              | 備註                                         |
-| ------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------- | ------------------------------------------ |
-| 建議清單圖示 `getPlaceIcon(class‖category, type)` | `class`/`category`, `type`                                     | `placeClass`, `placeType`                         | OSM 原值直通；Google 由 `types[]` 映射（§4.4）       |
-| 建議清單主標題                                     | `name ‖ display_name`                                          | `primaryText`                                     | 一律非空                                       |
-| 建議清單副標題                                     | `display_name`                                                 | `secondaryText`                                   | OSM 給 display_name；Google 預測只有短版 secondary |
-| 空字串態歷史紀錄                                    | `name`, `display_name`                                         | `primaryText`, `secondaryText`                    | 前端需一併存 `id`（含前綴）才能重查                       |
-| 詳情標題／副標                                     | `name`, `display_name`                                         | `name`, `fullAddress`                             |                                            |
-| 詳情類型 Badge `getPlaceTypeLabel(type)`        | `type`                                                         | `placeType` + `typeLabel`                         | 後端直接給中文標籤，前端可漸進改用                          |
-| 詳情 OSM 外連                                   | `osm_type`, `osm_id`                                           | `externalLinks.osm`                               | Google 來源為 `null`                          |
-| 詳情地址明細                                      | `road`, `suburb‖neighbourhood`, `city‖town‖county`, `postcode` | `addressComponents.{road,district,city,postcode}` | 後端做完 fallback，前端不再 `‖`                     |
-| 詳情附近無障礙（廁所／捷運各 4）                           | 另外查                                                            | `nearbyFacilities.{toilets,metro}`                | 併進 details，省一次往返                           |
-| 評論區 `PlaceReviewSection`                    | `osmId`, `placeType`                                           | `reviewKey.{placeId,placeType}`                   | §6                                         |
-| 規劃路線／收藏／分享                                  | 座標                                                             | `location`, `id`, `name`                          |                                            |
-
+| 前端使用處                                        | 前端欄位                                                       | 後端欄位                                          | 備註                                               |
+| ------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------- | -------------------------------------------------- |
+| 建議清單圖示 `getPlaceIcon(class‖category, type)` | `class`/`category`, `type`                                     | `placeClass`, `placeType`                         | OSM 原值直通；Google 由 `types[]` 映射（§4.4）     |
+| 建議清單主標題                                    | `name ‖ display_name`                                          | `primaryText`                                     | 一律非空                                           |
+| 建議清單副標題                                    | `display_name`                                                 | `secondaryText`                                   | OSM 給 display_name；Google 預測只有短版 secondary |
+| 空字串態歷史紀錄                                  | `name`, `display_name`                                         | `primaryText`, `secondaryText`                    | 前端需一併存 `id`（含前綴）才能重查                |
+| 詳情標題／副標                                    | `name`, `display_name`                                         | `name`, `fullAddress`                             |                                                    |
+| 詳情類型 Badge `getPlaceTypeLabel(type)`          | `type`                                                         | `placeType` + `typeLabel`                         | 後端直接給中文標籤，前端可漸進改用                 |
+| 詳情 OSM 外連                                     | `osm_type`, `osm_id`                                           | `externalLinks.osm`                               | Google 來源為 `null`                               |
+| 詳情地址明細                                      | `road`, `suburb‖neighbourhood`, `city‖town‖county`, `postcode` | `addressComponents.{road,district,city,postcode}` | 後端做完 fallback，前端不再 `‖`                    |
+| 詳情附近無障礙（廁所／捷運各 4）                  | 另外查                                                         | `nearbyFacilities.{toilets,metro}`                | 併進 details，省一次往返                           |
+| 評論區 `PlaceReviewSection`                       | `osmId`, `placeType`                                           | `reviewKey.{placeId,placeType}`                   | §6                                                 |
+| 規劃路線／收藏／分享                              | 座標                                                           | `location`, `id`, `name`                          |                                                    |
 
 ### 4.2 端點 A：`GET /a11y/search/autocomplete`
 
@@ -107,21 +103,22 @@ type PlaceSource = "osm" | "google";
 // 本文共用的兩個型別（本 repo 目前沒有同名 TS 型別，需在 place-search.types.ts 新增）：
 //   GeoPoint        —— 與 a11y.schema.ts 的 GeoPoint OpenAPI schema 同形狀，
 //                      TS 側現有的同義型別是 a11y.service.ts:105 的 A11yGeoPoint
-type GeoPoint = { type: "Point"; coordinates: [number, number] };  // [lng, lat]
+type GeoPoint = { type: "Point"; coordinates: [number, number] }; // [lng, lat]
 //   ReviewPlaceType —— 即 review.model.ts:3 匯出的 PlaceType（加上 "google" 之後），
 //                      本文以 ReviewPlaceType 為別名稱呼，實作時直接 import PlaceType
-type ReviewPlaceType = "osm" | "a11y" | "bathroom" | "welfare" | "parking" | "google";
+type ReviewPlaceType =
+  "osm" | "a11y" | "bathroom" | "welfare" | "parking" | "google";
 
 interface AutocompleteItem {
-  id: string;                      // 前綴 id（§3）
+  id: string; // 前綴 id（§3）
   source: PlaceSource;
   primaryText: string;
   secondaryText: string | null;
-  placeClass: string | null;       // 圖示用
-  placeType: string | null;        // 圖示 + 標籤用
-  typeLabel: string | null;        // 中文標籤，如「捷運站」
-  location: GeoPoint | null;       // OSM 有；google 恆為 null（預測階段拿不到座標）
-  distanceMeters: number | null;   // location 與 lat/lng 都有時才算
+  placeClass: string | null; // 圖示用
+  placeType: string | null; // 圖示 + 標籤用
+  typeLabel: string | null; // 中文標籤，如「捷運站」
+  location: GeoPoint | null; // OSM 有；google 恆為 null（預測階段拿不到座標）
+  distanceMeters: number | null; // location 與 lat/lng 都有時才算
 }
 ```
 
@@ -129,7 +126,7 @@ interface AutocompleteItem {
 - 兩路 `Promise.allSettled`，任一路失敗只掉那一路，整體仍 200（沿用既有降級精神）。
 - `location: null` 是誠實表達 Google 預測階段的限制，不是 bug；前端算距離時需容忍。
 - **此階段不含 `accessibility`**（沿用原計畫決策：徽章在 details 才算）。OSM 結果雖有座標，
-但為每筆預測跑一次 `$near` 會讓逐字輸入每按鍵打 5 次地理查詢，成本不划算。
+  但為每筆預測跑一次 `$near` 會讓逐字輸入每按鍵打 5 次地理查詢，成本不划算。
 
 ### 4.3 端點 B：`GET /a11y/search/details/:id`
 
@@ -138,44 +135,48 @@ interface PlaceResult {
   id: string;
   source: PlaceSource;
   name: string;
-  fullAddress: string | null;                // ≈ display_name / formattedAddress
+  fullAddress: string | null; // ≈ display_name / formattedAddress
   addressComponents: {
     road: string | null;
-    district: string | null;                 // suburb ‖ neighbourhood
-    city: string | null;                     // city ‖ town ‖ county
+    district: string | null; // suburb ‖ neighbourhood
+    city: string | null; // city ‖ town ‖ county
     postcode: string | null;
   };
-  location: GeoPoint;                        // [lng, lat]
+  location: GeoPoint; // [lng, lat]
   placeClass: string | null;
   placeType: string | null;
   typeLabel: string | null;
   distanceMeters: number | null;
-  rating: number | null;                     // 僅 google
-  accessibility: PlaceAccessibility;         // 沿用現有三態（local-db / google / none）
-  nearbyFacilities: {                        // 各取 N 筆（預設 4）
+  rating: number | null; // 僅 google
+  accessibility: PlaceAccessibility; // 沿用現有三態（local-db / google / none）
+  nearbyFacilities: {
+    // 各取 N 筆（預設 4）
     toilets: NearbyFacilityBrief[];
     metro: NearbyFacilityBrief[];
   };
-  reviewKey: { placeId: string; placeType: ReviewPlaceType };   // §6
+  reviewKey: { placeId: string; placeType: ReviewPlaceType }; // §6
   externalLinks: { osm: string | null; google: string | null };
-  attribution: string | null;                // "Powered by Google" / "© OpenStreetMap contributors"
+  attribution: string | null; // "Powered by Google" / "© OpenStreetMap contributors"
 }
 
 interface NearbyFacilityBrief {
-  id: string; name: string; address: string | null;
-  category: string; typeLabel: string; distanceMeters: number;
+  id: string;
+  name: string;
+  address: string | null;
+  category: string;
+  typeLabel: string;
+  distanceMeters: number;
 }
 ```
 
 - Google FieldMask 需**新增 `addressComponents,types`**
-（現為 `id,displayName,formattedAddress,location,rating,accessibilityOptions`，`google.adapter.ts:317`）。
+  （現為 `id,displayName,formattedAddress,location,rating,accessibilityOptions`，`google.adapter.ts:317`）。
 - OSM 分支 `addressdetails=1` 直接拿到 `address{}`，映射到 `addressComponents`。
 - 查無 / 無座標 → 404（維持現行行為）。
 
 ### 4.4 class/type 映射（圖示相容）
 
 前端 `getPlaceIcon` 照 OSM 字彙寫成，故 **Google 結果借用 OSM 字彙**輸出，前端圖示邏輯不用改：
-
 
 | Google `types[]`                                       | placeClass | placeType               |
 | ------------------------------------------------------ | ---------- | ----------------------- |
@@ -185,8 +186,7 @@ interface NearbyFacilityBrief {
 | `hospital` / `doctor` / `pharmacy`                     | `amenity`  | `hospital` / `pharmacy` |
 | `school` / `university`                                | `amenity`  | `school` / `university` |
 | `store` / `shopping_mall`                              | `shop`     | `mall` / `yes`          |
-| 其他                                                     | `null`     | Google 原 type 字串        |
-
+| 其他                                                   | `null`     | Google 原 type 字串     |
 
 映射表放 `place-search.types.ts`；未命中就給 `null`，前端 `getPlaceIcon` 已有 fallback 圖示。
 `typeLabel` 一律由後端輸出中文字串（OSM 與 Google 共用同一張對照表）。
@@ -198,11 +198,11 @@ interface NearbyFacilityBrief {
 1. 兩路並行：Nominatim `limit 5`、Google 預設 5。
 2. **名稱正規化**：去空白／全形半形／大小寫／「台↔臺」互換。
 3. **去重（受限，需誠實標註）**：Google 預測階段**沒有座標**，跨源只能做正規化名稱完全相同的比對。
- 名稱寫法不同（「台北101」vs「台北 101 購物中心」）就會漏，會出現兩張卡。
- → 接受此限制。命中重複時**保留 OSM 那筆**（有座標、有距離、有 OSM 外連、免費）。
+   名稱寫法不同（「台北101」vs「台北 101 購物中心」）就會漏，會出現兩張卡。
+   → 接受此限制。命中重複時**保留 OSM 那筆**（有座標、有距離、有 OSM 外連、免費）。
 4. 排序：先分「名稱以 `q` 開頭」與否兩層，層內 OSM 優先（有座標可算距離）；`limit`（預設 8）截斷。
 5. 對應 §10 的 R2：若實測重複卡太明顯，備案是把 Google 那路改成 `searchText`（有座標，可做距離去重），
- 代價是計費從 Autocomplete 轉為 Text Search（較貴）且失去 session token 綁定。**本次不做，先觀察。**
+   代價是計費從 Autocomplete 轉為 Text Search（較貴）且失去 session token 綁定。**本次不做，先觀察。**
 
 ---
 
@@ -246,19 +246,17 @@ interface NearbyFacilityBrief {
 2. Adapter 內建**全域 1 req/s 節流佇列** —— 限流擋的是使用者，節流保護的是我們對 OSM 的守約，兩者都要。
 3. 逾時 2s 即放棄該路（`allSettled` 吞掉），不拖累整體回應。
 4. `NOMINATIM_BASE_URL` 做成 env。**中期建議自架**：本專案已有 `VALHALLA_PBF_PATH`（台灣 OSM PBF），
- 自架 Nominatim/Photon 可複用同一份圖資，徹底解除政策風險。列為後續案，不擋本次。
+   自架 Nominatim/Photon 可複用同一份圖資，徹底解除政策風險。列為後續案，不擋本次。
 
 ### 7.2 快取／限流／成本
 
-
-| 項目              | 做法                                                                                |
-| --------------- | --------------------------------------------------------------------------------- |
+| 項目              | 做法                                                                                                    |
+| ----------------- | ------------------------------------------------------------------------------------------------------- |
 | autocomplete 快取 | 現有 `ps:ac:<q>:<粗座標>` 擴為 `ps:ac:<sources>:<q>:<粗座標>`，TTL 120s；token 不進 key（沿用既有決策） |
-| Nominatim 快取    | `ps:osm:<q>:<粗座標>` TTL 300s；lookup `ps:osmd:<id>` TTL 600s                        |
-| details 快取      | Google 分支**不快取**（ToS）；OSM 分支可快取 600s                                              |
-| 限流              | 沿用 `place-search.middleware.ts` 既有兩個 limiter（120/min、60/min per IP）               |
-| Google 成本       | 不變；OSM 命中越多、Google details 呼叫越少 → **成本會下降**                                       |
-
+| Nominatim 快取    | `ps:osm:<q>:<粗座標>` TTL 300s；lookup `ps:osmd:<id>` TTL 600s                                          |
+| details 快取      | Google 分支**不快取**（ToS）；OSM 分支可快取 600s                                                       |
+| 限流              | 沿用 `place-search.middleware.ts` 既有兩個 limiter（120/min、60/min per IP）                            |
+| Google 成本       | 不變；OSM 命中越多、Google details 呼叫越少 → **成本會下降**                                            |
 
 ---
 
@@ -318,15 +316,13 @@ interface NearbyFacilityBrief {
 
 ## 10. 風險與待決
 
-
-| #   | 項目                                       | 狀態                                     |
-| --- | ---------------------------------------- | -------------------------------------- |
-| R1  | Nominatim 集中流量遭封鎖                        | 已列緩解（§7.1）；中期自架                        |
-| R2  | Google 預測無座標 → 跨源去重只能靠名稱，會出現重複卡          | 接受；備案（改 `searchText`）記於 §5 項目 5，本次不做      |
-| R3  | review `osmId → placeId` 改名為破壞性變更，需跑遷移腳本 | 已決策採 A；遷移為純 `$rename`，風險低              |
-| R4  | Nominatim 對台灣中文 POI 的召回率可能不如 Google      | 實作後以實際 query 抽驗；`sources` 參數可隨時調整權重／關閉 |
-| R5  | 契約破壞性變更（id 加前綴、`:placeId`→`:id`、欄位擴充）    | 依專案慣例可接受，交付遷移說明                        |
-
+| #   | 項目                                                    | 狀態                                                        |
+| --- | ------------------------------------------------------- | ----------------------------------------------------------- |
+| R1  | Nominatim 集中流量遭封鎖                                | 已列緩解（§7.1）；中期自架                                  |
+| R2  | Google 預測無座標 → 跨源去重只能靠名稱，會出現重複卡    | 接受；備案（改 `searchText`）記於 §5 項目 5，本次不做       |
+| R3  | review `osmId → placeId` 改名為破壞性變更，需跑遷移腳本 | 已決策採 A；遷移為純 `$rename`，風險低                      |
+| R4  | Nominatim 對台灣中文 POI 的召回率可能不如 Google        | 實作後以實際 query 抽驗；`sources` 參數可隨時調整權重／關閉 |
+| R5  | 契約破壞性變更（id 加前綴、`:placeId`→`:id`、欄位擴充） | 依專案慣例可接受，交付遷移說明                              |
 
 **已決策（2026-07-27）**
 
@@ -355,13 +351,13 @@ place-search 的 schema／service／controller／router 與兩支測試、review
 
 直接呼叫 adapter 打正式 Nominatim，非 mock：
 
-| query | 結果 | 耗時 |
-|---|---|---|
-| `台北101` | 2 筆，首筆 `way/1159328965` `tourism/attraction` | 473ms |
-| `台北車站` | 5 筆，首筆 `node/3495094870` `railway/station` | 1340ms |
-| `台大醫院` | 4 筆，首筆 `node/2051219232` `railway/stop` | 1380ms |
-| `台北1`（部分輸入） | 3 筆，**全是雜訊**（淡水區的中山北路一段、臺北市與新北市的行政區界） | 1083ms |
-| lookup `way/370565540` | 成功，address 四格完整（road/district/city/postcode） | 692ms |
+| query                  | 結果                                                                 | 耗時   |
+| ---------------------- | -------------------------------------------------------------------- | ------ |
+| `台北101`              | 2 筆，首筆 `way/1159328965` `tourism/attraction`                     | 473ms  |
+| `台北車站`             | 5 筆，首筆 `node/3495094870` `railway/station`                       | 1340ms |
+| `台大醫院`             | 4 筆，首筆 `node/2051219232` `railway/stop`                          | 1380ms |
+| `台北1`（部分輸入）    | 3 筆，**全是雜訊**（淡水區的中山北路一段、臺北市與新北市的行政區界） | 1083ms |
+| lookup `way/370565540` | 成功，address 四格完整（road/district/city/postcode）                | 692ms  |
 
 **兩個煙測才看得到的事實**：
 
@@ -380,12 +376,12 @@ place-search 的 schema／service／controller／router 與兩支測試、review
 §11 煙測的失敗被誤判為「Nominatim 對中文召回差」。實際對照實驗（前端原參數 vs adapter 參數、
 `accept-language` zh/en 兩種）證明**兩者結果一字不差**，且與語言無關：
 
-| query | Nominatim 結果 |
-|---|---|
-| `台北` | 臺北市（行政區） |
-| `台北1` | 淡水區中山北路一段 ×2、臺北市、新北市 |
-| `台北10` | 淡水區一條真的叫「北10」的路 |
-| `台北101` | ✅ 台北101, 7, 信義路五段, 信義區 |
+| query                | Nominatim 結果                                 |
+| -------------------- | ---------------------------------------------- |
+| `台北`               | 臺北市（行政區）                               |
+| `台北1`              | 淡水區中山北路一段 ×2、臺北市、新北市          |
+| `台北10`             | 淡水區一條真的叫「北10」的路                   |
+| `台北101`            | ✅ 台北101, 7, 信義路五段, 信義區              |
 | `台北 101`（加空格） | 門牌號 101 的地址們（羅斯福路六段 97;99;101…） |
 
 **真正的根因：Nominatim `/search` 是 geocoder，只做整詞比對，沒有前綴比對。**
@@ -423,16 +419,15 @@ Nominatim 保留全域 1 req/s 節流（官方硬性政策）；**Photon 不設�
 
 ### 更換後煙測（2026-07-27，實打 photon.komoot.io）
 
-| query | 結果 |
-|---|---|
-| `台北1` | ✅ 5 筆：台北101 / 台北101世貿站 / 台北1號隧道 / 台北1號院 / 台北101購物中心 |
-| `台北10` | ✅ 首筆台北101（246ms） |
-| `台大醫` | ✅ 台大醫院 / 景通停車場 / 台大醫學院附設醫院 / 雲林分院 / 新竹分院 |
-| `市政府站` | ✅ 2 筆（TW 過濾 + 同名去重後），廈門那筆已消失 |
-| lookup `way/1159328965` | ✅ Nominatim 仍正常，address 四格完整（605ms） |
+| query                   | 結果                                                                         |
+| ----------------------- | ---------------------------------------------------------------------------- |
+| `台北1`                 | ✅ 5 筆：台北101 / 台北101世貿站 / 台北1號隧道 / 台北1號院 / 台北101購物中心 |
+| `台北10`                | ✅ 首筆台北101（246ms）                                                      |
+| `台大醫`                | ✅ 台大醫院 / 景通停車場 / 台大醫學院附設醫院 / 雲林分院 / 新竹分院          |
+| `市政府站`              | ✅ 2 筆（TW 過濾 + 同名去重後），廈門那筆已消失                              |
+| lookup `way/1159328965` | ✅ Nominatim 仍正常，address 四格完整（605ms）                               |
 
 **§10 R4 結論更新**：不再成立。換 Photon 後 OSM 這路在逐字輸入階段是**真的有用的**，
 不再只是「打完整名稱才有結果」。
 
 `npm run build` 綠、`npm test` **826 綠**（新增 13 個 Photon adapter 測試）。
-

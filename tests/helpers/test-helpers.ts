@@ -25,8 +25,14 @@ export function buildTestApp() {
  * @returns A string suitable for `.set("Authorization", ...)`.
  */
 export function buildAuthorizationHeader(
-  user: Record<string, unknown> = { _id: "test-user-id", email: "test@example.com" },
+  user: Record<string, unknown> = {
+    _id: "test-user-id",
+    email: "test@example.com",
+  },
 ): string {
-  const token = jwt.sign({ user }, process.env.JWT_ACCESS_SECRET ?? "test-access-secret");
+  const token = jwt.sign(
+    { user },
+    process.env.JWT_ACCESS_SECRET ?? "test-access-secret",
+  );
   return `Bearer ${token}`;
 }

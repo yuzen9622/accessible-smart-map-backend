@@ -42,7 +42,13 @@ export function runLineAgent(params: RunLineAgentParams): Promise<AgentResult> {
     ...params.messages,
   ]);
 
-  const execTool: AgentToolExecutor = (name, args, loc, userId, memoryOptions) =>
+  const execTool: AgentToolExecutor = (
+    name,
+    args,
+    loc,
+    userId,
+    memoryOptions,
+  ) =>
     executeLocalTool(name, args, loc ?? params.userLocation, userId, {
       ...(memoryOptions ?? {}),
       lineUserId: params.lineUserId,

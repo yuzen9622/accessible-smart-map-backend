@@ -67,11 +67,9 @@ export type BusAlert = AlertMetadata & {
 };
 
 type MetroStationScope =
-  | string
-  | { StationID: string; StationName?: LocalizedName | string };
+  string | { StationID: string; StationName?: LocalizedName | string };
 type MetroLineScope =
-  | string
-  | { LineID: string; LineName?: LocalizedName | string };
+  string | { LineID: string; LineName?: LocalizedName | string };
 
 export type MetroAlert = AlertMetadata & {
   Status: number;
@@ -136,12 +134,7 @@ export type TransitContext =
     };
 
 export type MatchKind =
-  | "route"
-  | "stop"
-  | "station"
-  | "line"
-  | "train"
-  | "section";
+  "route" | "stop" | "station" | "line" | "train" | "section";
 
 type Match = { kind: MatchKind };
 type BusRouteKeys = {

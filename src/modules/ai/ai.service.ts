@@ -20,7 +20,7 @@ const VALID_MODES: AccessibilityMode[] = [
  * @returns The parsed RouteIntent, or null when unusable
  */
 export async function parseRouteIntent(
-  query: string
+  query: string,
 ): Promise<RouteIntent | null> {
   const aiResponse = await googleGenAi.models.generateContent({
     model,
@@ -44,7 +44,7 @@ export async function parseRouteIntent(
   if (!parsed.from || !parsed.to) return null;
 
   const mode: AccessibilityMode = VALID_MODES.includes(
-    parsed.mode as AccessibilityMode
+    parsed.mode as AccessibilityMode,
   )
     ? (parsed.mode as AccessibilityMode)
     : "normal";
@@ -109,7 +109,7 @@ function compactRoute(route: Record<string, any>): Record<string, any> {
 export async function generateRouteExplanation(
   route: Record<string, any>,
   mode: AccessibilityMode = "normal",
-  language: "zh-TW" | "en" = "zh-TW"
+  language: "zh-TW" | "en" = "zh-TW",
 ): Promise<RouteExplanation | null> {
   const aiResponse = await googleGenAi.models.generateContent({
     model,
@@ -118,7 +118,13 @@ export async function generateRouteExplanation(
       {
         role: "user",
         parts: [
-          { text: JSON.stringify({ route: compactRoute(route), mode, language }) },
+          {
+            text: JSON.stringify({
+              route: compactRoute(route),
+              mode,
+              language,
+            }),
+          },
         ],
       },
     ],

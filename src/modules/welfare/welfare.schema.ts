@@ -79,12 +79,12 @@ const ApiResponseSchema = <T extends z.ZodTypeAny>(data: T, refName: string) =>
 
 export const WelfareListResponseSchema = ApiResponseSchema(
   z.array(WelfareSchema),
-  "WelfareListResponse"
+  "WelfareListResponse",
 );
 
 export const WelfareDetailResponseSchema = ApiResponseSchema(
   WelfareSchema,
-  "WelfareDetailResponse"
+  "WelfareDetailResponse",
 );
 
 registry.registerPath({

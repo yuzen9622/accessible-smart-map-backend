@@ -10,12 +10,19 @@ const MOENV_AIR_QUALITY_URL = "https://data.moenv.gov.tw/api/v2/aqx_p_432";
 const AIR_DATA_CACHE_TTL_MS = 10 * 60 * 1000;
 const EARTH_RADIUS_METERS = 6_371_000;
 
-let airDataCache: { records: MOENVAirQualityRecord[]; expiresAt: number } | null = null;
+let airDataCache: {
+  records: MOENVAirQualityRecord[];
+  expiresAt: number;
+} | null = null;
 
-function isMOENVAirQualityRecord(value: unknown): value is MOENVAirQualityRecord {
+function isMOENVAirQualityRecord(
+  value: unknown,
+): value is MOENVAirQualityRecord {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
-  return typeof record.sitename === "string" && typeof record.county === "string";
+  return (
+    typeof record.sitename === "string" && typeof record.county === "string"
+  );
 }
 
 function parseNumber(value: unknown): number | undefined {
@@ -40,7 +47,9 @@ function haversineDistanceMeters(
   return EARTH_RADIUS_METERS * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-async function getMOENVAirQualityRecords(): Promise<MOENVAirQualityRecord[] | null> {
+async function getMOENVAirQualityRecords(): Promise<
+  MOENVAirQualityRecord[] | null
+> {
   const apiKey = process.env.MOENV_API_KEY;
   if (!apiKey) return null;
 
@@ -71,7 +80,10 @@ async function getMOENVAirQualityRecords(): Promise<MOENVAirQualityRecord[] | nu
   }
 }
 
-export async function getAirData(lat: number, lng: number): Promise<AirData | null> {
+export async function getAirData(
+  lat: number,
+  lng: number,
+): Promise<AirData | null> {
   const records = await getMOENVAirQualityRecords();
   if (!records) return null;
 
@@ -100,7 +112,10 @@ export async function getAirData(lat: number, lng: number): Promise<AirData | nu
           : Number.POSITIVE_INFINITY,
       };
     })
-    .filter((value): value is { reading: AirReading; distance: number } => value !== null)
+    .filter(
+      (value): value is { reading: AirReading; distance: number } =>
+        value !== null,
+    )
     .sort((a, b) => a.distance - b.distance)
     .slice(0, 5)
     .map(({ reading }) => reading);
@@ -113,12 +128,31 @@ export async function getAirData(lat: number, lng: number): Promise<AirData | nu
   return { city, readings };
 }
 
-export function classifyPm25(pm25: number): { quality: string; advice: string } {
-  if (pm25 <= 12) return { quality: "良好", advice: "空氣品質良好，適合戶外活動" };
-  if (pm25 <= 35.4) return { quality: "普通", advice: "空氣品質尚可，敏感族群可考慮減少長時間戶外活動" };
-  if (pm25 <= 55.4) return { quality: "對敏感族群不健康", advice: "輪椅使用者及呼吸道敏感者建議配戴口罩，減少戶外停留時間" };
-  if (pm25 <= 150.4) return { quality: "不健康", advice: "建議所有人減少戶外活動，出門配戴口罩" };
-  return { quality: "非常不健康", advice: "強烈建議不要外出，若必須外出請配戴 N95 口罩" };
+export function classifyPm25(pm25: number): {
+  quality: string;
+  advice: string;
+} {
+  if (pm25 <= 12)
+    return { quality: "良好", advice: "空氣品質良好，適合戶外活動" };
+  if (pm25 <= 35.4)
+    return {
+      quality: "普通",
+      advice: "空氣品質尚可，敏感族群可考慮減少長時間戶外活動",
+    };
+  if (pm25 <= 55.4)
+    return {
+      quality: "對敏感族群不健康",
+      advice: "輪椅使用者及呼吸道敏感者建議配戴口罩，減少戶外停留時間",
+    };
+  if (pm25 <= 150.4)
+    return {
+      quality: "不健康",
+      advice: "建議所有人減少戶外活動，出門配戴口罩",
+    };
+  return {
+    quality: "非常不健康",
+    advice: "強烈建議不要外出，若必須外出請配戴 N95 口罩",
+  };
 }
 
 /**

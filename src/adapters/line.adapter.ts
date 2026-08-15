@@ -100,10 +100,18 @@ function buildSosNotificationFlex(
     },
   ];
   if (payload.userName) {
-    bodyContents.push({ type: "text", text: `求救者：${payload.userName}`, wrap: true });
+    bodyContents.push({
+      type: "text",
+      text: `求救者：${payload.userName}`,
+      wrap: true,
+    });
   }
   if (payload.address) {
-    bodyContents.push({ type: "text", text: `位置：${payload.address}`, wrap: true });
+    bodyContents.push({
+      type: "text",
+      text: `位置：${payload.address}`,
+      wrap: true,
+    });
   }
 
   const sessionId = extractSessionId(payload.trackingUrl);
@@ -271,7 +279,9 @@ export function buildSosMenuMessage(): messagingApi.TextMessage {
  * @param contact One bound contact entry.
  * @returns A Flex bubble for the carousel.
  */
-function boundContactBubble(contact: LineBoundContact): messagingApi.FlexBubble {
+function boundContactBubble(
+  contact: LineBoundContact,
+): messagingApi.FlexBubble {
   const details: messagingApi.FlexComponent[] = [
     {
       type: "text",
@@ -524,12 +534,20 @@ function buildSosResolvedFlex(userName?: string): messagingApi.FlexMessage {
     },
   ];
   if (userName) {
-    contents.push({ type: "text", text: `${userName} 的求救已解除，目前平安。`, wrap: true, margin: "md" });
+    contents.push({
+      type: "text",
+      text: `${userName} 的求救已解除，目前平安。`,
+      wrap: true,
+      margin: "md",
+    });
   }
   return {
     type: "flex",
     altText: LINE_MSG.SOS_RESOLVED_TITLE,
-    contents: { type: "bubble", body: { type: "box", layout: "vertical", contents } },
+    contents: {
+      type: "bubble",
+      body: { type: "box", layout: "vertical", contents },
+    },
   };
 }
 
@@ -541,31 +559,37 @@ function buildSosResolvedFlex(userName?: string): messagingApi.FlexMessage {
  * @param payload Normalized route card content.
  * @returns A LINE Flex Message ready to reply.
  */
-export function buildRouteCardFlex(payload: RouteCardPayload): messagingApi.FlexMessage {
-  const optionContents: messagingApi.FlexComponent[] = payload.options.slice(0, 3).map((option) => ({
-    type: "box",
-    layout: "vertical",
-    margin: "md",
-    contents: [
-      {
-        type: "text",
-        text: `${option.label}：${option.time}`,
-        weight: "bold",
-        size: "sm",
-        wrap: true,
-      },
-      ...(option.detail
-        ? [{
-            type: "text" as const,
-            text: option.detail,
-            size: "xs" as const,
-            color: "#666666",
-            margin: "xs" as const,
-            wrap: true,
-          }]
-        : []),
-    ],
-  }));
+export function buildRouteCardFlex(
+  payload: RouteCardPayload,
+): messagingApi.FlexMessage {
+  const optionContents: messagingApi.FlexComponent[] = payload.options
+    .slice(0, 3)
+    .map((option) => ({
+      type: "box",
+      layout: "vertical",
+      margin: "md",
+      contents: [
+        {
+          type: "text",
+          text: `${option.label}：${option.time}`,
+          weight: "bold",
+          size: "sm",
+          wrap: true,
+        },
+        ...(option.detail
+          ? [
+              {
+                type: "text" as const,
+                text: option.detail,
+                size: "xs" as const,
+                color: "#666666",
+                margin: "xs" as const,
+                wrap: true,
+              },
+            ]
+          : []),
+      ],
+    }));
 
   const footerContents: messagingApi.FlexComponent[] = payload.liffUrl
     ? [
@@ -607,7 +631,13 @@ export function buildRouteCardFlex(payload: RouteCardPayload): messagingApi.Flex
         ],
       },
       ...(footerContents.length
-        ? { footer: { type: "box" as const, layout: "vertical" as const, contents: footerContents } }
+        ? {
+            footer: {
+              type: "box" as const,
+              layout: "vertical" as const,
+              contents: footerContents,
+            },
+          }
         : {}),
     },
   };
@@ -724,7 +754,10 @@ export async function showLoadingAnimation(chatId: string): Promise<void> {
  * @param replyToken One-time reply token from the webhook event.
  * @param text Message text.
  */
-export async function replyText(replyToken: string, text: string): Promise<void> {
+export async function replyText(
+  replyToken: string,
+  text: string,
+): Promise<void> {
   await replyMessages(replyToken, [{ type: "text", text }]);
 }
 

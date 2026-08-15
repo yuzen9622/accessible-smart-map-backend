@@ -36,21 +36,24 @@ describe("WALK B12 a11y details", () => {
   });
 
   it("faithfully derives surface, width, incline, crossing/kerb, and accessible toilet tags", () => {
-    const details = deriveWalkA11yDetails([
-      facility("way/crossing", "kerb_cut", {
-        surface: "asphalt",
-        width: "1.25 m",
-        incline: "-6.5%",
-        highway: "crossing",
-        kerb: "lowered",
-      }),
-      facility(
-        "node/toilet",
-        "toilet",
-        { amenity: "toilets", "toilets:wheelchair": "yes" },
-        [0.0005, 0],
-      ),
-    ], line);
+    const details = deriveWalkA11yDetails(
+      [
+        facility("way/crossing", "kerb_cut", {
+          surface: "asphalt",
+          width: "1.25 m",
+          incline: "-6.5%",
+          highway: "crossing",
+          kerb: "lowered",
+        }),
+        facility(
+          "node/toilet",
+          "toilet",
+          { amenity: "toilets", "toilets:wheelchair": "yes" },
+          [0.0005, 0],
+        ),
+      ],
+      line,
+    );
 
     expect(details).toEqual({
       maxSlopePercent: 6.5,
@@ -63,16 +66,19 @@ describe("WALK B12 a11y details", () => {
   });
 
   it("accepts genuine numeric and unit-qualified OSM tag variants without inventing missing observations", () => {
-    const details = deriveWalkA11yDetails([
-      facility("way/gravel", "wheelchair_accessible", {
-        surface: "fine_gravel",
-        incline: 4,
-        width: "3 ft 6 in",
-      }),
-      facility("node/crossing", "wheelchair_accessible", {
-        highway: "crossing",
-      }),
-    ], line);
+    const details = deriveWalkA11yDetails(
+      [
+        facility("way/gravel", "wheelchair_accessible", {
+          surface: "fine_gravel",
+          incline: 4,
+          width: "3 ft 6 in",
+        }),
+        facility("node/crossing", "wheelchair_accessible", {
+          highway: "crossing",
+        }),
+      ],
+      line,
+    );
 
     expect(details).toMatchObject({
       maxSlopePercent: 4,

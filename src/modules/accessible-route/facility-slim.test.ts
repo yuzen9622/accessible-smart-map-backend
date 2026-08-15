@@ -23,7 +23,10 @@ describe("slimFacility", () => {
   });
 
   it("retains exact B12 WALK details through slim and compact facility projections", () => {
-    const polyline: [number, number][] = [[121.56, 25.04], [121.561, 25.04]];
+    const polyline: [number, number][] = [
+      [121.56, 25.04],
+      [121.561, 25.04],
+    ];
     const crossing: IOsmA11y = {
       ...baseFacility,
       osmId: "way/crossing",
@@ -45,23 +48,27 @@ describe("slimFacility", () => {
       location: { type: "Point", coordinates: [121.5605, 25.04] },
     };
     const details = deriveWalkA11yDetails([crossing, toilet], polyline);
-    const routes: AccessibleRoute[] = [{
-      routeId: "b12-compact",
-      routeName: "步行",
-      totalMinutes: 2,
-      transferCount: 0,
-      accessibilityHighlights: [],
-      legs: [{
-        type: "WALK",
-        from: "起點",
-        to: "終點",
-        distanceM: 100,
-        minutesEst: 2,
-        polyline,
-        a11yFacilities: [crossing, toilet],
-        ...details,
-      }],
-    }];
+    const routes: AccessibleRoute[] = [
+      {
+        routeId: "b12-compact",
+        routeName: "步行",
+        totalMinutes: 2,
+        transferCount: 0,
+        accessibilityHighlights: [],
+        legs: [
+          {
+            type: "WALK",
+            from: "起點",
+            to: "終點",
+            distanceM: 100,
+            minutesEst: 2,
+            polyline,
+            a11yFacilities: [crossing, toilet],
+            ...details,
+          },
+        ],
+      },
+    ];
 
     slimRoutes(routes);
     compactRoutes(routes);

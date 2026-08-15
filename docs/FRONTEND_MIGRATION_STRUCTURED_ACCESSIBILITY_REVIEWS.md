@@ -10,14 +10,14 @@
 
 所有欄位均採穩定英文 API 名稱。它們在建立與更新 request 都是 optional；MongoDB 欄位也沒有 default 或 required 設定，因此不需要遷移舊文件。
 
-| 欄位 | 型別 | 說明 |
-|---|---|---|
-| `entranceAccessibility` | `"step_free" \| "ramp" \| "stairs_with_assistance" \| "inaccessible"` | 入口是否可無階通行、經坡道、需協助上下階梯，或不可通行 |
-| `toiletTurningRoom` | `boolean` | 輪椅能否在無障礙廁所內迴轉 |
-| `wheelchairTableHeight` | `boolean` | 桌面高度是否適合輪椅使用者 |
-| `adequateAisleWidth` | `boolean` | 主要走道寬度是否足夠輪椅通行 |
-| `staffHelpfulnessRating` | integer `1`–`5` | 工作人員協助程度 |
-| `aggregateAccessibilityScore` | number `1`–`5` | 後端衍生的總合無障礙分數；只出現在 response，不可由 client 寫入 |
+| 欄位                          | 型別                                                                  | 說明                                                            |
+| ----------------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `entranceAccessibility`       | `"step_free" \| "ramp" \| "stairs_with_assistance" \| "inaccessible"` | 入口是否可無階通行、經坡道、需協助上下階梯，或不可通行          |
+| `toiletTurningRoom`           | `boolean`                                                             | 輪椅能否在無障礙廁所內迴轉                                      |
+| `wheelchairTableHeight`       | `boolean`                                                             | 桌面高度是否適合輪椅使用者                                      |
+| `adequateAisleWidth`          | `boolean`                                                             | 主要走道寬度是否足夠輪椅通行                                    |
+| `staffHelpfulnessRating`      | integer `1`–`5`                                                       | 工作人員協助程度                                                |
+| `aggregateAccessibilityScore` | number `1`–`5`                                                        | 後端衍生的總合無障礙分數；只出現在 response，不可由 client 寫入 |
 
 `POST` 的既有 `passageWidthRating`、`toiletRating`、`elevatorRating`、`serviceRating` 仍然必填，範圍仍為整數 `1`–`5`。request body 是 strict schema：未知欄位、非列舉的入口值、非布林值，以及超出範圍或非整數的 `staffHelpfulnessRating` 都會得到原本的 `400` response envelope。
 
@@ -34,14 +34,14 @@ rating = (passageWidthRating + toiletRating + elevatorRating + serviceRating) / 
 1. 以現有 `rating` 作為 legacy baseline。極舊文件若沒有可用的 `rating`，才使用已存在的四個 legacy 子評分的平均值。
 2. 將每個**有提供**的結構化證據轉為一個 1–5 分值：
 
-   | 證據 | 分值 |
-   |---|---:|
-   | `entranceAccessibility: "step_free"` | 5 |
-   | `entranceAccessibility: "ramp"` | 4 |
-   | `entranceAccessibility: "stairs_with_assistance"` | 2 |
-   | `entranceAccessibility: "inaccessible"` | 1 |
-   | 任一結構化 boolean 為 `true` / `false` | 5 / 1 |
-   | `staffHelpfulnessRating` | 該 1–5 值 |
+   | 證據                                              |      分值 |
+   | ------------------------------------------------- | --------: |
+   | `entranceAccessibility: "step_free"`              |         5 |
+   | `entranceAccessibility: "ramp"`                   |         4 |
+   | `entranceAccessibility: "stairs_with_assistance"` |         2 |
+   | `entranceAccessibility: "inaccessible"`           |         1 |
+   | 任一結構化 boolean 為 `true` / `false`            |     5 / 1 |
+   | `staffHelpfulnessRating`                          | 該 1–5 值 |
 
 3. 對 baseline 與上述有提供的 evidence 等權重取算術平均，四捨五入到小數一位。
 

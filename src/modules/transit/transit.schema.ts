@@ -312,12 +312,10 @@ export const AlertQuerySchema = z.discriminatedUnion("mode", [
 
 const AlertQueryDocSchema = z
   .object({
-    mode: z
-      .enum(["bus", "metro", "tra", "thsr"])
-      .openapi({
-        example: "bus",
-        description: "運具模式：bus=公車、metro=捷運、tra=臺鐵、thsr=高鐵",
-      }),
+    mode: z.enum(["bus", "metro", "tra", "thsr"]).openapi({
+      example: "bus",
+      description: "運具模式：bus=公車、metro=捷運、tra=臺鐵、thsr=高鐵",
+    }),
     city: z
       .string()
       .min(1)

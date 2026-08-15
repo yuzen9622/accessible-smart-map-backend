@@ -80,8 +80,7 @@ export const AlertClientMessageSchema = z.discriminatedUnion("type", [
 ]);
 
 export type AlertClientMessage =
-  | { type: "subscribe"; ctx: TransitContext }
-  | { type: "unsubscribe" };
+  { type: "subscribe"; ctx: TransitContext } | { type: "unsubscribe" };
 
 /** The single server-to-client frame this gateway emits. */
 export interface AlertOutboundMessage {

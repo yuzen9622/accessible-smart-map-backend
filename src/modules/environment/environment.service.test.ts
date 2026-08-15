@@ -33,9 +33,7 @@ describe("getWeatherAndAirQuality", () => {
     vi.mocked(fetchNearestWeather).mockRejectedValue(new Error("weather down"));
     vi.mocked(getAirData).mockRejectedValue(new Error("air down"));
 
-    await expect(
-      getWeatherAndAirQuality(25.033, 121.565),
-    ).resolves.toEqual({});
+    await expect(getWeatherAndAirQuality(25.033, 121.565)).resolves.toEqual({});
   });
 
   it("maps a cached ok weather block and omits a failed air source", async () => {

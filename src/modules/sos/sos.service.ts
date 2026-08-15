@@ -16,7 +16,10 @@ import {
   resolveActiveSession,
   updateActiveSessionLocation,
 } from "./sos.repository";
-import { sendSosNotification, sendSosResolved } from "../../adapters/line.adapter";
+import {
+  sendSosNotification,
+  sendSosResolved,
+} from "../../adapters/line.adapter";
 import { ResponseCode } from "../../types/code";
 import { SOS_MSG, SOS_REASON } from "../../constants/messages";
 import { buildSosSnapshot, emitSosUpdate } from "./sos-events";
@@ -43,12 +46,16 @@ const TRACKING_EXPIRY_MS = 24 * 60 * 60 * 1000;
  * @param lineUserIds Recipient LINE user ids (already excluding the actor).
  * @param message Short update text to deliver.
  */
-async function notifyOthers(lineUserIds: string[], message: string): Promise<void> {
+async function notifyOthers(
+  lineUserIds: string[],
+  message: string,
+): Promise<void> {
   if (!lineUserIds.length) return;
   try {
-    const adapter = (await import("../../adapters/line.adapter")) as unknown as {
-      pushSosUpdate?: (ids: string[], msg: string) => Promise<unknown>;
-    };
+    const adapter =
+      (await import("../../adapters/line.adapter")) as unknown as {
+        pushSosUpdate?: (ids: string[], msg: string) => Promise<unknown>;
+      };
     if (typeof adapter.pushSosUpdate === "function") {
       await adapter.pushSosUpdate(lineUserIds, message);
     }
@@ -114,8 +121,16 @@ export async function resolveActingContact(
   return { contactId: String(contact._id), name: contact.name ?? undefined };
 }
 
-function fail(httpCode: number, reason: keyof typeof SOS_REASON): ServiceResult {
-  return { ok: false, httpCode, message: SOS_MSG[reason], data: { reason: SOS_REASON[reason] } };
+function fail(
+  httpCode: number,
+  reason: keyof typeof SOS_REASON,
+): ServiceResult {
+  return {
+    ok: false,
+    httpCode,
+    message: SOS_MSG[reason],
+    data: { reason: SOS_REASON[reason] },
+  };
 }
 
 /**
@@ -148,7 +163,9 @@ async function boundLineUserIds(userId: string): Promise<string[]> {
  * @param input Requester id, SOS type and location.
  * @returns 201 (new) or 200 (existing active) with `{ sessionId, shareToken, notifiedCount }`.
  */
-export async function createSession(input: CreateSosInput): Promise<ServiceResult> {
+export async function createSession(
+  input: CreateSosInput,
+): Promise<ServiceResult> {
   const shareToken = crypto.randomBytes(16).toString("hex");
   const now = new Date();
 
@@ -186,7 +203,11 @@ export async function createSession(input: CreateSosInput): Promise<ServiceResul
       ok: true,
       httpCode: ResponseCode.CREATED,
       message: SOS_MSG.CREATED,
-      data: { sessionId: session._id, shareToken: session.shareToken, notifiedCount },
+      data: {
+        sessionId: session._id,
+        shareToken: session.shareToken,
+        notifiedCount,
+      },
     };
   } catch (err) {
     if ((err as { code?: number })?.code === 11000) {
@@ -197,7 +218,11 @@ export async function createSession(input: CreateSosInput): Promise<ServiceResul
           ok: true,
           httpCode: ResponseCode.OK,
           message: SOS_MSG.ALREADY_ACTIVE,
-          data: { sessionId: existing._id, shareToken: existing.shareToken, notifiedCount },
+          data: {
+            sessionId: existing._id,
+            shareToken: existing.shareToken,
+            notifiedCount,
+          },
         };
       }
     }
@@ -212,7 +237,9 @@ export async function createSession(input: CreateSosInput): Promise<ServiceResul
  * @param input Owner id, session id and new location.
  * @returns 200, or 404/403/400 per ownership and state guards.
  */
-export async function updateLocation(input: UpdateLocationInput): Promise<ServiceResult> {
+export async function updateLocation(
+  input: UpdateLocationInput,
+): Promise<ServiceResult> {
   if (!Types.ObjectId.isValid(input.sessionId)) {
     return fail(ResponseCode.NOT_FOUND, "SESSION_NOT_FOUND");
   }
@@ -232,9 +259,17 @@ export async function updateLocation(input: UpdateLocationInput): Promise<Servic
   });
   if (!updated) return fail(ResponseCode.INVALID_INPUT, "SESSION_NOT_ACTIVE");
 
-  emitSosUpdate(String(updated._id), buildSosSnapshot(updated as unknown as ISosSession));
+  emitSosUpdate(
+    String(updated._id),
+    buildSosSnapshot(updated as unknown as ISosSession),
+  );
 
-  return { ok: true, httpCode: ResponseCode.OK, message: SOS_MSG.PUBLIC_OK, data: { sessionId: updated._id } };
+  return {
+    ok: true,
+    httpCode: ResponseCode.OK,
+    message: SOS_MSG.PUBLIC_OK,
+    data: { sessionId: updated._id },
+  };
 }
 
 /**
@@ -245,10 +280,19 @@ export async function updateLocation(input: UpdateLocationInput): Promise<Servic
  * @param input Session id and acting LINE user id.
  * @returns 200 with `{ sessionId, handlingStatus }`, or 403 when not authorized.
  */
-export async function acknowledgeSession(input: AcknowledgeSosInput): Promise<ServiceResult> {
-  const auth = await getAuthorizedSessionForLineUser(input.lineUserId, input.sessionId);
-  if (!auth?.session) return fail(ResponseCode.FORBIDDEN, "NOT_AUTHORIZED_CONTACT");
-  const acting = await resolveActingContact(auth.session.userId, input.lineUserId);
+export async function acknowledgeSession(
+  input: AcknowledgeSosInput,
+): Promise<ServiceResult> {
+  const auth = await getAuthorizedSessionForLineUser(
+    input.lineUserId,
+    input.sessionId,
+  );
+  if (!auth?.session)
+    return fail(ResponseCode.FORBIDDEN, "NOT_AUTHORIZED_CONTACT");
+  const acting = await resolveActingContact(
+    auth.session.userId,
+    input.lineUserId,
+  );
   const now = new Date();
 
   const recorded = await pushAcknowledgement(
@@ -287,7 +331,10 @@ export async function acknowledgeSession(input: AcknowledgeSosInput): Promise<Se
       ok: true,
       httpCode: ResponseCode.OK,
       message: SOS_MSG.ACKNOWLEDGED,
-      data: { sessionId: input.sessionId, handlingStatus: current?.handlingStatus },
+      data: {
+        sessionId: input.sessionId,
+        handlingStatus: current?.handlingStatus,
+      },
     };
   }
 
@@ -295,8 +342,13 @@ export async function acknowledgeSession(input: AcknowledgeSosInput): Promise<Se
 
   const updated = await findSessionById(input.sessionId);
   if (updated) {
-    emitSosUpdate(input.sessionId, buildSosSnapshot(updated as unknown as ISosSession));
-    const others = (await boundLineUserIds(String(updated.userId))).filter((id) => id !== input.lineUserId);
+    emitSosUpdate(
+      input.sessionId,
+      buildSosSnapshot(updated as unknown as ISosSession),
+    );
+    const others = (await boundLineUserIds(String(updated.userId))).filter(
+      (id) => id !== input.lineUserId,
+    );
     await notifyOthers(others, `${acting?.name ?? "家人"}已確認收到通知`);
   }
 
@@ -304,7 +356,10 @@ export async function acknowledgeSession(input: AcknowledgeSosInput): Promise<Se
     ok: true,
     httpCode: ResponseCode.OK,
     message: SOS_MSG.ACKNOWLEDGED,
-    data: { sessionId: input.sessionId, handlingStatus: updated?.handlingStatus },
+    data: {
+      sessionId: input.sessionId,
+      handlingStatus: updated?.handlingStatus,
+    },
   };
 }
 
@@ -316,10 +371,19 @@ export async function acknowledgeSession(input: AcknowledgeSosInput): Promise<Se
  * @param input Session id and acting LINE user id.
  * @returns 200 `CLAIMED`, 200 `ALREADY_CLAIMED`, 403, or 400 per state.
  */
-export async function claimSession(input: ClaimSosInput): Promise<ServiceResult> {
-  const auth = await getAuthorizedSessionForLineUser(input.lineUserId, input.sessionId);
-  if (!auth?.session) return fail(ResponseCode.FORBIDDEN, "NOT_AUTHORIZED_CONTACT");
-  const acting = await resolveActingContact(auth.session.userId, input.lineUserId);
+export async function claimSession(
+  input: ClaimSosInput,
+): Promise<ServiceResult> {
+  const auth = await getAuthorizedSessionForLineUser(
+    input.lineUserId,
+    input.sessionId,
+  );
+  if (!auth?.session)
+    return fail(ResponseCode.FORBIDDEN, "NOT_AUTHORIZED_CONTACT");
+  const acting = await resolveActingContact(
+    auth.session.userId,
+    input.lineUserId,
+  );
   const now = new Date();
 
   const prev = await claimUnclaimedSession(
@@ -343,8 +407,13 @@ export async function claimSession(input: ClaimSosInput): Promise<ServiceResult>
   if (prev) {
     const updated = await findSessionById(input.sessionId);
     if (updated) {
-      emitSosUpdate(input.sessionId, buildSosSnapshot(updated as unknown as ISosSession));
-      const others = (await boundLineUserIds(String(updated.userId))).filter((id) => id !== input.lineUserId);
+      emitSosUpdate(
+        input.sessionId,
+        buildSosSnapshot(updated as unknown as ISosSession),
+      );
+      const others = (await boundLineUserIds(String(updated.userId))).filter(
+        (id) => id !== input.lineUserId,
+      );
       await notifyOthers(others, `${acting?.name ?? "家人"}已承接此事件`);
     }
     return {
@@ -361,7 +430,10 @@ export async function claimSession(input: ClaimSosInput): Promise<ServiceResult>
       ok: true,
       httpCode: ResponseCode.OK,
       message: SOS_MSG.CLAIMED,
-      data: { sessionId: input.sessionId, claimedByName: current.claimedByName ?? null },
+      data: {
+        sessionId: input.sessionId,
+        claimedByName: current.claimedByName ?? null,
+      },
     };
   }
   if (!current || current.status !== "active") {
@@ -371,7 +443,10 @@ export async function claimSession(input: ClaimSosInput): Promise<ServiceResult>
     ok: false,
     httpCode: ResponseCode.OK,
     message: SOS_MSG.ALREADY_CLAIMED,
-    data: { reason: SOS_REASON.ALREADY_CLAIMED, claimedByName: current.claimedByName ?? null },
+    data: {
+      reason: SOS_REASON.ALREADY_CLAIMED,
+      claimedByName: current.claimedByName ?? null,
+    },
   };
 }
 
@@ -382,10 +457,19 @@ export async function claimSession(input: ClaimSosInput): Promise<ServiceResult>
  * @param input Session id, acting LINE user id, optional handlingStatus and note.
  * @returns 200 with `{ sessionId, handlingStatus }`, 403, or 400 when not active.
  */
-export async function updateHandlingStatus(input: UpdateSosStatusInput): Promise<ServiceResult> {
-  const auth = await getAuthorizedSessionForLineUser(input.lineUserId, input.sessionId);
-  if (!auth?.session) return fail(ResponseCode.FORBIDDEN, "NOT_AUTHORIZED_CONTACT");
-  const acting = await resolveActingContact(auth.session.userId, input.lineUserId);
+export async function updateHandlingStatus(
+  input: UpdateSosStatusInput,
+): Promise<ServiceResult> {
+  const auth = await getAuthorizedSessionForLineUser(
+    input.lineUserId,
+    input.sessionId,
+  );
+  if (!auth?.session)
+    return fail(ResponseCode.FORBIDDEN, "NOT_AUTHORIZED_CONTACT");
+  const acting = await resolveActingContact(
+    auth.session.userId,
+    input.lineUserId,
+  );
   const now = new Date();
 
   const update: Record<string, unknown> = {
@@ -407,15 +491,23 @@ export async function updateHandlingStatus(input: UpdateSosStatusInput): Promise
   const updated = await applyHandlingUpdate(input.sessionId, update);
   if (!updated) return fail(ResponseCode.INVALID_INPUT, "SESSION_NOT_ACTIVE");
 
-  emitSosUpdate(input.sessionId, buildSosSnapshot(updated as unknown as ISosSession));
-  const others = (await boundLineUserIds(updated.userId)).filter((id) => id !== input.lineUserId);
+  emitSosUpdate(
+    input.sessionId,
+    buildSosSnapshot(updated as unknown as ISosSession),
+  );
+  const others = (await boundLineUserIds(updated.userId)).filter(
+    (id) => id !== input.lineUserId,
+  );
   await notifyOthers(others, `${acting?.name ?? "家人"}更新了處理狀態`);
 
   return {
     ok: true,
     httpCode: ResponseCode.OK,
     message: SOS_MSG.STATUS_UPDATED,
-    data: { sessionId: input.sessionId, handlingStatus: updated.handlingStatus },
+    data: {
+      sessionId: input.sessionId,
+      handlingStatus: updated.handlingStatus,
+    },
   };
 }
 
@@ -427,7 +519,9 @@ export async function updateHandlingStatus(input: UpdateSosStatusInput): Promise
  * @param input Session id and exactly one caller identity.
  * @returns 200 with `{ sessionId, status }`, or 404/403 per guards.
  */
-export async function resolveSession(input: ResolveSosInput): Promise<ServiceResult> {
+export async function resolveSession(
+  input: ResolveSosInput,
+): Promise<ServiceResult> {
   if (!Types.ObjectId.isValid(input.sessionId)) {
     return fail(ResponseCode.NOT_FOUND, "SESSION_NOT_FOUND");
   }
@@ -442,8 +536,12 @@ export async function resolveSession(input: ResolveSosInput): Promise<ServiceRes
     }
     ownerUserId = input.userId;
   } else if (input.lineUserId) {
-    const auth = await getAuthorizedSessionForLineUser(input.lineUserId, input.sessionId);
-    if (!auth?.session) return fail(ResponseCode.FORBIDDEN, "NOT_AUTHORIZED_CONTACT");
+    const auth = await getAuthorizedSessionForLineUser(
+      input.lineUserId,
+      input.sessionId,
+    );
+    if (!auth?.session)
+      return fail(ResponseCode.FORBIDDEN, "NOT_AUTHORIZED_CONTACT");
     ownerUserId = auth.session.userId;
     const acting = await resolveActingContact(ownerUserId, input.lineUserId);
     actorName = acting?.name;
@@ -488,7 +586,10 @@ export async function resolveSession(input: ResolveSosInput): Promise<ServiceRes
 
   const updated = await findSessionById(input.sessionId);
   if (updated) {
-    emitSosUpdate(input.sessionId, buildSosSnapshot(updated as unknown as ISosSession));
+    emitSosUpdate(
+      input.sessionId,
+      buildSosSnapshot(updated as unknown as ISosSession),
+    );
   }
 
   return {
@@ -506,7 +607,9 @@ export async function resolveSession(input: ResolveSosInput): Promise<ServiceRes
  * @param input Owner id and session id.
  * @returns 200 with the snapshot, 404 unknown, or 403 when not the owner.
  */
-export async function getSessionForOwner(input: GetSosForOwnerInput): Promise<ServiceResult> {
+export async function getSessionForOwner(
+  input: GetSosForOwnerInput,
+): Promise<ServiceResult> {
   if (!Types.ObjectId.isValid(input.sessionId)) {
     return fail(ResponseCode.NOT_FOUND, "SESSION_NOT_FOUND");
   }
@@ -530,10 +633,17 @@ export async function getSessionForOwner(input: GetSosForOwnerInput): Promise<Se
  * @param token The 32-char share token.
  * @returns 200 with a minimal location view, 404 unknown, or 410 expired.
  */
-export async function getPublicByToken(shareToken: string): Promise<ServiceResult> {
+export async function getPublicByToken(
+  shareToken: string,
+): Promise<ServiceResult> {
   const session = await findSessionByShareToken(shareToken);
   if (!session) {
-    return { ok: false, httpCode: ResponseCode.NOT_FOUND, message: SOS_MSG.TRACKING_NOT_FOUND, data: { reason: SOS_REASON.SESSION_NOT_FOUND } };
+    return {
+      ok: false,
+      httpCode: ResponseCode.NOT_FOUND,
+      message: SOS_MSG.TRACKING_NOT_FOUND,
+      data: { reason: SOS_REASON.SESSION_NOT_FOUND },
+    };
   }
   if (
     session.status === "resolved" &&

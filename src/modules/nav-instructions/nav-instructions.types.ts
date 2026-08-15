@@ -24,18 +24,10 @@ export type NavInstructionType =
   | "arrive";
 
 export type NavLegType =
-  | "WALK"
-  | "DRIVE"
-  | "MOTORCYCLE"
-  | "BUS"
-  | "METRO"
-  | "THSR"
-  | "TRA";
+  "WALK" | "DRIVE" | "MOTORCYCLE" | "BUS" | "METRO" | "THSR" | "TRA";
 
 export type NavWarningCode =
-  | "WALK_STEPS_UNAVAILABLE"
-  | "ORS_STEPS_UNAVAILABLE"
-  | "ROAD_STEPS_UNAVAILABLE";
+  "WALK_STEPS_UNAVAILABLE" | "ORS_STEPS_UNAVAILABLE" | "ROAD_STEPS_UNAVAILABLE";
 
 export interface NavInstruction {
   text: string;

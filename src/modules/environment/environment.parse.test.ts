@@ -10,7 +10,12 @@ function makeLocation(overrides: Partial<CwaLocation> = {}): CwaLocation {
     WeatherElement: [
       {
         ElementName: "溫度",
-        Time: [{ DataTime: "2026-06-20T10:00:00+08:00", ElementValue: [{ Temperature: "31" }] }],
+        Time: [
+          {
+            DataTime: "2026-06-20T10:00:00+08:00",
+            ElementValue: [{ Temperature: "31" }],
+          },
+        ],
       },
       {
         ElementName: "3小時降雨機率",
@@ -24,11 +29,21 @@ function makeLocation(overrides: Partial<CwaLocation> = {}): CwaLocation {
       },
       {
         ElementName: "風速",
-        Time: [{ DataTime: "2026-06-20T10:00:00+08:00", ElementValue: [{ WindSpeed: "3" }] }],
+        Time: [
+          {
+            DataTime: "2026-06-20T10:00:00+08:00",
+            ElementValue: [{ WindSpeed: "3" }],
+          },
+        ],
       },
       {
         ElementName: "風向",
-        Time: [{ DataTime: "2026-06-20T10:00:00+08:00", ElementValue: [{ WindDirection: "南風" }] }],
+        Time: [
+          {
+            DataTime: "2026-06-20T10:00:00+08:00",
+            ElementValue: [{ WindDirection: "南風" }],
+          },
+        ],
       },
       {
         ElementName: "天氣現象",
@@ -63,7 +78,12 @@ describe("parseWeather", () => {
       WeatherElement: [
         {
           ElementName: "3小時降雨機率",
-          Time: [{ StartTime: "2026-06-20T09:00:00+08:00", ElementValue: [{ ProbabilityOfPrecipitation: "-" }] }],
+          Time: [
+            {
+              StartTime: "2026-06-20T09:00:00+08:00",
+              ElementValue: [{ ProbabilityOfPrecipitation: "-" }],
+            },
+          ],
         },
       ],
     });
@@ -76,9 +96,21 @@ describe("parseWeather", () => {
 
 describe("parseCameras", () => {
   const cameras: RawCamera[] = [
-    { id: "tpe-near", name: "近的", lat: 25.0480, lon: 121.5320, cam_url: "https://cctv/near.mjpg" },
-    { id: "tpe-mid", name: "中等", lat: 25.0520, lon: 121.5360 },
-    { id: "tpe-far", name: "遠的", lat: 25.2000, lon: 121.7000, cam_url: "https://cctv/far.mjpg" },
+    {
+      id: "tpe-near",
+      name: "近的",
+      lat: 25.048,
+      lon: 121.532,
+      cam_url: "https://cctv/near.mjpg",
+    },
+    { id: "tpe-mid", name: "中等", lat: 25.052, lon: 121.536 },
+    {
+      id: "tpe-far",
+      name: "遠的",
+      lat: 25.2,
+      lon: 121.7,
+      cam_url: "https://cctv/far.mjpg",
+    },
   ];
 
   it("filters by radius, sorts by distance, derives snapshot/stream URLs", () => {

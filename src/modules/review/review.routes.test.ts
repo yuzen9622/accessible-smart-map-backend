@@ -4,7 +4,8 @@ import { ResponseCode } from "../../types/code";
 import { REVIEW_MSG } from "../../constants/messages";
 
 vi.mock("../../config/auth", async () => {
-  const { createAuthModuleMock } = await import("../../../tests/helpers/auth-mock");
+  const { createAuthModuleMock } =
+    await import("../../../tests/helpers/auth-mock");
   return createAuthModuleMock();
 });
 
@@ -17,12 +18,18 @@ vi.mock("./review.service", async (orig) => ({
   getAiSummary: vi.fn(),
 }));
 
-import { buildTestApp, buildAuthorizationHeader } from "../../../tests/helpers/test-helpers";
+import {
+  buildTestApp,
+  buildAuthorizationHeader,
+} from "../../../tests/helpers/test-helpers";
 import * as service from "./review.service";
 
 const app = buildTestApp();
 const BASE = "/api/v1/a11y/reviews";
-const AUTH = buildAuthorizationHeader({ _id: "user-abc", email: "user@test.com" });
+const AUTH = buildAuthorizationHeader({
+  _id: "user-abc",
+  email: "user@test.com",
+});
 
 const VALID_REVIEW = {
   _id: "66a1f2c3e4b5a6d7c8e9f0d4",
@@ -162,7 +169,10 @@ describe("POST /api/v1/a11y/reviews", () => {
 
   it("returns 400 when placeId is missing", async () => {
     const { placeId: _, ...body } = VALID_CREATE_BODY;
-    const res = await request(app).post(BASE).set("Authorization", AUTH).send(body);
+    const res = await request(app)
+      .post(BASE)
+      .set("Authorization", AUTH)
+      .send(body);
     expect(res.status).toBe(ResponseCode.INVALID_INPUT);
     expect(vi.mocked(service.createReview)).not.toHaveBeenCalled();
   });
@@ -181,14 +191,25 @@ describe("GET /api/v1/a11y/reviews", () => {
       ok: true,
       httpCode: ResponseCode.OK,
       message: REVIEW_MSG.LIST_OK,
-      data: { items: [VALID_REVIEW], avgRating: 4, totalCount: 1, page: 1, totalPages: 1 },
+      data: {
+        items: [VALID_REVIEW],
+        avgRating: 4,
+        totalCount: 1,
+        page: 1,
+        totalPages: 1,
+      },
     });
 
     const res = await request(app).get(BASE).query(VALID_LIST_QUERY);
     expect(res.status).toBe(200);
     expect(res.body.data.items).toHaveLength(1);
     expect(vi.mocked(service.findByPlace)).toHaveBeenCalledWith(
-      expect.objectContaining({ placeId: "node/123456", placeType: "osm", page: 1, limit: 10 }),
+      expect.objectContaining({
+        placeId: "node/123456",
+        placeType: "osm",
+        page: 1,
+        limit: 10,
+      }),
     );
   });
 
@@ -197,10 +218,18 @@ describe("GET /api/v1/a11y/reviews", () => {
       ok: true,
       httpCode: ResponseCode.OK,
       message: REVIEW_MSG.LIST_OK,
-      data: { items: [VALID_REVIEW], avgRating: 4, totalCount: 1, page: 1, totalPages: 1 },
+      data: {
+        items: [VALID_REVIEW],
+        avgRating: 4,
+        totalCount: 1,
+        page: 1,
+        totalPages: 1,
+      },
     });
 
-    const res = await request(app).get(BASE).query({ ...VALID_LIST_QUERY, minAggregateScore: "3.5" });
+    const res = await request(app)
+      .get(BASE)
+      .query({ ...VALID_LIST_QUERY, minAggregateScore: "3.5" });
 
     expect(res.status).toBe(ResponseCode.OK);
     expect(vi.mocked(service.findByPlace)).toHaveBeenCalledWith(
@@ -209,7 +238,9 @@ describe("GET /api/v1/a11y/reviews", () => {
   });
 
   it("returns 400 for minAggregateScore outside its bounds", async () => {
-    const res = await request(app).get(BASE).query({ ...VALID_LIST_QUERY, minAggregateScore: 5.1 });
+    const res = await request(app)
+      .get(BASE)
+      .query({ ...VALID_LIST_QUERY, minAggregateScore: 5.1 });
     expect(res.status).toBe(ResponseCode.INVALID_INPUT);
     expect(vi.mocked(service.findByPlace)).not.toHaveBeenCalled();
   });
@@ -221,7 +252,9 @@ describe("GET /api/v1/a11y/reviews", () => {
   });
 
   it("returns 400 when placeType is invalid", async () => {
-    const res = await request(app).get(BASE).query({ ...VALID_LIST_QUERY, placeType: "invalid" });
+    const res = await request(app)
+      .get(BASE)
+      .query({ ...VALID_LIST_QUERY, placeType: "invalid" });
     expect(res.status).toBe(ResponseCode.INVALID_INPUT);
     expect(vi.mocked(service.findByPlace)).not.toHaveBeenCalled();
   });
@@ -316,7 +349,9 @@ describe("PATCH /api/v1/a11y/reviews/:id", () => {
   });
 
   it("returns 403 when no auth header", async () => {
-    const res = await request(app).patch(`${BASE}/${validId}`).send({ passageWidthRating: 5 });
+    const res = await request(app)
+      .patch(`${BASE}/${validId}`)
+      .send({ passageWidthRating: 5 });
     expect(res.status).toBe(ResponseCode.FORBIDDEN);
     expect(vi.mocked(service.updateReview)).not.toHaveBeenCalled();
   });
@@ -339,7 +374,10 @@ describe("DELETE /api/v1/a11y/reviews/:id", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.message).toBe(REVIEW_MSG.DELETED);
-    expect(vi.mocked(service.deleteReview)).toHaveBeenCalledWith(validId, "user-abc");
+    expect(vi.mocked(service.deleteReview)).toHaveBeenCalledWith(
+      validId,
+      "user-abc",
+    );
   });
 
   it("returns 404 when review not found", async () => {
@@ -357,7 +395,9 @@ describe("DELETE /api/v1/a11y/reviews/:id", () => {
   });
 
   it("returns 400 for malformed id", async () => {
-    const res = await request(app).delete(`${BASE}/bad-id`).set("Authorization", AUTH);
+    const res = await request(app)
+      .delete(`${BASE}/bad-id`)
+      .set("Authorization", AUTH);
     expect(res.status).toBe(ResponseCode.INVALID_INPUT);
     expect(vi.mocked(service.deleteReview)).not.toHaveBeenCalled();
   });
@@ -384,10 +424,15 @@ describe("GET /api/v1/a11y/reviews/summary", () => {
       },
     });
 
-    const res = await request(app).get(`${BASE}/summary`).query(VALID_LIST_QUERY);
+    const res = await request(app)
+      .get(`${BASE}/summary`)
+      .query(VALID_LIST_QUERY);
     expect(res.status).toBe(200);
     expect(res.body.data.summary).toBe("整體評價良好，電梯寬敞");
-    expect(vi.mocked(service.getAiSummary)).toHaveBeenCalledWith("node/123456", "osm");
+    expect(vi.mocked(service.getAiSummary)).toHaveBeenCalledWith(
+      "node/123456",
+      "osm",
+    );
   });
 
   it("returns 200 with null summary when reviews are insufficient", async () => {
@@ -398,13 +443,17 @@ describe("GET /api/v1/a11y/reviews/summary", () => {
       data: { avgRating: 4.0, totalCount: 2, summary: null, highlights: null },
     });
 
-    const res = await request(app).get(`${BASE}/summary`).query(VALID_LIST_QUERY);
+    const res = await request(app)
+      .get(`${BASE}/summary`)
+      .query(VALID_LIST_QUERY);
     expect(res.status).toBe(200);
     expect(res.body.data.summary).toBeNull();
   });
 
   it("returns 400 when placeId is missing", async () => {
-    const res = await request(app).get(`${BASE}/summary`).query({ placeType: "osm" });
+    const res = await request(app)
+      .get(`${BASE}/summary`)
+      .query({ placeType: "osm" });
     expect(res.status).toBe(ResponseCode.INVALID_INPUT);
     expect(vi.mocked(service.getAiSummary)).not.toHaveBeenCalled();
   });

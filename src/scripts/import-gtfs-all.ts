@@ -39,7 +39,7 @@ async function runScript(scriptName: string): Promise<void> {
     {
       env: { ...process.env },
       maxBuffer: 10 * 1024 * 1024,
-    }
+    },
   );
 
   if (stdout) process.stdout.write(stdout);

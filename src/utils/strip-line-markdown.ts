@@ -16,7 +16,10 @@ export function stripLineMarkdown(text: string): string {
 
   let out = text;
 
-  out = out.replace(/```[^\n`]*\n?([\s\S]*?)```/g, (_m, inner: string) => inner);
+  out = out.replace(
+    /```[^\n`]*\n?([\s\S]*?)```/g,
+    (_m, inner: string) => inner,
+  );
 
   out = out.replace(/`([^`]+)`/g, "$1");
 
@@ -28,7 +31,9 @@ export function stripLineMarkdown(text: string): string {
     return l;
   });
 
-  const filtered = lines.filter((line) => !/^\s*\|?[\s:|-]+\|?\s*$/.test(line) || !line.includes("|"));
+  const filtered = lines.filter(
+    (line) => !/^\s*\|?[\s:|-]+\|?\s*$/.test(line) || !line.includes("|"),
+  );
 
   out = filtered
     .map((line) => {

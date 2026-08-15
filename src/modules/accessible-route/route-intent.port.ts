@@ -9,9 +9,7 @@ import type { RouteIntent } from "../../types/ai";
  * The planner therefore owns the interface and `ai` supplies the
  * implementation, which is registered once at the composition root (src/app.ts).
  */
-export type RouteIntentParser = (
-	query: string,
-) => Promise<RouteIntent | null>;
+export type RouteIntentParser = (query: string) => Promise<RouteIntent | null>;
 
 let parser: RouteIntentParser | null = null;
 
@@ -21,7 +19,7 @@ let parser: RouteIntentParser | null = null;
  * @param next Implementation supplied by the `ai` module
  */
 export function registerRouteIntentParser(next: RouteIntentParser): void {
-	parser = next;
+  parser = next;
 }
 
 /**
@@ -35,8 +33,8 @@ export function registerRouteIntentParser(next: RouteIntentParser): void {
  * @returns The parsed intent, or null when the query is unusable
  */
 export function parseRouteIntent(query: string): Promise<RouteIntent | null> {
-	if (!parser) {
-		throw new Error("[accessible-route] no route intent parser registered");
-	}
-	return parser(query);
+  if (!parser) {
+    throw new Error("[accessible-route] no route intent parser registered");
+  }
+  return parser(query);
 }

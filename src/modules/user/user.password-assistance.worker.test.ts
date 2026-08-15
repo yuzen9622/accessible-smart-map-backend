@@ -58,7 +58,9 @@ describe("drainPasswordAssistanceQueue", () => {
   });
 
   it("does not dispatch when the lease was lost before the irreversible side effect", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const warnSpy = vi
+      .spyOn(console, "warn")
+      .mockImplementation(() => undefined);
     vi.mocked(claimPasswordAssistanceJob)
       .mockResolvedValueOnce({
         _id: "job-1",
@@ -80,7 +82,9 @@ describe("drainPasswordAssistanceQueue", () => {
   });
 
   it("releases failed work for retry without completing it", async () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const errorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
     vi.mocked(claimPasswordAssistanceJob)
       .mockResolvedValueOnce({
         _id: "job-1",
@@ -91,7 +95,9 @@ describe("drainPasswordAssistanceQueue", () => {
       } as any)
       .mockResolvedValueOnce(null);
     vi.mocked(renewPasswordAssistanceLease).mockResolvedValue(true);
-    vi.mocked(processPasswordAssistance).mockRejectedValue(new Error("mail down"));
+    vi.mocked(processPasswordAssistance).mockRejectedValue(
+      new Error("mail down"),
+    );
     vi.mocked(failPasswordAssistanceJob).mockResolvedValue(true);
 
     const processed = await drainPasswordAssistanceQueue();

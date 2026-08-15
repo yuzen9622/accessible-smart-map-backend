@@ -49,7 +49,9 @@ function summarizeBody(body: string): string {
 
 /** Overpass sometimes answers HTTP 200 with a runtime error in `remark` (e.g. query timeout). */
 function hasRuntimeError(json: { remark?: unknown }): boolean {
-  return typeof json.remark === "string" && json.remark.includes("runtime error");
+  return (
+    typeof json.remark === "string" && json.remark.includes("runtime error")
+  );
 }
 
 /**
@@ -61,7 +63,7 @@ function hasRuntimeError(json: { remark?: unknown }): boolean {
  */
 export async function fetchOverpassElements(
   query: string,
-  options: OverpassFetchOptions = {}
+  options: OverpassFetchOptions = {},
 ): Promise<any[]> {
   const {
     userAgent = "accessible-smart-map-backend/1.0 (accessibility data import)",
@@ -74,7 +76,7 @@ export async function fetchOverpassElements(
   // hammering the first instance every time.
   const start = Math.floor(Math.random() * OVERPASS_ENDPOINTS.length);
   const endpoints = OVERPASS_ENDPOINTS.map(
-    (_, i) => OVERPASS_ENDPOINTS[(start + i) % OVERPASS_ENDPOINTS.length]
+    (_, i) => OVERPASS_ENDPOINTS[(start + i) % OVERPASS_ENDPOINTS.length],
   );
 
   const failures: string[] = [];
@@ -110,14 +112,14 @@ export async function fetchOverpassElements(
           }
           failures.push(
             `${url} (attempt ${attempt}): HTTP ${resp.status} runtime error` +
-              (json?.remark ? ` — ${summarizeBody(String(json.remark))}` : "")
+              (json?.remark ? ` — ${summarizeBody(String(json.remark))}` : ""),
           );
           // A 200-with-remark means the query itself hit its timeout — re-running
           // the same instance rarely helps; move on to the next one.
           retryable = false;
         } else {
           failures.push(
-            `${url} (attempt ${attempt}): HTTP ${resp.status} — ${summarizeBody(bodyText)}`
+            `${url} (attempt ${attempt}): HTTP ${resp.status} — ${summarizeBody(bodyText)}`,
           );
           // Permanent 4xx (e.g. 400 parse error) won't get better on retry.
           retryable = RETRYABLE_STATUS.has(resp.status);
@@ -127,7 +129,7 @@ export async function fetchOverpassElements(
         failures.push(
           `${url} (attempt ${attempt}): ${
             aborted ? `timeout after ${timeoutMs}ms` : (err as Error).message
-          }`
+          }`,
         );
         retryable = true; // network errors and timeouts are transient
       } finally {
@@ -142,6 +144,6 @@ export async function fetchOverpassElements(
 
   throw new Error(
     `Overpass request failed on all ${endpoints.length} endpoints ` +
-      `(${attemptsPerEndpoint} attempt(s) each): ${failures.join("; ")}`
+      `(${attemptsPerEndpoint} attempt(s) each): ${failures.join("; ")}`,
   );
 }

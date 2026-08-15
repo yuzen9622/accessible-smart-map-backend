@@ -11,7 +11,11 @@ import fs from "fs";
 import path from "path";
 import type { Content } from "@google/genai";
 import { model } from "../config/ai";
-import { CHAT_SYSTEM_PROMPT, withUserLocation, withCurrentDate } from "../config/ai/chat-prompt";
+import {
+  CHAT_SYSTEM_PROMPT,
+  withUserLocation,
+  withCurrentDate,
+} from "../config/ai/chat-prompt";
 import { taipeiYmdDash } from "../config/taipei-time";
 import { routeOnce, runToolLoop } from "../modules/agent/agent-manager.service";
 import { agentCases, type AgentCase } from "./agent-cases";
@@ -42,7 +46,9 @@ function gradeRun(c: AgentCase, called: string[]): boolean {
 }
 
 async function evalCase(c: AgentCase): Promise<Outcome> {
-  const sys = withCurrentDate(withUserLocation(CHAT_SYSTEM_PROMPT, c.userLocation));
+  const sys = withCurrentDate(
+    withUserLocation(CHAT_SYSTEM_PROMPT, c.userLocation),
+  );
   const ctx = { today: taipeiYmdDash() };
   const userId = c.loggedIn ? "eval-user" : undefined; // only toggles tool catalogue; never hits DB
   const runs: string[][] = [];
@@ -73,7 +79,16 @@ async function evalCase(c: AgentCase): Promise<Outcome> {
   else if (passes === 0) verdict = "FAIL";
   else verdict = "FLAKY";
 
-  return { id: c.id, query: c.query, expectTool: c.expectTool, runs, errors, passes, verdict, argFails };
+  return {
+    id: c.id,
+    query: c.query,
+    expectTool: c.expectTool,
+    runs,
+    errors,
+    passes,
+    verdict,
+    argFails,
+  };
 }
 
 function pad(s: string, n: number): string {
@@ -94,24 +109,47 @@ const NUTC = { latitude: 24.130608, longitude: 120.637112 };
 const CANNED_ROUTES = ["159", "48"];
 const BUS_ETA_TOOLS = ["getBusArrival", "getBusRouteDetail", "getBusTimetable"];
 
-async function cannedExec(name: string, args: Record<string, unknown>): Promise<string> {
+async function cannedExec(
+  name: string,
+  args: Record<string, unknown>,
+): Promise<string> {
   switch (name) {
     case "planAccessibleRoute":
       return JSON.stringify({
         ok: true,
         routes: [
-          { summary: "搭 159 路直達", legs: [{ mode: "BUS", routeName: "159" }] },
+          {
+            summary: "搭 159 路直達",
+            legs: [{ mode: "BUS", routeName: "159" }],
+          },
           { summary: "搭 48 路轉乘", legs: [{ mode: "BUS", routeName: "48" }] },
         ],
       });
     case "findNearbyBusStops":
-      return JSON.stringify({ ok: true, stops: [{ name: "中科大站", routes: CANNED_ROUTES }] });
+      return JSON.stringify({
+        ok: true,
+        stops: [{ name: "中科大站", routes: CANNED_ROUTES }],
+      });
     case "getBusArrival":
-      return JSON.stringify({ ok: true, routeName: args?.routeName ?? "159", etaMinutes: args?.routeName === "48" ? 9 : 4 });
+      return JSON.stringify({
+        ok: true,
+        routeName: args?.routeName ?? "159",
+        etaMinutes: args?.routeName === "48" ? 9 : 4,
+      });
     case "getBusRouteDetail":
-      return JSON.stringify({ ok: true, routeName: args?.routeName ?? "159", stops: [], etaMinutes: 4 });
+      return JSON.stringify({
+        ok: true,
+        routeName: args?.routeName ?? "159",
+        stops: [],
+        etaMinutes: 4,
+      });
     case "getBusTimetable":
-      return JSON.stringify({ ok: true, routeName: args?.routeName ?? "159", firstBus: "06:00", lastBus: "22:30" });
+      return JSON.stringify({
+        ok: true,
+        routeName: args?.routeName ?? "159",
+        firstBus: "06:00",
+        lastBus: "22:30",
+      });
     default:
       return JSON.stringify({ ok: true });
   }
@@ -128,7 +166,9 @@ interface CompositeRun {
 
 async function runCompositeOnce(): Promise<CompositeRun> {
   const sys = withUserLocation(CHAT_SYSTEM_PROMPT, NUTC);
-  const contents: Content[] = [{ role: "user", parts: [{ text: COMPOSITE_QUERY }] }];
+  const contents: Content[] = [
+    { role: "user", parts: [{ text: COMPOSITE_QUERY }] },
+  ];
   const seq: string[] = [];
   const result = await runToolLoop(
     contents,
@@ -146,11 +186,23 @@ async function runCompositeOnce(): Promise<CompositeRun> {
   const text = result.text ?? "";
   const hitBusEta = seq.some((n) => BUS_ETA_TOOLS.includes(n));
   const noNav = !seq.includes("getNavInstructions");
-  const busOriented = text.length > 0 && CANNED_ROUTES.some((r) => text.includes(r));
-  return { seq, text, hitBusEta, noNav, busOriented, pass: hitBusEta && noNav && busOriented };
+  const busOriented =
+    text.length > 0 && CANNED_ROUTES.some((r) => text.includes(r));
+  return {
+    seq,
+    text,
+    hitBusEta,
+    noNav,
+    busOriented,
+    pass: hitBusEta && noNav && busOriented,
+  };
 }
 
-async function evalComposite(): Promise<{ verdict: Verdict; passes: number; runs: CompositeRun[] }> {
+async function evalComposite(): Promise<{
+  verdict: Verdict;
+  passes: number;
+  runs: CompositeRun[];
+}> {
   const runs: CompositeRun[] = [];
   let errors = 0;
   for (let i = 0; i < N; i++) {
@@ -158,7 +210,14 @@ async function evalComposite(): Promise<{ verdict: Verdict; passes: number; runs
       runs.push(await runCompositeOnce());
     } catch (e: any) {
       errors++;
-      runs.push({ seq: [`__error__:${e?.message ?? "unknown"}`], text: "", hitBusEta: false, noNav: false, busOriented: false, pass: false });
+      runs.push({
+        seq: [`__error__:${e?.message ?? "unknown"}`],
+        text: "",
+        hitBusEta: false,
+        noNav: false,
+        busOriented: false,
+        pass: false,
+      });
     }
   }
   const passes = runs.filter((r) => r.pass).length;
@@ -178,7 +237,9 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  console.log(`Tool-Routing Eval  (model=${model}, N=${N}, ${agentCases.length} cases)`);
+  console.log(
+    `Tool-Routing Eval  (model=${model}, N=${N}, ${agentCases.length} cases)`,
+  );
   console.log("=".repeat(76));
 
   const outcomes: Outcome[] = [];
@@ -187,7 +248,9 @@ async function main(): Promise<void> {
     outcomes.push(o);
     const got = o.verdict === "PASS" ? "" : `  got: ${JSON.stringify(o.runs)}`;
     const argNote = o.argFails.length ? `  argFail: ${o.argFails[0]}` : "";
-    console.log(`${pad(o.verdict, 5)} ${pad(o.id, 16)} ${pad(o.expectTool, 24)} ${o.passes}/${N}${got}${argNote}`);
+    console.log(
+      `${pad(o.verdict, 5)} ${pad(o.id, 16)} ${pad(o.expectTool, 24)} ${o.passes}/${N}${got}${argNote}`,
+    );
   }
 
   const total = outcomes.length;
@@ -198,13 +261,21 @@ async function main(): Promise<void> {
   const errs = outcomes.filter((o) => o.verdict === "ERROR");
 
   console.log("-".repeat(76));
-  console.log(`Strict accuracy : ${strictPass}/${total}  (${((strictPass / total) * 100).toFixed(1)}%)`);
-  console.log(`Lenient accuracy: ${lenientPass}/${total * N}  (${((lenientPass / (total * N)) * 100).toFixed(1)}%)`);
-  console.log(`FAIL: ${fails.length}   FLAKY: ${flaky.length}   ERROR: ${errs.length}`);
+  console.log(
+    `Strict accuracy : ${strictPass}/${total}  (${((strictPass / total) * 100).toFixed(1)}%)`,
+  );
+  console.log(
+    `Lenient accuracy: ${lenientPass}/${total * N}  (${((lenientPass / (total * N)) * 100).toFixed(1)}%)`,
+  );
+  console.log(
+    `FAIL: ${fails.length}   FLAKY: ${flaky.length}   ERROR: ${errs.length}`,
+  );
   if (fails.length || errs.length) {
     console.log("Mis-routes / errors:");
     for (const o of [...fails, ...errs]) {
-      console.log(`  - ${o.id}: expected ${o.expectTool}, got ${JSON.stringify(o.runs)}`);
+      console.log(
+        `  - ${o.id}: expected ${o.expectTool}, got ${JSON.stringify(o.runs)}`,
+      );
     }
   }
 
@@ -213,10 +284,15 @@ async function main(): Promise<void> {
   const composite = await evalComposite();
   for (const r of composite.runs) {
     const flags = `busEta=${r.hitBusEta} noNav=${r.noNav} busText=${r.busOriented}`;
-    console.log(`  ${pad(r.pass ? "PASS" : "FAIL", 5)} seq=${JSON.stringify(r.seq)}  ${flags}`);
+    console.log(
+      `  ${pad(r.pass ? "PASS" : "FAIL", 5)} seq=${JSON.stringify(r.seq)}  ${flags}`,
+    );
   }
   console.log(`V1b verdict: ${composite.verdict}  ${composite.passes}/${N}`);
-  const compositeFail = composite.verdict === "FAIL" || composite.verdict === "ERROR" || composite.verdict === "FLAKY";
+  const compositeFail =
+    composite.verdict === "FAIL" ||
+    composite.verdict === "ERROR" ||
+    composite.verdict === "FLAKY";
 
   const outDir = path.resolve(__dirname, "eval-reports");
   fs.mkdirSync(outDir, { recursive: true });
@@ -225,14 +301,30 @@ async function main(): Promise<void> {
     model,
     runs: N,
     strict: { pass: strictPass, total, accuracy: strictPass / total },
-    lenient: { pass: lenientPass, total: total * N, accuracy: lenientPass / (total * N) },
+    lenient: {
+      pass: lenientPass,
+      total: total * N,
+      accuracy: lenientPass / (total * N),
+    },
     cases: outcomes,
-    compositeBus: { verdict: composite.verdict, passes: composite.passes, runs: composite.runs },
+    compositeBus: {
+      verdict: composite.verdict,
+      passes: composite.passes,
+      runs: composite.runs,
+    },
   };
   const stamp = report.timestamp.replace(/[:.]/g, "-");
-  fs.writeFileSync(path.join(outDir, `routing-${stamp}.json`), JSON.stringify(report, null, 2));
-  fs.writeFileSync(path.join(outDir, "latest.json"), JSON.stringify(report, null, 2));
-  console.log(`\nReport: src/scripts/eval-reports/routing-${stamp}.json (+ latest.json)`);
+  fs.writeFileSync(
+    path.join(outDir, `routing-${stamp}.json`),
+    JSON.stringify(report, null, 2),
+  );
+  fs.writeFileSync(
+    path.join(outDir, "latest.json"),
+    JSON.stringify(report, null, 2),
+  );
+  console.log(
+    `\nReport: src/scripts/eval-reports/routing-${stamp}.json (+ latest.json)`,
+  );
 
   process.exit(fails.length + errs.length > 0 || compositeFail ? 1 : 0);
 }

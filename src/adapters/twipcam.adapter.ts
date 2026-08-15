@@ -5,7 +5,11 @@
  * coordinate-scoped JSON endpoint. Failures are thrown via `withResilience`.
  */
 import { redisGet, redisSet } from "../config/redis";
-import { UpstreamBadPayloadError, UpstreamHttpError, withResilience } from "../config/resilience";
+import {
+  UpstreamBadPayloadError,
+  UpstreamHttpError,
+  withResilience,
+} from "../config/resilience";
 import {
   CCTV_CACHE_KEY,
   ENV_CACHE_TTL_SEC,
@@ -33,11 +37,17 @@ export async function fetchCamList(): Promise<RawCamera[]> {
 
     const data = (await res.json()) as unknown;
     if (!Array.isArray(data)) {
-      throw new UpstreamBadPayloadError("twipcam cam-list did not return an array");
+      throw new UpstreamBadPayloadError(
+        "twipcam cam-list did not return an array",
+      );
     }
     return data as RawCamera[];
   });
 
-  await redisSet(CCTV_CACHE_KEY, JSON.stringify(cameras), ENV_CACHE_TTL_SEC.CCTV);
+  await redisSet(
+    CCTV_CACHE_KEY,
+    JSON.stringify(cameras),
+    ENV_CACHE_TTL_SEC.CCTV,
+  );
   return cameras;
 }

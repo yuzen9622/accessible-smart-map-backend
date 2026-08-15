@@ -18,7 +18,10 @@ async function generateLineLinkCode(): Promise<string> {
   for (let attempt = 0; attempt < 8; attempt++) {
     let code = "";
     for (let i = 0; i < LINE_LINK_CODE_LENGTH; i++) {
-      code += LINE_LINK_CODE_ALPHABET[crypto.randomInt(LINE_LINK_CODE_ALPHABET.length)];
+      code +=
+        LINE_LINK_CODE_ALPHABET[
+          crypto.randomInt(LINE_LINK_CODE_ALPHABET.length)
+        ];
     }
     const exists = await lineLinkCodeExists(code);
     if (!exists) return code;

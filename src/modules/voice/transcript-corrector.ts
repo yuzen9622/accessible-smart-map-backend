@@ -81,9 +81,15 @@ export async function correctUserTranscript(text: string): Promise<string> {
   });
   try {
     const corrected = await Promise.race([requestCorrection(trimmed), timeout]);
-    const cleaned = corrected.trim().replace(/^["「『]+|["」』]+$/g, "").trim();
+    const cleaned = corrected
+      .trim()
+      .replace(/^["「『]+|["」』]+$/g, "")
+      .trim();
     if (!cleaned) return text;
-    if (cleaned.length > trimmed.length * MAX_OUTPUT_GROWTH + MAX_OUTPUT_SLACK) {
+    if (
+      cleaned.length >
+      trimmed.length * MAX_OUTPUT_GROWTH + MAX_OUTPUT_SLACK
+    ) {
       return text;
     }
     return cleaned;

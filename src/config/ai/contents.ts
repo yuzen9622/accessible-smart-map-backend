@@ -379,4 +379,13 @@ const reviewSummaryContents = [
   },
 ];
 
-export { agentContents, rankContents, routeContents, assistantContents, intentContents, explainContents, airContents, reviewSummaryContents };
+export {
+  agentContents,
+  rankContents,
+  routeContents,
+  assistantContents,
+  intentContents,
+  explainContents,
+  airContents,
+  reviewSummaryContents,
+};

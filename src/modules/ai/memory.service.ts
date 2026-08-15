@@ -1,4 +1,9 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+} from "crypto";
 import {
   countActiveMemories,
   findActiveMemories,
@@ -73,7 +78,10 @@ function hasPreciseCoordinates(content: string): boolean {
 }
 
 function redactPreciseCoordinates(content: string): string {
-  return content.replace(/\b2[1-6]\.\d{3,}\s*,\s*12[0-2]\.\d{3,}\b/g, "座標已隱藏");
+  return content.replace(
+    /\b2[1-6]\.\d{3,}\s*,\s*12[0-2]\.\d{3,}\b/g,
+    "座標已隱藏",
+  );
 }
 
 function inferSensitivity(
@@ -99,10 +107,7 @@ function buildPromptText(
   return trimmed;
 }
 
-function buildRetrievalText(
-  content: string,
-  category: MemoryCategory,
-): string {
+function buildRetrievalText(content: string, category: MemoryCategory): string {
   return `${category}: ${redactPreciseCoordinates(trimMemoryText(content))}`;
 }
 
@@ -117,7 +122,10 @@ function encryptMemoryContent(content: string): string {
   if (!key || content.startsWith(ENCRYPTED_PREFIX)) return content;
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", key, iv);
-  const ciphertext = Buffer.concat([cipher.update(content, "utf8"), cipher.final()]);
+  const ciphertext = Buffer.concat([
+    cipher.update(content, "utf8"),
+    cipher.final(),
+  ]);
   const tag = cipher.getAuthTag();
   return `${ENCRYPTED_PREFIX}${iv.toString("base64")}:${tag.toString("base64")}:${ciphertext.toString("base64")}`;
 }
@@ -192,7 +200,9 @@ async function assertMemoryEnabled(userId: string): Promise<void> {
   }
 }
 
-export async function getMemorySettings(userId: string): Promise<MemorySettings> {
+export async function getMemorySettings(
+  userId: string,
+): Promise<MemorySettings> {
   return { memoryEnabled: await findMemoryEnabled(userId) };
 }
 
@@ -329,12 +339,13 @@ export async function updateMemory(
     ? trimMemoryText(input.content)
     : existingContent;
   const category = input.category ?? existing.category;
-  const sensitivity =
-    input.sensitivity ?? inferSensitivity(content, category);
+  const sensitivity = input.sensitivity ?? inferSensitivity(content, category);
   const promptText = buildPromptText(content, sensitivity);
   const retrievalText = buildRetrievalText(content, category);
   const expiresAtUpdate =
-    input.expiresAt === undefined ? existing.expiresAt : input.expiresAt ?? undefined;
+    input.expiresAt === undefined
+      ? existing.expiresAt
+      : (input.expiresAt ?? undefined);
 
   const updated = await updateOwnedMemory(memoryId, userId, {
     content: encryptMemoryContent(content),
@@ -406,7 +417,9 @@ export async function searchMemoriesForPrompt(
 
     const memories = await findActiveMemoriesByIds(userId, ids);
 
-    const byId = new Map(memories.map((memory) => [String(memory._id), memory]));
+    const byId = new Map(
+      memories.map((memory) => [String(memory._id), memory]),
+    );
     const ranked: IUserMemory[] = [];
     for (const id of ids) {
       const memory = byId.get(id);

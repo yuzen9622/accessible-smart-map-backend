@@ -32,7 +32,7 @@ const middleware = async (req: Request, res: Response, next: NextFunction) => {
       false,
       "error",
       result.expired ? ResponseCode.UNAUTHORIZED : ResponseCode.FORBIDDEN,
-      result.expired ? ResponseMessage.UNAUTHORIZED : ResponseMessage.FORBIDDEN
+      result.expired ? ResponseMessage.UNAUTHORIZED : ResponseMessage.FORBIDDEN,
     );
   }
 

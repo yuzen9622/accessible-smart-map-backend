@@ -58,13 +58,7 @@ async function main() {
             fromStopId: row.from_stop_id,
             toStopId: row.to_stop_id,
             pathwayMode: parseInt(row.pathway_mode, 10) as
-              | 1
-              | 2
-              | 3
-              | 4
-              | 5
-              | 6
-              | 7,
+              1 | 2 | 3 | 4 | 5 | 6 | 7,
             isBidirectional: parseInt(row.is_bidirectional, 10) as 0 | 1,
             traversalTime:
               traversalTime !== undefined && !isNaN(traversalTime)

@@ -1,6 +1,7 @@
 export type RailSystem = "TRA" | "THSR";
 
-export type RailFetchErrorCode = "HTTP_ERROR" | "BAD_PAYLOAD" | "NETWORK" | "BUSY";
+export type RailFetchErrorCode =
+  "HTTP_ERROR" | "BAD_PAYLOAD" | "NETWORK" | "BUSY";
 
 export interface NormalizedTrain {
   trainNo: string;
@@ -24,8 +25,7 @@ export interface NormalizedStationTrain {
 }
 
 export type RailFetchOutcome<T> =
-  | { ok: true; items: T[] }
-  | { ok: false; errorCode: RailFetchErrorCode };
+  { ok: true; items: T[] } | { ok: false; errorCode: RailFetchErrorCode };
 
 export type OdFetchOutcome = RailFetchOutcome<NormalizedTrain>;
 

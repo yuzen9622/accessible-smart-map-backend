@@ -39,7 +39,8 @@ const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000;
  * A hash of a value nobody can supply, compared against when the account does
  * not exist so that a failed login costs the same time as a successful one.
  */
-const DUMMY_HASH = "$2b$12$C6UzMDM.H6dfI/f/IKcEe.O1oOb7wXHrN.HGoTvcNjBjWlKr1u2Bu";
+const DUMMY_HASH =
+  "$2b$12$C6UzMDM.H6dfI/f/IKcEe.O1oOb7wXHrN.HGoTvcNjBjWlKr1u2Bu";
 
 export type AuthFailure =
   | "INVALID_CREDENTIALS"
@@ -71,9 +72,13 @@ function hashToken(token: string): string {
  * @param type Which flow the token belongs to.
  * @returns The raw token; only its sha256 hash is persisted.
  */
-async function issueAuthToken(userId: string, type: AuthTokenType): Promise<string> {
+async function issueAuthToken(
+  userId: string,
+  type: AuthTokenType,
+): Promise<string> {
   const raw = crypto.randomBytes(32).toString("base64url");
-  const ttl = type === "email_verify" ? EMAIL_VERIFY_TTL_MS : PASSWORD_RESET_TTL_MS;
+  const ttl =
+    type === "email_verify" ? EMAIL_VERIFY_TTL_MS : PASSWORD_RESET_TTL_MS;
 
   await upsertAuthToken(
     userId,
@@ -216,7 +221,7 @@ export async function loginLocalUser(input: {
  * @throws AuthError INVALID_TOKEN when the token is unknown, expired or used.
  */
 export async function verifyEmail(
-  rawToken: string
+  rawToken: string,
 ): Promise<{ user: IUser; config: IConfig | null }> {
   const claimed = await consumeAuthToken(rawToken, "email_verify");
 
@@ -286,7 +291,8 @@ export async function processPasswordAssistance(input: {
         jobId: input.jobId,
         leaseToken: input.leaseToken,
       });
-      if (!ownsLease) throw new Error("Password assistance lease lost before dispatch");
+      if (!ownsLease)
+        throw new Error("Password assistance lease lost before dispatch");
       await sendGooglePasswordResetGuidanceEmail({
         to: email,
         name: user.name,
@@ -303,12 +309,15 @@ export async function processPasswordAssistance(input: {
     leaseToken: input.leaseToken,
     ttlMs: PASSWORD_RESET_TTL_MS,
   });
-  if (!tokenExpiresAt) throw new Error("Password assistance lease lost before token rotation");
+  if (!tokenExpiresAt)
+    throw new Error("Password assistance lease lost before token rotation");
   if (tokenExpiresAt.getTime() <= Date.now()) return;
 
   const tokenSecret = process.env.PASSWORD_RESET_TOKEN_SECRET;
   if (!tokenSecret || Buffer.byteLength(tokenSecret, "utf8") < 32) {
-    throw new Error("PASSWORD_RESET_TOKEN_SECRET must contain at least 32 bytes");
+    throw new Error(
+      "PASSWORD_RESET_TOKEN_SECRET must contain at least 32 bytes",
+    );
   }
   const stableToken = crypto
     .createHmac("sha256", tokenSecret)
@@ -326,7 +335,8 @@ export async function processPasswordAssistance(input: {
     jobId: input.jobId,
     leaseToken: input.leaseToken,
   });
-  if (!ownsLease) throw new Error("Password assistance lease lost before dispatch");
+  if (!ownsLease)
+    throw new Error("Password assistance lease lost before dispatch");
 
   await sendPasswordResetEmail({
     to: email,
@@ -386,7 +396,10 @@ export async function changePassword(input: {
 
   if (user.passwordHash) {
     if (!input.currentPassword) throw new AuthError("PASSWORD_REQUIRED");
-    const matches = await bcrypt.compare(input.currentPassword, user.passwordHash);
+    const matches = await bcrypt.compare(
+      input.currentPassword,
+      user.passwordHash,
+    );
     if (!matches) throw new AuthError("INVALID_CREDENTIALS");
   }
 
@@ -423,7 +436,7 @@ function getGoogleClient(): OAuth2Client {
  * @throws AuthError INVALID_TOKEN when the ID token or its email claim is unusable.
  */
 export async function authenticateWithGoogle(
-  idToken: string
+  idToken: string,
 ): Promise<{ user: IUser; config: IConfig | null }> {
   const audience = process.env.GOOGLE_CLIENT_ID;
   if (!audience) {

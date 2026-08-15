@@ -34,7 +34,7 @@ const userSchema = new Schema<IUser>(
       memoryEnabled: { type: Boolean, default: false },
     },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 // Both of these are partial rather than sparse on purpose. A sparse index only
@@ -43,11 +43,14 @@ const userSchema = new Schema<IUser>(
 // on $type: "string" indexes only accounts that actually have the identifier.
 userSchema.index(
   { lineUserId: 1 },
-  { unique: true, partialFilterExpression: { lineUserId: { $type: "string" } } }
+  {
+    unique: true,
+    partialFilterExpression: { lineUserId: { $type: "string" } },
+  },
 );
 userSchema.index(
   { client_id: 1 },
-  { unique: true, partialFilterExpression: { client_id: { $type: "string" } } }
+  { unique: true, partialFilterExpression: { client_id: { $type: "string" } } },
 );
 
 const User = model<IUser>("User", userSchema);

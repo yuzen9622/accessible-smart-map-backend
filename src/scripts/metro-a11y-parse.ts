@@ -22,24 +22,24 @@ const TW_BOUNDS = { lngMin: 119, lngMax: 122.5, latMin: 21.5, latMax: 26.5 };
  * out-of-Taiwan coordinates are skipped (return null).
  */
 export function rowToMetroA11yDoc(fields: string[]): Omit<IA11y, "_id"> | null {
-	const [serial, name, , lngStr, latStr] = fields;
-	const lng = parseFloat(lngStr);
-	const lat = parseFloat(latStr);
-	if (!name || !serial) return null;
-	if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
-	if (
-		lng < TW_BOUNDS.lngMin ||
-		lng > TW_BOUNDS.lngMax ||
-		lat < TW_BOUNDS.latMin ||
-		lat > TW_BOUNDS.latMax
-	) {
-		return null;
-	}
-	return {
-		項次: serial,
-		"出入口電梯/無障礙坡道名稱": name,
-		經度: lng,
-		緯度: lat,
-		location: { type: "Point", coordinates: [lng, lat] },
-	};
+  const [serial, name, , lngStr, latStr] = fields;
+  const lng = parseFloat(lngStr);
+  const lat = parseFloat(latStr);
+  if (!name || !serial) return null;
+  if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
+  if (
+    lng < TW_BOUNDS.lngMin ||
+    lng > TW_BOUNDS.lngMax ||
+    lat < TW_BOUNDS.latMin ||
+    lat > TW_BOUNDS.latMax
+  ) {
+    return null;
+  }
+  return {
+    項次: serial,
+    "出入口電梯/無障礙坡道名稱": name,
+    經度: lng,
+    緯度: lat,
+    location: { type: "Point", coordinates: [lng, lat] },
+  };
 }

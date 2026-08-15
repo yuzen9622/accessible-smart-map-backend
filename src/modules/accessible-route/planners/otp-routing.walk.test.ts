@@ -6,7 +6,11 @@ vi.mock("axios", () => ({
   default: { create: () => ({ post }), isAxiosError: () => false },
 }));
 
-import { planOtpWalk, planOtpWalkDetailed, isOtpCircuitOpen } from "./otp-routing";
+import {
+  planOtpWalk,
+  planOtpWalkDetailed,
+  isOtpCircuitOpen,
+} from "./otp-routing";
 
 const enc = (pts: [number, number][]) => encode(pts, 5);
 const okResp = (itineraries: unknown[]) => ({
@@ -91,7 +95,11 @@ describe("planOtpWalk", () => {
     twoStairs.duration = 600;
     twoStairs.legs[0].steps = [
       { ...twoStairs.legs[0].steps[0], feature: { __typename: "StairsUse" } },
-      { ...twoStairs.legs[0].steps[0], lon: 121.564, feature: { __typename: "StairsUse" } },
+      {
+        ...twoStairs.legs[0].steps[0],
+        lon: 121.564,
+        feature: { __typename: "StairsUse" },
+      },
     ];
     const oneStair = walkItin() as any;
     oneStair.duration = 800;
@@ -110,9 +118,10 @@ describe("planOtpWalk", () => {
     expect(result.routes[0].warnings).toContain(
       "目前候選路線仍包含無坡道樓梯，無法完全滿足避開樓梯條件",
     );
-    const step = result.routes[0].legs[0].type === "WALK"
-      ? result.routes[0].legs[0].steps?.[0]
-      : undefined;
+    const step =
+      result.routes[0].legs[0].type === "WALK"
+        ? result.routes[0].legs[0].steps?.[0]
+        : undefined;
     expect(step?.stairs).toBe(true);
     expect(step?.instruction).toContain("此路段含樓梯");
     expect(step?.instruction).not.toContain("823");
@@ -139,7 +148,9 @@ describe("planOtpWalk", () => {
   });
 
   it("drops an itinerary with no legs", async () => {
-    post.mockResolvedValue(okResp([{ duration: 100, walkDistance: 50, legs: [] }]));
+    post.mockResolvedValue(
+      okResp([{ duration: 100, walkDistance: 50, legs: [] }]),
+    );
     expect(await planOtpWalk(origin, destination)).toEqual([]);
   });
 
@@ -180,7 +191,12 @@ describe("planOtpWalk", () => {
       endTime: 300000,
       from: { name: "A" },
       to: { name: "B" },
-      legGeometry: { points: enc([[25.04, 121.56], [25.03, 121.55]]) },
+      legGeometry: {
+        points: enc([
+          [25.04, 121.56],
+          [25.03, 121.55],
+        ]),
+      },
       steps: [],
     });
     post.mockResolvedValue(okResp([it]));
@@ -214,7 +230,10 @@ describe("planOtpWalk", () => {
     vi.resetModules();
     const failPost = vi.fn().mockRejectedValue(new Error("down"));
     vi.doMock("axios", () => ({
-      default: { create: () => ({ post: failPost }), isAxiosError: () => false },
+      default: {
+        create: () => ({ post: failPost }),
+        isAxiosError: () => false,
+      },
     }));
     // A fresh module graph would recompile the mongoose models (OverwriteModelError);
     // the walk path never touches them, so stub them out for the isolated instance.

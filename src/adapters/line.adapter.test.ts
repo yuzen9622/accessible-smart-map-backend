@@ -35,7 +35,9 @@ describe("line.adapter — agent replies", () => {
     await replyAgentResult("reply-token", "我幫你找到可前往的路線。", {
       origin: "你分享的位置",
       destination: "台北車站",
-      options: [{ label: "無障礙路線", time: "約 12 分鐘", detail: "步行 → 公車 307" }],
+      options: [
+        { label: "無障礙路線", time: "約 12 分鐘", detail: "步行 → 公車 307" },
+      ],
       liffUrl: "https://liff.example.com/route?sessionId=s1",
     });
 

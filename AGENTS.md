@@ -47,6 +47,7 @@ the matching layer in the contracts — never guess.
    `src/app.ts`, via one `createXRouter()` exported from `modules/<feature>/index.ts`.
 
 Project specifics:
+
 - `modules/<feature>/` holds a feature's router/controller/service/schema + its
   own helpers. The accessible-route routing engine's internals live in
   `modules/accessible-route/planners/`.

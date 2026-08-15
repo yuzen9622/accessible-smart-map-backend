@@ -12,7 +12,10 @@ export type AgentToolExecutor = (
   args: Record<string, unknown>,
   userLocation?: { latitude: number; longitude: number },
   userId?: string,
-  memoryOptions?: { allowMemoryWrite?: boolean; explicitMemoryRequest?: boolean },
+  memoryOptions?: {
+    allowMemoryWrite?: boolean;
+    explicitMemoryRequest?: boolean;
+  },
 ) => Promise<string>;
 
 export interface RunToolLoopResult {

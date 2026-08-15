@@ -26,7 +26,7 @@ function parseBool(v?: string): boolean | null {
 }
 
 function parseAudioSignal(
-  tags: Record<string, string>
+  tags: Record<string, string>,
 ): IVisualA11y["properties"] {
   return {
     buttonOperated: parseBool(tags["button_operated"]),
@@ -36,7 +36,7 @@ function parseAudioSignal(
 }
 
 function parseTactilePaving(
-  tags: Record<string, string>
+  tags: Record<string, string>,
 ): IVisualA11y["properties"] {
   const subType =
     tags["highway"] === "bus_stop"
@@ -67,7 +67,7 @@ export async function findNearby(
   lat: number,
   lng: number,
   radiusM = 500,
-  type?: IVisualA11y["type"]
+  type?: IVisualA11y["type"],
 ) {
   return findNearbyVisualA11y(lat, lng, radiusM, type);
 }
@@ -85,7 +85,7 @@ export async function syncFromOverpass(): Promise<{
 
     const elements = await fetchOverpass(query);
     const nodes = elements.filter(
-      (el) => el.type === "node" && el.lat != null && el.lon != null
+      (el) => el.type === "node" && el.lat != null && el.lon != null,
     );
 
     if (nodes.length === 0) continue;
@@ -99,7 +99,10 @@ export async function syncFromOverpass(): Promise<{
       return {
         osmNodeId: el.id as number,
         type,
-        location: { type: "Point" as const, coordinates: [el.lon, el.lat] as [number, number] },
+        location: {
+          type: "Point" as const,
+          coordinates: [el.lon, el.lat] as [number, number],
+        },
         properties,
         updatedAt: new Date(),
       };

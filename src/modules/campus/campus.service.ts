@@ -105,7 +105,7 @@ export interface CampusSchoolListResult {
 
 /** Aggregates per-type facility counts, keyed by canonical code and ordered by SEQ. */
 function facTypeSummaryOf(
-  facilities: Pick<ICampusFacility, "facTypeId" | "facType">[]
+  facilities: Pick<ICampusFacility, "facTypeId" | "facType">[],
 ): FacTypeCount[] {
   const byId = new Map<
     number,
@@ -114,7 +114,12 @@ function facTypeSummaryOf(
   for (const f of facilities ?? []) {
     const t = resolveFacType(f.facTypeId, f.facType);
     if (!t) continue;
-    const cur = byId.get(t.id) ?? { code: t.code, label: t.label, seq: t.seq, count: 0 };
+    const cur = byId.get(t.id) ?? {
+      code: t.code,
+      label: t.label,
+      seq: t.seq,
+      count: 0,
+    };
     cur.count += 1;
     byId.set(t.id, cur);
   }
@@ -137,7 +142,7 @@ function toSummary(
     | "buildingCount"
     | "facilityCount"
     | "facilities"
-  >
+  >,
 ): CampusSummary {
   return {
     campusId: toPublicId(doc.branchId),
@@ -199,7 +204,7 @@ export async function findNearby(
   lat: number,
   lng: number,
   radiusM = 1000,
-  type?: string
+  type?: string,
 ): Promise<CampusSummary[]> {
   const docs = await findCampusesNearby(lat, lng, radiusM, type);
   return docs.map(toSummary);
@@ -254,7 +259,7 @@ function toFacilityPlace(
     ICampusA11y,
     "branchId" | "schoolId" | "schoolName" | "branchName"
   >,
-  f: ICampusFacility
+  f: ICampusFacility,
 ): CampusFacilityPlace {
   return {
     campusId: toPublicId(campus.branchId),
@@ -304,7 +309,7 @@ export async function findAllFacilities(): Promise<CampusFacilityPlace[]> {
 export async function findFacilitiesNearby(
   lat: number,
   lng: number,
-  radiusM: number
+  radiusM: number,
 ): Promise<CampusFacilityPlace[]> {
   const docs = await findCampusesNearbyWithFacilities(
     lat,
@@ -317,7 +322,8 @@ export async function findFacilitiesNearby(
       if (!hasCoordinates(f)) continue;
       const coords = f.location!.coordinates as [number, number];
       const dist = haversineMeters([lng, lat], coords);
-      if (dist <= radiusM) out.push({ place: toFacilityPlace(campus, f), dist });
+      if (dist <= radiusM)
+        out.push({ place: toFacilityPlace(campus, f), dist });
     }
   }
   return out.sort((a, b) => a.dist - b.dist).map((x) => x.place);
@@ -331,7 +337,9 @@ export async function findFacilitiesNearby(
  * @param filter City / type / keyword / schoolId filters plus sort + pagination.
  * @returns Campus summaries with total count and page metadata.
  */
-export async function findAll(filter: CampusListFilter): Promise<CampusListResult> {
+export async function findAll(
+  filter: CampusListFilter,
+): Promise<CampusListResult> {
   const { city, type, keyword, schoolId, sort, page, limit } = filter;
   const { docs, totalCount } = await findCampusPage(
     { city, type, keyword, schoolId },
@@ -355,7 +363,9 @@ export async function findAll(filter: CampusListFilter): Promise<CampusListResul
  * @param campusId The positive public campus id.
  * @returns The full campus detail or null.
  */
-export async function findByCampusId(campusId: number): Promise<CampusDetail | null> {
+export async function findByCampusId(
+  campusId: number,
+): Promise<CampusDetail | null> {
   const doc = await findCampusByBranchId(toRawId(campusId));
   return doc ? toDetail(doc) : null;
 }
@@ -368,7 +378,7 @@ export async function findByCampusId(campusId: number): Promise<CampusDetail | n
  * @returns Schools with total count and page metadata.
  */
 export async function listSchools(
-  filter: CampusSchoolFilter
+  filter: CampusSchoolFilter,
 ): Promise<CampusSchoolListResult> {
   const { city, keyword, page, limit } = filter;
   const { items: rows, totalCount } = await aggregateSchoolPage(

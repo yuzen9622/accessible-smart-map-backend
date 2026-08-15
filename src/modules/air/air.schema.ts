@@ -46,9 +46,8 @@ export const AIResponseSchema = z
   })
   .openapi("AIResponse");
 
-export const AirQualityResponseSchema = ApiResponseSchema(AIResponseSchema).openapi(
-  "AirQualityResponse"
-);
+export const AirQualityResponseSchema =
+  ApiResponseSchema(AIResponseSchema).openapi("AirQualityResponse");
 
 registry.registerPath({
   method: "get",

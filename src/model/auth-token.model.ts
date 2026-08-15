@@ -13,7 +13,7 @@ const authTokenSchema = new Schema<IAuthToken>(
     expiresAt: { type: Date, required: true },
     usedAt: { type: Date, default: null },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 authTokenSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });

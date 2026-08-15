@@ -1,5 +1,12 @@
-import express, { type NextFunction, type Request, type Response } from "express";
-import { middleware as lineSdkMiddleware, SignatureValidationFailed } from "@line/bot-sdk";
+import express, {
+  type NextFunction,
+  type Request,
+  type Response,
+} from "express";
+import {
+  middleware as lineSdkMiddleware,
+  SignatureValidationFailed,
+} from "@line/bot-sdk";
 import { rateLimit } from "express-rate-limit";
 import { sendResponse } from "../../config/lib";
 import { ResponseCode, ResponseMessage } from "../../types/code";
@@ -17,7 +24,8 @@ export const webhookRawBody = express.raw({ type: "application/json" });
  * request then fails signature validation and is rejected (fail-closed).
  */
 export const lineSignatureMiddleware = lineSdkMiddleware({
-  channelSecret: process.env.LINE_CHANNEL_SECRET || "line-channel-secret-not-configured",
+  channelSecret:
+    process.env.LINE_CHANNEL_SECRET || "line-channel-secret-not-configured",
 });
 
 /**
@@ -29,7 +37,13 @@ export const webhookLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   handler: (_req: Request, res: Response) =>
-    sendResponse(res, false, "error", ResponseCode.TOO_MANY_REQUESTS, ResponseMessage.TOO_MANY_REQUESTS),
+    sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.TOO_MANY_REQUESTS,
+      ResponseMessage.TOO_MANY_REQUESTS,
+    ),
 });
 
 /**
@@ -48,7 +62,13 @@ export function webhookErrorHandler(
   next: NextFunction,
 ) {
   if (err instanceof SignatureValidationFailed) {
-    return sendResponse(res, false, "error", ResponseCode.UNAUTHORIZED, ResponseMessage.UNAUTHORIZED);
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.UNAUTHORIZED,
+      ResponseMessage.UNAUTHORIZED,
+    );
   }
   next(err);
 }

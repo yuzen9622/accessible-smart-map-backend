@@ -21,7 +21,9 @@ async function main() {
 
   if (session) {
     console.log(`Querying EmergencyContact for userId: ${session.userId}`);
-    const contacts = await EmergencyContact.find({ userId: String(session.userId) }).lean();
+    const contacts = await EmergencyContact.find({
+      userId: String(session.userId),
+    }).lean();
     console.log("EmergencyContacts:", JSON.stringify(contacts, null, 2));
 
     const user = await User.findById(session.userId).lean();
@@ -31,7 +33,7 @@ async function main() {
   await mongoose.disconnect();
 }
 
-main().catch(err => {
+main().catch((err) => {
   console.error(err);
   mongoose.disconnect();
 });

@@ -19,7 +19,9 @@ beforeEach(() => {
 
 describe("getA11yProfile", () => {
   it("upserts an empty Config doc and returns every field as null when unset", async () => {
-    configModel.findOneAndUpdate.mockResolvedValue({ accessibility: undefined });
+    configModel.findOneAndUpdate.mockResolvedValue({
+      accessibility: undefined,
+    });
 
     const profile = await getA11yProfile("user-1");
 
@@ -80,13 +82,21 @@ describe("updateA11yProfile", () => {
   });
 
   it("ignores undefined fields instead of overwriting them with null", async () => {
-    configModel.findOneAndUpdate.mockResolvedValue({ accessibility: { canUseStairs: true } });
+    configModel.findOneAndUpdate.mockResolvedValue({
+      accessibility: { canUseStairs: true },
+    });
 
-    await updateA11yProfile("user-1", { canUseStairs: true, mobilityAid: undefined });
+    await updateA11yProfile("user-1", {
+      canUseStairs: true,
+      mobilityAid: undefined,
+    });
 
     expect(configModel.findOneAndUpdate).toHaveBeenCalledWith(
       { user_id: "user-1" },
-      { $set: { "accessibility.canUseStairs": true }, $setOnInsert: { user_id: "user-1" } },
+      {
+        $set: { "accessibility.canUseStairs": true },
+        $setOnInsert: { user_id: "user-1" },
+      },
       { returnDocument: "after", upsert: true },
     );
   });

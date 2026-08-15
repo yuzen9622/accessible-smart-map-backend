@@ -17,7 +17,9 @@ export interface ArgGradeCase {
  * @param raw The raw Gemini response (or undefined).
  * @returns The extracted tool calls.
  */
-export function extractCalls(raw: GenerateContentResponse | undefined): ToolCall[] {
+export function extractCalls(
+  raw: GenerateContentResponse | undefined,
+): ToolCall[] {
   const calls = raw?.functionCalls ?? [];
   const out: ToolCall[] = [];
   for (const c of calls) {

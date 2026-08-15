@@ -10,7 +10,9 @@ import { haversineMeters } from "../../utils/geo";
 export type RouteFailureReason =
   (typeof ROUTE_REASON)[keyof typeof ROUTE_REASON];
 
-export interface RouteFailureData<Reason extends RouteFailureReason = RouteFailureReason> {
+export interface RouteFailureData<
+  Reason extends RouteFailureReason = RouteFailureReason,
+> {
   reason: Reason;
   maxDistanceKm?: number;
 }
@@ -20,7 +22,9 @@ type RouteFailureStatus<Reason extends RouteFailureReason> =
     ? ResponseCode.SERVICE_UNAVAILABLE
     : ResponseCode.UNPROCESSABLE_ENTITY;
 
-export type RouteFailureResult<Reason extends RouteFailureReason = RouteFailureReason> = {
+export type RouteFailureResult<
+  Reason extends RouteFailureReason = RouteFailureReason,
+> = {
   ok: false;
   status: RouteFailureStatus<Reason>;
   error: string;
@@ -30,8 +34,7 @@ export type RouteFailureResult<Reason extends RouteFailureReason = RouteFailureR
 export type RoutePreflightResult =
   | { ok: true }
   | RouteFailureResult<
-      | typeof ROUTE_REASON.OUT_OF_RANGE
-      | typeof ROUTE_REASON.OUT_OF_COVERAGE
+      typeof ROUTE_REASON.OUT_OF_RANGE | typeof ROUTE_REASON.OUT_OF_COVERAGE
     >;
 
 /**
@@ -44,9 +47,10 @@ export function routeFailure<Reason extends RouteFailureReason>(
   reason: Reason,
   extra: Omit<RouteFailureData<Reason>, "reason"> = {},
 ): RouteFailureResult<Reason> {
-  const status = reason === ROUTE_REASON.UPSTREAM_TIMEOUT
-    ? ResponseCode.SERVICE_UNAVAILABLE
-    : ResponseCode.UNPROCESSABLE_ENTITY;
+  const status =
+    reason === ROUTE_REASON.UPSTREAM_TIMEOUT
+      ? ResponseCode.SERVICE_UNAVAILABLE
+      : ResponseCode.UNPROCESSABLE_ENTITY;
   return {
     ok: false,
     status: status as RouteFailureStatus<Reason>,

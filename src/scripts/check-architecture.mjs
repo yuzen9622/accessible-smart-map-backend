@@ -60,7 +60,9 @@ function importSpecs(source) {
  */
 function dynamicImportSpecs(source) {
   const specs = [];
-  for (const match of source.matchAll(/\bimport\s*\(\s*["']([^"']+)["']\s*\)/g)) {
+  for (const match of source.matchAll(
+    /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
+  )) {
     specs.push(match[1]);
   }
   return specs;
@@ -117,27 +119,60 @@ for (const file of walk(srcDir)) {
     recordModuleEdge(file, target, spec);
 
     if (role === "router" && targetRole === "service") {
-      addViolation(violations, file, spec, "routers must delegate through controllers, not services");
+      addViolation(
+        violations,
+        file,
+        spec,
+        "routers must delegate through controllers, not services",
+      );
     }
 
     if (role === "controller") {
       if (targetRole === "router") {
-        addViolation(violations, file, spec, "controllers must not import routers");
+        addViolation(
+          violations,
+          file,
+          spec,
+          "controllers must not import routers",
+        );
       }
-      if (targetRole === "controller" && moduleFor(file) !== moduleFor(target)) {
-        addViolation(violations, file, spec, "controllers must not import controllers from another module");
+      if (
+        targetRole === "controller" &&
+        moduleFor(file) !== moduleFor(target)
+      ) {
+        addViolation(
+          violations,
+          file,
+          spec,
+          "controllers must not import controllers from another module",
+        );
       }
       if (targetRel.startsWith("src/model/")) {
-        addViolation(violations, file, spec, "controllers must not import models directly");
+        addViolation(
+          violations,
+          file,
+          spec,
+          "controllers must not import models directly",
+        );
       }
     }
 
     if (role === "service") {
       if (spec === "express") {
-        addViolation(violations, file, spec, "services must not import Express transport types");
+        addViolation(
+          violations,
+          file,
+          spec,
+          "services must not import Express transport types",
+        );
       }
       if (targetRole === "controller" || targetRole === "router") {
-        addViolation(violations, file, spec, "services must not import transport layers");
+        addViolation(
+          violations,
+          file,
+          spec,
+          "services must not import transport layers",
+        );
       }
       if (targetRel.startsWith("src/model/")) {
         addViolation(
@@ -154,10 +189,20 @@ for (const file of walk(srcDir)) {
     // code and must not reach the transport or persistence layers directly.
     if (role === "orchestration") {
       if (spec === "express") {
-        addViolation(violations, file, spec, "orchestration must not import Express transport types");
+        addViolation(
+          violations,
+          file,
+          spec,
+          "orchestration must not import Express transport types",
+        );
       }
       if (targetRole === "controller" || targetRole === "router") {
-        addViolation(violations, file, spec, "orchestration must not import transport layers");
+        addViolation(
+          violations,
+          file,
+          spec,
+          "orchestration must not import transport layers",
+        );
       }
       if (targetRel.startsWith("src/model/")) {
         addViolation(
@@ -171,7 +216,12 @@ for (const file of walk(srcDir)) {
 
     if (role === "repository") {
       if (spec === "express") {
-        addViolation(violations, file, spec, "repositories must not import Express transport types");
+        addViolation(
+          violations,
+          file,
+          spec,
+          "repositories must not import Express transport types",
+        );
       }
       if (
         targetRole === "controller" ||
@@ -188,7 +238,10 @@ for (const file of walk(srcDir)) {
     }
 
     if (role === "schema") {
-      if (targetRel.startsWith("src/model/") || targetRel.startsWith("src/adapters/")) {
+      if (
+        targetRel.startsWith("src/model/") ||
+        targetRel.startsWith("src/adapters/")
+      ) {
         addViolation(violations, file, spec, "schemas must stay I/O-free");
       }
     }
@@ -220,7 +273,10 @@ function findModuleCycles(edges) {
           cycles.push(
             `${key}\n    ${path
               .slice(0, -1)
-              .map((from, i) => `${from} -> ${path[i + 1]}: ${edges.get(from).get(path[i + 1])}`)
+              .map(
+                (from, i) =>
+                  `${from} -> ${path[i + 1]}: ${edges.get(from).get(path[i + 1])}`,
+              )
               .join("\n    ")}`,
           );
         }

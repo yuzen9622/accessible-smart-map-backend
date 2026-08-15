@@ -20,34 +20,41 @@ describe("CreateHazardReportSchema", () => {
 
   it("rejects an unknown severity", () => {
     expect(
-      CreateHazardReportSchema.safeParse({ ...BASE, severity: "catastrophic" }).success,
+      CreateHazardReportSchema.safeParse({ ...BASE, severity: "catastrophic" })
+        .success,
     ).toBe(false);
   });
 
   it("accepts an expectedUntil within the future window", () => {
     const inTenDays = new Date(Date.now() + 10 * 86_400_000).toISOString();
     expect(
-      CreateHazardReportSchema.safeParse({ ...BASE, expectedUntil: inTenDays }).success,
+      CreateHazardReportSchema.safeParse({ ...BASE, expectedUntil: inTenDays })
+        .success,
     ).toBe(true);
   });
 
   it("rejects an expectedUntil in the past", () => {
     const yesterday = new Date(Date.now() - 86_400_000).toISOString();
     expect(
-      CreateHazardReportSchema.safeParse({ ...BASE, expectedUntil: yesterday }).success,
+      CreateHazardReportSchema.safeParse({ ...BASE, expectedUntil: yesterday })
+        .success,
     ).toBe(false);
   });
 
   it("rejects an expectedUntil beyond the 180-day cap", () => {
     const tooFar = new Date(Date.now() + 200 * 86_400_000).toISOString();
     expect(
-      CreateHazardReportSchema.safeParse({ ...BASE, expectedUntil: tooFar }).success,
+      CreateHazardReportSchema.safeParse({ ...BASE, expectedUntil: tooFar })
+        .success,
     ).toBe(false);
   });
 
   it("rejects a non-datetime string for expectedUntil", () => {
     expect(
-      CreateHazardReportSchema.safeParse({ ...BASE, expectedUntil: "2026-09-30" }).success,
+      CreateHazardReportSchema.safeParse({
+        ...BASE,
+        expectedUntil: "2026-09-30",
+      }).success,
     ).toBe(false);
   });
 });

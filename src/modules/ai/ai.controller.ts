@@ -16,7 +16,7 @@ import type { AccessibilityMode } from "../../types/route";
  */
 export async function aiExplain(
   req: Request,
-  res: Response<ApiResponse<RouteExplanation>>
+  res: Response<ApiResponse<RouteExplanation>>,
 ) {
   try {
     const { route, mode, language } = req.body as {
@@ -27,7 +27,7 @@ export async function aiExplain(
     const explanation = await generateRouteExplanation(
       route,
       mode ?? "normal",
-      language ?? "zh-TW"
+      language ?? "zh-TW",
     );
 
     if (!explanation) {
@@ -36,10 +36,17 @@ export async function aiExplain(
         false,
         "error",
         ResponseCode.INTERNAL_ERROR,
-        "路線說明生成失敗，請稍後再試"
+        "路線說明生成失敗，請稍後再試",
       );
     }
-    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, explanation);
+    return sendResponse(
+      res,
+      true,
+      "success",
+      ResponseCode.OK,
+      MSG.OK,
+      explanation,
+    );
   } catch (error) {
     console.error("[ai/explain]", error);
     return sendResponse(
@@ -47,7 +54,7 @@ export async function aiExplain(
       false,
       "error",
       ResponseCode.INTERNAL_ERROR,
-      ResponseMessage.INTERNAL_ERROR
+      ResponseMessage.INTERNAL_ERROR,
     );
   }
 }
@@ -61,7 +68,7 @@ export async function aiExplain(
  */
 export async function aiIntent(
   req: Request,
-  res: Response<ApiResponse<RouteIntent>>
+  res: Response<ApiResponse<RouteIntent>>,
 ) {
   try {
     const { query } = req.body as { query: string };
@@ -73,7 +80,7 @@ export async function aiIntent(
         false,
         "error",
         ResponseCode.INVALID_INPUT,
-        "無法解析您的查詢，請改用『從 A 到 B』的描述方式"
+        "無法解析您的查詢，請改用『從 A 到 B』的描述方式",
       );
     }
 
@@ -85,7 +92,7 @@ export async function aiIntent(
       false,
       "error",
       ResponseCode.INTERNAL_ERROR,
-      ResponseMessage.INTERNAL_ERROR
+      ResponseMessage.INTERNAL_ERROR,
     );
   }
 }

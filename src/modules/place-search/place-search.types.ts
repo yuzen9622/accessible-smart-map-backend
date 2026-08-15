@@ -70,7 +70,10 @@ function toExplicitA11yBoolean(value: string | undefined): boolean | null {
   return null;
 }
 
-function firstExplicitA11yBoolean(tags: OsmTags, keys: string[]): boolean | null {
+function firstExplicitA11yBoolean(
+  tags: OsmTags,
+  keys: string[],
+): boolean | null {
   for (const key of keys) {
     const value = toExplicitA11yBoolean(normalizedTagValue(tags, key));
     if (value !== null) return value;
@@ -103,14 +106,17 @@ export function mapOsmAccessibilityTags(
           ? "limited"
           : null;
   const directElevatorTag = normalizedTagValue(tags, "elevator");
-  const classifiedElevator = placeClass === "highway" && placeType === "elevator";
+  const classifiedElevator =
+    placeClass === "highway" && placeType === "elevator";
 
   return {
     wheelchair,
-    wheelchairAccess: wheelchair === "yes" ? true : wheelchair === "no" ? false : null,
+    wheelchairAccess:
+      wheelchair === "yes" ? true : wheelchair === "no" ? false : null,
     elevator:
       directElevatorTag === undefined
-        ? normalizedTagValue(tags, "highway") === "elevator" || classifiedElevator
+        ? normalizedTagValue(tags, "highway") === "elevator" ||
+          classifiedElevator
           ? true
           : null
         : toExplicitA11yBoolean(directElevatorTag),
@@ -180,7 +186,9 @@ export function googleTypesToClassType(types: string[]): ClassType {
     const hit = GOOGLE_TYPE_MAP[type];
     if (hit) return hit;
   }
-  const first = types.find((t) => t !== "point_of_interest" && t !== "establishment");
+  const first = types.find(
+    (t) => t !== "point_of_interest" && t !== "establishment",
+  );
   return { placeClass: null, placeType: first ?? null };
 }
 
@@ -360,7 +368,8 @@ export function typeLabelOf(
 ): string | null {
   const table = lang === "en" ? TYPE_LABELS_EN : TYPE_LABELS_ZH;
   if (placeType && table[placeType]) return table[placeType];
-  if (placeClass && CLASS_FALLBACK_LABELS[placeClass]) return CLASS_FALLBACK_LABELS[placeClass][lang];
+  if (placeClass && CLASS_FALLBACK_LABELS[placeClass])
+    return CLASS_FALLBACK_LABELS[placeClass][lang];
   return null;
 }
 

@@ -1,4 +1,5 @@
 # AI 影像辨識輔助服務（視障使用者）
+
 ## Functional Specification — Vision AI for Accessibility
 
 **版本**：v1.0.0  
@@ -28,11 +29,11 @@
 
 本規格書定義後端 **AI 影像辨識輔助服務**，以 Gemini 多模態（Vision）能力為視障使用者提供三類影像理解功能：
 
-| 功能 | 說明 | 參考產品 |
-|------|------|---------|
-| **場景描述** | 對準周遭拍照，後端回傳自然語言場景說明（適合 TTS 朗讀） | Seeing AI、Envision AI |
-| **讀字 / OCR** | 辨識照片中的文字（菜單、信件、招牌、產品包裝） | Seeing AI Documents |
-| **目的地確認** | 使用者到站後拍照，後端比對目的地資訊，回傳是否抵達正確位置 | Seeing AI Places |
+| 功能           | 說明                                                       | 參考產品               |
+| -------------- | ---------------------------------------------------------- | ---------------------- |
+| **場景描述**   | 對準周遭拍照，後端回傳自然語言場景說明（適合 TTS 朗讀）    | Seeing AI、Envision AI |
+| **讀字 / OCR** | 辨識照片中的文字（菜單、信件、招牌、產品包裝）             | Seeing AI Documents    |
+| **目的地確認** | 使用者到站後拍照，後端比對目的地資訊，回傳是否抵達正確位置 | Seeing AI Places       |
 
 > **範圍排除**：Be My Eyes 真人視訊屬第三方服務與前端職責，本規格**不涵蓋**真人遠端協助功能。
 
@@ -51,13 +52,13 @@
 
 ### 2.2 非功能目標
 
-| 目標 | 說明 |
-|------|------|
-| Backend 統一處理 | 所有 Gemini Vision 呼叫在後端完成，API 金鑰不暴露前端 |
-| 輸出適合 TTS | 語句長度、語氣、標點符號皆以口語朗讀為設計基準 |
-| 影像大小限制 | 後端拒絕超過 5 MB 的 base64 影像（Gemini inline 建議上限） |
-| 逾時防護 | Vision 呼叫上限 30 秒，超時回傳 503 而非 hang 住 event loop |
-| 成本可控 | Redis 快取命中跳過 Gemini 呼叫；`USE_VISION_API` 開關可整體停用 |
+| 目標             | 說明                                                            |
+| ---------------- | --------------------------------------------------------------- |
+| Backend 統一處理 | 所有 Gemini Vision 呼叫在後端完成，API 金鑰不暴露前端           |
+| 輸出適合 TTS     | 語句長度、語氣、標點符號皆以口語朗讀為設計基準                  |
+| 影像大小限制     | 後端拒絕超過 5 MB 的 base64 影像（Gemini inline 建議上限）      |
+| 逾時防護         | Vision 呼叫上限 30 秒，超時回傳 503 而非 hang 住 event loop     |
+| 成本可控         | Redis 快取命中跳過 Gemini 呼叫；`USE_VISION_API` 開關可整體停用 |
 
 ---
 
@@ -101,8 +102,8 @@ sendResponse() → ApiResponse<VisionResult>
 
 ### 3.2 路由群組
 
-| Prefix | Route 檔案 | 說明 |
-|--------|-----------|------|
+| Prefix                | Route 檔案                            | 說明                           |
+| --------------------- | ------------------------------------- | ------------------------------ |
 | `/api/v1/a11y/vision` | `src/modules/vision/vision.router.ts` | 視覺辨識端點（公開，不需 JWT） |
 
 > 視覺輔助屬無障礙公共服務，不要求登入。如日後需流量管控，建議在 middleware 層加 IP rate-limit 而非強制 JWT。
@@ -124,11 +125,11 @@ src/modules/vision/
 
 ### 4.1 端點總覽
 
-| Method | Path | 功能 | 狀態 |
-|--------|------|------|------|
-| `POST` | `/api/v1/a11y/vision/describe` | 場景描述 | 📋 Proposed |
-| `POST` | `/api/v1/a11y/vision/read-text` | 文字辨識（OCR） | 📋 Proposed |
-| `POST` | `/api/v1/a11y/vision/confirm-destination` | 目的地確認 | 📋 Proposed |
+| Method | Path                                      | 功能            | 狀態        |
+| ------ | ----------------------------------------- | --------------- | ----------- |
+| `POST` | `/api/v1/a11y/vision/describe`            | 場景描述        | 📋 Proposed |
+| `POST` | `/api/v1/a11y/vision/read-text`           | 文字辨識（OCR） | 📋 Proposed |
+| `POST` | `/api/v1/a11y/vision/confirm-destination` | 目的地確認      | 📋 Proposed |
 
 ### 4.2 端點設計取捨說明
 
@@ -153,16 +154,18 @@ const DescribeRequest = z.object({
   image: z.union([
     z.object({
       type: z.literal("base64"),
-      data: z.string().min(1),          // base64 字串（不含 data URI prefix）
-      mimeType: z.enum(["image/jpeg", "image/png", "image/webp"]).default("image/jpeg")
+      data: z.string().min(1), // base64 字串（不含 data URI prefix）
+      mimeType: z
+        .enum(["image/jpeg", "image/png", "image/webp"])
+        .default("image/jpeg"),
     }),
     z.object({
       type: z.literal("url"),
-      url: z.string().url()             // 公開可存取的影像 URL
-    })
+      url: z.string().url(), // 公開可存取的影像 URL
+    }),
   ]),
-  context: z.string().max(200).optional()  // 使用者的情境補充（如「我在捷運站內」）
-})
+  context: z.string().max(200).optional(), // 使用者的情境補充（如「我在捷運站內」）
+});
 ```
 
 #### Request 範例
@@ -196,20 +199,20 @@ const DescribeRequest = z.object({
 
 #### 欄位說明
 
-| 欄位 | 型別 | 說明 |
-|------|------|------|
-| `description` | `string` | 完整場景描述（較詳細，適合顯示） |
-| `spokenGuidance` | `string` | 精簡口語版，適合 TTS 直接朗讀 |
-| `cached` | `boolean` | `true` 表示此結果來自快取（未重新呼叫 Gemini） |
+| 欄位             | 型別      | 說明                                           |
+| ---------------- | --------- | ---------------------------------------------- |
+| `description`    | `string`  | 完整場景描述（較詳細，適合顯示）               |
+| `spokenGuidance` | `string`  | 精簡口語版，適合 TTS 直接朗讀                  |
+| `cached`         | `boolean` | `true` 表示此結果來自快取（未重新呼叫 Gemini） |
 
 #### 錯誤回應
 
-| HTTP | code | reason | 說明 |
-|------|------|--------|------|
-| 400 | `INVALID_IMAGE` | 影像格式不符或 base64 無法解碼 | |
-| 413 | `IMAGE_TOO_LARGE` | base64 解碼後超過 5 MB | |
-| 503 | `VISION_UNAVAILABLE` | Gemini 呼叫失敗或逾時（30s） | |
-| 503 | `VISION_DISABLED` | `USE_VISION_API=false` | |
+| HTTP | code                 | reason                         | 說明 |
+| ---- | -------------------- | ------------------------------ | ---- |
+| 400  | `INVALID_IMAGE`      | 影像格式不符或 base64 無法解碼 |      |
+| 413  | `IMAGE_TOO_LARGE`    | base64 解碼後超過 5 MB         |      |
+| 503  | `VISION_UNAVAILABLE` | Gemini 呼叫失敗或逾時（30s）   |      |
+| 503  | `VISION_DISABLED`    | `USE_VISION_API=false`         |      |
 
 ---
 
@@ -225,16 +228,20 @@ const ReadTextRequest = z.object({
     z.object({
       type: z.literal("base64"),
       data: z.string().min(1),
-      mimeType: z.enum(["image/jpeg", "image/png", "image/webp"]).default("image/jpeg")
+      mimeType: z
+        .enum(["image/jpeg", "image/png", "image/webp"])
+        .default("image/jpeg"),
     }),
     z.object({
       type: z.literal("url"),
-      url: z.string().url()
-    })
+      url: z.string().url(),
+    }),
   ]),
-  hint: z.enum(["menu", "sign", "letter", "product", "general"]).default("general")
+  hint: z
+    .enum(["menu", "sign", "letter", "product", "general"])
+    .default("general"),
   // hint 用於調整 Gemini prompt 策略（如 menu 重視品項與價格結構）
-})
+});
 ```
 
 #### Request 範例
@@ -268,12 +275,12 @@ const ReadTextRequest = z.object({
 
 #### 欄位說明
 
-| 欄位 | 型別 | 說明 |
-|------|------|------|
-| `rawText` | `string` | 原始辨識文字（保留換行，適合顯示） |
-| `spokenGuidance` | `string` | 口語化版本（數字轉國字、適合 TTS） |
-| `textFound` | `boolean` | `false` 表示照片中未偵測到可辨識文字 |
-| `cached` | `boolean` | 同上 |
+| 欄位             | 型別      | 說明                                 |
+| ---------------- | --------- | ------------------------------------ |
+| `rawText`        | `string`  | 原始辨識文字（保留換行，適合顯示）   |
+| `spokenGuidance` | `string`  | 口語化版本（數字轉國字、適合 TTS）   |
+| `textFound`      | `boolean` | `false` 表示照片中未偵測到可辨識文字 |
+| `cached`         | `boolean` | 同上                                 |
 
 ---
 
@@ -289,30 +296,32 @@ const ConfirmDestinationRequest = z.object({
     z.object({
       type: z.literal("base64"),
       data: z.string().min(1),
-      mimeType: z.enum(["image/jpeg", "image/png", "image/webp"]).default("image/jpeg")
+      mimeType: z
+        .enum(["image/jpeg", "image/png", "image/webp"])
+        .default("image/jpeg"),
     }),
     z.object({
       type: z.literal("url"),
-      url: z.string().url()
-    })
+      url: z.string().url(),
+    }),
   ]),
   destination: z.union([
     z.object({
       type: z.literal("placeId"),
-      placeId: z.string().min(1)         // Google Places ID
+      placeId: z.string().min(1), // Google Places ID
     }),
     z.object({
       type: z.literal("coords"),
       lat: z.number(),
       lng: z.number(),
-      name: z.string().min(1).optional()  // 選填地標名稱，協助 Gemini 比對
+      name: z.string().min(1).optional(), // 選填地標名稱，協助 Gemini 比對
     }),
     z.object({
       type: z.literal("address"),
-      address: z.string().min(1)
-    })
-  ])
-})
+      address: z.string().min(1),
+    }),
+  ]),
+});
 ```
 
 #### Request 範例
@@ -371,21 +380,21 @@ const ConfirmDestinationRequest = z.object({
 
 #### 欄位說明
 
-| 欄位 | 型別 | 說明 |
-|------|------|------|
-| `matched` | `boolean` | 照片與目的地吻合（`confidence >= 0.6` 視為吻合）⚠️ 待確認：閾值可由 `VISION_MATCH_THRESHOLD` 環境變數覆寫 |
-| `confidence` | `number` | 0.0–1.0，Gemini 從結構化輸出回傳的信心度 |
-| `placeName` | `string` | 解析後的地點名稱（來自 Google Places 或使用者輸入） |
-| `spokenGuidance` | `string` | 給視障使用者的語音導引文字 |
-| `description` | `string` | Gemini 的比對說明（較詳細，適合顯示） |
-| `cached` | `boolean` | 同上 |
+| 欄位             | 型別      | 說明                                                                                                      |
+| ---------------- | --------- | --------------------------------------------------------------------------------------------------------- |
+| `matched`        | `boolean` | 照片與目的地吻合（`confidence >= 0.6` 視為吻合）⚠️ 待確認：閾值可由 `VISION_MATCH_THRESHOLD` 環境變數覆寫 |
+| `confidence`     | `number`  | 0.0–1.0，Gemini 從結構化輸出回傳的信心度                                                                  |
+| `placeName`      | `string`  | 解析後的地點名稱（來自 Google Places 或使用者輸入）                                                       |
+| `spokenGuidance` | `string`  | 給視障使用者的語音導引文字                                                                                |
+| `description`    | `string`  | Gemini 的比對說明（較詳細，適合顯示）                                                                     |
+| `cached`         | `boolean` | 同上                                                                                                      |
 
 #### 錯誤回應（confirm-destination 額外）
 
-| HTTP | code | reason | 說明 |
-|------|------|--------|------|
-| 400 | `DESTINATION_RESOLVE_FAILED` | 無法從 `coords` 或 `address` 解析出有效地點資訊 | |
-| 404 | `PLACE_NOT_FOUND` | `placeId` 在 Google Places 查無資料 | |
+| HTTP | code                         | reason                                          | 說明 |
+| ---- | ---------------------------- | ----------------------------------------------- | ---- |
+| 400  | `DESTINATION_RESOLVE_FAILED` | 無法從 `coords` 或 `address` 解析出有效地點資訊 |      |
+| 404  | `PLACE_NOT_FOUND`            | `placeId` 在 Google Places 查無資料             |      |
 
 ---
 
@@ -416,10 +425,10 @@ const ConfirmDestinationRequest = z.object({
 
 **影像輸入方式**
 
-| 輸入型別 | Gemini API 處理方式 |
-|---------|-------------------|
-| `base64` + `mimeType` | `inlineData: { data, mimeType }` |
-| 公開 `url` | `fileData: { fileUri: url, mimeType }` |
+| 輸入型別              | Gemini API 處理方式                    |
+| --------------------- | -------------------------------------- |
+| `base64` + `mimeType` | `inlineData: { data, mimeType }`       |
+| 公開 `url`            | `fileData: { fileUri: url, mimeType }` |
 
 > ⚠️ **待確認**：Gemini OpenAI-compat 端點是否支援 `fileData.fileUri` 直接傳 URL；若不支援，後端需先以 `fetch` 下載再轉 inline base64。
 
@@ -441,7 +450,7 @@ ${context ? `使用者補充情境：${context}` : ""}
 
 請分兩段回傳（JSON 格式）：
 1. "description"：完整描述（100–200 字）
-2. "spokenGuidance"：簡短口語版（30–60 字，適合語音朗讀，避免標點堆疊）`
+2. "spokenGuidance"：簡短口語版（30–60 字，適合語音朗讀，避免標點堆疊）`;
 }
 ```
 
@@ -450,19 +459,19 @@ ${context ? `使用者補充情境：${context}` : ""}
 ```typescript
 export function readTextPrompt(hint: string): string {
   const hintMap: Record<string, string> = {
-    menu:    "這是菜單，請依序列出品項名稱與價格，跳過無關的裝飾性文字。",
-    sign:    "這是指示標示或招牌，請完整讀出所有文字，並說明方向或指示意涵。",
-    letter:  "這是信件或文件，請逐段讀出正文，保留段落結構。",
+    menu: "這是菜單，請依序列出品項名稱與價格，跳過無關的裝飾性文字。",
+    sign: "這是指示標示或招牌，請完整讀出所有文字，並說明方向或指示意涵。",
+    letter: "這是信件或文件，請逐段讀出正文，保留段落結構。",
     product: "這是產品包裝，請讀出品名、成分、使用說明等重要資訊。",
-    general: "請讀出照片中所有可辨識的文字。"
-  }
+    general: "請讀出照片中所有可辨識的文字。",
+  };
   return `你是一位文字辨識助理，正在協助視障使用者閱讀文件。
 ${hintMap[hint] ?? hintMap.general}
 
 請以繁體中文回傳 JSON 格式：
 1. "rawText"：原始辨識文字，以換行分段
 2. "spokenGuidance"：口語化版本（數字轉國字，如 120 → 一百二十；適合 TTS 朗讀）
-3. "textFound"：布林值，照片中是否有可辨識文字`
+3. "textFound"：布林值，照片中是否有可辨識文字`;
 }
 ```
 
@@ -472,7 +481,7 @@ ${hintMap[hint] ?? hintMap.general}
 export function confirmDestinationPrompt(
   placeName: string,
   placeTypes: string[],
-  referencePhotoDescription?: string
+  referencePhotoDescription?: string,
 ): string {
   return `你是一位無障礙導覽助理，正在協助視障使用者確認是否已抵達目的地。
 
@@ -487,7 +496,7 @@ ${referencePhotoDescription ? `- 參考外觀描述：${referencePhotoDescriptio
 3. "description"：比對說明（50–100 字）
 4. "spokenGuidance"：給視障使用者的語音導引（30–60 字）
    - 若 matched=true：說明已抵達，並描述入口方向或無障礙通道
-   - 若 matched=false：告知尚未抵達，建議繼續導航`
+   - 若 matched=false：告知尚未抵達，建議繼續導航`;
 }
 ```
 
@@ -501,32 +510,32 @@ ${referencePhotoDescription ? `- 參考外觀描述：${referencePhotoDescriptio
 const describeSchema = {
   type: "object",
   properties: {
-    description:    { type: "string" },
-    spokenGuidance: { type: "string" }
+    description: { type: "string" },
+    spokenGuidance: { type: "string" },
   },
-  required: ["description", "spokenGuidance"]
-}
+  required: ["description", "spokenGuidance"],
+};
 
 const readTextSchema = {
   type: "object",
   properties: {
-    rawText:        { type: "string" },
+    rawText: { type: "string" },
     spokenGuidance: { type: "string" },
-    textFound:      { type: "boolean" }
+    textFound: { type: "boolean" },
   },
-  required: ["rawText", "spokenGuidance", "textFound"]
-}
+  required: ["rawText", "spokenGuidance", "textFound"],
+};
 
 const confirmSchema = {
   type: "object",
   properties: {
-    matched:        { type: "boolean" },
-    confidence:     { type: "number" },
-    description:    { type: "string" },
-    spokenGuidance: { type: "string" }
+    matched: { type: "boolean" },
+    confidence: { type: "number" },
+    description: { type: "string" },
+    spokenGuidance: { type: "string" },
   },
-  required: ["matched", "confidence", "description", "spokenGuidance"]
-}
+  required: ["matched", "confidence", "description", "spokenGuidance"],
+};
 ```
 
 ### 5.4 影像預處理與大小限制
@@ -534,14 +543,14 @@ const confirmSchema = {
 ```typescript
 // src/modules/vision/vision.service.ts
 
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024  // 5 MB
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
 
 function validateBase64Image(data: string): Buffer {
-  const buf = Buffer.from(data, "base64")
+  const buf = Buffer.from(data, "base64");
   if (buf.length > MAX_IMAGE_BYTES) {
-    throw new VisionError("IMAGE_TOO_LARGE", 413)
+    throw new VisionError("IMAGE_TOO_LARGE", 413);
   }
-  return buf
+  return buf;
 }
 ```
 
@@ -559,13 +568,13 @@ AbortController timeout = 30s
 
 ### 5.6 快取策略
 
-| 屬性 | 說明 |
-|------|------|
-| 快取鍵 | `vision:{task}:{sha256(imageBytes)}` |
-| TTL | 24 小時（同樣照片、同任務的分析結果穩定） |
-| 儲存位置 | Redis（`src/config/redis.ts`，與 walk-time 快取共用連線） |
-| Cache-miss 成本 | Gemini Vision 約 $0.001–0.003 / 張（⚠️ 待確認：依 token 計費，視影像大小與輸出長度） |
-| 快取失效條件 | 僅依影像雜湊，相同影像不同 `context`/`hint` 視為不同快取鍵（鍵含 task + 輸入參數 hash） |
+| 屬性            | 說明                                                                                    |
+| --------------- | --------------------------------------------------------------------------------------- |
+| 快取鍵          | `vision:{task}:{sha256(imageBytes)}`                                                    |
+| TTL             | 24 小時（同樣照片、同任務的分析結果穩定）                                               |
+| 儲存位置        | Redis（`src/config/redis.ts`，與 walk-time 快取共用連線）                               |
+| Cache-miss 成本 | Gemini Vision 約 $0.001–0.003 / 張（⚠️ 待確認：依 token 計費，視影像大小與輸出長度）    |
+| 快取失效條件    | 僅依影像雜湊，相同影像不同 `context`/`hint` 視為不同快取鍵（鍵含 task + 輸入參數 hash） |
 
 ```typescript
 // 快取鍵範例
@@ -582,11 +591,11 @@ S1 路況回報功能（交通事件影像辨識）若日後實作，其影像�
 
 現有 AI agent 有 7 個工具（`src/config/ai/tool.ts`、`agent-tools.ts`）。下一步可新增：
 
-| 工具名稱 | 說明 | 觸發情境 |
-|---------|------|---------|
-| `describeEnvironment` | 同 `/vision/describe`，但由 agent 在對話中呼叫 | 使用者說「幫我看看周圍有什麼」 |
-| `readVisibleText` | 同 `/vision/read-text` | 使用者說「幫我讀這個招牌」 |
-| `confirmArrival` | 同 `/vision/confirm-destination`，搭配 agent 已知的導航目的地 | 使用者說「我到了，確認一下」 |
+| 工具名稱              | 說明                                                          | 觸發情境                       |
+| --------------------- | ------------------------------------------------------------- | ------------------------------ |
+| `describeEnvironment` | 同 `/vision/describe`，但由 agent 在對話中呼叫                | 使用者說「幫我看看周圍有什麼」 |
+| `readVisibleText`     | 同 `/vision/read-text`                                        | 使用者說「幫我讀這個招牌」     |
+| `confirmArrival`      | 同 `/vision/confirm-destination`，搭配 agent 已知的導航目的地 | 使用者說「我到了，確認一下」   |
 
 此為 **Roadmap Phase 3 選項**，非本版本必要交付項目。
 
@@ -614,18 +623,18 @@ Value 範例（describe task）:
 ### 6.2 快取鍵建構規則
 
 ```typescript
-import { createHash } from "crypto"
+import { createHash } from "crypto";
 
 function buildVisionCacheKey(
   task: "describe" | "read-text" | "confirm",
   imageBytes: Buffer,
-  extra?: string   // hint、placeId 等區分相同影像不同請求的參數
+  extra?: string, // hint、placeId 等區分相同影像不同請求的參數
 ): string {
-  const imageHash = createHash("sha256").update(imageBytes).digest("hex")
+  const imageHash = createHash("sha256").update(imageBytes).digest("hex");
   const extraHash = extra
     ? createHash("sha256").update(extra).digest("hex").slice(0, 8)
-    : ""
-  return `vision:${task}:${extraHash ? extraHash + ":" : ""}${imageHash}`
+    : "";
+  return `vision:${task}:${extraHash ? extraHash + ":" : ""}${imageHash}`;
 }
 ```
 
@@ -635,13 +644,13 @@ function buildVisionCacheKey(
 
 ### 待實作
 
-| Phase | 功能 | 優先度 | 依賴 |
-|-------|------|--------|------|
-| **Phase Vision-1** | 核心基礎設施：模組骨架 + 影像驗證 + Redis 快取 + `USE_VISION_API` 開關 | **Critical** | Redis 連線、GEMINI_MODEL |
-| **Phase Vision-2** | `describe` 端點：Gemini 多模態呼叫 + Prompt + 結構化輸出 + 逾時防護 | **Critical** | Phase Vision-1 |
-| **Phase Vision-3** | `read-text` 端點：OCR Prompt + hint 分類 + 數字國字轉換後處理 | High | Phase Vision-1 |
-| **Phase Vision-4** | `confirm-destination` 端點：Google Places 詳情取得 + 多模態比對 | High | Phase Vision-1、`src/config/map.ts` |
-| **Phase Vision-5（選配）** | AI Agent 工具整合：`describeEnvironment`、`readVisibleText`、`confirmArrival` 加入現有 7 工具 | Medium | Phase Vision-2/3/4、`src/config/ai/tool.ts` |
+| Phase                      | 功能                                                                                          | 優先度       | 依賴                                        |
+| -------------------------- | --------------------------------------------------------------------------------------------- | ------------ | ------------------------------------------- |
+| **Phase Vision-1**         | 核心基礎設施：模組骨架 + 影像驗證 + Redis 快取 + `USE_VISION_API` 開關                        | **Critical** | Redis 連線、GEMINI_MODEL                    |
+| **Phase Vision-2**         | `describe` 端點：Gemini 多模態呼叫 + Prompt + 結構化輸出 + 逾時防護                           | **Critical** | Phase Vision-1                              |
+| **Phase Vision-3**         | `read-text` 端點：OCR Prompt + hint 分類 + 數字國字轉換後處理                                 | High         | Phase Vision-1                              |
+| **Phase Vision-4**         | `confirm-destination` 端點：Google Places 詳情取得 + 多模態比對                               | High         | Phase Vision-1、`src/config/map.ts`         |
+| **Phase Vision-5（選配）** | AI Agent 工具整合：`describeEnvironment`、`readVisibleText`、`confirmArrival` 加入現有 7 工具 | Medium       | Phase Vision-2/3/4、`src/config/ai/tool.ts` |
 
 ---
 
@@ -662,8 +671,8 @@ src/modules/vision/
 
 ```typescript
 // src/app.ts（新增）
-import visionRouter from "./modules/vision/vision.router"
-app.use("/api/v1/a11y/vision", visionRouter)
+import visionRouter from "./modules/vision/vision.router";
+app.use("/api/v1/a11y/vision", visionRouter);
 ```
 
 **功能要點**
@@ -740,17 +749,17 @@ matched = confidence >= VISION_MATCH_THRESHOLD（預設 0.6）
 
 ### 8.1 手動測試案例
 
-| 測試案例 | 輸入 | 預期 |
-|---------|------|------|
-| 場景描述 — 捷運站出口 | 捷運站出口照片 + context "我在捷運出口" | description 含方向資訊，spokenGuidance 30–60 字 |
-| 讀字 — 菜單 | 菜單照片 + hint "menu" | rawText 含品項與價格，spokenGuidance 數字轉國字 |
-| 讀字 — 無文字影像 | 純風景照 + hint "general" | `textFound: false`，spokenGuidance 告知無文字 |
-| 目的地確認 — 正確地點 | 台北 101 外觀照 + placeId | `matched: true`，`confidence >= 0.6` |
-| 目的地確認 — 錯誤地點 | 非台北 101 環境 + 台北 101 placeId | `matched: false`，`confidence < 0.6` |
-| 影像過大 | base64 > 5 MB | 413 IMAGE_TOO_LARGE |
-| 逾時防護 | 模擬 Gemini 不回應 30s | 503 VISION_UNAVAILABLE |
-| 快取命中 | 同張照片送兩次 | 第二次 `cached: true`，回應時間 < 100ms |
-| `USE_VISION_API=false` | 任意請求 | 503 VISION_DISABLED |
+| 測試案例               | 輸入                                    | 預期                                            |
+| ---------------------- | --------------------------------------- | ----------------------------------------------- |
+| 場景描述 — 捷運站出口  | 捷運站出口照片 + context "我在捷運出口" | description 含方向資訊，spokenGuidance 30–60 字 |
+| 讀字 — 菜單            | 菜單照片 + hint "menu"                  | rawText 含品項與價格，spokenGuidance 數字轉國字 |
+| 讀字 — 無文字影像      | 純風景照 + hint "general"               | `textFound: false`，spokenGuidance 告知無文字   |
+| 目的地確認 — 正確地點  | 台北 101 外觀照 + placeId               | `matched: true`，`confidence >= 0.6`            |
+| 目的地確認 — 錯誤地點  | 非台北 101 環境 + 台北 101 placeId      | `matched: false`，`confidence < 0.6`            |
+| 影像過大               | base64 > 5 MB                           | 413 IMAGE_TOO_LARGE                             |
+| 逾時防護               | 模擬 Gemini 不回應 30s                  | 503 VISION_UNAVAILABLE                          |
+| 快取命中               | 同張照片送兩次                          | 第二次 `cached: true`，回應時間 < 100ms         |
+| `USE_VISION_API=false` | 任意請求                                | 503 VISION_DISABLED                             |
 
 ### 8.2 驗證重點
 
@@ -763,13 +772,13 @@ matched = confidence >= VISION_MATCH_THRESHOLD（預設 0.6）
 
 ## 9. 新增環境變數
 
-| 變數 | 用途 | 必要性 | 預設值 |
-|------|------|--------|--------|
-| `USE_VISION_API` | 整體開關，`false` 時所有 `/vision/*` 端點回傳 503 | 選配 | `true` |
-| `VISION_MATCH_THRESHOLD` | `confirm-destination` 的 matched 信心度閾值 | 選配 | `0.6` |
-| `VISION_TIMEOUT_MS` | Gemini Vision 呼叫逾時（毫秒） | 選配 | `30000` |
-| `VISION_MAX_IMAGE_BYTES` | base64 影像大小上限（bytes） | 選配 | `5242880`（5 MB）|
-| `VISION_CACHE_TTL_SECS` | Redis 快取 TTL（秒） | 選配 | `86400`（24 小時）|
+| 變數                     | 用途                                              | 必要性 | 預設值             |
+| ------------------------ | ------------------------------------------------- | ------ | ------------------ |
+| `USE_VISION_API`         | 整體開關，`false` 時所有 `/vision/*` 端點回傳 503 | 選配   | `true`             |
+| `VISION_MATCH_THRESHOLD` | `confirm-destination` 的 matched 信心度閾值       | 選配   | `0.6`              |
+| `VISION_TIMEOUT_MS`      | Gemini Vision 呼叫逾時（毫秒）                    | 選配   | `30000`            |
+| `VISION_MAX_IMAGE_BYTES` | base64 影像大小上限（bytes）                      | 選配   | `5242880`（5 MB）  |
+| `VISION_CACHE_TTL_SECS`  | Redis 快取 TTL（秒）                              | 選配   | `86400`（24 小時） |
 
 > 以上變數與現有 `GEMINI_API_URL`、`GEMINI_MODEL`、`GOOGLE_MAPS_API_KEY`、`REDIS_URL` 搭配使用，無需重複宣告。
 
@@ -779,36 +788,36 @@ matched = confidence >= VISION_MATCH_THRESHOLD（預設 0.6）
 
 ### 10.1 前端負責
 
-| 職責 | 說明 |
-|------|------|
-| 相機拍攝 | 觸發裝置相機、取得影像 Blob |
-| 影像壓縮（選配） | 建議在送出前將影像壓縮至 2 MB 以下，降低上傳時間 |
-| base64 編碼 | `Blob → base64` 轉換在前端完成，後端不接受 multipart/form-data |
-| TTS 朗讀 | 以裝置 Web Speech API 或原生 TTS 朗讀 `spokenGuidance` 欄位 |
-| 無障礙 UI | 按鍵、焦點、螢幕閱讀器標籤等無障礙 UI 元件 |
-| 錯誤提示語音化 | 將 HTTP 錯誤（413、503 等）轉為使用者可理解的語音提示 |
+| 職責             | 說明                                                           |
+| ---------------- | -------------------------------------------------------------- |
+| 相機拍攝         | 觸發裝置相機、取得影像 Blob                                    |
+| 影像壓縮（選配） | 建議在送出前將影像壓縮至 2 MB 以下，降低上傳時間               |
+| base64 編碼      | `Blob → base64` 轉換在前端完成，後端不接受 multipart/form-data |
+| TTS 朗讀         | 以裝置 Web Speech API 或原生 TTS 朗讀 `spokenGuidance` 欄位    |
+| 無障礙 UI        | 按鍵、焦點、螢幕閱讀器標籤等無障礙 UI 元件                     |
+| 錯誤提示語音化   | 將 HTTP 錯誤（413、503 等）轉為使用者可理解的語音提示          |
 
 ### 10.2 前端不負責
 
-| 禁止事項 | 原因 |
-|---------|------|
-| 直接呼叫 Gemini Vision API | API 金鑰安全性，所有 AI 呼叫由後端代理 |
-| 影像分析邏輯 | 分析邏輯（prompt 設計、結構化輸出解析）在後端統一管理 |
-| Google Places 呼叫 | API 金鑰安全性，目的地資料由後端取得 |
-| 快取管理 | Redis 由後端管理，前端可依 `cached` 欄位顯示「使用快取結果」提示 |
+| 禁止事項                          | 原因                                                               |
+| --------------------------------- | ------------------------------------------------------------------ |
+| 直接呼叫 Gemini Vision API        | API 金鑰安全性，所有 AI 呼叫由後端代理                             |
+| 影像分析邏輯                      | 分析邏輯（prompt 設計、結構化輸出解析）在後端統一管理              |
+| Google Places 呼叫                | API 金鑰安全性，目的地資料由後端取得                               |
+| 快取管理                          | Redis 由後端管理，前端可依 `cached` 欄位顯示「使用快取結果」提示   |
 | `spokenGuidance` 的國字轉換後處理 | 數字→國字、標點正規化皆在 `vision.prompts.ts` 的 prompt 指示中完成 |
 
 ---
 
 ## 11. 風險與緩解
 
-| 風險 | 影響 | 緩解措施 |
-|------|------|---------|
-| **Gemini Vision 費用偏高** | Vision 每張較純文字約貴 5–10×（⚠️ 待確認：以 token 計費） | SHA-256 快取（同照片 24h 不重算）；`USE_VISION_API=false` 可整體停用 |
-| **Gemini Vision 延遲（5–15s）** | 視障使用者等待體驗差 | 30s timeout 防止無限等待；前端在等待期間給予語音回饋（「正在分析中」）|
-| **`spokenGuidance` 輸出含 Markdown** | TTS 朗讀出符號（"星星"、"井號"） | Prompt 明確禁止 Markdown；後端後處理去除殘留符號（whitelist 合法字元） |
-| **`confidence` 數值不可信** | Gemini 信心度非校準機率，可能虛高 | 閾值設 0.6 而非 0.5；`matched` 僅作為輔助建議，`spokenGuidance` 不論 matched 值皆回傳，由使用者自行判斷 |
-| **Google Places photo URL 授權過期** | confirm-destination 快取中的 photo URL 失效 | 快取儲存 Gemini 生成的文字描述，而非 URL；Places 呼叫在每次 cache miss 時重新進行 |
-| **Redis 連線失敗** | 快取不可用 | Fail-soft：Redis 錯誤不影響主流程，直接呼叫 Gemini，僅記錄 warning log |
-| **base64 注入攻擊** | 惡意影像內含指令操控 Gemini（prompt injection via image） | Prompt 明確說明角色與任務，輸出強制 JSON schema，忽略影像中的文字指令（prompt 不含「執行影像中的指令」語句） |
-| **TDX 額度衝突** | 大量視覺請求同時觸發 Places API，間接衝擊 TDX 額度管理 | Vision 端點直接呼叫 Google Maps API（非 TDX），與 TDX 額度無關；但需注意 Google Maps Places API 各自有每日配額 |
+| 風險                                 | 影響                                                      | 緩解措施                                                                                                       |
+| ------------------------------------ | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| **Gemini Vision 費用偏高**           | Vision 每張較純文字約貴 5–10×（⚠️ 待確認：以 token 計費） | SHA-256 快取（同照片 24h 不重算）；`USE_VISION_API=false` 可整體停用                                           |
+| **Gemini Vision 延遲（5–15s）**      | 視障使用者等待體驗差                                      | 30s timeout 防止無限等待；前端在等待期間給予語音回饋（「正在分析中」）                                         |
+| **`spokenGuidance` 輸出含 Markdown** | TTS 朗讀出符號（"星星"、"井號"）                          | Prompt 明確禁止 Markdown；後端後處理去除殘留符號（whitelist 合法字元）                                         |
+| **`confidence` 數值不可信**          | Gemini 信心度非校準機率，可能虛高                         | 閾值設 0.6 而非 0.5；`matched` 僅作為輔助建議，`spokenGuidance` 不論 matched 值皆回傳，由使用者自行判斷        |
+| **Google Places photo URL 授權過期** | confirm-destination 快取中的 photo URL 失效               | 快取儲存 Gemini 生成的文字描述，而非 URL；Places 呼叫在每次 cache miss 時重新進行                              |
+| **Redis 連線失敗**                   | 快取不可用                                                | Fail-soft：Redis 錯誤不影響主流程，直接呼叫 Gemini，僅記錄 warning log                                         |
+| **base64 注入攻擊**                  | 惡意影像內含指令操控 Gemini（prompt injection via image） | Prompt 明確說明角色與任務，輸出強制 JSON schema，忽略影像中的文字指令（prompt 不含「執行影像中的指令」語句）   |
+| **TDX 額度衝突**                     | 大量視覺請求同時觸發 Places API，間接衝擊 TDX 額度管理    | Vision 端點直接呼叫 Google Maps API（非 TDX），與 TDX 額度無關；但需注意 Google Maps Places API 各自有每日配額 |

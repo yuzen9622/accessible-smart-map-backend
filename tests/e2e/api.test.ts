@@ -19,7 +19,9 @@ function findRedundancies(obj: any, path = ""): string[] {
 
   // Check for __v
   if (Object.hasOwn(obj, "__v")) {
-    warnings.push(`${path ? path + "." : ""}__v (Mongoose internal version key)`);
+    warnings.push(
+      `${path ? path + "." : ""}__v (Mongoose internal version key)`,
+    );
   }
 
   // Check for duplicate coordinates: location (Point) and separate lat/lng or 經度/緯度
@@ -28,14 +30,20 @@ function findRedundancies(obj: any, path = ""): string[] {
     typeof obj.location === "object" &&
     obj.location.type === "Point" &&
     Array.isArray(obj.location.coordinates);
-  const hasSeparateCoordsZh = Object.hasOwn(obj, "經度") && Object.hasOwn(obj, "緯度");
-  const hasSeparateCoordsEn = Object.hasOwn(obj, "latitude") && Object.hasOwn(obj, "longitude");
+  const hasSeparateCoordsZh =
+    Object.hasOwn(obj, "經度") && Object.hasOwn(obj, "緯度");
+  const hasSeparateCoordsEn =
+    Object.hasOwn(obj, "latitude") && Object.hasOwn(obj, "longitude");
 
   if (hasLocation && hasSeparateCoordsZh) {
-    warnings.push(`${path ? path + "." : ""}Duplicate coordinates: both "經度"/"緯度" and "location.coordinates" are present`);
+    warnings.push(
+      `${path ? path + "." : ""}Duplicate coordinates: both "經度"/"緯度" and "location.coordinates" are present`,
+    );
   }
   if (hasLocation && hasSeparateCoordsEn) {
-    warnings.push(`${path ? path + "." : ""}Duplicate coordinates: both "latitude"/"longitude" and "location.coordinates" are present`);
+    warnings.push(
+      `${path ? path + "." : ""}Duplicate coordinates: both "latitude"/"longitude" and "location.coordinates" are present`,
+    );
   }
 
   // Recurse into children
@@ -63,7 +71,9 @@ async function runTests() {
 
   let passed = 0;
   let failed = 0;
-  const auditReport: { [route: string]: { status: string; redundancies: string[]; notes?: string } } = {};
+  const auditReport: {
+    [route: string]: { status: string; redundancies: string[]; notes?: string };
+  } = {};
 
   // Session variables
   let accessToken = "";
@@ -75,7 +85,7 @@ async function runTests() {
   const runTest = async (
     name: string,
     route: string,
-    testFn: () => Promise<{ note?: string }>
+    testFn: () => Promise<{ note?: string }>,
   ) => {
     console.log(`[TEST] ${name} (${route})...`);
     try {
@@ -86,7 +96,7 @@ async function runTests() {
       auditReport[route] = {
         status: "PASS",
         redundancies: existing?.redundancies || [],
-        notes: note || existing?.notes
+        notes: note || existing?.notes,
       };
     } catch (error: any) {
       console.error(`  \x1b[31m✘ FAILED\x1b[0m:`, error.message);
@@ -99,7 +109,7 @@ async function runTests() {
       auditReport[route] = {
         status: "FAIL",
         redundancies: existing?.redundancies || [],
-        notes: error.message
+        notes: error.message,
       };
     }
     console.log("--------------------------------------------------");
@@ -173,7 +183,7 @@ async function runTests() {
     const res = await axios.post(
       `${BASE_URL}/api/v1/user/config`,
       {},
-      { headers: { Authorization: `Bearer ${accessToken}` } }
+      { headers: { Authorization: `Bearer ${accessToken}` } },
     );
     assert.equal(res.status, 200);
     assert.equal(res.data.ok, true);
@@ -185,21 +195,28 @@ async function runTests() {
   });
 
   // 6. Update User Config (Requires auth)
-  await runTest("Update User Config", "POST /api/v1/user/config/update", async () => {
-    const res = await axios.post(
-      `${BASE_URL}/api/v1/user/config/update`,
-      { language: "en", darkMode: "dark" },
-      { headers: { Authorization: `Bearer ${accessToken}` } }
-    );
-    assert.equal(res.status, 200);
-    assert.equal(res.data.ok, true);
-    assert.equal(res.data.data.language, "en");
-    assert.equal(res.data.data.darkMode, "dark");
+  await runTest(
+    "Update User Config",
+    "POST /api/v1/user/config/update",
+    async () => {
+      const res = await axios.post(
+        `${BASE_URL}/api/v1/user/config/update`,
+        { language: "en", darkMode: "dark" },
+        { headers: { Authorization: `Bearer ${accessToken}` } },
+      );
+      assert.equal(res.status, 200);
+      assert.equal(res.data.ok, true);
+      assert.equal(res.data.data.language, "en");
+      assert.equal(res.data.data.darkMode, "dark");
 
-    const redundancies = cleanWarnings(findRedundancies(res.data));
-    auditReport["POST /api/v1/user/config/update"] = { status: "PASS", redundancies };
-    return {};
-  });
+      const redundancies = cleanWarnings(findRedundancies(res.data));
+      auditReport["POST /api/v1/user/config/update"] = {
+        status: "PASS",
+        redundancies,
+      };
+      return {};
+    },
+  );
 
   // 7. Token Re-issue
   await runTest("Token Re-issue", "POST /api/v1/user/token", async () => {
@@ -222,7 +239,7 @@ async function runTests() {
       {},
       {
         headers: { Cookie: refreshTokenCookie },
-      }
+      },
     );
     assert.equal(res.status, 200);
     assert.equal(res.data.ok, true);
@@ -252,32 +269,44 @@ async function runTests() {
   });
 
   // 10. Bus Realtime Position
-  await runTest("Bus Realtime Position", "GET /api/v1/transit/bus/realtime", async () => {
-    try {
-      const res = await axios.get(`${BASE_URL}/api/v1/transit/bus/realtime`, {
-        params: {
-          plate_number: "KKA-9999", // Mock format, but satisfies the regex validation
-          arrival_lat: "25.0478",
-          arrival_lng: "121.5171",
-          route_name: "299",
-        },
-      });
-      assert.ok(res.status === 200 || res.status === 404);
-      const redundancies = cleanWarnings(findRedundancies(res.data));
-      auditReport["GET /api/v1/transit/bus/realtime"] = { status: "PASS", redundancies };
-      return { note: `HTTP Status: ${res.status}. Returned data: ${JSON.stringify(res.data.data)}` };
-    } catch (err: any) {
-      if (err.response && (err.response.status === 400 || err.response.status === 404)) {
+  await runTest(
+    "Bus Realtime Position",
+    "GET /api/v1/transit/bus/realtime",
+    async () => {
+      try {
+        const res = await axios.get(`${BASE_URL}/api/v1/transit/bus/realtime`, {
+          params: {
+            plate_number: "KKA-9999", // Mock format, but satisfies the regex validation
+            arrival_lat: "25.0478",
+            arrival_lng: "121.5171",
+            route_name: "299",
+          },
+        });
+        assert.ok(res.status === 200 || res.status === 404);
+        const redundancies = cleanWarnings(findRedundancies(res.data));
         auditReport["GET /api/v1/transit/bus/realtime"] = {
-          status: "PASS (Graceful Fail)",
-          redundancies: [],
-          notes: `Returned expected 400/404 for invalid plate: ${err.response.data.message}`,
+          status: "PASS",
+          redundancies,
         };
-        return {};
+        return {
+          note: `HTTP Status: ${res.status}. Returned data: ${JSON.stringify(res.data.data)}`,
+        };
+      } catch (err: any) {
+        if (
+          err.response &&
+          (err.response.status === 400 || err.response.status === 404)
+        ) {
+          auditReport["GET /api/v1/transit/bus/realtime"] = {
+            status: "PASS (Graceful Fail)",
+            redundancies: [],
+            notes: `Returned expected 400/404 for invalid plate: ${err.response.data.message}`,
+          };
+          return {};
+        }
+        throw err;
       }
-      throw err;
-    }
-  });
+    },
+  );
 
   // 11. All Places (A11y)
   await runTest("All Places", "GET /api/v1/a11y/all-places", async () => {
@@ -287,7 +316,10 @@ async function runTests() {
     assert.ok(Array.isArray(res.data.data));
 
     const redundancies = cleanWarnings(findRedundancies(res.data));
-    auditReport["GET /api/v1/a11y/all-places"] = { status: "PASS", redundancies };
+    auditReport["GET /api/v1/a11y/all-places"] = {
+      status: "PASS",
+      redundancies,
+    };
     return { note: `Fetched ${res.data.data.length} barrier-free places` };
   });
 
@@ -299,7 +331,10 @@ async function runTests() {
     assert.ok(Array.isArray(res.data.data));
 
     const redundancies = cleanWarnings(findRedundancies(res.data));
-    auditReport["GET /api/v1/a11y/all-bathrooms"] = { status: "PASS", redundancies };
+    auditReport["GET /api/v1/a11y/all-bathrooms"] = {
+      status: "PASS",
+      redundancies,
+    };
     return { note: `Fetched ${res.data.data.length} barrier-free bathrooms` };
   });
 
@@ -315,7 +350,10 @@ async function runTests() {
     assert.ok(res.data.data.nearbyOsm);
 
     const redundancies = cleanWarnings(findRedundancies(res.data));
-    auditReport["GET /api/v1/a11y/nearby-a11y"] = { status: "PASS", redundancies };
+    auditReport["GET /api/v1/a11y/nearby-a11y"] = {
+      status: "PASS",
+      redundancies,
+    };
     return {
       note: `Found ${res.data.data.nearbyMetroA11y.length} metro exit/lifts, ${res.data.data.nearbyBathroom.length} bathrooms, and ${res.data.data.nearbyOsm.length} OSM nodes.`,
     };
@@ -337,20 +375,29 @@ async function runTests() {
   });
 
   // 15. Accessible Route Planner (A11y)
-  await runTest("Accessible Route Planner", "POST /api/v1/a11y/accessible-route", async () => {
-    const res = await axios.post(`${BASE_URL}/api/v1/a11y/accessible-route`, {
-      origin: { latitude: 25.0478, longitude: 121.5171 },
-      destination: { latitude: 25.0339, longitude: 121.5644 },
-      mode: "wheelchair",
-    });
-    assert.equal(res.status, 200);
-    assert.equal(res.data.ok, true);
-    assert.ok(res.data.data.routes);
+  await runTest(
+    "Accessible Route Planner",
+    "POST /api/v1/a11y/accessible-route",
+    async () => {
+      const res = await axios.post(`${BASE_URL}/api/v1/a11y/accessible-route`, {
+        origin: { latitude: 25.0478, longitude: 121.5171 },
+        destination: { latitude: 25.0339, longitude: 121.5644 },
+        mode: "wheelchair",
+      });
+      assert.equal(res.status, 200);
+      assert.equal(res.data.ok, true);
+      assert.ok(res.data.data.routes);
 
-    const redundancies = cleanWarnings(findRedundancies(res.data));
-    auditReport["POST /api/v1/a11y/accessible-route"] = { status: "PASS", redundancies };
-    return { note: `Planned ${res.data.data.routes.length} candidate routes` };
-  });
+      const redundancies = cleanWarnings(findRedundancies(res.data));
+      auditReport["POST /api/v1/a11y/accessible-route"] = {
+        status: "PASS",
+        redundancies,
+      };
+      return {
+        note: `Planned ${res.data.data.routes.length} candidate routes`,
+      };
+    },
+  );
 
   // 16. Air Quality
   await runTest("Air Quality", "GET /api/v1/air/air-quality", async () => {
@@ -362,8 +409,13 @@ async function runTests() {
     assert.ok(res.data.data.quality);
 
     const redundancies = cleanWarnings(findRedundancies(res.data));
-    auditReport["GET /api/v1/air/air-quality"] = { status: "PASS", redundancies };
-    return { note: `Quality: ${res.data.data.quality}. Description: ${res.data.data.description}` };
+    auditReport["GET /api/v1/air/air-quality"] = {
+      status: "PASS",
+      redundancies,
+    };
+    return {
+      note: `Quality: ${res.data.data.quality}. Description: ${res.data.data.description}`,
+    };
   });
 
   // 17. AI Intent
@@ -377,7 +429,9 @@ async function runTests() {
 
     const redundancies = cleanWarnings(findRedundancies(res.data));
     auditReport["POST /api/v1/ai/intent"] = { status: "PASS", redundancies };
-    return { note: `Parsed origin: ${res.data.data.origin}, destination: ${res.data.data.destination}` };
+    return {
+      note: `Parsed origin: ${res.data.data.origin}, destination: ${res.data.data.destination}`,
+    };
   });
 
   // 18. AI Explain
@@ -392,7 +446,10 @@ async function runTests() {
             to: "捷運台北車站",
             distanceM: 100,
             minutesEst: 2,
-            polyline: [[121.5171, 25.0478], [121.5173, 25.0475]],
+            polyline: [
+              [121.5171, 25.0478],
+              [121.5173, 25.0475],
+            ],
             a11yFacilities: [],
           },
         ],
@@ -406,7 +463,9 @@ async function runTests() {
 
     const redundancies = cleanWarnings(findRedundancies(res.data));
     auditReport["POST /api/v1/ai/explain"] = { status: "PASS", redundancies };
-    return { note: `Explanation summary: ${res.data.data.summary.substring(0, 60)}...` };
+    return {
+      note: `Explanation summary: ${res.data.data.summary.substring(0, 60)}...`,
+    };
   });
 
   // 19. AI Chat
@@ -421,7 +480,9 @@ async function runTests() {
 
     const redundancies = cleanWarnings(findRedundancies(res.data));
     auditReport["POST /api/v1/ai/chat"] = { status: "PASS", redundancies };
-    return { note: `AI Response choice 0 content: ${res.data.data.choices[0].message.content.substring(0, 60)}...` };
+    return {
+      note: `AI Response choice 0 content: ${res.data.data.choices[0].message.content.substring(0, 60)}...`,
+    };
   });
 
   // 20. User Logout (Requires cookies)
@@ -431,7 +492,7 @@ async function runTests() {
       {},
       {
         headers: { Cookie: refreshTokenCookie },
-      }
+      },
     );
     assert.equal(res.status, 200);
     assert.equal(res.data.ok, true);

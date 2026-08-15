@@ -3,39 +3,17 @@ import type { ApiResponse } from "../../types/response";
 import { ResponseCode, ResponseMessage } from "../../types/code";
 import { sendResponse } from "../../config/lib";
 import type { IConfig, IUser } from "../../types";
-import { createAccessToken, createRefreshToken, verifyRefreshToken } from "../../config/jwt";
+import {
+  createAccessToken,
+  createRefreshToken,
+  verifyRefreshToken,
+} from "../../config/jwt";
 import * as userService from "./user.service";
 
-async function info(req: Request, res: Response<ApiResponse<{ user: IUser | null; config: IConfig | null }>>) {
-  try {
-    const userId = req.auth?.userId;
-    if (!userId) {
-      return sendResponse(res, false, "error", ResponseCode.FORBIDDEN, ResponseMessage.FORBIDDEN);
-    }
-
-    const { user, config } = await userService.getUserWithConfig(userId);
-    if (!user) {
-      return sendResponse(res, false, "error", ResponseCode.NOT_FOUND, ResponseMessage.NOT_FOUND);
-    }
-
-    return sendResponse(res, true, "success", ResponseCode.OK, ResponseMessage.OK, { user, config });
-  } catch (error) {
-    console.error(error);
-    return sendResponse(
-      res,
-      false,
-      "error",
-      ResponseCode.INTERNAL_ERROR,
-      ResponseMessage.INTERNAL_ERROR
-    );
-  }
-}
-
-async function lineLinkCode(req: Request, res: Response<ApiResponse<{
-  bindCode: string;
-  bindCodeExpiresAt: Date;
-  bindUrl: string;
-}>>) {
+async function info(
+  req: Request,
+  res: Response<ApiResponse<{ user: IUser | null; config: IConfig | null }>>,
+) {
   try {
     const userId = req.auth?.userId;
     if (!userId) {
@@ -44,7 +22,60 @@ async function lineLinkCode(req: Request, res: Response<ApiResponse<{
         false,
         "error",
         ResponseCode.FORBIDDEN,
-        ResponseMessage.FORBIDDEN
+        ResponseMessage.FORBIDDEN,
+      );
+    }
+
+    const { user, config } = await userService.getUserWithConfig(userId);
+    if (!user) {
+      return sendResponse(
+        res,
+        false,
+        "error",
+        ResponseCode.NOT_FOUND,
+        ResponseMessage.NOT_FOUND,
+      );
+    }
+
+    return sendResponse(
+      res,
+      true,
+      "success",
+      ResponseCode.OK,
+      ResponseMessage.OK,
+      { user, config },
+    );
+  } catch (error) {
+    console.error(error);
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      ResponseMessage.INTERNAL_ERROR,
+    );
+  }
+}
+
+async function lineLinkCode(
+  req: Request,
+  res: Response<
+    ApiResponse<{
+      bindCode: string;
+      bindCodeExpiresAt: Date;
+      bindUrl: string;
+    }>
+  >,
+) {
+  try {
+    const userId = req.auth?.userId;
+    if (!userId) {
+      return sendResponse(
+        res,
+        false,
+        "error",
+        ResponseCode.FORBIDDEN,
+        ResponseMessage.FORBIDDEN,
       );
     }
 
@@ -55,7 +86,7 @@ async function lineLinkCode(req: Request, res: Response<ApiResponse<{
       "success",
       ResponseCode.OK,
       ResponseMessage.OK,
-      payload
+      payload,
     );
   } catch (error) {
     console.error(error);
@@ -64,7 +95,7 @@ async function lineLinkCode(req: Request, res: Response<ApiResponse<{
       false,
       "error",
       ResponseCode.INTERNAL_ERROR,
-      ResponseMessage.INTERNAL_ERROR
+      ResponseMessage.INTERNAL_ERROR,
     );
   }
 }
@@ -78,7 +109,7 @@ async function updateConfig(req: Request, res: Response<ApiResponse<IConfig>>) {
         false,
         "error",
         ResponseCode.FORBIDDEN,
-        ResponseMessage.FORBIDDEN
+        ResponseMessage.FORBIDDEN,
       );
     }
     const config = await userService.updateConfig(userId, req.body);
@@ -89,7 +120,7 @@ async function updateConfig(req: Request, res: Response<ApiResponse<IConfig>>) {
         false,
         "error",
         ResponseCode.INVALID_INPUT,
-        ResponseMessage.INVALID_INPUT
+        ResponseMessage.INVALID_INPUT,
       );
     }
 
@@ -99,7 +130,7 @@ async function updateConfig(req: Request, res: Response<ApiResponse<IConfig>>) {
       "success",
       ResponseCode.OK,
       ResponseMessage.OK,
-      config
+      config,
     );
   } catch (error) {
     console.error(error);
@@ -108,7 +139,7 @@ async function updateConfig(req: Request, res: Response<ApiResponse<IConfig>>) {
       false,
       "error",
       ResponseCode.INTERNAL_ERROR,
-      ResponseMessage.INTERNAL_ERROR
+      ResponseMessage.INTERNAL_ERROR,
     );
   }
 }
@@ -122,7 +153,7 @@ async function config(req: Request, res: Response) {
         false,
         "error",
         ResponseCode.FORBIDDEN,
-        ResponseMessage.FORBIDDEN
+        ResponseMessage.FORBIDDEN,
       );
     }
     const userConfig = await userService.getConfig(userId);
@@ -133,7 +164,7 @@ async function config(req: Request, res: Response) {
       "success",
       ResponseCode.OK,
       ResponseMessage.OK,
-      userConfig
+      userConfig,
     );
   } catch (error) {
     console.error(error);
@@ -142,12 +173,15 @@ async function config(req: Request, res: Response) {
       false,
       "error",
       ResponseCode.INTERNAL_ERROR,
-      ResponseMessage.INTERNAL_ERROR
+      ResponseMessage.INTERNAL_ERROR,
     );
   }
 }
 
-async function refresh(req: Request, res: Response<ApiResponse<{ user: IUser }>>) {
+async function refresh(
+  req: Request,
+  res: Response<ApiResponse<{ user: IUser }>>,
+) {
   try {
     const { refreshToken } = req.cookies ?? {};
 
@@ -158,8 +192,13 @@ async function refresh(req: Request, res: Response<ApiResponse<{ user: IUser }>>
     }
 
     const claimed = verify.decoded.user as IUser | undefined;
-    const user = claimed?._id ? await userService.getUserById(String(claimed._id)) : null;
-    if (!user || Number(user.tokenVersion ?? 0) !== Number(claimed?.tokenVersion ?? -1)) {
+    const user = claimed?._id
+      ? await userService.getUserById(String(claimed._id))
+      : null;
+    if (
+      !user ||
+      Number(user.tokenVersion ?? 0) !== Number(claimed?.tokenVersion ?? -1)
+    ) {
       res.cookie("refreshToken", "", { maxAge: 0 });
       throw new Error("Revoked refresh token");
     }
@@ -172,7 +211,7 @@ async function refresh(req: Request, res: Response<ApiResponse<{ user: IUser }>>
       ResponseMessage.OK,
       { user },
       createAccessToken(user),
-      createRefreshToken(user)
+      createRefreshToken(user),
     );
   } catch (error) {
     console.error("[user] refresh 失敗", error);
@@ -181,7 +220,7 @@ async function refresh(req: Request, res: Response<ApiResponse<{ user: IUser }>>
       false,
       "error",
       ResponseCode.UNAUTHORIZED,
-      ResponseMessage.UNAUTHORIZED
+      ResponseMessage.UNAUTHORIZED,
     );
   }
 }
@@ -189,16 +228,35 @@ async function refresh(req: Request, res: Response<ApiResponse<{ user: IUser }>>
 async function logout(_req: Request, res: Response) {
   try {
     res.cookie("refreshToken", "", { maxAge: 0 });
-    return sendResponse(res, true, "success", ResponseCode.OK, "Logout successful");
+    return sendResponse(
+      res,
+      true,
+      "success",
+      ResponseCode.OK,
+      "Logout successful",
+    );
   } catch (_error) {
-    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, "Logout failed");
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      "Logout failed",
+    );
   }
 }
 
 async function getA11yProfile(req: Request, res: Response) {
   try {
     const profile = await userService.getA11yProfile(req.auth!.userId);
-    return sendResponse(res, true, "success", ResponseCode.OK, ResponseMessage.OK, profile);
+    return sendResponse(
+      res,
+      true,
+      "success",
+      ResponseCode.OK,
+      ResponseMessage.OK,
+      profile,
+    );
   } catch (error) {
     console.error(error);
     return sendResponse(
@@ -206,15 +264,25 @@ async function getA11yProfile(req: Request, res: Response) {
       false,
       "error",
       ResponseCode.INTERNAL_ERROR,
-      ResponseMessage.INTERNAL_ERROR
+      ResponseMessage.INTERNAL_ERROR,
     );
   }
 }
 
 async function updateA11yProfile(req: Request, res: Response) {
   try {
-    const profile = await userService.updateA11yProfile(req.auth!.userId, req.body);
-    return sendResponse(res, true, "success", ResponseCode.OK, ResponseMessage.OK, profile);
+    const profile = await userService.updateA11yProfile(
+      req.auth!.userId,
+      req.body,
+    );
+    return sendResponse(
+      res,
+      true,
+      "success",
+      ResponseCode.OK,
+      ResponseMessage.OK,
+      profile,
+    );
   } catch (error) {
     console.error(error);
     return sendResponse(
@@ -222,7 +290,7 @@ async function updateA11yProfile(req: Request, res: Response) {
       false,
       "error",
       ResponseCode.INTERNAL_ERROR,
-      ResponseMessage.INTERNAL_ERROR
+      ResponseMessage.INTERNAL_ERROR,
     );
   }
 }

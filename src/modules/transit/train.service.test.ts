@@ -16,7 +16,9 @@ import type { NormalizedTrain, NormalizedStationTrain } from "../../types/rail";
 
 const idx = fetchRailStationIndex as unknown as ReturnType<typeof vi.fn>;
 const odFetch = fetchRailOdTimetable as unknown as ReturnType<typeof vi.fn>;
-const stFetch = fetchRailStationTimetable as unknown as ReturnType<typeof vi.fn>;
+const stFetch = fetchRailStationTimetable as unknown as ReturnType<
+  typeof vi.fn
+>;
 
 // 2026-07-13T01:00:00Z → Asia/Taipei 2026-07-13 09:00
 const NOW = new Date("2026-07-13T01:00:00Z");
@@ -28,7 +30,8 @@ const STATIONS = new Map<string, string>([
 ]);
 
 function odItem(trainNo: string, dep: string, arr: string): NormalizedTrain {
-  const toMin = (s: string) => Number(s.slice(0, 2)) * 60 + Number(s.slice(3, 5));
+  const toMin = (s: string) =>
+    Number(s.slice(0, 2)) * 60 + Number(s.slice(3, 5));
   const depMin = toMin(dep);
   let arrMin = toMin(arr);
   const nextDay = arrMin < depMin;
@@ -60,18 +63,30 @@ beforeEach(() => {
 
 describe("getTrainTimetable station resolution (case 1/6/8)", () => {
   it("resolves normalized station names and returns an error naming an unknown station", async () => {
-    odFetch.mockResolvedValue({ ok: true, items: [odItem("1", "09:30", "11:00")] });
-    const ok = await getTrainTimetable({ originStation: "台北車站", destinationStation: "台中" }, NOW);
+    odFetch.mockResolvedValue({
+      ok: true,
+      items: [odItem("1", "09:30", "11:00")],
+    });
+    const ok = await getTrainTimetable(
+      { originStation: "台北車站", destinationStation: "台中" },
+      NOW,
+    );
     expect(ok.ok).toBe(true);
 
-    const bad = await getTrainTimetable({ originStation: "台北", destinationStation: "不存在站" }, NOW);
+    const bad = await getTrainTimetable(
+      { originStation: "台北", destinationStation: "不存在站" },
+      NOW,
+    );
     expect(bad.ok).toBe(false);
     if (!bad.ok) expect(bad.error).toContain("不存在站");
   });
 
   it("does not treat an index upstream failure as an unknown station (F6)", async () => {
     idx.mockResolvedValue({ ok: false, errorCode: "HTTP_ERROR" });
-    const out = await getTrainTimetable({ originStation: "台北", destinationStation: "台中" }, NOW);
+    const out = await getTrainTimetable(
+      { originStation: "台北", destinationStation: "台中" },
+      NOW,
+    );
     expect(out.ok).toBe(false);
     if (!out.ok) {
       expect(out.error).not.toContain("找不到");
@@ -80,7 +95,10 @@ describe("getTrainTimetable station resolution (case 1/6/8)", () => {
   });
 
   it("rejects identical origin and destination", async () => {
-    const out = await getTrainTimetable({ originStation: "台北", destinationStation: "臺北" }, NOW);
+    const out = await getTrainTimetable(
+      { originStation: "台北", destinationStation: "臺北" },
+      NOW,
+    );
     expect(out).toEqual({ ok: false, error: "起訖站相同" });
     expect(odFetch).not.toHaveBeenCalled();
   });
@@ -88,12 +106,23 @@ describe("getTrainTimetable station resolution (case 1/6/8)", () => {
 
 describe("getTrainTimetable filtering (case 2/3/4/5)", () => {
   const many: NormalizedTrain[] = [];
-  for (let h = 6; h < 22; h++) many.push(odItem(`${h}`, `${String(h).padStart(2, "0")}:00`, `${String(h + 1).padStart(2, "0")}:00`));
+  for (let h = 6; h < 22; h++)
+    many.push(
+      odItem(
+        `${h}`,
+        `${String(h).padStart(2, "0")}:00`,
+        `${String(h + 1).padStart(2, "0")}:00`,
+      ),
+    );
 
   it("departAfter keeps the earliest 12 at/after the time and notes truncation", async () => {
     odFetch.mockResolvedValue({ ok: true, items: many });
     const out = await getTrainTimetable(
-      { originStation: "台北", destinationStation: "台中", departAfter: "9:00" },
+      {
+        originStation: "台北",
+        destinationStation: "台中",
+        departAfter: "9:00",
+      },
       NOW,
     );
     expect(out.ok).toBe(true);
@@ -117,7 +146,10 @@ describe("getTrainTimetable filtering (case 2/3/4/5)", () => {
 
   it("returns ok with empty trains and a note when the timetable is empty", async () => {
     odFetch.mockResolvedValue({ ok: true, items: [] });
-    const out = await getTrainTimetable({ originStation: "台北", destinationStation: "台中" }, NOW);
+    const out = await getTrainTimetable(
+      { originStation: "台北", destinationStation: "台中" },
+      NOW,
+    );
     expect(out.ok).toBe(true);
     if (out.ok) {
       expect(out.trains).toHaveLength(0);
@@ -127,7 +159,10 @@ describe("getTrainTimetable filtering (case 2/3/4/5)", () => {
 
   it("maps an adapter failure to a temporary-failure error", async () => {
     odFetch.mockResolvedValue({ ok: false, errorCode: "NETWORK" });
-    const out = await getTrainTimetable({ originStation: "台北", destinationStation: "台中" }, NOW);
+    const out = await getTrainTimetable(
+      { originStation: "台北", destinationStation: "台中" },
+      NOW,
+    );
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.error).toContain("暫時失敗");
   });
@@ -137,13 +172,35 @@ describe("input validation short-circuits (case 7)", () => {
   const bad: Array<[string, any]> = [
     ["null origin", { originStation: null, destinationStation: "台中" }],
     ["empty origin", { originStation: "  ", destinationStation: "台中" }],
-    ["suffix-only origin", { originStation: "車站", destinationStation: "台中" }],
+    [
+      "suffix-only origin",
+      { originStation: "車站", destinationStation: "台中" },
+    ],
     ["number origin", { originStation: 123, destinationStation: "台中" }],
-    ["bad calendar date", { originStation: "台北", destinationStation: "台中", date: "2026-02-30" }],
-    ["past date", { originStation: "台北", destinationStation: "台中", date: "2026-07-12" }],
-    ["out-of-range date", { originStation: "台北", destinationStation: "台中", date: "2026-09-30" }],
-    ["bad time", { originStation: "台北", destinationStation: "台中", departAfter: "24:00" }],
-    ["bad railSystem", { originStation: "台北", destinationStation: "台中", railSystem: "tra" }],
+    [
+      "bad calendar date",
+      { originStation: "台北", destinationStation: "台中", date: "2026-02-30" },
+    ],
+    [
+      "past date",
+      { originStation: "台北", destinationStation: "台中", date: "2026-07-12" },
+    ],
+    [
+      "out-of-range date",
+      { originStation: "台北", destinationStation: "台中", date: "2026-09-30" },
+    ],
+    [
+      "bad time",
+      {
+        originStation: "台北",
+        destinationStation: "台中",
+        departAfter: "24:00",
+      },
+    ],
+    [
+      "bad railSystem",
+      { originStation: "台北", destinationStation: "台中", railSystem: "tra" },
+    ],
   ];
 
   for (const [label, params] of bad) {
@@ -155,7 +212,10 @@ describe("input validation short-circuits (case 7)", () => {
   }
 
   it("accepts a one-digit-hour time and today/max-range boundary dates", async () => {
-    odFetch.mockResolvedValue({ ok: true, items: [odItem("1", "09:30", "11:00")] });
+    odFetch.mockResolvedValue({
+      ok: true,
+      items: [odItem("1", "09:30", "11:00")],
+    });
     for (const params of [
       { departAfter: "9:05" },
       { date: "2026-07-13" },
@@ -186,7 +246,10 @@ describe("getStationTimetable (case 9/10)", () => {
   });
 
   it("notes the last train when the day is already over", async () => {
-    stFetch.mockResolvedValue({ ok: true, items: [stItem("A", "06:00"), stItem("B", "07:30")] });
+    stFetch.mockResolvedValue({
+      ok: true,
+      items: [stItem("A", "06:00"), stItem("B", "07:30")],
+    });
     const out = await getStationTimetable({ station: "台中" }, NOW);
     expect(out.ok).toBe(true);
     if (out.ok) {
@@ -203,7 +266,10 @@ describe("getStationTimetable (case 9/10)", () => {
 
   it("routes THSR through the THSR system", async () => {
     stFetch.mockResolvedValue({ ok: true, items: [stItem("A", "10:00")] });
-    await getStationTimetable({ station: "左營", railSystem: "THSR", departAfter: "08:00" }, NOW);
+    await getStationTimetable(
+      { station: "左營", railSystem: "THSR", departAfter: "08:00" },
+      NOW,
+    );
     expect(stFetch).toHaveBeenCalledWith("THSR", "6000", "2026-07-13");
   });
 });

@@ -63,30 +63,30 @@ function lean(value: unknown): unknown {
  * Does NOT set `SosSession.findById` — tests queue those per call because the
  * ordering (auth lookup first, then any post-write reload) is deterministic.
  */
-function setupAuthorized({ boundIds = ["L1", FAM_LINE] }: { boundIds?: string[] } = {}): void {
-  vi.mocked(EmergencyContact.find).mockImplementation(
-    (() => ({
-      select: (fields: string) => ({
-        lean: () =>
-          Promise.resolve(
-            fields === "lineUserId"
-              ? boundIds.map((id) => ({ lineUserId: id }))
-              : [{ userId: OWNER_ID, name: "媽媽" }],
-          ),
-      }),
-    })) as never,
+function setupAuthorized({
+  boundIds = ["L1", FAM_LINE],
+}: { boundIds?: string[] } = {}): void {
+  vi.mocked(EmergencyContact.find).mockImplementation((() => ({
+    select: (fields: string) => ({
+      lean: () =>
+        Promise.resolve(
+          fields === "lineUserId"
+            ? boundIds.map((id) => ({ lineUserId: id }))
+            : [{ userId: OWNER_ID, name: "媽媽" }],
+        ),
+    }),
+  })) as never);
+  vi.mocked(EmergencyContact.findOne).mockReturnValue(
+    lean({ _id: "c1", name: "媽媽" }) as never,
   );
-  vi.mocked(EmergencyContact.findOne).mockReturnValue(lean({ _id: "c1", name: "媽媽" }) as never);
   vi.mocked(User.findById).mockReturnValue(lean({ name: "小明" }) as never);
 }
 
 /** Programs an unauthorized LINE user: no bound contacts → auth resolves null. */
 function setupUnauthorized(): void {
-  vi.mocked(EmergencyContact.find).mockImplementation(
-    (() => ({
-      select: () => ({ lean: () => Promise.resolve([]) }),
-    })) as never,
-  );
+  vi.mocked(EmergencyContact.find).mockImplementation((() => ({
+    select: () => ({ lean: () => Promise.resolve([]) }),
+  })) as never);
 }
 
 beforeEach(() => {
@@ -97,13 +97,25 @@ describe("acknowledgeSession — idempotency (F1)", () => {
   it("first call emits once and returns ACKNOWLEDGED", async () => {
     setupAuthorized();
     vi.mocked(SosSession.findById)
-      .mockReturnValueOnce(lean({ _id: SESSION_ID, userId: OWNER_ID, status: "active" }) as never)
-      .mockReturnValueOnce(lean({ _id: SESSION_ID, userId: OWNER_ID, status: "active", handlingStatus: "acknowledged" }) as never);
+      .mockReturnValueOnce(
+        lean({ _id: SESSION_ID, userId: OWNER_ID, status: "active" }) as never,
+      )
+      .mockReturnValueOnce(
+        lean({
+          _id: SESSION_ID,
+          userId: OWNER_ID,
+          status: "active",
+          handlingStatus: "acknowledged",
+        }) as never,
+      );
     vi.mocked(SosSession.updateOne)
       .mockResolvedValueOnce({ modifiedCount: 1 } as never)
       .mockResolvedValueOnce({} as never);
 
-    const res = await acknowledgeSession({ sessionId: SESSION_ID, lineUserId: FAM_LINE });
+    const res = await acknowledgeSession({
+      sessionId: SESSION_ID,
+      lineUserId: FAM_LINE,
+    });
 
     expect(res.ok).toBe(true);
     expect(res.message).toBe(SOS_MSG.ACKNOWLEDGED);
@@ -113,11 +125,20 @@ describe("acknowledgeSession — idempotency (F1)", () => {
   it("second call (modifiedCount 0, still active) does NOT emit again but stays ok ACKNOWLEDGED", async () => {
     setupAuthorized();
     vi.mocked(SosSession.findById)
-      .mockReturnValueOnce(lean({ _id: SESSION_ID, userId: OWNER_ID, status: "active" }) as never)
-      .mockReturnValueOnce(lean({ status: "active", handlingStatus: "acknowledged" }) as never);
-    vi.mocked(SosSession.updateOne).mockResolvedValueOnce({ modifiedCount: 0 } as never);
+      .mockReturnValueOnce(
+        lean({ _id: SESSION_ID, userId: OWNER_ID, status: "active" }) as never,
+      )
+      .mockReturnValueOnce(
+        lean({ status: "active", handlingStatus: "acknowledged" }) as never,
+      );
+    vi.mocked(SosSession.updateOne).mockResolvedValueOnce({
+      modifiedCount: 0,
+    } as never);
 
-    const res = await acknowledgeSession({ sessionId: SESSION_ID, lineUserId: FAM_LINE });
+    const res = await acknowledgeSession({
+      sessionId: SESSION_ID,
+      lineUserId: FAM_LINE,
+    });
 
     expect(res.ok).toBe(true);
     expect(res.message).toBe(SOS_MSG.ACKNOWLEDGED);
@@ -127,11 +148,20 @@ describe("acknowledgeSession — idempotency (F1)", () => {
   it("modifiedCount 0 on an already-resolved session returns ALREADY_RESOLVED", async () => {
     setupAuthorized();
     vi.mocked(SosSession.findById)
-      .mockReturnValueOnce(lean({ _id: SESSION_ID, userId: OWNER_ID, status: "active" }) as never)
-      .mockReturnValueOnce(lean({ status: "resolved", handlingStatus: "resolved" }) as never);
-    vi.mocked(SosSession.updateOne).mockResolvedValueOnce({ modifiedCount: 0 } as never);
+      .mockReturnValueOnce(
+        lean({ _id: SESSION_ID, userId: OWNER_ID, status: "active" }) as never,
+      )
+      .mockReturnValueOnce(
+        lean({ status: "resolved", handlingStatus: "resolved" }) as never,
+      );
+    vi.mocked(SosSession.updateOne).mockResolvedValueOnce({
+      modifiedCount: 0,
+    } as never);
 
-    const res = await acknowledgeSession({ sessionId: SESSION_ID, lineUserId: FAM_LINE });
+    const res = await acknowledgeSession({
+      sessionId: SESSION_ID,
+      lineUserId: FAM_LINE,
+    });
 
     expect(res.ok).toBe(true);
     expect(res.message).toBe(SOS_MSG.ALREADY_RESOLVED);
@@ -140,10 +170,15 @@ describe("acknowledgeSession — idempotency (F1)", () => {
 
   it("returns FORBIDDEN NOT_AUTHORIZED_CONTACT for an unauthorized LINE user", async () => {
     setupUnauthorized();
-    const res = await acknowledgeSession({ sessionId: SESSION_ID, lineUserId: "stranger" });
+    const res = await acknowledgeSession({
+      sessionId: SESSION_ID,
+      lineUserId: "stranger",
+    });
     expect(res.ok).toBe(false);
     expect(res.httpCode).toBe(ResponseCode.FORBIDDEN);
-    expect((res.data as { reason: string }).reason).toBe(SOS_REASON.NOT_AUTHORIZED_CONTACT);
+    expect((res.data as { reason: string }).reason).toBe(
+      SOS_REASON.NOT_AUTHORIZED_CONTACT,
+    );
   });
 });
 
@@ -151,11 +186,25 @@ describe("claimSession — atomicity / conflict", () => {
   it("winner (findOneAndUpdate returns prev doc) returns CLAIMED and emits", async () => {
     setupAuthorized();
     vi.mocked(SosSession.findById)
-      .mockReturnValueOnce(lean({ _id: SESSION_ID, userId: OWNER_ID, status: "active" }) as never)
-      .mockReturnValueOnce(lean({ _id: SESSION_ID, userId: OWNER_ID, status: "active", claimedBy: FAM_LINE }) as never);
-    vi.mocked(SosSession.findOneAndUpdate).mockResolvedValueOnce({ _id: SESSION_ID } as never);
+      .mockReturnValueOnce(
+        lean({ _id: SESSION_ID, userId: OWNER_ID, status: "active" }) as never,
+      )
+      .mockReturnValueOnce(
+        lean({
+          _id: SESSION_ID,
+          userId: OWNER_ID,
+          status: "active",
+          claimedBy: FAM_LINE,
+        }) as never,
+      );
+    vi.mocked(SosSession.findOneAndUpdate).mockResolvedValueOnce({
+      _id: SESSION_ID,
+    } as never);
 
-    const res = await claimSession({ sessionId: SESSION_ID, lineUserId: FAM_LINE });
+    const res = await claimSession({
+      sessionId: SESSION_ID,
+      lineUserId: FAM_LINE,
+    });
 
     expect(res.ok).toBe(true);
     expect(res.message).toBe(SOS_MSG.CLAIMED);
@@ -165,11 +214,22 @@ describe("claimSession — atomicity / conflict", () => {
   it("idempotent claim (null prev, claimedBy === self) returns CLAIMED with NO emit", async () => {
     setupAuthorized();
     vi.mocked(SosSession.findById)
-      .mockReturnValueOnce(lean({ _id: SESSION_ID, userId: OWNER_ID, status: "active" }) as never)
-      .mockReturnValueOnce(lean({ status: "active", claimedBy: FAM_LINE, claimedByName: "媽媽" }) as never);
+      .mockReturnValueOnce(
+        lean({ _id: SESSION_ID, userId: OWNER_ID, status: "active" }) as never,
+      )
+      .mockReturnValueOnce(
+        lean({
+          status: "active",
+          claimedBy: FAM_LINE,
+          claimedByName: "媽媽",
+        }) as never,
+      );
     vi.mocked(SosSession.findOneAndUpdate).mockResolvedValueOnce(null as never);
 
-    const res = await claimSession({ sessionId: SESSION_ID, lineUserId: FAM_LINE });
+    const res = await claimSession({
+      sessionId: SESSION_ID,
+      lineUserId: FAM_LINE,
+    });
 
     expect(res.ok).toBe(true);
     expect(res.message).toBe(SOS_MSG.CLAIMED);
@@ -179,24 +239,42 @@ describe("claimSession — atomicity / conflict", () => {
   it("conflict (null prev, claimed by someone else) returns ok:false 200 ALREADY_CLAIMED, no emit/notify", async () => {
     setupAuthorized();
     vi.mocked(SosSession.findById)
-      .mockReturnValueOnce(lean({ _id: SESSION_ID, userId: OWNER_ID, status: "active" }) as never)
-      .mockReturnValueOnce(lean({ status: "active", claimedBy: "Lother", claimedByName: "哥哥" }) as never);
+      .mockReturnValueOnce(
+        lean({ _id: SESSION_ID, userId: OWNER_ID, status: "active" }) as never,
+      )
+      .mockReturnValueOnce(
+        lean({
+          status: "active",
+          claimedBy: "Lother",
+          claimedByName: "哥哥",
+        }) as never,
+      );
     vi.mocked(SosSession.findOneAndUpdate).mockResolvedValueOnce(null as never);
 
-    const res = await claimSession({ sessionId: SESSION_ID, lineUserId: FAM_LINE });
+    const res = await claimSession({
+      sessionId: SESSION_ID,
+      lineUserId: FAM_LINE,
+    });
 
     expect(res.ok).toBe(false);
     expect(res.httpCode).toBe(ResponseCode.OK);
-    expect((res.data as { reason: string }).reason).toBe(SOS_REASON.ALREADY_CLAIMED);
+    expect((res.data as { reason: string }).reason).toBe(
+      SOS_REASON.ALREADY_CLAIMED,
+    );
     expect(emitSosUpdate).not.toHaveBeenCalled();
   });
 
   it("returns FORBIDDEN NOT_AUTHORIZED_CONTACT for an unauthorized LINE user", async () => {
     setupUnauthorized();
-    const res = await claimSession({ sessionId: SESSION_ID, lineUserId: "stranger" });
+    const res = await claimSession({
+      sessionId: SESSION_ID,
+      lineUserId: "stranger",
+    });
     expect(res.ok).toBe(false);
     expect(res.httpCode).toBe(ResponseCode.FORBIDDEN);
-    expect((res.data as { reason: string }).reason).toBe(SOS_REASON.NOT_AUTHORIZED_CONTACT);
+    expect((res.data as { reason: string }).reason).toBe(
+      SOS_REASON.NOT_AUTHORIZED_CONTACT,
+    );
   });
 });
 
@@ -210,7 +288,11 @@ describe("updateHandlingStatus", () => {
       lean({ userId: OWNER_ID, handlingStatus: "en_route" }) as never,
     );
 
-    const res = await updateHandlingStatus({ sessionId: SESSION_ID, lineUserId: FAM_LINE, handlingStatus: "en_route" });
+    const res = await updateHandlingStatus({
+      sessionId: SESSION_ID,
+      lineUserId: FAM_LINE,
+      handlingStatus: "en_route",
+    });
 
     expect(res.ok).toBe(true);
     expect(res.message).toBe(SOS_MSG.STATUS_UPDATED);
@@ -222,22 +304,35 @@ describe("updateHandlingStatus", () => {
     vi.mocked(SosSession.findById).mockReturnValueOnce(
       lean({ _id: SESSION_ID, userId: OWNER_ID, status: "active" }) as never,
     );
-    vi.mocked(SosSession.findOneAndUpdate).mockReturnValueOnce(lean(null) as never);
+    vi.mocked(SosSession.findOneAndUpdate).mockReturnValueOnce(
+      lean(null) as never,
+    );
 
-    const res = await updateHandlingStatus({ sessionId: SESSION_ID, lineUserId: FAM_LINE, note: "hi" });
+    const res = await updateHandlingStatus({
+      sessionId: SESSION_ID,
+      lineUserId: FAM_LINE,
+      note: "hi",
+    });
 
     expect(res.ok).toBe(false);
     expect(res.httpCode).toBe(ResponseCode.INVALID_INPUT);
-    expect((res.data as { reason: string }).reason).toBe(SOS_REASON.SESSION_NOT_ACTIVE);
+    expect((res.data as { reason: string }).reason).toBe(
+      SOS_REASON.SESSION_NOT_ACTIVE,
+    );
     expect(emitSosUpdate).not.toHaveBeenCalled();
   });
 
   it("returns FORBIDDEN NOT_AUTHORIZED_CONTACT for an unauthorized LINE user", async () => {
     setupUnauthorized();
-    const res = await updateHandlingStatus({ sessionId: SESSION_ID, lineUserId: "stranger" });
+    const res = await updateHandlingStatus({
+      sessionId: SESSION_ID,
+      lineUserId: "stranger",
+    });
     expect(res.ok).toBe(false);
     expect(res.httpCode).toBe(ResponseCode.FORBIDDEN);
-    expect((res.data as { reason: string }).reason).toBe(SOS_REASON.NOT_AUTHORIZED_CONTACT);
+    expect((res.data as { reason: string }).reason).toBe(
+      SOS_REASON.NOT_AUTHORIZED_CONTACT,
+    );
   });
 });
 
@@ -245,12 +340,25 @@ describe("resolveSession — idempotency (F2)", () => {
   it("winner (findOneAndUpdate returns prev) calls sendSosResolved once and emits", async () => {
     setupAuthorized();
     vi.mocked(SosSession.findById)
-      .mockReturnValueOnce(lean({ _id: SESSION_ID, userId: OWNER_ID, status: "active" }) as never)
-      .mockReturnValueOnce(lean({ _id: SESSION_ID, userId: OWNER_ID, status: "resolved" }) as never);
-    vi.mocked(SosSession.findOneAndUpdate).mockResolvedValueOnce({ _id: SESSION_ID } as never);
+      .mockReturnValueOnce(
+        lean({ _id: SESSION_ID, userId: OWNER_ID, status: "active" }) as never,
+      )
+      .mockReturnValueOnce(
+        lean({
+          _id: SESSION_ID,
+          userId: OWNER_ID,
+          status: "resolved",
+        }) as never,
+      );
+    vi.mocked(SosSession.findOneAndUpdate).mockResolvedValueOnce({
+      _id: SESSION_ID,
+    } as never);
     vi.mocked(sendSosResolved).mockResolvedValue(undefined as never);
 
-    const res = await resolveSession({ sessionId: SESSION_ID, lineUserId: FAM_LINE });
+    const res = await resolveSession({
+      sessionId: SESSION_ID,
+      lineUserId: FAM_LINE,
+    });
 
     expect(res.ok).toBe(true);
     expect(res.message).toBe(SOS_MSG.RESOLVED);
@@ -265,7 +373,10 @@ describe("resolveSession — idempotency (F2)", () => {
     );
     vi.mocked(SosSession.findOneAndUpdate).mockResolvedValueOnce(null as never);
 
-    const res = await resolveSession({ sessionId: SESSION_ID, lineUserId: FAM_LINE });
+    const res = await resolveSession({
+      sessionId: SESSION_ID,
+      lineUserId: FAM_LINE,
+    });
 
     expect(res.ok).toBe(true);
     expect(res.message).toBe(SOS_MSG.RESOLVED);
@@ -277,25 +388,38 @@ describe("resolveSession — idempotency (F2)", () => {
     vi.mocked(SosSession.findById).mockReturnValueOnce(
       lean({ _id: SESSION_ID, userId: OWNER_ID, status: "active" }) as never,
     );
-    const res = await resolveSession({ sessionId: SESSION_ID, userId: "someone-else" });
+    const res = await resolveSession({
+      sessionId: SESSION_ID,
+      userId: "someone-else",
+    });
     expect(res.ok).toBe(false);
     expect(res.httpCode).toBe(ResponseCode.FORBIDDEN);
-    expect((res.data as { reason: string }).reason).toBe(SOS_REASON.NOT_SESSION_OWNER);
+    expect((res.data as { reason: string }).reason).toBe(
+      SOS_REASON.NOT_SESSION_OWNER,
+    );
   });
 
   it("family path unauthorized → FORBIDDEN NOT_AUTHORIZED_CONTACT", async () => {
     setupUnauthorized();
-    const res = await resolveSession({ sessionId: SESSION_ID, lineUserId: "stranger" });
+    const res = await resolveSession({
+      sessionId: SESSION_ID,
+      lineUserId: "stranger",
+    });
     expect(res.ok).toBe(false);
     expect(res.httpCode).toBe(ResponseCode.FORBIDDEN);
-    expect((res.data as { reason: string }).reason).toBe(SOS_REASON.NOT_AUTHORIZED_CONTACT);
+    expect((res.data as { reason: string }).reason).toBe(
+      SOS_REASON.NOT_AUTHORIZED_CONTACT,
+    );
   });
 });
 
 describe("getSessionForOwner", () => {
   it("unknown id → NOT_FOUND", async () => {
     vi.mocked(SosSession.findById).mockReturnValueOnce(lean(null) as never);
-    const res = await getSessionForOwner({ userId: OWNER_ID, sessionId: SESSION_ID });
+    const res = await getSessionForOwner({
+      userId: OWNER_ID,
+      sessionId: SESSION_ID,
+    });
     expect(res.ok).toBe(false);
     expect(res.httpCode).toBe(ResponseCode.NOT_FOUND);
   });
@@ -304,17 +428,25 @@ describe("getSessionForOwner", () => {
     vi.mocked(SosSession.findById).mockReturnValueOnce(
       lean({ _id: SESSION_ID, userId: OWNER_ID }) as never,
     );
-    const res = await getSessionForOwner({ userId: "someone-else", sessionId: SESSION_ID });
+    const res = await getSessionForOwner({
+      userId: "someone-else",
+      sessionId: SESSION_ID,
+    });
     expect(res.ok).toBe(false);
     expect(res.httpCode).toBe(ResponseCode.FORBIDDEN);
-    expect((res.data as { reason: string }).reason).toBe(SOS_REASON.NOT_SESSION_OWNER);
+    expect((res.data as { reason: string }).reason).toBe(
+      SOS_REASON.NOT_SESSION_OWNER,
+    );
   });
 
   it("owner match → ok with the buildSosSnapshot result as data", async () => {
     vi.mocked(SosSession.findById).mockReturnValueOnce(
       lean({ _id: SESSION_ID, userId: OWNER_ID }) as never,
     );
-    const res = await getSessionForOwner({ userId: OWNER_ID, sessionId: SESSION_ID });
+    const res = await getSessionForOwner({
+      userId: OWNER_ID,
+      sessionId: SESSION_ID,
+    });
     expect(res.ok).toBe(true);
     expect(res.httpCode).toBe(ResponseCode.OK);
     expect(res.data).toEqual({ snapshot: true });

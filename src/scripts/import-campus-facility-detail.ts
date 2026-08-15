@@ -54,7 +54,7 @@ async function createSession(): Promise<Session> {
 
 async function postFacilityResult(
   session: Session,
-  payload: Record<string, string>
+  payload: Record<string, string>,
 ): Promise<string> {
   await sleep(REQUEST_DELAY_MS);
   const res = await fetch(`${BASE_URL}/Facility/FacilityResult`, {
@@ -93,7 +93,7 @@ async function main() {
   const targets = Number.isFinite(limit) ? campuses.slice(0, limit) : campuses;
   console.log(
     `Campuses: ${campuses.length}` +
-      (Number.isFinite(limit) ? ` (limited to first ${targets.length})` : "")
+      (Number.isFinite(limit) ? ` (limited to first ${targets.length})` : ""),
   );
 
   let enriched = 0;
@@ -143,7 +143,7 @@ async function main() {
         failed++;
         console.error(
           `  ${campus.schoolName} ${campus.branchName} / ${fac.facUid}:`,
-          err instanceof Error ? err.message : err
+          err instanceof Error ? err.message : err,
         );
       }
     }
@@ -151,16 +151,16 @@ async function main() {
     if (changed > 0) {
       await CampusA11yModel.updateOne(
         { _id: campus._id },
-        { $set: { facilities: campus.facilities } }
+        { $set: { facilities: campus.facilities } },
       );
     }
     console.log(
-      `[${i + 1}/${targets.length}] ${campus.schoolName} ${campus.branchName}: ${changed} enriched`
+      `[${i + 1}/${targets.length}] ${campus.schoolName} ${campus.branchName}: ${changed} enriched`,
     );
   }
 
   console.log(
-    `Done — ${enriched} facilities enriched, ${skipped} skipped, ${failed} failed`
+    `Done — ${enriched} facilities enriched, ${skipped} skipped, ${failed} failed`,
   );
   await mongoose.disconnect();
 }

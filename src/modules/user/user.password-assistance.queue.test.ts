@@ -61,12 +61,18 @@ describe("password assistance durable queue", () => {
         },
         $inc: { attempts: 1 },
       },
-      { returnDocument: "after", sort: { availableAt: 1, createdAt: 1 }, maxTimeMS: 10_000 },
+      {
+        returnDocument: "after",
+        sort: { availableAt: 1, createdAt: 1 },
+        maxTimeMS: 10_000,
+      },
     );
   });
 
   it("renews a lease only when the same worker still owns it", async () => {
-    vi.mocked(PasswordAssistanceJob.updateOne).mockResolvedValue({ matchedCount: 0 } as any);
+    vi.mocked(PasswordAssistanceJob.updateOne).mockResolvedValue({
+      matchedCount: 0,
+    } as any);
 
     const renewed = await renewPasswordAssistanceLease({
       jobId: "job-1",
@@ -110,7 +116,9 @@ describe("password assistance durable queue", () => {
   });
 
   it("deletes completed work only while it is still claimed", async () => {
-    vi.mocked(PasswordAssistanceJob.deleteOne).mockResolvedValue({ deletedCount: 1 } as any);
+    vi.mocked(PasswordAssistanceJob.deleteOne).mockResolvedValue({
+      deletedCount: 1,
+    } as any);
 
     const completed = await completePasswordAssistanceJob({
       jobId: "job-1",
@@ -129,7 +137,9 @@ describe("password assistance durable queue", () => {
   });
 
   it("releases a transient failure with a future retry time", async () => {
-    vi.mocked(PasswordAssistanceJob.updateOne).mockResolvedValue({ matchedCount: 1 } as any);
+    vi.mocked(PasswordAssistanceJob.updateOne).mockResolvedValue({
+      matchedCount: 1,
+    } as any);
 
     const released = await failPasswordAssistanceJob({
       jobId: "job-1",
@@ -155,7 +165,9 @@ describe("password assistance durable queue", () => {
   });
 
   it("dead-letters work after the bounded attempt count", async () => {
-    vi.mocked(PasswordAssistanceJob.updateOne).mockResolvedValue({ matchedCount: 1 } as any);
+    vi.mocked(PasswordAssistanceJob.updateOne).mockResolvedValue({
+      matchedCount: 1,
+    } as any);
 
     await failPasswordAssistanceJob({
       jobId: "job-1",

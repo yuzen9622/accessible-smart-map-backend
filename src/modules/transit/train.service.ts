@@ -9,7 +9,11 @@ import {
   taipeiHHmm,
   addTaipeiDays,
 } from "../../config/taipei-time";
-import type { RailSystem, NormalizedTrain, NormalizedStationTrain } from "../../types/rail";
+import type {
+  RailSystem,
+  NormalizedTrain,
+  NormalizedStationTrain,
+} from "../../types/rail";
 import type {
   TrainTimetableParams,
   StationTimetableParams,
@@ -93,7 +97,8 @@ async function resolveStationId(
   const outcome = await fetchRailStationIndex(system);
   if (!outcome.ok) return err(TEMP_FAIL);
   const id = outcome.index.get(normalizeStationName(name));
-  if (!id) return err(`找不到${systemLabel(system)}車站「${name}」，請確認站名`);
+  if (!id)
+    return err(`找不到${systemLabel(system)}車站「${name}」，請確認站名`);
   return ok(id);
 }
 
@@ -110,9 +115,15 @@ export async function getTrainTimetable(
   params: TrainTimetableParams,
   now: Date = new Date(),
 ): Promise<TrainTimetableResult> {
-  const origin = validateStationArg(params.originStation, "請提供出發站與抵達站名稱");
+  const origin = validateStationArg(
+    params.originStation,
+    "請提供出發站與抵達站名稱",
+  );
   if (!origin.ok) return origin;
-  const destination = validateStationArg(params.destinationStation, "請提供出發站與抵達站名稱");
+  const destination = validateStationArg(
+    params.destinationStation,
+    "請提供出發站與抵達站名稱",
+  );
   if (!destination.ok) return destination;
   const system = validateRailSystem(params.railSystem);
   if (!system.ok) return system;
@@ -123,7 +134,10 @@ export async function getTrainTimetable(
   const arriveBy = validateTime(params.arriveBy);
   if (!arriveBy.ok) return arriveBy;
 
-  if (normalizeStationName(origin.value) === normalizeStationName(destination.value)) {
+  if (
+    normalizeStationName(origin.value) ===
+    normalizeStationName(destination.value)
+  ) {
     return { ok: false, error: "起訖站相同" };
   }
 
@@ -132,17 +146,26 @@ export async function getTrainTimetable(
   const toId = await resolveStationId(system.value, destination.value);
   if (!toId.ok) return toId;
 
-  const outcome = await fetchRailOdTimetable(system.value, fromId.value, toId.value, date.value);
+  const outcome = await fetchRailOdTimetable(
+    system.value,
+    fromId.value,
+    toId.value,
+    date.value,
+  );
   if (!outcome.ok) return { ok: false, error: TEMP_FAIL };
 
-  const all = [...outcome.items].sort((a, b) => a.departureMinutes - b.departureMinutes);
+  const all = [...outcome.items].sort(
+    (a, b) => a.departureMinutes - b.departureMinutes,
+  );
   const totalCount = all.length;
   const firstTrain = all[0]?.departureTime ?? null;
   const lastTrain = all[all.length - 1]?.departureTime ?? null;
 
   const filtered = filterOd(all, departAfter.value, arriveBy.value);
   const matchedCount = filtered.length;
-  const trains = truncate(filtered, departAfter.value, arriveBy.value).map(toOdEntry);
+  const trains = truncate(filtered, departAfter.value, arriveBy.value).map(
+    toOdEntry,
+  );
 
   const result: TrainTimetableResult = {
     ok: true,
@@ -191,10 +214,16 @@ export async function getStationTimetable(
   const stationId = await resolveStationId(system.value, station.value);
   if (!stationId.ok) return stationId;
 
-  const outcome = await fetchRailStationTimetable(system.value, stationId.value, date.value);
+  const outcome = await fetchRailStationTimetable(
+    system.value,
+    stationId.value,
+    date.value,
+  );
   if (!outcome.ok) return { ok: false, error: TEMP_FAIL };
 
-  const all = [...outcome.items].sort((a, b) => a.departureMinutes - b.departureMinutes);
+  const all = [...outcome.items].sort(
+    (a, b) => a.departureMinutes - b.departureMinutes,
+  );
   const totalCount = all.length;
   const firstTrain = all[0]?.departureTime ?? null;
   const lastTrain = all[all.length - 1]?.departureTime ?? null;
@@ -272,7 +301,11 @@ function toStationEntry(t: NormalizedStationTrain): StationTimetableEntry {
   return entry;
 }
 
-function odNote(total: number, matched: number, shown: number): string | undefined {
+function odNote(
+  total: number,
+  matched: number,
+  shown: number,
+): string | undefined {
   if (total === 0) {
     return "該日查無班次，可能日期超出可查範圍或該區間無直達車；需要轉乘可改用路線規劃。";
   }

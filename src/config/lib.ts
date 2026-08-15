@@ -69,7 +69,7 @@ export const sendResponse = <T = unknown>(
   message: string,
   data?: T,
   accessToken?: string,
-  refreshToken?: string
+  refreshToken?: string,
 ) => {
   if (refreshToken) {
     res.cookie("refreshToken", refreshToken, {

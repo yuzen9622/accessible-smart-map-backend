@@ -25,7 +25,12 @@ function fail(
   httpCode: number,
   reason: keyof typeof CONTACT_REASON,
 ): ServiceResult {
-  return { ok: false, httpCode, message: CONTACT_MSG[reason], data: { reason: CONTACT_REASON[reason] } };
+  return {
+    ok: false,
+    httpCode,
+    message: CONTACT_MSG[reason],
+    data: { reason: CONTACT_REASON[reason] },
+  };
 }
 
 /**
@@ -54,7 +59,12 @@ async function generateBindCode(): Promise<string> {
  */
 export async function listContacts(userId: string): Promise<ServiceResult> {
   const contacts = await findContactsByUser(userId);
-  return { ok: true, httpCode: ResponseCode.OK, message: CONTACT_MSG.LIST_OK, data: { contacts } };
+  return {
+    ok: true,
+    httpCode: ResponseCode.OK,
+    message: CONTACT_MSG.LIST_OK,
+    data: { contacts },
+  };
 }
 
 /**
@@ -64,7 +74,9 @@ export async function listContacts(userId: string): Promise<ServiceResult> {
  * @param input Owner id and contact name.
  * @returns A 201 result with `{ contact, bindUrl, bindCode }`, or 400 on cap.
  */
-export async function createContact(input: CreateContactInput): Promise<ServiceResult> {
+export async function createContact(
+  input: CreateContactInput,
+): Promise<ServiceResult> {
   const count = await countContactsByUser(input.userId);
   if (count >= MAX_CONTACTS) {
     return fail(ResponseCode.INVALID_INPUT, "CONTACT_LIMIT_REACHED");
@@ -103,7 +115,9 @@ export async function createContact(input: CreateContactInput): Promise<ServiceR
  * @param input Owner id and contact id.
  * @returns A 200 result, or 404/403 when missing / not owned.
  */
-export async function deleteContact(input: DeleteContactInput): Promise<ServiceResult> {
+export async function deleteContact(
+  input: DeleteContactInput,
+): Promise<ServiceResult> {
   const contact = await findContactById(input.contactId);
   if (!contact) {
     return fail(ResponseCode.NOT_FOUND, "CONTACT_NOT_FOUND");
@@ -112,5 +126,10 @@ export async function deleteContact(input: DeleteContactInput): Promise<ServiceR
     return fail(ResponseCode.FORBIDDEN, "NOT_CONTACT_OWNER");
   }
   await deleteContactById(input.contactId);
-  return { ok: true, httpCode: ResponseCode.OK, message: CONTACT_MSG.DELETED, data: null };
+  return {
+    ok: true,
+    httpCode: ResponseCode.OK,
+    message: CONTACT_MSG.DELETED,
+    data: null,
+  };
 }

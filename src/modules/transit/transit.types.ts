@@ -8,16 +8,25 @@ import type { TaiwanCityEn } from "../../types/transit";
 export type Lang = "Zh_tw" | "En";
 
 export type BusEtaResult =
-  | { ok: true; routeId: string; direction: number; city: TaiwanCityEn | "InterCity"; etaData: any }
+  | {
+      ok: true;
+      routeId: string;
+      direction: number;
+      city: TaiwanCityEn | "InterCity";
+      etaData: any;
+    }
   | { ok: false; error: string; status: 400 | 500 };
-
 
 export type BusPositionResult =
   | { ok: true; positionData: any }
   | { ok: false; error: string; status: 400 | 500 };
 
 /** Failure envelope shared by the V3 bus query service (bus.service.ts). */
-export type BusServiceError = { ok: false; error: string; status: 400 | 404 | 500 };
+export type BusServiceError = {
+  ok: false;
+  error: string;
+  status: 400 | 404 | 500;
+};
 
 export type BusRouteDirection = {
   subRouteUid?: string;
@@ -80,7 +89,13 @@ export type BusArrival = {
 };
 
 export type BusArrivalResult =
-  | { ok: true; routeName: string; city: TaiwanCityEn | "InterCity"; stopName: string; arrivals: BusArrival[] }
+  | {
+      ok: true;
+      routeName: string;
+      city: TaiwanCityEn | "InterCity";
+      stopName: string;
+      arrivals: BusArrival[];
+    }
   | BusServiceError;
 
 export type BusFrequency = {

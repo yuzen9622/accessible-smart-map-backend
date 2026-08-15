@@ -39,19 +39,33 @@ vi.mock("../../adapters/chroma.adapter", () => ({
 import UserMemory from "../../model/user-memory.model";
 import { redisGet, redisSet, redisDel } from "../../config/redis";
 import { queryDocuments } from "../../adapters/chroma.adapter";
-import { loadMemories, saveMemory, deleteMemory, searchMemoriesForPrompt } from "./memory.service";
+import {
+  loadMemories,
+  saveMemory,
+  deleteMemory,
+  searchMemoriesForPrompt,
+} from "./memory.service";
 
 const mockFind = UserMemory.find as unknown as ReturnType<typeof vi.fn>;
 const mockFindOne = UserMemory.findOne as unknown as ReturnType<typeof vi.fn>;
 const mockCreate = UserMemory.create as unknown as ReturnType<typeof vi.fn>;
-const mockCount = UserMemory.countDocuments as unknown as ReturnType<typeof vi.fn>;
-const mockFindByIdAndUpdate = UserMemory.findByIdAndUpdate as unknown as ReturnType<typeof vi.fn>;
-const mockUpdateMany = UserMemory.updateMany as unknown as ReturnType<typeof vi.fn>;
-const mockUpdateOne = UserMemory.updateOne as unknown as ReturnType<typeof vi.fn>;
+const mockCount = UserMemory.countDocuments as unknown as ReturnType<
+  typeof vi.fn
+>;
+const mockFindByIdAndUpdate =
+  UserMemory.findByIdAndUpdate as unknown as ReturnType<typeof vi.fn>;
+const mockUpdateMany = UserMemory.updateMany as unknown as ReturnType<
+  typeof vi.fn
+>;
+const mockUpdateOne = UserMemory.updateOne as unknown as ReturnType<
+  typeof vi.fn
+>;
 const mockRedisGet = redisGet as unknown as ReturnType<typeof vi.fn>;
 const mockRedisSet = redisSet as unknown as ReturnType<typeof vi.fn>;
 const mockRedisDel = redisDel as unknown as ReturnType<typeof vi.fn>;
-const mockQueryDocuments = queryDocuments as unknown as ReturnType<typeof vi.fn>;
+const mockQueryDocuments = queryDocuments as unknown as ReturnType<
+  typeof vi.fn
+>;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -131,7 +145,12 @@ describe("saveMemory", () => {
       userId: "u1",
       content: "家住板橋",
       category: "place",
-      toObject: () => ({ _id: "m1", userId: "u1", content: "家住板橋", category: "place" }),
+      toObject: () => ({
+        _id: "m1",
+        userId: "u1",
+        content: "家住板橋",
+        category: "place",
+      }),
     };
     mockCreate.mockResolvedValue(created);
     mockFindByIdAndUpdate.mockReturnValue({
@@ -156,16 +175,20 @@ describe("saveMemory", () => {
 
   it("已存在相同內容 — 更新 updatedAt", async () => {
     mockFindOne.mockReturnValue({
-      lean: () => Promise.resolve({ _id: "m1", content: "家住板橋", category: "place" }),
+      lean: () =>
+        Promise.resolve({ _id: "m1", content: "家住板橋", category: "place" }),
     });
     mockFindByIdAndUpdate.mockReturnValue({
-      lean: () => Promise.resolve({ _id: "m1", content: "家住板橋", category: "place" }),
+      lean: () =>
+        Promise.resolve({ _id: "m1", content: "家住板橋", category: "place" }),
     });
 
     await saveMemory("u1", "家住板橋", "place");
     expect(mockFindByIdAndUpdate).toHaveBeenCalledWith(
       "m1",
-      expect.objectContaining({ $set: expect.objectContaining({ content: "家住板橋" }) }),
+      expect.objectContaining({
+        $set: expect.objectContaining({ content: "家住板橋" }),
+      }),
       { returnDocument: "after" },
     );
     expect(mockCreate).not.toHaveBeenCalled();

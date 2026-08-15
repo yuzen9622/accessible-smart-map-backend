@@ -1,25 +1,39 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("../../config/fetch", () => ({ tdxFetch: vi.fn() }));
-vi.mock("../../model/bus-vehicle.model", () => ({ default: { find: vi.fn() } }));
+vi.mock("../../model/bus-vehicle.model", () => ({
+  default: { find: vi.fn() },
+}));
 vi.mock("../../model/bus-route.model", () => ({ default: { find: vi.fn() } }));
-vi.mock("../../model/bus-stop.model", () => ({ default: { aggregate: vi.fn() } }));
+vi.mock("../../model/bus-stop.model", () => ({
+  default: { aggregate: vi.fn() },
+}));
 vi.mock("../../adapters/google.adapter", () => ({ getCity: vi.fn() }));
 
 import { tdxFetch } from "../../config/fetch";
 import BusVehicleModel from "../../model/bus-vehicle.model";
 import BusRouteModel from "../../model/bus-route.model";
 import BusStopModel from "../../model/bus-stop.model";
-import { getBusRealtimeOnRoute, getBusArrivalAtStop, searchBusStops } from "./bus.service";
+import {
+  getBusRealtimeOnRoute,
+  getBusArrivalAtStop,
+  searchBusStops,
+} from "./bus.service";
 import { TaiwanCityEn } from "../../types/transit";
 
 const tdxFetchMock = tdxFetch as unknown as ReturnType<typeof vi.fn>;
-const vehicleFindMock = BusVehicleModel.find as unknown as ReturnType<typeof vi.fn>;
+const vehicleFindMock = BusVehicleModel.find as unknown as ReturnType<
+  typeof vi.fn
+>;
 const routeFindMock = BusRouteModel.find as unknown as ReturnType<typeof vi.fn>;
-const stopAggregateMock = BusStopModel.aggregate as unknown as ReturnType<typeof vi.fn>;
+const stopAggregateMock = BusStopModel.aggregate as unknown as ReturnType<
+  typeof vi.fn
+>;
 
 function mockRouteMap(rows: unknown[]) {
-  routeFindMock.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(rows) }) });
+  routeFindMock.mockReturnValue({
+    select: () => ({ lean: () => Promise.resolve(rows) }),
+  });
 }
 
 function mockTdxJson(rows: unknown[]) {
@@ -116,7 +130,9 @@ describe("getBusArrivalAtStop", () => {
   });
 
   it("EstimateTime 缺值時 estimateMinutes 為 null", async () => {
-    mockTdxJson([{ StopName: { Zh_tw: "台北車站" }, Direction: 0, StopStatus: 1 }]);
+    mockTdxJson([
+      { StopName: { Zh_tw: "台北車站" }, Direction: 0, StopStatus: 1 },
+    ]);
     const result = await getBusArrivalAtStop({
       routeName: "307",
       stopName: "台北車站",
@@ -180,7 +196,10 @@ describe("searchBusStops — 站牌關鍵字搜尋", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.stops).toHaveLength(2);
-    expect(result.stops.map((s) => s.city).sort()).toEqual(["Taichung", "Taipei"]);
+    expect(result.stops.map((s) => s.city).sort()).toEqual([
+      "Taichung",
+      "Taipei",
+    ]);
   });
 
   it("以 subRouteName→routeName 映射顯示路線名（而非 subRouteId）", async () => {
@@ -193,7 +212,9 @@ describe("searchBusStops — 站牌關鍵字搜尋", () => {
         location: { coordinates: [121.56, 25.04] },
       },
     ]);
-    mockRouteMap([{ subRouteName: { Zh_tw: "0東" }, routeName: { Zh_tw: "0東" } }]);
+    mockRouteMap([
+      { subRouteName: { Zh_tw: "0東" }, routeName: { Zh_tw: "0東" } },
+    ]);
 
     const result = await searchBusStops("市政府");
     expect(result.ok).toBe(true);
@@ -247,7 +268,10 @@ describe("City / InterCity scope 探測（不從路線號碼寫死判斷）", ()
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.arrivals[0]).toMatchObject({ stopName: "蓮華寺", estimateMinutes: 5 });
+    expect(result.arrivals[0]).toMatchObject({
+      stopName: "蓮華寺",
+      estimateMinutes: 5,
+    });
     expect(tdxFetchMock).toHaveBeenCalledTimes(1);
     expect(tdxFetchMock.mock.calls[0][0]).toContain(
       "/EstimatedTimeOfArrival/City/HsinchuCounty/0557",
@@ -268,7 +292,9 @@ describe("City / InterCity scope 探測（不從路線號碼寫死判斷）", ()
     expect(result.ok).toBe(true);
     expect(tdxFetchMock).toHaveBeenCalledTimes(2);
     expect(tdxFetchMock.mock.calls[0][0]).toContain("/City/HsinchuCounty/0968");
-    expect(tdxFetchMock.mock.calls[1][0]).toContain("/Streaming/InterCity/0968");
+    expect(tdxFetchMock.mock.calls[1][0]).toContain(
+      "/Streaming/InterCity/0968",
+    );
   });
 
   it("記住命中的 scope，同一路線再查只打一次 TDX", async () => {
@@ -292,7 +318,9 @@ describe("City / InterCity scope 探測（不從路線號碼寫死判斷）", ()
 
     expect(again.ok).toBe(true);
     expect(tdxFetchMock).toHaveBeenCalledTimes(1);
-    expect(tdxFetchMock.mock.calls[0][0]).toContain("/Streaming/InterCity/2011");
+    expect(tdxFetchMock.mock.calls[0][0]).toContain(
+      "/Streaming/InterCity/2011",
+    );
   });
 
   it("兩個 scope 都有同名路線時，以「查得到目標站牌」的那個為準", async () => {

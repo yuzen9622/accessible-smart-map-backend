@@ -32,26 +32,26 @@ GET /api/v1/a11y/search/autocomplete?q=<text>&sessiontoken=<uuid>&lat=&lng=&sour
 
 ```ts
 interface AutocompleteItem {
-  id: string;                    // ⚠️ 新：前綴 id。取代舊的 placeId
-  source: "osm" | "google";      // 新
+  id: string; // ⚠️ 新：前綴 id。取代舊的 placeId
+  source: "osm" | "google"; // 新
   primaryText: string;
-  secondaryText: string | null;  // OSM 是完整地址（≈ display_name）；Google 是預測副標
-  placeClass: string | null;     // 新：OSM 字彙，對應舊的 class/category
-  placeType: string | null;      // 新：對應舊的 type
-  typeLabel: string | null;      // 新：後端給的中文標籤
-  location: { type: "Point"; coordinates: [number, number] } | null;  // 新，[lng, lat]
+  secondaryText: string | null; // OSM 是完整地址（≈ display_name）；Google 是預測副標
+  placeClass: string | null; // 新：OSM 字彙，對應舊的 class/category
+  placeType: string | null; // 新：對應舊的 type
+  typeLabel: string | null; // 新：後端給的中文標籤
+  location: { type: "Point"; coordinates: [number, number] } | null; // 新，[lng, lat]
   distanceMeters: number | null; // 新
 }
 ```
 
 對照舊的 Nominatim 直連寫法：
 
-| 前端原本用 | 改用 |
-|---|---|
-| `place.name ‖ place.display_name` | `item.primaryText` |
-| `place.display_name` | `item.secondaryText` |
+| 前端原本用                                               | 改用                                                                                                            |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `place.name ‖ place.display_name`                        | `item.primaryText`                                                                                              |
+| `place.display_name`                                     | `item.secondaryText`                                                                                            |
 | `getPlaceIcon(place.class ‖ place.category, place.type)` | `getPlaceIcon(item.placeClass, item.placeType)`（字彙相同，Google 筆已在後端映射成 OSM 字彙，可不改 icon 邏輯） |
-| `place.osm_type` + `place.osm_id` 自組 key | `item.id` |
+| `place.osm_type` + `place.osm_id` 自組 key               | `item.id`                                                                                                       |
 
 **兩個要注意的**：
 
@@ -76,38 +76,42 @@ interface PlaceResult {
   id: string;
   source: "osm" | "google";
   name: string;
-  fullAddress: string | null;          // ⚠️ 舊欄位叫 address；≈ display_name
-  addressComponents: {                 // 新：後端已做完 ‖ fallback，前端不用再自己挑
-    road: string | null;               //   ← road
-    district: string | null;           //   ← suburb ‖ neighbourhood
-    city: string | null;               //   ← city ‖ town ‖ county
+  fullAddress: string | null; // ⚠️ 舊欄位叫 address；≈ display_name
+  addressComponents: {
+    // 新：後端已做完 ‖ fallback，前端不用再自己挑
+    road: string | null; //   ← road
+    district: string | null; //   ← suburb ‖ neighbourhood
+    city: string | null; //   ← city ‖ town ‖ county
     postcode: string | null;
   };
-  location: { type: "Point"; coordinates: [number, number] };  // [lng, lat]
+  location: { type: "Point"; coordinates: [number, number] }; // [lng, lat]
   placeClass: string | null;
   placeType: string | null;
-  typeLabel: string | null;            // 新：可取代 getPlaceTypeLabel(type)
+  typeLabel: string | null; // 新：可取代 getPlaceTypeLabel(type)
   distanceMeters: number | null;
-  rating: number | null;               // 只有 google 來源有
+  rating: number | null; // 只有 google 來源有
   accessibility: {
     status: "accessible" | "limited" | "unknown";
     wheelchair: "yes" | "limited" | "no" | null;
     nearbyFacilityCount: number;
     source: "local-db" | "google" | "none";
   };
-  nearbyFacilities: {                  // 新：各 4 筆，不用再另外呼叫
+  nearbyFacilities: {
+    // 新：各 4 筆，不用再另外呼叫
     toilets: NearbyFacilityBrief[];
     metro: NearbyFacilityBrief[];
   };
-  reviewKey: { placeId: string; placeType: ReviewPlaceType };  // 新，見 §4
-  externalLinks: { osm: string | null; google: string | null };  // 新，已組好的連結
-  attribution: string | null;          // "Powered by Google" / "© OpenStreetMap contributors"
+  reviewKey: { placeId: string; placeType: ReviewPlaceType }; // 新，見 §4
+  externalLinks: { osm: string | null; google: string | null }; // 新，已組好的連結
+  attribution: string | null; // "Powered by Google" / "© OpenStreetMap contributors"
 }
 
 interface NearbyFacilityBrief {
-  id: string; name: string; address: string | null;
-  category: string;       // "toilet" | "elevator" | "ramp" | "other"
-  typeLabel: string;      // "無障礙廁所" / "電梯" / "坡道"
+  id: string;
+  name: string;
+  address: string | null;
+  category: string; // "toilet" | "elevator" | "ramp" | "other"
+  typeLabel: string; // "無障礙廁所" / "電梯" / "坡道"
   distanceMeters: number;
 }
 ```

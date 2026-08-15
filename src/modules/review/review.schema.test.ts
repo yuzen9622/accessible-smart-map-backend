@@ -30,20 +30,39 @@ describe("structured review request schemas", () => {
 
   it("rejects an invalid entranceAccessibility enum on create and update", () => {
     expect(
-      CreateReviewSchema.safeParse({ ...VALID_CREATE, entranceAccessibility: "elevator" }).success,
+      CreateReviewSchema.safeParse({
+        ...VALID_CREATE,
+        entranceAccessibility: "elevator",
+      }).success,
     ).toBe(false);
-    expect(UpdateReviewSchema.safeParse({ entranceAccessibility: "stairs" }).success).toBe(false);
+    expect(
+      UpdateReviewSchema.safeParse({ entranceAccessibility: "stairs" }).success,
+    ).toBe(false);
   });
 
   it("rejects non-integer and out-of-range staff helpfulness ratings", () => {
-    expect(UpdateReviewSchema.safeParse({ staffHelpfulnessRating: 0 }).success).toBe(false);
-    expect(UpdateReviewSchema.safeParse({ staffHelpfulnessRating: 5.5 }).success).toBe(false);
-    expect(UpdateReviewSchema.safeParse({ staffHelpfulnessRating: 6 }).success).toBe(false);
+    expect(
+      UpdateReviewSchema.safeParse({ staffHelpfulnessRating: 0 }).success,
+    ).toBe(false);
+    expect(
+      UpdateReviewSchema.safeParse({ staffHelpfulnessRating: 5.5 }).success,
+    ).toBe(false);
+    expect(
+      UpdateReviewSchema.safeParse({ staffHelpfulnessRating: 6 }).success,
+    ).toBe(false);
   });
 
   it("rejects unknown fields on create and update", () => {
-    expect(CreateReviewSchema.safeParse({ ...VALID_CREATE, unsupported: true }).success).toBe(false);
-    expect(UpdateReviewSchema.safeParse({ adequateAisleWidth: true, unsupported: true }).success).toBe(false);
+    expect(
+      CreateReviewSchema.safeParse({ ...VALID_CREATE, unsupported: true })
+        .success,
+    ).toBe(false);
+    expect(
+      UpdateReviewSchema.safeParse({
+        adequateAisleWidth: true,
+        unsupported: true,
+      }).success,
+    ).toBe(false);
   });
 
   it("coerces minAggregateScore and enforces its 1–5 bounds", () => {

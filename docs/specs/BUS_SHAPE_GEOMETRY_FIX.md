@@ -30,11 +30,11 @@ OTP2 會把每站投影到 shape 上；只要**任一站**離 shape 超過 `maxS
 
 61B 三個 pattern 對 feed 內 shape `HSQ0081B1_0` 的最大站→線距離：
 
-| pattern | 站數 | 最大偏離 | OTP 結果 |
-|---|---|---|---|
-| A | 66 | 32 m | 保留（1149 點） |
-| B | 65 | 345 m | 丟棄 → 直線 |
-| C | 64 | 345 m | 丟棄 → 直線 |
+| pattern | 站數 | 最大偏離 | OTP 結果        |
+| ------- | ---- | -------- | --------------- |
+| A       | 66   | 32 m     | 保留（1149 點） |
+| B       | 65   | 345 m    | 丟棄 → 直線     |
+| C       | 64   | 345 m    | 丟棄 → 直線     |
 
 偏離來源是 B/C 多出來、根本不在 61B 上的站：`文化公園(HSQ309386)`、`文化局(HSQ303554)`、`東海`、`成瀧`。
 
@@ -61,13 +61,13 @@ RouteUID `HSQ0081` 的前綴同時命中 `HSQ008101_0`、`HSQ0081A1_0`、`HSQ008
 
 全台規模（掃 `otp-data/feed-1.gtfs.zip` + 線上 OTP 全量 pattern）：
 
-| 指標 | 數字 |
-|---|---|
-| 公車 pattern 幾何退化成直線 | 963 / 6658（14.5%） |
+| 指標                                                   | 數字                                       |
+| ------------------------------------------------------ | ------------------------------------------ |
+| 公車 pattern 幾何退化成直線                            | 963 / 6658（14.5%）                        |
 | patched 班次掛錯路線（該子路線自己有 route_id 卻沒用） | **11,399 / 128,050（8.9%）**，1,509 組錯配 |
-| 幾何偏離 >150 m 的 pattern 中由錯配造成 | **837 / 882（95%）** |
-| 完全沒有 shape_id 的 pattern | 4 |
-| dangling shape_id | 0 |
+| 幾何偏離 >150 m 的 pattern 中由錯配造成                | **837 / 882（95%）**                       |
+| 完全沒有 shape_id 的 pattern                           | 4                                          |
+| dangling shape_id                                      | 0                                          |
 
 > 此錯配同時是**資料正確性問題**，不只是畫線問題：61 主線的班次被標成 61B，使用者看到的路線號碼與班表都是錯的。
 
@@ -116,15 +116,15 @@ HSQ0551B1_0 (17站)  現況4237m → HSQ055101 dir0 =  13m  OK
 
 ## 2. 需求（R 編號，測試 docstring 請引用）
 
-| ID | 需求 |
-|---|---|
-| **R1** | TDX 子路線班表比對 GTFS route_id 時，**SubRouteUID 精準比對優先於 RouteUID**；精準比對一律優先於前綴比對。 |
-| **R2** | 前綴比對必須**決定性**（不得迭代 `set`）；候選 >1 時記入 `route_match_prefix_ambiguous` 並取排序後第一個。 |
-| **R3** | shape 索引以 `(SubRouteUID or RouteUID, Direction)` 為主鍵，並另存 RouteUID 層粗略備援；備援不得被後續子路線覆蓋（first-wins）。 |
-| **R4** | shape 候選依序：本子路線 TDX shape → RouteUID 層 TDX shape → 反向 TDX shape（反轉點序）→ 靜態繼承 shape。**每個候選都要通過貼合度驗證**，全部不過就不寫 `shape_id`。 |
+| ID     | 需求                                                                                                                                                                                                     |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **R1** | TDX 子路線班表比對 GTFS route_id 時，**SubRouteUID 精準比對優先於 RouteUID**；精準比對一律優先於前綴比對。                                                                                               |
+| **R2** | 前綴比對必須**決定性**（不得迭代 `set`）；候選 >1 時記入 `route_match_prefix_ambiguous` 並取排序後第一個。                                                                                               |
+| **R3** | shape 索引以 `(SubRouteUID or RouteUID, Direction)` 為主鍵，並另存 RouteUID 層粗略備援；備援不得被後續子路線覆蓋（first-wins）。                                                                         |
+| **R4** | shape 候選依序：本子路線 TDX shape → RouteUID 層 TDX shape → 反向 TDX shape（反轉點序）→ 靜態繼承 shape。**每個候選都要通過貼合度驗證**，全部不過就不寫 `shape_id`。                                     |
 | **R5** | 貼合度定義：trip 站序中所有「有座標」的站，其到 shape 折線的最短距離皆 ≤ `SHAPE_FIT_TOLERANCE_M = 100`。無任何站有座標時視為「無法判定 → 通過」（fixture feed 沒有 stops.txt，不得因此全面丟失 shape）。 |
-| **R6** | 產出的 shape_id 不得因不同子路線共用 route_id 而互相覆蓋：命名改為 `patched_shp_{key_uid}_{direction}`，反向候選另加 `r` 後綴。 |
-| **R7** | 新增可觀測性 stats 並印在 summary（見 §5），使「有沒有修好」不需重建 graph 就能從 patch 日誌判斷。 |
+| **R6** | 產出的 shape_id 不得因不同子路線共用 route_id 而互相覆蓋：命名改為 `patched_shp_{key_uid}_{direction}`，反向候選另加 `r` 後綴。                                                                          |
+| **R7** | 新增可觀測性 stats 並印在 summary（見 §5），使「有沒有修好」不需重建 graph 就能從 patch 日誌判斷。                                                                                                       |
 
 ---
 
@@ -182,14 +182,14 @@ class ShapeAssigner:
 
 `select()` 候選順序（R4），每個候選都跑 `_fits()`：
 
-| 順序 | 來源 | 產生的 shape_id | 統計 |
-|---|---|---|---|
-| 1 | `tdx_shapes[(sub_route_uid, direction)]` | `patched_shp_{sub_route_uid}_{direction}` | `shape_from_subroute` |
-| 2 | `tdx_shapes[(route_uid, direction)]` | `patched_shp_{route_uid}_{direction}` | `shape_from_route_uid` |
-| 3 | 上兩者的反向（`[::-1]`，先試 sub 再試 route） | `patched_shp_{key_uid}_{direction}r`，其中 `key_uid` 取**實際命中的那一個**：命中 `(sub_route_uid, 1-direction)` 就用 `sub_route_uid`，命中 `(route_uid, 1-direction)` 就用 `route_uid`；`direction` 一律用**該 trip 的方向**，不是被反轉的來源方向 | `shape_from_reversed` |
-| 4 | `route_shape_by_route.get(matched_id)` 的原始靜態 shape | 沿用原 shape_id（**不**寫入 `new_shapes`） | `shape_from_static` |
-| — | 全不通過 | `""` | `shape_rejected_unfit` |
-| — | 完全沒有任何候選 | `""` | `missing_shape`（維持現有鍵） |
+| 順序 | 來源                                                    | 產生的 shape_id                                                                                                                                                                                                                                     | 統計                          |
+| ---- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| 1    | `tdx_shapes[(sub_route_uid, direction)]`                | `patched_shp_{sub_route_uid}_{direction}`                                                                                                                                                                                                           | `shape_from_subroute`         |
+| 2    | `tdx_shapes[(route_uid, direction)]`                    | `patched_shp_{route_uid}_{direction}`                                                                                                                                                                                                               | `shape_from_route_uid`        |
+| 3    | 上兩者的反向（`[::-1]`，先試 sub 再試 route）           | `patched_shp_{key_uid}_{direction}r`，其中 `key_uid` 取**實際命中的那一個**：命中 `(sub_route_uid, 1-direction)` 就用 `sub_route_uid`，命中 `(route_uid, 1-direction)` 就用 `route_uid`；`direction` 一律用**該 trip 的方向**，不是被反轉的來源方向 | `shape_from_reversed`         |
+| 4    | `route_shape_by_route.get(matched_id)` 的原始靜態 shape | 沿用原 shape_id（**不**寫入 `new_shapes`）                                                                                                                                                                                                          | `shape_from_static`           |
+| —    | 全不通過                                                | `""`                                                                                                                                                                                                                                                | `shape_rejected_unfit`        |
+| —    | 完全沒有任何候選                                        | `""`                                                                                                                                                                                                                                                | `missing_shape`（維持現有鍵） |
 
 注意：候選 1–3 只在**通過驗證後**才寫入 `self.new_shapes`（現行程式是先寫再用，會把不合格幾何留在 shapes.txt 變孤兒列）。
 
@@ -202,6 +202,7 @@ SHAPE_FIT_TOLERANCE_M = 100
 選 100 而非 OTP 的 150：讓我方判定**嚴於** OTP，凡我方接受的 OTP 必接受。實測良品最大偏離 ≤84 m，錯配最小 199 m，100 m 落在安全帶內。
 
 `_fits(pts, stop_ids)`：
+
 - 取 `stop_coords` 有座標的站；一站都沒有 → 回 `True`（R5）。
 - 距離用等距圓柱投影：以 shape 各點緯度平均為 `lat0`，`kx = 111320 * cos(lat0)`、`ky = 110540`，轉成公尺平面後算**點到線段**最短距離（不是點到頂點）。誤差 <1%，對 100 m 門檻足夠。
 - 逐段先做便宜的 bounding-box 剪枝（線段 x/y 範圍外擴 tolerance，不相交就跳過）。
@@ -268,15 +269,18 @@ Shape assignment: {from_subroute} subroute TDX, {from_route_uid} route TDX,
 沿用現有風格：`unittest`、無網路、`build_travel_profile` 以 `_FIXED_PROFILE` mock。新增類別與案例：
 
 ### `RouteMatchingPrecedenceTests`（R1/R2）
+
 1. `test_subroute_exact_wins_over_route_uid_prefix` — **61B 迴歸案**。`route_ids_set = {"HSQ008101_0", "HSQ0081A1_0", "HSQ0081B1_0"}`，餵一筆 `RouteUID="HSQ0081"`、`SubRouteUID="HSQ008101"`、`Direction=0` 的班表；斷言產出的 trip `route_id == "HSQ008101_0"`，且**沒有任何** trip 落在 `HSQ0081B1_0`。
 2. `test_route_uid_exact_used_when_no_subroute_route_id` — routes 只有 `HSQ0081_0` 時，仍照 RouteUID 精準命中。
 3. `test_prefix_match_is_deterministic_and_flagged` — 只能靠前綴時，重複跑（或打亂 `route_ids_set` 插入順序）結果一致，且 `route_match_prefix_ambiguous == 1`。
 4. `test_unmatched_route_counted` — 無任何可比對 → `route_unmatched == 1`、不產 trip。
 
 ### `ShapeIndexTests`（R3）
+
 5. `test_subroute_key_is_primary_and_route_uid_is_first_wins` — 兩筆同 `(RouteUID, Direction)` 不同 `SubRouteUID` 的 shape record，斷言兩個子路線鍵都存在且各自正確，RouteUID 鍵等於**第一筆**。
 
 ### `ShapeFitTests`（R4/R5/R6）
+
 6. `test_unfit_shape_is_rejected_and_not_emitted` — 站序離候選 shape 約 300 m：`shape_id == ""`、`shape_rejected_unfit == 1`、`new_shapes` 不含該 shape。
 7. `test_subroute_shape_preferred_over_inherited_static` — 同時有貼合的子路線 TDX shape 與不貼合的靜態繼承 shape，斷言採用前者，shape_id 為 `patched_shp_{sub}_{dir}`，`shape_from_subroute == 1`。
 8. `test_reversed_opposite_direction_shape_gets_distinct_id` — 只有反向 shape 且反轉後貼合，斷言 id 以 `r` 結尾、`shape_from_reversed == 1`。
@@ -286,10 +290,12 @@ Shape assignment: {from_subroute} subroute TDX, {from_route_uid} route TDX,
 12. `test_route_uid_tdx_shape_used_when_no_subroute_shape` — TDX 只有 `(route_uid, direction)` 沒有子路線鍵且貼合：斷言 `shape_from_route_uid == 1`、shape_id 為 `patched_shp_{route_uid}_{dir}`。
 
 ### `MatchAndShapeCountersTests`（R7）
+
 13. `test_all_new_counters_are_populated` — 用一組涵蓋四種比對路徑的班表（subroute 精準 / RouteUID 精準 / 前綴 / 名稱）跑一次 `process_schedule_records_to_gtfs`，逐一斷言 `route_match_subroute_exact`、`route_match_route_exact`、`route_match_prefix`、`route_match_name` 各為預期值。
     **理由**：§8 的人工驗收是「先看 summary 兩行判斷比對與 shape 指派是否轉正」。若計數器本身加錯分支，測試全綠但 summary 會騙人，整個驗收基礎就失效 — 所以這 11 個鍵每一個都必須至少被一條測試斷言過（對照表：`route_match_prefix_ambiguous`→案例3、`route_unmatched`→案例4、`shape_from_subroute`→案例7、`shape_from_route_uid`→案例12、`shape_from_reversed`→案例8、`shape_from_static`→案例11、`shape_rejected_unfit`→案例6、其餘四個→案例13）。
 
 ### 既有測試調整
+
 - `_full_stats()` / `GtfsOutputTests._base_stats()` 補齊新鍵。
 - `test_patch_gtfs.py:446, 467, 532, 638` 四處 `process_schedule_records_to_gtfs` 位置引數改為傳 `ShapeAssigner`。
 - `FrequencyZipEmissionTests._write_fixture_zip` 建議加 `stops.txt`（含 `S1`/`MS1` 座標），順帶覆蓋 `patch_gtfs_zip` 讀 stops.txt 的新分支；但**必須另留一個沒有 stops.txt 的案例**確認不會爆（R5）。
@@ -335,10 +341,10 @@ curl -s -X POST http://127.0.0.1:18080/otp/routers/default/index/graphql \
 
 ## 9. 風險與回退
 
-| 風險 | 說明 | 處置 |
-|---|---|---|
-| 比對順序改動使某些城市班次改掛到別的 route_id | 這正是修復目的，但會改變 11k 個 trip 的歸屬 | 靠 summary 統計與 61B 定點檢查驗證；`route_match_prefix_ambiguous` 若異常高需回報 |
-| `shape_rejected_unfit` 異常高（>2000） | 表示驗證過嚴或投影/解析有 bug | 先別放寬 tolerance，改抽樣三條路線人工核對距離計算 |
-| 記憶體上升 | 新增 stop_coords（~30 MB）+ static_shape_points（~96 MB，須用 `array('d')`） | 若 OOM，先確認沒有誤用 tuple list |
-| build 時間上升 | 多一趟 shapes.txt 串流（60–90 s） | 可接受 |
-| 回退 | 全部改動集中在兩個 python 檔 | `git revert` 該 commit，重建 graph 即回舊行為 |
+| 風險                                          | 說明                                                                         | 處置                                                                              |
+| --------------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| 比對順序改動使某些城市班次改掛到別的 route_id | 這正是修復目的，但會改變 11k 個 trip 的歸屬                                  | 靠 summary 統計與 61B 定點檢查驗證；`route_match_prefix_ambiguous` 若異常高需回報 |
+| `shape_rejected_unfit` 異常高（>2000）        | 表示驗證過嚴或投影/解析有 bug                                                | 先別放寬 tolerance，改抽樣三條路線人工核對距離計算                                |
+| 記憶體上升                                    | 新增 stop_coords（~30 MB）+ static_shape_points（~96 MB，須用 `array('d')`） | 若 OOM，先確認沒有誤用 tuple list                                                 |
+| build 時間上升                                | 多一趟 shapes.txt 串流（60–90 s）                                            | 可接受                                                                            |
+| 回退                                          | 全部改動集中在兩個 python 檔                                                 | `git revert` 該 commit，重建 graph 即回舊行為                                     |

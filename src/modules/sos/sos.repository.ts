@@ -8,8 +8,8 @@ export type SosSessionRecord = ISosSession & { _id: unknown };
 
 /** The (owner, name) pair the notification fan-out keys off. */
 export interface BoundContactRef {
-	userId: string;
-	name?: string;
+  userId: string;
+  name?: string;
 }
 
 /**
@@ -19,11 +19,11 @@ export interface BoundContactRef {
  * @returns Owner id and display name per bound contact
  */
 export async function findBoundContactsByLineUser(
-	lineUserId: string,
+  lineUserId: string,
 ): Promise<BoundContactRef[]> {
-	return EmergencyContact.find({ lineUserId, bindStatus: "bound" })
-		.select("userId name")
-		.lean<BoundContactRef[]>();
+  return EmergencyContact.find({ lineUserId, bindStatus: "bound" })
+    .select("userId name")
+    .lean<BoundContactRef[]>();
 }
 
 /**
@@ -34,16 +34,16 @@ export async function findBoundContactsByLineUser(
  * @returns The contact's id and name, or null when not bound
  */
 export async function findBoundContact(
-	ownerUserId: string,
-	lineUserId: string,
+  ownerUserId: string,
+  lineUserId: string,
 ): Promise<{ _id: unknown; name?: string } | null> {
-	return EmergencyContact.findOne({
-		userId: ownerUserId,
-		lineUserId,
-		bindStatus: "bound",
-	})
-		.select("name")
-		.lean<{ _id: unknown; name?: string } | null>();
+  return EmergencyContact.findOne({
+    userId: ownerUserId,
+    lineUserId,
+    bindStatus: "bound",
+  })
+    .select("name")
+    .lean<{ _id: unknown; name?: string } | null>();
 }
 
 /**
@@ -53,16 +53,16 @@ export async function findBoundContact(
  * @returns Bound LINE user ids
  */
 export async function findBoundLineUserIds(userId: string): Promise<string[]> {
-	const contacts = await EmergencyContact.find({
-		userId,
-		bindStatus: "bound",
-		lineUserId: { $ne: null },
-	})
-		.select("lineUserId")
-		.lean<{ lineUserId?: string }[]>();
-	return contacts
-		.map((c) => c.lineUserId)
-		.filter((id): id is string => Boolean(id));
+  const contacts = await EmergencyContact.find({
+    userId,
+    bindStatus: "bound",
+    lineUserId: { $ne: null },
+  })
+    .select("lineUserId")
+    .lean<{ lineUserId?: string }[]>();
+  return contacts
+    .map((c) => c.lineUserId)
+    .filter((id): id is string => Boolean(id));
 }
 
 /**
@@ -72,10 +72,10 @@ export async function findBoundLineUserIds(userId: string): Promise<string[]> {
  * @returns The name, or undefined when unknown or unreadable
  */
 export async function findUserName(
-	userId: string,
+  userId: string,
 ): Promise<string | undefined> {
-	const user = await User.findById(userId).select("name").lean();
-	return (user as { name?: string } | null)?.name;
+  const user = await User.findById(userId).select("name").lean();
+  return (user as { name?: string } | null)?.name;
 }
 
 /**
@@ -85,9 +85,9 @@ export async function findUserName(
  * @returns The session, or null when unknown
  */
 export async function findSessionById(
-	sessionId: string,
+  sessionId: string,
 ): Promise<SosSessionRecord | null> {
-	return SosSession.findById(sessionId).lean<SosSessionRecord | null>();
+  return SosSession.findById(sessionId).lean<SosSessionRecord | null>();
 }
 
 /**
@@ -97,9 +97,9 @@ export async function findSessionById(
  * @returns The session, or null when unknown
  */
 export async function findSessionByShareToken(
-	shareToken: string,
+  shareToken: string,
 ): Promise<SosSessionRecord | null> {
-	return SosSession.findOne({ shareToken }).lean<SosSessionRecord | null>();
+  return SosSession.findOne({ shareToken }).lean<SosSessionRecord | null>();
 }
 
 /**
@@ -109,12 +109,12 @@ export async function findSessionByShareToken(
  * @returns The active session, or null
  */
 export async function findActiveSessionByUser(
-	userId: string,
+  userId: string,
 ): Promise<SosSessionRecord | null> {
-	return SosSession.findOne({
-		userId,
-		status: "active",
-	}).lean<SosSessionRecord | null>();
+  return SosSession.findOne({
+    userId,
+    status: "active",
+  }).lean<SosSessionRecord | null>();
 }
 
 /**
@@ -125,10 +125,10 @@ export async function findActiveSessionByUser(
  * @returns The stored session
  */
 export async function insertSession(
-	doc: Record<string, unknown>,
+  doc: Record<string, unknown>,
 ): Promise<SosSessionRecord> {
-	const created = await SosSession.create(doc);
-	return created.toObject() as unknown as SosSessionRecord;
+  const created = await SosSession.create(doc);
+  return created.toObject() as unknown as SosSessionRecord;
 }
 
 /**
@@ -139,21 +139,21 @@ export async function insertSession(
  * @returns The session after the update, or null when it is no longer active
  */
 export async function updateActiveSessionLocation(
-	sessionId: string,
-	patch: { lat: number; lng: number; address?: string | null },
+  sessionId: string,
+  patch: { lat: number; lng: number; address?: string | null },
 ): Promise<SosSessionRecord | null> {
-	const set: Record<string, unknown> = {
-		lat: patch.lat,
-		lng: patch.lng,
-		locationUpdatedAt: new Date(),
-		staleAlertSent: false,
-	};
-	if (patch.address !== undefined) set.address = patch.address;
-	return SosSession.findOneAndUpdate(
-		{ _id: sessionId, status: "active" },
-		{ $set: set },
-		{ returnDocument: "after" },
-	).lean<SosSessionRecord | null>();
+  const set: Record<string, unknown> = {
+    lat: patch.lat,
+    lng: patch.lng,
+    locationUpdatedAt: new Date(),
+    staleAlertSent: false,
+  };
+  if (patch.address !== undefined) set.address = patch.address;
+  return SosSession.findOneAndUpdate(
+    { _id: sessionId, status: "active" },
+    { $set: set },
+    { returnDocument: "after" },
+  ).lean<SosSessionRecord | null>();
 }
 
 /**
@@ -166,20 +166,20 @@ export async function updateActiveSessionLocation(
  * @returns True when this call was the one that recorded it
  */
 export async function pushAcknowledgement(
-	sessionId: string,
-	lineUserId: string,
-	acknowledgement: Record<string, unknown>,
-	timelineEntry: Record<string, unknown>,
+  sessionId: string,
+  lineUserId: string,
+  acknowledgement: Record<string, unknown>,
+  timelineEntry: Record<string, unknown>,
 ): Promise<boolean> {
-	const res = await SosSession.updateOne(
-		{
-			_id: sessionId,
-			status: "active",
-			"acknowledgements.lineUserId": { $ne: lineUserId },
-		},
-		{ $push: { acknowledgements: acknowledgement, timeline: timelineEntry } },
-	);
-	return res.modifiedCount > 0;
+  const res = await SosSession.updateOne(
+    {
+      _id: sessionId,
+      status: "active",
+      "acknowledgements.lineUserId": { $ne: lineUserId },
+    },
+    { $push: { acknowledgements: acknowledgement, timeline: timelineEntry } },
+  );
+  return res.modifiedCount > 0;
 }
 
 /**
@@ -187,13 +187,11 @@ export async function pushAcknowledgement(
  *
  * @param sessionId Session id
  */
-export async function promoteToAcknowledged(
-	sessionId: string,
-): Promise<void> {
-	await SosSession.updateOne(
-		{ _id: sessionId, handlingStatus: "notified" },
-		{ $set: { handlingStatus: "acknowledged" } },
-	);
+export async function promoteToAcknowledged(sessionId: string): Promise<void> {
+  await SosSession.updateOne(
+    { _id: sessionId, handlingStatus: "notified" },
+    { $set: { handlingStatus: "acknowledged" } },
+  );
 }
 
 /**
@@ -205,22 +203,22 @@ export async function promoteToAcknowledged(
  * @returns True when this call was the one that claimed it
  */
 export async function claimUnclaimedSession(
-	sessionId: string,
-	set: Record<string, unknown>,
-	timelineEntry: Record<string, unknown>,
+  sessionId: string,
+  set: Record<string, unknown>,
+  timelineEntry: Record<string, unknown>,
 ): Promise<boolean> {
-	// `new: false` returns the pre-update document, so a non-null result means
-	// this call is the one that matched the still-unclaimed filter.
-	const prev = await SosSession.findOneAndUpdate(
-		{
-			_id: sessionId,
-			status: "active",
-			$or: [{ claimedBy: null }, { claimedBy: { $exists: false } }],
-		},
-		{ $set: set, $push: { timeline: timelineEntry } },
-		{ new: false },
-	);
-	return Boolean(prev);
+  // `new: false` returns the pre-update document, so a non-null result means
+  // this call is the one that matched the still-unclaimed filter.
+  const prev = await SosSession.findOneAndUpdate(
+    {
+      _id: sessionId,
+      status: "active",
+      $or: [{ claimedBy: null }, { claimedBy: { $exists: false } }],
+    },
+    { $set: set, $push: { timeline: timelineEntry } },
+    { new: false },
+  );
+  return Boolean(prev);
 }
 
 /**
@@ -231,14 +229,14 @@ export async function claimUnclaimedSession(
  * @returns The session after the update, or null when it is no longer active
  */
 export async function applyHandlingUpdate(
-	sessionId: string,
-	update: Record<string, unknown>,
+  sessionId: string,
+  update: Record<string, unknown>,
 ): Promise<SosSessionRecord | null> {
-	return SosSession.findOneAndUpdate(
-		{ _id: sessionId, status: "active" },
-		update,
-		{ returnDocument: "after" },
-	).lean<SosSessionRecord | null>();
+  return SosSession.findOneAndUpdate(
+    { _id: sessionId, status: "active" },
+    update,
+    { returnDocument: "after" },
+  ).lean<SosSessionRecord | null>();
 }
 
 /**
@@ -250,16 +248,16 @@ export async function applyHandlingUpdate(
  * @returns True when this call was the one that resolved it
  */
 export async function resolveActiveSession(
-	sessionId: string,
-	set: Record<string, unknown>,
-	timelineEntry: Record<string, unknown>,
+  sessionId: string,
+  set: Record<string, unknown>,
+  timelineEntry: Record<string, unknown>,
 ): Promise<boolean> {
-	// `new: false` returns the pre-update document, so a non-null result means
-	// this call is the one that flipped active → resolved.
-	const prev = await SosSession.findOneAndUpdate(
-		{ _id: sessionId, status: "active" },
-		{ $set: set, $push: { timeline: timelineEntry } },
-		{ new: false },
-	);
-	return Boolean(prev);
+  // `new: false` returns the pre-update document, so a non-null result means
+  // this call is the one that flipped active → resolved.
+  const prev = await SosSession.findOneAndUpdate(
+    { _id: sessionId, status: "active" },
+    { $set: set, $push: { timeline: timelineEntry } },
+    { new: false },
+  );
+  return Boolean(prev);
 }

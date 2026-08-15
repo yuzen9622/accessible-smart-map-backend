@@ -14,20 +14,56 @@ MQTT 與 REST 回傳內容**完全一致**（TDX 官方文件明示）；收到�
 > 已於 2026-08-15 用 MQTT 實測證實（新竹城隍祭改道 alert）。
 
 ```jsonc
-[{
-  "AlertID": "34265", "Title": "…", "Description": "…", "Department": "新竹市政府交通處",
-  "Status": 2,                 // 0=全停 / 1=正常 / 2=異常
-  "Cause": 11, "Effect": 254,  // Cause/Effect 為 TDX enum（事故/施工/改道/班次異動…）
-  "Scope": {
-    "Operators": [{ "OperatorID": "13", "OperatorName": { "Zh_tw": "新竹客運", "En": "…" } }],
-    "Stops":     [{ "StopID": "291265", "StopName": { "Zh_tw": "東門市場", "En": "…" }, "StationID": "130108" }],
-    "Routes":    [{ "RouteID": "0100", "RouteName": { "Zh_tw": "總站→成德高中", "En": "…" }, "Direction": 0 }],
-    "SubRoutes": [{ "SubRouteID": "…", "SubRouteName": { "Zh_tw": "…" }, "Direction": 0 }],
-    "Stations":  [{ "StationID": "…", "StationName": { "Zh_tw": "…" } }],
-    "Trips":     [{ "TripID": "…", "RouteID": "…", "SubRouteID": "…", "Direction": 0, "TripDepTime": "07:00" }]
+[
+  {
+    "AlertID": "34265",
+    "Title": "…",
+    "Description": "…",
+    "Department": "新竹市政府交通處",
+    "Status": 2, // 0=全停 / 1=正常 / 2=異常
+    "Cause": 11,
+    "Effect": 254, // Cause/Effect 為 TDX enum（事故/施工/改道/班次異動…）
+    "Scope": {
+      "Operators": [
+        {
+          "OperatorID": "13",
+          "OperatorName": { "Zh_tw": "新竹客運", "En": "…" },
+        },
+      ],
+      "Stops": [
+        {
+          "StopID": "291265",
+          "StopName": { "Zh_tw": "東門市場", "En": "…" },
+          "StationID": "130108",
+        },
+      ],
+      "Routes": [
+        {
+          "RouteID": "0100",
+          "RouteName": { "Zh_tw": "總站→成德高中", "En": "…" },
+          "Direction": 0,
+        },
+      ],
+      "SubRoutes": [
+        { "SubRouteID": "…", "SubRouteName": { "Zh_tw": "…" }, "Direction": 0 },
+      ],
+      "Stations": [{ "StationID": "…", "StationName": { "Zh_tw": "…" } }],
+      "Trips": [
+        {
+          "TripID": "…",
+          "RouteID": "…",
+          "SubRouteID": "…",
+          "Direction": 0,
+          "TripDepTime": "07:00",
+        },
+      ],
+    },
+    "PublishTime": "…",
+    "StartTime": "…",
+    "EndTime": "…",
+    "UpdateTime": "…",
   },
-  "PublishTime": "…", "StartTime": "…", "EndTime": "…", "UpdateTime": "…"
-}]
+]
 ```
 
 ⚠️ **實測關鍵發現**：`Scope.Routes[].RouteName` 是**終點站名**（`"總站→成德高中"`），**不是路線號碼**。
@@ -74,10 +110,20 @@ MQTT 與 REST 回傳內容**完全一致**（TDX 官方文件明示）；收到�
 
 ```jsonc
 {
-  "AlertID": "…", "Title": "…", "Description": "…", "Status": "X",  // ''=正常 / '▲'=異常 / 'X'=全停
-  "Scope": { "LineSections": [{ "LineID": "…", "StartingStationID": "…", "EndingStationID": "…" }] },
-  "Direction": 0,   // 0=南下 / 1=北上 / 2=雙向
-  "Level": 2, "StartTime": "…", "EndTime": "…", "UpdateTime": "…"
+  "AlertID": "…",
+  "Title": "…",
+  "Description": "…",
+  "Status": "X", // ''=正常 / '▲'=異常 / 'X'=全停
+  "Scope": {
+    "LineSections": [
+      { "LineID": "…", "StartingStationID": "…", "EndingStationID": "…" },
+    ],
+  },
+  "Direction": 0, // 0=南下 / 1=北上 / 2=雙向
+  "Level": 2,
+  "StartTime": "…",
+  "EndTime": "…",
+  "UpdateTime": "…",
 }
 ```
 
@@ -91,11 +137,34 @@ MQTT 與 REST 回傳內容**完全一致**（TDX 官方文件明示）；收到�
 
 ```ts
 type TransitContext =
-  | { mode: "bus";   city: string; routeName: string;   // routeName = 路線號碼，如 "307"
-      direction?: number; stopUid?: string; stopName?: string }
-  | { mode: "metro"; railSystem: string; lineCode?: string; stationIds?: string[] }
-  | { mode: "tra";   trainNo?: string; lineId?: string; stationIds?: string[]; direction?: number }
-  | { mode: "thsr";  lineId?: string; direction?: number; fromStationId?: string; toStationId?: string };
+  | {
+      mode: "bus";
+      city: string;
+      routeName: string; // routeName = 路線號碼，如 "307"
+      direction?: number;
+      stopUid?: string;
+      stopName?: string;
+    }
+  | {
+      mode: "metro";
+      railSystem: string;
+      lineCode?: string;
+      stationIds?: string[];
+    }
+  | {
+      mode: "tra";
+      trainNo?: string;
+      lineId?: string;
+      stationIds?: string[];
+      direction?: number;
+    }
+  | {
+      mode: "thsr";
+      lineId?: string;
+      direction?: number;
+      fromStationId?: string;
+      toStationId?: string;
+    };
 ```
 
 欄位來源（既有）：
@@ -112,8 +181,9 @@ type TransitContext =
 
 ```ts
 const now = Date.now();
-active(a) = (a.StartTime == null || now >= +new Date(a.StartTime))
-         && (a.EndTime   == null || now <= +new Date(a.EndTime));
+active(a) =
+  (a.StartTime == null || now >= +new Date(a.StartTime)) &&
+  (a.EndTime == null || now <= +new Date(a.EndTime));
 // 過濾「正常」：bus/metro/tra 丟 Status===1；thsr 丟 Status==='' 。
 ```
 
@@ -128,9 +198,9 @@ active(a) = (a.StartTime == null || now >= +new Date(a.StartTime))
 
 ```ts
 async function resolveBusRouteKeys(ctx): Promise<{
-  routeIds: string[];        // ← 對 Scope.Routes[].RouteID
-  subRouteNames: string[];   // ← 對 Scope.Routes[].RouteName（終點站名）
-  stopIds: string[];         // ← 對 Scope.Stops[].StopID
+  routeIds: string[]; // ← 對 Scope.Routes[].RouteID
+  subRouteNames: string[]; // ← 對 Scope.Routes[].RouteName（終點站名）
+  stopIds: string[]; // ← 對 Scope.Stops[].StopID
 } | null> {
   // 與 getBusRouteInfo 同源：by city + routeName.Zh_tw 查 BusRouteModel
   const docs = await BusRouteModel.find({
@@ -140,14 +210,17 @@ async function resolveBusRouteKeys(ctx): Promise<{
   if (!docs.length) return null;
 
   // 若帶 direction，先收斂到該方向；否則全方向都算候選
-  const scoped = ctx.direction != null
-    ? docs.filter(d => d.direction === ctx.direction)
-    : docs;
+  const scoped =
+    ctx.direction != null
+      ? docs.filter((d) => d.direction === ctx.direction)
+      : docs;
 
   return {
-    routeIds:      [...new Set(scoped.map(d => d.routeId).filter(Boolean))],
-    subRouteNames: [...new Set(scoped.map(d => d.subRouteName?.Zh_tw).filter(Boolean))],
-    stopIds:       ctx.stopUid ? [ctx.stopUid] : [],
+    routeIds: [...new Set(scoped.map((d) => d.routeId).filter(Boolean))],
+    subRouteNames: [
+      ...new Set(scoped.map((d) => d.subRouteName?.Zh_tw).filter(Boolean)),
+    ],
+    stopIds: ctx.stopUid ? [ctx.stopUid] : [],
   };
 }
 
@@ -155,16 +228,37 @@ function matchBus(a: BusAlert, keys): Match | null {
   const S = a.Scope;
   const dirOk = (d) => dirMatch(d, ctx.direction);
   // 1. 路線層級（主）：RouteID 精確比對，或 RouteName(終點站名) 正規化比對
-  if (S.Routes?.some(r =>
-        (keys.routeIds.includes(r.RouteID) || keys.subRouteNames.some(n => equalStopName(r.RouteName?.Zh_tw, n)))
-        && dirOk(r.Direction))) return { kind: "route" };
-  if (S.SubRoutes?.some(r =>
-        keys.subRouteNames.some(n => equalStopName(r.SubRouteName?.Zh_tw, n)) && dirOk(r.Direction)))
+  if (
+    S.Routes?.some(
+      (r) =>
+        (keys.routeIds.includes(r.RouteID) ||
+          keys.subRouteNames.some((n) =>
+            equalStopName(r.RouteName?.Zh_tw, n),
+          )) &&
+        dirOk(r.Direction),
+    )
+  )
+    return { kind: "route" };
+  if (
+    S.SubRoutes?.some(
+      (r) =>
+        keys.subRouteNames.some((n) =>
+          equalStopName(r.SubRouteName?.Zh_tw, n),
+        ) && dirOk(r.Direction),
+    )
+  )
     return { kind: "route" };
   // 2. 站牌層級（改道/站點異動只影響部分站）
-  if (S.Stops?.some(s => keys.stopIds.includes(s.StopID) || equalStopName(s.StopName?.Zh_tw, ctx.stopName)))
+  if (
+    S.Stops?.some(
+      (s) =>
+        keys.stopIds.includes(s.StopID) ||
+        equalStopName(s.StopName?.Zh_tw, ctx.stopName),
+    )
+  )
     return { kind: "stop" };
-  if (S.Stations?.some(s => keys.stopIds.includes(s.StationID))) return { kind: "station" };
+  if (S.Stations?.some((s) => keys.stopIds.includes(s.StationID)))
+    return { kind: "station" };
   return null;
 }
 ```
@@ -176,12 +270,15 @@ function matchBus(a: BusAlert, keys): Match | null {
 ```ts
 function matchMetro(a, ctx): Match | null {
   const S = a.Scope;
-  const lineHit   = (l) => typeof l === "string" ? l === ctx.lineCode : l.LineID === ctx.lineCode;
-  const stationHit = (s) => typeof s === "string" ? ctx.stationIds?.includes(s)
-                                                  : ctx.stationIds?.includes(s.StationID);
-  if (S.Lines?.some(lineHit))       return { kind: "line" };
+  const lineHit = (l) =>
+    typeof l === "string" ? l === ctx.lineCode : l.LineID === ctx.lineCode;
+  const stationHit = (s) =>
+    typeof s === "string"
+      ? ctx.stationIds?.includes(s)
+      : ctx.stationIds?.includes(s.StationID);
+  if (S.Lines?.some(lineHit)) return { kind: "line" };
   if (S.Stations?.some(stationHit)) return { kind: "station" };
-  return null;   // LineSections OD 覆蓋為進階，v1 不做
+  return null; // LineSections OD 覆蓋為進階，v1 不做
 }
 ```
 
@@ -191,10 +288,14 @@ function matchMetro(a, ctx): Match | null {
 function matchTra(a, ctx): Match | null {
   if (!dirMatch(a.Direction, ctx.direction)) return null;
   const S = a.Scope;
-  if (ctx.trainNo && S.Trains?.some(t => t.TrainNo === ctx.trainNo)) return { kind: "train" }; // 最精準
-  if (ctx.lineId && S.Lines?.some(l => l.LineID === ctx.lineId))       return { kind: "line" };
-  if (S.Stations?.some(s => ctx.stationIds?.includes(s.StationID)))     return { kind: "station" };
-  if (S.LineSections?.some(ls => covers(ls, ctx.stationIds)))           return { kind: "section" };
+  if (ctx.trainNo && S.Trains?.some((t) => t.TrainNo === ctx.trainNo))
+    return { kind: "train" }; // 最精準
+  if (ctx.lineId && S.Lines?.some((l) => l.LineID === ctx.lineId))
+    return { kind: "line" };
+  if (S.Stations?.some((s) => ctx.stationIds?.includes(s.StationID)))
+    return { kind: "station" };
+  if (S.LineSections?.some((ls) => covers(ls, ctx.stationIds)))
+    return { kind: "section" };
   return null;
 }
 ```
@@ -204,9 +305,13 @@ function matchTra(a, ctx): Match | null {
 ```ts
 function matchThsr(a, ctx): Match | null {
   if (!dirMatch(a.Direction, ctx.direction)) return null;
-  if (a.Scope.LineSections?.some(ls => covers(ls, [ctx.fromStationId, ctx.toStationId])))
+  if (
+    a.Scope.LineSections?.some((ls) =>
+      covers(ls, [ctx.fromStationId, ctx.toStationId]),
+    )
+  )
     return { kind: "section" };
-  return null;   // 無 TrainNo，注定無法更精準
+  return null; // 無 TrainNo，注定無法更精準
 }
 ```
 
@@ -257,7 +362,7 @@ client → server：
 server → client：
 
 ```jsonc
-{ "type": "alerts", "result": { /* TransitAlertResult，同 §3 */ } }
+{ "type": "alerts", "result": {/* TransitAlertResult，同 §3 */} }
 ```
 
 推播時機：

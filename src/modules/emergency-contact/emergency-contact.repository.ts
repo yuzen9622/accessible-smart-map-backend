@@ -11,7 +11,12 @@ export type EmergencyContactRecord = IEmergencyContact & {
 /** The subset the list endpoint projects. */
 export type EmergencyContactSummary = Pick<
   EmergencyContactRecord,
-  "_id" | "name" | "bindStatus" | "lineUserId" | "bindCodeExpiresAt" | "createdAt"
+  | "_id"
+  | "name"
+  | "bindStatus"
+  | "lineUserId"
+  | "bindCodeExpiresAt"
+  | "createdAt"
 >;
 
 /**
@@ -76,7 +81,9 @@ export async function findContactById(
   contactId: string,
 ): Promise<EmergencyContactRecord | null> {
   if (!Types.ObjectId.isValid(contactId)) return null;
-  return EmergencyContact.findById(contactId).lean<EmergencyContactRecord | null>();
+  return EmergencyContact.findById(
+    contactId,
+  ).lean<EmergencyContactRecord | null>();
 }
 
 /**

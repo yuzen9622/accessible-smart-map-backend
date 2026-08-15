@@ -37,10 +37,16 @@ const OUTAGE_RE = /維修|故障|暫停|停用/;
 const ALERT_CACHE_TTL_MS = 5 * 60 * 1000;
 const FACILITY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
-const facilityCache = new Map<string, CacheEntry<Map<string, TdxStationFacilityItem>>>();
+const facilityCache = new Map<
+  string,
+  CacheEntry<Map<string, TdxStationFacilityItem>>
+>();
 const alertCache = new Map<string, CacheEntry<TdxMetroAlertItem[]>>();
 
-function cached<T>(cache: Map<string, CacheEntry<T>>, key: string): T | undefined {
+function cached<T>(
+  cache: Map<string, CacheEntry<T>>,
+  key: string,
+): T | undefined {
   const entry = cache.get(key);
   if (!entry) return undefined;
   if (Date.now() > entry.expiresAt) {
@@ -51,14 +57,14 @@ function cached<T>(cache: Map<string, CacheEntry<T>>, key: string): T | undefine
 }
 
 async function fetchFacilityIndex(
-  railSystem: string
+  railSystem: string,
 ): Promise<Map<string, TdxStationFacilityItem>> {
   const hit = cached(facilityCache, railSystem);
   if (hit) return hit;
   let index = new Map<string, TdxStationFacilityItem>();
   try {
     const resp = await tdxFetch(
-      `${metroUrl.stationFacilityUrl(railSystem)}?$format=JSON`
+      `${metroUrl.stationFacilityUrl(railSystem)}?$format=JSON`,
     );
     if (resp.ok) {
       const items = (await resp.json()) as TdxStationFacilityItem[];
@@ -66,8 +72,7 @@ async function fetchFacilityIndex(
         index = new Map(items.map((i) => [i.StationID, i]));
       }
     }
-  } catch {
-  }
+  } catch {}
   facilityCache.set(railSystem, {
     data: index,
     expiresAt: Date.now() + FACILITY_CACHE_TTL_MS,
@@ -75,18 +80,22 @@ async function fetchFacilityIndex(
   return index;
 }
 
-async function fetchMetroAlerts(railSystem: string): Promise<TdxMetroAlertItem[]> {
+async function fetchMetroAlerts(
+  railSystem: string,
+): Promise<TdxMetroAlertItem[]> {
   const hit = cached(alertCache, railSystem);
   if (hit !== undefined) return hit;
   let alerts: TdxMetroAlertItem[] = [];
   try {
-    const resp = await tdxFetch(`${metroUrl.alertUrl(railSystem)}?$format=JSON`);
+    const resp = await tdxFetch(
+      `${metroUrl.alertUrl(railSystem)}?$format=JSON`,
+    );
     if (resp.ok) {
-      const data = (await resp.json()) as TdxMetroAlertEnvelope | TdxMetroAlertItem[];
-      alerts = Array.isArray(data) ? data : data?.Alerts ?? [];
+      const data = (await resp.json()) as
+        TdxMetroAlertEnvelope | TdxMetroAlertItem[];
+      alerts = Array.isArray(data) ? data : (data?.Alerts ?? []);
     }
-  } catch {
-  }
+  } catch {}
   alertCache.set(railSystem, {
     data: alerts,
     expiresAt: Date.now() + ALERT_CACHE_TTL_MS,
@@ -127,7 +136,7 @@ function applyStationFacility(
   route: AccessibleRoute,
   item: TdxStationFacilityItem | undefined,
   prefix: "乘車站" | "下車站",
-  stationName: string
+  stationName: string,
 ): void {
   if (!item) return;
 
@@ -158,7 +167,7 @@ function applyStationFacility(
 function applyAlerts(
   leg: MetroLeg,
   route: AccessibleRoute,
-  alerts: TdxMetroAlertItem[]
+  alerts: TdxMetroAlertItem[],
 ): void {
   for (const alert of alerts) {
     const text = `${alert.Title ?? ""} ${alert.Description ?? ""}`;
@@ -203,7 +212,7 @@ function applyAlerts(
  */
 export async function overlayFacilityStatus(
   routes: AccessibleRoute[],
-  _mode: AccessibilityMode = "normal"
+  _mode: AccessibilityMode = "normal",
 ): Promise<void> {
   if (process.env.USE_REALTIME_FACILITY === "false") return;
 
@@ -218,7 +227,10 @@ export async function overlayFacilityStatus(
   const systems = [...new Set(metroLegs.map(({ leg }) => leg.railSystem))];
   const bySystem = new Map<
     string,
-    { facilities: Map<string, TdxStationFacilityItem>; alerts: TdxMetroAlertItem[] }
+    {
+      facilities: Map<string, TdxStationFacilityItem>;
+      alerts: TdxMetroAlertItem[];
+    }
   >();
   await Promise.all(
     systems.map(async (sys) => {
@@ -227,7 +239,7 @@ export async function overlayFacilityStatus(
         fetchMetroAlerts(sys),
       ]);
       bySystem.set(sys, { facilities, alerts });
-    })
+    }),
   );
 
   for (const { route, leg } of metroLegs) {
@@ -240,14 +252,14 @@ export async function overlayFacilityStatus(
       route,
       depId ? data.facilities.get(depId) : undefined,
       "乘車站",
-      leg.departureStation
+      leg.departureStation,
     );
     applyStationFacility(
       leg,
       route,
       arrId ? data.facilities.get(arrId) : undefined,
       "下車站",
-      leg.arrivalStation
+      leg.arrivalStation,
     );
     applyAlerts(leg, route, data.alerts);
   }

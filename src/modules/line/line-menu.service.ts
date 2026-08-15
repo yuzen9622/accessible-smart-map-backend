@@ -47,7 +47,9 @@ interface BoundContactDoc {
  * @param lineUserId The LINE user id of the caller.
  * @returns The bound contact documents, newest first.
  */
-async function boundContactDocs(lineUserId: string): Promise<BoundContactDoc[]> {
+async function boundContactDocs(
+  lineUserId: string,
+): Promise<BoundContactDoc[]> {
   return findBoundContacts(lineUserId) as unknown as Promise<BoundContactDoc[]>;
 }
 
@@ -159,10 +161,7 @@ export async function unbindContact(
   );
   if (!contact) return notFound();
 
-  const released = await releaseBoundContact(
-    input.contactId,
-    input.lineUserId,
-  );
+  const released = await releaseBoundContact(input.contactId, input.lineUserId);
   if (!released) return notFound();
 
   const names = await ownerNames([contact.userId]);
@@ -194,9 +193,9 @@ export async function listSosHistory(
 
   const contacts = await boundContactDocs(input.lineUserId);
   const names = await ownerNames(contacts.map((contact) => contact.userId));
-  const ownerIds = [...new Set(contacts.map((contact) => contact.userId))].filter(
-    (ownerId) => names.has(ownerId),
-  );
+  const ownerIds = [
+    ...new Set(contacts.map((contact) => contact.userId)),
+  ].filter((ownerId) => names.has(ownerId));
   if (!ownerIds.length) {
     return fail(ResponseCode.NOT_FOUND, LINE_MSG.SOS_NO_CONTACTS);
   }

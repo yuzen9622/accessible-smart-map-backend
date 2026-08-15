@@ -94,7 +94,10 @@ function chunkText(text: string): string[] {
 }
 
 /** Parse frontmatter from raw markdown string */
-function parseMarkdown(raw: string, filename: string): { title: string; category: string; source: string; body: string } {
+function parseMarkdown(
+  raw: string,
+  filename: string,
+): { title: string; category: string; source: string; body: string } {
   const match = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
   if (!match) {
     return {
@@ -149,7 +152,8 @@ async function processFile(filePath: string): Promise<DocumentPayload[]> {
       const chunks = chunkText(raw);
       return chunks.map((chunk, idx) => ({
         id: `rag-txt-${fileIdBase}-${idx}`,
-        title: chunks.length > 1 ? `${titleDefault}｜第${idx + 1}段` : titleDefault,
+        title:
+          chunks.length > 1 ? `${titleDefault}｜第${idx + 1}段` : titleDefault,
         content: chunk,
         source: relativePath,
         category: "00_general",
@@ -164,7 +168,8 @@ async function processFile(filePath: string): Promise<DocumentPayload[]> {
       const chunks = chunkText(rawText);
       return chunks.map((chunk, idx) => ({
         id: `rag-pdf-${fileIdBase}-${idx}`,
-        title: chunks.length > 1 ? `${titleDefault}｜第${idx + 1}段` : titleDefault,
+        title:
+          chunks.length > 1 ? `${titleDefault}｜第${idx + 1}段` : titleDefault,
         content: chunk,
         source: relativePath,
         category: "00_general",
@@ -178,7 +183,8 @@ async function processFile(filePath: string): Promise<DocumentPayload[]> {
       const chunks = chunkText(rawText);
       return chunks.map((chunk, idx) => ({
         id: `rag-docx-${fileIdBase}-${idx}`,
-        title: chunks.length > 1 ? `${titleDefault}｜第${idx + 1}段` : titleDefault,
+        title:
+          chunks.length > 1 ? `${titleDefault}｜第${idx + 1}段` : titleDefault,
         content: chunk,
         source: relativePath,
         category: "00_general",
@@ -200,7 +206,8 @@ async function processFile(filePath: string): Promise<DocumentPayload[]> {
           chunks.forEach((chunk, chunkIdx) => {
             payloads.push({
               id: `rag-json-${fileIdBase}-${itemIdx}-${chunkIdx}`,
-              title: chunks.length > 1 ? `${title}｜第${chunkIdx + 1}段` : title,
+              title:
+                chunks.length > 1 ? `${title}｜第${chunkIdx + 1}段` : title,
               content: chunk,
               source: item.source || item.url || relativePath,
               category: item.category || "00_general",
@@ -210,7 +217,8 @@ async function processFile(filePath: string): Promise<DocumentPayload[]> {
         return payloads;
       } else {
         // Format B: Single JSON Object
-        const content = parsed.content || parsed.body || JSON.stringify(parsed, null, 2);
+        const content =
+          parsed.content || parsed.body || JSON.stringify(parsed, null, 2);
         const title = parsed.title || titleDefault;
         const chunks = chunkText(content);
         return chunks.map((chunk, idx) => ({
@@ -262,7 +270,9 @@ async function main() {
     process.exit(0);
   }
 
-  console.log(`\nIngesting ${allChunks.length} chunks into Chroma collection...`);
+  console.log(
+    `\nIngesting ${allChunks.length} chunks into Chroma collection...`,
+  );
   try {
     await ingestKnowledgeBatch(allChunks);
     console.log("🟢 Ingestion completed successfully!");
@@ -272,12 +282,18 @@ async function main() {
     console.log(`\nRunning smoke test search for "${query}":`);
     const results = await searchKnowledge(query, 3);
     if (results.length === 0) {
-      console.log("  No matches found (Chroma might be empty or search failed).");
+      console.log(
+        "  No matches found (Chroma might be empty or search failed).",
+      );
     } else {
       results.forEach((r, idx) => {
-        console.log(`  [${idx + 1}] [Score: ${r.score.toFixed(3)}] ${r.title} (${r.category})`);
+        console.log(
+          `  [${idx + 1}] [Score: ${r.score.toFixed(3)}] ${r.title} (${r.category})`,
+        );
         console.log(`      Source: ${r.source}`);
-        console.log(`      Snippet: ${r.content.substring(0, 100).replace(/\n/g, " ")}...`);
+        console.log(
+          `      Snippet: ${r.content.substring(0, 100).replace(/\n/g, " ")}...`,
+        );
       });
     }
   } catch (err: any) {

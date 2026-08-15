@@ -20,16 +20,16 @@ const PasswordSchema = z
     message: "密碼需同時包含英文字母與數字",
   })
   .openapi({
-    description: "至少 8 字元、最多 72 位元組（bcrypt 上限），需含英文字母與數字",
+    description:
+      "至少 8 字元、最多 72 位元組（bcrypt 上限），需含英文字母與數字",
     example: "taipei2026",
   });
 
 export const GoogleAuthBodySchema = z
   .object({
-    idToken: z
-      .string()
-      .min(1)
-      .openapi({ description: "Google Sign-In 發給前端的 ID token，由後端驗證" }),
+    idToken: z.string().min(1).openapi({
+      description: "Google Sign-In 發給前端的 ID token，由後端驗證",
+    }),
   })
   .strict();
 
@@ -56,13 +56,19 @@ export const EmailBodySchema = z
 
 export const VerifyEmailBodySchema = z
   .object({
-    token: z.string().min(1).openapi({ description: "驗證信連結中的一次性權杖" }),
+    token: z
+      .string()
+      .min(1)
+      .openapi({ description: "驗證信連結中的一次性權杖" }),
   })
   .strict();
 
 export const ResetPasswordBodySchema = z
   .object({
-    token: z.string().min(1).openapi({ description: "重設信連結中的一次性權杖" }),
+    token: z
+      .string()
+      .min(1)
+      .openapi({ description: "重設信連結中的一次性權杖" }),
     password: PasswordSchema,
   })
   .strict();
@@ -94,19 +100,28 @@ const UserSchema = z
   .object({
     _id: z.string().openapi({ example: "665f1a2b3c4d5e6f7a8b9c0d" }),
     name: z.string().openapi({ example: "Jane Doe" }),
-    avatar: z.string().url().optional().openapi({ example: "https://example.com/avatar.png" }),
-    email: z.string().email().openapi({ example: "jane@example.com" }),
-    client_id: z
+    avatar: z
       .string()
-      .nullable()
+      .url()
       .optional()
-      .openapi({ description: "Google sub；純帳密註冊的帳號為 null", example: "10293847" }),
+      .openapi({ example: "https://example.com/avatar.png" }),
+    email: z.string().email().openapi({ example: "jane@example.com" }),
+    client_id: z.string().nullable().optional().openapi({
+      description: "Google sub；純帳密註冊的帳號為 null",
+      example: "10293847",
+    }),
     authProviders: z
       .array(z.enum(["google", "local"]))
       .openapi({ description: "此帳號可用的登入方式", example: ["local"] }),
     emailVerified: z.boolean().openapi({ example: true }),
-    tokenVersion: z.number().openapi({ description: "改密碼時遞增，用於撤銷舊權杖", example: 0 }),
-    lineUserId: z.string().nullable().optional().openapi({ example: "U1234567890abcdef" }),
+    tokenVersion: z
+      .number()
+      .openapi({ description: "改密碼時遞增，用於撤銷舊權杖", example: 0 }),
+    lineUserId: z
+      .string()
+      .nullable()
+      .optional()
+      .openapi({ example: "U1234567890abcdef" }),
     createdAt: z.string().openapi({ example: "2026-01-15T08:30:00.000Z" }),
     updatedAt: z.string().openapi({ example: "2026-06-03T11:45:00.000Z" }),
   })
@@ -115,7 +130,9 @@ const UserSchema = z
 const ConfigSchema = z
   .object({
     language: z.string().openapi({ example: "zh-TW" }),
-    darkMode: z.enum(["light", "dark", "system"]).openapi({ example: "system" }),
+    darkMode: z
+      .enum(["light", "dark", "system"])
+      .openapi({ example: "system" }),
     themeColor: z.string().openapi({ example: "#3B82F6" }),
     fontSize: z.string().openapi({ example: "md" }),
     notifications: z.boolean().openapi({ example: true }),
@@ -130,7 +147,10 @@ const apiResponse = <T extends z.ZodTypeAny>(data?: T) =>
     code: z.number().openapi({ example: 200 }),
     message: z.string().openapi({ example: "OK" }),
     ...(data ? { data: data.optional() } : {}),
-    accessToken: z.string().optional().openapi({ description: "短期有效的 JWT 存取權杖" }),
+    accessToken: z
+      .string()
+      .optional()
+      .openapi({ description: "短期有效的 JWT 存取權杖" }),
   });
 
 export const LoginResponseSchema = apiResponse(
@@ -165,18 +185,27 @@ export const UserInfoResponseSchema = apiResponse(
   }),
 ).openapi("UserInfoResponse");
 
-export const ConfigResponseSchema = apiResponse(ConfigSchema.nullable()).openapi("ConfigResponse");
+export const ConfigResponseSchema = apiResponse(
+  ConfigSchema.nullable(),
+).openapi("ConfigResponse");
 
-export const UpdateConfigResponseSchema = apiResponse(ConfigSchema).openapi("UpdateConfigResponse");
+export const UpdateConfigResponseSchema = apiResponse(ConfigSchema).openapi(
+  "UpdateConfigResponse",
+);
 
-const MOBILITY_AIDS = ["manual_wheelchair", "power_wheelchair", "walker", "none"] as const;
+const MOBILITY_AIDS = [
+  "manual_wheelchair",
+  "power_wheelchair",
+  "walker",
+  "none",
+] as const;
 
 const A11yProfileSchema = z
   .object({
-    mobilityAid: z
-      .enum(MOBILITY_AIDS)
-      .nullable()
-      .openapi({ example: "manual_wheelchair", description: "行動輔具類型；null 表示尚未設定" }),
+    mobilityAid: z.enum(MOBILITY_AIDS).nullable().openapi({
+      example: "manual_wheelchair",
+      description: "行動輔具類型；null 表示尚未設定",
+    }),
     canUseStairs: z
       .boolean()
       .nullable()
@@ -190,10 +219,10 @@ const A11yProfileSchema = z
     needsAccessibleToilet: z.boolean().nullable().openapi({ example: true }),
     needsElevator: z.boolean().nullable().openapi({ example: true }),
     needsHandrail: z.boolean().nullable().openapi({ example: false }),
-    visualAssistance: z
-      .boolean()
-      .nullable()
-      .openapi({ example: false, description: "是否需要視障相關輔助（導盲磚、語音號誌等）" }),
+    visualAssistance: z.boolean().nullable().openapi({
+      example: false,
+      description: "是否需要視障相關輔助（導盲磚、語音號誌等）",
+    }),
     preferredFontScale: z
       .number()
       .min(0.5)
@@ -215,7 +244,9 @@ export const A11yProfileResponseSchema = apiResponse(A11yProfileSchema).openapi(
 export const LineLinkCodeResponseSchema = apiResponse(
   z.object({
     bindCode: z.string().openapi({ example: "A1B2C3" }),
-    bindCodeExpiresAt: z.string().openapi({ example: "2026-07-09T08:30:00.000Z" }),
+    bindCodeExpiresAt: z
+      .string()
+      .openapi({ example: "2026-07-09T08:30:00.000Z" }),
     bindUrl: z.string().openapi({ example: "https://line.me/R/ti/p/@xxxxxxx" }),
   }),
 ).openapi("LineLinkCodeResponse");
@@ -238,7 +269,10 @@ registry.registerPath({
     "後端以 GOOGLE_CLIENT_ID 驗證前端傳來的 Google ID token，身分僅取自驗證後的 payload。" +
     "同 email 的既有帳號會自動連結；若該帳號原為未驗證的帳密帳號，其密碼會被移除並撤銷既有權杖。",
   request: {
-    body: { content: { "application/json": { schema: GoogleAuthBodySchema } }, required: true },
+    body: {
+      content: { "application/json": { schema: GoogleAuthBodySchema } },
+      required: true,
+    },
   },
   responses: {
     200: {
@@ -259,7 +293,10 @@ registry.registerPath({
   description:
     "建立帳密帳號並寄出驗證信。**不會回傳權杖**：必須先完成信箱驗證才能登入。",
   request: {
-    body: { content: { "application/json": { schema: RegisterBodySchema } }, required: true },
+    body: {
+      content: { "application/json": { schema: RegisterBodySchema } },
+      required: true,
+    },
   },
   responses: {
     200: {
@@ -281,7 +318,10 @@ registry.registerPath({
   description:
     "以電子郵件與密碼登入。帳號不存在與密碼錯誤回傳完全相同的 401，以避免洩漏哪些信箱已註冊。",
   request: {
-    body: { content: { "application/json": { schema: LoginBodySchema } }, required: true },
+    body: {
+      content: { "application/json": { schema: LoginBodySchema } },
+      required: true,
+    },
   },
   responses: {
     200: {
@@ -289,7 +329,9 @@ registry.registerPath({
       content: { "application/json": { schema: LoginResponseSchema } },
     },
     400: errorResponse("欄位格式錯誤"),
-    401: errorResponse("電子郵件或密碼錯誤（data.reason = INVALID_CREDENTIALS）"),
+    401: errorResponse(
+      "電子郵件或密碼錯誤（data.reason = INVALID_CREDENTIALS）",
+    ),
     403: errorResponse("信箱尚未驗證（data.reason = EMAIL_NOT_VERIFIED）"),
     429: errorResponse("登入請求過於頻繁"),
   },
@@ -302,7 +344,10 @@ registry.registerPath({
   summary: "驗證電子郵件",
   description: "以驗證信中的一次性權杖完成驗證，並直接回傳登入權杖。",
   request: {
-    body: { content: { "application/json": { schema: VerifyEmailBodySchema } }, required: true },
+    body: {
+      content: { "application/json": { schema: VerifyEmailBodySchema } },
+      required: true,
+    },
   },
   responses: {
     200: {
@@ -320,7 +365,10 @@ registry.registerPath({
   summary: "重寄驗證信",
   description: "無論該信箱是否存在或已驗證，一律回傳 200，以避免信箱列舉。",
   request: {
-    body: { content: { "application/json": { schema: EmailBodySchema } }, required: true },
+    body: {
+      content: { "application/json": { schema: EmailBodySchema } },
+      required: true,
+    },
   },
   responses: {
     200: {
@@ -341,7 +389,10 @@ registry.registerPath({
     "Queue 無法寫入時，無論帳號是否存在都回 503。背景 worker 對本地密碼帳號寄重設連結；" +
     "Google-only 帳號只寄 Google 登入與帳戶救援說明，不簽發本站重設權杖。",
   request: {
-    body: { content: { "application/json": { schema: EmailBodySchema } }, required: true },
+    body: {
+      content: { "application/json": { schema: EmailBodySchema } },
+      required: true,
+    },
   },
   responses: {
     202: {
@@ -362,7 +413,10 @@ registry.registerPath({
     "以本地密碼帳號重設信中的一次性權杖設定新密碼。Google-only 帳號不能透過此流程新增本站密碼。" +
     "成功後信箱一併標記為已驗證，並撤銷所有既有權杖。",
   request: {
-    body: { content: { "application/json": { schema: ResetPasswordBodySchema } }, required: true },
+    body: {
+      content: { "application/json": { schema: ResetPasswordBodySchema } },
+      required: true,
+    },
   },
   responses: {
     200: {
@@ -385,7 +439,10 @@ registry.registerPath({
     "帳號尚無密碼（純 Google 登入）時可省略 currentPassword，即為新增密碼登入方式。",
   security: [{ bearerAuth: [] }],
   request: {
-    body: { content: { "application/json": { schema: ChangePasswordBodySchema } }, required: true },
+    body: {
+      content: { "application/json": { schema: ChangePasswordBodySchema } },
+      required: true,
+    },
   },
   responses: {
     200: {
@@ -404,7 +461,8 @@ registry.registerPath({
   path: "/user/refresh",
   tags: ["User"],
   summary: "Cookie 換發權杖",
-  description: "讀取 refreshToken cookie，簽發新的存取與 refresh 權杖，免請求內容。",
+  description:
+    "讀取 refreshToken cookie，簽發新的存取與 refresh 權杖，免請求內容。",
   responses: {
     200: {
       description: "新的存取與 refresh 權杖",
@@ -449,7 +507,8 @@ registry.registerPath({
   path: "/user/line-link-code",
   tags: ["User"],
   summary: "取得 LINE 帳號綁定碼",
-  description: "由已登入使用者產生一次性 LINE 綁定碼，供使用者在 LINE Bot 中傳送綁定。",
+  description:
+    "由已登入使用者產生一次性 LINE 綁定碼，供使用者在 LINE Bot 中傳送綁定。",
   security: [{ bearerAuth: [] }],
   responses: {
     200: {
@@ -530,7 +589,8 @@ registry.registerPath({
   path: "/user/a11y-profile",
   tags: ["User"],
   summary: "取得使用者無障礙偏好",
-  description: "首次呼叫時若尚無設定，會自動建立一筆欄位皆為 null 的空白設定；不會因此要求使用者重新填寫一次。",
+  description:
+    "首次呼叫時若尚無設定，會自動建立一筆欄位皆為 null 的空白設定；不會因此要求使用者重新填寫一次。",
   security: [{ bearerAuth: [] }],
   responses: {
     200: {

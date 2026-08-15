@@ -1,4 +1,5 @@
 # 出發前環境資訊查詢
+
 ## Functional Specification — Pre-Trip Environment Aggregation
 
 **版本**：v1.0.5  
@@ -29,11 +30,11 @@
 
 本功能讓使用者在出發前，針對目標地點一次查詢三類即時環境資訊：
 
-| 資訊類型 | 資料來源 | 現有整合狀態 |
-|---------|---------|------------|
-| **天氣**（氣溫 / 降雨 / 風速 / 風向） | 中央氣象署 CWA 開放資料 API | 未整合 |
-| **空氣品質（AQI / PM2.5）** | 台灣感測器平台 STA（`sta.ci.taiwan.gov.tw`） | ✅ 已整合（`getAirQuality` Agent Tool + `air.service.ts`） |
-| **監視器（CCTV）路況** | 台灣路況監視器平台 twipcam（`twipcam.com`） | 未整合 |
+| 資訊類型                              | 資料來源                                     | 現有整合狀態                                               |
+| ------------------------------------- | -------------------------------------------- | ---------------------------------------------------------- |
+| **天氣**（氣溫 / 降雨 / 風速 / 風向） | 中央氣象署 CWA 開放資料 API                  | 未整合                                                     |
+| **空氣品質（AQI / PM2.5）**           | 台灣感測器平台 STA（`sta.ci.taiwan.gov.tw`） | ✅ 已整合（`getAirQuality` Agent Tool + `air.service.ts`） |
+| **監視器（CCTV）路況**                | 台灣路況監視器平台 twipcam（`twipcam.com`）  | 未整合                                                     |
 
 **系統定位**：純資訊查詢聚合端點，**不**修改路徑規劃邏輯，不影響無障礙評分，回傳結果供使用者自行判斷是否出發。
 
@@ -49,11 +50,11 @@
 
 ### 2.2 非功能目標
 
-| 目標          | 說明                                        |
-| ----------- | ----------------------------------------- |
-| 後端聚合        | 前端單一呼叫即取得三類資料，不直接呼叫外部 API                 |
-| 降級不中斷       | 任一外部 API 失敗，其他區塊仍正常回傳                     |
-| 配額保護        | Redis 快取攔截重複查詢，避免超過外部 API 速率上限            |
+| 目標                   | 說明                                                                     |
+| ---------------------- | ------------------------------------------------------------------------ |
+| 後端聚合               | 前端單一呼叫即取得三類資料，不直接呼叫外部 API                           |
+| 降級不中斷             | 任一外部 API 失敗，其他區塊仍正常回傳                                    |
+| 配額保護               | Redis 快取攔截重複查詢，避免超過外部 API 速率上限                        |
 | 環境感知路徑不納入本期 | 本功能僅供資訊顯示，不與評分引擎整合（環境感知路徑規劃 S4 為獨立 phase） |
 
 ---
@@ -133,10 +134,10 @@ src/modules/environment/
 
 「降級」不是塞在 adapter 與 service 之間的一層，而是拆成兩個**正交**的關注點，各自下沉 / 上收到正確的層，且依賴方向單向、永不回頭：
 
-| 關注點    | 內容                                                                 | 住哪                                    | 理由                                                                                                |
-| ------ | ------------------------------------------------------------------ | ------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| **機制** | timeout、斷路、重試、例外正規化、log                                            | **infra**（`src/config/resilience.ts`） | 橫切關注點，不屬任何 domain；位於依賴圖最底層，誰都能用、不依賴任何人。與既有 `tdxFetch`（`src/config/fetch.ts`，掛 token + 401 重試）同層同理 |
-| **政策** | `Promise.allSettled`、部分回 200、「unavailable 對本端點的語意」、cache-aside TTL | **service**（`environment.service.ts`） | 「本端點容忍缺哪幾塊」是業務決策                                                                                  |
+| 關注點   | 內容                                                                              | 住哪                                    | 理由                                                                                                                                           |
+| -------- | --------------------------------------------------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| **機制** | timeout、斷路、重試、例外正規化、log                                              | **infra**（`src/config/resilience.ts`） | 橫切關注點，不屬任何 domain；位於依賴圖最底層，誰都能用、不依賴任何人。與既有 `tdxFetch`（`src/config/fetch.ts`，掛 token + 401 重試）同層同理 |
+| **政策** | `Promise.allSettled`、部分回 200、「unavailable 對本端點的語意」、cache-aside TTL | **service**（`environment.service.ts`） | 「本端點容忍缺哪幾塊」是業務決策                                                                                                               |
 
 **adapter 失敗直接 throw、由 service 決定容忍**：
 
@@ -161,11 +162,11 @@ environment.service.ts ──→ cwa.adapter.ts ──────┐
 
 #### 4.1.1 API 資訊
 
-| 項目 | 內容 |
-|------|------|
-| 文件網址 | `https://opendata.cwa.gov.tw/dist/opendata-swagger.html` |
-| 授權金鑰 | CWA 開放資料平台申請，免費方案每日呼叫上限 100,000 次 |
-| 環境變數 | `CWA_API_KEY` |
+| 項目                        | 內容                                                                                                                                                                                                                                                     |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 文件網址                    | `https://opendata.cwa.gov.tw/dist/opendata-swagger.html`                                                                                                                                                                                                 |
+| 授權金鑰                    | CWA 開放資料平台申請，免費方案每日呼叫上限 100,000 次                                                                                                                                                                                                    |
+| 環境變數                    | `CWA_API_KEY`                                                                                                                                                                                                                                            |
 | 採用端點（兩段式，方案 E′） | **① 定縣市**：`GET /v1/rest/datastore/F-D0047-089` — 全台 22 縣市代表點（含 `Latitude`/`Longitude`），Haversine 取最近縣市。**② 定區**：依縣市查靜態表取該縣市鄉鎮檔（如臺北市 → `F-D0047-061`），Haversine 取最近區。皆每 6 小時更新（詳見 §4.1.2、§8） |
 
 #### 4.1.2 請求範例
@@ -184,8 +185,9 @@ GET https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-D0047-061
 > 經實測（2026-06-19，實打 API）：過濾參數為 **PascalCase** —— `ElementName=溫度,3小時降雨機率,…`、`LocationName=<區>` 才會生效；舊版小寫 `elementName` / `locationName` 會被**靜默忽略**（回傳全部，這也是早期草稿誤以為可用的原因）。兩段式 stage ② 需全縣市各區座標做 Haversine，故**不**用 `LocationName` 過濾，但可用 `ElementName` 只取所需元素以縮小 payload。
 
 > **方案演進**：原規劃方案 E（單一全台鄉鎮檔 `F-D0047-093` + 就近比對）經 2026-06-19 實打 API 確認**不可行**——`F-D0047-093` 在 REST datastore 為 404，且 API 上唯一的全台檔（`089`/`091`）只有 **22 個縣市代表點**、非全鄉鎮。改採**方案 E′（兩段式就近比對）**：先用 `089`（22 縣市點）Haversine 定縣市，再抓該縣市鄉鎮檔 Haversine 定區，全程**免 Google 反查**、僅需一張靜態縣市→ID 表。座標 → 行政區 反查方案比較（仍列為參考）：
->
+
 | 方案 | 類型 | 成本 / 配額 | 精度 | 備註 |
+
 > |------|------|------------|------|------|
 > | **A. Google Maps Reverse Geocoding** | 外部 API | 付費、有配額 | 縣市 + 區 | 現有 `getCityZh()`，§4.2 空品已使用，可直接重用 |
 > | **B. 靜態 GeoJSON 鄉鎮市區界 + point-in-polygon** | 離線 | 免費、無配額、無網路 | 鄉鎮/區（精確含括判斷） | 資料源：政府資料開放平臺「鄉鎮市區界線(TWD97經緯度)」（dataset 7441）；以 turf.js `booleanPointInPolygon` 判斷 |
@@ -203,25 +205,25 @@ GET https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-D0047-061
 
 每個 `Location` 結構：`{ LocationName, Latitude, Longitude, WeatherElement[] }`。各 `WeatherElement` 以中文 `ElementName` 標示，值位於 `WeatherElement[].Time[].ElementValue[0].<key>`（瞬時值用 `Time[].DataTime`；區間值如降雨機率/天氣現象用 `Time[].StartTime`/`EndTime`）。
 
-| CWA `ElementName`                          | `ElementValue` key              | 回應欄位                               | 範例值                            |
-| ------------------------------------------ | ------------------------------- | ---------------------------------- | ------------------------------ |
-| `溫度`                                       | `Temperature`                   | `weather.temperature`              | `"36"`（°C）                     |
-| `3小時降雨機率`                                  | `ProbabilityOfPrecipitation`    | `weather.precipitationProbability` | `"10"`（%，**3 小時**非 6 小時）       |
-| `風速`                                       | `WindSpeed`（另有 `BeaufortScale`） | `weather.windSpeed`                | `"2"`（m/s）                     |
-| `風向`                                       | `WindDirection`                 | `weather.windDirection`            | `"西北風"`                        |
-| `天氣現象`                                     | `Weather`（另有 `WeatherCode`）     | `weather.condition`                | `"晴"`                          |
-| `天氣預報綜合描述`                                 | `WeatherDescription`            | （選用，整段描述）                          | `"晴。降雨機率10%。溫度…"`              |
-| `Location.Latitude` / `Location.Longitude` | —                               | （Haversine 就近比對用）                  | `"25.051608"` / `"121.568983"` |
+| CWA `ElementName`                          | `ElementValue` key                  | 回應欄位                           | 範例值                           |
+| ------------------------------------------ | ----------------------------------- | ---------------------------------- | -------------------------------- |
+| `溫度`                                     | `Temperature`                       | `weather.temperature`              | `"36"`（°C）                     |
+| `3小時降雨機率`                            | `ProbabilityOfPrecipitation`        | `weather.precipitationProbability` | `"10"`（%，**3 小時**非 6 小時） |
+| `風速`                                     | `WindSpeed`（另有 `BeaufortScale`） | `weather.windSpeed`                | `"2"`（m/s）                     |
+| `風向`                                     | `WindDirection`                     | `weather.windDirection`            | `"西北風"`                       |
+| `天氣現象`                                 | `Weather`（另有 `WeatherCode`）     | `weather.condition`                | `"晴"`                           |
+| `天氣預報綜合描述`                         | `WeatherDescription`                | （選用，整段描述）                 | `"晴。降雨機率10%。溫度…"`       |
+| `Location.Latitude` / `Location.Longitude` | —                                   | （Haversine 就近比對用）           | `"25.051608"` / `"121.568983"`   |
 
 > 其餘可用元素：`露點溫度`(`DewPoint`)、`相對濕度`(`RelativeHumidity`)、`體感溫度`(`ApparentTemperature`)、`舒適度指數`(`ComfortIndex`/`ComfortIndexDescription`)。`F-D0047-091`（1週）改為 `平均溫度`/`最高溫度`/`最低溫度`、`12小時降雨機率`、`紫外線指數` 等彙總元素。
 
 #### 4.1.4 錯誤處理
 
-| 情境 | 處理方式 |
-|------|---------|
+| 情境           | 處理方式                                                   |
+| -------------- | ---------------------------------------------------------- |
 | HTTP 4xx / 5xx | `weather` 區塊標記 `status: "unavailable"`，不中斷整體回應 |
-| 查無地點資料 | 同上 |
-| 逾時（> 5 秒） | 同上，記錄 warning log |
+| 查無地點資料   | 同上                                                       |
+| 逾時（> 5 秒） | 同上，記錄 warning log                                     |
 
 > **分層**（§3.3）：4xx / 5xx / 逾時由 `cwa.adapter.ts`（經 `withResilience`）正規化後 **throw**；「標記 `unavailable`、不中斷整體」是 `environment.service.ts` 的 `Promise.allSettled` 政策。本表描述的是**對外可觀察結果**，非實作所在層。
 
@@ -251,13 +253,13 @@ const { quality, advice } = classifyPm25(pm25);
 
 #### 4.2.3 欄位對應表
 
-| air.service 欄位 | 回應欄位 | 說明 |
-|----------------|---------|------|
-| `readings[0].pm25` | `airQuality.pm25` | PM2.5 濃度（μg/m³） |
-| `readings[0].area` | `airQuality.area` | 測站區域名稱 |
-| `readings[0].coordinates` | `airQuality.stationCoordinates` | 測站座標 |
-| `quality`（`classifyPm25` 輸出） | `airQuality.quality` | 品質等級（良好 / 普通 / …） |
-| `advice`（`classifyPm25` 輸出） | `airQuality.advice` | 健康建議文字 |
+| air.service 欄位                 | 回應欄位                        | 說明                        |
+| -------------------------------- | ------------------------------- | --------------------------- |
+| `readings[0].pm25`               | `airQuality.pm25`               | PM2.5 濃度（μg/m³）         |
+| `readings[0].area`               | `airQuality.area`               | 測站區域名稱                |
+| `readings[0].coordinates`        | `airQuality.stationCoordinates` | 測站座標                    |
+| `quality`（`classifyPm25` 輸出） | `airQuality.quality`            | 品質等級（良好 / 普通 / …） |
+| `advice`（`classifyPm25` 輸出）  | `airQuality.advice`             | 健康建議文字                |
 
 ---
 
@@ -265,12 +267,12 @@ const { quality, advice } = classifyPm25(pm25);
 
 #### 4.3.1 API 資訊
 
-| 項目     | 內容                                                                                                                     |
-| ------ | ---------------------------------------------------------------------------------------------------------------------- |
-| 文件網址   | `https://www.twipcam.com/api/document`                                                                                 |
-| 授權方式   | ✅ 已確認 — **不需要 API Key**（兩個端點皆為公開存取）                                                                                    |
-| 環境變數   | 無（不需金鑰）                                                                                                                |
-| 全台清單端點 | `GET https://www.twipcam.com/api/v1/cam-list.json` — 回傳全台攝影機清單（JSON 陣列，約 800+ 筆），無參數、無認證                               |
+| 項目         | 內容                                                                                                                                |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| 文件網址     | `https://www.twipcam.com/api/document`                                                                                              |
+| 授權方式     | ✅ 已確認 — **不需要 API Key**（兩個端點皆為公開存取）                                                                              |
+| 環境變數     | 無（不需金鑰）                                                                                                                      |
+| 全台清單端點 | `GET https://www.twipcam.com/api/v1/cam-list.json` — 回傳全台攝影機清單（JSON 陣列，約 800+ 筆），無參數、無認證                    |
 | 座標查詢端點 | `GET https://www.twipcam.com/widget/v1/query-cam-list-by-coordinate?lat=&lon=` — ⚠️ 回傳 **HTML widget（非 JSON）**，不適合後端聚合 |
 
 > **採用策略（✅ 已確認）**：twipcam **沒有**「座標 + 半徑」的 JSON 查詢端點，座標端點僅回傳 HTML。因此後端採 **全台清單（`cam-list.json`）+ 本地 Haversine 過濾** 策略（見 §4.3.2、§8 Phase E-3）。
@@ -305,15 +307,15 @@ GET https://www.twipcam.com/api/v1/cam-list.json
 }
 ```
 
-| twipcam 欄位  | 回應欄位                | 說明                                                                                                   |
-| ----------- | ------------------- | ---------------------------------------------------------------------------------------------------- |
-| `id`        | `cctv.id`           | 攝影機識別碼（如 `n2-w-1k-000`、`tpe-000313`）                                                                 |
-| `name`      | `cctv.name`         | 地點描述（中文）                                                                                             |
-| `lat`       | `cctv.location.lat` | 緯度                                                                                                   |
-| `lon`       | `cctv.location.lng` | 經度（twipcam 欄位名為 `lon`，回應正規化為 `lng`）                                                                  |
-| `cam_url`   | `cctv.streamUrl`    | 影像來源 URL（國道為 MJPEG `abs2mjpg` 串流，可直接於 `<img>` 或播放器呈現）                                                |
+| twipcam 欄位     | 回應欄位            | 說明                                                                                                                                  |
+| ---------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`             | `cctv.id`           | 攝影機識別碼（如 `n2-w-1k-000`、`tpe-000313`）                                                                                        |
+| `name`           | `cctv.name`         | 地點描述（中文）                                                                                                                      |
+| `lat`            | `cctv.location.lat` | 緯度                                                                                                                                  |
+| `lon`            | `cctv.location.lng` | 經度（twipcam 欄位名為 `lon`，回應正規化為 `lng`）                                                                                    |
+| `cam_url`        | `cctv.streamUrl`    | 影像來源 URL（國道為 MJPEG `abs2mjpg` 串流，可直接於 `<img>` 或播放器呈現）                                                           |
 | （由 `id` 推導） | `cctv.snapshotUrl`  | twipcam 快照代理 `https://c01.twipcam.com/cam/snapshot/{id}.jpg`（⚠️ 待驗證：僅於座標 widget 觀察到市區攝影機適用，國道攝影機未驗證） |
-| （計算值）       | `cctv.distanceM`    | 與查詢座標的距離（公尺），後端以 Haversine 計算                                                                        |
+| （計算值）       | `cctv.distanceM`    | 與查詢座標的距離（公尺），後端以 Haversine 計算                                                                                       |
 
 > **無 `m3u8` / `RTSP` / `snapshot_url` 欄位**：實測 `cam-list.json` 僅提供單一 `cam_url`（MJPEG / 來源影像）；原規格假設的 `snapshot_url` / `stream_url` 欄位**不存在**。`snapshotUrl` 改由 `id` 推導 twipcam 快照代理 URL。
 
@@ -321,10 +323,10 @@ GET https://www.twipcam.com/api/v1/cam-list.json
 
 #### 4.3.4 錯誤處理
 
-| 情境 | 處理方式 |
-|------|---------|
-| HTTP 4xx / 5xx | `nearbyCctv` 標記 `status: "unavailable"` |
-| 附近無監視器 | 回傳空陣列 `[]`，`status: "ok"` |
+| 情境           | 處理方式                                       |
+| -------------- | ---------------------------------------------- |
+| HTTP 4xx / 5xx | `nearbyCctv` 標記 `status: "unavailable"`      |
+| 附近無監視器   | 回傳空陣列 `[]`，`status: "ok"`                |
 | 逾時（> 5 秒） | 標記 `status: "unavailable"`，記錄 warning log |
 
 > **分層**（§3.3）：HTTP 失敗 / 逾時由 `twipcam.adapter.ts`（經 `withResilience`）**throw**，「標 `unavailable`」是 service 政策。「附近無監視器 → 空陣列 + `status: "ok"`」屬**正常結果**（非降級）：adapter 正常回傳空清單，service 不特別處理。
@@ -335,9 +337,9 @@ GET https://www.twipcam.com/api/v1/cam-list.json
 
 ### 5.1 端點總覽
 
-| Method | Path | 功能 | 狀態 |
-|--------|------|------|------|
-| `GET` | `/api/v1/a11y/environment` | 聚合環境資訊查詢 | ✅ Implemented |
+| Method | Path                       | 功能             | 狀態           |
+| ------ | -------------------------- | ---------------- | -------------- |
+| `GET`  | `/api/v1/a11y/environment` | 聚合環境資訊查詢 | ✅ Implemented |
 
 ### 5.2 聚合查詢端點
 
@@ -351,8 +353,8 @@ GET https://www.twipcam.com/api/v1/cam-list.json
 const EnvironmentQuerySchema = z.object({
   lat: z.coerce.number().min(-90).max(90),
   lng: z.coerce.number().min(-180).max(180),
-  radius: z.coerce.number().int().min(100).max(2000).default(500),  // 監視器搜尋半徑（公尺）
-})
+  radius: z.coerce.number().int().min(100).max(2000).default(500), // 監視器搜尋半徑（公尺）
+});
 ```
 
 **請求範例**
@@ -389,7 +391,7 @@ GET /api/v1/a11y/environment?lat=25.0478&lng=121.5318&radius=500
       "quality": "普通",
       "advice": "空氣品質尚可，敏感族群可考慮減少長時間戶外活動",
       "area": "大安區",
-      "stationCoordinates": [121.5417, 25.0260]
+      "stationCoordinates": [121.5417, 25.026]
     },
     "nearbyCctv": {
       "status": "ok",
@@ -436,7 +438,7 @@ GET /api/v1/a11y/environment?lat=25.0478&lng=121.5318&radius=500
       "quality": "普通",
       "advice": "空氣品質尚可，敏感族群可考慮減少長時間戶外活動",
       "area": "大安區",
-      "stationCoordinates": [121.5417, 25.0260]
+      "stationCoordinates": [121.5417, 25.026]
     },
     "nearbyCctv": {
       "status": "ok",
@@ -463,31 +465,31 @@ GET /api/v1/a11y/environment?lat=25.0478&lng=121.5318&radius=500
 
 ### 5.3 狀態碼一覽
 
-| HTTP 狀態碼 | Reason | 說明 |
-|-----------|--------|------|
-| `200` | — | 成功（含部分降級） |
-| `400` | `INVALID_PARAMS` | Zod 驗證失敗（lat/lng/radius 不合法） |
-| `500` | `INTERNAL_ERROR` | 非預期錯誤（所有外部呼叫皆無法降級） |
+| HTTP 狀態碼 | Reason           | 說明                                  |
+| ----------- | ---------------- | ------------------------------------- |
+| `200`       | —                | 成功（含部分降級）                    |
+| `400`       | `INVALID_PARAMS` | Zod 驗證失敗（lat/lng/radius 不合法） |
+| `500`       | `INTERNAL_ERROR` | 非預期錯誤（所有外部呼叫皆無法降級）  |
 
 ### 5.4 `status` 欄位說明
 
 各資料區塊（`weather` / `airQuality` / `nearbyCctv`）獨立攜帶 `status` 欄位：
 
-| 值 | 含義 |
-|----|------|
-| `"ok"` | 資料正常取得 |
+| 值              | 含義                              |
+| --------------- | --------------------------------- |
+| `"ok"`          | 資料正常取得                      |
 | `"unavailable"` | 外部 API 失敗或逾時，此區塊無資料 |
 
 ### 5.5 `reason` 代碼（常數，無 magic literal）
 
 `status: "unavailable"` 時 `reason` 攜帶失敗分類。代碼為具名常數（`src/constants/environment.ts`），由 `withResilience`（§3.3 機制層）統一正規化後產生、service 原樣帶入該區塊——呼叫點不得內聯字面值：
 
-| `reason` | 含義 | 適用來源 |
-|----------|------|---------|
-| `UPSTREAM_TIMEOUT` | 外部 API 逾時（> 5 秒） | 任一來源 |
-| `UPSTREAM_HTTP_ERROR` | 外部 API 回 4xx / 5xx | 任一來源 |
-| `UPSTREAM_BAD_PAYLOAD` | 回應解析失敗 / 欄位缺漏 | 任一來源 |
-| `CIRCUIT_OPEN` | 斷路器開啟（連續失敗，暫停外呼） | 任一來源 |
+| `reason`               | 含義                             | 適用來源 |
+| ---------------------- | -------------------------------- | -------- |
+| `UPSTREAM_TIMEOUT`     | 外部 API 逾時（> 5 秒）          | 任一來源 |
+| `UPSTREAM_HTTP_ERROR`  | 外部 API 回 4xx / 5xx            | 任一來源 |
+| `UPSTREAM_BAD_PAYLOAD` | 回應解析失敗 / 欄位缺漏          | 任一來源 |
+| `CIRCUIT_OPEN`         | 斷路器開啟（連續失敗，暫停外呼） | 任一來源 |
 
 > 取代先前範例內聯的 `"CWA_API_ERROR"`：`reason` 一律取自 `withResilience` 的統一分類（與來源無關，誰失敗就掛在哪個區塊），落實 §3.3「機制只寫一處」。
 
@@ -501,11 +503,11 @@ GET /api/v1/a11y/environment?lat=25.0478&lng=121.5318&radius=500
 
 ### 6.2 快取 TTL 表
 
-| 資料類型 | 快取 TTL | 理由 |
-|---------|---------|------|
-| **天氣**（CWA） | 20 分鐘 | 預報資料更新頻率低；20 分鐘對出發前決策已夠即時 |
-| **空氣品質**（STA） | 60 分鐘 | 測站每小時更新一次 PM2.5，TTL 與資料週期對齊 |
-| **監視器清單**（twipcam 清單查詢） | 10 分鐘 | 攝影機列表變動少；列表快取，快照 URL 不儲存 |
+| 資料類型                           | 快取 TTL | 理由                                            |
+| ---------------------------------- | -------- | ----------------------------------------------- |
+| **天氣**（CWA）                    | 20 分鐘  | 預報資料更新頻率低；20 分鐘對出發前決策已夠即時 |
+| **空氣品質**（STA）                | 60 分鐘  | 測站每小時更新一次 PM2.5，TTL 與資料週期對齊    |
+| **監視器清單**（twipcam 清單查詢） | 10 分鐘  | 攝影機列表變動少；列表快取，快照 URL 不儲存     |
 
 ### 6.3 快取 Key 設計
 
@@ -561,49 +563,49 @@ environment.service 對三類資料各自執行：
 ```typescript
 // src/modules/environment/environment.types.ts
 
-type DataStatus = "ok" | "unavailable"
+type DataStatus = "ok" | "unavailable";
 
 interface WeatherBlock {
-  status: DataStatus
-  temperature?: number              // 氣溫（°C）
-  precipitationProbability?: number // 降雨機率（%，0–100）
-  windSpeed?: number                // 風速（m/s）
-  windDirection?: string            // 風向（中文）
-  condition?: string                // 天氣描述
-  forecastTime?: string             // ISO 8601，預報時段起始時間
-  reason?: string                   // 僅 status="unavailable" 時出現
+  status: DataStatus;
+  temperature?: number; // 氣溫（°C）
+  precipitationProbability?: number; // 降雨機率（%，0–100）
+  windSpeed?: number; // 風速（m/s）
+  windDirection?: string; // 風向（中文）
+  condition?: string; // 天氣描述
+  forecastTime?: string; // ISO 8601，預報時段起始時間
+  reason?: string; // 僅 status="unavailable" 時出現
 }
 
 interface AirQualityBlock {
-  status: DataStatus
-  pm25?: number                     // PM2.5 濃度（μg/m³）
-  quality?: string                  // 等級（良好 / 普通 / 對敏感族群不健康 / 不健康 / 非常不健康）
-  advice?: string                   // 健康建議文字
-  area?: string | null              // 測站所在行政區
-  stationCoordinates?: [number, number] | null   // [lng, lat]
-  reason?: string
+  status: DataStatus;
+  pm25?: number; // PM2.5 濃度（μg/m³）
+  quality?: string; // 等級（良好 / 普通 / 對敏感族群不健康 / 不健康 / 非常不健康）
+  advice?: string; // 健康建議文字
+  area?: string | null; // 測站所在行政區
+  stationCoordinates?: [number, number] | null; // [lng, lat]
+  reason?: string;
 }
 
 interface CctvCamera {
-  id: string
-  name: string
-  location: { lat: number; lng: number }
-  distanceM: number
-  snapshotUrl: string | null
-  streamUrl: string | null
+  id: string;
+  name: string;
+  location: { lat: number; lng: number };
+  distanceM: number;
+  snapshotUrl: string | null;
+  streamUrl: string | null;
 }
 
 interface CctvBlock {
-  status: DataStatus
-  cameras?: CctvCamera[]
-  reason?: string
+  status: DataStatus;
+  cameras?: CctvCamera[];
+  reason?: string;
 }
 
 interface EnvironmentData {
-  location: { lat: number; lng: number }
-  weather: WeatherBlock
-  airQuality: AirQualityBlock
-  nearbyCctv: CctvBlock
+  location: { lat: number; lng: number };
+  weather: WeatherBlock;
+  airQuality: AirQualityBlock;
+  nearbyCctv: CctvBlock;
 }
 ```
 
@@ -613,12 +615,12 @@ interface EnvironmentData {
 
 ### 8.1 Phase 總覽
 
-| Phase | 功能 | 優先度 | 依賴 | 狀態 |
-|-------|------|--------|------|------|
-| **Phase E-1** | 聚合骨架 + 空品整合 | Critical | 現有 `air.service.ts` | ✅ 已實作 |
-| **Phase E-2** | CWA 天氣整合 + Redis 快取 | High | `CWA_API_KEY`、Redis | ✅ 已實作 |
-| **Phase E-3** | twipcam CCTV 整合 | Medium | twipcam API 確認 | ✅ 已實作 |
-| **Phase E-4（選配）** | `getEnvironmentInfo` AI Agent Tool | Low | Phase E-1 完成 | ⬜ 未實作（選配） |
+| Phase                 | 功能                               | 優先度   | 依賴                  | 狀態              |
+| --------------------- | ---------------------------------- | -------- | --------------------- | ----------------- |
+| **Phase E-1**         | 聚合骨架 + 空品整合                | Critical | 現有 `air.service.ts` | ✅ 已實作         |
+| **Phase E-2**         | CWA 天氣整合 + Redis 快取          | High     | `CWA_API_KEY`、Redis  | ✅ 已實作         |
+| **Phase E-3**         | twipcam CCTV 整合                  | Medium   | twipcam API 確認      | ✅ 已實作         |
+| **Phase E-4（選配）** | `getEnvironmentInfo` AI Agent Tool | Low      | Phase E-1 完成        | ⬜ 未實作（選配） |
 
 ---
 
@@ -661,6 +663,7 @@ app.use("/api/v1/a11y", createEnvironmentRouter());
 ```
 
 **驗收條件**：
+
 - `GET /api/v1/a11y/environment?lat=25.0478&lng=121.5318` 回傳 `airQuality` 含 PM2.5 資料
 - `weather` 與 `nearbyCctv` 回傳 `status: "unavailable"`（來源尚未整合）
 
@@ -692,18 +695,19 @@ src/modules/environment/
 
 **靜態縣市→ID 對照表（`cwa-county-codes.ts`，✅ 實打 API 驗證 2026-06-19，未來3天逐3小時版）**：
 
-| ID | 縣市 | ID | 縣市 | ID | 縣市 | ID | 縣市 |
-|----|------|----|------|----|------|----|------|
+| ID            | 縣市   | ID            | 縣市   | ID            | 縣市   | ID            | 縣市   |
+| ------------- | ------ | ------------- | ------ | ------------- | ------ | ------------- | ------ |
 | `F-D0047-001` | 宜蘭縣 | `F-D0047-025` | 雲林縣 | `F-D0047-049` | 基隆市 | `F-D0047-073` | 臺中市 |
 | `F-D0047-005` | 桃園市 | `F-D0047-029` | 嘉義縣 | `F-D0047-053` | 新竹市 | `F-D0047-077` | 臺南市 |
 | `F-D0047-009` | 新竹縣 | `F-D0047-033` | 屏東縣 | `F-D0047-057` | 嘉義市 | `F-D0047-081` | 連江縣 |
 | `F-D0047-013` | 苗栗縣 | `F-D0047-037` | 臺東縣 | `F-D0047-061` | 臺北市 | `F-D0047-085` | 金門縣 |
-| `F-D0047-017` | 彰化縣 | `F-D0047-041` | 花蓮縣 | `F-D0047-065` | 高雄市 | | |
-| `F-D0047-021` | 南投縣 | `F-D0047-045` | 澎湖縣 | `F-D0047-069` | 新北市 | | |
+| `F-D0047-017` | 彰化縣 | `F-D0047-041` | 花蓮縣 | `F-D0047-065` | 高雄市 |               |        |
+| `F-D0047-021` | 南投縣 | `F-D0047-045` | 澎湖縣 | `F-D0047-069` | 新北市 |               |        |
 
 > 規律：未來3天逐3小時版每 4 號遞增（`001`→`085`）；全台聚合 = `089`。1 週逐12小時版為中間號（`003`、`007`…）+ 聚合 `091`。
 
 **驗收條件**：
+
 - 天氣區塊回傳 `temperature`、`condition`、`precipitationProbability`，且選用的「縣市 + 區」均為距查詢座標最近者
 - 第一次查詢命中 CWA API；第二次相同座標命中 Redis（`forecastTime` 相同）
 
@@ -733,6 +737,7 @@ src/modules/environment/
 > twipcam 端點與欄位已於 §4.3 對照實際回應確認；`snapshotUrl` 推導模式（`c01.twipcam.com/cam/snapshot/{id}.jpg`）仍待全站驗證。
 
 **驗收條件**：
+
 - `nearbyCctv.cameras` 回傳至少一筆，含 `snapshotUrl`
 - `distanceM` 為正確計算值
 
@@ -794,14 +799,14 @@ case "getEnvironmentInfo":
 
 ### 9.1 手動測試案例
 
-| 測試案例 | 輸入 | 預期 |
-|---------|------|------|
-| 正常查詢 | `lat=25.0478&lng=121.5318&radius=500` | 三區塊均有資料（status: "ok"） |
-| 空品資料 | 同上 | `airQuality.pm25` 為數值，`quality` 為中文等級 |
-| 無 CCTV 覆蓋區域 | 偏遠地點座標 | `nearbyCctv.cameras` 為空陣列，status: "ok" |
-| CWA API 停用（移除 key） | 正常座標 | `weather.status: "unavailable"`，其餘區塊正常 |
-| 無效座標 | `lat=999&lng=0` | HTTP 400，reason: "INVALID_PARAMS" |
-| Redis 快取命中 | 相同座標連續查詢兩次 | 第二次回應與第一次 `forecastTime` / `pm25` 相同 |
+| 測試案例                 | 輸入                                  | 預期                                            |
+| ------------------------ | ------------------------------------- | ----------------------------------------------- |
+| 正常查詢                 | `lat=25.0478&lng=121.5318&radius=500` | 三區塊均有資料（status: "ok"）                  |
+| 空品資料                 | 同上                                  | `airQuality.pm25` 為數值，`quality` 為中文等級  |
+| 無 CCTV 覆蓋區域         | 偏遠地點座標                          | `nearbyCctv.cameras` 為空陣列，status: "ok"     |
+| CWA API 停用（移除 key） | 正常座標                              | `weather.status: "unavailable"`，其餘區塊正常   |
+| 無效座標                 | `lat=999&lng=0`                       | HTTP 400，reason: "INVALID_PARAMS"              |
+| Redis 快取命中           | 相同座標連續查詢兩次                  | 第二次回應與第一次 `forecastTime` / `pm25` 相同 |
 
 ### 9.2 驗證重點
 
@@ -815,11 +820,12 @@ case "getEnvironmentInfo":
 
 ## 10. 新增環境變數
 
-| 變數 | 用途 | 必要性 | 使用位置 |
-|------|------|--------|---------|
+| 變數          | 用途                            | 必要性                | 使用位置         |
+| ------------- | ------------------------------- | --------------------- | ---------------- |
 | `CWA_API_KEY` | 中央氣象署開放資料 API 授權金鑰 | **必要**（Phase E-2） | `cwa.adapter.ts` |
 
 > **說明**：
+>
 > - 空品資料使用現有 STA API（`sta.ci.taiwan.gov.tw`），為公開端點，不需新增金鑰。
 > - twipcam（CCTV）端點亦為公開存取（✅ 已確認），**不需** `TWIPCAM_API_KEY`，故不新增此變數。
 
@@ -829,46 +835,46 @@ case "getEnvironmentInfo":
 
 ### 11.1 前端負責
 
-| 職責          | 說明                                    |
-| ----------- | ------------------------------------- |
-| 天氣圖示與 UI 呈現 | 依 `condition` 文字顯示天氣 icon（晴 / 雨 / 陰…） |
-| 空品等級顏色標示    | 依 `quality` 欄位對應顏色（良好=綠、不健康=紅…）       |
-| CCTV 快照圖片顯示 | 以 `snapshotUrl` 顯示靜態快照（`<img>` 標籤）    |
-| CCTV 影像串流播放 | 以 `streamUrl` 播放即時串流（m3u8 / HLS 播放器）  |
-| 提醒通知推播      | 依天氣 / 空品資料決定是否顯示提醒（前端邏輯）              |
-| 降級 UI 處理    | `status: "unavailable"` 時顯示「資料暫時無法取得」 |
+| 職責               | 說明                                               |
+| ------------------ | -------------------------------------------------- |
+| 天氣圖示與 UI 呈現 | 依 `condition` 文字顯示天氣 icon（晴 / 雨 / 陰…）  |
+| 空品等級顏色標示   | 依 `quality` 欄位對應顏色（良好=綠、不健康=紅…）   |
+| CCTV 快照圖片顯示  | 以 `snapshotUrl` 顯示靜態快照（`<img>` 標籤）      |
+| CCTV 影像串流播放  | 以 `streamUrl` 播放即時串流（m3u8 / HLS 播放器）   |
+| 提醒通知推播       | 依天氣 / 空品資料決定是否顯示提醒（前端邏輯）      |
+| 降級 UI 處理       | `status: "unavailable"` 時顯示「資料暫時無法取得」 |
 
 ### 11.2 前端不負責（後端處理）
 
-| 禁止事項 | 原因 |
-|---------|------|
-| 直接呼叫 CWA API | API Key 安全性，由後端代理 |
-| 直接呼叫 twipcam API | API Key 安全性，由後端代理 |
-| 直接呼叫 STA 空品 API | 後端統一封裝，前端不持有外部端點 |
+| 禁止事項                  | 原因                                         |
+| ------------------------- | -------------------------------------------- |
+| 直接呼叫 CWA API          | API Key 安全性，由後端代理                   |
+| 直接呼叫 twipcam API      | API Key 安全性，由後端代理                   |
+| 直接呼叫 STA 空品 API     | 後端統一封裝，前端不持有外部端點             |
 | 代理 / 轉發 CCTV 影像串流 | 後端只提供 URL，串流由前端播放器直連 twipcam |
-| 快取管理 | Redis 由後端管理 |
-| 距離計算 | 後端計算 `distanceM` 後回傳 |
+| 快取管理                  | Redis 由後端管理                             |
+| 距離計算                  | 後端計算 `distanceM` 後回傳                  |
 
 ---
 
 ## 12. 風險與緩解
 
-| 風險 | 影響 | 緩解策略 |
-|------|------|---------|
-| **twipcam 僅有全台清單端點、無座標查詢 JSON** | 每次未命中快取需處理 ~800 筆全台資料 | 全台清單長時間快取（§6）；後端 Haversine 過濾半徑後僅回傳鄰近數筆（§4.3.2 已確認） |
-| **`snapshotUrl` 推導模式未全站驗證** | 部分攝影機（如國道）快照 URL 可能 404 | 僅於 widget 觀察到市區攝影機適用；前端圖片載入失敗時顯示 placeholder；Phase E-3 實作前抽樣驗證各類 `id` |
-| **天氣需兩段呼叫（縣市→區）** | 未命中快取時 stage ①②各一次 CWA 呼叫，延遲較高 | `089` 與各縣市鄉鎮檔分別快取（§6.2 20 分鐘）；多數查詢命中快取後 0 次外呼 |
-| **縣市→ID 靜態表偏移風險** | CWA 若調整 resource ID 編號，對照表失準 | 表已實打 API 驗證（22 筆，每 4 號遞增）；以 `LocationsName` 驗證對應、加單元測試比對；CWA 改版時重跑掃描腳本 |
-| **CWA 新版 API 參數為 PascalCase** | 用小寫 `locationName`/`elementName` 會被靜默忽略、payload 暴增 | 一律用 `ElementName`/`LocationName`（大寫）；stage ② 以 `ElementName` 限縮元素 |
-| **外部 API 速率上限** | CWA 免費方案 10 萬次/日，twipcam 不明 | Redis 快取攔截重複查詢（§6）；監控每日 API 呼叫量 |
-| **STA 感測器離查詢點遠（>5km）** | 空品資料代表性不足 | **本期不做**最近點補償（`$near`）——此屬第三方**資料品質**而非**可用性**問題，不在本聚合端點職責內（§3.3：可用性才降級，品質補償不做）；維持現有縣市層級 `getAirData()`，由前端以 `area`（測站區域）標示讓使用者自行判讀 |
-| **Redis 無快取時三個外部 API 並行** | 首次查詢回應時間可能 > 3 秒 | `Promise.allSettled` 並行執行（非串行）；各 API 設 5 秒 timeout；前端顯示 loading 狀態 |
-| **CCTV 快照/串流 URL 過期** | 快取 10 分鐘內 URL 可能失效 | twipcam 快照 URL 通常有效期較短，前端圖片載入失敗時顯示 placeholder；串流 URL 失效後前端 reload |
+| 風險                                          | 影響                                                           | 緩解策略                                                                                                                                                                                                                |
+| --------------------------------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **twipcam 僅有全台清單端點、無座標查詢 JSON** | 每次未命中快取需處理 ~800 筆全台資料                           | 全台清單長時間快取（§6）；後端 Haversine 過濾半徑後僅回傳鄰近數筆（§4.3.2 已確認）                                                                                                                                      |
+| **`snapshotUrl` 推導模式未全站驗證**          | 部分攝影機（如國道）快照 URL 可能 404                          | 僅於 widget 觀察到市區攝影機適用；前端圖片載入失敗時顯示 placeholder；Phase E-3 實作前抽樣驗證各類 `id`                                                                                                                 |
+| **天氣需兩段呼叫（縣市→區）**                 | 未命中快取時 stage ①②各一次 CWA 呼叫，延遲較高                 | `089` 與各縣市鄉鎮檔分別快取（§6.2 20 分鐘）；多數查詢命中快取後 0 次外呼                                                                                                                                               |
+| **縣市→ID 靜態表偏移風險**                    | CWA 若調整 resource ID 編號，對照表失準                        | 表已實打 API 驗證（22 筆，每 4 號遞增）；以 `LocationsName` 驗證對應、加單元測試比對；CWA 改版時重跑掃描腳本                                                                                                            |
+| **CWA 新版 API 參數為 PascalCase**            | 用小寫 `locationName`/`elementName` 會被靜默忽略、payload 暴增 | 一律用 `ElementName`/`LocationName`（大寫）；stage ② 以 `ElementName` 限縮元素                                                                                                                                          |
+| **外部 API 速率上限**                         | CWA 免費方案 10 萬次/日，twipcam 不明                          | Redis 快取攔截重複查詢（§6）；監控每日 API 呼叫量                                                                                                                                                                       |
+| **STA 感測器離查詢點遠（>5km）**              | 空品資料代表性不足                                             | **本期不做**最近點補償（`$near`）——此屬第三方**資料品質**而非**可用性**問題，不在本聚合端點職責內（§3.3：可用性才降級，品質補償不做）；維持現有縣市層級 `getAirData()`，由前端以 `area`（測站區域）標示讓使用者自行判讀 |
+| **Redis 無快取時三個外部 API 並行**           | 首次查詢回應時間可能 > 3 秒                                    | `Promise.allSettled` 並行執行（非串行）；各 API 設 5 秒 timeout；前端顯示 loading 狀態                                                                                                                                  |
+| **CCTV 快照/串流 URL 過期**                   | 快取 10 分鐘內 URL 可能失效                                    | twipcam 快照 URL 通常有效期較短，前端圖片載入失敗時顯示 placeholder；串流 URL 失效後前端 reload                                                                                                                         |
 
 ---
 
-*文件版本 v1.0.5 — **Phase E-1 ~ E-3 落地**：依本規格實作 `GET /api/v1/a11y/environment` 並通過 `npm run build` + 69 筆 vitest 與真實外部 API 煙霧測試（air STA 真資料、twipcam 真資料過濾最近 5 筆、無 `CWA_API_KEY` 時 weather 正確降級為 `UPSTREAM_HTTP_ERROR`）。落地差異：①「縣市→ID」對照表置於 `src/constants/cwa-county-codes.ts`（非 §8 原寫的 `adapters/`；靜態資料表本應於 constants）；② `withResilience` 以 `Promise.race([fn, timeout])` 實作 5 秒上限，因重用的 `getAirData()` 不接受 `AbortSignal`，純靠 `AbortController` 無法保證逾時；③ air「無感測器」（`getAirData` 回 `null`）→ `{status:"unavailable"}` **不帶** `reason`（屬資料缺口非上游失敗），僅真失敗帶 `reason`。快取 key（前綴皆 `env:`）：`env:weather:{lat3}:{lng3}`、`env:air:{lat3}:{lng3}`（service 存 parsed block）、`env:cwa:raw:{resourceId}` 與 `env:cctv:all`（adapter 存原始 payload），僅快取成功結果。Phase E-4（AI Agent Tool）依規格仍為選配、未實作。以下 v1.0.4 內容不變。*
+_文件版本 v1.0.5 — **Phase E-1 ~ E-3 落地**：依本規格實作 `GET /api/v1/a11y/environment` 並通過 `npm run build` + 69 筆 vitest 與真實外部 API 煙霧測試（air STA 真資料、twipcam 真資料過濾最近 5 筆、無 `CWA_API_KEY` 時 weather 正確降級為 `UPSTREAM_HTTP_ERROR`）。落地差異：①「縣市→ID」對照表置於 `src/constants/cwa-county-codes.ts`（非 §8 原寫的 `adapters/`；靜態資料表本應於 constants）；② `withResilience` 以 `Promise.race([fn, timeout])` 實作 5 秒上限，因重用的 `getAirData()` 不接受 `AbortSignal`，純靠 `AbortController` 無法保證逾時；③ air「無感測器」（`getAirData` 回 `null`）→ `{status:"unavailable"}` **不帶** `reason`（屬資料缺口非上游失敗），僅真失敗帶 `reason`。快取 key（前綴皆 `env:`）：`env:weather:{lat3}:{lng3}`、`env:air:{lat3}:{lng3}`（service 存 parsed block）、`env:cwa:raw:{resourceId}` 與 `env:cctv:all`（adapter 存原始 payload），僅快取成功結果。Phase E-4（AI Agent Tool）依規格仍為選配、未實作。以下 v1.0.4 內容不變。_
 
-*文件版本 v1.0.4 — **架構分層重構**：外部 I/O（CWA / twipcam）移至 `src/adapters/`（`cwa.adapter.ts` / `twipcam.adapter.ts`），降級拆為「機制」（`config/resilience.ts` 的 `withResilience`，與 `tdxFetch` 同層）與「政策」（`environment.service.ts` 的 `allSettled` + 失敗→unavailable）兩層；adapter 失敗一律 **throw**、永不呼叫 service，依賴方向單向 `service → adapter → config(infra)`（§3.2 / §3.3）。STA `$near` 最近點補償判定為**品質補償**、本期不做（§12）。同時對齊本專案 clean architecture：補 `environment.router.ts` + `createEnvironmentRouter()` 工廠、改於 `app.ts` 單行掛載（移除過時的 `src/routes/a11y.route.ts` + `validate()` 寫法）、`reason` 代碼與外部 URL / TTL 收斂至 `src/constants/environment.ts`（無 magic literal）；上游解析自 adapter 抽出為獨立的 `environment.parse.ts`（adapter 純 I/O 回原始 payload、parse 做 raw→domain 轉換、共用 `utils/geo.ts` Haversine）（§3.2 / §3.3 / §5.5 / §8）。以下 v1.0.3 內容不變。*
+_文件版本 v1.0.4 — **架構分層重構**：外部 I/O（CWA / twipcam）移至 `src/adapters/`（`cwa.adapter.ts` / `twipcam.adapter.ts`），降級拆為「機制」（`config/resilience.ts` 的 `withResilience`，與 `tdxFetch` 同層）與「政策」（`environment.service.ts` 的 `allSettled` + 失敗→unavailable）兩層；adapter 失敗一律 **throw**、永不呼叫 service，依賴方向單向 `service → adapter → config(infra)`（§3.2 / §3.3）。STA `$near` 最近點補償判定為**品質補償**、本期不做（§12）。同時對齊本專案 clean architecture：補 `environment.router.ts` + `createEnvironmentRouter()` 工廠、改於 `app.ts` 單行掛載（移除過時的 `src/routes/a11y.route.ts` + `validate()` 寫法）、`reason` 代碼與外部 URL / TTL 收斂至 `src/constants/environment.ts`（無 magic literal）；上游解析自 adapter 抽出為獨立的 `environment.parse.ts`（adapter 純 I/O 回原始 payload、parse 做 raw→domain 轉換、共用 `utils/geo.ts` Haversine）（§3.2 / §3.3 / §5.5 / §8）。以下 v1.0.3 內容不變。_
 
-*文件版本 v1.0.3 — 天氣資料**實打 CWA API 驗證後**改採**方案 E′（兩段式）**：`F-D0047-089`（22 縣市點）Haversine 定縣市 → 靜態 22 筆「縣市→ID」表抓該縣市鄉鎮檔 → Haversine 定區，免 Google 反查（§4.1、§8 Phase E-2、§12）。原方案 E 的單一全台鄉鎮檔 `F-D0047-093` 經實測為 404、且全台檔僅 22 縣市點，已否決。同時校正：座標欄位 `Latitude`/`Longitude`、元素為中文 `ElementName`（值在 `Time[].ElementValue[0]`）、過濾參數為 PascalCase。twipcam API（§4.3）採全台清單 + 本地 Haversine、不需金鑰、欄位 `lon`/`cam_url`（已對照 `cam-list.json`）。本規格仍為 Proposed；待抽樣驗證 `snapshotUrl` 推導模式（§4.3.3）。*
+_文件版本 v1.0.3 — 天氣資料**實打 CWA API 驗證後**改採**方案 E′（兩段式）**：`F-D0047-089`（22 縣市點）Haversine 定縣市 → 靜態 22 筆「縣市→ID」表抓該縣市鄉鎮檔 → Haversine 定區，免 Google 反查（§4.1、§8 Phase E-2、§12）。原方案 E 的單一全台鄉鎮檔 `F-D0047-093` 經實測為 404、且全台檔僅 22 縣市點，已否決。同時校正：座標欄位 `Latitude`/`Longitude`、元素為中文 `ElementName`（值在 `Time[].ElementValue[0]`）、過濾參數為 PascalCase。twipcam API（§4.3）採全台清單 + 本地 Haversine、不需金鑰、欄位 `lon`/`cam_url`（已對照 `cam-list.json`）。本規格仍為 Proposed；待抽樣驗證 `snapshotUrl` 推導模式（§4.3.3）。_

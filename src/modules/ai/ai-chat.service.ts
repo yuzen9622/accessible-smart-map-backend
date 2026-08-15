@@ -16,6 +16,8 @@ export type { RunToolLoopResult, RouteOnceResult } from "../../types/agent";
  * @param input The agent input contract minus `execTool` (bound here).
  * @returns The final text answer plus parsed tool results.
  */
-export function runChatAgent(input: Omit<AgentInput, "execTool">): Promise<AgentResult> {
+export function runChatAgent(
+  input: Omit<AgentInput, "execTool">,
+): Promise<AgentResult> {
   return runAgent({ ...input, execTool: executeLocalTool });
 }

@@ -14,7 +14,10 @@ const EXPIRY_SCAN_INTERVAL_MS = Number(
  */
 export async function expireStaleReports(): Promise<number> {
   const result = await HazardReport.updateMany(
-    { expiredAt: { $lte: new Date() }, status: { $in: ["pending", "verified"] } },
+    {
+      expiredAt: { $lte: new Date() },
+      status: { $in: ["pending", "verified"] },
+    },
     { $set: { status: "expired" } },
   );
   return result.modifiedCount ?? 0;

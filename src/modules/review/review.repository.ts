@@ -1,7 +1,7 @@
 import Review, {
-	type EntranceAccessibility,
-	type IReview,
-	type PlaceType,
+  type EntranceAccessibility,
+  type IReview,
+  type PlaceType,
 } from "../../model/review.model";
 
 export type { EntranceAccessibility, IReview, PlaceType };
@@ -11,34 +11,34 @@ const SCORE_ROUNDING_FACTOR = 10;
 // MongoDB's $round uses banker's rounding, unlike Math.round. Ratings are
 // positive, so this mirrors the response's one-decimal Math.round fallback.
 const LEGACY_RATING_ROUNDING_EXPR = {
-	$divide: [
-		{
-			$floor: {
-				$add: [{ $multiply: ["$rating", SCORE_ROUNDING_FACTOR] }, 0.5],
-			},
-		},
-		SCORE_ROUNDING_FACTOR,
-	],
+  $divide: [
+    {
+      $floor: {
+        $add: [{ $multiply: ["$rating", SCORE_ROUNDING_FACTOR] }, 0.5],
+      },
+    },
+    SCORE_ROUNDING_FACTOR,
+  ],
 };
 
 /** A review as stored, as a plain object. */
 export type ReviewRecord = Pick<
-	IReview,
-	| "_id"
-	| "userId"
-	| "rating"
-	| "passageWidthRating"
-	| "toiletRating"
-	| "elevatorRating"
-	| "serviceRating"
-	| "entranceAccessibility"
-	| "toiletTurningRoom"
-	| "wheelchairTableHeight"
-	| "adequateAisleWidth"
-	| "staffHelpfulnessRating"
-	| "aggregateAccessibilityScore"
-	| "comment"
-	| "createdAt"
+  IReview,
+  | "_id"
+  | "userId"
+  | "rating"
+  | "passageWidthRating"
+  | "toiletRating"
+  | "elevatorRating"
+  | "serviceRating"
+  | "entranceAccessibility"
+  | "toiletTurningRoom"
+  | "wheelchairTableHeight"
+  | "adequateAisleWidth"
+  | "staffHelpfulnessRating"
+  | "aggregateAccessibilityScore"
+  | "comment"
+  | "createdAt"
 >;
 
 /** The rating/comment pair the AI summary consumes. */
@@ -46,32 +46,32 @@ export type ReviewRatingComment = Pick<IReview, "rating" | "comment">;
 
 /** Identifies one place's active reviews, optionally floored by score. */
 export interface PlaceReviewFilter {
-	placeId: string;
-	placeType: PlaceType;
-	minAggregateScore?: number;
+  placeId: string;
+  placeType: PlaceType;
+  minAggregateScore?: number;
 }
 
 function buildPlaceFilter(filter: PlaceReviewFilter): Record<string, unknown> {
-	return {
-		placeId: filter.placeId,
-		placeType: filter.placeType,
-		status: "active" as const,
-		...(filter.minAggregateScore !== undefined
-			? {
-					$expr: {
-						$gte: [
-							{
-								$ifNull: [
-									"$aggregateAccessibilityScore",
-									LEGACY_RATING_ROUNDING_EXPR,
-								],
-							},
-							filter.minAggregateScore,
-						],
-					},
-				}
-			: {}),
-	};
+  return {
+    placeId: filter.placeId,
+    placeType: filter.placeType,
+    status: "active" as const,
+    ...(filter.minAggregateScore !== undefined
+      ? {
+          $expr: {
+            $gte: [
+              {
+                $ifNull: [
+                  "$aggregateAccessibilityScore",
+                  LEGACY_RATING_ROUNDING_EXPR,
+                ],
+              },
+              filter.minAggregateScore,
+            ],
+          },
+        }
+      : {}),
+  };
 }
 
 /**
@@ -83,17 +83,17 @@ function buildPlaceFilter(filter: PlaceReviewFilter): Record<string, unknown> {
  * @returns True when an active review already exists
  */
 export async function activeReviewExists(
-	placeId: string,
-	placeType: PlaceType,
-	userId: string,
+  placeId: string,
+  placeType: PlaceType,
+  userId: string,
 ): Promise<boolean> {
-	const existing = await Review.findOne({
-		placeId,
-		placeType,
-		userId,
-		status: "active",
-	}).lean<ReviewRecord | null>();
-	return Boolean(existing);
+  const existing = await Review.findOne({
+    placeId,
+    placeType,
+    userId,
+    status: "active",
+  }).lean<ReviewRecord | null>();
+  return Boolean(existing);
 }
 
 /**
@@ -103,10 +103,10 @@ export async function activeReviewExists(
  * @returns The stored review
  */
 export async function insertReview(
-	doc: Record<string, unknown>,
+  doc: Record<string, unknown>,
 ): Promise<ReviewRecord> {
-	const created = await Review.create(doc);
-	return created.toObject() as unknown as ReviewRecord;
+  const created = await Review.create(doc);
+  return created.toObject() as unknown as ReviewRecord;
 }
 
 /**
@@ -118,20 +118,20 @@ export async function insertReview(
  * @returns The page's reviews and the total count
  */
 export async function findReviewPage(
-	filter: PlaceReviewFilter,
-	page: number,
-	limit: number,
+  filter: PlaceReviewFilter,
+  page: number,
+  limit: number,
 ): Promise<{ items: ReviewRecord[]; totalCount: number }> {
-	const query = buildPlaceFilter(filter);
-	const [items, totalCount] = await Promise.all([
-		Review.find(query)
-			.sort({ createdAt: -1 })
-			.skip((page - 1) * limit)
-			.limit(limit)
-			.lean<ReviewRecord[]>(),
-		Review.countDocuments(query),
-	]);
-	return { items, totalCount };
+  const query = buildPlaceFilter(filter);
+  const [items, totalCount] = await Promise.all([
+    Review.find(query)
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean<ReviewRecord[]>(),
+    Review.countDocuments(query),
+  ]);
+  return { items, totalCount };
 }
 
 /**
@@ -141,13 +141,13 @@ export async function findReviewPage(
  * @returns The mean rounded to one decimal, or null when there is nothing to average
  */
 export async function averageRating(
-	filter: PlaceReviewFilter,
+  filter: PlaceReviewFilter,
 ): Promise<number | null> {
-	const agg = await Review.aggregate([
-		{ $match: buildPlaceFilter(filter) },
-		{ $group: { _id: null, avg: { $avg: "$rating" } } },
-	]);
-	return agg[0]?.avg != null ? Math.round(agg[0].avg * 10) / 10 : null;
+  const agg = await Review.aggregate([
+    { $match: buildPlaceFilter(filter) },
+    { $group: { _id: null, avg: { $avg: "$rating" } } },
+  ]);
+  return agg[0]?.avg != null ? Math.round(agg[0].avg * 10) / 10 : null;
 }
 
 /**
@@ -159,20 +159,20 @@ export async function averageRating(
  * @returns Rating/comment pairs plus the place's total active review count
  */
 export async function findRatingsForSummary(
-	placeId: string,
-	placeType: PlaceType,
-	limit: number,
+  placeId: string,
+  placeType: PlaceType,
+  limit: number,
 ): Promise<{ reviews: ReviewRatingComment[]; totalCount: number }> {
-	const query = { placeId, placeType, status: "active" as const };
-	const [reviews, totalCount] = await Promise.all([
-		Review.find(query)
-			.select("rating comment")
-			.sort({ createdAt: -1 })
-			.limit(limit)
-			.lean<ReviewRatingComment[]>(),
-		Review.countDocuments(query),
-	]);
-	return { reviews, totalCount };
+  const query = { placeId, placeType, status: "active" as const };
+  const [reviews, totalCount] = await Promise.all([
+    Review.find(query)
+      .select("rating comment")
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .lean<ReviewRatingComment[]>(),
+    Review.countDocuments(query),
+  ]);
+  return { reviews, totalCount };
 }
 
 /**
@@ -182,9 +182,12 @@ export async function findRatingsForSummary(
  * @returns The review, or null when missing or already deleted
  */
 export async function findActiveReviewById(
-	id: string,
+  id: string,
 ): Promise<ReviewRecord | null> {
-	return Review.findOne({ _id: id, status: "active" }).lean<ReviewRecord | null>();
+  return Review.findOne({
+    _id: id,
+    status: "active",
+  }).lean<ReviewRecord | null>();
 }
 
 /**
@@ -195,14 +198,14 @@ export async function findActiveReviewById(
  * @returns The review after the update, or null when it is no longer active
  */
 export async function updateActiveReview(
-	id: string,
-	fields: Record<string, unknown>,
+  id: string,
+  fields: Record<string, unknown>,
 ): Promise<ReviewRecord | null> {
-	return Review.findOneAndUpdate(
-		{ _id: id, status: "active" },
-		{ $set: fields },
-		{ returnDocument: "after" },
-	).lean<ReviewRecord | null>();
+  return Review.findOneAndUpdate(
+    { _id: id, status: "active" },
+    { $set: fields },
+    { returnDocument: "after" },
+  ).lean<ReviewRecord | null>();
 }
 
 /**
@@ -211,5 +214,8 @@ export async function updateActiveReview(
  * @param id Review id
  */
 export async function softDeleteReview(id: string): Promise<void> {
-	await Review.updateOne({ _id: id, status: "active" }, { $set: { status: "deleted" } });
+  await Review.updateOne(
+    { _id: id, status: "active" },
+    { $set: { status: "deleted" } },
+  );
 }

@@ -16,9 +16,9 @@
 
 使用者提供第二份 swagger（`/webapi/File/Swagger/V3/10187099-9e74-43d8-9bad-c60118e6baba`）：同為「停車資訊」服務，但 server 為 **`https://tdx.transportdata.tw/api/advanced`**（非 basic），只有 2 個端點：
 
-| 端點 | 內容 | 回應型別 |
-| ------ | ------ | --------- |
-| `GET /v1/Parking/OffStreet/CarPark/NearBy` | 指定位置+範圍的全台路外停車場 | `CarPark[]` |
+| 端點                                          | 內容                          | 回應型別               |
+| --------------------------------------------- | ----------------------------- | ---------------------- |
+| `GET /v1/Parking/OffStreet/CarPark/NearBy`    | 指定位置+範圍的全台路外停車場 | `CarPark[]`            |
 | `GET /v1/Parking/OnStreet/ParkingSpot/NearBy` | 指定位置+範圍的全台路邊停車格 | `ParkingSegmentSpot[]` |
 
 - 必填參數 `$spatialFilter`：`nearby({Lat},{Lon},{DistanceInMeters})`，**最大半徑 1000m**（spec 原文）
@@ -45,25 +45,25 @@
 
 ### 2.1 可用（已實測 200 且內容正確）
 
-| # | 縣市 | 資料集 | 來源 URL | 格式 | 座標 | 備註 |
-| --- | ------ | -------- | --------- | ------ | ------ | ------ |
-| 1 | 新北市 | 路邊停車場身心障礙停車格 | `data/disabled-parking/新北市路邊停車場身心障礙停車格.csv`（本機已有） | CSV | TWD97/TM2 → WGS84（`disabled-parking-parse.ts` 已處理） | 現役匯入腳本 |
-| 2 | 臺北市 | 臺北市路邊停車格位（身障專用格 CSV 資源） | `https://data.taipei/api/dataset/5a911ea5-1694-4301-808e-e1780d971611/resource/a76540cb-b6ee-410f-a2ca-de9432d62390/download` | CSV | WGS84 直用 | 欄位：行政區,地址,格位數,周邊景點或商圈,場站緯度,場站經度 |
-| 3 | 臺北市 | 臺北市路邊停車格位（全量 SHP 資源） | 同上資料集、resource `7e2f32a0-9201-4666-a0ed-11034e6c2b66` | SHP (zip) | WGS84 | 含格位類別欄位（身障格可由類別篩出） |
-| 4 | 新北市 | 路邊停車空位查詢 | `https://data.ntpc.gov.tw/api/datasets/54a507c4-c038-41b5-bf60-bbecb9d052c6/csv/file` | CSV | WGS84 直用 | 欄位含 `name`（如「汽車身心障礙專用」）可當身障標記；需帶瀏覽器 UA |
-| 5 | 臺中市 | 路邊停車格位資訊 | `https://newdatacenter.taichung.gov.tw/api/v1/no-auth/resource.download?rid=cccb8eb9-ad58-4e30-b078-cac890e7c56b` | CSV→Google Drive SHP | WGS84 | 下載檔是「地圖服務」說明 CSV，實際圖資在 Google Drive 連結 |
-| 6 | 全台（交通部） | 指定[縣市]之路邊停車格位基本資料（data.gov.tw nid 161173） | `https://tdx.transportdata.tw/api/basic/v1/Parking/OnStreet/ParkingSpot/City/{City}` | JSON API | WGS84 | **basic 層 2026-08 實測全空**；資料實際在 advanced 層 NearBy（見 2.0） |
+| #   | 縣市           | 資料集                                                     | 來源 URL                                                                                                                      | 格式                 | 座標                                                    | 備註                                                                   |
+| --- | -------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | -------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------- |
+| 1   | 新北市         | 路邊停車場身心障礙停車格                                   | `data/disabled-parking/新北市路邊停車場身心障礙停車格.csv`（本機已有）                                                        | CSV                  | TWD97/TM2 → WGS84（`disabled-parking-parse.ts` 已處理） | 現役匯入腳本                                                           |
+| 2   | 臺北市         | 臺北市路邊停車格位（身障專用格 CSV 資源）                  | `https://data.taipei/api/dataset/5a911ea5-1694-4301-808e-e1780d971611/resource/a76540cb-b6ee-410f-a2ca-de9432d62390/download` | CSV                  | WGS84 直用                                              | 欄位：行政區,地址,格位數,周邊景點或商圈,場站緯度,場站經度              |
+| 3   | 臺北市         | 臺北市路邊停車格位（全量 SHP 資源）                        | 同上資料集、resource `7e2f32a0-9201-4666-a0ed-11034e6c2b66`                                                                   | SHP (zip)            | WGS84                                                   | 含格位類別欄位（身障格可由類別篩出）                                   |
+| 4   | 新北市         | 路邊停車空位查詢                                           | `https://data.ntpc.gov.tw/api/datasets/54a507c4-c038-41b5-bf60-bbecb9d052c6/csv/file`                                         | CSV                  | WGS84 直用                                              | 欄位含 `name`（如「汽車身心障礙專用」）可當身障標記；需帶瀏覽器 UA     |
+| 5   | 臺中市         | 路邊停車格位資訊                                           | `https://newdatacenter.taichung.gov.tw/api/v1/no-auth/resource.download?rid=cccb8eb9-ad58-4e30-b078-cac890e7c56b`             | CSV→Google Drive SHP | WGS84                                                   | 下載檔是「地圖服務」說明 CSV，實際圖資在 Google Drive 連結             |
+| 6   | 全台（交通部） | 指定[縣市]之路邊停車格位基本資料（data.gov.tw nid 161173） | `https://tdx.transportdata.tw/api/basic/v1/Parking/OnStreet/ParkingSpot/City/{City}`                                          | JSON API             | WGS84                                                   | **basic 層 2026-08 實測全空**；資料實際在 advanced 層 NearBy（見 2.0） |
 
 ### 2.2 已排除（實測不可用）
 
-| 來源 | 實測結果 |
-| ------ | --------- |
-| TDX basic v1 `Parking/*/City/{City}`（74 端點） | 200 但全空（**資料在 advanced 層 NearBy，見 2.0**） |
-| TDX v2 `Parking/*` | 404（停車資源為 v1-only） |
-| OSM Overpass：`amenity=parking_space` + `disabled=designated` | 台灣全島 nodes 0、ways 1（近乎為零） |
+| 來源                                                                  | 實測結果                                                         |
+| --------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| TDX basic v1 `Parking/*/City/{City}`（74 端點）                       | 200 但全空（**資料在 advanced 層 NearBy，見 2.0**）              |
+| TDX v2 `Parking/*`                                                    | 404（停車資源為 v1-only）                                        |
+| OSM Overpass：`amenity=parking_space` + `disabled=designated`         | 台灣全島 nodes 0、ways 1（近乎為零）                             |
 | data.gov.tw 搜尋 API `POST /api/front/dataset/list`（`keyword` 參數） | 無視關鍵字（端點疑似棄用）；搜尋頁 `/search`、`/datasets` 皆 500 |
-| data.taipei 資料集清單 API `/api/v1/dataset/all` | count 0（清單端點停用；**下載端點仍通**） |
-| Bing 中文搜尋 | 拆詞嚴重（「身心」→ 身心科），不可靠 |
+| data.taipei 資料集清單 API `/api/v1/dataset/all`                      | count 0（清單端點停用；**下載端點仍通**）                        |
+| Bing 中文搜尋                                                         | 拆詞嚴重（「身心」→ 身心科），不可靠                             |
 
 ### 2.3 TDX「停車資訊」OpenAPI 完整定義（2026-08-13 使用者提供 swagger 後補測）
 
@@ -90,15 +90,15 @@
 
 ## 3. 各縣市覆蓋盤點（規劃用）
 
-| 縣市 | 身障停車格 | 一般路邊停車格 | 路外停車場 | 狀態 |
-| ------ | ----------- | --------------- | ----------- | ------ |
-| 臺北市 | ✅ CSV（2.1#2） | ✅ SHP（2.1#3） | 待註冊（data.taipei「臺北市停車場資訊」） | 可直接匯入 |
-| 新北市 | ✅ CSV（本機） | ✅ CSV（2.1#4） | 待查 | 可直接匯入 |
-| 臺中市 | 待查 | ✅ SHP（2.1#5） | 待註冊（opendata.taichung.gov.tw「臺中市路外停車場」） | SHP 需處理 |
-| 高雄市 | 待查（data.kcg.gov.tw） | 待查 | 待查 | 需註冊資料集 |
-| 臺南市 | 待查 | 待查 | 待查 | 需註冊資料集 |
-| 桃園市 | 待查 | 待查 | 待查 | 需註冊資料集 |
-| 其他縣市（基隆/新竹/嘉義/彰化/屏東等） | 多數未公開 | 多數未公開 | 部分有 | 依開放資料成熟度遞減 |
+| 縣市                                   | 身障停車格              | 一般路邊停車格  | 路外停車場                                             | 狀態                 |
+| -------------------------------------- | ----------------------- | --------------- | ------------------------------------------------------ | -------------------- |
+| 臺北市                                 | ✅ CSV（2.1#2）         | ✅ SHP（2.1#3） | 待註冊（data.taipei「臺北市停車場資訊」）              | 可直接匯入           |
+| 新北市                                 | ✅ CSV（本機）          | ✅ CSV（2.1#4） | 待查                                                   | 可直接匯入           |
+| 臺中市                                 | 待查                    | ✅ SHP（2.1#5） | 待註冊（opendata.taichung.gov.tw「臺中市路外停車場」） | SHP 需處理           |
+| 高雄市                                 | 待查（data.kcg.gov.tw） | 待查            | 待查                                                   | 需註冊資料集         |
+| 臺南市                                 | 待查                    | 待查            | 待查                                                   | 需註冊資料集         |
+| 桃園市                                 | 待查                    | 待查            | 待查                                                   | 需註冊資料集         |
+| 其他縣市（基隆/新竹/嘉義/彰化/屏東等） | 多數未公開              | 多數未公開      | 部分有                                                 | 依開放資料成熟度遞減 |
 
 > 註：依《身心障礙者權益保障法》第 56 條，各縣市都依法設置身障專用停車位，但**只有部分縣市將其開放為機器可讀資料**。全台「完整」覆蓋在資料源頭即不存在，務實目標是六都＋直轄市優先。
 

@@ -82,10 +82,10 @@ registry.registerPath({
       lng: z
         .union([z.string(), z.number()])
         .openapi({ example: 121.5318, description: "目標地點經度。" }),
-      radius: z
-        .union([z.string(), z.number()])
-        .optional()
-        .openapi({ example: 500, description: "監視器搜尋半徑（公尺），100–2000，預設 500。" }),
+      radius: z.union([z.string(), z.number()]).optional().openapi({
+        example: 500,
+        description: "監視器搜尋半徑（公尺），100–2000，預設 500。",
+      }),
     }),
   },
   responses: {

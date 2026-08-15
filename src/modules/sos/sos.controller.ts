@@ -35,7 +35,11 @@ async function createSession(req: Request, res: Response) {
 
 async function updateLocation(req: Request, res: Response) {
   const params = req.validated?.params as { id: string };
-  const body = req.validated?.body as { lat: number; lng: number; address?: string };
+  const body = req.validated?.body as {
+    lat: number;
+    lng: number;
+    address?: string;
+  };
   const result = await service.updateLocation({
     userId: req.auth!.userId,
     sessionId: params.id,

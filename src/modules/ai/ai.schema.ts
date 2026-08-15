@@ -184,10 +184,13 @@ export const MemorySensitivitySchema = z
 
 export const MemoryIdParamsSchema = z
   .object({
-    id: z.string().regex(/^[a-f\d]{24}$/i).openapi({
-      description: "MongoDB ObjectId",
-      example: "665f1c2b9a0b4d0012a34567",
-    }),
+    id: z
+      .string()
+      .regex(/^[a-f\d]{24}$/i)
+      .openapi({
+        description: "MongoDB ObjectId",
+        example: "665f1c2b9a0b4d0012a34567",
+      }),
   })
   .strict()
   .openapi("MemoryIdParams");

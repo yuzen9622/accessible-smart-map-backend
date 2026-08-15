@@ -28,7 +28,7 @@ export function decodeHtmlEntities(s: string): string {
       if (hex) return String.fromCodePoint(parseInt(hex, 16));
       if (dec) return String.fromCodePoint(parseInt(dec, 10));
       return NAMED_ENTITIES[name] ?? match;
-    }
+    },
   );
 }
 
@@ -40,7 +40,7 @@ export function decodeHtmlEntities(s: string): string {
  */
 export function mercatorToWgs84(
   x: number,
-  y: number
+  y: number,
 ): { lat: number; lng: number } {
   const lng = (x / 20037508.34) * 180;
   const lat =
@@ -96,10 +96,7 @@ function extractAttr(attrs: string, name: string): string | null {
  * @returns structured campus info + deduplicated facility list
  */
 export function parseFacilityResultHtml(rawHtml: string): ParsedCampusResult {
-  const raw = rawHtml.replace(
-    /data:image\/[a-z]+;base64,[A-Za-z0-9+/=]+/g,
-    ""
-  );
+  const raw = rawHtml.replace(/data:image\/[a-z]+;base64,[A-Za-z0-9+/=]+/g, "");
 
   const result: ParsedCampusResult = {
     noResult: raw.includes('id="noResult"'),
@@ -113,7 +110,8 @@ export function parseFacilityResultHtml(rawHtml: string): ParsedCampusResult {
   if (result.noResult) return result;
 
   const geoMatch = /data-geo="([^"]+)"/.exec(raw);
-  if (geoMatch) result.campusGeo = parseGeoPoint(decodeHtmlEntities(geoMatch[1]));
+  if (geoMatch)
+    result.campusGeo = parseGeoPoint(decodeHtmlEntities(geoMatch[1]));
 
   const addrMatch = /校園地址：\s*([^<]+)</.exec(raw);
   if (addrMatch) result.address = decodeHtmlEntities(addrMatch[1]).trim();
@@ -123,7 +121,7 @@ export function parseFacilityResultHtml(rawHtml: string): ParsedCampusResult {
 
   const firstArticle = raw.indexOf("<article");
   const header = decodeHtmlEntities(
-    firstArticle >= 0 ? raw.slice(0, firstArticle) : raw
+    firstArticle >= 0 ? raw.slice(0, firstArticle) : raw,
   );
   const countMatch = /共\s*(\d+)\s*筆建物，(\d+)\s*筆設施/.exec(header);
   if (countMatch) {
@@ -135,7 +133,7 @@ export function parseFacilityResultHtml(rawHtml: string): ParsedCampusResult {
   const articles = raw.split('<article class="result-all-item"').slice(1);
   for (const article of articles) {
     const buildingMatch = /<h2 id="[^"]*"[^>]*aria-label="([^"]*)"/.exec(
-      article
+      article,
     );
     const building = buildingMatch
       ? decodeHtmlEntities(buildingMatch[1])
@@ -164,7 +162,7 @@ export function parseFacilityResultHtml(rawHtml: string): ParsedCampusResult {
         if (!fac) {
           const label = extractAttr(attrs, "aria-label") ?? "";
           const labelMatch = /^查看詳情：([^，]+)，(.+?)\s*\(開啟視窗\)/.exec(
-            label
+            label,
           );
           const typeIdRaw = extractAttr(attrs, "data-type");
           fac = {
@@ -211,7 +209,7 @@ export interface ParsedFacilityDetail {
  */
 export function parseFacilityDetailHtml(rawHtml: string): ParsedFacilityDetail {
   const raw = decodeHtmlEntities(
-    rawHtml.replace(/data:image\/[a-z]+;base64,[A-Za-z0-9+/=]+/g, "")
+    rawHtml.replace(/data:image\/[a-z]+;base64,[A-Za-z0-9+/=]+/g, ""),
   );
 
   const geoMatch = /data-facility-geo="([^"]+)"/.exec(raw);

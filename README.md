@@ -330,14 +330,14 @@ docker compose up -d
 
 我們使用 pnpm 腳本來管理所有日常開發與建構工作：
 
-| 腳本名稱          | 終端指令                        | 說明                                    |
-| ----------------- | ------------------------------- | --------------------------------------- |
-| `pnpm dev`        | `dotenvx run -- nodemon`        | 開發模式啟動 (支援熱重載與環境變數載入) |
-| `pnpm build`      | `pnpm run lint:arch && tsc`     | 分層邊界檢查 + 編譯 TypeScript 至 `dist/` |
-| `pnpm start`      | `node dist/server.js`           | 啟動生產模式伺服器                      |
-| `pnpm clean`      | `rimraf dist`                   | 清除建構產出的編譯檔案                  |
-| `pnpm test`       | `vitest run`                    | 執行所有單元測試與整合測試              |
-| `pnpm test:watch` | `vitest`                        | 以互動式監控模式執行測試                |
+| 腳本名稱          | 終端指令                    | 說明                                      |
+| ----------------- | --------------------------- | ----------------------------------------- |
+| `pnpm dev`        | `dotenvx run -- nodemon`    | 開發模式啟動 (支援熱重載與環境變數載入)   |
+| `pnpm build`      | `pnpm run lint:arch && tsc` | 分層邊界檢查 + 編譯 TypeScript 至 `dist/` |
+| `pnpm start`      | `node dist/server.js`       | 啟動生產模式伺服器                        |
+| `pnpm clean`      | `rimraf dist`               | 清除建構產出的編譯檔案                    |
+| `pnpm test`       | `vitest run`                | 執行所有單元測試與整合測試                |
+| `pnpm test:watch` | `vitest`                    | 以互動式監控模式執行測試                  |
 
 ---
 

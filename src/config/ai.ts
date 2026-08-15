@@ -10,7 +10,9 @@ const googleGenAi = new GoogleGenAI({
 
 const openai = new OpenAI({
   apiKey: process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY,
-  baseURL: process.env.GEMINI_API_URL || "https://generativelanguage.googleapis.com/v1beta/openai",
+  baseURL:
+    process.env.GEMINI_API_URL ||
+    "https://generativelanguage.googleapis.com/v1beta/openai",
 });
 
 const model = process.env.GEMINI_MODEL || "gemini-3-flash-preview";

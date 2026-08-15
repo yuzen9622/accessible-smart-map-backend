@@ -119,7 +119,10 @@ describe("parseOdBody (M4)", () => {
 
   it("reports BAD_PAYLOAD for a non-array body and for zero valid rows", () => {
     expect(parseOdBody({})).toEqual({ ok: false, errorCode: "BAD_PAYLOAD" });
-    expect(parseOdBody([{ foo: 1 }])).toEqual({ ok: false, errorCode: "BAD_PAYLOAD" });
+    expect(parseOdBody([{ foo: 1 }])).toEqual({
+      ok: false,
+      errorCode: "BAD_PAYLOAD",
+    });
   });
 
   it("treats an empty array as a successful empty timetable", () => {
@@ -141,8 +144,14 @@ describe("parseStationList (M5)", () => {
   });
 
   it("reports BAD_PAYLOAD for a non-array or empty list", () => {
-    expect(parseStationList({})).toEqual({ ok: false, errorCode: "BAD_PAYLOAD" });
-    expect(parseStationList([{ foo: 1 }])).toEqual({ ok: false, errorCode: "BAD_PAYLOAD" });
+    expect(parseStationList({})).toEqual({
+      ok: false,
+      errorCode: "BAD_PAYLOAD",
+    });
+    expect(parseStationList([{ foo: 1 }])).toEqual({
+      ok: false,
+      errorCode: "BAD_PAYLOAD",
+    });
   });
 });
 

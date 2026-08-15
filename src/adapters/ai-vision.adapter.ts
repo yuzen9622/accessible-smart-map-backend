@@ -58,7 +58,10 @@ export async function verifyImageWithGemini(
         {
           role: "user",
           content: [
-            { type: "text", text: hints || "請判斷這張照片是否為真實路況回報。" },
+            {
+              type: "text",
+              text: hints || "請判斷這張照片是否為真實路況回報。",
+            },
             { type: "image_url", image_url: { url: dataUrl } },
           ],
         },

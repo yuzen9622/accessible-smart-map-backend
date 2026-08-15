@@ -8,7 +8,8 @@ import {
 import { normalizePlaceName } from "../utils/place-name";
 import { DEFAULT_LANG, type SupportedLang } from "../types/lang";
 
-const BASE_URL = () => process.env.PHOTON_BASE_URL ?? "https://photon.komoot.io";
+const BASE_URL = () =>
+  process.env.PHOTON_BASE_URL ?? "https://photon.komoot.io";
 const REQUEST_TIMEOUT_MS = 2000;
 const DEFAULT_LIMIT = 5;
 const COUNTRY_CODE = "TW";
@@ -32,12 +33,14 @@ function toDisplayName(
   const housenumber = firstOsmValue(p.housenumber);
 
   if (lang === "en") {
-    const streetLine = street && housenumber ? `${housenumber} ${street}` : street;
+    const streetLine =
+      street && housenumber ? `${housenumber} ${street}` : street;
     const line = [streetLine, district, city].filter(Boolean).join(", ");
     return line || name;
   }
 
-  const streetLine = street && housenumber ? `${street}${housenumber}號` : street;
+  const streetLine =
+    street && housenumber ? `${street}${housenumber}號` : street;
   const line = [city, district, streetLine].filter(Boolean).join("");
   return line || name;
 }

@@ -1,4 +1,9 @@
-import { ChromaClient, type Collection, type Metadata, type Where } from "chromadb";
+import {
+  ChromaClient,
+  type Collection,
+  type Metadata,
+  type Where,
+} from "chromadb";
 
 let client: ChromaClient | null = null;
 
@@ -19,9 +24,7 @@ function getClient(): ChromaClient {
  * @param name Collection name.
  * @returns A Chroma collection (created if not exists).
  */
-export async function getOrCreateCollection(
-  name: string,
-): Promise<Collection> {
+export async function getOrCreateCollection(name: string): Promise<Collection> {
   return getClient().getOrCreateCollection({
     name,
     embeddingFunction: null,

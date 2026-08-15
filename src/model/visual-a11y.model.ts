@@ -3,7 +3,11 @@ import { IVisualA11y } from "../types";
 
 const visualA11ySchema = new Schema<IVisualA11y>({
   osmNodeId: { type: Number, required: true },
-  type: { type: String, enum: ["audio_signal", "tactile_paving"], required: true },
+  type: {
+    type: String,
+    enum: ["audio_signal", "tactile_paving"],
+    required: true,
+  },
   location: {
     type: { type: String, enum: ["Point"], required: true, default: "Point" },
     coordinates: { type: [Number], required: true },

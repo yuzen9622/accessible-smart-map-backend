@@ -20,7 +20,7 @@ import { getCoordinates } from "../adapters/google.adapter";
 
 const DEFAULT_CSV = path.resolve(
   __dirname,
-  "../../data/welfare/全國身心障礙福利機構一覽表.csv"
+  "../../data/welfare/全國身心障礙福利機構一覽表.csv",
 );
 
 function sleep(ms: number) {
@@ -70,7 +70,9 @@ async function main() {
     }
     docs.push({ ...b, geocoded: !!location, location, importedAt: new Date() });
     if ((i + 1) % 25 === 0) {
-      console.log(`  geocoded ${i + 1}/${bases.length} (ok ${geocoded}, fail ${failed})`);
+      console.log(
+        `  geocoded ${i + 1}/${bases.length} (ok ${geocoded}, fail ${failed})`,
+      );
     }
     await sleep(120);
   }

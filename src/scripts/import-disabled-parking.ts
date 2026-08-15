@@ -18,7 +18,7 @@ import { parseCsvLine, rowToParking } from "./disabled-parking-parse";
 
 const DEFAULT_CSV = path.resolve(
   __dirname,
-  "../../data/disabled-parking/新北市路邊停車場身心障礙停車格.csv"
+  "../../data/disabled-parking/新北市路邊停車場身心障礙停車格.csv",
 );
 const CITY = "新北市";
 
@@ -51,7 +51,7 @@ async function main() {
   for (let i = 0; i < docs.length; i += CHUNK) {
     const batch = await DisabledParkingModel.insertMany(
       docs.slice(i, i + CHUNK),
-      { ordered: false }
+      { ordered: false },
     );
     inserted += batch.length;
   }

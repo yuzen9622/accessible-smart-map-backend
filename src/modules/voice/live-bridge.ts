@@ -28,13 +28,47 @@ const TURN_TIMEOUT_MS = 15_000;
 const TURN_TIMEOUT_STRIKES = 2;
 export const LIVE_TURN_TIMEOUT_CLOSE_CODE = 4410;
 
-type LiveTurnState = "IDLE" | "USER_INPUT" | "TOOL_PENDING" | "AWAIT_MODEL" | "MODEL_OUTPUT";
+type LiveTurnState =
+  "IDLE" | "USER_INPUT" | "TOOL_PENDING" | "AWAIT_MODEL" | "MODEL_OUTPUT";
 
 const NAV_FUNCTIONS: FunctionDeclaration[] = [
-  { name: "startNavigation", description: "開始已由使用者在畫面選定的無障礙路線導航", parametersJsonSchema: { type: "object", properties: {}, additionalProperties: false } },
-  { name: "stopNavigation", description: "停止目前的逐步導航", parametersJsonSchema: { type: "object", properties: {}, additionalProperties: false } },
-  { name: "repeatNavStep", description: "重播目前導航步驟", parametersJsonSchema: { type: "object", properties: {}, additionalProperties: false } },
-  { name: "getActiveNavigationContext", description: "取得目前導航的步驟、目的地，以及目前或下一段大眾運輸資料；解析『那班公車』『下一段』『目的地』等指涉時使用", parametersJsonSchema: { type: "object", properties: {}, additionalProperties: false } },
+  {
+    name: "startNavigation",
+    description: "開始已由使用者在畫面選定的無障礙路線導航",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "stopNavigation",
+    description: "停止目前的逐步導航",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "repeatNavStep",
+    description: "重播目前導航步驟",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "getActiveNavigationContext",
+    description:
+      "取得目前導航的步驟、目的地，以及目前或下一段大眾運輸資料；解析『那班公車』『下一段』『目的地』等指涉時使用",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
 ];
 
 /**
@@ -110,7 +144,10 @@ function redactValue(value: unknown, key?: string): unknown {
     if (/token|secret|password|authorization/i.test(key)) return "[redacted]";
     if (/user_?id/i.test(key)) return "[redacted]";
     if (/phone|email|contact/i.test(key)) return "[redacted]";
-    if (/^(lat|latitude|lng|lon|longitude)$/i.test(key) && typeof value === "number") {
+    if (
+      /^(lat|latitude|lng|lon|longitude)$/i.test(key) &&
+      typeof value === "number"
+    ) {
       return Number(value.toFixed(2));
     }
   }
@@ -157,7 +194,9 @@ function traceToolCall(tool: string, args: unknown, result: string): void {
  * @param options The client socket, authenticated user id, and optional location.
  * @returns A bridge handle for forwarding audio and closing the session.
  */
-export async function createLiveBridge(options: LiveBridgeOptions): Promise<LiveBridge> {
+export async function createLiveBridge(
+  options: LiveBridgeOptions,
+): Promise<LiveBridge> {
   const { ws, userId, userLocation } = options;
   let session: Session | null = null;
   let closedByGateway = false;
@@ -177,11 +216,13 @@ export async function createLiveBridge(options: LiveBridgeOptions): Promise<Live
   const navSession = new NavigationSession();
 
   const sendJson = (payload: Record<string, unknown>): void => {
-    if (!disposed && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload));
+    if (!disposed && ws.readyState === WebSocket.OPEN)
+      ws.send(JSON.stringify(payload));
   };
 
   const applyEffect = (effect: NavEffect): void => {
-    for (const event of effect.events) sendJson(event as unknown as Record<string, unknown>);
+    for (const event of effect.events)
+      sendJson(event as unknown as Record<string, unknown>);
   };
 
   const clearTurnTimeout = (): void => {
@@ -199,7 +240,10 @@ export async function createLiveBridge(options: LiveBridgeOptions): Promise<Live
     turnTimeout = setTimeout(() => {
       if (disposed || !navSpeaking || liveState === "IDLE") return;
       turnTimeoutStrikes++;
-      console.warn("[voice] navigation turn timed out", JSON.stringify({ strikes: turnTimeoutStrikes }));
+      console.warn(
+        "[voice] navigation turn timed out",
+        JSON.stringify({ strikes: turnTimeoutStrikes }),
+      );
       if (turnTimeoutStrikes >= TURN_TIMEOUT_STRIKES) {
         closeForTurnTimeout();
         return;
@@ -234,12 +278,18 @@ export async function createLiveBridge(options: LiveBridgeOptions): Promise<Live
     ws.send(Buffer.from(base64Data, "base64"), { binary: true });
   };
 
-  const handleToolCalls = async (functionCalls: FunctionCall[]): Promise<void> => {
+  const handleToolCalls = async (
+    functionCalls: FunctionCall[],
+  ): Promise<void> => {
     const functionResponses: FunctionResponse[] = [];
     for (const call of functionCalls) {
       const name = call.name ?? "";
       if (navSpeaking) {
-        functionResponses.push({ id: call.id, name, response: { error: "navigation speech turn cannot execute tools" } });
+        functionResponses.push({
+          id: call.id,
+          name,
+          response: { error: "navigation speech turn cannot execute tools" },
+        });
         continue;
       }
       sendJson({ type: "tool_call", name });
@@ -256,7 +306,10 @@ export async function createLiveBridge(options: LiveBridgeOptions): Promise<Live
           }
           const effect = navSession.start(latestPosition ?? undefined);
           applyEffect(effect);
-          result = JSON.stringify({ ok: effect.ok, message: effect.ok ? "已開始導航" : "尚未選擇路線" });
+          result = JSON.stringify({
+            ok: effect.ok,
+            message: effect.ok ? "已開始導航" : "尚未選擇路線",
+          });
         } else if (name === "stopNavigation") {
           applyEffect(navSession.stop("user_voice"));
           result = JSON.stringify({ ok: true, message: "已停止導航" });
@@ -283,15 +336,29 @@ export async function createLiveBridge(options: LiveBridgeOptions): Promise<Live
       } catch (err) {
         ok = false;
         response = {
-          error: summarizeError(err instanceof Error ? err.message : String(err)),
+          error: summarizeError(
+            err instanceof Error ? err.message : String(err),
+          ),
         };
       }
       const durationMs = Date.now() - startedAt;
       console.log(
         "[voice] tool",
-        JSON.stringify({ tool: name, ok, durationMs, ...(ok ? {} : { error: response.error }) }),
+        JSON.stringify({
+          tool: name,
+          ok,
+          durationMs,
+          ...(ok ? {} : { error: response.error }),
+        }),
       );
-      sendJson({ type: "tool_result", name, ok, durationMs, result: toolResult, args: call.args ?? {} });
+      sendJson({
+        type: "tool_result",
+        name,
+        ok,
+        durationMs,
+        result: toolResult,
+        args: call.args ?? {},
+      });
       functionResponses.push({ id: call.id, name, response });
     }
     if (!disposed && session) session.sendToolResponse({ functionResponses });
@@ -303,10 +370,17 @@ export async function createLiveBridge(options: LiveBridgeOptions): Promise<Live
     if (!raw) return;
     const corrected = await correctUserTranscript(raw);
     if (disposed) return;
-    sendJson({ type: "transcript", role: "user", text: corrected, final: true });
+    sendJson({
+      type: "transcript",
+      role: "user",
+      text: corrected,
+      final: true,
+    });
   };
 
-  const handleServerMessage = async (message: LiveServerMessage): Promise<void> => {
+  const handleServerMessage = async (
+    message: LiveServerMessage,
+  ): Promise<void> => {
     if (disposed) return;
     const content = message.serverContent;
     if (content) {
@@ -320,9 +394,16 @@ export async function createLiveBridge(options: LiveBridgeOptions): Promise<Live
       if (content.inputTranscription) {
         if (content.inputTranscription.text) {
           liveState = "USER_INPUT";
-          const piece = normalizeVoiceTranscript(content.inputTranscription.text);
+          const piece = normalizeVoiceTranscript(
+            content.inputTranscription.text,
+          );
           userTranscriptBuffer += piece;
-          sendJson({ type: "transcript", role: "user", text: piece, final: false });
+          sendJson({
+            type: "transcript",
+            role: "user",
+            text: piece,
+            final: false,
+          });
         }
         if (content.inputTranscription.finished) void finalizeUserTranscript();
       }
@@ -393,11 +474,15 @@ export async function createLiveBridge(options: LiveBridgeOptions): Promise<Live
             );
           })
           .finally(() => {
-            if (hasToolCalls) pendingToolMessages = Math.max(0, pendingToolMessages - 1);
+            if (hasToolCalls)
+              pendingToolMessages = Math.max(0, pendingToolMessages - 1);
           });
       },
       onerror: (e) => {
-        console.error("[voice] live session error:", summarizeError(e?.message));
+        console.error(
+          "[voice] live session error:",
+          summarizeError(e?.message),
+        );
       },
       onclose: () => {
         if (closedByGateway || ws.readyState !== WebSocket.OPEN) return;
@@ -412,7 +497,10 @@ export async function createLiveBridge(options: LiveBridgeOptions): Promise<Live
       if (disposed || !session) return;
       liveState = "USER_INPUT";
       session?.sendRealtimeInput({
-        audio: { data: data.toString("base64"), mimeType: INPUT_AUDIO_MIME_TYPE },
+        audio: {
+          data: data.toString("base64"),
+          mimeType: INPUT_AUDIO_MIME_TYPE,
+        },
       });
     },
     async armRouteToken(routeToken: string): Promise<void> {
@@ -422,7 +510,13 @@ export async function createLiveBridge(options: LiveBridgeOptions): Promise<Live
       if (!route) {
         applyEffect({
           ok: false,
-          events: [{ type: "nav.error", code: "NAV_ROUTE_INVALID", message: "路線已過期，請重新規劃" }],
+          events: [
+            {
+              type: "nav.error",
+              code: "NAV_ROUTE_INVALID",
+              message: "路線已過期，請重新規劃",
+            },
+          ],
         });
         return;
       }
@@ -440,13 +534,19 @@ export async function createLiveBridge(options: LiveBridgeOptions): Promise<Live
         applyEffect(navSession.onPosition(latestPosition));
         driveNavigationSpeech();
       };
-      if (lastPositionProcessedAt === 0 || elapsed >= POSITION_MIN_INTERVAL_MS) {
+      if (
+        lastPositionProcessedAt === 0 ||
+        elapsed >= POSITION_MIN_INTERVAL_MS
+      ) {
         if (positionTimer) clearTimeout(positionTimer);
         processLatest();
         return;
       }
       if (!positionTimer) {
-        positionTimer = setTimeout(processLatest, POSITION_MIN_INTERVAL_MS - elapsed);
+        positionTimer = setTimeout(
+          processLatest,
+          POSITION_MIN_INTERVAL_MS - elapsed,
+        );
       }
     },
     cancelNav(): void {

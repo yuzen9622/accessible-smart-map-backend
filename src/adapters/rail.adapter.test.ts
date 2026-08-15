@@ -134,7 +134,8 @@ describe("concurrency limit and key isolation (A5/A6)", () => {
 
   it("keeps od / station / index keys isolated", async () => {
     mockFetch.mockImplementation(async (url: string) => {
-      if (url.includes("/Station/")) return jsonResp([{ TrainNo: "1", DepartureTime: "08:00" }]);
+      if (url.includes("/Station/"))
+        return jsonResp([{ TrainNo: "1", DepartureTime: "08:00" }]);
       if (url.includes("/OD/")) return jsonResp(OD_ROWS);
       return jsonResp([{ StationID: "1000", StationName: { Zh_tw: "臺北" } }]);
     });
@@ -160,13 +161,18 @@ describe("LRU capacity eviction (A5)", () => {
 describe("URL and system routing (A7/A8)", () => {
   it("uses the OD, Station and THSR URLs correctly", async () => {
     mockFetch.mockImplementation(async (url: string) => {
-      if (url.includes("Station/")) return jsonResp([{ TrainNo: "1", DepartureTime: "08:00" }]);
+      if (url.includes("Station/"))
+        return jsonResp([{ TrainNo: "1", DepartureTime: "08:00" }]);
       return jsonResp(OD_ROWS);
     });
     await fetchRailOdTimetable("TRA", "1000", "3300", "2026-07-13");
-    expect(mockFetch.mock.calls[0][0]).toContain("/TRA/DailyTimetable/OD/1000/to/3300/2026-07-13");
+    expect(mockFetch.mock.calls[0][0]).toContain(
+      "/TRA/DailyTimetable/OD/1000/to/3300/2026-07-13",
+    );
     await fetchRailStationTimetable("THSR", "1070", "2026-07-13");
-    expect(mockFetch.mock.calls[1][0]).toContain("/THSR/DailyTimetable/Station/1070/2026-07-13");
+    expect(mockFetch.mock.calls[1][0]).toContain(
+      "/THSR/DailyTimetable/Station/1070/2026-07-13",
+    );
   });
 
   it("reports station-index upstream failure without an empty map", async () => {

@@ -10,6 +10,7 @@
 > 部署確認：`opentripplanner/opentripplanner:2.9.0`（`docker-compose.yml` pin），Java 21，graph.obj 含全台 GTFS+OSM。
 >
 > **實作進度（2026-06-17）：**
+>
 > - ✅ **P1 兩段式評分**（`finalizeRoutes`：prerank→enrich top-8→re-score→top-3）+ `prerankCost`/`prerankByProxy`。
 > - ✅ **P3 中性基準 40**（`scoreFacilitySet` 空集合回 `FACILITY_NEUTRAL`）+ `dataConfidence`/`scoreWarnings`（thirds 門檻）。
 > - ✅ **步行距離懲罰**（`walkPenaltyScore` 進 `scoreRoute`、`routeCost`、`prerankCost`；P2 的 score/cost 面）。
@@ -20,7 +21,7 @@
 >   `orsWalkingRoute` 信任 ORS 距離、用 mode 速度重算 duration（cache 不再跨 mode 洩漏）；OTP `plan` query
 >   加 `walkSpeed` 參數 + `snapWalkLeg` mode 化；mode 串進 4 個 build 函式。
 > - ✅ **Q4 vitest**：31 案例全過。`scoring.test.ts`（26：純函數 + routeCost 回歸 + P5 mode + E2 walkSpeed）
->   + `ranking.test.ts`（5，正式 `scoreAndRank` 跑政大三條，零 TDX）。`npm test`。`tsc --noEmit` 乾淨。
+>   - `ranking.test.ts`（5，正式 `scoreAndRank` 跑政大三條，零 TDX）。`npm test`。`tsc --noEmit` 乾淨。
 > - ✅ **排序翻轉實測**（wheelchair，空 a11y 重現 facility=0）：羅斯福(score6/736m) → 66→台鐵(score8/425m)
 >   → **251(score0/1444m,penalty 封頂35) 掉到最後**。251 從第 2 名降到第 3 名，直接修掉最初抱怨。
 > - ⏳ 未做：P2 硬上限、P4 即時故障入分、P6 TRA 欄位、build 對 429 韌性（快取+退避）。
@@ -103,11 +104,11 @@ mode 預設 `normal`（`:1660`），不啟動輪椅權重。
 
 ### 2.2 引擎層的三個控制面（不改 OTP 原始碼）
 
-| 控制面 | 旋鈕 | 性質 |
-|---|---|---|
-| **GraphQL `plan` 請求參數** | `wheelchair`、`walkSpeed`、`walkReluctance` | 每次查詢可帶，**可 mode 化** |
-| **router-config.json** | `inaccessibleCost`、`maxSlope`、`accessEgress.maxDuration`、`onlyConsiderAccessible` | server 全域預設，重啟生效 |
-| **餵入資料** | GTFS `wheelchair_boarding`/`wheelchair_accessible`、OSM `wheelchair`/`incline` tags | 決定引擎層差異化的上限 |
+| 控制面                      | 旋鈕                                                                                 | 性質                         |
+| --------------------------- | ------------------------------------------------------------------------------------ | ---------------------------- |
+| **GraphQL `plan` 請求參數** | `wheelchair`、`walkSpeed`、`walkReluctance`                                          | 每次查詢可帶，**可 mode 化** |
+| **router-config.json**      | `inaccessibleCost`、`maxSlope`、`accessEgress.maxDuration`、`onlyConsiderAccessible` | server 全域預設，重啟生效    |
+| **餵入資料**                | GTFS `wheelchair_boarding`/`wheelchair_accessible`、OSM `wheelchair`/`incline` tags  | 決定引擎層差異化的上限       |
 
 ### 2.3 引擎結構上做不到的事 → post 層的必要性
 
@@ -125,18 +126,24 @@ mode 預設 `normal`（`:1660`），不啟動輪椅權重。
 > 以「改什麼、要不要重啟/重建」分三層：
 
 **第 1 層 — Per-request（每次查詢可變，免重啟，經 GraphQL）**
+
 - 舊 `plan` query（repo 現用）：`wheelchair: Boolean`、`walkSpeed: Float`、`walkReluctance: Float`、
   `walkBoardCost: Int`、`walkSafetyFactor`、`transportModes`、`maxTransfers`、`arriveBy`、`date/time`、`numItineraries`。
 - 新 `planConnection` query（2.9 推薦，`plan` 已 deprecated）：`preferences.accessibility.wheelchair.enabled`、
   `preferences.street.walk.{speed, reluctance, boardCost, safetyFactor}`、`preferences.transit.*`。
 - **鐵證（schema 原文）**：整個 wheelchair 偏好只有一個欄位：
   ```graphql
-  input WheelchairPreferencesInput { enabled: Boolean }
-  input AccessibilityPreferencesInput { wheelchair: WheelchairPreferencesInput }  # 註解：currently the only accessibility mode available
+  input WheelchairPreferencesInput {
+    enabled: Boolean
+  }
+  input AccessibilityPreferencesInput {
+    wheelchair: WheelchairPreferencesInput
+  } # 註解：currently the only accessibility mode available
   ```
   ⇒ **per-request 的無障礙維度 = 只有一個布林開關**；可另外 per-request 調步速/reluctance。
 
 **第 2 層 — Server config（`router-config.json` routingDefaults，改完重啟 OTP，不必重建圖）**
+
 - `wheelchairAccessibility`：`maxSlope`(0.083)、`slopeExceededReluctance`(1.0，每超 1% 成本翻倍)、
   `stairsReluctance`(100)、`inaccessibleStreetReluctance`(25)、`trip/stop/elevator` 各
   `onlyConsiderAccessible`/`inaccessibleCost`(3600)/`unknownCost`(600)。
@@ -145,6 +152,7 @@ mode 預設 `normal`（`:1660`），不啟動輪椅權重。
 - **全域**：套用每一個 wheelchair 查詢，無法 per-user。
 
 **第 3 層 — Build config（`build-config.json`，改完要重建 graph.obj）**
+
 - `osmDefaults.osmTagMapping`：`default`/`uk`/`germany`/`finland`/`norway`/`houston`...（台灣無專屬 mapper，現用 `default`，
   決定 OSM `wheelchair`/`incline`/`kerb`/`surface`/`steps` 如何讀入街道圖）。
 - `transferRequests` 加 `wheelchairAccessibility.enabled:true` → **建圖時預算無障礙轉乘**。
@@ -152,31 +160,31 @@ mode 預設 `normal`（`:1660`），不啟動輪椅權重。
 
 **四個硬限制（thesis-critical）**
 
-| # | 限制 | 後果 |
-|---|---|---|
-| 1 | OTP 只有 wheelchair 一種無障礙模式（schema 明說） | elderly/visual 引擎完全做不到 → 100% post 層 |
-| 2 | slope/cost 旋鈕不能 per-request | 無法做個人化 profile；全域一套 |
-| 3 | `accessEgress.maxDuration` 不能 per-request | 「per-mode 步行上限」做不到 per-request → 全域 config 或 post 層 |
-| 4 | OTP 看不到即時電梯故障、看不到我們的 OsmA11y POI 圖層 | 必然 post 層 |
+| #   | 限制                                                  | 後果                                                             |
+| --- | ----------------------------------------------------- | ---------------------------------------------------------------- |
+| 1   | OTP 只有 wheelchair 一種無障礙模式（schema 明說）     | elderly/visual 引擎完全做不到 → 100% post 層                     |
+| 2   | slope/cost 旋鈕不能 per-request                       | 無法做個人化 profile；全域一套                                   |
+| 3   | `accessEgress.maxDuration` 不能 per-request           | 「per-mode 步行上限」做不到 per-request → 全域 config 或 post 層 |
+| 4   | OTP 看不到即時電梯故障、看不到我們的 OsmA11y POI 圖層 | 必然 post 層                                                     |
 
 **論點定位**：OTP 提供「全域、僅限輪椅、網路層級」的無障礙成本模型；個人化 profile、非輪椅障別、
 即時設施狀態、curated POI 圖層皆在其能力之外 → 混合架構為必然，post 層承載多障別與即時智能。
 
 ### 2.4 分工表
 
-| 維度 | 放哪 | 對應條目 |
-|---|---|---|
-| mode→wheelchair 確實傳到 OTP | 引擎 | E1 |
-| 步行速度 mode 化 | 引擎（`walkSpeed`） | E2 |
-| 長步行上限（源頭剪枝） | 引擎（`accessEgress.maxDuration`） | E3 |
-| 輪椅 stop/trip 成本調校 | 引擎（`inaccessibleCost`） | E4 |
-| GTFS/OSM 無障礙資料補齊 | 引擎（餵入資料，前置） | E5 |
-| 評分時機 bug（enrich 前） | post | P1 |
-| 步行距離進分數 + 長步行軟懲罰 | post（補引擎沒剪掉的） | P2 |
-| 未知資料：中性基準 + 信心度 | post | P3 |
-| 即時電梯故障降分 | post | P4 |
-| elderly / visual 維度 | post | P5 |
-| TRA 列車欄位完整性 | post | P6 |
+| 維度                          | 放哪                               | 對應條目 |
+| ----------------------------- | ---------------------------------- | -------- |
+| mode→wheelchair 確實傳到 OTP  | 引擎                               | E1       |
+| 步行速度 mode 化              | 引擎（`walkSpeed`）                | E2       |
+| 長步行上限（源頭剪枝）        | 引擎（`accessEgress.maxDuration`） | E3       |
+| 輪椅 stop/trip 成本調校       | 引擎（`inaccessibleCost`）         | E4       |
+| GTFS/OSM 無障礙資料補齊       | 引擎（餵入資料，前置）             | E5       |
+| 評分時機 bug（enrich 前）     | post                               | P1       |
+| 步行距離進分數 + 長步行軟懲罰 | post（補引擎沒剪掉的）             | P2       |
+| 未知資料：中性基準 + 信心度   | post                               | P3       |
+| 即時電梯故障降分              | post                               | P4       |
+| elderly / visual 維度         | post                               | P5       |
+| TRA 列車欄位完整性            | post                               | P6       |
 
 ---
 
@@ -192,11 +200,13 @@ mode 預設 `normal`（`:1660`），不啟動輪椅權重。
 ## 4. 目標與非目標
 
 **目標**
+
 - 無障礙在候選生成階段（OTP）就生效，而非僅事後評分。
 - 步行距離/速度/轉乘對輪椅/長者/視障有實質且 mode-aware 的權重。
 - post 層分數反映 enrichment 後完整資料（含即時電梯故障）。
 
 **非目標**
+
 - 不重做 transit journey planning（OTP2 負責）、不改 OTP 原始碼。
 - 不在本階段大規模重建 OSM/GTFS 資料管線（E5 僅定義前置與最小集）。
 
@@ -210,6 +220,7 @@ mode 預設 `normal`（`:1660`），不啟動輪椅權重。
 OTP 的 wheelchair 完全不啟動。
 
 **方案**
+
 - 前端/呼叫端契約：行動不便使用者的查詢務必帶 `mode:"wheelchair"`（或 elderly/visual）。
 - `parseRouteIntent` 對「輪椅/無障礙/電梯/行動不便」等語意要可靠映射到 `mode`。
 - 記一行 log：實際送入 OTP 的 `wheelchair` 值，便於驗證引擎層有開。
@@ -222,12 +233,12 @@ OTP 的 wheelchair 完全不啟動。
 
 **方案**：`PLAN_QUERY`（`otp-routing.ts:169`）增加 `$walkSpeed: Float`，依 mode 帶入：
 
-| mode | walkSpeed (m/s) |
-|---|---|
-| wheelchair | 0.8 |
-| elderly | 0.9 |
-| visual_impaired | 1.0 |
-| normal | 1.3 |
+| mode            | walkSpeed (m/s) |
+| --------------- | --------------- |
+| wheelchair      | 0.8             |
+| elderly         | 0.9             |
+| visual_impaired | 1.0             |
+| normal          | 1.3             |
 
 - 同步給 OTP 的 access/egress 步行段套用 → 685m 步行對輪椅變 ≥14 分鐘。
 - snap walk leg（`otp-routing.ts:420`）與 ORS fallback（`ors.ts`）也用同一張速度表，
@@ -242,6 +253,7 @@ access 步行段（1.4km）。
 GraphQL `plan`/`planConnection` 皆無對應 per-request 欄位 ⇒ **無法做 per-mode 上限**。
 
 **修正方案**
+
 - 引擎層只能做「全域」決策：維持 20m（或微調），影響所有 mode。不為輪椅單獨砍。
 - **per-mode 長步行差異化全部交給 post 層 P2 軟懲罰**（隨距離遞增，依 mode 不同門檻）。
 - 若未來要真正引擎層 per-mode 上限：唯一途徑是跑多個 OTP router/instance（不同 config），
@@ -254,6 +266,7 @@ GraphQL `plan`/`planConnection` 皆無對應 per-request 欄位 ⇒ **無法做 
 **現值** `inaccessibleCost` trip 3600 / stop 600、`onlyConsiderAccessible:false`。
 
 **方案**
+
 - 維持 `onlyConsiderAccessible:false`（避免在資料稀疏下把所有選項剪光 → 0 結果）。
 - 待 E5 資料補齊後，再評估提高 `inaccessibleCost` 或對特定系統開 `onlyConsiderAccessible`。
 - 本階段先**不動數值**，僅記錄為 E5 完成後的後續旋鈕。
@@ -270,6 +283,7 @@ GraphQL `plan`/`planConnection` 皆無對應 per-request 欄位 ⇒ **無法做 
   → `scoring.ts` 找這些 tag 的分支等同死碼。
 
 **高槓桿補齊（依序）**
+
 1. ✅ **已實作並驗證(91 站)**：捷運站 `stops.txt.wheelchair_boarding` 注入 —— `build-otp-graph.sh`
    步驟 1d（`inject-station-wheelchair.py`）。真實 schema = top-level `Elevators` 陣列 + `StationID` 鍵
    （非 FacilityType；v1 用錯 schema 注入 0 筆，2026-06-17 修正）。實測對到 **91 站**
@@ -301,16 +315,16 @@ GraphQL `plan`/`planConnection` 皆無對應 per-request 欄位 ⇒ **無法做 
 ```ts
 function walkPenaltyScore(walkDistanceM, mode): number {
   const { freeM, slope, cap } = WALK_PENALTY[mode];
-  return Math.min(Math.max(0, walkDistanceM - freeM) * slope, cap);  // 正值，呼叫端做減法
+  return Math.min(Math.max(0, walkDistanceM - freeM) * slope, cap); // 正值，呼叫端做減法
 }
 ```
 
-| mode | freeM | slope(/m) | cap |
-|---|---|---|---|
-| wheelchair | 150 | 0.03 | 35 |
-| elderly | 200 | 0.025 | 30 |
-| visual_impaired | 250 | 0.02 | 25 |
-| normal | 400 | 0.01 | 15 |
+| mode            | freeM | slope(/m) | cap |
+| --------------- | ----- | --------- | --- |
+| wheelchair      | 150   | 0.03      | 35  |
+| elderly         | 200   | 0.025     | 30  |
+| visual_impaired | 250   | 0.02      | 25  |
+| normal          | 400   | 0.01      | 15  |
 
 - `scoreRoute` totalScore 扣 `walkPenaltyScore`；`routeCost` 加同量（並用於 P1 預排序代理）。
 - 預期：251（1444m）≈cap(35)、羅斯福路幹線（736m）≈-18、66→TRA（425m）≈-8 ⇒ 排序翻轉。
@@ -379,14 +393,14 @@ totalWalkDistanceM?: number;
 
 ## 9. 風險與緩解
 
-| 風險 | 緩解 |
-|---|---|
-| 引擎層差異化受限於 GTFS/OSM 資料品質 | E5 先量測覆蓋率；資料不足時 post 層 P2/P3 兜底 |
-| 調 `accessEgress.maxDuration` 太緊 → 部分 OD 無解 | per-mode 設定 + 保留 server fallback；P2 軟懲罰兜底 |
-| 中性基準 40 高估「真的很差」的路線 | 僅環境品質用中性；軌道電梯/即時故障仍嚴格 + 低信心 warning |
-| 兩段式 N=8 增加 enrich 成本 | 只影響 Stage 2 Mongo nearbyA11y（毫秒級）；TDX overlay 仍只跑 top-3 |
-| walk-cache 加 mode 後命中率下降 | 可接受，正確性優先 |
-| 改 router-config 需重啟 OTP sidecar | 納入部署檢查清單；config 變更走版控 |
+| 風險                                              | 緩解                                                                |
+| ------------------------------------------------- | ------------------------------------------------------------------- |
+| 引擎層差異化受限於 GTFS/OSM 資料品質              | E5 先量測覆蓋率；資料不足時 post 層 P2/P3 兜底                      |
+| 調 `accessEgress.maxDuration` 太緊 → 部分 OD 無解 | per-mode 設定 + 保留 server fallback；P2 軟懲罰兜底                 |
+| 中性基準 40 高估「真的很差」的路線                | 僅環境品質用中性；軌道電梯/即時故障仍嚴格 + 低信心 warning          |
+| 兩段式 N=8 增加 enrich 成本                       | 只影響 Stage 2 Mongo nearbyA11y（毫秒級）；TDX overlay 仍只跑 top-3 |
+| walk-cache 加 mode 後命中率下降                   | 可接受，正確性優先                                                  |
+| 改 router-config 需重啟 OTP sidecar               | 納入部署檢查清單；config 變更走版控                                 |
 
 ---
 

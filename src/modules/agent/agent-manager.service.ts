@@ -1,10 +1,5 @@
 import type OpenAI from "openai";
-import type {
-  Content,
-  Part,
-  Tool,
-  GenerateContentConfig,
-} from "@google/genai";
+import type { Content, Part, Tool, GenerateContentConfig } from "@google/genai";
 import { FunctionCallingConfigMode } from "@google/genai";
 import { googleGenAi, model } from "../../config/ai";
 import { AGENT_TEMPERATURE } from "../../config/ai/config";
@@ -75,7 +70,10 @@ function buildFinalConfig(
 function stableCacheKey(name: string, args: Record<string, unknown>): string {
   const sorted = Object.keys(args)
     .sort()
-    .reduce<Record<string, unknown>>((o, k) => { o[k] = args[k]; return o; }, {});
+    .reduce<Record<string, unknown>>((o, k) => {
+      o[k] = args[k];
+      return o;
+    }, {});
   return name + "\0" + JSON.stringify(sorted);
 }
 
@@ -119,7 +117,8 @@ export async function runToolLoop(
   systemInstruction: string | undefined,
   useModel: string,
   userLocation: { latitude: number; longitude: number } | undefined,
-  onToolCall: ((name: string, args: Record<string, unknown>) => void) | undefined,
+  onToolCall:
+    ((name: string, args: Record<string, unknown>) => void) | undefined,
   onToolResult: ((name: string, result: unknown) => void) | undefined,
   userId: string | undefined,
   memoryToolsEnabled: boolean,
@@ -158,7 +157,9 @@ export async function runToolLoop(
       config: buildRoutingConfig(
         systemInstruction,
         tools,
-        round === 0 ? { allowedFunctionNames: options.allowedFunctionNames } : undefined,
+        round === 0
+          ? { allowedFunctionNames: options.allowedFunctionNames }
+          : undefined,
       ),
     });
 
@@ -182,7 +183,10 @@ export async function runToolLoop(
       // Execution-layer authorization boundary. `undefined` keeps the legacy
       // AUTO path (no interception); any array (including `[]` = deny-all) is a
       // membership check — an unauthorized tool is never executed.
-      if (options.toolAllowList !== undefined && !options.toolAllowList.includes(name)) {
+      if (
+        options.toolAllowList !== undefined &&
+        !options.toolAllowList.includes(name)
+      ) {
         console.warn(`[agent-manager] blocked unauthorized tool: ${name}`);
         const blocked = { error: "tool_not_allowed" };
         onToolResult?.(name, blocked);
@@ -252,7 +256,10 @@ export async function summarizeWithContext(params: {
   const contents = params.seedParts?.length
     ? [
         ...params.contents,
-        { role: "user" as const, parts: params.seedParts.map((text) => ({ text })) },
+        {
+          role: "user" as const,
+          parts: params.seedParts.map((text) => ({ text })),
+        },
       ]
     : params.contents;
   const response = await googleGenAi.models.generateContent({
@@ -313,8 +320,13 @@ export async function routeOnce(
   } = {},
 ): Promise<RouteOnceResult> {
   const useModel = opts.model ?? model;
-  const tools = buildGeminiTools(opts.userId, opts.memoryEnabled ?? Boolean(opts.userId));
-  const contents: Content[] = [{ role: "user", parts: [{ text: userMessage }] }];
+  const tools = buildGeminiTools(
+    opts.userId,
+    opts.memoryEnabled ?? Boolean(opts.userId),
+  );
+  const contents: Content[] = [
+    { role: "user", parts: [{ text: userMessage }] },
+  ];
 
   const response = await googleGenAi.models.generateContent({
     model: useModel,
@@ -328,7 +340,7 @@ export async function routeOnce(
 
   // Only read `.text` when no tool fired — the SDK warns when `.text` is
   // accessed on a response that also has functionCall parts.
-  const text = calledTools.length ? "" : response.text ?? "";
+  const text = calledTools.length ? "" : (response.text ?? "");
 
   return { calledTools, text, raw: response };
 }

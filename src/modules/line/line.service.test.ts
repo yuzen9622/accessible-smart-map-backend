@@ -11,7 +11,10 @@ vi.mock("../../adapters/line.adapter", () => ({
     _sid: sessionId,
   })),
   buildSosMenuMessage: vi.fn(() => ({ type: "text", text: "menu" })),
-  buildBoundContactsMessage: vi.fn(() => ({ type: "flex", altText: "contacts" })),
+  buildBoundContactsMessage: vi.fn(() => ({
+    type: "flex",
+    altText: "contacts",
+  })),
   buildSosHistoryMessage: vi.fn(() => ({ type: "flex", altText: "history" })),
   buildUnbindConfirmMessage: vi.fn(() => ({ type: "text", text: "confirm" })),
 }));
@@ -346,9 +349,14 @@ describe("line.service — text message (agent loop)", () => {
         origin: "你的位置",
         destination: "台北車站",
         options: [
-          { label: "無障礙路線", time: "約 12 分鐘", detail: "步行 → 公車 307" },
+          {
+            label: "無障礙路線",
+            time: "約 12 分鐘",
+            detail: "步行 → 公車 307",
+          },
         ],
-        liffUrl: "https://liff.example.com/route?sessionId=a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
+        liffUrl:
+          "https://liff.example.com/route?sessionId=a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
       },
     );
   });
@@ -396,12 +404,21 @@ describe("line.service — text message (agent loop)", () => {
   });
 
   it("does not block the reply when the loading animation call fails", async () => {
-    vi.mocked(showLoadingAnimation).mockRejectedValue(new Error("loading boom"));
-    vi.mocked(runLineAgent).mockResolvedValue({ text: "你好呀", toolResults: [] });
+    vi.mocked(showLoadingAnimation).mockRejectedValue(
+      new Error("loading boom"),
+    );
+    vi.mocked(runLineAgent).mockResolvedValue({
+      text: "你好呀",
+      toolResults: [],
+    });
 
     await handleEvents([textEvent("你好嗎")]);
 
-    expect(vi.mocked(replyAgentResult)).toHaveBeenCalledWith("r1", "你好呀", null);
+    expect(vi.mocked(replyAgentResult)).toHaveBeenCalledWith(
+      "r1",
+      "你好呀",
+      null,
+    );
   });
 });
 
@@ -440,7 +457,10 @@ describe("line.service — postback (deterministic SOS controls)", () => {
     await handleEvents([postbackEvent("action=claim&sid=s1")]);
 
     expect(vi.mocked(replyMessages)).not.toHaveBeenCalled();
-    expect(vi.mocked(replyText)).toHaveBeenCalledWith("rp", "此事件已由他人承接");
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith(
+      "rp",
+      "此事件已由他人承接",
+    );
   });
 
   it("status delegates handlingStatus to updateHandlingStatus", async () => {
@@ -568,10 +588,7 @@ describe("line.service — webhook dedup", () => {
 
     await handleEvents([textEvent("你好", "evt-1")]);
 
-    expect(vi.mocked(redisSetNx)).toHaveBeenCalledWith(
-      "line:evt:evt-1",
-      3600,
-    );
+    expect(vi.mocked(redisSetNx)).toHaveBeenCalledWith("line:evt:evt-1", 3600);
     expect(vi.mocked(runLineAgent)).not.toHaveBeenCalled();
   });
 
@@ -681,7 +698,9 @@ describe("line.service — route preview", () => {
   });
 
   it("returns 404 when the session is not active", async () => {
-    sosSessionModel.findOne.mockReturnValue({ lean: () => Promise.resolve(null) });
+    sosSessionModel.findOne.mockReturnValue({
+      lean: () => Promise.resolve(null),
+    });
 
     const result = await getRoutePreview(previewToken);
 

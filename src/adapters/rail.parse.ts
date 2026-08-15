@@ -136,7 +136,8 @@ export function parseStationBody(body: unknown): StationFetchOutcome {
     if (!row) continue;
     const info = asRecord(row.DailyTrainInfo) ?? row;
     const trainNo = info.TrainNo ?? row.TrainNo;
-    const dep = row.DepartureTime ?? asRecord(row.OriginStopTime)?.DepartureTime;
+    const dep =
+      row.DepartureTime ?? asRecord(row.OriginStopTime)?.DepartureTime;
     if (typeof trainNo !== "string" || !trainNo) continue;
     const depMin = hhmmToMinutes(dep);
     if (depMin === null) continue;
@@ -154,8 +155,10 @@ export function parseStationBody(body: unknown): StationFetchOutcome {
     const destination =
       asRecord(row.EndingStationName)?.Zh_tw ??
       asRecord(info.EndingStationName)?.Zh_tw;
-    if (typeof destination === "string" && destination) train.destination = destination;
-    const arr = row.ArrivalTime ?? asRecord(row.DestinationStopTime)?.ArrivalTime;
+    if (typeof destination === "string" && destination)
+      train.destination = destination;
+    const arr =
+      row.ArrivalTime ?? asRecord(row.DestinationStopTime)?.ArrivalTime;
     if (clockValid(arr)) train.arrivalTime = normalizeClock(arr as string);
     items.push(train);
   }

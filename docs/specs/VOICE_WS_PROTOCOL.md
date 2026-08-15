@@ -36,7 +36,11 @@ ws://localhost:<PORT>/api/v1/voice/ws   (本機開發)
 連線建立（`onopen`）後，**必須在 5 秒內**送出第一個文字（JSON）訊息，型別為 `session.start`：
 
 ```json
-{ "type": "session.start", "token": "<accessToken>", "userLocation": { "latitude": 25.0478, "longitude": 121.5170 } }
+{
+  "type": "session.start",
+  "token": "<accessToken>",
+  "userLocation": { "latitude": 25.0478, "longitude": 121.517 }
+}
 ```
 
 - `token`：必填，字串。**絕不可放在 URL query string**，只能放在這個首訊息的 body 裡。
@@ -67,7 +71,12 @@ curl -X POST https://<host>/api/v1/user/login \
   "code": 200,
   "message": "OK",
   "data": {
-    "user": { "_id": "...", "name": "Jane Doe", "email": "jane@example.com", "...": "..." },
+    "user": {
+      "_id": "...",
+      "name": "Jane Doe",
+      "email": "jane@example.com",
+      "...": "..."
+    },
     "config": { "...": "..." }
   },
   "accessToken": "<JWT，拿這個當 session.start 的 token>"
@@ -82,14 +91,14 @@ curl -X POST https://<host>/api/v1/user/login \
 
 ### 3.1 Client → Server
 
-| 型別 | 傳輸 | 欄位 | 範例 | 說明 |
-|---|---|---|---|---|
-| `session.start` | text (JSON) | `type`, `token` (string, 必填), `userLocation?` (`{latitude:number, longitude:number}`) | `{"type":"session.start","token":"eyJ...","userLocation":{"latitude":25.0478,"longitude":121.5170}}` | 必須是連線後第一則訊息，5 秒內送出 |
-| （音訊） | binary | 原始 PCM16 bytes | — | 僅認證成功後才會被接受並轉發給 Gemini；認證前送 binary 會被視為未授權而 `close(4401)` |
-| `session.end` | text (JSON) | `type` | `{"type":"session.end"}` | 相容用結束訊息；主要終止方式應直接呼叫 `WebSocket.close()` |
-| `nav.setRoute` | text (JSON) | `type`, `routeToken` | `{"type":"nav.setRoute","routeToken":"..."}` | 選定 HTTP 路線後 arm；只傳 token，不傳完整 route |
-| `nav.position` | text (JSON) | `type`, `latitude`, `longitude`, `heading?`, `accuracy?` | `{"type":"nav.position","latitude":25.0478,"longitude":121.517,"accuracy":8}` | 導航中節流上報位置；transit 期間仍持續上報 |
-| `nav.cancel` | text (JSON) | `type` | `{"type":"nav.cancel"}` | UI 主動停止導航，不結束語音會話 |
+| 型別            | 傳輸        | 欄位                                                                                    | 範例                                                                                                 | 說明                                                                                  |
+| --------------- | ----------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `session.start` | text (JSON) | `type`, `token` (string, 必填), `userLocation?` (`{latitude:number, longitude:number}`) | `{"type":"session.start","token":"eyJ...","userLocation":{"latitude":25.0478,"longitude":121.5170}}` | 必須是連線後第一則訊息，5 秒內送出                                                    |
+| （音訊）        | binary      | 原始 PCM16 bytes                                                                        | —                                                                                                    | 僅認證成功後才會被接受並轉發給 Gemini；認證前送 binary 會被視為未授權而 `close(4401)` |
+| `session.end`   | text (JSON) | `type`                                                                                  | `{"type":"session.end"}`                                                                             | 相容用結束訊息；主要終止方式應直接呼叫 `WebSocket.close()`                            |
+| `nav.setRoute`  | text (JSON) | `type`, `routeToken`                                                                    | `{"type":"nav.setRoute","routeToken":"..."}`                                                         | 選定 HTTP 路線後 arm；只傳 token，不傳完整 route                                      |
+| `nav.position`  | text (JSON) | `type`, `latitude`, `longitude`, `heading?`, `accuracy?`                                | `{"type":"nav.position","latitude":25.0478,"longitude":121.517,"accuracy":8}`                        | 導航中節流上報位置；transit 期間仍持續上報                                            |
+| `nav.cancel`    | text (JSON) | `type`                                                                                  | `{"type":"nav.cancel"}`                                                                              | UI 主動停止導航，不結束語音會話                                                       |
 
 其他未定義的文字訊息型別會被忽略並在伺服器端 log 一行警告，不會回應任何錯誤給前端。
 
@@ -97,25 +106,26 @@ curl -X POST https://<host>/api/v1/user/login \
 
 ### 3.2 Server → Client
 
-| 型別 | 傳輸 | 欄位 | 範例 | 觸發時機 |
-|---|---|---|---|---|
-| `session.ready` | text (JSON) | `type` | `{"type":"session.ready"}` | 認證成功且 Gemini Live 連線建立完成，前端此時才可開始送音訊 |
-| （音訊） | binary | 原始 PCM16 bytes | — | Gemini 回覆的語音，見 §3.4 |
-| `transcript` | text (JSON) | `type`, `role` (`"user"` \| `"model"`), `text` (string), `final?` (boolean，僅 `role:"user"`) | `{"type":"transcript","role":"user","text":"竹北車站","final":true}` | 使用者語音辨識逐字稿（`role:"user"`）或模型回覆逐字稿（`role:"model"`）。見 §3.5 的 interim/final 規則 |
-| `tool_call` | text (JSON) | `type`, `name` (string，工具名) | `{"type":"tool_call","name":"getBusArrivalEstimate"}` | 模型觸發工具呼叫的當下（工具開始執行前） |
-| `tool_result` | text (JSON) | `type`, `name`, `ok` (boolean), `durationMs` (number), `result` (optional，工具回傳資料，任意 JSON 值：物件／陣列／`null`；與文字模式 SSE 的 `tool_result` 內容一致；`ok:false` 執行失敗時省略), `args` (optional，物件，模型呼叫工具時的參數) | `{"type":"tool_result","name":"findA11yPlaces","ok":true,"durationMs":812,"result":{"places":[{"id":"a11y_123","name":"台北車站無障礙電梯","latitude":25.0478,"longitude":121.517,"category":"elevator"}]},"args":{"latitude":25.033,"longitude":121.5654,"radius":500}}` | 工具執行完成（成功或失敗都會送）。`result` 為工具回傳的實際內容，前端可據此在地圖上撒點／畫路線；`result`、`args` 皆為 optional 且向後相容（未帶 = 行為與舊版相同） |
-| `interrupted` | text (JSON) | `type` | `{"type":"interrupted"}` | 使用者開口打斷模型正在說話時（barge-in） |
-| `turn.complete` | text (JSON) | `type` | `{"type":"turn.complete"}` | 這一輪模型回覆全部結束 |
-| `error` | text (JSON) | `type`, `code` (`"LIVE_CONNECT_FAILED"` \| `"LIVE_SESSION_ENDED"`) | `{"type":"error","code":"LIVE_SESSION_ENDED"}` | 見下方說明 |
-| `nav.start` | text (JSON) | `steps`, `currentStepIndex`, `totalSteps` | `{"type":"nav.start","steps":[...],"currentStepIndex":0,"totalSteps":5}` | 語音工具成功開始導航，前端渲染整條步驟 |
-| `nav.step` | text (JSON) | `currentStepIndex`, `instruction`, `remainingM` | `{"type":"nav.step","currentStepIndex":1,"instruction":"前方右轉","remainingM":30}` | GPS 命中下一 geofence，更新 highlight |
-| `nav.transit` | text (JSON) | `leg` | `{"type":"nav.transit","leg":{"mode":"BUS","from":"甲站","to":"乙站","routeName":"307"}}` | 抵達該 transit leg 上車點；只播報搭乘資訊 |
-| `nav.arrived` | text (JSON) | `type` | `{"type":"nav.arrived"}` | 抵達最終目的地 |
-| `nav.stop` | text (JSON) | `reason` | `{"type":"nav.stop","reason":"arrived"}` | 導航結束；reason 為 `user_voice`/`user_ui`/`arrived`/`session_end` |
-| `nav.offroute` | text (JSON) | `distanceM` | `{"type":"nav.offroute","distanceM":72}` | 連續 GPS 樣本判定偏離步行路線；v1 不自動重規劃 |
-| `nav.error` | text (JSON) | `code`, `message` | `{"type":"nav.error","code":"NAV_ROUTE_INVALID","message":"路線已過期，請重新規劃"}` | arm/start 失敗；code 為 `NAV_ROUTE_INVALID` 或 `NO_ROUTE_ARMED` |
+| 型別            | 傳輸        | 欄位                                                                                                                                                                                                                                           | 範例                                                                                                                                                                                                                                                                      | 觸發時機                                                                                                                                                            |
+| --------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `session.ready` | text (JSON) | `type`                                                                                                                                                                                                                                         | `{"type":"session.ready"}`                                                                                                                                                                                                                                                | 認證成功且 Gemini Live 連線建立完成，前端此時才可開始送音訊                                                                                                         |
+| （音訊）        | binary      | 原始 PCM16 bytes                                                                                                                                                                                                                               | —                                                                                                                                                                                                                                                                         | Gemini 回覆的語音，見 §3.4                                                                                                                                          |
+| `transcript`    | text (JSON) | `type`, `role` (`"user"` \| `"model"`), `text` (string), `final?` (boolean，僅 `role:"user"`)                                                                                                                                                  | `{"type":"transcript","role":"user","text":"竹北車站","final":true}`                                                                                                                                                                                                      | 使用者語音辨識逐字稿（`role:"user"`）或模型回覆逐字稿（`role:"model"`）。見 §3.5 的 interim/final 規則                                                              |
+| `tool_call`     | text (JSON) | `type`, `name` (string，工具名)                                                                                                                                                                                                                | `{"type":"tool_call","name":"getBusArrivalEstimate"}`                                                                                                                                                                                                                     | 模型觸發工具呼叫的當下（工具開始執行前）                                                                                                                            |
+| `tool_result`   | text (JSON) | `type`, `name`, `ok` (boolean), `durationMs` (number), `result` (optional，工具回傳資料，任意 JSON 值：物件／陣列／`null`；與文字模式 SSE 的 `tool_result` 內容一致；`ok:false` 執行失敗時省略), `args` (optional，物件，模型呼叫工具時的參數) | `{"type":"tool_result","name":"findA11yPlaces","ok":true,"durationMs":812,"result":{"places":[{"id":"a11y_123","name":"台北車站無障礙電梯","latitude":25.0478,"longitude":121.517,"category":"elevator"}]},"args":{"latitude":25.033,"longitude":121.5654,"radius":500}}` | 工具執行完成（成功或失敗都會送）。`result` 為工具回傳的實際內容，前端可據此在地圖上撒點／畫路線；`result`、`args` 皆為 optional 且向後相容（未帶 = 行為與舊版相同） |
+| `interrupted`   | text (JSON) | `type`                                                                                                                                                                                                                                         | `{"type":"interrupted"}`                                                                                                                                                                                                                                                  | 使用者開口打斷模型正在說話時（barge-in）                                                                                                                            |
+| `turn.complete` | text (JSON) | `type`                                                                                                                                                                                                                                         | `{"type":"turn.complete"}`                                                                                                                                                                                                                                                | 這一輪模型回覆全部結束                                                                                                                                              |
+| `error`         | text (JSON) | `type`, `code` (`"LIVE_CONNECT_FAILED"` \| `"LIVE_SESSION_ENDED"`)                                                                                                                                                                             | `{"type":"error","code":"LIVE_SESSION_ENDED"}`                                                                                                                                                                                                                            | 見下方說明                                                                                                                                                          |
+| `nav.start`     | text (JSON) | `steps`, `currentStepIndex`, `totalSteps`                                                                                                                                                                                                      | `{"type":"nav.start","steps":[...],"currentStepIndex":0,"totalSteps":5}`                                                                                                                                                                                                  | 語音工具成功開始導航，前端渲染整條步驟                                                                                                                              |
+| `nav.step`      | text (JSON) | `currentStepIndex`, `instruction`, `remainingM`                                                                                                                                                                                                | `{"type":"nav.step","currentStepIndex":1,"instruction":"前方右轉","remainingM":30}`                                                                                                                                                                                       | GPS 命中下一 geofence，更新 highlight                                                                                                                               |
+| `nav.transit`   | text (JSON) | `leg`                                                                                                                                                                                                                                          | `{"type":"nav.transit","leg":{"mode":"BUS","from":"甲站","to":"乙站","routeName":"307"}}`                                                                                                                                                                                 | 抵達該 transit leg 上車點；只播報搭乘資訊                                                                                                                           |
+| `nav.arrived`   | text (JSON) | `type`                                                                                                                                                                                                                                         | `{"type":"nav.arrived"}`                                                                                                                                                                                                                                                  | 抵達最終目的地                                                                                                                                                      |
+| `nav.stop`      | text (JSON) | `reason`                                                                                                                                                                                                                                       | `{"type":"nav.stop","reason":"arrived"}`                                                                                                                                                                                                                                  | 導航結束；reason 為 `user_voice`/`user_ui`/`arrived`/`session_end`                                                                                                  |
+| `nav.offroute`  | text (JSON) | `distanceM`                                                                                                                                                                                                                                    | `{"type":"nav.offroute","distanceM":72}`                                                                                                                                                                                                                                  | 連續 GPS 樣本判定偏離步行路線；v1 不自動重規劃                                                                                                                      |
+| `nav.error`     | text (JSON) | `code`, `message`                                                                                                                                                                                                                              | `{"type":"nav.error","code":"NAV_ROUTE_INVALID","message":"路線已過期，請重新規劃"}`                                                                                                                                                                                      | arm/start 失敗；code 為 `NAV_ROUTE_INVALID` 或 `NO_ROUTE_ARMED`                                                                                                     |
 
 `error` 的兩種 `code`：
+
 - `LIVE_CONNECT_FAILED`：認證成功後，後端連 Gemini Live 失敗；緊接著會 `close(1011)`。
 - `LIVE_SESSION_ENDED`：Gemini Live 連線自然結束（如 ~10 分鐘上限，見 §8）；緊接著會 `close(1000, "live-session-ended")`。
 
@@ -149,10 +159,10 @@ HTTP accessible-route ── route + routeToken ──▶ 前端選路
 
 ### 3.4 Binary frame 音訊格式
 
-| 方向 | 編碼 | 取樣率 | 聲道 | 切幀間隔 |
-|---|---|---|---|---|
-| 上行（前端 → 後端）| PCM16 (16-bit signed little-endian) | 16000 Hz | mono | 每累積 1600 samples（= 100ms）送一個 binary frame |
-| 下行（後端 → 前端）| PCM16 (16-bit signed little-endian) | 24000 Hz | mono | 依 Gemini 回傳的 chunk 大小，非固定 100ms，前端需能處理任意長度並依序播放 |
+| 方向                | 編碼                                | 取樣率   | 聲道 | 切幀間隔                                                                  |
+| ------------------- | ----------------------------------- | -------- | ---- | ------------------------------------------------------------------------- |
+| 上行（前端 → 後端） | PCM16 (16-bit signed little-endian) | 16000 Hz | mono | 每累積 1600 samples（= 100ms）送一個 binary frame                         |
+| 下行（後端 → 前端） | PCM16 (16-bit signed little-endian) | 24000 Hz | mono | 依 Gemini 回傳的 chunk 大小，非固定 100ms，前端需能處理任意長度並依序播放 |
 
 後端把上行 PCM16 轉成 base64 塞進 `mimeType: "audio/pcm;rate=16000"` 送給 Gemini；下行則是 Gemini inline audio data 解 base64 後原樣以 binary frame（`{binary:true}`）轉發，前端收到的 `ws.onmessage` 若 `e.data instanceof ArrayBuffer` 就是這個下行音訊。
 
@@ -164,6 +174,7 @@ HTTP accessible-route ── route + routeToken ──▶ 前端選路
 - **final**（`final:true`）：整句講完後，後端用一次性 LLM 對台灣地名／車站／捷運／路線名做**音近錯字校正**（例如「珠北車站」→「竹北車站」）後送出的**最終整句**。校正約在講完後 0.5–1 秒到；LLM 逾時／失敗時會退回未校正原文，但仍帶 `final:true`。
 
 **前端必須這樣渲染（不可再無腦 append）**：
+
 - `role:"user"`：把 interim 片段累加到「當前這句」的字幕元素；收到 `final:true` 時**用該則 `text` 整句取代**當前字幕，並結束這句（下一則 interim 另起新句）。
 - `role:"model"`：不帶 `final`，維持原本逐段 append 行為。
 - barge-in（收到 `interrupted`）或斷線時，重置「當前使用者字幕」狀態，避免殘留半句。
@@ -202,14 +213,14 @@ HTTP accessible-route ── route + routeToken ──▶ 前端選路
 
 ## 6. Close codes 與前端應對
 
-| Code | 觸發原因（依程式碼） | 前端建議行為 |
-|---|---|---|
-| `4401` | token 缺失/格式錯誤/驗證失敗/過期；或 5 秒內未送 `session.start`；或認證前送了 binary/其他訊息 | 視為未授權：清除本地 token，導去重新登入（`/api/v1/user/login` 或 `/refresh`）取得新 accessToken 後重連 |
-| `4409` | 同一使用者在別處開了新的語音連線（新連線會踢掉舊連線） | 提示使用者「已在其他裝置/分頁開啟語音對話」，不要自動重連此連線 |
-| `4408` | 認證後文字 frame/byte budget 耗盡 | 視為異常流量；停止送資料，退避後完整重連 |
-| `4410` | Gemini 導航語音 turn 連續兩次逾時 | 完整重連；重新送 `session.start`，收到 ready 後重新 `nav.setRoute(routeToken)` |
-| `1000` | 正常關閉：前端主動 WS close／相容的 `session.end`（reason `client-end`），或 Gemini Live 結束（reason `live-session-ended`） | 使用者主動結束則正常收尾；Live 結束則重新走完整連線流程 |
-| `1011` | 伺服器內部錯誤，目前唯一來源是認證後連 Gemini Live 失敗（`LIVE_CONNECT_FAILED`） | 提示暫時無法使用語音，可加退避後重試 |
+| Code   | 觸發原因（依程式碼）                                                                                                         | 前端建議行為                                                                                            |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `4401` | token 缺失/格式錯誤/驗證失敗/過期；或 5 秒內未送 `session.start`；或認證前送了 binary/其他訊息                               | 視為未授權：清除本地 token，導去重新登入（`/api/v1/user/login` 或 `/refresh`）取得新 accessToken 後重連 |
+| `4409` | 同一使用者在別處開了新的語音連線（新連線會踢掉舊連線）                                                                       | 提示使用者「已在其他裝置/分頁開啟語音對話」，不要自動重連此連線                                         |
+| `4408` | 認證後文字 frame/byte budget 耗盡                                                                                            | 視為異常流量；停止送資料，退避後完整重連                                                                |
+| `4410` | Gemini 導航語音 turn 連續兩次逾時                                                                                            | 完整重連；重新送 `session.start`，收到 ready 後重新 `nav.setRoute(routeToken)`                          |
+| `1000` | 正常關閉：前端主動 WS close／相容的 `session.end`（reason `client-end`），或 Gemini Live 結束（reason `live-session-ended`） | 使用者主動結束則正常收尾；Live 結束則重新走完整連線流程                                                 |
+| `1011` | 伺服器內部錯誤，目前唯一來源是認證後連 Gemini Live 失敗（`LIVE_CONNECT_FAILED`）                                             | 提示暫時無法使用語音，可加退避後重試                                                                    |
 
 ### 6.1 異常斷線（close code `1006`）
 

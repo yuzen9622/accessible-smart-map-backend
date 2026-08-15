@@ -20,48 +20,48 @@ import { rowToMetroA11yDoc } from "./metro-a11y-parse";
  */
 
 const DEFAULT_CSV = path.resolve(
-	__dirname,
-	"../../data/metro-a11y/捷運車站出入口無障礙電梯、無障礙坡道GPS座標.csv",
+  __dirname,
+  "../../data/metro-a11y/捷運車站出入口無障礙電梯、無障礙坡道GPS座標.csv",
 );
 
 async function main() {
-	const dbUrl = process.env.DATABASE_URL;
-	if (!dbUrl) throw new Error("DATABASE_URL env var is required");
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl) throw new Error("DATABASE_URL env var is required");
 
-	const csvPath = process.argv[2] ?? DEFAULT_CSV;
-	const raw = fs.readFileSync(csvPath, "utf-8").replace(/^\uFEFF/, "");
-	const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
-	const dataLines = lines.slice(1); // header: 項次,出入口電梯/無障礙坡道名稱,出入口編號,經度,緯度
+  const csvPath = process.argv[2] ?? DEFAULT_CSV;
+  const raw = fs.readFileSync(csvPath, "utf-8").replace(/^\uFEFF/, "");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  const dataLines = lines.slice(1); // header: 項次,出入口電梯/無障礙坡道名稱,出入口編號,經度,緯度
 
-	const docs: NonNullable<ReturnType<typeof rowToMetroA11yDoc>>[] = [];
-	let skipped = 0;
-	for (const line of dataLines) {
-		const doc = rowToMetroA11yDoc(parseCsvLine(line));
-		if (doc) docs.push(doc);
-		else skipped++;
-	}
-	console.log(`Parsed ${docs.length} rows, skipped ${skipped}`);
+  const docs: NonNullable<ReturnType<typeof rowToMetroA11yDoc>>[] = [];
+  let skipped = 0;
+  for (const line of dataLines) {
+    const doc = rowToMetroA11yDoc(parseCsvLine(line));
+    if (doc) docs.push(doc);
+    else skipped++;
+  }
+  console.log(`Parsed ${docs.length} rows, skipped ${skipped}`);
 
-	await mongoose.connect(dbUrl);
-	console.log("Connected to MongoDB");
+  await mongoose.connect(dbUrl);
+  console.log("Connected to MongoDB");
 
-	const del = await A11y.deleteMany({});
-	console.log(`Cleared ${del.deletedCount} existing accessibility rows`);
+  const del = await A11y.deleteMany({});
+  console.log(`Cleared ${del.deletedCount} existing accessibility rows`);
 
-	const CHUNK = 500;
-	let inserted = 0;
-	for (let i = 0; i < docs.length; i += CHUNK) {
-		const batch = await A11y.insertMany(docs.slice(i, i + CHUNK) as any[], {
-			ordered: false,
-		});
-		inserted += batch.length;
-	}
+  const CHUNK = 500;
+  let inserted = 0;
+  for (let i = 0; i < docs.length; i += CHUNK) {
+    const batch = await A11y.insertMany(docs.slice(i, i + CHUNK) as any[], {
+      ordered: false,
+    });
+    inserted += batch.length;
+  }
 
-	console.log(`Inserted ${inserted} metro accessibility rows`);
-	await mongoose.disconnect();
+  console.log(`Inserted ${inserted} metro accessibility rows`);
+  await mongoose.disconnect();
 }
 
 main().catch((err) => {
-	console.error(err);
-	process.exit(1);
+  console.error(err);
+  process.exit(1);
 });

@@ -6,7 +6,10 @@ const REQUEST_TIMEOUT_MS = 10_000;
 const PASSWORD_RESET_PATH = "/zh-TW/reset-password";
 
 function appBaseUrl(): string {
-  return (process.env.APP_WEB_BASE_URL ?? "http://localhost:3000").replace(/\/+$/, "");
+  return (process.env.APP_WEB_BASE_URL ?? "http://localhost:3000").replace(
+    /\/+$/,
+    "",
+  );
 }
 
 /**
@@ -20,7 +23,10 @@ function appBaseUrl(): string {
  * @param token Raw reset token.
  * @param baseUrl Overridable base URL (kept injectable for tests).
  */
-export function buildPasswordResetUrl(token: string, baseUrl = appBaseUrl()): string {
+export function buildPasswordResetUrl(
+  token: string,
+  baseUrl = appBaseUrl(),
+): string {
   const normalizedBase = baseUrl.replace(/\/+$/, "");
   return `${normalizedBase}${PASSWORD_RESET_PATH}?token=${encodeURIComponent(token)}`;
 }
@@ -69,7 +75,9 @@ export async function sendEmail(input: {
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
-        ...(input.idempotencyKey ? { "Idempotency-Key": input.idempotencyKey } : {}),
+        ...(input.idempotencyKey
+          ? { "Idempotency-Key": input.idempotencyKey }
+          : {}),
       },
       body: JSON.stringify({
         from,
@@ -108,7 +116,7 @@ export async function sendVerificationEmail(input: {
       "驗證你的電子郵件",
       `<p style="margin:0 0 16px;line-height:1.7;">${input.name} 你好，請點擊下方按鈕完成驗證後即可登入。連結 24 小時內有效。</p>
        <p style="margin:0 0 24px;"><a href="${url}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:8px;">驗證電子郵件</a></p>
-       <p style="margin:0;font-size:13px;color:#52606d;word-break:break-all;">若按鈕無法點擊，請複製此連結：<br>${url}</p>`
+       <p style="margin:0;font-size:13px;color:#52606d;word-break:break-all;">若按鈕無法點擊，請複製此連結：<br>${url}</p>`,
     ),
     text: `${input.name} 你好，請開啟以下連結完成電子郵件驗證後即可登入（24 小時內有效）：\n${url}`,
   });
@@ -134,7 +142,7 @@ export async function sendPasswordResetEmail(input: {
       `<p style="margin:0 0 16px;line-height:1.7;">${input.name} 你好，請點擊下方按鈕設定新密碼。連結 1 小時內有效，且只能使用一次。</p>
        <p style="margin:0 0 24px;"><a href="${url}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:8px;">重設密碼</a></p>
        <p style="margin:0 0 16px;font-size:13px;color:#52606d;word-break:break-all;">若按鈕無法點擊，請複製此連結：<br>${url}</p>
-       <p style="margin:0;font-size:13px;color:#52606d;">若這不是你本人的操作，請忽略此信，你的密碼不會有任何變動。</p>`
+       <p style="margin:0;font-size:13px;color:#52606d;">若這不是你本人的操作，請忽略此信，你的密碼不會有任何變動。</p>`,
     ),
     text: `${input.name} 你好，請開啟以下連結重設密碼（1 小時內有效，僅能使用一次）：\n${url}\n\n若這不是你本人的操作，請忽略此信。`,
     idempotencyKey: input.idempotencyKey,
@@ -158,7 +166,7 @@ export async function sendGooglePasswordResetGuidanceEmail(input: {
       `<p style="margin:0 0 16px;line-height:1.7;">${input.name} 你好，此帳號目前使用 Google 登入，因此沒有本站密碼可供重設。</p>
        <p style="margin:0 0 24px;line-height:1.7;">請回到登入頁選擇「使用 Google 登入」。若你忘記的是 Google 帳戶密碼，請使用下方的 Google 帳戶救援服務。</p>
        <p style="margin:0 0 24px;"><a href="${GOOGLE_ACCOUNT_RECOVERY_URL}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:8px;">前往 Google 帳戶救援</a></p>
-       <p style="margin:0;font-size:13px;color:#52606d;">若想為本站新增密碼登入方式，請先使用 Google 登入，再到帳號設定中新增密碼。</p>`
+       <p style="margin:0;font-size:13px;color:#52606d;">若想為本站新增密碼登入方式，請先使用 Google 登入，再到帳號設定中新增密碼。</p>`,
     ),
     text: `${input.name} 你好，此帳號目前使用 Google 登入，因此沒有本站密碼可供重設。\n\n請回到登入頁選擇「使用 Google 登入」。若你忘記的是 Google 帳戶密碼，請前往 Google 帳戶救援：\n${GOOGLE_ACCOUNT_RECOVERY_URL}\n\n若想為本站新增密碼登入方式，請先使用 Google 登入，再到帳號設定中新增密碼。`,
     idempotencyKey: input.idempotencyKey,

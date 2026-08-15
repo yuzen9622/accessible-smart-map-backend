@@ -9,18 +9,18 @@
 
 ## ✅ 已完成的重構（Phase 1–7）
 
-| Phase | 內容 | Commit |
-|---|---|---|
-| 1 | `a11y.service.ts` — controller + agent-tools 不再直接碰 MongoDB | `8443583` |
-| 2 | `transit.service.ts` — TDX URL 組裝移出 controller / agent-tools | `20036e2` |
-| 3 | `air.service.ts` — Google Geocoding + STA API 集中 | `aea514e` |
-| 4 | `adapters/google.adapter.ts` — 刪除 `config/map.ts`、移除 `config/lib.ts::getCoordinates` | `64e3181` |
-| 5 | `config/ors.ts` → `service/ors.service.ts` | `9992bee` |
-| 6 | `agent-tools.ts` 薄封裝化（534 → 365 行） | （併入 Phase 5） |
-| **7** | **`user.service.ts` — user 模組原本完全沒有 service 層（v1.0 遺漏）** | `b4a9fa9` |
-| 補 | transit 服務改回傳明確 HTTP status（移除字串比對 hack） | `fa24a65` |
-| **8** | **`src/types/route.ts` — 路由領域型別下沉，根治倒置依賴（見 §9）** | `1a5658b` |
-| **9** | **消滅頂層 `src/service/`：11 個 planner → `modules/accessible-route/planners/`、`TdxTokenManger` → `adapters/tdx.adapter.ts`** | （本分支） |
+| Phase | 內容                                                                                                                            | Commit           |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| 1     | `a11y.service.ts` — controller + agent-tools 不再直接碰 MongoDB                                                                 | `8443583`        |
+| 2     | `transit.service.ts` — TDX URL 組裝移出 controller / agent-tools                                                                | `20036e2`        |
+| 3     | `air.service.ts` — Google Geocoding + STA API 集中                                                                              | `aea514e`        |
+| 4     | `adapters/google.adapter.ts` — 刪除 `config/map.ts`、移除 `config/lib.ts::getCoordinates`                                       | `64e3181`        |
+| 5     | `config/ors.ts` → `service/ors.service.ts`                                                                                      | `9992bee`        |
+| 6     | `agent-tools.ts` 薄封裝化（534 → 365 行）                                                                                       | （併入 Phase 5） |
+| **7** | **`user.service.ts` — user 模組原本完全沒有 service 層（v1.0 遺漏）**                                                           | `b4a9fa9`        |
+| 補    | transit 服務改回傳明確 HTTP status（移除字串比對 hack）                                                                         | `fa24a65`        |
+| **8** | **`src/types/route.ts` — 路由領域型別下沉，根治倒置依賴（見 §9）**                                                              | `1a5658b`        |
+| **9** | **消滅頂層 `src/service/`：11 個 planner → `modules/accessible-route/planners/`、`TdxTokenManger` → `adapters/tdx.adapter.ts`** | （本分支）       |
 
 > **§2/§6 的目錄樹早於 Phase 9**：頂層 `src/service/` 已不存在，`*.service.ts` 現在只出現在模組內。
 > 最新結構與理由見 [`architecture-audit.md`](./architecture-audit.md) §3/§4。Phase 9 的動機：`src/service/`
@@ -51,14 +51,14 @@
 Router → Controller → Service → Adapter / Repository → 外部資源
 ```
 
-| 層次 | 職責 |
-|---|---|
-| **Router** | 定義 HTTP 路由、套用 middleware |
-| **Controller** | 解析請求、驗證參數、呼叫 Service、格式化回應 |
-| **Service** | 業務邏輯，協調多個 Repository / Adapter |
-| **Adapter** | 封裝單一外部 API（Google、TDX、ORS、STA） |
+| 層次           | 職責                                                |
+| -------------- | --------------------------------------------------- |
+| **Router**     | 定義 HTTP 路由、套用 middleware                     |
+| **Controller** | 解析請求、驗證參數、呼叫 Service、格式化回應        |
+| **Service**    | 業務邏輯，協調多個 Repository / Adapter             |
+| **Adapter**    | 封裝單一外部 API（Google、TDX、ORS、STA）           |
 | **Repository** | 封裝 MongoDB 存取（可暫用 Mongoose Model 直接代替） |
-| **Config** | 純常數與客戶端初始化，**不含網路呼叫** |
+| **Config**     | 純常數與客戶端初始化，**不含網路呼叫**              |
 
 ---
 
@@ -249,9 +249,10 @@ async function nearbyA11y(req, res) {
 async function getBusData(req, res) {
   const city = await getCity(Number(arrival_lat), Number(arrival_lng));
   const formatRouteName = detectBusApiType(route_name);
-  const url = formatRouteName.type === "City"
-    ? `${busUrl.stopOfRouteUrl}/${city}?...`
-    : `${busUrl.interCityStopOfRouteUrl}?...`;
+  const url =
+    formatRouteName.type === "City"
+      ? `${busUrl.stopOfRouteUrl}/${city}?...`
+      : `${busUrl.interCityStopOfRouteUrl}?...`;
   const busStopInfo = await tdxFetch(url);
   // ...
 }
@@ -261,11 +262,11 @@ async function getBusData(req, res) {
 
 #### 問題 3：業務邏輯重複（`agent-tools.ts` 是 controller 的複製品）
 
-| agent-tools 函式 | 重複自 | 重複內容 |
-|---|---|---|
-| `findA11yPlaces()` | `a11y.controller.nearbyA11y` | 相同 3 個 MongoDB `$near` 查詢 |
-| `getBusArrivalEstimate()` | `transit.controller.getBusData` | TDX URL 組裝 + 方向判斷 + ETA 查詢 |
-| `getAirQuality()` | `air.controller.getAirQualityInfo` | Google Geocoding + STA API 呼叫 |
+| agent-tools 函式          | 重複自                             | 重複內容                           |
+| ------------------------- | ---------------------------------- | ---------------------------------- |
+| `findA11yPlaces()`        | `a11y.controller.nearbyA11y`       | 相同 3 個 MongoDB `$near` 查詢     |
+| `getBusArrivalEstimate()` | `transit.controller.getBusData`    | TDX URL 組裝 + 方向判斷 + ETA 查詢 |
+| `getAirQuality()`         | `air.controller.getAirQualityInfo` | Google Geocoding + STA API 呼叫    |
 
 任何邏輯修改都需要改兩個地方，容易造成行為不一致。
 
@@ -275,11 +276,11 @@ async function getBusData(req, res) {
 
 #### 問題 4：`config/` 內含 HTTP 呼叫
 
-| 檔案 | 問題函式 | 說明 |
-|---|---|---|
-| `config/map.ts` | `getCity()` | 呼叫 Google Geocoding API，不是常數 |
-| `config/lib.ts:199` | `getCoordinates()` | 呼叫 Google Places API，不是工具函式 |
-| `config/ors.ts` | `orsWalkingRoute()`, `orsWalkingMatrix()` | 完整的 ORS HTTP client，應為 service |
+| 檔案                | 問題函式                                  | 說明                                 |
+| ------------------- | ----------------------------------------- | ------------------------------------ |
+| `config/map.ts`     | `getCity()`                               | 呼叫 Google Geocoding API，不是常數  |
+| `config/lib.ts:199` | `getCoordinates()`                        | 呼叫 Google Places API，不是工具函式 |
+| `config/ors.ts`     | `orsWalkingRoute()`, `orsWalkingMatrix()` | 完整的 ORS HTTP client，應為 service |
 
 **影響：** `config/` 被多個模組引入；一旦替換 Google 或 ORS，需要追蹤散落在 config 裡的呼叫點。
 
@@ -345,7 +346,7 @@ agent-tools.ts::getBusArrivalEstimate()
 
 agent-tools.ts::getAirQuality()
   → air.service.ts::getAirQuality()     ← 共用同一份外部 API 查詢
-  
+
 a11y.controller::nearbyA11y()
   → a11y.service.ts::findNearby()       ← 同上
 
@@ -414,7 +415,12 @@ src/
 ```typescript
 // src/modules/a11y/a11y.service.ts
 export async function findNearby(lat: number, lng: number, radiusM = 150) {
-  const geoQuery = { $near: { $geometry: { type: "Point", coordinates: [lng, lat] }, $maxDistance: radiusM } };
+  const geoQuery = {
+    $near: {
+      $geometry: { type: "Point", coordinates: [lng, lat] },
+      $maxDistance: radiusM,
+    },
+  };
   const [nearbyMetroA11y, nearbyBathroom, nearbyOsm] = await Promise.all([
     A11y.find({ location: geoQuery }),
     BathroomModel.find({ type: "無障礙廁所", location: geoQuery }),
@@ -433,6 +439,7 @@ export async function findByOsmIds(ids: string[]) {
 ```
 
 **改動清單：**
+
 - `a11y.controller.ts`：`nearbyA11y()`, `getA11yData()`, `getA11yPlace()` 改呼叫 service
 - `agent-tools.ts`：`findA11yPlaces()`, `getA11yFacilityDetails()` 改呼叫 service
 
@@ -454,6 +461,7 @@ export async function getBusPosition(params: {
 ```
 
 **改動清單：**
+
 - `transit.controller.ts`：`getBusData()`, `getRealtimeBusPosition()` 改呼叫 service
 - `agent-tools.ts`：`getBusArrivalEstimate()`, `getBusPosition()` 改呼叫 service
 
@@ -470,6 +478,7 @@ export async function getRawAirReadings(city: string): Promise<AirReading[]> { .
 ```
 
 **改動清單：**
+
 - `air.controller.ts`：`getAirQualityInfo()` 改呼叫 service
 - `agent-tools.ts`：`getAirQuality()` 改呼叫 service
 
@@ -487,6 +496,7 @@ export async function findPlaces(query: string, ...): Promise<Place[]> { ... }
 ```
 
 **改動清單：**
+
 - 刪除 `config/map.ts`，更新所有 import
 - 從 `config/lib.ts` 移除 `getCoordinates()`（其餘工具函式留下）
 - `agent-tools.ts` 的 `findGooglePlaces()` 改呼叫 adapter
@@ -498,6 +508,7 @@ export async function findPlaces(query: string, ...): Promise<Place[]> { ... }
 **目標：** config/ 不再含 HTTP 呼叫。
 
 **改動清單：**
+
 - 移動並重新命名
 - 更新 `accessible-route.service.ts` 的 import
 
@@ -590,13 +601,13 @@ Controller **禁止**：
 
 下層的各個 planner（位於 `src/service/`）需要這些型別，於是**向上 import**：
 
-| 下層 planner（`src/service/`） | 向上 import 的型別 | 行號 |
-|---|---|---|
-| `tdx-routing.service.ts` | AccessibleRoute, WalkLeg, … | :34–41 |
-| `otp-routing.service.ts` | AccessibleRoute, WalkLeg, …, WaitInfo | :18–26 |
-| `realtime-transit.service.ts` | AccessibleRoute, BusLeg, TraLeg | :46–50 |
-| `facility-status.service.ts` | AccessibleRoute, MetroLeg | :25–28 |
-| `a11y-exit.service.ts` | WalkLeg | :18 |
+| 下層 planner（`src/service/`） | 向上 import 的型別                    | 行號   |
+| ------------------------------ | ------------------------------------- | ------ |
+| `tdx-routing.service.ts`       | AccessibleRoute, WalkLeg, …           | :34–41 |
+| `otp-routing.service.ts`       | AccessibleRoute, WalkLeg, …, WaitInfo | :18–26 |
+| `realtime-transit.service.ts`  | AccessibleRoute, BusLeg, TraLeg       | :46–50 |
+| `facility-status.service.ts`   | AccessibleRoute, MetroLeg             | :25–28 |
+| `a11y-exit.service.ts`         | WalkLeg                               | :18    |
 
 ### 9.2 依賴方向是反的（倒置）
 
@@ -620,6 +631,7 @@ Controller **禁止**：
 （`accessible-route.service.ts:1843, 1866, 1880`），把靜態環打斷。
 
 程式碼裡甚至留了註解承認這件事：
+
 ```ts
 // Leg/route types live in the accessible-route module. Import as TYPES only so
 // this service does not create a runtime circular dependency with the orchestrator.

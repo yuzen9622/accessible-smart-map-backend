@@ -6,7 +6,12 @@ import mongoose from "mongoose";
 import A11y from "../model/a11y.model";
 
 // Haversine formula for distance between two coordinates in meters
-function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+function haversineDistance(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number,
+): number {
   const R = 6371e3; // Earth radius in meters
   const phi1 = (lat1 * Math.PI) / 180;
   const phi2 = (lat2 * Math.PI) / 180;
@@ -15,14 +20,19 @@ function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
 
   const a =
     Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
-    Math.cos(phi1) * Math.cos(phi2) *
-    Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+    Math.cos(phi1) *
+      Math.cos(phi2) *
+      Math.sin(deltaLambda / 2) *
+      Math.sin(deltaLambda / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
   return R * c; // in meters
 }
 
-function parseCSV(csvText: string): { headers: string[]; rows: Record<string, string>[] } {
+function parseCSV(csvText: string): {
+  headers: string[];
+  rows: Record<string, string>[];
+} {
   // Simple CSV parser supporting quotes
   const lines = csvText.split(/\r?\n/);
   if (lines.length === 0 || !lines[0].trim()) {
@@ -65,15 +75,20 @@ function parseCSV(csvText: string): { headers: string[]; rows: Record<string, st
   return { headers, rows };
 }
 
-function stringifyCSV(headers: string[], rows: Record<string, string>[]): string {
+function stringifyCSV(
+  headers: string[],
+  rows: Record<string, string>[],
+): string {
   const headerLine = headers.join(",");
   const lines = rows.map((row) =>
     headers
       .map((h) => {
         const val = row[h] ?? "";
-        return val.includes(",") || val.includes('"') ? `"${val.replace(/"/g, '""')}"` : val;
+        return val.includes(",") || val.includes('"')
+          ? `"${val.replace(/"/g, '""')}"`
+          : val;
       })
-      .join(",")
+      .join(","),
   );
   return [headerLine, ...lines].join("\n");
 }
@@ -81,7 +96,9 @@ function stringifyCSV(headers: string[], rows: Record<string, string>[]): string
 async function main() {
   const args = process.argv.slice(2);
   if (args.length < 1) {
-    console.error("Usage: npx ts-node src/scripts/inject-db-a11y-stops.ts <gtfs-zip-path>");
+    console.error(
+      "Usage: npx ts-node src/scripts/inject-db-a11y-stops.ts <gtfs-zip-path>",
+    );
     process.exit(1);
   }
 
@@ -104,7 +121,9 @@ async function main() {
   // 1. Fetch all A11y accessibility elevator/ramp records
   console.log("Fetching accessibilities from database...");
   const a11yRecords = await A11y.find().lean();
-  console.log(`Loaded ${a11yRecords.length} accessibility coordinates from database.`);
+  console.log(
+    `Loaded ${a11yRecords.length} accessibility coordinates from database.`,
+  );
 
   if (a11yRecords.length === 0) {
     console.log("No accessibility records found in database. Exiting.");
@@ -116,7 +135,10 @@ async function main() {
   console.log(`Extracting stops.txt from ${path.basename(zipPath)}...`);
   let stopsCSV: string;
   try {
-    stopsCSV = execSync(`unzip -p "${zipPath}" stops.txt`, { encoding: "utf-8", maxBuffer: 50 * 1024 * 1024 });
+    stopsCSV = execSync(`unzip -p "${zipPath}" stops.txt`, {
+      encoding: "utf-8",
+      maxBuffer: 50 * 1024 * 1024,
+    });
   } catch (err) {
     console.error("Failed to extract stops.txt from zip:", err);
     await mongoose.disconnect();
@@ -130,7 +152,9 @@ async function main() {
 
   // Find all TRTC stops (which represent stations/stops in this GTFS feed, location_type === "0" or empty)
   const trtcStops = rows.filter(
-    (r) => r.stop_id.startsWith("TRTC_") && (r.location_type === "0" || r.location_type === "")
+    (r) =>
+      r.stop_id.startsWith("TRTC_") &&
+      (r.location_type === "0" || r.location_type === ""),
   );
   console.log(`Found ${trtcStops.length} TRTC stops in stops.txt.`);
 
@@ -155,13 +179,16 @@ async function main() {
     }
   }
 
-  console.log(`Matched ${accessibleStopIds.size} accessible TRTC stops based on database coordinates.`);
+  console.log(
+    `Matched ${accessibleStopIds.size} accessible TRTC stops based on database coordinates.`,
+  );
 
   // 4. Update wheelchair_boarding for matched stops and any parent/child associations
   let updatedCount = 0;
   for (const r of rows) {
     const isMatched = accessibleStopIds.has(r.stop_id);
-    const isChildOfMatched = r.parent_station && accessibleStopIds.has(r.parent_station);
+    const isChildOfMatched =
+      r.parent_station && accessibleStopIds.has(r.parent_station);
 
     if (isMatched || isChildOfMatched) {
       r.wheelchair_boarding = "1";

@@ -4,21 +4,21 @@
 
 ## 現況摘要
 
-| 項目 | 數值 |
-| --- | --- |
-| 本機 Node | v26.6.0（無 engines 欄位） |
-| Docker | node:22-bookworm-slim（builder + runtime） |
-| 安全漏洞 | 11 個（High 6 / Moderate 2 / Low 3，其中 protobufjs 佔 7 個、mongoose 1、body-parser 1） |
-| 待升級 | 6 個 patch/minor + 7 個 major |
+| 項目      | 數值                                                                                     |
+| --------- | ---------------------------------------------------------------------------------------- |
+| 本機 Node | v26.6.0（無 engines 欄位）                                                               |
+| Docker    | node:22-bookworm-slim（builder + runtime）                                               |
+| 安全漏洞  | 11 個（High 6 / Moderate 2 / Low 3，其中 protobufjs 佔 7 個、mongoose 1、body-parser 1） |
+| 待升級    | 6 個 patch/minor + 7 個 major                                                            |
 
 ## 漏洞與修補版本（GHSA 官方）
 
-| GHSA | 套件 | 影響版本 | 修補版本 | 在本專案的引入路徑 |
-| --- | --- | --- | --- | --- |
-| GHSA-f38q-mgvj-vph7 (High) | protobufjs | ≤7.6.2 / 8.0.0–8.5.0 | **7.6.3 / 8.6.0** | @google-cloud/vision → google-gax |
-| GHSA-j3f2-48v5-ccww (High) | protobufjs | 同上 | 同上 | 同上 |
-| GHSA-664h-wqgq-64gw (Moderate) | mongoose | <8.24.1 / <9.7.2 | **8.24.1 / 9.7.2** | 直接依賴 |
-| GHSA-v422-hmwv-36x6 (Low) | body-parser | <1.20.6 / 2.0–<2.3.0 | **1.20.6 / 2.3.0** | express 4.22.2 釘死 body-parser 1.20.3，**express 4 無解，唯一正解是 express 5** |
+| GHSA                           | 套件        | 影響版本             | 修補版本           | 在本專案的引入路徑                                                               |
+| ------------------------------ | ----------- | -------------------- | ------------------ | -------------------------------------------------------------------------------- |
+| GHSA-f38q-mgvj-vph7 (High)     | protobufjs  | ≤7.6.2 / 8.0.0–8.5.0 | **7.6.3 / 8.6.0**  | @google-cloud/vision → google-gax                                                |
+| GHSA-j3f2-48v5-ccww (High)     | protobufjs  | 同上                 | 同上               | 同上                                                                             |
+| GHSA-664h-wqgq-64gw (Moderate) | mongoose    | <8.24.1 / <9.7.2     | **8.24.1 / 9.7.2** | 直接依賴                                                                         |
+| GHSA-v422-hmwv-36x6 (Low)      | body-parser | <1.20.6 / 2.0–<2.3.0 | **1.20.6 / 2.3.0** | express 4.22.2 釘死 body-parser 1.20.3，**express 4 無解，唯一正解是 express 5** |
 
 ## Major 升級官方公告重點 → 本專案對應改動
 
@@ -83,19 +83,19 @@
 
 ## 升級順序（風險由低到高，每步獨立 commit + 驗證）
 
-| 步驟 | 內容 | 驗證 |
-| --- | --- | --- |
-| 0 | 基線：git 乾淨、`pnpm build` + `pnpm test` 紀錄 | — |
-| 1 | mongoose 8.24.0 → **8.24.1**（純 patch 修漏洞） | build + test |
-| 2 | @google-cloud/vision → 6.0.0（修 protobufjs 7 個漏洞） | build + test + `pnpm why protobufjs` 確認 ≥8.6.0 |
-| 3 | 低風險批次：google-auth-library 11.0.1、mammoth 1.12.1、ws 8.21.3、@dotenvx/dotenvx 2.21.0、@google-cloud/storage 7.22.0、@scalar/express-api-reference 0.10.13 | build + test |
-| 4 | ioredis 6.0.0 | build + test + redis 連線 smoke |
-| 5 | @google/genai 2.16.0 | build + test + agent smoke |
-| 6 | openai 7.4.0 | build + test + ai smoke |
-| 7 | express 5.2.1 + @types/express 5（修 body-parser DoS） | build + 全測試 + server 開機 smoke（/health、/docs、openapi、404 handler、query 驗證路由、錯誤路徑） |
-| 8 | mongoose 9.9.2 | build + 全測試 + conn 連線 + 一條 import script dry-run |
-| 9 | typescript 7（方案 A/B 待決） | build + test + ts-node script smoke |
-| 10 | 收尾：`pnpm audit` 期望歸零、`pnpm outdated` 殘留檢視、Docker build 驗證（node:22）、更新本文件為執行紀錄 | — |
+| 步驟 | 內容                                                                                                                                                            | 驗證                                                                                                 |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| 0    | 基線：git 乾淨、`pnpm build` + `pnpm test` 紀錄                                                                                                                 | —                                                                                                    |
+| 1    | mongoose 8.24.0 → **8.24.1**（純 patch 修漏洞）                                                                                                                 | build + test                                                                                         |
+| 2    | @google-cloud/vision → 6.0.0（修 protobufjs 7 個漏洞）                                                                                                          | build + test + `pnpm why protobufjs` 確認 ≥8.6.0                                                     |
+| 3    | 低風險批次：google-auth-library 11.0.1、mammoth 1.12.1、ws 8.21.3、@dotenvx/dotenvx 2.21.0、@google-cloud/storage 7.22.0、@scalar/express-api-reference 0.10.13 | build + test                                                                                         |
+| 4    | ioredis 6.0.0                                                                                                                                                   | build + test + redis 連線 smoke                                                                      |
+| 5    | @google/genai 2.16.0                                                                                                                                            | build + test + agent smoke                                                                           |
+| 6    | openai 7.4.0                                                                                                                                                    | build + test + ai smoke                                                                              |
+| 7    | express 5.2.1 + @types/express 5（修 body-parser DoS）                                                                                                          | build + 全測試 + server 開機 smoke（/health、/docs、openapi、404 handler、query 驗證路由、錯誤路徑） |
+| 8    | mongoose 9.9.2                                                                                                                                                  | build + 全測試 + conn 連線 + 一條 import script dry-run                                              |
+| 9    | typescript 7（方案 A/B 待決）                                                                                                                                   | build + test + ts-node script smoke                                                                  |
+| 10   | 收尾：`pnpm audit` 期望歸零、`pnpm outdated` 殘留檢視、Docker build 驗證（node:22）、更新本文件為執行紀錄                                                       | —                                                                                                    |
 
 每步流程固定：官方公告核對（本文件已涵蓋，openai 7.0.0 / ioredis 6.0.0 段落於實作時再細讀）→ `pnpm add/update` → 必要程式碼修改 → `pnpm build`（含 lint:arch）→ `pnpm test` → commit。
 
@@ -109,19 +109,19 @@
 
 ## 執行紀錄（2026-08-13，全部完成）
 
-| 步驟 | 內容 | 結果與驗證 |
-| --- | --- | --- |
-| 0 | 基線 | build ✅ 95 files / 1168 tests ✅ |
-| 1 | mongoose 8.24.0 → 8.24.3（GHSA-664h） | ✅ build + tests |
-| 2 | @google-cloud/vision 6.0.0 + protobufjs 7.6.5（GHSA-f38q/j3f2） | ✅ build + tests；`pnpm why` 確認唯一 protobufjs 7.6.5 |
-| 3 | 批次：google-auth-library 11.0.2、mammoth 1.12.1、ws 8.21.3、dotenvx 2.21.0、storage 7.22.0、scalar 0.10.13 + `pnpm.overrides` gaxios ^7.3.1 / teeny-request ^11.0.1（修 uuid）、minimatch→brace-expansion 5.0.9、nanoid 5.1.16 | ✅ build + tests；audit 從 11 → 2 個 |
-| 4 | ioredis 6.0.0 + `protocol: 2` | ✅ build + tests |
-| 5 | @google/genai 2.17.0（breaking 僅 Interactions） | ✅ 零程式碼改動，tsc 一次過 |
-| 6 | openai 7.4.0（breaking 僅 Node ≥22） | ✅ 零程式碼改動 |
-| 7 | express 5.2.1 + @types/express 5（GHSA-v422） | ✅ 改 3 檔（app.ts `/{*splat}`、validate-request `defineProperty` 遮蔽 query getter、hazard params `as string`）+ @types/express override；server 實測 health/docs/openapi/404/400/async 錯誤轉交 |
-| 8 | mongoose 9.9.2 | ✅ 改 4 檔（FilterQuery→QueryFilter、create 嚴格型別、updatePipeline opt-in、writeConcern cast）+ 測試契約更新；**實測 DB 路由 200**（welfare/reviews，本機 mongod 27018） |
-| 9 | typescript 7.0.2（方案 A） | ✅ `typescript`→`@typescript/typescript6`（ts-node/編輯器）+ `@typescript/native`→`typescript@7`（build）；tsconfig：`moduleResolution: bundler`（TS7 移除 node10）+ `types: ["*"]`；ts-node script 實跑 ✅ |
-| 10 | 收尾 | audit **0 vulnerabilities**；docker build（node:22）✅；outdated 僅剩計劃外 zod-to-openapi 9 / @types/node 26 |
+| 步驟 | 內容                                                                                                                                                                                                                            | 結果與驗證                                                                                                                                                                                                  |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0    | 基線                                                                                                                                                                                                                            | build ✅ 95 files / 1168 tests ✅                                                                                                                                                                           |
+| 1    | mongoose 8.24.0 → 8.24.3（GHSA-664h）                                                                                                                                                                                           | ✅ build + tests                                                                                                                                                                                            |
+| 2    | @google-cloud/vision 6.0.0 + protobufjs 7.6.5（GHSA-f38q/j3f2）                                                                                                                                                                 | ✅ build + tests；`pnpm why` 確認唯一 protobufjs 7.6.5                                                                                                                                                      |
+| 3    | 批次：google-auth-library 11.0.2、mammoth 1.12.1、ws 8.21.3、dotenvx 2.21.0、storage 7.22.0、scalar 0.10.13 + `pnpm.overrides` gaxios ^7.3.1 / teeny-request ^11.0.1（修 uuid）、minimatch→brace-expansion 5.0.9、nanoid 5.1.16 | ✅ build + tests；audit 從 11 → 2 個                                                                                                                                                                        |
+| 4    | ioredis 6.0.0 + `protocol: 2`                                                                                                                                                                                                   | ✅ build + tests                                                                                                                                                                                            |
+| 5    | @google/genai 2.17.0（breaking 僅 Interactions）                                                                                                                                                                                | ✅ 零程式碼改動，tsc 一次過                                                                                                                                                                                 |
+| 6    | openai 7.4.0（breaking 僅 Node ≥22）                                                                                                                                                                                            | ✅ 零程式碼改動                                                                                                                                                                                             |
+| 7    | express 5.2.1 + @types/express 5（GHSA-v422）                                                                                                                                                                                   | ✅ 改 3 檔（app.ts `/{*splat}`、validate-request `defineProperty` 遮蔽 query getter、hazard params `as string`）+ @types/express override；server 實測 health/docs/openapi/404/400/async 錯誤轉交           |
+| 8    | mongoose 9.9.2                                                                                                                                                                                                                  | ✅ 改 4 檔（FilterQuery→QueryFilter、create 嚴格型別、updatePipeline opt-in、writeConcern cast）+ 測試契約更新；**實測 DB 路由 200**（welfare/reviews，本機 mongod 27018）                                  |
+| 9    | typescript 7.0.2（方案 A）                                                                                                                                                                                                      | ✅ `typescript`→`@typescript/typescript6`（ts-node/編輯器）+ `@typescript/native`→`typescript@7`（build）；tsconfig：`moduleResolution: bundler`（TS7 移除 node10）+ `types: ["*"]`；ts-node script 實跑 ✅ |
+| 10   | 收尾                                                                                                                                                                                                                            | audit **0 vulnerabilities**；docker build（node:22）✅；outdated 僅剩計劃外 zod-to-openapi 9 / @types/node 26                                                                                               |
 
 ### 決策紀錄
 

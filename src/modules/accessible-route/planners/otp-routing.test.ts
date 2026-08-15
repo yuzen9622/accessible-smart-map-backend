@@ -116,7 +116,11 @@ const walkOnlyItinerary = () => ({
 
 const overTransferItinerary = (startTime: number) => {
   const first = transitItinerary("SNAP_BAD_1", startTime, 600) as any;
-  const second = transitItinerary("SNAP_BAD_2", startTime + 660_000, 600) as any;
+  const second = transitItinerary(
+    "SNAP_BAD_2",
+    startTime + 660_000,
+    600,
+  ) as any;
   return {
     duration: 1_260,
     walkDistance: 0,
@@ -151,9 +155,19 @@ describe("OTP PLAN_QUERY transportModes allowlist", () => {
   // Fixed-expectation guard: catches an accidental shrink of SUPPORTED_TRANSIT_MODES
   // that the dynamic test above would silently pass in lockstep with the query.
   it("resolves to exactly WALK + the 6 allowed transit modes", () => {
-    const requested = [...PLAN_QUERY.matchAll(/\{ mode: (\w+) \}/g)].map((m) => m[1]);
+    const requested = [...PLAN_QUERY.matchAll(/\{ mode: (\w+) \}/g)].map(
+      (m) => m[1],
+    );
     expect(new Set(requested)).toEqual(
-      new Set(["WALK", "BUS", "TROLLEYBUS", "RAIL", "SUBWAY", "TRAM", "MONORAIL"]),
+      new Set([
+        "WALK",
+        "BUS",
+        "TROLLEYBUS",
+        "RAIL",
+        "SUBWAY",
+        "TRAM",
+        "MONORAIL",
+      ]),
     );
   });
 });
@@ -179,23 +193,23 @@ describe("OTP PLAN_QUERY searchWindow", () => {
       from: { name: "Origin" },
       to: { name: "起站" },
       legGeometry: { points: "" },
-      steps: [{
-        distance: 20,
-        lon: 121.565,
-        lat: 25.041,
-        relativeDirection: "CONTINUE",
-        absoluteDirection: "NORTH",
-        streetName: "圓山市景步道",
-        area: false,
-        bogusName: false,
-        feature: { __typename: "StairsUse" },
-      }],
+      steps: [
+        {
+          distance: 20,
+          lon: 121.565,
+          lat: 25.041,
+          relativeDirection: "CONTINUE",
+          absoluteDirection: "NORTH",
+          streetName: "圓山市景步道",
+          area: false,
+          bogusName: false,
+          feature: { __typename: "StairsUse" },
+        },
+      ],
     });
-    post.mockResolvedValue(okResp([
-      withStairs,
-      transitItinerary("R2"),
-      transitItinerary("R3"),
-    ]));
+    post.mockResolvedValue(
+      okResp([withStairs, transitItinerary("R2"), transitItinerary("R3")]),
+    );
 
     const routes = await planOtpRoute(origin, destination);
 
@@ -362,17 +376,19 @@ describe("planOtpRoute search windows and timeouts", () => {
       from: { name: "Origin" },
       to: { name: "起站" },
       legGeometry: { points: "" },
-      steps: [{
-        distance: 20,
-        lon: 121.565,
-        lat: 25.041,
-        relativeDirection: "CONTINUE",
-        absoluteDirection: "NORTH",
-        streetName: "樓梯",
-        area: false,
-        bogusName: false,
-        feature: { __typename: "StairsUse" },
-      }],
+      steps: [
+        {
+          distance: 20,
+          lon: 121.565,
+          lat: 25.041,
+          relativeDirection: "CONTINUE",
+          absoluteDirection: "NORTH",
+          streetName: "樓梯",
+          area: false,
+          bogusName: false,
+          feature: { __typename: "StairsUse" },
+        },
+      ],
     });
     const continuationRoutes = [
       earliest,
@@ -399,7 +415,10 @@ describe("planOtpRoute search windows and timeouts", () => {
     const departureTime = new Date("2030-01-01T13:51:00.000Z");
     const routeStart = new Date("2030-01-01T22:20:00.000Z").getTime();
     const noTransit = [{ code: "NO_TRANSIT_CONNECTION_IN_SEARCH_WINDOW" }];
-    const earlyRoute = transitItinerary("EARLY_START", routeStart + 17 * 60_000) as any;
+    const earlyRoute = transitItinerary(
+      "EARLY_START",
+      routeStart + 17 * 60_000,
+    ) as any;
     earlyRoute.duration = 2_400;
     earlyRoute.legs.unshift({
       mode: "WALK",
@@ -442,7 +461,9 @@ describe("planOtpRoute search windows and timeouts", () => {
     post
       .mockResolvedValueOnce(okResp([]))
       .mockResolvedValueOnce(okResp([]))
-      .mockResolvedValueOnce(okResp([overTransferItinerary(scheduledDeparture)], []))
+      .mockResolvedValueOnce(
+        okResp([overTransferItinerary(scheduledDeparture)], []),
+      )
       .mockResolvedValueOnce(
         okResp([transitItinerary("ORIGINAL", scheduledDeparture, 2_400)]),
       );
@@ -485,7 +506,9 @@ describe("planOtpRoute search windows and timeouts", () => {
     post
       .mockResolvedValueOnce(okResp([], noTransit))
       .mockResolvedValueOnce(okResp([], noTransit))
-      .mockResolvedValueOnce(okResp([overTransferItinerary(scheduledDeparture)], []))
+      .mockResolvedValueOnce(
+        okResp([overTransferItinerary(scheduledDeparture)], []),
+      )
       .mockResolvedValueOnce(okResp([], noTransit))
       .mockResolvedValueOnce(
         okResp([transitItinerary("SNAPPED", scheduledDeparture, 2_400)]),
@@ -565,7 +588,9 @@ describe("planOtpRoute search windows and timeouts", () => {
 
     expect(detailed.status).toBe("ok");
     if (detailed.status !== "ok") return;
-    await expect(planOtpRoute(origin, destination)).resolves.toEqual(detailed.routes);
+    await expect(planOtpRoute(origin, destination)).resolves.toEqual(
+      detailed.routes,
+    );
   });
 
   it("caps the continuation ladder at two hops", async () => {

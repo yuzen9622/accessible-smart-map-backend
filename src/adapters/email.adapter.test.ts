@@ -17,7 +17,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (ORIGINAL_APP_WEB_BASE_URL === undefined) delete process.env.APP_WEB_BASE_URL;
+  if (ORIGINAL_APP_WEB_BASE_URL === undefined)
+    delete process.env.APP_WEB_BASE_URL;
   else process.env.APP_WEB_BASE_URL = ORIGINAL_APP_WEB_BASE_URL;
   if (ORIGINAL_RESEND_API_KEY === undefined) delete process.env.RESEND_API_KEY;
   else process.env.RESEND_API_KEY = ORIGINAL_RESEND_API_KEY;
@@ -29,12 +30,16 @@ describe("buildPasswordResetUrl — pure URL builder", () => {
   it("builds the /zh-TW/reset-password path on the app base URL", () => {
     const url = buildPasswordResetUrl("token-1", "https://app.example.com");
     expect(new URL(url).pathname).toBe("/zh-TW/reset-password");
-    expect(url.startsWith("https://app.example.com/zh-TW/reset-password")).toBe(true);
+    expect(url.startsWith("https://app.example.com/zh-TW/reset-password")).toBe(
+      true,
+    );
   });
 
   it("strips trailing slashes from the base URL", () => {
     const url = buildPasswordResetUrl("token-1", "https://app.example.com///");
-    expect(url).toBe("https://app.example.com/zh-TW/reset-password?token=token-1");
+    expect(url).toBe(
+      "https://app.example.com/zh-TW/reset-password?token=token-1",
+    );
   });
 
   it("reads APP_WEB_BASE_URL by default and normalizes it", () => {
@@ -53,7 +58,9 @@ describe("buildPasswordResetUrl — pure URL builder", () => {
 
   it("percent-encodes tokens containing /, +, = and &", () => {
     const url = buildPasswordResetUrl("a/b+c=d&e", "https://app.example.com");
-    expect(url).toBe("https://app.example.com/zh-TW/reset-password?token=a%2Fb%2Bc%3Dd%26e");
+    expect(url).toBe(
+      "https://app.example.com/zh-TW/reset-password?token=a%2Fb%2Bc%3Dd%26e",
+    );
     expect(new URL(url).searchParams.get("token")).toBe("a/b+c=d&e");
   });
 });
@@ -117,12 +124,18 @@ describe("sendPasswordResetEmail — URL lands in both HTML and text", () => {
 
   it("fails closed without logging the reset token when RESEND_API_KEY is absent", async () => {
     process.env.APP_WEB_BASE_URL = "https://app.example.com/";
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const warnSpy = vi
+      .spyOn(console, "warn")
+      .mockImplementation(() => undefined);
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const fetchSpy = vi.spyOn(globalThis, "fetch");
 
     await expect(
-      sendPasswordResetEmail({ to: "user@example.com", name: "小明", token: "secret-token" }),
+      sendPasswordResetEmail({
+        to: "user@example.com",
+        name: "小明",
+        token: "secret-token",
+      }),
     ).rejects.toThrow("RESEND_API_KEY is not configured");
 
     expect(fetchSpy).not.toHaveBeenCalled();

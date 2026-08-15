@@ -31,13 +31,13 @@
 先做一個重要校正 —— `ARCHITECTURE.md` §4/§6/§7 描述的多數問題**其實已經修好了**，
 但該文件未把這些項目勾掉，容易誤導讀者以為仍待辦：
 
-| ARCHITECTURE.md 提到的待辦 | 目前程式碼的實際狀態 |
-|---|---|
-| `config/map.ts`（getCity 呼叫 Google） | ✅ 已不存在；併入 `adapters/google.adapter.ts` |
-| `config/ors.ts`（ORS HTTP client） | ✅ 已移至 `service/ors.service.ts` |
-| `config/lib.ts::getCoordinates()` | ✅ 已移除；`lib.ts` 現僅剩純工具函式 + `sendResponse` |
-| `a11y.service.ts` / `transit.service.ts` / `air.service.ts` 不存在 | ✅ 三者皆已建立 |
-| 路由領域型別倒置依賴（§9） | ✅ Phase 8 已下沉至 `src/types/route.ts` |
+| ARCHITECTURE.md 提到的待辦                                         | 目前程式碼的實際狀態                                  |
+| ------------------------------------------------------------------ | ----------------------------------------------------- |
+| `config/map.ts`（getCity 呼叫 Google）                             | ✅ 已不存在；併入 `adapters/google.adapter.ts`        |
+| `config/ors.ts`（ORS HTTP client）                                 | ✅ 已移至 `service/ors.service.ts`                    |
+| `config/lib.ts::getCoordinates()`                                  | ✅ 已移除；`lib.ts` 現僅剩純工具函式 + `sendResponse` |
+| `a11y.service.ts` / `transit.service.ts` / `air.service.ts` 不存在 | ✅ 三者皆已建立                                       |
+| 路由領域型別倒置依賴（§9）                                         | ✅ Phase 8 已下沉至 `src/types/route.ts`              |
 
 換句話說：**§7 路線圖的 Phase 1–8 已實質落地**。本報告聚焦於**之後仍未處理、或當時未列入**的結構問題。
 
@@ -59,14 +59,14 @@
 
 ## §1 六大不變式 Scorecard
 
-| # | 不變式 | 評級 | 一句話結論 |
-|---|--------|------|-----------|
-| 1 | **一檔一責，檔名即職責** | 🟠 PARTIAL | 模組命名乾淨，但 `config/a11y-scoring.ts`（735 行領域邏輯）與 1995 行協調器違反單一職責 |
-| 2 | **單向依賴** | 🟠 PARTIAL | service 層乾淨（無 req/res）；但 controller→controller 跨模組 import、controller 直接呼叫 LLM SDK、controller 內含業務邏輯 |
-| 3 | **邊界驗證** | 🟠 PARTIAL | 有驗證中介層，但 `req.validated` 完全沒被用；6 條路由無 schema |
-| 4 | **單一回應契約** | 🟠 PARTIAL | 多數走 `sendResponse`，但 4 處（ai.chat / user / app.ts / 驗證中介層）自拼 envelope |
-| 5 | **零魔術字面值** | 🔴 FAIL | 無 `constants/`；狀態碼/錯誤字串/外部 URL 全為內聯字面值 |
-| 6 | **單一註冊點** | 🟢 PASS | 單一 `/api/v1` 前綴、每模組一個 `index.ts`（唯一小瑕疵：a11y 與 accessible-route 共用同一前綴） |
+| #   | 不變式                   | 評級       | 一句話結論                                                                                                                 |
+| --- | ------------------------ | ---------- | -------------------------------------------------------------------------------------------------------------------------- |
+| 1   | **一檔一責，檔名即職責** | 🟠 PARTIAL | 模組命名乾淨，但 `config/a11y-scoring.ts`（735 行領域邏輯）與 1995 行協調器違反單一職責                                    |
+| 2   | **單向依賴**             | 🟠 PARTIAL | service 層乾淨（無 req/res）；但 controller→controller 跨模組 import、controller 直接呼叫 LLM SDK、controller 內含業務邏輯 |
+| 3   | **邊界驗證**             | 🟠 PARTIAL | 有驗證中介層，但 `req.validated` 完全沒被用；6 條路由無 schema                                                             |
+| 4   | **單一回應契約**         | 🟠 PARTIAL | 多數走 `sendResponse`，但 4 處（ai.chat / user / app.ts / 驗證中介層）自拼 envelope                                        |
+| 5   | **零魔術字面值**         | 🔴 FAIL    | 無 `constants/`；狀態碼/錯誤字串/外部 URL 全為內聯字面值                                                                   |
+| 6   | **單一註冊點**           | 🟢 PASS    | 單一 `/api/v1` 前綴、每模組一個 `index.ts`（唯一小瑕疵：a11y 與 accessible-route 共用同一前綴）                            |
 
 ---
 
@@ -74,11 +74,11 @@
 
 ### 不變式 1 — 一檔一責 🟠
 
-| 證據 | 問題 |
-|---|---|
-| `src/config/a11y-scoring.ts:241-712` | 735 行的**無障礙評分引擎**（`scoreRoute`、`routeCost`、`scoreOsmNode`…）是核心領域邏輯，卻放在 `config/`。config 應只有常數與 client 初始化 |
-| `src/modules/accessible-route/accessible-route.service.ts`（1995 行） | 同時是「領域協調器」與超大 god-file；`ARCHITECTURE.md §9` 已修掉型別倒置，但檔案體積與職責仍過載 |
-| `src/config/lib.ts:34-196` | `normalizeStopName`、`detectBusApiType`、`getRouteDirectionImproved` 等是 transit 領域工具，混在 `lib.ts`（同檔還有 transport 相關的 `sendResponse`） |
+| 證據                                                                  | 問題                                                                                                                                                  |
+| --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/config/a11y-scoring.ts:241-712`                                  | 735 行的**無障礙評分引擎**（`scoreRoute`、`routeCost`、`scoreOsmNode`…）是核心領域邏輯，卻放在 `config/`。config 應只有常數與 client 初始化           |
+| `src/modules/accessible-route/accessible-route.service.ts`（1995 行） | 同時是「領域協調器」與超大 god-file；`ARCHITECTURE.md §9` 已修掉型別倒置，但檔案體積與職責仍過載                                                      |
+| `src/config/lib.ts:34-196`                                            | `normalizeStopName`、`detectBusApiType`、`getRouteDirectionImproved` 等是 transit 領域工具，混在 `lib.ts`（同檔還有 transport 相關的 `sendResponse`） |
 
 ### 不變式 2 — 單向依賴 🟠
 
@@ -86,22 +86,22 @@
 
 🔴 **破口**：
 
-| 證據 | 問題 |
-|---|---|
+| 證據                                                             | 問題                                                                                                                                                                                  |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/modules/ai/index.ts:2` + `accessible-route.controller.ts:8` | `parseRouteIntent`/`generateRouteExplanation` 從 **controller** 匯出，又被另一模組的 controller import → **controller → controller 跨模組依賴**。這兩個其實是領域函式，應住在 service |
-| `air.controller.ts:23-37` | `air.service` 已存在且被用（`:17`），但 **Gemini `generateContent` 仍在 controller 裡**。AI 生成那一半從未進 service |
-| `ai.chat.controller.ts:66,171,201` | 整個 agent tool-loop（多次 `openai.chat.completions.create`）都在 controller 內 |
-| `accessible-route.controller.ts:23-55, 61-93` | controller 內含實質業務邏輯：語意意圖解析、座標解析、城市 fallback、出發時間正規化。應下沉成一個 service 入口（如 `planFromRequest`） |
+| `air.controller.ts:23-37`                                        | `air.service` 已存在且被用（`:17`），但 **Gemini `generateContent` 仍在 controller 裡**。AI 生成那一半從未進 service                                                                  |
+| `ai.chat.controller.ts:66,171,201`                               | 整個 agent tool-loop（多次 `openai.chat.completions.create`）都在 controller 內                                                                                                       |
+| `accessible-route.controller.ts:23-55, 61-93`                    | controller 內含實質業務邏輯：語意意圖解析、座標解析、城市 fallback、出發時間正規化。應下沉成一個 service 入口（如 `planFromRequest`）                                                 |
 
 ### 不變式 3 — 邊界驗證 🟠
 
 `validate-request.middleware.ts:45` 把結果寫進 **`req.validated`**，且**不會**改寫 `req.body`。但所有 controller 仍讀原始來源：
 
-| 證據 | 問題 |
-|---|---|
-| `accessible-route.controller.ts:16-18` | 讀 `req.body`，丟棄 `req.validated`（已驗證/已 coerce/已 strip 的資料被浪費） |
-| `transit.controller.ts:10-11,38` · `air.controller.ts:16` · `a11y.controller.ts:40-41` · `ai.controller.ts:185,224` | 同上，全讀原始 `req.body`/`req.query` |
-| 無 schema 的 6 條路由 | `user`: `/refresh`、`/info`、`/logout`；`air`: `/air-quality`；`a11y`: `/all-places`、`/all-bathrooms`（見 `user.router.ts:24-25,32`、`air.router.ts:7`、`a11y.router.ts:13-14`） |
+| 證據                                                                                                                | 問題                                                                                                                                                                              |
+| ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `accessible-route.controller.ts:16-18`                                                                              | 讀 `req.body`，丟棄 `req.validated`（已驗證/已 coerce/已 strip 的資料被浪費）                                                                                                     |
+| `transit.controller.ts:10-11,38` · `air.controller.ts:16` · `a11y.controller.ts:40-41` · `ai.controller.ts:185,224` | 同上，全讀原始 `req.body`/`req.query`                                                                                                                                             |
+| 無 schema 的 6 條路由                                                                                               | `user`: `/refresh`、`/info`、`/logout`；`air`: `/air-quality`；`a11y`: `/all-places`、`/all-bathrooms`（見 `user.router.ts:24-25,32`、`air.router.ts:7`、`a11y.router.ts:13-14`） |
 
 > 注意：中介層在「某個 key 沒給 schema」時不會把該 key 放進 `req.validated`，這正是 controller 不敢用 `req.validated` 的原因 —— 修這個中介層是讓 controller 統一改讀 validated 的前置條件。
 
@@ -109,22 +109,22 @@
 
 共用 envelope 是 `config/lib.ts:5` 的 `sendResponse`。以下繞過它自拼 envelope：
 
-| 證據 | 問題 |
-|---|---|
-| `ai.chat.controller.ts:208-221` | 成功路徑 `res.json({ ok, status, code, ... })` 手拼 |
-| `ai.chat.controller.ts:224-229` · `user.controller.ts:51-56` | 錯誤路徑 `res.status(500).json({...})` 手拼 |
-| `app.ts:40-45, 72-79` | health check 與 404 handler 各自拼 shape |
-| `validate-request.middleware.ts:36-42` | 400 驗證錯誤直接拼 envelope（可接受，但應共用同一份錯誤 shape） |
+| 證據                                                         | 問題                                                            |
+| ------------------------------------------------------------ | --------------------------------------------------------------- |
+| `ai.chat.controller.ts:208-221`                              | 成功路徑 `res.json({ ok, status, code, ... })` 手拼             |
+| `ai.chat.controller.ts:224-229` · `user.controller.ts:51-56` | 錯誤路徑 `res.status(500).json({...})` 手拼                     |
+| `app.ts:40-45, 72-79`                                        | health check 與 404 handler 各自拼 shape                        |
+| `validate-request.middleware.ts:36-42`                       | 400 驗證錯誤直接拼 envelope（可接受，但應共用同一份錯誤 shape） |
 
 ### 不變式 5 — 零魔術字面值 🔴
 
 **沒有 `src/constants/` 目錄**，沒有 `HTTP_STATUS`/`ERROR_MESSAGE` 來源。
 
-| 類別 | 證據 |
-|---|---|
-| **內聯狀態碼** | `sendResponse(res, …, 200/400/404/500, …)` 全用原始數字而非 `ResponseCode` enum：`accessible-route.controller.ts:28,58,73,112,126`、`a11y.controller.ts`（9 處）、`air.controller.ts:20,43,52`、`transit.controller.ts`（7 處）、`ai.controller.ts:202,205,213,237`、`user.controller.ts:249,251`（共 ~27 處） |
-| **重複錯誤字串** | `"缺少必要參數"`（accessible-route:58、transit:14,41、a11y:26）、`"Internal Server Error"`（5+ 處）、`"無法解析您的查詢…"`（accessible-route:36、ai:233） |
-| **內聯外部 URL（非來自 typed env）** | ORS base `ors.service.ts:11`、TDX MaaS `tdx-routing.service.ts:43`、TDX token `TdxTokenManger.ts:11`、STA 空品 `air.service.ts:20`、Gemini fallback `config/ai.ts:13`、OTP fallback `http://localhost:8080`（`otp-routing.service.ts:217,292,369`，重複 3 處） |
+| 類別                                 | 證據                                                                                                                                                                                                                                                                                                           |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **內聯狀態碼**                       | `sendResponse(res, …, 200/400/404/500, …)` 全用原始數字而非 `ResponseCode` enum：`accessible-route.controller.ts:28,58,73,112,126`、`a11y.controller.ts`（9 處）、`air.controller.ts:20,43,52`、`transit.controller.ts`（7 處）、`ai.controller.ts:202,205,213,237`、`user.controller.ts:249,251`（共 ~27 處） |
+| **重複錯誤字串**                     | `"缺少必要參數"`（accessible-route:58、transit:14,41、a11y:26）、`"Internal Server Error"`（5+ 處）、`"無法解析您的查詢…"`（accessible-route:36、ai:233）                                                                                                                                                      |
+| **內聯外部 URL（非來自 typed env）** | ORS base `ors.service.ts:11`、TDX MaaS `tdx-routing.service.ts:43`、TDX token `TdxTokenManger.ts:11`、STA 空品 `air.service.ts:20`、Gemini fallback `config/ai.ts:13`、OTP fallback `http://localhost:8080`（`otp-routing.service.ts:217,292,369`，重複 3 處）                                                 |
 
 > `config/transit.ts` 的 TDX URL 已集中為常數，屬正確示範；其餘服務的 URL 應比照辦理。
 
@@ -173,40 +173,47 @@ src/service/（11 個檔案 = accessible-route 專屬叢集 + 1 個真．跨切�
 > `service/realtime-transit`、`service/tdx-routing`。**Slice 5 會搬移這些檔案，務必先 commit 或 stash 再做。**
 
 ### Slice 0 — 建立 `constants/` + 收斂回應契約（不變式 4、5）
+
 - 新建 `src/constants/http-status.ts`（沿用既有 `ResponseCode`，或包一層 `HTTP_STATUS`）與 `error-message.ts`。
 - 全面把 `sendResponse(…, 200/400/…, …)` 的原始數字換成具名常數；重複錯誤字串改引用 `ERROR_MESSAGE.*`。
 - `ai.chat.controller.ts:208,224`、`user.controller.ts:51`、`app.ts:40,72`、驗證中介層 → 全部改走 `sendResponse`（或一個共用的 envelope builder，供非 Express-`Response` 場景）。
 - **風險：低**（純內部、API 行為不變）；改動點多但機械化。
 
 ### Slice 1 — 補滿邊界驗證（不變式 3）
+
 - 修 `validate-request.middleware.ts`：沒給 schema 的 key 也要把原始值放進 `req.validated`，讓 controller 能統一讀 validated。
 - 所有 controller 改讀 `req.validated.{body,query,params}`，停止讀原始 `req.body`/`req.query`。
 - 為無 schema 的 6 條路由補 schema（或明確標記為 schema-exempt 並寫進註解）。
 - **風險：中**（行為等價，但需逐路由確認 coerce 結果）。
 
 ### Slice 2 — 把 AI / air 的領域邏輯下沉到 service（不變式 2）
+
 - `parseRouteIntent`/`generateRouteExplanation`：`ai.controller.ts` → `ai.service.ts`（或新 `ai-intent.service.ts`）；`ai/index.ts` 改從 service re-export；`accessible-route.controller.ts:8` 的 import 改指 service。
 - air 的 Gemini 呼叫（`air.controller.ts:23-37`）→ `air.service.ts::getAirQualityWithAI()`。
 - `ai.chat.controller.ts` 的 agent tool-loop → 抽到 service（controller 只留 SSE 串流與 parse）。
 - **風險：中**；消除 controller→controller import 與 controller 端 LLM 呼叫。
 
 ### Slice 3 — 瘦身 `accessible-route.controller`（不變式 2）
+
 - 把意圖解析 + 座標/城市解析 + 出發時間正規化（`controller:20-93`）抽成 service 入口（如 `accessibleRouteService.planFromRequest(input)`）。
 - controller 回到「parse 輸入 → 呼叫一個 service → `sendResponse`」。
 - **風險：中**。
 
 ### Slice 4 — 把 accessible-route 專屬 planner 收進模組（不變式 1、2）
+
 - 將 11 個檔案從 `src/service/` 移入 `src/modules/accessible-route/planners/`（保留 `TdxTokenManger` 等跨切面基礎設施於共用處）。
 - 純搬移 + 更新 import 路徑；型別已在 `src/types/route.ts`，不會生循環。
 - **風險：低（機械）但 ⚠️ 與未提交改動衝突最大 —— 先 commit/stash。**
 
 ### Slice 5 — 把領域邏輯移出 `config/` + 外部 URL 進 typed config（不變式 1、5）
+
 - `config/a11y-scoring.ts`（735 行）→ `modules/accessible-route/scoring.ts`（或一個 scoring service）。
 - `config/lib.ts` 的 transit 工具 → `transit` 模組或 `utils/transit.ts`；`lib.ts` 只留 envelope/純工具。
 - ORS / MaaS / TDX token / STA / OTP fallback 的 URL → 集中進 `config`/typed env（比照 `config/transit.ts`）。
 - **風險：中**。
 
 ### Slice 6 — 治理鎖定（防止再次腐化）
+
 - 落地 `AGENTS.md`/補強 `CLAUDE.md`：六大不變式 + 強制閱讀順序 + 交付檢查表。
 - 加一條自動邊界檢查（eslint `import` 規則或 import-linter）：禁止 service import controller/router/express、禁止 controller import model、禁止跨模組 controller import。
 - 用「逐步縮小的 allowlist」豁免尚未遷移的檔案，每遷移一個就刪一筆。

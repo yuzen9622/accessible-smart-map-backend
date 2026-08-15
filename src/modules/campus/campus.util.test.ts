@@ -40,7 +40,9 @@ describe("toPublicId / toRawId", () => {
 
 describe("buildSearchName", () => {
   it("concatenates and normalizes school + branch", () => {
-    expect(buildSearchName("國立臺中科技大學", "三民校區")).toBe("國立台中科技大學三民校區");
+    expect(buildSearchName("國立臺中科技大學", "三民校區")).toBe(
+      "國立台中科技大學三民校區",
+    );
   });
 });
 
@@ -53,7 +55,9 @@ describe("buildAliasNames", () => {
   });
 
   it("does not include the plain normalized name", () => {
-    expect(buildAliasNames("國立臺中科技大學")).not.toContain("國立台中科技大學");
+    expect(buildAliasNames("國立臺中科技大學")).not.toContain(
+      "國立台中科技大學",
+    );
   });
 });
 

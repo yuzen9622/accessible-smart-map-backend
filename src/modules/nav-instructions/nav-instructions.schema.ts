@@ -32,9 +32,7 @@ const NavLegSchema = z
   .looseObject({
     type: z.string(),
     polyline: z.array(NavCoordSchema),
-    steps: z
-      .array(z.union([NavWalkStepSchema, NavRoadStepSchema]))
-      .optional(),
+    steps: z.array(z.union([NavWalkStepSchema, NavRoadStepSchema])).optional(),
     exitInfo: z
       .looseObject({
         exitNumber: z.string().optional(),
@@ -65,16 +63,11 @@ export const NavInstructionsRequestSchema = z
         "由 /accessible-route 回傳、30 分鐘內有效的 routeToken；與 route 同時提供時優先使用 token 對應的伺服器端路線。",
       example: "M2F1...short-lived-capability",
     }),
-    userHeading: z
-      .number()
-      .min(0)
-      .max(359)
-      .optional()
-      .openapi({
-        description:
-          "使用者當前朝向（度，正北 = 0，順時針），由陀螺儀取得。提供時後端填入 relativeDirection；省略則為 null。",
-        example: 45,
-      }),
+    userHeading: z.number().min(0).max(359).optional().openapi({
+      description:
+        "使用者當前朝向（度，正北 = 0，順時針），由陀螺儀取得。提供時後端填入 relativeDirection；省略則為 null。",
+      example: 45,
+    }),
     language: z.enum(["zh-TW"]).default("zh-TW").openapi({
       description: "輸出語言（預留，目前僅支援 zh-TW）。",
     }),
@@ -86,7 +79,16 @@ export const NavInstructionsRequestSchema = z
   .openapi("NavInstructionsRequest");
 
 const RelativeDirectionEnum = z
-  .enum(["正前方", "左前方", "右前方", "左側", "右側", "左後方", "右後方", "正後方"])
+  .enum([
+    "正前方",
+    "左前方",
+    "右前方",
+    "左側",
+    "右側",
+    "左後方",
+    "右後方",
+    "正後方",
+  ])
   .openapi("RelativeDirection");
 
 const NavInstructionSchema = z
@@ -134,11 +136,13 @@ const NavInstructionsDataSchema = z
     instructions: z.array(NavInstructionSchema),
     initialBearing: z.number(),
     totalSteps: z.number(),
-    warnings: z.array(z.enum([
-      "WALK_STEPS_UNAVAILABLE",
-      "ORS_STEPS_UNAVAILABLE",
-      "ROAD_STEPS_UNAVAILABLE",
-    ])),
+    warnings: z.array(
+      z.enum([
+        "WALK_STEPS_UNAVAILABLE",
+        "ORS_STEPS_UNAVAILABLE",
+        "ROAD_STEPS_UNAVAILABLE",
+      ]),
+    ),
   })
   .openapi("NavInstructionsData");
 

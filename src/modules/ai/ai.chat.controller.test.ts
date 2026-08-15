@@ -3,7 +3,10 @@ import request from "supertest";
 
 vi.mock("./ai-chat.service", () => ({
   runChatAgent: vi.fn(),
-  toGeminiHistory: vi.fn(() => ({ systemInstruction: undefined, contents: [] })),
+  toGeminiHistory: vi.fn(() => ({
+    systemInstruction: undefined,
+    contents: [],
+  })),
 }));
 
 import { buildTestApp } from "../../../tests/helpers/test-helpers";

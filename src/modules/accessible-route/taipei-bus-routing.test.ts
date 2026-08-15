@@ -9,18 +9,27 @@ import type {
 import type { IOsmA11y } from "../../types";
 
 vi.mock("../../config/fetch", () => ({ tdxFetch: vi.fn() }));
-vi.mock("../../model/bus-vehicle.model", () => ({ default: { find: vi.fn() } }));
+vi.mock("../../model/bus-vehicle.model", () => ({
+  default: { find: vi.fn() },
+}));
 vi.mock("../../model/bus-route.model", () => ({ default: { find: vi.fn() } }));
-vi.mock("../../model/bus-stop.model", () => ({ default: { aggregate: vi.fn() } }));
+vi.mock("../../model/bus-stop.model", () => ({
+  default: { aggregate: vi.fn() },
+}));
 vi.mock("../../adapters/google.adapter", () => ({ getCity: vi.fn() }));
 
 import { tdxFetch } from "../../config/fetch";
 import BusVehicleModel from "../../model/bus-vehicle.model";
-import { getBusRealtimeOnRoute, getBusArrivalAtStop } from "../transit/bus.service";
+import {
+  getBusRealtimeOnRoute,
+  getBusArrivalAtStop,
+} from "../transit/bus.service";
 import { TaiwanCityEn } from "../../types/transit";
 
 const tdxFetchMock = tdxFetch as unknown as ReturnType<typeof vi.fn>;
-const vehicleFindMock = BusVehicleModel.find as unknown as ReturnType<typeof vi.fn>;
+const vehicleFindMock = BusVehicleModel.find as unknown as ReturnType<
+  typeof vi.fn
+>;
 
 const dummyLoc: [number, number] = [121.517, 25.0478];
 
@@ -120,7 +129,9 @@ describe("台北市主要公車路線評分與排序測試 (Taipei Bus Route Sco
     const ranked = scoreAndRank([route307, routeStandardBus], "wheelchair");
 
     expect(ranked[0].routeId).toBe("taipei-bus-307");
-    expect(ranked[0].accessibilityScore).toBeGreaterThan(ranked[1].accessibilityScore);
+    expect(ranked[0].accessibilityScore).toBeGreaterThan(
+      ranked[1].accessibilityScore,
+    );
     expect(ranked[0].totalWalkDistanceM).toBe(180);
     expect(ranked[1].totalWalkDistanceM).toBe(550);
   });
@@ -147,9 +158,11 @@ describe("台北市主要公車路線評分與排序測試 (Taipei Bus Route Sco
     const ranked = scoreAndRank([routeRoosevelt, route251], "wheelchair");
 
     expect(ranked[0].routeId).toBe("r1-roosevelt");
-    expect(ranked[0].totalWalkDistanceM).toBeLessThan(ranked[1].totalWalkDistanceM);
+    expect(ranked[0].totalWalkDistanceM).toBeLessThan(
+      ranked[1].totalWalkDistanceM,
+    );
     expect(ranked[0].scoreComponents?.walkPenalty).toBeLessThan(
-      ranked[1].scoreComponents?.walkPenalty ?? Infinity
+      ranked[1].scoreComponents?.walkPenalty ?? Infinity,
     );
   });
 
@@ -229,8 +242,18 @@ describe("台北市公車即時動態與低底盤 Join 服務測試 (Bus Realtim
     vehicleFindMock.mockReturnValue({
       lean: () =>
         Promise.resolve([
-          { plateNumb: "EAL-3071", isLowFloor: 1, hasLiftOrRamp: 1, vehicleClass: 1 },
-          { plateNumb: "FAB-2992", isLowFloor: 0, hasLiftOrRamp: 0, vehicleClass: 1 },
+          {
+            plateNumb: "EAL-3071",
+            isLowFloor: 1,
+            hasLiftOrRamp: 1,
+            vehicleClass: 1,
+          },
+          {
+            plateNumb: "FAB-2992",
+            isLowFloor: 0,
+            hasLiftOrRamp: 0,
+            vehicleClass: 1,
+          },
         ]),
     });
 

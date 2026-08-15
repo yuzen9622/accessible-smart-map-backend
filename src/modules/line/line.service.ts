@@ -253,7 +253,11 @@ async function handleRenameInput(
     return;
   }
 
-  const result = await renameBoundContact({ lineUserId, contactId, name: text });
+  const result = await renameBoundContact({
+    lineUserId,
+    contactId,
+    name: text,
+  });
   if (!result.ok && result.httpCode === ResponseCode.INVALID_INPUT) {
     await replyText(replyToken, result.message);
     return;
@@ -366,9 +370,7 @@ async function handleMenuPostback(
         await replyText(replyToken, LINE_MSG.SOS_NO_CONTACTS);
         return;
       }
-      await replyMessages(replyToken, [
-        buildBoundContactsMessage(result.data),
-      ]);
+      await replyMessages(replyToken, [buildBoundContactsMessage(result.data)]);
       return;
     }
 

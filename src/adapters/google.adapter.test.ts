@@ -3,7 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("axios", () => ({ default: { post: vi.fn(), get: vi.fn() } }));
 
 import axios from "axios";
-import { autocompletePlaces, getPlaceDetails, searchPlaces } from "./google.adapter";
+import {
+  autocompletePlaces,
+  getPlaceDetails,
+  searchPlaces,
+} from "./google.adapter";
 
 const mockPost = axios.post as unknown as ReturnType<typeof vi.fn>;
 const mockGet = axios.get as unknown as ReturnType<typeof vi.fn>;
@@ -18,9 +22,24 @@ describe("searchPlaces distance ordering", () => {
     mockPost.mockResolvedValue({
       data: {
         places: [
-          { id: "far", displayName: { text: "較遠站" }, formattedAddress: "far", location: { latitude: 25.06, longitude: 121.52 } },
-          { id: "near", displayName: { text: "最近站" }, formattedAddress: "near", location: { latitude: 25.048, longitude: 121.5171 } },
-          { id: "middle", displayName: { text: "中間站" }, formattedAddress: "middle", location: { latitude: 25.05, longitude: 121.518 } },
+          {
+            id: "far",
+            displayName: { text: "較遠站" },
+            formattedAddress: "far",
+            location: { latitude: 25.06, longitude: 121.52 },
+          },
+          {
+            id: "near",
+            displayName: { text: "最近站" },
+            formattedAddress: "near",
+            location: { latitude: 25.048, longitude: 121.5171 },
+          },
+          {
+            id: "middle",
+            displayName: { text: "中間站" },
+            formattedAddress: "middle",
+            location: { latitude: 25.05, longitude: 121.518 },
+          },
         ],
       },
     });
@@ -45,8 +64,18 @@ describe("searchPlaces distance ordering", () => {
     mockPost.mockResolvedValue({
       data: {
         places: [
-          { id: "a", displayName: { text: "第一筆" }, formattedAddress: "a", location: { latitude: 25, longitude: 121 } },
-          { id: "b", displayName: { text: "第二筆" }, formattedAddress: "b", location: { latitude: 24, longitude: 120 } },
+          {
+            id: "a",
+            displayName: { text: "第一筆" },
+            formattedAddress: "a",
+            location: { latitude: 25, longitude: 121 },
+          },
+          {
+            id: "b",
+            displayName: { text: "第二筆" },
+            formattedAddress: "b",
+            location: { latitude: 24, longitude: 120 },
+          },
         ],
       },
     });
@@ -61,10 +90,29 @@ describe("searchPlaces distance ordering", () => {
     mockPost.mockResolvedValue({
       data: {
         places: [
-          { id: "missing", displayName: { text: "缺座標" }, formattedAddress: "missing" },
-          { id: "nan", displayName: { text: "壞座標" }, formattedAddress: "nan", location: { latitude: Number.NaN, longitude: 121 } },
-          { id: "far", displayName: { text: "較遠站" }, formattedAddress: "far", location: { latitude: 25.06, longitude: 121.52 } },
-          { id: "near", displayName: { text: "最近站" }, formattedAddress: "near", location: { latitude: 25.048, longitude: 121.5171 } },
+          {
+            id: "missing",
+            displayName: { text: "缺座標" },
+            formattedAddress: "missing",
+          },
+          {
+            id: "nan",
+            displayName: { text: "壞座標" },
+            formattedAddress: "nan",
+            location: { latitude: Number.NaN, longitude: 121 },
+          },
+          {
+            id: "far",
+            displayName: { text: "較遠站" },
+            formattedAddress: "far",
+            location: { latitude: 25.06, longitude: 121.52 },
+          },
+          {
+            id: "near",
+            displayName: { text: "最近站" },
+            formattedAddress: "near",
+            location: { latitude: 25.048, longitude: 121.5171 },
+          },
         ],
       },
     });
@@ -106,14 +154,23 @@ describe("place language", () => {
 
   it("sends languageCode on place details alongside the session token", async () => {
     mockGet.mockResolvedValue({
-      data: { id: "ChIJ123", displayName: { text: "Taipei 101" }, location: { latitude: 25.03, longitude: 121.56 } },
+      data: {
+        id: "ChIJ123",
+        displayName: { text: "Taipei 101" },
+        location: { latitude: 25.03, longitude: 121.56 },
+      },
     });
 
-    const details = await getPlaceDetails("ChIJ123", { sessionToken: "tok", lang: "en" });
+    const details = await getPlaceDetails("ChIJ123", {
+      sessionToken: "tok",
+      lang: "en",
+    });
 
     expect(mockGet).toHaveBeenCalledWith(
       "https://places.googleapis.com/v1/places/ChIJ123",
-      expect.objectContaining({ params: { languageCode: "en", sessionToken: "tok" } }),
+      expect.objectContaining({
+        params: { languageCode: "en", sessionToken: "tok" },
+      }),
     );
     expect(details?.name).toBe("Taipei 101");
   });

@@ -18,13 +18,13 @@
 
 ### 緩解策略（寫新程式碼時必須遵守）
 
-| 情境 | 做法 |
-| ------ | ------ |
-| 靜態資料（公車路線/站位、捷運站、CityAPS 等） | **嚴禁在 query 時即時呼叫**；一律經 `src/scripts/import-tdx-*.ts` 預匯入 MongoDB，查詢只走本地 DB |
-| 大量匯入 | 逐系統/逐縣市串列 + 批次間 sleep（既有腳本 `DELAY_MS` 慣例）；chunk 寫入 |
-| 動態資料（即時車位、到站時間） | 集中快取（Redis 可用）；批次撈取後廣播，禁止每請求直連 |
-| 多資源串接（如 `/ai/chat` tool loop） | 上限化：單一請求最多 N 次外部呼叫；優先本地查詢（見 `FUNCTIONAL_SPEC_AI_AGENT_PRODUCTION.md` §5.2） |
-| 單一惡意使用者 | 使用者的呼叫配額（auth middleware 層）＋外部呼叫計數器 |
+| 情境                                          | 做法                                                                                                |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| 靜態資料（公車路線/站位、捷運站、CityAPS 等） | **嚴禁在 query 時即時呼叫**；一律經 `src/scripts/import-tdx-*.ts` 預匯入 MongoDB，查詢只走本地 DB   |
+| 大量匯入                                      | 逐系統/逐縣市串列 + 批次間 sleep（既有腳本 `DELAY_MS` 慣例）；chunk 寫入                            |
+| 動態資料（即時車位、到站時間）                | 集中快取（Redis 可用）；批次撈取後廣播，禁止每請求直連                                              |
+| 多資源串接（如 `/ai/chat` tool loop）         | 上限化：單一請求最多 N 次外部呼叫；優先本地查詢（見 `FUNCTIONAL_SPEC_AI_AGENT_PRODUCTION.md` §5.2） |
+| 單一惡意使用者                                | 使用者的呼叫配額（auth middleware 層）＋外部呼叫計數器                                              |
 
 ## 2. 資料漂移（data drift）
 
@@ -36,13 +36,13 @@ TDX 資料由各縣市政府／主管機關供數，**交通部只做彙整轉�
 
 ### 實測案例（2026-08-13）
 
-| 資源 | 狀態 |
-| ------ | ------ |
-| `v1/Parking/*/City/{City}`（basic 層 74 端點） | 全部 200 但**全縣市、全場域回空**（機場/鐵路/國道/旅遊亦空） |
+| 資源                                                                                                                                      | 狀態                                                                  |
+| ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `v1/Parking/*/City/{City}`（basic 層 74 端點）                                                                                            | 全部 200 但**全縣市、全場域回空**（機場/鐵路/國道/旅遊亦空）          |
 | `v1/Parking/OffStreet/CarPark/NearBy`、`v1/Parking/OnStreet/ParkingSpot/NearBy`（**advanced 層**，`$spatialFilter=nearby(lat,lon,1000)`） | **有全台資料**（CarPark 全台；ParkingSpot 部分縣市）— 2026-08-13 實測 |
-| `v2/Parking/*` | 404（停車資源為 v1-only） |
-| `v2/Bus/*`、`v2/Metro/*` 等（本專案現役來源） | 正常供數 |
-| OSM Overpass（非 TDX）身障停車格 | nodes 0 / ways 1（近乎為零，非 TDX 問題但同屬「資料不存在」陷阱） |
+| `v2/Parking/*`                                                                                                                            | 404（停車資源為 v1-only）                                             |
+| `v2/Bus/*`、`v2/Metro/*` 等（本專案現役來源）                                                                                             | 正常供數                                                              |
+| OSM Overpass（非 TDX）身障停車格                                                                                                          | nodes 0 / ways 1（近乎為零，非 TDX 問題但同屬「資料不存在」陷阱）     |
 
 > ⚠️ 2026-08-13 修正：初版曾誤判「停車資料全台停供」——實際是 **basic 層縣市端點空、advanced 層 NearBy 空間查詢有資料**（不同 server 供數不同）。教訓：**同一資源在 basic/advanced 層可能供數不同，驗證時兩層都要試**。詳細盤點：`docs/reports/parking-open-data-research.md` §2.0；停車 API 完整欄位定義：`docs/reports/tdx-parking-swagger-v1.json`。
 

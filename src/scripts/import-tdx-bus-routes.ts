@@ -46,9 +46,10 @@ function sleep(ms: number) {
 async function importCity(city: string): Promise<number> {
   const all: V2StopOfRoute[] = [];
   for (let skip = 0; ; skip += TOP) {
-    const url = city === "InterCity"
-      ? `${busUrl.interCityStopOfRouteUrl}?$format=JSON&$top=${TOP}&$skip=${skip}`
-      : `${busUrl.stopOfRouteUrl}/${city}?$format=JSON&$top=${TOP}&$skip=${skip}`;
+    const url =
+      city === "InterCity"
+        ? `${busUrl.interCityStopOfRouteUrl}?$format=JSON&$top=${TOP}&$skip=${skip}`
+        : `${busUrl.stopOfRouteUrl}/${city}?$format=JSON&$top=${TOP}&$skip=${skip}`;
     const resp = await tdxFetch(url);
     if (!resp.ok) {
       const body = await resp.text();

@@ -20,7 +20,13 @@ import {
 function getUserId(req: Request, res: Response): string | null {
   const userId = req.auth?.userId;
   if (!userId) {
-    sendResponse(res, false, "error", ResponseCode.UNAUTHORIZED, ResponseMessage.UNAUTHORIZED);
+    sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.UNAUTHORIZED,
+      ResponseMessage.UNAUTHORIZED,
+    );
     return null;
   }
   return userId;
@@ -62,7 +68,13 @@ export async function listUserMemories(
     });
   } catch (error) {
     console.error("[memory/list]", error);
-    sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, ERROR_MESSAGE.INTERNAL);
+    sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      ERROR_MESSAGE.INTERNAL,
+    );
   }
 }
 
@@ -85,12 +97,25 @@ export async function createUserMemory(
       requireMemoryEnabled: false,
       expiresAt: body.expiresAt ? new Date(body.expiresAt) : undefined,
     });
-    sendResponse(res, true, "success", ResponseCode.CREATED, MEMORY_MSG.CREATED, {
-      memory: toMemoryDto(memory),
-    });
+    sendResponse(
+      res,
+      true,
+      "success",
+      ResponseCode.CREATED,
+      MEMORY_MSG.CREATED,
+      {
+        memory: toMemoryDto(memory),
+      },
+    );
   } catch (error) {
     console.error("[memory/create]", error);
-    sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, ERROR_MESSAGE.INTERNAL);
+    sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      ERROR_MESSAGE.INTERNAL,
+    );
   }
 }
 
@@ -121,7 +146,13 @@ export async function updateUserMemory(
     };
     const memory = await updateMemory(userId, id, input);
     if (!memory) {
-      sendResponse(res, false, "error", ResponseCode.NOT_FOUND, MEMORY_MSG.NOT_FOUND);
+      sendResponse(
+        res,
+        false,
+        "error",
+        ResponseCode.NOT_FOUND,
+        MEMORY_MSG.NOT_FOUND,
+      );
       return;
     }
     sendResponse(res, true, "success", ResponseCode.OK, MEMORY_MSG.UPDATED, {
@@ -129,7 +160,13 @@ export async function updateUserMemory(
     });
   } catch (error) {
     console.error("[memory/update]", error);
-    sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, ERROR_MESSAGE.INTERNAL);
+    sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      ERROR_MESSAGE.INTERNAL,
+    );
   }
 }
 
@@ -143,7 +180,13 @@ export async function deleteUserMemory(
     const { id } = req.params as { id: string };
     const deleted = await deleteMemory(userId, id);
     if (!deleted) {
-      sendResponse(res, false, "error", ResponseCode.NOT_FOUND, MEMORY_MSG.NOT_FOUND);
+      sendResponse(
+        res,
+        false,
+        "error",
+        ResponseCode.NOT_FOUND,
+        MEMORY_MSG.NOT_FOUND,
+      );
       return;
     }
     sendResponse(res, true, "success", ResponseCode.OK, MEMORY_MSG.DELETED, {
@@ -151,7 +194,13 @@ export async function deleteUserMemory(
     });
   } catch (error) {
     console.error("[memory/delete]", error);
-    sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, ERROR_MESSAGE.INTERNAL);
+    sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      ERROR_MESSAGE.INTERNAL,
+    );
   }
 }
 
@@ -168,7 +217,13 @@ export async function clearUserMemories(
     });
   } catch (error) {
     console.error("[memory/clear]", error);
-    sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, ERROR_MESSAGE.INTERNAL);
+    sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      ERROR_MESSAGE.INTERNAL,
+    );
   }
 }
 
@@ -180,10 +235,23 @@ export async function getUserMemorySettings(
     const userId = getUserId(req, res);
     if (!userId) return;
     const settings = await getMemorySettings(userId);
-    sendResponse(res, true, "success", ResponseCode.OK, MEMORY_MSG.SETTINGS_OK, settings);
+    sendResponse(
+      res,
+      true,
+      "success",
+      ResponseCode.OK,
+      MEMORY_MSG.SETTINGS_OK,
+      settings,
+    );
   } catch (error) {
     console.error("[memory/settings:get]", error);
-    sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, ERROR_MESSAGE.INTERNAL);
+    sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      ERROR_MESSAGE.INTERNAL,
+    );
   }
 }
 
@@ -208,6 +276,12 @@ export async function updateUserMemorySettings(
     );
   } catch (error) {
     console.error("[memory/settings:update]", error);
-    sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, ERROR_MESSAGE.INTERNAL);
+    sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      ERROR_MESSAGE.INTERNAL,
+    );
   }
 }

@@ -27,7 +27,12 @@ export interface SosSnapshot {
     note?: string | null;
     at: Date;
   }[];
-  location: { lat: number; lng: number; address?: string | null; updatedAt: Date };
+  location: {
+    lat: number;
+    lng: number;
+    address?: string | null;
+    updatedAt: Date;
+  };
   resolvedAt?: Date | null;
   updatedAt: Date;
 }

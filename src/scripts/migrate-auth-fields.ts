@@ -45,7 +45,10 @@ async function main() {
 
     await collection.createIndex(
       { [field]: 1 },
-      { unique: true, partialFilterExpression: { [field]: { $type: "string" } } },
+      {
+        unique: true,
+        partialFilterExpression: { [field]: { $type: "string" } },
+      },
     );
     console.log(`ensured partial unique index on ${field}`);
   }
@@ -78,8 +81,12 @@ async function main() {
   // and password mutation are one atomic update. Invalidate legacy cross-
   // collection links; users can safely request a new queued reset email.
   const tokenCollection = AuthToken.collection;
-  const invalidatedResetTokens = await tokenCollection.deleteMany({ type: "password_reset" });
-  console.log(`invalidated ${invalidatedResetTokens.deletedCount} legacy password reset token(s)`);
+  const invalidatedResetTokens = await tokenCollection.deleteMany({
+    type: "password_reset",
+  });
+  console.log(
+    `invalidated ${invalidatedResetTokens.deletedCount} legacy password reset token(s)`,
+  );
 
   // Email-verification rotation keeps one token per (userId,type). Remove any
   // historical race-created duplicates before enforcing uniqueness.
@@ -99,14 +106,18 @@ async function main() {
   let duplicateTokensRemoved = 0;
   for (const group of duplicateGroups) {
     const duplicates = group.ids.slice(1);
-    const result = await tokenCollection.deleteMany({ _id: { $in: duplicates as any[] } });
+    const result = await tokenCollection.deleteMany({
+      _id: { $in: duplicates as any[] },
+    });
     duplicateTokensRemoved += result.deletedCount;
   }
   console.log(`removed ${duplicateTokensRemoved} duplicate auth token(s)`);
 
   const tokenIndexName = "userId_1_type_1";
   const tokenIndexes = await tokenCollection.indexes();
-  const tokenIndex = tokenIndexes.find((index) => index.name === tokenIndexName);
+  const tokenIndex = tokenIndexes.find(
+    (index) => index.name === tokenIndexName,
+  );
   if (tokenIndex && tokenIndex.unique !== true) {
     await tokenCollection.dropIndex(tokenIndexName);
     console.log(`dropped non-unique auth token index ${tokenIndexName}`);

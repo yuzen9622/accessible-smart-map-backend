@@ -19,10 +19,8 @@ import {
 import type { IOsmA11y } from "../../types";
 
 // Minimal IOsmA11y factory — scoring only reads `category` and `tags`.
-const node = (
-  category: string,
-  tags: Record<string, string> = {},
-): IOsmA11y => ({ category, tags }) as unknown as IOsmA11y;
+const node = (category: string, tags: Record<string, string> = {}): IOsmA11y =>
+  ({ category, tags }) as unknown as IOsmA11y;
 
 describe("slope / width / cross-slope contributions", () => {
   it("slope: free below 5%, capped at -35", () => {
@@ -53,7 +51,9 @@ describe("scoreFacilitySet — P3 neutral baseline", () => {
     expect(score).toBeGreaterThan(FACILITY_NEUTRAL);
   });
   it("scoreOsmNode rewards a wheelchair=yes elevator", () => {
-    expect(scoreOsmNode(node("elevator", { wheelchair: "yes" }))).toBeGreaterThan(0);
+    expect(
+      scoreOsmNode(node("elevator", { wheelchair: "yes" })),
+    ).toBeGreaterThan(0);
   });
 });
 
@@ -63,7 +63,10 @@ describe("walkPenaltyScore — mode-aware, monotonic, capped", () => {
     expect(walkPenaltyScore(400, "normal")).toBe(0);
   });
   it("grows linearly past the free distance", () => {
-    expect(walkPenaltyScore(500, "wheelchair")).toBeCloseTo((500 - 150) * 0.03, 5);
+    expect(walkPenaltyScore(500, "wheelchair")).toBeCloseTo(
+      (500 - 150) * 0.03,
+      5,
+    );
     expect(walkPenaltyScore(1400, "normal")).toBeCloseTo(1000 * 0.01, 5);
   });
   it("is capped per mode", () => {
@@ -198,11 +201,14 @@ describe("mode profiles — P5: elderly / visual_impaired actually bite", () => 
   it("the SAME route scores differently per mode (the profile is not cosmetic)", () => {
     const facilities = [
       node("elevator", { elevator: "yes" }),
-      node("crossing", { tactile_paving: "yes", "traffic_signals:sound": "yes" }),
+      node("crossing", {
+        tactile_paving: "yes",
+        "traffic_signals:sound": "yes",
+      }),
     ];
-    const scores = (["wheelchair", "elderly", "visual_impaired", "normal"] as const).map(
-      (m) => scoreRoute(facilities, 25, 30, 25, 0, m, 600).totalScore,
-    );
+    const scores = (
+      ["wheelchair", "elderly", "visual_impaired", "normal"] as const
+    ).map((m) => scoreRoute(facilities, 25, 30, 25, 0, m, 600).totalScore);
     // not all four identical
     expect(new Set(scores).size).toBeGreaterThan(1);
   });
@@ -233,11 +239,19 @@ describe("environmentPenalty", () => {
   });
 
   it("applies rain tiers scaled by mode factor", () => {
-    expect(environmentPenalty({ precipitationProbability: 70 }, "wheelchair", 0)).toBe(12);
-    expect(environmentPenalty({ precipitationProbability: 40 }, "wheelchair", 0)).toBe(6);
-    expect(environmentPenalty({ precipitationProbability: 39 }, "wheelchair", 0)).toBe(0);
+    expect(
+      environmentPenalty({ precipitationProbability: 70 }, "wheelchair", 0),
+    ).toBe(12);
+    expect(
+      environmentPenalty({ precipitationProbability: 40 }, "wheelchair", 0),
+    ).toBe(6);
+    expect(
+      environmentPenalty({ precipitationProbability: 39 }, "wheelchair", 0),
+    ).toBe(0);
     // normal mode factor 0.5
-    expect(environmentPenalty({ precipitationProbability: 40 }, "normal", 0)).toBe(3);
+    expect(
+      environmentPenalty({ precipitationProbability: 40 }, "normal", 0),
+    ).toBe(3);
   });
 
   it("gates heat penalty on walk distance exceeding the mode free distance", () => {
@@ -250,15 +264,23 @@ describe("environmentPenalty", () => {
   });
 
   it("applies air-quality penalty unscaled by mode", () => {
-    expect(environmentPenalty({ airQuality: "非常不健康" }, "normal", 0)).toBe(12);
+    expect(environmentPenalty({ airQuality: "非常不健康" }, "normal", 0)).toBe(
+      12,
+    );
     expect(environmentPenalty({ airQuality: "不健康" }, "normal", 0)).toBe(8);
-    expect(environmentPenalty({ airQuality: "對敏感族群不健康" }, "normal", 0)).toBe(4);
+    expect(
+      environmentPenalty({ airQuality: "對敏感族群不健康" }, "normal", 0),
+    ).toBe(4);
     expect(environmentPenalty({ airQuality: "良好" }, "normal", 0)).toBe(0);
   });
 
   it("clamps the combined penalty to ENV_PENALTY_CAP", () => {
     const p = environmentPenalty(
-      { precipitationProbability: 90, temperature: 40, airQuality: "非常不健康" },
+      {
+        precipitationProbability: 90,
+        temperature: 40,
+        airQuality: "非常不健康",
+      },
       "wheelchair",
       1000,
     );
@@ -338,7 +360,9 @@ describe("resolveA11yConstraints", () => {
 
   it("falls back to the normal profile for an unknown mode", () => {
     expect(
-      resolveA11yConstraints("bogus" as Parameters<typeof resolveA11yConstraints>[0]),
+      resolveA11yConstraints(
+        "bogus" as Parameters<typeof resolveA11yConstraints>[0],
+      ),
     ).toEqual({ avoidStairs: false, requireElevator: false });
   });
 });

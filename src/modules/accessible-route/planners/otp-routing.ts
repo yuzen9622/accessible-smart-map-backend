@@ -53,9 +53,7 @@ import type {
   SnapStop,
 } from "./otp-routing.types";
 import { unknownWalkA11yDetails } from "./walk-a11y";
-export type {
-  PlanOtpRouteOptions,
-};
+export type { PlanOtpRouteOptions };
 
 const OTP_TIMEOUT_MS = Number(process.env.OTP_TIMEOUT_MS ?? 30_000);
 const OTP_NUM_ITINERARIES = 8;
@@ -92,14 +90,7 @@ const otpClient = axios.create({
 
 const SNAP_RADIUS_M = 2000;
 
-const METRO_SYSTEMS = new Set([
-  "TRTC",
-  "KRTC",
-  "TMRT",
-  "NTMC",
-  "KLRT",
-  "TYMC",
-]);
+const METRO_SYSTEMS = new Set(["TRTC", "KRTC", "TMRT", "NTMC", "KLRT", "TYMC"]);
 
 export const SUPPORTED_TRANSIT_MODES = new Set([
   "BUS",
@@ -205,10 +196,14 @@ function systemFromId(id: string): string {
  * @param points The Google-encoded polyline string.
  * @returns The decoded [lng, lat] coordinate pairs.
  */
-export function decodeOtpPolyline(points: string | undefined): [number, number][] {
+export function decodeOtpPolyline(
+  points: string | undefined,
+): [number, number][] {
   if (!points) return [];
   try {
-    return decode(points, 5).map(([lat, lng]) => [lng, lat] as [number, number]);
+    return decode(points, 5).map(
+      ([lat, lng]) => [lng, lat] as [number, number],
+    );
   } catch {
     return [];
   }
@@ -300,21 +295,24 @@ async function queryOtpPlan(
   searchWindowSec: number,
 ): Promise<OtpPlanAttempt> {
   const baseUrl = process.env.OTP_BASE_URL ?? "http://localhost:8080";
-  const response = await otpClient.post(`${baseUrl}/otp/routers/default/index/graphql`, {
-    query: PLAN_QUERY,
-    variables: {
-      fromLat: origin.lat,
-      fromLon: origin.lng,
-      toLat: destination.lat,
-      toLon: destination.lng,
-      date: ymdDash(departure),
-      time: hhmm(departure.getTime()),
-      wheelchair,
-      walkSpeed,
-      numItineraries,
-      searchWindow: searchWindowSec,
+  const response = await otpClient.post(
+    `${baseUrl}/otp/routers/default/index/graphql`,
+    {
+      query: PLAN_QUERY,
+      variables: {
+        fromLat: origin.lat,
+        fromLon: origin.lng,
+        toLat: destination.lat,
+        toLon: destination.lng,
+        date: ymdDash(departure),
+        time: hhmm(departure.getTime()),
+        wheelchair,
+        walkSpeed,
+        numItineraries,
+        searchWindow: searchWindowSec,
+      },
     },
-  });
+  );
   const json = response.data as {
     data?: {
       plan?: {
@@ -388,20 +386,23 @@ async function queryOtpWalk(
   walkSpeed: number,
 ): Promise<OtpItinerary[]> {
   const baseUrl = process.env.OTP_BASE_URL ?? "http://localhost:8080";
-  const response = await otpClient.post(`${baseUrl}/otp/routers/default/index/graphql`, {
-    query: WALK_QUERY,
-    variables: {
-      fromLat: origin.lat,
-      fromLon: origin.lng,
-      toLat: destination.lat,
-      toLon: destination.lng,
-      date: ymdDash(departure),
-      time: hhmm(departure.getTime()),
-      wheelchair,
-      walkSpeed,
-      numItineraries: OTP_NUM_ITINERARIES,
+  const response = await otpClient.post(
+    `${baseUrl}/otp/routers/default/index/graphql`,
+    {
+      query: WALK_QUERY,
+      variables: {
+        fromLat: origin.lat,
+        fromLon: origin.lng,
+        toLat: destination.lat,
+        toLon: destination.lng,
+        date: ymdDash(departure),
+        time: hhmm(departure.getTime()),
+        wheelchair,
+        walkSpeed,
+        numItineraries: OTP_NUM_ITINERARIES,
+      },
     },
-  });
+  );
   const json = response.data as {
     data?: { plan?: { itineraries?: OtpItinerary[] } };
     errors?: { message?: string }[];
@@ -505,7 +506,13 @@ export async function planOtpWalkDetailed(
 
   let itineraries: OtpItinerary[];
   try {
-    itineraries = await queryOtpWalk(origin, destination, new Date(), wheelchair, walkSpeed);
+    itineraries = await queryOtpWalk(
+      origin,
+      destination,
+      new Date(),
+      wheelchair,
+      walkSpeed,
+    );
     walkPlanBreaker.recordSuccess();
   } catch (err) {
     walkPlanBreaker.recordFailure();
@@ -523,7 +530,9 @@ export async function planOtpWalkDetailed(
   const out: AccessibleRoute[] = [];
   for (const it of itineraries) {
     if (!it.legs.length || !it.legs.every((l) => l.mode === "WALK")) continue;
-    const legs = it.legs.map((l, i) => walkLegFrom(l, i === 0, i === it.legs.length - 1));
+    const legs = it.legs.map((l, i) =>
+      walkLegFrom(l, i === 0, i === it.legs.length - 1),
+    );
     if (!legs.every((l) => l.polyline.length >= 2)) continue;
     const totalWalkDistanceM = Number.isFinite(it.walkDistance)
       ? Math.round(it.walkDistance as number)
@@ -584,17 +593,20 @@ export async function fetchRailLegGeometry(
   if (railGeomBreaker.isOpen()) return null;
   const baseUrl = process.env.OTP_BASE_URL ?? "http://localhost:8080";
   try {
-    const response = await otpClient.post(`${baseUrl}/otp/routers/default/index/graphql`, {
-      query: RAIL_GEOMETRY_QUERY,
-      variables: {
-        fromLat: from.lat,
-        fromLon: from.lng,
-        toLat: to.lat,
-        toLon: to.lng,
-        date: dateYmd,
-        time: timeHHmm,
+    const response = await otpClient.post(
+      `${baseUrl}/otp/routers/default/index/graphql`,
+      {
+        query: RAIL_GEOMETRY_QUERY,
+        variables: {
+          fromLat: from.lat,
+          fromLon: from.lng,
+          toLat: to.lat,
+          toLon: to.lng,
+          date: dateYmd,
+          time: timeHHmm,
+        },
       },
-    });
+    );
     const json = response.data as {
       data?: {
         plan?: {
@@ -674,7 +686,10 @@ async function findSnapStop(
       TrainStationModel.find(nearQuery).limit(1).lean<ITdxTrainStation[]>(),
     ]);
     const rail = [...metro, ...train]
-      .map((s) => ({ coords: s.location.coordinates, name: s.stationName.Zh_tw }))
+      .map((s) => ({
+        coords: s.location.coordinates,
+        name: s.stationName.Zh_tw,
+      }))
       .sort(
         (a, b) =>
           haversineCoords(origin, a.coords) - haversineCoords(origin, b.coords),
@@ -749,16 +764,15 @@ async function lookupDirections(
       .select("tripId directionId")
       .lean<{ tripId: string; directionId: 0 | 1 }[]>();
     for (const t of trips) map.set(t.tripId, t.directionId ?? 0);
-  } catch {
-  }
+  } catch {}
   return map;
 }
 
 function walkLegFrom(leg: OtpLeg, isFirst: boolean, isLast: boolean): WalkLeg {
   const fromName =
-    isFirst || leg.from.name === "Origin" ? "出發地" : leg.from.name ?? "";
+    isFirst || leg.from.name === "Origin" ? "出發地" : (leg.from.name ?? "");
   const toName =
-    isLast || leg.to.name === "Destination" ? "目的地" : leg.to.name ?? "";
+    isLast || leg.to.name === "Destination" ? "目的地" : (leg.to.name ?? "");
   const durationSec =
     leg.duration ?? Math.round((leg.endTime - leg.startTime) / 1000);
   return {
@@ -833,7 +847,7 @@ function transitLegFrom(
     return {
       name: p.name || "",
       stationUid: stripFeedId(p.stop?.gtfsId),
-      location: lat && lon ? [lon, lat] as [number, number] : undefined,
+      location: lat && lon ? ([lon, lat] as [number, number]) : undefined,
     };
   });
 
@@ -1037,7 +1051,10 @@ export async function planOtpRouteDetailed(
       tm.primaryTimedOut = 1;
       console.warn("[otp-routing] primary query timed out", err);
     } else {
-      console.warn("[otp-routing] primary query failed, attempting stop snap", err);
+      console.warn(
+        "[otp-routing] primary query failed, attempting stop snap",
+        err,
+      );
     }
   }
   tm.otpFirst = Date.now() - t0;
@@ -1063,15 +1080,13 @@ export async function planOtpRouteDetailed(
 
   const hasUsableTransit = (its: OtpItinerary[]) =>
     its.some(
-      (it) =>
-        it.legs.some(isTransitLeg) && itineraryUsable(it, maxTransfers),
+      (it) => it.legs.some(isTransitLeg) && itineraryUsable(it, maxTransfers),
     );
 
   const rememberOriginalWalkFallback = (attempt: OtpPlanAttempt) => {
     if (walkFallbackItineraries.length) return;
     const walkOnly = attempt.itineraries.filter(
-      (it) =>
-        !it.legs.some(isTransitLeg) && itineraryUsable(it, maxTransfers),
+      (it) => !it.legs.some(isTransitLeg) && itineraryUsable(it, maxTransfers),
     );
     if (!walkOnly.length) return;
     walkFallbackAttempt = attempt;
@@ -1132,7 +1147,10 @@ export async function planOtpRouteDetailed(
           tm.primaryTimedOut = 1;
           console.warn("[otp-routing] wide query timed out", err);
         } else {
-          console.warn("[otp-routing] wide query failed, retaining narrow result", err);
+          console.warn(
+            "[otp-routing] wide query failed, retaining narrow result",
+            err,
+          );
         }
       }
     }
@@ -1214,7 +1232,10 @@ export async function planOtpRouteDetailed(
           tm.primaryTimedOut = 1;
           console.warn("[otp-routing] snap retry timed out", err);
         } else {
-          console.warn("[otp-routing] snap retry failed, falling back to walk-only", err);
+          console.warn(
+            "[otp-routing] snap retry failed, falling back to walk-only",
+            err,
+          );
         }
       }
     }
@@ -1352,9 +1373,7 @@ export async function planOtpRouteDetailed(
       );
       const mapped = transitLegFrom(
         leg,
-        isFutureScheduled && transitLegIndex === 0
-          ? undefined
-          : waitMinutes,
+        isFutureScheduled && transitLegIndex === 0 ? undefined : waitMinutes,
         directions,
       );
       transitLegIndex++;
@@ -1363,31 +1382,34 @@ export async function planOtpRouteDetailed(
       transitLegs.push(mapped);
     }
 
-    const routeName = transitLegs.length > 0
-      ? transitLegs
-          .map((l) =>
-            l.type === "BUS"
-              ? l.routeName
-              : l.type === "METRO"
-                ? l.lineName
-                : l.trainNo,
-          )
-          .join(" → ")
-      : "步行路線";
+    const routeName =
+      transitLegs.length > 0
+        ? transitLegs
+            .map((l) =>
+              l.type === "BUS"
+                ? l.routeName
+                : l.type === "METRO"
+                  ? l.lineName
+                  : l.trainNo,
+            )
+            .join(" → ")
+        : "步行路線";
 
     const queryDate = ymdDash(departure);
-    const firstDepDate = transitOtpLegs.length > 0
-      ? ymdDash(new Date(transitOtpLegs[0].startTime))
-      : queryDate;
+    const firstDepDate =
+      transitOtpLegs.length > 0
+        ? ymdDash(new Date(transitOtpLegs[0].startTime))
+        : queryDate;
 
     if (snapPre) legs.unshift({ ...snapPre });
     if (snapPost) legs.push({ ...snapPost });
     const snapMinutes =
       (snapPre?.minutesEst ?? 0) + (snapPost?.minutesEst ?? 0);
 
-    const tripIdToken = transitOtpLegs.length > 0
-      ? (stripFeedId(transitOtpLegs[0].trip?.gtfsId) || "unknown")
-      : "walk";
+    const tripIdToken =
+      transitOtpLegs.length > 0
+        ? stripFeedId(transitOtpLegs[0].trip?.gtfsId) || "unknown"
+        : "walk";
 
     const scheduledDepartureTime =
       it.legs[0]?.startTime ??

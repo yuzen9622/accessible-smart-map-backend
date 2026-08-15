@@ -10,7 +10,7 @@ class TdxTokenManager {
     process.env.TDX_TOKEN_ENDPOINT ||
     "https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token";
   private readonly safetySeconds = Number(
-    process.env.TDX_TOKEN_SAFETY_SECONDS || 60
+    process.env.TDX_TOKEN_SAFETY_SECONDS || 60,
   );
 
   private constructor() {}
@@ -62,7 +62,7 @@ class TdxTokenManager {
 
       const expiresInMs = Math.max(
         0,
-        (json.expires_in - this.safetySeconds) * 1000
+        (json.expires_in - this.safetySeconds) * 1000,
       );
       this.accessToken = json.access_token;
       this.expiresAt = Date.now() + expiresInMs;

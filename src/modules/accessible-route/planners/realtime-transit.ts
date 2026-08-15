@@ -97,7 +97,7 @@ let liveBoardCache: CacheEntry<Map<string, number>> | null = null;
 
 function cachedEntry<T>(
   cache: Map<string, CacheEntry<T>>,
-  key: string
+  key: string,
 ): T | undefined {
   const entry = cache.get(key);
   if (!entry) return undefined;
@@ -113,7 +113,7 @@ const MAX_CACHE_ENTRIES = 5_000;
 function cacheSet<T>(
   cache: Map<string, CacheEntry<T>>,
   key: string,
-  entry: CacheEntry<T>
+  entry: CacheEntry<T>,
 ): void {
   cache.delete(key);
   cache.set(key, entry);
@@ -217,8 +217,7 @@ async function fetchEtaRecords(url: string): Promise<TdxEtaRecord[]> {
         const data = (await resp.json()) as TdxEtaRecord[];
         if (Array.isArray(data)) records = data;
       }
-    } catch {
-    }
+    } catch {}
     cacheSet(etaCache, url, {
       data: records,
       expiresAt: Date.now() + CACHE_TTL_MS,
@@ -337,14 +336,14 @@ async function overlayBusEta(route: AccessibleRoute): Promise<void> {
     const minutes = Math.round(pick.est / 60);
     leg.waitInfo = pick.live
       ? { time: minutes, source: "realtime" }
-      : { time: secondsToHHmm(taipeiSecondsOfDay() + pick.est), source: "schedule" };
+      : {
+          time: secondsToHHmm(taipeiSecondsOfDay() + pick.est),
+          source: "schedule",
+        };
     leg.estimatedWaitMinutes = minutes;
     shiftLegToLiveEta(leg, pick.est);
     if (route.transferCount === 0) {
-      route.totalMinutes = Math.max(
-        1,
-        route.totalMinutes - prevWait + minutes,
-      );
+      route.totalMinutes = Math.max(1, route.totalMinutes - prevWait + minutes);
     }
     return;
   }
@@ -394,7 +393,7 @@ async function traStationIndex(): Promise<Map<string, string>> {
     const index = new Map<string, string>();
     try {
       const resp = await tdxFetch(
-        `${traUrl.stationUrl}?$format=JSON&$select=StationID,StationName`
+        `${traUrl.stationUrl}?$format=JSON&$select=StationID,StationName`,
       );
       if (resp.ok) {
         const items = (await resp.json()) as TdxTraStation[];
@@ -406,8 +405,7 @@ async function traStationIndex(): Promise<Map<string, string>> {
           }
         }
       }
-    } catch {
-    }
+    } catch {}
     traStationCache = {
       data: index,
       expiresAt:
@@ -420,7 +418,7 @@ async function traStationIndex(): Promise<Map<string, string>> {
 async function fetchOdTimetable(
   from: string,
   to: string,
-  date: string
+  date: string,
 ): Promise<TdxTraOdItem[]> {
   const key = `${from}|${to}|${date}`;
   const hit = cachedEntry(odCache, key);
@@ -429,14 +427,13 @@ async function fetchOdTimetable(
     let items: TdxTraOdItem[] = [];
     try {
       const resp = await tdxFetch(
-        `${traUrl.dailyTimetableOdUrl(from, to, date)}?$format=JSON`
+        `${traUrl.dailyTimetableOdUrl(from, to, date)}?$format=JSON`,
       );
       if (resp.ok) {
         const data = (await resp.json()) as TdxTraOdItem[];
         if (Array.isArray(data)) items = data;
       }
-    } catch {
-    }
+    } catch {}
     cacheSet(odCache, key, {
       data: items,
       expiresAt:
@@ -464,7 +461,7 @@ async function resolveTraTrainNo(leg: TraLeg): Promise<string | null> {
   if (!from || !to) return null;
   const timetable = await fetchOdTimetable(from, to, taipeiYmdDash());
   const match = timetable.find(
-    (t) => t.OriginStopTime?.DepartureTime === leg.departureTime
+    (t) => t.OriginStopTime?.DepartureTime === leg.departureTime,
   );
   return match?.DailyTrainInfo?.TrainNo ?? null;
 }
@@ -484,15 +481,15 @@ async function fetchTrainDelays(): Promise<Map<string, number>> {
       const resp = await tdxFetch(`${trainUrl.trainLiveBoardUrl}?$format=JSON`);
       if (resp.ok) {
         const data = (await resp.json()) as
-          | TdxTrainLiveBoardEnvelope
-          | TdxTrainLiveBoardItem[];
-        const items = Array.isArray(data) ? data : data?.TrainLiveBoards ?? [];
+          TdxTrainLiveBoardEnvelope | TdxTrainLiveBoardItem[];
+        const items = Array.isArray(data)
+          ? data
+          : (data?.TrainLiveBoards ?? []);
         for (const item of items) {
           if (item?.TrainNo) delays.set(item.TrainNo, item.DelayTime ?? 0);
         }
       }
-    } catch {
-    }
+    } catch {}
     liveBoardCache = { data: delays, expiresAt: Date.now() + CACHE_TTL_MS };
     return delays;
   });
@@ -547,7 +544,7 @@ async function thsrStationIndex(): Promise<Map<string, string>> {
     const index = new Map<string, string>();
     try {
       const resp = await tdxFetch(
-        `${thsrUrl.stationUrl}?$format=JSON&$select=StationID,StationName`
+        `${thsrUrl.stationUrl}?$format=JSON&$select=StationID,StationName`,
       );
       if (resp.ok) {
         const items = (await resp.json()) as TdxThsrStation[];
@@ -559,8 +556,7 @@ async function thsrStationIndex(): Promise<Map<string, string>> {
           }
         }
       }
-    } catch {
-    }
+    } catch {}
     thsrStationCache = {
       data: index,
       expiresAt:
@@ -573,7 +569,7 @@ async function thsrStationIndex(): Promise<Map<string, string>> {
 async function fetchThsrOdTimetable(
   from: string,
   to: string,
-  date: string
+  date: string,
 ): Promise<TdxThsrOdItem[]> {
   const key = `${from}|${to}|${date}`;
   const hit = cachedEntry(thsrOdCache, key);
@@ -582,14 +578,13 @@ async function fetchThsrOdTimetable(
     let items: TdxThsrOdItem[] = [];
     try {
       const resp = await tdxFetch(
-        `${thsrUrl.dailyTimetableOdUrl(from, to, date)}?$format=JSON`
+        `${thsrUrl.dailyTimetableOdUrl(from, to, date)}?$format=JSON`,
       );
       if (resp.ok) {
         const data = (await resp.json()) as TdxThsrOdItem[];
         if (Array.isArray(data)) items = data;
       }
-    } catch {
-    }
+    } catch {}
     cacheSet(thsrOdCache, key, {
       data: items,
       expiresAt:
@@ -701,7 +696,8 @@ async function recoverRailLeg(
   fetchOd: (from: string, to: string, date: string) => Promise<RailOdRow[]>,
 ): Promise<void> {
   if (/^\d+$/.test(leg.trainNo)) return;
-  if (!leg.departureStation || !leg.arrivalStation || !leg.departureTime) return;
+  if (!leg.departureStation || !leg.arrivalStation || !leg.departureTime)
+    return;
   const from = index.get(normStation(leg.departureStation));
   const to = index.get(normStation(leg.arrivalStation));
   if (!from || !to) return;
@@ -716,7 +712,8 @@ async function recoverRailLeg(
   const match = snapToTrain(await fetchOd(from, to, date), leg.departureTime);
   if (!match) return;
   leg.trainNo = match.trainNo;
-  if (leg.type === "TRA" && match.trainType) leg.trainTypeName = match.trainType;
+  if (leg.type === "TRA" && match.trainType)
+    leg.trainTypeName = match.trainType;
 
   if (match.dep && match.dep !== leg.departureTime) {
     pushUnique(
@@ -759,9 +756,10 @@ export async function recoverRailTrainNos(
   ]);
   await Promise.all(
     routes.flatMap((r) => {
-      const date = typeof r._scheduledDepartureTime === "number"
-        ? taipeiYmdDash(new Date(r._scheduledDepartureTime))
-        : r.departureDate ?? taipeiYmdDash();
+      const date =
+        typeof r._scheduledDepartureTime === "number"
+          ? taipeiYmdDash(new Date(r._scheduledDepartureTime))
+          : (r.departureDate ?? taipeiYmdDash());
       return r.legs.map((leg) => {
         if (leg.type === "TRA" && traIdx) {
           return recoverRailLeg(leg, date, traIdx, fetchOdTimetable).catch(

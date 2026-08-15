@@ -8,27 +8,27 @@ const PUBLIC_SELECT = "-reporterId -photoStoragePath -confirmedBy -deniedBy";
 const MINE_SELECT = "-photoStoragePath -confirmedBy -deniedBy";
 
 const GEO_SELECT =
-	"hazardType severity description reportedLocation reporterId confirmedBy status expiredAt";
+  "hazardType severity description reportedLocation reporterId confirmedBy status expiredAt";
 
 /**
  * Matches reports carrying at least one confirmation from somebody other than
  * the reporter. Count-only legacy records fail closed.
  */
 const INDEPENDENT_CONFIRMATION_EXPR = {
-	$gt: [
-		{
-			$size: {
-				$filter: {
-					input: {
-						$cond: [{ $isArray: "$confirmedBy" }, "$confirmedBy", []],
-					},
-					as: "voterId",
-					cond: { $ne: ["$$voterId", "$reporterId"] },
-				},
-			},
-		},
-		0,
-	],
+  $gt: [
+    {
+      $size: {
+        $filter: {
+          input: {
+            $cond: [{ $isArray: "$confirmedBy" }, "$confirmedBy", []],
+          },
+          as: "voterId",
+          cond: { $ne: ["$$voterId", "$reporterId"] },
+        },
+      },
+    },
+    0,
+  ],
 };
 
 /** A hazard report as stored, as a plain object. */
@@ -36,42 +36,42 @@ export type HazardReportRecord = IHazardReport & { _id: string };
 
 /** The projection the route-blocking check reads. */
 export type HazardGeoProjection = Pick<
-	IHazardReport,
-	| "_id"
-	| "hazardType"
-	| "severity"
-	| "description"
-	| "reportedLocation"
-	| "reporterId"
-	| "confirmedBy"
-	| "status"
-	| "expiredAt"
+  IHazardReport,
+  | "_id"
+  | "hazardType"
+  | "severity"
+  | "description"
+  | "reportedLocation"
+  | "reporterId"
+  | "confirmedBy"
+  | "status"
+  | "expiredAt"
 >;
 
 /** The fields a report is created with. */
 export interface HazardReportInsert {
-	_id: string;
-	reporterId: string;
-	reportedLocation: { type: "Point"; coordinates: [number, number] };
-	hazardType: HazardType;
-	severity: IHazardReport["severity"];
-	expectedUntil: Date | null;
-	description?: string;
-	photoUrl: string;
-	photoStoragePath: string;
-	exifValidation: IHazardReport["exifValidation"];
-	aiVerification: IHazardReport["aiVerification"];
-	status: HazardStatus;
-	expiredAt: Date;
+  _id: string;
+  reporterId: string;
+  reportedLocation: { type: "Point"; coordinates: [number, number] };
+  hazardType: HazardType;
+  severity: IHazardReport["severity"];
+  expectedUntil: Date | null;
+  description?: string;
+  photoUrl: string;
+  photoStoragePath: string;
+  exifValidation: IHazardReport["exifValidation"];
+  aiVerification: IHazardReport["aiVerification"];
+  status: HazardStatus;
+  expiredAt: Date;
 }
 
 function nearQuery(lng: number, lat: number, maxDistanceM: number) {
-	return {
-		$near: {
-			$geometry: { type: "Point", coordinates: [lng, lat] },
-			$maxDistance: maxDistanceM,
-		},
-	};
+  return {
+    $near: {
+      $geometry: { type: "Point", coordinates: [lng, lat] },
+      $maxDistance: maxDistanceM,
+    },
+  };
 }
 
 /**
@@ -85,18 +85,18 @@ function nearQuery(lng: number, lat: number, maxDistanceM: number) {
  * @returns The duplicate to merge into, or null
  */
 export async function findActiveDuplicate(
-	lat: number,
-	lng: number,
-	radiusM: number,
-	hazardType: HazardType,
-	now: Date,
+  lat: number,
+  lng: number,
+  radiusM: number,
+  hazardType: HazardType,
+  now: Date,
 ): Promise<HazardReportRecord | null> {
-	return HazardReport.findOne({
-		reportedLocation: nearQuery(lng, lat, radiusM),
-		hazardType,
-		status: { $in: ["pending", "verified"] },
-		expiredAt: { $gt: now },
-	}).lean<HazardReportRecord | null>();
+  return HazardReport.findOne({
+    reportedLocation: nearQuery(lng, lat, radiusM),
+    hazardType,
+    status: { $in: ["pending", "verified"] },
+    expiredAt: { $gt: now },
+  }).lean<HazardReportRecord | null>();
 }
 
 /**
@@ -107,22 +107,22 @@ export async function findActiveDuplicate(
  * @returns The report after the update, or null when it vanished
  */
 export async function addConfirmation(
-	reportId: string,
-	voterId: string,
+  reportId: string,
+  voterId: string,
 ): Promise<HazardReportRecord | null> {
-	// The one-vote-per-identity rule is enforced in the filter, not just by the
-	// caller's earlier read: two concurrent requests from the same voter would
-	// otherwise both pass that read and both push, inflating confirmCount and
-	// putting the voter in confirmedBy twice.
-	return HazardReport.findOneAndUpdate(
-		{
-			_id: reportId,
-			confirmedBy: { $ne: voterId },
-			deniedBy: { $ne: voterId },
-		},
-		{ $inc: { confirmCount: 1 }, $push: { confirmedBy: voterId } },
-		{ returnDocument: "after" },
-	).lean<HazardReportRecord | null>();
+  // The one-vote-per-identity rule is enforced in the filter, not just by the
+  // caller's earlier read: two concurrent requests from the same voter would
+  // otherwise both pass that read and both push, inflating confirmCount and
+  // putting the voter in confirmedBy twice.
+  return HazardReport.findOneAndUpdate(
+    {
+      _id: reportId,
+      confirmedBy: { $ne: voterId },
+      deniedBy: { $ne: voterId },
+    },
+    { $inc: { confirmCount: 1 }, $push: { confirmedBy: voterId } },
+    { returnDocument: "after" },
+  ).lean<HazardReportRecord | null>();
 }
 
 /**
@@ -133,19 +133,19 @@ export async function addConfirmation(
  * @returns The report after the update, or null when it vanished
  */
 export async function addDenial(
-	reportId: string,
-	voterId: string,
+  reportId: string,
+  voterId: string,
 ): Promise<HazardReportRecord | null> {
-	// Same one-vote-per-identity guard as addConfirmation.
-	return HazardReport.findOneAndUpdate(
-		{
-			_id: reportId,
-			confirmedBy: { $ne: voterId },
-			deniedBy: { $ne: voterId },
-		},
-		{ $inc: { denyCount: 1 }, $push: { deniedBy: voterId } },
-		{ returnDocument: "after" },
-	).lean<HazardReportRecord | null>();
+  // Same one-vote-per-identity guard as addConfirmation.
+  return HazardReport.findOneAndUpdate(
+    {
+      _id: reportId,
+      confirmedBy: { $ne: voterId },
+      deniedBy: { $ne: voterId },
+    },
+    { $inc: { denyCount: 1 }, $push: { deniedBy: voterId } },
+    { returnDocument: "after" },
+  ).lean<HazardReportRecord | null>();
 }
 
 /**
@@ -155,10 +155,10 @@ export async function addDenial(
  * @returns The stored report
  */
 export async function insertReport(
-	doc: HazardReportInsert,
+  doc: HazardReportInsert,
 ): Promise<HazardReportRecord> {
-	const created = await HazardReport.create(doc);
-	return created.toObject() as unknown as HazardReportRecord;
+  const created = await HazardReport.create(doc);
+  return created.toObject() as unknown as HazardReportRecord;
 }
 
 /**
@@ -173,21 +173,21 @@ export async function insertReport(
  * @returns Public-projected reports
  */
 export async function findNearbyReports(
-	lat: number,
-	lng: number,
-	radiusM: number,
-	statuses: HazardStatus[],
-	hazardType: HazardType | undefined,
-	limit: number,
+  lat: number,
+  lng: number,
+  radiusM: number,
+  statuses: HazardStatus[],
+  hazardType: HazardType | undefined,
+  limit: number,
 ): Promise<Record<string, unknown>[]> {
-	return HazardReport.find({
-		reportedLocation: nearQuery(lng, lat, radiusM),
-		status: { $in: statuses },
-		...(hazardType ? { hazardType } : {}),
-	})
-		.select(PUBLIC_SELECT)
-		.limit(limit)
-		.lean<Record<string, unknown>[]>();
+  return HazardReport.find({
+    reportedLocation: nearQuery(lng, lat, radiusM),
+    status: { $in: statuses },
+    ...(hazardType ? { hazardType } : {}),
+  })
+    .select(PUBLIC_SELECT)
+    .limit(limit)
+    .lean<Record<string, unknown>[]>();
 }
 
 /**
@@ -203,24 +203,24 @@ export async function findNearbyReports(
  * @returns Geo-projected hazards
  */
 export async function findConfirmedWithin(
-	center: { lat: number; lng: number },
-	radiusM: number,
-	limit: number,
-	now: Date,
+  center: { lat: number; lng: number },
+  radiusM: number,
+  limit: number,
+  now: Date,
 ): Promise<HazardGeoProjection[]> {
-	return HazardReport.find({
-		reportedLocation: {
-			$geoWithin: {
-				$centerSphere: [[center.lng, center.lat], radiusM / EARTH_RADIUS_M],
-			},
-		},
-		status: "verified",
-		expiredAt: { $gt: now },
-		$expr: INDEPENDENT_CONFIRMATION_EXPR,
-	})
-		.select(GEO_SELECT)
-		.limit(limit)
-		.lean<HazardGeoProjection[]>();
+  return HazardReport.find({
+    reportedLocation: {
+      $geoWithin: {
+        $centerSphere: [[center.lng, center.lat], radiusM / EARTH_RADIUS_M],
+      },
+    },
+    status: "verified",
+    expiredAt: { $gt: now },
+    $expr: INDEPENDENT_CONFIRMATION_EXPR,
+  })
+    .select(GEO_SELECT)
+    .limit(limit)
+    .lean<HazardGeoProjection[]>();
 }
 
 /**
@@ -230,12 +230,12 @@ export async function findConfirmedWithin(
  * @returns The public view, or null when the id is malformed or unknown
  */
 export async function findPublicReportById(
-	id: string,
+  id: string,
 ): Promise<Record<string, unknown> | null> {
-	if (!Types.ObjectId.isValid(id)) return null;
-	return HazardReport.findById(id)
-		.select(PUBLIC_SELECT)
-		.lean<Record<string, unknown> | null>();
+  if (!Types.ObjectId.isValid(id)) return null;
+  return HazardReport.findById(id)
+    .select(PUBLIC_SELECT)
+    .lean<Record<string, unknown> | null>();
 }
 
 /**
@@ -247,26 +247,26 @@ export async function findPublicReportById(
  * @returns The reporter's own projected reports
  */
 export async function findReportsByReporter(
-	reporterId: string,
-	filter: {
-		statuses?: string[];
-		hazardType?: HazardType;
-		cursor?: string;
-	},
-	limit: number,
+  reporterId: string,
+  filter: {
+    statuses?: string[];
+    hazardType?: HazardType;
+    cursor?: string;
+  },
+  limit: number,
 ): Promise<(Record<string, unknown> & { _id: unknown })[]> {
-	const query: Record<string, unknown> = { reporterId };
-	if (filter.statuses?.length) query.status = { $in: filter.statuses };
-	if (filter.hazardType) query.hazardType = filter.hazardType;
-	if (filter.cursor && Types.ObjectId.isValid(filter.cursor)) {
-		query._id = { $lt: new Types.ObjectId(filter.cursor) };
-	}
+  const query: Record<string, unknown> = { reporterId };
+  if (filter.statuses?.length) query.status = { $in: filter.statuses };
+  if (filter.hazardType) query.hazardType = filter.hazardType;
+  if (filter.cursor && Types.ObjectId.isValid(filter.cursor)) {
+    query._id = { $lt: new Types.ObjectId(filter.cursor) };
+  }
 
-	return HazardReport.find(query)
-		.select(MINE_SELECT)
-		.sort({ createdAt: -1 })
-		.limit(limit)
-		.lean<(Record<string, unknown> & { _id: unknown })[]>();
+  return HazardReport.find(query)
+    .select(MINE_SELECT)
+    .sort({ createdAt: -1 })
+    .limit(limit)
+    .lean<(Record<string, unknown> & { _id: unknown })[]>();
 }
 
 /**
@@ -276,8 +276,8 @@ export async function findReportsByReporter(
  * @returns The report, or null when the id is malformed or unknown
  */
 export async function findReportById(
-	id: string,
+  id: string,
 ): Promise<HazardReportRecord | null> {
-	if (!Types.ObjectId.isValid(id)) return null;
-	return HazardReport.findById(id).lean<HazardReportRecord | null>();
+  if (!Types.ObjectId.isValid(id)) return null;
+  return HazardReport.findById(id).lean<HazardReportRecord | null>();
 }

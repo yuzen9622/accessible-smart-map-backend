@@ -8,10 +8,10 @@
 
 ## 一、移除的端點（必須改）
 
-| 舊端點 | 狀態 | 改用 |
-|---|---|---|
-| `POST /api/v1/user/login`（body `{name, email, avatar, client_id}`） | **已移除** | `POST /api/v1/user/auth/google`，body 改成 `{ idToken }` |
-| `POST /api/v1/user/token`（body `{token}`） | **已移除** | `POST /api/v1/user/refresh`（讀 httpOnly cookie，不需 body） |
+| 舊端點                                                               | 狀態       | 改用                                                         |
+| -------------------------------------------------------------------- | ---------- | ------------------------------------------------------------ |
+| `POST /api/v1/user/login`（body `{name, email, avatar, client_id}`） | **已移除** | `POST /api/v1/user/auth/google`，body 改成 `{ idToken }`     |
+| `POST /api/v1/user/token`（body `{token}`）                          | **已移除** | `POST /api/v1/user/refresh`（讀 httpOnly cookie，不需 body） |
 
 `POST /user/login` 之所以要移除，是因為它直接相信前端傳來的 `email` 與 `client_id`，任何人都能用別人的 email 換到該帳號的 access token。現在身分只取自後端驗證過的 Google ID token payload。
 
@@ -24,7 +24,7 @@
 const res = await fetch("/api/v1/user/auth/google", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
-  credentials: "include",              // refresh token 是 httpOnly cookie
+  credentials: "include", // refresh token 是 httpOnly cookie
   body: JSON.stringify({ idToken: response.credential }),
 });
 ```
@@ -54,6 +54,7 @@ const res = await fetch("/api/v1/user/auth/google", {
 `data.emailSent` 為 `false` 時代表帳號已建好但驗證信寄送失敗，`message` 會變成提示重寄的版本 —— 此時應顯示「重新寄送驗證信」按鈕。
 
 密碼規則（後端 Zod 驗證，不符回 400）：
+
 - 至少 8 字元
 - **最多 72 個位元組**（不是 72 字元。bcrypt 的硬上限，超過會被靜默截斷，所以在邊界擋掉。中文一個字算 3 bytes，所以純中文密碼上限是 24 字）
 - 必須同時包含英文字母與數字
@@ -71,11 +72,11 @@ email 已被註冊 → **409**，`data.reason = "EMAIL_TAKEN"`。
 
 失敗情形要分開處理，因為使用者該看到的下一步不同：
 
-| 狀態 | `data.reason` | 前端該做的事 |
-|---|---|---|
-| 401 | `INVALID_CREDENTIALS` | 顯示「電子郵件或密碼錯誤」。**不要**試圖區分「帳號不存在」與「密碼錯誤」—— 後端刻意對兩者回完全相同的回應，避免洩漏哪些信箱已註冊 |
-| 403 | `EMAIL_NOT_VERIFIED` | 顯示「請先完成驗證」並提供「重寄驗證信」按鈕 |
-| 429 | — | 登入嘗試過於頻繁（每 IP 10 次 / 15 分） |
+| 狀態 | `data.reason`         | 前端該做的事                                                                                                                      |
+| ---- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| 401  | `INVALID_CREDENTIALS` | 顯示「電子郵件或密碼錯誤」。**不要**試圖區分「帳號不存在」與「密碼錯誤」—— 後端刻意對兩者回完全相同的回應，避免洩漏哪些信箱已註冊 |
+| 403  | `EMAIL_NOT_VERIFIED`  | 顯示「請先完成驗證」並提供「重寄驗證信」按鈕                                                                                      |
+| 429  | —                     | 登入嘗試過於頻繁（每 IP 10 次 / 15 分）                                                                                           |
 
 ### 3. `POST /auth/verify-email` — 完成信箱驗證
 
@@ -152,12 +153,13 @@ TTL 1 小時、一次性。密碼規則同註冊。無效 → 401 `INVALID_TOKEN
   "_id": "665f...",
   "name": "Jane",
   "email": "jane@example.com",
-  "client_id": null,               // 改動：純帳密帳號為 null（原本必定有值）
-  "authProviders": ["local"],      // 新增："google" | "local"，可同時有兩者
-  "emailVerified": true,           // 新增
-  "tokenVersion": 0,               // 新增，見下
+  "client_id": null, // 改動：純帳密帳號為 null（原本必定有值）
+  "authProviders": ["local"], // 新增："google" | "local"，可同時有兩者
+  "emailVerified": true, // 新增
+  "tokenVersion": 0, // 新增，見下
   "lineUserId": null,
-  "createdAt": "...", "updatedAt": "..."
+  "createdAt": "...",
+  "updatedAt": "...",
 }
 ```
 

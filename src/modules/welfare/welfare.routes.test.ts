@@ -29,10 +29,16 @@ beforeEach(() => {
 describe("GET /api/v1/a11y/welfare/nearby", () => {
   it("returns 200 + nearby institutions for valid coordinates", async () => {
     vi.mocked(service.findNearby).mockResolvedValue([sample] as any);
-    const res = await request(app).get(`${BASE}/nearby`).query({ lat: 25.05, lng: 121.51 });
+    const res = await request(app)
+      .get(`${BASE}/nearby`)
+      .query({ lat: 25.05, lng: 121.51 });
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(1);
-    expect(vi.mocked(service.findNearby)).toHaveBeenCalledWith(25.05, 121.51, 1000);
+    expect(vi.mocked(service.findNearby)).toHaveBeenCalledWith(
+      25.05,
+      121.51,
+      1000,
+    );
   });
 
   it("returns 400 when lat/lng are missing", async () => {

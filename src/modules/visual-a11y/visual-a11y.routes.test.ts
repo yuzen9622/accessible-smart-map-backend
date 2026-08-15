@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import request from "supertest";
 
 vi.mock("../../config/auth", async () => {
-  const { createAuthModuleMock } = await import("../../../tests/helpers/auth-mock");
+  const { createAuthModuleMock } =
+    await import("../../../tests/helpers/auth-mock");
   return createAuthModuleMock();
 });
 
@@ -11,12 +12,18 @@ vi.mock("./visual-a11y.service", () => ({
   syncFromOverpass: vi.fn(),
 }));
 
-import { buildTestApp, buildAuthorizationHeader } from "../../../tests/helpers/test-helpers";
+import {
+  buildTestApp,
+  buildAuthorizationHeader,
+} from "../../../tests/helpers/test-helpers";
 import * as service from "./visual-a11y.service";
 
 const app = buildTestApp();
 const BASE = "/api/v1/a11y/visual-a11y";
-const AUTH = buildAuthorizationHeader({ _id: "user-abc", email: "user@test.com" });
+const AUTH = buildAuthorizationHeader({
+  _id: "user-abc",
+  email: "user@test.com",
+});
 
 const sample = {
   _id: "66a1f2c3e4b5a6d7c8e9f0d4",
@@ -34,28 +41,33 @@ beforeEach(() => {
 describe("GET /api/v1/a11y/visual-a11y", () => {
   it("returns 200 + nearby facilities for valid coordinates (default radius, no type)", async () => {
     vi.mocked(service.findNearby).mockResolvedValue([sample] as any);
-    const res = await request(app).get(BASE).query({ lat: 25.047, lng: 121.517 });
+    const res = await request(app)
+      .get(BASE)
+      .query({ lat: 25.047, lng: 121.517 });
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(1);
     expect(vi.mocked(service.findNearby)).toHaveBeenCalledWith(
       25.047,
       121.517,
       500,
-      undefined
+      undefined,
     );
   });
 
   it("passes radius + type through to the service", async () => {
     vi.mocked(service.findNearby).mockResolvedValue([] as any);
-    const res = await request(app)
-      .get(BASE)
-      .query({ lat: 25.047, lng: 121.517, radius: 1000, type: "tactile_paving" });
+    const res = await request(app).get(BASE).query({
+      lat: 25.047,
+      lng: 121.517,
+      radius: 1000,
+      type: "tactile_paving",
+    });
     expect(res.status).toBe(200);
     expect(vi.mocked(service.findNearby)).toHaveBeenCalledWith(
       25.047,
       121.517,
       1000,
-      "tactile_paving"
+      "tactile_paving",
     );
   });
 
@@ -80,14 +92,20 @@ describe("POST /api/v1/a11y/visual-a11y/sync", () => {
       inserted: 120,
       updated: 35,
     });
-    const res = await request(app).post(`${BASE}/sync`).set("Authorization", AUTH);
+    const res = await request(app)
+      .post(`${BASE}/sync`)
+      .set("Authorization", AUTH);
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual({ inserted: 120, updated: 35 });
   });
 
   it("returns 500 when the sync fails", async () => {
-    vi.mocked(service.syncFromOverpass).mockRejectedValue(new Error("overpass down"));
-    const res = await request(app).post(`${BASE}/sync`).set("Authorization", AUTH);
+    vi.mocked(service.syncFromOverpass).mockRejectedValue(
+      new Error("overpass down"),
+    );
+    const res = await request(app)
+      .post(`${BASE}/sync`)
+      .set("Authorization", AUTH);
     expect(res.status).toBe(500);
   });
 

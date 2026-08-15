@@ -168,7 +168,9 @@ const SCENARIOS: Scenario[] = [
       const errors: string[] = [];
       if (calledSosTool(run)) errors.push("不得呼叫任何 SOS 工具");
       if (called(run, "getEnvironmentInfo"))
-        errors.push("沒有地名時不得呼叫 getEnvironmentInfo（不可自行假設地點）");
+        errors.push(
+          "沒有地名時不得呼叫 getEnvironmentInfo（不可自行假設地點）",
+        );
       if (!run.speech) errors.push("speech 不得為空");
       else if (!/[哪那][個些裡邊]?|[?？]/.test(run.speech))
         errors.push(`speech 應為詢問地區的問句，實際: ${run.speech}`);
@@ -255,7 +257,8 @@ async function main(): Promise<void> {
         ? await scenario.run()
         : await runScenario(scenario.message ?? "");
       errors = scenario.assert(run);
-      const toolSeq = run.calls.map((c) => c.name).join(" → ") || "(無工具呼叫)";
+      const toolSeq =
+        run.calls.map((c) => c.name).join(" → ") || "(無工具呼叫)";
       console.log(
         `[${scenario.id}] attempt ${attempt} 工具序列: ${toolSeq}\n  speech: ${run.speech}`,
       );

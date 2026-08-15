@@ -53,9 +53,7 @@ out center;`,
   },
 ];
 
-function deriveCategory(
-  tags: Record<string, string>
-): IOsmA11y["category"] {
+function deriveCategory(tags: Record<string, string>): IOsmA11y["category"] {
   if (tags["highway"] === "elevator" || tags["elevator"] === "yes")
     return "elevator";
   if (
@@ -110,7 +108,8 @@ async function main() {
     let elements: any[];
     try {
       elements = await fetchOverpassElements(query, {
-        userAgent: "accessible-smart-map-backend/1.0 (accessibility data import)",
+        userAgent:
+          "accessible-smart-map-backend/1.0 (accessibility data import)",
       });
     } catch (err) {
       console.error(`  Error: ${(err as Error).message}`);
@@ -122,13 +121,13 @@ async function main() {
       .map((el) =>
         el.type === "way" && el.center != null
           ? { ...el, lat: el.center.lat, lon: el.center.lon }
-          : el
+          : el,
       )
       .filter(
         (el) =>
           (el.type === "node" || el.type === "way") &&
           el.lat != null &&
-          el.lon != null
+          el.lon != null,
       );
     console.log(`  Received ${points.length} elements`);
 
@@ -167,12 +166,14 @@ async function main() {
     }
 
     console.log(
-      `  Done — new: ${totalUpserted}, updated: ${totalUpdated} (cumulative)`
+      `  Done — new: ${totalUpserted}, updated: ${totalUpdated} (cumulative)`,
     );
     await sleep(DELAY_MS);
   }
 
-  console.log(`\n✓ Import complete. Total new: ${totalUpserted}, updated: ${totalUpdated}`);
+  console.log(
+    `\n✓ Import complete. Total new: ${totalUpserted}, updated: ${totalUpdated}`,
+  );
   await mongoose.disconnect();
 }
 

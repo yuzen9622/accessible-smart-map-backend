@@ -9,7 +9,10 @@
 import "dotenv/config";
 import mongoose from "mongoose";
 import CampusA11yModel from "../model/campus-a11y.model";
-import { buildAliasNames, buildSearchName } from "../modules/campus/campus.util";
+import {
+  buildAliasNames,
+  buildSearchName,
+} from "../modules/campus/campus.util";
 
 async function main() {
   const dbUrl = process.env.DATABASE_URL;
@@ -34,7 +37,7 @@ async function main() {
           },
         },
       })),
-      { ordered: false }
+      { ordered: false },
     );
     console.log(`✓ Backfilled ${res.modifiedCount} campuses`);
   }

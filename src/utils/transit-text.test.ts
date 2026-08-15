@@ -42,7 +42,9 @@ describe("busRouteQueryCandidates", () => {
   });
 
   it("路線名含贅字時，格式化後的名稱與原始名稱都是候選", () => {
-    expect(busRouteQueryCandidates("1619B經中港路不經竹科", "Taichung")).toEqual([
+    expect(
+      busRouteQueryCandidates("1619B經中港路不經竹科", "Taichung"),
+    ).toEqual([
       { type: "City", routeId: "1619B" },
       { type: "City", routeId: "1619B經中港路不經竹科" },
       { type: "InterCity", routeId: "1619B" },
@@ -125,18 +127,22 @@ describe("formatWalkStepInstruction", () => {
     expect(formatFriendlyDistance(12)).toBe("馬上");
     expect(formatFriendlyDistance(185)).toBe("約 190 公尺");
     expect(formatFriendlyDistance(1011)).toBe("約 1.0 公里");
-    expect(formatWalkStepInstruction({
-      relativeDirection: "CONTINUE",
-      bogusName: true,
-      distanceM: 185,
-      targetStreetName: "民族西路",
-    })).toBe("直行約 190 公尺至「民族西路」");
-    expect(formatWalkStepInstruction({
-      relativeDirection: "RIGHT",
-      streetName: "民族西路",
-      bogusName: false,
-      distanceM: 1011,
-    })).toBe("向右轉進入「民族西路」，續行約 1.0 公里");
+    expect(
+      formatWalkStepInstruction({
+        relativeDirection: "CONTINUE",
+        bogusName: true,
+        distanceM: 185,
+        targetStreetName: "民族西路",
+      }),
+    ).toBe("直行約 190 公尺至「民族西路」");
+    expect(
+      formatWalkStepInstruction({
+        relativeDirection: "RIGHT",
+        streetName: "民族西路",
+        bogusName: false,
+        distanceM: 1011,
+      }),
+    ).toBe("向右轉進入「民族西路」，續行約 1.0 公里");
   });
 });
 

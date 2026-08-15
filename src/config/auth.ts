@@ -3,8 +3,7 @@ import { toPublicUser, verifyAccessToken } from "./jwt";
 import type { IUser } from "../types";
 
 export type AuthenticateResult =
-  | { ok: true; userId: string; user: IUser }
-  | { ok: false; expired: boolean };
+  { ok: true; userId: string; user: IUser } | { ok: false; expired: boolean };
 
 /**
  * Verify an access token and confirm it has not been revoked.
@@ -17,7 +16,9 @@ export type AuthenticateResult =
  * @param token Raw JWT access token, without the "Bearer " prefix.
  * @returns The fresh user on success, or whether the token was merely expired.
  */
-export async function authenticateToken(token: string): Promise<AuthenticateResult> {
+export async function authenticateToken(
+  token: string,
+): Promise<AuthenticateResult> {
   const verify = verifyAccessToken(token);
   if (!verify.success || !verify.decoded) {
     return { ok: false, expired: Boolean(verify.expired) };

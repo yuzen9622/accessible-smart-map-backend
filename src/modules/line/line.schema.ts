@@ -9,7 +9,10 @@ export const RoutePreviewQuerySchema = z
   .object({
     sessionId: z
       .string()
-      .regex(/^[0-9a-f]{32}$/, "sessionId 必須是 32 位元 hex 的 SOS share token")
+      .regex(
+        /^[0-9a-f]{32}$/,
+        "sessionId 必須是 32 位元 hex 的 SOS share token",
+      )
       .openapi({
         description:
           "SOS session 的 shareToken（32 位元 hex，建立 session 時產生），取自 LINE 路線預覽 URL。",
@@ -23,10 +26,10 @@ export const RoutePreviewQuerySchema = z
       .enum(["wheelchair", "elderly", "visual_impaired", "normal"])
       .optional()
       .openapi({ example: "normal", description: "無障礙模式" }),
-    departureTime: z
-      .string()
-      .optional()
-      .openapi({ example: "2026-07-09T16:00:00+08:00", description: "出發時間" }),
+    departureTime: z.string().optional().openapi({
+      example: "2026-07-09T16:00:00+08:00",
+      description: "出發時間",
+    }),
   })
   .strict();
 

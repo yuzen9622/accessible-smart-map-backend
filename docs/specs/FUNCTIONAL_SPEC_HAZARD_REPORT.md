@@ -1,4 +1,5 @@
 # 使用者路況回報系統
+
 ## Functional Specification — Hazard Report
 
 **版本**：v1.2.1  
@@ -54,13 +55,13 @@
 
 ### 2.2 非功能目標
 
-| 目標 | 說明 |
-|------|------|
-| 後端統一驗證 | 登入、地理柵欄與 EXIF 驗證皆在後端執行，前端無法繞過 |
+| 目標              | 說明                                                                                                               |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------ |
+| 後端統一驗證      | 登入、地理柵欄與 EXIF 驗證皆在後端執行，前端無法繞過                                                               |
 | AI 僅作第一道過濾 | Cloud Vision 預篩 + Gemini 語意判斷為輔助篩選，verdict 記錄但不強制擋，`rejected` 狀態需人工複核流程（本期未納入） |
-| Fail-soft AI | Cloud Vision 或 Gemini 呼叫失敗時回報降級為 `pending`，不阻擋回報提交 |
-| 資料時效性 | 路況回報具時效，到期由定時任務設為 `expired`，文件保留供歷史查詢，不物理刪除 |
-| 路徑規劃暫不整合 | 本期回報僅供前端顯示，與路徑評分的整合列為未來選項（見 §9）|
+| Fail-soft AI      | Cloud Vision 或 Gemini 呼叫失敗時回報降級為 `pending`，不阻擋回報提交                                              |
+| 資料時效性        | 路況回報具時效，到期由定時任務設為 `expired`，文件保留供歷史查詢，不物理刪除                                       |
+| 路徑規劃暫不整合  | 本期回報僅供前端顯示，與路徑評分的整合列為未來選項（見 §9）                                                        |
 
 ---
 
@@ -138,26 +139,26 @@ src/
 
 ### 3.3 各層職責（clean-architecture 契約）
 
-| 層           | 檔案                                                      | 唯一職責                                                                            | 不可以做                         |
-| ----------- | ------------------------------------------------------- | ------------------------------------------------------------------------------- | ---------------------------- |
-| transport   | `hazard-report.router.ts`                               | 宣告 path/method、串 middleware（auth→multer→validate）、委派**單一** controller           | 業務邏輯、直接呼叫 service            |
-| validation  | `hazard-report.schema.ts`                               | 以 Zod 宣告 body/query/params 形狀並拒絕未知欄位                                            | I/O、業務規則、塑形回應                |
-| handler     | `hazard-report.controller.ts`                           | 讀 `req.auth`/`req.validated`/`req.file`，呼叫**一個** service 方法，用 `sendResponse` 包裝 | 業務 if/else、外部/DB 呼叫、解析原始上游資料 |
-| domain      | `hazard-report.service.ts`、`hazard-report.ai-verify.ts` | 業務邏輯與協調，呼叫 adapter / model，落實領域規則                                               | import `req`/`res`、驗證請求形狀    |
-| I/O mapping | `hazard-report.parse.ts`                                | exifr 原始值 ↔ `exifValidation`、Gemini 文字 → `AiVerifyResult`                       | 請求驗證、業務決策、HTTP 細節            |
-| I/O client  | `adapters/*.adapter.ts`                                 | 封裝單一外部來源（GCS / Cloud Vision / Gemini）                                           | 業務決策、HTTP envelope           |
-| types       | `hazard-report.types.ts`                                | 模組內 domain 型別來源（DTO / ServiceResult / 結果型別）；model 介面在 `types/index.d.ts`        | 邏輯、執行期值                      |
+| 層          | 檔案                                                     | 唯一職責                                                                                    | 不可以做                                     |
+| ----------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| transport   | `hazard-report.router.ts`                                | 宣告 path/method、串 middleware（auth→multer→validate）、委派**單一** controller            | 業務邏輯、直接呼叫 service                   |
+| validation  | `hazard-report.schema.ts`                                | 以 Zod 宣告 body/query/params 形狀並拒絕未知欄位                                            | I/O、業務規則、塑形回應                      |
+| handler     | `hazard-report.controller.ts`                            | 讀 `req.auth`/`req.validated`/`req.file`，呼叫**一個** service 方法，用 `sendResponse` 包裝 | 業務 if/else、外部/DB 呼叫、解析原始上游資料 |
+| domain      | `hazard-report.service.ts`、`hazard-report.ai-verify.ts` | 業務邏輯與協調，呼叫 adapter / model，落實領域規則                                          | import `req`/`res`、驗證請求形狀             |
+| I/O mapping | `hazard-report.parse.ts`                                 | exifr 原始值 ↔ `exifValidation`、Gemini 文字 → `AiVerifyResult`                             | 請求驗證、業務決策、HTTP 細節                |
+| I/O client  | `adapters/*.adapter.ts`                                  | 封裝單一外部來源（GCS / Cloud Vision / Gemini）                                             | 業務決策、HTTP envelope                      |
+| types       | `hazard-report.types.ts`                                 | 模組內 domain 型別來源（DTO / ServiceResult / 結果型別）；model 介面在 `types/index.d.ts`   | 邏輯、執行期值                               |
 
 ### 3.4 需動到的共用 spine（一次定義、處處沿用）
 
 這些是 feature 之外、所有受保護端點共用的橫切基礎，本期需小幅擴充（皆為**加法、向後相容**）：
 
-| 變更 | 檔案 | 原因 |
-|------|------|------|
+| 變更          | 檔案                                                      | 原因                                                                                                                                                                        |
+| ------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Auth 注入身分 | `src/middleware/middleware.ts` + `src/types/express.d.ts` | 現有 auth middleware 只「擋」不「注入」（controller 目前各自 re-decode token）；改為 `req.auth = { userId, user }`，controller 統一從 `req.auth` 讀身分（取代手動解 token） |
-| 補狀態碼 | `src/types/code.ts`（`ResponseCode`） | 目前缺 `410`（過期投票）與 `429`（rate limit）；補 `GONE=410`、`TOO_MANY_REQUESTS=429` 才能讓這兩種錯誤也走同一 `sendResponse` envelope |
-| reason 常數 | `src/constants/messages.ts` | `GEOFENCE_VIOLATION` 等 `data.reason` 字串集中成 `HAZARD_REASON` 常數，避免魔術字串散落 |
-| docs 來源 | `src/openapi/registry.ts` | 將 hazard-report 的 Zod schema 註冊進去，`/docs` 與 `/api/v1/openapi.json` 自動同步 |
+| 補狀態碼      | `src/types/code.ts`（`ResponseCode`）                     | 目前缺 `410`（過期投票）與 `429`（rate limit）；補 `GONE=410`、`TOO_MANY_REQUESTS=429` 才能讓這兩種錯誤也走同一 `sendResponse` envelope                                     |
+| reason 常數   | `src/constants/messages.ts`                               | `GEOFENCE_VIOLATION` 等 `data.reason` 字串集中成 `HAZARD_REASON` 常數，避免魔術字串散落                                                                                     |
+| docs 來源     | `src/openapi/registry.ts`                                 | 將 hazard-report 的 Zod schema 註冊進去，`/docs` 與 `/api/v1/openapi.json` 自動同步                                                                                         |
 
 > 單一方向依賴、邊界驗證、單一 envelope（`sendResponse`）、無魔術字串（`ResponseCode` + `HAZARD_REASON`）、單一註冊點（`index.ts` + `app.ts` 一行）——六項不變量逐項對齊。
 
@@ -168,71 +169,74 @@ src/
 ### 4.1 HazardReport（`src/model/hazard-report.model.ts`）
 
 ```typescript
-import { Schema, model, Document } from 'mongoose'
+import { Schema, model, Document } from "mongoose";
 
 // 回報類型
-export type HazardType = 'obstacle' | 'construction' | 'data_error'
+export type HazardType = "obstacle" | "construction" | "data_error";
 
 // AI 辨識結果
-export type AiVerdict = 'verified' | 'suspicious' | 'rejected' | 'skipped'
+export type AiVerdict = "verified" | "suspicious" | "rejected" | "skipped";
 
 export interface IHazardReport extends Document {
   // 回報識別
-  reporterId: string           // 必填，回報者使用者 ID（須登入）
+  reporterId: string; // 必填，回報者使用者 ID（須登入）
 
   // 地點資訊
-  reportedLocation: {          // 使用者宣稱的回報地點
-    type: 'Point'
-    coordinates: [number, number]  // [lng, lat]
-  }
-  reporterLocation: {          // 回報當下使用者的 GPS 座標
-    type: 'Point'
-    coordinates: [number, number]
-  }
-  distanceM: number            // Haversine 計算結果（公尺，記錄用）
+  reportedLocation: {
+    // 使用者宣稱的回報地點
+    type: "Point";
+    coordinates: [number, number]; // [lng, lat]
+  };
+  reporterLocation: {
+    // 回報當下使用者的 GPS 座標
+    type: "Point";
+    coordinates: [number, number];
+  };
+  distanceM: number; // Haversine 計算結果（公尺，記錄用）
 
   // 回報內容
-  hazardType: HazardType
-  description?: string         // 選用文字說明（最多 500 字）
-  photoUrl: string             // 上傳後的公開 URL（GCS Signed URL 或 CDN URL）
-  photoStoragePath: string     // bucket 內部路徑（用於刪除或重新取得）
+  hazardType: HazardType;
+  description?: string; // 選用文字說明（最多 500 字）
+  photoUrl: string; // 上傳後的公開 URL（GCS Signed URL 或 CDN URL）
+  photoStoragePath: string; // bucket 內部路徑（用於刪除或重新取得）
 
   // EXIF 驗證結果
   exifValidation: {
-    timestampFresh: boolean         // 拍攝時間距回報時間 ≤ 10 分鐘
-    gpsPresent: boolean             // 照片含 EXIF GPS
-    gpsMatchesClaimed: boolean      // EXIF GPS 與宣稱座標距離 ≤ 50m
-    rawExifTime?: string            // ISO 8601 字串（記錄用）
-    rawExifLat?: number
-    rawExifLng?: number
-  }
+    timestampFresh: boolean; // 拍攝時間距回報時間 ≤ 10 分鐘
+    gpsPresent: boolean; // 照片含 EXIF GPS
+    gpsMatchesClaimed: boolean; // EXIF GPS 與宣稱座標距離 ≤ 50m
+    rawExifTime?: string; // ISO 8601 字串（記錄用）
+    rawExifLat?: number;
+    rawExifLng?: number;
+  };
 
   // AI 影像辨識結果（兩階段）
   aiVerification: {
-    verdict: AiVerdict
-    confidence: number              // 0.0 – 1.0
-    reason: string                  // Gemini 回傳的判斷說明（繁中）
-    prefilter?: {                   // 第一階段：Cloud Vision 預篩結果
-      passed: boolean               // 是否通過預篩（未被 SafeSearch 擋下）
-      detectedLabels?: string[]     // 偵測到的物件／標籤（傳給 Gemini 作提示）
-      safeSearchBlocked?: boolean   // SafeSearch 判定不雅／暴力／spoof 而擋下
-    }
-    attemptedAt?: Date
-  }
+    verdict: AiVerdict;
+    confidence: number; // 0.0 – 1.0
+    reason: string; // Gemini 回傳的判斷說明（繁中）
+    prefilter?: {
+      // 第一階段：Cloud Vision 預篩結果
+      passed: boolean; // 是否通過預篩（未被 SafeSearch 擋下）
+      detectedLabels?: string[]; // 偵測到的物件／標籤（傳給 Gemini 作提示）
+      safeSearchBlocked?: boolean; // SafeSearch 判定不雅／暴力／spoof 而擋下
+    };
+    attemptedAt?: Date;
+  };
 
   // 狀態
-  status: 'pending' | 'verified' | 'rejected' | 'expired'
+  status: "pending" | "verified" | "rejected" | "expired";
 
   // 社群確認
-  confirmCount: number         // 確認票數（其他使用者認同）
-  denyCount: number            // 否認票數
-  confirmedBy: string[]        // 已確認使用者 ID 清單（防重複投票）
-  deniedBy: string[]           // 已否認使用者 ID 清單
+  confirmCount: number; // 確認票數（其他使用者認同）
+  denyCount: number; // 否認票數
+  confirmedBy: string[]; // 已確認使用者 ID 清單（防重複投票）
+  deniedBy: string[]; // 已否認使用者 ID 清單
 
   // 時間
-  createdAt: Date
-  updatedAt: Date
-  expiredAt: Date              // TTL 欄位（建立時依 hazardType 計算）
+  createdAt: Date;
+  updatedAt: Date;
+  expiredAt: Date; // TTL 欄位（建立時依 hazardType 計算）
 }
 
 const HazardReportSchema = new Schema<IHazardReport>(
@@ -240,18 +244,18 @@ const HazardReportSchema = new Schema<IHazardReport>(
     reporterId: { type: String, required: true, index: true },
 
     reportedLocation: {
-      type: { type: String, enum: ['Point'], required: true },
+      type: { type: String, enum: ["Point"], required: true },
       coordinates: { type: [Number], required: true },
     },
     reporterLocation: {
-      type: { type: String, enum: ['Point'], required: true },
+      type: { type: String, enum: ["Point"], required: true },
       coordinates: { type: [Number], required: true },
     },
     distanceM: { type: Number, required: true },
 
     hazardType: {
       type: String,
-      enum: ['obstacle', 'construction', 'data_error'],
+      enum: ["obstacle", "construction", "data_error"],
       required: true,
     },
     description: { type: String, maxlength: 500, default: null },
@@ -270,7 +274,7 @@ const HazardReportSchema = new Schema<IHazardReport>(
     aiVerification: {
       verdict: {
         type: String,
-        enum: ['verified', 'suspicious', 'rejected', 'skipped'],
+        enum: ["verified", "suspicious", "rejected", "skipped"],
         required: true,
       },
       confidence: { type: Number, min: 0, max: 1, required: true },
@@ -285,8 +289,8 @@ const HazardReportSchema = new Schema<IHazardReport>(
 
     status: {
       type: String,
-      enum: ['pending', 'verified', 'rejected', 'expired'],
-      default: 'pending',
+      enum: ["pending", "verified", "rejected", "expired"],
+      default: "pending",
     },
 
     confirmCount: { type: Number, default: 0 },
@@ -296,29 +300,32 @@ const HazardReportSchema = new Schema<IHazardReport>(
 
     expiredAt: { type: Date, required: true },
   },
-  { timestamps: true }
-)
+  { timestamps: true },
+);
 
 // Index 定義
-HazardReportSchema.index({ reportedLocation: '2dsphere' })
-HazardReportSchema.index({ status: 1, createdAt: -1 })
-HazardReportSchema.index({ hazardType: 1, status: 1 })
-HazardReportSchema.index({ reporterId: 1, createdAt: -1 }) // GET /reports/mine
-HazardReportSchema.index({ expiredAt: 1, status: 1 })      // 過期掃描定時任務查詢
+HazardReportSchema.index({ reportedLocation: "2dsphere" });
+HazardReportSchema.index({ status: 1, createdAt: -1 });
+HazardReportSchema.index({ hazardType: 1, status: 1 });
+HazardReportSchema.index({ reporterId: 1, createdAt: -1 }); // GET /reports/mine
+HazardReportSchema.index({ expiredAt: 1, status: 1 }); // 過期掃描定時任務查詢
 // 注意：不使用 MongoDB TTL index（expireAfterSeconds）——回報到期僅標記為 expired，保留歷史不物理刪除
 
-export const HazardReport = model<IHazardReport>('HazardReport', HazardReportSchema)
+export const HazardReport = model<IHazardReport>(
+  "HazardReport",
+  HazardReportSchema,
+);
 ```
 
 ### 4.2 過期策略（保留歷史）
 
 `expiredAt` 於建立時依 `hazardType` 計算，僅決定回報何時從「附近查詢」的預設結果中淡出，**不觸發刪除**：
 
-| hazardType | expiredAt 計算 | 說明 |
-|------------|---------------|------|
-| `obstacle` | `createdAt + 6 小時` | 障礙物通常短暫，若無確認即視為過期 |
-| `construction` | `createdAt + 7 天` | 施工工期較長 |
-| `data_error` | `createdAt + 30 天` | 資料問題需較長觀察期 |
+| hazardType     | expiredAt 計算       | 說明                               |
+| -------------- | -------------------- | ---------------------------------- |
+| `obstacle`     | `createdAt + 6 小時` | 障礙物通常短暫，若無確認即視為過期 |
+| `construction` | `createdAt + 7 天`   | 施工工期較長                       |
+| `data_error`   | `createdAt + 30 天`  | 資料問題需較長觀察期               |
 
 **保留歷史的做法（取代 MongoDB TTL index）**：
 
@@ -328,9 +335,12 @@ export const HazardReport = model<IHazardReport>('HazardReport', HazardReportSch
   ```typescript
   // 將到期但尚未標記的回報設為 expired，文件保留
   await HazardReport.updateMany(
-    { expiredAt: { $lte: new Date() }, status: { $in: ['pending', 'verified'] } },
-    { $set: { status: 'expired' } }
-  )
+    {
+      expiredAt: { $lte: new Date() },
+      status: { $in: ["pending", "verified"] },
+    },
+    { $set: { status: "expired" } },
+  );
   ```
 
 - `expired` 文件：從 `GET /reports`（附近查詢，預設 `status=pending,verified`）排除，但仍可經 `GET /reports/:id`、`GET /reports/mine` 查得，並保留供統計與人工複核。
@@ -364,12 +374,12 @@ export const HazardReport = model<IHazardReport>('HazardReport', HazardReportSch
 
 ### 5.1 端點總覽
 
-| Method | Path | 功能 | 認證 |
-|--------|------|------|------|
-| `POST` | `/api/v1/a11y/reports` | 提交路況回報 | **JWT 必要** |
-| `GET` | `/api/v1/a11y/reports/mine` | 查詢自己的回報紀錄 | **JWT 必要** |
-| `GET` | `/api/v1/a11y/reports` | 查詢附近回報 | 公開 |
-| `GET` | `/api/v1/a11y/reports/:id` | 取得單一回報 | 公開 |
+| Method | Path                               | 功能               | 認證             |
+| ------ | ---------------------------------- | ------------------ | ---------------- |
+| `POST` | `/api/v1/a11y/reports`             | 提交路況回報       | **JWT 必要**     |
+| `GET`  | `/api/v1/a11y/reports/mine`        | 查詢自己的回報紀錄 | **JWT 必要**     |
+| `GET`  | `/api/v1/a11y/reports`             | 查詢附近回報       | 公開             |
+| `GET`  | `/api/v1/a11y/reports/:id`         | 取得單一回報       | 公開             |
 | `POST` | `/api/v1/a11y/reports/:id/confirm` | 社群二次確認／否認 | 公開（選用 JWT） |
 
 > **回報（`POST /reports`）與「我的回報」（`GET /reports/mine`）強制 JWT**，`reporterId` 取自 `req.auth.userId`（由共用 auth middleware 注入，見 §3.4）。token 過期→401、缺少/無效→403，皆由 middleware 直接回應（不進 controller）。  
@@ -384,33 +394,33 @@ export const HazardReport = model<IHazardReport>('HazardReport', HazardReportSch
 
 **請求欄位**
 
-| 欄位 | 型別 | 必要 | 說明 |
-|------|------|------|------|
-| `photo` | File（JPEG/PNG） | 必要 | 即時拍攝照片，最大 10MB |
-| `hazardType` | `obstacle` \| `construction` \| `data_error` | 必要 | 回報類型 |
-| `reportedLat` | number | 必要 | 回報地點緯度 |
-| `reportedLng` | number | 必要 | 回報地點經度 |
-| `reporterLat` | number | 必要 | 使用者當前緯度（GPS） |
-| `reporterLng` | number | 必要 | 使用者當前經度（GPS） |
-| `description` | string | 選用 | 文字說明，最多 500 字元 |
+| 欄位          | 型別                                         | 必要 | 說明                    |
+| ------------- | -------------------------------------------- | ---- | ----------------------- |
+| `photo`       | File（JPEG/PNG）                             | 必要 | 即時拍攝照片，最大 10MB |
+| `hazardType`  | `obstacle` \| `construction` \| `data_error` | 必要 | 回報類型                |
+| `reportedLat` | number                                       | 必要 | 回報地點緯度            |
+| `reportedLng` | number                                       | 必要 | 回報地點經度            |
+| `reporterLat` | number                                       | 必要 | 使用者當前緯度（GPS）   |
+| `reporterLng` | number                                       | 必要 | 使用者當前經度（GPS）   |
+| `description` | string                                       | 選用 | 文字說明，最多 500 字元 |
 
 **Zod Schema（`hazard-report.schema.ts`）**
 
 ```typescript
-import { z } from 'zod'
+import { z } from "zod";
 
 // photo 欄位由 Multer 處理（→ req.file），不在 body schema 內
 // 多 part 欄位皆為字串，故以 z.coerce 轉數值；.strict() 拒絕未知欄位（邊界驗證不變量）
 export const CreateHazardReportSchema = z
   .object({
-    hazardType: z.enum(['obstacle', 'construction', 'data_error']),
+    hazardType: z.enum(["obstacle", "construction", "data_error"]),
     reportedLat: z.coerce.number().min(-90).max(90),
     reportedLng: z.coerce.number().min(-180).max(180),
     reporterLat: z.coerce.number().min(-90).max(90),
     reporterLng: z.coerce.number().min(-180).max(180),
     description: z.string().max(500).optional(),
   })
-  .strict()
+  .strict();
 ```
 
 > 其餘 schema（`NearbyReportsQuerySchema`、`MyReportsQuerySchema`、`ReportIdParamSchema`、`ConfirmSchema`）同樣 `.strict()`，並於 `src/openapi/registry.ts` 註冊，使 `/docs` 與 schema 單一同步。
@@ -457,7 +467,7 @@ export const CreateHazardReportSchema = z
       "hazardType": "obstacle",
       "reportedLocation": {
         "type": "Point",
-        "coordinates": [121.5654, 25.0330]
+        "coordinates": [121.5654, 25.033]
       },
       "description": "人行道上有施工鐵板未固定",
       "photoUrl": "https://storage.googleapis.com/bucket/reports/6670abc123def456.jpg",
@@ -485,17 +495,17 @@ export const CreateHazardReportSchema = z
 
 > envelope 的 `code` 欄位 = HTTP 狀態（`ResponseCode` enum）；領域錯誤類別放 `data.reason`（建議集中為 `HAZARD_REASON` 常數）。下表 reason 即 `data.reason`。
 
-| HTTP（ResponseCode） | data.reason | message | 說明 |
-|------|------|---------|------|
-| 401 / 403（auth middleware） | —（由 middleware 回應） | Unauthorized / Forbidden | token 過期→401、缺少/無效→403；在 controller 之前攔截 |
-| 400 `INVALID_INPUT` | `GEOFENCE_VIOLATION` | 使用者位置距回報地點超過 20 公尺 | Haversine 距離 > 20m |
-| 400 `INVALID_INPUT` | `EXIF_TOO_OLD` | 照片拍攝時間距回報時間超過 10 分鐘 | 疑似從相簿選取 |
-| 400 `INVALID_INPUT` | `EXIF_GPS_MISMATCH` | 照片 GPS 位置與宣稱位置不符 | EXIF GPS ↔ reporterLocation > 50m |
-| 400 `INVALID_INPUT` | `PHOTO_REQUIRED` | 未上傳照片 | Multer 未收到 photo 欄位 |
-| 400 `INVALID_INPUT` | `PHOTO_TOO_LARGE` | 照片超過 10MB | Multer 檔案大小限制 |
-| 400 `INVALID_INPUT` | `INVALID_PHOTO_TYPE` | 僅接受 JPEG 或 PNG | MIME type 不符 |
-| 429 `TOO_MANY_REQUESTS` | `RATE_LIMITED` | 回報提交過於頻繁，請稍後再試 | Rate limit 觸發（需擴充 enum；見 §3.4） |
-| 500 `INTERNAL_ERROR` | `UPLOAD_FAILED` | 照片上傳失敗，請重試 | GCS 上傳錯誤 |
+| HTTP（ResponseCode）         | data.reason             | message                            | 說明                                                  |
+| ---------------------------- | ----------------------- | ---------------------------------- | ----------------------------------------------------- |
+| 401 / 403（auth middleware） | —（由 middleware 回應） | Unauthorized / Forbidden           | token 過期→401、缺少/無效→403；在 controller 之前攔截 |
+| 400 `INVALID_INPUT`          | `GEOFENCE_VIOLATION`    | 使用者位置距回報地點超過 20 公尺   | Haversine 距離 > 20m                                  |
+| 400 `INVALID_INPUT`          | `EXIF_TOO_OLD`          | 照片拍攝時間距回報時間超過 10 分鐘 | 疑似從相簿選取                                        |
+| 400 `INVALID_INPUT`          | `EXIF_GPS_MISMATCH`     | 照片 GPS 位置與宣稱位置不符        | EXIF GPS ↔ reporterLocation > 50m                     |
+| 400 `INVALID_INPUT`          | `PHOTO_REQUIRED`        | 未上傳照片                         | Multer 未收到 photo 欄位                              |
+| 400 `INVALID_INPUT`          | `PHOTO_TOO_LARGE`       | 照片超過 10MB                      | Multer 檔案大小限制                                   |
+| 400 `INVALID_INPUT`          | `INVALID_PHOTO_TYPE`    | 僅接受 JPEG 或 PNG                 | MIME type 不符                                        |
+| 429 `TOO_MANY_REQUESTS`      | `RATE_LIMITED`          | 回報提交過於頻繁，請稍後再試       | Rate limit 觸發（需擴充 enum；見 §3.4）               |
+| 500 `INTERNAL_ERROR`         | `UPLOAD_FAILED`         | 照片上傳失敗，請重試               | GCS 上傳錯誤                                          |
 
 ```json
 {
@@ -516,14 +526,14 @@ export const CreateHazardReportSchema = z
 
 **Query Parameters**
 
-| 參數 | 型別 | 必要 | 說明 |
-|------|------|------|------|
-| `lat` | number | 必要 | 查詢中心緯度 |
-| `lng` | number | 必要 | 查詢中心經度 |
-| `radius` | number | 選用 | 查詢半徑（公尺），預設 500，最大 5000 |
+| 參數         | 型別   | 必要 | 說明                                                         |
+| ------------ | ------ | ---- | ------------------------------------------------------------ |
+| `lat`        | number | 必要 | 查詢中心緯度                                                 |
+| `lng`        | number | 必要 | 查詢中心經度                                                 |
+| `radius`     | number | 選用 | 查詢半徑（公尺），預設 500，最大 5000                        |
 | `hazardType` | string | 選用 | 過濾回報類型（`obstacle` \| `construction` \| `data_error`） |
-| `status` | string | 選用 | 過濾狀態，預設 `pending,verified`（逗號分隔） |
-| `limit` | number | 選用 | 回傳筆數上限，預設 20，最大 50 |
+| `status`     | string | 選用 | 過濾狀態，預設 `pending,verified`（逗號分隔）                |
+| `limit`      | number | 選用 | 回傳筆數上限，預設 20，最大 50                               |
 
 **查詢邏輯**
 
@@ -532,15 +542,15 @@ export const CreateHazardReportSchema = z
 HazardReport.find({
   reportedLocation: {
     $near: {
-      $geometry: { type: 'Point', coordinates: [lng, lat] },
+      $geometry: { type: "Point", coordinates: [lng, lat] },
       $maxDistance: radius,
     },
   },
   status: { $in: statusFilter },
   ...(hazardType ? { hazardType } : {}),
 })
-  .select('-reporterId -photoStoragePath -confirmedBy -deniedBy') // 公開查詢不洩漏回報者 ID
-  .limit(limit)
+  .select("-reporterId -photoStoragePath -confirmedBy -deniedBy") // 公開查詢不洩漏回報者 ID
+  .limit(limit);
 ```
 
 **成功回應（200）**
@@ -558,7 +568,7 @@ HazardReport.find({
         "hazardType": "obstacle",
         "reportedLocation": {
           "type": "Point",
-          "coordinates": [121.5654, 25.0330]
+          "coordinates": [121.5654, 25.033]
         },
         "description": "人行道上有施工鐵板未固定",
         "photoUrl": "https://storage.googleapis.com/bucket/reports/6670abc123def456.jpg",
@@ -587,18 +597,18 @@ HazardReport.find({
 
 **路徑參數**
 
-| 參數 | 說明 |
-|------|------|
+| 參數 | 說明                  |
+| ---- | --------------------- |
 | `id` | MongoDB ObjectId 字串 |
 
 **成功回應（200）**：回傳 `HazardReport` document（同 §5.3 格式，公開端點同樣以 `.select('-reporterId -photoStoragePath -confirmedBy -deniedBy')` 隱藏回報者 ID 與內部欄位）。前端輪詢即打此端點讀取最新 `status` / `aiVerification`。
 
 **錯誤回應**
 
-| HTTP（ResponseCode） | data.reason | message |
-|------|------|---------|
-| 400 `INVALID_INPUT` | `INVALID_ID` | 無效的回報 ID 格式 |
-| 404 `NOT_FOUND` | `REPORT_NOT_FOUND` | 找不到對應的回報 |
+| HTTP（ResponseCode） | data.reason        | message            |
+| -------------------- | ------------------ | ------------------ |
+| 400 `INVALID_INPUT`  | `INVALID_ID`       | 無效的回報 ID 格式 |
+| 404 `NOT_FOUND`      | `REPORT_NOT_FOUND` | 找不到對應的回報   |
 
 ---
 
@@ -614,8 +624,8 @@ HazardReport.find({
 }
 ```
 
-| 欄位 | 型別 | 必要 | 說明 |
-|------|------|------|------|
+| 欄位     | 型別                | 必要 | 說明             |
+| -------- | ------------------- | ---- | ---------------- |
 | `action` | `confirm` \| `deny` | 必要 | 確認或否認此回報 |
 
 **後端邏輯**
@@ -648,12 +658,12 @@ HazardReport.find({
 
 **錯誤回應**
 
-| HTTP（ResponseCode） | data.reason | message |
-|------|------|---------|
-| 400 `INVALID_INPUT` | `INVALID_ID` | 無效的回報 ID 格式 |
-| 400 `INVALID_INPUT` | `ALREADY_VOTED` | 您已對此回報投過票 |
-| 404 `NOT_FOUND` | `REPORT_NOT_FOUND` | 找不到對應的回報 |
-| 410 `GONE` | `REPORT_EXPIRED` | 此回報已過期，無法投票（需擴充 enum；見 §3.4） |
+| HTTP（ResponseCode） | data.reason        | message                                        |
+| -------------------- | ------------------ | ---------------------------------------------- |
+| 400 `INVALID_INPUT`  | `INVALID_ID`       | 無效的回報 ID 格式                             |
+| 400 `INVALID_INPUT`  | `ALREADY_VOTED`    | 您已對此回報投過票                             |
+| 404 `NOT_FOUND`      | `REPORT_NOT_FOUND` | 找不到對應的回報                               |
+| 410 `GONE`           | `REPORT_EXPIRED`   | 此回報已過期，無法投票（需擴充 enum；見 §3.4） |
 
 ---
 
@@ -663,26 +673,26 @@ HazardReport.find({
 
 **Query Parameters**
 
-| 參數 | 型別 | 必要 | 說明 |
-|------|------|------|------|
-| `status` | string | 選用 | 過濾狀態（`pending` \| `verified` \| `rejected` \| `expired`，逗號分隔）；預設**全部**（含 `expired`，供使用者檢視歷史） |
-| `hazardType` | string | 選用 | 過濾回報類型 |
-| `limit` | number | 選用 | 回傳筆數上限，預設 20，最大 50 |
-| `cursor` | string | 選用 | 分頁游標（前一頁最後一筆的 `_id`），依 `createdAt` 由新到舊 |
+| 參數         | 型別   | 必要 | 說明                                                                                                                     |
+| ------------ | ------ | ---- | ------------------------------------------------------------------------------------------------------------------------ |
+| `status`     | string | 選用 | 過濾狀態（`pending` \| `verified` \| `rejected` \| `expired`，逗號分隔）；預設**全部**（含 `expired`，供使用者檢視歷史） |
+| `hazardType` | string | 選用 | 過濾回報類型                                                                                                             |
+| `limit`      | number | 選用 | 回傳筆數上限，預設 20，最大 50                                                                                           |
+| `cursor`     | string | 選用 | 分頁游標（前一頁最後一筆的 `_id`），依 `createdAt` 由新到舊                                                              |
 
 **查詢邏輯**
 
 ```typescript
 // 依 reporterId 過濾，最新在前；不做地理排序
 HazardReport.find({
-  reporterId,                              // 來自 JWT，非 query 參數
+  reporterId, // 來自 JWT，非 query 參數
   ...(statusFilter ? { status: { $in: statusFilter } } : {}),
   ...(hazardType ? { hazardType } : {}),
   ...(cursor ? { _id: { $lt: cursor } } : {}),
 })
-  .select('-photoStoragePath -confirmedBy -deniedBy')
+  .select("-photoStoragePath -confirmedBy -deniedBy")
   .sort({ createdAt: -1 })
-  .limit(limit)
+  .limit(limit);
 ```
 
 **成功回應（200）**
@@ -702,7 +712,11 @@ HazardReport.find({
         "status": "expired",
         "description": "人行道上有施工鐵板未固定",
         "photoUrl": "https://storage.googleapis.com/bucket/reports/6670abc123def456.jpg",
-        "aiVerification": { "verdict": "verified", "confidence": 0.87, "reason": "..." },
+        "aiVerification": {
+          "verdict": "verified",
+          "confidence": 0.87,
+          "reason": "..."
+        },
         "confirmCount": 3,
         "denyCount": 0,
         "createdAt": "2026-06-17T08:30:00.000Z",
@@ -717,8 +731,8 @@ HazardReport.find({
 
 **錯誤回應**
 
-| HTTP（ResponseCode） | data.reason | message |
-|------|------|---------|
+| HTTP（ResponseCode）         | data.reason             | message                  |
+| ---------------------------- | ----------------------- | ------------------------ |
 | 401 / 403（auth middleware） | —（由 middleware 回應） | Unauthorized / Forbidden |
 
 ---
@@ -733,10 +747,10 @@ HazardReport.find({
 
 **呼叫**：`@google-cloud/vision` SDK，對使用者照片 buffer 同時做兩種偵測：
 
-| 偵測 | 用途 |
-|------|------|
+| 偵測                                    | 用途                                                                                                                         |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | `labelDetection` / `objectLocalization` | 取得物件標籤（如 `Construction`、`Traffic cone`、`Fence`、`Sidewalk`、`Road`），作為 Gemini 判斷的提示，並判別是否為戶外街景 |
-| `safeSearchDetection` | 偵測 `adult` / `violence` / `racy` / `spoof`，擋下濫用或惡意圖 |
+| `safeSearchDetection`                   | 偵測 `adult` / `violence` / `racy` / `spoof`，擋下濫用或惡意圖                                                               |
 
 **預篩判定**
 
@@ -788,21 +802,21 @@ HazardReport.find({
 
 ```typescript
 interface AiVerifyResult {
-  verdict: 'verified' | 'suspicious' | 'rejected'
-  confidence: number
-  reason: string
+  verdict: "verified" | "suspicious" | "rejected";
+  confidence: number;
+  reason: string;
 }
 ```
 
 **Fail-soft 策略**
 
-| 情境 | 處理 |
-|------|------|
-| Cloud Vision 預篩呼叫失敗 | 略過預篩、直接進 Gemini（`prefilter.passed` 留空）；不阻擋流程 |
-| Gemini API 呼叫失敗 | `verdict: 'skipped'`，`confidence: 0`，`reason: 'AI 服務暫時不可用'`，`status` 維持 `pending` |
-| JSON 解析失敗 | `verdict: 'skipped'` |
-| 超時（10 秒） | `verdict: 'skipped'` |
-| `USE_HAZARD_AI_VERIFY=false` | 兩階段皆跳過，`verdict: 'skipped'`，`status` 維持 `pending` |
+| 情境                         | 處理                                                                                          |
+| ---------------------------- | --------------------------------------------------------------------------------------------- |
+| Cloud Vision 預篩呼叫失敗    | 略過預篩、直接進 Gemini（`prefilter.passed` 留空）；不阻擋流程                                |
+| Gemini API 呼叫失敗          | `verdict: 'skipped'`，`confidence: 0`，`reason: 'AI 服務暫時不可用'`，`status` 維持 `pending` |
+| JSON 解析失敗                | `verdict: 'skipped'`                                                                          |
+| 超時（10 秒）                | `verdict: 'skipped'`                                                                          |
+| `USE_HAZARD_AI_VERIFY=false` | 兩階段皆跳過，`verdict: 'skipped'`，`status` 維持 `pending`                                   |
 
 ---
 
@@ -810,18 +824,18 @@ interface AiVerifyResult {
 
 **解析欄位**
 
-| EXIF 欄位 | 用途 |
-|----------|------|
-| `DateTimeOriginal` | 拍攝時間，比對請求時間是否在 10 分鐘內 |
+| EXIF 欄位                      | 用途                                    |
+| ------------------------------ | --------------------------------------- |
+| `DateTimeOriginal`             | 拍攝時間，比對請求時間是否在 10 分鐘內  |
 | `GPSLatitude` / `GPSLongitude` | 比對是否與 `reporterLocation` 在 50m 內 |
 
 **邊界條件**
 
-| 情境 | 處理 |
-|------|------|
-| 照片無任何 EXIF | `timestampFresh: false`，`gpsPresent: false`，`gpsMatchesClaimed: false` → 400 EXIF_TOO_OLD |
-| 照片有時間戳但無 GPS | `gpsPresent: false`，`gpsMatchesClaimed: false`；時間戳仍驗證 |
-| 時間戳格式異常無法解析 | 視同無時間戳，`timestampFresh: false` → 400 EXIF_TOO_OLD |
+| 情境                   | 處理                                                                                        |
+| ---------------------- | ------------------------------------------------------------------------------------------- |
+| 照片無任何 EXIF        | `timestampFresh: false`，`gpsPresent: false`，`gpsMatchesClaimed: false` → 400 EXIF_TOO_OLD |
+| 照片有時間戳但無 GPS   | `gpsPresent: false`，`gpsMatchesClaimed: false`；時間戳仍驗證                               |
+| 時間戳格式異常無法解析 | 視同無時間戳，`timestampFresh: false` → 400 EXIF_TOO_OLD                                    |
 
 > ⚠️ **待確認**：部分 Android 相機 App 以 UTC 儲存 EXIF 時間（無時區標記），驗證時需以 UTC 比對，或要求前端另外傳入設備時間（`deviceTimestamp`）作為對照。
 
@@ -833,13 +847,13 @@ interface AiVerifyResult {
 
 ### 7.1 選擇依據
 
-| 面向 | GCS Bucket | GridFS |
-|------|-----------|--------|
-| 擴充性 | 無上限，CDN 整合容易 | MongoDB 受儲存空間限制 |
-| 讀取效能 | CDN 快取，靜態 URL | 每次查詢走 MongoDB Streaming |
-| 費用 | 依用量計費（GCS 標準儲存） | MongoDB Atlas 儲存費用較高 |
-| 管理複雜度 | 需額外設定 bucket + IAM | 零外部依賴 |
-| 現有技術棧吻合度 | 已有 `GOOGLE_MAPS_API_KEY`，同一 GCP 專案 | 無額外依賴 |
+| 面向             | GCS Bucket                                | GridFS                       |
+| ---------------- | ----------------------------------------- | ---------------------------- |
+| 擴充性           | 無上限，CDN 整合容易                      | MongoDB 受儲存空間限制       |
+| 讀取效能         | CDN 快取，靜態 URL                        | 每次查詢走 MongoDB Streaming |
+| 費用             | 依用量計費（GCS 標準儲存）                | MongoDB Atlas 儲存費用較高   |
+| 管理複雜度       | 需額外設定 bucket + IAM                   | 零外部依賴                   |
+| 現有技術棧吻合度 | 已有 `GOOGLE_MAPS_API_KEY`，同一 GCP 專案 | 無額外依賴                   |
 
 **結論**：採用 GCS，建立專用 bucket `taipei-a11y-hazard-reports`，照片以 `reports/{reportId}.jpg` 路徑儲存，上傳後取得公開 CDN URL 記錄於 `photoUrl`。
 
@@ -850,8 +864,8 @@ interface AiVerifyResult {
 async function uploadHazardPhoto(
   buffer: Buffer,
   reportId: string,
-  mimeType: 'image/jpeg' | 'image/png'
-): Promise<{ url: string; storagePath: string }>
+  mimeType: "image/jpeg" | "image/png",
+): Promise<{ url: string; storagePath: string }>;
 ```
 
 ### 7.3 生命週期
@@ -867,11 +881,11 @@ async function uploadHazardPhoto(
 
 以 `express-rate-limit` + Redis 儲存（`ioredis`，與現有 Redis 共用）實作：
 
-| 端點 | 限制 | 時間窗 | 識別鍵 |
-|------|------|--------|--------|
-| `POST /reports` | 3 次 | 10 分鐘 | IP |
-| `POST /reports/:id/confirm` | 10 次 | 1 分鐘 | IP |
-| `GET /reports` | 30 次 | 1 分鐘 | IP |
+| 端點                        | 限制  | 時間窗  | 識別鍵 |
+| --------------------------- | ----- | ------- | ------ |
+| `POST /reports`             | 3 次  | 10 分鐘 | IP     |
+| `POST /reports/:id/confirm` | 10 次 | 1 分鐘  | IP     |
+| `GET /reports`              | 30 次 | 1 分鐘  | IP     |
 
 觸發 rate limit 時回傳 429 + `RATE_LIMITED`。
 
@@ -883,13 +897,13 @@ async function uploadHazardPhoto(
 const existing = await HazardReport.findOne({
   reportedLocation: {
     $near: {
-      $geometry: { type: 'Point', coordinates: [reportedLng, reportedLat] },
+      $geometry: { type: "Point", coordinates: [reportedLng, reportedLat] },
       $maxDistance: 50,
     },
   },
   hazardType,
-  status: { $in: ['pending', 'verified'] },
-})
+  status: { $in: ["pending", "verified"] },
+});
 ```
 
 - **有近似回報**：不建立新 document，改以 `POST /reports/:id/confirm` 邏輯自動對既有回報加 `confirmCount += 1`，回傳 200 + 既有回報資料（`merged: true`）。
@@ -901,17 +915,17 @@ const existing = await HazardReport.findOne({
 
 ### 待實作
 
-| Phase | 功能 | 優先度 | 依賴 |
-|-------|------|--------|------|
-| **S1** | 基礎架構：`HazardReport` model、Multer 中介層、Zod schema、路由掛載（`POST /` 與 `GET /mine` 掛 JWT auth） | Critical | — |
-| **S2** | `POST /reports`：JWT 驗證 + 地理柵欄 + EXIF 驗證 + GCS 上傳 + document 建立（AI 辨識先以 `skipped` 佔位） | Critical | S1 |
-| **S3** | `GET /reports`、`GET /reports/:id`、`GET /reports/mine`：查詢端點 | High | S1 |
-| **S3** | `POST /reports/:id/confirm`：社群確認端點 | High | S1 |
-| **S4** | `hazard-report.ai-verify.ts` + `adapters/vision.adapter.ts` + `adapters/ai-vision.adapter.ts`：Cloud Vision 預篩 + Gemini 單圖判斷 + 非同步 status 更新 | High | S2 |
-| **S5** | Rate limit（`express-rate-limit` + Redis）+ 同地點重複回報合併 | Medium | S1 |
-| **S6** | 過期標記定時任務（cron 將到期回報 `status` 設為 `expired`，文件與照片保留） | Medium | S2 |
-| **Future** | 長週期封存／清理：保留期滿後刪 GCS 物件並標記文件（與「過期」解耦） | Low | S6 |
-| **Future** | 環境感知路徑規劃：將 `verified` 回報餵入路徑評分以動態避開障礙（本期不納入，路徑規劃端另立規格） | — | 路徑規劃重構 |
+| Phase      | 功能                                                                                                                                                    | 優先度   | 依賴         |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------ |
+| **S1**     | 基礎架構：`HazardReport` model、Multer 中介層、Zod schema、路由掛載（`POST /` 與 `GET /mine` 掛 JWT auth）                                              | Critical | —            |
+| **S2**     | `POST /reports`：JWT 驗證 + 地理柵欄 + EXIF 驗證 + GCS 上傳 + document 建立（AI 辨識先以 `skipped` 佔位）                                               | Critical | S1           |
+| **S3**     | `GET /reports`、`GET /reports/:id`、`GET /reports/mine`：查詢端點                                                                                       | High     | S1           |
+| **S3**     | `POST /reports/:id/confirm`：社群確認端點                                                                                                               | High     | S1           |
+| **S4**     | `hazard-report.ai-verify.ts` + `adapters/vision.adapter.ts` + `adapters/ai-vision.adapter.ts`：Cloud Vision 預篩 + Gemini 單圖判斷 + 非同步 status 更新 | High     | S2           |
+| **S5**     | Rate limit（`express-rate-limit` + Redis）+ 同地點重複回報合併                                                                                          | Medium   | S1           |
+| **S6**     | 過期標記定時任務（cron 將到期回報 `status` 設為 `expired`，文件與照片保留）                                                                             | Medium   | S2           |
+| **Future** | 長週期封存／清理：保留期滿後刪 GCS 物件並標記文件（與「過期」解耦）                                                                                     | Low      | S6           |
+| **Future** | 環境感知路徑規劃：將 `verified` 回報餵入路徑評分以動態避開障礙（本期不納入，路徑規劃端另立規格）                                                        | —        | 路徑規劃重構 |
 
 ---
 
@@ -949,11 +963,34 @@ app.use("/api/v1/a11y", createHazardReportRouter());
 // src/modules/hazard-report/hazard-report.router.ts — 逐路由掛 auth（僅 POST / 與 GET /mine）
 export function createHazardReportRouter(): Router {
   const router = Router();
-  router.post("/reports", middleware, uploadPhoto, validateRequest({ body: CreateHazardReportSchema }), createReport);
-  router.get("/reports/mine", middleware, validateRequest({ query: MyReportsQuerySchema }), getMyReports);
-  router.get("/reports", validateRequest({ query: NearbyReportsQuerySchema }), getNearbyReports);
-  router.get("/reports/:id", validateRequest({ params: ReportIdParamSchema }), getReport);
-  router.post("/reports/:id/confirm", validateRequest({ params: ReportIdParamSchema, body: ConfirmSchema }), confirmReport);
+  router.post(
+    "/reports",
+    middleware,
+    uploadPhoto,
+    validateRequest({ body: CreateHazardReportSchema }),
+    createReport,
+  );
+  router.get(
+    "/reports/mine",
+    middleware,
+    validateRequest({ query: MyReportsQuerySchema }),
+    getMyReports,
+  );
+  router.get(
+    "/reports",
+    validateRequest({ query: NearbyReportsQuerySchema }),
+    getNearbyReports,
+  );
+  router.get(
+    "/reports/:id",
+    validateRequest({ params: ReportIdParamSchema }),
+    getReport,
+  );
+  router.post(
+    "/reports/:id/confirm",
+    validateRequest({ params: ReportIdParamSchema, body: ConfirmSchema }),
+    confirmReport,
+  );
   return router;
 }
 ```
@@ -984,24 +1021,24 @@ export function createHazardReportRouter(): Router {
 
 ### 10.1 手動測試案例
 
-| 測試案例 | 輸入條件 | 預期結果 |
-|---------|---------|---------|
-| 未登入提交 | 無 JWT 或 token 無效 | 401/403（auth middleware 攔截） |
-| 正常提交 | 已登入、距離 < 20m、EXIF 時間新鮮、GPS 吻合 | 201 pending，文件建立且帶 reporterId 與 _id |
-| 地理柵欄拒絕 | reporterLocation 距 reportedLocation 25m | 400 GEOFENCE_VIOLATION |
-| EXIF 過舊 | 照片拍攝於 15 分鐘前 | 400 EXIF_TOO_OLD |
-| EXIF GPS 不符 | EXIF GPS 距 reporterLocation 100m | 400 EXIF_GPS_MISMATCH |
-| 無 EXIF 照片 | 截圖或純白圖 | 400 EXIF_TOO_OLD |
-| SafeSearch 擋下 | 上傳不雅／無關圖（通過 EXIF） | 非同步後 verdict: rejected，prefilter.safeSearchBlocked: true |
-| AI skipped 情境 | Gemini API Key 無效 | 201 pending，非同步後 verdict: skipped |
-| 我的回報 | 已登入查 /mine | 200，僅回傳該 reporterId 的回報（含 expired） |
-| 我的回報未登入 | 無 JWT 查 /mine | 401/403（auth middleware 攔截） |
-| 附近查詢 | lat/lng/radius 正常值 | 200，回傳距離排序清單（排除 expired） |
-| 超出範圍查詢 | radius=10000（超過 5000m 上限） | 400 驗證錯誤 |
-| 重複同地點回報 | 50m 內已有相同 hazardType pending 回報 | 200 merged:true，confirmCount+1 |
-| Rate limit | 同 IP 1 分鐘內送 4 次 POST | 第 4 次 429 RATE_LIMITED |
-| 社群確認重複 | 同使用者對同回報 confirm 兩次 | 400 ALREADY_VOTED |
-| 過期標記 | 文件 expiredAt 已過、cron 執行後 | status 變 expired，文件仍存在、可由 /mine 查得 |
+| 測試案例        | 輸入條件                                    | 預期結果                                                      |
+| --------------- | ------------------------------------------- | ------------------------------------------------------------- |
+| 未登入提交      | 無 JWT 或 token 無效                        | 401/403（auth middleware 攔截）                               |
+| 正常提交        | 已登入、距離 < 20m、EXIF 時間新鮮、GPS 吻合 | 201 pending，文件建立且帶 reporterId 與 _id                   |
+| 地理柵欄拒絕    | reporterLocation 距 reportedLocation 25m    | 400 GEOFENCE_VIOLATION                                        |
+| EXIF 過舊       | 照片拍攝於 15 分鐘前                        | 400 EXIF_TOO_OLD                                              |
+| EXIF GPS 不符   | EXIF GPS 距 reporterLocation 100m           | 400 EXIF_GPS_MISMATCH                                         |
+| 無 EXIF 照片    | 截圖或純白圖                                | 400 EXIF_TOO_OLD                                              |
+| SafeSearch 擋下 | 上傳不雅／無關圖（通過 EXIF）               | 非同步後 verdict: rejected，prefilter.safeSearchBlocked: true |
+| AI skipped 情境 | Gemini API Key 無效                         | 201 pending，非同步後 verdict: skipped                        |
+| 我的回報        | 已登入查 /mine                              | 200，僅回傳該 reporterId 的回報（含 expired）                 |
+| 我的回報未登入  | 無 JWT 查 /mine                             | 401/403（auth middleware 攔截）                               |
+| 附近查詢        | lat/lng/radius 正常值                       | 200，回傳距離排序清單（排除 expired）                         |
+| 超出範圍查詢    | radius=10000（超過 5000m 上限）             | 400 驗證錯誤                                                  |
+| 重複同地點回報  | 50m 內已有相同 hazardType pending 回報      | 200 merged:true，confirmCount+1                               |
+| Rate limit      | 同 IP 1 分鐘內送 4 次 POST                  | 第 4 次 429 RATE_LIMITED                                      |
+| 社群確認重複    | 同使用者對同回報 confirm 兩次               | 400 ALREADY_VOTED                                             |
+| 過期標記        | 文件 expiredAt 已過、cron 執行後            | status 變 expired，文件仍存在、可由 /mine 查得                |
 
 ### 10.2 驗證重點
 
@@ -1017,14 +1054,14 @@ export function createHazardReportRouter(): Router {
 
 ## 11. 新增環境變數
 
-| 變數 | 用途 | 必要性 | 預設值 |
-|------|------|--------|--------|
-| `GCS_BUCKET_NAME` | GCS bucket 名稱，照片儲存目標 | **必要** | — |
-| `GCS_KEY_FILE` | GCS Service Account JSON 金鑰路徑（或使用 Workload Identity） | **必要**（GCS 認證） | — |
-| `HAZARD_REPORT_MAX_DISTANCE_M` | 地理柵欄最大允許距離（公尺） | 選配 | `20` |
-| `HAZARD_PHOTO_MAX_SIZE_MB` | 照片檔案大小上限（MB） | 選配 | `10` |
-| `USE_HAZARD_AI_VERIFY` | `false` 時跳過整個 AI 辨識（兩階段皆略過，省 API 費用 / 開發環境） | 選配 | `true` |
-| `USE_VISION_PREFILTER` | `false` 時跳過 Cloud Vision 預篩，直接進 Gemini | 選配 | `true` |
+| 變數                           | 用途                                                               | 必要性               | 預設值 |
+| ------------------------------ | ------------------------------------------------------------------ | -------------------- | ------ |
+| `GCS_BUCKET_NAME`              | GCS bucket 名稱，照片儲存目標                                      | **必要**             | —      |
+| `GCS_KEY_FILE`                 | GCS Service Account JSON 金鑰路徑（或使用 Workload Identity）      | **必要**（GCS 認證） | —      |
+| `HAZARD_REPORT_MAX_DISTANCE_M` | 地理柵欄最大允許距離（公尺）                                       | 選配                 | `20`   |
+| `HAZARD_PHOTO_MAX_SIZE_MB`     | 照片檔案大小上限（MB）                                             | 選配                 | `10`   |
+| `USE_HAZARD_AI_VERIFY`         | `false` 時跳過整個 AI 辨識（兩階段皆略過，省 API 費用 / 開發環境） | 選配                 | `true` |
+| `USE_VISION_PREFILTER`         | `false` 時跳過 Cloud Vision 預篩，直接進 Gemini                    | 選配                 | `true` |
 
 > `GEMINI_API_KEY` / `GEMINI_API_URL` / `GEMINI_MODEL` 已存在於現有環境，無需重複新增。Cloud Vision 沿用 `GCS_KEY_FILE`（同一 GCP 專案的 service account）認證，需在 GCP 啟用 Cloud Vision API。`GOOGLE_MAPS_API_KEY` 本系統已不再需要（移除街景後）。
 
@@ -1032,14 +1069,14 @@ export function createHazardReportRouter(): Router {
 
 ## 12. 新增 npm 依賴
 
-| 套件 | 用途 | 版本建議 |
-|------|------|---------|
-| `@google-cloud/storage` | GCS Bucket 操作（上傳、刪除、取得 URL） | `^7.x` |
-| `@google-cloud/vision` | Cloud Vision 影像預篩（物件偵測、SafeSearch） | `^4.x` |
-| `exifr` | EXIF 解析（時間戳、GPS），支援 JPEG/HEIC | `^7.x` |
-| `multer` | multipart/form-data 照片解析 | `^1.x` |
-| `express-rate-limit` | IP-based rate limiting | `^7.x` |
-| `rate-limit-redis` | express-rate-limit 的 Redis store（與現有 ioredis 整合） | `^4.x` |
+| 套件                    | 用途                                                     | 版本建議 |
+| ----------------------- | -------------------------------------------------------- | -------- |
+| `@google-cloud/storage` | GCS Bucket 操作（上傳、刪除、取得 URL）                  | `^7.x`   |
+| `@google-cloud/vision`  | Cloud Vision 影像預篩（物件偵測、SafeSearch）            | `^4.x`   |
+| `exifr`                 | EXIF 解析（時間戳、GPS），支援 JPEG/HEIC                 | `^7.x`   |
+| `multer`                | multipart/form-data 照片解析                             | `^1.x`   |
+| `express-rate-limit`    | IP-based rate limiting                                   | `^7.x`   |
+| `rate-limit-redis`      | express-rate-limit 的 Redis store（與現有 ioredis 整合） | `^4.x`   |
 
 > ⚠️ `multer` 與 `@types/multer` 請同步安裝。`exifr` 為 ESM-first 套件，TypeScript 設定需確認 `moduleResolution: "bundler"` 或以動態 import 引入。
 
@@ -1049,36 +1086,36 @@ export function createHazardReportRouter(): Router {
 
 ### 13.1 前端負責
 
-| 職責 | 說明 |
-|------|------|
-| 登入把關 | 回報與「我的回報」前確認使用者已登入並附上 JWT；未登入引導登入（後端仍會以 401 把關） |
-| 即時相機啟動 | 強制開啟裝置相機 API，**禁止從相簿選取**，由前端 UI 層面限制 |
-| GPS 擷取 | 以 Geolocation API 取得使用者當前座標，傳入 `reporterLat/Lng` |
-| 回報表單 UI | 選擇 hazardType、輸入 description、拍照並預覽 |
-| 地圖疊加顯示 | 呼叫 `GET /reports` 取得附近回報，於地圖 render 標記 |
-| 狀態輪詢 | 回報提交後，視需求輪詢 `GET /reports/:id` 以顯示 AI 驗證結果 |
-| 確認 / 否認互動 | 呼叫 `POST /reports/:id/confirm` |
+| 職責            | 說明                                                                                  |
+| --------------- | ------------------------------------------------------------------------------------- |
+| 登入把關        | 回報與「我的回報」前確認使用者已登入並附上 JWT；未登入引導登入（後端仍會以 401 把關） |
+| 即時相機啟動    | 強制開啟裝置相機 API，**禁止從相簿選取**，由前端 UI 層面限制                          |
+| GPS 擷取        | 以 Geolocation API 取得使用者當前座標，傳入 `reporterLat/Lng`                         |
+| 回報表單 UI     | 選擇 hazardType、輸入 description、拍照並預覽                                         |
+| 地圖疊加顯示    | 呼叫 `GET /reports` 取得附近回報，於地圖 render 標記                                  |
+| 狀態輪詢        | 回報提交後，視需求輪詢 `GET /reports/:id` 以顯示 AI 驗證結果                          |
+| 確認 / 否認互動 | 呼叫 `POST /reports/:id/confirm`                                                      |
 
 ### 13.2 前端不負責（後端職責）
 
-| 禁止事項 | 原因 |
-|---------|------|
-| 地理柵欄計算 | 後端以 Haversine 重新計算，前端傳入座標僅作顯示用 |
-| EXIF 驗證 | 後端解析 EXIF，前端無法可靠讀取所有 MIME 類型的 EXIF |
-| AI 影像辨識 | Cloud Vision 預篩與 Gemini 判斷皆在後端執行，金鑰不外露 |
+| 禁止事項         | 原因                                                                                                       |
+| ---------------- | ---------------------------------------------------------------------------------------------------------- |
+| 地理柵欄計算     | 後端以 Haversine 重新計算，前端傳入座標僅作顯示用                                                          |
+| EXIF 驗證        | 後端解析 EXIF，前端無法可靠讀取所有 MIME 類型的 EXIF                                                       |
+| AI 影像辨識      | Cloud Vision 預篩與 Gemini 判斷皆在後端執行，金鑰不外露                                                    |
 | 相簿選取限制邏輯 | **後端補強**：EXIF 時間戳與 GPS 驗證是防相簿選取的後端把關機制；前端相機限制屬 UX 層，後端驗證才是實質關卡 |
-| 照片上傳至 GCS | adapters/gcs.adapter.ts 在後端處理，GCS 憑證不外露 |
+| 照片上傳至 GCS   | adapters/gcs.adapter.ts 在後端處理，GCS 憑證不外露                                                         |
 
 ---
 
 ## 14. 風險與緩解
 
-| 風險 | 影響 | 緩解策略 |
-|------|------|---------|
-| **EXIF 剝除**：部分裝置或社群媒體 App 自動剝除 EXIF | EXIF 驗證失效，回報被擋 | 無 EXIF GPS 時允許僅以時間戳驗證（降級允許），但記錄 `gpsPresent: false` 作為信心度參考 |
-| **EXIF 偽造**：進階使用者手動修改 EXIF 後再拍照 | 繞過時間戳與 GPS 驗證 | AI 辨識（Cloud Vision + Gemini）為獨立第二道過濾；可評估加入 perceptual hash 比對（未來選項） |
-| **AI 誤判**：照片語意判斷錯誤、或非戶外場景被誤放行 | `suspicious/rejected` 誤殺真實回報，或濫用圖漏接 | AI verdict 不直接刪除回報，`rejected` 需社群否認達門檻或人工複核才真正排除；SafeSearch 硬擋僅限明確不雅／暴力 |
-| **GCS 費用 / 儲存累積**：保留歷史使照片不隨過期刪除 | 長期儲存成本上升 | Multer 檔案大小 10MB 上限 + rate limit 3 次/10 分鐘；長週期封存／清理列入 Roadmap Future（§9）與「過期」解耦 |
-| **Cloud Vision 費用**：每則回報觸發一次預篩 | Vision API 費用 | 費用低於 LLM；可由 `USE_VISION_PREFILTER=false` 或 `USE_HAZARD_AI_VERIFY=false` 關閉 |
-| **環境感知路徑規劃整合**：本期回報未餵入路徑評分，使用者期待路線自動避障 | 功能落差 | Roadmap Future 列入；本期文件及前端應明確說明「回報供顯示，路線規劃不受影響」 |
-| **TDX 額度**：Hazard Report 系統本身不呼叫 TDX，但若未來整合路徑規劃，附近回報查詢可能觸發更多 TDX 路線查詢 | 429 rate limit | 整合時參照 [[tdx-quota-and-data-drift]] 的緩解策略 |
+| 風險                                                                                                        | 影響                                             | 緩解策略                                                                                                      |
+| ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| **EXIF 剝除**：部分裝置或社群媒體 App 自動剝除 EXIF                                                         | EXIF 驗證失效，回報被擋                          | 無 EXIF GPS 時允許僅以時間戳驗證（降級允許），但記錄 `gpsPresent: false` 作為信心度參考                       |
+| **EXIF 偽造**：進階使用者手動修改 EXIF 後再拍照                                                             | 繞過時間戳與 GPS 驗證                            | AI 辨識（Cloud Vision + Gemini）為獨立第二道過濾；可評估加入 perceptual hash 比對（未來選項）                 |
+| **AI 誤判**：照片語意判斷錯誤、或非戶外場景被誤放行                                                         | `suspicious/rejected` 誤殺真實回報，或濫用圖漏接 | AI verdict 不直接刪除回報，`rejected` 需社群否認達門檻或人工複核才真正排除；SafeSearch 硬擋僅限明確不雅／暴力 |
+| **GCS 費用 / 儲存累積**：保留歷史使照片不隨過期刪除                                                         | 長期儲存成本上升                                 | Multer 檔案大小 10MB 上限 + rate limit 3 次/10 分鐘；長週期封存／清理列入 Roadmap Future（§9）與「過期」解耦  |
+| **Cloud Vision 費用**：每則回報觸發一次預篩                                                                 | Vision API 費用                                  | 費用低於 LLM；可由 `USE_VISION_PREFILTER=false` 或 `USE_HAZARD_AI_VERIFY=false` 關閉                          |
+| **環境感知路徑規劃整合**：本期回報未餵入路徑評分，使用者期待路線自動避障                                    | 功能落差                                         | Roadmap Future 列入；本期文件及前端應明確說明「回報供顯示，路線規劃不受影響」                                 |
+| **TDX 額度**：Hazard Report 系統本身不呼叫 TDX，但若未來整合路徑規劃，附近回報查詢可能觸發更多 TDX 路線查詢 | 429 rate limit                                   | 整合時參照 [[tdx-quota-and-data-drift]] 的緩解策略                                                            |
