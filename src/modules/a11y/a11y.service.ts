@@ -7,12 +7,14 @@ import A11y from "../../model/a11y.model";
 import BathroomModel from "../../model/bathroom.model";
 import OsmA11y from "../../model/osm-a11y.model";
 import DisabledParkingModel from "../../model/disabled-parking.model";
+import ParkingLotModel from "../../model/parking-lot.model";
 import ParkingSpaceModel from "../../model/parking-space.model";
 import type {
 	IA11y,
 	IOsmA11y,
 	IBathroom,
 	IDisabledParking,
+	IParkingLot,
 	IParkingSpace,
 	OsmWheelchairValue,
 } from "../../types";
@@ -299,14 +301,14 @@ export async function findAllFacilities(
 		!want || want.has("elevator") || want.has("ramp") || want.has("other")
 			? A11y.find().sort({ _id: 1 }).limit(A11Y_MAX_RESULTS).lean()
 			: [],
-		!osmCategories
-			? OsmA11y.find().sort({ _id: 1 }).limit(A11Y_MAX_RESULTS).lean()
-			: osmCategories.length > 0
+		osmCategories
+			? osmCategories.length > 0
 				? OsmA11y.find({ category: { $in: osmCategories } })
 						.sort({ _id: 1 })
 						.limit(A11Y_MAX_RESULTS)
 						.lean()
-				: [],
+				: []
+			: OsmA11y.find().sort({ _id: 1 }).limit(A11Y_MAX_RESULTS).lean(),
 		campusService.findAllFacilities(),
 		!want || want.has("toilet")
 			? BathroomModel.find({ type: "無障礙廁所" })
@@ -315,10 +317,7 @@ export async function findAllFacilities(
 					.lean()
 			: [],
 		!want || want.has("parking")
-			? DisabledParkingModel.find()
-					.sort({ _id: 1 })
-					.limit(A11Y_MAX_RESULTS)
-					.lean()
+			? DisabledParkingModel.find().sort({ _id: 1 }).limit(A11Y_MAX_RESULTS).lean()
 			: [],
 	]);
 	const facilities = [
@@ -429,11 +428,31 @@ export type ParkingKind = "disabled" | "standard";
  * the same shape so one response array can carry both collections.
  */
 export type ParkingNearbyItem = IDisabledParking & {
-	type: ParkingKind;
+	type: "disabled" | "standard";
 	segmentId?: string;
 	spaceType?: number;
 	hasChargingPoint?: boolean;
 };
+
+/** Off-street car park (路外停車場) payload, discriminated by `type: "lot"`. */
+export type ParkingLotNearbyItem = {
+	type: "lot";
+	_id: string;
+	carParkId: string;
+	name: string;
+	address?: string;
+	city: string;
+	district?: string;
+	carParkType?: number;
+	chargeTypes?: number[];
+	wheelchairAccessible?: boolean;
+	disabledSpaces?: number;
+	totalCarSpaces?: number;
+	position: { type: "Point"; coordinates: [number, number] };
+	importedAt: Date;
+};
+
+export type ParkingNearbyResult = ParkingNearbyItem | ParkingLotNearbyItem;
 
 function disabledParkingToItem(doc: IDisabledParking): ParkingNearbyItem {
 	return { ...doc, type: "disabled" };
@@ -461,36 +480,78 @@ function parkingSpaceToItem(doc: IParkingSpace): ParkingNearbyItem {
 	};
 }
 
+function parkingLotToItem(doc: IParkingLot): ParkingLotNearbyItem {
+	return { ...doc, type: "lot" };
+}
+
+/**
+ * Lots whose disabled capacity can be confirmed from the parsed fields
+ * (`disabledSpaces > 0` or explicit `wheelchairAccessible` flag) — used to keep
+ * `type=disabled` results accessibility-true instead of dumping every car park.
+ */
+const DISABLED_CAPACITY_FILTER = {
+	$or: [{ disabledSpaces: { $gt: 0 } }, { wheelchairAccessible: true }],
+};
+
 /**
  * @param type which collection(s) to search; defaults to `all`, which queries
- * both and fills the result set with standard bays only after every disabled
- * bay is included, so disabled bays are never crowded out by the shared cap
+ * disabled bays, off-street car parks (lots) and standard bays together and
+ * fills the shared cap in that priority order. `disabled` also includes lots
+ * whose disabled capacity is confirmed; `standard` includes every lot.
  */
 export async function findNearbyParking(
 	lat: number,
 	lng: number,
-	radiusM = 300,
+	radiusM = 1000,
 	type: ParkingKind | "all" = "all",
-): Promise<ParkingNearbyItem[]> {
+): Promise<ParkingNearbyResult[]> {
 	const cappedRadius = Math.min(radiusM, PARKING_MAX_RADIUS_M);
 	const geoQuery = makeGeoQuery(lng, lat, cappedRadius);
 
 	if (type === "disabled") {
-		const disabled = await DisabledParkingModel.find({ location: geoQuery })
-			.limit(PARKING_MAX_RESULTS)
-			.lean();
-		return (disabled as IDisabledParking[]).map(disabledParkingToItem);
+		const [disabled, lots] = await Promise.all([
+			DisabledParkingModel.find({ location: geoQuery })
+				.limit(PARKING_MAX_RESULTS)
+				.lean(),
+			ParkingLotModel.find({
+				position: geoQuery,
+				...DISABLED_CAPACITY_FILTER,
+			})
+				.limit(PARKING_MAX_RESULTS)
+				.lean(),
+		]);
+		const items = (disabled as IDisabledParking[]).map(disabledParkingToItem);
+		const remaining = PARKING_MAX_RESULTS - items.length;
+		if (remaining <= 0) return items;
+		return [
+			...items,
+			...(lots as IParkingLot[]).slice(0, remaining).map(parkingLotToItem),
+		];
 	}
 
 	if (type === "standard") {
-		const standard = await ParkingSpaceModel.find({ location: geoQuery })
-			.limit(PARKING_MAX_RESULTS)
-			.lean();
-		return (standard as IParkingSpace[]).map(parkingSpaceToItem);
+		const [standard, lots] = await Promise.all([
+			ParkingSpaceModel.find({ location: geoQuery })
+				.limit(PARKING_MAX_RESULTS)
+				.lean(),
+			ParkingLotModel.find({ position: geoQuery })
+				.limit(PARKING_MAX_RESULTS)
+				.lean(),
+		]);
+		const items = (standard as IParkingSpace[]).map(parkingSpaceToItem);
+		const remaining = PARKING_MAX_RESULTS - items.length;
+		if (remaining <= 0) return items;
+		return [
+			...items,
+			...(lots as IParkingLot[]).slice(0, remaining).map(parkingLotToItem),
+		];
 	}
 
-	const [disabled, standard] = await Promise.all([
+	const [disabled, lots, standard] = await Promise.all([
 		DisabledParkingModel.find({ location: geoQuery })
+			.limit(PARKING_MAX_RESULTS)
+			.lean(),
+		ParkingLotModel.find({ position: geoQuery })
 			.limit(PARKING_MAX_RESULTS)
 			.lean(),
 		ParkingSpaceModel.find({ location: geoQuery })
@@ -498,13 +559,17 @@ export async function findNearbyParking(
 			.lean(),
 	]);
 	const items = (disabled as IDisabledParking[]).map(disabledParkingToItem);
-	const remaining = PARKING_MAX_RESULTS - items.length;
+	let remaining = PARKING_MAX_RESULTS - items.length;
 	if (remaining <= 0) return items;
-	return [
+	const withLots = [
 		...items,
-		...(standard as IParkingSpace[])
-			.slice(0, remaining)
-			.map(parkingSpaceToItem),
+		...(lots as IParkingLot[]).slice(0, remaining).map(parkingLotToItem),
+	];
+	remaining = PARKING_MAX_RESULTS - withLots.length;
+	if (remaining <= 0) return withLots;
+	return [
+		...withLots,
+		...(standard as IParkingSpace[]).slice(0, remaining).map(parkingSpaceToItem),
 	];
 }
 

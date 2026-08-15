@@ -76,13 +76,13 @@ export const ParkingNearbyQuerySchema = z
 			}, "半徑需介於 1 到 5000 公尺")
 			.optional()
 			.openapi({
-				example: "300",
-				description: "搜尋半徑（公尺），預設 300，上限 5000（超過回 400）",
+				example: "1000",
+				description: "搜尋半徑（公尺），預設 1000，上限 5000（超過回 400）",
 			}),
 		type: z.enum(["disabled", "standard", "all"]).optional().openapi({
 			example: "all",
 			description:
-				"停車格種類：all 身障格＋一般路邊格（預設，身障格優先）、disabled 僅身障格、standard 僅一般路邊格",
+				"停車格種類：all 身障格＋一般路邊格＋路外停車場（預設，身障格優先）、disabled 僅身障格（含可確認身障容量之路外停車場）、standard 僅一般路邊格＋路外停車場",
 		}),
 	})
 	.strict();
@@ -536,8 +536,47 @@ export const ParkingNearbyItemSchema = DisabledParkingSchema.extend({
 	}),
 }).openapi("ParkingNearbyItem");
 
+export const ParkingLotNearbyItemSchema = z
+	.object({
+		type: z.literal("lot").openapi({ example: "lot" }),
+		_id: z.string().openapi({ example: "66a1f2c3e4b5a6d7c8e9f0c3" }),
+		carParkId: z.string().openapi({ example: "txg-2156" }),
+		name: z.string().openapi({ example: "南屯區-民營-城市車旅-台中豐功站P" }),
+		address: z.string().optional().openapi({
+			example: "台中市南屯區文心南三路732號旁空地",
+		}),
+		city: z.string().openapi({ example: "臺中市" }),
+		district: z.string().optional().openapi({ example: "南屯區" }),
+		carParkType: z.number().optional().openapi({
+			example: 1,
+			description: "停車場類型：1 平面 / 2 立體 / 3 地下 / 4 停車塔 / 5 機械式…",
+		}),
+		chargeTypes: z
+			.array(z.number())
+			.optional()
+			.openapi({
+				example: [1, 2],
+				description: "收費方式：1 計時 / 2 計次 / 3 月租 / 4 免費",
+			}),
+		wheelchairAccessible: z.boolean().optional().openapi({
+			example: true,
+			description: "是否標記輪椅可及",
+		}),
+		disabledSpaces: z.number().optional().openapi({
+			example: 2,
+			description: "身障車位數（自 Description 解析，可能缺）",
+		}),
+		totalCarSpaces: z.number().optional().openapi({
+			example: 36,
+			description: "汽車總車位數（可能缺）",
+		}),
+		position: GeoPointSchema,
+		importedAt: z.string().openapi({ example: "2026-08-14T12:02:20.224Z" }),
+	})
+	.openapi("ParkingLotNearbyItem");
+
 export const ParkingNearbyResponseSchema = ApiResponseSchema(
-	z.array(ParkingNearbyItemSchema),
+	z.array(z.union([ParkingNearbyItemSchema, ParkingLotNearbyItemSchema])),
 	"ParkingNearbyResponse",
 );
 
@@ -547,7 +586,7 @@ registry.registerPath({
 	tags: ["Accessibility"],
 	summary: "鄰近停車格",
 	description:
-		"回傳指定座標附近的停車格（預設半徑 300 公尺，可用 radius 覆寫；預設同時回身障與一般路邊停車格，身障格優先，可用 type 限定只查其中一種）。",
+		"回傳指定座標附近的停車格與路外停車場（預設半徑 1000 公尺，可用 radius 覆寫；預設同時回身障格、一般路邊格與路外停車場，身障格優先，可用 type 限定查詢範圍）。",
 	request: {
 		query: ParkingNearbyQuerySchema,
 	},

@@ -152,6 +152,9 @@ vi.mock("../../model/disabled-parking.model", () => ({
 vi.mock("../../model/parking-space.model", () => ({
 	default: { find: vi.fn() },
 }));
+vi.mock("../../model/parking-lot.model", () => ({
+	default: { find: vi.fn() },
+}));
 vi.mock("../campus/campus.service", () => ({
 	findAllFacilities: vi.fn(),
 	findFacilitiesNearby: vi.fn(),
@@ -161,6 +164,7 @@ import A11y from "../../model/a11y.model";
 import OsmA11y from "../../model/osm-a11y.model";
 import BathroomModel from "../../model/bathroom.model";
 import DisabledParkingModel from "../../model/disabled-parking.model";
+import ParkingLotModel from "../../model/parking-lot.model";
 import ParkingSpaceModel from "../../model/parking-space.model";
 import * as campusService from "../campus/campus.service";
 import {
@@ -214,6 +218,21 @@ function spaceDoc(id: string, overrides: Record<string, unknown> = {}) {
 	};
 }
 
+function lotDoc(id: string, overrides: Record<string, unknown> = {}) {
+	return {
+		_id: id,
+		carParkId: `lot-${id}`,
+		name: `停車場${id}`,
+		city: "臺中市",
+		district: "南屯區",
+		carParkType: 1,
+		chargeTypes: [1],
+		position: GEO,
+		importedAt: SPACE_IMPORTED_AT,
+		...overrides,
+	};
+}
+
 function osmDoc(overrides: Record<string, unknown> = {}) {
 	return {
 		_id: "osm-doc",
@@ -235,18 +254,21 @@ beforeEach(() => {
 	vi.mocked(BathroomModel.find).mockReturnValue(makeChain([]) as never);
 	vi.mocked(DisabledParkingModel.find).mockReturnValue(makeChain([]) as never);
 	vi.mocked(ParkingSpaceModel.find).mockReturnValue(makeChain([]) as never);
+	vi.mocked(ParkingLotModel.find).mockReturnValue(makeChain([]) as never);
 	vi.mocked(campusService.findAllFacilities).mockResolvedValue([]);
 });
 
 describe("findAllFacilities", () => {
 	it("returns items from all five sources with correct source-specific fields", async () => {
-		vi.mocked(A11y.find).mockReturnValue(
-			makeChain([
-				metroDoc("m1", "台北車站 M8 出口電梯"),
-				metroDoc("m2", "市府轉運站電梯"),
-				metroDoc("m3", "xx無障礙坡道"),
-			]) as never,
-		);
+		vi
+			.mocked(A11y.find)
+			.mockReturnValue(
+				makeChain([
+					metroDoc("m1", "台北車站 M8 出口電梯"),
+					metroDoc("m2", "市府轉運站電梯"),
+					metroDoc("m3", "xx無障礙坡道"),
+				]) as never,
+			);
 		vi.mocked(OsmA11y.find).mockReturnValue(
 			makeChain([
 				osmDoc({ _id: "od1", osmId: "o1" }),
@@ -270,14 +292,16 @@ describe("findAllFacilities", () => {
 				},
 			]) as never,
 		);
-		vi.mocked(DisabledParkingModel.find).mockReturnValue(
-			makeChain([
-				{ _id: "p1", placeName: "商港八路身障停車格", location: GEO },
-			]) as never,
-		);
-		vi.mocked(campusService.findAllFacilities).mockResolvedValue([
-			makeCampusFacility({ facUid: "c1", type: "elevator" }),
-		]);
+		vi
+			.mocked(DisabledParkingModel.find)
+			.mockReturnValue(
+				makeChain([
+					{ _id: "p1", placeName: "商港八路身障停車格", location: GEO },
+				]) as never,
+			);
+		vi
+			.mocked(campusService.findAllFacilities)
+			.mockResolvedValue([makeCampusFacility({ facUid: "c1", type: "elevator" })]);
 
 		const result = await findAllFacilities();
 
@@ -310,13 +334,15 @@ describe("findAllFacilities", () => {
 	});
 
 	it("classifies metro facilities and extracts exit names", async () => {
-		vi.mocked(A11y.find).mockReturnValue(
-			makeChain([
-				metroDoc("m1", "台北車站 M8 出口電梯"),
-				metroDoc("m2", "市府轉運站電梯"),
-				metroDoc("m3", "xx無障礙坡道"),
-			]) as never,
-		);
+		vi
+			.mocked(A11y.find)
+			.mockReturnValue(
+				makeChain([
+					metroDoc("m1", "台北車站 M8 出口電梯"),
+					metroDoc("m2", "市府轉運站電梯"),
+					metroDoc("m3", "xx無障礙坡道"),
+				]) as never,
+			);
 
 		const result = await findAllFacilities();
 		const [m1, m2, m3] = result;
@@ -370,14 +396,16 @@ describe("findAllFacilities", () => {
 
 describe("findAllFacilities with a category whitelist", () => {
 	it("queries only parking-capable sources for ['parking']", async () => {
-		vi.mocked(DisabledParkingModel.find).mockReturnValue(
-			makeChain([
-				{ _id: "p1", placeName: "商港八路身障停車格", location: GEO },
-			]) as never,
-		);
-		vi.mocked(campusService.findAllFacilities).mockResolvedValue([
-			makeCampusFacility({ facUid: "c1", type: "elevator" }),
-		]);
+		vi
+			.mocked(DisabledParkingModel.find)
+			.mockReturnValue(
+				makeChain([
+					{ _id: "p1", placeName: "商港八路身障停車格", location: GEO },
+				]) as never,
+			);
+		vi
+			.mocked(campusService.findAllFacilities)
+			.mockResolvedValue([makeCampusFacility({ facUid: "c1", type: "elevator" })]);
 
 		const result = await findAllFacilities(["parking"]);
 
@@ -389,17 +417,21 @@ describe("findAllFacilities with a category whitelist", () => {
 	});
 
 	it("narrows the OSM query and skips bathroom/parking for ['elevator']", async () => {
-		vi.mocked(A11y.find).mockReturnValue(
-			makeChain([
-				metroDoc("m1", "台北車站 M8 出口電梯"),
-				metroDoc("m2", "xx無障礙坡道"),
-			]) as never,
-		);
-		vi.mocked(OsmA11y.find).mockReturnValue(
-			makeChain([
-				osmDoc({ _id: "od1", osmId: "o1", category: "elevator" }),
-			]) as never,
-		);
+		vi
+			.mocked(A11y.find)
+			.mockReturnValue(
+				makeChain([
+					metroDoc("m1", "台北車站 M8 出口電梯"),
+					metroDoc("m2", "xx無障礙坡道"),
+				]) as never,
+			);
+		vi
+			.mocked(OsmA11y.find)
+			.mockReturnValue(
+				makeChain([
+					osmDoc({ _id: "od1", osmId: "o1", category: "elevator" }),
+				]) as never,
+			);
 
 		const result = await findAllFacilities(["elevator"]);
 
@@ -423,15 +455,19 @@ describe("findAllFacilities with a category whitelist", () => {
 				},
 			]) as never,
 		);
-		vi.mocked(OsmA11y.find).mockReturnValue(
-			makeChain([
-				osmDoc({ _id: "od2", osmId: "o2", category: "toilet" }),
-			]) as never,
-		);
-		vi.mocked(campusService.findAllFacilities).mockResolvedValue([
-			makeCampusFacility({ facUid: "c1", type: "accessible_toilet" }),
-			makeCampusFacility({ facUid: "c2", type: "ramp" }),
-		]);
+		vi
+			.mocked(OsmA11y.find)
+			.mockReturnValue(
+				makeChain([
+					osmDoc({ _id: "od2", osmId: "o2", category: "toilet" }),
+				]) as never,
+			);
+		vi
+			.mocked(campusService.findAllFacilities)
+			.mockResolvedValue([
+				makeCampusFacility({ facUid: "c1", type: "accessible_toilet" }),
+				makeCampusFacility({ facUid: "c2", type: "ramp" }),
+			]);
 
 		const result = await findAllFacilities(["toilet"]);
 
@@ -446,20 +482,26 @@ describe("findAllFacilities with a category whitelist", () => {
 	});
 
 	it("maps ['other'] to the OSM kerb_cut/wheelchair_accessible categories and keeps unclassified metro/campus items", async () => {
-		vi.mocked(A11y.find).mockReturnValue(
-			makeChain([
-				metroDoc("m1", "台北車站 M8 出口電梯"),
-				metroDoc("m2", "無障礙通道"),
-			]) as never,
-		);
-		vi.mocked(OsmA11y.find).mockReturnValue(
-			makeChain([
-				osmDoc({ _id: "od3", osmId: "o3", category: "kerb_cut" }),
-			]) as never,
-		);
-		vi.mocked(campusService.findAllFacilities).mockResolvedValue([
-			makeCampusFacility({ facUid: "c1", type: "accessible_stairs" }),
-		]);
+		vi
+			.mocked(A11y.find)
+			.mockReturnValue(
+				makeChain([
+					metroDoc("m1", "台北車站 M8 出口電梯"),
+					metroDoc("m2", "無障礙通道"),
+				]) as never,
+			);
+		vi
+			.mocked(OsmA11y.find)
+			.mockReturnValue(
+				makeChain([
+					osmDoc({ _id: "od3", osmId: "o3", category: "kerb_cut" }),
+				]) as never,
+			);
+		vi
+			.mocked(campusService.findAllFacilities)
+			.mockResolvedValue([
+				makeCampusFacility({ facUid: "c1", type: "accessible_stairs" }),
+			]);
 
 		const result = await findAllFacilities(["other"]);
 
@@ -475,12 +517,14 @@ describe("findAllFacilities with a category whitelist", () => {
 	});
 
 	it("unions the OSM $in condition and only returns the selected categories for ['elevator','toilet']", async () => {
-		vi.mocked(OsmA11y.find).mockReturnValue(
-			makeChain([
-				osmDoc({ _id: "od1", osmId: "o1", category: "elevator" }),
-				osmDoc({ _id: "od2", osmId: "o2", category: "toilet" }),
-			]) as never,
-		);
+		vi
+			.mocked(OsmA11y.find)
+			.mockReturnValue(
+				makeChain([
+					osmDoc({ _id: "od1", osmId: "o1", category: "elevator" }),
+					osmDoc({ _id: "od2", osmId: "o2", category: "toilet" }),
+				]) as never,
+			);
 		vi.mocked(BathroomModel.find).mockReturnValue(
 			makeChain([
 				{
@@ -491,10 +535,12 @@ describe("findAllFacilities with a category whitelist", () => {
 				},
 			]) as never,
 		);
-		vi.mocked(campusService.findAllFacilities).mockResolvedValue([
-			makeCampusFacility({ facUid: "c1", type: "elevator" }),
-			makeCampusFacility({ facUid: "c2", type: "accessible_parking" }),
-		]);
+		vi
+			.mocked(campusService.findAllFacilities)
+			.mockResolvedValue([
+				makeCampusFacility({ facUid: "c1", type: "elevator" }),
+				makeCampusFacility({ facUid: "c2", type: "accessible_parking" }),
+			]);
 
 		const result = await findAllFacilities(["elevator", "toilet"]);
 
@@ -514,13 +560,7 @@ describe("findAllFacilities with a category whitelist", () => {
 		expect(vi.mocked(A11y.find)).toHaveBeenCalled();
 		expect(vi.mocked(OsmA11y.find)).toHaveBeenCalledWith({
 			category: {
-				$in: [
-					"elevator",
-					"ramp",
-					"toilet",
-					"kerb_cut",
-					"wheelchair_accessible",
-				],
+				$in: ["elevator", "ramp", "toilet", "kerb_cut", "wheelchair_accessible"],
 			},
 		});
 		expect(vi.mocked(BathroomModel.find)).toHaveBeenCalled();
@@ -542,19 +582,25 @@ describe("findAllFacilities with a category whitelist", () => {
 
 describe("findElevatorFacilities", () => {
 	it("returns only elevator-category items and campus facilities of type elevator", async () => {
-		vi.mocked(A11y.find).mockReturnValue(
-			makeChain([metroDoc("m1", "台北車站 M8 出口電梯")]) as never,
-		);
-		vi.mocked(OsmA11y.find).mockReturnValue(
-			makeChain([
-				osmDoc({ _id: "od1", osmId: "o1", category: "elevator" }),
-			]) as never,
-		);
-		vi.mocked(campusService.findAllFacilities).mockResolvedValue([
-			makeCampusFacility({ facUid: "c1", type: "elevator" }),
-			makeCampusFacility({ facUid: "c2", type: "ramp" }),
-			makeCampusFacility({ facUid: "c3", type: "accessible_toilet" }),
-		]);
+		vi
+			.mocked(A11y.find)
+			.mockReturnValue(
+				makeChain([metroDoc("m1", "台北車站 M8 出口電梯")]) as never,
+			);
+		vi
+			.mocked(OsmA11y.find)
+			.mockReturnValue(
+				makeChain([
+					osmDoc({ _id: "od1", osmId: "o1", category: "elevator" }),
+				]) as never,
+			);
+		vi
+			.mocked(campusService.findAllFacilities)
+			.mockResolvedValue([
+				makeCampusFacility({ facUid: "c1", type: "elevator" }),
+				makeCampusFacility({ facUid: "c2", type: "ramp" }),
+				makeCampusFacility({ facUid: "c3", type: "accessible_toilet" }),
+			]);
 
 		const result = await findElevatorFacilities();
 		expect(result.every((f) => f.category === "elevator")).toBe(true);
@@ -566,9 +612,9 @@ describe("findElevatorFacilities", () => {
 
 describe("findRampFacilities", () => {
 	it("returns campus ramps and OSM ramps only", async () => {
-		vi.mocked(A11y.find).mockReturnValue(
-			makeChain([metroDoc("m3", "xx無障礙坡道")]) as never,
-		);
+		vi
+			.mocked(A11y.find)
+			.mockReturnValue(makeChain([metroDoc("m3", "xx無障礙坡道")]) as never);
 		vi.mocked(OsmA11y.find).mockReturnValue(
 			makeChain([
 				osmDoc({
@@ -579,10 +625,12 @@ describe("findRampFacilities", () => {
 				}),
 			]) as never,
 		);
-		vi.mocked(campusService.findAllFacilities).mockResolvedValue([
-			makeCampusFacility({ facUid: "c1", type: "elevator" }),
-			makeCampusFacility({ facUid: "c2", type: "ramp" }),
-		]);
+		vi
+			.mocked(campusService.findAllFacilities)
+			.mockResolvedValue([
+				makeCampusFacility({ facUid: "c1", type: "elevator" }),
+				makeCampusFacility({ facUid: "c2", type: "ramp" }),
+			]);
 
 		const result = await findRampFacilities();
 		const campusItems = result.filter((f) => f.source === "campus");
@@ -616,10 +664,12 @@ describe("findBathroomFacilities", () => {
 				}),
 			]) as never,
 		);
-		vi.mocked(campusService.findAllFacilities).mockResolvedValue([
-			makeCampusFacility({ facUid: "c1", type: "accessible_toilet" }),
-			makeCampusFacility({ facUid: "c2", type: "elevator" }),
-		]);
+		vi
+			.mocked(campusService.findAllFacilities)
+			.mockResolvedValue([
+				makeCampusFacility({ facUid: "c1", type: "accessible_toilet" }),
+				makeCampusFacility({ facUid: "c2", type: "elevator" }),
+			]);
 
 		const result = await findBathroomFacilities();
 		expect(result.length).toBeGreaterThan(0);
@@ -854,13 +904,27 @@ describe("findNearbyParking", () => {
 		expect(arg.location.$near.$maxDistance).toBe(300);
 	});
 
+	it("defaults the radius to 1000m when omitted", async () => {
+		const chain = makeChain([]);
+		vi.mocked(DisabledParkingModel.find).mockReturnValue(chain as never);
+
+		await findNearbyParking(25.03, 121.56);
+
+		const arg = vi.mocked(DisabledParkingModel.find).mock.calls[0][0] as {
+			location: { $near: { $maxDistance: number } };
+		};
+		expect(arg.location.$near.$maxDistance).toBe(1000);
+	});
+
 	it("defaults to type=all and queries both collections when type is omitted", async () => {
-		vi.mocked(DisabledParkingModel.find).mockReturnValue(
-			makeChain([{ _id: "p1", placeName: "x", location: GEO }]) as never,
-		);
-		vi.mocked(ParkingSpaceModel.find).mockReturnValue(
-			makeChain([spaceDoc("s1")]) as never,
-		);
+		vi
+			.mocked(DisabledParkingModel.find)
+			.mockReturnValue(
+				makeChain([{ _id: "p1", placeName: "x", location: GEO }]) as never,
+			);
+		vi
+			.mocked(ParkingSpaceModel.find)
+			.mockReturnValue(makeChain([spaceDoc("s1")]) as never);
 
 		const result = await findNearbyParking(25.03, 121.56, 300);
 
@@ -912,19 +976,25 @@ describe("findNearbyParking", () => {
 	});
 
 	it("queries both collections for type=all and puts disabled bays first", async () => {
-		vi.mocked(DisabledParkingModel.find).mockReturnValue(
-			makeChain([{ _id: "p1", placeName: "x", location: GEO }]) as never,
-		);
-		vi.mocked(ParkingSpaceModel.find).mockReturnValue(
-			makeChain([spaceDoc("s1")]) as never,
-		);
+		vi
+			.mocked(DisabledParkingModel.find)
+			.mockReturnValue(
+				makeChain([{ _id: "p1", placeName: "x", location: GEO }]) as never,
+			);
+		vi
+			.mocked(ParkingSpaceModel.find)
+			.mockReturnValue(makeChain([spaceDoc("s1")]) as never);
 
 		const result = await findNearbyParking(25.03, 121.56, 300, "all");
 
 		expect(vi.mocked(DisabledParkingModel.find)).toHaveBeenCalledTimes(1);
 		expect(vi.mocked(ParkingSpaceModel.find)).toHaveBeenCalledTimes(1);
 		expect(result.map((p) => p.type)).toEqual(["disabled", "standard"]);
-		expect(result[1].placeName).toBe("一般停車格（ext-s1）");
+		const second = result[1];
+		expect(second.type).toBe("standard");
+		if (second.type === "standard") {
+			expect(second.placeName).toBe("一般停車格（ext-s1）");
+		}
 	});
 
 	it("fills type=all up to 50 results with standard bays only after every disabled bay", async () => {
@@ -937,11 +1007,11 @@ describe("findNearbyParking", () => {
 				})),
 			) as never,
 		);
-		vi.mocked(ParkingSpaceModel.find).mockReturnValue(
-			makeChain(
-				Array.from({ length: 50 }, (_, i) => spaceDoc(`s${i}`)),
-			) as never,
-		);
+		vi
+			.mocked(ParkingSpaceModel.find)
+			.mockReturnValue(
+				makeChain(Array.from({ length: 50 }, (_, i) => spaceDoc(`s${i}`))) as never,
+			);
 
 		const result = await findNearbyParking(25.03, 121.56, 300, "all");
 
@@ -960,13 +1030,98 @@ describe("findNearbyParking", () => {
 				})),
 			) as never,
 		);
-		vi.mocked(ParkingSpaceModel.find).mockReturnValue(
-			makeChain([spaceDoc("s1")]) as never,
-		);
+		vi
+			.mocked(ParkingSpaceModel.find)
+			.mockReturnValue(makeChain([spaceDoc("s1")]) as never);
 
 		const result = await findNearbyParking(25.03, 121.56, 300, "all");
 
 		expect(result).toHaveLength(50);
 		expect(result.every((p) => p.type === "disabled")).toBe(true);
+	});
+
+	it("queries ParkingLot for type=all and puts lots after disabled bays, before standard bays", async () => {
+		vi
+			.mocked(DisabledParkingModel.find)
+			.mockReturnValue(
+				makeChain([{ _id: "p1", placeName: "x", location: GEO }]) as never,
+			);
+		vi
+			.mocked(ParkingLotModel.find)
+			.mockReturnValue(makeChain([lotDoc("l1")]) as never);
+		vi
+			.mocked(ParkingSpaceModel.find)
+			.mockReturnValue(makeChain([spaceDoc("s1")]) as never);
+
+		const result = await findNearbyParking(25.03, 121.56, 300, "all");
+
+		expect(vi.mocked(ParkingLotModel.find)).toHaveBeenCalledWith({
+			position: {
+				$near: {
+					$geometry: { type: "Point", coordinates: [121.56, 25.03] },
+					$maxDistance: 300,
+				},
+			},
+		});
+		expect(result.map((p) => p.type)).toEqual(["disabled", "lot", "standard"]);
+		expect(result[1]).toMatchObject({ type: "lot", name: "停車場l1" });
+	});
+
+	it("queries every lot for type=standard and appends them after standard bays", async () => {
+		vi
+			.mocked(ParkingSpaceModel.find)
+			.mockReturnValue(makeChain([spaceDoc("s1")]) as never);
+		vi
+			.mocked(ParkingLotModel.find)
+			.mockReturnValue(makeChain([lotDoc("l1")]) as never);
+
+		const result = await findNearbyParking(25.03, 121.56, 300, "standard");
+
+		expect(vi.mocked(ParkingLotModel.find)).toHaveBeenCalledTimes(1);
+		expect(result.map((p) => p.type)).toEqual(["standard", "lot"]);
+	});
+
+	it("filters lots to confirmed disabled capacity for type=disabled", async () => {
+		vi.mocked(DisabledParkingModel.find).mockReturnValue(makeChain([]) as never);
+		vi
+			.mocked(ParkingLotModel.find)
+			.mockReturnValue(makeChain([lotDoc("l1", { disabledSpaces: 2 })]) as never);
+
+		await findNearbyParking(25.03, 121.56, 300, "disabled");
+
+		expect(vi.mocked(ParkingLotModel.find)).toHaveBeenCalledWith({
+			position: {
+				$near: {
+					$geometry: { type: "Point", coordinates: [121.56, 25.03] },
+					$maxDistance: 300,
+				},
+			},
+			$or: [{ disabledSpaces: { $gt: 0 } }, { wheelchairAccessible: true }],
+		});
+	});
+
+	it("includes eligible lots in type=disabled results after disabled bays", async () => {
+		vi
+			.mocked(DisabledParkingModel.find)
+			.mockReturnValue(
+				makeChain([{ _id: "p1", placeName: "x", location: GEO }]) as never,
+			);
+		vi
+			.mocked(ParkingLotModel.find)
+			.mockReturnValue(
+				makeChain([
+					lotDoc("l1", { wheelchairAccessible: true, disabledSpaces: 4 }),
+				]) as never,
+			);
+
+		const result = await findNearbyParking(25.03, 121.56, 300, "disabled");
+
+		expect(result.map((p) => p.type)).toEqual(["disabled", "lot"]);
+		expect(result[1]).toMatchObject({
+			type: "lot",
+			carParkId: "lot-l1",
+			wheelchairAccessible: true,
+			disabledSpaces: 4,
+		});
 	});
 });

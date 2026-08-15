@@ -1451,14 +1451,15 @@ export async function planAccessibleRouteFromRequest(
 			);
 			if (parking.length) {
 				const p = parking[0];
+				const isLot = p.type === "lot";
 				const anchor: LatLng = {
-					lat: p.location.coordinates[1],
-					lng: p.location.coordinates[0],
+					lat: isLot ? p.position.coordinates[1] : p.location.coordinates[1],
+					lng: isLot ? p.position.coordinates[0] : p.location.coordinates[0],
 				};
 				routingDest = anchor;
 				finalWalkTarget = dest;
 				arrivalParking = {
-					name: p.placeName,
+					name: isLot ? p.name : p.placeName,
 					distanceM: Math.round(
 						haversineMeters(anchor.lat, anchor.lng, dest.lat, dest.lng),
 					),
