@@ -1,4 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import request from "supertest";
 
 vi.mock("./welfare.service", () => ({
@@ -7,10 +15,13 @@ vi.mock("./welfare.service", () => ({
   findById: vi.fn(),
 }));
 
-import { buildTestApp } from "../../../tests/helpers/test-helpers";
+import {
+  startTestServer,
+  stopTestServer,
+} from "../../../tests/helpers/test-helpers";
 import * as service from "./welfare.service";
 
-const app = buildTestApp();
+let app: Awaited<ReturnType<typeof startTestServer>>;
 const BASE = "/api/v1/a11y/welfare";
 
 const sample = {
@@ -22,6 +33,14 @@ const sample = {
   geocoded: true,
 };
 
+beforeAll(async () => {
+  app = await startTestServer();
+});
+
+afterAll(async () => {
+  await stopTestServer(app);
+});
+
 beforeEach(() => {
   vi.resetAllMocks();
 });
@@ -29,10 +48,16 @@ beforeEach(() => {
 describe("GET /api/v1/a11y/welfare/nearby", () => {
   it("returns 200 + nearby institutions for valid coordinates", async () => {
     vi.mocked(service.findNearby).mockResolvedValue([sample] as any);
-    const res = await request(app).get(`${BASE}/nearby`).query({ lat: 25.05, lng: 121.51 });
+    const res = await request(app)
+      .get(`${BASE}/nearby`)
+      .query({ lat: 25.05, lng: 121.51 });
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(1);
-    expect(vi.mocked(service.findNearby)).toHaveBeenCalledWith(25.05, 121.51, 1000);
+    expect(vi.mocked(service.findNearby)).toHaveBeenCalledWith(
+      25.05,
+      121.51,
+      1000,
+    );
   });
 
   it("returns 400 when lat/lng are missing", async () => {

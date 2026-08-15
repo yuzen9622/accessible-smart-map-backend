@@ -73,7 +73,8 @@ const intentConfig: GenerateContentConfig = {
     properties: {
       from: {
         type: "string",
-        description: "出發地名稱；若用戶說『現在位置/這裡』則填 'current_location'",
+        description:
+          "出發地名稱；若用戶說『現在位置/這裡』則填 'current_location'",
       },
       to: { type: "string", description: "目的地名稱" },
       mode: {
@@ -132,7 +133,12 @@ const explainConfig: GenerateContentConfig = {
       "warnings",
       "alternatives",
     ],
-    required: ["summary", "accessibilityHighlights", "warnings", "alternatives"],
+    required: [
+      "summary",
+      "accessibilityHighlights",
+      "warnings",
+      "alternatives",
+    ],
   },
   temperature: 0.2,
   topP: 0,
@@ -192,4 +198,12 @@ const reviewSummaryConfig: GenerateContentConfig = {
   topK: 1,
 };
 
-export { agentConfig, rankConfig, routeConfig, intentConfig, explainConfig, airConfig, reviewSummaryConfig };
+export {
+  agentConfig,
+  rankConfig,
+  routeConfig,
+  intentConfig,
+  explainConfig,
+  airConfig,
+  reviewSummaryConfig,
+};

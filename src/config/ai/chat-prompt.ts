@@ -5,9 +5,9 @@
  * eval automatically instead of drifting between the two.
  */
 import {
- AGENT_IDENTITY,
- ANSWER_FACT_RULE,
- ANSWER_UNCERTAINTY_RULE,
+  AGENT_IDENTITY,
+  ANSWER_FACT_RULE,
+  ANSWER_UNCERTAINTY_RULE,
 } from "./agent-prompt-shared";
 import { taipeiYmdDash, taipeiWeekday } from "../taipei-time";
 
@@ -69,12 +69,12 @@ export const CHAT_SYSTEM_PROMPT = `${AGENT_IDENTITY}。
  * @returns The prompt with a location block appended when `loc` is present
  */
 export function withUserLocation(
- prompt: string,
- loc?: { latitude: number; longitude: number },
+  prompt: string,
+  loc?: { latitude: number; longitude: number },
 ): string {
- return loc
-  ? `${prompt}\n\n【使用者目前位置】緯度 ${loc.latitude}，經度 ${loc.longitude}`
-  : prompt;
+  return loc
+    ? `${prompt}\n\n【使用者目前位置】緯度 ${loc.latitude}，經度 ${loc.longitude}`
+    : prompt;
 }
 
 const WEEKDAY_ZH = ["日", "一", "二", "三", "四", "五", "六"];
@@ -89,10 +89,10 @@ const WEEKDAY_ZH = ["日", "一", "二", "三", "四", "五", "六"];
  * @returns The prompt with a current-date block appended
  */
 export function withCurrentDate(
- prompt: string,
- now: Date = new Date(),
+  prompt: string,
+  now: Date = new Date(),
 ): string {
- const date = taipeiYmdDash(now);
- const weekday = WEEKDAY_ZH[taipeiWeekday(now)];
- return `${prompt}\n\n【今天日期】${date}（Asia/Taipei，週${weekday}）。相對日期（明天、後天、週五）一律以此換算成 YYYY-MM-DD；「週X」指最近的未來該日，若今天就是週X 則指今天。`;
+  const date = taipeiYmdDash(now);
+  const weekday = WEEKDAY_ZH[taipeiWeekday(now)];
+  return `${prompt}\n\n【今天日期】${date}（Asia/Taipei，週${weekday}）。相對日期（明天、後天、週五）一律以此換算成 YYYY-MM-DD；「週X」指最近的未來該日，若今天就是週X 則指今天。`;
 }

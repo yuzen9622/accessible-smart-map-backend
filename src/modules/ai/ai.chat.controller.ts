@@ -4,9 +4,17 @@ import { sendResponse } from "../../config/lib";
 import { ResponseCode, ResponseMessage } from "../../types/code";
 import { MSG, ERROR_MESSAGE } from "../../constants/messages";
 import { authenticateToken } from "../../config/auth";
-import { runChatAgent, toGeminiHistory, type OAIMessage } from "./ai-chat.service";
+import {
+  runChatAgent,
+  toGeminiHistory,
+  type OAIMessage,
+} from "./ai-chat.service";
 import { getMemorySettings, searchMemoriesForPrompt } from "./memory.service";
-import { CHAT_SYSTEM_PROMPT, withUserLocation, withCurrentDate } from "../../config/ai/chat-prompt";
+import {
+  CHAT_SYSTEM_PROMPT,
+  withUserLocation,
+  withCurrentDate,
+} from "../../config/ai/chat-prompt";
 import type { IUser } from "../../types";
 
 function sendSse(res: Response, event: string, data: unknown): void {
@@ -46,7 +54,9 @@ function latestUserText(messages: OAIMessage[]): string {
 
 function isExplicitMemoryRequest(text: string): boolean {
   if (/(忘記|刪除|不要記|別記|不必記)/.test(text)) return false;
-  return /(記住|記得|幫我記|幫我記住|請記住|remember this|remember that)/i.test(text);
+  return /(記住|記得|幫我記|幫我記住|請記住|remember this|remember that)/i.test(
+    text,
+  );
 }
 
 function isMemoryDeletionRequest(text: string): boolean {
@@ -68,16 +78,30 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
 
   const authResult = await resolveAuthUser(req);
   if (authResult.expired) {
-    return sendResponse(res, false, "error", ResponseCode.UNAUTHORIZED, ResponseMessage.UNAUTHORIZED);
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.UNAUTHORIZED,
+      ResponseMessage.UNAUTHORIZED,
+    );
   }
   if (authResult.invalid) {
-    return sendResponse(res, false, "error", ResponseCode.FORBIDDEN, ResponseMessage.FORBIDDEN);
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.FORBIDDEN,
+      ResponseMessage.FORBIDDEN,
+    );
   }
   const authUser = authResult.user;
   const userId = authUser ? String(authUser._id) : undefined;
   const latestText = latestUserText(rawMessages);
 
-  let systemPrompt = withCurrentDate(withUserLocation(CHAT_SYSTEM_PROMPT, userLocation));
+  let systemPrompt = withCurrentDate(
+    withUserLocation(CHAT_SYSTEM_PROMPT, userLocation),
+  );
   let memoryEnabled = false;
   let memoryToolsEnabled = false;
   let allowMemoryWrite = false;
@@ -122,7 +146,8 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
         model,
         userLocation,
         onToolCall: (name, args) => sendSse(res, "tool_call", { name, args }),
-        onToolResult: (name, result) => sendSse(res, "tool_result", { name, result }),
+        onToolResult: (name, result) =>
+          sendSse(res, "tool_result", { name, result }),
         userId,
         memoryToolsEnabled,
         allowMemoryWrite,

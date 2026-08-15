@@ -17,7 +17,8 @@ export const CWA_WEATHER_ELEMENTS = [
   "天氣現象",
 ] as const;
 
-export const TWIPCAM_CAM_LIST_URL = "https://www.twipcam.com/api/v1/cam-list.json";
+export const TWIPCAM_CAM_LIST_URL =
+  "https://www.twipcam.com/api/v1/cam-list.json";
 
 export const TWIPCAM_SNAPSHOT_BASE_URL = "https://c01.twipcam.com/cam/snapshot";
 

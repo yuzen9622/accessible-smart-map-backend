@@ -66,12 +66,14 @@ describe("getAirData", () => {
   it("filters blank and non-numeric PM2.5 records", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      json: vi.fn().mockResolvedValue([
-        record({ sitename: "空白", "pm2.5": "" }),
-        record({ sitename: "未檢出", "pm2.5": "ND" }),
-        record({ sitename: "文字", "pm2.5": "not-a-number" }),
-        record({ sitename: "有效", "pm2.5": "18" }),
-      ]),
+      json: vi
+        .fn()
+        .mockResolvedValue([
+          record({ sitename: "空白", "pm2.5": "" }),
+          record({ sitename: "未檢出", "pm2.5": "ND" }),
+          record({ sitename: "文字", "pm2.5": "not-a-number" }),
+          record({ sitename: "有效", "pm2.5": "18" }),
+        ]),
     });
     vi.stubGlobal("fetch", fetchMock);
     const getAirData = await loadGetAirData();

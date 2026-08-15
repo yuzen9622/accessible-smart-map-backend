@@ -2,12 +2,15 @@ import http from "http";
 import { AddressInfo } from "net";
 import jwt from "jsonwebtoken";
 import WebSocket from "ws";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-
-vi.mock("../../config/auth", async () => {
-  const { createAuthModuleMock } = await import("../../../tests/helpers/auth-mock");
-  return createAuthModuleMock();
-});
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 vi.mock("./live-bridge", () => ({
   createLiveBridge: vi.fn(async () => ({
@@ -22,8 +25,14 @@ vi.mock("./live-bridge", () => ({
 import app from "../../app";
 import { attachVoiceWebSocket } from "./voice.gateway";
 import { createLiveBridge } from "./live-bridge";
+import {
+  buildDbUser,
+  stubAuthUserLookup,
+} from "../../../tests/helpers/real-auth";
 
-const mockCreateLiveBridge = createLiveBridge as unknown as ReturnType<typeof vi.fn>;
+const mockCreateLiveBridge = createLiveBridge as unknown as ReturnType<
+  typeof vi.fn
+>;
 
 const AUTH_TIMEOUT_MS = 300;
 
@@ -33,14 +42,21 @@ const openSockets: WebSocket[] = [];
 
 /**
  * Signs a valid access token with the same payload shape and secret used by
- * tests/helpers/test-helpers.ts buildAuthorizationHeader.
+ * tests/helpers/real-auth.ts. Includes tokenVersion 0, which the production
+ * revocation check compares against the `User.findById` stub.
  *
  * @param userId The user _id embedded in the JWT payload.
  * @returns A signed access token string.
  */
 function signToken(userId: string): string {
   return jwt.sign(
-    { user: { _id: userId, email: `${userId}@example.com` } },
+    {
+      user: {
+        _id: userId,
+        email: `${userId}@example.com`,
+        tokenVersion: 0,
+      },
+    },
     process.env.JWT_ACCESS_SECRET ?? "test-access-secret",
   );
 }
@@ -76,9 +92,13 @@ function waitForOpen(ws: WebSocket): Promise<void> {
  * @param ws The WebSocket client.
  * @returns A promise of the close code and reason string.
  */
-function waitForClose(ws: WebSocket): Promise<{ code: number; reason: string }> {
+function waitForClose(
+  ws: WebSocket,
+): Promise<{ code: number; reason: string }> {
   return new Promise((resolve) => {
-    ws.on("close", (code, reason) => resolve({ code, reason: reason.toString() }));
+    ws.on("close", (code, reason) =>
+      resolve({ code, reason: reason.toString() }),
+    );
   });
 }
 
@@ -105,7 +125,13 @@ function sendSessionStart(
   userId: string,
   userLocation?: { latitude: number; longitude: number },
 ): void {
-  ws.send(JSON.stringify({ type: "session.start", token: signToken(userId), userLocation }));
+  ws.send(
+    JSON.stringify({
+      type: "session.start",
+      token: signToken(userId),
+      userLocation,
+    }),
+  );
 }
 
 beforeAll(async () => {
@@ -113,6 +139,10 @@ beforeAll(async () => {
   attachVoiceWebSocket(server, { authTimeoutMs: AUTH_TIMEOUT_MS });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   port = (server.address() as AddressInfo).port;
+  // Real auth path: the handshake runs the production authenticateToken();
+  // only the User.findById DB seam is stubbed, echoing whatever id the token
+  // claims so the tokenVersion check passes.
+  stubAuthUserLookup((id) => buildDbUser({ _id: id }));
 });
 
 afterEach(() => {
@@ -138,7 +168,9 @@ describe("voice gateway", () => {
   it("closes 4401 when session.start carries an invalid token", async () => {
     const ws = connect();
     await waitForOpen(ws);
-    ws.send(JSON.stringify({ type: "session.start", token: "not-a-valid-token" }));
+    ws.send(
+      JSON.stringify({ type: "session.start", token: "not-a-valid-token" }),
+    );
     const { code } = await waitForClose(ws);
     expect(code).toBe(4401);
   });
@@ -155,7 +187,9 @@ describe("voice gateway", () => {
     const ws = connect();
     await waitForOpen(ws);
     const closed = waitForClose(ws);
-    ws.send(JSON.stringify({ type: "session.start", token: "x".repeat(9_000) }));
+    ws.send(
+      JSON.stringify({ type: "session.start", token: "x".repeat(9_000) }),
+    );
     expect((await closed).code).toBe(4401);
     expect(mockCreateLiveBridge).not.toHaveBeenCalled();
   });
@@ -174,24 +208,34 @@ describe("voice gateway", () => {
     const ws = connect();
     await waitForOpen(ws);
     const ready = waitForJson(ws);
-    sendSessionStart(ws, "voice-user-location", { latitude: 25.0478, longitude: 121.517 });
+    sendSessionStart(ws, "voice-user-location", {
+      latitude: 25.0478,
+      longitude: 121.517,
+    });
     await ready;
 
-    expect(mockCreateLiveBridge).toHaveBeenCalledWith(expect.objectContaining({
-      userLocation: { latitude: 25.0478, longitude: 121.517 },
-    }));
+    expect(mockCreateLiveBridge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userLocation: { latitude: 25.0478, longitude: 121.517 },
+      }),
+    );
   });
 
   it("drops an out-of-range GPS pair before creating the Live bridge", async () => {
     const ws = connect();
     await waitForOpen(ws);
     const ready = waitForJson(ws);
-    sendSessionStart(ws, "voice-user-invalid-location", { latitude: 999, longitude: 121.517 });
+    sendSessionStart(ws, "voice-user-invalid-location", {
+      latitude: 999,
+      longitude: 121.517,
+    });
     await ready;
 
-    expect(mockCreateLiveBridge).toHaveBeenCalledWith(expect.objectContaining({
-      userLocation: undefined,
-    }));
+    expect(mockCreateLiveBridge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userLocation: undefined,
+      }),
+    );
   });
 
   it("routes nav.setRoute, nav.position, and nav.cancel to the bridge", async () => {
@@ -200,12 +244,25 @@ describe("voice gateway", () => {
     const ready = waitForJson(ws);
     sendSessionStart(ws, "voice-user-nav");
     await ready;
-    const bridge = await mockCreateLiveBridge.mock.results.at(-1).value;
+    const bridge = await mockCreateLiveBridge.mock.results.at(-1)!.value;
     ws.send(JSON.stringify({ type: "nav.setRoute", routeToken: "capability" }));
-    ws.send(JSON.stringify({ type: "nav.position", latitude: 25, longitude: 121, accuracy: 5 }));
+    ws.send(
+      JSON.stringify({
+        type: "nav.position",
+        latitude: 25,
+        longitude: 121,
+        accuracy: 5,
+      }),
+    );
     ws.send(JSON.stringify({ type: "nav.cancel" }));
-    await vi.waitFor(() => expect(bridge.armRouteToken).toHaveBeenCalledWith("capability"));
-    expect(bridge.updatePosition).toHaveBeenCalledWith({ latitude: 25, longitude: 121, accuracy: 5 });
+    await vi.waitFor(() =>
+      expect(bridge.armRouteToken).toHaveBeenCalledWith("capability"),
+    );
+    expect(bridge.updatePosition).toHaveBeenCalledWith({
+      latitude: 25,
+      longitude: 121,
+      accuracy: 5,
+    });
     expect(bridge.cancelNav).toHaveBeenCalledOnce();
   });
 
@@ -217,7 +274,10 @@ describe("voice gateway", () => {
     await ready;
     const message = waitForJson(ws);
     ws.send(JSON.stringify({ type: "nav.setRoute", routeToken: "" }));
-    await expect(message).resolves.toMatchObject({ type: "nav.error", code: "NAV_ROUTE_INVALID" });
+    await expect(message).resolves.toMatchObject({
+      type: "nav.error",
+      code: "NAV_ROUTE_INVALID",
+    });
   });
 
   it("ignores an oversized authenticated control frame before JSON parsing", async () => {
@@ -226,8 +286,10 @@ describe("voice gateway", () => {
     const ready = waitForJson(ws);
     sendSessionStart(ws, "voice-user-oversized");
     await ready;
-    const bridge = await mockCreateLiveBridge.mock.results.at(-1).value;
-    ws.send(JSON.stringify({ type: "nav.setRoute", routeToken: "x".repeat(9_000) }));
+    const bridge = await mockCreateLiveBridge.mock.results.at(-1)!.value;
+    ws.send(
+      JSON.stringify({ type: "nav.setRoute", routeToken: "x".repeat(9_000) }),
+    );
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(bridge.armRouteToken).not.toHaveBeenCalled();
     expect(ws.readyState).toBe(WebSocket.OPEN);
@@ -235,28 +297,43 @@ describe("voice gateway", () => {
 
   it("keeps latest route and position while Live bridge creation is pending", async () => {
     let resolveBridge!: (bridge: any) => void;
-    const pending = new Promise<any>((resolve) => { resolveBridge = resolve; });
+    const pending = new Promise<any>((resolve) => {
+      resolveBridge = resolve;
+    });
     mockCreateLiveBridge.mockImplementationOnce(() => pending);
     const ws = connect();
     await waitForOpen(ws);
     sendSessionStart(ws, "voice-user-pending");
     ws.send(JSON.stringify({ type: "nav.setRoute", routeToken: "first" }));
     ws.send(JSON.stringify({ type: "nav.setRoute", routeToken: "latest" }));
-    ws.send(JSON.stringify({ type: "nav.position", latitude: 25, longitude: 121 }));
+    ws.send(
+      JSON.stringify({ type: "nav.position", latitude: 25, longitude: 121 }),
+    );
     const bridge = {
-      sendAudio: vi.fn(), armRouteToken: vi.fn(), updatePosition: vi.fn(), cancelNav: vi.fn(), close: vi.fn(),
+      sendAudio: vi.fn(),
+      armRouteToken: vi.fn(),
+      updatePosition: vi.fn(),
+      cancelNav: vi.fn(),
+      close: vi.fn(),
     };
     const ready = waitForJson(ws);
     resolveBridge(bridge);
     await expect(ready).resolves.toEqual({ type: "session.ready" });
-    await vi.waitFor(() => expect(bridge.armRouteToken).toHaveBeenCalledWith("latest"));
+    await vi.waitFor(() =>
+      expect(bridge.armRouteToken).toHaveBeenCalledWith("latest"),
+    );
     expect(bridge.armRouteToken).toHaveBeenCalledOnce();
-    expect(bridge.updatePosition).toHaveBeenCalledWith({ latitude: 25, longitude: 121 });
+    expect(bridge.updatePosition).toHaveBeenCalledWith({
+      latitude: 25,
+      longitude: 121,
+    });
   });
 
   it("closes a bridge that resolves after its WebSocket was already closed", async () => {
     let resolveBridge!: (bridge: any) => void;
-    const pending = new Promise<any>((resolve) => { resolveBridge = resolve; });
+    const pending = new Promise<any>((resolve) => {
+      resolveBridge = resolve;
+    });
     mockCreateLiveBridge.mockImplementationOnce(() => pending);
     const ws = connect();
     await waitForOpen(ws);
@@ -265,7 +342,11 @@ describe("voice gateway", () => {
     ws.close(1000, "test-close");
     await closed;
     const bridge = {
-      sendAudio: vi.fn(), armRouteToken: vi.fn(), updatePosition: vi.fn(), cancelNav: vi.fn(), close: vi.fn(),
+      sendAudio: vi.fn(),
+      armRouteToken: vi.fn(),
+      updatePosition: vi.fn(),
+      cancelNav: vi.fn(),
+      close: vi.fn(),
     };
     resolveBridge(bridge);
     await vi.waitFor(() => expect(bridge.close).toHaveBeenCalledOnce());
@@ -278,9 +359,15 @@ describe("voice gateway", () => {
     const ready = waitForJson(ws);
     sendSessionStart(ws, "voice-user-position-flood");
     await ready;
-    const bridge = await mockCreateLiveBridge.mock.results.at(-1).value;
+    const bridge = await mockCreateLiveBridge.mock.results.at(-1)!.value;
     for (let i = 0; i < 50; i++) {
-      ws.send(JSON.stringify({ type: "nav.position", latitude: 25, longitude: 121 + i / 100_000 }));
+      ws.send(
+        JSON.stringify({
+          type: "nav.position",
+          latitude: 25,
+          longitude: 121 + i / 100_000,
+        }),
+      );
     }
     await vi.waitFor(() => expect(bridge.updatePosition).toHaveBeenCalled());
     expect(bridge.updatePosition.mock.calls.length).toBeLessThanOrEqual(30);
@@ -294,7 +381,8 @@ describe("voice gateway", () => {
     sendSessionStart(ws, "voice-user-frame-flood");
     await ready;
     const closed = waitForClose(ws);
-    for (let i = 0; i < 90; i++) ws.send(JSON.stringify({ type: `unknown.${i}`, pad: "x".repeat(1100) }));
+    for (let i = 0; i < 90; i++)
+      ws.send(JSON.stringify({ type: `unknown.${i}`, pad: "x".repeat(1100) }));
     const result = await closed;
     expect(result.code).toBe(4408);
     expect(result.reason).toBe("control-rate-limit");
@@ -317,7 +405,8 @@ describe("voice gateway", () => {
     const ready = waitForJson(ws);
     sendSessionStart(ws, "voice-user-end-after-budget");
     await ready;
-    for (let i = 0; i < 45; i++) ws.send(JSON.stringify({ type: "nav.cancel" }));
+    for (let i = 0; i < 45; i++)
+      ws.send(JSON.stringify({ type: "nav.cancel" }));
     const closed = waitForClose(ws);
     ws.send(JSON.stringify({ type: "session.end" }));
     expect(await closed).toEqual({ code: 1000, reason: "client-end" });

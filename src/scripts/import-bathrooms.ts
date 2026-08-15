@@ -6,7 +6,7 @@ import BathroomModel from "../model/bathroom.model";
 
 const DEFAULT_CSV = path.resolve(
   __dirname,
-  "../../data/bathrooms/無障礙廁所.csv"
+  "../../data/bathrooms/無障礙廁所.csv",
 );
 
 function parseCsvLine(line: string): string[] {
@@ -99,7 +99,7 @@ async function main() {
   for (let i = 0; i < docs.length; i += CHUNK) {
     const batch = await BathroomModel.insertMany(
       docs.slice(i, i + CHUNK) as any[],
-      { ordered: false }
+      { ordered: false },
     );
     inserted += batch.length;
   }

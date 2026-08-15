@@ -54,7 +54,10 @@ export function normalizeName(s: string): string {
  * @param branchName campus/branch name
  * @returns normalized search string
  */
-export function buildSearchName(schoolName: string, branchName: string): string {
+export function buildSearchName(
+  schoolName: string,
+  branchName: string,
+): string {
   return normalizeName(`${schoolName}${branchName}`);
 }
 

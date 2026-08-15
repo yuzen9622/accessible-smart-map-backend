@@ -21,7 +21,9 @@ import { executeLocalTool } from "../ai/agent-tools";
 import { runToolLoop, runAgent } from "./agent-manager.service";
 import { FunctionCallingConfigMode, type Content } from "@google/genai";
 
-const mockCreate = googleGenAi.models.generateContent as unknown as ReturnType<typeof vi.fn>;
+const mockCreate = googleGenAi.models.generateContent as unknown as ReturnType<
+  typeof vi.fn
+>;
 const mockExec = executeLocalTool as unknown as ReturnType<typeof vi.fn>;
 
 // The executor is now an injected dependency (execTool is required), so tests
@@ -45,14 +47,18 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-function functionCallResponse(calls: Array<{ name: string; args: Record<string, unknown> }>) {
+function functionCallResponse(
+  calls: Array<{ name: string; args: Record<string, unknown> }>,
+) {
   return {
     functionCalls: calls.map((c) => ({ name: c.name, args: c.args })),
     candidates: [
       {
         content: {
           role: "model",
-          parts: calls.map((c) => ({ functionCall: { name: c.name, args: c.args } })),
+          parts: calls.map((c) => ({
+            functionCall: { name: c.name, args: c.args },
+          })),
         },
       },
     ],
@@ -88,8 +94,12 @@ describe("runToolLoop dedup", () => {
   it("相同 (name, args) 且成功 → 第二次不執行 executeLocalTool", async () => {
     const args = { routeName: "307", city: "台北" };
     mockCreate
-      .mockResolvedValueOnce(functionCallResponse([{ name: "trackBuses", args }]))
-      .mockResolvedValueOnce(functionCallResponse([{ name: "trackBuses", args }]))
+      .mockResolvedValueOnce(
+        functionCallResponse([{ name: "trackBuses", args }]),
+      )
+      .mockResolvedValueOnce(
+        functionCallResponse([{ name: "trackBuses", args }]),
+      )
       .mockResolvedValueOnce(stopResponse());
 
     mockExec.mockResolvedValue(JSON.stringify({ ok: true, buses: [] }));
@@ -108,8 +118,12 @@ describe("runToolLoop dedup", () => {
   it("相同 (name, args) 但失敗 → 第二次重新執行", async () => {
     const args = { query: "火星" };
     mockCreate
-      .mockResolvedValueOnce(functionCallResponse([{ name: "findA11yPlaces", args }]))
-      .mockResolvedValueOnce(functionCallResponse([{ name: "findA11yPlaces", args }]))
+      .mockResolvedValueOnce(
+        functionCallResponse([{ name: "findA11yPlaces", args }]),
+      )
+      .mockResolvedValueOnce(
+        functionCallResponse([{ name: "findA11yPlaces", args }]),
+      )
       .mockResolvedValueOnce(stopResponse());
 
     mockExec
@@ -126,8 +140,14 @@ describe("runToolLoop dedup", () => {
     mockCreate
       .mockResolvedValueOnce(
         functionCallResponse([
-          { name: "getBusArrival", args: { routeName: "307", stopName: "台北車站" } },
-          { name: "getBusArrival", args: { routeName: "307", stopName: "忠孝復興" } },
+          {
+            name: "getBusArrival",
+            args: { routeName: "307", stopName: "台北車站" },
+          },
+          {
+            name: "getBusArrival",
+            args: { routeName: "307", stopName: "忠孝復興" },
+          },
         ]),
       )
       .mockResolvedValueOnce(stopResponse());
@@ -143,15 +163,19 @@ describe("runToolLoop dedup", () => {
   it("returns parsed tool results for downstream UI mappers", async () => {
     mockCreate
       .mockResolvedValueOnce(
-        functionCallResponse([{ name: "planRouteToSosVictim", args: { sessionId: "s1" } }]),
+        functionCallResponse([
+          { name: "planRouteToSosVictim", args: { sessionId: "s1" } },
+        ]),
       )
       .mockResolvedValueOnce(stopResponse());
 
-    mockExec.mockResolvedValue(JSON.stringify({
-      ok: true,
-      sessionId: "s1",
-      routes: [{ routeName: "route1", totalMinutes: 12 }],
-    }));
+    mockExec.mockResolvedValue(
+      JSON.stringify({
+        ok: true,
+        sessionId: "s1",
+        routes: [{ routeName: "route1", totalMinutes: 12 }],
+      }),
+    );
 
     const contents: Content[] = [{ role: "user", parts: [{ text: "test" }] }];
     const result = await run(contents);
@@ -172,10 +196,14 @@ describe("runToolLoop dedup", () => {
   it("args 順序不同但值相同 → 命中 cache", async () => {
     mockCreate
       .mockResolvedValueOnce(
-        functionCallResponse([{ name: "trackBuses", args: { routeName: "307", city: "台北" } }]),
+        functionCallResponse([
+          { name: "trackBuses", args: { routeName: "307", city: "台北" } },
+        ]),
       )
       .mockResolvedValueOnce(
-        functionCallResponse([{ name: "trackBuses", args: { city: "台北", routeName: "307" } }]),
+        functionCallResponse([
+          { name: "trackBuses", args: { city: "台北", routeName: "307" } },
+        ]),
       )
       .mockResolvedValueOnce(stopResponse());
 
@@ -190,8 +218,12 @@ describe("runToolLoop dedup", () => {
   it("含 error 欄位的結果不被快取", async () => {
     const args = { latitude: 0, longitude: 0 };
     mockCreate
-      .mockResolvedValueOnce(functionCallResponse([{ name: "getAirQuality", args }]))
-      .mockResolvedValueOnce(functionCallResponse([{ name: "getAirQuality", args }]))
+      .mockResolvedValueOnce(
+        functionCallResponse([{ name: "getAirQuality", args }]),
+      )
+      .mockResolvedValueOnce(
+        functionCallResponse([{ name: "getAirQuality", args }]),
+      )
       .mockResolvedValueOnce(stopResponse());
 
     mockExec
@@ -236,7 +268,9 @@ describe("runToolLoop 最終文字保證（修沒文字 bug）", () => {
 
     expect(mockCreate).toHaveBeenCalledTimes(6);
     const finalCfg = (mockCreate.mock.calls[5][0] as any).config;
-    expect(finalCfg.toolConfig.functionCallingConfig.mode).toBe(FunctionCallingConfigMode.NONE);
+    expect(finalCfg.toolConfig.functionCallingConfig.mode).toBe(
+      FunctionCallingConfigMode.NONE,
+    );
     expect(finalCfg.temperature).toBe(0);
     expect(result.text).toBe("最終答案");
   });
@@ -251,7 +285,9 @@ describe("runToolLoop 最終文字保證（修沒文字 bug）", () => {
 
     expect(mockCreate).toHaveBeenCalledTimes(2);
     const finalCfg = (mockCreate.mock.calls[1][0] as any).config;
-    expect(finalCfg.toolConfig.functionCallingConfig.mode).toBe(FunctionCallingConfigMode.NONE);
+    expect(finalCfg.toolConfig.functionCallingConfig.mode).toBe(
+      FunctionCallingConfigMode.NONE,
+    );
     expect(result.text).toBe("補救答案");
   });
 
@@ -259,15 +295,23 @@ describe("runToolLoop 最終文字保證（修沒文字 bug）", () => {
     mockCreate
       .mockResolvedValueOnce(
         functionCallResponse([
-          { name: "planAccessibleRoute", args: { origin: "中科大", destination: "火車站" } },
+          {
+            name: "planAccessibleRoute",
+            args: { origin: "中科大", destination: "火車站" },
+          },
         ]),
       )
       .mockResolvedValueOnce(
         functionCallResponse([
-          { name: "getBusArrival", args: { routeName: "159", stopName: "中科大" } },
+          {
+            name: "getBusArrival",
+            args: { routeName: "159", stopName: "中科大" },
+          },
         ]),
       )
-      .mockResolvedValueOnce(textResponse("您可以搭 159 路，約 4 分鐘後到，是最快的一班。"));
+      .mockResolvedValueOnce(
+        textResponse("您可以搭 159 路，約 4 分鐘後到，是最快的一班。"),
+      );
 
     mockExec.mockImplementation(async (name: string) =>
       name === "planAccessibleRoute"
@@ -276,7 +320,10 @@ describe("runToolLoop 最終文字保證（修沒文字 bug）", () => {
     );
 
     const contents: Content[] = [
-      { role: "user", parts: [{ text: "從中科大要去火車站可以搭哪些公車、哪班最快來" }] },
+      {
+        role: "user",
+        parts: [{ text: "從中科大要去火車站可以搭哪些公車、哪班最快來" }],
+      },
     ];
     const result = await run(contents);
 
@@ -305,7 +352,9 @@ describe("runAgent façade", () => {
 
   it("routes tool execution through the injected executor", async () => {
     mockCreate
-      .mockResolvedValueOnce(functionCallResponse([{ name: "getAirQuality", args: {} }]))
+      .mockResolvedValueOnce(
+        functionCallResponse([{ name: "getAirQuality", args: {} }]),
+      )
       .mockResolvedValueOnce(stopResponse());
     mockExec.mockResolvedValue(JSON.stringify({ ok: true, pm25: 10 }));
 

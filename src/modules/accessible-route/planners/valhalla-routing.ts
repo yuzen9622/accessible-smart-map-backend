@@ -7,8 +7,18 @@ import {
   type ValhallaCosting,
 } from "../../../adapters/valhalla.adapter";
 import { VALHALLA_OSM_ATTRIBUTION } from "../../../config/valhalla";
-import type { AccessibleRoute, DriveLeg, DriveStep, WalkLeg, WalkStep } from "../../../types/route";
-import type { LatLng, PlanRoadRouteOptions, RoadTravelMode } from "../accessible-route.types";
+import type {
+  AccessibleRoute,
+  DriveLeg,
+  DriveStep,
+  WalkLeg,
+  WalkStep,
+} from "../../../types/route";
+import type {
+  LatLng,
+  PlanRoadRouteOptions,
+  RoadTravelMode,
+} from "../accessible-route.types";
 import { haversineCoords, haversineMeters } from "../../../utils/geo";
 import { ROUTE_WARNING } from "../../../constants/messages";
 import { ValhallaRoutingError } from "./valhalla-routing.types";
@@ -43,24 +53,62 @@ const ROUTE_LABEL: Record<RoadTravelMode, string> = {
 };
 
 const MANEUVER_BY_TYPE: Record<number, string> = {
-  1: "DEPART", 2: "DEPART", 3: "DEPART", 4: "ARRIVE", 5: "ARRIVE", 6: "ARRIVE",
-  7: "STRAIGHT", 8: "STRAIGHT", 9: "TURN_SLIGHT_RIGHT", 10: "TURN_RIGHT",
-  11: "TURN_SHARP_RIGHT", 12: "UTURN_RIGHT", 13: "UTURN_LEFT", 14: "TURN_SHARP_LEFT",
-  15: "TURN_LEFT", 16: "TURN_SLIGHT_LEFT", 17: "RAMP_STRAIGHT", 18: "RAMP_RIGHT",
-  19: "RAMP_LEFT", 20: "EXIT_RIGHT", 21: "EXIT_LEFT", 22: "STRAIGHT", 23: "KEEP_RIGHT",
-  24: "KEEP_LEFT", 25: "MERGE", 26: "ROUNDABOUT_ENTER", 27: "ROUNDABOUT_EXIT",
-  28: "FERRY_ENTER", 29: "FERRY_EXIT", 37: "MERGE_RIGHT", 38: "MERGE_LEFT",
-  39: "ELEVATOR", 40: "STAIRS", 41: "ESCALATOR", 42: "ENTER_STATION", 43: "EXIT_STATION",
+  1: "DEPART",
+  2: "DEPART",
+  3: "DEPART",
+  4: "ARRIVE",
+  5: "ARRIVE",
+  6: "ARRIVE",
+  7: "STRAIGHT",
+  8: "STRAIGHT",
+  9: "TURN_SLIGHT_RIGHT",
+  10: "TURN_RIGHT",
+  11: "TURN_SHARP_RIGHT",
+  12: "UTURN_RIGHT",
+  13: "UTURN_LEFT",
+  14: "TURN_SHARP_LEFT",
+  15: "TURN_LEFT",
+  16: "TURN_SLIGHT_LEFT",
+  17: "RAMP_STRAIGHT",
+  18: "RAMP_RIGHT",
+  19: "RAMP_LEFT",
+  20: "EXIT_RIGHT",
+  21: "EXIT_LEFT",
+  22: "STRAIGHT",
+  23: "KEEP_RIGHT",
+  24: "KEEP_LEFT",
+  25: "MERGE",
+  26: "ROUNDABOUT_ENTER",
+  27: "ROUNDABOUT_EXIT",
+  28: "FERRY_ENTER",
+  29: "FERRY_EXIT",
+  37: "MERGE_RIGHT",
+  38: "MERGE_LEFT",
+  39: "ELEVATOR",
+  40: "STAIRS",
+  41: "ESCALATOR",
+  42: "ENTER_STATION",
+  43: "EXIT_STATION",
 };
 
 const WALK_DIRECTION: Record<string, string> = {
-  DEPART: "DEPART", STRAIGHT: "STRAIGHT", TURN_LEFT: "LEFT", TURN_RIGHT: "RIGHT",
-  TURN_SHARP_LEFT: "HARD_LEFT", TURN_SHARP_RIGHT: "HARD_RIGHT",
-  TURN_SLIGHT_LEFT: "SLIGHTLY_LEFT", TURN_SLIGHT_RIGHT: "SLIGHTLY_RIGHT",
-  KEEP_LEFT: "SLIGHTLY_LEFT", KEEP_RIGHT: "SLIGHTLY_RIGHT", UTURN_LEFT: "UTURN_LEFT",
-  UTURN_RIGHT: "UTURN_RIGHT", ROUNDABOUT_ENTER: "CIRCLE_CLOCKWISE",
-  ROUNDABOUT_EXIT: "CIRCLE_CLOCKWISE", ELEVATOR: "ELEVATOR",
-  ENTER_STATION: "ENTER_STATION", EXIT_STATION: "EXIT_STATION",
+  DEPART: "DEPART",
+  STRAIGHT: "STRAIGHT",
+  TURN_LEFT: "LEFT",
+  TURN_RIGHT: "RIGHT",
+  TURN_SHARP_LEFT: "HARD_LEFT",
+  TURN_SHARP_RIGHT: "HARD_RIGHT",
+  TURN_SLIGHT_LEFT: "SLIGHTLY_LEFT",
+  TURN_SLIGHT_RIGHT: "SLIGHTLY_RIGHT",
+  KEEP_LEFT: "SLIGHTLY_LEFT",
+  KEEP_RIGHT: "SLIGHTLY_RIGHT",
+  UTURN_LEFT: "UTURN_LEFT",
+  UTURN_RIGHT: "UTURN_RIGHT",
+  ROUNDABOUT_ENTER: "CIRCLE_CLOCKWISE",
+  ROUNDABOUT_EXIT: "CIRCLE_CLOCKWISE",
+  ELEVATOR: "ELEVATOR",
+  ENTER_STATION: "ENTER_STATION",
+  EXIT_STATION: "EXIT_STATION",
 };
 
 function minutes(seconds: number): number {
@@ -68,16 +116,36 @@ function minutes(seconds: number): number {
 }
 
 export function decodeValhallaShape(shape: string): [number, number][] {
-  const points = decode(shape, 6).map(([lat, lng]) => [lng, lat] as [number, number]);
+  const points = decode(shape, 6).map(
+    ([lat, lng]) => [lng, lat] as [number, number],
+  );
   if (
     points.length < 2 ||
-    points.some(([lng, lat]) => !Number.isFinite(lng) || !Number.isFinite(lat) || lng < -180 || lng > 180 || lat < -90 || lat > 90)
-  ) throw new Error("Invalid Valhalla polyline");
+    points.some(
+      ([lng, lat]) =>
+        !Number.isFinite(lng) ||
+        !Number.isFinite(lat) ||
+        lng < -180 ||
+        lng > 180 ||
+        lat < -90 ||
+        lat > 90,
+    )
+  )
+    throw new Error("Invalid Valhalla polyline");
   return points;
 }
 
-function guidanceFits(maneuvers: NormalizedValhallaManeuver[] | undefined, points: [number, number][]): boolean {
-  return !!maneuvers?.length && maneuvers.every((m) => m.beginShapeIndex < points.length && m.endShapeIndex < points.length);
+function guidanceFits(
+  maneuvers: NormalizedValhallaManeuver[] | undefined,
+  points: [number, number][],
+): boolean {
+  return (
+    !!maneuvers?.length &&
+    maneuvers.every(
+      (m) =>
+        m.beginShapeIndex < points.length && m.endShapeIndex < points.length,
+    )
+  );
 }
 
 function maneuverCode(maneuver: NormalizedValhallaManeuver): string {
@@ -92,89 +160,138 @@ function localizedInstruction(
   const onto = street ? `進入「${street}」` : "";
   const along = street ? `沿「${street}」` : "沿目前道路";
   switch (code) {
-    case "DEPART": return `${along}出發`;
-    case "ARRIVE": return "抵達目的地";
-    case "TURN_LEFT": return `向左轉${onto}`;
-    case "TURN_RIGHT": return `向右轉${onto}`;
-    case "TURN_SLIGHT_LEFT": return `稍向左轉${onto}`;
-    case "TURN_SLIGHT_RIGHT": return `稍向右轉${onto}`;
-    case "TURN_SHARP_LEFT": return `大幅向左轉${onto}`;
-    case "TURN_SHARP_RIGHT": return `大幅向右轉${onto}`;
-    case "KEEP_LEFT": return "靠左行進";
-    case "KEEP_RIGHT": return "靠右行進";
+    case "DEPART":
+      return `${along}出發`;
+    case "ARRIVE":
+      return "抵達目的地";
+    case "TURN_LEFT":
+      return `向左轉${onto}`;
+    case "TURN_RIGHT":
+      return `向右轉${onto}`;
+    case "TURN_SLIGHT_LEFT":
+      return `稍向左轉${onto}`;
+    case "TURN_SLIGHT_RIGHT":
+      return `稍向右轉${onto}`;
+    case "TURN_SHARP_LEFT":
+      return `大幅向左轉${onto}`;
+    case "TURN_SHARP_RIGHT":
+      return `大幅向右轉${onto}`;
+    case "KEEP_LEFT":
+      return "靠左行進";
+    case "KEEP_RIGHT":
+      return "靠右行進";
     case "UTURN_LEFT":
-    case "UTURN_RIGHT": return "請迴轉";
-    case "RAMP_LEFT": return "從左側匝道行進";
-    case "RAMP_RIGHT": return "從右側匝道行進";
-    case "RAMP_STRAIGHT": return "繼續沿匝道直行";
-    case "EXIT_LEFT": return "從左側出口駛出";
-    case "EXIT_RIGHT": return "從右側出口駛出";
-    case "MERGE_LEFT": return "向左併入道路";
-    case "MERGE_RIGHT": return "向右併入道路";
-    case "MERGE": return "併入道路";
-    case "ROUNDABOUT_ENTER": return "進入圓環並依指示行進";
-    case "ROUNDABOUT_EXIT": return `駛出圓環${onto}`;
-    case "FERRY_ENTER": return "前往渡輪乘船處";
-    case "FERRY_EXIT": return "離開渡輪";
-    case "ELEVATOR": return "搭乘電梯";
-    case "STAIRS": return "走樓梯繼續前進";
-    case "ESCALATOR": return "搭乘手扶梯";
-    case "ENTER_STATION": return "進入建築或車站";
-    case "EXIT_STATION": return "離開建築或車站";
+    case "UTURN_RIGHT":
+      return "請迴轉";
+    case "RAMP_LEFT":
+      return "從左側匝道行進";
+    case "RAMP_RIGHT":
+      return "從右側匝道行進";
+    case "RAMP_STRAIGHT":
+      return "繼續沿匝道直行";
+    case "EXIT_LEFT":
+      return "從左側出口駛出";
+    case "EXIT_RIGHT":
+      return "從右側出口駛出";
+    case "MERGE_LEFT":
+      return "向左併入道路";
+    case "MERGE_RIGHT":
+      return "向右併入道路";
+    case "MERGE":
+      return "併入道路";
+    case "ROUNDABOUT_ENTER":
+      return "進入圓環並依指示行進";
+    case "ROUNDABOUT_EXIT":
+      return `駛出圓環${onto}`;
+    case "FERRY_ENTER":
+      return "前往渡輪乘船處";
+    case "FERRY_EXIT":
+      return "離開渡輪";
+    case "ELEVATOR":
+      return "搭乘電梯";
+    case "STAIRS":
+      return "走樓梯繼續前進";
+    case "ESCALATOR":
+      return "搭乘手扶梯";
+    case "ENTER_STATION":
+      return "進入建築或車站";
+    case "EXIT_STATION":
+      return "離開建築或車站";
     case "STRAIGHT":
     case "CONTINUE":
-    default: return `${along}繼續直行`;
+    default:
+      return `${along}繼續直行`;
   }
 }
 
-function driveSteps(leg: NormalizedValhallaLeg, points: [number, number][]): DriveStep[] | undefined {
+function driveSteps(
+  leg: NormalizedValhallaLeg,
+  points: [number, number][],
+): DriveStep[] | undefined {
   if (!guidanceFits(leg.maneuvers, points)) return undefined;
-  return leg.maneuvers!.filter((m) => maneuverCode(m) !== "ARRIVE").map((m) => {
-    const maneuver = maneuverCode(m);
-    return {
-      instruction: localizedInstruction(m, maneuver),
-      maneuver,
-      distanceM: Math.round(m.lengthKm * 1000),
-      durationMin: minutes(m.timeSec),
-      polyline: points.slice(m.beginShapeIndex, m.endShapeIndex + 1),
-    };
-  });
+  return leg
+    .maneuvers!.filter((m) => maneuverCode(m) !== "ARRIVE")
+    .map((m) => {
+      const maneuver = maneuverCode(m);
+      return {
+        instruction: localizedInstruction(m, maneuver),
+        maneuver,
+        distanceM: Math.round(m.lengthKm * 1000),
+        durationMin: minutes(m.timeSec),
+        polyline: points.slice(m.beginShapeIndex, m.endShapeIndex + 1),
+      };
+    });
 }
 
-function walkSteps(leg: NormalizedValhallaLeg, points: [number, number][]): WalkStep[] | undefined {
+function walkSteps(
+  leg: NormalizedValhallaLeg,
+  points: [number, number][],
+): WalkStep[] | undefined {
   if (!guidanceFits(leg.maneuvers, points)) return undefined;
-  return leg.maneuvers!.filter((m) => maneuverCode(m) !== "ARRIVE").map((m) => {
-    const maneuver = maneuverCode(m);
-    const streetName = m.streetNames?.[0] ?? "";
-    return {
-      instruction: localizedInstruction(m, maneuver),
-      maneuver,
-      relativeDirection: WALK_DIRECTION[maneuver] ?? "CONTINUE",
-      absoluteDirection: null,
-      streetName,
-      bogusName: streetName.length === 0,
-      area: false,
-      stairs: m.stairs,
-      distanceM: Math.round(m.lengthKm * 1000),
-      location: points[m.beginShapeIndex],
-    };
-  });
+  return leg
+    .maneuvers!.filter((m) => maneuverCode(m) !== "ARRIVE")
+    .map((m) => {
+      const maneuver = maneuverCode(m);
+      const streetName = m.streetNames?.[0] ?? "";
+      return {
+        instruction: localizedInstruction(m, maneuver),
+        maneuver,
+        relativeDirection: WALK_DIRECTION[maneuver] ?? "CONTINUE",
+        absoluteDirection: null,
+        streetName,
+        bogusName: streetName.length === 0,
+        area: false,
+        stairs: m.stairs,
+        distanceM: Math.round(m.lengthKm * 1000),
+        location: points[m.beginShapeIndex],
+      };
+    });
 }
 
 function labels(index: number, count: number): [string, string] {
-  return [index === 0 ? "起點" : `中途點 ${index}`, index === count - 1 ? "終點" : `中途點 ${index + 1}`];
+  return [
+    index === 0 ? "起點" : `中途點 ${index}`,
+    index === count - 1 ? "終點" : `中途點 ${index + 1}`,
+  ];
 }
 
-function mapTrip(trip: NormalizedValhallaTrip, mode: RoadTravelMode, index: number): AccessibleRoute {
+function mapTrip(
+  trip: NormalizedValhallaTrip,
+  mode: RoadTravelMode,
+  index: number,
+): AccessibleRoute {
   const mappedLegs = trip.legs.map((leg, legIndex): DriveLeg | WalkLeg => {
     const points = decodeValhallaShape(leg.shapePolyline6);
     if (mode === "walk") {
       const [from, to] = labels(legIndex, trip.legs.length);
       return {
-        type: "WALK", from, to,
+        type: "WALK",
+        from,
+        to,
         distanceM: Math.round(leg.summary.lengthKm * 1000),
         minutesEst: minutes(leg.summary.timeSec),
-        polyline: points, a11yFacilities: [],
+        polyline: points,
+        a11yFacilities: [],
         ...unknownWalkA11yDetails(),
         ...(walkSteps(leg, points) ? { steps: walkSteps(leg, points) } : {}),
       };
@@ -196,7 +313,10 @@ function mapTrip(trip: NormalizedValhallaTrip, mode: RoadTravelMode, index: numb
     transferCount: 0,
     legs: mappedLegs,
     accessibilityHighlights: [],
-    totalWalkDistanceM: mode === "walk" ? mappedLegs.reduce((sum, leg) => sum + leg.distanceM, 0) : 0,
+    totalWalkDistanceM:
+      mode === "walk"
+        ? mappedLegs.reduce((sum, leg) => sum + leg.distanceM, 0)
+        : 0,
     attribution: VALHALLA_OSM_ATTRIBUTION,
   };
 }
@@ -225,13 +345,17 @@ async function planWalkConnector(
       mode,
       avoidStairs,
     });
-    const leg = otp.routes[0]?.legs.find((candidate) => candidate.type === "WALK");
+    const leg = otp.routes[0]?.legs.find(
+      (candidate) => candidate.type === "WALK",
+    );
     if (leg?.type === "WALK" && leg.polyline.length >= 2) {
       const pStart = leg.polyline[0];
       const pEnd = leg.polyline.at(-1)!;
       if (
-        haversineCoords(pStart, [fromAnchor.lng, fromAnchor.lat]) <= CONNECT_TOLERANCE_M &&
-        haversineCoords(pEnd, [toAnchor.lng, toAnchor.lat]) <= CONNECT_TOLERANCE_M
+        haversineCoords(pStart, [fromAnchor.lng, fromAnchor.lat]) <=
+          CONNECT_TOLERANCE_M &&
+        haversineCoords(pEnd, [toAnchor.lng, toAnchor.lat]) <=
+          CONNECT_TOLERANCE_M
       ) {
         const { from: _from, to: _to, ...body } = leg;
         return { body, degraded: false };
@@ -246,7 +370,9 @@ async function planWalkConnector(
   );
   try {
     const result = await computeValhallaRoutes({
-      origin: fromAnchor, destination: toAnchor, costing: "pedestrian",
+      origin: fromAnchor,
+      destination: toAnchor,
+      costing: "pedestrian",
       wheelchair: avoidStairs,
     });
     if (result.status !== "OK") return { body: null, degraded: true };
@@ -260,10 +386,15 @@ async function planWalkConnector(
     }
     const pStart = points[0];
     const pEnd = points.at(-1)!;
-    if (haversineCoords(pStart, [fromAnchor.lng, fromAnchor.lat]) > CONNECT_TOLERANCE_M) {
+    if (
+      haversineCoords(pStart, [fromAnchor.lng, fromAnchor.lat]) >
+      CONNECT_TOLERANCE_M
+    ) {
       return { body: null, degraded: true };
     }
-    if (haversineCoords(pEnd, [toAnchor.lng, toAnchor.lat]) > CONNECT_TOLERANCE_M) {
+    if (
+      haversineCoords(pEnd, [toAnchor.lng, toAnchor.lat]) > CONNECT_TOLERANCE_M
+    ) {
       return { body: null, degraded: true };
     }
     const steps = walkSteps(leg, points);
@@ -280,7 +411,10 @@ async function planWalkConnector(
       },
     };
   } catch (error) {
-    console.warn("[valhalla-routing] Valhalla walk connector fallback failed", error);
+    console.warn(
+      "[valhalla-routing] Valhalla walk connector fallback failed",
+      error,
+    );
     return { body: null, degraded: true };
   }
 }
@@ -307,7 +441,13 @@ function createLimiter(limit: number) {
 
 /** Clone a connector body into a full WALK leg with position-specific labels. */
 function toWalkLeg(body: WalkConnector, from: string, to: string): WalkLeg {
-  return { ...body, from, to, polyline: [...body.polyline], a11yFacilities: [] };
+  return {
+    ...body,
+    from,
+    to,
+    polyline: [...body.polyline],
+    a11yFacilities: [],
+  };
 }
 
 /**
@@ -347,10 +487,24 @@ async function attachWalkAccessLegs(
       const driveLegs = route.legs as DriveLeg[];
       const originSnap = driveLegs[0].from;
       const destSnap = driveLegs.at(-1)!.to;
-      const gapHead = haversineMeters(origin.lat, origin.lng, originSnap.lat, originSnap.lng);
-      const gapTail = haversineMeters(destSnap.lat, destSnap.lng, tailTarget.lat, tailTarget.lng);
-      const headPending = gapHead > WALK_ACCESS_MIN_GAP_M ? connector(origin, originSnap) : null;
-      const tailPending = gapTail > WALK_ACCESS_MIN_GAP_M ? connector(destSnap, tailTarget) : null;
+      const gapHead = haversineMeters(
+        origin.lat,
+        origin.lng,
+        originSnap.lat,
+        originSnap.lng,
+      );
+      const gapTail = haversineMeters(
+        destSnap.lat,
+        destSnap.lng,
+        tailTarget.lat,
+        tailTarget.lng,
+      );
+      const headPending =
+        gapHead > WALK_ACCESS_MIN_GAP_M ? connector(origin, originSnap) : null;
+      const tailPending =
+        gapTail > WALK_ACCESS_MIN_GAP_M
+          ? connector(destSnap, tailTarget)
+          : null;
 
       const wpMatches = driveLegs.length - 1 === waypoints.length;
       if (waypoints.length && !wpMatches) {
@@ -362,16 +516,28 @@ async function attachWalkAccessLegs(
         ? waypoints.flatMap((trueWp, j) => {
             const arrivalSnap = driveLegs[j].to;
             const departureSnap = driveLegs[j + 1].from;
-            const gapArrival = haversineMeters(trueWp.lat, trueWp.lng, arrivalSnap.lat, arrivalSnap.lng);
-            const gapDeparture = haversineMeters(trueWp.lat, trueWp.lng, departureSnap.lat, departureSnap.lng);
+            const gapArrival = haversineMeters(
+              trueWp.lat,
+              trueWp.lng,
+              arrivalSnap.lat,
+              arrivalSnap.lng,
+            );
+            const gapDeparture = haversineMeters(
+              trueWp.lat,
+              trueWp.lng,
+              departureSnap.lat,
+              departureSnap.lng,
+            );
             const gap = Math.max(gapArrival, gapDeparture);
             if (gap <= WALK_ACCESS_MIN_GAP_M) return [];
-            return [{
-              index: j,
-              gap,
-              inPending: connector(arrivalSnap, trueWp),
-              outPending: connector(trueWp, departureSnap),
-            }];
+            return [
+              {
+                index: j,
+                gap,
+                inPending: connector(arrivalSnap, trueWp),
+                outPending: connector(trueWp, departureSnap),
+              },
+            ];
           })
         : [];
 
@@ -403,7 +569,9 @@ async function attachWalkAccessLegs(
           walkDistanceM += head.distanceM;
           highlights.push(`起點需步行約 ${head.distanceM} 公尺至可上車路段`);
         } else {
-          highlights.push(`起點距可行車路段約 ${Math.round(gapHead)} 公尺，但無法建立可信步行路徑，請留意`);
+          highlights.push(
+            `起點距可行車路段約 ${Math.round(gapHead)} 公尺，但無法建立可信步行路徑，請留意`,
+          );
         }
       }
 
@@ -418,9 +586,13 @@ async function attachWalkAccessLegs(
           legs.push(toWalkLeg(slot.out, label, `${label} 停車處`));
           walkMinutes += slot.in.minutesEst + slot.out.minutesEst;
           walkDistanceM += slot.in.distanceM + slot.out.distanceM;
-          highlights.push(`${label} 需步行約 ${slot.in.distanceM + slot.out.distanceM} 公尺往返停車處`);
+          highlights.push(
+            `${label} 需步行約 ${slot.in.distanceM + slot.out.distanceM} 公尺往返停車處`,
+          );
         } else {
-          highlights.push(`${label} 距可行車路段約 ${Math.round(slot.gap)} 公尺，但無法建立可信步行路徑，請留意`);
+          highlights.push(
+            `${label} 距可行車路段約 ${Math.round(slot.gap)} 公尺，但無法建立可信步行路徑，請留意`,
+          );
         }
       });
 
@@ -429,9 +601,13 @@ async function attachWalkAccessLegs(
           legs.push(toWalkLeg(tail, "下車處", "終點"));
           walkMinutes += tail.minutesEst;
           walkDistanceM += tail.distanceM;
-          highlights.push(`於終點前約 ${tail.distanceM} 公尺處停車，需步行至目的地`);
+          highlights.push(
+            `於終點前約 ${tail.distanceM} 公尺處停車，需步行至目的地`,
+          );
         } else {
-          highlights.push(`目的地距可行車路段約 ${Math.round(gapTail)} 公尺，但無法建立可信步行路徑，請留意`);
+          highlights.push(
+            `目的地距可行車路段約 ${Math.round(gapTail)} 公尺，但無法建立可信步行路徑，請留意`,
+          );
         }
       }
 
@@ -441,8 +617,17 @@ async function attachWalkAccessLegs(
         totalMinutes: route.totalMinutes + walkMinutes,
         totalWalkDistanceM: walkDistanceM,
         accessibilityHighlights: highlights,
-        ...(headResult?.degraded || tailResult?.degraded || wpResolved.some((slot) => slot.degraded)
-          ? { warnings: [...new Set([...(route.warnings ?? []), ROUTE_WARNING.OTP_WALK_FALLBACK])] }
+        ...(headResult?.degraded ||
+        tailResult?.degraded ||
+        wpResolved.some((slot) => slot.degraded)
+          ? {
+              warnings: [
+                ...new Set([
+                  ...(route.warnings ?? []),
+                  ROUTE_WARNING.OTP_WALK_FALLBACK,
+                ]),
+              ],
+            }
           : {}),
       };
     }),
@@ -455,19 +640,27 @@ export async function planValhallaRoute(
   opts: PlanRoadRouteOptions,
 ): Promise<AccessibleRoute[]> {
   const result = await computeValhallaRoutes({
-    origin, destination, waypoints: opts.waypoints,
-    costing: COSTING[opts.travelMode], computeAlternatives: true,
+    origin,
+    destination,
+    waypoints: opts.waypoints,
+    costing: COSTING[opts.travelMode],
+    computeAlternatives: true,
     wheelchair:
       opts.travelMode === "walk" &&
       (opts.avoidStairs ?? opts.mode === "wheelchair"),
   });
   if (result.status === "NO_ROUTE") return [];
   if (result.status === "UPSTREAM_ERROR") {
-    throw new ValhallaRoutingError("Valhalla routing upstream error", result.httpStatus);
+    throw new ValhallaRoutingError(
+      "Valhalla routing upstream error",
+      result.httpStatus,
+    );
   }
   let routes: AccessibleRoute[];
   try {
-    routes = result.trips.map((trip, index) => mapTrip(trip, opts.travelMode, index));
+    routes = result.trips.map((trip, index) =>
+      mapTrip(trip, opts.travelMode, index),
+    );
   } catch (error) {
     if (error instanceof ValhallaRoutingError) throw error;
     throw new ValhallaRoutingError("Malformed Valhalla response");

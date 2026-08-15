@@ -24,9 +24,9 @@ describe("route token cache", () => {
   it("adds a high-entropy token only after Redis confirms the write", async () => {
     redisSetChecked.mockResolvedValue(true);
     const [stored] = await attachRouteTokens([sampleRoute]);
-    expect(stored.routeToken).toMatch(/^[A-Za-z0-9_-]{40,}$/);
+    expect(stored.routeToken!).toMatch(/^[A-Za-z0-9_-]{40,}$/);
     expect(redisSetChecked).toHaveBeenCalledWith(
-      expect.stringContaining(stored.routeToken),
+      expect.stringContaining(stored.routeToken!),
       JSON.stringify(sampleRoute),
       1800,
     );

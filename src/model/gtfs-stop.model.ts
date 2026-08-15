@@ -19,7 +19,7 @@ const gtfsStopSchema = new Schema<IGtfsStop>({
 gtfsStopSchema.index({ stopId: 1 }, { unique: true });
 gtfsStopSchema.index(
   { location: "2dsphere" },
-  { partialFilterExpression: { locationType: { $in: [0, 2] } } }
+  { partialFilterExpression: { locationType: { $in: [0, 2] } } },
 );
 gtfsStopSchema.index({ parentStation: 1 });
 

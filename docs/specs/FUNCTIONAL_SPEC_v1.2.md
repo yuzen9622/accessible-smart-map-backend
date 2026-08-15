@@ -1,4 +1,5 @@
 # 無障礙混合式交通導航系統
+
 ## Functional Specification v1.2 — ORS Hybrid Architecture
 
 **版本**：v1.6.0  
@@ -34,15 +35,15 @@
 
 本系統為多模態無障礙導航平台，整合以下技術棧運作：
 
-| 組件 | 角色 | 實作狀態 |
-|------|------|---------|
-| **OpenRouteService (ORS)** | 步行 / 輪椅路徑引擎（First/Last Mile） | ✅ `src/config/ors.ts` |
-| **GTFS（來源：TDX）** | 大眾運輸路由圖主要資料層 | 📋 `src/scripts/import-gtfs-*.ts` |
-| **TDX 台灣交通資料平台** | 即時資料補強（班次位置、設施狀態） | ✅ `src/config/transit.ts` |
-| **Indoor Graph** | 車站室內路徑 | ✅ `src/service/a11y-exit.service.ts` |
-| **Accessibility Engine** | 無障礙評分與路徑成本 | ✅ `src/config/a11y-scoring.ts` |
-| **Google Gemini / AI Layer** | 語意解析與路徑說明 | ✅ `src/modules/chatbot/` |
-| **MongoDB + Redis** | 資料持久化 + walk-time 快取 | ✅ `src/config/redis.ts` |
+| 組件                         | 角色                                   | 實作狀態                              |
+| ---------------------------- | -------------------------------------- | ------------------------------------- |
+| **OpenRouteService (ORS)**   | 步行 / 輪椅路徑引擎（First/Last Mile） | ✅ `src/config/ors.ts`                |
+| **GTFS（來源：TDX）**        | 大眾運輸路由圖主要資料層               | 📋 `src/scripts/import-gtfs-*.ts`     |
+| **TDX 台灣交通資料平台**     | 即時資料補強（班次位置、設施狀態）     | ✅ `src/config/transit.ts`            |
+| **Indoor Graph**             | 車站室內路徑                           | ✅ `src/service/a11y-exit.service.ts` |
+| **Accessibility Engine**     | 無障礙評分與路徑成本                   | ✅ `src/config/a11y-scoring.ts`       |
+| **Google Gemini / AI Layer** | 語意解析與路徑說明                     | ✅ `src/modules/chatbot/`             |
+| **MongoDB + Redis**          | 資料持久化 + walk-time 快取            | ✅ `src/config/redis.ts`              |
 
 **系統定位**：ORS 驅動的混合式無障礙圖論導航系統，針對臺灣大眾運輸環境與輪椅使用者需求特化。
 
@@ -60,13 +61,13 @@
 
 ### 2.2 非功能目標
 
-| 目標 | 說明 |
-|------|------|
-| ORS 為核心 routing | 不自建 global routing，由 ORS 負責 |
-| Backend 統一處理 | 所有 routing 邏輯在 backend，前端僅 render |
-| 可替換 ORS | 透過 `src/config/ors.ts` 抽象層，可切換引擎 |
-| 快取優先 | ORS 呼叫結果快取於 Redis（7天 TTL） |
-| 無障礙 as first-class | 所有路段均計算無障礙分數，非事後加工 |
+| 目標                  | 說明                                        |
+| --------------------- | ------------------------------------------- |
+| ORS 為核心 routing    | 不自建 global routing，由 ORS 負責          |
+| Backend 統一處理      | 所有 routing 邏輯在 backend，前端僅 render  |
+| 可替換 ORS            | 透過 `src/config/ors.ts` 抽象層，可切換引擎 |
+| 快取優先              | ORS 呼叫結果快取於 Redis（7天 TTL）         |
+| 無障礙 as first-class | 所有路段均計算無障礙分數，非事後加工        |
 
 ---
 
@@ -76,13 +77,13 @@
 
 ### 3.1 已完成 Phase
 
-| Phase | 功能 | 核心檔案 |
-|-------|------|---------|
-| **Phase 1** | 直達路線查詢（公車 / 捷運 / 高鐵 / 台鐵） | `accessible-route.service.ts` |
-| **Phase 2** | `findReachableStops` — ORS Matrix 步行過濾 | `reachable-stops.service.ts` |
-| **Phase 3** | 一次轉乘路線組合 | `transfer-finder.ts` |
-| **Phase 4** | 轉乘複合鍵去重 + `transferCount` | `accessible-route.service.ts` |
-| **Phase 5** | TRTC 車站無障礙出口室內導航 | `a11y-exit.service.ts` |
+| Phase       | 功能                                       | 核心檔案                      |
+| ----------- | ------------------------------------------ | ----------------------------- |
+| **Phase 1** | 直達路線查詢（公車 / 捷運 / 高鐵 / 台鐵）  | `accessible-route.service.ts` |
+| **Phase 2** | `findReachableStops` — ORS Matrix 步行過濾 | `reachable-stops.service.ts`  |
+| **Phase 3** | 一次轉乘路線組合                           | `transfer-finder.ts`          |
+| **Phase 4** | 轉乘複合鍵去重 + `transferCount`           | `accessible-route.service.ts` |
+| **Phase 5** | TRTC 車站無障礙出口室內導航                | `a11y-exit.service.ts`        |
 
 ### 3.2 已建立的核心基礎設施
 
@@ -114,13 +115,13 @@ src/
 
 以下問題是引入 GTFS 的主要動機：
 
-| 問題 | 根因 | GTFS 解法 |
-|------|------|----------|
-| 公車路線 polyline 不準確 | TDX API 無 shapes 資料 | `shapes.txt` 提供真實幾何 |
-| 站點順序錯誤或缺失 | TDX stop sequence 有缺 | `stop_times.txt` 有完整序列 |
-| 轉乘連結依賴 800m 地理估算 | 無官方轉乘定義 | `transfers.txt` 精確定義 |
-| 時刻不準 / 無法計算精確候車時間 | 依賴 TDX realtime（不穩定） | `stop_times.txt` 靜態時刻 |
-| 跨城市公車路線覆蓋不完整 | TDX API 分城市查詢有漏 | GTFS feed 涵蓋所有系統 |
+| 問題                            | 根因                        | GTFS 解法                   |
+| ------------------------------- | --------------------------- | --------------------------- |
+| 公車路線 polyline 不準確        | TDX API 無 shapes 資料      | `shapes.txt` 提供真實幾何   |
+| 站點順序錯誤或缺失              | TDX stop sequence 有缺      | `stop_times.txt` 有完整序列 |
+| 轉乘連結依賴 800m 地理估算      | 無官方轉乘定義              | `transfers.txt` 精確定義    |
+| 時刻不準 / 無法計算精確候車時間 | 依賴 TDX realtime（不穩定） | `stop_times.txt` 靜態時刻   |
+| 跨城市公車路線覆蓋不完整        | TDX API 分城市查詢有漏      | GTFS feed 涵蓋所有系統      |
 
 ### 3.3 現有 API
 
@@ -248,13 +249,13 @@ orsWalkingMatrix(source: LatLng, destinations: LatLng[]): Promise<number[]>
 
 **ORS Profile 對應**
 
-| 場景 | ORS Profile | 說明 |
-|------|------------|------|
-| 一般步行段 | `foot-walking` | 預設步行路段 |
-| 輪椅模式 | `wheelchair` | 坡道限制、門檻過濾 |
-| 起點 → 捷運站 | `foot-walking` | 進站步行 |
-| 車站出口 → 目的地 | `foot-walking` | 離站步行 |
-| Matrix 計算 | `foot-walking` | 可達站點過濾 |
+| 場景              | ORS Profile    | 說明               |
+| ----------------- | -------------- | ------------------ |
+| 一般步行段        | `foot-walking` | 預設步行路段       |
+| 輪椅模式          | `wheelchair`   | 坡道限制、門檻過濾 |
+| 起點 → 捷運站     | `foot-walking` | 進站步行           |
+| 車站出口 → 目的地 | `foot-walking` | 離站步行           |
+| Matrix 計算       | `foot-walking` | 可達站點過濾       |
 
 **Fallback 策略**：ORS API Key 不存在或呼叫失敗時，退回 Haversine 直線距離 × 1.4 係數估算。
 
@@ -277,16 +278,17 @@ Pattern: fire-and-forget write, synchronous read
 
 #### v1.3 後 TDX 職責範圍
 
-| 職責 | TDX Endpoint | 狀態 |
-|------|------------|------|
-| 公車即時位置 | `/Bus/RealTimeByFrequency` | ✅ 保留 |
-| 捷運設施狀態 | `/Rail/Metro/{system}/StationFacility` | ✅ 保留 |
-| 高鐵即時誤點 | `/Rail/THSR/RealTimeStatus` | 📋 待整合 |
-| OAuth token | `client_credentials` flow | ✅ 保留 |
+| 職責         | TDX Endpoint                           | 狀態      |
+| ------------ | -------------------------------------- | --------- |
+| 公車即時位置 | `/Bus/RealTimeByFrequency`             | ✅ 保留   |
+| 捷運設施狀態 | `/Rail/Metro/{system}/StationFacility` | ✅ 保留   |
+| 高鐵即時誤點 | `/Rail/THSR/RealTimeStatus`            | 📋 待整合 |
+| OAuth token  | `client_credentials` flow              | ✅ 保留   |
 
 #### TDX Token 管理
 
 `TdxTokenManger`（singleton）處理 OAuth2 `client_credentials` 流程：
+
 - 自動取得 token
 - 401 時自動 refresh
 - 所有 TDX 呼叫經由 `tdxFetch()` 統一注入 Bearer token
@@ -331,6 +333,7 @@ flat walk  → cost = normal
 #### 擴充計畫（Phase 6+）
 
 未來可擴充至非 TRTC 系統（NTMC / KLRT / TMRT / KRTC）：
+
 - ORS exit point → indoor entry node mapping
 - 電梯位置資料來源：OSM `highway=elevator` nodes（已匯入 `OsmA11y`）
 
@@ -352,31 +355,31 @@ Route Score (0-100) =
 
 #### Tier 分級（文獻依據：CHI25, Huang25, MDPI Scoping Review 2025）
 
-| Tier | 特徵 | 評分影響 |
-|------|------|---------|
+| Tier   | 特徵             | 評分影響                    |
+| ------ | ---------------- | --------------------------- |
 | Tier 1 | 電梯、無障礙坡道 | Critical — 缺少直接降分 30+ |
-| Tier 2 | 無障礙廁所、停車 | High — 各 +10~15 |
-| Tier 3 | 觸覺引導 | Medium — 各 +5~8 |
-| Tier 4 | 輔助聽覺 | Low — 各 +2~3 |
+| Tier 2 | 無障礙廁所、停車 | High — 各 +10~15            |
+| Tier 3 | 觸覺引導         | Medium — 各 +5~8            |
+| Tier 4 | 輔助聽覺         | Low — 各 +2~3               |
 
 #### 評分標籤
 
-| Score | Label |
-|-------|-------|
+| Score  | Label     |
+| ------ | --------- |
 | 85-100 | excellent |
-| 70-84 | good |
-| 50-69 | fair |
-| 30-49 | poor |
-| 0-29 | critical |
+| 70-84  | good      |
+| 50-69  | fair      |
+| 30-49  | poor      |
+| 0-29   | critical  |
 
 #### 無障礙模式
 
-| Mode | 特殊行為 |
-|------|---------|
-| `wheelchair` | Tier 1 缺失 = 路線排除；ORS 使用 wheelchair profile |
-| `elderly` | Tier 1 + Tier 2 權重提升；坡度限制放寬 |
-| `visual_impaired` | 觸覺引導（Tier 3）提升為 critical |
-| `normal` | 標準評分，無排除規則 |
+| Mode              | 特殊行為                                            |
+| ----------------- | --------------------------------------------------- |
+| `wheelchair`      | Tier 1 缺失 = 路線排除；ORS 使用 wheelchair profile |
+| `elderly`         | Tier 1 + Tier 2 權重提升；坡度限制放寬              |
+| `visual_impaired` | 觸覺引導（Tier 3）提升為 critical                   |
+| `normal`          | 標準評分，無排除規則                                |
 
 ---
 
@@ -399,26 +402,26 @@ Route Score (0-100) =
 ```typescript
 // 路由查詢意圖解析輸出
 type RouteIntent = {
-  from: string           // 起點（中文地址或地標）
-  to: string             // 終點
-  mode: AccessibilityMode
-  departureTime?: string // ISO 8601 或 "now"
+  from: string; // 起點（中文地址或地標）
+  to: string; // 終點
+  mode: AccessibilityMode;
+  departureTime?: string; // ISO 8601 或 "now"
   preferences?: {
-    minimizeTransfers?: boolean
-    preferElevator?: boolean
-  }
-}
+    minimizeTransfers?: boolean;
+    preferElevator?: boolean;
+  };
+};
 ```
 
 #### Route Explanation Schema
 
 ```typescript
 type RouteExplanation = {
-  summary: string           // 一句話摘要
-  accessibilityHighlights: string[]  // ["全程電梯", "無須跨越平交道"]
-  warnings: string[]        // ["3號出口電梯可能有維修"]
-  alternatives?: string     // fallback 建議
-}
+  summary: string; // 一句話摘要
+  accessibilityHighlights: string[]; // ["全程電梯", "無須跨越平交道"]
+  warnings: string[]; // ["3號出口電梯可能有維修"]
+  alternatives?: string; // fallback 建議
+};
 ```
 
 ---
@@ -430,22 +433,22 @@ type RouteExplanation = {
 ```typescript
 // 現有 MongoDB 集合的統一視圖
 type RoutingNode = {
-  id: string
-  name: string
-  type: "BUS_STOP" | "METRO_STATION" | "TRAIN_STATION" | "INDOOR_NODE"
+  id: string;
+  name: string;
+  type: "BUS_STOP" | "METRO_STATION" | "TRAIN_STATION" | "INDOOR_NODE";
   location: {
-    lat: number
-    lng: number
-  }
-  railSystem?: "TRTC" | "NTMC" | "KLRT" | "TMRT" | "KRTC" | "THSR" | "TRA"
-  lineIds?: string[]
+    lat: number;
+    lng: number;
+  };
+  railSystem?: "TRTC" | "NTMC" | "KLRT" | "TMRT" | "KRTC" | "THSR" | "TRA";
+  lineIds?: string[];
   accessibility?: {
-    hasElevator: boolean
-    hasRamp: boolean
-    hasAccessibleToilet: boolean
-    accessibilityScore: number
-  }
-}
+    hasElevator: boolean;
+    hasRamp: boolean;
+    hasAccessibleToilet: boolean;
+    accessibilityScore: number;
+  };
+};
 ```
 
 ### 6.2 路段型別（Leg）
@@ -453,75 +456,75 @@ type RoutingNode = {
 ```typescript
 // 現有 leg 型別（已實作）
 type WalkLeg = {
-  type: "WALK"
-  from: string
-  to: string
-  distanceM: number
-  minutesEst: number
-  polyline: string             // Google encoded polyline
-  a11yFacilities: OsmA11yFeature[]
-  exitInfo?: A11yExit          // Indoor graph 出口資訊
-}
+  type: "WALK";
+  from: string;
+  to: string;
+  distanceM: number;
+  minutesEst: number;
+  polyline: string; // Google encoded polyline
+  a11yFacilities: OsmA11yFeature[];
+  exitInfo?: A11yExit; // Indoor graph 出口資訊
+};
 
 type BusLeg = {
-  type: "BUS"
-  routeName: string
-  departureStop: string
-  arrivalStop: string
-  waitInfo: WaitInfo
-  direction: number
-  polyline: string
-  departureStopA11y: A11yFeatures
-  arrivalStopA11y: A11yFeatures
-  nearestBus?: BusRealTimeInfo
-}
+  type: "BUS";
+  routeName: string;
+  departureStop: string;
+  arrivalStop: string;
+  waitInfo: WaitInfo;
+  direction: number;
+  polyline: string;
+  departureStopA11y: A11yFeatures;
+  arrivalStopA11y: A11yFeatures;
+  nearestBus?: BusRealTimeInfo;
+};
 
 type MetroLeg = {
-  type: "METRO"
-  railSystem: string
-  lineName: string
-  departureStation: string
-  arrivalStation: string
-  rideMinutes: number
-  waitInfo: WaitInfo
-  polyline: string
-  facilityHighlights: string[]
-}
+  type: "METRO";
+  railSystem: string;
+  lineName: string;
+  departureStation: string;
+  arrivalStation: string;
+  rideMinutes: number;
+  waitInfo: WaitInfo;
+  polyline: string;
+  facilityHighlights: string[];
+};
 
 type ThsrLeg = {
-  type: "THSR"
-  trainNo: string
-  departureTime: string
-  arrivalTime: string
-  rideMinutes: number
-  polyline: string
-}
+  type: "THSR";
+  trainNo: string;
+  departureTime: string;
+  arrivalTime: string;
+  rideMinutes: number;
+  polyline: string;
+};
 
 type TraLeg = {
-  type: "TRA"
-  trainNo: string
-  trainTypeName: string
-  departureTime: string
-  arrivalTime: string
-  polyline: string
-}
+  type: "TRA";
+  trainNo: string;
+  trainTypeName: string;
+  departureTime: string;
+  arrivalTime: string;
+  polyline: string;
+};
 ```
 
 ### 6.3 路線型別（Route）
 
 ```typescript
 type AccessibleRoute = {
-  routeId: string
-  routeName: string                    // "捷運直達", "公車一次轉乘" 等
-  totalMinutes: number
-  transferCount: 0 | 1                 // 目前支援 0 或 1 次轉乘
-  legs: (WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg)[]
-  accessibilityHighlights: string[]
-  accessibilityScore: number           // 0-100
-  accessibilityLabel: "excellent" | "good" | "fair" | "poor" | "critical"
-  scoreComponents: RouteAccessibilityScore
-  source: ("ORS" | "TDX" | "INDOOR" | "A11Y_ENGINE")[]
-}
+  routeId: string;
+  routeName: string; // "捷運直達", "公車一次轉乘" 等
+  totalMinutes: number;
+  transferCount: 0 | 1; // 目前支援 0 或 1 次轉乘
+  legs: (WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg)[];
+  accessibilityHighlights: string[];
+  accessibilityScore: number; // 0-100
+  accessibilityLabel: "excellent" | "good" | "fair" | "poor" | "critical";
+  scoreComponents: RouteAccessibilityScore;
+  source: ("ORS" | "TDX" | "INDOOR" | "A11Y_ENGINE")[];
+};
 ```
 
 ### 6.4 API Response 包裝
@@ -594,21 +597,21 @@ ApiResponse<AccessibleRouteData>
 
 每個 WalkLeg 的 polyline 來源：
 
-| 場景 | 資料來源 |
-|------|---------|
-| 起點 → 第一個站點 | `orsWalkingRoute()` |
-| 末站 → 終點 | `orsWalkingRoute()` |
-| 轉乘間步行 | `orsWalkingRoute()`（預估）|
-| Matrix 時間估算 | `orsWalkingMatrix()`（快取） |
+| 場景              | 資料來源                     |
+| ----------------- | ---------------------------- |
+| 起點 → 第一個站點 | `orsWalkingRoute()`          |
+| 末站 → 終點       | `orsWalkingRoute()`          |
+| 轉乘間步行        | `orsWalkingRoute()`（預估）  |
+| Matrix 時間估算   | `orsWalkingMatrix()`（快取） |
 
 ### 7.3 轉乘預算限制
 
-| 參數 | 值 | 說明 |
-|------|------|------|
-| 步行預算 | 20 分鐘 | 可達站點最大步行時間 |
-| 步行速度 | 60 m/min | 估算距離 → 時間 |
-| 轉乘距離 | 800 m | 轉乘站點預過濾閾值 |
-| 最大路線數 | 3 | 最終回傳候選路線數 |
+| 參數       | 值       | 說明                 |
+| ---------- | -------- | -------------------- |
+| 步行預算   | 20 分鐘  | 可達站點最大步行時間 |
+| 步行速度   | 60 m/min | 估算距離 → 時間      |
+| 轉乘距離   | 800 m    | 轉乘站點預過濾閾值   |
+| 最大路線數 | 3        | 最終回傳候選路線數   |
 
 ---
 
@@ -657,13 +660,13 @@ Content-Type: application/json
 
 ### 8.2 輸出處理
 
-| ORS 輸出欄位 | 系統用途 |
-|------------|---------|
-| `geometry` (polyline) | WalkLeg.polyline |
-| `duration` (seconds) | WalkLeg.minutesEst |
-| `distance` (meters) | WalkLeg.distanceM |
-| `segments[].steps` | 未來逐步指引 |
-| `matrix durations` | 可達站點過濾 + 快取 |
+| ORS 輸出欄位          | 系統用途            |
+| --------------------- | ------------------- |
+| `geometry` (polyline) | WalkLeg.polyline    |
+| `duration` (seconds)  | WalkLeg.minutesEst  |
+| `distance` (meters)   | WalkLeg.distanceM   |
+| `segments[].steps`    | 未來逐步指引        |
+| `matrix durations`    | 可達站點過濾 + 快取 |
 
 ### 8.3 錯誤處理
 
@@ -716,21 +719,21 @@ stop_id, stop_name, stop_lat, stop_lon, zone_id, location_type, parent_station, 
 
 #### location_type 分佈
 
-| location_type | 含義 | 筆數 |
-|--------------|------|------|
-| 0 | Stop / Platform（搭乘點） | 154,825 |
-| 1 | Station（站體建築，parent） | 247 |
-| 2 | Entrance / Exit（出入口） | 686 |
-| 3 | Generic Node（室內路徑節點） | 5,876 |
+| location_type | 含義                         | 筆數    |
+| ------------- | ---------------------------- | ------- |
+| 0             | Stop / Platform（搭乘點）    | 154,825 |
+| 1             | Station（站體建築，parent）  | 247     |
+| 2             | Entrance / Exit（出入口）    | 686     |
+| 3             | Generic Node（室內路徑節點） | 5,876   |
 
 #### route_type 分佈
 
-| route_type | 含義 | 筆數 |
-|------------|------|------|
-| 1 | 捷運（Subway / Metro） | 47 |
-| 2 | 鐵路（TRA 台鐵 / THSR 高鐵） | 245 |
-| 3 | 公車（Bus） | 8,565 |
-| 4 | 渡輪（Ferry） | 49 |
+| route_type | 含義                         | 筆數  |
+| ---------- | ---------------------------- | ----- |
+| 1          | 捷運（Subway / Metro）       | 47    |
+| 2          | 鐵路（TRA 台鐵 / THSR 高鐵） | 245   |
+| 3          | 公車（Bus）                  | 8,565 |
+| 4          | 渡輪（Ferry）                | 49    |
 
 ---
 
@@ -740,18 +743,18 @@ stop_id, stop_name, stop_lat, stop_lon, zone_id, location_type, parent_station, 
 
 ```typescript
 interface IGtfsStop {
-  stopId: string
-  stopName: string
-  stopLat: number
-  stopLon: number
-  zoneId?: string
-  locationType: 0 | 1 | 2 | 3   // 0=搭乘點, 1=站體, 2=出入口, 3=室內節點
-  parentStation?: string          // location_type 1 站體的 stop_id
-  levelId?: string                // 關聯 GtfsLevel
+  stopId: string;
+  stopName: string;
+  stopLat: number;
+  stopLon: number;
+  zoneId?: string;
+  locationType: 0 | 1 | 2 | 3; // 0=搭乘點, 1=站體, 2=出入口, 3=室內節點
+  parentStation?: string; // location_type 1 站體的 stop_id
+  levelId?: string; // 關聯 GtfsLevel
   location: {
-    type: "Point"
-    coordinates: [number, number]  // [lng, lat]
-  }
+    type: "Point";
+    coordinates: [number, number]; // [lng, lat]
+  };
   // ⚠️ 無 wheelchair_boarding 欄位（TDX GTFS 未提供）
   // 無障礙可達性從 GtfsPathway.pathwayMode = 5 推導
 }
@@ -762,11 +765,11 @@ interface IGtfsStop {
 
 ```typescript
 interface IGtfsRoute {
-  routeId: string
-  agencyId: string
-  routeShortName: string   // e.g. "307", "板南線"
-  routeLongName: string
-  routeType: 1 | 2 | 3 | 4  // 1=捷運, 2=鐵路, 3=公車, 4=渡輪
+  routeId: string;
+  agencyId: string;
+  routeShortName: string; // e.g. "307", "板南線"
+  routeLongName: string;
+  routeType: 1 | 2 | 3 | 4; // 1=捷運, 2=鐵路, 3=公車, 4=渡輪
 }
 // Index: routeId (unique), routeShortName
 ```
@@ -775,12 +778,12 @@ interface IGtfsRoute {
 
 ```typescript
 interface IGtfsTrip {
-  tripId: string
-  routeId: string
-  serviceId: string   // 關聯 GtfsCalendar
-  shapeId?: string    // 關聯 GtfsShape（公車 / 鐵路有值，部分可能為空）
-  directionId: 0 | 1
-  bikesAllowed?: 0 | 1 | 2
+  tripId: string;
+  routeId: string;
+  serviceId: string; // 關聯 GtfsCalendar
+  shapeId?: string; // 關聯 GtfsShape（公車 / 鐵路有值，部分可能為空）
+  directionId: 0 | 1;
+  bikesAllowed?: 0 | 1 | 2;
   // ⚠️ tripHeadsign 在此 feed 中未出現
 }
 // Index: tripId (unique), routeId, serviceId
@@ -792,11 +795,11 @@ interface IGtfsTrip {
 
 ```typescript
 interface IGtfsStopTime {
-  tripId: string
-  stopId: string
-  stopSequence: number    // 站點序號，路線順序依據
-  arrivalTime: string     // "HH:MM:SS"，可超過 "24:00:00"（跨日班次）
-  departureTime: string
+  tripId: string;
+  stopId: string;
+  stopSequence: number; // 站點序號，路線順序依據
+  arrivalTime: string; // "HH:MM:SS"，可超過 "24:00:00"（跨日班次）
+  departureTime: string;
 }
 // ⚠️ pickup_type / drop_off_type 欄位在此 feed 未提供，不建模
 // Index: { tripId: 1, stopSequence: 1 }, { stopId: 1, departureTime: 1 }
@@ -808,11 +811,11 @@ interface IGtfsStopTime {
 
 ```typescript
 interface IGtfsShape {
-  shapeId: string
+  shapeId: string;
   geometry: {
-    type: "LineString"
-    coordinates: [number, number][]   // [lng, lat]，依 shape_pt_sequence 排序
-  }
+    type: "LineString";
+    coordinates: [number, number][]; // [lng, lat]，依 shape_pt_sequence 排序
+  };
 }
 // Index: shapeId (unique)
 ```
@@ -821,20 +824,21 @@ interface IGtfsShape {
 
 ```typescript
 interface IGtfsCalendar {
-  serviceId: string
-  monday: boolean
-  tuesday: boolean
-  wednesday: boolean
-  thursday: boolean
-  friday: boolean
-  saturday: boolean
-  sunday: boolean
-  startDate: string   // "YYYYMMDD"
-  endDate: string
-  exceptions: {       // calendar_dates.txt 合併儲存
-    date: string      // "YYYYMMDD"
-    exceptionType: 1 | 2   // 1=加班, 2=停駛
-  }[]
+  serviceId: string;
+  monday: boolean;
+  tuesday: boolean;
+  wednesday: boolean;
+  thursday: boolean;
+  friday: boolean;
+  saturday: boolean;
+  sunday: boolean;
+  startDate: string; // "YYYYMMDD"
+  endDate: string;
+  exceptions: {
+    // calendar_dates.txt 合併儲存
+    date: string; // "YYYYMMDD"
+    exceptionType: 1 | 2; // 1=加班, 2=停駛
+  }[];
 }
 // Index: serviceId (unique)
 ```
@@ -845,43 +849,43 @@ interface IGtfsCalendar {
 
 ```typescript
 interface IGtfsPathway {
-  pathwayId: string
-  fromStopId: string   // 關聯 GtfsStop（locationType 0/2/3）
-  toStopId: string
+  pathwayId: string;
+  fromStopId: string; // 關聯 GtfsStop（locationType 0/2/3）
+  toStopId: string;
   pathwayMode:
-    1 |  // walkway（步道）
-    2 |  // stairs（樓梯）← 輪椅模式禁止
-    3 |  // moving sidewalk（水平電扶梯）
-    4 |  // escalator（電扶梯）
-    5 |  // elevator（電梯）← 輪椅模式優先
-    6 |  // fare gate（驗票閘門）
-    7    // exit gate（出站閘門）
-  isBidirectional: 0 | 1
-  traversalTime?: number  // 秒
-  stairCount?: number     // 正=向上, 負=向下
+    | 1 // walkway（步道）
+    | 2 // stairs（樓梯）← 輪椅模式禁止
+    | 3 // moving sidewalk（水平電扶梯）
+    | 4 // escalator（電扶梯）
+    | 5 // elevator（電梯）← 輪椅模式優先
+    | 6 // fare gate（驗票閘門）
+    | 7; // exit gate（出站閘門）
+  isBidirectional: 0 | 1;
+  traversalTime?: number; // 秒
+  stairCount?: number; // 正=向上, 負=向下
 }
 // Index: fromStopId, toStopId, pathwayMode
 ```
 
 **pathway_mode 分佈（實際資料）**：
 
-| mode | 含義 | 筆數 | 輪椅模式 |
-|------|------|------|---------|
-| 1 | 步道 walkway | 6,718 | ✅ 可通行 |
-| 2 | 樓梯 stairs | 1,079 | ❌ 不可通行 |
-| 3 | 水平電扶梯 | 3 | ✅ 可通行 |
-| 4 | 電扶梯 escalator | 955 | ⚠️ 視方向 |
-| 5 | 電梯 elevator | 714 | ✅ 優先 |
-| 6 | 驗票閘門 | 405 | ✅ 視寬度 |
-| 7 | 出站閘門 | 346 | ✅ 視寬度 |
+| mode | 含義             | 筆數  | 輪椅模式    |
+| ---- | ---------------- | ----- | ----------- |
+| 1    | 步道 walkway     | 6,718 | ✅ 可通行   |
+| 2    | 樓梯 stairs      | 1,079 | ❌ 不可通行 |
+| 3    | 水平電扶梯       | 3     | ✅ 可通行   |
+| 4    | 電扶梯 escalator | 955   | ⚠️ 視方向   |
+| 5    | 電梯 elevator    | 714   | ✅ 優先     |
+| 6    | 驗票閘門         | 405   | ✅ 視寬度   |
+| 7    | 出站閘門         | 346   | ✅ 視寬度   |
 
 #### GtfsLevel（`src/model/gtfs-level.model.ts`）
 
 ```typescript
 interface IGtfsLevel {
-  levelId: string
-  levelIndex: number   // 負數 = 地下（如 -1=閘門層, -2=月台層）
-  levelName: string    // e.g. "閘門一(外)", "月台"
+  levelId: string;
+  levelIndex: number; // 負數 = 地下（如 -1=閘門層, -2=月台層）
+  levelName: string; // e.g. "閘門一(外)", "月台"
 }
 // Index: levelId (unique)
 ```
@@ -892,10 +896,10 @@ interface IGtfsLevel {
 
 ```typescript
 interface IGtfsFrequency {
-  tripId: string
-  startTime: string   // "HH:MM:SS"，服務起始時間
-  endTime: string     // "HH:MM:SS"，服務結束時間
-  headwaySecs: number // 班距（秒）
+  tripId: string;
+  startTime: string; // "HH:MM:SS"，服務起始時間
+  endTime: string; // "HH:MM:SS"，服務結束時間
+  headwaySecs: number; // 班距（秒）
 }
 // Index: tripId
 ```
@@ -943,17 +947,17 @@ npx ts-node src/scripts/import-gtfs-all.ts
 
 #### 預估匯入時間
 
-| 檔案 | 筆數 | 預估時間 |
-|------|------|---------|
-| stops.txt | 161K | < 1 min |
-| routes.txt | 8.9K | < 30s |
-| trips.txt | 148K | < 2 min |
-| stop_times.txt | 4.97M | 10-20 min |
-| shapes.txt | 5.41M → 聚合後 | 10-20 min |
-| pathways.txt | 10.2K | < 1 min |
-| calendar.txt | 136K | < 2 min |
-| frequencies.txt | 7.4K | < 30s |
-| **合計** | | **~30-45 min** |
+| 檔案            | 筆數           | 預估時間       |
+| --------------- | -------------- | -------------- |
+| stops.txt       | 161K           | < 1 min        |
+| routes.txt      | 8.9K           | < 30s          |
+| trips.txt       | 148K           | < 2 min        |
+| stop_times.txt  | 4.97M          | 10-20 min      |
+| shapes.txt      | 5.41M → 聚合後 | 10-20 min      |
+| pathways.txt    | 10.2K          | < 1 min        |
+| calendar.txt    | 136K           | < 2 min        |
+| frequencies.txt | 7.4K           | < 30s          |
+| **合計**        |                | **~30-45 min** |
 
 ---
 
@@ -965,8 +969,8 @@ npx ts-node src/scripts/import-gtfs-all.ts
 // 查詢起點附近可搭乘的 GTFS 站點（僅 locationType=0 的搭乘點）
 GtfsStop.find({
   locationType: 0,
-  location: { $near: { $geometry: point, $maxDistance: 1200 } }
-})
+  location: { $near: { $geometry: point, $maxDistance: 1200 } },
+});
 // ⚠️ 無 wheelchairBoarding，輪椅過濾改由 GtfsPathway 推導（見 Section 10）
 ```
 
@@ -977,19 +981,19 @@ GtfsStop.find({
 // Step 1: 找所有在 stopA 且出發時間 >= 現在的 stop_times
 const departures = await GtfsStopTime.find({
   stopId: stopA,
-  departureTime: { $gte: currentTimeStr }   // "HH:MM:SS"
-}).sort({ departureTime: 1 })
+  departureTime: { $gte: currentTimeStr }, // "HH:MM:SS"
+}).sort({ departureTime: 1 });
 
 // Step 2: 對每個 tripId，確認 stopB 在 stopA 之後
 const arrival = await GtfsStopTime.findOne({
   tripId: trip.tripId,
   stopId: stopB,
-  stopSequence: { $gt: departureSequence }
-})
+  stopSequence: { $gt: departureSequence },
+});
 
 // Step 3: 過濾今日有效 serviceId
-const calendar = await GtfsCalendar.findOne({ serviceId: trip.serviceId })
-if (!isTripActiveToday(calendar, today)) continue
+const calendar = await GtfsCalendar.findOne({ serviceId: trip.serviceId });
+if (!isTripActiveToday(calendar, today)) continue;
 ```
 
 #### 班距制路線查詢（frequencies.txt）
@@ -1001,12 +1005,13 @@ if (!isTripActiveToday(calendar, today)) continue
 const freq = await GtfsFrequency.findOne({
   tripId,
   startTime: { $lte: currentTimeStr },
-  endTime: { $gte: currentTimeStr }
-})
+  endTime: { $gte: currentTimeStr },
+});
 
 if (freq) {
   // 下一班 = ceil((now - startTime) / headwaySecs) * headwaySecs + startTime
-  const waitSecs = freq.headwaySecs - ((nowSecs - startSecs) % freq.headwaySecs)
+  const waitSecs =
+    freq.headwaySecs - ((nowSecs - startSecs) % freq.headwaySecs);
   // 以 stop_times 中的相對時間 + 下一班出發時間計算到站時刻
 }
 ```
@@ -1014,9 +1019,9 @@ if (freq) {
 #### 路線幾何（shapes → BusLeg / MetroLeg polyline）
 
 ```typescript
-const trip = await GtfsTrip.findOne({ tripId })
+const trip = await GtfsTrip.findOne({ tripId });
 if (trip.shapeId) {
-  const shape = await GtfsShape.findOne({ shapeId: trip.shapeId })
+  const shape = await GtfsShape.findOne({ shapeId: trip.shapeId });
   // shape.geometry (GeoJSON LineString) → 轉為 Google encoded polyline
 }
 ```
@@ -1024,6 +1029,7 @@ if (trip.shapeId) {
 #### 轉乘（無 transfers.txt → 地理接近判斷）
 
 > ⚠️ 此 GTFS feed **無 `transfers.txt`**。轉乘連結改用：
+>
 > 1. `GtfsStop.$near` 查詢同站體（相同 `parent_station`）的不同月台
 > 2. ORS Matrix 計算兩站間步行時間（現有邏輯保留）
 
@@ -1031,8 +1037,8 @@ if (trip.shapeId) {
 // 同站體轉乘：parent_station 相同的站點
 const platformsInSameStation = await GtfsStop.find({
   parentStation: parentStationId,
-  locationType: 0
-})
+  locationType: 0,
+});
 ```
 
 ---
@@ -1041,21 +1047,28 @@ const platformsInSameStation = await GtfsStop.find({
 
 ```typescript
 function isTripActiveToday(calendar: IGtfsCalendar, date: Date): boolean {
-  const days = ['sunday','monday','tuesday','wednesday',
-                'thursday','friday','saturday'] as const
-  const dayOfWeek = days[date.getDay()]
-  const dateStr = formatYYYYMMDD(date)   // "YYYYMMDD"
+  const days = [
+    "sunday",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+  ] as const;
+  const dayOfWeek = days[date.getDay()];
+  const dateStr = formatYYYYMMDD(date); // "YYYYMMDD"
 
   // calendar_dates 例外優先
-  const exception = calendar.exceptions.find(e => e.date === dateStr)
-  if (exception) return exception.exceptionType === 1   // 1=加班, 2=停駛
+  const exception = calendar.exceptions.find((e) => e.date === dateStr);
+  if (exception) return exception.exceptionType === 1; // 1=加班, 2=停駛
 
   // 一般服務日
   return (
     dateStr >= calendar.startDate &&
     dateStr <= calendar.endDate &&
     calendar[dayOfWeek]
-  )
+  );
 }
 ```
 
@@ -1063,10 +1076,10 @@ function isTripActiveToday(calendar: IGtfsCalendar, date: Date): boolean {
 
 ### 9.6 GTFS 更新策略
 
-| 頻率 | 動作 |
-|------|------|
-| 每週 | 重新從 TDX 下載 GTFS，執行 `import-gtfs-all.ts` |
-| 每日 | 僅更新 `calendar_dates.txt`（補登 / 停駛例外） |
+| 頻率 | 動作                                               |
+| ---- | -------------------------------------------------- |
+| 每週 | 重新從 TDX 下載 GTFS，執行 `import-gtfs-all.ts`    |
+| 每日 | 僅更新 `calendar_dates.txt`（補登 / 停駛例外）     |
 | 即時 | 班次延誤由 TDX realtime API 疊加於 GTFS 計算結果上 |
 
 ---
@@ -1092,15 +1105,15 @@ GtfsStop (location_type=0, Platform)
 
 ### 10.2 室內路徑規則（基於 pathway_mode）
 
-| pathway_mode | 含義 | 一般模式 | 輪椅模式 |
-|-------------|------|---------|---------|
-| 1 | walkway 步道 | cost = traversalTime | cost = traversalTime |
-| 2 | stairs 樓梯 | cost = traversalTime | cost = **∞（不可通行）** |
-| 3 | moving sidewalk | cost = traversalTime | cost = traversalTime |
-| 4 | escalator 電扶梯 | cost = traversalTime | ⚠️ `is_bidirectional=0` 時視方向 |
-| 5 | elevator 電梯 | cost = traversalTime | cost = traversalTime（**優先**） |
-| 6 | fare gate 驗票閘門 | cost = traversalTime | cost = traversalTime |
-| 7 | exit gate 出站閘門 | cost = traversalTime | cost = traversalTime |
+| pathway_mode | 含義               | 一般模式             | 輪椅模式                         |
+| ------------ | ------------------ | -------------------- | -------------------------------- |
+| 1            | walkway 步道       | cost = traversalTime | cost = traversalTime             |
+| 2            | stairs 樓梯        | cost = traversalTime | cost = **∞（不可通行）**         |
+| 3            | moving sidewalk    | cost = traversalTime | cost = traversalTime             |
+| 4            | escalator 電扶梯   | cost = traversalTime | ⚠️ `is_bidirectional=0` 時視方向 |
+| 5            | elevator 電梯      | cost = traversalTime | cost = traversalTime（**優先**） |
+| 6            | fare gate 驗票閘門 | cost = traversalTime | cost = traversalTime             |
+| 7            | exit gate 出站閘門 | cost = traversalTime | cost = traversalTime             |
 
 > `traversalTime` 欄位單位為**秒**，直接使用。若為 null，使用預設值（步道 15s、電梯 30s）。
 
@@ -1113,18 +1126,18 @@ GtfsStop (location_type=0, Platform)
 const entrance = await GtfsStop.findOne({
   locationType: 2,
   parentStation: stationId,
-  location: { $near: { $geometry: userPoint, $maxDistance: 200 } }
-})
+  location: { $near: { $geometry: userPoint, $maxDistance: 200 } },
+});
 
 // Step 2: 以 pathways 圖走到月台（locationType=0）
 // wheelchair 模式：排除 pathwayMode=2（樓梯）的邊
 const path = await findIndoorPath(entrance.stopId, platformStopId, {
-  excludePathwayModes: mode === 'wheelchair' ? [2] : [],
-  preferPathwayModes: mode === 'wheelchair' ? [5] : []
-})
+  excludePathwayModes: mode === "wheelchair" ? [2] : [],
+  preferPathwayModes: mode === "wheelchair" ? [5] : [],
+});
 
 // Step 3: 取第一個電梯節點作為前端指引
-const elevatorNode = path.find(p => p.pathwayMode === 5)
+const elevatorNode = path.find((p) => p.pathwayMode === 5);
 ```
 
 ### 10.4 無障礙站點推導
@@ -1135,24 +1148,24 @@ const elevatorNode = path.find(p => p.pathwayMode === 5)
 // 站體有無障礙通道 = 存在至少一條 pathwayMode=5（電梯）連結
 async function stationHasElevator(parentStationId: string): Promise<boolean> {
   const elevatorStops = await GtfsStop.find({
-    parentStation: parentStationId
-  }).select('stopId')
-  
+    parentStation: parentStationId,
+  }).select("stopId");
+
   const count = await GtfsPathway.countDocuments({
-    fromStopId: { $in: elevatorStops.map(s => s.stopId) },
-    pathwayMode: 5
-  })
-  return count > 0
+    fromStopId: { $in: elevatorStops.map((s) => s.stopId) },
+    pathwayMode: 5,
+  });
+  return count > 0;
 }
 ```
 
 ### 10.5 現有 `a11y-exit.service.ts` 的定位調整
 
-| 功能 | v1.2 | v1.3 |
-|------|------|------|
+| 功能                 | v1.2                            | v1.3                          |
+| -------------------- | ------------------------------- | ----------------------------- |
 | TRTC 電梯 / 坡道出口 | `A11y` collection（內政部資料） | GTFS pathways（所有系統統一） |
-| 出口號碼文字 | 從名稱字串解析 | GTFS `levels.txt` level_name |
-| 支援系統 | TRTC 限定 | 所有有 pathways 資料的系統 |
+| 出口號碼文字         | 從名稱字串解析                  | GTFS `levels.txt` level_name  |
+| 支援系統             | TRTC 限定                       | 所有有 pathways 資料的系統    |
 
 `a11y-exit.service.ts` 保留作為 **GTFS pathways 資料缺失時的 fallback**（TRTC 內政部資料補充）。
 
@@ -1184,41 +1197,45 @@ totalScore = facilityScore × 0.65 + timeScore × 0.35
 ```typescript
 // 路線排序使用的成本（非使用者顯示分數）
 type RouteCost = {
-  travelTime: number           // 分鐘
-  transferPenalty: number      // 每次轉乘 +5 分鐘等效
-  accessibilityPenalty: number // 無障礙缺失懲罰
-  
+  travelTime: number; // 分鐘
+  transferPenalty: number; // 每次轉乘 +5 分鐘等效
+  accessibilityPenalty: number; // 無障礙缺失懲罰
+
   // 計算方式
   // cost = travelTime + transferCount × 5 + (100 - accessibilityScore) × 0.3
-}
+};
 ```
 
 ### 11.3 路線排除規則
 
 ```typescript
 // wheelchair 模式下
-function isRouteExcluded(route: AccessibleRoute, mode: AccessibilityMode): boolean {
-  if (mode !== "wheelchair") return false
-  
+function isRouteExcluded(
+  route: AccessibleRoute,
+  mode: AccessibilityMode,
+): boolean {
+  if (mode !== "wheelchair") return false;
+
   // Tier 1 特徵缺失 → 排除路線
-  const hasElevatorAccess = route.legs.every(leg => {
-    if (leg.type === "METRO") return leg.facilityHighlights.includes("電梯")
-    if (leg.type === "WALK") return !leg.a11yFacilities.some(f => f.type === "stairs_only")
-    return true
-  })
-  
-  return !hasElevatorAccess
+  const hasElevatorAccess = route.legs.every((leg) => {
+    if (leg.type === "METRO") return leg.facilityHighlights.includes("電梯");
+    if (leg.type === "WALK")
+      return !leg.a11yFacilities.some((f) => f.type === "stairs_only");
+    return true;
+  });
+
+  return !hasElevatorAccess;
 }
 ```
 
 ### 11.4 多模式無障礙參數
 
-| Mode | ORS Profile | Tier 1 Required | 轉乘懲罰 |
-|------|------------|-----------------|---------|
-| `wheelchair` | `wheelchair` | 必須 | ×2 |
-| `elderly` | `foot-walking` | 建議 | ×1.5 |
-| `visual_impaired` | `foot-walking` | 否 | ×1 |
-| `normal` | `foot-walking` | 否 | ×1 |
+| Mode              | ORS Profile    | Tier 1 Required | 轉乘懲罰 |
+| ----------------- | -------------- | --------------- | -------- |
+| `wheelchair`      | `wheelchair`   | 必須            | ×2       |
+| `elderly`         | `foot-walking` | 建議            | ×1.5     |
+| `visual_impaired` | `foot-walking` | 否              | ×1       |
+| `normal`          | `foot-walking` | 否              | ×1       |
 
 ---
 
@@ -1295,7 +1312,7 @@ Gemini 第二次呼叫
 
 ```json
 {
-  "route": { /* AccessibleRoute 物件 */ },
+  "route": {/* AccessibleRoute 物件 */},
   "mode": "wheelchair",
   "language": "zh-TW"
 }
@@ -1324,15 +1341,15 @@ Gemini 第二次呼叫
 
 ### 13.1 路由端點總覽
 
-| Method | Path | 功能 | 狀態 |
-|--------|------|------|------|
-| `POST` | `/api/v1/a11y/accessible-route` | 主路由查詢 | ✅ 已實作 |
-| `POST` | `/api/v1/a11y/chat` | AI 無障礙問答 | ✅ 已實作 |
-| `POST` | `/api/v1/transit/bus` | 公車路線查詢 | ✅ 已實作 |
-| `GET` | `/api/v1/transit/bus/realtime` | 公車即時位置 | ✅ 已實作 |
-| `GET` | `/api/v1/a11y/*` | 無障礙 POI 查詢 | ✅ 已實作 |
-| `POST` | `/api/v1/ai/intent` | 語意意圖解析 | ✅ 已實作 |
-| `POST` | `/api/v1/ai/explain` | 路線說明生成 | ✅ 已實作（Phase 10） |
+| Method | Path                            | 功能            | 狀態                  |
+| ------ | ------------------------------- | --------------- | --------------------- |
+| `POST` | `/api/v1/a11y/accessible-route` | 主路由查詢      | ✅ 已實作             |
+| `POST` | `/api/v1/a11y/chat`             | AI 無障礙問答   | ✅ 已實作             |
+| `POST` | `/api/v1/transit/bus`           | 公車路線查詢    | ✅ 已實作             |
+| `GET`  | `/api/v1/transit/bus/realtime`  | 公車即時位置    | ✅ 已實作             |
+| `GET`  | `/api/v1/a11y/*`                | 無障礙 POI 查詢 | ✅ 已實作             |
+| `POST` | `/api/v1/ai/intent`             | 語意意圖解析    | ✅ 已實作             |
+| `POST` | `/api/v1/ai/explain`            | 路線說明生成    | ✅ 已實作（Phase 10） |
 
 ### 13.2 主路由查詢（詳細規格）
 
@@ -1343,19 +1360,20 @@ Gemini 第二次呼叫
 ```typescript
 const AccessibleRouteRequest = z.object({
   origin: z.union([
-    z.string().min(1),                    // 地名 / 地址
-    z.object({ lat: z.number(), lng: z.number() })
+    z.string().min(1), // 地名 / 地址
+    z.object({ lat: z.number(), lng: z.number() }),
   ]),
   destination: z.union([
     z.string().min(1),
-    z.object({ lat: z.number(), lng: z.number() })
+    z.object({ lat: z.number(), lng: z.number() }),
   ]),
-  mode: z.enum(["wheelchair", "elderly", "visual_impaired", "normal"])
-           .default("normal"),
-  departureTime: z.string().optional(),   // ISO 8601 或省略（用現在時間）
+  mode: z
+    .enum(["wheelchair", "elderly", "visual_impaired", "normal"])
+    .default("normal"),
+  departureTime: z.string().optional(), // ISO 8601 或省略（用現在時間）
   maxTransfers: z.number().int().min(0).max(1).default(1),
-  language: z.enum(["zh-TW", "en"]).default("zh-TW")
-})
+  language: z.enum(["zh-TW", "en"]).default("zh-TW"),
+});
 ```
 
 **回應範例**
@@ -1442,12 +1460,12 @@ const AccessibleRouteRequest = z.object({
 
 **Error Codes**
 
-| Code | Reason | 說明 |
-|------|--------|------|
-| `NO_ACCESSIBLE_ROUTE` | 404 | 無符合無障礙條件路線 |
-| `GEOCODING_FAILED` | 400 | 地名無法解析為座標 |
-| `ORS_UNAVAILABLE` | 503 | ORS API 不可用，已 fallback |
-| `INVALID_LOCATION` | 400 | 座標超出服務範圍 |
+| Code                  | Reason | 說明                        |
+| --------------------- | ------ | --------------------------- |
+| `NO_ACCESSIBLE_ROUTE` | 404    | 無符合無障礙條件路線        |
+| `GEOCODING_FAILED`    | 400    | 地名無法解析為座標          |
+| `ORS_UNAVAILABLE`     | 503    | ORS API 不可用，已 fallback |
+| `INVALID_LOCATION`    | 400    | 座標超出服務範圍            |
 
 ---
 
@@ -1455,23 +1473,23 @@ const AccessibleRouteRequest = z.object({
 
 ### 14.1 前端負責
 
-| 職責 | 說明 |
-|------|------|
-| 地圖顯示 | Render polyline、站點標記 |
-| Route Rendering | 展示 legs 清單、步驟說明 |
-| Step UI | 逐步導航介面 |
-| 使用者互動 | 起迄點輸入、模式選擇 |
-| 無障礙分數視覺化 | 分數條、標籤顯示 |
+| 職責             | 說明                      |
+| ---------------- | ------------------------- |
+| 地圖顯示         | Render polyline、站點標記 |
+| Route Rendering  | 展示 legs 清單、步驟說明  |
+| Step UI          | 逐步導航介面              |
+| 使用者互動       | 起迄點輸入、模式選擇      |
+| 無障礙分數視覺化 | 分數條、標籤顯示          |
 
 ### 14.2 前端不負責
 
-| 禁止事項 | 原因 |
-|---------|------|
-| Routing 計算 | 由 backend ORS + TDX 統一處理 |
-| GTFS / TDX 資料處理 | Backend 統一 |
-| ORS API 直接呼叫 | API Key 安全性，backend 代理 |
-| 無障礙 cost function | 評分邏輯在 `a11y-scoring.ts` |
-| 快取管理 | Redis 由 backend 管理 |
+| 禁止事項             | 原因                          |
+| -------------------- | ----------------------------- |
+| Routing 計算         | 由 backend ORS + TDX 統一處理 |
+| GTFS / TDX 資料處理  | Backend 統一                  |
+| ORS API 直接呼叫     | API Key 安全性，backend 代理  |
+| 無障礙 cost function | 評分邏輯在 `a11y-scoring.ts`  |
+| 快取管理             | Redis 由 backend 管理         |
 
 ---
 
@@ -1479,26 +1497,26 @@ const AccessibleRouteRequest = z.object({
 
 ### 已完成
 
-| Phase | 功能 | Commit |
-|-------|------|--------|
-| Phase 1 | 直達路線查詢 | `d59f848` |
-| Phase 2 | ORS Matrix 可達站點 | `9855f79` |
-| Phase 3 | 一次轉乘路線 | `79c1383` |
+| Phase   | 功能                      | Commit    |
+| ------- | ------------------------- | --------- |
+| Phase 1 | 直達路線查詢              | `d59f848` |
+| Phase 2 | ORS Matrix 可達站點       | `9855f79` |
+| Phase 3 | 一次轉乘路線              | `79c1383` |
 | Phase 4 | 複合鍵去重、transferCount | `b65c1fc` |
-| Phase 5 | TRTC 無障礙出口室內導航 | `ddfdff6` |
+| Phase 5 | TRTC 無障礙出口室內導航   | `ddfdff6` |
 
 ### 待實作
 
-| Phase | 功能 | 優先度 | 依賴 |
-|-------|------|--------|------|
-| ~~**Phase 6**~~ | ~~GTFS Import Pipeline~~ ✅ **已實作**（9 models + 10 scripts） | **Critical** | `data/gtfs/` 檔案 |
-| ~~**Phase 7**~~ | ~~GTFS-based Router~~ 🗑️ **已退役（2026-06）**——全面改用 OTP2 + TDX MaaS（Phase 16），`gtfs-router.service.ts` 與 `USE_GTFS_ROUTER` 已移除 | **Critical** | Phase 6 |
-| ~~**Phase 8**~~ | ~~Indoor Graph 擴充（NTMC/KLRT/TMRT/KRTC）~~ ✅ **已實作**（`indoor-graph.service.ts`，GTFS pathways 全系統） | High | GTFS stops + OSM 電梯 |
-| ~~**Phase 9**~~ | ~~AI Intent Parsing API（`/ai/intent`）~~ ✅ **已實作**（`src/modules/ai/`，結構化 Gemini 解析 + accessible-route 整合） | High | Gemini tool config |
-| ~~**Phase 10**~~ | ~~AI Route Explanation（`/ai/explain`）~~ ✅ **已實作**（`generateRouteExplanation` + `/ai/explain`） | Medium | Phase 9 |
-| ~~**Phase 11**~~ | ~~多模式強化（elderly / visual_impaired）~~ ✅ **已實作**（`MODE_PROFILES` + `routeCost` + §11.3 排除規則） | Medium | a11y-scoring.ts |
-| ~~**Phase 12**~~ | ~~多次轉乘支援（`maxTransfers: 2`）~~ ✅ **已實作**（`findTwoTransferRoutes`，三段 chain join） | Low | Phase 7 GTFS Router |
-| ~~**Phase 13**~~ | ~~即時電梯故障整合（TDX 設施狀態）~~ ✅ **已實作**（`facility-status.service.ts` overlay） | Low | TDX Metro Facility API |
+| Phase            | 功能                                                                                                                                       | 優先度       | 依賴                   |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------ | ---------------------- |
+| ~~**Phase 6**~~  | ~~GTFS Import Pipeline~~ ✅ **已實作**（9 models + 10 scripts）                                                                            | **Critical** | `data/gtfs/` 檔案      |
+| ~~**Phase 7**~~  | ~~GTFS-based Router~~ 🗑️ **已退役（2026-06）**——全面改用 OTP2 + TDX MaaS（Phase 16），`gtfs-router.service.ts` 與 `USE_GTFS_ROUTER` 已移除 | **Critical** | Phase 6                |
+| ~~**Phase 8**~~  | ~~Indoor Graph 擴充（NTMC/KLRT/TMRT/KRTC）~~ ✅ **已實作**（`indoor-graph.service.ts`，GTFS pathways 全系統）                              | High         | GTFS stops + OSM 電梯  |
+| ~~**Phase 9**~~  | ~~AI Intent Parsing API（`/ai/intent`）~~ ✅ **已實作**（`src/modules/ai/`，結構化 Gemini 解析 + accessible-route 整合）                   | High         | Gemini tool config     |
+| ~~**Phase 10**~~ | ~~AI Route Explanation（`/ai/explain`）~~ ✅ **已實作**（`generateRouteExplanation` + `/ai/explain`）                                      | Medium       | Phase 9                |
+| ~~**Phase 11**~~ | ~~多模式強化（elderly / visual_impaired）~~ ✅ **已實作**（`MODE_PROFILES` + `routeCost` + §11.3 排除規則）                                | Medium       | a11y-scoring.ts        |
+| ~~**Phase 12**~~ | ~~多次轉乘支援（`maxTransfers: 2`）~~ ✅ **已實作**（`findTwoTransferRoutes`，三段 chain join）                                            | Low          | Phase 7 GTFS Router    |
+| ~~**Phase 13**~~ | ~~即時電梯故障整合（TDX 設施狀態）~~ ✅ **已實作**（`facility-status.service.ts` overlay）                                                 | Low          | TDX Metro Facility API |
 
 ---
 
@@ -1536,20 +1554,20 @@ src/scripts/
 
 ```typescript
 // GtfsStopTime — 路由查詢最頻繁（497萬筆）
-GtfsStopTimeSchema.index({ tripId: 1, stopSequence: 1 })
-GtfsStopTimeSchema.index({ stopId: 1, departureTime: 1 })
+GtfsStopTimeSchema.index({ tripId: 1, stopSequence: 1 });
+GtfsStopTimeSchema.index({ stopId: 1, departureTime: 1 });
 
 // GtfsStop — 地理查詢（僅 locationType=0/2 建 2dsphere）
-GtfsStopSchema.index({ location: "2dsphere" })
-GtfsStopSchema.index({ stopId: 1 }, { unique: true })
-GtfsStopSchema.index({ parentStation: 1 })
+GtfsStopSchema.index({ location: "2dsphere" });
+GtfsStopSchema.index({ stopId: 1 }, { unique: true });
+GtfsStopSchema.index({ parentStation: 1 });
 
 // GtfsShape（聚合後一 shapeId 一份）
-GtfsShapeSchema.index({ shapeId: 1 }, { unique: true })
+GtfsShapeSchema.index({ shapeId: 1 }, { unique: true });
 
 // GtfsPathway — 室內圖遍歷
-GtfsPathwaySchema.index({ fromStopId: 1, pathwayMode: 1 })
-GtfsPathwaySchema.index({ toStopId: 1 })
+GtfsPathwaySchema.index({ fromStopId: 1, pathwayMode: 1 });
+GtfsPathwaySchema.index({ toStopId: 1 });
 ```
 
 ---
@@ -1570,6 +1588,7 @@ GtfsPathwaySchema.index({ toStopId: 1 })
 **⚠️ 實作期資料模型修正**（基於 `data/gtfs/` 實際資料）：
 
 > 本 feed 有 **兩套不相交的 stop 命名空間**：
+>
 > 1. **路網節點**（`stop_times` 引用）：如 `TRTC_BL12`，`location_type=0`，**無 parent_station**。
 >    同一實體車站跨不同路線靠 **相同 `stop_name` + 鄰近度** 辨識。
 > 2. **室內節點**（`pathways` 引用）：數字 id，`location_type` 1/2/3，以 parent_station 串接站體。
@@ -1580,23 +1599,23 @@ GtfsPathwaySchema.index({ toStopId: 1 })
 
 **已實作 exports**：
 
-| 函式 | 說明 | 對應步驟 |
-|------|------|---------|
-| `gtfsTimeToSeconds` / `secondsToHHmm` | "HH:MM:SS"（可超過 24:00）↔ 秒 | 時間正規化 |
-| `getActiveServiceIds(date)` | calendar 週期 + calendar_dates 例外 → 今日有效 serviceId 集合 | 步驟 4 |
-| `findNearestGtfsStops(point)` | `$near` 取路網節點（location_type 0/2） | 取代 findReachableStops 資料來源 |
-| `findSameStationStops(stopId)` | 同站轉乘 hub（stop_name + 距離） | 步驟 5 |
-| `findDirectConnections(...)` | 核心：同 trip board→alight（seq 序）、今日服務、headway 展開、(route,dir) 去重 | 步驟 2-4 |
-| `getShapePolyline(shapeId, from, to)` | 由 GtfsShape 取區段 polyline（最近點切片），缺值退化直線 | 步驟 6 |
-| `connectionToLeg(conn)` | GtfsConnection → BusLeg / MetroLeg / ThsrLeg / TraLeg | leg 組裝 |
-| `planGtfsRoute(origin, dest, opts)` | 高階：ORS first/last mile + 直達 / 一次轉乘 → `AccessibleRoute[]` | 步驟 7 |
+| 函式                                  | 說明                                                                           | 對應步驟                         |
+| ------------------------------------- | ------------------------------------------------------------------------------ | -------------------------------- |
+| `gtfsTimeToSeconds` / `secondsToHHmm` | "HH:MM:SS"（可超過 24:00）↔ 秒                                                 | 時間正規化                       |
+| `getActiveServiceIds(date)`           | calendar 週期 + calendar_dates 例外 → 今日有效 serviceId 集合                  | 步驟 4                           |
+| `findNearestGtfsStops(point)`         | `$near` 取路網節點（location_type 0/2）                                        | 取代 findReachableStops 資料來源 |
+| `findSameStationStops(stopId)`        | 同站轉乘 hub（stop_name + 距離）                                               | 步驟 5                           |
+| `findDirectConnections(...)`          | 核心：同 trip board→alight（seq 序）、今日服務、headway 展開、(route,dir) 去重 | 步驟 2-4                         |
+| `getShapePolyline(shapeId, from, to)` | 由 GtfsShape 取區段 polyline（最近點切片），缺值退化直線                       | 步驟 6                           |
+| `connectionToLeg(conn)`               | GtfsConnection → BusLeg / MetroLeg / ThsrLeg / TraLeg                          | leg 組裝                         |
+| `planGtfsRoute(origin, dest, opts)`   | 高階：ORS first/last mile + 直達 / 一次轉乘 → `AccessibleRoute[]`              | 步驟 7                           |
 
 **整合方式（步驟 7，混合架構）**：`findAccessibleRoutes()` 開頭判斷 **`USE_GTFS_ROUTER=true`** →
 略過舊版 TDX leg-builder，改並行跑兩個來源後合併評分：
 
-| 來源 | 旗標 | 角色 |
-|------|------|------|
-| `planGtfsRoute()`（GTFS router） | `USE_GTFS_ROUTER` | 有 GTFS 班表的系統（北捷/高捷/高鐵/機捷/輕軌/公車），含 polyline、完整無障礙控制 |
+| 來源                                         | 旗標              | 角色                                                                                            |
+| -------------------------------------------- | ----------------- | ----------------------------------------------------------------------------------------------- |
+| `planGtfsRoute()`（GTFS router）             | `USE_GTFS_ROUTER` | 有 GTFS 班表的系統（北捷/高捷/高鐵/機捷/輕軌/公車），含 polyline、完整無障礙控制                |
 | `planTdxRoute()`（`tdx-routing.service.ts`） | `USE_TDX_ROUTING` | 補 GTFS 缺口：**台鐵、城際、多模式接駁**（如高鐵→台鐵→步行）。呼叫 TDX MaaS `/api/maas/routing` |
 
 兩者皆映射為 `AccessibleRoute` → 合併 → `deduplicateRoutes` → `scoreAndRank` → top-3。
@@ -1607,6 +1626,7 @@ GtfsPathwaySchema.index({ toStopId: 1 })
 並在路線標記 `departureDate`（`YYYY-MM-DD`）與 `accessibilityHighlights` 開頭加「🕒 今日班次已過，顯示 … 最早班次」。
 
 **TDX routing service 重點**：
+
 - 端點 `GET https://tdx.transportdata.tw/api/maas/routing`（`origin`/`destination`=`{lat},{lng}`、`gc`、`top`、`transit`、`depart`、`first/last_mile_mode`），透過 `tdxFetch()` 帶 OAuth。
 - HERE 風格回傳 `data.routes[].sections[]`（`pedestrian` / `transit`）；以 `transport.category` + `agency.agency_id` 判別 THSR / TRA / Metro / Bus。
 - **回傳無 geometry** → polyline 以 `departure → intermediateStops → arrival` 座標近似。
@@ -1616,17 +1636,17 @@ GtfsPathwaySchema.index({ toStopId: 1 })
 ```typescript
 // 實際介面
 interface PlanGtfsRouteOptions {
-  departureTime?: Date
-  maxTransfers?: 0 | 1
-  routeTypes?: Array<1 | 2 | 3 | 4>
-  limit?: number
+  departureTime?: Date;
+  maxTransfers?: 0 | 1;
+  routeTypes?: Array<1 | 2 | 3 | 4>;
+  limit?: number;
 }
 
 function planGtfsRoute(
   origin: { lat: number; lng: number },
   destination: { lat: number; lng: number },
   opts?: PlanGtfsRouteOptions,
-): Promise<AccessibleRoute[]>
+): Promise<AccessibleRoute[]>;
 ```
 
 **THSR vs TRA 判別**：`agencyId === "THSR"` 或 `routeId` 前綴 `THSR` → ThsrLeg，否則 TraLeg。
@@ -1638,6 +1658,7 @@ function planGtfsRoute(
 `facilityHighlights`（即時電梯故障）與 TDX 專屬 UID 仍待 Phase 13；UID 暫填 GTFS stopId。
 
 **已知資料模型陷阱（實作期踩到）**：
+
 - `location_type` 0/2 **無法**區分路網 vs 室內節點；路網節點 = **`location_type=0` 且 `parent_station` 為空**。
 - 154k 路網節點絕大多數是公車站，單一 `$near` 會淹沒稀疏的捷運/鐵路站 →
   `findNearestGtfsStops` 以 stopId 前綴 regex（`^(TRTC|KRTC|KLRT|TYMC|TMRT|NTMC|THSR|TRA)_`）
@@ -1680,21 +1701,23 @@ TDX routing 為查詢時外部呼叫（受 `USE_TDX_ROUTING` 控制，可單獨�
 **實作檔案**：`src/service/indoor-graph.service.ts`
 
 **⚠️ 實作期資料修正（import bug）**：
+
 > `import-gtfs-stops.ts` 原以 `isNaN(lat||lon) → continue` 過濾，導致 **`location_type=3` 的室內節點（閘門、電梯樓層，無座標）全被丟棄**（DB 內 generic=0），
 > 而這些節點正是 pathways 連接出入口↔月台的關鍵（714 條電梯邊都接在 loc_type=3 節點上）。
 > 修正：**boarding stop（loc_type=0）仍須座標，其餘節點允許無座標**（以 `[0,0]` 佔位，2dsphere partial index 僅含 loc_type 0/2，不受污染）。重新匯入後 generic=5,876，電梯路徑可達。
 
 **已實作 exports**：
 
-| 函式 | 說明 |
-|------|------|
-| `findIndoorStation(name, coords)` | 以 stop_name + 鄰近度（≤600m）將**路網節點**（`TRTC_R28`）橋接到**室內站體節點**（`location_type=1`，數字 id）——兩者命名空間不相交，靠名稱+距離匹配 |
-| `findIndoorPath(from, to, opts)` | Dijkstra over `GtfsPathway`，`excludePathwayModes`（輪椅排除樓梯=2）、wheelchair 對電扶梯=4 加權，電梯=5 優先 |
-| `getStationNodeIds` / `getStationEntrances` / `getStationPlatforms` | 站體節點集合 / 出入口（loc_type=2）/ 月台（loc_type=0） |
-| `stationHasElevator(stationId)` | spec §10.4：站體節點間存在 `pathwayMode=5` 即無障礙可達 |
-| `getStationAccess(station, userCoords, mode)` | 高階：解析室內站 → 選**離使用者最近且 step-free 的出入口** → 取最短電梯路徑 → 回傳 `{entrance, hasElevator, stepFree, usesElevator, elevatorLevelName}` |
+| 函式                                                                | 說明                                                                                                                                                    |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `findIndoorStation(name, coords)`                                   | 以 stop_name + 鄰近度（≤600m）將**路網節點**（`TRTC_R28`）橋接到**室內站體節點**（`location_type=1`，數字 id）——兩者命名空間不相交，靠名稱+距離匹配     |
+| `findIndoorPath(from, to, opts)`                                    | Dijkstra over `GtfsPathway`，`excludePathwayModes`（輪椅排除樓梯=2）、wheelchair 對電扶梯=4 加權，電梯=5 優先                                           |
+| `getStationNodeIds` / `getStationEntrances` / `getStationPlatforms` | 站體節點集合 / 出入口（loc_type=2）/ 月台（loc_type=0）                                                                                                 |
+| `stationHasElevator(stationId)`                                     | spec §10.4：站體節點間存在 `pathwayMode=5` 即無障礙可達                                                                                                 |
+| `getStationAccess(station, userCoords, mode)`                       | 高階：解析室內站 → 選**離使用者最近且 step-free 的出入口** → 取最短電梯路徑 → 回傳 `{entrance, hasElevator, stepFree, usesElevator, elevatorLevelName}` |
 
 **整合（wire into routes）**：
+
 - `gtfs-router.service.ts` 的軌道 leg（METRO/THSR/TRA）以 `enrichLegIndoor()` 補：相鄰 WalkLeg 的 `exitInfo`（**僅在 step-free 出入口才掛**，避免誤導）+ leg 的 `facilityHighlights`（「乘車站可由出口1電梯無障礙進站（電梯2F）」）。
 - `a11y-exit.service.ts buildExitWalkLeg` 改為 **GTFS pathways 優先、TRTC A11y collection fallback**（spec §10.5）。
 - 受 `USE_INDOOR_GRAPH`（預設開啟）控制。
@@ -1720,6 +1743,7 @@ TDX routing 為查詢時外部呼叫（受 `USE_TDX_ROUTING` 控制，可單獨�
 **目標**：新增 `POST /api/v1/ai/explain` 端點（spec §12.4）
 
 **實作**：
+
 1. `config/ai/config.ts` 的 `explainConfig` 以 `responseJsonSchema` 強制 Gemini 回傳 `RouteExplanation`；`config/ai/contents.ts` 的 `explainContents` 規範生成規則（不可捏造設施、warnings 來源、依 mode/language 調整）。
 2. `src/modules/ai/ai.controller.ts`：`generateRouteExplanation(route, mode, language)` 可重用；`compactRoute()` 先剝除 polyline / OSM 設施陣列再送模型（省 token）。`alternatives` schema 強制 string，空字串→`null`。
 3. `/ai/explain` 接受 `{ route, mode?, language? }`，route 為 `/a11y/accessible-route` 回傳的 AccessibleRoute 物件（passthrough 驗證）。
@@ -1804,13 +1828,13 @@ TDX routing 為查詢時外部呼叫（受 `USE_TDX_ROUTING` 控制，可單獨�
 
 ### 16.1 手動測試案例
 
-| 測試案例 | 輸入 | 預期 |
-|---------|------|------|
-| 直達捷運 | 台北車站 → 忠孝復興（輪椅） | MetroLeg，全程電梯 |
-| 一次轉乘 | 台中 → 高鐵新竹（輪椅） | TRA + THSR leg |
-| ORS Fallback | 禁用 ORS API Key | Haversine 估算，WalkLeg.polyline = null |
-| 無解路線 | 偏遠地點無公共運輸 | 404 NO_ACCESSIBLE_ROUTE |
-| 自然語言輸入 | `"我坐輪椅要去101"` | AI 解析 → 正常路由流程 |
+| 測試案例     | 輸入                        | 預期                                    |
+| ------------ | --------------------------- | --------------------------------------- |
+| 直達捷運     | 台北車站 → 忠孝復興（輪椅） | MetroLeg，全程電梯                      |
+| 一次轉乘     | 台中 → 高鐵新竹（輪椅）     | TRA + THSR leg                          |
+| ORS Fallback | 禁用 ORS API Key            | Haversine 估算，WalkLeg.polyline = null |
+| 無解路線     | 偏遠地點無公共運輸          | 404 NO_ACCESSIBLE_ROUTE                 |
+| 自然語言輸入 | `"我坐輪椅要去101"`         | AI 解析 → 正常路由流程                  |
 
 ### 16.2 驗證重點
 
@@ -1823,39 +1847,39 @@ TDX routing 為查詢時外部呼叫（受 `USE_TDX_ROUTING` 控制，可單獨�
 
 ## 17. 環境變數總覽
 
-| 變數 | 用途 | 必要性 | 使用位置 |
-|------|------|--------|---------|
-| `PORT` | Server 監聽 port | 選配（預設 5000） | `server.ts` |
-| `CORS_ORIGINS` | CORS 白名單 | 選配 | `app.ts` |
-| `GOOGLE_MAPS_API_KEY` | 地理編碼 + Places Search | **必要** | `config/map.ts` |
-| `GEMINI_API_KEY` | Gemini AI | **必要** | `@google/genai` 自動讀取 |
-| `JWT_ACCESS_SECRET` | JWT 簽署 | **必要** | `config/jwt.ts` |
-| `JWT_REFRESH_SECRET` | JWT Refresh | **必要** | `config/jwt.ts` |
-| `DATABASE_URL` | MongoDB 連線 | **必要** | `server.ts` |
-| `TDX_CLIENT_ID` | TDX OAuth | **必要** | `TdxTokenManger.ts` |
-| `TDX_CLIENT_SECRET` | TDX OAuth | **必要** | `TdxTokenManger.ts` |
-| `ORS_API_KEY` | OpenRouteService | **必要**（有 fallback） | `config/ors.ts` |
-| `REDIS_URL` | Walk-time 快取 | 選配（有降級）| `config/redis.ts` |
-| `USE_OTP_ROUTER` | 主路由引擎（OTP2 sidecar）。`false`｜`shadow`（並跑只記 diff）｜`true`（併入結果） | 選配（預設 `false`） | `accessible-route.service.ts` |
-| `USE_TDX_ROUTING` | `true` 時並用 TDX MaaS routing 補 OTP 缺口（台鐵/城際） | 選配（預設關閉） | `accessible-route.service.ts` |
-| ~~`USE_GTFS_ROUTER`~~ | 🗑️ **已移除（2026-06）**——本地 GTFS router 退役，改由 `USE_OTP_ROUTER` + `USE_TDX_ROUTING` 取代 | — | — |
-| `USE_INDOOR_GRAPH` | Phase 8 室內圖出口/電梯導引。設為 `false` 可關閉（省去每段軌道 leg 的 pathways 查詢）；其餘值（含未設定）皆啟用 | 選配（**預設開啟**） | `route-a11y.service.ts` / `a11y-exit.service.ts` |
-| `USE_REALTIME_FACILITY` | Phase 13 TDX 即時設施狀態 overlay（top-3 的 METRO leg）。設為 `false` 關閉以省 TDX 額度 | 選配（**預設開啟**） | `facility-status.service.ts` |
-| `USE_REALTIME_TRANSIT` | Phase 15 即時大眾運輸 overlay（top-3：首段公車 TDX ETA + 全部 TRA leg 誤點）。設為 `false` 關閉以省 TDX 額度 | 選配（**預設開啟**） | `realtime-transit.service.ts` |
-| ~~`GTFS_DEBUG`~~ | 🗑️ **已移除**——隨 `gtfs-router.service.ts` 退役（兩次轉乘 chain join 的除錯 log） | — | — |
+| 變數                    | 用途                                                                                                            | 必要性                  | 使用位置                                         |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------- | ----------------------- | ------------------------------------------------ |
+| `PORT`                  | Server 監聽 port                                                                                                | 選配（預設 5000）       | `server.ts`                                      |
+| `CORS_ORIGINS`          | CORS 白名單                                                                                                     | 選配                    | `app.ts`                                         |
+| `GOOGLE_MAPS_API_KEY`   | 地理編碼 + Places Search                                                                                        | **必要**                | `config/map.ts`                                  |
+| `GEMINI_API_KEY`        | Gemini AI                                                                                                       | **必要**                | `@google/genai` 自動讀取                         |
+| `JWT_ACCESS_SECRET`     | JWT 簽署                                                                                                        | **必要**                | `config/jwt.ts`                                  |
+| `JWT_REFRESH_SECRET`    | JWT Refresh                                                                                                     | **必要**                | `config/jwt.ts`                                  |
+| `DATABASE_URL`          | MongoDB 連線                                                                                                    | **必要**                | `server.ts`                                      |
+| `TDX_CLIENT_ID`         | TDX OAuth                                                                                                       | **必要**                | `TdxTokenManger.ts`                              |
+| `TDX_CLIENT_SECRET`     | TDX OAuth                                                                                                       | **必要**                | `TdxTokenManger.ts`                              |
+| `ORS_API_KEY`           | OpenRouteService                                                                                                | **必要**（有 fallback） | `config/ors.ts`                                  |
+| `REDIS_URL`             | Walk-time 快取                                                                                                  | 選配（有降級）          | `config/redis.ts`                                |
+| `USE_OTP_ROUTER`        | 主路由引擎（OTP2 sidecar）。`false`｜`shadow`（並跑只記 diff）｜`true`（併入結果）                              | 選配（預設 `false`）    | `accessible-route.service.ts`                    |
+| `USE_TDX_ROUTING`       | `true` 時並用 TDX MaaS routing 補 OTP 缺口（台鐵/城際）                                                         | 選配（預設關閉）        | `accessible-route.service.ts`                    |
+| ~~`USE_GTFS_ROUTER`~~   | 🗑️ **已移除（2026-06）**——本地 GTFS router 退役，改由 `USE_OTP_ROUTER` + `USE_TDX_ROUTING` 取代                 | —                       | —                                                |
+| `USE_INDOOR_GRAPH`      | Phase 8 室內圖出口/電梯導引。設為 `false` 可關閉（省去每段軌道 leg 的 pathways 查詢）；其餘值（含未設定）皆啟用 | 選配（**預設開啟**）    | `route-a11y.service.ts` / `a11y-exit.service.ts` |
+| `USE_REALTIME_FACILITY` | Phase 13 TDX 即時設施狀態 overlay（top-3 的 METRO leg）。設為 `false` 關閉以省 TDX 額度                         | 選配（**預設開啟**）    | `facility-status.service.ts`                     |
+| `USE_REALTIME_TRANSIT`  | Phase 15 即時大眾運輸 overlay（top-3：首段公車 TDX ETA + 全部 TRA leg 誤點）。設為 `false` 關閉以省 TDX 額度    | 選配（**預設開啟**）    | `realtime-transit.service.ts`                    |
+| ~~`GTFS_DEBUG`~~        | 🗑️ **已移除**——隨 `gtfs-router.service.ts` 退役（兩次轉乘 chain join 的除錯 log）                               | —                       | —                                                |
 
 ---
 
-*文件版本 v1.7.0 — 資料補強三件組（2026-06-10）：① TRA 班表匯入（`import-tra-timetable.ts`，943 班 / 21,622 stop_times，台鐵路由生效）② 車站群集（`StationCluster` + `build-station-clusters.ts`，403 群集，公車↔軌道轉乘 hub）③ stop_times 插值（`gtfs-interpolation.ts`，回填 257 萬筆空白時刻）。*
-*v1.7 router 連帶修正：`findNearestGtfsStops` 公車名額改以「不同站名」計（TPE/NWT 雙登錄重複站不再吃光名額）；轉乘搜尋兩側改為「每（路線,方向）一個代表 trip」做 hub 探索，預過濾不再卡時間窗（代表班次時刻僅供探索，真實班次由 build 階段以鏈式 afterSec 重新解析）；上/下車站改以「離端點距離」選擇（不再坐過頭走回頭路）。驗證案例：三芝→台北車站（860→淡水 cluster→紅線，84 分）、三芝→動物園（兩次轉乘 863→紅線→912，108 分）。*
+_文件版本 v1.7.0 — 資料補強三件組（2026-06-10）：① TRA 班表匯入（`import-tra-timetable.ts`，943 班 / 21,622 stop_times，台鐵路由生效）② 車站群集（`StationCluster` + `build-station-clusters.ts`，403 群集，公車↔軌道轉乘 hub）③ stop_times 插值（`gtfs-interpolation.ts`，回填 257 萬筆空白時刻）。_
+_v1.7 router 連帶修正：`findNearestGtfsStops` 公車名額改以「不同站名」計（TPE/NWT 雙登錄重複站不再吃光名額）；轉乘搜尋兩側改為「每（路線,方向）一個代表 trip」做 hub 探索，預過濾不再卡時間窗（代表班次時刻僅供探索，真實班次由 build 階段以鏈式 afterSec 重新解析）；上/下車站改以「離端點距離」選擇（不再坐過頭走回頭路）。驗證案例：三芝→台北車站（860→淡水 cluster→紅線，84 分）、三芝→動物園（兩次轉乘 863→紅線→912，108 分）。_
 
-*v1.7.1（2026-06-10）：① 等候時間——TDX MaaS 路徑的 transit leg 不再硬編 `waitInfo: null`，改由 section 時間戳鏈推算（下車時刻 → 下一段發車）；BUS/METRO leg 新增選用欄位 `departureTime`/`arrivalTime`（GTFS 與 TDX 路徑皆填），前端可顯示「下一班」。② 反方向護欄——`ridesToward()` 檢查（首段上車、末段下車）對（起點, 終點）的地理進展，擋掉「走過頭再搭回來」（如台中案例：走到臺中車站搭到新烏日再走回學校）；另加 `accessWalkBudgetM()`：walkIn+walkOut 合計不得超過起終點直線距離（下限 2.5km），擋掉 10km 軌道半徑產生的「走 7km 搭火車再走 11km」病態路線。兩護欄套用於 direct / 一次轉乘 / 兩次轉乘三條組裝路徑。驗證：台中（萬和國中→臺中州廳）只回傳公車 30 直達與三段公車轉乘；三芝案例不受影響。③ Phase 14（OSM tags 瘦身）規劃完成。*
+_v1.7.1（2026-06-10）：① 等候時間——TDX MaaS 路徑的 transit leg 不再硬編 `waitInfo: null`，改由 section 時間戳鏈推算（下車時刻 → 下一段發車）；BUS/METRO leg 新增選用欄位 `departureTime`/`arrivalTime`（GTFS 與 TDX 路徑皆填），前端可顯示「下一班」。② 反方向護欄——`ridesToward()` 檢查（首段上車、末段下車）對（起點, 終點）的地理進展，擋掉「走過頭再搭回來」（如台中案例：走到臺中車站搭到新烏日再走回學校）；另加 `accessWalkBudgetM()`：walkIn+walkOut 合計不得超過起終點直線距離（下限 2.5km），擋掉 10km 軌道半徑產生的「走 7km 搭火車再走 11km」病態路線。兩護欄套用於 direct / 一次轉乘 / 兩次轉乘三條組裝路徑。驗證：台中（萬和國中→臺中州廳）只回傳公車 30 直達與三段公車轉乘；三芝案例不受影響。③ Phase 14（OSM tags 瘦身）規劃完成。_
 
-*v1.8.0（2026-06-10）：Phase 14 實作完成——`facility-slim.ts`（`slimRoutes` 預設啟用 + `compactRoutes` opt-in `format:"compact"`）、`GET /api/v1/a11y/place` 完整文件端點、`SlimOsmA11y` OpenAPI component。設施酬載縮減約 95%（實測 53.5KB → 23.5KB，設施部分 31KB → 1.5KB），tags 白名單對齊評分引擎確保 /route-rank 重評分不失真。*
+_v1.8.0（2026-06-10）：Phase 14 實作完成——`facility-slim.ts`（`slimRoutes` 預設啟用 + `compactRoutes` opt-in `format:"compact"`）、`GET /api/v1/a11y/place` 完整文件端點、`SlimOsmA11y` OpenAPI component。設施酬載縮減約 95%（實測 53.5KB → 23.5KB，設施部分 31KB → 1.5KB），tags 白名單對齊評分引擎確保 /route-rank 重評分不失真。_
 
-*v1.9.0（2026-06-11）：Phase 15 實作完成——`realtime-transit.service.ts`（首段公車 TDX ETA 蓋班表等候 + TRA TrainLiveBoard 誤點跟車次套用所有 TRA leg），`USE_REALTIME_TRANSIT` 開關（預設開）。實作期發現：GTFS 公車 stopId 前綴無底線（`TXG2646`）；GTFS direction_id 與 TDX Direction 不對應（改以 board/alight ETA 遞增解方向）；GTFS 軌道車次在 tripId（`TRA_1003`）而非 routeShortName（線名），`connectionToLeg` 連帶修正 TRA/THSR `trainNo`。*
+_v1.9.0（2026-06-11）：Phase 15 實作完成——`realtime-transit.service.ts`（首段公車 TDX ETA 蓋班表等候 + TRA TrainLiveBoard 誤點跟車次套用所有 TRA leg），`USE_REALTIME_TRANSIT` 開關（預設開）。實作期發現：GTFS 公車 stopId 前綴無底線（`TXG2646`）；GTFS direction_id 與 TDX Direction 不對應（改以 board/alight ETA 遞增解方向）；GTFS 軌道車次在 tripId（`TRA_1003`）而非 routeShortName（線名），`connectionToLeg` 連帶修正 TRA/THSR `trainNo`。_
 
-*v1.9.1（2026-06-11）：Phase 15 延伸至 TDX MaaS 路徑（原本因無 stopId/車次而跳過）——① 公車：MaaS `agency.agency_id` 前綴（`NWT_1104_1102`→`NWT`）存入 `BusLeg.cityCode`，overlay fallback 使用；② TRA：OD 每日時刻表以「站名+發車時刻」反查車次並回填 `trainNo`（站名→ID 245 站 6h 快取、OD 表 6h 快取、台/臺正規化）；③ 失敗結果（429/故障的空回應）只快取 60s，避免一次 429 癱瘓即時功能 6 小時。MaaS THSR/捷運 leg 維持班表（TDX 無對應即時 API）。*
-*文件版本 v1.6.0 — Phase 10（AI Route Explanation `/ai/explain`）、Phase 11（多模式：`MODE_PROFILES` / `routeCost` / §11.3 排除）、Phase 12（兩次轉乘：`findTwoTransferRoutes` chain join）、Phase 13（TDX 即時設施狀態：`facility-status.service.ts`）已實作。Roadmap Phase 6-13 全數完成。*  
-*Phase 12 實作期修正：兩側 trip cap 必須依時間排序（任意順序會被城際鐵路擠掉捷運）、middle join 需 `departureTime >= now` 過濾、三段班次需鏈式 afterSec 解析、同點轉乘步行需短路避免 ORS NaN、需冗餘轉乘檢查（前段 trip 已達下段下車站者剔除）。*  
-*下次更新應反映實機負載下的兩次轉乘效能調校與 TDX 額度管理策略。*
+_v1.9.1（2026-06-11）：Phase 15 延伸至 TDX MaaS 路徑（原本因無 stopId/車次而跳過）——① 公車：MaaS `agency.agency_id` 前綴（`NWT_1104_1102`→`NWT`）存入 `BusLeg.cityCode`，overlay fallback 使用；② TRA：OD 每日時刻表以「站名+發車時刻」反查車次並回填 `trainNo`（站名→ID 245 站 6h 快取、OD 表 6h 快取、台/臺正規化）；③ 失敗結果（429/故障的空回應）只快取 60s，避免一次 429 癱瘓即時功能 6 小時。MaaS THSR/捷運 leg 維持班表（TDX 無對應即時 API）。_
+_文件版本 v1.6.0 — Phase 10（AI Route Explanation `/ai/explain`）、Phase 11（多模式：`MODE_PROFILES` / `routeCost` / §11.3 排除）、Phase 12（兩次轉乘：`findTwoTransferRoutes` chain join）、Phase 13（TDX 即時設施狀態：`facility-status.service.ts`）已實作。Roadmap Phase 6-13 全數完成。_  
+_Phase 12 實作期修正：兩側 trip cap 必須依時間排序（任意順序會被城際鐵路擠掉捷運）、middle join 需 `departureTime >= now` 過濾、三段班次需鏈式 afterSec 解析、同點轉乘步行需短路避免 ORS NaN、需冗餘轉乘檢查（前段 trip 已達下段下車站者剔除）。_  
+_下次更新應反映實機負載下的兩次轉乘效能調校與 TDX 額度管理策略。_

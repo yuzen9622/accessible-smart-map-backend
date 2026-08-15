@@ -48,7 +48,11 @@ export async function claimPasswordAssistanceJob() {
       $set: { status: "processing", lockedAt: now, leaseToken },
       $inc: { attempts: 1 },
     },
-    { returnDocument: "after", sort: { availableAt: 1, createdAt: 1 }, maxTimeMS: DB_OPERATION_MAX_MS },
+    {
+      returnDocument: "after",
+      sort: { availableAt: 1, createdAt: 1 },
+      maxTimeMS: DB_OPERATION_MAX_MS,
+    },
   );
 }
 
@@ -58,7 +62,11 @@ export async function renewPasswordAssistanceLease(input: {
   leaseToken: string;
 }): Promise<boolean> {
   const result = await PasswordAssistanceJob.updateOne(
-    { _id: input.jobId as string, status: "processing", leaseToken: input.leaseToken },
+    {
+      _id: input.jobId as string,
+      status: "processing",
+      leaseToken: input.leaseToken,
+    },
     { $set: { lockedAt: new Date() } },
     { maxTimeMS: DB_OPERATION_MAX_MS },
   );
@@ -78,7 +86,11 @@ export async function getOrSetPasswordResetExpiry(input: {
   const firstExpiry = new Date(now.getTime() + input.ttlMs);
   // Aggregation update pipeline: mongoose 9 requires explicit opt-in.
   const job = (await PasswordAssistanceJob.findOneAndUpdate(
-    { _id: input.jobId as string, status: "processing", leaseToken: input.leaseToken },
+    {
+      _id: input.jobId as string,
+      status: "processing",
+      leaseToken: input.leaseToken,
+    },
     [
       {
         $set: {
@@ -87,7 +99,11 @@ export async function getOrSetPasswordResetExpiry(input: {
         },
       },
     ],
-    { returnDocument: "after", updatePipeline: true, maxTimeMS: DB_OPERATION_MAX_MS },
+    {
+      returnDocument: "after",
+      updatePipeline: true,
+      maxTimeMS: DB_OPERATION_MAX_MS,
+    },
   )) as IPasswordAssistanceJob | null;
   return job?.tokenExpiresAt ?? null;
 }
@@ -115,14 +131,17 @@ export async function failPasswordAssistanceJob(input: {
   attempts: number;
   error: unknown;
 }): Promise<boolean> {
-  const message = String(input.error instanceof Error ? input.error.message : input.error).slice(
-    0,
-    MAX_ERROR_LENGTH,
-  );
+  const message = String(
+    input.error instanceof Error ? input.error.message : input.error,
+  ).slice(0, MAX_ERROR_LENGTH);
 
   if (input.attempts >= MAX_ATTEMPTS) {
     const result = await PasswordAssistanceJob.updateOne(
-      { _id: input.jobId as string, status: "processing", leaseToken: input.leaseToken },
+      {
+        _id: input.jobId as string,
+        status: "processing",
+        leaseToken: input.leaseToken,
+      },
       {
         $set: {
           status: "failed",
@@ -138,7 +157,11 @@ export async function failPasswordAssistanceJob(input: {
 
   const delayMs = RETRY_BASE_MS * 2 ** Math.max(0, input.attempts - 1);
   const result = await PasswordAssistanceJob.updateOne(
-    { _id: input.jobId as string, status: "processing", leaseToken: input.leaseToken },
+    {
+      _id: input.jobId as string,
+      status: "processing",
+      leaseToken: input.leaseToken,
+    },
     {
       $set: {
         status: "pending",

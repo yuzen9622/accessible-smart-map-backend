@@ -32,7 +32,12 @@ function fail(message: string): never {
 
 function capRows(body: unknown): unknown {
   if (Array.isArray(body)) {
-    if (body.some((el) => el && typeof el === "object" && Array.isArray((el as any).TimeTables))) {
+    if (
+      body.some(
+        (el) =>
+          el && typeof el === "object" && Array.isArray((el as any).TimeTables),
+      )
+    ) {
       return body.map((el) => ({
         ...(el as object),
         TimeTables: (el as any).TimeTables.slice(0, MAX_ROWS),
@@ -51,9 +56,15 @@ function capRows(body: unknown): unknown {
   return body;
 }
 
-async function capture(system: RailSystem, date: string): Promise<{ url: string; body: unknown }> {
+async function capture(
+  system: RailSystem,
+  date: string,
+): Promise<{ url: string; body: unknown }> {
   const idx = await fetchRailStationIndex(system);
-  if (!idx.ok) fail(`${system} station index unavailable (${idx.errorCode}) — check TDX credentials`);
+  if (!idx.ok)
+    fail(
+      `${system} station index unavailable (${idx.errorCode}) — check TDX credentials`,
+    );
   const stationId = idx.index.get(normalizeStationName("台北"));
   if (!stationId) fail(`${system} has no 臺北 station in index`);
 
@@ -64,8 +75,12 @@ async function capture(system: RailSystem, date: string): Promise<{ url: string;
   const body = await resp.json();
 
   const parsed = parseStationBody(body);
-  if (!parsed.ok) fail(`${system} station payload not parseable (${parsed.errorCode}) — shape drift`);
-  if (parsed.items.length === 0) fail(`${system} station timetable empty for ${date}`);
+  if (!parsed.ok)
+    fail(
+      `${system} station payload not parseable (${parsed.errorCode}) — shape drift`,
+    );
+  if (parsed.items.length === 0)
+    fail(`${system} station timetable empty for ${date}`);
 
   return { url, body: capRows(body) };
 }

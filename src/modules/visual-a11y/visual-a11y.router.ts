@@ -9,7 +9,7 @@ export function createVisualA11yRouter(): Router {
   router.get(
     "/visual-a11y",
     validateRequest({ query: VisualA11yNearbyQuerySchema }),
-    getNearbyVisualA11y
+    getNearbyVisualA11y,
   );
   router.post("/visual-a11y/sync", middleware, syncVisualA11y);
   return router;

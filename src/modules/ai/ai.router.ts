@@ -29,14 +29,14 @@ export function createAiRouter(): Router {
   router.post(
     "/explain",
     validateRequest({ body: ExplainBodySchema }),
-    aiExplain
+    aiExplain,
   );
-  router.post("/chat", validateRequest({ body: AgentChatRequestSchema }), aiChat);
-  router.get(
-    "/memories/settings",
-    middleware,
-    getUserMemorySettings,
+  router.post(
+    "/chat",
+    validateRequest({ body: AgentChatRequestSchema }),
+    aiChat,
   );
+  router.get("/memories/settings", middleware, getUserMemorySettings);
   router.patch(
     "/memories/settings",
     middleware,
@@ -58,7 +58,10 @@ export function createAiRouter(): Router {
   router.patch(
     "/memories/:id",
     middleware,
-    validateRequest({ params: MemoryIdParamsSchema, body: UpdateMemoryBodySchema }),
+    validateRequest({
+      params: MemoryIdParamsSchema,
+      body: UpdateMemoryBodySchema,
+    }),
     updateUserMemory,
   );
   router.delete(

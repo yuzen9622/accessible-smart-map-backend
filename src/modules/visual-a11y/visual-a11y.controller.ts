@@ -22,7 +22,7 @@ export async function getNearbyVisualA11y(req: Request, res: Response) {
       false,
       "error",
       ResponseCode.INTERNAL_ERROR,
-      ERROR_MESSAGE.INTERNAL
+      ERROR_MESSAGE.INTERNAL,
     );
   }
 }
@@ -38,7 +38,7 @@ export async function syncVisualA11y(_req: Request, res: Response) {
       false,
       "error",
       ResponseCode.INTERNAL_ERROR,
-      ERROR_MESSAGE.INTERNAL
+      ERROR_MESSAGE.INTERNAL,
     );
   }
 }

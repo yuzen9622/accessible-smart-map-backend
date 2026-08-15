@@ -20,9 +20,22 @@ export function createReviewRouter(): Router {
   const router = Router();
 
   // summary must be declared before /:id to avoid Express treating "summary" as an id
-  router.get("/reviews/summary", validateRequest({ query: SummaryQuerySchema }), getAiSummary);
-  router.get("/reviews", validateRequest({ query: ListReviewsQuerySchema }), listReviews);
-  router.post("/reviews", middleware, validateRequest({ body: CreateReviewSchema }), createReview);
+  router.get(
+    "/reviews/summary",
+    validateRequest({ query: SummaryQuerySchema }),
+    getAiSummary,
+  );
+  router.get(
+    "/reviews",
+    validateRequest({ query: ListReviewsQuerySchema }),
+    listReviews,
+  );
+  router.post(
+    "/reviews",
+    middleware,
+    validateRequest({ body: CreateReviewSchema }),
+    createReview,
+  );
   router.patch(
     "/reviews/:id",
     middleware,

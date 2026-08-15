@@ -2,7 +2,7 @@ import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 import { registry } from "../../openapi/registry";
 import { ROUTE_MSG, ROUTE_REASON } from "../../constants/messages";
-import { RouteIntentSchema } from "../ai/ai.schema";
+import { RouteIntentSchema } from "../../schemas/route-intent.schema";
 
 extendZodWithOpenApi(z);
 
@@ -450,11 +450,9 @@ const ThsrLegSchema = z
     }),
     departureStationA11y: z.array(OsmA11ySchema),
     arrivalStationA11y: z.array(OsmA11ySchema),
-    facilityHighlights: z
-      .array(z.string())
-      .openapi({
-        example: ["高鐵站設有無障礙設施", "列車備有無障礙座位及輪椅空間"],
-      }),
+    facilityHighlights: z.array(z.string()).openapi({
+      example: ["高鐵站設有無障礙設施", "列車備有無障礙座位及輪椅空間"],
+    }),
     intermediateStops: z.array(IntermediateStopSchema).optional(),
   })
   .strict()
@@ -721,13 +719,10 @@ export const AccessibleRouteSchema = z
         description:
           "影響分數可信度或需提醒使用者的訊息（如資料不足、步行過長）",
       }),
-    totalWalkDistanceM: z
-      .number()
-      .optional()
-      .openapi({
-        example: 736,
-        description: "全程步行距離（公尺），供前端顯示與排序透明度",
-      }),
+    totalWalkDistanceM: z.number().optional().openapi({
+      example: 736,
+      description: "全程步行距離（公尺），供前端顯示與排序透明度",
+    }),
     facilities: z.record(z.string(), OsmA11ySchema).optional().openapi({
       description:
         "僅 compact 格式：以 osmId 為鍵、去重後的設施字典；各段透過 a11yRefs 參照。",
@@ -766,12 +761,10 @@ export const AccessibleRouteDataSchema = z
         enforced: z
           .boolean()
           .openapi({ description: "要求的坡度上限是否真的被路徑引擎執行" }),
-        note: z
-          .string()
-          .openapi({
-            example:
-              "大眾運輸/步行路線引擎目前固定以 8.3% 作為輪椅模式上限，無法套用您要求的更嚴格數值",
-          }),
+        note: z.string().openapi({
+          example:
+            "大眾運輸/步行路線引擎目前固定以 8.3% 作為輪椅模式上限，無法套用您要求的更嚴格數值",
+        }),
       })
       .optional()
       .openapi({

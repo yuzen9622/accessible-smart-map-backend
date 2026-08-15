@@ -1,12 +1,10 @@
 import { Schema, model } from "mongoose";
 
-export type PlaceType = "osm" | "a11y" | "bathroom" | "welfare" | "parking" | "google";
+export type PlaceType =
+  "osm" | "a11y" | "bathroom" | "welfare" | "parking" | "google";
 export type ReviewStatus = "active" | "deleted";
 export type EntranceAccessibility =
-  | "step_free"
-  | "ramp"
-  | "stairs_with_assistance"
-  | "inaccessible";
+  "step_free" | "ramp" | "stairs_with_assistance" | "inaccessible";
 
 export interface IReview {
   _id: string;

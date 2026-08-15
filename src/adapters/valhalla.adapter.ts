@@ -61,7 +61,8 @@ function finiteNonNegative(value: unknown): value is number {
 function normalizeSummary(value: unknown): NormalizedValhallaSummary | null {
   if (!value || typeof value !== "object") return null;
   const raw = value as Record<string, unknown>;
-  if (!finiteNonNegative(raw.length) || !finiteNonNegative(raw.time)) return null;
+  if (!finiteNonNegative(raw.length) || !finiteNonNegative(raw.time))
+    return null;
   return { lengthKm: raw.length, timeSec: raw.time };
 }
 
@@ -79,21 +80,29 @@ function normalizeManeuver(value: unknown): NormalizedValhallaManeuver | null {
     (begin as number) < 0 ||
     !Number.isInteger(end) ||
     (end as number) < (begin as number)
-  ) return null;
-  if (raw.instruction !== undefined && typeof raw.instruction !== "string") return null;
+  )
+    return null;
+  if (raw.instruction !== undefined && typeof raw.instruction !== "string")
+    return null;
   if (
     raw.street_names !== undefined &&
-    (!Array.isArray(raw.street_names) || raw.street_names.some((v) => typeof v !== "string"))
-  ) return null;
+    (!Array.isArray(raw.street_names) ||
+      raw.street_names.some((v) => typeof v !== "string"))
+  )
+    return null;
   return {
-    ...(typeof raw.instruction === "string" ? { instruction: raw.instruction } : {}),
+    ...(typeof raw.instruction === "string"
+      ? { instruction: raw.instruction }
+      : {}),
     type: raw.type as number,
     lengthKm: raw.length,
     timeSec: raw.time,
     beginShapeIndex: begin as number,
     endShapeIndex: end as number,
     stairs: false,
-    ...(Array.isArray(raw.street_names) ? { streetNames: raw.street_names as string[] } : {}),
+    ...(Array.isArray(raw.street_names)
+      ? { streetNames: raw.street_names as string[] }
+      : {}),
   };
 }
 
@@ -101,7 +110,8 @@ function normalizeLeg(value: unknown): NormalizedValhallaLeg | null {
   if (!value || typeof value !== "object") return null;
   const raw = value as Record<string, unknown>;
   const summary = normalizeSummary(raw.summary);
-  if (!summary || typeof raw.shape !== "string" || raw.shape.length === 0) return null;
+  if (!summary || typeof raw.shape !== "string" || raw.shape.length === 0)
+    return null;
   let maneuvers: NormalizedValhallaManeuver[] | undefined;
   if (raw.maneuvers !== undefined) {
     if (!Array.isArray(raw.maneuvers)) return null;
@@ -109,14 +119,19 @@ function normalizeLeg(value: unknown): NormalizedValhallaLeg | null {
     if (normalized.some((m) => m === null)) return null;
     maneuvers = normalized as NormalizedValhallaManeuver[];
   }
-  return { shapePolyline6: raw.shape, summary, ...(maneuvers ? { maneuvers } : {}) };
+  return {
+    shapePolyline6: raw.shape,
+    summary,
+    ...(maneuvers ? { maneuvers } : {}),
+  };
 }
 
 function normalizeTrip(value: unknown): NormalizedValhallaTrip | null {
   if (!value || typeof value !== "object") return null;
   const raw = value as Record<string, unknown>;
   const summary = normalizeSummary(raw.summary);
-  if (!summary || !Array.isArray(raw.legs) || raw.legs.length === 0) return null;
+  if (!summary || !Array.isArray(raw.legs) || raw.legs.length === 0)
+    return null;
   const legs = raw.legs.map(normalizeLeg);
   if (legs.some((leg) => leg === null)) return null;
   return { summary, legs: legs as NormalizedValhallaLeg[] };
@@ -125,8 +140,11 @@ function normalizeTrip(value: unknown): NormalizedValhallaTrip | null {
 export async function computeValhallaRoutes(
   params: ComputeValhallaRoutesParams,
 ): Promise<ComputeValhallaRoutesResult> {
-  const locations = [params.origin, ...(params.waypoints ?? []), params.destination]
-    .map(({ lat, lng }) => ({ lat, lon: lng, type: "break" as const }));
+  const locations = [
+    params.origin,
+    ...(params.waypoints ?? []),
+    params.destination,
+  ].map(({ lat, lng }) => ({ lat, lon: lng, type: "break" as const }));
   const costingOptions: Record<string, unknown> = {
     exclude_ferries: true,
     use_ferry: 0,
@@ -145,7 +163,8 @@ export async function computeValhallaRoutes(
     costing_options: { [params.costing]: costingOptions },
     directions_options: { units: "kilometers" },
   };
-  if (params.computeAlternatives && !params.waypoints?.length) body.alternates = 2;
+  if (params.computeAlternatives && !params.waypoints?.length)
+    body.alternates = 2;
 
   try {
     const response = await axios.post(
@@ -156,20 +175,30 @@ export async function computeValhallaRoutes(
     const data = response.data as Record<string, unknown>;
     const rawTrips: unknown[] = [data?.trip];
     if (data?.alternates !== undefined) {
-      if (!Array.isArray(data.alternates)) return { status: "UPSTREAM_ERROR", trips: [] };
+      if (!Array.isArray(data.alternates))
+        return { status: "UPSTREAM_ERROR", trips: [] };
       for (const alternate of data.alternates) {
-        if (!alternate || typeof alternate !== "object" || !("trip" in alternate)) {
+        if (
+          !alternate ||
+          typeof alternate !== "object" ||
+          !("trip" in alternate)
+        ) {
           return { status: "UPSTREAM_ERROR", trips: [] };
         }
         rawTrips.push((alternate as { trip: unknown }).trip);
       }
     }
     const trips = rawTrips.map(normalizeTrip);
-    if (trips.some((trip) => trip === null)) return { status: "UPSTREAM_ERROR", trips: [] };
+    if (trips.some((trip) => trip === null))
+      return { status: "UPSTREAM_ERROR", trips: [] };
     return { status: "OK", trips: trips as NormalizedValhallaTrip[] };
   } catch (error) {
-    const httpStatus = axios.isAxiosError(error) ? error.response?.status : undefined;
-    const rawCode = axios.isAxiosError(error) ? error.response?.data?.error_code : undefined;
+    const httpStatus = axios.isAxiosError(error)
+      ? error.response?.status
+      : undefined;
+    const rawCode = axios.isAxiosError(error)
+      ? error.response?.data?.error_code
+      : undefined;
     const errorCode = typeof rawCode === "number" ? rawCode : undefined;
     if (errorCode !== undefined && NO_ROUTE_ERROR_CODES.has(errorCode)) {
       return { status: "NO_ROUTE", trips: [], httpStatus, errorCode };

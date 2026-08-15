@@ -1,10 +1,14 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import request from "supertest";
-
-vi.mock("../../config/auth", async () => {
-  const { createAuthModuleMock } = await import("../../../tests/helpers/auth-mock");
-  return createAuthModuleMock();
-});
 
 vi.mock("./emergency-contact.service", () => ({
   listContacts: vi.fn(),
@@ -12,17 +16,42 @@ vi.mock("./emergency-contact.service", () => ({
   deleteContact: vi.fn(),
 }));
 
-import { buildTestApp, buildAuthorizationHeader } from "../../../tests/helpers/test-helpers";
+import {
+  buildAuthorizationHeader,
+  startTestServer,
+  stopTestServer,
+} from "../../../tests/helpers/test-helpers";
+import { stubAuthUserLookup } from "../../../tests/helpers/real-auth";
 import * as service from "./emergency-contact.service";
 import { ResponseCode } from "../../types/code";
 import { CONTACT_MSG, CONTACT_REASON } from "../../constants/messages";
 
-const app = buildTestApp();
+let app: Awaited<ReturnType<typeof startTestServer>>;
 const URL = "/api/v1/user/emergency-contacts";
 const auth = buildAuthorizationHeader();
 
+beforeAll(async () => {
+  app = await startTestServer();
+});
+
+afterAll(async () => {
+  await stopTestServer(app);
+});
+
 beforeEach(() => {
-  vi.resetAllMocks();
+  // Route suites share the production User model through the composed app.
+  // Restore the previous test's findById spy instead of only resetting its
+  // implementation, then reset only this file's service seams.
+  vi.restoreAllMocks();
+  vi.mocked(service.listContacts).mockReset();
+  vi.mocked(service.createContact).mockReset();
+  vi.mocked(service.deleteContact).mockReset();
+  // Real auth path: only the User.findById DB seam is stubbed.
+  stubAuthUserLookup();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("Emergency contact routes — auth", () => {
@@ -50,7 +79,9 @@ describe("GET /user/emergency-contacts", () => {
     const res = await request(app).get(URL).set("Authorization", auth);
     expect(res.status).toBe(200);
     expect(res.body.data.contacts).toEqual([]);
-    expect(vi.mocked(service.listContacts)).toHaveBeenCalledWith("test-user-id");
+    expect(vi.mocked(service.listContacts)).toHaveBeenCalledWith(
+      "test-user-id",
+    );
   });
 });
 
@@ -61,16 +92,27 @@ describe("POST /user/emergency-contacts", () => {
       httpCode: ResponseCode.CREATED,
       message: CONTACT_MSG.CREATED,
       data: {
-        contact: { _id: "c1", name: "媽媽", bindStatus: "pending", bindCodeExpiresAt: new Date().toISOString() },
+        contact: {
+          _id: "c1",
+          name: "媽媽",
+          bindStatus: "pending",
+          bindCodeExpiresAt: new Date().toISOString(),
+        },
         bindUrl: "https://line.me/R/ti/p/@xxxxxxx",
         bindCode: "K7X2QD",
       },
     });
-    const res = await request(app).post(URL).set("Authorization", auth).send({ name: "媽媽" });
+    const res = await request(app)
+      .post(URL)
+      .set("Authorization", auth)
+      .send({ name: "媽媽" });
     expect(res.status).toBe(201);
     expect(res.body.data.bindUrl).toBe("https://line.me/R/ti/p/@xxxxxxx");
     expect(res.body.data.bindCode).toBe("K7X2QD");
-    expect(vi.mocked(service.createContact)).toHaveBeenCalledWith({ userId: "test-user-id", name: "媽媽" });
+    expect(vi.mocked(service.createContact)).toHaveBeenCalledWith({
+      userId: "test-user-id",
+      name: "媽媽",
+    });
   });
 
   it("returns 400 CONTACT_LIMIT_REACHED when the cap is hit", async () => {
@@ -80,13 +122,19 @@ describe("POST /user/emergency-contacts", () => {
       message: CONTACT_MSG.CONTACT_LIMIT_REACHED,
       data: { reason: CONTACT_REASON.CONTACT_LIMIT_REACHED },
     });
-    const res = await request(app).post(URL).set("Authorization", auth).send({ name: "哥哥" });
+    const res = await request(app)
+      .post(URL)
+      .set("Authorization", auth)
+      .send({ name: "哥哥" });
     expect(res.status).toBe(400);
     expect(res.body.data.reason).toBe(CONTACT_REASON.CONTACT_LIMIT_REACHED);
   });
 
   it("rejects an empty name with 400 at the schema (service not called)", async () => {
-    const res = await request(app).post(URL).set("Authorization", auth).send({ name: "" });
+    const res = await request(app)
+      .post(URL)
+      .set("Authorization", auth)
+      .send({ name: "" });
     expect(res.status).toBe(ResponseCode.INVALID_INPUT);
     expect(vi.mocked(service.createContact)).not.toHaveBeenCalled();
   });
@@ -100,7 +148,9 @@ describe("DELETE /user/emergency-contacts/:id", () => {
       message: CONTACT_MSG.NOT_CONTACT_OWNER,
       data: { reason: CONTACT_REASON.NOT_CONTACT_OWNER },
     });
-    const res = await request(app).delete(`${URL}/507f1f77bcf86cd799439011`).set("Authorization", auth);
+    const res = await request(app)
+      .delete(`${URL}/507f1f77bcf86cd799439011`)
+      .set("Authorization", auth);
     expect(res.status).toBe(403);
     expect(res.body.data.reason).toBe(CONTACT_REASON.NOT_CONTACT_OWNER);
   });
@@ -112,7 +162,9 @@ describe("DELETE /user/emergency-contacts/:id", () => {
       message: CONTACT_MSG.DELETED,
       data: null,
     });
-    const res = await request(app).delete(`${URL}/507f1f77bcf86cd799439011`).set("Authorization", auth);
+    const res = await request(app)
+      .delete(`${URL}/507f1f77bcf86cd799439011`)
+      .set("Authorization", auth);
     expect(res.status).toBe(ResponseCode.OK);
     expect(res.body.message).toBe(CONTACT_MSG.DELETED);
   });

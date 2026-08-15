@@ -1,4 +1,4 @@
-import type { ResponseCode, ResponseMessage } from "./code";
+import type { ResponseCode } from "./code";
 export interface ApiResponse<T> {
   ok: boolean;
   status: "success" | "error";

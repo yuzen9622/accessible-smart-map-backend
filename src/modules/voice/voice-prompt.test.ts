@@ -3,7 +3,10 @@ import { buildVoiceSystemPrompt } from "./voice-prompt";
 
 describe("buildVoiceSystemPrompt nearest-place policy", () => {
   it("directs the model to search and route without asking for a station when GPS exists", () => {
-    const prompt = buildVoiceSystemPrompt({ latitude: 25.0478, longitude: 121.517 });
+    const prompt = buildVoiceSystemPrompt({
+      latitude: 25.0478,
+      longitude: 121.517,
+    });
 
     expect(prompt).toContain("不要反問要去哪個 X");
     expect(prompt).toContain("先呼叫 findGooglePlaces");
@@ -12,11 +15,16 @@ describe("buildVoiceSystemPrompt nearest-place policy", () => {
   });
 
   it("keeps nearby exploration separate from route planning", () => {
-    const prompt = buildVoiceSystemPrompt({ latitude: 25.0478, longitude: 121.517 });
+    const prompt = buildVoiceSystemPrompt({
+      latitude: 25.0478,
+      longitude: 121.517,
+    });
 
     expect(prompt).toContain("附近有哪些 X");
     expect(prompt).toContain("不要自動規劃路線");
-    expect(prompt).toContain("只有使用者接著要求帶路時才呼叫 planAccessibleRoute");
+    expect(prompt).toContain(
+      "只有使用者接著要求帶路時才呼叫 planAccessibleRoute",
+    );
   });
 
   it("directs the model to request location instead of a station when GPS is absent", () => {
@@ -48,7 +56,9 @@ describe("buildVoiceSystemPrompt active-navigation context", () => {
     const prompt = buildVoiceSystemPrompt();
 
     expect(prompt).toContain("先呼叫 getActiveNavigationContext");
-    expect(prompt).toContain("transit.routeName、transit.from、transit.direction");
+    expect(prompt).toContain(
+      "transit.routeName、transit.from、transit.direction",
+    );
     expect(prompt).toContain("呼叫 getBusArrival");
     expect(prompt).toContain("後端會使用導航最新位置");
     expect(prompt).toContain("只有 active=false 或必要欄位確實不存在時才追問");

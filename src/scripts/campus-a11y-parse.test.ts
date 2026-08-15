@@ -8,7 +8,9 @@ import {
 } from "./campus-a11y-parse";
 
 const encode = (s: string) =>
-  [...s].map((c) => `&#x${c.codePointAt(0)!.toString(16).toUpperCase()};`).join("");
+  [...s]
+    .map((c) => `&#x${c.codePointAt(0)!.toString(16).toUpperCase()};`)
+    .join("");
 
 const button = (opts: {
   facUid: string;
@@ -75,7 +77,9 @@ describe("mercatorToWgs84 / parseGeoPoint", () => {
   });
 
   it("parses WKT points and rejects other strings", () => {
-    expect(parseGeoPoint("POINT (13529069.669036 2877830.51267)")).not.toBeNull();
+    expect(
+      parseGeoPoint("POINT (13529069.669036 2877830.51267)"),
+    ).not.toBeNull();
     expect(parseGeoPoint("not a point")).toBeNull();
   });
 });
@@ -123,7 +127,7 @@ describe("parseFacilityResultHtml", () => {
   it("strips inlined base64 images before parsing", () => {
     const bloated = SAMPLE_HTML.replace(
       "校園路線",
-      `<img src="data:image/jpg;base64,${"A".repeat(5000)}">校園路線`
+      `<img src="data:image/jpg;base64,${"A".repeat(5000)}">校園路線`,
     );
     const r = parseFacilityResultHtml(bloated);
     expect(r.facilities).toHaveLength(2);

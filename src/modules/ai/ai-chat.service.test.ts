@@ -25,7 +25,10 @@ describe("runChatAgent facade", () => {
 
     const result = await runChatAgent(input as never);
 
-    expect(runAgent).toHaveBeenCalledWith({ ...input, execTool: executeLocalTool });
+    expect(runAgent).toHaveBeenCalledWith({
+      ...input,
+      execTool: executeLocalTool,
+    });
     expect(result).toEqual({ text: "ok", toolResults: [] });
   });
 });

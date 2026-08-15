@@ -46,7 +46,10 @@ type PendingNavInstruction = Omit<
   "legIndex" | "cumulativeDistanceM"
 >;
 
-function pushWarning(warnings: NavWarningCode[], warning: NavWarningCode): void {
+function pushWarning(
+  warnings: NavWarningCode[],
+  warning: NavWarningCode,
+): void {
   if (!warnings.includes(warning)) warnings.push(warning);
 }
 
@@ -189,9 +192,11 @@ export function nearestPolylineIndex(
 
 function isFacilityDirection(relativeDirection: string): boolean {
   const direction = relativeDirection.toUpperCase();
-  return direction === "ELEVATOR" ||
+  return (
+    direction === "ELEVATOR" ||
     direction === "ENTER_STATION" ||
-    direction === "EXIT_STATION";
+    direction === "EXIT_STATION"
+  );
 }
 
 function mergeWalkSteps(steps: WalkStep[]): WalkStep[] {
@@ -200,8 +205,10 @@ function mergeWalkSteps(steps: WalkStep[]): WalkStep[] {
     const direction = step.relativeDirection.toUpperCase();
     const previous = merged.at(-1);
     const previousDirection = previous?.relativeDirection.toUpperCase();
-    const mergeableDirection = direction === "CONTINUE" || direction === "STRAIGHT";
-    const previousContinues = previousDirection === "CONTINUE" || previousDirection === "STRAIGHT";
+    const mergeableDirection =
+      direction === "CONTINUE" || direction === "STRAIGHT";
+    const previousContinues =
+      previousDirection === "CONTINUE" || previousDirection === "STRAIGHT";
     const streetName = step.streetName?.trim() ?? "";
     const startsDifferentNamedStreet =
       !step.bogusName &&
@@ -231,7 +238,11 @@ function splitLongWalkSteps(
   let searchIndex = 0;
   for (let index = 0; index < steps.length; index++) {
     const step = steps[index];
-    const startIndex = nearestPolylineIndex(polyline, step.location, searchIndex);
+    const startIndex = nearestPolylineIndex(
+      polyline,
+      step.location,
+      searchIndex,
+    );
     if (startIndex !== null) searchIndex = startIndex;
     const nextLocation = steps[index + 1]?.location;
     const endIndex = nextLocation
@@ -249,7 +260,11 @@ function splitLongWalkSteps(
     }
     const chunkCount = Math.ceil(step.distanceM / MAX_WALK_PROMPT_DISTANCE_M);
     const cumulative = [0];
-    for (let pointIndex = startIndex + 1; pointIndex <= endIndex; pointIndex++) {
+    for (
+      let pointIndex = startIndex + 1;
+      pointIndex <= endIndex;
+      pointIndex++
+    ) {
       cumulative.push(
         cumulative.at(-1)! +
           haversineCoords(polyline[pointIndex - 1], polyline[pointIndex]),
@@ -268,8 +283,11 @@ function splitLongWalkSteps(
       const offset = cumulative.findIndex((distance) => distance >= target);
       if (offset <= 0) continue;
       const location = polyline[startIndex + offset];
-      if (location[0] === expanded.at(-1)!.location[0] &&
-          location[1] === expanded.at(-1)!.location[1]) continue;
+      if (
+        location[0] === expanded.at(-1)!.location[0] &&
+        location[1] === expanded.at(-1)!.location[1]
+      )
+        continue;
       const { instruction: _instruction, maneuver: _maneuver, ...rest } = step;
       expanded.push({
         ...rest,
@@ -322,12 +340,14 @@ function walkStepText(
 ): string {
   const upstreamText = step.instruction?.trim();
   const compass =
-    bearing !== null && (step.relativeDirection ?? "").toUpperCase() === "DEPART"
+    bearing !== null &&
+    (step.relativeDirection ?? "").toUpperCase() === "DEPART"
       ? `，方位約 ${bearing} 度（${degToCompassWord(bearing)}）`
       : "";
-  const baseText = isFacilityDirection(step.relativeDirection) && upstreamText
-    ? upstreamText
-    : formatWalkStepInstruction({ ...step, targetStreetName }) + compass;
+  const baseText =
+    isFacilityDirection(step.relativeDirection) && upstreamText
+      ? upstreamText
+      : formatWalkStepInstruction({ ...step, targetStreetName }) + compass;
   const normalizedText = baseText.endsWith(STAIRS_NOTICE)
     ? baseText.slice(0, -STAIRS_NOTICE.length)
     : baseText;
@@ -350,17 +370,21 @@ function roadLegToInstructions(
       leg.polyline.length >= 2
         ? Math.round(calcBearing(leg.polyline[0], leg.polyline[1]))
         : null;
-    return [{
-      text: isFirstLeg ? "請沿道路出發，前往目的地" : "請沿道路繼續前往目的地",
-      type: isFirstLeg ? "depart" : "turn",
-      bearing,
-      relativeDirection: null,
-      distanceM: leg.distanceM,
-      streetName: null,
-      legType: leg.type,
-      stairs: false,
-      polylineIndex: bearing === null ? null : 0,
-    }];
+    return [
+      {
+        text: isFirstLeg
+          ? "請沿道路出發，前往目的地"
+          : "請沿道路繼續前往目的地",
+        type: isFirstLeg ? "depart" : "turn",
+        bearing,
+        relativeDirection: null,
+        distanceM: leg.distanceM,
+        streetName: null,
+        legType: leg.type,
+        stairs: false,
+        polylineIndex: bearing === null ? null : 0,
+      },
+    ];
   }
 
   let searchIndex = 0;
@@ -369,9 +393,10 @@ function roadLegToInstructions(
       step.polyline.length >= 2
         ? Math.round(calcBearing(step.polyline[0], step.polyline[1]))
         : null;
-    const polylineIndex = step.polyline[0] && leg.polyline.length
-      ? nearestPolylineIndex(leg.polyline, step.polyline[0], searchIndex)
-      : null;
+    const polylineIndex =
+      step.polyline[0] && leg.polyline.length
+        ? nearestPolylineIndex(leg.polyline, step.polyline[0], searchIndex)
+        : null;
     if (polylineIndex !== null) searchIndex = polylineIndex;
     return {
       text: step.instruction.trim() || "請沿道路繼續前行",
@@ -420,11 +445,19 @@ function walkLegToInstructions(
   if (steps.length > 0) {
     let searchIndex = 0;
     steps.forEach((step, i) => {
-      const polylineIndex = nearestPolylineIndex(polyline, step.location, searchIndex);
+      const polylineIndex = nearestPolylineIndex(
+        polyline,
+        step.location,
+        searchIndex,
+      );
       if (polylineIndex !== null) searchIndex = polylineIndex;
       const bearing = stepBearing(step, polyline, polylineIndex);
       const type = stepType(step.relativeDirection ?? "CONTINUE");
-      const nextNamed = steps.slice(i + 1).find(hasStreetName)?.streetName.trim() ?? null;
+      const nextNamed =
+        steps
+          .slice(i + 1)
+          .find(hasStreetName)
+          ?.streetName.trim() ?? null;
       out.push({
         text: walkStepText(step, bearing, nextNamed),
         type,
@@ -439,7 +472,9 @@ function walkLegToInstructions(
     });
   } else {
     const bearing =
-      polyline.length >= 2 ? Math.round(calcBearing(polyline[0], polyline[1])) : null;
+      polyline.length >= 2
+        ? Math.round(calcBearing(polyline[0], polyline[1]))
+        : null;
     const heading = bearing !== null ? degToCompassWord(bearing) : "前";
     out.push({
       text: isFirstLeg
@@ -567,7 +602,9 @@ export function generateNavInstructions(
 ): GenerateNavResult {
   const voiceResult = generateNavStepsWithLegIndex(route);
   if (!voiceResult.ok) return voiceResult;
-  const instructions = voiceResult.steps.map(({ instruction }) => ({ ...instruction }));
+  const instructions = voiceResult.steps.map(({ instruction }) => ({
+    ...instruction,
+  }));
 
   if (typeof userHeading === "number") {
     for (const instruction of instructions) {
@@ -605,9 +642,8 @@ export async function generateNavInstructionsFromInput(
 ): Promise<GenerateNavResult> {
   let route = input.route;
   if (input.routeToken) {
-    const { getRouteByToken } = await import(
-      "../accessible-route/route-token.service"
-    );
+    const { getRouteByToken } =
+      await import("../accessible-route/route-token.service");
     route = (await getRouteByToken(input.routeToken)) ?? undefined;
     if (!route) {
       return {
@@ -675,33 +711,58 @@ export function generateNavStepsWithLegIndex(
 
   legs.forEach((rawLeg, legIndex) => {
     const leg = rawLeg as
-      | WalkLeg
-      | DriveLeg
-      | BusLeg
-      | MetroLeg
-      | ThsrLeg
-      | TraLeg;
+      WalkLeg | DriveLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg;
     switch (leg.type) {
       case "WALK":
-        pendingSteps.push(...walkLegToInstructions(leg, pendingSteps.length === 0, warnings)
-          .map((instruction) => ({ instruction, legIndex })));
+        pendingSteps.push(
+          ...walkLegToInstructions(
+            leg,
+            pendingSteps.length === 0,
+            warnings,
+          ).map((instruction) => ({ instruction, legIndex })),
+        );
         break;
       case "DRIVE":
       case "MOTORCYCLE":
-        pendingSteps.push(...roadLegToInstructions(leg, pendingSteps.length === 0, warnings)
-          .map((instruction) => ({ instruction, legIndex })));
+        pendingSteps.push(
+          ...roadLegToInstructions(
+            leg,
+            pendingSteps.length === 0,
+            warnings,
+          ).map((instruction) => ({ instruction, legIndex })),
+        );
         break;
       case "BUS":
-        pendingSteps.push(...busInstructions(leg).map((instruction) => ({ instruction, legIndex })));
+        pendingSteps.push(
+          ...busInstructions(leg).map((instruction) => ({
+            instruction,
+            legIndex,
+          })),
+        );
         break;
       case "METRO":
-        pendingSteps.push(...metroInstructions(leg).map((instruction) => ({ instruction, legIndex })));
+        pendingSteps.push(
+          ...metroInstructions(leg).map((instruction) => ({
+            instruction,
+            legIndex,
+          })),
+        );
         break;
       case "THSR":
-        pendingSteps.push(...thsrInstructions(leg).map((instruction) => ({ instruction, legIndex })));
+        pendingSteps.push(
+          ...thsrInstructions(leg).map((instruction) => ({
+            instruction,
+            legIndex,
+          })),
+        );
         break;
       case "TRA":
-        pendingSteps.push(...traInstructions(leg).map((instruction) => ({ instruction, legIndex })));
+        pendingSteps.push(
+          ...traInstructions(leg).map((instruction) => ({
+            instruction,
+            legIndex,
+          })),
+        );
         break;
     }
   });
@@ -721,16 +782,18 @@ export function generateNavStepsWithLegIndex(
     },
   });
   let cumulativeDistanceM = 0;
-  const steps: VoiceNavStep[] = pendingSteps.map(({ instruction, legIndex }) => {
-    const complete: NavInstruction = {
-      ...instruction,
-      legIndex,
-      cumulativeDistanceM: Math.round(cumulativeDistanceM),
-    };
-    if (instruction.distanceM !== null) {
-      cumulativeDistanceM += instruction.distanceM;
-    }
-    return { instruction: complete, legIndex };
-  });
+  const steps: VoiceNavStep[] = pendingSteps.map(
+    ({ instruction, legIndex }) => {
+      const complete: NavInstruction = {
+        ...instruction,
+        legIndex,
+        cumulativeDistanceM: Math.round(cumulativeDistanceM),
+      };
+      if (instruction.distanceM !== null) {
+        cumulativeDistanceM += instruction.distanceM;
+      }
+      return { instruction: complete, legIndex };
+    },
+  );
   return { ok: true, steps, warnings };
 }

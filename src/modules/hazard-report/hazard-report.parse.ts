@@ -1,6 +1,9 @@
 import exifr from "exifr";
 import { haversineMeters } from "../../utils/geo";
-import type { AiVerifyResult, ExifValidationResult } from "./hazard-report.types";
+import type {
+  AiVerifyResult,
+  ExifValidationResult,
+} from "./hazard-report.types";
 
 const EXIF_MAX_AGE_MS = 10 * 60 * 1000;
 const EXIF_CLOCK_SKEW_MS = 10 * 60 * 1000;
@@ -43,7 +46,9 @@ export function parseExifDateTime(
   fallbackOffsetMin = DEFAULT_TZ_OFFSET_MIN,
 ): Date | null {
   if (typeof raw !== "string") return null;
-  const m = raw.trim().match(/^(\d{4})[-:](\d{2})[-:](\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+  const m = raw
+    .trim()
+    .match(/^(\d{4})[-:](\d{2})[-:](\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
   if (!m) return null;
   const offsetMin = parseOffsetMinutes(offset) ?? fallbackOffsetMin;
   const epoch =
@@ -97,7 +102,10 @@ export async function parsePhotoExif(
   ]);
 
   const rawTime =
-    timeData?.DateTimeOriginal ?? timeData?.CreateDate ?? timeData?.ModifyDate ?? null;
+    timeData?.DateTimeOriginal ??
+    timeData?.CreateDate ??
+    timeData?.ModifyDate ??
+    null;
   const rawOffset =
     timeData?.OffsetTimeOriginal ??
     timeData?.OffsetTimeDigitized ??
@@ -106,13 +114,15 @@ export async function parsePhotoExif(
   const exifDate = parseExifDateTime(rawTime, rawOffset);
   const ageMs = exifDate ? now.getTime() - exifDate.getTime() : null;
   const timestampFresh =
-    ageMs === null || (ageMs <= EXIF_MAX_AGE_MS && ageMs >= -EXIF_CLOCK_SKEW_MS);
+    ageMs === null ||
+    (ageMs <= EXIF_MAX_AGE_MS && ageMs >= -EXIF_CLOCK_SKEW_MS);
 
   const lat = typeof gps?.latitude === "number" ? gps.latitude : undefined;
   const lng = typeof gps?.longitude === "number" ? gps.longitude : undefined;
   const gpsPresent = lat !== undefined && lng !== undefined;
   const gpsMatchesClaimed =
-    gpsPresent && haversineMeters(lat, lng, claimedLat, claimedLng) <= EXIF_GPS_MATCH_M;
+    gpsPresent &&
+    haversineMeters(lat, lng, claimedLat, claimedLng) <= EXIF_GPS_MATCH_M;
 
   return {
     timestampFresh,
@@ -142,9 +152,14 @@ export function parseAiVerifyResult(text: string): AiVerifyResult {
   if (start === -1 || end === -1 || end < start) return skipped();
 
   try {
-    const obj = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
+    const obj = JSON.parse(text.slice(start, end + 1)) as Record<
+      string,
+      unknown
+    >;
     const verdict =
-      obj.verdict === "verified" || obj.verdict === "suspicious" || obj.verdict === "rejected"
+      obj.verdict === "verified" ||
+      obj.verdict === "suspicious" ||
+      obj.verdict === "rejected"
         ? obj.verdict
         : "skipped";
     if (verdict === "skipped") return skipped();
@@ -153,7 +168,9 @@ export function parseAiVerifyResult(text: string): AiVerifyResult {
         ? Math.max(0, Math.min(1, obj.confidence))
         : 0;
     const reason =
-      typeof obj.reason === "string" && obj.reason.trim() ? obj.reason.trim().slice(0, 200) : "";
+      typeof obj.reason === "string" && obj.reason.trim()
+        ? obj.reason.trim().slice(0, 200)
+        : "";
     return { verdict, confidence, reason };
   } catch {
     return skipped();

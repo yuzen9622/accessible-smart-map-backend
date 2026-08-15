@@ -37,58 +37,44 @@ const PlaceGeoPointSchema = z
 
 const AccessibilitySchema = z
   .object({
-    status: z
-      .enum(["accessible", "limited", "unknown"])
-      .openapi({
-        example: "unknown",
-        description: "場所本身的無障礙判定；附近設施不會改變此判定。",
-      }),
-    wheelchair: z
-      .enum(["yes", "limited", "no"])
-      .nullable()
-      .openapi({ example: null, description: "既有輪椅可用性欄位；無資料為 null" }),
-    wheelchairAccess: z
-      .boolean()
-      .nullable()
-      .openapi({
-        example: null,
-        description: "場所本身輪椅可進入：true=來源明確確認有，false=來源明確確認沒有，null=未調查或來源無法判斷。",
-      }),
-    elevator: z
-      .boolean()
-      .nullable()
-      .openapi({
-        example: null,
-        description: "場所本身電梯：true=來源明確確認有，false=來源明確確認沒有，null=未調查或來源無法判斷。",
-      }),
-    ramp: z
-      .boolean()
-      .nullable()
-      .openapi({
-        example: null,
-        description: "場所本身坡道：true=來源明確確認有，false=來源明確確認沒有，null=未調查或來源無法判斷。",
-      }),
-    accessibleToilet: z
-      .boolean()
-      .nullable()
-      .openapi({
-        example: null,
-        description: "場所本身無障礙廁所：true=來源明確確認有，false=來源明確確認沒有，null=未調查或來源無法判斷。",
-      }),
-    nearbyFacilityCount: z
-      .number()
-      .int()
-      .nonnegative()
-      .openapi({
-        example: 0,
-        description: "本地 DB 半徑內的無障礙設施數，僅供附近設施展示，不是場所本身的無障礙證據。",
-      }),
-    source: z
-      .enum(["local-db", "google", "osm", "none"])
-      .openapi({
-        example: "none",
-        description: "場所本身無障礙訊號的資料來源；附近本地設施不會作為場所證據。",
-      }),
+    status: z.enum(["accessible", "limited", "unknown"]).openapi({
+      example: "unknown",
+      description: "場所本身的無障礙判定；附近設施不會改變此判定。",
+    }),
+    wheelchair: z.enum(["yes", "limited", "no"]).nullable().openapi({
+      example: null,
+      description: "既有輪椅可用性欄位；無資料為 null",
+    }),
+    wheelchairAccess: z.boolean().nullable().openapi({
+      example: null,
+      description:
+        "場所本身輪椅可進入：true=來源明確確認有，false=來源明確確認沒有，null=未調查或來源無法判斷。",
+    }),
+    elevator: z.boolean().nullable().openapi({
+      example: null,
+      description:
+        "場所本身電梯：true=來源明確確認有，false=來源明確確認沒有，null=未調查或來源無法判斷。",
+    }),
+    ramp: z.boolean().nullable().openapi({
+      example: null,
+      description:
+        "場所本身坡道：true=來源明確確認有，false=來源明確確認沒有，null=未調查或來源無法判斷。",
+    }),
+    accessibleToilet: z.boolean().nullable().openapi({
+      example: null,
+      description:
+        "場所本身無障礙廁所：true=來源明確確認有，false=來源明確確認沒有，null=未調查或來源無法判斷。",
+    }),
+    nearbyFacilityCount: z.number().int().nonnegative().openapi({
+      example: 0,
+      description:
+        "本地 DB 半徑內的無障礙設施數，僅供附近設施展示，不是場所本身的無障礙證據。",
+    }),
+    source: z.enum(["local-db", "google", "osm", "none"]).openapi({
+      example: "none",
+      description:
+        "場所本身無障礙訊號的資料來源；附近本地設施不會作為場所證據。",
+    }),
   })
   .strict()
   .openapi("PlaceAccessibility");
@@ -97,31 +83,33 @@ const PlaceSourceSchema = z.enum(["osm", "google"]);
 
 export const AutocompleteItemSchema = z
   .object({
-    id: z
-      .string()
-      .openapi({ example: "osm:node:123456", description: "前綴 id：google:<id> 或 osm:<type>:<id>" }),
+    id: z.string().openapi({
+      example: "osm:node:123456",
+      description: "前綴 id：google:<id> 或 osm:<type>:<id>",
+    }),
     source: PlaceSourceSchema.openapi({ example: "osm" }),
     primaryText: z.string().openapi({ example: "台北101" }),
-    secondaryText: z
-      .string()
-      .nullable()
-      .openapi({ example: "台北市信義區", description: "OSM 為完整地址；Google 為預測副標" }),
-    placeClass: z
-      .string()
-      .nullable()
-      .openapi({ example: "tourism", description: "OSM 字彙的 class，供前端選圖示" }),
+    secondaryText: z.string().nullable().openapi({
+      example: "台北市信義區",
+      description: "OSM 為完整地址；Google 為預測副標",
+    }),
+    placeClass: z.string().nullable().openapi({
+      example: "tourism",
+      description: "OSM 字彙的 class，供前端選圖示",
+    }),
     placeType: z.string().nullable().openapi({ example: "attraction" }),
-    typeLabel: z.string().nullable().openapi({ example: "景點", description: "中文類型標籤" }),
+    typeLabel: z
+      .string()
+      .nullable()
+      .openapi({ example: "景點", description: "中文類型標籤" }),
     location: PlaceGeoPointSchema.nullable().openapi({
       description: "OSM 有座標；Google 預測階段恆為 null",
     }),
-    distanceMeters: z
-      .number()
-      .nullable()
-      .openapi({
-        example: 1200,
-        description: "直線距離（haversine 公式計算，非實際行走距離），相對於查詢參數 lat/lng 計算；未帶 lat/lng 或地點本身無座標時為 null。",
-      }),
+    distanceMeters: z.number().nullable().openapi({
+      example: 1200,
+      description:
+        "直線距離（haversine 公式計算，非實際行走距離），相對於查詢參數 lat/lng 計算；未帶 lat/lng 或地點本身無座標時為 null。",
+    }),
   })
   .strict()
   .openapi("AutocompleteItem");
@@ -140,43 +128,51 @@ const NearbyFacilityBriefSchema = z
   .object({
     id: z.string().openapi({ example: "66a1f2c3e4b5a6d7c8e9f0d4" }),
     name: z.string().openapi({ example: "市政府站無障礙廁所" }),
-    address: z.string().nullable().openapi({ example: "台北市信義區市府路45號" }),
+    address: z
+      .string()
+      .nullable()
+      .openapi({ example: "台北市信義區市府路45號" }),
     category: z.string().openapi({ example: "toilet" }),
     typeLabel: z.string().openapi({ example: "無障礙廁所" }),
     distanceMeters: z.number().openapi({ example: 120 }),
-    source: z
-      .enum(["government", "osm"])
-      .openapi({ example: "government", description: "這筆設施資料的來源資料集" }),
-    lastVerifiedAt: z
-      .string()
-      .nullable()
-      .openapi({
-        example: null,
-        description: "資料集匯入/更新時間；來源本身不附時間戳記時為 null，不代表資料是最新的。",
-      }),
+    source: z.enum(["government", "osm"]).openapi({
+      example: "government",
+      description: "這筆設施資料的來源資料集",
+    }),
+    lastVerifiedAt: z.string().nullable().openapi({
+      example: null,
+      description:
+        "資料集匯入/更新時間；來源本身不附時間戳記時為 null，不代表資料是最新的。",
+    }),
   })
   .strict()
   .openapi("NearbyFacilityBrief");
 
 export const PlaceResultSchema = z
   .object({
-    id: z.string().openapi({ example: "google:ChIJ...", description: "前綴 id" }),
+    id: z
+      .string()
+      .openapi({ example: "google:ChIJ...", description: "前綴 id" }),
     source: PlaceSourceSchema.openapi({ example: "google" }),
     name: z.string().openapi({ example: "台北101" }),
-    fullAddress: z.string().nullable().openapi({ example: "台北市信義區信義路五段7號" }),
+    fullAddress: z
+      .string()
+      .nullable()
+      .openapi({ example: "台北市信義區信義路五段7號" }),
     addressComponents: AddressComponentsSchema,
     location: PlaceGeoPointSchema,
     placeClass: z.string().nullable().openapi({ example: "tourism" }),
     placeType: z.string().nullable().openapi({ example: "attraction" }),
     typeLabel: z.string().nullable().openapi({ example: "景點" }),
-    distanceMeters: z
+    distanceMeters: z.number().nullable().openapi({
+      example: 1200,
+      description:
+        "直線距離（haversine 公式計算，非實際行走距離），相對於查詢參數 lat/lng 計算；未帶 lat/lng 時為 null。",
+    }),
+    rating: z
       .number()
       .nullable()
-      .openapi({
-        example: 1200,
-        description: "直線距離（haversine 公式計算，非實際行走距離），相對於查詢參數 lat/lng 計算；未帶 lat/lng 時為 null。",
-      }),
-    rating: z.number().nullable().openapi({ example: 4.5, description: "Google 才有" }),
+      .openapi({ example: 4.5, description: "Google 才有" }),
     accessibility: AccessibilitySchema,
     nearbyFacilities: z
       .object({
@@ -196,43 +192,52 @@ export const PlaceResultSchema = z
       .openapi("PlaceReviewKey"),
     externalLinks: z
       .object({
-        osm: z.string().nullable().openapi({ example: "https://www.openstreetmap.org/node/123456" }),
+        osm: z
+          .string()
+          .nullable()
+          .openapi({ example: "https://www.openstreetmap.org/node/123456" }),
         google: z.string().nullable().openapi({ example: null }),
       })
       .strict()
       .openapi("PlaceExternalLinks"),
-    attribution: z
-      .string()
-      .nullable()
-      .openapi({ example: "© OpenStreetMap contributors", description: "資料來源授權標註" }),
+    attribution: z.string().nullable().openapi({
+      example: "© OpenStreetMap contributors",
+      description: "資料來源授權標註",
+    }),
   })
   .strict()
   .openapi("PlaceResult");
 
 export const AutocompleteQuerySchema = z
   .object({
-    q: z.string().min(1).openapi({ example: "台北1", description: "使用者輸入的部分文字" }),
-    sessiontoken: z
+    q: z
       .string()
-      .optional()
-      .openapi({ example: "b2c3d4e5-...", description: "前端產生的 session UUID，綁定計費" }),
-    lat: coordString("latitude")
-      .optional()
-      .openapi({
-        example: "25.0330",
-        description: "距離計算的基準點緯度；不限定是使用者裝置 GPS，可以是地圖中心或任何參考座標，未提供時 distanceMeters 回 null。",
-      }),
-    lng: coordString("longitude")
-      .optional()
-      .openapi({
-        example: "121.5654",
-        description: "距離計算的基準點經度；與 lat 成對使用。",
-      }),
+      .min(1)
+      .openapi({ example: "台北1", description: "使用者輸入的部分文字" }),
+    sessiontoken: z.string().optional().openapi({
+      example: "b2c3d4e5-...",
+      description: "前端產生的 session UUID，綁定計費",
+    }),
+    lat: coordString("latitude").optional().openapi({
+      example: "25.0330",
+      description:
+        "距離計算的基準點緯度；不限定是使用者裝置 GPS，可以是地圖中心或任何參考座標，未提供時 distanceMeters 回 null。",
+    }),
+    lng: coordString("longitude").optional().openapi({
+      example: "121.5654",
+      description: "距離計算的基準點經度；與 lat 成對使用。",
+    }),
     sources: z
       .string()
-      .regex(/^(osm|google)(,(osm|google))*$/, "sources 只接受 osm / google，以逗號分隔")
+      .regex(
+        /^(osm|google)(,(osm|google))*$/,
+        "sources 只接受 osm / google，以逗號分隔",
+      )
       .optional()
-      .openapi({ example: "osm,google", description: "來源白名單，預設兩者皆啟用" }),
+      .openapi({
+        example: "osm,google",
+        description: "來源白名單，預設兩者皆啟用",
+      }),
     limit: z.coerce
       .number()
       .int()
@@ -258,22 +263,19 @@ export const DetailsParamsSchema = z
 
 export const DetailsQuerySchema = z
   .object({
-    sessiontoken: z
-      .string()
-      .optional()
-      .openapi({ example: "b2c3d4e5-...", description: "與 autocomplete 相同的 session UUID" }),
-    lat: coordString("latitude")
-      .optional()
-      .openapi({
-        example: "25.0330",
-        description: "距離計算的基準點緯度；不限定是使用者裝置 GPS，可以是地圖中心或任何參考座標，未提供時 distanceMeters 回 null。",
-      }),
-    lng: coordString("longitude")
-      .optional()
-      .openapi({
-        example: "121.5654",
-        description: "距離計算的基準點經度；與 lat 成對使用。",
-      }),
+    sessiontoken: z.string().optional().openapi({
+      example: "b2c3d4e5-...",
+      description: "與 autocomplete 相同的 session UUID",
+    }),
+    lat: coordString("latitude").optional().openapi({
+      example: "25.0330",
+      description:
+        "距離計算的基準點緯度；不限定是使用者裝置 GPS，可以是地圖中心或任何參考座標，未提供時 distanceMeters 回 null。",
+    }),
+    lng: coordString("longitude").optional().openapi({
+      example: "121.5654",
+      description: "距離計算的基準點經度；與 lat 成對使用。",
+    }),
     lang: langString(),
   })
   .strict();

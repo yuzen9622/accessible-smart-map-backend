@@ -1,12 +1,16 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import request from "supertest";
 import { ROUTE_MSG, ROUTE_REASON } from "../../constants/messages";
 import { ResponseCode } from "../../types/code";
-
-vi.mock("../../config/auth", async () => {
-  const { createAuthModuleMock } = await import("../../../tests/helpers/auth-mock");
-  return createAuthModuleMock();
-});
+import { TaiwanCityEn } from "../../types/transit";
 
 // Mock only the service seam; the request still exercises router + validation
 // + controller + envelope (schema defaults / rejections happen before the mock).
@@ -16,26 +20,48 @@ vi.mock("./accessible-route.service", async (importActual) => {
   return { ...actual, planAccessibleRouteForHttp: vi.fn() };
 });
 
-import { buildTestApp, buildAuthorizationHeader } from "../../../tests/helpers/test-helpers";
+import {
+  buildAuthorizationHeader,
+  startTestServer,
+  stopTestServer,
+} from "../../../tests/helpers/test-helpers";
+import {
+  buildDbUser,
+  stubAuthUserLookup,
+} from "../../../tests/helpers/real-auth";
 import * as service from "./accessible-route.service";
 import { AccessibleRouteSchema } from "./accessible-route.schema";
 
-const app = buildTestApp();
+let app: Awaited<ReturnType<typeof startTestServer>>;
 const URL = "/api/v1/a11y/accessible-route";
 const mockPlan = vi.mocked(service.planAccessibleRouteForHttp);
-const AUTH = buildAuthorizationHeader({ _id: "user-abc", email: "user@test.com" });
+const AUTH = buildAuthorizationHeader({
+  _id: "user-abc",
+  email: "user@test.com",
+});
+
+beforeAll(async () => {
+  app = await startTestServer();
+});
+
+afterAll(async () => {
+  await stopTestServer(app);
+});
 
 const okData = (overrides: Record<string, unknown> = {}) => ({
   origin: { lat: 25.04, lng: 121.56 },
   destination: { lat: 25.03, lng: 121.55 },
-  city: "Taipei",
-  travelMode: "transit",
+  city: TaiwanCityEn.Taipei,
+  travelMode: "transit" as const,
   routes: [],
   ...overrides,
 });
 
 beforeEach(() => {
   vi.resetAllMocks();
+  // Optional-auth route: the production authenticateToken() runs for real when
+  // a Bearer header is present; only the User.findById DB seam is stubbed.
+  stubAuthUserLookup(buildDbUser({ _id: "user-abc", email: "user@test.com" }));
 });
 
 describe("POST /api/v1/a11y/accessible-route travel modes + waypoints", () => {
@@ -43,21 +69,25 @@ describe("POST /api/v1/a11y/accessible-route travel modes + waypoints", () => {
     mockPlan.mockResolvedValue({
       ok: true,
       data: okData({
-        routes: [{
-          routeId: "walk-0",
-          routeToken: "high-entropy-capability",
-          routeName: "步行",
-          totalMinutes: 3,
-          transferCount: 0,
-          legs: [],
-          accessibilityHighlights: [],
-        }],
+        routes: [
+          {
+            routeId: "walk-0",
+            routeToken: "high-entropy-capability",
+            routeName: "步行",
+            totalMinutes: 3,
+            transferCount: 0,
+            legs: [],
+            accessibilityHighlights: [],
+          },
+        ],
       }),
     } as any);
-    const res = await request(app).post(URL).send({
-      origin: { latitude: 25, longitude: 121 },
-      destination: { latitude: 25.1, longitude: 121.1 },
-    });
+    const res = await request(app)
+      .post(URL)
+      .send({
+        origin: { latitude: 25, longitude: 121 },
+        destination: { latitude: 25.1, longitude: 121.1 },
+      });
     expect(res.status).toBe(200);
     expect(res.body.data.routes[0].routeToken).toBe("high-entropy-capability");
   });
@@ -86,15 +116,22 @@ describe("POST /api/v1/a11y/accessible-route travel modes + waypoints", () => {
         penaltyPoints: 0,
       },
     };
-    mockPlan.mockResolvedValue({ ok: true, data: okData({ routes: [route] }) } as any);
+    mockPlan.mockResolvedValue({
+      ok: true,
+      data: okData({ routes: [route] }),
+    } as any);
 
-    const res = await request(app).post(URL).send({
-      origin: { latitude: 25, longitude: 121 },
-      destination: { latitude: 25.1, longitude: 121.1 },
-    });
+    const res = await request(app)
+      .post(URL)
+      .send({
+        origin: { latitude: 25, longitude: 121 },
+        destination: { latitude: 25.1, longitude: 121.1 },
+      });
 
     expect(res.status).toBe(200);
-    expect(res.body.data.routes[0].hazardAdvisory).toEqual(route.hazardAdvisory);
+    expect(res.body.data.routes[0].hazardAdvisory).toEqual(
+      route.hazardAdvisory,
+    );
     expect(AccessibleRouteSchema.safeParse(route).success).toBe(true);
     expect(
       AccessibleRouteSchema.safeParse({
@@ -108,36 +145,42 @@ describe("POST /api/v1/a11y/accessible-route travel modes + waypoints", () => {
     mockPlan.mockResolvedValue({
       ok: true,
       data: okData({
-        routes: [{
-          routeId: "otp-next-day",
-          routeName: "NEXT",
-          totalMinutes: 40,
-          transferCount: 0,
-          departureDate: "2030-01-02",
-          legs: [{
-            type: "BUS",
+        routes: [
+          {
+            routeId: "otp-next-day",
             routeName: "NEXT",
-            departureStop: "東南國中",
-            arrivalStop: "台中科大",
-            departureTime: "06:20",
-            arrivalTime: "07:00",
-            waitInfo: { time: "06:20", source: "schedule" },
-            direction: 0,
-            polyline: [],
-            departureStopA11y: [],
-            arrivalStopA11y: [],
-          }],
-          accessibilityHighlights: [],
-        }],
+            totalMinutes: 40,
+            transferCount: 0,
+            departureDate: "2030-01-02",
+            legs: [
+              {
+                type: "BUS",
+                routeName: "NEXT",
+                departureStop: "東南國中",
+                arrivalStop: "台中科大",
+                departureTime: "06:20",
+                arrivalTime: "07:00",
+                waitInfo: { time: "06:20", source: "schedule" },
+                direction: 0,
+                polyline: [],
+                departureStopA11y: [],
+                arrivalStopA11y: [],
+              },
+            ],
+            accessibilityHighlights: [],
+          },
+        ],
       }),
     } as any);
 
-    const res = await request(app).post(URL).send({
-      origin: { latitude: 23.80409, longitude: 120.4517439 },
-      destination: { latitude: 24.1497433, longitude: 120.6837712 },
-      travelMode: "transit",
-      departureTime: "2030-01-01T21:51:00+08:00",
-    });
+    const res = await request(app)
+      .post(URL)
+      .send({
+        origin: { latitude: 23.80409, longitude: 120.4517439 },
+        destination: { latitude: 24.1497433, longitude: 120.6837712 },
+        travelMode: "transit",
+        departureTime: "2030-01-01T21:51:00+08:00",
+      });
 
     expect(res.status).toBe(200);
     expect(res.body.data.routes[0]).toMatchObject({
@@ -406,28 +449,33 @@ describe("POST /api/v1/a11y/accessible-route travel modes + waypoints", () => {
   it.each([
     [ROUTE_REASON.NO_ROUTE, ROUTE_MSG.NO_ROUTE],
     [ROUTE_REASON.NO_ACCESSIBLE_ROUTE, ROUTE_MSG.NO_ACCESSIBLE_ROUTE],
-  ] as const)("maps %s to the exact HTTP 422 envelope", async (reason, message) => {
-    mockPlan.mockResolvedValue({
-      ok: false,
-      status: ResponseCode.UNPROCESSABLE_ENTITY,
-      error: message,
-      data: { reason },
-    });
+  ] as const)(
+    "maps %s to the exact HTTP 422 envelope",
+    async (reason, message) => {
+      mockPlan.mockResolvedValue({
+        ok: false,
+        status: ResponseCode.UNPROCESSABLE_ENTITY,
+        error: message,
+        data: { reason },
+      });
 
-    const res = await request(app).post(URL).send({
-      origin: { latitude: 25, longitude: 121 },
-      destination: { latitude: 25.1, longitude: 121.1 },
-    });
+      const res = await request(app)
+        .post(URL)
+        .send({
+          origin: { latitude: 25, longitude: 121 },
+          destination: { latitude: 25.1, longitude: 121.1 },
+        });
 
-    expect(res.status).toBe(ResponseCode.UNPROCESSABLE_ENTITY);
-    expect(res.body).toEqual({
-      ok: false,
-      status: "error",
-      code: ResponseCode.UNPROCESSABLE_ENTITY,
-      message,
-      data: { reason },
-    });
-  });
+      expect(res.status).toBe(ResponseCode.UNPROCESSABLE_ENTITY);
+      expect(res.body).toEqual({
+        ok: false,
+        status: "error",
+        code: ResponseCode.UNPROCESSABLE_ENTITY,
+        message,
+        data: { reason },
+      });
+    },
+  );
 });
 
 describe("accessible-route OpenAPI", () => {
@@ -444,7 +492,9 @@ describe("accessible-route OpenAPI", () => {
     ]) {
       expect(responses["422"].description).toContain(reason);
     }
-    expect(responses["503"].description).toContain(ROUTE_REASON.UPSTREAM_TIMEOUT);
+    expect(responses["503"].description).toContain(
+      ROUTE_REASON.UPSTREAM_TIMEOUT,
+    );
     expect(responses["404"]).toBeUndefined();
     expect(res.body.components.schemas.RouteFailureData).toMatchObject({
       type: "object",
@@ -500,16 +550,23 @@ describe("POST /api/v1/a11y/accessible-route optional auth", () => {
     const res = await request(app).post(URL).send(body);
 
     expect(res.status).toBe(200);
-    expect(mockPlan).toHaveBeenCalledWith(expect.objectContaining({ userId: undefined }));
+    expect(mockPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: undefined }),
+    );
   });
 
   it("passes the authenticated userId through to the planner", async () => {
     mockPlan.mockResolvedValue({ ok: true, data: okData() });
 
-    const res = await request(app).post(URL).set("Authorization", AUTH).send(body);
+    const res = await request(app)
+      .post(URL)
+      .set("Authorization", AUTH)
+      .send(body);
 
     expect(res.status).toBe(200);
-    expect(mockPlan).toHaveBeenCalledWith(expect.objectContaining({ userId: "user-abc" }));
+    expect(mockPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "user-abc" }),
+    );
   });
 
   it("returns 403 for a garbage Bearer token instead of silently going anonymous", async () => {

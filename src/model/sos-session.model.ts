@@ -3,7 +3,11 @@ import type { ISosSession } from "../types";
 
 const acknowledgementSchema = new Schema(
   {
-    contactId: { type: Schema.Types.ObjectId, ref: "EmergencyContact", default: null },
+    contactId: {
+      type: Schema.Types.ObjectId,
+      ref: "EmergencyContact",
+      default: null,
+    },
     lineUserId: { type: String, required: true },
     name: { type: String, default: null },
     at: { type: Date, required: true },
@@ -15,7 +19,14 @@ const timelineEntrySchema = new Schema(
   {
     type: {
       type: String,
-      enum: ["created", "notified", "acknowledged", "claimed", "status_update", "resolved"],
+      enum: [
+        "created",
+        "notified",
+        "acknowledged",
+        "claimed",
+        "status_update",
+        "resolved",
+      ],
       required: true,
     },
     actorType: {
@@ -46,7 +57,14 @@ const sosSessionSchema = new Schema<ISosSession>(
     },
     handlingStatus: {
       type: String,
-      enum: ["notified", "acknowledged", "claimed", "en_route", "arrived", "resolved"],
+      enum: [
+        "notified",
+        "acknowledged",
+        "claimed",
+        "en_route",
+        "arrived",
+        "resolved",
+      ],
       default: "notified",
     },
     lat: { type: Number, required: true, min: -90, max: 90 },
@@ -57,7 +75,11 @@ const sosSessionSchema = new Schema<ISosSession>(
     resolvedAt: { type: Date, default: null },
     claimedBy: { type: String, default: null },
     claimedByName: { type: String, default: null },
-    claimedByContactId: { type: Schema.Types.ObjectId, ref: "EmergencyContact", default: null },
+    claimedByContactId: {
+      type: Schema.Types.ObjectId,
+      ref: "EmergencyContact",
+      default: null,
+    },
     claimedAt: { type: Date, default: null },
     acknowledgements: { type: [acknowledgementSchema], default: [] },
     timeline: { type: [timelineEntrySchema], default: [] },

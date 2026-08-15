@@ -8,7 +8,7 @@ const WALK_POLYLINE: [number, number][] = [
   [121.5648, 25.0421],
   [121.5641, 25.0426],
   [121.5633, 25.0432],
-  [121.5620, 25.0455],
+  [121.562, 25.0455],
 ];
 
 const OTP_STEP_DISTANCES = [40, 120, 480];
@@ -91,15 +91,17 @@ const valhallaWalkLeg = () => ({
   ],
 });
 
-const otpRoute = (): NavRouteInput => ({
-  routeId: "walk-0",
-  legs: [otpWalkLeg()],
-}) as unknown as NavRouteInput;
+const otpRoute = (): NavRouteInput =>
+  ({
+    routeId: "walk-0",
+    legs: [otpWalkLeg()],
+  }) as unknown as NavRouteInput;
 
-const valhallaRoute = (): NavRouteInput => ({
-  routeId: "walk-1",
-  legs: [valhallaWalkLeg()],
-}) as unknown as NavRouteInput;
+const valhallaRoute = (): NavRouteInput =>
+  ({
+    routeId: "walk-1",
+    legs: [valhallaWalkLeg()],
+  }) as unknown as NavRouteInput;
 
 describe("walk-quality regression contracts", () => {
   it("uses OTP geometry bearings instead of the former eight-direction values", () => {
@@ -111,9 +113,11 @@ describe("walk-quality regression contracts", () => {
       .filter((bearing): bearing is number => bearing !== null);
     expect(bearings.some((bearing) => bearing % 45 !== 0)).toBe(true);
     expect(result.data.initialBearing % 45).not.toBe(0);
-    expect(result.data.instructions.every(
-      (instruction) => instruction.legIndex === 0,
-    )).toBe(true);
+    expect(
+      result.data.instructions.every(
+        (instruction) => instruction.legIndex === 0,
+      ),
+    ).toBe(true);
   });
 
   it("rewrites Valhalla maneuvers as distance-bearing TTS sentences", () => {
@@ -121,10 +125,13 @@ describe("walk-quality regression contracts", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const moving = result.data.instructions.filter(
-      (instruction) => instruction.type !== "arrive" && instruction.distanceM !== null,
+      (instruction) =>
+        instruction.type !== "arrive" && instruction.distanceM !== null,
     );
     expect(moving.length).toBeGreaterThan(0);
-    expect(moving.every((instruction) => /馬上|公尺|公里/.test(instruction.text))).toBe(true);
+    expect(
+      moving.every((instruction) => /馬上|公尺|公里/.test(instruction.text)),
+    ).toBe(true);
     expect(result.data.instructions.at(-1)?.cumulativeDistanceM).toBe(1040);
   });
 
@@ -142,7 +149,10 @@ describe("walk-quality regression contracts", () => {
     expect(secondLeg.length).toBeGreaterThan(0);
     expect(secondLeg[0].type).toBe("turn");
     expect(secondLeg[0].text).not.toContain("出發");
-    expect(result.data.instructions.filter((instruction) => instruction.type === "depart"))
-      .toHaveLength(1);
+    expect(
+      result.data.instructions.filter(
+        (instruction) => instruction.type === "depart",
+      ),
+    ).toHaveLength(1);
   });
 });

@@ -10,9 +10,11 @@ import {
 } from "../types/osm";
 import { DEFAULT_LANG, type SupportedLang } from "../types/lang";
 
-const BASE_URL = () => process.env.NOMINATIM_BASE_URL ?? "https://nominatim.openstreetmap.org";
+const BASE_URL = () =>
+  process.env.NOMINATIM_BASE_URL ?? "https://nominatim.openstreetmap.org";
 const USER_AGENT = () =>
-  process.env.NOMINATIM_USER_AGENT ?? "taipei-accessible-backend (contact: unset)";
+  process.env.NOMINATIM_USER_AGENT ??
+  "taipei-accessible-backend (contact: unset)";
 
 const MIN_INTERVAL_MS = 1000;
 const MAX_QUEUE_WAIT_MS = 2000;
@@ -57,28 +59,45 @@ function toAddress(raw: Record<string, unknown> | undefined): OsmAddress {
   const a = raw ?? {};
   return {
     road: firstOsmValue(a.road, a.pedestrian, a.footway),
-    district: firstOsmValue(a.suburb, a.neighbourhood, a.city_district, a.district),
+    district: firstOsmValue(
+      a.suburb,
+      a.neighbourhood,
+      a.city_district,
+      a.district,
+    ),
     city: firstOsmValue(a.city, a.town, a.county, a.state),
     postcode: firstOsmValue(a.postcode),
   };
 }
 
-function toOsmPlace(raw: NominatimLookupRaw | null | undefined): OsmPlace | null {
+function toOsmPlace(
+  raw: NominatimLookupRaw | null | undefined,
+): OsmPlace | null {
   if (!raw) return null;
 
   const osmType = raw.osm_type as OsmType | undefined;
   const osmId = raw.osm_id;
-  if (!osmType || !PREFIX_BY_OSM_TYPE[osmType] || osmId === undefined || osmId === null) return null;
+  if (
+    !osmType ||
+    !PREFIX_BY_OSM_TYPE[osmType] ||
+    osmId === undefined ||
+    osmId === null
+  )
+    return null;
 
   const latitude = Number(raw.lat);
   const longitude = Number(raw.lon);
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
 
-  const displayName = typeof raw.display_name === "string" ? raw.display_name : "";
+  const displayName =
+    typeof raw.display_name === "string" ? raw.display_name : "";
   const rawType = typeof raw.type === "string" ? raw.type : undefined;
   const name =
-    firstOsmValue(raw.name, rawType ? raw.address?.[rawType] : undefined, displayName.split(",")[0]) ??
-    displayName;
+    firstOsmValue(
+      raw.name,
+      rawType ? raw.address?.[rawType] : undefined,
+      displayName.split(",")[0],
+    ) ?? displayName;
   if (!name) return null;
 
   return {
@@ -104,7 +123,9 @@ export function toOsmLookupId(osmType: OsmType, osmId: string): string {
 }
 
 /** Parses a Nominatim lookup id such as "N123" back into its parts. */
-export function parseOsmLookupId(value: string): { osmType: OsmType; osmId: string } | null {
+export function parseOsmLookupId(
+  value: string,
+): { osmType: OsmType; osmId: string } | null {
   const osmType = OSM_TYPE_BY_PREFIX[value.charAt(0).toUpperCase()];
   const osmId = value.slice(1);
   if (!osmType || !/^\d+$/.test(osmId)) return null;
@@ -131,20 +152,24 @@ export async function lookupOsmPlace(
   if (!(await awaitSlot())) return null;
 
   try {
-    const response = await axios.get<NominatimLookupRaw[]>(`${BASE_URL()}/lookup`, {
-      params: {
-        osm_ids: toOsmLookupId(osmType, osmId),
-        format: "jsonv2",
-        addressdetails: 1,
-        extratags: 1,
+    const response = await axios.get<NominatimLookupRaw[]>(
+      `${BASE_URL()}/lookup`,
+      {
+        params: {
+          osm_ids: toOsmLookupId(osmType, osmId),
+          format: "jsonv2",
+          addressdetails: 1,
+          extratags: 1,
+        },
+        timeout: REQUEST_TIMEOUT_MS,
+        headers: {
+          "User-Agent": USER_AGENT(),
+          "Accept-Language": opts.lang ?? DEFAULT_LANG,
+        },
       },
-      timeout: REQUEST_TIMEOUT_MS,
-      headers: {
-        "User-Agent": USER_AGENT(),
-        "Accept-Language": opts.lang ?? DEFAULT_LANG,
-      },
-    });
-    if (!Array.isArray(response.data) || response.data.length === 0) return null;
+    );
+    if (!Array.isArray(response.data) || response.data.length === 0)
+      return null;
     return toOsmPlace(response.data[0]);
   } catch {
     return null;

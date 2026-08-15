@@ -1,6 +1,11 @@
 import type { webhook } from "@line/bot-sdk";
-import { Types } from "mongoose";
-import EmergencyContact from "../../model/emergency-contact.model";
+import {
+  findActiveSessionByShareToken,
+  findLatestLocatedContact,
+  findUserName,
+  releaseContactsForLineUser,
+  updateBoundContactLocations,
+} from "./line.repository";
 import {
   buildBoundContactsMessage,
   buildClaimedControlsMessage,
@@ -14,8 +19,6 @@ import {
   type RouteCardPayload,
 } from "../../adapters/line.adapter";
 import { LINE_MSG, SOS_MSG, SOS_REASON } from "../../constants/messages";
-import SosSession from "../../model/sos-session.model";
-import User from "../../model/user.model";
 import { planAccessibleRouteFromRequest } from "../accessible-route/accessible-route.service";
 import {
   acknowledgeSession,
@@ -250,7 +253,11 @@ async function handleRenameInput(
     return;
   }
 
-  const result = await renameBoundContact({ lineUserId, contactId, name: text });
+  const result = await renameBoundContact({
+    lineUserId,
+    contactId,
+    name: text,
+  });
   if (!result.ok && result.httpCode === ResponseCode.INVALID_INPUT) {
     await replyText(replyToken, result.message);
     return;
@@ -363,9 +370,7 @@ async function handleMenuPostback(
         await replyText(replyToken, LINE_MSG.SOS_NO_CONTACTS);
         return;
       }
-      await replyMessages(replyToken, [
-        buildBoundContactsMessage(result.data),
-      ]);
+      await replyMessages(replyToken, [buildBoundContactsMessage(result.data)]);
       return;
     }
 
@@ -557,15 +562,10 @@ async function handleLocationMessage(
 ): Promise<void> {
   if (!lineUserId) return;
 
-  await EmergencyContact.updateMany(
-    { lineUserId, bindStatus: "bound" },
-    {
-      $set: {
-        lastLineLat: message.latitude,
-        lastLineLng: message.longitude,
-        lastLineLocationUpdatedAt: new Date(),
-      },
-    },
+  await updateBoundContactLocations(
+    lineUserId,
+    message.latitude,
+    message.longitude,
   );
 
   if (!replyToken) return;
@@ -601,10 +601,7 @@ async function handleEvent(event: LineEvent): Promise<void> {
     case "unfollow": {
       const userId = getUserId(event);
       if (userId) {
-        await EmergencyContact.updateMany(
-          { lineUserId: userId },
-          { $set: { bindStatus: "pending", lineUserId: null } },
-        );
+        await releaseContactsForLineUser(userId);
       }
       return;
     }
@@ -651,24 +648,12 @@ export async function getRoutePreview(
     return fail(ResponseCode.NOT_FOUND, "找不到進行中的求救紀錄");
   }
 
-  const session = await SosSession.findOne({
-    shareToken: previewToken,
-    status: "active",
-  }).lean();
+  const session = await findActiveSessionByShareToken(previewToken);
   if (!session) {
     return fail(ResponseCode.NOT_FOUND, "找不到進行中的求救紀錄");
   }
 
-  const contact = await EmergencyContact.findOne({
-    userId: String(session.userId),
-    bindStatus: "bound",
-    lineUserId: { $ne: null },
-    lastLineLat: { $ne: null },
-    lastLineLng: { $ne: null },
-  })
-    .sort({ lastLineLocationUpdatedAt: -1, updatedAt: -1 })
-    .select("lastLineLat lastLineLng lastLineLocationUpdatedAt")
-    .lean();
+  const contact = await findLatestLocatedContact(String(session.userId));
 
   if (
     typeof contact?.lastLineLat !== "number" ||
@@ -696,7 +681,7 @@ export async function getRoutePreview(
     return fail(routeResult.status, routeResult.error);
   }
 
-  const owner = await User.findById(session.userId).select("name").lean();
+  const ownerName = await findUserName(String(session.userId));
   return {
     ok: true,
     httpCode: ResponseCode.OK,
@@ -704,7 +689,7 @@ export async function getRoutePreview(
     data: {
       ...routeResult.data,
       sessionId: String(session._id),
-      ownerName: owner?.name ?? "未知使用者",
+      ownerName: ownerName ?? "未知使用者",
       originLabel: "你分享的位置",
       destinationLabel: session.address ?? "求救者位置",
       travelMode: routeResult.data.travelMode ?? travelMode ?? "drive",

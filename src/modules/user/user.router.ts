@@ -56,7 +56,12 @@ export function createUserRouter(): Router {
     validateRequest({ body: RegisterBodySchema }),
     register,
   );
-  router.post("/auth/login", loginLimiter, validateRequest({ body: LoginBodySchema }), login);
+  router.post(
+    "/auth/login",
+    loginLimiter,
+    validateRequest({ body: LoginBodySchema }),
+    login,
+  );
   router.post(
     "/auth/verify-email",
     validateRequest({ body: VerifyEmailBodySchema }),

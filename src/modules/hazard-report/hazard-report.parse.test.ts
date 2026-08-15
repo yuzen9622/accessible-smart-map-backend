@@ -7,8 +7,14 @@ import {
 
 describe("parseAiVerifyResult", () => {
   it("parses a clean JSON verdict", () => {
-    const r = parseAiVerifyResult('{"verdict":"verified","confidence":0.87,"reason":"街景實拍"}');
-    expect(r).toEqual({ verdict: "verified", confidence: 0.87, reason: "街景實拍" });
+    const r = parseAiVerifyResult(
+      '{"verdict":"verified","confidence":0.87,"reason":"街景實拍"}',
+    );
+    expect(r).toEqual({
+      verdict: "verified",
+      confidence: 0.87,
+      reason: "街景實拍",
+    });
   });
 
   it("tolerates code fences and surrounding prose", () => {
@@ -20,8 +26,14 @@ describe("parseAiVerifyResult", () => {
   });
 
   it("clamps confidence into [0,1]", () => {
-    expect(parseAiVerifyResult('{"verdict":"rejected","confidence":5,"reason":"x"}').confidence).toBe(1);
-    expect(parseAiVerifyResult('{"verdict":"rejected","confidence":-2,"reason":"x"}').confidence).toBe(0);
+    expect(
+      parseAiVerifyResult('{"verdict":"rejected","confidence":5,"reason":"x"}')
+        .confidence,
+    ).toBe(1);
+    expect(
+      parseAiVerifyResult('{"verdict":"rejected","confidence":-2,"reason":"x"}')
+        .confidence,
+    ).toBe(0);
   });
 
   it("degrades unknown / non-JSON payloads to skipped", () => {
@@ -32,9 +44,9 @@ describe("parseAiVerifyResult", () => {
 
 describe("parseExifDateTime", () => {
   it("applies the photo's own offset tag", () => {
-    expect(parseExifDateTime("2026:06:25 22:30:00", "+08:00")?.toISOString()).toBe(
-      "2026-06-25T14:30:00.000Z",
-    );
+    expect(
+      parseExifDateTime("2026:06:25 22:30:00", "+08:00")?.toISOString(),
+    ).toBe("2026-06-25T14:30:00.000Z");
   });
 
   it("assumes Asia/Taipei (UTC+8) when the photo has no offset tag", () => {
@@ -44,9 +56,9 @@ describe("parseExifDateTime", () => {
   });
 
   it("handles negative and compact offsets", () => {
-    expect(parseExifDateTime("2026:06:25 09:00:00", "-0530")?.toISOString()).toBe(
-      "2026-06-25T14:30:00.000Z",
-    );
+    expect(
+      parseExifDateTime("2026:06:25 09:00:00", "-0530")?.toISOString(),
+    ).toBe("2026-06-25T14:30:00.000Z");
   });
 
   it("returns null for missing or malformed input", () => {
@@ -57,7 +69,12 @@ describe("parseExifDateTime", () => {
 
 describe("parsePhotoExif", () => {
   it("passes a buffer with no readable EXIF (missing time is allowed)", async () => {
-    const r = await parsePhotoExif(Buffer.from("not an image"), 25, 121, new Date());
+    const r = await parsePhotoExif(
+      Buffer.from("not an image"),
+      25,
+      121,
+      new Date(),
+    );
     expect(r.timestampFresh).toBe(true);
     expect(r.rawExifTime).toBeUndefined();
     expect(r.gpsPresent).toBe(false);

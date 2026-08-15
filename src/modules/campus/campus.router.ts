@@ -20,22 +20,22 @@ export function createCampusRouter(): Router {
   router.get(
     "/campus/nearby",
     validateRequest({ query: CampusNearbyQuerySchema }),
-    nearbyCampus
+    nearbyCampus,
   );
   router.get(
     "/campus/schools",
     validateRequest({ query: CampusSchoolsQuerySchema }),
-    listSchools
+    listSchools,
   );
   router.get(
     "/campus",
     validateRequest({ query: CampusListQuerySchema }),
-    listCampus
+    listCampus,
   );
   router.get(
     "/campus/:campusId",
     validateRequest({ params: CampusParamsSchema }),
-    getCampusByCampusId
+    getCampusByCampusId,
   );
   return router;
 }

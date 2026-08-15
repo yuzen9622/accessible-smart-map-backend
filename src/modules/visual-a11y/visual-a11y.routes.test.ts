@@ -1,22 +1,44 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import request from "supertest";
-
-vi.mock("../../config/auth", async () => {
-  const { createAuthModuleMock } = await import("../../../tests/helpers/auth-mock");
-  return createAuthModuleMock();
-});
 
 vi.mock("./visual-a11y.service", () => ({
   findNearby: vi.fn(),
   syncFromOverpass: vi.fn(),
 }));
 
-import { buildTestApp, buildAuthorizationHeader } from "../../../tests/helpers/test-helpers";
+import {
+  buildAuthorizationHeader,
+  startTestServer,
+  stopTestServer,
+} from "../../../tests/helpers/test-helpers";
+import {
+  buildDbUser,
+  stubAuthUserLookup,
+} from "../../../tests/helpers/real-auth";
 import * as service from "./visual-a11y.service";
 
-const app = buildTestApp();
+let app: Awaited<ReturnType<typeof startTestServer>>;
 const BASE = "/api/v1/a11y/visual-a11y";
-const AUTH = buildAuthorizationHeader({ _id: "user-abc", email: "user@test.com" });
+const AUTH = buildAuthorizationHeader({
+  _id: "user-abc",
+  email: "user@test.com",
+});
+
+beforeAll(async () => {
+  app = await startTestServer();
+});
+
+afterAll(async () => {
+  await stopTestServer(app);
+});
 
 const sample = {
   _id: "66a1f2c3e4b5a6d7c8e9f0d4",
@@ -29,33 +51,40 @@ const sample = {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  // Real auth path: only the User.findById DB seam is stubbed.
+  stubAuthUserLookup(buildDbUser({ _id: "user-abc", email: "user@test.com" }));
 });
 
 describe("GET /api/v1/a11y/visual-a11y", () => {
   it("returns 200 + nearby facilities for valid coordinates (default radius, no type)", async () => {
     vi.mocked(service.findNearby).mockResolvedValue([sample] as any);
-    const res = await request(app).get(BASE).query({ lat: 25.047, lng: 121.517 });
+    const res = await request(app)
+      .get(BASE)
+      .query({ lat: 25.047, lng: 121.517 });
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(1);
     expect(vi.mocked(service.findNearby)).toHaveBeenCalledWith(
       25.047,
       121.517,
       500,
-      undefined
+      undefined,
     );
   });
 
   it("passes radius + type through to the service", async () => {
     vi.mocked(service.findNearby).mockResolvedValue([] as any);
-    const res = await request(app)
-      .get(BASE)
-      .query({ lat: 25.047, lng: 121.517, radius: 1000, type: "tactile_paving" });
+    const res = await request(app).get(BASE).query({
+      lat: 25.047,
+      lng: 121.517,
+      radius: 1000,
+      type: "tactile_paving",
+    });
     expect(res.status).toBe(200);
     expect(vi.mocked(service.findNearby)).toHaveBeenCalledWith(
       25.047,
       121.517,
       1000,
-      "tactile_paving"
+      "tactile_paving",
     );
   });
 
@@ -80,14 +109,20 @@ describe("POST /api/v1/a11y/visual-a11y/sync", () => {
       inserted: 120,
       updated: 35,
     });
-    const res = await request(app).post(`${BASE}/sync`).set("Authorization", AUTH);
+    const res = await request(app)
+      .post(`${BASE}/sync`)
+      .set("Authorization", AUTH);
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual({ inserted: 120, updated: 35 });
   });
 
   it("returns 500 when the sync fails", async () => {
-    vi.mocked(service.syncFromOverpass).mockRejectedValue(new Error("overpass down"));
-    const res = await request(app).post(`${BASE}/sync`).set("Authorization", AUTH);
+    vi.mocked(service.syncFromOverpass).mockRejectedValue(
+      new Error("overpass down"),
+    );
+    const res = await request(app)
+      .post(`${BASE}/sync`)
+      .set("Authorization", AUTH);
     expect(res.status).toBe(500);
   });
 

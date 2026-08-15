@@ -15,12 +15,12 @@
                 └─────────────────────────────────────────┘
 ```
 
-| 元件                    | 跑法                       | 必要？                                   |
-| ----------------------- | -------------------------- | ---------------------------------------- |
-| Node API                | systemd service            | ✅                                       |
-| MongoDB 8.0             | apt 安裝、systemd          | ✅（存 a11y/公車站/捷運站等）            |
-| OTP 2.9.0               | Docker（`docker compose`） | ✅（路徑規劃唯一引擎）                  |
-| Redis                   | —                          | ❌ 選用（`REDIS_URL` 沒設就全程 no-op）  |
+| 元件        | 跑法                       | 必要？                                  |
+| ----------- | -------------------------- | --------------------------------------- |
+| Node API    | systemd service            | ✅                                      |
+| MongoDB 8.0 | apt 安裝、systemd          | ✅（存 a11y/公車站/捷運站等）           |
+| OTP 2.9.0   | Docker（`docker compose`） | ✅（路徑規劃唯一引擎）                  |
+| Redis       | —                          | ❌ 選用（`REDIS_URL` 沒設就全程 no-op） |
 
 > ⚠️ 重點：`src/server.ts` **不會自己讀 `.env`**（只有 `dev` 腳本用 dotenvx）。生產環境靠 systemd 用 `node -r dotenv/config` 載入 `.env`（`dotenv` 已是正式依賴）。
 
@@ -294,14 +294,14 @@ curl -s -X POST http://localhost:8000/api/v1/a11y/accessible-route \
 
 ## 日常維運
 
-| 工作           | 指令                                                          |
-| -------------- | ------------------------------------------------------------- |
-| 看 API log     | `journalctl -u accessible-backend -f`                         |
-| 重啟 API       | `sudo systemctl restart accessible-backend`                   |
+| 工作           | 指令                                                                                      |
+| -------------- | ----------------------------------------------------------------------------------------- |
+| 看 API log     | `journalctl -u accessible-backend -f`                                                     |
+| 重啟 API       | `sudo systemctl restart accessible-backend`                                               |
 | 更新程式碼     | `git pull && pnpm install --frozen-lockfile && sudo systemctl restart accessible-backend` |
-| OTP 啟停       | `docker compose up -d otp` / `docker stop otp`                |
-| OTP log        | `docker logs otp --tail 30`                                   |
-| 每週重建 graph | cron：`0 4 * * 0`，見下                                       |
+| OTP 啟停       | `docker compose up -d otp` / `docker stop otp`                                            |
+| OTP log        | `docker logs otp --tail 30`                                                               |
+| 每週重建 graph | cron：`0 4 * * 0`，見下                                                                   |
 
 每週日 04:00 自動重建 OTP graph（含捷運/台鐵班表更新）：
 
@@ -316,7 +316,7 @@ crontab -e
 | 症狀                           | 多半原因 / 處置                                                                                |
 | ------------------------------ | ---------------------------------------------------------------------------------------------- |
 | API 啟動即崩、env 都 undefined | systemd 沒載到 `.env` → 確認 `WorkingDirectory` 正確、`.env` 在該目錄、用了 `-r dotenv/config` |
-| 路由都沒捷運/台鐵              | OTP 沒起來或 graph 沒含注入 → `docker logs otp`、確認 `OTP_BASE_URL` 可連                       |
+| 路由都沒捷運/台鐵              | OTP 沒起來或 graph 沒含注入 → `docker logs otp`、確認 `OTP_BASE_URL` 可連                      |
 | API 每次卡 ~30 秒才回          | MongoDB 連不上 → `systemctl status mongod`、檢查 `DATABASE_URL` 帳密/authSource                |
 | 建圖 `exit 137`                | OOM（這台不會發生；若在小機器則先 `docker stop otp` 釋放記憶體）                               |
 | graph 換壞                     | 回滾：`mv otp-data/graph.obj.prev otp-data/graph.obj && docker compose up -d otp`              |

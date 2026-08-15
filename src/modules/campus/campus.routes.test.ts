@@ -1,4 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import request from "supertest";
 
 vi.mock("./campus.service", () => ({
@@ -8,10 +16,13 @@ vi.mock("./campus.service", () => ({
   listSchools: vi.fn(),
 }));
 
-import { buildTestApp } from "../../../tests/helpers/test-helpers";
+import {
+  startTestServer,
+  stopTestServer,
+} from "../../../tests/helpers/test-helpers";
 import * as service from "./campus.service";
 
-const app = buildTestApp();
+let app: Awaited<ReturnType<typeof startTestServer>>;
 const BASE = "/api/v1/a11y/campus";
 
 const summary = {
@@ -34,10 +45,25 @@ const detail = {
   ...summary,
   _id: "66a1f2c3e4b5a6d7c8e9f0d4",
   facilities: [
-    { facUid: "F1", facTypeId: 8, type: "elevator", facType: "無障礙電梯", floors: ["1"], floorIds: ["L1"] },
+    {
+      facUid: "F1",
+      facTypeId: 8,
+      type: "elevator",
+      facType: "無障礙電梯",
+      floors: ["1"],
+      floorIds: ["L1"],
+    },
   ],
   importedAt: "2026-06-24T00:00:00.000Z",
 };
+
+beforeAll(async () => {
+  app = await startTestServer();
+});
+
+afterAll(async () => {
+  await stopTestServer(app);
+});
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -50,18 +76,29 @@ describe("GET /api/v1/a11y/campus/facility-types", () => {
     expect(Array.isArray(res.body.data)).toBe(true);
     expect(res.body.data.length).toBe(13);
     const elevator = res.body.data.find((t: any) => t.code === "elevator");
-    expect(elevator).toMatchObject({ id: 8, code: "elevator", label: "無障礙電梯" });
+    expect(elevator).toMatchObject({
+      id: 8,
+      code: "elevator",
+      label: "無障礙電梯",
+    });
   });
 });
 
 describe("GET /api/v1/a11y/campus/nearby", () => {
   it("returns 200 + nearby campus summaries for valid coordinates", async () => {
     vi.mocked(service.findNearby).mockResolvedValue([summary] as any);
-    const res = await request(app).get(`${BASE}/nearby`).query({ lat: 25.05, lng: 121.51 });
+    const res = await request(app)
+      .get(`${BASE}/nearby`)
+      .query({ lat: 25.05, lng: 121.51 });
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(1);
     expect(res.body.data[0].facTypeSummary).toEqual(summary.facTypeSummary);
-    expect(vi.mocked(service.findNearby)).toHaveBeenCalledWith(25.05, 121.51, 1000, undefined);
+    expect(vi.mocked(service.findNearby)).toHaveBeenCalledWith(
+      25.05,
+      121.51,
+      1000,
+      undefined,
+    );
   });
 
   it("passes the type code through to the service", async () => {
@@ -70,7 +107,12 @@ describe("GET /api/v1/a11y/campus/nearby", () => {
       .get(`${BASE}/nearby`)
       .query({ lat: 25.05, lng: 121.51, type: "elevator" });
     expect(res.status).toBe(200);
-    expect(vi.mocked(service.findNearby)).toHaveBeenCalledWith(25.05, 121.51, 1000, "elevator");
+    expect(vi.mocked(service.findNearby)).toHaveBeenCalledWith(
+      25.05,
+      121.51,
+      1000,
+      "elevator",
+    );
   });
 
   it("returns 400 for an unknown type code", async () => {
@@ -97,9 +139,12 @@ describe("GET /api/v1/a11y/campus", () => {
       page: 1,
       totalPages: 1,
     } as any);
-    const res = await request(app)
-      .get(BASE)
-      .query({ city: "台中市", type: "elevator", schoolId: 33, sort: "facilities" });
+    const res = await request(app).get(BASE).query({
+      city: "台中市",
+      type: "elevator",
+      schoolId: 33,
+      sort: "facilities",
+    });
     expect(res.status).toBe(200);
     expect(res.body.data.items).toHaveLength(1);
     expect(vi.mocked(service.findAll)).toHaveBeenCalledWith({
@@ -123,7 +168,7 @@ describe("GET /api/v1/a11y/campus", () => {
     const res = await request(app).get(BASE).query({ keyword: "中科大" });
     expect(res.status).toBe(200);
     expect(vi.mocked(service.findAll)).toHaveBeenCalledWith(
-      expect.objectContaining({ keyword: "中科大", page: 1, limit: 20 })
+      expect.objectContaining({ keyword: "中科大", page: 1, limit: 20 }),
     );
   });
 
@@ -137,12 +182,22 @@ describe("GET /api/v1/a11y/campus", () => {
 describe("GET /api/v1/a11y/campus/schools", () => {
   it("returns 200 + paginated school directory", async () => {
     vi.mocked(service.listSchools).mockResolvedValue({
-      items: [{ schoolId: 33, schoolName: "國立臺中科技大學", city: "臺中市", branchCount: 2, facilityCount: 900 }],
+      items: [
+        {
+          schoolId: 33,
+          schoolName: "國立臺中科技大學",
+          city: "臺中市",
+          branchCount: 2,
+          facilityCount: 900,
+        },
+      ],
       totalCount: 1,
       page: 1,
       totalPages: 1,
     } as any);
-    const res = await request(app).get(`${BASE}/schools`).query({ city: "台中市" });
+    const res = await request(app)
+      .get(`${BASE}/schools`)
+      .query({ city: "台中市" });
     expect(res.status).toBe(200);
     expect(res.body.data.items[0].schoolId).toBe(33);
     expect(vi.mocked(service.listSchools)).toHaveBeenCalledWith({

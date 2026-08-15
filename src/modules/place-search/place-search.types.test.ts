@@ -15,13 +15,20 @@ describe("place id", () => {
   it("round-trips a google id", () => {
     const id = buildGooglePlaceId("ChIJ123");
     expect(id).toBe("google:ChIJ123");
-    expect(parsePlaceId(id)).toEqual({ source: "google", googlePlaceId: "ChIJ123" });
+    expect(parsePlaceId(id)).toEqual({
+      source: "google",
+      googlePlaceId: "ChIJ123",
+    });
   });
 
   it("round-trips every osm type", () => {
     for (const osmType of ["node", "way", "relation"] as const) {
       const id = buildOsmPlaceId(osmType, "123");
-      expect(parsePlaceId(id)).toEqual({ source: "osm", osmType, osmId: "123" });
+      expect(parsePlaceId(id)).toEqual({
+        source: "osm",
+        osmType,
+        osmId: "123",
+      });
     }
   });
 
@@ -60,7 +67,9 @@ describe("normalizeName", () => {
 
 describe("googleTypesToClassType", () => {
   it("maps known types onto the OSM vocabulary, most specific first", () => {
-    expect(googleTypesToClassType(["subway_station", "transit_station"])).toEqual({
+    expect(
+      googleTypesToClassType(["subway_station", "transit_station"]),
+    ).toEqual({
       placeClass: "railway",
       placeType: "station",
     });
@@ -78,14 +87,19 @@ describe("googleTypesToClassType", () => {
   });
 
   it("ignores the generic Google types when falling back", () => {
-    expect(googleTypesToClassType(["point_of_interest", "establishment"])).toEqual({
+    expect(
+      googleTypesToClassType(["point_of_interest", "establishment"]),
+    ).toEqual({
       placeClass: null,
       placeType: null,
     });
   });
 
   it("returns nulls for an empty type list", () => {
-    expect(googleTypesToClassType([])).toEqual({ placeClass: null, placeType: null });
+    expect(googleTypesToClassType([])).toEqual({
+      placeClass: null,
+      placeType: null,
+    });
   });
 });
 
@@ -106,7 +120,9 @@ describe("typeLabelOf", () => {
 
   it("falls back to a class-level label instead of leaking a raw unmapped type", () => {
     expect(typeLabelOf("unclassified_weird_value", "highway")).toBe("道路");
-    expect(typeLabelOf("unclassified_weird_value", "highway", "en")).toBe("Road");
+    expect(typeLabelOf("unclassified_weird_value", "highway", "en")).toBe(
+      "Road",
+    );
     expect(typeLabelOf("some_unmapped_shop", "shop")).toBe("商店");
     expect(typeLabelOf("tertiary", "highway")).toBe("市區道路");
   });
@@ -150,12 +166,18 @@ describe("mapOsmAccessibilityTags", () => {
   });
 
   it("reads the standard ramp:wheelchair key first", () => {
-    expect(mapOsmAccessibilityTags({ "ramp:wheelchair": "no" })).toMatchObject({ ramp: false });
-    expect(mapOsmAccessibilityTags({ "ramp:wheelchair": "yes" })).toMatchObject({ ramp: true });
+    expect(mapOsmAccessibilityTags({ "ramp:wheelchair": "no" })).toMatchObject({
+      ramp: false,
+    });
+    expect(mapOsmAccessibilityTags({ "ramp:wheelchair": "yes" })).toMatchObject(
+      { ramp: true },
+    );
   });
 
   it("keeps reading the legacy wheelchair:ramp alias", () => {
-    expect(mapOsmAccessibilityTags({ "wheelchair:ramp": "yes" })).toMatchObject({ ramp: true });
+    expect(mapOsmAccessibilityTags({ "wheelchair:ramp": "yes" })).toMatchObject(
+      { ramp: true },
+    );
   });
 
   it("maps class=highway,type=elevator to elevator even with empty extratags", () => {
@@ -180,7 +202,9 @@ describe("mapOsmAccessibilityTags", () => {
   });
 
   it("lets an explicit elevator tag override the highway=elevator classification", () => {
-    expect(mapOsmAccessibilityTags({ elevator: "no" }, "highway", "elevator")).toMatchObject({
+    expect(
+      mapOsmAccessibilityTags({ elevator: "no" }, "highway", "elevator"),
+    ).toMatchObject({
       elevator: false,
     });
   });

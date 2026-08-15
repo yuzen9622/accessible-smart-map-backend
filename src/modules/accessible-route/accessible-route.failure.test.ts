@@ -101,8 +101,12 @@ describe("preflightAccessibleRoute", () => {
       { lat: 25.5, lng: 121 },
     ];
     const maxRouteDistanceKm =
-      haversineMeters(points[0].lat, points[0].lng, points[1].lat, points[1].lng) /
-      1_000;
+      haversineMeters(
+        points[0].lat,
+        points[0].lng,
+        points[1].lat,
+        points[1].lng,
+      ) / 1_000;
 
     expect(
       preflightAccessibleRoute(points, {

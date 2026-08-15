@@ -15,4 +15,7 @@ gtfsPathwaySchema.index({ pathwayId: 1 }, { unique: true });
 gtfsPathwaySchema.index({ fromStopId: 1, pathwayMode: 1 });
 gtfsPathwaySchema.index({ toStopId: 1 });
 
-export const GtfsPathway = model<IGtfsPathway>("GtfsPathway", gtfsPathwaySchema);
+export const GtfsPathway = model<IGtfsPathway>(
+  "GtfsPathway",
+  gtfsPathwaySchema,
+);

@@ -16,10 +16,7 @@ export interface ServiceCoverageConfig {
 }
 
 export const DEFAULT_SERVICE_COVERAGE_BBOX: ServiceCoverageBbox = [
-  117.9,
-  21.85,
-  122.6,
-  26.55,
+  117.9, 21.85, 122.6, 26.55,
 ];
 
 /**

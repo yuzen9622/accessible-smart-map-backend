@@ -1,29 +1,48 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import request from "supertest";
-
-vi.mock("../../config/auth", async () => {
-  const { createAuthModuleMock } = await import("../../../tests/helpers/auth-mock");
-  return createAuthModuleMock();
-});
 
 vi.mock("./user.service", () => ({
   getConfig: vi.fn(),
   updateConfig: vi.fn(),
 }));
 
-import { buildTestApp, buildAuthorizationHeader } from "../../../tests/helpers/test-helpers";
+import {
+  buildAuthorizationHeader,
+  startTestServer,
+  stopTestServer,
+} from "../../../tests/helpers/test-helpers";
+import { stubAuthUserLookup } from "../../../tests/helpers/real-auth";
 import * as userService from "./user.service";
 import { ResponseCode } from "../../types/code";
 
-const app = buildTestApp();
+let app: Awaited<ReturnType<typeof startTestServer>>;
 const BASE = "/api/v1/user";
 const auth = buildAuthorizationHeader();
 
 const getConfig = vi.mocked(userService.getConfig);
 const updateConfig = vi.mocked(userService.updateConfig);
 
+beforeAll(async () => {
+  app = await startTestServer();
+});
+
+afterAll(async () => {
+  await stopTestServer(app);
+});
+
 beforeEach(() => {
   vi.resetAllMocks();
+  // Real auth path: the JWT is verified for real; only the lowest-level DB
+  // seam the middleware reads (User.findById) is stubbed.
+  stubAuthUserLookup();
 });
 
 /**
@@ -44,7 +63,10 @@ describe("GET/POST /user/config (IDOR guard)", () => {
   });
 
   it("reads the config of the authenticated user, not of a supplied id", async () => {
-    getConfig.mockResolvedValue({ user_id: "test-user-id", language: "zh-TW" } as any);
+    getConfig.mockResolvedValue({
+      user_id: "test-user-id",
+      language: "zh-TW",
+    } as any);
 
     const res = await request(app)
       .post(`${BASE}/config`)
@@ -67,7 +89,10 @@ describe("GET/POST /user/config (IDOR guard)", () => {
   });
 
   it("updates the config of the authenticated user, not of a supplied id", async () => {
-    updateConfig.mockResolvedValue({ user_id: "test-user-id", language: "en" } as any);
+    updateConfig.mockResolvedValue({
+      user_id: "test-user-id",
+      language: "en",
+    } as any);
 
     const res = await request(app)
       .post(`${BASE}/config/update`)
@@ -75,10 +100,13 @@ describe("GET/POST /user/config (IDOR guard)", () => {
       .send({ language: "en", darkMode: "dark" });
 
     expect(res.status).toBe(ResponseCode.OK);
-    expect(updateConfig).toHaveBeenCalledWith(
-      "test-user-id",
-      { language: "en", darkMode: "dark" },
+    expect(updateConfig).toHaveBeenCalledWith("test-user-id", {
+      language: "en",
+      darkMode: "dark",
+    });
+    expect(updateConfig).not.toHaveBeenCalledWith(
+      "victim-account-id",
+      expect.anything(),
     );
-    expect(updateConfig).not.toHaveBeenCalledWith("victim-account-id", expect.anything());
   });
 });

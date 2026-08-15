@@ -13,19 +13,21 @@ function routeTokenKey(token: string): string {
 export async function attachRouteTokens(
   routes: AccessibleRoute[],
 ): Promise<AccessibleRoute[]> {
-  return Promise.all(routes.map(async (route) => {
-    const routeToken = randomBytes(32).toString("base64url");
-    const stored = await redisSetChecked(
-      routeTokenKey(routeToken),
-      JSON.stringify(route),
-      ROUTE_TOKEN_TTL_SEC,
-    );
-    if (!stored) {
-      console.warn("[accessible-route] route token cache unavailable");
-      return route;
-    }
-    return { ...route, routeToken };
-  }));
+  return Promise.all(
+    routes.map(async (route) => {
+      const routeToken = randomBytes(32).toString("base64url");
+      const stored = await redisSetChecked(
+        routeTokenKey(routeToken),
+        JSON.stringify(route),
+        ROUTE_TOKEN_TTL_SEC,
+      );
+      if (!stored) {
+        console.warn("[accessible-route] route token cache unavailable");
+        return route;
+      }
+      return { ...route, routeToken };
+    }),
+  );
 }
 
 /** Resolve a short-lived bearer capability to a server-produced route. */

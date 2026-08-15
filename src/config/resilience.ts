@@ -92,7 +92,10 @@ function recordFailure(state: CircuitState): void {
 function normalize(err: unknown, timedOut: boolean): ResilienceError {
   if (err instanceof ResilienceError) return err;
   if (timedOut || (err instanceof Error && err.name === "AbortError")) {
-    return new ResilienceError(ENV_REASON.UPSTREAM_TIMEOUT, "Upstream request timed out");
+    return new ResilienceError(
+      ENV_REASON.UPSTREAM_TIMEOUT,
+      "Upstream request timed out",
+    );
   }
   if (err instanceof UpstreamHttpError) {
     return new ResilienceError(ENV_REASON.UPSTREAM_HTTP_ERROR, err.message);
@@ -121,8 +124,13 @@ export async function withResilience<T>(
 ): Promise<T> {
   const state = circuitFor(circuitKey);
   if (isCircuitOpen(state)) {
-    const error = new ResilienceError(ENV_REASON.CIRCUIT_OPEN, `Circuit open for ${circuitKey}`);
-    console.warn(`[resilience:${circuitKey}] ${error.reason} — ${error.message}`);
+    const error = new ResilienceError(
+      ENV_REASON.CIRCUIT_OPEN,
+      `Circuit open for ${circuitKey}`,
+    );
+    console.warn(
+      `[resilience:${circuitKey}] ${error.reason} — ${error.message}`,
+    );
     throw error;
   }
 
@@ -131,7 +139,12 @@ export async function withResilience<T>(
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
       controller.abort();
-      reject(new ResilienceError(ENV_REASON.UPSTREAM_TIMEOUT, "Upstream request timed out"));
+      reject(
+        new ResilienceError(
+          ENV_REASON.UPSTREAM_TIMEOUT,
+          "Upstream request timed out",
+        ),
+      );
     }, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   });
 
@@ -142,7 +155,9 @@ export async function withResilience<T>(
   } catch (err) {
     recordFailure(state);
     const error = normalize(err, controller.signal.aborted);
-    console.warn(`[resilience:${circuitKey}] ${error.reason} — ${error.message}`);
+    console.warn(
+      `[resilience:${circuitKey}] ${error.reason} — ${error.message}`,
+    );
     throw error;
   } finally {
     clearTimeout(timer!);

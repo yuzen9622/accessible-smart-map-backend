@@ -56,8 +56,6 @@ const DEFAULT_TRAVERSAL_SEC: Record<number, number> = {
   7: 5,
 };
 
-const WHEELCHAIR_BLOCKED_MODES = new Set([2]);
-
 const ESCALATOR_WHEELCHAIR_PENALTY = 120;
 
 const STATION_MATCH_RADIUS_M = 600;
@@ -73,10 +71,12 @@ const STATION_MATCH_RADIUS_M = 600;
  */
 export async function findIndoorStation(
   name: string,
-  coords: [number, number]
+  coords: [number, number],
 ): Promise<IndoorStation | null> {
-  let candidates = await GtfsStop.find({ locationType: 1, stopName: name })
-    .lean<IGtfsStop[]>();
+  let candidates = await GtfsStop.find({
+    locationType: 1,
+    stopName: name,
+  }).lean<IGtfsStop[]>();
   if (!candidates.length) {
     const core = name.replace(/[站台臺]+$/u, "").trim();
     if (core) {
@@ -110,10 +110,7 @@ export async function findIndoorStation(
   };
 }
 
-function edgeCost(
-  p: IGtfsPathway,
-  opts: FindIndoorPathOptions
-): number | null {
+function edgeCost(p: IGtfsPathway, opts: FindIndoorPathOptions): number | null {
   const exclude = new Set(opts.excludePathwayModes ?? []);
   if (exclude.has(p.pathwayMode)) return null;
 
@@ -135,7 +132,7 @@ function edgeCost(
  */
 async function buildAdjacency(
   nodeIds: Set<string>,
-  opts: FindIndoorPathOptions
+  opts: FindIndoorPathOptions,
 ): Promise<Map<string, Edge[]>> {
   const ids = [...nodeIds];
   const pathways = await GtfsPathway.find({
@@ -174,10 +171,15 @@ async function buildAdjacency(
 function dijkstraPath(
   adj: Map<string, Edge[]>,
   fromStopId: string,
-  toStopId: string
+  toStopId: string,
 ): IndoorPath | null {
   if (fromStopId === toStopId) {
-    return { steps: [{ stopId: fromStopId }], totalSeconds: 0, usesElevator: false, usesStairs: false };
+    return {
+      steps: [{ stopId: fromStopId }],
+      totalSeconds: 0,
+      usesElevator: false,
+      usesStairs: false,
+    };
   }
 
   const dist = new Map<string, number>([[fromStopId, 0]]);
@@ -221,7 +223,12 @@ function dijkstraPath(
     node = p?.from;
   }
 
-  return { steps, totalSeconds: dist.get(toStopId) ?? 0, usesElevator, usesStairs };
+  return {
+    steps,
+    totalSeconds: dist.get(toStopId) ?? 0,
+    usesElevator,
+    usesStairs,
+  };
 }
 
 /**
@@ -230,7 +237,9 @@ function dijkstraPath(
  * @param stationId The station node id.
  * @returns The set of node ids belonging to the station.
  */
-export async function getStationNodeIds(stationId: string): Promise<Set<string>> {
+export async function getStationNodeIds(
+  stationId: string,
+): Promise<Set<string>> {
   const kids = await GtfsStop.find({ parentStation: stationId })
     .select("stopId")
     .lean<{ stopId: string }[]>();
@@ -251,17 +260,24 @@ export async function getStationNodeIds(stationId: string): Promise<Set<string>>
 export async function findIndoorPath(
   fromStopId: string,
   toStopId: string,
-  opts: FindIndoorPathOptions = {}
+  opts: FindIndoorPathOptions = {},
 ): Promise<IndoorPath | null> {
   if (fromStopId === toStopId) {
-    return { steps: [{ stopId: fromStopId }], totalSeconds: 0, usesElevator: false, usesStairs: false };
+    return {
+      steps: [{ stopId: fromStopId }],
+      totalSeconds: 0,
+      usesElevator: false,
+      usesStairs: false,
+    };
   }
 
   const nodeIds =
     opts.allowedNodeIds ??
     (await (async () => {
       const set = new Set<string>([fromStopId, toStopId]);
-      const ends = await GtfsStop.find({ stopId: { $in: [fromStopId, toStopId] } })
+      const ends = await GtfsStop.find({
+        stopId: { $in: [fromStopId, toStopId] },
+      })
         .select("parentStation")
         .lean<{ parentStation?: string }[]>();
       for (const e of ends) {
@@ -285,9 +301,13 @@ export async function findIndoorPath(
  * @param stationId The station node id.
  * @returns The station's entrance nodes that have usable coordinates.
  */
-export async function getStationEntrances(stationId: string): Promise<IGtfsStop[]> {
-  const docs = await GtfsStop.find({ parentStation: stationId, locationType: 2 })
-    .lean<IGtfsStop[]>();
+export async function getStationEntrances(
+  stationId: string,
+): Promise<IGtfsStop[]> {
+  const docs = await GtfsStop.find({
+    parentStation: stationId,
+    locationType: 2,
+  }).lean<IGtfsStop[]>();
   return docs.filter((d) => {
     const c = d.location?.coordinates;
     return c && (c[0] !== 0 || c[1] !== 0);
@@ -300,9 +320,12 @@ export async function getStationEntrances(stationId: string): Promise<IGtfsStop[
  * @param stationId The station node id.
  * @returns The station's platform nodes.
  */
-export async function getStationPlatforms(stationId: string): Promise<IGtfsStop[]> {
-  return GtfsStop.find({ parentStation: stationId, locationType: 0 })
-    .lean<IGtfsStop[]>();
+export async function getStationPlatforms(
+  stationId: string,
+): Promise<IGtfsStop[]> {
+  return GtfsStop.find({ parentStation: stationId, locationType: 0 }).lean<
+    IGtfsStop[]
+  >();
 }
 
 /**
@@ -314,12 +337,15 @@ export async function getStationPlatforms(stationId: string): Promise<IGtfsStop[
  */
 export function selectNearestEntrance(
   userCoords: [number, number],
-  entrances: IGtfsStop[]
+  entrances: IGtfsStop[],
 ): IGtfsStop | null {
   let best: IGtfsStop | null = null;
   let bestDist = Infinity;
   for (const e of entrances) {
-    const d = haversineCoords(userCoords, e.location.coordinates as [number, number]);
+    const d = haversineCoords(
+      userCoords,
+      e.location.coordinates as [number, number],
+    );
     if (d < bestDist) {
       bestDist = d;
       best = e;
@@ -372,7 +398,7 @@ function parseExitNumber(name: string): string {
 export async function getStationAccess(
   station: { name: string; coords: [number, number] },
   userCoords: [number, number],
-  mode: AccessibilityMode = "wheelchair"
+  mode: AccessibilityMode = "wheelchair",
 ): Promise<StationAccess | null> {
   try {
     const indoor = await findIndoorStation(station.name, station.coords);
@@ -414,15 +440,19 @@ export async function getStationAccess(
       let best: IndoorPath | null = null;
       for (const plat of platforms) {
         const path = dijkstraPath(adj, entranceId, plat.stopId);
-        if (path && (!best || path.totalSeconds < best.totalSeconds)) best = path;
+        if (path && (!best || path.totalSeconds < best.totalSeconds))
+          best = path;
       }
       return best;
     };
 
     const entrancesByDistance = [...entrances].sort(
       (a, b) =>
-        haversineCoords(userCoords, a.location.coordinates as [number, number]) -
-        haversineCoords(userCoords, b.location.coordinates as [number, number])
+        haversineCoords(
+          userCoords,
+          a.location.coordinates as [number, number],
+        ) -
+        haversineCoords(userCoords, b.location.coordinates as [number, number]),
     );
 
     let chosen: IGtfsStop | null = null;

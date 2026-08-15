@@ -27,18 +27,33 @@ async function resolveOptionalUserId(
 
 export async function accessibleRoute(
   req: Request,
-  res: Response<ApiResponse<any>>
+  res: Response<ApiResponse<any>>,
 ) {
   try {
     const auth = await resolveOptionalUserId(req);
     if (auth.expired) {
-      return sendResponse(res, false, "error", ResponseCode.UNAUTHORIZED, ResponseMessage.UNAUTHORIZED);
+      return sendResponse(
+        res,
+        false,
+        "error",
+        ResponseCode.UNAUTHORIZED,
+        ResponseMessage.UNAUTHORIZED,
+      );
     }
     if (auth.invalid) {
-      return sendResponse(res, false, "error", ResponseCode.FORBIDDEN, ResponseMessage.FORBIDDEN);
+      return sendResponse(
+        res,
+        false,
+        "error",
+        ResponseCode.FORBIDDEN,
+        ResponseMessage.FORBIDDEN,
+      );
     }
 
-    const result = await planAccessibleRouteForHttp({ ...req.body, userId: auth.userId });
+    const result = await planAccessibleRouteForHttp({
+      ...req.body,
+      userId: auth.userId,
+    });
 
     if (!result.ok) {
       return sendResponse(
@@ -51,7 +66,14 @@ export async function accessibleRoute(
       );
     }
 
-    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, result.data);
+    return sendResponse(
+      res,
+      true,
+      "success",
+      ResponseCode.OK,
+      MSG.OK,
+      result.data,
+    );
   } catch (error: any) {
     console.error("[accessible-route]", error);
     return sendResponse(
@@ -59,7 +81,7 @@ export async function accessibleRoute(
       false,
       "error",
       ResponseCode.INTERNAL_ERROR,
-      error?.message ?? ERROR_MESSAGE.INTERNAL
+      error?.message ?? ERROR_MESSAGE.INTERNAL,
     );
   }
 }

@@ -25,6 +25,9 @@ export function haversineMeters(
   return EARTH_RADIUS_M * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-export function haversineCoords(a: [number, number], b: [number, number]): number {
+export function haversineCoords(
+  a: [number, number],
+  b: [number, number],
+): number {
   return haversineMeters(a[1], a[0], b[1], b[0]);
 }

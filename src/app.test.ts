@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import request from "supertest";
 
 import { buildTestApp } from "../tests/helpers/test-helpers";
@@ -37,5 +37,21 @@ describe("unmatched routes", () => {
     expect(res.status).toBe(404);
     expect(res.headers["content-type"]).toMatch(/application\/json/);
     expect(res.body).toMatchObject({ ok: false, status: "error", code: 404 });
+  });
+});
+
+describe("test-environment logging", () => {
+  it("does not write morgan access logs for HTTP requests", async () => {
+    const stdoutWriteSpy = vi.spyOn(process.stdout, "write");
+    const writesBeforeRequest = stdoutWriteSpy.mock.calls.length;
+
+    try {
+      const res = await request(app).get("/health");
+
+      expect(res.status).toBe(200);
+      expect(stdoutWriteSpy.mock.calls.length).toBe(writesBeforeRequest);
+    } finally {
+      stdoutWriteSpy.mockRestore();
+    }
   });
 });

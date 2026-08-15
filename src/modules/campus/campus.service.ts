@@ -1,17 +1,15 @@
-import CampusA11yModel from "../../model/campus-a11y.model";
-import type { ICampusA11y, ICampusFacility } from "../../types";
-import { codeToId, resolveFacType } from "./campus.fac-type";
 import {
-  cityFilter,
-  escapeRegExp,
-  normalizeName,
-  taiwanClass,
-  toPublicId,
-  toRawId,
-} from "./campus.util";
-
-const SUMMARY_FIELDS =
-  "schoolId branchId schoolName branchName city address phone location buildingCount facilityCount facilities.facTypeId facilities.facType";
+  aggregateSchoolPage,
+  findCampusByBranchId,
+  findCampusPage,
+  findCampusesNearby,
+  findCampusesNearbyWithFacilities,
+  findCampusesWithLocatedFacilities,
+} from "./campus.repository";
+import type { ICampusA11y, ICampusFacility } from "../../types";
+import type { CampusSort } from "./campus.types";
+import { resolveFacType } from "./campus.fac-type";
+import { toPublicId, toRawId } from "./campus.util";
 
 export interface FacTypeCount {
   code: string;
@@ -72,7 +70,7 @@ export interface CampusSchool {
   facilityCount: number;
 }
 
-export type CampusSort = "name" | "-name" | "facilities" | "-facilities";
+export type { CampusSort } from "./campus.types";
 
 export interface CampusListFilter {
   city?: string;
@@ -105,25 +103,9 @@ export interface CampusSchoolListResult {
   totalPages: number;
 }
 
-const SORT_SPECS: Record<CampusSort, Record<string, 1 | -1>> = {
-  name: { schoolName: 1, branchName: 1 },
-  "-name": { schoolName: -1, branchName: -1 },
-  facilities: { facilityCount: -1 },
-  "-facilities": { facilityCount: 1 },
-};
-
-function makeGeoQuery(lng: number, lat: number, radiusM: number) {
-  return {
-    $near: {
-      $geometry: { type: "Point", coordinates: [lng, lat] },
-      $maxDistance: radiusM,
-    },
-  };
-}
-
 /** Aggregates per-type facility counts, keyed by canonical code and ordered by SEQ. */
 function facTypeSummaryOf(
-  facilities: Pick<ICampusFacility, "facTypeId" | "facType">[]
+  facilities: Pick<ICampusFacility, "facTypeId" | "facType">[],
 ): FacTypeCount[] {
   const byId = new Map<
     number,
@@ -132,39 +114,18 @@ function facTypeSummaryOf(
   for (const f of facilities ?? []) {
     const t = resolveFacType(f.facTypeId, f.facType);
     if (!t) continue;
-    const cur = byId.get(t.id) ?? { code: t.code, label: t.label, seq: t.seq, count: 0 };
+    const cur = byId.get(t.id) ?? {
+      code: t.code,
+      label: t.label,
+      seq: t.seq,
+      count: 0,
+    };
     cur.count += 1;
     byId.set(t.id, cur);
   }
   return [...byId.values()]
     .sort((a, b) => a.seq - b.seq)
     .map(({ code, label, count }) => ({ code, label, count }));
-}
-
-/**
- * Builds the keyword `$or` clause. Primary path matches the normalized
- * `searchName` / `aliasNames`; the raw schoolName / branchName clauses are a
- * legacy fallback (臺/台-insensitive substring) so documents not yet backfilled
- * with `searchName`/`aliasNames` still match on the common case.
- */
-function keywordClause(keyword: string): Record<string, unknown>[] | null {
-  const nk = normalizeName(keyword);
-  if (!nk) return null;
-  const rx = escapeRegExp(nk);
-  const rawPat = taiwanClass(rx);
-  return [
-    { searchName: { $regex: rx } },
-    { aliasNames: { $regex: rx } },
-    { schoolName: { $regex: rawPat, $options: "i" } },
-    { branchName: { $regex: rawPat, $options: "i" } },
-  ];
-}
-
-/** Resolves an optional type code to a facTypeId filter fragment. */
-function facTypeQuery(type?: string): Record<string, number> {
-  if (!type) return {};
-  const id = codeToId(type);
-  return id != null ? { "facilities.facTypeId": id } : {};
 }
 
 function toSummary(
@@ -181,7 +142,7 @@ function toSummary(
     | "buildingCount"
     | "facilityCount"
     | "facilities"
-  >
+  >,
 ): CampusSummary {
   return {
     campusId: toPublicId(doc.branchId),
@@ -243,13 +204,9 @@ export async function findNearby(
   lat: number,
   lng: number,
   radiusM = 1000,
-  type?: string
+  type?: string,
 ): Promise<CampusSummary[]> {
-  const query: Record<string, unknown> = {
-    location: makeGeoQuery(lng, lat, radiusM),
-    ...facTypeQuery(type),
-  };
-  const docs = await CampusA11yModel.find(query).select(SUMMARY_FIELDS).lean();
+  const docs = await findCampusesNearby(lat, lng, radiusM, type);
   return docs.map(toSummary);
 }
 
@@ -302,7 +259,7 @@ function toFacilityPlace(
     ICampusA11y,
     "branchId" | "schoolId" | "schoolName" | "branchName"
   >,
-  f: ICampusFacility
+  f: ICampusFacility,
 ): CampusFacilityPlace {
   return {
     campusId: toPublicId(campus.branchId),
@@ -320,9 +277,6 @@ function toFacilityPlace(
   };
 }
 
-const FACILITY_PLACE_FIELDS =
-  "schoolId branchId schoolName branchName facilities";
-
 /**
  * Every campus accessibility facility (across all campuses) that has its own
  * coordinates, flattened into standalone places. Used to merge campus data into
@@ -331,11 +285,7 @@ const FACILITY_PLACE_FIELDS =
  * @returns One place per located facility.
  */
 export async function findAllFacilities(): Promise<CampusFacilityPlace[]> {
-  const docs = await CampusA11yModel.find({
-    "facilities.location": { $exists: true },
-  })
-    .select(FACILITY_PLACE_FIELDS)
-    .lean();
+  const docs = await findCampusesWithLocatedFacilities();
   const out: CampusFacilityPlace[] = [];
   for (const campus of docs) {
     for (const f of campus.facilities ?? []) {
@@ -359,20 +309,21 @@ export async function findAllFacilities(): Promise<CampusFacilityPlace[]> {
 export async function findFacilitiesNearby(
   lat: number,
   lng: number,
-  radiusM: number
+  radiusM: number,
 ): Promise<CampusFacilityPlace[]> {
-  const docs = await CampusA11yModel.find({
-    location: makeGeoQuery(lng, lat, radiusM + CAMPUS_QUERY_BUFFER_M),
-  })
-    .select(FACILITY_PLACE_FIELDS)
-    .lean();
+  const docs = await findCampusesNearbyWithFacilities(
+    lat,
+    lng,
+    radiusM + CAMPUS_QUERY_BUFFER_M,
+  );
   const out: { place: CampusFacilityPlace; dist: number }[] = [];
   for (const campus of docs) {
     for (const f of campus.facilities ?? []) {
       if (!hasCoordinates(f)) continue;
       const coords = f.location!.coordinates as [number, number];
       const dist = haversineMeters([lng, lat], coords);
-      if (dist <= radiusM) out.push({ place: toFacilityPlace(campus, f), dist });
+      if (dist <= radiusM)
+        out.push({ place: toFacilityPlace(campus, f), dist });
     }
   }
   return out.sort((a, b) => a.dist - b.dist).map((x) => x.place);
@@ -386,26 +337,16 @@ export async function findFacilitiesNearby(
  * @param filter City / type / keyword / schoolId filters plus sort + pagination.
  * @returns Campus summaries with total count and page metadata.
  */
-export async function findAll(filter: CampusListFilter): Promise<CampusListResult> {
+export async function findAll(
+  filter: CampusListFilter,
+): Promise<CampusListResult> {
   const { city, type, keyword, schoolId, sort, page, limit } = filter;
-  const query: Record<string, unknown> = { ...facTypeQuery(type) };
-  if (city) query.city = cityFilter(city);
-  if (schoolId != null) query.schoolId = toRawId(schoolId);
-  if (keyword) {
-    const clause = keywordClause(keyword);
-    if (clause) query.$or = clause;
-  }
-
-  const sortSpec = { ...SORT_SPECS[sort ?? "name"], _id: 1 as const };
-  const [docs, totalCount] = await Promise.all([
-    CampusA11yModel.find(query)
-      .select(SUMMARY_FIELDS)
-      .sort(sortSpec)
-      .skip((page - 1) * limit)
-      .limit(limit)
-      .lean(),
-    CampusA11yModel.countDocuments(query),
-  ]);
+  const { docs, totalCount } = await findCampusPage(
+    { city, type, keyword, schoolId },
+    sort,
+    page,
+    limit,
+  );
 
   return {
     items: docs.map(toSummary),
@@ -422,9 +363,11 @@ export async function findAll(filter: CampusListFilter): Promise<CampusListResul
  * @param campusId The positive public campus id.
  * @returns The full campus detail or null.
  */
-export async function findByCampusId(campusId: number): Promise<CampusDetail | null> {
-  const doc = await CampusA11yModel.findOne({ branchId: toRawId(campusId) }).lean();
-  return doc ? toDetail(doc as ICampusA11y) : null;
+export async function findByCampusId(
+  campusId: number,
+): Promise<CampusDetail | null> {
+  const doc = await findCampusByBranchId(toRawId(campusId));
+  return doc ? toDetail(doc) : null;
 }
 
 /**
@@ -435,47 +378,16 @@ export async function findByCampusId(campusId: number): Promise<CampusDetail | n
  * @returns Schools with total count and page metadata.
  */
 export async function listSchools(
-  filter: CampusSchoolFilter
+  filter: CampusSchoolFilter,
 ): Promise<CampusSchoolListResult> {
   const { city, keyword, page, limit } = filter;
-  const match: Record<string, unknown> = {};
-  if (city) match.city = cityFilter(city);
-  if (keyword) {
-    const clause = keywordClause(keyword);
-    if (clause) match.$or = clause;
-  }
+  const { items: rows, totalCount } = await aggregateSchoolPage(
+    { city, keyword },
+    page,
+    limit,
+  );
 
-  const [result] = await CampusA11yModel.aggregate<{
-    items: {
-      _id: number;
-      schoolName: string;
-      city?: string;
-      branchCount: number;
-      facilityCount: number;
-    }[];
-    total: { n: number }[];
-  }>([
-    { $match: match },
-    {
-      $group: {
-        _id: "$schoolId",
-        schoolName: { $first: "$schoolName" },
-        city: { $first: "$city" },
-        branchCount: { $sum: 1 },
-        facilityCount: { $sum: "$facilityCount" },
-      },
-    },
-    { $sort: { schoolName: 1, _id: 1 } },
-    {
-      $facet: {
-        items: [{ $skip: (page - 1) * limit }, { $limit: limit }],
-        total: [{ $count: "n" }],
-      },
-    },
-  ]);
-
-  const totalCount = result?.total[0]?.n ?? 0;
-  const items: CampusSchool[] = (result?.items ?? []).map((s) => ({
+  const items: CampusSchool[] = rows.map((s) => ({
     schoolId: toPublicId(s._id),
     schoolName: s.schoolName,
     city: s.city,

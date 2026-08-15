@@ -31,9 +31,10 @@ async function importCity(city: string): Promise<number> {
   const routes: BusRoute[] = [];
   const PAGE_DELAY_MS = 1500;
   for (let skip = 0; ; skip += TOP) {
-    const url = city === "InterCity"
-      ? `${busUrl.interCityStopOfRouteUrl}?$format=JSON&$top=${TOP}&$skip=${skip}`
-      : `${busUrl.stopOfRouteUrl}/${city}?$format=JSON&$top=${TOP}&$skip=${skip}`;
+    const url =
+      city === "InterCity"
+        ? `${busUrl.interCityStopOfRouteUrl}?$format=JSON&$top=${TOP}&$skip=${skip}`
+        : `${busUrl.stopOfRouteUrl}/${city}?$format=JSON&$top=${TOP}&$skip=${skip}`;
     const resp = await tdxFetch(url);
 
     if (!resp.ok) {
@@ -88,22 +89,24 @@ async function importCity(city: string): Promise<number> {
 
   if (!stopMap.size) return 0;
 
-  const ops: AnyBulkWriteOperation<ITdxBusStop>[] = [...stopMap.entries()].map(([stopUid, info]) => ({
-    updateOne: {
-      filter: { stopUid },
-      update: {
-        $set: {
-          stopUid,
-          stopName: { Zh_tw: info.Zh_tw, En: info.En },
-          city,
-          subRouteIds: [...info.subRouteIds],
-          location: { type: "Point", coordinates: [info.lon, info.lat] },
-          importedAt: new Date(),
+  const ops: AnyBulkWriteOperation<ITdxBusStop>[] = [...stopMap.entries()].map(
+    ([stopUid, info]) => ({
+      updateOne: {
+        filter: { stopUid },
+        update: {
+          $set: {
+            stopUid,
+            stopName: { Zh_tw: info.Zh_tw, En: info.En },
+            city,
+            subRouteIds: [...info.subRouteIds],
+            location: { type: "Point", coordinates: [info.lon, info.lat] },
+            importedAt: new Date(),
+          },
         },
+        upsert: true,
       },
-      upsert: true,
-    },
-  }));
+    }),
+  );
 
   const CHUNK = 500;
   let upserted = 0;

@@ -61,7 +61,7 @@ const ApiResponseSchema = <T extends z.ZodTypeAny>(data: T, refName: string) =>
 
 export const VisualA11yListResponseSchema = ApiResponseSchema(
   z.array(VisualA11yItemSchema),
-  "VisualA11yListResponse"
+  "VisualA11yListResponse",
 );
 
 export const VisualA11ySyncResponseSchema = ApiResponseSchema(
@@ -69,7 +69,7 @@ export const VisualA11ySyncResponseSchema = ApiResponseSchema(
     inserted: z.number().openapi({ example: 120 }),
     updated: z.number().openapi({ example: 35 }),
   }),
-  "VisualA11ySyncResponse"
+  "VisualA11ySyncResponse",
 );
 
 registry.registerPath({

@@ -11,7 +11,10 @@ const LEASE_HEARTBEAT_MS = 60_000;
 const MAX_JOBS_PER_TICK = 25;
 let running = false;
 
-function startLeaseHeartbeat(jobId: unknown, leaseToken: string): NodeJS.Timeout {
+function startLeaseHeartbeat(
+  jobId: unknown,
+  leaseToken: string,
+): NodeJS.Timeout {
   let refreshing = false;
   const timer = setInterval(() => {
     if (refreshing) return;
@@ -19,10 +22,15 @@ function startLeaseHeartbeat(jobId: unknown, leaseToken: string): NodeJS.Timeout
     void renewPasswordAssistanceLease({ jobId, leaseToken })
       .then((renewed) => {
         if (!renewed) {
-          console.warn("[auth] 帳號協助工作 heartbeat lease 已失效", String(jobId));
+          console.warn(
+            "[auth] 帳號協助工作 heartbeat lease 已失效",
+            String(jobId),
+          );
         }
       })
-      .catch((error) => console.error("[auth] 帳號協助 lease heartbeat 失敗", error))
+      .catch((error) =>
+        console.error("[auth] 帳號協助 lease heartbeat 失敗", error),
+      )
       .finally(() => {
         refreshing = false;
       });
@@ -50,9 +58,15 @@ export async function drainPasswordAssistanceQueue(): Promise<number> {
       // Fence stale workers immediately before dispatch. The processor uses a
       // stable per-job reset token and Resend idempotency key, so retries cannot
       // rotate the link or send the same job twice.
-      const renewed = await renewPasswordAssistanceLease({ jobId: job._id, leaseToken });
+      const renewed = await renewPasswordAssistanceLease({
+        jobId: job._id,
+        leaseToken,
+      });
       if (!renewed) {
-        console.warn("[auth] 帳號協助工作 dispatch 前 lease 已失效", String(job._id));
+        console.warn(
+          "[auth] 帳號協助工作 dispatch 前 lease 已失效",
+          String(job._id),
+        );
         processed += 1;
         continue;
       }
@@ -64,9 +78,15 @@ export async function drainPasswordAssistanceQueue(): Promise<number> {
           jobId: String(job._id),
           leaseToken,
         });
-        const completed = await completePasswordAssistanceJob({ jobId: job._id, leaseToken });
+        const completed = await completePasswordAssistanceJob({
+          jobId: job._id,
+          leaseToken,
+        });
         if (!completed) {
-          console.warn("[auth] 帳號協助工作完成時 lease 已失效", String(job._id));
+          console.warn(
+            "[auth] 帳號協助工作完成時 lease 已失效",
+            String(job._id),
+          );
         }
       } finally {
         clearInterval(heartbeat);

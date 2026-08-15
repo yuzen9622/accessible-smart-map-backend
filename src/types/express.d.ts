@@ -1,5 +1,5 @@
-import { Express } from "express";
 import type { IUser } from "./index";
+
 declare global {
   namespace Express {
     interface Request {

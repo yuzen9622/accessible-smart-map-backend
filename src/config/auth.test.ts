@@ -33,7 +33,9 @@ describe("authenticateToken", () => {
   it("accepts a token whose tokenVersion matches the stored one", async () => {
     findById.mockResolvedValue(storedUser(3));
 
-    const result = await authenticateToken(sign({ _id: USER_ID, tokenVersion: 3 }));
+    const result = await authenticateToken(
+      sign({ _id: USER_ID, tokenVersion: 3 }),
+    );
 
     expect(result).toMatchObject({ ok: true, userId: USER_ID });
   });
@@ -41,7 +43,9 @@ describe("authenticateToken", () => {
   it("rejects a token issued before a password change bumped tokenVersion", async () => {
     findById.mockResolvedValue(storedUser(4));
 
-    const result = await authenticateToken(sign({ _id: USER_ID, tokenVersion: 3 }));
+    const result = await authenticateToken(
+      sign({ _id: USER_ID, tokenVersion: 3 }),
+    );
 
     expect(result).toEqual({ ok: false, expired: false });
   });
@@ -66,7 +70,10 @@ describe("authenticateToken", () => {
   });
 
   it("rejects a token signed with the wrong secret", async () => {
-    const forged = jwt.sign({ user: { _id: USER_ID, tokenVersion: 0 } }, "wrong-secret");
+    const forged = jwt.sign(
+      { user: { _id: USER_ID, tokenVersion: 0 } },
+      "wrong-secret",
+    );
 
     const result = await authenticateToken(forged);
 
@@ -77,7 +84,9 @@ describe("authenticateToken", () => {
   it("rejects a token whose user no longer exists", async () => {
     findById.mockResolvedValue(null);
 
-    const result = await authenticateToken(sign({ _id: USER_ID, tokenVersion: 0 }));
+    const result = await authenticateToken(
+      sign({ _id: USER_ID, tokenVersion: 0 }),
+    );
 
     expect(result).toEqual({ ok: false, expired: false });
   });
@@ -85,7 +94,9 @@ describe("authenticateToken", () => {
   it("rejects rather than throws when the id in the token is not a valid ObjectId", async () => {
     findById.mockRejectedValue(new Error("Cast to ObjectId failed"));
 
-    const result = await authenticateToken(sign({ _id: "not-an-objectid", tokenVersion: 0 }));
+    const result = await authenticateToken(
+      sign({ _id: "not-an-objectid", tokenVersion: 0 }),
+    );
 
     expect(result).toEqual({ ok: false, expired: false });
   });
@@ -98,9 +109,14 @@ describe("authenticateToken", () => {
   });
 
   it("never exposes passwordHash on the resolved user", async () => {
-    findById.mockResolvedValue({ ...storedUser(0), passwordHash: "$2b$12$leaked" });
+    findById.mockResolvedValue({
+      ...storedUser(0),
+      passwordHash: "$2b$12$leaked",
+    });
 
-    const result = await authenticateToken(sign({ _id: USER_ID, tokenVersion: 0 }));
+    const result = await authenticateToken(
+      sign({ _id: USER_ID, tokenVersion: 0 }),
+    );
 
     expect(result.ok).toBe(true);
     expect(JSON.stringify(result)).not.toContain("leaked");

@@ -18,10 +18,13 @@ export async function getEnvironmentInfo(req: Request, res: Response) {
 
     const data = await service.getEnvironmentInfo(lat, lng, radius);
 
-    const unavailableCount = [data.weather, data.airQuality, data.nearbyCctv].filter(
-      (block) => block.status === "unavailable",
-    ).length;
-    const message = unavailableCount === 0 ? ENV_MSG.OK : ENV_MSG.partial(unavailableCount);
+    const unavailableCount = [
+      data.weather,
+      data.airQuality,
+      data.nearbyCctv,
+    ].filter((block) => block.status === "unavailable").length;
+    const message =
+      unavailableCount === 0 ? ENV_MSG.OK : ENV_MSG.partial(unavailableCount);
 
     return sendResponse(res, true, "success", ResponseCode.OK, message, data);
   } catch (error) {

@@ -17,7 +17,9 @@ export type OsmTags = Record<string, string>;
 export function normalizeOsmTags(value: unknown): OsmTags {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return Object.fromEntries(
-    Object.entries(value).filter(([, tagValue]) => typeof tagValue === "string"),
+    Object.entries(value).filter(
+      ([, tagValue]) => typeof tagValue === "string",
+    ),
   ) as OsmTags;
 }
 

@@ -6,7 +6,7 @@ const emergencyContactSchema = new Schema<IEmergencyContact>(
     userId: { type: String, required: true, index: true },
     name: { type: String, required: true, maxlength: 50 },
     lineUserId: { type: String, default: null },
-  bindStatus: {
+    bindStatus: {
       type: String,
       enum: ["pending", "bound"],
       default: "pending",

@@ -60,14 +60,15 @@ PUT  /api/v1/user/a11y-profile     （需登入，部分更新，只改傳入欄
   "slopeConstraint": {
     "requestedMaxPercent": 5,
     "enforced": false, // 真的有被套用時才是 true
-    "note": "大眾運輸/步行路線引擎目前固定以 8.3% 作為輪椅模式上限，無法套用您要求的更嚴格數值"
-  }
+    "note": "大眾運輸/步行路線引擎目前固定以 8.3% 作為輪椅模式上限，無法套用您要求的更嚴格數值",
+  },
 }
 ```
 
 **前端一定要檢查 `enforced`**，不能只看有沒有傳 `maxSlopePercent`。`enforced: false` 時建議將 `note` 直接顯示給使用者，讓他知道這個設定目前沒有實際作用，而不是讓他以為系統已經幫他避開陡坡。
 
 **若未來要讓這項真正生效，需要的基礎建設（已確認的需求，需獨立排程）：**
+
 1. 為台灣下載/建置 SRTM 或同等級 DEM 地形高程資料，並正確掛進 Valhalla 容器的 `/data/valhalla/elevation/`，重建 tiles。Valhalla 本身對行人模式只有軟性避山權重（`use_hills`），沒有硬性百分比上限，還需自己後處理回傳的每段坡度來實現硬篩選。
 2. 為 OTP graph build 配上 `elevationBucket`（目前 `otp-data/build-config.json` 沒有），讓坡度計算不完全依賴稀疏的 OSM incline 標記。
 3. 將 otp-routing.ts 從舊版 `plan` GraphQL query 改寫成新版 `planConnection` query（支援每次請求自訂 `wheelchairAccessibility.maxSlope`）——這是一個會改變核心路徑規劃邏輯的重構，需要獨立規劃與充分測試。

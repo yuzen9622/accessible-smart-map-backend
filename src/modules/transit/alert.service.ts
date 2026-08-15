@@ -1,6 +1,6 @@
 import { tdxFetch } from "../../config/fetch";
 import { alertUrl, metroUrl } from "../../config/transit";
-import BusRouteModel from "../../model/bus-route.model";
+import { findBusRoutesByName } from "./alert.repository";
 import { ResponseCode } from "../../types/code";
 import { equalStopName, formatRouteName } from "../../utils/transit-text";
 import {
@@ -67,11 +67,9 @@ export type BusAlert = AlertMetadata & {
 };
 
 type MetroStationScope =
-  | string
-  | { StationID: string; StationName?: LocalizedName | string };
+  string | { StationID: string; StationName?: LocalizedName | string };
 type MetroLineScope =
-  | string
-  | { LineID: string; LineName?: LocalizedName | string };
+  string | { LineID: string; LineName?: LocalizedName | string };
 
 export type MetroAlert = AlertMetadata & {
   Status: number;
@@ -136,12 +134,7 @@ export type TransitContext =
     };
 
 export type MatchKind =
-  | "route"
-  | "stop"
-  | "station"
-  | "line"
-  | "train"
-  | "section";
+  "route" | "stop" | "station" | "line" | "train" | "section";
 
 type Match = { kind: MatchKind };
 type BusRouteKeys = {
@@ -301,12 +294,10 @@ function dirMatch(
 export async function resolveBusRouteKeys(
   ctx: Extract<TransitContext, { mode: "bus" }>,
 ): Promise<BusRouteKeys | null> {
-  const docs = await BusRouteModel.find({
-    city: ctx.city,
-    "routeName.Zh_tw": {
-      $in: [formatRouteName(ctx.routeName), ctx.routeName.trim()],
-    },
-  }).lean();
+  const docs = await findBusRoutesByName(ctx.city, [
+    formatRouteName(ctx.routeName),
+    ctx.routeName.trim(),
+  ]);
   if (!docs.length) return null;
 
   const scoped =

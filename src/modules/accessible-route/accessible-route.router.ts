@@ -5,6 +5,10 @@ import { AccessibleRouteBodySchema } from "./accessible-route.schema";
 
 export function createAccessibleRouteRouter(): Router {
   const router = Router();
-  router.post("/accessible-route", validateRequest({ body: AccessibleRouteBodySchema }), accessibleRoute);
+  router.post(
+    "/accessible-route",
+    validateRequest({ body: AccessibleRouteBodySchema }),
+    accessibleRoute,
+  );
   return router;
 }

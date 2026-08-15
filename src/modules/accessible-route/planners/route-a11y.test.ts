@@ -2,10 +2,8 @@ import { describe, it, expect } from "vitest";
 import { buildAccessibilitySummary } from "./route-a11y";
 import type { IOsmA11y } from "../../../types";
 
-const node = (
-  category: string,
-  tags: Record<string, string> = {},
-): IOsmA11y => ({ category, tags }) as unknown as IOsmA11y;
+const node = (category: string, tags: Record<string, string> = {}): IOsmA11y =>
+  ({ category, tags }) as unknown as IOsmA11y;
 
 describe("buildAccessibilitySummary", () => {
   it("wheelchair: mentions elevator and a positive verdict when present + good label", () => {
@@ -58,7 +56,12 @@ describe("buildAccessibilitySummary", () => {
   });
 
   it("always returns a non-empty string for every mode", () => {
-    for (const mode of ["wheelchair", "elderly", "visual_impaired", "normal"] as const) {
+    for (const mode of [
+      "wheelchair",
+      "elderly",
+      "visual_impaired",
+      "normal",
+    ] as const) {
       const s = buildAccessibilitySummary({
         mode,
         walkDistanceM: 100,

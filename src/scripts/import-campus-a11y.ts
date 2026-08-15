@@ -17,7 +17,10 @@ import mongoose from "mongoose";
 import CampusA11yModel from "../model/campus-a11y.model";
 import { ICampusA11y } from "../types";
 import { parseFacilityResultHtml } from "./campus-a11y-parse";
-import { buildAliasNames, buildSearchName } from "../modules/campus/campus.util";
+import {
+  buildAliasNames,
+  buildSearchName,
+} from "../modules/campus/campus.util";
 
 const BASE_URL = "https://cam.moe.gov.tw";
 const USER_AGENT =
@@ -73,7 +76,7 @@ async function getJson<T>(session: Session, path: string): Promise<T> {
 
 async function postFacilityResultList(
   session: Session,
-  payload: Record<string, string>
+  payload: Record<string, string>,
 ): Promise<string> {
   await sleep(REQUEST_DELAY_MS);
   const res = await fetch(`${BASE_URL}/Facility/FacilityResultList`, {
@@ -106,7 +109,7 @@ async function main() {
 
   const facTypes = await getJson<{ MAP_NAME: string }[]>(
     session,
-    "/api/Base/FacType"
+    "/api/Base/FacType",
   );
   const facTypeQuery = facTypes.map((t) => t.MAP_NAME).join(",");
   console.log(`Facility types: ${facTypes.length}`);
@@ -116,18 +119,21 @@ async function main() {
   for (const city of cities) {
     const schools = await getJson<IdName[]>(
       session,
-      `/api/Base/Institution?CITY_ID=${city.ID}`
+      `/api/Base/Institution?CITY_ID=${city.ID}`,
     );
     for (const s of schools) cityBySchool.set(s.ID, city.NAME);
   }
 
-  const institutions = await getJson<IdName[]>(session, "/api/Base/Institution");
+  const institutions = await getJson<IdName[]>(
+    session,
+    "/api/Base/Institution",
+  );
   const targets = Number.isFinite(limit)
     ? institutions.slice(0, limit)
     : institutions;
   console.log(
     `Schools: ${institutions.length}` +
-      (Number.isFinite(limit) ? ` (limited to first ${targets.length})` : "")
+      (Number.isFinite(limit) ? ` (limited to first ${targets.length})` : ""),
   );
 
   const docs: Omit<ICampusA11y, "_id">[] = [];
@@ -138,7 +144,7 @@ async function main() {
     try {
       const branches = await getJson<IdName[]>(
         session,
-        `/api/Base/InstitutionBranch?INSTITUTION_ID=${inst.ID}`
+        `/api/Base/InstitutionBranch?INSTITUTION_ID=${inst.ID}`,
       );
       let facilityTotal = 0;
       for (const branch of branches) {
@@ -193,13 +199,13 @@ async function main() {
         facilityTotal += parsed.facilities.length;
       }
       console.log(
-        `[${i + 1}/${targets.length}] ${inst.NAME}: ${branches.length} campuses, ${facilityTotal} facilities`
+        `[${i + 1}/${targets.length}] ${inst.NAME}: ${branches.length} campuses, ${facilityTotal} facilities`,
       );
     } catch (err) {
       failedSchools++;
       console.error(
         `[${i + 1}/${targets.length}] ${inst.NAME} failed:`,
-        err instanceof Error ? err.message : err
+        err instanceof Error ? err.message : err,
       );
     }
   }
@@ -207,7 +213,7 @@ async function main() {
   const totalFacilities = docs.reduce((n, d) => n + d.facilities.length, 0);
   console.log(
     `Crawl done — ${docs.length} campuses with data, ${emptyCampuses} empty, ` +
-      `${failedSchools} schools failed, ${totalFacilities} facilities`
+      `${failedSchools} schools failed, ${totalFacilities} facilities`,
   );
 
   await mongoose.connect(dbUrl);
@@ -226,10 +232,10 @@ async function main() {
           upsert: true,
         },
       })),
-      { ordered: false }
+      { ordered: false },
     );
     console.log(
-      `✓ Wrote ${docs.length} campuses (${res.upsertedCount} inserted, ${res.modifiedCount} updated)`
+      `✓ Wrote ${docs.length} campuses (${res.upsertedCount} inserted, ${res.modifiedCount} updated)`,
     );
   } else {
     console.log("No campus data to write");

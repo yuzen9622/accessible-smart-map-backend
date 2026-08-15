@@ -42,19 +42,39 @@ const walkRoute = {
   totalMinutes: 2,
   transferCount: 0,
   accessibilityHighlights: [],
-  legs: [{
-    type: "WALK",
-    from: "A",
-    to: "B",
-    distanceM: 100,
-    minutesEst: 2,
-    polyline: [start, end],
-    a11yFacilities: [],
-    steps: [
-      { relativeDirection: "DEPART", absoluteDirection: null, streetName: "路", bogusName: false, area: false, distanceM: 50, location: start, instruction: "向前走" },
-      { relativeDirection: "CONTINUE", absoluteDirection: null, streetName: "路", bogusName: false, area: false, distanceM: 50, location: end, instruction: "抵達路口" },
-    ],
-  }],
+  legs: [
+    {
+      type: "WALK",
+      from: "A",
+      to: "B",
+      distanceM: 100,
+      minutesEst: 2,
+      polyline: [start, end],
+      a11yFacilities: [],
+      steps: [
+        {
+          relativeDirection: "DEPART",
+          absoluteDirection: null,
+          streetName: "路",
+          bogusName: false,
+          area: false,
+          distanceM: 50,
+          location: start,
+          instruction: "向前走",
+        },
+        {
+          relativeDirection: "CONTINUE",
+          absoluteDirection: null,
+          streetName: "路",
+          bogusName: false,
+          area: false,
+          distanceM: 50,
+          location: end,
+          instruction: "抵達路口",
+        },
+      ],
+    },
+  ],
 } as any;
 
 describe("createLiveBridge transcript forwarding", () => {
@@ -81,17 +101,21 @@ describe("createLiveBridge transcript forwarding", () => {
     });
 
     await vi.waitFor(() => expect(ws.send).toHaveBeenCalledTimes(2));
-    expect(ws.send).toHaveBeenCalledWith(JSON.stringify({
-      type: "transcript",
-      role: "user",
-      text: "帶我去火車站",
-      final: false,
-    }));
-    expect(ws.send).toHaveBeenCalledWith(JSON.stringify({
-      type: "transcript",
-      role: "model",
-      text: "好的，我幫您查詢",
-    }));
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: "transcript",
+        role: "user",
+        text: "帶我去火車站",
+        final: false,
+      }),
+    );
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: "transcript",
+        role: "model",
+        text: "好的，我幫您查詢",
+      }),
+    );
   });
 
   it("accumulates interim user fragments and emits one corrected final on finished", async () => {
@@ -103,19 +127,41 @@ describe("createLiveBridge transcript forwarding", () => {
     const ws = makeWs();
 
     await createLiveBridge({ ws, userId: "voice-user" });
-    onmessage?.({ serverContent: { inputTranscription: { text: "我想去珠北" } } });
-    onmessage?.({ serverContent: { inputTranscription: { text: "車站", finished: true } } });
+    onmessage?.({
+      serverContent: { inputTranscription: { text: "我想去珠北" } },
+    });
+    onmessage?.({
+      serverContent: { inputTranscription: { text: "車站", finished: true } },
+    });
 
     await vi.waitFor(() => expect(ws.send).toHaveBeenCalledTimes(3));
-    expect(ws.send).toHaveBeenNthCalledWith(1, JSON.stringify({
-      type: "transcript", role: "user", text: "我想去珠北", final: false,
-    }));
-    expect(ws.send).toHaveBeenNthCalledWith(2, JSON.stringify({
-      type: "transcript", role: "user", text: "車站", final: false,
-    }));
-    expect(ws.send).toHaveBeenNthCalledWith(3, JSON.stringify({
-      type: "transcript", role: "user", text: "我想去竹北車站", final: true,
-    }));
+    expect(ws.send).toHaveBeenNthCalledWith(
+      1,
+      JSON.stringify({
+        type: "transcript",
+        role: "user",
+        text: "我想去珠北",
+        final: false,
+      }),
+    );
+    expect(ws.send).toHaveBeenNthCalledWith(
+      2,
+      JSON.stringify({
+        type: "transcript",
+        role: "user",
+        text: "車站",
+        final: false,
+      }),
+    );
+    expect(ws.send).toHaveBeenNthCalledWith(
+      3,
+      JSON.stringify({
+        type: "transcript",
+        role: "user",
+        text: "我想去竹北車站",
+        final: true,
+      }),
+    );
   });
 });
 
@@ -146,7 +192,9 @@ describe("createLiveBridge Live config", () => {
   it("adds speechConfig only for a validly-formatted language code", async () => {
     process.env.GEMINI_LIVE_LANGUAGE_CODE = "cmn-TW";
     await createLiveBridge({ ws: makeWs(), userId: "u" });
-    expect(connect.mock.calls[0][0].config.speechConfig).toEqual({ languageCode: "cmn-TW" });
+    expect(connect.mock.calls[0][0].config.speechConfig).toEqual({
+      languageCode: "cmn-TW",
+    });
   });
 
   it("omits speechConfig when the language code is unset or malformed", async () => {
@@ -161,9 +209,13 @@ describe("createLiveBridge Live config", () => {
 
   it("adds navigation functions only to the Live tool config", async () => {
     await createLiveBridge({ ws: makeWs(), userId: "u" });
-    const declarations = connect.mock.calls[0][0].config.tools.at(-1).functionDeclarations;
+    const declarations =
+      connect.mock.calls[0][0].config.tools.at(-1).functionDeclarations;
     expect(declarations.map((item: any) => item.name)).toEqual([
-      "startNavigation", "stopNavigation", "repeatNavStep", "getActiveNavigationContext",
+      "startNavigation",
+      "stopNavigation",
+      "repeatNavStep",
+      "getActiveNavigationContext",
     ]);
   });
 });
@@ -182,17 +234,30 @@ describe("createLiveBridge navigation turn arbiter", () => {
       return session;
     });
     const bridge = await createLiveBridge({
-      ws: makeWs(), userId: "u", userLocation: { latitude: 25, longitude: 121 },
+      ws: makeWs(),
+      userId: "u",
+      userLocation: { latitude: 25, longitude: 121 },
     });
     await bridge.armRouteToken("cap");
-    onmessage?.({ toolCall: { functionCalls: [{ id: "nav-1", name: "startNavigation", args: {} }] } });
-    await vi.waitFor(() => expect(session.sendToolResponse).toHaveBeenCalledOnce());
+    onmessage?.({
+      toolCall: {
+        functionCalls: [{ id: "nav-1", name: "startNavigation", args: {} }],
+      },
+    });
+    await vi.waitFor(() =>
+      expect(session.sendToolResponse).toHaveBeenCalledOnce(),
+    );
     expect(session.sendClientContent).not.toHaveBeenCalled();
     onmessage?.({ serverContent: { turnComplete: true } });
-    await vi.waitFor(() => expect(session.sendClientContent).toHaveBeenCalledOnce());
-    expect(session.sendToolResponse.mock.invocationCallOrder[0])
-      .toBeLessThan(session.sendClientContent.mock.invocationCallOrder[0]);
-    expect(session.sendClientContent.mock.calls[0][0].turns).toContain("請逐字唸出以下導航指引");
+    await vi.waitFor(() =>
+      expect(session.sendClientContent).toHaveBeenCalledOnce(),
+    );
+    expect(session.sendToolResponse.mock.invocationCallOrder[0]).toBeLessThan(
+      session.sendClientContent.mock.invocationCallOrder[0],
+    );
+    expect(session.sendClientContent.mock.calls[0][0].turns).toContain(
+      "請逐字唸出以下導航指引",
+    );
   });
 
   it("waits for a real idle boundary while ordinary model output is active", async () => {
@@ -204,13 +269,23 @@ describe("createLiveBridge navigation turn arbiter", () => {
     });
     const bridge = await createLiveBridge({ ws: makeWs(), userId: "u" });
     await bridge.armRouteToken("cap");
-    onmessage?.({ serverContent: { modelTurn: { parts: [{ text: "一般回覆" }] } } });
+    onmessage?.({
+      serverContent: { modelTurn: { parts: [{ text: "一般回覆" }] } },
+    });
     bridge.updatePosition({ latitude: 25, longitude: 121 });
-    onmessage?.({ toolCall: { functionCalls: [{ id: "nav", name: "startNavigation", args: {} }] } });
-    await vi.waitFor(() => expect(session.sendToolResponse).toHaveBeenCalledOnce());
+    onmessage?.({
+      toolCall: {
+        functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
+      },
+    });
+    await vi.waitFor(() =>
+      expect(session.sendToolResponse).toHaveBeenCalledOnce(),
+    );
     expect(session.sendClientContent).not.toHaveBeenCalled();
     onmessage?.({ serverContent: { turnComplete: true } });
-    await vi.waitFor(() => expect(session.sendClientContent).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(session.sendClientContent).toHaveBeenCalledOnce(),
+    );
   });
 
   it("prioritizes interrupted over turnComplete and replays the whole sentence only at a later idle boundary", async () => {
@@ -221,20 +296,33 @@ describe("createLiveBridge navigation turn arbiter", () => {
       return session;
     });
     const bridge = await createLiveBridge({
-      ws: makeWs(), userId: "u", userLocation: { latitude: 25, longitude: 121 },
+      ws: makeWs(),
+      userId: "u",
+      userLocation: { latitude: 25, longitude: 121 },
     });
     await bridge.armRouteToken("cap");
-    onmessage?.({ toolCall: { functionCalls: [{ id: "nav", name: "startNavigation", args: {} }] } });
-    await vi.waitFor(() => expect(session.sendToolResponse).toHaveBeenCalledOnce());
+    onmessage?.({
+      toolCall: {
+        functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
+      },
+    });
+    await vi.waitFor(() =>
+      expect(session.sendToolResponse).toHaveBeenCalledOnce(),
+    );
     onmessage?.({ serverContent: { turnComplete: true } });
-    await vi.waitFor(() => expect(session.sendClientContent).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(session.sendClientContent).toHaveBeenCalledOnce(),
+    );
     onmessage?.({ serverContent: { interrupted: true, turnComplete: true } });
     await Promise.resolve();
     expect(session.sendClientContent).toHaveBeenCalledOnce();
     onmessage?.({ serverContent: { turnComplete: true } });
-    await vi.waitFor(() => expect(session.sendClientContent).toHaveBeenCalledTimes(2));
-    expect(session.sendClientContent.mock.calls[1][0].turns)
-      .toBe(session.sendClientContent.mock.calls[0][0].turns);
+    await vi.waitFor(() =>
+      expect(session.sendClientContent).toHaveBeenCalledTimes(2),
+    );
+    expect(session.sendClientContent.mock.calls[1][0].turns).toBe(
+      session.sendClientContent.mock.calls[0][0].turns,
+    );
   });
 
   it("does not overlap turns on timeout and closes after consecutive timeout strikes", async () => {
@@ -248,10 +336,16 @@ describe("createLiveBridge navigation turn arbiter", () => {
         return session;
       });
       const bridge = await createLiveBridge({
-        ws, userId: "u", userLocation: { latitude: 25, longitude: 121 },
+        ws,
+        userId: "u",
+        userLocation: { latitude: 25, longitude: 121 },
       });
       await bridge.armRouteToken("cap");
-      onmessage?.({ toolCall: { functionCalls: [{ id: "nav", name: "startNavigation", args: {} }] } });
+      onmessage?.({
+        toolCall: {
+          functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
+        },
+      });
       await vi.advanceTimersByTimeAsync(0);
       onmessage?.({ serverContent: { turnComplete: true } });
       await vi.advanceTimersByTimeAsync(0);
@@ -273,31 +367,58 @@ describe("createLiveBridge navigation turn arbiter", () => {
     });
     let resolveFirst!: (value: string) => void;
     let resolveSecond!: (value: string) => void;
-    const first = new Promise<string>((resolve) => { resolveFirst = resolve; });
-    const second = new Promise<string>((resolve) => { resolveSecond = resolve; });
-    vi.mocked(executeLocalTool).mockImplementation((name) => name === "slowFirst" ? first : second);
+    const first = new Promise<string>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const second = new Promise<string>((resolve) => {
+      resolveSecond = resolve;
+    });
+    vi.mocked(executeLocalTool).mockImplementation((name) =>
+      name === "slowFirst" ? first : second,
+    );
 
     const bridge = await createLiveBridge({
-      ws: makeWs(), userId: "u", userLocation: { latitude: 25, longitude: 121 },
+      ws: makeWs(),
+      userId: "u",
+      userLocation: { latitude: 25, longitude: 121 },
     });
     await bridge.armRouteToken("cap");
-    onmessage?.({ toolCall: { functionCalls: [{ id: "nav", name: "startNavigation", args: {} }] } });
-    await vi.waitFor(() => expect(session.sendToolResponse).toHaveBeenCalledOnce());
+    onmessage?.({
+      toolCall: {
+        functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
+      },
+    });
+    await vi.waitFor(() =>
+      expect(session.sendToolResponse).toHaveBeenCalledOnce(),
+    );
 
-    onmessage?.({ toolCall: { functionCalls: [{ id: "a", name: "slowFirst", args: {} }] } });
+    onmessage?.({
+      toolCall: { functionCalls: [{ id: "a", name: "slowFirst", args: {} }] },
+    });
     onmessage?.({ serverContent: { turnComplete: true } });
-    onmessage?.({ toolCall: { functionCalls: [{ id: "b", name: "slowSecond", args: {} }] } });
+    onmessage?.({
+      toolCall: { functionCalls: [{ id: "b", name: "slowSecond", args: {} }] },
+    });
     resolveFirst(JSON.stringify({ ok: true }));
-    await vi.waitFor(() => expect(executeLocalTool).toHaveBeenCalledWith(
-      "slowSecond", {}, { latitude: 25, longitude: 121 }, "u",
-    ));
+    await vi.waitFor(() =>
+      expect(executeLocalTool).toHaveBeenCalledWith(
+        "slowSecond",
+        {},
+        { latitude: 25, longitude: 121 },
+        "u",
+      ),
+    );
     expect(session.sendClientContent).not.toHaveBeenCalled();
 
     resolveSecond(JSON.stringify({ ok: true }));
-    await vi.waitFor(() => expect(session.sendToolResponse).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() =>
+      expect(session.sendToolResponse).toHaveBeenCalledTimes(3),
+    );
     expect(session.sendClientContent).not.toHaveBeenCalled();
     onmessage?.({ serverContent: { turnComplete: true } });
-    await vi.waitFor(() => expect(session.sendClientContent).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(session.sendClientContent).toHaveBeenCalledOnce(),
+    );
   });
 
   it("keeps only the latest asynchronously resolved route token", async () => {
@@ -310,9 +431,15 @@ describe("createLiveBridge navigation turn arbiter", () => {
     });
     let resolveOld!: (value: typeof walkRoute) => void;
     let resolveNew!: (value: typeof walkRoute) => void;
-    const oldLookup = new Promise<typeof walkRoute>((resolve) => { resolveOld = resolve; });
-    const newLookup = new Promise<typeof walkRoute>((resolve) => { resolveNew = resolve; });
-    getRouteByToken.mockImplementation((token) => token === "old" ? oldLookup : newLookup);
+    const oldLookup = new Promise<typeof walkRoute>((resolve) => {
+      resolveOld = resolve;
+    });
+    const newLookup = new Promise<typeof walkRoute>((resolve) => {
+      resolveNew = resolve;
+    });
+    getRouteByToken.mockImplementation((token) =>
+      token === "old" ? oldLookup : newLookup,
+    );
     const oldRoute = structuredClone(walkRoute);
     oldRoute.legs[0].steps[0].streetName = "舊路線";
     const newRoute = structuredClone(walkRoute);
@@ -325,14 +452,23 @@ describe("createLiveBridge navigation turn arbiter", () => {
     await newArm;
     resolveOld(oldRoute);
     await oldArm;
-    onmessage?.({ toolCall: { functionCalls: [{ id: "nav", name: "startNavigation", args: {} }] } });
-    await vi.waitFor(() => expect(session.sendToolResponse).toHaveBeenCalledOnce());
+    onmessage?.({
+      toolCall: {
+        functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
+      },
+    });
+    await vi.waitFor(() =>
+      expect(session.sendToolResponse).toHaveBeenCalledOnce(),
+    );
 
-    const messages = vi.mocked(ws.send).mock.calls
-      .map(([value]) => value)
+    const messages = vi
+      .mocked(ws.send)
+      .mock.calls.map(([value]) => value)
       .filter((value): value is string => typeof value === "string")
       .map((value) => JSON.parse(value));
-    const startMessage = messages.find((message) => message.type === "nav.start");
+    const startMessage = messages.find(
+      (message) => message.type === "nav.start",
+    );
     expect(startMessage.steps[0].instruction).toContain("新路線");
     expect(startMessage.steps[0].instruction).not.toContain("舊路線");
   });
@@ -349,7 +485,11 @@ describe("createLiveBridge navigation turn arbiter", () => {
       });
       const bridge = await createLiveBridge({ ws, userId: "u" });
       await bridge.armRouteToken("cap");
-      onmessage?.({ toolCall: { functionCalls: [{ id: "nav", name: "startNavigation", args: {} }] } });
+      onmessage?.({
+        toolCall: {
+          functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
+        },
+      });
       await vi.advanceTimersByTimeAsync(0);
       onmessage?.({ serverContent: { turnComplete: true } });
       await vi.advanceTimersByTimeAsync(0);
@@ -360,11 +500,14 @@ describe("createLiveBridge navigation turn arbiter", () => {
       bridge.updatePosition({ latitude: end[1], longitude: end[0] });
       await vi.advanceTimersByTimeAsync(500);
 
-      const messages = vi.mocked(ws.send).mock.calls
-        .map(([value]) => value)
+      const messages = vi
+        .mocked(ws.send)
+        .mock.calls.map(([value]) => value)
         .filter((value): value is string => typeof value === "string")
         .map((value) => JSON.parse(value));
-      expect(messages.some((message) => message.type === "nav.arrived")).toBe(true);
+      expect(messages.some((message) => message.type === "nav.arrived")).toBe(
+        true,
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -397,13 +540,28 @@ describe("createLiveBridge navigation turn arbiter", () => {
     getRouteByToken.mockResolvedValue(transitRoute);
     const bridge = await createLiveBridge({ ws: makeWs(), userId: "u" });
     await bridge.armRouteToken("cap");
-    onmessage?.({ toolCall: { functionCalls: [{ id: "start", name: "startNavigation", args: {} }] } });
-    await vi.waitFor(() => expect(session.sendToolResponse).toHaveBeenCalledOnce());
-    onmessage?.({ toolCall: { functionCalls: [{ id: "context", name: "getActiveNavigationContext", args: {} }] } });
-    await vi.waitFor(() => expect(session.sendToolResponse).toHaveBeenCalledTimes(2));
+    onmessage?.({
+      toolCall: {
+        functionCalls: [{ id: "start", name: "startNavigation", args: {} }],
+      },
+    });
+    await vi.waitFor(() =>
+      expect(session.sendToolResponse).toHaveBeenCalledOnce(),
+    );
+    onmessage?.({
+      toolCall: {
+        functionCalls: [
+          { id: "context", name: "getActiveNavigationContext", args: {} },
+        ],
+      },
+    });
+    await vi.waitFor(() =>
+      expect(session.sendToolResponse).toHaveBeenCalledTimes(2),
+    );
 
-    const output = session.sendToolResponse.mock.calls[1][0]
-      .functionResponses[0].response.output;
+    const output =
+      session.sendToolResponse.mock.calls[1][0].functionResponses[0].response
+        .output;
     expect(JSON.parse(output)).toMatchObject({
       active: true,
       destination: "乙站",
@@ -432,14 +590,24 @@ describe("createLiveBridge navigation turn arbiter", () => {
       userLocation: { latitude: 25, longitude: 121 },
     });
     bridge.updatePosition({ latitude: 25.05, longitude: 121.55, accuracy: 8 });
-    onmessage?.({ toolCall: { functionCalls: [{ id: "weather", name: "getEnvironmentInfo", args: {} }] } });
-    await vi.waitFor(() => expect(executeLocalTool).toHaveBeenCalledWith(
-      "getEnvironmentInfo",
-      {},
-      { latitude: 25.05, longitude: 121.55, accuracy: 8 },
-      "u",
-    ));
-    await vi.waitFor(() => expect(session.sendToolResponse).toHaveBeenCalledOnce());
+    onmessage?.({
+      toolCall: {
+        functionCalls: [
+          { id: "weather", name: "getEnvironmentInfo", args: {} },
+        ],
+      },
+    });
+    await vi.waitFor(() =>
+      expect(executeLocalTool).toHaveBeenCalledWith(
+        "getEnvironmentInfo",
+        {},
+        { latitude: 25.05, longitude: 121.55, accuracy: 8 },
+        "u",
+      ),
+    );
+    await vi.waitFor(() =>
+      expect(session.sendToolResponse).toHaveBeenCalledOnce(),
+    );
   });
 });
 
@@ -461,21 +629,39 @@ describe("createLiveBridge consecutive tool calls", () => {
 
     await createLiveBridge({ ws: makeWs(), userId: "voice-user" });
 
-    onmessage?.({ toolCall: { functionCalls: [{ id: "c1", name: "findGooglePlaces", args: {} }] } });
-    onmessage?.({ toolCall: { functionCalls: [{ id: "c2", name: "planAccessibleRoute", args: {} }] } });
+    onmessage?.({
+      toolCall: {
+        functionCalls: [{ id: "c1", name: "findGooglePlaces", args: {} }],
+      },
+    });
+    onmessage?.({
+      toolCall: {
+        functionCalls: [{ id: "c2", name: "planAccessibleRoute", args: {} }],
+      },
+    });
 
     // handleServerMessage is fire-and-forget from onmessage; wait for both
     // executions to finish resolving before asserting (deferred sync point).
-    await vi.waitFor(() => expect(session.sendToolResponse).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() =>
+      expect(session.sendToolResponse).toHaveBeenCalledTimes(2),
+    );
 
     expect(session.sendToolResponse).toHaveBeenNthCalledWith(1, {
       functionResponses: [
-        { id: "c1", name: "findGooglePlaces", response: { output: JSON.stringify({ ok: true }) } },
+        {
+          id: "c1",
+          name: "findGooglePlaces",
+          response: { output: JSON.stringify({ ok: true }) },
+        },
       ],
     });
     expect(session.sendToolResponse).toHaveBeenNthCalledWith(2, {
       functionResponses: [
-        { id: "c2", name: "planAccessibleRoute", response: { output: JSON.stringify({ ok: true }) } },
+        {
+          id: "c2",
+          name: "planAccessibleRoute",
+          response: { output: JSON.stringify({ ok: true }) },
+        },
       ],
     });
     expect(session.close).not.toHaveBeenCalled();
@@ -498,7 +684,8 @@ describe("createLiveBridge tool_result payload", () => {
    * @returns The parsed `tool_result` message, or undefined if none was sent.
    */
   function findToolResult(ws: WebSocket): Record<string, unknown> | undefined {
-    const calls = (ws.send as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const calls = (ws.send as unknown as { mock: { calls: unknown[][] } }).mock
+      .calls;
     const messages = calls
       .map((c) => c[0])
       .filter((arg): arg is string => typeof arg === "string")
@@ -518,7 +705,9 @@ describe("createLiveBridge tool_result payload", () => {
 
     await createLiveBridge({ ws, userId: "voice-user" });
     const args = { latitude: 25.033, longitude: 121.5654, radius: 500 };
-    onmessage?.({ toolCall: { functionCalls: [{ id: "c1", name: "findA11yPlaces", args }] } });
+    onmessage?.({
+      toolCall: { functionCalls: [{ id: "c1", name: "findA11yPlaces", args }] },
+    });
 
     await vi.waitFor(() => expect(findToolResult(ws)).toBeDefined());
     const msg = findToolResult(ws)!;
@@ -539,10 +728,16 @@ describe("createLiveBridge tool_result payload", () => {
     const ws = makeWs();
 
     await createLiveBridge({ ws, userId: "voice-user" });
-    onmessage?.({ toolCall: { functionCalls: [{ id: "c1", name: "findA11yPlaces", args: {} }] } });
+    onmessage?.({
+      toolCall: {
+        functionCalls: [{ id: "c1", name: "findA11yPlaces", args: {} }],
+      },
+    });
 
     await vi.waitFor(() => expect(findToolResult(ws)).toBeDefined());
-    expect(findToolResult(ws)!.result).toEqual({ result: "plain string result" });
+    expect(findToolResult(ws)!.result).toEqual({
+      result: "plain string result",
+    });
   });
 
   it("omits result but keeps args when the tool throws", async () => {
@@ -556,7 +751,9 @@ describe("createLiveBridge tool_result payload", () => {
 
     await createLiveBridge({ ws, userId: "voice-user" });
     const args = { latitude: 25.033, longitude: 121.5654 };
-    onmessage?.({ toolCall: { functionCalls: [{ id: "c1", name: "findA11yPlaces", args }] } });
+    onmessage?.({
+      toolCall: { functionCalls: [{ id: "c1", name: "findA11yPlaces", args }] },
+    });
 
     await vi.waitFor(() => expect(findToolResult(ws)).toBeDefined());
     const msg = findToolResult(ws)!;

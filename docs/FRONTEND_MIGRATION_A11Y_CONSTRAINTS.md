@@ -11,10 +11,10 @@
 `mode` 這個四值 enum 只調整**評分權重**（誰加分、轉乘懲罰多重），它不是「條件」。
 新增的兩個布林值才是**硬性條件（hard constraint）**，會決定一條路線有沒有資格被回傳：
 
-| 欄位 | 型別 | 效果 |
-|---|---|---|
-| `avoidStairs` | `boolean?` | 向 OTP2 索取 step-free 路線；graph build 會把無輪椅坡道例外的 `highway=steps` 補成 `wheelchair=no`，後處理再以 OTP step 的 `feature.__typename === "StairsUse"` 作第二道排除 |
-| `requireElevator` | `boolean?` | 排除「該站有設施資料、但查不到電梯」或「電梯維修／故障／暫停」的捷運／台鐵／高鐵路段（**後處理層**，在設施 enrich 之後執行） |
+| 欄位              | 型別       | 效果                                                                                                                                                                         |
+| ----------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `avoidStairs`     | `boolean?` | 向 OTP2 索取 step-free 路線；graph build 會把無輪椅坡道例外的 `highway=steps` 補成 `wheelchair=no`，後處理再以 OTP step 的 `feature.__typename === "StairsUse"` 作第二道排除 |
+| `requireElevator` | `boolean?` | 排除「該站有設施資料、但查不到電梯」或「電梯維修／故障／暫停」的捷運／台鐵／高鐵路段（**後處理層**，在設施 enrich 之後執行）                                                 |
 
 兩者的作用層不同，這會影響你怎麼解讀結果：
 
@@ -32,10 +32,10 @@
 
 未填的欄位會回退到 `mode` 的預設，回退規則就是舊的 tier-1 判定：
 
-| `mode` | `avoidStairs` 預設 | `requireElevator` 預設 |
-|---|---|---|
-| `wheelchair` | `true` | `true` |
-| `elderly` / `visual_impaired` / `normal` | `false` | `false` |
+| `mode`                                   | `avoidStairs` 預設 | `requireElevator` 預設 |
+| ---------------------------------------- | ------------------ | ---------------------- |
+| `wheelchair`                             | `true`             | `true`                 |
+| `elderly` / `visual_impaired` / `normal` | `false`            | `false`                |
 
 所以：
 
@@ -52,7 +52,7 @@
 ```json
 {
   "origin": { "latitude": 25.0418, "longitude": 121.5654 },
-  "destination": { "latitude": 25.0330, "longitude": 121.5645 },
+  "destination": { "latitude": 25.033, "longitude": 121.5645 },
   "mode": "elderly",
   "avoidStairs": true,
   "requireElevator": true

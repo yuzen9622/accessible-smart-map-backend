@@ -17,26 +17,41 @@ import type {
 
 export type ParsedWeather = Omit<WeatherBlock, "status" | "reason">;
 
-function firstValue(loc: CwaLocation, elementName: string, key: string): string | undefined {
-  const element = loc.WeatherElement?.find((e) => e.ElementName === elementName);
+function firstValue(
+  loc: CwaLocation,
+  elementName: string,
+  key: string,
+): string | undefined {
+  const element = loc.WeatherElement?.find(
+    (e) => e.ElementName === elementName,
+  );
   return element?.Time?.[0]?.ElementValue?.[0]?.[key];
 }
 
-function numberField(loc: CwaLocation, elementName: string, key: string): number | undefined {
+function numberField(
+  loc: CwaLocation,
+  elementName: string,
+  key: string,
+): number | undefined {
   const raw = firstValue(loc, elementName, key);
   if (raw === undefined) return undefined;
   const value = Number(raw);
   return Number.isFinite(value) ? value : undefined;
 }
 
-function stringField(loc: CwaLocation, elementName: string, key: string): string | undefined {
+function stringField(
+  loc: CwaLocation,
+  elementName: string,
+  key: string,
+): string | undefined {
   const raw = firstValue(loc, elementName, key);
   return raw && raw.trim() ? raw : undefined;
 }
 
 function firstForecastTime(loc: CwaLocation): string | undefined {
   for (const name of CWA_WEATHER_ELEMENTS) {
-    const time = loc.WeatherElement?.find((e) => e.ElementName === name)?.Time?.[0];
+    const time = loc.WeatherElement?.find((e) => e.ElementName === name)
+      ?.Time?.[0];
     if (time) return time.DataTime ?? time.StartTime;
   }
   return undefined;
@@ -52,7 +67,11 @@ function firstForecastTime(loc: CwaLocation): string | undefined {
 export function parseWeather(loc: CwaLocation): ParsedWeather {
   return {
     temperature: numberField(loc, "溫度", "Temperature"),
-    precipitationProbability: numberField(loc, "3小時降雨機率", "ProbabilityOfPrecipitation"),
+    precipitationProbability: numberField(
+      loc,
+      "3小時降雨機率",
+      "ProbabilityOfPrecipitation",
+    ),
     windSpeed: numberField(loc, "風速", "WindSpeed"),
     windDirection: stringField(loc, "風向", "WindDirection"),
     condition: stringField(loc, "天氣現象", "Weather"),

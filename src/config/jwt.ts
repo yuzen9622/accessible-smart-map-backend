@@ -17,7 +17,10 @@ const REFRESH_TOKEN_TTL = "1d";
  * @returns A plain object containing only publicly shareable user fields.
  */
 const toPublicUser = (user: IUser): IUser => {
-  const source = typeof (user as any)?.toObject === "function" ? (user as any).toObject() : user;
+  const source =
+    typeof (user as any)?.toObject === "function"
+      ? (user as any).toObject()
+      : user;
   return {
     _id: String(source._id),
     name: source.name,

@@ -1,7 +1,10 @@
 import mongoose from "mongoose";
 import Review from "../model/review.model";
 
-const LEGACY_INDEXES = ["osmId_1_placeType_1_userId_1", "osmId_1_placeType_1_status_1"] as const;
+const LEGACY_INDEXES = [
+  "osmId_1_placeType_1_userId_1",
+  "osmId_1_placeType_1_status_1",
+] as const;
 
 /**
  * Rename the review location key from `osmId` to `placeId`.
@@ -39,7 +42,10 @@ async function main() {
   );
   console.log(`renamed osmId → placeId on ${renamed.modifiedCount} review(s)`);
 
-  await collection.createIndex({ placeId: 1, placeType: 1, userId: 1 }, { unique: true });
+  await collection.createIndex(
+    { placeId: 1, placeType: 1, userId: 1 },
+    { unique: true },
+  );
   await collection.createIndex({ placeId: 1, placeType: 1, status: 1 });
   console.log("ensured placeId compound indexes");
 

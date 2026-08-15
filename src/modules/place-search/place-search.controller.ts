@@ -23,9 +23,13 @@ function toSources(value?: string): PlaceSource[] | undefined {
   return value === undefined ? undefined : (value.split(",") as PlaceSource[]);
 }
 
-async function autocomplete(req: Request, res: Response<ApiResponse<AutocompleteItem[]>>) {
+async function autocomplete(
+  req: Request,
+  res: Response<ApiResponse<AutocompleteItem[]>>,
+) {
   try {
-    const { q, sessiontoken, lat, lng, sources, limit, lang } = (req.validated?.query ?? {}) as {
+    const { q, sessiontoken, lat, lng, sources, limit, lang } = (req.validated
+      ?.query ?? {}) as {
       q: string;
       sessiontoken?: string;
       lat?: string;
@@ -45,7 +49,13 @@ async function autocomplete(req: Request, res: Response<ApiResponse<Autocomplete
     });
     return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
   } catch {
-    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, ERROR_MESSAGE.INTERNAL);
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      ERROR_MESSAGE.INTERNAL,
+    );
   }
 }
 
@@ -77,7 +87,13 @@ async function details(req: Request, res: Response<ApiResponse<PlaceResult>>) {
     }
     return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
   } catch {
-    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, ERROR_MESSAGE.INTERNAL);
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      ERROR_MESSAGE.INTERNAL,
+    );
   }
 }
 

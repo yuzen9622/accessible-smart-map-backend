@@ -268,20 +268,20 @@ export function scoreFacilitySet(nodes: IOsmA11y[]): number {
     (n) =>
       n.category === "elevator" ||
       n.tags?.["elevator"] === "yes" ||
-      n.tags?.["highway"] === "elevator"
+      n.tags?.["highway"] === "elevator",
   );
   const hasFlushKerb = nodes.some(
     (n) =>
       n.category === "kerb_cut" ||
       n.tags?.["kerb"] === "flush" ||
       n.tags?.["kerb"] === "lowered" ||
-      n.tags?.["highway"] === "dropped_kerb"
+      n.tags?.["highway"] === "dropped_kerb",
   );
   const hasRamp = nodes.some(
-    (n) => n.category === "ramp" || n.tags?.["ramp:wheelchair"] === "yes"
+    (n) => n.category === "ramp" || n.tags?.["ramp:wheelchair"] === "yes",
   );
   const hasAccessibleToilet = nodes.some(
-    (n) => n.tags?.["toilets:wheelchair"] === "yes"
+    (n) => n.tags?.["toilets:wheelchair"] === "yes",
   );
 
   let score = maxNodeScore * 0.6 + avgNodeScore * 0.4;
@@ -414,7 +414,7 @@ const WALK_PENALTY: Record<
  */
 export function walkPenaltyScore(
   walkDistanceM: number,
-  mode: AccessibilityMode = "normal"
+  mode: AccessibilityMode = "normal",
 ): number {
   const { freeM, slope, cap } = WALK_PENALTY[mode] ?? WALK_PENALTY.normal;
   const over = Math.max(0, walkDistanceM - freeM);
@@ -560,7 +560,7 @@ export function routeCost(
   transferCount: number,
   accessibilityScore: number,
   mode: AccessibilityMode = "normal",
-  walkDistanceM = 0
+  walkDistanceM = 0,
 ): number {
   const profile = MODE_PROFILES[mode] ?? MODE_PROFILES.normal;
   return (
@@ -587,7 +587,7 @@ export function prerankCost(
   totalMinutes: number,
   transferCount: number,
   walkDistanceM: number,
-  mode: AccessibilityMode = "normal"
+  mode: AccessibilityMode = "normal",
 ): number {
   const profile = MODE_PROFILES[mode] ?? MODE_PROFILES.normal;
   return (
@@ -618,7 +618,7 @@ export function scoreRoute(
   mode: AccessibilityMode = "normal",
   walkDistanceM = 0,
   dataCoverageRatio = 1,
-  env?: EnvConditions
+  env?: EnvConditions,
 ): RouteAccessibilityScore {
   const profile = MODE_PROFILES[mode] ?? MODE_PROFILES.normal;
   const facilityScore = scoreFacilitySet(facilityNodes);
@@ -627,31 +627,31 @@ export function scoreRoute(
     (n) =>
       n.category === "elevator" ||
       n.tags?.["elevator"] === "yes" ||
-      n.tags?.["highway"] === "elevator"
+      n.tags?.["highway"] === "elevator",
   );
   const hasFlushKerb = facilityNodes.some(
     (n) =>
       n.category === "kerb_cut" ||
       n.tags?.["kerb"] === "flush" ||
       n.tags?.["kerb"] === "lowered" ||
-      n.tags?.["highway"] === "dropped_kerb"
+      n.tags?.["highway"] === "dropped_kerb",
   );
   const hasRamp = facilityNodes.some(
-    (n) => n.category === "ramp" || n.tags?.["ramp:wheelchair"] === "yes"
+    (n) => n.category === "ramp" || n.tags?.["ramp:wheelchair"] === "yes",
   );
   const hasAccessibleToilet = facilityNodes.some(
-    (n) => n.tags?.["toilets:wheelchair"] === "yes"
+    (n) => n.tags?.["toilets:wheelchair"] === "yes",
   );
   const hasWheelchairYes = facilityNodes.some(
     (n) =>
       n.tags?.["wheelchair"] === "yes" ||
-      n.tags?.["wheelchair"] === "designated"
+      n.tags?.["wheelchair"] === "designated",
   );
   const hasAudioSignal = facilityNodes.some(
-    (n) => n.tags?.["traffic_signals:sound"] === "yes"
+    (n) => n.tags?.["traffic_signals:sound"] === "yes",
   );
   const hasTactilePaving = facilityNodes.some(
-    (n) => n.tags?.["tactile_paving"] === "yes"
+    (n) => n.tags?.["tactile_paving"] === "yes",
   );
 
   const w = profile.criticalWeights;
@@ -666,9 +666,8 @@ export function scoreRoute(
   const criticalFeatureScore = Math.min(criticalRaw, 100);
 
   const timeRange = maxMinutes - minMinutes;
-  const timeScore = timeRange > 0
-    ? ((maxMinutes - totalMinutes) / timeRange) * 100
-    : 100; // 唯一候選或等時路線不給予時間懲罰
+  const timeScore =
+    timeRange > 0 ? ((maxMinutes - totalMinutes) / timeRange) * 100 : 100; // 唯一候選或等時路線不給予時間懲罰
 
   const highlightBonus = Math.min(highlightCount * 1.5, 5);
   const adjustedFacilityScore = Math.min(facilityScore + highlightBonus, 100);
@@ -723,21 +722,20 @@ export function scoreRoute(
 export function walkLegSurfaceMultiplier(nodes: IOsmA11y[]): number {
   if (!nodes.length) return 0.85;
 
-  const surfacePenalties = nodes
-    .map((n) => {
-      const smoothness = n.tags?.["smoothness"];
-      const surface = n.tags?.["surface"];
-      let penalty = 0;
-      if (smoothness) {
-        const w = (TIER2_WEIGHTS.smoothness ?? {})[smoothness] ?? 0;
-        penalty += w < 0 ? Math.abs(w) : 0;
-      }
-      if (surface) {
-        const w = (TIER2_WEIGHTS.surface ?? {})[surface] ?? 0;
-        penalty += w < 0 ? Math.abs(w) : 0;
-      }
-      return penalty;
-    });
+  const surfacePenalties = nodes.map((n) => {
+    const smoothness = n.tags?.["smoothness"];
+    const surface = n.tags?.["surface"];
+    let penalty = 0;
+    if (smoothness) {
+      const w = (TIER2_WEIGHTS.smoothness ?? {})[smoothness] ?? 0;
+      penalty += w < 0 ? Math.abs(w) : 0;
+    }
+    if (surface) {
+      const w = (TIER2_WEIGHTS.surface ?? {})[surface] ?? 0;
+      penalty += w < 0 ? Math.abs(w) : 0;
+    }
+    return penalty;
+  });
 
   const maxPenalty = Math.max(...surfacePenalties, 0);
   const multiplier = 1.0 - (Math.min(maxPenalty, 35) / 35) * 0.5;

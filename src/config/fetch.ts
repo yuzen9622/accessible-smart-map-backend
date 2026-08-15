@@ -12,7 +12,7 @@ import { tdxTokenManager } from "../adapters/tdx.adapter";
 export async function tdxFetch(
   url: string,
   init?: RequestInit,
-  _retried = false
+  _retried = false,
 ) {
   const token = await tdxTokenManager.getToken();
   const headers = new Headers(init?.headers || {});

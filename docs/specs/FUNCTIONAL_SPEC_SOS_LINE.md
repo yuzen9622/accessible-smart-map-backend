@@ -1,4 +1,5 @@
 # 緊急求救與家人通報系統
+
 ## Functional Specification — SOS Emergency & LINE Family Notification
 
 **版本**：v1.0.1
@@ -59,14 +60,14 @@
 
 ### 2.2 非功能目標
 
-| 目標 | 說明 |
-|------|------|
-| 綁定不可偽造狀態穿透 | 不假設 LINE 平台會回傳任何自訂 state，綁定完全由後端 bindCode 比對驅動 |
-| Push 額度意識 | 家人端對話一律走 reply token（免費），僅 SOS 開始/解除/警示走 push（計額度），見 §11 |
-| Webhook 快速 ACK | 簽章驗證通過後立即回 200，事件處理非同步進行，避免 LINE 平台重送 |
-| Fail-soft 推播 | 推播失敗（如聯絡人已封鎖官方帳號）僅記錄，不阻擋 SOS 建立/回應 |
-| 公開追蹤頁最小揭露 | `shareToken` 高熵、24 小時後失效，明確標示為「接受的風險」而非解決方案（見 §17） |
-| 不取代正式求救管道 | AI Agent 對話中不得暗示「已幫忙叫救護車」等，逾時需引導撥打 119/110 |
+| 目標                 | 說明                                                                                 |
+| -------------------- | ------------------------------------------------------------------------------------ |
+| 綁定不可偽造狀態穿透 | 不假設 LINE 平台會回傳任何自訂 state，綁定完全由後端 bindCode 比對驅動               |
+| Push 額度意識        | 家人端對話一律走 reply token（免費），僅 SOS 開始/解除/警示走 push（計額度），見 §11 |
+| Webhook 快速 ACK     | 簽章驗證通過後立即回 200，事件處理非同步進行，避免 LINE 平台重送                     |
+| Fail-soft 推播       | 推播失敗（如聯絡人已封鎖官方帳號）僅記錄，不阻擋 SOS 建立/回應                       |
+| 公開追蹤頁最小揭露   | `shareToken` 高熵、24 小時後失效，明確標示為「接受的風險」而非解決方案（見 §17）     |
+| 不取代正式求救管道   | AI Agent 對話中不得暗示「已幫忙叫救護車」等，逾時需引導撥打 119/110                  |
 
 ---
 
@@ -164,25 +165,25 @@ src/
 
 ### 3.3 各層職責（clean-architecture 契約）
 
-| 層 | 檔案 | 唯一職責 | 不可以做 |
-|---|---|---|---|
-| transport | `emergency-contact.router.ts` / `sos.router.ts` / `line.router.ts` | 宣告 path/method、串 middleware、委派**單一** controller | 業務邏輯、直接呼叫 model |
-| validation | `emergency-contact.schema.ts` / `sos.schema.ts` | Zod 宣告 body/query/params 並拒絕未知欄位 | I/O、業務規則 |
-| handler | `*.controller.ts` | 讀 `req.auth`/`req.validated`，呼叫**一個** service 方法，`sendResponse` 包裝 | 業務 if/else、外部/DB 呼叫 |
-| domain | `emergency-contact.service.ts` / `sos.service.ts` / `line.service.ts` / `family-agent.service.ts` | 業務邏輯與協調，呼叫 adapter / model | import `req`/`res`、驗證請求形狀 |
-| webhook 簽章 | `line.middleware.ts` | 封裝 `@line/bot-sdk` HMAC-SHA256 驗證、快速 ACK | 業務邏輯 |
-| I/O client | `adapters/line.adapter.ts` | 封裝 LINE Messaging API（push/multicast/reply/Flex 模板） | 業務決策、HTTP envelope |
-| types | `*.types.ts` | 模組內 DTO；跨模組共用型別放 `src/types/`（沿用既有 reorg 慣例） | 邏輯、執行期值 |
+| 層           | 檔案                                                                                              | 唯一職責                                                                      | 不可以做                         |
+| ------------ | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | -------------------------------- |
+| transport    | `emergency-contact.router.ts` / `sos.router.ts` / `line.router.ts`                                | 宣告 path/method、串 middleware、委派**單一** controller                      | 業務邏輯、直接呼叫 model         |
+| validation   | `emergency-contact.schema.ts` / `sos.schema.ts`                                                   | Zod 宣告 body/query/params 並拒絕未知欄位                                     | I/O、業務規則                    |
+| handler      | `*.controller.ts`                                                                                 | 讀 `req.auth`/`req.validated`，呼叫**一個** service 方法，`sendResponse` 包裝 | 業務 if/else、外部/DB 呼叫       |
+| domain       | `emergency-contact.service.ts` / `sos.service.ts` / `line.service.ts` / `family-agent.service.ts` | 業務邏輯與協調，呼叫 adapter / model                                          | import `req`/`res`、驗證請求形狀 |
+| webhook 簽章 | `line.middleware.ts`                                                                              | 封裝 `@line/bot-sdk` HMAC-SHA256 驗證、快速 ACK                               | 業務邏輯                         |
+| I/O client   | `adapters/line.adapter.ts`                                                                        | 封裝 LINE Messaging API（push/multicast/reply/Flex 模板）                     | 業務決策、HTTP envelope          |
+| types        | `*.types.ts`                                                                                      | 模組內 DTO；跨模組共用型別放 `src/types/`（沿用既有 reorg 慣例）              | 邏輯、執行期值                   |
 
 ### 3.4 需動到的共用 spine
 
-| 變更 | 檔案 | 原因 |
-|---|---|---|
-| Webhook 例外掛載順序 | `src/app.ts` | `POST /api/v1/line/webhook` 必須掛在第 41 行 `app.use(express.json({ limit: "10mb" }))` **之前**（改用 `express.raw({ type: "application/json" })` 保留原始 body），否則簽章驗證會因 body 已被消耗而永遠失敗 |
-| 第二個 `/api/v1/user` 掛載點 | `src/app.ts` | 既有 `app.use("/api/v1/user", middleware, createUserRouter())`（第 65 行）僅涵蓋 `createUserRouter()`；新增 `app.use("/api/v1/user", middleware, createEmergencyContactRouter())`，兩次掛載各自帶 `middleware`（Express 中介層不會跨 `app.use()` 呼叫自動延續） |
-| 新前綴 | `src/app.ts` | 新增 `app.use("/api/v1/sos", createSosRouter())`——router 內對 3 個保護端點個別掛 `middleware`（沿用 `hazard-report.router.ts` 的 per-route 掛法），公開追蹤端點不掛 |
-| docs 來源 | `src/openapi/document.ts` | side-effect import `emergency-contact.schema` / `sos.schema`，讓 `/docs` 自動同步 |
-| env | `.env.example` | 新增 `LINE_CHANNEL_ACCESS_TOKEN` / `LINE_CHANNEL_SECRET` / `PUBLIC_TRACKING_BASE_URL` |
+| 變更                         | 檔案                      | 原因                                                                                                                                                                                                                                                            |
+| ---------------------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Webhook 例外掛載順序         | `src/app.ts`              | `POST /api/v1/line/webhook` 必須掛在第 41 行 `app.use(express.json({ limit: "10mb" }))` **之前**（改用 `express.raw({ type: "application/json" })` 保留原始 body），否則簽章驗證會因 body 已被消耗而永遠失敗                                                    |
+| 第二個 `/api/v1/user` 掛載點 | `src/app.ts`              | 既有 `app.use("/api/v1/user", middleware, createUserRouter())`（第 65 行）僅涵蓋 `createUserRouter()`；新增 `app.use("/api/v1/user", middleware, createEmergencyContactRouter())`，兩次掛載各自帶 `middleware`（Express 中介層不會跨 `app.use()` 呼叫自動延續） |
+| 新前綴                       | `src/app.ts`              | 新增 `app.use("/api/v1/sos", createSosRouter())`——router 內對 3 個保護端點個別掛 `middleware`（沿用 `hazard-report.router.ts` 的 per-route 掛法），公開追蹤端點不掛                                                                                             |
+| docs 來源                    | `src/openapi/document.ts` | side-effect import `emergency-contact.schema` / `sos.schema`，讓 `/docs` 自動同步                                                                                                                                                                               |
+| env                          | `.env.example`            | 新增 `LINE_CHANNEL_ACCESS_TOKEN` / `LINE_CHANNEL_SECRET` / `PUBLIC_TRACKING_BASE_URL`                                                                                                                                                                           |
 
 > `ResponseCode` 已具備本功能所需的全部狀態碼（`GONE=410`、`INVALID_INPUT=400`、`FORBIDDEN=403`、`NOT_FOUND=404` 等，見 `src/types/code.ts`），**不需要新增 enum 值**。
 
@@ -219,7 +220,12 @@ import type { IEmergencyContact } from "../types";
 
 const emergencyContactSchema = new Schema<IEmergencyContact>(
   {
-    userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
+    userId: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+      index: true,
+    },
     name: { type: String, required: true, maxlength: 50 },
 
     lineUserId: { type: String, default: null },
@@ -275,7 +281,12 @@ import type { ISosSession } from "../types";
 
 const sosSessionSchema = new Schema<ISosSession>(
   {
-    userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
+    userId: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+      index: true,
+    },
     type: {
       type: String,
       enum: ["body", "trapped", "share_location"],
@@ -297,7 +308,11 @@ const sosSessionSchema = new Schema<ISosSession>(
 
     locationUpdatedAt: { type: Date, required: true },
     resolvedAt: { type: Date, default: null },
-    claimedBy: { type: Schema.Types.ObjectId, ref: "EmergencyContact", default: null },
+    claimedBy: {
+      type: Schema.Types.ObjectId,
+      ref: "EmergencyContact",
+      default: null,
+    },
 
     // 10 分鐘無位置更新警示是否已發送過（避免重複推播，見 §10）
     staleAlertSent: { type: Boolean, default: false },
@@ -376,16 +391,16 @@ export interface ISosSession {
 
 ### 7.1 端點總覽
 
-| Method | Path | 功能 | 認證 |
-|---|---|---|---|
-| GET | `/api/v1/user/emergency-contacts` | 列出我的緊急聯絡人 | JWT |
-| POST | `/api/v1/user/emergency-contacts` | 新增緊急聯絡人（回傳 bindCode） | JWT |
-| DELETE | `/api/v1/user/emergency-contacts/:id` | 刪除緊急聯絡人 | JWT |
-| POST | `/api/v1/line/webhook` | LINE 平台事件回呼 | LINE 簽章（非 JWT） |
-| POST | `/api/v1/sos/sessions` | 建立 SOS 求救 | JWT |
-| PATCH | `/api/v1/sos/sessions/:id/location` | 更新求救中位置 | JWT（限本人） |
-| PATCH | `/api/v1/sos/sessions/:id/resolve` | 解除求救 | JWT（限本人） |
-| GET | `/api/v1/sos/sessions/:token/public` | 公開追蹤頁查詢 | 無（token 即憑證） |
+| Method | Path                                  | 功能                            | 認證                |
+| ------ | ------------------------------------- | ------------------------------- | ------------------- |
+| GET    | `/api/v1/user/emergency-contacts`     | 列出我的緊急聯絡人              | JWT                 |
+| POST   | `/api/v1/user/emergency-contacts`     | 新增緊急聯絡人（回傳 bindCode） | JWT                 |
+| DELETE | `/api/v1/user/emergency-contacts/:id` | 刪除緊急聯絡人                  | JWT                 |
+| POST   | `/api/v1/line/webhook`                | LINE 平台事件回呼               | LINE 簽章（非 JWT） |
+| POST   | `/api/v1/sos/sessions`                | 建立 SOS 求救                   | JWT                 |
+| PATCH  | `/api/v1/sos/sessions/:id/location`   | 更新求救中位置                  | JWT（限本人）       |
+| PATCH  | `/api/v1/sos/sessions/:id/resolve`    | 解除求救                        | JWT（限本人）       |
+| GET    | `/api/v1/sos/sessions/:token/public`  | 公開追蹤頁查詢                  | 無（token 即憑證）  |
 
 ### 7.2 GET /api/v1/user/emergency-contacts — 列出緊急聯絡人
 
@@ -464,24 +479,30 @@ export const CreateEmergencyContactSchema = z
 
 **錯誤碼**
 
-| HTTP（ResponseCode） | data.reason | message | 說明 |
-|---|---|---|---|
-| 400 `INVALID_INPUT` | `CONTACT_LIMIT_REACHED` | 緊急聯絡人已達上限（5 位） | `countDocuments({ userId }) >= 5` |
-| 400 `INVALID_INPUT` | — | Zod 驗證失敗（`name` 空白或超長） | 邊界驗證 |
+| HTTP（ResponseCode） | data.reason             | message                           | 說明                              |
+| -------------------- | ----------------------- | --------------------------------- | --------------------------------- |
+| 400 `INVALID_INPUT`  | `CONTACT_LIMIT_REACHED` | 緊急聯絡人已達上限（5 位）        | `countDocuments({ userId }) >= 5` |
+| 400 `INVALID_INPUT`  | —                       | Zod 驗證失敗（`name` 空白或超長） | 邊界驗證                          |
 
 ### 7.4 DELETE /api/v1/user/emergency-contacts/:id — 刪除緊急聯絡人
 
 **錯誤碼**
 
-| HTTP（ResponseCode） | data.reason | message | 說明 |
-|---|---|---|---|
-| 403 `FORBIDDEN` | `NOT_CONTACT_OWNER` | 無權刪除此聯絡人 | `contact.userId !== req.auth.userId` |
-| 404 `NOT_FOUND` | `CONTACT_NOT_FOUND` | 找不到該聯絡人 | id 不存在 |
+| HTTP（ResponseCode） | data.reason         | message          | 說明                                 |
+| -------------------- | ------------------- | ---------------- | ------------------------------------ |
+| 403 `FORBIDDEN`      | `NOT_CONTACT_OWNER` | 無權刪除此聯絡人 | `contact.userId !== req.auth.userId` |
+| 404 `NOT_FOUND`      | `CONTACT_NOT_FOUND` | 找不到該聯絡人   | id 不存在                            |
 
 **成功回應（205 `DELETED`，沿用專案既有刪除語意）**
 
 ```json
-{ "ok": true, "status": "success", "code": 205, "message": "已刪除", "data": null }
+{
+  "ok": true,
+  "status": "success",
+  "code": 205,
+  "message": "已刪除",
+  "data": null
+}
 ```
 
 ### 7.5 POST /api/v1/sos/sessions — 建立 SOS 求救
@@ -504,7 +525,12 @@ export const CreateSosSchema = z
 **請求範例**
 
 ```json
-{ "type": "trapped", "lat": 25.033, "lng": 121.5654, "address": "台北市信義區松壽路上" }
+{
+  "type": "trapped",
+  "lat": 25.033,
+  "lng": 121.5654,
+  "address": "台北市信義區松壽路上"
+}
 ```
 
 **成功回應（201，新建）**
@@ -531,7 +557,11 @@ export const CreateSosSchema = z
   "status": "success",
   "code": 200,
   "message": "已有進行中的求救",
-  "data": { "sessionId": "66a20a...", "shareToken": "9f3a1c...e02b", "notifiedCount": 2 }
+  "data": {
+    "sessionId": "66a20a...",
+    "shareToken": "9f3a1c...e02b",
+    "notifiedCount": 2
+  }
 }
 ```
 
@@ -557,18 +587,24 @@ export const UpdateSosLocationSchema = z
 
 **錯誤碼**
 
-| HTTP（ResponseCode） | data.reason | message | 說明 |
-|---|---|---|---|
-| 403 `FORBIDDEN` | `NOT_SESSION_OWNER` | 無權更新此求救紀錄 | `session.userId !== req.auth.userId` |
-| 400 `INVALID_INPUT` | `SESSION_NOT_ACTIVE` | 此求救已結束 | `status !== "active"` |
-| 404 `NOT_FOUND` | `SESSION_NOT_FOUND` | 找不到該求救紀錄 | id 不存在 |
+| HTTP（ResponseCode） | data.reason          | message            | 說明                                 |
+| -------------------- | -------------------- | ------------------ | ------------------------------------ |
+| 403 `FORBIDDEN`      | `NOT_SESSION_OWNER`  | 無權更新此求救紀錄 | `session.userId !== req.auth.userId` |
+| 400 `INVALID_INPUT`  | `SESSION_NOT_ACTIVE` | 此求救已結束       | `status !== "active"`                |
+| 404 `NOT_FOUND`      | `SESSION_NOT_FOUND`  | 找不到該求救紀錄   | id 不存在                            |
 
 ### 7.7 PATCH /api/v1/sos/sessions/:id/resolve — 解除求救
 
 **成功回應（200）**
 
 ```json
-{ "ok": true, "status": "success", "code": 200, "message": "已解除求救", "data": { "sessionId": "66a20a...", "status": "resolved" } }
+{
+  "ok": true,
+  "status": "success",
+  "code": 200,
+  "message": "已解除求救",
+  "data": { "sessionId": "66a20a...", "status": "resolved" }
+}
 ```
 
 錯誤碼與 §7.6 相同（`NOT_SESSION_OWNER` / `SESSION_NOT_ACTIVE` / `SESSION_NOT_FOUND`）。解除成功後推播全員「已解除」訊息（best-effort，失敗不影響本次回應）。
@@ -606,10 +642,10 @@ export const ShareTokenParamSchema = z
 
 **錯誤碼**
 
-| HTTP（ResponseCode） | data.reason | message | 說明 |
-|---|---|---|---|
-| 404 `NOT_FOUND` | `SESSION_NOT_FOUND` | 找不到此追蹤連結 | token 不存在 |
-| 410 `GONE` | `TRACKING_EXPIRED` | 此追蹤連結已失效 | `status === "resolved"` 且 `resolvedAt` 超過 24 小時 |
+| HTTP（ResponseCode） | data.reason         | message          | 說明                                                 |
+| -------------------- | ------------------- | ---------------- | ---------------------------------------------------- |
+| 404 `NOT_FOUND`      | `SESSION_NOT_FOUND` | 找不到此追蹤連結 | token 不存在                                         |
+| 410 `GONE`           | `TRACKING_EXPIRED`  | 此追蹤連結已失效 | `status === "resolved"` 且 `resolvedAt` 超過 24 小時 |
 
 ---
 
@@ -623,9 +659,9 @@ export const ShareTokenParamSchema = z
 
 ```typescript
 // app.ts —— 必須在 express.json() 之前
-app.use("/api/v1/line", createLineRouter());   // 內部用 express.raw() 取代 json()
+app.use("/api/v1/line", createLineRouter()); // 內部用 express.raw() 取代 json()
 
-app.use(express.json({ limit: "10mb" }));       // 第 41 行，其餘路由沿用
+app.use(express.json({ limit: "10mb" })); // 第 41 行，其餘路由沿用
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 // ... 其餘既有 app.use(...) 不變
 ```
@@ -643,7 +679,10 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 因此需在 webhook 路由的 middleware 鏈**最後**加一個路由層級（僅此路由適用，非全域）的 4 參數錯誤處理器，專門攔截 `SignatureValidationFailed` 並以 `sendResponse()` 包成 401；其他型別的錯誤一律 `next(err)` 往下丟，不吞掉：
 
 ```typescript
-import { middleware as lineSignatureMiddleware, SignatureValidationFailed } from "@line/bot-sdk";
+import {
+  middleware as lineSignatureMiddleware,
+  SignatureValidationFailed,
+} from "@line/bot-sdk";
 import { sendResponse } from "../../config/lib";
 import { ResponseCode, ResponseMessage } from "../../types/code";
 
@@ -654,7 +693,13 @@ router.post(
   // 路由層級錯誤處理器：只接在這個路由後面，不影響其他路由，也不需要改 app.ts 加全域 error handler
   (err: unknown, req: Request, res: Response, next: NextFunction) => {
     if (err instanceof SignatureValidationFailed) {
-      return sendResponse(res, false, "error", ResponseCode.UNAUTHORIZED, ResponseMessage.UNAUTHORIZED);
+      return sendResponse(
+        res,
+        false,
+        "error",
+        ResponseCode.UNAUTHORIZED,
+        ResponseMessage.UNAUTHORIZED,
+      );
     }
     next(err);
   },
@@ -710,21 +755,21 @@ export async function executeLocalTool(
   userLocation?: { latitude: number; longitude: number },
   userId?: string,
   options: { allowMemoryWrite?: boolean; explicitMemoryRequest?: boolean } = {},
-): Promise<string>
+): Promise<string>;
 ```
 
 `family-agent.service.ts` 組出對話 context（以受困者的 `SosSession.lat/lng` 作為 `userLocation`），呼叫 LLM 判斷要不要調用工具、再透過 `executeLocalTool` 執行，最後把結果整理成 LINE 訊息（優先 Flex Message / quick-reply，減少家人手動輸入）。
 
 **能力**
 
-| 家人輸入意圖 | 處理方式 |
-|---|---|
-| 「他在哪」 | 讀取 session 最新 `lat/lng/address/locationUpdatedAt`，附**本服務公開追蹤頁連結**（`{PUBLIC_TRACKING_BASE_URL}/sos/{shareToken}`，與求救推播中的連結一致——家人點開就是前端地圖即時位置）；不以 Google Maps 連結為主要入口 |
-| 「附近有醫院／無障礙設施」 | 重用 `findGooglePlaces` / `findA11yPlaces`，以受困者當前位置為中心 |
-| 「我要過去」 | 重用 `planAccessibleRoute`；**前提**：家人需先透過 LINE 的「分享位置」訊息把自己的位置傳給官方帳號，作為起點 |
-| 「我來處理」 | 認領流程：`SosSession.claimedBy = contactId`，並 push 通知其他已綁定聯絡人「OOO 已認領處理」 |
-| 環境資訊查詢（天氣/空品） | 重用既有 environment 模組（`getEnvironmentInfo`），以受困者位置為準 |
-| 無 active session 時的任意訊息 | 回覆最近一次已解決 session 的狀態摘要，或「目前平安」（若從無求救紀錄） |
+| 家人輸入意圖                   | 處理方式                                                                                                                                                                                                                  |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 「他在哪」                     | 讀取 session 最新 `lat/lng/address/locationUpdatedAt`，附**本服務公開追蹤頁連結**（`{PUBLIC_TRACKING_BASE_URL}/sos/{shareToken}`，與求救推播中的連結一致——家人點開就是前端地圖即時位置）；不以 Google Maps 連結為主要入口 |
+| 「附近有醫院／無障礙設施」     | 重用 `findGooglePlaces` / `findA11yPlaces`，以受困者當前位置為中心                                                                                                                                                        |
+| 「我要過去」                   | 重用 `planAccessibleRoute`；**前提**：家人需先透過 LINE 的「分享位置」訊息把自己的位置傳給官方帳號，作為起點                                                                                                              |
+| 「我來處理」                   | 認領流程：`SosSession.claimedBy = contactId`，並 push 通知其他已綁定聯絡人「OOO 已認領處理」                                                                                                                              |
+| 環境資訊查詢（天氣/空品）      | 重用既有 environment 模組（`getEnvironmentInfo`），以受困者位置為準                                                                                                                                                       |
+| 無 active session 時的任意訊息 | 回覆最近一次已解決 session 的狀態摘要，或「目前平安」（若從無求救紀錄）                                                                                                                                                   |
 
 > `findGooglePlaces`（`src/modules/ai/agent-tools.ts:26-30`，已 Read 確認）簽章為 `(args: { query: string; latitude?: number; longitude?: number })`——`latitude`/`longitude` 是直接攤平在 `args` 上的頂層欄位，**不是**巢狀的 `userLocation` 物件；`executeLocalTool` 的 dispatcher（`agent-tools.ts:920` 起）對 `findGooglePlaces` 只是原樣轉傳呼叫方給的 `args`，並未像對 `findA11yPlaces` 那樣額外把呼叫者位置注入進去。一般聊天情境下 `latitude/longitude` 由 LLM 依對話上下文自行決定要不要填；但家人端 Agent 是跨使用者情境（發問者是家人，要查的卻是受困者的位置），沒有「以發話者為中心」的隱含行為可依賴——`family-agent.service.ts` 的 system prompt／工具呼叫組裝**必須明確**把 `SosSession.lat/lng` 寫進 `findGooglePlaces`（以及 `findA11yPlaces` 等其他位置相關工具）呼叫的 `args.latitude`／`args.longitude`，不能依賴預設行為自動置中。
 
@@ -742,7 +787,9 @@ export async function executeLocalTool(
 
 ```typescript
 // src/modules/sos/sos.expire.ts（比照 hazard-report.expire.ts 的 startHazardExpiryJob 寫法）
-export async function runSosMaintenance(): Promise<void> { /* 見下 */ }
+export async function runSosMaintenance(): Promise<void> {
+  /* 見下 */
+}
 
 export function startSosExpiryJob(): NodeJS.Timeout {
   const run = () => {
@@ -779,11 +826,11 @@ LINE Messaging API 官方帳號免費方案（**Communication Plan**）每月 **
 
 ## 12. 分期 Roadmap
 
-| 階段 | 範圍 | 優先度 | 依賴 |
-|---|---|---|---|
-| **P0** | Model（EmergencyContact/SosSession）、聯絡人 CRUD（含 5 筆上限、bindCode 生成）、Webhook 簽章驗證 + follow/message-綁定/unfollow、SOS 生命週期三端點、multicast 建立/解除通知、公開追蹤端點、env/openapi/app.ts 共用 spine 佈線 | P0（必須） | LINE Messaging API Channel 已建立（§6） |
-| **P1** | 家人端 AI Agent（位置查詢／附近設施／認領）、Flex Message／quick-reply 模板 | P1 | P0 完成、`agent-tools.ts` 既有工具可直接重用 |
-| **P2** | 背景 Job（24h 自動解除、10 分鐘斷線警示）、Agent 的「我要過去」路線規劃、環境資訊查詢整合 | P2 | P1 完成（Agent 主迴圈已存在）；路線規劃依賴既有 `planAccessibleRoute` |
+| 階段   | 範圍                                                                                                                                                                                                                            | 優先度     | 依賴                                                                  |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | --------------------------------------------------------------------- |
+| **P0** | Model（EmergencyContact/SosSession）、聯絡人 CRUD（含 5 筆上限、bindCode 生成）、Webhook 簽章驗證 + follow/message-綁定/unfollow、SOS 生命週期三端點、multicast 建立/解除通知、公開追蹤端點、env/openapi/app.ts 共用 spine 佈線 | P0（必須） | LINE Messaging API Channel 已建立（§6）                               |
+| **P1** | 家人端 AI Agent（位置查詢／附近設施／認領）、Flex Message／quick-reply 模板                                                                                                                                                     | P1         | P0 完成、`agent-tools.ts` 既有工具可直接重用                          |
+| **P2** | 背景 Job（24h 自動解除、10 分鐘斷線警示）、Agent 的「我要過去」路線規劃、環境資訊查詢整合                                                                                                                                       | P2         | P1 完成（Agent 主迴圈已存在）；路線規劃依賴既有 `planAccessibleRoute` |
 
 ---
 
@@ -791,34 +838,34 @@ LINE Messaging API 官方帳號免費方案（**Communication Plan**）每月 **
 
 沿用專案既有 vitest + supertest 路由層整合測試慣例（`tests/helpers/test-helpers.ts` 的 `buildTestApp()` / `buildAuthorizationHeader(user?)`），以 `vi.mock` 掛掉 service 層，讓請求真正跑過 router + middleware + validation + controller + envelope。**LINE adapter 全程 mock，測試中不打真實 LINE API。**
 
-| 測試案例 | 型態 | 重點 |
-|---|---|---|
-| `GET /emergency-contacts` 未帶 token → 401/403 | 整合 | auth middleware 攔截，未進 controller |
-| `POST /emergency-contacts` 已有 5 筆 → 400 `CONTACT_LIMIT_REACHED` | 整合 | mock service 回傳上限錯誤，controller 正確轉譯 |
-| `POST /emergency-contacts` 成功 → 201 含 `bindUrl`/`bindCode` | 整合 | 回應形狀符合 envelope |
-| `DELETE /emergency-contacts/:id` 非本人 → 403 `NOT_CONTACT_OWNER` | 整合 | owner 檢查 |
-| `POST /sos/sessions` 首次建立 → 201 | 整合 | `notifiedCount` 欄位存在 |
-| `POST /sos/sessions` 已有 active session → 200（非 201）回傳既有 session | 整合 | 驗證「重複建立回既有紀錄」語意 |
-| `PATCH /sos/sessions/:id/location` 非本人 → 403 | 整合 | owner 檢查 |
-| `PATCH /sos/sessions/:id/location` session 已 resolved → 400 `SESSION_NOT_ACTIVE` | 整合 | 狀態機檢查 |
-| `GET /sos/sessions/:token/public` 有效 token → 200 | 整合 | 無需 Authorization header |
-| `GET /sos/sessions/:token/public` 已解除超過 24h → 410 `GONE` | 整合 | 過期邏輯 |
-| `GET /sos/sessions/:token/public` 不存在 token → 404 | 整合 | — |
-| `POST /line/webhook` 簽章不符 → 401 | 整合 | mock `@line/bot-sdk` middleware 拋出 `SignatureValidationFailed`，驗證路由層級錯誤處理器攔截並轉換為 401（而非未處理例外落到 Express 預設 500），不進 controller |
-| `POST /line/webhook` bindCode 命中 → 更新聯絡人為 bound（mock line.service） | 單元/整合 | 驗證比對邏輯（含大小寫、過期判斷） |
-| `POST /line/webhook` bindCode 過期 → 不綁定，回落到說明訊息 | 單元 | `bindCodeExpiresAt` 邊界 |
-| `sos.expire.ts`：24h 逾時 session 被標記 resolved | 單元 | 比照 `hazard-report.parse.test.ts` 風格的純函式測試 |
-| `sos.expire.ts`：10 分鐘無更新且 `staleAlertSent=false` → 觸發一次警示、置 true 後不重複 | 单元 | 驗證去重旗標 |
+| 測試案例                                                                                 | 型態      | 重點                                                                                                                                                             |
+| ---------------------------------------------------------------------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /emergency-contacts` 未帶 token → 401/403                                           | 整合      | auth middleware 攔截，未進 controller                                                                                                                            |
+| `POST /emergency-contacts` 已有 5 筆 → 400 `CONTACT_LIMIT_REACHED`                       | 整合      | mock service 回傳上限錯誤，controller 正確轉譯                                                                                                                   |
+| `POST /emergency-contacts` 成功 → 201 含 `bindUrl`/`bindCode`                            | 整合      | 回應形狀符合 envelope                                                                                                                                            |
+| `DELETE /emergency-contacts/:id` 非本人 → 403 `NOT_CONTACT_OWNER`                        | 整合      | owner 檢查                                                                                                                                                       |
+| `POST /sos/sessions` 首次建立 → 201                                                      | 整合      | `notifiedCount` 欄位存在                                                                                                                                         |
+| `POST /sos/sessions` 已有 active session → 200（非 201）回傳既有 session                 | 整合      | 驗證「重複建立回既有紀錄」語意                                                                                                                                   |
+| `PATCH /sos/sessions/:id/location` 非本人 → 403                                          | 整合      | owner 檢查                                                                                                                                                       |
+| `PATCH /sos/sessions/:id/location` session 已 resolved → 400 `SESSION_NOT_ACTIVE`        | 整合      | 狀態機檢查                                                                                                                                                       |
+| `GET /sos/sessions/:token/public` 有效 token → 200                                       | 整合      | 無需 Authorization header                                                                                                                                        |
+| `GET /sos/sessions/:token/public` 已解除超過 24h → 410 `GONE`                            | 整合      | 過期邏輯                                                                                                                                                         |
+| `GET /sos/sessions/:token/public` 不存在 token → 404                                     | 整合      | —                                                                                                                                                                |
+| `POST /line/webhook` 簽章不符 → 401                                                      | 整合      | mock `@line/bot-sdk` middleware 拋出 `SignatureValidationFailed`，驗證路由層級錯誤處理器攔截並轉換為 401（而非未處理例外落到 Express 預設 500），不進 controller |
+| `POST /line/webhook` bindCode 命中 → 更新聯絡人為 bound（mock line.service）             | 單元/整合 | 驗證比對邏輯（含大小寫、過期判斷）                                                                                                                               |
+| `POST /line/webhook` bindCode 過期 → 不綁定，回落到說明訊息                              | 單元      | `bindCodeExpiresAt` 邊界                                                                                                                                         |
+| `sos.expire.ts`：24h 逾時 session 被標記 resolved                                        | 單元      | 比照 `hazard-report.parse.test.ts` 風格的純函式測試                                                                                                              |
+| `sos.expire.ts`：10 分鐘無更新且 `staleAlertSent=false` → 觸發一次警示、置 true 後不重複 | 单元      | 驗證去重旗標                                                                                                                                                     |
 
 ---
 
 ## 14. 新增環境變數
 
-| 變數 | 用途 | 必要性 | 預設值 |
-|---|---|---|---|
-| `LINE_CHANNEL_ACCESS_TOKEN` | LINE Messaging API 頻道存取權杖，`line.adapter.ts` 建立 `MessagingApiClient` 用 | 必要（缺少則 push/reply 一律失敗） | 無 |
-| `LINE_CHANNEL_SECRET` | Webhook 簽章驗證密鑰（HMAC-SHA256） | 必要（缺少則 webhook 一律 401） | 無 |
-| `PUBLIC_TRACKING_BASE_URL` | 組出公開追蹤連結（`{PUBLIC_TRACKING_BASE_URL}/sos/{shareToken}`）的網域前綴 | 必要（缺少則推播訊息無法附上可用連結） | 無 |
+| 變數                        | 用途                                                                            | 必要性                                 | 預設值 |
+| --------------------------- | ------------------------------------------------------------------------------- | -------------------------------------- | ------ |
+| `LINE_CHANNEL_ACCESS_TOKEN` | LINE Messaging API 頻道存取權杖，`line.adapter.ts` 建立 `MessagingApiClient` 用 | 必要（缺少則 push/reply 一律失敗）     | 無     |
+| `LINE_CHANNEL_SECRET`       | Webhook 簽章驗證密鑰（HMAC-SHA256）                                             | 必要（缺少則 webhook 一律 401）        | 無     |
+| `PUBLIC_TRACKING_BASE_URL`  | 組出公開追蹤連結（`{PUBLIC_TRACKING_BASE_URL}/sos/{shareToken}`）的網域前綴     | 必要（缺少則推播訊息無法附上可用連結） | 無     |
 
 比照 `.env.example` 既有風格追加（沿用區塊註解慣例，如 `# --- Hazard Report ---`）：
 
@@ -834,8 +881,8 @@ PUBLIC_TRACKING_BASE_URL=
 
 ## 15. 新增 npm 依賴
 
-| 套件 | 版本 | 用途 |
-|---|---|---|
+| 套件            | 版本  | 用途                                                                                                                                |
+| --------------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `@line/bot-sdk` | `^11` | LINE Messaging API 官方 SDK：webhook 簽章驗證 middleware、`messagingApi.MessagingApiClient`（push/multicast/reply）、事件與訊息型別 |
 
 > 確認：目前 `package.json` 的 `dependencies` 中**尚未**存在 `@line/bot-sdk`，需新增。
@@ -864,15 +911,15 @@ PUBLIC_TRACKING_BASE_URL=
 
 ## 17. 風險與緩解
 
-| 風險 | 影響 | 緩解 |
-|---|---|---|
-| Push 額度耗盡（免費方案 200 則/月） | 超額後 push 失敗，SOS 通知發不出去（家人收不到任何提醒） | Fail-soft：push 失敗只記錄不擋主流程；正式上線前升級 Light Plan（5,000 則/月，見 §11）；額度使用量建議加監控告警（⚠️ 待確認：監控方式非本期範圍） |
-| Webhook 需要公開 https，本機開發摩擦 | 本機測試需額外架設 ngrok/cloudflared 隧道，且 Docker 部署改 code 需 `docker compose up -d --build backend` 才生效，忘記重建會排錯困難 | 文件明確記載重建指令（本文 §11）；開發環境提供固定的 ngrok/cloudflared 啟動腳本（⚠️ 待確認，非阻塞） |
-| 公開追蹤頁隱私外洩 | 連結一旦外流，任何人在到期前都能看到即時位置 | `shareToken` 128-bit 高熵 + 解除後 24h 失效，明確標示為**接受的風險**而非解決方案；不做額外存取控制 |
-| bindCode 暴力猜測 | 6 碼英數字（統一以 `.toUpperCase()` 儲存與比對，見 §8.3；有效組合空間 ≈ 36^6 ≈ 21.7 億種）理論上可窮舉，但需精準命中「某個 pending 且未過期」的 code，且每次嘗試都是一次 LINE 訊息（人力/自動化成本高）；24h 到期進一步縮小攻擊視窗 | 現階段熵值/時效已足夠抵禦隨手嘗試；⚠️ 待確認：是否需要對單一 LINE 帳號的綁定嘗試次數做 rate limit——`express-rate-limit`（`^8.5.2`）已是本專案既有依賴（已 Grep 確認於 `package.json`，`hazard-report.middleware.ts` 已在使用），webhook 路由要加限流可直接複用、不需新增套件，但依 LINE userId 或來源 IP 限流的具體設計待補，P0 可先不做，觀察濫用情形再補 |
-| Unfollow 競態 | 家人在 SOS 通知推播的極短時間內取消追蹤，可能導致推播對象剛好失效、push 回傳好友關係已解除的錯誤 | Fail-soft：push 失敗僅記錄；`unfollow` 事件本身會把該聯絡人狀態復原為 `pending`，下次建立 SOS 時 multicast 名單已自動排除 |
-| 家人端 AI Agent 給出錯誤的醫療/急救建議 | 家人可能因此延誤真正需要的專業急救行動 | Agent 系統提示明確禁止給予醫療處置指示；session 超過 30 分鐘未解除時每次回覆強制附加「請撥打 119/110」提示；Agent 用途定位為資訊輔助與家庭協調，不取代正式求救管道 |
+| 風險                                    | 影響                                                                                                                                                                                                                                | 緩解                                                                                                                                                                                                                                                                                                                                                       |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Push 額度耗盡（免費方案 200 則/月）     | 超額後 push 失敗，SOS 通知發不出去（家人收不到任何提醒）                                                                                                                                                                            | Fail-soft：push 失敗只記錄不擋主流程；正式上線前升級 Light Plan（5,000 則/月，見 §11）；額度使用量建議加監控告警（⚠️ 待確認：監控方式非本期範圍）                                                                                                                                                                                                          |
+| Webhook 需要公開 https，本機開發摩擦    | 本機測試需額外架設 ngrok/cloudflared 隧道，且 Docker 部署改 code 需 `docker compose up -d --build backend` 才生效，忘記重建會排錯困難                                                                                               | 文件明確記載重建指令（本文 §11）；開發環境提供固定的 ngrok/cloudflared 啟動腳本（⚠️ 待確認，非阻塞）                                                                                                                                                                                                                                                       |
+| 公開追蹤頁隱私外洩                      | 連結一旦外流，任何人在到期前都能看到即時位置                                                                                                                                                                                        | `shareToken` 128-bit 高熵 + 解除後 24h 失效，明確標示為**接受的風險**而非解決方案；不做額外存取控制                                                                                                                                                                                                                                                        |
+| bindCode 暴力猜測                       | 6 碼英數字（統一以 `.toUpperCase()` 儲存與比對，見 §8.3；有效組合空間 ≈ 36^6 ≈ 21.7 億種）理論上可窮舉，但需精準命中「某個 pending 且未過期」的 code，且每次嘗試都是一次 LINE 訊息（人力/自動化成本高）；24h 到期進一步縮小攻擊視窗 | 現階段熵值/時效已足夠抵禦隨手嘗試；⚠️ 待確認：是否需要對單一 LINE 帳號的綁定嘗試次數做 rate limit——`express-rate-limit`（`^8.5.2`）已是本專案既有依賴（已 Grep 確認於 `package.json`，`hazard-report.middleware.ts` 已在使用），webhook 路由要加限流可直接複用、不需新增套件，但依 LINE userId 或來源 IP 限流的具體設計待補，P0 可先不做，觀察濫用情形再補 |
+| Unfollow 競態                           | 家人在 SOS 通知推播的極短時間內取消追蹤，可能導致推播對象剛好失效、push 回傳好友關係已解除的錯誤                                                                                                                                    | Fail-soft：push 失敗僅記錄；`unfollow` 事件本身會把該聯絡人狀態復原為 `pending`，下次建立 SOS 時 multicast 名單已自動排除                                                                                                                                                                                                                                  |
+| 家人端 AI Agent 給出錯誤的醫療/急救建議 | 家人可能因此延誤真正需要的專業急救行動                                                                                                                                                                                              | Agent 系統提示明確禁止給予醫療處置指示；session 超過 30 分鐘未解除時每次回覆強制附加「請撥打 119/110」提示；Agent 用途定位為資訊輔助與家庭協調，不取代正式求救管道                                                                                                                                                                                         |
 
 ---
 
-*文件版本 v1.0.0 — 涵蓋緊急聯絡人管理（bindCode 綁定，取代已否決的 follow-event state 方案）、SOS 求救生命週期（建立/位置更新/解除/公開追蹤）、LINE Webhook 簽章驗證與事件分派、家人端 AI Agent（P1，重用既有 `agent-tools.ts` 工具生態）、背景自動結案與斷線警示 Job（P2）。P0 範圍（模型、聯絡人 CRUD、Webhook 綁定、SOS 生命週期、共用 spine 佈線）待實作；P1/P2 依此規格分期展開。*
+_文件版本 v1.0.0 — 涵蓋緊急聯絡人管理（bindCode 綁定，取代已否決的 follow-event state 方案）、SOS 求救生命週期（建立/位置更新/解除/公開追蹤）、LINE Webhook 簽章驗證與事件分派、家人端 AI Agent（P1，重用既有 `agent-tools.ts` 工具生態）、背景自動結案與斷線警示 Job（P2）。P0 範圍（模型、聯絡人 CRUD、Webhook 綁定、SOS 生命週期、共用 spine 佈線）待實作；P1/P2 依此規格分期展開。_

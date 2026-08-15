@@ -63,8 +63,11 @@ function account(authProviders: Array<"google" | "local">) {
 
 beforeEach(() => {
   vi.resetAllMocks();
-  process.env.PASSWORD_RESET_TOKEN_SECRET = "test-secret-that-is-at-least-32-bytes-long";
-  vi.mocked(getOrSetPasswordResetExpiry).mockResolvedValue(new Date("2030-01-01T01:00:00Z"));
+  process.env.PASSWORD_RESET_TOKEN_SECRET =
+    "test-secret-that-is-at-least-32-bytes-long";
+  vi.mocked(getOrSetPasswordResetExpiry).mockResolvedValue(
+    new Date("2030-01-01T01:00:00Z"),
+  );
   vi.mocked(renewPasswordAssistanceLease).mockResolvedValue(true);
   vi.mocked(User.findOneAndUpdate).mockResolvedValue(account(["local"]) as any);
 });
@@ -73,14 +76,20 @@ describe("requestPasswordReset", () => {
   it("normalizes and enqueues every syntactically valid address without an account lookup", async () => {
     await requestPasswordReset(" Nobody@Example.com ");
 
-    expect(enqueuePasswordAssistance).toHaveBeenCalledWith("nobody@example.com");
+    expect(enqueuePasswordAssistance).toHaveBeenCalledWith(
+      "nobody@example.com",
+    );
     expect(User.findOne).not.toHaveBeenCalled();
   });
 
   it("propagates queue insertion failure so the controller can return 503", async () => {
-    vi.mocked(enqueuePasswordAssistance).mockRejectedValue(new Error("queue down"));
+    vi.mocked(enqueuePasswordAssistance).mockRejectedValue(
+      new Error("queue down"),
+    );
 
-    await expect(requestPasswordReset("jane@example.com")).rejects.toThrow("queue down");
+    await expect(requestPasswordReset("jane@example.com")).rejects.toThrow(
+      "queue down",
+    );
   });
 });
 
@@ -118,7 +127,9 @@ describe("processPasswordAssistance", () => {
         _id: "user-1",
         authProviders: "local",
         passwordResetTokens: {
-          $not: { $elemMatch: { jobId: "job-local", consumedAt: { $exists: true } } },
+          $not: {
+            $elemMatch: { jobId: "job-local", consumedAt: { $exists: true } },
+          },
         },
       },
       [
@@ -195,8 +206,11 @@ describe("processPasswordAssistance", () => {
     });
 
     expect(sendPasswordResetEmail).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(sendPasswordResetEmail).mock.calls.map(([input]) => input.idempotencyKey))
-      .toEqual(["password-assistance/job-new", "password-assistance/job-old"]);
+    expect(
+      vi
+        .mocked(sendPasswordResetEmail)
+        .mock.calls.map(([input]) => input.idempotencyKey),
+    ).toEqual(["password-assistance/job-new", "password-assistance/job-old"]);
   });
 
   it("sends guidance without issuing a token for a Google-only account", async () => {
@@ -218,7 +232,9 @@ describe("processPasswordAssistance", () => {
   });
 
   it("uses the local reset flow when Google and local providers coexist", async () => {
-    vi.mocked(User.findOne).mockResolvedValue(account(["google", "local"]) as any);
+    vi.mocked(User.findOne).mockResolvedValue(
+      account(["google", "local"]) as any,
+    );
 
     await processPasswordAssistance({
       email: "jane@example.com",
@@ -246,7 +262,10 @@ describe("resetPassword", () => {
     vi.mocked(User.findOneAndUpdate).mockResolvedValue(updatedUser as any);
     vi.mocked(Config.findOne).mockResolvedValue({ user_id: "user-1" } as any);
 
-    const result = await resetPassword({ token: "valid-token", password: "taipei2027" });
+    const result = await resetPassword({
+      token: "valid-token",
+      password: "taipei2027",
+    });
 
     expect(User.findOneAndUpdate).toHaveBeenCalledWith(
       {
@@ -272,7 +291,12 @@ describe("resetPassword", () => {
                 in: {
                   $cond: [
                     { $eq: ["$$token.tokenHash", expect.any(String)] },
-                    { $mergeObjects: ["$$token", { consumedAt: expect.any(Date) }] },
+                    {
+                      $mergeObjects: [
+                        "$$token",
+                        { consumedAt: expect.any(Date) },
+                      ],
+                    },
                     "$$token",
                   ],
                 },
@@ -300,8 +324,12 @@ describe("resetPassword", () => {
       resetPassword({ token: "same-token", password: "taipei2028" }),
     ]);
 
-    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
-    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect(
+      results.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(1);
+    expect(
+      results.filter((result) => result.status === "rejected"),
+    ).toHaveLength(1);
     expect(User.findOneAndUpdate).toHaveBeenCalledTimes(2);
     expect(AuthToken.findOneAndDelete).not.toHaveBeenCalled();
   });

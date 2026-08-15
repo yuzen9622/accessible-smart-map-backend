@@ -1,9 +1,23 @@
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import { OAuth2Client } from "google-auth-library";
-import User from "../../model/user.model";
-import Config from "../../model/config.model";
-import AuthToken from "../../model/auth-token.model";
+import {
+  consumeAuthTokenRecord,
+  consumePasswordResetToken,
+  emailExists,
+  ensureConfigForUser,
+  findConfigForUser,
+  findUserByClientId,
+  findUserByEmail,
+  findUserByEmailBounded,
+  findUserByEmailWithPassword,
+  findUserByIdBounded,
+  findUserByIdWithPassword,
+  insertUser,
+  rotatePasswordResetToken,
+  updateUserById,
+  upsertAuthToken,
+} from "./user.auth.repository";
 import {
   sendGooglePasswordResetGuidanceEmail,
   sendPasswordResetEmail,
@@ -20,13 +34,13 @@ import {
 const BCRYPT_COST = 12;
 const EMAIL_VERIFY_TTL_MS = 24 * 60 * 60 * 1000;
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000;
-const DB_OPERATION_MAX_MS = 10_000;
 
 /**
  * A hash of a value nobody can supply, compared against when the account does
  * not exist so that a failed login costs the same time as a successful one.
  */
-const DUMMY_HASH = "$2b$12$C6UzMDM.H6dfI/f/IKcEe.O1oOb7wXHrN.HGoTvcNjBjWlKr1u2Bu";
+const DUMMY_HASH =
+  "$2b$12$C6UzMDM.H6dfI/f/IKcEe.O1oOb7wXHrN.HGoTvcNjBjWlKr1u2Bu";
 
 export type AuthFailure =
   | "INVALID_CREDENTIALS"
@@ -58,26 +72,19 @@ function hashToken(token: string): string {
  * @param type Which flow the token belongs to.
  * @returns The raw token; only its sha256 hash is persisted.
  */
-async function issueAuthToken(userId: string, type: AuthTokenType): Promise<string> {
+async function issueAuthToken(
+  userId: string,
+  type: AuthTokenType,
+): Promise<string> {
   const raw = crypto.randomBytes(32).toString("base64url");
-  const ttl = type === "email_verify" ? EMAIL_VERIFY_TTL_MS : PASSWORD_RESET_TTL_MS;
+  const ttl =
+    type === "email_verify" ? EMAIL_VERIFY_TTL_MS : PASSWORD_RESET_TTL_MS;
 
-  await AuthToken.findOneAndUpdate(
-    { userId, type },
-    {
-      $set: {
-        tokenHash: hashToken(raw),
-        expiresAt: new Date(Date.now() + ttl),
-        usedAt: null,
-      },
-    },
-    {
-      upsert: true,
-      returnDocument: "after",
-      runValidators: true,
-      setDefaultsOnInsert: true,
-      maxTimeMS: DB_OPERATION_MAX_MS,
-    },
+  await upsertAuthToken(
+    userId,
+    type,
+    hashToken(raw),
+    new Date(Date.now() + ttl),
   );
 
   return raw;
@@ -95,46 +102,14 @@ async function issuePasswordResetToken(input: {
   jobId: string;
 }): Promise<string | null> {
   const now = new Date();
-  const user = await User.findOneAndUpdate(
-    {
-      _id: input.userId,
-      authProviders: "local",
-      passwordResetTokens: {
-        $not: { $elemMatch: { jobId: input.jobId, consumedAt: { $exists: true } } },
-      },
-    },
-    [
-      {
-        $set: {
-          passwordResetTokens: {
-            $concatArrays: [
-              {
-                $filter: {
-                  input: { $ifNull: ["$passwordResetTokens", []] },
-                  as: "token",
-                  cond: {
-                    $and: [
-                      { $gt: ["$$token.expiresAt", now] },
-                      { $ne: ["$$token.jobId", input.jobId] },
-                    ],
-                  },
-                },
-              },
-              [
-                {
-                  jobId: input.jobId,
-                  tokenHash: hashToken(input.rawToken),
-                  expiresAt: input.expiresAt,
-                },
-              ],
-            ],
-          },
-        },
-      },
-    ],
-    { returnDocument: "after", maxTimeMS: DB_OPERATION_MAX_MS },
+  const stored = await rotatePasswordResetToken(
+    input.userId,
+    input.jobId,
+    hashToken(input.rawToken),
+    input.expiresAt,
+    now,
   );
-  return user ? input.rawToken : null;
+  return stored ? input.rawToken : null;
 }
 
 /**
@@ -146,26 +121,16 @@ async function issuePasswordResetToken(input: {
  * @throws AuthError INVALID_TOKEN when the token is unknown, expired or already used.
  */
 async function consumeAuthToken(raw: string, type: AuthTokenType) {
-  const record = await AuthToken.findOneAndDelete(
-    {
-      tokenHash: hashToken(raw),
-      type,
-      usedAt: null,
-      expiresAt: { $gt: new Date() },
-    },
-    { maxTimeMS: DB_OPERATION_MAX_MS },
-  );
+  const record = await consumeAuthTokenRecord(hashToken(raw), type);
   if (!record) throw new AuthError("INVALID_TOKEN");
 
-  const user = await User.findById(record.userId, null, { maxTimeMS: DB_OPERATION_MAX_MS });
+  const user = await findUserByIdBounded(record.userId);
   if (!user) throw new AuthError("INVALID_TOKEN");
   return user;
 }
 
 async function ensureConfig(userId: unknown): Promise<IConfig | null> {
-  const existing = await Config.findOne({ user_id: userId });
-  if (existing) return existing;
-  return Config.create({ user_id: userId });
+  return ensureConfigForUser(userId);
 }
 
 /**
@@ -185,7 +150,7 @@ export async function registerLocalUser(input: {
 }): Promise<{ emailSent: boolean }> {
   const email = normalizeEmail(input.email);
 
-  if (await User.exists({ email })) {
+  if (await emailExists(email)) {
     throw new AuthError("EMAIL_TAKEN");
   }
 
@@ -193,7 +158,7 @@ export async function registerLocalUser(input: {
 
   let user;
   try {
-    user = await User.create({
+    user = await insertUser({
       name: input.name,
       email,
       passwordHash,
@@ -230,7 +195,7 @@ export async function loginLocalUser(input: {
   password: string;
 }): Promise<{ user: IUser; config: IConfig | null }> {
   const email = normalizeEmail(input.email);
-  const user = await User.findOne({ email }).select("+passwordHash");
+  const user = await findUserByEmailWithPassword(email);
 
   const hash = user?.passwordHash ?? DUMMY_HASH;
   const matches = await bcrypt.compare(input.password, hash);
@@ -243,7 +208,7 @@ export async function loginLocalUser(input: {
     throw new AuthError("EMAIL_NOT_VERIFIED");
   }
 
-  const config = await Config.findOne({ user_id: user._id });
+  const config = await findConfigForUser(user._id);
   return { user: toPublicUser(user), config };
 }
 
@@ -256,12 +221,12 @@ export async function loginLocalUser(input: {
  * @throws AuthError INVALID_TOKEN when the token is unknown, expired or used.
  */
 export async function verifyEmail(
-  rawToken: string
+  rawToken: string,
 ): Promise<{ user: IUser; config: IConfig | null }> {
-  const user = await consumeAuthToken(rawToken, "email_verify");
+  const claimed = await consumeAuthToken(rawToken, "email_verify");
 
-  user.emailVerified = true;
-  await user.save();
+  const user =
+    (await updateUserById(claimed._id, { emailVerified: true })) ?? claimed;
 
   const config = await ensureConfig(user._id);
   return { user: toPublicUser(user), config };
@@ -277,7 +242,7 @@ export async function verifyEmail(
  */
 export async function resendVerificationEmail(rawEmail: string): Promise<void> {
   const email = normalizeEmail(rawEmail);
-  const user = await User.findOne({ email });
+  const user = await findUserByEmail(email);
   if (!user || user.emailVerified) return;
 
   const token = await issueAuthToken(String(user._id), "email_verify");
@@ -317,7 +282,7 @@ export async function processPasswordAssistance(input: {
 }): Promise<void> {
   const email = normalizeEmail(input.email);
   const idempotencyKey = `password-assistance/${input.jobId}`;
-  const user = await User.findOne({ email }, null, { maxTimeMS: DB_OPERATION_MAX_MS });
+  const user = await findUserByEmailBounded(email);
   if (!user) return;
 
   if (!user.authProviders.includes("local")) {
@@ -326,7 +291,8 @@ export async function processPasswordAssistance(input: {
         jobId: input.jobId,
         leaseToken: input.leaseToken,
       });
-      if (!ownsLease) throw new Error("Password assistance lease lost before dispatch");
+      if (!ownsLease)
+        throw new Error("Password assistance lease lost before dispatch");
       await sendGooglePasswordResetGuidanceEmail({
         to: email,
         name: user.name,
@@ -343,12 +309,15 @@ export async function processPasswordAssistance(input: {
     leaseToken: input.leaseToken,
     ttlMs: PASSWORD_RESET_TTL_MS,
   });
-  if (!tokenExpiresAt) throw new Error("Password assistance lease lost before token rotation");
+  if (!tokenExpiresAt)
+    throw new Error("Password assistance lease lost before token rotation");
   if (tokenExpiresAt.getTime() <= Date.now()) return;
 
   const tokenSecret = process.env.PASSWORD_RESET_TOKEN_SECRET;
   if (!tokenSecret || Buffer.byteLength(tokenSecret, "utf8") < 32) {
-    throw new Error("PASSWORD_RESET_TOKEN_SECRET must contain at least 32 bytes");
+    throw new Error(
+      "PASSWORD_RESET_TOKEN_SECRET must contain at least 32 bytes",
+    );
   }
   const stableToken = crypto
     .createHmac("sha256", tokenSecret)
@@ -366,7 +335,8 @@ export async function processPasswordAssistance(input: {
     jobId: input.jobId,
     leaseToken: input.leaseToken,
   });
-  if (!ownsLease) throw new Error("Password assistance lease lost before dispatch");
+  if (!ownsLease)
+    throw new Error("Password assistance lease lost before dispatch");
 
   await sendPasswordResetEmail({
     to: email,
@@ -395,44 +365,10 @@ export async function resetPassword(input: {
   // token removal then happen in one atomic update on the same User document.
   const passwordHash = await bcrypt.hash(input.password, BCRYPT_COST);
   const now = new Date();
-  const user = await User.findOneAndUpdate(
-    {
-      passwordResetTokens: {
-        $elemMatch: {
-          tokenHash: hashToken(input.token),
-          expiresAt: { $gt: now },
-          consumedAt: { $exists: false },
-        },
-      },
-      authProviders: "local",
-    },
-    [
-      {
-        $set: {
-          passwordHash: { $literal: passwordHash },
-          emailVerified: true,
-          tokenVersion: { $add: [{ $ifNull: ["$tokenVersion", 0] }, 1] },
-          // Each queued email owns an independent one-time token. Consume only
-          // the matching entry: another link may be in flight, and consuming it
-          // before dispatch would make the newest delivered email immediately
-          // invalid. The consumed tombstone blocks this job from recreating it.
-          passwordResetTokens: {
-            $map: {
-              input: { $ifNull: ["$passwordResetTokens", []] },
-              as: "token",
-              in: {
-                $cond: [
-                  { $eq: ["$$token.tokenHash", hashToken(input.token)] },
-                  { $mergeObjects: ["$$token", { consumedAt: now }] },
-                  "$$token",
-                ],
-              },
-            },
-          },
-        },
-      },
-    ],
-    { returnDocument: "after", maxTimeMS: DB_OPERATION_MAX_MS },
+  const user = await consumePasswordResetToken(
+    hashToken(input.token),
+    passwordHash,
+    now,
   );
   if (!user) throw new AuthError("INVALID_TOKEN");
 
@@ -455,21 +391,29 @@ export async function changePassword(input: {
   currentPassword?: string;
   newPassword: string;
 }): Promise<{ user: IUser }> {
-  const user = await User.findById(input.userId).select("+passwordHash");
+  const user = await findUserByIdWithPassword(input.userId);
   if (!user) throw new AuthError("INVALID_TOKEN");
 
   if (user.passwordHash) {
     if (!input.currentPassword) throw new AuthError("PASSWORD_REQUIRED");
-    const matches = await bcrypt.compare(input.currentPassword, user.passwordHash);
+    const matches = await bcrypt.compare(
+      input.currentPassword,
+      user.passwordHash,
+    );
     if (!matches) throw new AuthError("INVALID_CREDENTIALS");
   }
 
-  user.passwordHash = await bcrypt.hash(input.newPassword, BCRYPT_COST);
-  user.tokenVersion = Number(user.tokenVersion ?? 0) + 1;
-  if (!user.authProviders.includes("local")) user.authProviders.push("local");
-  await user.save();
+  const authProviders = user.authProviders.includes("local")
+    ? user.authProviders
+    : [...user.authProviders, "local"];
+  const updated =
+    (await updateUserById(user._id, {
+      passwordHash: await bcrypt.hash(input.newPassword, BCRYPT_COST),
+      tokenVersion: Number(user.tokenVersion ?? 0) + 1,
+      authProviders,
+    })) ?? user;
 
-  return { user: toPublicUser(user) };
+  return { user: toPublicUser(updated) };
 }
 
 let googleClient: OAuth2Client | null = null;
@@ -492,7 +436,7 @@ function getGoogleClient(): OAuth2Client {
  * @throws AuthError INVALID_TOKEN when the ID token or its email claim is unusable.
  */
 export async function authenticateWithGoogle(
-  idToken: string
+  idToken: string,
 ): Promise<{ user: IUser; config: IConfig | null }> {
   const audience = process.env.GOOGLE_CLIENT_ID;
   if (!audience) {
@@ -516,28 +460,38 @@ export async function authenticateWithGoogle(
   const name = payload.name?.trim() || email.split("@")[0];
   const avatar = payload.picture;
 
-  let user = await User.findOne({ client_id: payload.sub });
+  let user = await findUserByClientId(payload.sub);
 
   if (!user) {
-    user = await User.findOne({ email }).select("+passwordHash");
+    const byEmail = await findUserByEmailWithPassword(email);
 
-    if (user) {
-      if (!user.emailVerified && user.passwordHash) {
-        user.passwordHash = undefined;
-        user.authProviders = user.authProviders.filter((p) => p !== "local");
-        user.tokenVersion = Number(user.tokenVersion ?? 0) + 1;
+    if (byEmail) {
+      const set: Record<string, unknown> = {
+        client_id: payload.sub,
+        emailVerified: true,
+      };
+      const unset: string[] = [];
+      let authProviders = byEmail.authProviders;
+      // An unverified local account never proved it owns the address, so the
+      // Google sign-in takes it over: drop the password login and revoke any
+      // token minted under it.
+      if (!byEmail.emailVerified && byEmail.passwordHash) {
+        unset.push("passwordHash");
+        authProviders = authProviders.filter((p) => p !== "local");
+        set.tokenVersion = Number(byEmail.tokenVersion ?? 0) + 1;
       }
-      user.client_id = payload.sub;
-      user.emailVerified = true;
-      if (!user.authProviders.includes("google")) user.authProviders.push("google");
-      if (avatar && !user.avatar) user.avatar = avatar;
-      await user.save();
+      if (!authProviders.includes("google")) {
+        authProviders = [...authProviders, "google"];
+      }
+      set.authProviders = authProviders;
+      if (avatar && !byEmail.avatar) set.avatar = avatar;
+      user = (await updateUserById(byEmail._id, set, unset)) ?? byEmail;
     }
   }
 
   if (!user) {
     try {
-      user = await User.create({
+      user = await insertUser({
         name,
         email,
         avatar,

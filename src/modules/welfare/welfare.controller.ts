@@ -16,7 +16,13 @@ export async function nearbyWelfare(req: Request, res: Response) {
     return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, result);
   } catch (error) {
     console.error(error);
-    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, ERROR_MESSAGE.INTERNAL);
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      ERROR_MESSAGE.INTERNAL,
+    );
   }
 }
 
@@ -31,7 +37,13 @@ export async function listWelfare(req: Request, res: Response) {
     return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, result);
   } catch (error) {
     console.error(error);
-    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, ERROR_MESSAGE.INTERNAL);
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      ERROR_MESSAGE.INTERNAL,
+    );
   }
 }
 
@@ -41,11 +53,23 @@ export async function getWelfareById(req: Request, res: Response) {
     const { id } = req.validated?.params as { id: string };
     const result = await service.findById(id);
     if (!result) {
-      return sendResponse(res, false, "error", ResponseCode.NOT_FOUND, "查無此機構");
+      return sendResponse(
+        res,
+        false,
+        "error",
+        ResponseCode.NOT_FOUND,
+        "查無此機構",
+      );
     }
     return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, result);
   } catch (error) {
     console.error(error);
-    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, ERROR_MESSAGE.INTERNAL);
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      ERROR_MESSAGE.INTERNAL,
+    );
   }
 }

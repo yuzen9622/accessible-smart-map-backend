@@ -1,7 +1,27 @@
-import type { QueryFilter } from "mongoose";
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "crypto";
-import UserMemory, { type IUserMemory } from "../../model/user-memory.model";
-import User from "../../model/user.model";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+} from "crypto";
+import {
+  countActiveMemories,
+  findActiveMemories,
+  findActiveMemoriesByIds,
+  findActiveMemoryById,
+  findAllActiveMemoryIds,
+  findMemoryByRetrievalText,
+  findMemoryEnabled,
+  findOldestMemoryIds,
+  insertMemory,
+  markMemoriesUsed,
+  setMemoryEnabled,
+  softDeleteActiveMemory,
+  softDeleteMemories,
+  updateMemoryById,
+  updateOwnedMemory,
+  type IUserMemory,
+} from "./memory.repository";
 import { redisGet, redisSet, redisDel } from "../../config/redis";
 import { embedText } from "../../adapters/embedding.adapter";
 import {
@@ -49,13 +69,6 @@ async function invalidateCache(userId: string): Promise<void> {
   await redisDel(cacheKey(userId));
 }
 
-function activeMemoryFilter(userId: string): QueryFilter<IUserMemory> {
-  return {
-    userId,
-    $or: [{ deletedAt: { $exists: false } }, { deletedAt: null }],
-  };
-}
-
 function trimMemoryText(content: string): string {
   return content.replace(/\s+/g, " ").trim().slice(0, 240);
 }
@@ -65,7 +78,10 @@ function hasPreciseCoordinates(content: string): boolean {
 }
 
 function redactPreciseCoordinates(content: string): string {
-  return content.replace(/\b2[1-6]\.\d{3,}\s*,\s*12[0-2]\.\d{3,}\b/g, "座標已隱藏");
+  return content.replace(
+    /\b2[1-6]\.\d{3,}\s*,\s*12[0-2]\.\d{3,}\b/g,
+    "座標已隱藏",
+  );
 }
 
 function inferSensitivity(
@@ -91,10 +107,7 @@ function buildPromptText(
   return trimmed;
 }
 
-function buildRetrievalText(
-  content: string,
-  category: MemoryCategory,
-): string {
+function buildRetrievalText(content: string, category: MemoryCategory): string {
   return `${category}: ${redactPreciseCoordinates(trimMemoryText(content))}`;
 }
 
@@ -109,7 +122,10 @@ function encryptMemoryContent(content: string): string {
   if (!key || content.startsWith(ENCRYPTED_PREFIX)) return content;
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", key, iv);
-  const ciphertext = Buffer.concat([cipher.update(content, "utf8"), cipher.final()]);
+  const ciphertext = Buffer.concat([
+    cipher.update(content, "utf8"),
+    cipher.final(),
+  ]);
   const tag = cipher.getAuthTag();
   return `${ENCRYPTED_PREFIX}${iv.toString("base64")}:${tag.toString("base64")}:${ciphertext.toString("base64")}`;
 }
@@ -179,29 +195,24 @@ async function deleteMemoryIndex(memoryIds: string[]): Promise<void> {
 }
 
 async function assertMemoryEnabled(userId: string): Promise<void> {
-  const user = await User.findById(userId).select("settings.memoryEnabled").lean();
-  if (!user?.settings?.memoryEnabled) {
+  if (!(await findMemoryEnabled(userId))) {
     throw new Error("MEMORY_DISABLED");
   }
 }
 
-export async function getMemorySettings(userId: string): Promise<MemorySettings> {
-  const user = await User.findById(userId).select("settings.memoryEnabled").lean();
-  return { memoryEnabled: Boolean(user?.settings?.memoryEnabled) };
+export async function getMemorySettings(
+  userId: string,
+): Promise<MemorySettings> {
+  return { memoryEnabled: await findMemoryEnabled(userId) };
 }
 
 export async function updateMemorySettings(
   userId: string,
   settings: MemorySettings,
 ): Promise<MemorySettings> {
-  const user = await User.findByIdAndUpdate(
-    userId,
-    { $set: { "settings.memoryEnabled": settings.memoryEnabled } },
-    { returnDocument: "after" },
-  )
-    .select("settings.memoryEnabled")
-    .lean();
-  return { memoryEnabled: Boolean(user?.settings?.memoryEnabled) };
+  return {
+    memoryEnabled: await setMemoryEnabled(userId, settings.memoryEnabled),
+  };
 }
 
 /**
@@ -219,26 +230,20 @@ export async function loadMemories(
     return parsed.slice(0, limit).map(decryptMemory);
   }
 
-  const memories = await UserMemory.find(activeMemoryFilter(userId))
-    .sort({ updatedAt: -1 })
-    .limit(limit)
-    .lean();
+  const memories = await findActiveMemories(userId, limit);
 
   if (memories.length) {
     await redisSet(cacheKey(userId), JSON.stringify(memories), CACHE_TTL_SEC);
   }
-  return (memories as IUserMemory[]).map(decryptMemory);
+  return memories.map(decryptMemory);
 }
 
 export async function listMemories(
   userId: string,
   limit = 100,
 ): Promise<IUserMemory[]> {
-  const memories = await UserMemory.find(activeMemoryFilter(userId))
-    .sort({ updatedAt: -1 })
-    .limit(limit)
-    .lean();
-  return (memories as IUserMemory[]).map(decryptMemory);
+  const memories = await findActiveMemories(userId, limit);
+  return memories.map(decryptMemory);
 }
 
 /**
@@ -265,37 +270,31 @@ export async function saveMemory(
   const retrievalText = buildRetrievalText(normalizedContent, category);
   const source = options.source ?? "explicit_user";
 
-  const existing = await UserMemory.findOne({
-    ...activeMemoryFilter(userId),
+  const existing = await findMemoryByRetrievalText(
+    userId,
     category,
     retrievalText,
-  }).lean();
+  );
 
   if (existing) {
-    const updated = await UserMemory.findByIdAndUpdate(
-      existing._id,
-      {
-        $set: {
-          content: encryptMemoryContent(normalizedContent),
-          promptText,
-          retrievalText,
-          sensitivity,
-          source,
-          embeddingId: String(existing._id),
-          embeddingModel: EMBEDDING_MODEL,
-          expiresAt: options.expiresAt,
-          updatedAt: new Date(),
-        },
-      },
-      { returnDocument: "after" },
-    ).lean();
+    const updated = await updateMemoryById(String(existing._id), {
+      content: encryptMemoryContent(normalizedContent),
+      promptText,
+      retrievalText,
+      sensitivity,
+      source,
+      embeddingId: String(existing._id),
+      embeddingModel: EMBEDDING_MODEL,
+      expiresAt: options.expiresAt,
+      updatedAt: new Date(),
+    });
     await invalidateCache(userId);
     const memory = decryptMemory(updated as IUserMemory);
     await indexMemory(memory);
     return memory;
   }
 
-  const doc = await UserMemory.create({
+  const memoryId = await insertMemory({
     userId,
     content: encryptMemoryContent(normalizedContent),
     promptText,
@@ -307,24 +306,17 @@ export async function saveMemory(
     expiresAt: options.expiresAt,
   });
 
-  const memoryId = String(doc._id);
-  const memoryWithEmbeddingId = await UserMemory.findByIdAndUpdate(
-    memoryId,
-    { $set: { embeddingId: memoryId } },
-    { returnDocument: "after" },
-  ).lean();
+  const memoryWithEmbeddingId = await updateMemoryById(memoryId, {
+    embeddingId: memoryId,
+  });
 
-  const count = await UserMemory.countDocuments(activeMemoryFilter(userId));
+  const count = await countActiveMemories(userId);
   if (count > MAX_MEMORIES_PER_USER) {
-    const oldest = await UserMemory.find(activeMemoryFilter(userId))
-      .sort({ updatedAt: 1 })
-      .limit(count - MAX_MEMORIES_PER_USER)
-      .select("_id");
-    const oldestIds = oldest.map((d) => String(d._id));
-    await UserMemory.updateMany(
-      { _id: { $in: oldestIds }, userId },
-      { $set: { deletedAt: new Date() } },
+    const oldestIds = await findOldestMemoryIds(
+      userId,
+      count - MAX_MEMORIES_PER_USER,
     );
+    await softDeleteMemories(oldestIds, userId);
     await deleteMemoryIndex(oldestIds);
   }
 
@@ -339,10 +331,7 @@ export async function updateMemory(
   memoryId: string,
   input: UpdateMemoryInput,
 ): Promise<IUserMemory | null> {
-  const existing = await UserMemory.findOne({
-    ...activeMemoryFilter(userId),
-    _id: memoryId,
-  }).lean();
+  const existing = await findActiveMemoryById(userId, memoryId);
   if (!existing) return null;
 
   const existingContent = decryptMemoryContent(existing.content);
@@ -350,30 +339,25 @@ export async function updateMemory(
     ? trimMemoryText(input.content)
     : existingContent;
   const category = input.category ?? existing.category;
-  const sensitivity =
-    input.sensitivity ?? inferSensitivity(content, category);
+  const sensitivity = input.sensitivity ?? inferSensitivity(content, category);
   const promptText = buildPromptText(content, sensitivity);
   const retrievalText = buildRetrievalText(content, category);
   const expiresAtUpdate =
-    input.expiresAt === undefined ? existing.expiresAt : input.expiresAt ?? undefined;
+    input.expiresAt === undefined
+      ? existing.expiresAt
+      : (input.expiresAt ?? undefined);
 
-  const updated = await UserMemory.findOneAndUpdate(
-    { _id: memoryId, userId },
-    {
-      $set: {
-        content: encryptMemoryContent(content),
-        promptText,
-        retrievalText,
-        category,
-        sensitivity,
-        expiresAt: expiresAtUpdate,
-        embeddingId: String(existing._id),
-        embeddingModel: EMBEDDING_MODEL,
-        updatedAt: new Date(),
-      },
-    },
-    { returnDocument: "after" },
-  ).lean();
+  const updated = await updateOwnedMemory(memoryId, userId, {
+    content: encryptMemoryContent(content),
+    promptText,
+    retrievalText,
+    category,
+    sensitivity,
+    expiresAt: expiresAtUpdate,
+    embeddingId: String(existing._id),
+    embeddingModel: EMBEDDING_MODEL,
+    updatedAt: new Date(),
+  });
 
   if (!updated) return null;
   const memory = decryptMemory(updated as IUserMemory);
@@ -391,11 +375,7 @@ export async function deleteMemory(
   userId: string,
   memoryId: string,
 ): Promise<boolean> {
-  const result = await UserMemory.updateOne(
-    { ...activeMemoryFilter(userId), _id: memoryId },
-    { $set: { deletedAt: new Date() } },
-  );
-  if (result.modifiedCount > 0) {
+  if (await softDeleteActiveMemory(userId, memoryId)) {
     await invalidateCache(userId);
     await deleteMemoryIndex([memoryId]);
     return true;
@@ -404,19 +384,13 @@ export async function deleteMemory(
 }
 
 export async function clearMemories(userId: string): Promise<number> {
-  const memories = await UserMemory.find(activeMemoryFilter(userId))
-    .select("_id")
-    .lean();
-  const ids = memories.map((memory) => String(memory._id));
+  const ids = await findAllActiveMemoryIds(userId);
   if (!ids.length) return 0;
 
-  const result = await UserMemory.updateMany(
-    { _id: { $in: ids }, userId },
-    { $set: { deletedAt: new Date() } },
-  );
+  const modifiedCount = await softDeleteMemories(ids, userId);
   await invalidateCache(userId);
   await deleteMemoryIndex(ids);
-  return result.modifiedCount;
+  return modifiedCount;
 }
 
 export async function searchMemoriesForPrompt(
@@ -441,12 +415,11 @@ export async function searchMemoriesForPrompt(
 
     if (!ids.length) return loadMemories(userId, limit);
 
-    const memories = (await UserMemory.find({
-      ...activeMemoryFilter(userId),
-      _id: { $in: ids },
-    }).lean()) as IUserMemory[];
+    const memories = await findActiveMemoriesByIds(userId, ids);
 
-    const byId = new Map(memories.map((memory) => [String(memory._id), memory]));
+    const byId = new Map(
+      memories.map((memory) => [String(memory._id), memory]),
+    );
     const ranked: IUserMemory[] = [];
     for (const id of ids) {
       const memory = byId.get(id);
@@ -455,9 +428,9 @@ export async function searchMemoriesForPrompt(
     }
 
     if (ranked.length) {
-      await UserMemory.updateMany(
-        { _id: { $in: ranked.map((memory) => memory._id) }, userId },
-        { $set: { lastUsedAt: new Date() } },
+      await markMemoriesUsed(
+        ranked.map((memory) => memory._id),
+        userId,
       );
     }
 

@@ -16,6 +16,7 @@ pnpm test:watch    # Vitest in watch mode
 
 Tests use **vitest**; specs live next to the code as `*.test.ts` (e.g. `src/modules/accessible-route/scoring.test.ts`).
 We support unit tests and route-level integration tests. The integration test harness uses **supertest** to drive the Express application:
+
 - `buildTestApp()` (from `tests/helpers/test-helpers.ts`) returns the real Express app instance (from `src/app.ts`) without starting the HTTP server or connecting to MongoDB.
 - `buildAuthorizationHeader(user?)` (from `tests/helpers/test-helpers.ts`) signs a JWT token and returns a Bearer header string for authenticated routes.
 - Mock the service layer with `vi.mock` in test files so that the request exercises router + middleware + validation + controller + envelope without touching the network or DB.
@@ -28,24 +29,24 @@ Data-import scripts run via dotenvx + ts-node and populate MongoDB from TDX / GT
 
 Copy `.env.example` to `.env`. Required variables:
 
-| Variable | Purpose |
-|---|---|
-| `PORT` | Server port (default 5000) |
-| `CORS_ORIGINS` | Comma-separated allowed origins |
-| `GOOGLE_MAPS_API_KEY` | Google Maps reverse geocoding + Places Text Search |
-| `VALHALLA_BASE_URL` | Self-hosted Valhalla — drive / motorcycle / walk route planning |
-| `VALHALLA_DATA_DIR` | Host directory containing versioned Valhalla tile releases |
-| `VALHALLA_PBF_PATH` | Host path to the Taiwan OSM PBF used for tile builds |
-| `GEMINI_API_KEY` | Google Gemini AI (auto-read by `@google/genai` SDK) |
-| `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | JWT signing |
-| `DATABASE_URL` | MongoDB connection URI |
-| `TDX_CLIENT_ID` / `TDX_CLIENT_SECRET` | Taiwan transport data API credentials |
-| `USE_OTP_ROUTER` | OTP2 planner rollout: `false` \| `shadow` (log diff only) \| `true` (merge) |
-| `OTP_BASE_URL` | OTP2 sidecar GraphQL server (default `http://localhost:8080`, internal only) |
-| `GEMINI_API_URL` | OpenAI-compatible base URL for the AI API (default: Gemini's `/v1beta/openai` endpoint) |
-| `GEMINI_MODEL` | Model name used by all AI features (default: `gemini-3-flash-preview`) |
-| `CWA_API_KEY` | 中央氣象署 CWA open-data key — weather block of `/a11y/environment` |
-| `MOENV_API_KEY` | 環境部環境資料開放平臺 AQI key（免費註冊會員後取得） |
+| Variable                                   | Purpose                                                                                 |
+| ------------------------------------------ | --------------------------------------------------------------------------------------- |
+| `PORT`                                     | Server port (default 5000)                                                              |
+| `CORS_ORIGINS`                             | Comma-separated allowed origins                                                         |
+| `GOOGLE_MAPS_API_KEY`                      | Google Maps reverse geocoding + Places Text Search                                      |
+| `VALHALLA_BASE_URL`                        | Self-hosted Valhalla — drive / motorcycle / walk route planning                         |
+| `VALHALLA_DATA_DIR`                        | Host directory containing versioned Valhalla tile releases                              |
+| `VALHALLA_PBF_PATH`                        | Host path to the Taiwan OSM PBF used for tile builds                                    |
+| `GEMINI_API_KEY`                           | Google Gemini AI (auto-read by `@google/genai` SDK)                                     |
+| `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | JWT signing                                                                             |
+| `DATABASE_URL`                             | MongoDB connection URI                                                                  |
+| `TDX_CLIENT_ID` / `TDX_CLIENT_SECRET`      | Taiwan transport data API credentials                                                   |
+| `USE_OTP_ROUTER`                           | OTP2 planner rollout: `false` \| `shadow` (log diff only) \| `true` (merge)             |
+| `OTP_BASE_URL`                             | OTP2 sidecar GraphQL server (default `http://localhost:8080`, internal only)            |
+| `GEMINI_API_URL`                           | OpenAI-compatible base URL for the AI API (default: Gemini's `/v1beta/openai` endpoint) |
+| `GEMINI_MODEL`                             | Model name used by all AI features (default: `gemini-3-flash-preview`)                  |
+| `CWA_API_KEY`                              | 中央氣象署 CWA open-data key — weather block of `/a11y/environment`                     |
+| `MOENV_API_KEY`                            | 環境部環境資料開放平臺 AQI key（免費註冊會員後取得）                                    |
 
 ## Architecture
 
@@ -67,36 +68,36 @@ Each module exposes a `createXRouter()` factory via its `index.ts` (the single r
 
 ### Layer conventions (where code goes)
 
-| Path | Role |
-|---|---|
-| `src/modules/<feature>/*.router.ts` | Route + middleware chain; delegates to one controller method |
-| `src/modules/<feature>/*.schema.ts` | Zod request schemas (edge validation); registered to OpenAPI |
-| `src/modules/<feature>/*.controller.ts` | Thin handler: read `req.validated` / identity, call one service, `sendResponse` |
-| `src/modules/<feature>/*.service.ts` | Business logic + orchestration; no framework objects |
-| `src/adapters/*.adapter.ts` | External I/O clients (`google.adapter.ts` geocoding/Places, `valhalla.adapter.ts` road routing, `tdx.adapter.ts`) — one source per file |
-| `src/model/*.model.ts` | Mongoose models |
-| `src/constants/messages.ts` | Shared message strings (no magic literals) |
-| `src/config/*` | Shared infra: `lib.ts` (envelope), `jwt.ts`, `redis.ts`, `fetch.ts`, `taipei-time.ts`, `transit.ts`, `ai.ts`, `ai/` |
-| `src/middleware/` | `middleware.ts` (JWT auth gate), `validate-request.middleware.ts` |
-| `src/openapi/` | Schema-driven docs — served at `/docs`, spec at `/api/v1/openapi.json` |
-| `src/utils/` | Pure helpers (e.g. `transit-text.ts`) |
-| `src/types/` | Shared types — `code.ts` = `ResponseCode` enum, `express.d.ts` augments `req.validated` / `req.auth` |
+| Path                                    | Role                                                                                                                                    |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/modules/<feature>/*.router.ts`     | Route + middleware chain; delegates to one controller method                                                                            |
+| `src/modules/<feature>/*.schema.ts`     | Zod request schemas (edge validation); registered to OpenAPI                                                                            |
+| `src/modules/<feature>/*.controller.ts` | Thin handler: read `req.validated` / identity, call one service, `sendResponse`                                                         |
+| `src/modules/<feature>/*.service.ts`    | Business logic + orchestration; no framework objects                                                                                    |
+| `src/adapters/*.adapter.ts`             | External I/O clients (`google.adapter.ts` geocoding/Places, `valhalla.adapter.ts` road routing, `tdx.adapter.ts`) — one source per file |
+| `src/model/*.model.ts`                  | Mongoose models                                                                                                                         |
+| `src/constants/messages.ts`             | Shared message strings (no magic literals)                                                                                              |
+| `src/config/*`                          | Shared infra: `lib.ts` (envelope), `jwt.ts`, `redis.ts`, `fetch.ts`, `taipei-time.ts`, `transit.ts`, `ai.ts`, `ai/`                     |
+| `src/middleware/`                       | `middleware.ts` (JWT auth gate), `validate-request.middleware.ts`                                                                       |
+| `src/openapi/`                          | Schema-driven docs — served at `/docs`, spec at `/api/v1/openapi.json`                                                                  |
+| `src/utils/`                            | Pure helpers (e.g. `transit-text.ts`)                                                                                                   |
+| `src/types/`                            | Shared types — `code.ts` = `ResponseCode` enum, `express.d.ts` augments `req.validated` / `req.auth`                                    |
 
 > The legacy flat `routes/` / `controller/` / `service/` directories **no longer exist** — everything is under `modules/` + `adapters/`. Place new external I/O in `adapters/`, not a `service/` dir.
 
 ### Route groups (all under `/api/v1`)
 
-| Prefix | Router factory | Domain |
-|---|---|---|
-| `/api/v1/user` | `createUserRouter` | Auth — **mounted behind `middleware` (JWT)** in `app.ts` |
-| `/api/v1/transit` | `createTransitRouter` | Bus/train real-time data |
-| `/api/v1/a11y` | `createA11yRouter` | Accessibility places + bathrooms |
-| `/api/v1/a11y` | `createAccessibleRouteRouter` | `POST /accessible-route` planner |
-| `/api/v1/a11y` | `createNavInstructionsRouter` | Turn-by-turn navigation instructions |
-| `/api/v1/a11y` | `createHazardReportRouter` | Hazard reporting & confirmation |
-| `/api/v1/a11y` | `createEnvironmentRouter` | `GET /environment` pre-trip weather/air/CCTV aggregation |
-| `/api/v1/air` | `createAirRouter` | Air quality |
-| `/api/v1/ai` | `createAiRouter` | `/intent`, `/explain`, `/chat` |
+| Prefix            | Router factory                | Domain                                                   |
+| ----------------- | ----------------------------- | -------------------------------------------------------- |
+| `/api/v1/user`    | `createUserRouter`            | Auth — **mounted behind `middleware` (JWT)** in `app.ts` |
+| `/api/v1/transit` | `createTransitRouter`         | Bus/train real-time data                                 |
+| `/api/v1/a11y`    | `createA11yRouter`            | Accessibility places + bathrooms                         |
+| `/api/v1/a11y`    | `createAccessibleRouteRouter` | `POST /accessible-route` planner                         |
+| `/api/v1/a11y`    | `createNavInstructionsRouter` | Turn-by-turn navigation instructions                     |
+| `/api/v1/a11y`    | `createHazardReportRouter`    | Hazard reporting & confirmation                          |
+| `/api/v1/a11y`    | `createEnvironmentRouter`     | `GET /environment` pre-trip weather/air/CCTV aggregation |
+| `/api/v1/air`     | `createAirRouter`             | Air quality                                              |
+| `/api/v1/ai`      | `createAiRouter`              | `/intent`, `/explain`, `/chat`                           |
 
 Several routers share the `/api/v1/a11y` prefix. Only `/api/v1/user` is wrapped in the auth middleware; all other routes are public (or use route-level auth hooks).
 
@@ -140,6 +141,7 @@ Agent tools include `findGooglePlaces`, `findA11yPlaces`, `planAccessibleRoute`,
 ### Circuit Breakers
 
 External calls to the OTP planner (for routing and rail geometry) are wrapped in isolated circuit breakers (`createBreaker` in `src/modules/accessible-route/planners/otp-routing.ts`).
+
 - **Breakers**: `planBreaker` and `railGeomBreaker`.
 - **Threshold**: Trips after 3 (`BREAKER_THRESHOLD`) consecutive failures, staying open for 60,000ms (`BREAKER_COOLDOWN_MS`).
 - **Behavior**: When the main planner circuit is open (`isOtpCircuitOpen()`), the routing service returns `ResponseCode.SERVICE_UNAVAILABLE` (503) with a localized error message (`路線規劃服務暫時忙線，請稍後再試`) so callers can distinguish temporary service outages from a genuine `404 Not Found` (no route exists).
@@ -150,9 +152,9 @@ This project enforces a dual-agent review process (Cross-Model Review). During t
 
 1. **File Reading & Searching (Planning Phase)**:
    - ❌ **Do not** use shell commands via `Bash` (such as `sed`, `grep`, or `cat` combined with pipes `|` or chaining `&&`) to inspect files, unless using the whitelisted read-only combinations below.
-   -  **Always prefer** native tools for cleaner context and token efficiency:
-     - Use `view_file` to read specific file contents (always specify `StartLine` and `EndLine` for section reads).
-     - Use `grep_search` for full-text symbol and string searches.
+   - **Always prefer** native tools for cleaner context and token efficiency:
+   - Use `view_file` to read specific file contents (always specify `StartLine` and `EndLine` for section reads).
+   - Use `grep_search` for full-text symbol and string searches.
 
 2. **Whitelisted Read-Only Commands**:
    - The following commands are explicitly whitelisted and can be run via `Bash` (even in pipelines with `|`, `&&`, `;`, `\n`) during the planning phase:
@@ -163,4 +165,3 @@ This project enforces a dual-agent review process (Cross-Model Review). During t
 
 3. **Implementation Restrictions**:
    - All modifying tools (e.g. `Write`, `Edit`, `apply_patch`) and mutating commands (e.g. `git commit`, `pnpm dev`) remain gated and will be blocked until the task plan is fully approved.
-

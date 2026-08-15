@@ -1,6 +1,7 @@
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 import { registry } from "../../openapi/registry";
+import { RouteIntentSchema } from "../../schemas/route-intent.schema";
 
 extendZodWithOpenApi(z);
 
@@ -12,24 +13,6 @@ export const IntentBodySchema = z
     }),
   })
   .strict();
-
-export const RouteIntentSchema = z
-  .object({
-    from: z.string().openapi({ example: "台中車站" }),
-    to: z.string().openapi({ example: "高鐵新竹站" }),
-    mode: z
-      .enum(["wheelchair", "elderly", "visual_impaired", "normal"])
-      .openapi({ example: "wheelchair" }),
-    departureTime: z.string().openapi({
-      example: "now",
-      description: "'now' 或 HH:mm／ISO8601",
-    }),
-    preferences: z.object({
-      minimizeTransfers: z.boolean().openapi({ example: false }),
-      preferElevator: z.boolean().openapi({ example: true }),
-    }),
-  })
-  .openapi("RouteIntent");
 
 const IntentResponseSchema = z
   .object({
@@ -201,10 +184,13 @@ export const MemorySensitivitySchema = z
 
 export const MemoryIdParamsSchema = z
   .object({
-    id: z.string().regex(/^[a-f\d]{24}$/i).openapi({
-      description: "MongoDB ObjectId",
-      example: "665f1c2b9a0b4d0012a34567",
-    }),
+    id: z
+      .string()
+      .regex(/^[a-f\d]{24}$/i)
+      .openapi({
+        description: "MongoDB ObjectId",
+        example: "665f1c2b9a0b4d0012a34567",
+      }),
   })
   .strict()
   .openapi("MemoryIdParams");

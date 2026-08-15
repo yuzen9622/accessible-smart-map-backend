@@ -6,9 +6,7 @@ import { PUBLIC_ID_MAX } from "./campus.util";
 
 extendZodWithOpenApi(z);
 
-const facTypeCodeEnum = z.enum(
-  CAMPUS_FAC_TYPE_CODES as [string, ...string[]]
-);
+const facTypeCodeEnum = z.enum(CAMPUS_FAC_TYPE_CODES as [string, ...string[]]);
 
 const TYPE_DESCRIPTION = `設施類型代碼（英文 code），可用值見 GET /a11y/campus/facility-types，例如 elevator / accessible_toilet / ramp`;
 
@@ -38,26 +36,28 @@ export const CampusListQuerySchema = z
     type: facTypeCodeEnum
       .optional()
       .openapi({ example: "elevator", description: TYPE_DESCRIPTION }),
-    keyword: z
-      .string()
-      .optional()
-      .openapi({
-        example: "中科大",
-        description: "校名 / 校區名模糊比對（支援臺台通用、常見簡稱如「中科大」）",
-      }),
+    keyword: z.string().optional().openapi({
+      example: "中科大",
+      description:
+        "校名 / 校區名模糊比對（支援臺台通用、常見簡稱如「中科大」）",
+    }),
     schoolId: z.coerce
       .number()
       .int()
       .nonnegative()
       .lt(PUBLIC_ID_MAX)
       .optional()
-      .openapi({ example: 33, description: "只列出指定學校（公開 schoolId）的校區" }),
+      .openapi({
+        example: 33,
+        description: "只列出指定學校（公開 schoolId）的校區",
+      }),
     sort: z
       .enum(["name", "-name", "facilities", "-facilities"])
       .optional()
       .openapi({
         example: "name",
-        description: "排序：name（校名）/ facilities（設施數，多→少）；前綴 - 反向",
+        description:
+          "排序：name（校名）/ facilities（設施數，多→少）；前綴 - 反向",
       }),
     page: z.coerce.number().int().min(1).default(1).openapi({ example: 1 }),
     limit: z.coerce
@@ -116,8 +116,14 @@ const FacTypeCountSchema = z.object({
 const CampusFacilitySchema = z.object({
   facUid: z.string().openapi({ example: "F123456" }),
   facTypeId: z.number().optional().openapi({ example: 8 }),
-  type: z.string().optional().openapi({ example: "elevator", description: "設施類型代碼" }),
-  facType: z.string().optional().openapi({ example: "無障礙電梯", description: "設施類型中文" }),
+  type: z
+    .string()
+    .optional()
+    .openapi({ example: "elevator", description: "設施類型代碼" }),
+  facType: z
+    .string()
+    .optional()
+    .openapi({ example: "無障礙電梯", description: "設施類型中文" }),
   name: z.string().optional().openapi({ example: "行政大樓電梯" }),
   building: z.string().optional().openapi({ example: "行政大樓" }),
   buildingUid: z.string().optional().openapi({ example: "B01" }),
@@ -145,20 +151,21 @@ export const CampusSummarySchema = z
     schoolName: z.string().openapi({ example: "國立臺中科技大學" }),
     branchName: z.string().openapi({ example: "三民校區" }),
     city: z.string().optional().openapi({ example: "臺中市" }),
-    address: z.string().optional().openapi({ example: "臺中市北區三民路三段129號" }),
+    address: z
+      .string()
+      .optional()
+      .openapi({ example: "臺中市北區三民路三段129號" }),
     phone: z.string().optional().openapi({ example: "04-22195000" }),
     location: GeoPointSchema.optional(),
     buildingCount: z.number().openapi({ example: 120 }),
     facilityCount: z.number().openapi({ example: 680 }),
-    facTypeSummary: z
-      .array(FacTypeCountSchema)
-      .openapi({
-        example: [
-          { code: "elevator", label: "無障礙電梯", count: 24 },
-          { code: "accessible_toilet", label: "無障礙廁所", count: 130 },
-        ],
-        description: "該校區各設施類型的筆數統計（依類型順序）",
-      }),
+    facTypeSummary: z.array(FacTypeCountSchema).openapi({
+      example: [
+        { code: "elevator", label: "無障礙電梯", count: 24 },
+        { code: "accessible_toilet", label: "無障礙廁所", count: 130 },
+      ],
+      description: "該校區各設施類型的筆數統計（依類型順序）",
+    }),
   })
   .openapi("CampusSummary");
 
@@ -170,7 +177,10 @@ export const CampusDetailSchema = z
     schoolName: z.string().openapi({ example: "國立臺中科技大學" }),
     branchName: z.string().openapi({ example: "三民校區" }),
     city: z.string().optional().openapi({ example: "臺中市" }),
-    address: z.string().optional().openapi({ example: "臺中市北區三民路三段129號" }),
+    address: z
+      .string()
+      .optional()
+      .openapi({ example: "臺中市北區三民路三段129號" }),
     phone: z.string().optional().openapi({ example: "04-22195000" }),
     buildingCount: z.number().openapi({ example: 120 }),
     facilityCount: z.number().openapi({ example: 680 }),
@@ -233,27 +243,27 @@ const ApiResponseSchema = <T extends z.ZodTypeAny>(data: T, refName: string) =>
 
 export const CampusNearbyResponseSchema = ApiResponseSchema(
   z.array(CampusSummarySchema),
-  "CampusNearbyResponse"
+  "CampusNearbyResponse",
 );
 
 export const CampusListResponseSchema = ApiResponseSchema(
   CampusListDataSchema,
-  "CampusListResponse"
+  "CampusListResponse",
 );
 
 export const CampusDetailResponseSchema = ApiResponseSchema(
   CampusDetailSchema,
-  "CampusDetailResponse"
+  "CampusDetailResponse",
 );
 
 export const CampusFacTypesResponseSchema = ApiResponseSchema(
   z.array(CampusFacTypeSchema),
-  "CampusFacTypesResponse"
+  "CampusFacTypesResponse",
 );
 
 export const CampusSchoolsResponseSchema = ApiResponseSchema(
   CampusSchoolsDataSchema,
-  "CampusSchoolsResponse"
+  "CampusSchoolsResponse",
 );
 
 registry.registerPath({
@@ -328,7 +338,8 @@ registry.registerPath({
   path: "/a11y/campus/{campusId}",
   tags: ["Campus"],
   summary: "校區無障礙設施詳情",
-  description: "依 campusId 回傳單一校區的完整資訊，含 facilities 設施陣列（每筆帶 type 代碼）。",
+  description:
+    "依 campusId 回傳單一校區的完整資訊，含 facilities 設施陣列（每筆帶 type 代碼）。",
   request: { params: CampusParamsSchema },
   responses: {
     200: {

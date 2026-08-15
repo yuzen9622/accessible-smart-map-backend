@@ -1,10 +1,15 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import request from "supertest";
-
-vi.mock("../../config/auth", async () => {
-  const { createAuthModuleMock } = await import("../../../tests/helpers/auth-mock");
-  return createAuthModuleMock();
-});
+import type { Readable } from "stream";
+import type * as supertestTypes from "supertest";
 
 vi.mock("./sos.service", () => ({
   createSession: vi.fn(),
@@ -14,24 +19,41 @@ vi.mock("./sos.service", () => ({
   getSessionForOwner: vi.fn(),
 }));
 
-import { buildTestApp, buildAuthorizationHeader } from "../../../tests/helpers/test-helpers";
+import {
+  buildAuthorizationHeader,
+  startTestServer,
+  stopTestServer,
+} from "../../../tests/helpers/test-helpers";
+import { stubAuthUserLookup } from "../../../tests/helpers/real-auth";
 import * as service from "./sos.service";
 import { ResponseCode } from "../../types/code";
 import { SOS_MSG, SOS_REASON } from "../../constants/messages";
 
-const app = buildTestApp();
+let app: Awaited<ReturnType<typeof startTestServer>>;
 const BASE = "/api/v1/sos/sessions";
 const auth = buildAuthorizationHeader();
 const TOKEN_32 = "9f3a1c000000000000000000000000e0";
 const OID = "6a4e797394fbb1b1721c8b81";
 
+beforeAll(async () => {
+  app = await startTestServer();
+});
+
+afterAll(async () => {
+  await stopTestServer(app);
+});
+
 beforeEach(() => {
   vi.resetAllMocks();
+  // Real auth path: only the User.findById DB seam is stubbed.
+  stubAuthUserLookup();
 });
 
 describe("POST /sos/sessions", () => {
   it("rejects without a token with 403", async () => {
-    const res = await request(app).post(BASE).send({ type: "trapped", lat: 25, lng: 121 });
+    const res = await request(app)
+      .post(BASE)
+      .send({ type: "trapped", lat: 25, lng: 121 });
     expect(res.status).toBe(ResponseCode.FORBIDDEN);
     expect(vi.mocked(service.createSession)).not.toHaveBeenCalled();
   });
@@ -43,10 +65,12 @@ describe("POST /sos/sessions", () => {
       message: SOS_MSG.CREATED,
       data: { sessionId: "s1", shareToken: TOKEN_32, notifiedCount: 2 },
     });
-    const res = await request(app)
-      .post(BASE)
-      .set("Authorization", auth)
-      .send({ type: "trapped", lat: 25.033, lng: 121.5654, address: "台北市信義區" });
+    const res = await request(app).post(BASE).set("Authorization", auth).send({
+      type: "trapped",
+      lat: 25.033,
+      lng: 121.5654,
+      address: "台北市信義區",
+    });
     expect(res.status).toBe(201);
     expect(res.body.data.notifiedCount).toBe(2);
     expect(res.body.data.shareToken).toBe(TOKEN_32);
@@ -59,7 +83,10 @@ describe("POST /sos/sessions", () => {
       message: SOS_MSG.ALREADY_ACTIVE,
       data: { sessionId: "s1", shareToken: TOKEN_32, notifiedCount: 2 },
     });
-    const res = await request(app).post(BASE).set("Authorization", auth).send({ type: "body", lat: 25, lng: 121 });
+    const res = await request(app)
+      .post(BASE)
+      .set("Authorization", auth)
+      .send({ type: "body", lat: 25, lng: 121 });
     expect(res.status).toBe(200);
     expect(res.body.message).toBe(SOS_MSG.ALREADY_ACTIVE);
   });
@@ -73,7 +100,10 @@ describe("PATCH /sos/sessions/:id/location", () => {
       message: SOS_MSG.NOT_SESSION_OWNER,
       data: { reason: SOS_REASON.NOT_SESSION_OWNER },
     });
-    const res = await request(app).patch(`${BASE}/s1/location`).set("Authorization", auth).send({ lat: 25, lng: 121 });
+    const res = await request(app)
+      .patch(`${BASE}/s1/location`)
+      .set("Authorization", auth)
+      .send({ lat: 25, lng: 121 });
     expect(res.status).toBe(403);
     expect(res.body.data.reason).toBe(SOS_REASON.NOT_SESSION_OWNER);
   });
@@ -85,7 +115,10 @@ describe("PATCH /sos/sessions/:id/location", () => {
       message: SOS_MSG.SESSION_NOT_ACTIVE,
       data: { reason: SOS_REASON.SESSION_NOT_ACTIVE },
     });
-    const res = await request(app).patch(`${BASE}/s1/location`).set("Authorization", auth).send({ lat: 25, lng: 121 });
+    const res = await request(app)
+      .patch(`${BASE}/s1/location`)
+      .set("Authorization", auth)
+      .send({ lat: 25, lng: 121 });
     expect(res.status).toBe(400);
     expect(res.body.data.reason).toBe(SOS_REASON.SESSION_NOT_ACTIVE);
   });
@@ -99,12 +132,21 @@ describe("GET /sos/sessions/:token/public", () => {
       ok: true,
       httpCode: ResponseCode.OK,
       message: SOS_MSG.PUBLIC_OK,
-      data: { type: "trapped", status: "active", lat: 25, lng: 121, address: null, updatedAt: new Date().toISOString() },
+      data: {
+        type: "trapped",
+        status: "active",
+        lat: 25,
+        lng: 121,
+        address: null,
+        updatedAt: new Date().toISOString(),
+      },
     });
     const res = await request(app).get(`${BASE}/${SHARE_TOKEN}/public`);
     expect(res.status).toBe(200);
     expect(res.body.data.type).toBe("trapped");
-    expect(vi.mocked(service.getPublicByToken)).toHaveBeenCalledWith(SHARE_TOKEN);
+    expect(vi.mocked(service.getPublicByToken)).toHaveBeenCalledWith(
+      SHARE_TOKEN,
+    );
   });
 
   it("returns 404 for an unknown token", async () => {
@@ -145,14 +187,20 @@ describe("GET /sos/sessions/:id (owner snapshot)", () => {
   });
 
   it("returns the snapshot for the owner", async () => {
-    const snapshot = { sessionId: OID, status: "active", handlingStatus: "acknowledged" };
+    const snapshot = {
+      sessionId: OID,
+      status: "active",
+      handlingStatus: "acknowledged",
+    };
     vi.mocked(service.getSessionForOwner).mockResolvedValue({
       ok: true,
       httpCode: ResponseCode.OK,
       message: SOS_MSG.PUBLIC_OK,
       data: snapshot,
     });
-    const res = await request(app).get(`${BASE}/${OID}`).set("Authorization", auth);
+    const res = await request(app)
+      .get(`${BASE}/${OID}`)
+      .set("Authorization", auth);
     expect(res.status).toBe(200);
     expect(res.body.data.handlingStatus).toBe("acknowledged");
     expect(vi.mocked(service.getSessionForOwner)).toHaveBeenCalledWith({
@@ -168,7 +216,9 @@ describe("GET /sos/sessions/:id (owner snapshot)", () => {
       message: SOS_MSG.NOT_SESSION_OWNER,
       data: { reason: SOS_REASON.NOT_SESSION_OWNER },
     });
-    const res = await request(app).get(`${BASE}/${OID}`).set("Authorization", auth);
+    const res = await request(app)
+      .get(`${BASE}/${OID}`)
+      .set("Authorization", auth);
     expect(res.status).toBe(403);
     expect(res.body.data.reason).toBe(SOS_REASON.NOT_SESSION_OWNER);
   });
@@ -195,23 +245,38 @@ describe("GET /sos/sessions/:id/stream (SSE)", () => {
       data: { sessionId: OID, status: "active", handlingStatus: "notified" },
     });
 
-    const raw = await new Promise<{ statusCode: number; contentType: string }>((resolve, reject) => {
-      const req = request(app)
-        .get(`${BASE}/${OID}/stream`)
-        .set("Authorization", auth)
-        .buffer(false)
-        .parse((res: NodeJS.ReadableStream & { statusCode: number; headers: Record<string, string> }) => {
-          resolve({ statusCode: res.statusCode, contentType: res.headers["content-type"] ?? "" });
-          res.destroy();
+    const raw = await new Promise<{ statusCode: number; contentType: string }>(
+      (resolve, reject) => {
+        const req = request(app)
+          .get(`${BASE}/${OID}/stream`)
+          .set("Authorization", auth)
+          .buffer(false)
+          .parse(
+            (
+              res: supertestTypes.Response,
+              _callback: (err: Error | null, body: unknown) => void,
+            ) => {
+              resolve({
+                statusCode: res.statusCode,
+                contentType: res.headers["content-type"] ?? "",
+              });
+              // superagent's Response typings don't surface `destroy`, but with
+              // `.buffer(false)` the underlying object is a raw node stream.
+              (res as unknown as Readable).destroy();
+            },
+          );
+        req.on("error", () => {
+          // aborting the stream surfaces an ECONNRESET/"aborted" error — expected.
         });
-      req.on("error", () => {
-        // aborting the stream surfaces an ECONNRESET/"aborted" error — expected.
-      });
-      req.end(() => {
-        // no-op; resolution happens in the parser above.
-      });
-      setTimeout(() => reject(new Error("SSE stream did not respond in time")), 4000);
-    });
+        req.end(() => {
+          // no-op; resolution happens in the parser above.
+        });
+        setTimeout(
+          () => reject(new Error("SSE stream did not respond in time")),
+          4000,
+        );
+      },
+    );
 
     expect(raw.statusCode).toBe(200);
     expect(raw.contentType).toContain("text/event-stream");

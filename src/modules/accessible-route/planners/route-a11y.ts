@@ -26,12 +26,8 @@ import type {
   ThsrLeg,
   TraLeg,
 } from "../../../types/route";
-import type {
-  RailLeg,
-} from "./route-a11y.types";
-export type {
-  RailLeg,
-};
+import type { RailLeg } from "./route-a11y.types";
+export type { RailLeg };
 
 const A11Y_RADIUS_M = 200;
 const A11Y_LIMIT = 5;
@@ -42,7 +38,9 @@ const A11Y_LIMIT = 5;
  * @param coords The stop's [lng, lat] coordinates.
  * @returns The nearby OSM accessibility facilities.
  */
-export async function nearbyA11y(coords: [number, number]): Promise<IOsmA11y[]> {
+export async function nearbyA11y(
+  coords: [number, number],
+): Promise<IOsmA11y[]> {
   return OsmA11y.find({
     location: {
       $near: {
@@ -64,7 +62,7 @@ export async function nearbyA11y(coords: [number, number]): Promise<IOsmA11y[]> 
  */
 export function deriveHighlights(
   boardA11y: IOsmA11y[],
-  alightA11y: IOsmA11y[]
+  alightA11y: IOsmA11y[],
 ): string[] {
   const tagVal = (nodes: IOsmA11y[], key: string, val: string) =>
     nodes.some((f) => f.tags?.[key] === val);
@@ -93,9 +91,15 @@ export function deriveHighlights(
     tagVal(alightA11y, "traffic_signals:sound", "yes")
   )
     h.push("附近有音響號誌");
-  if (tagVal(boardA11y, "wheelchair", "yes") || tagVal(boardA11y, "wheelchair", "designated"))
+  if (
+    tagVal(boardA11y, "wheelchair", "yes") ||
+    tagVal(boardA11y, "wheelchair", "designated")
+  )
     h.push("乘車站設施完善");
-  if (tagVal(alightA11y, "wheelchair", "yes") || tagVal(alightA11y, "wheelchair", "designated"))
+  if (
+    tagVal(alightA11y, "wheelchair", "yes") ||
+    tagVal(alightA11y, "wheelchair", "designated")
+  )
     h.push("下車站設施完善");
   return h;
 }
@@ -158,18 +162,32 @@ export function buildAccessibilitySummary(input: {
         : "沿途導盲設施資訊有限",
     );
     parts.push(transferText);
-    parts.push(verdict("適合視障者通行", "大致可行，請留意路口", "通行較困難，建議結伴"));
+    parts.push(
+      verdict("適合視障者通行", "大致可行，請留意路口", "通行較困難，建議結伴"),
+    );
   } else if (mode === "elderly") {
     parts.push(walkText);
     parts.push(transferText);
     if (hasElevator) parts.push("車站設有電梯可搭乘");
-    parts.push(verdict("步行負擔低，適合長者", "步行負擔尚可，請適度休息", "步行或轉乘負擔較大，請斟酌"));
+    parts.push(
+      verdict(
+        "步行負擔低，適合長者",
+        "步行負擔尚可，請適度休息",
+        "步行或轉乘負擔較大，請斟酌",
+      ),
+    );
   } else {
     parts.push(
-      hasElevator ? "全程設有電梯" : hasRamp ? "沿途設有無障礙坡道" : "沿途無障礙設施資訊有限",
+      hasElevator
+        ? "全程設有電梯"
+        : hasRamp
+          ? "沿途設有無障礙坡道"
+          : "沿途無障礙設施資訊有限",
     );
     parts.push(walkText);
-    parts.push(verdict("適合輪椅通行", "大致可行，建議留意路況", "通行較困難，請斟酌"));
+    parts.push(
+      verdict("適合輪椅通行", "大致可行，建議留意路況", "通行較困難，請斟酌"),
+    );
   }
 
   return parts.join("，");
@@ -185,7 +203,7 @@ export function buildAccessibilitySummary(input: {
 export function attachA11yToLeg(
   leg: BusLeg | MetroLeg | ThsrLeg | TraLeg,
   boardA11y: IOsmA11y[],
-  alightA11y: IOsmA11y[]
+  alightA11y: IOsmA11y[],
 ): void {
   if (leg.type === "BUS") {
     leg.departureStopA11y = boardA11y;
@@ -223,7 +241,7 @@ export async function enrichLegIndoor(
   destCoords: [number, number],
   boardCoords: [number, number],
   alightCoords: [number, number],
-  mode: AccessibilityMode = "wheelchair"
+  mode: AccessibilityMode = "wheelchair",
 ): Promise<void> {
   if (process.env.USE_INDOOR_GRAPH === "false") return;
 
@@ -231,8 +249,16 @@ export async function enrichLegIndoor(
   const alightName = leg.arrivalStation;
 
   const [board, alight] = await Promise.all([
-    getStationAccess({ name: boardName, coords: boardCoords }, originCoords, mode),
-    getStationAccess({ name: alightName, coords: alightCoords }, destCoords, mode),
+    getStationAccess(
+      { name: boardName, coords: boardCoords },
+      originCoords,
+      mode,
+    ),
+    getStationAccess(
+      { name: alightName, coords: alightCoords },
+      destCoords,
+      mode,
+    ),
   ]);
 
   const exitTypeFor = (a: NonNullable<typeof board>) =>
@@ -250,11 +276,11 @@ export async function enrichLegIndoor(
     if (board.stepFree && board.usesElevator) {
       leg.facilityHighlights.push(
         `乘車站「${board.stationName}」可由${board.entrance.name}電梯無障礙進站` +
-          (board.elevatorLevelName ? `（${board.elevatorLevelName}）` : "")
+          (board.elevatorLevelName ? `（${board.elevatorLevelName}）` : ""),
       );
     } else if (board.stepFree) {
       leg.facilityHighlights.push(
-        `乘車站「${board.stationName}」${board.entrance.name}為無障礙平面進站`
+        `乘車站「${board.stationName}」${board.entrance.name}為無障礙平面進站`,
       );
     } else if (board.hasElevator) {
       leg.facilityHighlights.push(`乘車站「${board.stationName}」設有電梯`);
@@ -273,11 +299,11 @@ export async function enrichLegIndoor(
     if (alight.stepFree && alight.usesElevator) {
       leg.facilityHighlights.push(
         `下車站「${alight.stationName}」可由${alight.entrance.name}電梯無障礙出站` +
-          (alight.elevatorLevelName ? `（${alight.elevatorLevelName}）` : "")
+          (alight.elevatorLevelName ? `（${alight.elevatorLevelName}）` : ""),
       );
     } else if (alight.stepFree) {
       leg.facilityHighlights.push(
-        `下車站「${alight.stationName}」${alight.entrance.name}為無障礙平面出站`
+        `下車站「${alight.stationName}」${alight.entrance.name}為無障礙平面出站`,
       );
     } else if (alight.hasElevator) {
       leg.facilityHighlights.push(`下車站「${alight.stationName}」設有電梯`);

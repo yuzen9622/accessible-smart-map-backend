@@ -40,7 +40,7 @@ export function getRouteDirectionImproved(
   routeStopsByDirection: { [direction: number]: BusRoute["Stops"] },
   startStopName: string,
   endStopName: string,
-  language: "Zh_tw" | "En"
+  language: "Zh_tw" | "En",
 ): number {
   for (const dirStr in routeStopsByDirection) {
     const direction = parseInt(dirStr) as 0 | 1;
@@ -49,10 +49,10 @@ export function getRouteDirectionImproved(
     const normEnd = normalizeStopName(endStopName);
 
     const startIndex = stops.findIndex((s) =>
-      equalStopName(s?.StopName?.[language], normStart)
+      equalStopName(s?.StopName?.[language], normStart),
     );
     const endIndex = stops.findIndex((s) =>
-      equalStopName(s?.StopName?.[language], normEnd)
+      equalStopName(s?.StopName?.[language], normEnd),
     );
 
     if (startIndex !== -1 && endIndex !== -1) {
@@ -65,10 +65,10 @@ export function getRouteDirectionImproved(
 export function getBusFrontOfArrivalStop(
   stops: BusRoute["Stops"],
   arrivalStopName: string,
-  bus: BusRealtimeNearbyStop[]
+  bus: BusRealtimeNearbyStop[],
 ): BusRealtimeNearbyStop | null {
   const arrivalIndex = stops.findIndex(
-    (s) => s.StopName.Zh_tw === arrivalStopName
+    (s) => s.StopName.Zh_tw === arrivalStopName,
   );
   if (arrivalIndex === -1) return null;
 
@@ -173,7 +173,7 @@ export function odataUrlLiteral(value: string): string {
  */
 export function busRouteQueryCandidates(
   fullName: string,
-  city?: string | null
+  city?: string | null,
 ): BusRouteQueryScope[] {
   const names = [
     ...new Set([formatRouteName(fullName), fullName.trim()].filter(Boolean)),
@@ -190,7 +190,11 @@ export function busRouteQueryCandidates(
  * @returns A short Traditional-Chinese distance phrase.
  */
 export function formatFriendlyDistance(distanceM?: number | null): string {
-  if (distanceM === null || distanceM === undefined || !Number.isFinite(distanceM)) {
+  if (
+    distanceM === null ||
+    distanceM === undefined ||
+    !Number.isFinite(distanceM)
+  ) {
     return "";
   }
   if (distanceM < 20) return "馬上";
@@ -220,11 +224,12 @@ export function formatWalkStepInstruction(step: {
     : friendlyDistance === "馬上"
       ? "，馬上接續下一步"
       : `，續行${friendlyDistance}`;
-  const unnamedContinue = target && friendlyDistance
-    ? friendlyDistance === "馬上"
-      ? `直行後馬上抵達「${target}」`
-      : `直行${friendlyDistance}至「${target}」`
-    : `請繼續直行${suffix}`;
+  const unnamedContinue =
+    target && friendlyDistance
+      ? friendlyDistance === "馬上"
+        ? `直行後馬上抵達「${target}」`
+        : `直行${friendlyDistance}至「${target}」`
+      : `請繼續直行${suffix}`;
   switch (dir) {
     case "DEPART":
       return named ? `沿「${street}」出發${suffix}` : `請出發${suffix}`;
@@ -236,13 +241,21 @@ export function formatWalkStepInstruction(step: {
     case "RIGHT":
       return named ? `向右轉進入「${street}」${suffix}` : `向右轉${suffix}`;
     case "SLIGHTLY_LEFT":
-      return named ? `稍向左轉進入「${street}」${suffix}` : `請稍向左轉${suffix}`;
+      return named
+        ? `稍向左轉進入「${street}」${suffix}`
+        : `請稍向左轉${suffix}`;
     case "SLIGHTLY_RIGHT":
-      return named ? `稍向右轉進入「${street}」${suffix}` : `請稍向右轉${suffix}`;
+      return named
+        ? `稍向右轉進入「${street}」${suffix}`
+        : `請稍向右轉${suffix}`;
     case "HARD_LEFT":
-      return named ? `大幅向左轉進入「${street}」${suffix}` : `請大幅向左轉${suffix}`;
+      return named
+        ? `大幅向左轉進入「${street}」${suffix}`
+        : `請大幅向左轉${suffix}`;
     case "HARD_RIGHT":
-      return named ? `大幅向右轉進入「${street}」${suffix}` : `請大幅向右轉${suffix}`;
+      return named
+        ? `大幅向右轉進入「${street}」${suffix}`
+        : `請大幅向右轉${suffix}`;
     case "UTURN_LEFT":
     case "UTURN_RIGHT":
       return `請迴轉${suffix}`;

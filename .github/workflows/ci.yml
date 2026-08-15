@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # Actions pinned to full commit SHAs (supply-chain hygiene); see the
+      # matching tag in a comment for human readability.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          # NOTE: no `cache: pnpm` here. With that option, setup-node itself
+          # invokes `pnpm` to compute the store cache path — but pnpm is only
+          # provisioned by the `corepack enable` step below, so the action
+          # fails with "Unable to locate executable file: pnpm" before corepack
+          # ever runs. Corepack supplies pnpm for everything downstream.
+
+      # pnpm version is pinned by `packageManager` in package.json; corepack
+      # reads it from there, so no separate version step is needed.
+      - name: Enable pnpm via corepack
+        run: corepack enable
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Python test dependencies
+        run: >-
+          python -m pip install --disable-pip-version-check
+          --requirement requirements-test.txt
+
+      # `postinstall` runs `pnpm run build`; with --ignore-scripts the build
+      # happens explicitly below so the pipeline is one clean pass.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Architecture boundary check
+        run: pnpm run lint:arch
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Format check
+        run: pnpm run format:check
+
+      - name: Typecheck (incl. tests)
+        run: pnpm run typecheck
+
+      # Runs the full suite AND applies the coverage thresholds from
+      # vitest.config.ts — exits non-zero below threshold, so this gates.
+      - name: Test with coverage gate
+        run: pnpm run test:coverage
+
+      - name: Python script tests
+        run: pnpm run test:python
+
+      - name: Audit (high and above)
+        run: pnpm audit --audit-level high

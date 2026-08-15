@@ -155,10 +155,12 @@ export function taipeiWallClock(
   d: Date,
   hour: number,
   minute = 0,
-  second = 0
+  second = 0,
 ): Date {
   const p = taipeiParts(d);
-  return new Date(Date.UTC(p.year, p.month - 1, p.day, hour - 8, minute, second));
+  return new Date(
+    Date.UTC(p.year, p.month - 1, p.day, hour - 8, minute, second),
+  );
 }
 
 /**

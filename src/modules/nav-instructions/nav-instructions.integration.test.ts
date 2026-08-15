@@ -1,16 +1,14 @@
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-
 vi.mock("./nav-instructions.service", async (importActual) => {
-  const actual = await importActual<typeof import("./nav-instructions.service")>();
+  const actual =
+    await importActual<typeof import("./nav-instructions.service")>();
   return { ...actual, generateNavInstructionsFromInput: vi.fn() };
 });
 
-
 import { buildTestApp } from "../../../tests/helpers/test-helpers";
 import { generateNavInstructionsFromInput } from "./nav-instructions.service";
-
 
 const app = buildTestApp();
 const URL = "/api/v1/a11y/route/instructions";
@@ -20,7 +18,7 @@ const WALK_POLYLINE: [number, number][] = [
   [121.5654, 25.0418],
   [121.5651, 25.0417],
   [121.5648, 25.0421],
-  [121.5620, 25.0455],
+  [121.562, 25.0455],
 ];
 
 const walkLeg = (steps: Record<string, unknown>[]) => ({
@@ -40,28 +38,30 @@ const otpRoute = {
   totalMinutes: 9,
   transferCount: 0,
   totalWalkDistanceM: 640,
-  legs: [walkLeg([
-    {
-      relativeDirection: "DEPART",
-      absoluteDirection: "NORTHWEST",
-      streetName: "open area",
-      bogusName: true,
-      area: true,
-      stairs: false,
-      distanceM: 40,
-      location: WALK_POLYLINE[0],
-    },
-    {
-      relativeDirection: "RIGHT",
-      absoluteDirection: "NORTHEAST",
-      streetName: "基隆路一段147巷",
-      bogusName: false,
-      area: false,
-      stairs: false,
-      distanceM: 600,
-      location: WALK_POLYLINE[2],
-    },
-  ])],
+  legs: [
+    walkLeg([
+      {
+        relativeDirection: "DEPART",
+        absoluteDirection: "NORTHWEST",
+        streetName: "open area",
+        bogusName: true,
+        area: true,
+        stairs: false,
+        distanceM: 40,
+        location: WALK_POLYLINE[0],
+      },
+      {
+        relativeDirection: "RIGHT",
+        absoluteDirection: "NORTHEAST",
+        streetName: "基隆路一段147巷",
+        bogusName: false,
+        area: false,
+        stairs: false,
+        distanceM: 600,
+        location: WALK_POLYLINE[2],
+      },
+    ]),
+  ],
 };
 
 const valhallaRoute = {
@@ -70,48 +70,50 @@ const valhallaRoute = {
   totalMinutes: 14,
   transferCount: 0,
   totalWalkDistanceM: 1040,
-  legs: [walkLeg([
-    {
-      instruction: "沿目前道路出發",
-      maneuver: "DEPART",
-      relativeDirection: "DEPART",
-      absoluteDirection: null,
-      streetName: "",
-      bogusName: true,
-      area: false,
-      stairs: false,
-      distanceM: 1040,
-      location: WALK_POLYLINE[0],
-    },
-  ])],
+  legs: [
+    walkLeg([
+      {
+        instruction: "沿目前道路出發",
+        maneuver: "DEPART",
+        relativeDirection: "DEPART",
+        absoluteDirection: null,
+        streetName: "",
+        bogusName: true,
+        area: false,
+        stairs: false,
+        distanceM: 1040,
+        location: WALK_POLYLINE[0],
+      },
+    ]),
+  ],
 };
-
 
 beforeEach(() => {
   vi.resetAllMocks();
   generate.mockResolvedValue({
     ok: true,
     data: {
-      instructions: [{
-        text: "沿測試路線前進，續行約 100 公尺",
-        type: "depart",
-        bearing: 90,
-        relativeDirection: null,
-        distanceM: 100,
-        streetName: "測試路線",
-        legType: "WALK",
-        stairs: false,
-        legIndex: 0,
-        polylineIndex: 0,
-        cumulativeDistanceM: 0,
-      }],
+      instructions: [
+        {
+          text: "沿測試路線前進，續行約 100 公尺",
+          type: "depart",
+          bearing: 90,
+          relativeDirection: null,
+          distanceM: 100,
+          streetName: "測試路線",
+          legType: "WALK",
+          stairs: false,
+          legIndex: 0,
+          polylineIndex: 0,
+          cumulativeDistanceM: 0,
+        },
+      ],
       initialBearing: 90,
       totalSteps: 1,
       warnings: [],
     },
   });
 });
-
 
 describe("POST /api/v1/a11y/route/instructions route contracts", () => {
   it.each([
@@ -125,7 +127,9 @@ describe("POST /api/v1/a11y/route/instructions route contracts", () => {
       cumulativeDistanceM: 0,
     });
     expect(generate).toHaveBeenCalledWith(
-      expect.objectContaining({ route: expect.objectContaining({ routeId: route.routeId }) }),
+      expect.objectContaining({
+        route: expect.objectContaining({ routeId: route.routeId }),
+      }),
     );
   });
 

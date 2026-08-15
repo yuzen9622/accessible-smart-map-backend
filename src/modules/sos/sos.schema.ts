@@ -23,9 +23,7 @@ export const UpdateSosLocationSchema = z
   .strict()
   .openapi("UpdateSosLocation");
 
-export const SessionIdParamSchema = z
-  .object({ id: z.string() })
-  .strict();
+export const SessionIdParamSchema = z.object({ id: z.string() }).strict();
 
 export const ShareTokenParamSchema = z
   .object({ token: z.string().length(32) })
@@ -90,9 +88,7 @@ export const SosSnapshotResponseSchema = ApiResponse(
   z.object({
     sessionId: z.string().openapi({ example: "66b0abc123def4567890abcd" }),
     status: z.enum(["active", "resolved"]).openapi({ example: "active" }),
-    handlingStatus: z
-      .string()
-      .openapi({ example: "acknowledged" }),
+    handlingStatus: z.string().openapi({ example: "acknowledged" }),
     claimedBy: z.string().nullable().openapi({ example: null }),
     claimedByName: z.string().nullable().openapi({ example: "王小明" }),
     claimedAt: z.string().nullable().openapi({ example: null }),
@@ -119,7 +115,10 @@ export const SosSnapshotResponseSchema = ApiResponse(
     location: z.object({
       lat: z.number().openapi({ example: 25.033 }),
       lng: z.number().openapi({ example: 121.5654 }),
-      address: z.string().nullable().openapi({ example: "台北市信義區市府路1號" }),
+      address: z
+        .string()
+        .nullable()
+        .openapi({ example: "台北市信義區市府路1號" }),
       updatedAt: z.string().openapi({ example: "2026-07-19T08:30:00.000Z" }),
     }),
     resolvedAt: z.string().nullable().openapi({ example: null }),
@@ -189,7 +188,9 @@ registry.registerPath({
   security: [{ bearerAuth: [] }],
   request: {
     params: SessionIdParamSchema,
-    body: { content: { "application/json": { schema: UpdateSosLocationSchema } } },
+    body: {
+      content: { "application/json": { schema: UpdateSosLocationSchema } },
+    },
   },
   responses: {
     200: {
@@ -284,7 +285,8 @@ registry.registerPath({
   request: { params: SessionIdParamSchema },
   responses: {
     200: {
-      description: "text/event-stream：每次事件推送 `event: update` 與 JSON 快照",
+      description:
+        "text/event-stream：每次事件推送 `event: update` 與 JSON 快照",
       content: { "text/event-stream": { schema: z.string() } },
     },
     401: {
@@ -307,7 +309,8 @@ registry.registerPath({
   path: "/sos/sessions/{token}/public",
   tags: ["SOS"],
   summary: "公開追蹤頁查詢（無需登入）",
-  description: "以高熵 shareToken（建立事件時回傳，非 session id）查詢，避免可被猜測/列舉的 ObjectId 暴露即時位置。",
+  description:
+    "以高熵 shareToken（建立事件時回傳，非 session id）查詢，避免可被猜測/列舉的 ObjectId 暴露即時位置。",
   request: { params: ShareTokenParamSchema },
   responses: {
     200: {

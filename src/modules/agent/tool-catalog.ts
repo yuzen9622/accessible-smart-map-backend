@@ -26,10 +26,16 @@ export function buildGeminiTools(
       : [...openAiChatTools, ...extraTools];
   const functionDeclarations: FunctionDeclaration[] = specs
     .filter(
-      (t): t is Extract<OpenAI.Chat.Completions.ChatCompletionTool, { type: "function" }> =>
-        t.type === "function",
+      (
+        t,
+      ): t is Extract<
+        OpenAI.Chat.Completions.ChatCompletionTool,
+        { type: "function" }
+      > => t.type === "function",
     )
-    .filter((t) => allowList === undefined || allowList.includes(t.function.name))
+    .filter(
+      (t) => allowList === undefined || allowList.includes(t.function.name),
+    )
     .map((t) => ({
       name: t.function.name,
       description: t.function.description,

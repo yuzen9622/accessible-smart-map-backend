@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-Hant">
   <head>
     <meta charset="utf-8" />
@@ -6,7 +6,11 @@
     <title>語音對話 POC</title>
     <style>
       body {
-        font-family: system-ui, -apple-system, "Noto Sans TC", sans-serif;
+        font-family:
+          system-ui,
+          -apple-system,
+          "Noto Sans TC",
+          sans-serif;
         margin: 0;
         padding: 16px;
         background: #0f172a;
@@ -111,7 +115,11 @@
   <body>
     <h1>即時語音對話 POC (Gemini Live)</h1>
     <div class="row">
-      <input id="token" type="password" placeholder="貼上登入取得的 accessToken" />
+      <input
+        id="token"
+        type="password"
+        placeholder="貼上登入取得的 accessToken"
+      />
     </div>
     <div class="row">
       <input id="lat" type="text" value="25.0478" placeholder="緯度" />
@@ -187,7 +195,11 @@
 
       async function startMic() {
         micStream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
         });
         audioCtx = new AudioContext({ sampleRate: IN_RATE });
         if (audioCtx.sampleRate !== IN_RATE) {
@@ -197,7 +209,9 @@
               "Hz；上行音訊 rate 可能與後端宣告的 16000 不符",
           );
         }
-        const blob = new Blob([captureWorklet], { type: "application/javascript" });
+        const blob = new Blob([captureWorklet], {
+          type: "application/javascript",
+        });
         const url = URL.createObjectURL(blob);
         await audioCtx.audioWorklet.addModule(url);
         const src = audioCtx.createMediaStreamSource(micStream);

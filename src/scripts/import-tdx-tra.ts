@@ -28,7 +28,9 @@ async function main() {
   const resp = await tdxFetch(`${traUrl.stationUrl}?$format=JSON`);
   if (!resp.ok) {
     const body = await resp.text();
-    throw new Error(`TDX ${resp.status} for TRA stations: ${body.slice(0, 200)}`);
+    throw new Error(
+      `TDX ${resp.status} for TRA stations: ${body.slice(0, 200)}`,
+    );
   }
   const stations = (await resp.json()) as TdxTraStation[];
   if (!stations.length) {
@@ -50,13 +52,16 @@ async function main() {
         filter: { stationUID: s.StationUID },
         update: {
           $set: {
-            stationUID:  s.StationUID,
-            stationID:   s.StationID,
+            stationUID: s.StationUID,
+            stationID: s.StationID,
             stationName: { Zh_tw: s.StationName.Zh_tw, En: s.StationName.En },
-            railSystem:  "TRA",
+            railSystem: "TRA",
             location: {
-              type:        "Point",
-              coordinates: [s.StationPosition.PositionLon, s.StationPosition.PositionLat],
+              type: "Point",
+              coordinates: [
+                s.StationPosition.PositionLon,
+                s.StationPosition.PositionLat,
+              ],
             },
           },
         },

@@ -5,7 +5,10 @@ import { execSync } from "child_process";
 import mongoose from "mongoose";
 import BusVehicleModel from "../model/bus-vehicle.model";
 
-function parseCSV(csvText: string): { headers: string[]; rows: Record<string, string>[] } {
+function parseCSV(csvText: string): {
+  headers: string[];
+  rows: Record<string, string>[];
+} {
   const lines = csvText.split(/\r?\n/);
   if (lines.length === 0 || !lines[0].trim()) {
     return { headers: [], rows: [] };
@@ -47,15 +50,20 @@ function parseCSV(csvText: string): { headers: string[]; rows: Record<string, st
   return { headers, rows };
 }
 
-function stringifyCSV(headers: string[], rows: Record<string, string>[]): string {
+function stringifyCSV(
+  headers: string[],
+  rows: Record<string, string>[],
+): string {
   const headerLine = headers.join(",");
   const lines = rows.map((row) =>
     headers
       .map((h) => {
         const val = row[h] ?? "";
-        return val.includes(",") || val.includes('"') ? `"${val.replace(/"/g, '""')}"` : val;
+        return val.includes(",") || val.includes('"')
+          ? `"${val.replace(/"/g, '""')}"`
+          : val;
       })
-      .join(",")
+      .join(","),
   );
   return [headerLine, ...lines].join("\n");
 }
@@ -63,7 +71,9 @@ function stringifyCSV(headers: string[], rows: Record<string, string>[]): string
 async function main() {
   const args = process.argv.slice(2);
   if (args.length < 1) {
-    console.error("Usage: npx ts-node src/scripts/inject-tdx-bus-trips-a11y.ts <gtfs-zip-path>");
+    console.error(
+      "Usage: npx ts-node src/scripts/inject-tdx-bus-trips-a11y.ts <gtfs-zip-path>",
+    );
     process.exit(1);
   }
 
@@ -84,21 +94,36 @@ async function main() {
   console.log("Connected to MongoDB.");
 
   // 1. Calculate low floor ratio for each city based on BusVehicle collection
-  const cities = ["Taipei", "NewTaipei", "Taoyuan", "Taichung", "Tainan", "Kaohsiung"];
+  const cities = [
+    "Taipei",
+    "NewTaipei",
+    "Taoyuan",
+    "Taichung",
+    "Tainan",
+    "Kaohsiung",
+  ];
   const cityRatios: Record<string, number> = {};
-  
+
   for (const city of cities) {
     const total = await BusVehicleModel.countDocuments({ city });
-    const lowFloor = await BusVehicleModel.countDocuments({ city, isLowFloor: 1 });
+    const lowFloor = await BusVehicleModel.countDocuments({
+      city,
+      isLowFloor: 1,
+    });
     cityRatios[city] = total > 0 ? lowFloor / total : 0;
-    console.log(`  City ${city}: low floor ratio = ${(cityRatios[city] * 100).toFixed(1)}% (${lowFloor}/${total})`);
+    console.log(
+      `  City ${city}: low floor ratio = ${(cityRatios[city] * 100).toFixed(1)}% (${lowFloor}/${total})`,
+    );
   }
 
   // 2. Extract trips.txt from GTFS zip
   console.log(`Extracting trips.txt from ${path.basename(zipPath)}...`);
   let tripsCSV: string;
   try {
-    tripsCSV = execSync(`unzip -p "${zipPath}" trips.txt`, { encoding: "utf-8", maxBuffer: 100 * 1024 * 1024 });
+    tripsCSV = execSync(`unzip -p "${zipPath}" trips.txt`, {
+      encoding: "utf-8",
+      maxBuffer: 100 * 1024 * 1024,
+    });
   } catch (err) {
     console.error("Failed to extract trips.txt from zip:", err);
     await mongoose.disconnect();
@@ -117,7 +142,7 @@ async function main() {
     TYC: "Taoyuan",
     TXG: "Taichung",
     TNN: "Tainan",
-    KHH: "Kaohsiung"
+    KHH: "Kaohsiung",
   };
 
   let accessibleCount = 0;
@@ -142,10 +167,10 @@ async function main() {
       const ratio = cityRatios[city] ?? 0;
       // Heuristic: If city low-floor ratio > 70%, mark as accessible (1).
       // If < 30%, mark as inaccessible (2). Otherwise leave as unknown (0).
-      if (ratio > 0.70) {
+      if (ratio > 0.7) {
         r.wheelchair_accessible = "1";
         accessibleCount++;
-      } else if (ratio < 0.30 && ratio > 0) {
+      } else if (ratio < 0.3 && ratio > 0) {
         r.wheelchair_accessible = "2";
         inaccessibleCount++;
       } else {
@@ -158,7 +183,9 @@ async function main() {
     }
   }
 
-  console.log(`Updated wheelchair_accessible=1 on ${accessibleCount} trips, set to 2 on ${inaccessibleCount} trips, left ${unchangedCount} trips unchanged.`);
+  console.log(
+    `Updated wheelchair_accessible=1 on ${accessibleCount} trips, set to 2 on ${inaccessibleCount} trips, left ${unchangedCount} trips unchanged.`,
+  );
 
   // 3. Write updated trips.txt back to ZIP
   const updatedCSV = stringifyCSV(headers, rows);

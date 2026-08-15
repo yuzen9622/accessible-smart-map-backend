@@ -15,25 +15,68 @@
 ```jsonc
 {
   "sessionId": "66b0abc123def4567890abcd",
-  "status": "active",              // "active" | "resolved"（主開關）
-  "handlingStatus": "claimed",     // "notified"|"acknowledged"|"claimed"|"en_route"|"arrived"|"resolved"
-  "claimedBy": "Uxxxx",            // 承接家人的 LINE userId（可為 null）
-  "claimedByName": "小明",          // 承接家人姓名（可為 null）
+  "status": "active", // "active" | "resolved"（主開關）
+  "handlingStatus": "claimed", // "notified"|"acknowledged"|"claimed"|"en_route"|"arrived"|"resolved"
+  "claimedBy": "Uxxxx", // 承接家人的 LINE userId（可為 null）
+  "claimedByName": "小明", // 承接家人姓名（可為 null）
   "claimedAt": "2026-07-21T08:30:10.000Z",
-  "acknowledgements": [            // 已「確認收到」的家人
-    { "lineUserId": "Uxxxx", "name": "小明", "at": "2026-07-21T08:30:00.000Z" }
+  "acknowledgements": [
+    // 已「確認收到」的家人
+    { "lineUserId": "Uxxxx", "name": "小明", "at": "2026-07-21T08:30:00.000Z" },
   ],
-  "timeline": [                    // 完整事件歷程（append-only，依 at 排序）
-    { "type": "created",       "actorType": "victim",  "actorName": null,  "note": null, "at": "..." },
-    { "type": "notified",      "actorType": "system",  "actorName": null,  "note": null, "at": "..." },
-    { "type": "acknowledged",  "actorType": "contact", "actorName": "小明", "note": null, "at": "..." },
-    { "type": "claimed",       "actorType": "contact", "actorName": "小明", "note": null, "at": "..." },
-    { "type": "status_update", "actorType": "contact", "actorName": "小明", "note": "前往中", "at": "..." },
-    { "type": "resolved",      "actorType": "victim",  "actorName": null,  "note": null, "at": "..." }
+  "timeline": [
+    // 完整事件歷程（append-only，依 at 排序）
+    {
+      "type": "created",
+      "actorType": "victim",
+      "actorName": null,
+      "note": null,
+      "at": "...",
+    },
+    {
+      "type": "notified",
+      "actorType": "system",
+      "actorName": null,
+      "note": null,
+      "at": "...",
+    },
+    {
+      "type": "acknowledged",
+      "actorType": "contact",
+      "actorName": "小明",
+      "note": null,
+      "at": "...",
+    },
+    {
+      "type": "claimed",
+      "actorType": "contact",
+      "actorName": "小明",
+      "note": null,
+      "at": "...",
+    },
+    {
+      "type": "status_update",
+      "actorType": "contact",
+      "actorName": "小明",
+      "note": "前往中",
+      "at": "...",
+    },
+    {
+      "type": "resolved",
+      "actorType": "victim",
+      "actorName": null,
+      "note": null,
+      "at": "...",
+    },
   ],
-  "location": { "lat": 25.033, "lng": 121.5654, "address": "…", "updatedAt": "..." },
+  "location": {
+    "lat": 25.033,
+    "lng": 121.5654,
+    "address": "…",
+    "updatedAt": "...",
+  },
   "resolvedAt": null,
-  "updatedAt": "..."
+  "updatedAt": "...",
 }
 ```
 
@@ -50,7 +93,9 @@
 前端範例：
 
 ```js
-const es = new EventSource(`/api/v1/sos/sessions/${id}/stream`, { withCredentials: true });
+const es = new EventSource(`/api/v1/sos/sessions/${id}/stream`, {
+  withCredentials: true,
+});
 es.addEventListener("update", (e) => {
   const snapshot = JSON.parse(e.data);
   render(snapshot); // 更新「由誰處理 / 處理狀態 / 歷程」
@@ -75,11 +120,13 @@ es.onerror = () => {
 **問題**：之前實作的 `GET /api/v1/sos/sessions/:id/public` 實際上是用原始 session id（MongoDB ObjectId）查詢，並非設計上應該使用的高熵 `shareToken`。ObjectId 不是加密安全隨機值（同一時段建立的 session id 彼此相鄰、可被列舉），意味著陌生人有機會猜到別人正在求救的即時 GPS 位置。已修復。
 
 **後端變更**：
+
 - Endpoint 路徑改為 `GET /api/v1/sos/sessions/:token/public`，`:token` 是建立 SOS session 時回傳的 `shareToken`（32 字元十六進位字串，128-bit 熵），**不是** `sessionId`。
 - `POST /sessions` 回應的 `shareToken` 欄位未變，一直都有回傳，只是之前沒被用到。
 - LINE 推送給家人的追蹤連結（`{PUBLIC_TRACKING_BASE_URL}/zh-TW?sos=...`）同步改用 `shareToken`。
 
 **前端需要改的地方**：
+
 1. 若前端曾自行用 `POST /sessions` 回傳的 `sessionId` 拼追蹤連結（例如 `/zh-TW?sos=${sessionId}`），**改成用同一筆回應裡的 `shareToken`**。
 2. 若前端是直接解析 LINE 推送連結中的 `sos=` 參數來呼叫 `GET /sessions/:id/public`，不需要改程式碼（連結本身已改為 shareToken，直接拿來拼 URL 即可），但若有別的地方用 `sessionId` 拼這支 API 就需要修改。
 3. 既有已發出、尚未過期的舊連結（用 sessionId 拼成）在上線後會**立即失效**（404），因為後端不再接受 sessionId 查詢。若需要不中斷過渡，請告訴我，可討論短暫雙軌支援（但不建議，因為 sessionId 查詢本身就是漏洞）。

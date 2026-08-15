@@ -16,17 +16,17 @@ export function createWelfareRouter(): Router {
   router.get(
     "/welfare/nearby",
     validateRequest({ query: WelfareNearbyQuerySchema }),
-    nearbyWelfare
+    nearbyWelfare,
   );
   router.get(
     "/welfare",
     validateRequest({ query: WelfareListQuerySchema }),
-    listWelfare
+    listWelfare,
   );
   router.get(
     "/welfare/:id",
     validateRequest({ params: WelfareParamsSchema }),
-    getWelfareById
+    getWelfareById,
   );
   return router;
 }

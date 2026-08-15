@@ -234,15 +234,18 @@ function distanceAlongPolyline(
     // nearest point on a single city-scale route segment; route distance itself
     // continues to use the shared great-circle helper above.
     const latScale = 111_320;
-    const lngScale = latScale * Math.cos(((start[1] + end[1] + target[1]) / 3) * Math.PI / 180);
+    const lngScale =
+      latScale *
+      Math.cos((((start[1] + end[1] + target[1]) / 3) * Math.PI) / 180);
     const dx = (end[0] - start[0]) * lngScale;
     const dy = (end[1] - start[1]) * latScale;
     const targetX = (target[0] - start[0]) * lngScale;
     const targetY = (target[1] - start[1]) * latScale;
     const denominator = dx * dx + dy * dy;
-    const fraction = denominator === 0
-      ? 0
-      : Math.max(0, Math.min(1, (targetX * dx + targetY * dy) / denominator));
+    const fraction =
+      denominator === 0
+        ? 0
+        : Math.max(0, Math.min(1, (targetX * dx + targetY * dy) / denominator));
     const nearest: Coord = [
       start[0] + (end[0] - start[0]) * fraction,
       start[1] + (end[1] - start[1]) * fraction,

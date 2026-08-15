@@ -3,7 +3,11 @@ import { ApiResponse } from "../../types/response";
 import { ResponseCode, ResponseMessage } from "../../types/code";
 import { AUTH_MSG } from "../../constants/messages";
 import { sendResponse } from "../../config/lib";
-import { createAccessToken, createRefreshToken, toPublicUser } from "../../config/jwt";
+import {
+  createAccessToken,
+  createRefreshToken,
+  toPublicUser,
+} from "../../config/jwt";
 import { IConfig, IUser } from "../../types";
 import { AuthError } from "./user.auth.service";
 import * as authService from "./user.auth.service";
@@ -13,7 +17,7 @@ type SessionPayload = { user: IUser; config: IConfig | null };
 function sendSession(
   res: Response<ApiResponse<SessionPayload>>,
   payload: SessionPayload,
-  message: string
+  message: string,
 ) {
   // Re-filter here rather than trusting the service: this is the only place a
   // user object reaches the client, so making the guarantee structural keeps a
@@ -27,7 +31,7 @@ function sendSession(
     message,
     { user, config: payload.config },
     createAccessToken(user),
-    createRefreshToken(user)
+    createRefreshToken(user),
   );
 }
 
@@ -35,9 +39,16 @@ function sendAuthError(res: Response<any>, error: unknown) {
   if (error instanceof AuthError) {
     switch (error.reason) {
       case "EMAIL_TAKEN":
-        return sendResponse(res, false, "error", ResponseCode.CONFLICT, AUTH_MSG.EMAIL_TAKEN, {
-          reason: error.reason,
-        });
+        return sendResponse(
+          res,
+          false,
+          "error",
+          ResponseCode.CONFLICT,
+          AUTH_MSG.EMAIL_TAKEN,
+          {
+            reason: error.reason,
+          },
+        );
       case "EMAIL_NOT_VERIFIED":
         return sendResponse(
           res,
@@ -45,7 +56,7 @@ function sendAuthError(res: Response<any>, error: unknown) {
           "error",
           ResponseCode.FORBIDDEN,
           AUTH_MSG.EMAIL_NOT_VERIFIED,
-          { reason: error.reason }
+          { reason: error.reason },
         );
       case "INVALID_TOKEN":
         return sendResponse(
@@ -54,7 +65,7 @@ function sendAuthError(res: Response<any>, error: unknown) {
           "error",
           ResponseCode.UNAUTHORIZED,
           AUTH_MSG.INVALID_TOKEN,
-          { reason: error.reason }
+          { reason: error.reason },
         );
       case "PASSWORD_REQUIRED":
         return sendResponse(
@@ -63,7 +74,7 @@ function sendAuthError(res: Response<any>, error: unknown) {
           "error",
           ResponseCode.INVALID_INPUT,
           AUTH_MSG.PASSWORD_REQUIRED,
-          { reason: error.reason }
+          { reason: error.reason },
         );
       case "INVALID_CREDENTIALS":
       default:
@@ -73,7 +84,7 @@ function sendAuthError(res: Response<any>, error: unknown) {
           "error",
           ResponseCode.UNAUTHORIZED,
           AUTH_MSG.INVALID_CREDENTIALS,
-          { reason: "INVALID_CREDENTIALS" }
+          { reason: "INVALID_CREDENTIALS" },
         );
     }
   }
@@ -84,7 +95,7 @@ function sendAuthError(res: Response<any>, error: unknown) {
     false,
     "error",
     ResponseCode.INTERNAL_ERROR,
-    ResponseMessage.INTERNAL_ERROR
+    ResponseMessage.INTERNAL_ERROR,
   );
 }
 
@@ -95,14 +106,18 @@ async function register(req: Request, res: Response) {
       email: string;
       password: string;
     };
-    const { emailSent } = await authService.registerLocalUser({ name, email, password });
+    const { emailSent } = await authService.registerLocalUser({
+      name,
+      email,
+      password,
+    });
     return sendResponse(
       res,
       true,
       "success",
       ResponseCode.OK,
       emailSent ? AUTH_MSG.REGISTERED : AUTH_MSG.REGISTERED_EMAIL_FAILED,
-      { emailSent }
+      { emailSent },
     );
   } catch (error) {
     return sendAuthError(res, error);
@@ -111,7 +126,10 @@ async function register(req: Request, res: Response) {
 
 async function login(req: Request, res: Response<ApiResponse<SessionPayload>>) {
   try {
-    const { email, password } = req.validated!.body as { email: string; password: string };
+    const { email, password } = req.validated!.body as {
+      email: string;
+      password: string;
+    };
     const session = await authService.loginLocalUser({ email, password });
     return sendSession(res, session, ResponseMessage.OK);
   } catch (error) {
@@ -119,7 +137,10 @@ async function login(req: Request, res: Response<ApiResponse<SessionPayload>>) {
   }
 }
 
-async function googleAuth(req: Request, res: Response<ApiResponse<SessionPayload>>) {
+async function googleAuth(
+  req: Request,
+  res: Response<ApiResponse<SessionPayload>>,
+) {
   try {
     const { idToken } = req.validated!.body as { idToken: string };
     const session = await authService.authenticateWithGoogle(idToken);
@@ -129,7 +150,10 @@ async function googleAuth(req: Request, res: Response<ApiResponse<SessionPayload
   }
 }
 
-async function verifyEmail(req: Request, res: Response<ApiResponse<SessionPayload>>) {
+async function verifyEmail(
+  req: Request,
+  res: Response<ApiResponse<SessionPayload>>,
+) {
   try {
     const { token } = req.validated!.body as { token: string };
     const session = await authService.verifyEmail(token);
@@ -143,7 +167,13 @@ async function resendVerification(req: Request, res: Response) {
   try {
     const { email } = req.validated!.body as { email: string };
     await authService.resendVerificationEmail(email);
-    return sendResponse(res, true, "success", ResponseCode.OK, AUTH_MSG.VERIFICATION_SENT);
+    return sendResponse(
+      res,
+      true,
+      "success",
+      ResponseCode.OK,
+      AUTH_MSG.VERIFICATION_SENT,
+    );
   } catch (error) {
     return sendAuthError(res, error);
   }
@@ -153,7 +183,13 @@ async function forgotPassword(req: Request, res: Response) {
   const { email } = req.validated!.body as { email: string };
   try {
     await authService.requestPasswordReset(email);
-    return sendResponse(res, true, "success", ResponseCode.ACCEPTED, AUTH_MSG.RESET_SENT);
+    return sendResponse(
+      res,
+      true,
+      "success",
+      ResponseCode.ACCEPTED,
+      AUTH_MSG.RESET_SENT,
+    );
   } catch (error) {
     // Queue insertion is account-independent, so a 503 here reports only that
     // the durable queue is unavailable and cannot reveal account/provider state.
@@ -168,9 +204,15 @@ async function forgotPassword(req: Request, res: Response) {
   }
 }
 
-async function resetPassword(req: Request, res: Response<ApiResponse<SessionPayload>>) {
+async function resetPassword(
+  req: Request,
+  res: Response<ApiResponse<SessionPayload>>,
+) {
   try {
-    const { token, password } = req.validated!.body as { token: string; password: string };
+    const { token, password } = req.validated!.body as {
+      token: string;
+      password: string;
+    };
     const session = await authService.resetPassword({ token, password });
     return sendSession(res, session, AUTH_MSG.PASSWORD_RESET);
   } catch (error) {
@@ -178,18 +220,31 @@ async function resetPassword(req: Request, res: Response<ApiResponse<SessionPayl
   }
 }
 
-async function changePassword(req: Request, res: Response<ApiResponse<{ user: IUser }>>) {
+async function changePassword(
+  req: Request,
+  res: Response<ApiResponse<{ user: IUser }>>,
+) {
   try {
     const userId = req.auth?.userId;
     if (!userId) {
-      return sendResponse(res, false, "error", ResponseCode.FORBIDDEN, ResponseMessage.FORBIDDEN);
+      return sendResponse(
+        res,
+        false,
+        "error",
+        ResponseCode.FORBIDDEN,
+        ResponseMessage.FORBIDDEN,
+      );
     }
 
     const { currentPassword, newPassword } = req.validated!.body as {
       currentPassword?: string;
       newPassword: string;
     };
-    const result = await authService.changePassword({ userId, currentPassword, newPassword });
+    const result = await authService.changePassword({
+      userId,
+      currentPassword,
+      newPassword,
+    });
     const user = toPublicUser(result.user);
 
     return sendResponse(
@@ -200,7 +255,7 @@ async function changePassword(req: Request, res: Response<ApiResponse<{ user: IU
       AUTH_MSG.PASSWORD_CHANGED,
       { user },
       createAccessToken(user),
-      createRefreshToken(user)
+      createRefreshToken(user),
     );
   } catch (error) {
     return sendAuthError(res, error);

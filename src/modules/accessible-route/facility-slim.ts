@@ -12,15 +12,7 @@
  */
 
 import type { IOsmA11y } from "../../types";
-import type {
-  AccessibleRoute,
-  WalkLeg,
-  BusLeg,
-  MetroLeg,
-  ThsrLeg,
-  TraLeg,
-  SlimA11y,
-} from "../../types/route";
+import type { AccessibleRoute, SlimA11y } from "../../types/route";
 
 export type { SlimA11y } from "../../types/route";
 import type { AnyLeg } from "./accessible-route.types";

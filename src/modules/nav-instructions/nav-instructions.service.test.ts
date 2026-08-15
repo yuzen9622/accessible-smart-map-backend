@@ -92,18 +92,30 @@ describe("walk geometry helpers", () => {
       to: "B",
       distanceM: 40,
       minutesEst: 1,
-      polyline: [[121, 25], [121.0003, 25], [121.0006, 25]],
+      polyline: [
+        [121, 25],
+        [121.0003, 25],
+        [121.0006, 25],
+      ],
       a11yFacilities: [],
-      steps: [{
-        relativeDirection: "DEPART",
-        absoluteDirection: "NORTH",
-        streetName: "測試路",
-        bogusName: false,
-        area: false,
-        stairs: false,
-        distanceM: 40,
-        location: [121, 25],
-      }],
+      maxSlopePercent: null,
+      crossings: null,
+      crossingsWithCurbRamp: null,
+      minPathWidthCm: null,
+      surfaceType: "unknown",
+      restPoints: [],
+      steps: [
+        {
+          relativeDirection: "DEPART",
+          absoluteDirection: "NORTH",
+          streetName: "測試路",
+          bogusName: false,
+          area: false,
+          stairs: false,
+          distanceM: 40,
+          location: [121, 25],
+        },
+      ],
     };
     const result = generateNavInstructions({ legs: [leg] });
     expect(result.ok).toBe(true);
@@ -125,6 +137,12 @@ const walkWithSteps = (): WalkLeg => ({
   ],
   a11yFacilities: [],
   exitInfo: null,
+  maxSlopePercent: null,
+  crossings: null,
+  crossingsWithCurbRamp: null,
+  minPathWidthCm: null,
+  surfaceType: "unknown",
+  restPoints: [],
   steps: [
     {
       relativeDirection: "DEPART",
@@ -208,10 +226,16 @@ describe("generateNavInstructions", () => {
     expect(after).toEqual(before);
     expect(voice.ok).toBe(true);
     if (!voice.ok) return;
-    expect(voice.steps.filter((step) => step.instruction.legType === "WALK").map((step) => step.legIndex))
-      .toEqual([0, 0, 2, 2, 2]);
-    expect(voice.steps.filter((step) => step.instruction.legType === "METRO").map((step) => step.legIndex))
-      .toEqual([1, 1]);
+    expect(
+      voice.steps
+        .filter((step) => step.instruction.legType === "WALK")
+        .map((step) => step.legIndex),
+    ).toEqual([0, 0, 2, 2, 2]);
+    expect(
+      voice.steps
+        .filter((step) => step.instruction.legType === "METRO")
+        .map((step) => step.legIndex),
+    ).toEqual([1, 1]);
   });
 
   it("純步行（含 steps）回傳 depart + turn + arrive", () => {
@@ -232,9 +256,12 @@ describe("generateNavInstructions", () => {
     expect(instructions.at(-1)?.stairs).toBe(false);
     expect(result.data.initialBearing).toBe(19);
     expect(result.data.warnings).toHaveLength(0);
-    expect(instructions.map((instruction) => instruction.legIndex)).toEqual([0, 0, 0]);
-    expect(instructions.map((instruction) => instruction.cumulativeDistanceM))
-      .toEqual([0, 120, 200]);
+    expect(instructions.map((instruction) => instruction.legIndex)).toEqual([
+      0, 0, 0,
+    ]);
+    expect(
+      instructions.map((instruction) => instruction.cumulativeDistanceM),
+    ).toEqual([0, 120, 200]);
   });
 
   it("propagates stairs to navigation output and generates the warning text locally", () => {
@@ -268,9 +295,25 @@ describe("generateNavInstructions", () => {
     ];
     leg.steps = [
       { ...leg.steps![0], distanceM: 100, location: leg.polyline[0] },
-      { ...leg.steps![0], relativeDirection: "CONTINUE", distanceM: 5, location: leg.polyline[1] },
-      { ...leg.steps![0], relativeDirection: "LEFT", distanceM: 5, location: leg.polyline[2] },
-      { ...leg.steps![0], relativeDirection: "ELEVATOR", distanceM: 2, location: leg.polyline[3], instruction: "請進入電梯" },
+      {
+        ...leg.steps![0],
+        relativeDirection: "CONTINUE",
+        distanceM: 5,
+        location: leg.polyline[1],
+      },
+      {
+        ...leg.steps![0],
+        relativeDirection: "LEFT",
+        distanceM: 5,
+        location: leg.polyline[2],
+      },
+      {
+        ...leg.steps![0],
+        relativeDirection: "ELEVATOR",
+        distanceM: 2,
+        location: leg.polyline[3],
+        instruction: "請進入電梯",
+      },
     ];
     leg.exitInfo = {
       exitName: "M6",
@@ -282,17 +325,16 @@ describe("generateNavInstructions", () => {
     const result = generateNavInstructions({ legs: [leg] });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.data.instructions.map((instruction) => instruction.type)).toEqual([
-      "depart",
-      "turn",
-      "facility",
-      "facility",
-      "arrive",
-    ]);
+    expect(
+      result.data.instructions.map((instruction) => instruction.type),
+    ).toEqual(["depart", "turn", "facility", "facility", "arrive"]);
     expect(result.data.instructions[0].distanceM).toBe(105);
     expect(result.data.instructions[1].text).toContain("向左轉");
-    expect(result.data.instructions.filter((instruction) => instruction.type === "facility"))
-      .toHaveLength(2);
+    expect(
+      result.data.instructions.filter(
+        (instruction) => instruction.type === "facility",
+      ),
+    ).toHaveLength(2);
   });
 
   it("does not merge consecutive continuation steps when the named street changes", () => {
@@ -361,8 +403,10 @@ describe("generateNavInstructions", () => {
   });
 
   it("splits a long OTP step into polyline-grounded prompts no longer than 300 metres", () => {
-    const polyline = Array.from({ length: 7 }, (_, index) =>
-      [121.5 + index * 0.002, 25] as [number, number]);
+    const polyline = Array.from(
+      { length: 7 },
+      (_, index) => [121.5 + index * 0.002, 25] as [number, number],
+    );
     const leg: WalkLeg = {
       type: "WALK",
       from: "A",
@@ -371,16 +415,24 @@ describe("generateNavInstructions", () => {
       minutesEst: 16,
       polyline,
       a11yFacilities: [],
-      steps: [{
-        relativeDirection: "DEPART",
-        absoluteDirection: "EAST",
-        streetName: "長直路段",
-        bogusName: false,
-        area: false,
-        stairs: true,
-        distanceM: 1201,
-        location: polyline[0],
-      }],
+      maxSlopePercent: null,
+      crossings: null,
+      crossingsWithCurbRamp: null,
+      minPathWidthCm: null,
+      surfaceType: "unknown",
+      restPoints: [],
+      steps: [
+        {
+          relativeDirection: "DEPART",
+          absoluteDirection: "EAST",
+          streetName: "長直路段",
+          bogusName: false,
+          area: false,
+          stairs: true,
+          distanceM: 1201,
+          location: polyline[0],
+        },
+      ],
     };
 
     const result = generateNavInstructions({ legs: [leg] });
@@ -390,18 +442,30 @@ describe("generateNavInstructions", () => {
       (instruction) => instruction.type !== "arrive",
     );
     expect(prompts).toHaveLength(5);
-    expect(prompts.every((instruction) => (instruction.distanceM ?? 0) <= 300)).toBe(true);
-    expect(prompts.reduce((sum, instruction) => sum + (instruction.distanceM ?? 0), 0))
-      .toBe(1201);
-    expect(prompts.slice(1).every((instruction) => instruction.text.includes("繼續直行")))
-      .toBe(true);
+    expect(
+      prompts.every((instruction) => (instruction.distanceM ?? 0) <= 300),
+    ).toBe(true);
+    expect(
+      prompts.reduce(
+        (sum, instruction) => sum + (instruction.distanceM ?? 0),
+        0,
+      ),
+    ).toBe(1201);
+    expect(
+      prompts
+        .slice(1)
+        .every((instruction) => instruction.text.includes("繼續直行")),
+    ).toBe(true);
     expect(prompts.every((instruction) => instruction.stairs)).toBe(true);
-    expect(prompts.every((instruction) => instruction.text.includes("此路段含樓梯")))
-      .toBe(true);
+    expect(
+      prompts.every((instruction) => instruction.text.includes("此路段含樓梯")),
+    ).toBe(true);
   });
 
   it("reclassifies DEPART on later walk legs and exposes their public leg indexes", () => {
-    const result = generateNavInstructions({ legs: [walkWithSteps(), walkWithSteps()] });
+    const result = generateNavInstructions({
+      legs: [walkWithSteps(), walkWithSteps()],
+    });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const secondLeg = result.data.instructions.filter(
@@ -409,7 +473,9 @@ describe("generateNavInstructions", () => {
     );
     expect(secondLeg[0].type).toBe("turn");
     expect(secondLeg[0].text).not.toContain("出發");
-    expect(secondLeg.every((instruction) => instruction.legIndex === 1)).toBe(true);
+    expect(secondLeg.every((instruction) => instruction.legIndex === 1)).toBe(
+      true,
+    );
   });
 
   it("步行 + 捷運回傳 transit_board / transit_alight，電梯亮點觸發優先電梯句", () => {
@@ -418,8 +484,12 @@ describe("generateNavInstructions", () => {
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    const board = result.data.instructions.find((i) => i.type === "transit_board");
-    const alight = result.data.instructions.find((i) => i.type === "transit_alight");
+    const board = result.data.instructions.find(
+      (i) => i.type === "transit_board",
+    );
+    const alight = result.data.instructions.find(
+      (i) => i.type === "transit_alight",
+    );
     expect(board?.text).toContain("板南線");
     expect(board?.text).toContain("台北捷運");
     expect(board?.text).toContain("請優先使用電梯進站");
@@ -439,7 +509,9 @@ describe("generateNavInstructions", () => {
     const result = generateNavInstructions({ legs: [leg] });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    const facility = result.data.instructions.find((i) => i.type === "facility");
+    const facility = result.data.instructions.find(
+      (i) => i.type === "facility",
+    );
     expect(facility?.text).toContain("電梯");
   });
 
@@ -455,6 +527,12 @@ describe("generateNavInstructions", () => {
         [121.52, 25.05],
       ],
       a11yFacilities: [],
+      maxSlopePercent: null,
+      crossings: null,
+      crossingsWithCurbRamp: null,
+      minPathWidthCm: null,
+      surfaceType: "unknown",
+      restPoints: [],
       exitInfo: null,
     };
     const result = generateNavInstructions({ legs: [leg] });
@@ -551,7 +629,9 @@ describe("generateNavInstructions", () => {
     const result = generateNavInstructions({ legs: [thsr] });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    const board = result.data.instructions.find((i) => i.type === "transit_board");
+    const board = result.data.instructions.find(
+      (i) => i.type === "transit_board",
+    );
     expect(board?.text).toContain("0823");
     expect(board?.text).toContain("09:00");
   });

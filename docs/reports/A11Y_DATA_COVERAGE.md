@@ -19,10 +19,10 @@ Post 層 curated 資料（OsmA11y 11,242 點）對 134,377 個公車站而言**�
 
 ### 1.1 GTFS `stops.txt` — `wheelchair_boarding`：**整欄不存在**
 
-| feed | stops 總數 | `wheelchair_boarding` 欄 |
-|---|---|---|
-| feed-1.gtfs.zip（進 graph） | 161,755 | **不存在** |
-| taiwan-gtfs.zip（原始 TDX） | — | **不存在** |
+| feed                        | stops 總數 | `wheelchair_boarding` 欄 |
+| --------------------------- | ---------- | ------------------------ |
+| feed-1.gtfs.zip（進 graph） | 161,755    | **不存在**               |
+| taiwan-gtfs.zip（原始 TDX） | —          | **不存在**               |
 
 - location_type 分布：154,946 月台/站(0)、247 車站(1)、686 出入口(2)、5,876 generic node(3)。
 - **原始 TDX feed 本身就沒有這欄** → 不是 clean 腳本砍掉的，是 TDX 國家級 GTFS 不提供。
@@ -31,11 +31,11 @@ Post 層 curated 資料（OsmA11y 11,242 點）對 134,377 個公車站而言**�
 
 ### 1.2 GTFS `trips.txt` — `wheelchair_accessible`：164 / 150,070（0.11%）
 
-| 值 | 數量 | 說明 |
-|---|---|---|
-| EMPTY（unknown） | 149,906 | 套 `trip.unknownCost`(600) |
-| `1`（accessible） | 164 | **全部是 route_type 2（台鐵）** |
-| `2`（inaccessible） | 0 | 無 |
+| 值                  | 數量    | 說明                            |
+| ------------------- | ------- | ------------------------------- |
+| EMPTY（unknown）    | 149,906 | 套 `trip.unknownCost`(600)      |
+| `1`（accessible）   | 164     | **全部是 route_type 2（台鐵）** |
+| `2`（inaccessible） | 0       | 無                              |
 
 - 來源：`src/scripts/inject-tra-gtfs.py` 依台鐵 `WheelChairFlag=1` 注入；其餘**刻意留空不標 2**
   （腳本註解原文：標 2 或靠 3600s inaccessibleCost 會把輪椅規劃硬擠到那 164 班車）。
@@ -45,15 +45,15 @@ Post 層 curated 資料（OsmA11y 11,242 點）對 134,377 個公車站而言**�
 
 ### 1.3 GTFS `pathways.txt` — 車站內無障礙圖：**有料**
 
-| pathway_mode | 數量 | |
-|---|---|---|
-| 1 walkway | 6,618 | |
-| 2 stairs | 1,071 | 輪椅須避開 |
-| 4 escalator | 942 | |
-| **5 elevator** | **702** | **輪椅關鍵路徑** |
-| 6 fare gate | 402 | |
-| 7 exit gate | 345 | |
-| 3 moving sidewalk | 3 | |
+| pathway_mode      | 數量    |                  |
+| ----------------- | ------- | ---------------- |
+| 1 walkway         | 6,618   |                  |
+| 2 stairs          | 1,071   | 輪椅須避開       |
+| 4 escalator       | 942     |                  |
+| **5 elevator**    | **702** | **輪椅關鍵路徑** |
+| 6 fare gate       | 402     |                  |
+| 7 exit gate       | 345     |                  |
+| 3 moving sidewalk | 3       |                  |
 
 - 共 10,083 條 pathway，涵蓋 ~6,989 個 stop（捷運/台鐵站內的室內圖）。
 - **這是目前引擎層唯一真正有鑑別力的無障礙資料**：開 wheelchair 後，OTP 會走電梯(5)、
@@ -73,13 +73,13 @@ Post 層 curated 資料（OsmA11y 11,242 點）對 134,377 個公車站而言**�
 
 ### 2.1 `OsmA11y`：11,242 點（對照 134,377 公車站 → 極稀疏）
 
-| category | 數量 |
-|---|---|
+| category                                      | 數量  |
+| --------------------------------------------- | ----- |
 | wheelchair_accessible（泛 wheelchair=yes 點） | 8,812 |
-| kerb_cut | 1,390 |
-| toilet | 551 |
-| elevator | 489 |
-| ramp | **0** |
+| kerb_cut                                      | 1,390 |
+| toilet                                        | 551   |
+| elevator                                      | 489   |
+| ramp                                          | **0** |
 
 關鍵 tag 出現數：`wheelchair`=9,514、`toilets:wheelchair`=2,671、`kerb`=1,393、`tactile_paving`=94、
 `elevator`=22、**`ramp:wheelchair`=0、`incline`=0**。
@@ -98,15 +98,15 @@ Post 層 curated 資料（OsmA11y 11,242 點）對 134,377 個公車站而言**�
 
 ## 3. 哪些引擎旋鈕現在有效 / 無效
 
-| 旋鈕 | 現在有效？ | 原因 |
-|---|---|---|
-| `stop.inaccessibleCost` | ❌ 無效 | 無 stop 被標不可達（整欄缺） |
-| `stop.unknownCost` | ⚠️ 全域齊一 | 每站都 unknown，只改 walk↔transit 平衡，不分站 |
-| `trip.inaccessibleCost` | ⚠️ 極弱 | 只影響「164 台鐵 vs 其餘」，且腳本刻意不標 2 |
+| 旋鈕                                                      | 現在有效？  | 原因                                                   |
+| --------------------------------------------------------- | ----------- | ------------------------------------------------------ |
+| `stop.inaccessibleCost`                                   | ❌ 無效     | 無 stop 被標不可達（整欄缺）                           |
+| `stop.unknownCost`                                        | ⚠️ 全域齊一 | 每站都 unknown，只改 walk↔transit 平衡，不分站         |
+| `trip.inaccessibleCost`                                   | ⚠️ 極弱     | 只影響「164 台鐵 vs 其餘」，且腳本刻意不標 2           |
 | `wheelchairAccessibility.elevator.*` + `stairsReluctance` | ✅ **有效** | 702 電梯 / 1,071 樓梯在 pathways，站內輪椅路徑真的在算 |
-| `accessEgress.maxDuration` | ✅ 全域有效 | 影響所有人步行段長度 |
-| `walkSpeed`（per-request） | ✅ 有效 | E2，最乾淨 |
-| `maxSlope` / `inaccessibleStreetReluctance` | ❓ 疑似無料 | OSM 街道坡度/輪椅 tag 近乎零（代理證據），待 §5 確認 |
+| `accessEgress.maxDuration`                                | ✅ 全域有效 | 影響所有人步行段長度                                   |
+| `walkSpeed`（per-request）                                | ✅ 有效     | E2，最乾淨                                             |
+| `maxSlope` / `inaccessibleStreetReluctance`               | ❓ 疑似無料 | OSM 街道坡度/輪椅 tag 近乎零（代理證據），待 §5 確認   |
 
 ---
 
@@ -135,6 +135,7 @@ Post 層 curated 資料（OsmA11y 11,242 點）對 134,377 個公車站而言**�
 ## 6. 待辦：OSM pbf 街道 tag 精確量測（本次未做）
 
 本機缺工具。建議擇一：
+
 - `osmium tags-filter taiwan-otp.osm.pbf w/wheelchair w/incline w/kerb w/highway=steps -o /tmp/a11y.osm.pbf` 後計數；或
 - `pip install pyosmium` 寫 handler 計數 highway way 上 `wheelchair`/`incline` 出現比例；或
 - 讀 OTP build 的 `DataImportIssues` 報表（建圖時加 `--save` 並開啟 issue report）。
@@ -149,14 +150,14 @@ Post 層 curated 資料（OsmA11y 11,242 點）對 134,377 個公車站而言**�
 > 結論先講：**最高槓桿的「捷運+台鐵站 `wheelchair_boarding`」可由公開資料補齊**（TDX StationFacility
 > ＋ OSM/data.taipei 補 TRTC）；公車低地板與 OSM 街道坡度則「開放但不易直接灌」，ROI 低、短期不追。
 
-| 缺口 | 公開來源 | 取得方式 | 覆蓋／品質 | 已接線？ | ROI |
-|---|---|---|---|---|---|
-| **A. 捷運+台鐵站 `wheelchair_boarding`**（~509 站） | **TDX StationFacility**（Metro/THSR/TRA，`FacilityType`=1 電梯/3 無障礙廁所…）；**OSM** Overpass（`highway=elevator`、`wheelchair`）；**data.taipei / 各市開放平臺** 捷運無障礙電梯位置 | OData API（已有 `TdxMetroStationFacility`/`TdxThsrStationFacility`/`TdxTraStationFacility` 型別）；Overpass（已有 `import-osm-a11y.ts`） | 非 TRTC 的鐵路/捷運 TDX 可用；**TRTC 電梯在 TDX 為空（已知）→ 用 OSM/data.taipei 補** | TDX 型別已備、metro facility 已部分使用 | ★★★ 最高 |
-| **B. 公車 trip `wheelchair_accessible`（低地板）** | TDX 公車（per-vehicle 低地板不穩定）；部分縣市/業者低地板班表 | — | 全國 per-trip 覆蓋弱、業者相依 | ❌ 未接 | ★ 低，短期不追 |
-| **C. OSM 街道 `incline`/`kerb`/`wheelchair`** | OSM 本身；各市人行道/騎樓 GIS（如臺北人行道圖資） | Overpass / 市府 GIS（需轉檔灌入 OTP pbf） | 台灣街道坡度 tag 近乎零；GIS 非 OSM 格式、灌入 OTP 工程大 | ❌ | ★ 低（engine maxSlope 暫無料），改由 post 層 |
-| **D. 無障礙廁所** | **環境部 全國公廁** open data（含無障礙旗標+座標）；OSM `toilets:wheelchair` | data.gov.tw 下載；Overpass | 已有 bathrooms 7,180 + OSM 2,671，覆蓋尚可 | ✅ 部分（bathrooms 集合） | ★★ 可增補 |
-| **E. 即時電梯/電扶梯故障** | 各捷運公司（TRTC 等）即時電梯狀態；TDX 部分 | 業者 API | 用於 post 層即時 overlay（已有 `overlayFacilityStatus` 基礎） | ✅ 基礎已有 | ★★ |
-| **F. 站內電梯/樓梯**（pathways） | 已具備（GTFS pathways 702 電梯） | — | 已在 graph | ✅ | — |
+| 缺口                                                | 公開來源                                                                                                                                                                                | 取得方式                                                                                                                                 | 覆蓋／品質                                                                            | 已接線？                                | ROI                                          |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | --------------------------------------- | -------------------------------------------- |
+| **A. 捷運+台鐵站 `wheelchair_boarding`**（~509 站） | **TDX StationFacility**（Metro/THSR/TRA，`FacilityType`=1 電梯/3 無障礙廁所…）；**OSM** Overpass（`highway=elevator`、`wheelchair`）；**data.taipei / 各市開放平臺** 捷運無障礙電梯位置 | OData API（已有 `TdxMetroStationFacility`/`TdxThsrStationFacility`/`TdxTraStationFacility` 型別）；Overpass（已有 `import-osm-a11y.ts`） | 非 TRTC 的鐵路/捷運 TDX 可用；**TRTC 電梯在 TDX 為空（已知）→ 用 OSM/data.taipei 補** | TDX 型別已備、metro facility 已部分使用 | ★★★ 最高                                     |
+| **B. 公車 trip `wheelchair_accessible`（低地板）**  | TDX 公車（per-vehicle 低地板不穩定）；部分縣市/業者低地板班表                                                                                                                           | —                                                                                                                                        | 全國 per-trip 覆蓋弱、業者相依                                                        | ❌ 未接                                 | ★ 低，短期不追                               |
+| **C. OSM 街道 `incline`/`kerb`/`wheelchair`**       | OSM 本身；各市人行道/騎樓 GIS（如臺北人行道圖資）                                                                                                                                       | Overpass / 市府 GIS（需轉檔灌入 OTP pbf）                                                                                                | 台灣街道坡度 tag 近乎零；GIS 非 OSM 格式、灌入 OTP 工程大                             | ❌                                      | ★ 低（engine maxSlope 暫無料），改由 post 層 |
+| **D. 無障礙廁所**                                   | **環境部 全國公廁** open data（含無障礙旗標+座標）；OSM `toilets:wheelchair`                                                                                                            | data.gov.tw 下載；Overpass                                                                                                               | 已有 bathrooms 7,180 + OSM 2,671，覆蓋尚可                                            | ✅ 部分（bathrooms 集合）               | ★★ 可增補                                    |
+| **E. 即時電梯/電扶梯故障**                          | 各捷運公司（TRTC 等）即時電梯狀態；TDX 部分                                                                                                                                             | 業者 API                                                                                                                                 | 用於 post 層即時 overlay（已有 `overlayFacilityStatus` 基礎）                         | ✅ 基礎已有                             | ★★                                           |
+| **F. 站內電梯/樓梯**（pathways）                    | 已具備（GTFS pathways 702 電梯）                                                                                                                                                        | —                                                                                                                                        | 已在 graph                                                                            | ✅                                      | —                                            |
 
 **A 的具體作法（E5 #1，已落地）**：`build-otp-graph.sh` 步驟 1d → `inject-station-wheelchair.py`。
 ⚠️ 實測修正（2026-06-17）：TDX Metro StationFacility 的真實 schema 是 **top-level `Elevators` 陣列 + `StationID` 鍵**

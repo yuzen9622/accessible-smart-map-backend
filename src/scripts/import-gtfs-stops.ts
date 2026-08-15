@@ -46,12 +46,10 @@ async function main() {
     const row = parseLine(headers, values);
 
     const locationType = parseInt(row.location_type || "0", 10) as
-      | 0
-      | 1
-      | 2
-      | 3;
+      0 | 1 | 2 | 3;
 
-    const hasCoords = !isNaN(parseFloat(row.stop_lat)) && !isNaN(parseFloat(row.stop_lon));
+    const hasCoords =
+      !isNaN(parseFloat(row.stop_lat)) && !isNaN(parseFloat(row.stop_lon));
     if (!row.stop_id) continue;
     if (locationType === 0 && !hasCoords) continue;
     const lat = hasCoords ? parseFloat(row.stop_lat) : 0;

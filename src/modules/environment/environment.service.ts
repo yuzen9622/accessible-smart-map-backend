@@ -31,7 +31,8 @@ import type {
 
 function reasonOf(err: unknown): string {
   if (err instanceof ResilienceError) return err.reason;
-  if (err instanceof UpstreamBadPayloadError) return ENV_REASON.UPSTREAM_BAD_PAYLOAD;
+  if (err instanceof UpstreamBadPayloadError)
+    return ENV_REASON.UPSTREAM_BAD_PAYLOAD;
   if (err instanceof UpstreamHttpError) return ENV_REASON.UPSTREAM_HTTP_ERROR;
   return ENV_REASON.UPSTREAM_HTTP_ERROR;
 }
@@ -51,7 +52,10 @@ async function loadWeather(lat: number, lng: number): Promise<WeatherBlock> {
   return block;
 }
 
-async function loadAirQuality(lat: number, lng: number): Promise<AirQualityBlock> {
+async function loadAirQuality(
+  lat: number,
+  lng: number,
+): Promise<AirQualityBlock> {
   const cacheKey = airCacheKey(lat, lng);
   const cached = await redisGet(cacheKey);
   if (cached) return JSON.parse(cached) as AirQualityBlock;
@@ -152,10 +156,17 @@ export async function getEnvironmentInfo(
 
   return {
     location: { lat, lng },
-    weather: weather.status === "fulfilled" ? weather.value : unavailable(weather.reason),
+    weather:
+      weather.status === "fulfilled"
+        ? weather.value
+        : unavailable(weather.reason),
     airQuality:
-      airQuality.status === "fulfilled" ? airQuality.value : unavailable(airQuality.reason),
+      airQuality.status === "fulfilled"
+        ? airQuality.value
+        : unavailable(airQuality.reason),
     nearbyCctv:
-      nearbyCctv.status === "fulfilled" ? nearbyCctv.value : unavailable(nearbyCctv.reason),
+      nearbyCctv.status === "fulfilled"
+        ? nearbyCctv.value
+        : unavailable(nearbyCctv.reason),
   };
 }

@@ -1,4 +1,7 @@
-import type { EntranceAccessibility, PlaceType } from "../../model/review.model";
+import type {
+  EntranceAccessibility,
+  PlaceType,
+} from "../../model/review.model";
 
 export type { EntranceAccessibility, PlaceType };
 

@@ -24,12 +24,12 @@ OTP 官方目前的開發主幹是 `dev-2.x`，不是 `main`。2026-07-30 所取
 
 本報告把「自訂演算法」分成四種不同深度，避免把改權重誤稱為換演算法：
 
-| 策略 | 真正改變什麼 | 是否 fork OTP | 適合本專案 |
-|---|---|---:|---|
-| A. 請求/設定 | 既有 A*、McRangeRaptor 的成本與約束 | 否 | 立刻做 |
-| B. OTP 內擴充 | edge cost、cost calculator、Pareto、filter，甚至 worker | 是，或向 upstream 合併 | 僅搜尋階段確有缺口時 |
-| C. sidecar/後處理 | OTP 產生候選，外部服務補資料、Pareto/重排 | 否 | **目前最佳解** |
-| D. 完全替換 | 自己讀 GTFS/OSM/RT、建圖並搜尋 | 否，但等同另造引擎 | 目前不建議 |
+| 策略              | 真正改變什麼                                            |          是否 fork OTP | 適合本專案           |
+| ----------------- | ------------------------------------------------------- | ---------------------: | -------------------- |
+| A. 請求/設定      | 既有 A*、McRangeRaptor 的成本與約束                     |                     否 | 立刻做               |
+| B. OTP 內擴充     | edge cost、cost calculator、Pareto、filter，甚至 worker | 是，或向 upstream 合併 | 僅搜尋階段確有缺口時 |
+| C. sidecar/後處理 | OTP 產生候選，外部服務補資料、Pareto/重排               |                     否 | **目前最佳解**       |
+| D. 完全替換       | 自己讀 GTFS/OSM/RT、建圖並搜尋                          |     否，但等同另造引擎 | 目前不建議           |
 
 「官方未驗證」的邊界：本次沒有找到官方文件宣告穩定的 algorithm
 `ServiceLoader`、plugin registry 或跨版本 binary compatibility；這是對上述固定
@@ -280,16 +280,16 @@ const candidates = [
   { id: "C", arrival: 55, transfers: 1, walkM: 400, risk: 20 },
   { id: "D", arrival: 42, transfers: 2, walkM: 100, risk: 0 },
 ];
-const gc = r => r.arrival + 8*r.transfers + 0.02*r.walkM + 0.3*r.risk;
-const vector = r => [r.arrival, r.transfers, gc(r)];
+const gc = (r) => r.arrival + 8 * r.transfers + 0.02 * r.walkM + 0.3 * r.risk;
+const vector = (r) => [r.arrival, r.transfers, gc(r)];
 const dominates = (a, b) =>
   vector(a).every((x, i) => x <= vector(b)[i]) &&
   vector(a).some((x, i) => x < vector(b)[i]);
-const front = candidates.filter(a =>
-  !candidates.some(b => b !== a && dominates(b, a))
+const front = candidates.filter(
+  (a) => !candidates.some((b) => b !== a && dominates(b, a)),
 );
-console.log(candidates.map(r => `${r.id}:${gc(r)}`).join(" "));
-console.log("pareto=" + front.map(r => r.id).join(","));
+console.log(candidates.map((r) => `${r.id}:${gc(r)}`).join(" "));
+console.log("pareto=" + front.map((r) => r.id).join(","));
 ```
 
 本研究實際以系統 Node 執行，輸出：

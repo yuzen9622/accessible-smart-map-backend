@@ -1,9 +1,18 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import request from "supertest";
 
 vi.mock("./place-search.service", async () => {
-  const actual =
-    await vi.importActual<typeof import("./place-search.service")>("./place-search.service");
+  const actual = await vi.importActual<typeof import("./place-search.service")>(
+    "./place-search.service",
+  );
   return {
     ...actual,
     autocomplete: vi.fn(),
@@ -11,11 +20,22 @@ vi.mock("./place-search.service", async () => {
   };
 });
 
-import { buildTestApp } from "../../../tests/helpers/test-helpers";
+import {
+  startTestServer,
+  stopTestServer,
+} from "../../../tests/helpers/test-helpers";
 import * as service from "./place-search.service";
 
-const app = buildTestApp();
+let app: Awaited<ReturnType<typeof startTestServer>>;
 const BASE = "/api/v1/a11y";
+
+beforeAll(async () => {
+  app = await startTestServer();
+});
+
+afterAll(async () => {
+  await stopTestServer(app);
+});
 
 const autocompleteItem = (): service.AutocompleteItem => ({
   id: "osm:node:123456",
@@ -113,9 +133,13 @@ describe("GET /a11y/search/autocomplete", () => {
   it("normalizes the lang tag before handing it to the service", async () => {
     vi.mocked(service.autocomplete).mockResolvedValue([]);
 
-    await request(app).get(`${BASE}/search/autocomplete`).query({ q: "台北", lang: "en-US" });
+    await request(app)
+      .get(`${BASE}/search/autocomplete`)
+      .query({ q: "台北", lang: "en-US" });
 
-    expect(service.autocomplete).toHaveBeenCalledWith(expect.objectContaining({ lang: "en" }));
+    expect(service.autocomplete).toHaveBeenCalledWith(
+      expect.objectContaining({ lang: "en" }),
+    );
   });
 
   it("returns 400 on an unsupported lang tag", async () => {
@@ -151,14 +175,18 @@ describe("GET /a11y/search/autocomplete", () => {
   it("returns 200 with an empty list when the service degrades", async () => {
     vi.mocked(service.autocomplete).mockResolvedValue([]);
 
-    const res = await request(app).get(`${BASE}/search/autocomplete`).query({ q: "zzz" });
+    const res = await request(app)
+      .get(`${BASE}/search/autocomplete`)
+      .query({ q: "zzz" });
 
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual([]);
   });
 
   it("returns 400 when q is missing", async () => {
-    const res = await request(app).get(`${BASE}/search/autocomplete`).query({ sessiontoken: "tok" });
+    const res = await request(app)
+      .get(`${BASE}/search/autocomplete`)
+      .query({ sessiontoken: "tok" });
 
     expect(res.status).toBe(400);
     expect(service.autocomplete).not.toHaveBeenCalled();
@@ -183,7 +211,12 @@ describe("GET /a11y/search/details/:id", () => {
       .query({ sessiontoken: "tok", lat: "25.03", lng: "121.5" });
 
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ ok: true, status: "success", code: 200, data });
+    expect(res.body).toMatchObject({
+      ok: true,
+      status: "success",
+      code: 200,
+      data,
+    });
     expect(res.body.data.accessibility).toMatchObject({
       wheelchairAccess: true,
       elevator: null,
@@ -208,13 +241,17 @@ describe("GET /a11y/search/details/:id", () => {
 
     expect(res.status).toBe(404);
     expect(res.body.message).toBe("Place not found");
-    expect(service.details).toHaveBeenCalledWith(expect.objectContaining({ lang: "en" }));
+    expect(service.details).toHaveBeenCalledWith(
+      expect.objectContaining({ lang: "en" }),
+    );
   });
 
   it("accepts an osm id", async () => {
     vi.mocked(service.details).mockResolvedValue(placeResult());
 
-    const res = await request(app).get(`${BASE}/search/details/osm:node:123456`);
+    const res = await request(app).get(
+      `${BASE}/search/details/osm:node:123456`,
+    );
 
     expect(res.status).toBe(200);
     expect(service.details).toHaveBeenCalledWith(
@@ -230,7 +267,9 @@ describe("GET /a11y/search/details/:id", () => {
   });
 
   it("returns 400 on an unknown prefix", async () => {
-    const res = await request(app).get(`${BASE}/search/details/metro:TRTC-BL12`);
+    const res = await request(app).get(
+      `${BASE}/search/details/metro:TRTC-BL12`,
+    );
 
     expect(res.status).toBe(400);
     expect(service.details).not.toHaveBeenCalled();
@@ -246,7 +285,9 @@ describe("GET /a11y/search/details/:id", () => {
   it("returns 404 when the place is unresolvable", async () => {
     vi.mocked(service.details).mockResolvedValue(null);
 
-    const res = await request(app).get(`${BASE}/search/details/google:ChIJmissing`);
+    const res = await request(app).get(
+      `${BASE}/search/details/google:ChIJmissing`,
+    );
 
     expect(res.status).toBe(404);
     expect(res.body.ok).toBe(false);

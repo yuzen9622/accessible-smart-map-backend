@@ -1,4 +1,5 @@
 # 有聲號誌無障礙路徑規劃（視障優先）
+
 ## Functional Specification — Audible Pedestrian Signal Routing
 
 **版本**：v1.0.0  
@@ -40,14 +41,14 @@
 
 ### 1.2 功能定位
 
-| 組件 | 本功能角色 |
-|------|-----------|
-| OTP2 sidecar | 不異動。重型 journey planning 維持現狀 |
-| ORS | 不異動。步行 / 輪椅路段引擎 |
-| `scoring.ts` | 新增 `apsSignalBonus` 計算邏輯（post 層） |
-| `ApsSignal` collection | 新增。儲存全台有聲號誌路口，2dsphere 索引 |
-| `import-aps.ts` | 新增。逐縣市呼叫 TDX CityAPS，bulkWrite upsert |
-| `route-a11y.ts` | 擴充 `enrichTopRoutes`：`visual_impaired` 模式額外做 APS geo 查詢 |
+| 組件                   | 本功能角色                                                        |
+| ---------------------- | ----------------------------------------------------------------- |
+| OTP2 sidecar           | 不異動。重型 journey planning 維持現狀                            |
+| ORS                    | 不異動。步行 / 輪椅路段引擎                                       |
+| `scoring.ts`           | 新增 `apsSignalBonus` 計算邏輯（post 層）                         |
+| `ApsSignal` collection | 新增。儲存全台有聲號誌路口，2dsphere 索引                         |
+| `import-aps.ts`        | 新增。逐縣市呼叫 TDX CityAPS，bulkWrite upsert                    |
+| `route-a11y.ts`        | 擴充 `enrichTopRoutes`：`visual_impaired` 模式額外做 APS geo 查詢 |
 
 ---
 
@@ -61,11 +62,11 @@
 
 ### 2.2 非功能目標
 
-| 目標 | 說明 |
-|------|------|
-| 不改動路由引擎 | 全部邏輯在 post 層，不動 OTP2 / ORS |
-| 靜態資料預先匯入 | CityAPS 為靜態 API，不在 query 時即時呼叫 TDX，避免觸發 429 |
-| 向後相容 | 新增欄位均為 optional，不破壞現有 `wheelchair` / `normal` 路線回應 |
+| 目標               | 說明                                                                            |
+| ------------------ | ------------------------------------------------------------------------------- |
+| 不改動路由引擎     | 全部邏輯在 post 層，不動 OTP2 / ORS                                             |
+| 靜態資料預先匯入   | CityAPS 為靜態 API，不在 query 時即時呼叫 TDX，避免觸發 429                     |
+| 向後相容           | 新增欄位均為 optional，不破壞現有 `wheelchair` / `normal` 路線回應              |
 | 與評分引擎架構對齊 | 遵循 `A11Y_SCORING_REWORK.md` 的兩段式排序（prerank → enrich top-N → re-score） |
 
 ---
@@ -114,14 +115,14 @@ src/
 
 ### 4.1 API 概覽
 
-| 項目 | 值 |
-|------|----|
-| 資料集名稱 | CityAPS — 無障礙號誌（有聲號誌） |
-| API 類型 | RESTful 靜態 JSON |
-| 認證 | TDX OAuth2（現有 `TdxTokenManger` singleton） |
-| 呼叫方式 | 現有 `tdxFetch()`（`src/config/fetch.ts`） |
-| 更新頻率 | 靜態，每月或按縣市公告更新 |
-| 分縣市 | 是。需逐縣市查詢 |
+| 項目       | 值                                            |
+| ---------- | --------------------------------------------- |
+| 資料集名稱 | CityAPS — 無障礙號誌（有聲號誌）              |
+| API 類型   | RESTful 靜態 JSON                             |
+| 認證       | TDX OAuth2（現有 `TdxTokenManger` singleton） |
+| 呼叫方式   | 現有 `tdxFetch()`（`src/config/fetch.ts`）    |
+| 更新頻率   | 靜態，每月或按縣市公告更新                    |
+| 分縣市     | 是。需逐縣市查詢                              |
 
 ### 4.2 端點與查詢模式
 
@@ -152,17 +153,17 @@ TaitungCounty / KinmenCounty / PenghuCounty / LienchiangCounty
 
 TDX CityAPS API 回傳的欄位依縣市可能略有差異，以下為常見可用欄位（⚠️ 部分欄位待以實際 API 回應驗證）：
 
-| TDX 欄位 | 說明 | 對應 ApsSignal 欄位 |
-|----------|------|---------------------|
-| `IntersectionID` | 路口識別碼 | `intersectionId` |
-| `IntersectionName` | 路口名稱（如「忠孝東路/敦化南路口」） | `intersectionName` |
-| `PositionLon` | 經度 | `location.coordinates[0]` |
-| `PositionLat` | 緯度 | `location.coordinates[1]` |
-| `HasAudibleSignal` | 是否具有語音提示 | `hasAudibleSignal` |
-| `HasTactilePaving` | 是否具有觸覺引導設施 | `hasTactilePaving` |
-| `CityCode` | 縣市代碼 | `cityCode` |
-| `Direction` | 可服務方向描述（若提供） | `direction` |
-| `UpdateTime` | 資料更新時間 | `updatedAt`（匯入時覆寫） |
+| TDX 欄位           | 說明                                  | 對應 ApsSignal 欄位       |
+| ------------------ | ------------------------------------- | ------------------------- |
+| `IntersectionID`   | 路口識別碼                            | `intersectionId`          |
+| `IntersectionName` | 路口名稱（如「忠孝東路/敦化南路口」） | `intersectionName`        |
+| `PositionLon`      | 經度                                  | `location.coordinates[0]` |
+| `PositionLat`      | 緯度                                  | `location.coordinates[1]` |
+| `HasAudibleSignal` | 是否具有語音提示                      | `hasAudibleSignal`        |
+| `HasTactilePaving` | 是否具有觸覺引導設施                  | `hasTactilePaving`        |
+| `CityCode`         | 縣市代碼                              | `cityCode`                |
+| `Direction`        | 可服務方向描述（若提供）              | `direction`               |
+| `UpdateTime`       | 資料更新時間                          | `updatedAt`（匯入時覆寫） |
 
 > ⚠️ 待確認：`HasTactilePaving` 是否為所有縣市均有的欄位；部分縣市可能僅提供 `HasAudibleSignal`。
 
@@ -180,17 +181,17 @@ TDX CityAPS API 回傳的欄位依縣市可能略有差異，以下為常見可�
 import { Schema, model, Document } from "mongoose";
 
 export interface IApsSignal extends Document {
-  intersectionId: string;        // TDX IntersectionID，全台唯一鍵
-  intersectionName: string;      // 路口名稱
-  cityCode: string;              // 縣市代碼，例如 "Taipei"
+  intersectionId: string; // TDX IntersectionID，全台唯一鍵
+  intersectionName: string; // 路口名稱
+  cityCode: string; // 縣市代碼，例如 "Taipei"
   location: {
     type: "Point";
     coordinates: [number, number]; // [lng, lat]
   };
-  hasAudibleSignal: boolean;     // 是否具有語音提示
-  hasTactilePaving: boolean;     // 是否具有觸覺引導設施（⚠️ 待確認欄位覆蓋率）
-  direction?: string;            // 可服務方向描述（若 API 提供）
-  updatedAt: Date;               // 匯入時間
+  hasAudibleSignal: boolean; // 是否具有語音提示
+  hasTactilePaving: boolean; // 是否具有觸覺引導設施（⚠️ 待確認欄位覆蓋率）
+  direction?: string; // 可服務方向描述（若 API 提供）
+  updatedAt: Date; // 匯入時間
 }
 
 const ApsSignalSchema = new Schema<IApsSignal>({
@@ -217,11 +218,11 @@ export const ApsSignalModel = model<IApsSignal>("ApsSignal", ApsSignalSchema);
 
 **Index 設計說明**
 
-| 索引 | 用途 |
-|------|------|
-| `location` (2dsphere) | walk leg 路段附近路口查詢（`$near`） |
-| `intersectionId` (unique) | bulkWrite upsert 唯一鍵 |
-| `{ cityCode, hasAudibleSignal }` | 未來縣市層級統計或管理查詢 |
+| 索引                             | 用途                                 |
+| -------------------------------- | ------------------------------------ |
+| `location` (2dsphere)            | walk leg 路段附近路口查詢（`$near`） |
+| `intersectionId` (unique)        | bulkWrite upsert 唯一鍵              |
+| `{ cityCode, hasAudibleSignal }` | 未來縣市層級統計或管理查詢           |
 
 ---
 
@@ -252,22 +253,22 @@ npx ts-node src/scripts/import-aps.ts
 
 ### 6.3 節流策略
 
-| 參數 | 預設值 | 說明 |
-|------|--------|------|
-| 縣市間延遲 | 1500 ms | 每個縣市呼叫完成後等待，避免 burst |
-| 429 退避 | 2000 ms + 重試一次 | 單次限流時的退避 |
-| 分頁大小 | 500 | TDX 建議最大值 |
-| 批次 bulkWrite | 500 筆 | 與分頁對齊 |
+| 參數           | 預設值             | 說明                               |
+| -------------- | ------------------ | ---------------------------------- |
+| 縣市間延遲     | 1500 ms            | 每個縣市呼叫完成後等待，避免 burst |
+| 429 退避       | 2000 ms + 重試一次 | 單次限流時的退避                   |
+| 分頁大小       | 500                | TDX 建議最大值                     |
+| 批次 bulkWrite | 500 筆             | 與分頁對齊                         |
 
 > 因 CityAPS 為靜態資料，匯入腳本**不在應用程式啟動時自動執行**，須由運維人員手動或排程觸發（見 §9 Roadmap）。
 
 ### 6.4 更新策略
 
-| 頻率 | 動作 |
-|------|------|
-| 每月 | 執行 `import-aps.ts`，以 upsert 更新所有縣市資料 |
-| 縣市新增 | 修改 `APS_CITIES` 環境變數後重新執行腳本 |
-| 緊急修正 | 直接對 MongoDB `ApsSignal` 集合執行修補 |
+| 頻率     | 動作                                             |
+| -------- | ------------------------------------------------ |
+| 每月     | 執行 `import-aps.ts`，以 upsert 更新所有縣市資料 |
+| 縣市新增 | 修改 `APS_CITIES` 環境變數後重新執行腳本         |
+| 緊急修正 | 直接對 MongoDB `ApsSignal` 集合執行修補          |
 
 ### 6.5 預估資料規模（⚠️ 待確認）
 
@@ -307,8 +308,8 @@ if (mode === "visual_impaired") {
  */
 export async function enrichWalkLegsWithApsSignals(
   legs: (WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg)[],
-  radiusM: number = 40
-): Promise<void>
+  radiusM: number = 40,
+): Promise<void>;
 ```
 
 **查詢邏輯**
@@ -332,7 +333,9 @@ const nearbySignals = await ApsSignalModel.find({
     },
   },
   hasAudibleSignal: true,
-}).select("intersectionId intersectionName location hasTactilePaving").lean();
+})
+  .select("intersectionId intersectionName location hasTactilePaving")
+  .lean();
 ```
 
 ### 7.4 評分加成機制
@@ -344,7 +347,7 @@ const nearbySignals = await ApsSignalModel.find({
 ```typescript
 // 現有：僅讀 OsmA11y tag
 const hasAudioSignal = facilityNodes.some(
-  (n) => n.tags?.["traffic_signals:sound"] === "yes"
+  (n) => n.tags?.["traffic_signals:sound"] === "yes",
 );
 
 // 修改後：OsmA11y tag OR ApsSignal 查詢結果（任一成立即為 true）
@@ -412,8 +415,8 @@ Stage 3: scoreRoute()（有 apsSignals 資料後重算）
 
 本功能**不新增端點**。所有修改在現有端點的回應 schema 中體現：
 
-| Method | Path | 影響說明 |
-|--------|------|---------|
+| Method | Path                            | 影響說明                                     |
+| ------ | ------------------------------- | -------------------------------------------- |
 | `POST` | `/api/v1/a11y/accessible-route` | `WalkLeg` 新增 `apsSignals` 欄位（optional） |
 
 ### 8.2 WalkLeg 新增欄位
@@ -431,11 +434,11 @@ type WalkLeg = {
   polyline: string;
   a11yFacilities: OsmA11yFeature[];
   exitInfo?: A11yExit;
-  accessibilityHighlights?: string[];   // 現有（補充型別定義）
-  
+  accessibilityHighlights?: string[]; // 現有（補充型別定義）
+
   // 新增（optional，不影響現有呼叫端）
   apsSignals?: ApsSignalSummary[];
-}
+};
 
 // 新增輔助型別（輕量，不回傳完整 IApsSignal document）
 type ApsSignalSummary = {
@@ -444,7 +447,7 @@ type ApsSignalSummary = {
   lat: number;
   lng: number;
   hasTactilePaving: boolean;
-}
+};
 ```
 
 ### 8.3 回應範例（mode=visual_impaired，有 APS 資料）
@@ -487,7 +490,7 @@ type ApsSignalSummary = {
                 "intersectionId": "APS-TPE-001235",
                 "intersectionName": "忠孝東路四段/大安路口",
                 "lat": 25.0412,
-                "lng": 121.5460,
+                "lng": 121.546,
                 "hasTactilePaving": false
               }
             ]
@@ -521,28 +524,28 @@ type ApsSignalSummary = {
 
 ### 8.5 錯誤處理
 
-| 情境 | 行為 |
-|------|------|
-| `ApsSignal` collection 為空（未匯入） | `apsSignals = []`，評分不加成，回傳仍正常（不報錯） |
-| MongoDB `$near` 查詢逾時 | fail-soft：`apsSignals = []`，記 warning log，不影響路線回傳 |
-| mode 非 `visual_impaired` | 直接略過 `enrichWalkLegsWithApsSignals`，效能零影響 |
+| 情境                                  | 行為                                                         |
+| ------------------------------------- | ------------------------------------------------------------ |
+| `ApsSignal` collection 為空（未匯入） | `apsSignals = []`，評分不加成，回傳仍正常（不報錯）          |
+| MongoDB `$near` 查詢逾時              | fail-soft：`apsSignals = []`，記 warning log，不影響路線回傳 |
+| mode 非 `visual_impaired`             | 直接略過 `enrichWalkLegsWithApsSignals`，效能零影響          |
 
 ---
 
 ## 9. 實作 Roadmap
 
-| 階段 | 任務 | 依賴 |
-|------|------|------|
-| **Phase A** | 建立 `ApsSignalModel`（`aps-signal.model.ts`），含 2dsphere index | 無 |
-| **Phase A** | 撰寫 `import-aps.ts`，實作逐縣市拉取 + 節流 + bulkWrite upsert | Phase A 模型 |
-| **Phase A** | 手動執行匯入腳本，驗證至少台北市資料正確入庫 | Phase A 腳本 |
-| **Phase B** | 在 `route-a11y.ts` 新增 `enrichWalkLegsWithApsSignals()` | Phase A 入庫 |
-| **Phase B** | 修改 `scoring.ts`：`hasAudioSignal` / `hasTactilePaving` 加入 APS 來源 | Phase B enrich |
-| **Phase B** | 修改 `accessible-route.service.ts`：`finalizeRoutes` Stage 2 加入 APS enrich 呼叫 | Phase B 函式 |
-| **Phase C** | 補充型別定義：`WalkLeg.apsSignals`、`ApsSignalSummary` | Phase B |
-| **Phase C** | 更新 OpenAPI schema（`document.ts`） | Phase C 型別 |
-| **Phase C** | 撰寫單元測試（見 §10） | Phase B |
-| **Phase D** | 設定定期匯入排程（cron 或 CI/CD job），更新策略文件 | Phase A + DevOps |
+| 階段        | 任務                                                                              | 依賴             |
+| ----------- | --------------------------------------------------------------------------------- | ---------------- |
+| **Phase A** | 建立 `ApsSignalModel`（`aps-signal.model.ts`），含 2dsphere index                 | 無               |
+| **Phase A** | 撰寫 `import-aps.ts`，實作逐縣市拉取 + 節流 + bulkWrite upsert                    | Phase A 模型     |
+| **Phase A** | 手動執行匯入腳本，驗證至少台北市資料正確入庫                                      | Phase A 腳本     |
+| **Phase B** | 在 `route-a11y.ts` 新增 `enrichWalkLegsWithApsSignals()`                          | Phase A 入庫     |
+| **Phase B** | 修改 `scoring.ts`：`hasAudioSignal` / `hasTactilePaving` 加入 APS 來源            | Phase B enrich   |
+| **Phase B** | 修改 `accessible-route.service.ts`：`finalizeRoutes` Stage 2 加入 APS enrich 呼叫 | Phase B 函式     |
+| **Phase C** | 補充型別定義：`WalkLeg.apsSignals`、`ApsSignalSummary`                            | Phase B          |
+| **Phase C** | 更新 OpenAPI schema（`document.ts`）                                              | Phase C 型別     |
+| **Phase C** | 撰寫單元測試（見 §10）                                                            | Phase B          |
+| **Phase D** | 設定定期匯入排程（cron 或 CI/CD job），更新策略文件                               | Phase A + DevOps |
 
 ---
 
@@ -579,20 +582,24 @@ describe("scoreRoute — visual_impaired APS 加成", () => {
 
 ```typescript
 describe("enrichWalkLegsWithApsSignals", () => {
-  it("起點與終點查詢結果重複的路口，以 intersectionId 去重後只計一次", () => { /* ... */ });
-  it("非 visual_impaired 模式不應觸發此函式", () => { /* ... */ });
+  it("起點與終點查詢結果重複的路口，以 intersectionId 去重後只計一次", () => {
+    /* ... */
+  });
+  it("非 visual_impaired 模式不應觸發此函式", () => {
+    /* ... */
+  });
 });
 ```
 
 ### 10.2 整合驗收條件
 
-| 條件 | 預期結果 |
-|------|---------|
+| 條件                                         | 預期結果                                                                     |
+| -------------------------------------------- | ---------------------------------------------------------------------------- |
 | `mode=visual_impaired`，路線行經有聲號誌路口 | `WalkLeg.apsSignals` 非空，`accessibilityHighlights` 含「有聲號誌路口 N 處」 |
-| 有 APS 路線 vs 無 APS 路線排名 | 有 APS 路線 `accessibilityScore` 應明顯高於無 APS 路線（差距 > 10） |
-| `mode=wheelchair` 請求 | `WalkLeg.apsSignals` 不出現（undefined），現有行為不受影響 |
-| `ApsSignal` collection 為空時查詢 | 正常回傳路線，`apsSignals` 欄位缺席，log 無 error |
-| `dataConfidence` | 有 APS 資料的路段因補強了 criticalFeature，`dataConfidence` 相應提升 |
+| 有 APS 路線 vs 無 APS 路線排名               | 有 APS 路線 `accessibilityScore` 應明顯高於無 APS 路線（差距 > 10）          |
+| `mode=wheelchair` 請求                       | `WalkLeg.apsSignals` 不出現（undefined），現有行為不受影響                   |
+| `ApsSignal` collection 為空時查詢            | 正常回傳路線，`apsSignals` 欄位缺席，log 無 error                            |
+| `dataConfidence`                             | 有 APS 資料的路段因補強了 criticalFeature，`dataConfidence` 相應提升         |
 
 ### 10.3 測試資料前置條件
 
@@ -602,11 +609,11 @@ describe("enrichWalkLegsWithApsSignals", () => {
 
 ## 11. 新增環境變數
 
-| 變數名稱 | 預設值 | 說明 |
-|----------|--------|------|
-| `APS_CITIES` | （見 §4.3 完整清單） | 逗號分隔的縣市代碼清單，供 `import-aps.ts` 使用；可覆寫預設清單 |
-| `APS_ENRICH_RADIUS_M` | `40` | APS 路口查詢半徑（公尺）；值越大覆蓋越廣但可能引入不相關路口 |
-| `APS_THROTTLE_DELAY_MS` | `1500` | `import-aps.ts` 各縣市間的節流延遲（毫秒） |
+| 變數名稱                | 預設值               | 說明                                                            |
+| ----------------------- | -------------------- | --------------------------------------------------------------- |
+| `APS_CITIES`            | （見 §4.3 完整清單） | 逗號分隔的縣市代碼清單，供 `import-aps.ts` 使用；可覆寫預設清單 |
+| `APS_ENRICH_RADIUS_M`   | `40`                 | APS 路口查詢半徑（公尺）；值越大覆蓋越廣但可能引入不相關路口    |
+| `APS_THROTTLE_DELAY_MS` | `1500`               | `import-aps.ts` 各縣市間的節流延遲（毫秒）                      |
 
 以上三個變數**僅影響匯入腳本與 post 層查詢半徑**，不影響路由引擎。須加入 `.env.example`。
 
@@ -616,28 +623,28 @@ describe("enrichWalkLegsWithApsSignals", () => {
 
 本規格書僅涵蓋後端職責。以下為**前端負責**的對應工作，列出供介面對齊：
 
-| 前端任務 | 說明 |
-|----------|------|
-| 地圖標記渲染 | 讀取 `WalkLeg.apsSignals` 陣列，於地圖上以特殊圖示標示有聲號誌路口位置 |
-| 路口語音提示 | 當使用者接近 `apsSignals` 中的路口座標時，觸發語音提示（前端邏輯，後端不介入） |
-| `accessibilityHighlights` 顯示 | 在路線卡片顯示「本路段行經有聲號誌路口 N 處」等文字 |
-| APS 路口詳情頁 | 若需顯示 `intersectionName` / `direction` 等細節，直接使用後端 `apsSignals` 回傳資料，**不另開後端 API** |
+| 前端任務                       | 說明                                                                                                     |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| 地圖標記渲染                   | 讀取 `WalkLeg.apsSignals` 陣列，於地圖上以特殊圖示標示有聲號誌路口位置                                   |
+| 路口語音提示                   | 當使用者接近 `apsSignals` 中的路口座標時，觸發語音提示（前端邏輯，後端不介入）                           |
+| `accessibilityHighlights` 顯示 | 在路線卡片顯示「本路段行經有聲號誌路口 N 處」等文字                                                      |
+| APS 路口詳情頁                 | 若需顯示 `intersectionName` / `direction` 等細節，直接使用後端 `apsSignals` 回傳資料，**不另開後端 API** |
 
 ---
 
 ## 13. 風險與緩解
 
-| 風險 | 說明 | 緩解方式 |
-|------|------|---------|
-| **TDX CityAPS 縣市覆蓋不完整** | 部分縣市 API 可能回傳空資料或 404 | `import-aps.ts` 對每個縣市獨立錯誤處理，空回傳記 warning 而非中斷整體匯入 |
-| **TDX 429 限流** | 逐縣市拉取 23 個縣市仍有可能觸發 | 縣市間固定延遲 1500ms + 429 退避 2000ms；靜態資料離線匯入，不影響 query 流程 |
-| **APS 欄位結構差異** | 不同縣市的 API 回應欄位可能有差異 | 匯入時對缺失欄位給預設值（`hasAudibleSignal: false`），記欄位缺失 warning |
-| **查詢半徑設定不當** | 半徑過小（< 20m）導致大量路口未被匹配；過大（> 100m）納入不相關路口影響評分 | 以 `APS_ENRICH_RADIUS_M=40` 為初始值，並記錄匹配筆數於 debug log，供調校參考 |
-| **polyline 解碼效能** | 長路段 polyline 解碼後點數過多，若對每個點都查詢 DB 效能差 | 僅對路段起點與終點各查詢一次（非每個中間節點），並以 `intersectionId` 去重 |
-| **OsmA11y 與 APS 重複計算** | 同一路口可能同時存在於 OsmA11y tag 與 ApsSignal collection，導致 `hasAudioSignal` 重複觸發 | `hasAudioSignal` 為布林值（any-of 判斷），重複來源不影響最終評分結果 |
-| **APS 資料時效性** | TDX CityAPS 為靜態 API，實際路口狀況可能與資料有落差 | 每月定期重新匯入；於 `WalkLeg.accessibilityHighlights` 文字中使用「設有有聲號誌路口」而非「有聲號誌運作中」，降低誤導風險 |
-| **`dataConfidence` 不反映 APS 來源** | APS 加成提升了分數，但 `dataConfidence` 目前依 OsmA11y leg 覆蓋率計算，可能低估信心度 | ⚠️ 待確認：評估是否需將 APS 匹配數納入 `dataCoverageRatio` 計算，或以另一欄位 `apsEnriched: boolean` 示意 |
+| 風險                                 | 說明                                                                                       | 緩解方式                                                                                                                  |
+| ------------------------------------ | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| **TDX CityAPS 縣市覆蓋不完整**       | 部分縣市 API 可能回傳空資料或 404                                                          | `import-aps.ts` 對每個縣市獨立錯誤處理，空回傳記 warning 而非中斷整體匯入                                                 |
+| **TDX 429 限流**                     | 逐縣市拉取 23 個縣市仍有可能觸發                                                           | 縣市間固定延遲 1500ms + 429 退避 2000ms；靜態資料離線匯入，不影響 query 流程                                              |
+| **APS 欄位結構差異**                 | 不同縣市的 API 回應欄位可能有差異                                                          | 匯入時對缺失欄位給預設值（`hasAudibleSignal: false`），記欄位缺失 warning                                                 |
+| **查詢半徑設定不當**                 | 半徑過小（< 20m）導致大量路口未被匹配；過大（> 100m）納入不相關路口影響評分                | 以 `APS_ENRICH_RADIUS_M=40` 為初始值，並記錄匹配筆數於 debug log，供調校參考                                              |
+| **polyline 解碼效能**                | 長路段 polyline 解碼後點數過多，若對每個點都查詢 DB 效能差                                 | 僅對路段起點與終點各查詢一次（非每個中間節點），並以 `intersectionId` 去重                                                |
+| **OsmA11y 與 APS 重複計算**          | 同一路口可能同時存在於 OsmA11y tag 與 ApsSignal collection，導致 `hasAudioSignal` 重複觸發 | `hasAudioSignal` 為布林值（any-of 判斷），重複來源不影響最終評分結果                                                      |
+| **APS 資料時效性**                   | TDX CityAPS 為靜態 API，實際路口狀況可能與資料有落差                                       | 每月定期重新匯入；於 `WalkLeg.accessibilityHighlights` 文字中使用「設有有聲號誌路口」而非「有聲號誌運作中」，降低誤導風險 |
+| **`dataConfidence` 不反映 APS 來源** | APS 加成提升了分數，但 `dataConfidence` 目前依 OsmA11y leg 覆蓋率計算，可能低估信心度      | ⚠️ 待確認：評估是否需將 APS 匹配數納入 `dataCoverageRatio` 計算，或以另一欄位 `apsEnriched: boolean` 示意                 |
 
 ---
 
-*本文件狀態為 Proposed — 尚未實作。實作時如發現 TDX CityAPS 實際欄位與 §4.4 有差異，請於此文件標註並更新 §5.1 資料模型。*
+_本文件狀態為 Proposed — 尚未實作。實作時如發現 TDX CityAPS 實際欄位與 §4.4 有差異，請於此文件標註並更新 §5.1 資料模型。_

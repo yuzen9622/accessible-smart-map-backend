@@ -1,7 +1,7 @@
-import A11y from "../../model/a11y.model";
-import BathroomModel from "../../model/bathroom.model";
-import OsmA11y from "../../model/osm-a11y.model";
-import DisabledParkingModel from "../../model/disabled-parking.model";
+import {
+  countFacilitiesNearby,
+  findNearbyFacilityRows,
+} from "./place-search.repository";
 import * as campusService from "../campus/campus.service";
 import {
   autocompletePlaces,
@@ -11,7 +11,7 @@ import {
 import { searchOsmPlaces } from "../../adapters/photon.adapter";
 import { lookupOsmPlace } from "../../adapters/nominatim.adapter";
 import { normalizeOsmTags, type OsmPlace } from "../../types/osm";
-import type { PlaceType as ReviewPlaceType } from "../../model/review.model";
+import type { PlaceType as ReviewPlaceType } from "./place-search.repository";
 import { redisGet, redisSet } from "../../config/redis";
 import { haversineMeters } from "../../utils/geo";
 import {
@@ -106,15 +106,6 @@ export interface PlaceResult {
   attribution: string | null;
 }
 
-function makeGeoQuery(lng: number, lat: number, radiusM: number) {
-  return {
-    $near: {
-      $geometry: { type: "Point", coordinates: [lng, lat] },
-      $maxDistance: radiusM,
-    },
-  };
-}
-
 /** Coarse coordinate bucket (~1km) so nearby queries share the same cache key. */
 function roundCoarse(n?: number): string {
   return Number.isFinite(n) ? (n as number).toFixed(2) : "";
@@ -131,7 +122,9 @@ function distanceFrom(
   targetLng: number,
 ): number | null {
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-  return Math.round(haversineMeters(lat as number, lng as number, targetLat, targetLng));
+  return Math.round(
+    haversineMeters(lat as number, lng as number, targetLat, targetLng),
+  );
 }
 
 /** Adds an empty tag map to pre-tags Redis entries while rejecting malformed values. */
@@ -161,7 +154,8 @@ async function cachedOsmSearch(
       const parsed: unknown = JSON.parse(cached);
       if (Array.isArray(parsed)) {
         const places = parsed.map(normalizeCachedOsmPlace);
-        if (places.every((place): place is OsmPlace => place !== null)) return places;
+        if (places.every((place): place is OsmPlace => place !== null))
+          return places;
       }
     } catch {
       /* treat malformed cache as a miss */
@@ -271,9 +265,16 @@ export async function autocomplete(params: {
   }
 
   const [osmResult, googleResult] = await Promise.allSettled([
-    sources.includes("osm") ? cachedOsmSearch(q, lang, lat, lng) : Promise.resolve([]),
+    sources.includes("osm")
+      ? cachedOsmSearch(q, lang, lat, lng)
+      : Promise.resolve([]),
     sources.includes("google")
-      ? autocompletePlaces(q, { sessionToken, latitude: lat, longitude: lng, lang })
+      ? autocompletePlaces(q, {
+          sessionToken,
+          latitude: lat,
+          longitude: lng,
+          lang,
+        })
       : Promise.resolve([]),
   ]);
 
@@ -302,16 +303,19 @@ export async function autocomplete(params: {
 }
 
 /** Counts local accessibility facilities within the given radius of a point. */
-async function countNearbyFacilities(lat: number, lng: number): Promise<number> {
-  const geoQuery = makeGeoQuery(lng, lat, A11Y_NEARBY_RADIUS_M);
-  const [metro, osm, bathroom, parking, campus] = await Promise.all([
-    A11y.find({ location: geoQuery }).lean().catch(() => []),
-    OsmA11y.find({ location: geoQuery }).lean().catch(() => []),
-    BathroomModel.find({ type: "無障礙廁所", location: geoQuery }).lean().catch(() => []),
-    DisabledParkingModel.find({ location: geoQuery }).lean().catch(() => []),
-    campusService.findFacilitiesNearby(lat, lng, A11Y_NEARBY_RADIUS_M).catch(() => []),
+async function countNearbyFacilities(
+  lat: number,
+  lng: number,
+): Promise<number> {
+  const [counts, campus] = await Promise.all([
+    countFacilitiesNearby(lat, lng, A11Y_NEARBY_RADIUS_M),
+    campusService
+      .findFacilitiesNearby(lat, lng, A11Y_NEARBY_RADIUS_M)
+      .catch(() => []),
   ]);
-  return metro.length + osm.length + bathroom.length + parking.length + campus.length;
+  return (
+    counts.metro + counts.osm + counts.bathroom + counts.parking + campus.length
+  );
 }
 
 /** Classifies a metro facility name the way the a11y module does. */
@@ -321,7 +325,9 @@ function metroCategory(name: string): string {
   return "other";
 }
 
-function coordsOf(doc: { location?: { coordinates?: number[] } }): [number, number] | null {
+function coordsOf(doc: {
+  location?: { coordinates?: number[] };
+}): [number, number] | null {
   const coordinates = doc.location?.coordinates;
   if (!coordinates || coordinates.length < 2) return null;
   const [lng, lat] = coordinates;
@@ -342,21 +348,12 @@ async function findNearbyFacilities(
   lng: number,
   lang: SupportedLang,
 ): Promise<{ toilets: NearbyFacilityBrief[]; metro: NearbyFacilityBrief[] }> {
-  const geoQuery = makeGeoQuery(lng, lat, NEARBY_LIST_RADIUS_M);
-  const [bathrooms, osmToilets, metro] = await Promise.all([
-    BathroomModel.find({ type: "無障礙廁所", location: geoQuery })
-      .limit(NEARBY_LIST_LIMIT)
-      .lean()
-      .catch(() => []),
-    OsmA11y.find({ category: "toilet", location: geoQuery })
-      .limit(NEARBY_LIST_LIMIT)
-      .lean()
-      .catch(() => []),
-    A11y.find({ location: geoQuery })
-      .limit(NEARBY_LIST_LIMIT)
-      .lean()
-      .catch(() => []),
-  ]);
+  const { bathrooms, osmToilets, metro } = await findNearbyFacilityRows(
+    lat,
+    lng,
+    NEARBY_LIST_RADIUS_M,
+    NEARBY_LIST_LIMIT,
+  );
 
   const toBrief = (
     id: string,
@@ -376,7 +373,9 @@ async function findNearbyFacilities(
       address,
       category,
       typeLabel,
-      distanceMeters: Math.round(haversineMeters(lat, lng, coords[0], coords[1])),
+      distanceMeters: Math.round(
+        haversineMeters(lat, lng, coords[0], coords[1]),
+      ),
       source,
       lastVerifiedAt: lastVerifiedAt ? lastVerifiedAt.toISOString() : null,
     };
@@ -385,10 +384,28 @@ async function findNearbyFacilities(
   const toiletLabel = facilityLabelOf("toilet", lang);
   const toilets = [
     ...bathrooms.map((doc: any) =>
-      toBrief(String(doc._id), doc.name, doc.address ?? null, "toilet", toiletLabel, doc, "government", undefined),
+      toBrief(
+        String(doc._id),
+        doc.name,
+        doc.address ?? null,
+        "toilet",
+        toiletLabel,
+        doc,
+        "government",
+        undefined,
+      ),
     ),
     ...osmToilets.map((doc: any) =>
-      toBrief(String(doc._id), doc.name ?? toiletLabel, null, "toilet", toiletLabel, doc, "osm", doc.importedAt),
+      toBrief(
+        String(doc._id),
+        doc.name ?? toiletLabel,
+        null,
+        "toilet",
+        toiletLabel,
+        doc,
+        "osm",
+        doc.importedAt,
+      ),
     ),
   ]
     .filter((brief): brief is NearbyFacilityBrief => brief !== null)
@@ -472,7 +489,10 @@ async function computeAccessibility(
   };
 }
 
-type ResolvedPlace = Omit<PlaceResult, "accessibility" | "nearbyFacilities" | "distanceMeters">;
+type ResolvedPlace = Omit<
+  PlaceResult,
+  "accessibility" | "nearbyFacilities" | "distanceMeters"
+>;
 
 function googleToResolved(
   id: string,
@@ -500,7 +520,11 @@ function googleToResolved(
   };
 }
 
-function osmToResolved(id: string, p: OsmPlace, lang: SupportedLang): ResolvedPlace {
+function osmToResolved(
+  id: string,
+  p: OsmPlace,
+  lang: SupportedLang,
+): ResolvedPlace {
   return {
     id,
     source: "osm",
@@ -538,7 +562,8 @@ async function cachedOsmLookup(
     }
   }
   const place = await lookupOsmPlace(osmType, osmId, { lang });
-  if (place) await redisSet(cacheKey, JSON.stringify(place), OSM_DETAILS_CACHE_TTL_SEC);
+  if (place)
+    await redisSet(cacheKey, JSON.stringify(place), OSM_DETAILS_CACHE_TTL_SEC);
   return place;
 }
 
@@ -571,11 +596,16 @@ export async function details(params: {
   let accessibilitySignals: PlaceAccessibilitySignals;
 
   if (parsed.source === "google") {
-    const d = await getPlaceDetails(parsed.googlePlaceId, { sessionToken, lang });
+    const d = await getPlaceDetails(parsed.googlePlaceId, {
+      sessionToken,
+      lang,
+    });
     if (!d || !d.location) return null;
     resolved = googleToResolved(
       id,
-      d as GooglePlaceDetails & { location: { latitude: number; longitude: number } },
+      d as GooglePlaceDetails & {
+        location: { latitude: number; longitude: number };
+      },
       lang,
     );
     const wheelchairAccess = d.wheelchairAccessibleEntrance ?? null;
@@ -593,7 +623,11 @@ export async function details(params: {
     const p = await cachedOsmLookup(parsed.osmType, parsed.osmId, lang);
     if (!p) return null;
     resolved = osmToResolved(id, p, lang);
-    const osmAccessibility = mapOsmAccessibilityTags(p.tags, p.placeClass, p.placeType);
+    const osmAccessibility = mapOsmAccessibilityTags(
+      p.tags,
+      p.placeClass,
+      p.placeType,
+    );
     accessibilitySignals = {
       source: "osm",
       ...osmAccessibility,

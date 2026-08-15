@@ -20,10 +20,15 @@ vi.mock("../campus/campus.service", () => ({
 vi.mock("../../model/a11y.model", () => ({ default: { find: vi.fn() } }));
 vi.mock("../../model/osm-a11y.model", () => ({ default: { find: vi.fn() } }));
 vi.mock("../../model/bathroom.model", () => ({ default: { find: vi.fn() } }));
-vi.mock("../../model/disabled-parking.model", () => ({ default: { find: vi.fn() } }));
+vi.mock("../../model/disabled-parking.model", () => ({
+  default: { find: vi.fn() },
+}));
 
 import * as service from "./place-search.service";
-import { autocompletePlaces, getPlaceDetails } from "../../adapters/google.adapter";
+import {
+  autocompletePlaces,
+  getPlaceDetails,
+} from "../../adapters/google.adapter";
 import { searchOsmPlaces } from "../../adapters/photon.adapter";
 import { lookupOsmPlace } from "../../adapters/nominatim.adapter";
 import { redisGet, redisSet } from "../../config/redis";
@@ -76,14 +81,21 @@ const osmPlace = (overrides: Partial<any> = {}) => ({
   longitude: 121.5645,
   placeClass: "tourism",
   placeType: "attraction",
-  address: { road: "信義路五段", district: "信義區", city: "臺北市", postcode: "110" },
+  address: {
+    road: "信義路五段",
+    district: "信義區",
+    city: "臺北市",
+    postcode: "110",
+  },
   tags: {},
   ...overrides,
 });
 
 const legacyOsmPlace = () => {
   const place = osmPlace();
-  delete place.tags;
+  // `delete` needs an optional property; the legacy fixture intentionally
+  // omits `tags` to exercise the tolerant parsing path.
+  delete (place as { tags?: Record<string, string> }).tags;
   return place;
 };
 
@@ -138,8 +150,14 @@ describe("autocomplete", () => {
 
     const items = await service.autocomplete({ q: "taipei", lang: "en" });
 
-    expect(searchOsmPlaces).toHaveBeenCalledWith("taipei", expect.objectContaining({ lang: "en" }));
-    expect(autocompletePlaces).toHaveBeenCalledWith("taipei", expect.objectContaining({ lang: "en" }));
+    expect(searchOsmPlaces).toHaveBeenCalledWith(
+      "taipei",
+      expect.objectContaining({ lang: "en" }),
+    );
+    expect(autocompletePlaces).toHaveBeenCalledWith(
+      "taipei",
+      expect.objectContaining({ lang: "en" }),
+    );
     expect(items[0].typeLabel).toBe("Attraction");
   });
 
@@ -172,7 +190,11 @@ describe("autocomplete", () => {
   it("keeps both when the names differ, even for the same place", async () => {
     vi.mocked(searchOsmPlaces).mockResolvedValue([osmPlace()] as any);
     vi.mocked(autocompletePlaces).mockResolvedValue([
-      { placeId: "p1", primaryText: "台北101購物中心", secondaryText: "信義區" },
+      {
+        placeId: "p1",
+        primaryText: "台北101購物中心",
+        secondaryText: "信義區",
+      },
     ]);
 
     const items = await service.autocomplete({ q: "台北" });
@@ -190,7 +212,10 @@ describe("autocomplete", () => {
 
     const items = await service.autocomplete({ q: "台北" });
 
-    expect(items.map((i) => i.primaryText)).toEqual(["台北101", "大安森林公園"]);
+    expect(items.map((i) => i.primaryText)).toEqual([
+      "台北101",
+      "大安森林公園",
+    ]);
   });
 
   it("caps the merged list at the requested limit", async () => {
@@ -219,7 +244,10 @@ describe("autocomplete", () => {
       { placeId: "p1", primaryText: "台北101", secondaryText: null },
     ]);
 
-    const items = await service.autocomplete({ q: "台北", sources: ["google"] });
+    const items = await service.autocomplete({
+      q: "台北",
+      sources: ["google"],
+    });
 
     expect(items).toHaveLength(1);
     expect(searchOsmPlaces).not.toHaveBeenCalled();
@@ -275,7 +303,9 @@ describe("details", () => {
   });
 
   it("returns null when the place has no coordinates", async () => {
-    vi.mocked(getPlaceDetails).mockResolvedValue(googleDetails({ location: null }) as any);
+    vi.mocked(getPlaceDetails).mockResolvedValue(
+      googleDetails({ location: null }) as any,
+    );
     expect(await service.details({ id: "google:x" })).toBeNull();
   });
 
@@ -317,7 +347,9 @@ describe("details", () => {
 
     const result = await service.details({ id: "osm:node:123456" });
 
-    expect(lookupOsmPlace).toHaveBeenCalledWith("node", "123456", { lang: "zh-TW" });
+    expect(lookupOsmPlace).toHaveBeenCalledWith("node", "123456", {
+      lang: "zh-TW",
+    });
     expect(getPlaceDetails).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       id: "osm:node:123456",
@@ -331,7 +363,9 @@ describe("details", () => {
       reviewKey: { placeId: "node/123456", placeType: "osm" },
       attribution: "© OpenStreetMap contributors",
     });
-    expect(result?.externalLinks.osm).toBe("https://www.openstreetmap.org/node/123456");
+    expect(result?.externalLinks.osm).toBe(
+      "https://www.openstreetmap.org/node/123456",
+    );
     expect(result?.externalLinks.google).toBeNull();
   });
 
@@ -383,7 +417,10 @@ describe("details", () => {
 
     const result = await service.details({ id: "osm:node:123456" });
 
-    expect(result?.nearbyFacilities.toilets.map((t) => t.name)).toEqual(["近處廁所", "遠處廁所"]);
+    expect(result?.nearbyFacilities.toilets.map((t) => t.name)).toEqual([
+      "近處廁所",
+      "遠處廁所",
+    ]);
     expect(result?.nearbyFacilities.toilets[0]).toMatchObject({
       category: "toilet",
       typeLabel: "無障礙廁所",
@@ -399,7 +436,9 @@ describe("details", () => {
   it("drops nearby facilities that carry no coordinates", async () => {
     vi.mocked(lookupOsmPlace).mockResolvedValue(osmPlace() as any);
     stubAllModelsEmpty();
-    stubFind(BathroomModel as any, [{ _id: "b1", name: "無座標廁所", address: null }]);
+    stubFind(BathroomModel as any, [
+      { _id: "b1", name: "無座標廁所", address: null },
+    ]);
 
     const result = await service.details({ id: "osm:node:123456" });
 
@@ -428,7 +467,10 @@ describe("details", () => {
 
     it("is accessible/google when Google explicitly reports a wheelchair entrance", async () => {
       vi.mocked(getPlaceDetails).mockResolvedValue(
-        googleDetails({ wheelchair: "yes", wheelchairAccessibleEntrance: true }) as any,
+        googleDetails({
+          wheelchair: "yes",
+          wheelchairAccessibleEntrance: true,
+        }) as any,
       );
       stubAllModelsEmpty();
 
@@ -521,7 +563,9 @@ describe("details", () => {
     });
 
     it("returns four null fields for an OSM place with no accessibility tags", async () => {
-      vi.mocked(lookupOsmPlace).mockResolvedValue(osmPlace({ tags: {} }) as any);
+      vi.mocked(lookupOsmPlace).mockResolvedValue(
+        osmPlace({ tags: {} }) as any,
+      );
       stubAllModelsEmpty();
 
       const r = await service.details({ id: "osm:node:123456" });
@@ -571,7 +615,7 @@ describe("details", () => {
 
     it("maps OSM elevator=no and highway=elevator to explicit evidence", async () => {
       vi.mocked(lookupOsmPlace).mockResolvedValue(
-        osmPlace({ tags: { "elevator": "no", "highway": "elevator" } }) as any,
+        osmPlace({ tags: { elevator: "no", highway: "elevator" } }) as any,
       );
       stubAllModelsEmpty();
 
@@ -607,7 +651,11 @@ describe("details", () => {
 
     it("does not treat arbitrary OSM class/type pairs as elevator evidence", async () => {
       vi.mocked(lookupOsmPlace).mockResolvedValue(
-        osmPlace({ tags: {}, placeClass: "amenity", placeType: "restaurant" }) as any,
+        osmPlace({
+          tags: {},
+          placeClass: "amenity",
+          placeType: "restaurant",
+        }) as any,
       );
       stubAllModelsEmpty();
 

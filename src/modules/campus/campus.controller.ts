@@ -8,7 +8,14 @@ import type { CampusSort } from "./campus.service";
 
 /** GET /a11y/campus/facility-types — canonical facility-type registry. */
 export async function listFacilityTypes(_req: Request, res: Response) {
-  return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, CAMPUS_FAC_TYPES);
+  return sendResponse(
+    res,
+    true,
+    "success",
+    ResponseCode.OK,
+    MSG.OK,
+    CAMPUS_FAC_TYPES,
+  );
 }
 
 /** GET /a11y/campus/nearby — campus summaries within radius of the coordinate. */
@@ -24,7 +31,13 @@ export async function nearbyCampus(req: Request, res: Response) {
     return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, result);
   } catch (error) {
     console.error(error);
-    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, ERROR_MESSAGE.INTERNAL);
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      ERROR_MESSAGE.INTERNAL,
+    );
   }
 }
 
@@ -41,28 +54,48 @@ export async function listSchools(req: Request, res: Response) {
     return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, result);
   } catch (error) {
     console.error(error);
-    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, ERROR_MESSAGE.INTERNAL);
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      ERROR_MESSAGE.INTERNAL,
+    );
   }
 }
 
 /** GET /a11y/campus — paginated campus directory, optionally filtered. */
 export async function listCampus(req: Request, res: Response) {
   try {
-    const { city, type, keyword, schoolId, sort, page, limit } =
-      req.validated?.query as {
-        city?: string;
-        type?: string;
-        keyword?: string;
-        schoolId?: number;
-        sort?: CampusSort;
-        page: number;
-        limit: number;
-      };
-    const result = await service.findAll({ city, type, keyword, schoolId, sort, page, limit });
+    const { city, type, keyword, schoolId, sort, page, limit } = req.validated
+      ?.query as {
+      city?: string;
+      type?: string;
+      keyword?: string;
+      schoolId?: number;
+      sort?: CampusSort;
+      page: number;
+      limit: number;
+    };
+    const result = await service.findAll({
+      city,
+      type,
+      keyword,
+      schoolId,
+      sort,
+      page,
+      limit,
+    });
     return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, result);
   } catch (error) {
     console.error(error);
-    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, ERROR_MESSAGE.INTERNAL);
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      ERROR_MESSAGE.INTERNAL,
+    );
   }
 }
 
@@ -72,11 +105,23 @@ export async function getCampusByCampusId(req: Request, res: Response) {
     const { campusId } = req.validated?.params as { campusId: number };
     const result = await service.findByCampusId(campusId);
     if (!result) {
-      return sendResponse(res, false, "error", ResponseCode.NOT_FOUND, CAMPUS_MSG.NOT_FOUND);
+      return sendResponse(
+        res,
+        false,
+        "error",
+        ResponseCode.NOT_FOUND,
+        CAMPUS_MSG.NOT_FOUND,
+      );
     }
     return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, result);
   } catch (error) {
     console.error(error);
-    return sendResponse(res, false, "error", ResponseCode.INTERNAL_ERROR, ERROR_MESSAGE.INTERNAL);
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      ERROR_MESSAGE.INTERNAL,
+    );
   }
 }

@@ -29,7 +29,10 @@ export function createSosRouter(): Router {
   router.patch(
     "/sessions/:id/location",
     middleware,
-    validateRequest({ params: SessionIdParamSchema, body: UpdateSosLocationSchema }),
+    validateRequest({
+      params: SessionIdParamSchema,
+      body: UpdateSosLocationSchema,
+    }),
     updateLocation,
   );
 

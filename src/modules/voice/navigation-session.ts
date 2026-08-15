@@ -35,13 +35,30 @@ export interface NavStepDto {
 }
 
 export type NavServerEvent =
-  | { type: "nav.start"; steps: NavStepDto[]; currentStepIndex: 0; totalSteps: number }
-  | { type: "nav.step"; currentStepIndex: number; instruction: string; remainingM: number | null }
-  | { type: "nav.transit"; leg: { mode: NavLegType; from: string; to: string; routeName?: string } }
+  | {
+      type: "nav.start";
+      steps: NavStepDto[];
+      currentStepIndex: 0;
+      totalSteps: number;
+    }
+  | {
+      type: "nav.step";
+      currentStepIndex: number;
+      instruction: string;
+      remainingM: number | null;
+    }
+  | {
+      type: "nav.transit";
+      leg: { mode: NavLegType; from: string; to: string; routeName?: string };
+    }
   | { type: "nav.arrived" }
   | { type: "nav.stop"; reason: StopReason }
   | { type: "nav.offroute"; distanceM: number }
-  | { type: "nav.error"; code: "NAV_ROUTE_INVALID" | "NO_ROUTE_ARMED"; message: string };
+  | {
+      type: "nav.error";
+      code: "NAV_ROUTE_INVALID" | "NO_ROUTE_ARMED";
+      message: string;
+    };
 
 export interface NavEffect {
   ok: boolean;
@@ -84,7 +101,8 @@ type StepGenerator = (route: NavRouteInput) => GenerateVoiceNavStepsResult;
 const emptyEffect = (ok = true): NavEffect => ({ ok, events: [] });
 const isTransitType = (type: NavLegType): boolean =>
   type === "BUS" || type === "METRO" || type === "THSR" || type === "TRA";
-const sameCoord = (a: Coord, b: Coord): boolean => a[0] === b[0] && a[1] === b[1];
+const sameCoord = (a: Coord, b: Coord): boolean =>
+  a[0] === b[0] && a[1] === b[1];
 
 /** Great-circle distance for GeoJSON-order [lng, lat] tuples. */
 export function haversineLngLat(a: Coord, b: Coord): number {
@@ -93,8 +111,9 @@ export function haversineLngLat(a: Coord, b: Coord): number {
   const dLng = toRad(b[0] - a[0]);
   const lat1 = toRad(a[1]);
   const lat2 = toRad(b[1]);
-  const h = Math.sin(dLat / 2) ** 2
-    + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
   return 6_371_000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 
@@ -107,7 +126,8 @@ function distanceToSegmentM(point: Coord, a: Coord, b: Coord): number {
   const bx = (b[0] - a[0]) * mx;
   const by = (b[1] - a[1]) * my;
   const denom = bx * bx + by * by;
-  const t = denom === 0 ? 0 : Math.max(0, Math.min(1, (px * bx + py * by) / denom));
+  const t =
+    denom === 0 ? 0 : Math.max(0, Math.min(1, (px * bx + py * by) / denom));
   return Math.hypot(px - t * bx, py - t * by);
 }
 
@@ -117,7 +137,10 @@ export function distanceToPolylineM(point: Coord, polyline: Coord[]): number {
   if (polyline.length === 1) return haversineLngLat(point, polyline[0]);
   let min = Number.POSITIVE_INFINITY;
   for (let i = 1; i < polyline.length; i++) {
-    min = Math.min(min, distanceToSegmentM(point, polyline[i - 1], polyline[i]));
+    min = Math.min(
+      min,
+      distanceToSegmentM(point, polyline[i - 1], polyline[i]),
+    );
   }
   return min;
 }
@@ -138,10 +161,17 @@ export class NavigationSession {
   private currentSpeechText: string | null = null;
   private speechQueue: string[] = [];
 
-  constructor(private readonly generateSteps: StepGenerator = generateNavStepsWithLegIndex) {}
+  constructor(
+    private readonly generateSteps: StepGenerator = generateNavStepsWithLegIndex,
+  ) {}
 
   armRoute(route: AccessibleRoute): NavEffect {
-    if (this.disposed || !route || !Array.isArray(route.legs) || route.legs.length === 0) {
+    if (
+      this.disposed ||
+      !route ||
+      !Array.isArray(route.legs) ||
+      route.legs.length === 0
+    ) {
       return this.invalidRoute();
     }
     this.armedRoute = route;
@@ -157,37 +187,49 @@ export class NavigationSession {
     if (!this.armedRoute) {
       return {
         ok: false,
-        events: [{ type: "nav.error", code: "NO_ROUTE_ARMED", message: "尚未選擇路線" }],
+        events: [
+          {
+            type: "nav.error",
+            code: "NO_ROUTE_ARMED",
+            message: "尚未選擇路線",
+          },
+        ],
       };
     }
-    if (this.armedRoute.legs.some((leg) => leg.type === "DRIVE" || leg.type === "MOTORCYCLE")) {
+    if (
+      this.armedRoute.legs.some(
+        (leg) => leg.type === "DRIVE" || leg.type === "MOTORCYCLE",
+      )
+    ) {
       return this.invalidRoute("語音逐步導航目前僅支援步行與大眾運輸");
     }
     const built = this.buildResolvedSteps(this.armedRoute);
     if (!built) return this.invalidRoute();
     this.activeRoute = this.armedRoute;
     this.steps = built;
-    this.terminalCoordIndex = built.map((s) => s.coord).lastIndexOf(
-      [...built].reverse().find((s) => s.coord)?.coord ?? null,
-    );
+    this.terminalCoordIndex = built
+      .map((s) => s.coord)
+      .lastIndexOf([...built].reverse().find((s) => s.coord)?.coord ?? null);
     this.active = true;
     this.announcedIndex = -1;
     this.onVehicle = false;
     this.offrouteWarned = false;
     this.offrouteCount = 0;
     this.recoverCount = 0;
-    const events: NavServerEvent[] = [{
-      type: "nav.start",
-      steps: this.steps.map((step, index) => ({
-        index,
-        instruction: step.instruction,
-        legType: step.legType,
-        distanceM: step.distanceM,
-        isTransit: step.isTransit,
-      })),
-      currentStepIndex: 0,
-      totalSteps: this.steps.length,
-    }];
+    const events: NavServerEvent[] = [
+      {
+        type: "nav.start",
+        steps: this.steps.map((step, index) => ({
+          index,
+          instruction: step.instruction,
+          legType: step.legType,
+          distanceM: step.distanceM,
+          isTransit: step.isTransit,
+        })),
+        currentStepIndex: 0,
+        totalSteps: this.steps.length,
+      },
+    ];
     const seed = seedPosition ?? this.latestPosition;
     if (seed) events.push(...this.onPosition(seed).events);
     return { ok: true, events };
@@ -198,7 +240,9 @@ export class NavigationSession {
     if (this.disposed || !this.active) return emptyEffect();
     const advanced = this.advanceFrom(position);
     const offroute = this.checkOffRoute(position);
-    const speech = [...advanced.speech, ...offroute.speech].filter(Boolean).join(" ");
+    const speech = [...advanced.speech, ...offroute.speech]
+      .filter(Boolean)
+      .join(" ");
     if (speech) this.enqueueSpeech(speech);
     return { ok: true, events: [...advanced.events, ...offroute.events] };
   }
@@ -227,42 +271,50 @@ export class NavigationSession {
 
   /** Minimal trusted route context exposed to the Live conversation tool. */
   getConversationContext(): NavigationConversationContext {
-    if (this.disposed || !this.active || !this.activeRoute) return { active: false };
-    const currentIndex = this.announcedIndex >= 0
-      ? this.announcedIndex
-      : this.nextCoordIndex(0);
-    const current = currentIndex === null ? undefined : this.steps[currentIndex];
-    const currentTransitIndex = this.onVehicle
-      && current?.kind === "transit_board"
-      ? currentIndex
-      : null;
-    const upcomingTransitIndex = currentTransitIndex === null
-      ? this.steps.findIndex((step, index) => (
-        index > this.announcedIndex && step.kind === "transit_board"
-      ))
-      : -1;
-    const transitIndex = currentTransitIndex ?? (upcomingTransitIndex >= 0 ? upcomingTransitIndex : null);
+    if (this.disposed || !this.active || !this.activeRoute)
+      return { active: false };
+    const currentIndex =
+      this.announcedIndex >= 0 ? this.announcedIndex : this.nextCoordIndex(0);
+    const current =
+      currentIndex === null ? undefined : this.steps[currentIndex];
+    const currentTransitIndex =
+      this.onVehicle && current?.kind === "transit_board" ? currentIndex : null;
+    const upcomingTransitIndex =
+      currentTransitIndex === null
+        ? this.steps.findIndex(
+            (step, index) =>
+              index > this.announcedIndex && step.kind === "transit_board",
+          )
+        : -1;
+    const transitIndex =
+      currentTransitIndex ??
+      (upcomingTransitIndex >= 0 ? upcomingTransitIndex : null);
     return {
       active: true,
-      ...(current && currentIndex !== null ? {
-        currentStep: {
-          index: currentIndex,
-          instruction: current.instruction,
-          legType: current.legType,
-        },
-      } : {}),
+      ...(current && currentIndex !== null
+        ? {
+            currentStep: {
+              index: currentIndex,
+              instruction: current.instruction,
+              legType: current.legType,
+            },
+          }
+        : {}),
       destination: this.routeDestination(this.activeRoute),
-      ...(transitIndex !== null ? {
-        transit: this.conversationTransit(
-          this.steps[transitIndex].legIndex,
-          currentTransitIndex !== null ? "current" : "upcoming",
-        ),
-      } : {}),
+      ...(transitIndex !== null
+        ? {
+            transit: this.conversationTransit(
+              this.steps[transitIndex].legIndex,
+              currentTransitIndex !== null ? "current" : "upcoming",
+            ),
+          }
+        : {}),
     };
   }
 
   takeNextSpeech(): string | null {
-    if (this.disposed || this.currentSpeechText || !this.speechQueue.length) return null;
+    if (this.disposed || this.currentSpeechText || !this.speechQueue.length)
+      return null;
     this.currentSpeechText = this.speechQueue.shift() ?? null;
     return this.currentSpeechText;
   }
@@ -272,7 +324,8 @@ export class NavigationSession {
   }
 
   onInterrupted(): void {
-    if (this.currentSpeechText) this.speechQueue.unshift(this.currentSpeechText);
+    if (this.currentSpeechText)
+      this.speechQueue.unshift(this.currentSpeechText);
     this.currentSpeechText = null;
   }
 
@@ -297,10 +350,19 @@ export class NavigationSession {
     for (const leg of route.legs) {
       if (leg.type === "DRIVE" || leg.type === "MOTORCYCLE") return null;
       if (isTransitType(leg.type)) {
-        if (leg.polyline.length < 2 || sameCoord(leg.polyline[0], leg.polyline.at(-1)!)) return null;
+        if (
+          leg.polyline.length < 2 ||
+          sameCoord(leg.polyline[0], leg.polyline.at(-1)!)
+        )
+          return null;
       } else if (leg.type === "WALK") {
         if (!leg.polyline.length) return null;
-        if (!(leg.steps?.length) && (leg.polyline.length < 2 || sameCoord(leg.polyline[0], leg.polyline.at(-1)!))) return null;
+        if (
+          !leg.steps?.length &&
+          (leg.polyline.length < 2 ||
+            sameCoord(leg.polyline[0], leg.polyline.at(-1)!))
+        )
+          return null;
       }
     }
     const generated = this.generateSteps(route);
@@ -315,12 +377,17 @@ export class NavigationSession {
     route.legs.forEach((leg, legIndex) => {
       for (const item of byLeg.get(legIndex) ?? []) {
         if (item.instruction.type === "arrive") continue;
-        resolved.push(this.resolveInstruction(item.instruction, legIndex, route));
+        resolved.push(
+          this.resolveInstruction(item.instruction, legIndex, route),
+        );
       }
-      const walkEnd = leg.type === "WALK" ? leg.polyline.at(-1) ?? null : null;
-      const lastLegCoord = [...resolved].reverse().find((step) => (
-        step.legIndex === legIndex && step.coord
-      ))?.coord ?? null;
+      const walkEnd =
+        leg.type === "WALK" ? (leg.polyline.at(-1) ?? null) : null;
+      const lastLegCoord =
+        [...resolved]
+          .reverse()
+          .find((step) => step.legIndex === legIndex && step.coord)?.coord ??
+        null;
       if (
         leg.type === "WALK" &&
         walkEnd &&
@@ -338,8 +405,13 @@ export class NavigationSession {
         });
       }
     });
-    const arrive = generated.steps.find((item) => item.instruction.type === "arrive");
-    if (arrive) resolved.push(this.resolveInstruction(arrive.instruction, arrive.legIndex, route));
+    const arrive = generated.steps.find(
+      (item) => item.instruction.type === "arrive",
+    );
+    if (arrive)
+      resolved.push(
+        this.resolveInstruction(arrive.instruction, arrive.legIndex, route),
+      );
     const coords = resolved.filter((step) => step.coord);
     if (!coords.length) return null;
     const lastLegIndex = route.legs.length - 1;
@@ -358,7 +430,8 @@ export class NavigationSession {
     const leg = route.legs[legIndex];
     let coord: Coord | null = null;
     if (instruction.type === "transit_board") coord = leg.polyline[0] ?? null;
-    else if (instruction.type === "transit_alight") coord = leg.polyline.at(-1) ?? null;
+    else if (instruction.type === "transit_alight")
+      coord = leg.polyline.at(-1) ?? null;
     else if (leg.type === "WALK" && instruction.polylineIndex !== null) {
       coord = leg.polyline[instruction.polylineIndex] ?? null;
     }
@@ -374,32 +447,52 @@ export class NavigationSession {
     };
   }
 
-  private advanceFrom(position: NavPosition): { events: NavServerEvent[]; speech: string[] } {
+  private advanceFrom(position: NavPosition): {
+    events: NavServerEvent[];
+    speech: string[];
+  } {
     const point: Coord = [position.longitude, position.latitude];
     const radius = this.onVehicle ? RESUME_RADIUS_M : ARRIVE_RADIUS_M;
-    const effectiveRadius = radius + Math.min(position.accuracy ?? 0, ACCURACY_CAP_M);
+    const effectiveRadius =
+      radius + Math.min(position.accuracy ?? 0, ACCURACY_CAP_M);
     const candidates: number[] = [];
     let previous: Coord | null = null;
     let pathDistance = 0;
     for (let i = this.announcedIndex + 1; i < this.steps.length; i++) {
       const step = this.steps[i];
       if (!step.coord) continue;
-      if (candidates.length && (step.kind === "transit_board" || step.kind === "transit_alight")) break;
+      if (
+        candidates.length &&
+        (step.kind === "transit_board" || step.kind === "transit_alight")
+      )
+        break;
       if (previous) pathDistance += haversineLngLat(previous, step.coord);
-      if (candidates.length >= MAX_LOOKAHEAD_STEPS || pathDistance > MAX_SKIP_DIST_M) break;
+      if (
+        candidates.length >= MAX_LOOKAHEAD_STEPS ||
+        pathDistance > MAX_SKIP_DIST_M
+      )
+        break;
       candidates.push(i);
       previous = step.coord;
-      if (step.kind === "transit_board" || step.kind === "transit_alight") break;
+      if (step.kind === "transit_board" || step.kind === "transit_alight")
+        break;
     }
-    const hit = candidates.filter((i) => haversineLngLat(point, this.steps[i].coord!) < effectiveRadius).at(-1);
+    const hit = candidates
+      .filter(
+        (i) => haversineLngLat(point, this.steps[i].coord!) < effectiveRadius,
+      )
+      .at(-1);
     if (hit == null) return { events: [], speech: [] };
     const result = this.processThrough(hit);
     if (this.steps[hit].kind === "transit_alight") {
       const next = this.nextCoordIndex(hit + 1);
-      if (next !== null
-        && this.steps[next].kind === "transit_board"
-        && haversineLngLat(this.steps[hit].coord!, this.steps[next].coord!) < TRANSFER_SNAP_M
-        && haversineLngLat(point, this.steps[next].coord!) < effectiveRadius) {
+      if (
+        next !== null &&
+        this.steps[next].kind === "transit_board" &&
+        haversineLngLat(this.steps[hit].coord!, this.steps[next].coord!) <
+          TRANSFER_SNAP_M &&
+        haversineLngLat(point, this.steps[next].coord!) < effectiveRadius
+      ) {
         const transfer = this.processThrough(next);
         result.events.push(...transfer.events);
         result.speech.push(...transfer.speech);
@@ -408,7 +501,10 @@ export class NavigationSession {
     return result;
   }
 
-  private processThrough(targetIndex: number): { events: NavServerEvent[]; speech: string[] } {
+  private processThrough(targetIndex: number): {
+    events: NavServerEvent[];
+    speech: string[];
+  } {
     const events: NavServerEvent[] = [];
     const speech: string[] = [];
     for (let i = this.announcedIndex + 1; i <= targetIndex; i++) {
@@ -416,7 +512,10 @@ export class NavigationSession {
       speech.push(step.instruction);
       if (step.kind === "transit_board") {
         this.onVehicle = true;
-        events.push({ type: "nav.transit", leg: this.transitSummary(step.legIndex) });
+        events.push({
+          type: "nav.transit",
+          leg: this.transitSummary(step.legIndex),
+        });
       } else if (step.kind === "transit_alight") {
         this.onVehicle = false;
       }
@@ -430,31 +529,54 @@ export class NavigationSession {
       remainingM: target.distanceM,
     });
     if (targetIndex === this.terminalCoordIndex) {
-      for (let i = targetIndex + 1; i < this.steps.length && !this.steps[i].coord; i++) {
+      for (
+        let i = targetIndex + 1;
+        i < this.steps.length && !this.steps[i].coord;
+        i++
+      ) {
         speech.push(this.steps[i].instruction);
         this.announcedIndex = i;
       }
       this.active = false;
-      events.push({ type: "nav.arrived" }, { type: "nav.stop", reason: "arrived" });
+      events.push(
+        { type: "nav.arrived" },
+        { type: "nav.stop", reason: "arrived" },
+      );
     }
     return { events, speech };
   }
 
   private nextCoordIndex(from: number): number | null {
-    for (let i = from; i < this.steps.length; i++) if (this.steps[i].coord) return i;
+    for (let i = from; i < this.steps.length; i++)
+      if (this.steps[i].coord) return i;
     return null;
   }
 
   private transitSummary(legIndex: number) {
     const leg = this.activeRoute!.legs[legIndex];
     if (leg.type === "BUS") {
-      return { mode: leg.type, from: leg.departureStop, to: leg.arrivalStop, routeName: leg.routeName };
+      return {
+        mode: leg.type,
+        from: leg.departureStop,
+        to: leg.arrivalStop,
+        routeName: leg.routeName,
+      };
     }
     if (leg.type === "METRO") {
-      return { mode: leg.type, from: leg.departureStation, to: leg.arrivalStation, routeName: leg.lineName };
+      return {
+        mode: leg.type,
+        from: leg.departureStation,
+        to: leg.arrivalStation,
+        routeName: leg.lineName,
+      };
     }
     if (leg.type === "THSR" || leg.type === "TRA") {
-      return { mode: leg.type, from: leg.departureStation, to: leg.arrivalStation, routeName: leg.trainNo };
+      return {
+        mode: leg.type,
+        from: leg.departureStation,
+        to: leg.arrivalStation,
+        routeName: leg.trainNo,
+      };
     }
     return { mode: leg.type, from: "", to: "" };
   }
@@ -493,7 +615,9 @@ export class NavigationSession {
         to: leg.arrivalStation,
       };
     }
-    throw new Error("navigation transit context requested for a non-transit leg");
+    throw new Error(
+      "navigation transit context requested for a non-transit leg",
+    );
   }
 
   private routeDestination(route: AccessibleRoute): string | undefined {
@@ -501,21 +625,35 @@ export class NavigationSession {
     if (!lastLeg) return undefined;
     if (lastLeg.type === "WALK") return lastLeg.to;
     if (lastLeg.type === "BUS") return lastLeg.arrivalStop;
-    if (lastLeg.type === "METRO" || lastLeg.type === "THSR" || lastLeg.type === "TRA") {
+    if (
+      lastLeg.type === "METRO" ||
+      lastLeg.type === "THSR" ||
+      lastLeg.type === "TRA"
+    ) {
       return lastLeg.arrivalStation;
     }
     return undefined;
   }
 
-  private checkOffRoute(position: NavPosition): { events: NavServerEvent[]; speech: string[] } {
-    if (!this.active || this.onVehicle || !this.activeRoute) return { events: [], speech: [] };
+  private checkOffRoute(position: NavPosition): {
+    events: NavServerEvent[];
+    speech: string[];
+  } {
+    if (!this.active || this.onVehicle || !this.activeRoute)
+      return { events: [], speech: [] };
     const next = this.nextCoordIndex(this.announcedIndex + 1);
-    const reference = next !== null ? this.steps[next] : this.steps[this.announcedIndex];
-    if (!reference || reference.legType !== "WALK") return { events: [], speech: [] };
+    const reference =
+      next !== null ? this.steps[next] : this.steps[this.announcedIndex];
+    if (!reference || reference.legType !== "WALK")
+      return { events: [], speech: [] };
     const leg = this.activeRoute.legs[reference.legIndex];
     if (leg.type !== "WALK") return { events: [], speech: [] };
-    const distance = distanceToPolylineM([position.longitude, position.latitude], leg.polyline);
-    const threshold = OFFROUTE_RADIUS_M + Math.min(position.accuracy ?? 0, ACCURACY_CAP_M);
+    const distance = distanceToPolylineM(
+      [position.longitude, position.latitude],
+      leg.polyline,
+    );
+    const threshold =
+      OFFROUTE_RADIUS_M + Math.min(position.accuracy ?? 0, ACCURACY_CAP_M);
     if (distance > threshold) {
       this.recoverCount = 0;
       this.offrouteCount++;
@@ -528,7 +666,10 @@ export class NavigationSession {
       }
     } else {
       this.offrouteCount = 0;
-      if (this.offrouteWarned && ++this.recoverCount >= OFFROUTE_RECOVER_CONSECUTIVE) {
+      if (
+        this.offrouteWarned &&
+        ++this.recoverCount >= OFFROUTE_RECOVER_CONSECUTIVE
+      ) {
         this.offrouteWarned = false;
         this.recoverCount = 0;
       }

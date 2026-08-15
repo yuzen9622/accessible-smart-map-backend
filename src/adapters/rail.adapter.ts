@@ -1,10 +1,6 @@
 import { tdxFetch } from "../config/fetch";
 import { traUrl, thsrUrl } from "../config/transit";
-import {
-  parseOdBody,
-  parseStationBody,
-  parseStationList,
-} from "./rail.parse";
+import { parseOdBody, parseStationBody, parseStationList } from "./rail.parse";
 import type {
   RailSystem,
   OdFetchOutcome,
@@ -33,7 +29,9 @@ const inflight = new Map<string, Promise<AnyOutcome>>();
 function ttlForOutcome(outcome: AnyOutcome): number {
   if (!outcome.ok) return SHORT_TTL_MS;
   if (outcome.index) return STATION_INDEX_TTL_MS;
-  return outcome.items && outcome.items.length > 0 ? TIMETABLE_TTL_MS : SHORT_TTL_MS;
+  return outcome.items && outcome.items.length > 0
+    ? TIMETABLE_TTL_MS
+    : SHORT_TTL_MS;
 }
 
 function evictExpired(now: number): void {
@@ -140,11 +138,14 @@ export async function fetchRailOdTimetable(
   date: string,
 ): Promise<OdFetchOutcome> {
   const url = railUrls(system).dailyTimetableOdUrl(fromId, toId, date);
-  const outcome = await runCached(`od|${system}|${fromId}|${toId}|${date}`, async () => {
-    const fetched = await fetchJson(url);
-    if (!fetched.ok) return fetched;
-    return parseOdBody(fetched.body);
-  });
+  const outcome = await runCached(
+    `od|${system}|${fromId}|${toId}|${date}`,
+    async () => {
+      const fetched = await fetchJson(url);
+      if (!fetched.ok) return fetched;
+      return parseOdBody(fetched.body);
+    },
+  );
   return outcome as OdFetchOutcome;
 }
 
@@ -162,11 +163,14 @@ export async function fetchRailStationTimetable(
   date: string,
 ): Promise<StationFetchOutcome> {
   const url = railUrls(system).dailyTimetableStationUrl(stationId, date);
-  const outcome = await runCached(`station|${system}|${stationId}|${date}`, async () => {
-    const fetched = await fetchJson(url);
-    if (!fetched.ok) return fetched;
-    return parseStationBody(fetched.body);
-  });
+  const outcome = await runCached(
+    `station|${system}|${stationId}|${date}`,
+    async () => {
+      const fetched = await fetchJson(url);
+      if (!fetched.ok) return fetched;
+      return parseStationBody(fetched.body);
+    },
+  );
   return outcome as StationFetchOutcome;
 }
 

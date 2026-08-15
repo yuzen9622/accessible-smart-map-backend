@@ -1,6 +1,6 @@
 import { tdxFetch } from "../../config/fetch";
 import { metroUrl } from "../../config/transit";
-import MetroStationModel from "../../model/metro-station.model";
+import { findMetroStationsByUids } from "./metro.repository";
 import type { MetroAlert, MetroAlertResult } from "../../types/transit";
 
 export type { MetroAlert, MetroAlertResult };
@@ -101,12 +101,7 @@ export async function getMetroAlerts(
       ),
     ),
   );
-  const stations =
-    stationIds.length === 0
-      ? []
-      : await MetroStationModel.find({
-          stationUid: { $in: stationIds },
-        }).lean();
+  const stations = await findMetroStationsByUids(stationIds);
   const stationNames = new Map(
     stations.map((station) => [station.stationUid, station.stationName.Zh_tw]),
   );

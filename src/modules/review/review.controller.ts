@@ -36,11 +36,7 @@ export async function listReviews(req: Request, res: Response) {
 export async function updateReview(req: Request, res: Response) {
   const params = req.validated?.params as { id: string };
   const body = req.validated?.body as UpdateReviewInput;
-  const result = await service.updateReview(
-    params.id,
-    req.auth!.userId,
-    body,
-  );
+  const result = await service.updateReview(params.id, req.auth!.userId, body);
   return send(res, result);
 }
 
@@ -55,4 +51,3 @@ export async function getAiSummary(req: Request, res: Response) {
   const result = await service.getAiSummary(query.placeId, query.placeType);
   return send(res, result);
 }
-

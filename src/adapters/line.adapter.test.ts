@@ -35,7 +35,9 @@ describe("line.adapter — agent replies", () => {
     await replyAgentResult("reply-token", "我幫你找到可前往的路線。", {
       origin: "你分享的位置",
       destination: "台北車站",
-      options: [{ label: "無障礙路線", time: "約 12 分鐘", detail: "步行 → 公車 307" }],
+      options: [
+        { label: "無障礙路線", time: "約 12 分鐘", detail: "步行 → 公車 307" },
+      ],
       liffUrl: "https://liff.example.com/route?sessionId=s1",
     });
 
@@ -123,7 +125,7 @@ describe("line.adapter — SOS menu builders", () => {
   it("builds the four menu entries as postbacks", () => {
     const message = buildSosMenuMessage();
     const data = (message.quickReply?.items ?? []).map((item) =>
-      item.action.type === "postback" ? item.action.data : undefined,
+      item.action?.type === "postback" ? item.action.data : undefined,
     );
 
     expect(data).toEqual([
@@ -163,7 +165,7 @@ describe("line.adapter — SOS menu builders", () => {
   it("asks for confirmation with a distinct confirm postback", () => {
     const message = buildUnbindConfirmMessage(contact);
     const data = (message.quickReply?.items ?? []).map((item) =>
-      item.action.type === "postback" ? item.action.data : undefined,
+      item.action?.type === "postback" ? item.action.data : undefined,
     );
 
     expect(data).toEqual([
@@ -201,12 +203,12 @@ describe("line.adapter — SOS menu builders", () => {
 
     expect(
       (filtered.quickReply?.items ?? []).map((item) =>
-        item.action.type === "postback" ? item.action.data : undefined,
+        item.action?.type === "postback" ? item.action.data : undefined,
       ),
     ).toEqual(["action=sos_history", "action=sos_history&owner=u2"]);
     expect(
       (unfiltered.quickReply?.items ?? []).map((item) =>
-        item.action.type === "postback" ? item.action.data : undefined,
+        item.action?.type === "postback" ? item.action.data : undefined,
       ),
     ).toEqual(["action=sos_history&owner=u1", "action=sos_history&owner=u2"]);
     expect((filtered.quickReply?.items ?? []).length).toBeLessThanOrEqual(13);

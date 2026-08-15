@@ -2,12 +2,22 @@ import fs from "fs";
 import path from "path";
 import { GTFS_DIR } from "../constants/gtfs";
 
-function getDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+function getDistanceMeters(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number,
+): number {
   const R = 6371e3;
   const toRad = (val: number) => (val * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
-  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) *
+      Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 }
@@ -28,8 +38,8 @@ async function main() {
     throw new Error(`stops.txt not found at ${stopsFilePath}`);
   }
 
-  const content = fs.readFileSync(stopsFilePath, "utf8").replace(/^\uFEFF/, '');
-  const lines = content.split(/\r?\n/).filter(line => line.trim() !== "");
+  const content = fs.readFileSync(stopsFilePath, "utf8").replace(/^\uFEFF/, "");
+  const lines = content.split(/\r?\n/).filter((line) => line.trim() !== "");
   const headerLine = lines[0];
   const headers = headerLine.split(",");
 
@@ -45,7 +55,7 @@ async function main() {
   }
 
   // Ensure location_type and parent_station headers exist
-  let newHeaders = [...headers];
+  const newHeaders = [...headers];
   if (locTypeIdx === -1) {
     locTypeIdx = newHeaders.length;
     newHeaders.push("location_type");
@@ -60,14 +70,15 @@ async function main() {
 
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i];
-    const parts = line.split(",");
-    let parsed: string[] = [];
+    const parsed: string[] = [];
     let current = "";
     let inQuotes = false;
-    for (let char of line) {
+    for (const char of line) {
       if (char === '"') inQuotes = !inQuotes;
-      else if (char === ',' && !inQuotes) { parsed.push(current); current = ""; }
-      else current += char;
+      else if (char === "," && !inQuotes) {
+        parsed.push(current);
+        current = "";
+      } else current += char;
     }
     parsed.push(current);
 
@@ -96,17 +107,20 @@ async function main() {
 
     // Simple clustering: finding connected components within 50m
     const visited = new Set<string>();
-    
+
     for (let i = 0; i < groupStops.length; i++) {
       const s = groupStops[i];
       if (visited.has(s.id)) continue;
-      
+
       const cluster: Stop[] = [s];
       visited.add(s.id);
-      
+
       for (let j = i + 1; j < groupStops.length; j++) {
         const other = groupStops[j];
-        if (!visited.has(other.id) && getDistanceMeters(s.lat, s.lon, other.lat, other.lon) <= 50) {
+        if (
+          !visited.has(other.id) &&
+          getDistanceMeters(s.lat, s.lon, other.lat, other.lon) <= 50
+        ) {
           cluster.push(other);
           visited.add(other.id);
         }
@@ -115,9 +129,11 @@ async function main() {
       if (cluster.length > 1) {
         parentStationCount++;
         const parentId = `P_${parentStationCount}`;
-        const avgLat = cluster.reduce((sum, st) => sum + st.lat, 0) / cluster.length;
-        const avgLon = cluster.reduce((sum, st) => sum + st.lon, 0) / cluster.length;
-        
+        const avgLat =
+          cluster.reduce((sum, st) => sum + st.lat, 0) / cluster.length;
+        const avgLon =
+          cluster.reduce((sum, st) => sum + st.lon, 0) / cluster.length;
+
         // Update children
         for (const st of cluster) {
           st.parentId = parentId;
@@ -148,15 +164,16 @@ async function main() {
       outputLines.push(st.originalLine);
       continue;
     }
-    
-    const parts = st.originalLine.split(",");
-    let parsed: string[] = [];
+
+    const parsed: string[] = [];
     let current = "";
     let inQuotes = false;
-    for (let char of st.originalLine) {
+    for (const char of st.originalLine) {
       if (char === '"') inQuotes = !inQuotes;
-      else if (char === ',' && !inQuotes) { parsed.push(current); current = ""; }
-      else current += char;
+      else if (char === "," && !inQuotes) {
+        parsed.push(current);
+        current = "";
+      } else current += char;
     }
     parsed.push(current);
 
@@ -175,7 +192,9 @@ async function main() {
   }
 
   fs.writeFileSync(stopsFilePath, outputLines.join("\n") + "\n", "utf8");
-  console.log(`Generated ${parentStationCount} parent stations and updated stops.txt`);
+  console.log(
+    `Generated ${parentStationCount} parent stations and updated stops.txt`,
+  );
 }
 
 main().catch(console.error);
