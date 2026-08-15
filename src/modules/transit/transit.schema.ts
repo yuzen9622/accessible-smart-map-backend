@@ -4,14 +4,10 @@ import { registry } from "../../openapi/registry";
 
 extendZodWithOpenApi(z);
 
-const CityQuery = z
-  .string()
-  .min(1)
-  .optional()
-  .openapi({
-    example: "台北",
-    description: "公車所在縣市（中文或英文），未提供則無法定位",
-  });
+const CityQuery = z.string().min(1).optional().openapi({
+  example: "台北",
+  description: "公車所在縣市（中文或英文），未提供則無法定位",
+});
 
 const DirectionQuery = z.coerce
   .number()
@@ -219,18 +215,14 @@ export const BusStopSearchResultSchema = z
     city: z
       .string()
       .openapi({ example: "Taipei", description: "站牌所屬縣市英文名" }),
-    coordinates: z
-      .tuple([z.number(), z.number()])
-      .openapi({
-        example: [121.5171, 25.0478],
-        description: "站牌經緯度座標 [lng, lat]",
-      }),
-    routes: z
-      .array(z.string())
-      .openapi({
-        example: ["307", "652"],
-        description: "停靠該站牌的公車路線清單",
-      }),
+    coordinates: z.tuple([z.number(), z.number()]).openapi({
+      example: [121.5171, 25.0478],
+      description: "站牌經緯度座標 [lng, lat]",
+    }),
+    routes: z.array(z.string()).openapi({
+      example: ["307", "652"],
+      description: "停靠該站牌的公車路線清單",
+    }),
   })
   .openapi("BusStopSearchResult");
 
@@ -251,21 +243,17 @@ export const BusNearbyStopSchema = z
     city: z
       .string()
       .openapi({ example: "Taipei", description: "站牌所屬縣市英文名" }),
-    coordinates: z
-      .tuple([z.number(), z.number()])
-      .openapi({
-        example: [121.5171, 25.0478],
-        description: "站牌經緯度座標 [lng, lat]",
-      }),
+    coordinates: z.tuple([z.number(), z.number()]).openapi({
+      example: [121.5171, 25.0478],
+      description: "站牌經緯度座標 [lng, lat]",
+    }),
     distance: z
       .number()
       .openapi({ example: 120, description: "與使用者的距離 (公尺)" }),
-    routes: z
-      .array(z.string())
-      .openapi({
-        example: ["307", "652"],
-        description: "停靠該站牌的公車路線清單",
-      }),
+    routes: z.array(z.string()).openapi({
+      example: ["307", "652"],
+      description: "停靠該站牌的公車路線清單",
+    }),
   })
   .openapi("BusNearbyStop");
 
@@ -321,6 +309,118 @@ export const AlertQuerySchema = z.discriminatedUnion("mode", [
     })
     .strict(),
 ]);
+
+const AlertQueryDocSchema = z
+  .object({
+    mode: z
+      .enum(["bus", "metro", "tra", "thsr"])
+      .openapi({
+        example: "bus",
+        description: "運具模式：bus=公車、metro=捷運、tra=臺鐵、thsr=高鐵",
+      }),
+    city: z
+      .string()
+      .min(1)
+      .optional()
+      .openapi({ example: "Taipei", description: "公車縣市（mode=bus 必填）" }),
+    routeName: z
+      .string()
+      .min(1)
+      .optional()
+      .openapi({ example: "307", description: "公車路線（mode=bus 必填）" }),
+    direction: z.coerce
+      .number()
+      .int()
+      .optional()
+      .openapi({ example: 0, description: "行駛方向（bus/tra/thsr 可選）" }),
+    stopUid: z.string().min(1).optional().openapi({ description: "站牌 UID" }),
+    stopName: z
+      .string()
+      .min(1)
+      .optional()
+      .openapi({ example: "台北車站", description: "站牌名稱" }),
+    railSystem: z
+      .enum(["TRTC", "KRTC", "TYMC", "TMRT", "KLRT", "TRTCMG"])
+      .optional()
+      .openapi({ example: "TRTC", description: "捷運系統（mode=metro 必填）" }),
+    lineCode: z
+      .string()
+      .min(1)
+      .optional()
+      .openapi({ example: "R", description: "捷運路線代碼" }),
+    stationIds: z
+      .string()
+      .optional()
+      .openapi({ example: "R10,R16", description: "逗號分隔的車站代碼" }),
+    trainNo: z
+      .string()
+      .min(1)
+      .optional()
+      .openapi({ example: "123", description: "臺鐵車次" }),
+    lineId: z.string().min(1).optional(),
+    fromStationId: z
+      .string()
+      .min(1)
+      .optional()
+      .openapi({ description: "高鐵起站代碼" }),
+    toStationId: z
+      .string()
+      .min(1)
+      .optional()
+      .openapi({ description: "高鐵迄站代碼" }),
+  })
+  .strict();
+
+const MatchedAlertSchema = z
+  .object({
+    alertId: z
+      .string()
+      .openapi({ example: "34265", description: "通阻事件代碼" }),
+    title: z.string().openapi({ example: "8月27日城隍祭改道" }),
+    description: z.string().openapi({ description: "事件描述" }),
+    status: z
+      .union([z.number(), z.string()])
+      .openapi({ description: "0/1/2（公車/臺鐵/捷運）或 ''/▲/X（高鐵）" }),
+    cause: z.union([z.number(), z.string()]).optional(),
+    effect: z.union([z.number(), z.string()]).optional(),
+    level: z.union([z.number(), z.string()]).optional(),
+    reason: z.string().optional(),
+    matchKind: z
+      .enum(["route", "stop", "station", "line", "train", "section"])
+      .openapi({
+        description: "匹配精度（train/stop/station 最精準，section 最寬）",
+      }),
+    startTime: z.string().nullable().optional(),
+    endTime: z.string().nullable().optional(),
+    alertUrl: z.string().optional(),
+  })
+  .openapi("MatchedAlert");
+
+const AlertResponseSchema = ApiResponseSchema(
+  z.object({
+    mode: z.enum(["bus", "metro", "tra", "thsr"]),
+    matchedAt: z.string().openapi({ example: "2026-08-15T10:42:42+08:00" }),
+    alerts: z.array(MatchedAlertSchema),
+  }),
+).openapi("AlertResponse");
+
+registry.registerPath({
+  method: "get",
+  path: "/transit/alerts",
+  tags: ["Transit"],
+  summary: "營運通阻（即時）",
+  description:
+    "依使用者搭乘的運具精準匹配 TDX 營運通阻資料：公車以路線、捷運以線/站、臺鐵以車次、高鐵以區間+方向。資料由 TDX MQTT 即時餵養，REST 兜底。",
+  request: { query: AlertQueryDocSchema },
+  responses: {
+    200: {
+      description: "匹配到的通阻訊息",
+      content: { "application/json": { schema: AlertResponseSchema } },
+    },
+    400: { description: "mode 或參數錯誤" },
+    500: { description: "TDX/DB 錯誤" },
+  },
+});
 
 registry.registerPath({
   method: "get",
