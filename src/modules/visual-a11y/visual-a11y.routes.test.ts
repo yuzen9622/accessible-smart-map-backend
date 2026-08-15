@@ -1,4 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import request from "supertest";
 
 vi.mock("./visual-a11y.service", () => ({
@@ -7,8 +15,9 @@ vi.mock("./visual-a11y.service", () => ({
 }));
 
 import {
-  buildTestApp,
   buildAuthorizationHeader,
+  startTestServer,
+  stopTestServer,
 } from "../../../tests/helpers/test-helpers";
 import {
   buildDbUser,
@@ -16,11 +25,19 @@ import {
 } from "../../../tests/helpers/real-auth";
 import * as service from "./visual-a11y.service";
 
-const app = buildTestApp();
+let app: Awaited<ReturnType<typeof startTestServer>>;
 const BASE = "/api/v1/a11y/visual-a11y";
 const AUTH = buildAuthorizationHeader({
   _id: "user-abc",
   email: "user@test.com",
+});
+
+beforeAll(async () => {
+  app = await startTestServer();
+});
+
+afterAll(async () => {
+  await stopTestServer(app);
 });
 
 const sample = {

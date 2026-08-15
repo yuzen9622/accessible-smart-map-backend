@@ -1,4 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import request from "supertest";
 
 /**
@@ -125,7 +133,10 @@ vi.mock("../modules/sos/sos.service", () => ({
   getSessionForOwner: vi.fn(),
 }));
 
-import { buildTestApp } from "../../tests/helpers/test-helpers";
+import {
+  startTestServer,
+  stopTestServer,
+} from "../../tests/helpers/test-helpers";
 import {
   bearerFor,
   buildDbUser,
@@ -142,7 +153,7 @@ import * as sosService from "../modules/sos/sos.service";
 import { ResponseCode, ResponseMessage } from "../types/code";
 import { SOS_MSG, SOS_REASON, REVIEW_MSG } from "../constants/messages";
 
-const app = buildTestApp();
+let app: Awaited<ReturnType<typeof startTestServer>>;
 
 const SERVICE_NAMESPACES = [
   userService,
@@ -223,6 +234,14 @@ function hit(route: ProtectedRoute, authHeader?: string) {
   if (route.body) req.send(route.body);
   return req;
 }
+
+beforeAll(async () => {
+  app = await startTestServer();
+});
+
+afterAll(async () => {
+  await stopTestServer(app);
+});
 
 beforeEach(() => {
   vi.resetAllMocks();

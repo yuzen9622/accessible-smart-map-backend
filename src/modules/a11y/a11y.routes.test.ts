@@ -1,4 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import request from "supertest";
 
 vi.mock("./a11y.service", async () => {
@@ -25,7 +33,10 @@ vi.mock("./a11y.orchestration", async () => {
   };
 });
 
-import { buildTestApp } from "../../../tests/helpers/test-helpers";
+import {
+  startTestServer,
+  stopTestServer,
+} from "../../../tests/helpers/test-helpers";
 import * as service from "./a11y.service";
 import * as orchestration from "./a11y.orchestration";
 import {
@@ -35,7 +46,7 @@ import {
 import type { ServiceCoverageConfig } from "../../config/coverage";
 import { ERROR_MESSAGE } from "../../constants/messages";
 
-const app = buildTestApp();
+let app: Awaited<ReturnType<typeof startTestServer>>;
 const BASE = "/api/v1/a11y";
 
 const GEO = {
@@ -47,6 +58,14 @@ const coverage: ServiceCoverageConfig = {
   bbox: [...DEFAULT_SERVICE_COVERAGE_BBOX] as ServiceCoverageConfig["bbox"],
   maxRouteDistanceKm: MAX_ROUTE_DISTANCE_KM,
 };
+
+beforeAll(async () => {
+  app = await startTestServer();
+});
+
+afterAll(async () => {
+  await stopTestServer(app);
+});
 
 const facility = (id: string, source: string): any => ({
   _id: id,

@@ -1,4 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import request from "supertest";
 import { ResponseCode } from "../../types/code";
 import { REVIEW_MSG } from "../../constants/messages";
@@ -13,8 +21,9 @@ vi.mock("./review.service", async (orig) => ({
 }));
 
 import {
-  buildTestApp,
   buildAuthorizationHeader,
+  startTestServer,
+  stopTestServer,
 } from "../../../tests/helpers/test-helpers";
 import {
   buildDbUser,
@@ -22,11 +31,19 @@ import {
 } from "../../../tests/helpers/real-auth";
 import * as service from "./review.service";
 
-const app = buildTestApp();
+let app: Awaited<ReturnType<typeof startTestServer>>;
 const BASE = "/api/v1/a11y/reviews";
 const AUTH = buildAuthorizationHeader({
   _id: "user-abc",
   email: "user@test.com",
+});
+
+beforeAll(async () => {
+  app = await startTestServer();
+});
+
+afterAll(async () => {
+  await stopTestServer(app);
 });
 
 const VALID_REVIEW = {

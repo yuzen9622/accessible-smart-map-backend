@@ -1,4 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import request from "supertest";
 
 // Replace the service seam; the controller's only job above it is the
@@ -7,12 +15,15 @@ vi.mock("./environment.service", () => ({
   getEnvironmentInfo: vi.fn(),
 }));
 
-import { buildTestApp } from "../../../tests/helpers/test-helpers";
+import {
+  startTestServer,
+  stopTestServer,
+} from "../../../tests/helpers/test-helpers";
 import * as service from "./environment.service";
 import { ResponseCode } from "../../types/code";
 import { ENV_MSG, ERROR_MESSAGE } from "../../constants/messages";
 
-const app = buildTestApp();
+let app: Awaited<ReturnType<typeof startTestServer>>;
 const URL = "/api/v1/a11y/environment";
 
 type Status = "ok" | "unavailable";
@@ -25,6 +36,14 @@ function envData(weather: Status, air: Status, cctv: Status) {
     nearbyCctv: { status: cctv, cameras: [] },
   };
 }
+
+beforeAll(async () => {
+  app = await startTestServer();
+});
+
+afterAll(async () => {
+  await stopTestServer(app);
+});
 
 beforeEach(() => {
   vi.resetAllMocks();

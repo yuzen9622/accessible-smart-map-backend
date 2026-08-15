@@ -1,4 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import request from "supertest";
 import type { Readable } from "stream";
 import type * as supertestTypes from "supertest";
@@ -12,19 +20,28 @@ vi.mock("./sos.service", () => ({
 }));
 
 import {
-  buildTestApp,
   buildAuthorizationHeader,
+  startTestServer,
+  stopTestServer,
 } from "../../../tests/helpers/test-helpers";
 import { stubAuthUserLookup } from "../../../tests/helpers/real-auth";
 import * as service from "./sos.service";
 import { ResponseCode } from "../../types/code";
 import { SOS_MSG, SOS_REASON } from "../../constants/messages";
 
-const app = buildTestApp();
+let app: Awaited<ReturnType<typeof startTestServer>>;
 const BASE = "/api/v1/sos/sessions";
 const auth = buildAuthorizationHeader();
 const TOKEN_32 = "9f3a1c000000000000000000000000e0";
 const OID = "6a4e797394fbb1b1721c8b81";
+
+beforeAll(async () => {
+  app = await startTestServer();
+});
+
+afterAll(async () => {
+  await stopTestServer(app);
+});
 
 beforeEach(() => {
   vi.resetAllMocks();

@@ -1,4 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import request from "supertest";
 
 vi.mock("./campus.service", () => ({
@@ -8,10 +16,13 @@ vi.mock("./campus.service", () => ({
   listSchools: vi.fn(),
 }));
 
-import { buildTestApp } from "../../../tests/helpers/test-helpers";
+import {
+  startTestServer,
+  stopTestServer,
+} from "../../../tests/helpers/test-helpers";
 import * as service from "./campus.service";
 
-const app = buildTestApp();
+let app: Awaited<ReturnType<typeof startTestServer>>;
 const BASE = "/api/v1/a11y/campus";
 
 const summary = {
@@ -45,6 +56,14 @@ const detail = {
   ],
   importedAt: "2026-06-24T00:00:00.000Z",
 };
+
+beforeAll(async () => {
+  app = await startTestServer();
+});
+
+afterAll(async () => {
+  await stopTestServer(app);
+});
 
 beforeEach(() => {
   vi.resetAllMocks();

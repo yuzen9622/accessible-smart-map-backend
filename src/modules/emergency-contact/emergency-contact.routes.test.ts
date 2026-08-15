@@ -1,4 +1,13 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import request from "supertest";
 
 vi.mock("./emergency-contact.service", () => ({
@@ -8,22 +17,41 @@ vi.mock("./emergency-contact.service", () => ({
 }));
 
 import {
-  buildTestApp,
   buildAuthorizationHeader,
+  startTestServer,
+  stopTestServer,
 } from "../../../tests/helpers/test-helpers";
 import { stubAuthUserLookup } from "../../../tests/helpers/real-auth";
 import * as service from "./emergency-contact.service";
 import { ResponseCode } from "../../types/code";
 import { CONTACT_MSG, CONTACT_REASON } from "../../constants/messages";
 
-const app = buildTestApp();
+let app: Awaited<ReturnType<typeof startTestServer>>;
 const URL = "/api/v1/user/emergency-contacts";
 const auth = buildAuthorizationHeader();
 
+beforeAll(async () => {
+  app = await startTestServer();
+});
+
+afterAll(async () => {
+  await stopTestServer(app);
+});
+
 beforeEach(() => {
-  vi.resetAllMocks();
+  // Route suites share the production User model through the composed app.
+  // Restore the previous test's findById spy instead of only resetting its
+  // implementation, then reset only this file's service seams.
+  vi.restoreAllMocks();
+  vi.mocked(service.listContacts).mockReset();
+  vi.mocked(service.createContact).mockReset();
+  vi.mocked(service.deleteContact).mockReset();
   // Real auth path: only the User.findById DB seam is stubbed.
   stubAuthUserLookup();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("Emergency contact routes — auth", () => {

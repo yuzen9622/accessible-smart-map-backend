@@ -1,4 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import request from "supertest";
 import { ROUTE_MSG, ROUTE_REASON } from "../../constants/messages";
 import { ResponseCode } from "../../types/code";
@@ -13,8 +21,9 @@ vi.mock("./accessible-route.service", async (importActual) => {
 });
 
 import {
-  buildTestApp,
   buildAuthorizationHeader,
+  startTestServer,
+  stopTestServer,
 } from "../../../tests/helpers/test-helpers";
 import {
   buildDbUser,
@@ -23,12 +32,20 @@ import {
 import * as service from "./accessible-route.service";
 import { AccessibleRouteSchema } from "./accessible-route.schema";
 
-const app = buildTestApp();
+let app: Awaited<ReturnType<typeof startTestServer>>;
 const URL = "/api/v1/a11y/accessible-route";
 const mockPlan = vi.mocked(service.planAccessibleRouteForHttp);
 const AUTH = buildAuthorizationHeader({
   _id: "user-abc",
   email: "user@test.com",
+});
+
+beforeAll(async () => {
+  app = await startTestServer();
+});
+
+afterAll(async () => {
+  await stopTestServer(app);
 });
 
 const okData = (overrides: Record<string, unknown> = {}) => ({

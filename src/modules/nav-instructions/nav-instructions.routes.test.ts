@@ -1,8 +1,20 @@
 import request from "supertest";
-import { describe, expect, it } from "vitest";
-import app from "../../app";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  startTestServer,
+  stopTestServer,
+} from "../../../tests/helpers/test-helpers";
 
 const URL = "/api/v1/a11y/route/instructions";
+let app: Awaited<ReturnType<typeof startTestServer>>;
+
+beforeAll(async () => {
+  app = await startTestServer();
+});
+
+afterAll(async () => {
+  await stopTestServer(app);
+});
 
 const driveRoute = {
   routeId: "drive-contract",

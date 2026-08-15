@@ -1,4 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import request from "supertest";
 
 vi.mock("./user.service", () => ({
@@ -7,19 +15,28 @@ vi.mock("./user.service", () => ({
 }));
 
 import {
-  buildTestApp,
   buildAuthorizationHeader,
+  startTestServer,
+  stopTestServer,
 } from "../../../tests/helpers/test-helpers";
 import { stubAuthUserLookup } from "../../../tests/helpers/real-auth";
 import * as userService from "./user.service";
 import { ResponseCode } from "../../types/code";
 
-const app = buildTestApp();
+let app: Awaited<ReturnType<typeof startTestServer>>;
 const BASE = "/api/v1/user";
 const auth = buildAuthorizationHeader();
 
 const getConfig = vi.mocked(userService.getConfig);
 const updateConfig = vi.mocked(userService.updateConfig);
+
+beforeAll(async () => {
+  app = await startTestServer();
+});
+
+afterAll(async () => {
+  await stopTestServer(app);
+});
 
 beforeEach(() => {
   vi.resetAllMocks();

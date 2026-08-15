@@ -1,3 +1,4 @@
+import http from "http";
 import jwt from "jsonwebtoken";
 import app from "../../src/app";
 
@@ -14,6 +15,35 @@ import app from "../../src/app";
  */
 export function buildTestApp() {
   return app;
+}
+
+/**
+ * Starts one stable HTTP server for a route-test file.
+ *
+ * Passing an Express function directly to each SuperTest request makes
+ * SuperTest bind and close a new ephemeral server for every request. Under the
+ * full parallel suite, rapid cross-process port reuse can connect a request to
+ * the wrong short-lived server. Keeping one server for the file removes that
+ * transport race while exercising the same production Express app.
+ */
+export async function startTestServer(): Promise<http.Server> {
+  const server = http.createServer(app);
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => reject(error);
+    server.once("error", onError);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", onError);
+      resolve();
+    });
+  });
+  return server;
+}
+
+/** Closes a server created by {@link startTestServer}. */
+export async function stopTestServer(server: http.Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
 }
 
 /**
