@@ -1,6 +1,6 @@
 import BusStopModel from "../../model/bus-stop.model";
 import { getCity, getCoordinates } from "../../adapters/google.adapter";
-import { parseRouteIntent } from "../ai/ai.service";
+import { parseRouteIntent } from "./route-intent.port";
 import { getA11yProfile } from "../user/user.service";
 import type { RouteIntent } from "../../types/ai";
 import { ResponseCode } from "../../types/code";

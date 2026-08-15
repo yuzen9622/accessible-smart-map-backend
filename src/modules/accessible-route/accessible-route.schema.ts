@@ -2,7 +2,7 @@ import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 import { registry } from "../../openapi/registry";
 import { ROUTE_MSG, ROUTE_REASON } from "../../constants/messages";
-import { RouteIntentSchema } from "../ai/ai.schema";
+import { RouteIntentSchema } from "../../schemas/route-intent.schema";
 
 extendZodWithOpenApi(z);
 

@@ -15,13 +15,16 @@ import { sendResponse } from "./config/lib";
 import { ERROR_MESSAGE } from "./constants/messages";
 import middleware from "./middleware/middleware";
 import { createA11yRouter } from "./modules/a11y";
-import { createAccessibleRouteRouter } from "./modules/accessible-route";
+import {
+	createAccessibleRouteRouter,
+	registerRouteIntentParser,
+} from "./modules/accessible-route";
 import { createNavInstructionsRouter } from "./modules/nav-instructions";
 import { createPlaceSearchRouter } from "./modules/place-search";
 import { createTransitRouter } from "./modules/transit";
 import { createUserRouter } from "./modules/user";
 import { createAirRouter } from "./modules/air";
-import { createAiRouter } from "./modules/ai";
+import { createAiRouter, parseRouteIntent } from "./modules/ai";
 import { createHazardReportRouter } from "./modules/hazard-report";
 import { createEnvironmentRouter } from "./modules/environment";
 import { createWelfareRouter } from "./modules/welfare";
@@ -33,6 +36,11 @@ import { createSosRouter } from "./modules/sos";
 import { createLineRouter } from "./modules/line";
 import { createVoiceRouter } from "./modules/voice";
 import { generateOpenAPIDocument } from "./openapi/document";
+
+// Composition root: the planner declares a route-intent port and the `ai`
+// module supplies the implementation, so the dependency stays one-way
+// (ai → accessible-route) instead of the two modules importing each other.
+registerRouteIntentParser(parseRouteIntent);
 
 const app: Express = express();
 
