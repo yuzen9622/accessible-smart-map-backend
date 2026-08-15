@@ -12,6 +12,9 @@ vi.mock("../transit/bus.service", () => ({
 	getBusTimetable: vi.fn(),
 	getBusRealtimeOnRoute: vi.fn(),
 }));
+vi.mock("../transit/metro.service", () => ({
+	getMetroAlerts: vi.fn(),
+}));
 vi.mock("../transit/train.service", () => ({
 	getTrainTimetable: vi.fn(),
 	getStationTimetable: vi.fn(),
@@ -107,6 +110,7 @@ import {
 	getCampusAccessibilityDetails,
 	getNearbyHazards,
 	findNearbyParking,
+	getMetroAlerts,
 	getNavInstructions,
 	saveMemory,
 	deleteMemory,
@@ -120,6 +124,7 @@ import {
 	bindLineAccountCode,
 } from "./agent-tools";
 import * as trainService from "../transit/train.service";
+import * as metroService from "../transit/metro.service";
 
 const mockGetCoordinates = getCoordinates as unknown as ReturnType<
 	typeof vi.fn
@@ -140,6 +145,9 @@ const mockHazardFindNearby = hazardService.findNearby as unknown as ReturnType<
 	typeof vi.fn
 >;
 const mockA11yParking = a11yService.findNearbyParking as unknown as ReturnType<
+	typeof vi.fn
+>;
+const mockMetroAlerts = metroService.getMetroAlerts as unknown as ReturnType<
 	typeof vi.fn
 >;
 const mockPlanRoute = planAccessibleRouteFromRequest as unknown as ReturnType<
@@ -633,6 +641,68 @@ describe("findNearbyParking", () => {
 		const result = JSON.parse(raw);
 		expect(result.ok).toBe(false);
 		expect(result.error).toBe("停車位查詢失敗");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// getMetroAlerts
+// ---------------------------------------------------------------------------
+describe("getMetroAlerts", () => {
+	it("全部正常時回傳摘要", async () => {
+		mockMetroAlerts.mockResolvedValue([
+			{
+				railSystem: "TRTC",
+				updatedAt: "2026-08-15T10:00:00+08:00",
+				alerts: [],
+			},
+		]);
+
+		const raw = await getMetroAlerts({});
+		const result = JSON.parse(raw);
+
+		expect(mockMetroAlerts).toHaveBeenCalledWith(undefined);
+		expect(result).toEqual({
+			ok: true,
+			summary: "各捷運系統目前皆正常營運，無異常公告",
+			alerts: [],
+		});
+	});
+
+	it("有異常時透傳各系統公告", async () => {
+		const alerts = [
+			{
+				railSystem: "TRTC",
+				updatedAt: "2026-08-15T10:00:00+08:00",
+				alerts: [
+					{
+						alertId: "fault-1",
+						title: "電梯故障",
+						description: "R10 電梯維修中",
+						status: 2,
+						stations: [{ id: "R10", name: "中山站" }],
+						lines: ["R"],
+						publishTime: "2026-08-15T09:30:00+08:00",
+						updateTime: "2026-08-15T09:45:00+08:00",
+					},
+				],
+			},
+		];
+		mockMetroAlerts.mockResolvedValue(alerts);
+
+		const raw = await getMetroAlerts({ railSystem: "TRTC" });
+		const result = JSON.parse(raw);
+
+		expect(mockMetroAlerts).toHaveBeenCalledWith("TRTC");
+		expect(result).toEqual({ ok: true, alerts });
+	});
+
+	it("service 拋錯時回 fallback", async () => {
+		mockMetroAlerts.mockRejectedValue(new Error("TDX unavailable"));
+
+		const raw = await getMetroAlerts({});
+		const result = JSON.parse(raw);
+
+		expect(result).toEqual({ ok: false, error: "捷運營運狀態查詢失敗" });
 	});
 });
 

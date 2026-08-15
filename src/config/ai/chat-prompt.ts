@@ -25,6 +25,7 @@ export const CHAT_SYSTEM_PROMPT = `${AGENT_IDENTITY}。
 - findCampusAccessibility：查校園／大學校區的無障礙設施摘要，回傳 campusId。
 - getCampusAccessibilityDetails：依 campusId 回傳單一校區的完整設施清單。
 - findNearbyParking：查附近停車位（身障專用格或一般路邊格），依使用者需求選 type：身障者找專用車位 → disabled、一般汽車 → standard、未明說 → all（身障格優先）。
+- getMetroAlerts：查捷運即時異常公告（無障礙電梯故障、延誤等），回答「某站電梯有沒有壞」這類即時狀態問題；靜態設施位置用 findA11yPlaces。
 - planAccessibleRoute：回傳整段交通路線的**摘要**（候選路線、含哪些公車/捷運、轉乘次數、預估時間、無障礙評分）——要「怎麼去／有哪些走法」時用；也可作為「兩地間有哪些公車」的候選來源，之後再串公車工具比時間。
 - getNavInstructions：回傳**逐步**導航指引（直行幾公尺、右轉、在哪站上車）——要「每一步怎麼走／帶我走／step by step」時用。與 planAccessibleRoute 的差別＝逐步 vs 摘要。
 - findNearbyBusStops：回傳某地點附近的公車站牌及各站「真實經過的路線清單」。**不要自己猜路線號碼**，先用它拿到真實路線再查時間。

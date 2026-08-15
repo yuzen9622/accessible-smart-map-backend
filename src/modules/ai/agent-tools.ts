@@ -1,5 +1,6 @@
 import * as a11yService from "../a11y/a11y.service";
 import * as busService from "../transit/bus.service";
+import * as metroService from "../transit/metro.service";
 import * as trainService from "../transit/train.service";
 import * as airService from "../air/air.service";
 import * as campusService from "../campus/campus.service";
@@ -879,6 +880,25 @@ export async function findNearbyParking(args: {
 	} catch (error: any) {
 		console.error("[agent-tool:findNearbyParking]", error);
 		return JSON.stringify({ ok: false, error: "停車位查詢失敗" });
+	}
+}
+
+export async function getMetroAlerts(args: {
+	railSystem?: string;
+}): Promise<string> {
+	try {
+		const results = await metroService.getMetroAlerts(args.railSystem);
+		if (results.every((result) => result.alerts.length === 0)) {
+			return JSON.stringify({
+				ok: true,
+				summary: "各捷運系統目前皆正常營運，無異常公告",
+				alerts: [],
+			});
+		}
+		return JSON.stringify({ ok: true, alerts: results });
+	} catch (error: any) {
+		console.error("[agent-tool:getMetroAlerts]", error);
+		return JSON.stringify({ ok: false, error: "捷運營運狀態查詢失敗" });
 	}
 }
 
@@ -1876,6 +1896,9 @@ export async function executeLocalTool(
 				type: args.type,
 				userLocation,
 			});
+
+		case "getMetroAlerts":
+			return getMetroAlerts({ railSystem: args.railSystem });
 
 		case "getNavInstructions":
 			return getNavInstructions({

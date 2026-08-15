@@ -57,8 +57,7 @@ const planRouteDeclaration: FunctionDeclaration = {
 			},
 			destination: {
 				type: Type.STRING,
-				description:
-					"終點。若用戶說「...到台中高鐵站」，則終點為「台中高鐵站」。",
+				description: "終點。若用戶說「...到台中高鐵站」，則終點為「台中高鐵站」。",
 			},
 			travelMode: {
 				type: Type.STRING,
@@ -139,8 +138,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
 					longitude: { type: "number", description: "搜尋中心經度（選填）" },
 					radiusM: {
 						type: "number",
-						description:
-							"附近搜尋半徑（公尺），預設 1000，上限由資料庫查詢決定",
+						description: "附近搜尋半徑（公尺），預設 1000，上限由資料庫查詢決定",
 					},
 					city: {
 						type: "string",
@@ -256,8 +254,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
 					},
 					city: {
 						type: "string",
-						description:
-							"公車所在縣市，例如：'台北'。未提供時會用使用者位置推斷。",
+						description: "公車所在縣市，例如：'台北'。未提供時會用使用者位置推斷。",
 					},
 				},
 				required: ["routeName"],
@@ -283,8 +280,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
 					},
 					city: {
 						type: "string",
-						description:
-							"公車所在縣市，例如：'台北'。未提供時會用使用者位置推斷。",
+						description: "公車所在縣市，例如：'台北'。未提供時會用使用者位置推斷。",
 					},
 					direction: {
 						type: "number",
@@ -310,8 +306,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
 					},
 					city: {
 						type: "string",
-						description:
-							"公車所在縣市，例如：'台北'。未提供時會用使用者位置推斷。",
+						description: "公車所在縣市，例如：'台北'。未提供時會用使用者位置推斷。",
 					},
 				},
 				required: ["routeName"],
@@ -408,8 +403,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
 					},
 					city: {
 						type: "string",
-						description:
-							"公車所在縣市，例如：'台北'。未提供時會用使用者位置推斷。",
+						description: "公車所在縣市，例如：'台北'。未提供時會用使用者位置推斷。",
 					},
 					direction: {
 						type: "number",
@@ -468,8 +462,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
 				properties: {
 					osmId: {
 						type: "string",
-						description:
-							"設施的 OSM ID，單個或以逗號分隔的多個，例如：'node/123456'",
+						description: "設施的 OSM ID，單個或以逗號分隔的多個，例如：'node/123456'",
 					},
 				},
 				required: ["osmId"],
@@ -512,8 +505,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
 				properties: {
 					query: {
 						type: "string",
-						description:
-							"地點名稱，例如：'台北車站'。與 latitude/longitude 二擇一。",
+						description: "地點名稱，例如：'台北車站'。與 latitude/longitude 二擇一。",
 					},
 					latitude: { type: "number", description: "查詢中心緯度（選填）" },
 					longitude: { type: "number", description: "查詢中心經度（選填）" },
@@ -556,6 +548,26 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
 						enum: ["disabled", "standard", "all"],
 						description:
 							"停車格種類：disabled 身障專用格、standard 一般路邊格、all 兩者（預設，身障格優先）。依使用者身份與需求判斷：身障使用者找車位 → disabled；一般使用者 → standard；不確定 → all",
+					},
+				},
+				required: [],
+			},
+		},
+	},
+	{
+		type: "function",
+		function: {
+			name: "getMetroAlerts",
+			description:
+				"查捷運即時營運狀態與異常公告（例如無障礙電梯故障、延誤）。用於「某站電梯有沒有壞/有沒有故障」、「捷運目前有沒有異常」這類即時問題；靜態無障礙設施位置用 findA11yPlaces。",
+			parameters: {
+				type: "object",
+				properties: {
+					railSystem: {
+						type: "string",
+						enum: ["TRTC", "KRTC", "TYMC", "TMRT", "KLRT", "TRTCMG"],
+						description:
+							"捷運系統代碼（選填，不填查全部）：TRTC 台北捷運、KRTC 高雄捷運、TYMC 桃園捷運、TMRT 台中捷運、KLRT 高雄輕軌、TRTCMG 貓空纜車",
 					},
 				},
 				required: [],
