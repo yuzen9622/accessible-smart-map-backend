@@ -197,7 +197,7 @@ export async function updateMemorySettings(
   const user = await User.findByIdAndUpdate(
     userId,
     { $set: { "settings.memoryEnabled": settings.memoryEnabled } },
-    { new: true },
+    { returnDocument: "after" },
   )
     .select("settings.memoryEnabled")
     .lean();
@@ -287,7 +287,7 @@ export async function saveMemory(
           updatedAt: new Date(),
         },
       },
-      { new: true },
+      { returnDocument: "after" },
     ).lean();
     await invalidateCache(userId);
     const memory = decryptMemory(updated as IUserMemory);
@@ -311,7 +311,7 @@ export async function saveMemory(
   const memoryWithEmbeddingId = await UserMemory.findByIdAndUpdate(
     memoryId,
     { $set: { embeddingId: memoryId } },
-    { new: true },
+    { returnDocument: "after" },
   ).lean();
 
   const count = await UserMemory.countDocuments(activeMemoryFilter(userId));
@@ -372,7 +372,7 @@ export async function updateMemory(
         updatedAt: new Date(),
       },
     },
-    { new: true },
+    { returnDocument: "after" },
   ).lean();
 
   if (!updated) return null;

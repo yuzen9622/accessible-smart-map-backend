@@ -26,7 +26,7 @@ describe("getA11yProfile", () => {
     expect(configModel.findOneAndUpdate).toHaveBeenCalledWith(
       { user_id: "user-1" },
       { $setOnInsert: { user_id: "user-1" } },
-      { new: true, upsert: true },
+      { returnDocument: "after", upsert: true },
     );
     expect(profile).toEqual({
       mobilityAid: null,
@@ -73,7 +73,7 @@ describe("updateA11yProfile", () => {
         },
         $setOnInsert: { user_id: "user-1" },
       },
-      { new: true, upsert: true },
+      { returnDocument: "after", upsert: true },
     );
     expect(profile.mobilityAid).toBe("power_wheelchair");
     expect(profile.maxSlopePercent).toBe(8);
@@ -87,7 +87,7 @@ describe("updateA11yProfile", () => {
     expect(configModel.findOneAndUpdate).toHaveBeenCalledWith(
       { user_id: "user-1" },
       { $set: { "accessibility.canUseStairs": true }, $setOnInsert: { user_id: "user-1" } },
-      { new: true, upsert: true },
+      { returnDocument: "after", upsert: true },
     );
   });
 });

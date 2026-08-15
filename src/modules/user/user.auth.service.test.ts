@@ -130,7 +130,7 @@ describe("processPasswordAssistance", () => {
           },
         },
       ],
-      { new: true, maxTimeMS: 10_000 },
+      { returnDocument: "after", maxTimeMS: 10_000 },
     );
     expect(sendPasswordResetEmail).toHaveBeenCalledWith({
       to: "jane@example.com",
@@ -229,7 +229,7 @@ describe("processPasswordAssistance", () => {
     expect(User.findOneAndUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ _id: "user-1", authProviders: "local" }),
       expect.any(Object),
-      expect.objectContaining({ new: true }),
+      expect.objectContaining({ returnDocument: "after" }),
     );
     expect(sendPasswordResetEmail).toHaveBeenCalledTimes(1);
     expect(sendGooglePasswordResetGuidanceEmail).not.toHaveBeenCalled();
@@ -281,7 +281,7 @@ describe("resetPassword", () => {
           },
         },
       ],
-      { new: true, maxTimeMS: 10_000 },
+      { returnDocument: "after", maxTimeMS: 10_000 },
     );
     expect(AuthToken.findOneAndDelete).not.toHaveBeenCalled();
     expect(result.user.authProviders).toEqual(["google", "local"]);
@@ -316,7 +316,7 @@ describe("resetPassword", () => {
     expect(User.findOneAndUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ authProviders: "local" }),
       expect.any(Array),
-      { new: true, maxTimeMS: 10_000 },
+      { returnDocument: "after", maxTimeMS: 10_000 },
     );
     expect(AuthToken.findOneAndDelete).not.toHaveBeenCalled();
   });

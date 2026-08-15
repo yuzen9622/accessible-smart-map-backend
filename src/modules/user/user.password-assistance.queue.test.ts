@@ -61,7 +61,7 @@ describe("password assistance durable queue", () => {
         },
         $inc: { attempts: 1 },
       },
-      { new: true, sort: { availableAt: 1, createdAt: 1 }, maxTimeMS: 10_000 },
+      { returnDocument: "after", sort: { availableAt: 1, createdAt: 1 }, maxTimeMS: 10_000 },
     );
   });
 
@@ -104,7 +104,7 @@ describe("password assistance durable queue", () => {
         },
       ],
       // mongoose 9 requires explicit opt-in for aggregation update pipelines.
-      { new: true, updatePipeline: true, maxTimeMS: 10_000 },
+      { returnDocument: "after", updatePipeline: true, maxTimeMS: 10_000 },
     );
     expect(expiry).toEqual(fixedExpiry);
   });

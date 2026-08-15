@@ -168,7 +168,7 @@ describe("saveMemory", () => {
     expect(mockFindByIdAndUpdate).toHaveBeenCalledWith(
       "m1",
       expect.objectContaining({ $set: expect.objectContaining({ content: "家住板橋" }) }),
-      { new: true },
+      { returnDocument: "after" },
     );
     expect(mockCreate).not.toHaveBeenCalled();
   });

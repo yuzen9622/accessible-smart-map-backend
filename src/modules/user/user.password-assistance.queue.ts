@@ -48,7 +48,7 @@ export async function claimPasswordAssistanceJob() {
       $set: { status: "processing", lockedAt: now, leaseToken },
       $inc: { attempts: 1 },
     },
-    { new: true, sort: { availableAt: 1, createdAt: 1 }, maxTimeMS: DB_OPERATION_MAX_MS },
+    { returnDocument: "after", sort: { availableAt: 1, createdAt: 1 }, maxTimeMS: DB_OPERATION_MAX_MS },
   );
 }
 
@@ -87,7 +87,7 @@ export async function getOrSetPasswordResetExpiry(input: {
         },
       },
     ],
-    { new: true, updatePipeline: true, maxTimeMS: DB_OPERATION_MAX_MS },
+    { returnDocument: "after", updatePipeline: true, maxTimeMS: DB_OPERATION_MAX_MS },
   )) as IPasswordAssistanceJob | null;
   return job?.tokenExpiresAt ?? null;
 }

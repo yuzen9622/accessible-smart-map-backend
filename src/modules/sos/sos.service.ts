@@ -432,7 +432,7 @@ export async function updateHandlingStatus(input: UpdateSosStatusInput): Promise
   const updated = await SosSession.findOneAndUpdate(
     { _id: input.sessionId, status: "active" },
     update,
-    { new: true },
+    { returnDocument: "after" },
   ).lean();
   if (!updated) return fail(ResponseCode.INVALID_INPUT, "SESSION_NOT_ACTIVE");
 

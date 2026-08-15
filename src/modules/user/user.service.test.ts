@@ -51,7 +51,7 @@ describe("issueLineLinkCode", () => {
           expiresAt: expect.any(Date),
         }),
       }),
-      { upsert: true, new: true },
+      { upsert: true, returnDocument: "after" },
     );
   });
 });

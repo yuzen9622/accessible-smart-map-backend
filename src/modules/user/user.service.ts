@@ -62,7 +62,7 @@ export async function updateConfig(
   for (const [key, value] of Object.entries(fields)) {
     if (value !== undefined) updateFields[key] = value;
   }
-  return Config.findOneAndUpdate({ user_id }, { $set: updateFields }, { new: true });
+  return Config.findOneAndUpdate({ user_id }, { $set: updateFields }, { returnDocument: "after" });
 }
 
 const DEFAULT_A11Y_PROFILE: IA11yProfile = {
@@ -88,7 +88,7 @@ export async function getA11yProfile(userId: string): Promise<IA11yProfile> {
   const config = await Config.findOneAndUpdate(
     { user_id: userId },
     { $setOnInsert: { user_id: userId } },
-    { new: true, upsert: true },
+    { returnDocument: "after", upsert: true },
   );
   return { ...DEFAULT_A11Y_PROFILE, ...(config.accessibility ?? {}) };
 }
@@ -111,7 +111,7 @@ export async function updateA11yProfile(
   const config = await Config.findOneAndUpdate(
     { user_id: userId },
     { $set: updateFields, $setOnInsert: { user_id: userId } },
-    { new: true, upsert: true },
+    { returnDocument: "after", upsert: true },
   );
   return { ...DEFAULT_A11Y_PROFILE, ...(config.accessibility ?? {}) };
 }
@@ -132,7 +132,7 @@ export async function issueLineLinkCode(userId: string): Promise<{
   await LineLinkCode.findOneAndUpdate(
     { userId },
     { $set: { code: bindCode, expiresAt: bindCodeExpiresAt } },
-    { upsert: true, new: true },
+    { upsert: true, returnDocument: "after" },
   );
 
   return {

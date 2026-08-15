@@ -73,7 +73,7 @@ async function issueAuthToken(userId: string, type: AuthTokenType): Promise<stri
     },
     {
       upsert: true,
-      new: true,
+      returnDocument: "after",
       runValidators: true,
       setDefaultsOnInsert: true,
       maxTimeMS: DB_OPERATION_MAX_MS,
@@ -132,7 +132,7 @@ async function issuePasswordResetToken(input: {
         },
       },
     ],
-    { new: true, maxTimeMS: DB_OPERATION_MAX_MS },
+    { returnDocument: "after", maxTimeMS: DB_OPERATION_MAX_MS },
   );
   return user ? input.rawToken : null;
 }
@@ -432,7 +432,7 @@ export async function resetPassword(input: {
         },
       },
     ],
-    { new: true, maxTimeMS: DB_OPERATION_MAX_MS },
+    { returnDocument: "after", maxTimeMS: DB_OPERATION_MAX_MS },
   );
   if (!user) throw new AuthError("INVALID_TOKEN");
 
