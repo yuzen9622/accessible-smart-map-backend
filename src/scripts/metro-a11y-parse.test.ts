@@ -28,7 +28,7 @@ describe("rowToMetroA11yDoc", () => {
 	});
 
 	it("returns null for a row with an empty name", () => {
-		expect(rowToMetroA11yDoc(parseCsvLine('5,,出口1,121.5,25.0'))).toBeNull();
+		expect(rowToMetroA11yDoc(parseCsvLine("5,,出口1,121.5,25.0"))).toBeNull();
 	});
 
 	it("returns null for non-finite coordinates", () => {
