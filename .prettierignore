@@ -1,0 +1,25 @@
+# Build output
+dist/
+
+# Dependencies
+node_modules/
+
+# Lockfile — pnpm-managed, never reformat
+pnpm-lock.yaml
+
+# Large runtime/data directories (not source)
+data/
+otp-data/
+valhalla-data/
+graphify-out/
+
+# Python and shell scripts — not Prettier-managed
+*.py
+*.sh
+
+# AI prompt fixtures — literal content must stay byte-identical
+src/config/ai/__fixtures__/
+src/adapters/__fixtures__/
+
+# Synthetic JSON fixtures imported by tests — keep byte-identical
+src/config/ai/*.json
