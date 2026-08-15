@@ -3,12 +3,6 @@ import request from "supertest";
 import type { Readable } from "stream";
 import type * as supertestTypes from "supertest";
 
-vi.mock("../../config/auth", async () => {
-  const { createAuthModuleMock } =
-    await import("../../../tests/helpers/auth-mock");
-  return createAuthModuleMock();
-});
-
 vi.mock("./sos.service", () => ({
   createSession: vi.fn(),
   updateLocation: vi.fn(),
@@ -21,6 +15,7 @@ import {
   buildTestApp,
   buildAuthorizationHeader,
 } from "../../../tests/helpers/test-helpers";
+import { stubAuthUserLookup } from "../../../tests/helpers/real-auth";
 import * as service from "./sos.service";
 import { ResponseCode } from "../../types/code";
 import { SOS_MSG, SOS_REASON } from "../../constants/messages";
@@ -33,6 +28,8 @@ const OID = "6a4e797394fbb1b1721c8b81";
 
 beforeEach(() => {
   vi.resetAllMocks();
+  // Real auth path: only the User.findById DB seam is stubbed.
+  stubAuthUserLookup();
 });
 
 describe("POST /sos/sessions", () => {

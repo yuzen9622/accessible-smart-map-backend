@@ -21,6 +21,10 @@ export function buildTestApp() {
  * protected routes. Mirrors the production JWT payload shape `{ user }` that
  * the auth middleware (`src/middleware/middleware.ts`) decodes into `req.auth`.
  *
+ * The token carries `tokenVersion: 0` unless overridden, and the request only
+ * authenticates when the `User.findById` seam (see `tests/helpers/real-auth.ts`)
+ * returns a user whose tokenVersion matches — the production revocation check.
+ *
  * @param user Optional user payload override (defaults to a stub user).
  * @returns A string suitable for `.set("Authorization", ...)`.
  */
@@ -31,7 +35,7 @@ export function buildAuthorizationHeader(
   },
 ): string {
   const token = jwt.sign(
-    { user },
+    { user: { tokenVersion: 0, ...user } },
     process.env.JWT_ACCESS_SECRET ?? "test-access-secret",
   );
   return `Bearer ${token}`;

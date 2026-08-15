@@ -1,12 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import request from "supertest";
 
-vi.mock("../../config/auth", async () => {
-  const { createAuthModuleMock } =
-    await import("../../../tests/helpers/auth-mock");
-  return createAuthModuleMock();
-});
-
 vi.mock("./user.service", () => ({
   getConfig: vi.fn(),
   updateConfig: vi.fn(),
@@ -16,6 +10,7 @@ import {
   buildTestApp,
   buildAuthorizationHeader,
 } from "../../../tests/helpers/test-helpers";
+import { stubAuthUserLookup } from "../../../tests/helpers/real-auth";
 import * as userService from "./user.service";
 import { ResponseCode } from "../../types/code";
 
@@ -28,6 +23,9 @@ const updateConfig = vi.mocked(userService.updateConfig);
 
 beforeEach(() => {
   vi.resetAllMocks();
+  // Real auth path: the JWT is verified for real; only the lowest-level DB
+  // seam the middleware reads (User.findById) is stubbed.
+  stubAuthUserLookup();
 });
 
 /**

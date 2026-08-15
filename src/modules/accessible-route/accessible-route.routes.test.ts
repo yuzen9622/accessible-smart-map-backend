@@ -4,12 +4,6 @@ import { ROUTE_MSG, ROUTE_REASON } from "../../constants/messages";
 import { ResponseCode } from "../../types/code";
 import { TaiwanCityEn } from "../../types/transit";
 
-vi.mock("../../config/auth", async () => {
-  const { createAuthModuleMock } =
-    await import("../../../tests/helpers/auth-mock");
-  return createAuthModuleMock();
-});
-
 // Mock only the service seam; the request still exercises router + validation
 // + controller + envelope (schema defaults / rejections happen before the mock).
 vi.mock("./accessible-route.service", async (importActual) => {
@@ -22,6 +16,10 @@ import {
   buildTestApp,
   buildAuthorizationHeader,
 } from "../../../tests/helpers/test-helpers";
+import {
+  buildDbUser,
+  stubAuthUserLookup,
+} from "../../../tests/helpers/real-auth";
 import * as service from "./accessible-route.service";
 import { AccessibleRouteSchema } from "./accessible-route.schema";
 
@@ -44,6 +42,9 @@ const okData = (overrides: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   vi.resetAllMocks();
+  // Optional-auth route: the production authenticateToken() runs for real when
+  // a Bearer header is present; only the User.findById DB seam is stubbed.
+  stubAuthUserLookup(buildDbUser({ _id: "user-abc", email: "user@test.com" }));
 });
 
 describe("POST /api/v1/a11y/accessible-route travel modes + waypoints", () => {

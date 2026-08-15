@@ -1,12 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import request from "supertest";
 
-vi.mock("../../config/auth", async () => {
-  const { createAuthModuleMock } =
-    await import("../../../tests/helpers/auth-mock");
-  return createAuthModuleMock();
-});
-
 vi.mock("./user.middleware", () => {
   const passthrough = (_req: unknown, _res: unknown, next: () => void) =>
     next();
@@ -39,6 +33,7 @@ import {
   buildTestApp,
   buildAuthorizationHeader,
 } from "../../../tests/helpers/test-helpers";
+import { stubAuthUserLookup } from "../../../tests/helpers/real-auth";
 import * as service from "./user.auth.service";
 import { AuthError } from "./user.auth.service";
 import { ResponseCode } from "../../types/code";
@@ -64,6 +59,9 @@ const SESSION = { user: USER, config: null };
 
 beforeEach(() => {
   vi.resetAllMocks();
+  // Real auth path for the protected POST /auth/password endpoint: the JWT is
+  // verified for real, and only the User.findById DB seam is stubbed.
+  stubAuthUserLookup();
 });
 
 describe("POST /user/auth/register", () => {

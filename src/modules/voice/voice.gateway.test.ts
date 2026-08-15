@@ -12,12 +12,6 @@ import {
   vi,
 } from "vitest";
 
-vi.mock("../../config/auth", async () => {
-  const { createAuthModuleMock } =
-    await import("../../../tests/helpers/auth-mock");
-  return createAuthModuleMock();
-});
-
 vi.mock("./live-bridge", () => ({
   createLiveBridge: vi.fn(async () => ({
     sendAudio: vi.fn(),
@@ -31,6 +25,10 @@ vi.mock("./live-bridge", () => ({
 import app from "../../app";
 import { attachVoiceWebSocket } from "./voice.gateway";
 import { createLiveBridge } from "./live-bridge";
+import {
+  buildDbUser,
+  stubAuthUserLookup,
+} from "../../../tests/helpers/real-auth";
 
 const mockCreateLiveBridge = createLiveBridge as unknown as ReturnType<
   typeof vi.fn
@@ -44,14 +42,21 @@ const openSockets: WebSocket[] = [];
 
 /**
  * Signs a valid access token with the same payload shape and secret used by
- * tests/helpers/test-helpers.ts buildAuthorizationHeader.
+ * tests/helpers/real-auth.ts. Includes tokenVersion 0, which the production
+ * revocation check compares against the `User.findById` stub.
  *
  * @param userId The user _id embedded in the JWT payload.
  * @returns A signed access token string.
  */
 function signToken(userId: string): string {
   return jwt.sign(
-    { user: { _id: userId, email: `${userId}@example.com` } },
+    {
+      user: {
+        _id: userId,
+        email: `${userId}@example.com`,
+        tokenVersion: 0,
+      },
+    },
     process.env.JWT_ACCESS_SECRET ?? "test-access-secret",
   );
 }
@@ -134,6 +139,10 @@ beforeAll(async () => {
   attachVoiceWebSocket(server, { authTimeoutMs: AUTH_TIMEOUT_MS });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   port = (server.address() as AddressInfo).port;
+  // Real auth path: the handshake runs the production authenticateToken();
+  // only the User.findById DB seam is stubbed, echoing whatever id the token
+  // claims so the tokenVersion check passes.
+  stubAuthUserLookup((id) => buildDbUser({ _id: id }));
 });
 
 afterEach(() => {

@@ -1,12 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import request from "supertest";
 
-vi.mock("../../config/auth", async () => {
-  const { createAuthModuleMock } =
-    await import("../../../tests/helpers/auth-mock");
-  return createAuthModuleMock();
-});
-
 vi.mock("./visual-a11y.service", () => ({
   findNearby: vi.fn(),
   syncFromOverpass: vi.fn(),
@@ -16,6 +10,10 @@ import {
   buildTestApp,
   buildAuthorizationHeader,
 } from "../../../tests/helpers/test-helpers";
+import {
+  buildDbUser,
+  stubAuthUserLookup,
+} from "../../../tests/helpers/real-auth";
 import * as service from "./visual-a11y.service";
 
 const app = buildTestApp();
@@ -36,6 +34,8 @@ const sample = {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  // Real auth path: only the User.findById DB seam is stubbed.
+  stubAuthUserLookup(buildDbUser({ _id: "user-abc", email: "user@test.com" }));
 });
 
 describe("GET /api/v1/a11y/visual-a11y", () => {

@@ -3,12 +3,6 @@ import request from "supertest";
 import { ResponseCode } from "../../types/code";
 import { REVIEW_MSG } from "../../constants/messages";
 
-vi.mock("../../config/auth", async () => {
-  const { createAuthModuleMock } =
-    await import("../../../tests/helpers/auth-mock");
-  return createAuthModuleMock();
-});
-
 vi.mock("./review.service", async (orig) => ({
   ...((await orig()) as object),
   createReview: vi.fn(),
@@ -22,6 +16,10 @@ import {
   buildTestApp,
   buildAuthorizationHeader,
 } from "../../../tests/helpers/test-helpers";
+import {
+  buildDbUser,
+  stubAuthUserLookup,
+} from "../../../tests/helpers/real-auth";
 import * as service from "./review.service";
 
 const app = buildTestApp();
@@ -66,6 +64,9 @@ const VALID_LIST_QUERY = { placeId: "node/123456", placeType: "osm" };
 
 beforeEach(() => {
   vi.resetAllMocks();
+  // Real auth path: only the User.findById DB seam is stubbed, echoing the
+  // user id the token claims so the tokenVersion check passes.
+  stubAuthUserLookup(buildDbUser({ _id: "user-abc", email: "user@test.com" }));
 });
 
 // ─── POST /reviews ───────────────────────────────────────────────

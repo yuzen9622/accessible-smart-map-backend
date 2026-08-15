@@ -1,12 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import request from "supertest";
 
-vi.mock("../../config/auth", async () => {
-  const { createAuthModuleMock } =
-    await import("../../../tests/helpers/auth-mock");
-  return createAuthModuleMock();
-});
-
 vi.mock("./emergency-contact.service", () => ({
   listContacts: vi.fn(),
   createContact: vi.fn(),
@@ -17,6 +11,7 @@ import {
   buildTestApp,
   buildAuthorizationHeader,
 } from "../../../tests/helpers/test-helpers";
+import { stubAuthUserLookup } from "../../../tests/helpers/real-auth";
 import * as service from "./emergency-contact.service";
 import { ResponseCode } from "../../types/code";
 import { CONTACT_MSG, CONTACT_REASON } from "../../constants/messages";
@@ -27,6 +22,8 @@ const auth = buildAuthorizationHeader();
 
 beforeEach(() => {
   vi.resetAllMocks();
+  // Real auth path: only the User.findById DB seam is stubbed.
+  stubAuthUserLookup();
 });
 
 describe("Emergency contact routes — auth", () => {
