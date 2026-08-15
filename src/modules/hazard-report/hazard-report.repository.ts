@@ -110,8 +110,16 @@ export async function addConfirmation(
 	reportId: string,
 	voterId: string,
 ): Promise<HazardReportRecord | null> {
+	// The one-vote-per-identity rule is enforced in the filter, not just by the
+	// caller's earlier read: two concurrent requests from the same voter would
+	// otherwise both pass that read and both push, inflating confirmCount and
+	// putting the voter in confirmedBy twice.
 	return HazardReport.findOneAndUpdate(
-		{ _id: reportId },
+		{
+			_id: reportId,
+			confirmedBy: { $ne: voterId },
+			deniedBy: { $ne: voterId },
+		},
 		{ $inc: { confirmCount: 1 }, $push: { confirmedBy: voterId } },
 		{ returnDocument: "after" },
 	).lean<HazardReportRecord | null>();
@@ -128,8 +136,13 @@ export async function addDenial(
 	reportId: string,
 	voterId: string,
 ): Promise<HazardReportRecord | null> {
+	// Same one-vote-per-identity guard as addConfirmation.
 	return HazardReport.findOneAndUpdate(
-		{ _id: reportId },
+		{
+			_id: reportId,
+			confirmedBy: { $ne: voterId },
+			deniedBy: { $ne: voterId },
+		},
 		{ $inc: { denyCount: 1 }, $push: { deniedBy: voterId } },
 		{ returnDocument: "after" },
 	).lean<HazardReportRecord | null>();

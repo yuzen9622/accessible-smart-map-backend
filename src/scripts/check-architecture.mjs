@@ -30,6 +30,7 @@ function roleFor(file) {
   if (file.endsWith(".controller.ts")) return "controller";
   if (file.endsWith(".service.ts")) return "service";
   if (file.endsWith(".repository.ts")) return "repository";
+  if (file.endsWith(".orchestration.ts")) return "orchestration";
   if (file.endsWith(".schema.ts")) return "schema";
   return undefined;
 }
@@ -144,6 +145,26 @@ for (const file of walk(srcDir)) {
           file,
           spec,
           "services must not import models directly — go through the module's repository",
+        );
+      }
+    }
+
+    // Orchestration composes several modules' services on purpose, so it is
+    // exempt from the service-to-service restriction — but it is still domain
+    // code and must not reach the transport or persistence layers directly.
+    if (role === "orchestration") {
+      if (spec === "express") {
+        addViolation(violations, file, spec, "orchestration must not import Express transport types");
+      }
+      if (targetRole === "controller" || targetRole === "router") {
+        addViolation(violations, file, spec, "orchestration must not import transport layers");
+      }
+      if (targetRel.startsWith("src/model/")) {
+        addViolation(
+          violations,
+          file,
+          spec,
+          "orchestration must not import models directly — go through a repository",
         );
       }
     }

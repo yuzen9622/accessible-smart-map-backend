@@ -12,13 +12,20 @@ import type { TransitContext } from "./alert.service";
 /**
  * The subscription context.
  *
- * Deliberately only asserts "some object". The gateway has always accepted any
- * object here and cast it to `TransitContext` without field checks, so
- * enforcing the real discriminated union below would reject traffic that is
- * accepted today — a wire-behaviour change. {@link TransitContextShape}
+ * Deliberately only asserts "a non-null object". The gateway has always
+ * accepted any object here and cast it to `TransitContext` without field
+ * checks, so enforcing the real discriminated union below would reject traffic
+ * that is accepted today — a wire-behaviour change. {@link TransitContextShape}
  * records the intended shape so a later pass can tighten this deliberately.
+ *
+ * `z.custom` rather than `z.looseObject({})` because the latter rejects arrays,
+ * while the predicate this replaced (`ctx && typeof ctx === "object"`) accepted
+ * them. That difference is not worth a silent change in what the socket takes.
  */
-export const SubscribeContextSchema = z.looseObject({});
+export const SubscribeContextSchema = z.custom<Record<string, unknown>>(
+  (value) => typeof value === "object" && value !== null,
+  { message: "ctx must be an object" },
+);
 
 /**
  * The shape `TransitContext` actually shows up as, kept alongside the loose

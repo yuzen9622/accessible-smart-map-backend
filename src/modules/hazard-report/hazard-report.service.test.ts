@@ -137,7 +137,11 @@ describe("hazard report confirmations", () => {
 			expiredAt: { $gt: expect.any(Date) },
 		}));
 		expect(hazardReportModel.findOneAndUpdate).toHaveBeenCalledWith(
-			{ _id: REPORT_ID },
+			{
+				_id: REPORT_ID,
+				confirmedBy: { $ne: "confirmer-2" },
+				deniedBy: { $ne: "confirmer-2" },
+			},
 			{ $inc: { confirmCount: 1 }, $push: { confirmedBy: "confirmer-2" } },
 			{ returnDocument: "after" },
 		);

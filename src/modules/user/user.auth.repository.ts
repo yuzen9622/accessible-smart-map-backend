@@ -207,7 +207,8 @@ export async function emailExists(email: string): Promise<boolean> {
  * @returns The stored user
  */
 export async function insertUser(doc: Record<string, unknown>): Promise<IUser> {
-  return User.create(doc) as unknown as Promise<IUser>;
+  const created = await User.create(doc);
+  return created.toObject() as unknown as IUser;
 }
 
 /**
