@@ -16,7 +16,11 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
-          cache: pnpm
+          # NOTE: no `cache: pnpm` here. With that option, setup-node itself
+          # invokes `pnpm` to compute the store cache path — but pnpm is only
+          # provisioned by the `corepack enable` step below, so the action
+          # fails with "Unable to locate executable file: pnpm" before corepack
+          # ever runs. Corepack supplies pnpm for everything downstream.
 
       # pnpm version is pinned by `packageManager` in package.json; corepack
       # reads it from there, so no separate version step is needed.
@@ -28,7 +32,9 @@ jobs:
           python-version: "3.12"
 
       - name: Install Python test dependencies
-        run: python -m pip install --disable-pip-version-check --requirement requirements-test.txt
+        run: >-
+          python -m pip install --disable-pip-version-check
+          --requirement requirements-test.txt
 
       # `postinstall` runs `pnpm run build`; with --ignore-scripts the build
       # happens explicitly below so the pipeline is one clean pass.
