@@ -179,6 +179,9 @@ describe("getTransitAlerts", () => {
         Description: "本站不停靠",
         Status: 2,
         Scope: {
+          Routes: [
+            { RouteID: "0100", RouteName: { Zh_tw: "307" }, Direction: 0 },
+          ],
           Stops: [{ StopID: "STOP-1", StopName: { Zh_tw: "市政府" } }],
         },
       },
@@ -195,6 +198,76 @@ describe("getTransitAlerts", () => {
     if (!result.ok) return;
     expect(result.alerts[0]).toMatchObject({
       alertId: "bus-stop",
+      matchKind: "stop",
+    });
+  });
+
+  it("filters out stop-specific bus alert when user's stops do not include the affected stop", async () => {
+    mockBusRoutes([busRouteDocument()]);
+    mockTdxJson([
+      {
+        AlertID: "bus-stop-other",
+        Title: "遠東園區站不停靠",
+        Description: "施工不停靠",
+        Status: 2,
+        Scope: {
+          Routes: [
+            { RouteID: "0100", RouteName: { Zh_tw: "307" }, Direction: 0 },
+          ],
+          Stops: [
+            { StopID: "STOP-OTHER", StopName: { Zh_tw: "遠東世紀廣場" } },
+          ],
+        },
+      },
+    ]);
+
+    const result = await getTransitAlerts({
+      mode: "bus",
+      city: "Taipei",
+      routeName: "307",
+      stopUid: "STOP-1",
+      stopName: "板橋公車站",
+      stopUids: ["STOP-1", "STOP-2"],
+      stopNames: ["板橋公車站", "萬華車站"],
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.alerts).toEqual([]);
+  });
+
+  it("matches a stop-specific bus alert when user's arrival stop matches in stopUids / stopNames", async () => {
+    mockBusRoutes([busRouteDocument()]);
+    mockTdxJson([
+      {
+        AlertID: "bus-stop-arrival",
+        Title: "萬華車站不停靠",
+        Description: "施工不停靠",
+        Status: 2,
+        Scope: {
+          Routes: [
+            { RouteID: "0100", RouteName: { Zh_tw: "307" }, Direction: 0 },
+          ],
+          Stops: [{ StopID: "STOP-2", StopName: { Zh_tw: "萬華車站" } }],
+        },
+      },
+    ]);
+
+    const result = await getTransitAlerts({
+      mode: "bus",
+      city: "Taipei",
+      routeName: "307",
+      stopUid: "STOP-1",
+      stopName: "板橋公車站",
+      stopUids: ["STOP-1", "STOP-2"],
+      stopNames: ["板橋公車站", "萬華車站"],
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.alerts).toHaveLength(1);
+    expect(result.alerts[0]).toMatchObject({
+      alertId: "bus-stop-arrival",
       matchKind: "stop",
     });
   });

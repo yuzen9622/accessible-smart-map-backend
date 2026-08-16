@@ -114,6 +114,8 @@ export type TransitContext =
       direction?: number;
       stopUid?: string;
       stopName?: string;
+      stopUids?: string[];
+      stopNames?: string[];
     }
   | {
       mode: "metro";
@@ -283,6 +285,10 @@ export async function resolveBusRouteKeys(
     formatRouteName(ctx.routeName),
     ctx.routeName.trim(),
   ]);
+  const stopIds = [
+    ...(ctx.stopUids ?? []),
+    ...(ctx.stopUid ? [ctx.stopUid] : []),
+  ];
   if (!docs.length) {
     const rawName = ctx.routeName?.trim();
     const fmtName = formatRouteName(ctx.routeName);
@@ -292,7 +298,7 @@ export async function resolveBusRouteKeys(
     return {
       routeIds: [],
       subRouteNames,
-      stopIds: ctx.stopUid ? [ctx.stopUid] : [],
+      stopIds,
     };
   }
 
@@ -317,7 +323,7 @@ export async function resolveBusRouteKeys(
         formatRouteName(ctx.routeName),
       ]),
     ],
-    stopIds: ctx.stopUid ? [ctx.stopUid] : [],
+    stopIds,
   };
 }
 
@@ -327,6 +333,51 @@ function matchBus(
   ctx: Extract<TransitContext, { mode: "bus" }>,
 ): Match | null {
   const scope = alert.Scope ?? {};
+  const hasSpecificStops =
+    (scope.Stops && scope.Stops.length > 0) ||
+    (scope.Stations && scope.Stations.length > 0);
+
+  const candidateStopNames = [
+    ...(ctx.stopNames ?? []),
+    ...(ctx.stopName ? [ctx.stopName] : []),
+  ].filter((s): s is string => Boolean(s));
+
+  if (hasSpecificStops) {
+    if (
+      scope.Stops?.some(
+        (stop) =>
+          keys.stopIds.includes(stop.StopID) ||
+          candidateStopNames.some((name) =>
+            equalStopName(stop.StopName?.Zh_tw, name),
+          ),
+      )
+    ) {
+      return { kind: "stop" };
+    }
+    if (
+      scope.Stations?.some((station) => {
+        const sName =
+          typeof station.StationName === "string"
+            ? station.StationName
+            : station.StationName?.Zh_tw;
+        return (
+          keys.stopIds.includes(station.StationID) ||
+          (sName &&
+            candidateStopNames.some((name) => equalStopName(sName, name)))
+        );
+      })
+    ) {
+      return { kind: "station" };
+    }
+
+    // 當通阻指定了特定站牌，但使用者的起訖/所經站牌皆未包含時，視為不影響此行程（避免不相干站點的通阻干擾）
+    const userProvidedAnyStop =
+      keys.stopIds.length > 0 || candidateStopNames.length > 0;
+    if (userProvidedAnyStop) {
+      return null;
+    }
+  }
+
   if (
     scope.Routes?.some(
       (route) =>
@@ -349,20 +400,7 @@ function matchBus(
   ) {
     return { kind: "route" };
   }
-  if (
-    scope.Stops?.some(
-      (stop) =>
-        keys.stopIds.includes(stop.StopID) ||
-        equalStopName(stop.StopName?.Zh_tw, ctx.stopName),
-    )
-  ) {
-    return { kind: "stop" };
-  }
-  if (
-    scope.Stations?.some((station) => keys.stopIds.includes(station.StationID))
-  ) {
-    return { kind: "station" };
-  }
+
   return null;
 }
 
@@ -371,6 +409,23 @@ function matchMetro(
   ctx: Extract<TransitContext, { mode: "metro" }>,
 ): Match | null {
   const scope = alert.Scope ?? {};
+  const hasSpecificStations = scope.Stations && scope.Stations.length > 0;
+
+  if (hasSpecificStations) {
+    if (
+      scope.Stations?.some((station) =>
+        typeof station === "string"
+          ? ctx.stationIds?.includes(station)
+          : ctx.stationIds?.includes(station.StationID),
+      )
+    ) {
+      return { kind: "station" };
+    }
+    if (ctx.stationIds && ctx.stationIds.length > 0) {
+      return null;
+    }
+  }
+
   if (
     ctx.lineCode &&
     scope.Lines?.some((line) =>
@@ -380,15 +435,6 @@ function matchMetro(
     )
   ) {
     return { kind: "line" };
-  }
-  if (
-    scope.Stations?.some((station) =>
-      typeof station === "string"
-        ? ctx.stationIds?.includes(station)
-        : ctx.stationIds?.includes(station.StationID),
-    )
-  ) {
-    return { kind: "station" };
   }
   return null;
 }
@@ -424,7 +470,7 @@ function covers(
     (stationId): stationId is string => Boolean(stationId),
   );
   if (!requestedStationIds.length) return false;
-  return requestedStationIds.every((stationId) =>
+  return requestedStationIds.some((stationId) =>
     isStationIdWithinSection(
       stationId,
       section.StartingStationID,
@@ -445,9 +491,6 @@ function matchTra(
   ) {
     return { kind: "train" };
   }
-  if (ctx.lineId && scope.Lines?.some((line) => line.LineID === ctx.lineId)) {
-    return { kind: "line" };
-  }
   if (
     scope.Stations?.some((station) =>
       ctx.stationIds?.includes(station.StationID),
@@ -457,6 +500,18 @@ function matchTra(
   }
   if (scope.LineSections?.some((section) => covers(section, ctx.stationIds))) {
     return { kind: "section" };
+  }
+  const hasSpecificScope =
+    (scope.Trains && scope.Trains.length > 0) ||
+    (scope.Stations && scope.Stations.length > 0) ||
+    (scope.LineSections && scope.LineSections.length > 0);
+
+  if (
+    !hasSpecificScope &&
+    ctx.lineId &&
+    scope.Lines?.some((line) => line.LineID === ctx.lineId)
+  ) {
+    return { kind: "line" };
   }
   return null;
 }
