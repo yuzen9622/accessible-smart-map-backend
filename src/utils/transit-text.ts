@@ -36,6 +36,30 @@ export function equalStopName(a?: string, b?: string): boolean {
   return na === nb || na.includes(nb) || nb.includes(na);
 }
 
+export function normalizeRouteName(name?: string): string {
+  if (!name) return "";
+  return name
+    .normalize("NFKC")
+    .replace(/[(（][^）)]*[)）]/g, "")
+    .replace(/路$/g, "")
+    .replace(/\s+/g, "")
+    .replace(/臺/g, "台")
+    .replace(/[－–—-]/g, "")
+    .replace("副線", "副")
+    .replace("區間車", "區")
+    .replace("區間", "區")
+    .replace(".", "")
+    .toLowerCase()
+    .trim();
+}
+
+export function equalRouteName(a?: string, b?: string): boolean {
+  const na = normalizeRouteName(a);
+  const nb = normalizeRouteName(b);
+  if (!na || !nb) return false;
+  return na === nb;
+}
+
 export function getRouteDirectionImproved(
   routeStopsByDirection: { [direction: number]: BusRoute["Stops"] },
   startStopName: string,

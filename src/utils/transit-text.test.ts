@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
   busRouteQueryCandidates,
+  equalRouteName,
   escapeODataLiteral,
   formatFriendlyDistance,
   formatWalkStepInstruction,
+  normalizeRouteName,
   odataUrlLiteral,
 } from "./transit-text";
 
@@ -173,5 +175,28 @@ describe("odataUrlLiteral", () => {
 
   it("percent-encodes Chinese values as UTF-8", () => {
     expect(odataUrlLiteral("臺北市")).toBe("%E8%87%BA%E5%8C%97%E5%B8%82");
+  });
+});
+
+describe("equalRouteName & normalizeRouteName", () => {
+  it("normalizes route names with suffix variations", () => {
+    expect(normalizeRouteName("30路")).toBe("30");
+    expect(normalizeRouteName("30")).toBe("30");
+    expect(normalizeRouteName("紅30路")).toBe("紅30");
+    expect(normalizeRouteName("307副線")).toBe("307副");
+  });
+
+  it("strictly distinguishes routes with overlapping substrings (no false positives)", () => {
+    expect(equalRouteName("30", "30")).toBe(true);
+    expect(equalRouteName("30", "30路")).toBe(true);
+    expect(equalRouteName("30", "3")).toBe(false);
+    expect(equalRouteName("30", "302")).toBe(false);
+    expect(equalRouteName("30", "302延")).toBe(false);
+    expect(equalRouteName("30", "307")).toBe(false);
+    expect(equalRouteName("紅30", "30")).toBe(false);
+    expect(equalRouteName("綠3", "3")).toBe(false);
+    expect(equalRouteName("藍1", "1")).toBe(false);
+    expect(equalRouteName("500", "500跳蛙")).toBe(false);
+    expect(equalRouteName("153", "153副")).toBe(false);
   });
 });
