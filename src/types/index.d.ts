@@ -17,9 +17,6 @@ export interface IUser {
     consumedAt?: Date;
   }>;
   lineUserId?: string | null;
-  settings?: {
-    memoryEnabled?: boolean;
-  };
   createdAt: string;
   updatedAt: string;
 }
@@ -75,6 +72,7 @@ export interface IConfig {
   fontSize: string;
   notifications: boolean;
   accessibility: IA11yProfile;
+  memoryEnabled: boolean;
   user_id: Schema.Types.ObjectId;
 }
 

@@ -93,6 +93,7 @@ export const UpdateConfigBodySchema = z
     themeColor: z.string().optional().openapi({ example: "#3B82F6" }),
     fontSize: z.string().optional().openapi({ example: "md" }),
     notifications: z.boolean().optional(),
+    memoryEnabled: z.boolean().optional(),
   })
   .strict();
 
@@ -136,6 +137,7 @@ const ConfigSchema = z
     themeColor: z.string().openapi({ example: "#3B82F6" }),
     fontSize: z.string().openapi({ example: "md" }),
     notifications: z.boolean().openapi({ example: true }),
+    memoryEnabled: z.boolean().openapi({ example: false }),
     user_id: z.string().openapi({ example: "665f1a2b3c4d5e6f7a8b9c0d" }),
   })
   .openapi("Config");

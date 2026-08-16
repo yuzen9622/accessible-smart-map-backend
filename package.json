@@ -41,6 +41,7 @@
     "lint:fix": "eslint . --fix",
     "migrate:auth": "npx dotenvx run -- ts-node src/scripts/migrate-auth-fields.ts",
     "migrate:review-place-id": "npx dotenvx run -- ts-node src/scripts/migrate-review-place-id.ts",
+    "migrate:user-settings": "npx dotenvx run -- ts-node src/scripts/migrate-user-settings-to-config.ts",
     "postinstall": "pnpm run build",
     "prebuild": "pnpm run clean",
     "smoke:line-agent": "npx dotenvx run -- ts-node src/scripts/smoke-line-agent.ts",

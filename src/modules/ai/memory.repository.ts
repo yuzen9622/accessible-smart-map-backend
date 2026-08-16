@@ -1,5 +1,5 @@
 import UserMemory, { type IUserMemory } from "../../model/user-memory.model";
-import User from "../../model/user.model";
+import Config from "../../model/config.model";
 
 export type { IUserMemory };
 
@@ -16,20 +16,20 @@ function activeMemoryFilter(userId: string): Record<string, unknown> {
 }
 
 /**
- * Reads a user's memory opt-in flag.
+ * Reads a user's memory opt-in flag from their Config.
  *
  * @param userId Owner
  * @returns Whether memory capture is enabled
  */
 export async function findMemoryEnabled(userId: string): Promise<boolean> {
-  const user = await User.findById(userId)
-    .select("settings.memoryEnabled")
+  const config = await Config.findOne({ user_id: userId })
+    .select("memoryEnabled")
     .lean();
-  return Boolean(user?.settings?.memoryEnabled);
+  return Boolean(config?.memoryEnabled);
 }
 
 /**
- * Sets a user's memory opt-in flag.
+ * Sets a user's memory opt-in flag in their Config.
  *
  * @param userId Owner
  * @param memoryEnabled Desired flag value
@@ -39,14 +39,14 @@ export async function setMemoryEnabled(
   userId: string,
   memoryEnabled: boolean,
 ): Promise<boolean> {
-  const user = await User.findByIdAndUpdate(
-    userId,
-    { $set: { "settings.memoryEnabled": memoryEnabled } },
-    { returnDocument: "after" },
+  const config = await Config.findOneAndUpdate(
+    { user_id: userId },
+    { $set: { memoryEnabled } },
+    { returnDocument: "after", upsert: true, setDefaultsOnInsert: true },
   )
-    .select("settings.memoryEnabled")
+    .select("memoryEnabled")
     .lean();
-  return Boolean(user?.settings?.memoryEnabled);
+  return Boolean(config?.memoryEnabled);
 }
 
 /**

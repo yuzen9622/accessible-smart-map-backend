@@ -30,9 +30,6 @@ const userSchema = new Schema<IUser>(
       default: [],
     },
     lineUserId: { type: String, default: null },
-    settings: {
-      memoryEnabled: { type: Boolean, default: false },
-    },
   },
   { timestamps: true },
 );

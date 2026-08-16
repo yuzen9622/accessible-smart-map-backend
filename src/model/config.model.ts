@@ -7,6 +7,7 @@ const ConfigSchema = new Schema<IConfig>({
   themeColor: { type: String, default: "default" },
   fontSize: { type: String, default: "medium" },
   notifications: { type: Boolean, default: true },
+  memoryEnabled: { type: Boolean, default: false },
   accessibility: {
     mobilityAid: {
       type: String,

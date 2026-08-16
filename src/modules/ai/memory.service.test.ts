@@ -15,10 +15,10 @@ vi.mock("../../model/user-memory.model", () => {
   };
   return { default: mockModel };
 });
-vi.mock("../../model/user.model", () => ({
+vi.mock("../../model/config.model", () => ({
   default: {
-    findById: vi.fn(),
-    findByIdAndUpdate: vi.fn(),
+    findOne: vi.fn(),
+    findOneAndUpdate: vi.fn(),
   },
 }));
 vi.mock("../../config/redis", () => ({
