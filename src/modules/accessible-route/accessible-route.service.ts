@@ -1204,9 +1204,12 @@ export async function attachTransitAlerts(
           lineIds.has(normalizeStationId(line)),
         );
       });
-      if (matched.length) {
-        leg.alerts = matched;
-        for (const a of matched) {
+      const uniqueMetroAlerts = Array.from(
+        new Map(matched.map((a) => [a.alertId, a])).values(),
+      );
+      if (uniqueMetroAlerts.length) {
+        leg.alerts = uniqueMetroAlerts;
+        for (const a of uniqueMetroAlerts) {
           allTransitAlertsMap.set(a.alertId, {
             alertId: a.alertId,
             title: a.title,
@@ -1250,8 +1253,12 @@ export async function attachTransitAlerts(
           stopNames,
         });
         if (res.ok && res.alerts.length > 0) {
-          leg.alerts = res.alerts;
-          for (const a of res.alerts) allTransitAlertsMap.set(a.alertId, a);
+          const uniqueLegAlerts = Array.from(
+            new Map(res.alerts.map((a) => [a.alertId, a])).values(),
+          );
+          leg.alerts = uniqueLegAlerts;
+          for (const a of uniqueLegAlerts)
+            allTransitAlertsMap.set(a.alertId, a);
         }
         return res;
       } catch (err) {
@@ -1283,8 +1290,12 @@ export async function attachTransitAlerts(
           stationIds,
         });
         if (res.ok && res.alerts.length > 0) {
-          leg.alerts = res.alerts;
-          for (const a of res.alerts) allTransitAlertsMap.set(a.alertId, a);
+          const uniqueLegAlerts = Array.from(
+            new Map(res.alerts.map((a) => [a.alertId, a])).values(),
+          );
+          leg.alerts = uniqueLegAlerts;
+          for (const a of uniqueLegAlerts)
+            allTransitAlertsMap.set(a.alertId, a);
         }
         return res;
       } catch (err) {
@@ -1310,8 +1321,12 @@ export async function attachTransitAlerts(
           toStationId,
         });
         if (res.ok && res.alerts.length > 0) {
-          leg.alerts = res.alerts;
-          for (const a of res.alerts) allTransitAlertsMap.set(a.alertId, a);
+          const uniqueLegAlerts = Array.from(
+            new Map(res.alerts.map((a) => [a.alertId, a])).values(),
+          );
+          leg.alerts = uniqueLegAlerts;
+          for (const a of uniqueLegAlerts)
+            allTransitAlertsMap.set(a.alertId, a);
         }
         return res;
       } catch (err) {
