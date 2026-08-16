@@ -1,9 +1,16 @@
 import { tdxFetch } from "../../config/fetch";
 import { alertUrl, metroUrl } from "../../config/transit";
-import { findBusRoutesByName } from "./alert.repository";
+import {
+  findBusRoutesByName,
+  type BusRouteLookupRow,
+} from "./alert.repository";
 import { ResponseCode } from "../../types/code";
 import type { MatchKind, MatchedAlert } from "../../types/transit";
-import { equalStopName, formatRouteName } from "../../utils/transit-text";
+import {
+  equalRouteName,
+  equalStopName,
+  formatRouteName,
+} from "../../utils/transit-text";
 import {
   clearAlertStore,
   getFreshAlertSnapshot,
@@ -281,10 +288,15 @@ function dirMatch(
 export async function resolveBusRouteKeys(
   ctx: Extract<TransitContext, { mode: "bus" }>,
 ): Promise<BusRouteKeys | null> {
-  const docs = await findBusRoutesByName(ctx.city, [
-    formatRouteName(ctx.routeName),
-    ctx.routeName.trim(),
-  ]);
+  let docs: BusRouteLookupRow[] = [];
+  try {
+    docs = await findBusRoutesByName(ctx.city, [
+      formatRouteName(ctx.routeName),
+      ctx.routeName.trim(),
+    ]);
+  } catch {
+    docs = [];
+  }
   const stopIds = [
     ...(ctx.stopUids ?? []),
     ...(ctx.stopUid ? [ctx.stopUid] : []),
@@ -327,22 +339,96 @@ export async function resolveBusRouteKeys(
   };
 }
 
+function textMentionsAnyStop(
+  text: string,
+  stopNames: string[],
+  stopIds: string[],
+): boolean {
+  for (const id of stopIds) {
+    if (id && text.includes(id)) return true;
+  }
+  const normText = text.replace(/[\s()（）「」『』【】、，,。-]/g, "");
+  for (const name of stopNames) {
+    if (!name || name.length < 2) continue;
+    const normName = name.replace(/[\s()（）「」『』【】、，,。-]/g, "");
+    if (normText.includes(normName)) return true;
+    const tai1 = normName.replace(/臺/g, "台");
+    const tai2 = normName.replace(/台/g, "臺");
+    if (normText.includes(tai1) || normText.includes(tai2)) return true;
+    const base = normName.replace(/(?:公車)?(?:招呼)?站$/g, "");
+    if (
+      base.length >= 2 &&
+      (normText.includes(base) ||
+        normText.includes(base.replace(/臺/g, "台")) ||
+        normText.includes(base.replace(/台/g, "臺")))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const STOP_DISRUPTION_KEYWORD_REGEX =
+  /取消停靠|臨時站位|站牌遷移|不停靠|暫不停靠|站位調整|招呼站|站位暫停|請至.+候車|移至.+候車|不停[^\n，。、]{1,10}站/;
+
+function isStopSpecificTextDisruption(
+  title?: string,
+  description?: string,
+): boolean {
+  const text = `${title ?? ""} ${description ?? ""}`;
+  return STOP_DISRUPTION_KEYWORD_REGEX.test(text);
+}
+
 function matchBus(
   alert: BusAlert,
   keys: BusRouteKeys,
   ctx: Extract<TransitContext, { mode: "bus" }>,
 ): Match | null {
   const scope = alert.Scope ?? {};
-  const hasSpecificStops =
-    (scope.Stops && scope.Stops.length > 0) ||
-    (scope.Stations && scope.Stations.length > 0);
 
+  // 1. 檢查此通阻是否屬於該路線（使用嚴格路線名稱比對，避免 "3" 或 "302" 誤配 "30"）
+  const routeMatch = scope.Routes?.some(
+    (route) =>
+      (keys.routeIds.includes(route.RouteID) ||
+        equalRouteName(route.RouteName?.Zh_tw, ctx.routeName) ||
+        keys.subRouteNames.some((name) =>
+          equalRouteName(route.RouteName?.Zh_tw, name),
+        )) &&
+      dirMatch(route.Direction, ctx.direction),
+  );
+
+  const subRouteMatch = scope.SubRoutes?.some(
+    (subRoute) =>
+      (equalRouteName(subRoute.SubRouteName?.Zh_tw, ctx.routeName) ||
+        keys.subRouteNames.some((name) =>
+          equalRouteName(subRoute.SubRouteName?.Zh_tw, name),
+        )) &&
+      dirMatch(subRoute.Direction, ctx.direction),
+  );
+
+  const hasRouteScope = Boolean(
+    scope.Routes?.length || scope.SubRoutes?.length,
+  );
+  if (hasRouteScope && !routeMatch && !subRouteMatch) {
+    return null;
+  }
+
+  // 2. 當通阻為特定站點異動（如施工取消停靠/遷移站牌/臨時站位）
   const candidateStopNames = [
     ...(ctx.stopNames ?? []),
     ...(ctx.stopName ? [ctx.stopName] : []),
   ].filter((s): s is string => Boolean(s));
 
-  if (hasSpecificStops) {
+  const hasSpecificStops =
+    (scope.Stops && scope.Stops.length > 0) ||
+    (scope.Stations && scope.Stations.length > 0);
+
+  const alertText = `${alert.Title ?? ""} ${alert.Description ?? ""}`;
+  const isStopDisruption =
+    hasSpecificStops ||
+    isStopSpecificTextDisruption(alert.Title, alert.Description);
+
+  if (isStopDisruption) {
     if (
       scope.Stops?.some(
         (stop) =>
@@ -369,8 +455,11 @@ function matchBus(
     ) {
       return { kind: "station" };
     }
+    if (textMentionsAnyStop(alertText, candidateStopNames, keys.stopIds)) {
+      return { kind: "stop" };
+    }
 
-    // 當通阻指定了特定站牌，但使用者的起訖/所經站牌皆未包含時，視為不影響此行程（避免不相干站點的通阻干擾）
+    // 若為特定站點異動，且使用者有提供行程站點但均不包含在內，則判定不影響此行程
     const userProvidedAnyStop =
       keys.stopIds.length > 0 || candidateStopNames.length > 0;
     if (userProvidedAnyStop) {
@@ -378,26 +467,7 @@ function matchBus(
     }
   }
 
-  if (
-    scope.Routes?.some(
-      (route) =>
-        (keys.routeIds.includes(route.RouteID) ||
-          keys.subRouteNames.some((name) =>
-            equalStopName(route.RouteName?.Zh_tw, name),
-          )) &&
-        dirMatch(route.Direction, ctx.direction),
-    )
-  ) {
-    return { kind: "route" };
-  }
-  if (
-    scope.SubRoutes?.some(
-      (subRoute) =>
-        keys.subRouteNames.some((name) =>
-          equalStopName(subRoute.SubRouteName?.Zh_tw, name),
-        ) && dirMatch(subRoute.Direction, ctx.direction),
-    )
-  ) {
+  if (routeMatch || subRouteMatch) {
     return { kind: "route" };
   }
 
@@ -560,19 +630,31 @@ function success<T extends AlertMetadata>(
   mode: TransitContext["mode"],
   candidates: AlertCandidate<T>[],
 ): TransitAlertSuccess {
-  const alerts = candidates
-    .sort((left, right) => {
-      const priority =
-        MATCH_KIND_PRIORITY[right.match.kind] -
-        MATCH_KIND_PRIORITY[left.match.kind];
-      return (
-        priority ||
-        updateTimeValue(right.alert.UpdateTime) -
-          updateTimeValue(left.alert.UpdateTime)
-      );
-    })
-    .map(({ alert, match }) => toMatchedAlert(alert, match));
-  return { ok: true, mode, matchedAt: new Date().toISOString(), alerts };
+  const sorted = candidates.sort((left, right) => {
+    const priority =
+      MATCH_KIND_PRIORITY[right.match.kind] -
+      MATCH_KIND_PRIORITY[left.match.kind];
+    return (
+      priority ||
+      updateTimeValue(right.alert.UpdateTime) -
+        updateTimeValue(left.alert.UpdateTime)
+    );
+  });
+
+  // Deduplicate by AlertID so multi-subroute TDX entries only return ONE unique alert
+  const uniqueAlertsMap = new Map<string, MatchedAlert>();
+  for (const { alert, match } of sorted) {
+    if (!uniqueAlertsMap.has(alert.AlertID)) {
+      uniqueAlertsMap.set(alert.AlertID, toMatchedAlert(alert, match));
+    }
+  }
+
+  return {
+    ok: true,
+    mode,
+    matchedAt: new Date().toISOString(),
+    alerts: [...uniqueAlertsMap.values()],
+  };
 }
 
 function failure(

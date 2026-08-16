@@ -272,6 +272,68 @@ describe("getTransitAlerts", () => {
     });
   });
 
+  it("filters out TDX alert with Title '取消停靠' when Scope.Stops is empty but Description specifies other stops", async () => {
+    mockBusRoutes([
+      busRouteDocument({ routeId: "99", subRouteName: { Zh_tw: "99" } }),
+    ]);
+    mockTdxJson([
+      {
+        AlertID: "403225146",
+        Title: "取消停靠",
+        Description:
+          "【因配合臺中市養護工程處辦理「北區健行路(崇德路至金龍街)道路鋪面燙平改善工程」，自115年8月17日上午8時至下午5時「莒光新城」(往西)公車招呼站將臨時取消停靠，敬請您提早至前站或下一站搭乘，造成不便，敬請見諒。】",
+        Status: 2,
+        Scope: {
+          Routes: [{ RouteID: "99", RouteName: { Zh_tw: "99" }, Direction: 0 }],
+        },
+      },
+    ]);
+
+    const result = await getTransitAlerts({
+      mode: "bus",
+      city: "Taichung",
+      routeName: "99",
+      stopName: "黎明文心南五路口",
+      stopNames: ["黎明文心南五路口", "國立臺中科技大學"],
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.alerts).toEqual([]);
+  });
+
+  it("matches TDX alert with Title '臨時站位' when Scope.Stops is empty but Description specifies user's stop", async () => {
+    mockBusRoutes([
+      busRouteDocument({ routeId: "99", subRouteName: { Zh_tw: "99" } }),
+    ]);
+    mockTdxJson([
+      {
+        AlertID: "402705099",
+        Title: "臨時站位",
+        Description:
+          "【配合本市養護工程處辦理「臺中市北區三民路三段(太平路至五權路)道路、共桿建置及人行道改善工程，為維護候車安全，自115年7月14日至115年9月15日 (如因受天候因素影響將順延)「國立臺中科技大學」(往北)全線請至「墊腳石圖書文化廣場」前候車，造成不便，敬請見諒。】",
+        Status: 2,
+        Scope: {
+          Routes: [{ RouteID: "99", RouteName: { Zh_tw: "99" }, Direction: 0 }],
+        },
+      },
+    ]);
+
+    const result = await getTransitAlerts({
+      mode: "bus",
+      city: "Taichung",
+      routeName: "99",
+      stopName: "黎明文心南五路口",
+      stopNames: ["黎明文心南五路口", "國立臺中科技大學"],
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.alerts).toHaveLength(1);
+    expect(result.alerts[0].alertId).toBe("402705099");
+    expect(result.alerts[0].matchKind).toBe("stop");
+  });
+
   it("filters normal bus alerts with Status === 1", async () => {
     mockBusRoutes([busRouteDocument()]);
     mockTdxJson([
