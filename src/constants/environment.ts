@@ -9,6 +9,8 @@ export const CWA_DATASTORE_BASE_URL =
 
 export const CWA_COUNTY_RESOURCE_ID = "F-D0047-089";
 
+export const CWA_OBSERVATION_RESOURCE_ID = "O-A0001-001";
+
 export const CWA_WEATHER_ELEMENTS = [
   "溫度",
   "3小時降雨機率",

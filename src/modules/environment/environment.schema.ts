@@ -19,7 +19,10 @@ const WeatherBlockSchema = z.object({
   windSpeed: z.number().optional(),
   windDirection: z.string().optional(),
   condition: z.string().optional(),
+  rainfall: z.number().optional(),
   forecastTime: z.string().optional(),
+  observationTime: z.string().optional(),
+  stationName: z.string().optional(),
   reason: z.string().optional(),
 });
 

@@ -11,10 +11,18 @@ import {
   UpstreamHttpError,
   withResilience,
 } from "../../config/resilience";
-import { fetchNearestWeather } from "../../adapters/cwa.adapter";
+import {
+  fetchNearestObservation,
+  fetchNearestWeather,
+} from "../../adapters/cwa.adapter";
 import { fetchCamList } from "../../adapters/twipcam.adapter";
 import { getAirData, classifyPm25 } from "../air/air.service";
-import { parseCameras, parseWeather } from "./environment.parse";
+import {
+  mergeWeather,
+  parseCameras,
+  parseObservation,
+  parseWeather,
+} from "./environment.parse";
 import {
   DEFAULT_CCTV_LIMIT,
   ENV_CACHE_TTL_SEC,
@@ -44,10 +52,40 @@ function unavailable(err: unknown): { status: "unavailable"; reason: string } {
 async function loadWeather(lat: number, lng: number): Promise<WeatherBlock> {
   const cacheKey = weatherCacheKey(lat, lng);
   const cached = await redisGet(cacheKey);
-  if (cached) return JSON.parse(cached) as WeatherBlock;
+  if (cached) {
+    try {
+      return JSON.parse(cached) as WeatherBlock;
+    } catch {
+      // cache corrupted, fall through to fetch
+    }
+  }
 
-  const raw = await fetchNearestWeather(lat, lng);
-  const block: WeatherBlock = { status: "ok", ...parseWeather(raw) };
+  const [obsResult, forecastResult] = await Promise.allSettled([
+    fetchNearestObservation(lat, lng),
+    fetchNearestWeather(lat, lng),
+  ]);
+
+  const obs =
+    obsResult.status === "fulfilled"
+      ? parseObservation(obsResult.value)
+      : undefined;
+  const forecast =
+    forecastResult.status === "fulfilled"
+      ? parseWeather(forecastResult.value)
+      : undefined;
+
+  if (!obs && !forecast) {
+    let error: unknown = new Error("Weather unavailable");
+    if (obsResult.status === "rejected") {
+      error = obsResult.reason;
+    } else if (forecastResult.status === "rejected") {
+      error = forecastResult.reason;
+    }
+    return unavailable(error);
+  }
+
+  const merged = mergeWeather(obs, forecast);
+  const block: WeatherBlock = { status: "ok", ...merged };
   await redisSet(cacheKey, JSON.stringify(block), ENV_CACHE_TTL_SEC.WEATHER);
   return block;
 }
@@ -58,7 +96,13 @@ async function loadAirQuality(
 ): Promise<AirQualityBlock> {
   const cacheKey = airCacheKey(lat, lng);
   const cached = await redisGet(cacheKey);
-  if (cached) return JSON.parse(cached) as AirQualityBlock;
+  if (cached) {
+    try {
+      return JSON.parse(cached) as AirQualityBlock;
+    } catch {
+      // cache corrupted, fall through to fetch
+    }
+  }
 
   const airData = await withResilience("air", () => getAirData(lat, lng));
   if (!airData || !airData.readings.length) {

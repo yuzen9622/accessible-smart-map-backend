@@ -12,7 +12,10 @@ export interface WeatherBlock {
   windSpeed?: number;
   windDirection?: string;
   condition?: string;
+  rainfall?: number;
   forecastTime?: string;
+  observationTime?: string;
+  stationName?: string;
   reason?: string;
 }
 
@@ -65,6 +68,43 @@ export interface CwaLocation {
   Latitude: string;
   Longitude: string;
   WeatherElement: CwaWeatherElement[];
+}
+
+export interface CwaObservationCoordinate {
+  CoordinateName: string;
+  CoordinateFormat?: string;
+  StationLatitude: string;
+  StationLongitude: string;
+}
+
+export interface CwaObservationStation {
+  StationName: string;
+  StationId: string;
+  ObsTime?: {
+    DateTime?: string;
+  };
+  GeoInfo?: {
+    Coordinates?: CwaObservationCoordinate[];
+    CountyName?: string;
+    TownName?: string;
+  };
+  WeatherElement?: {
+    Weather?: string;
+    Now?: {
+      Precipitation?: string;
+    };
+    WindDirection?: string;
+    WindSpeed?: string;
+    AirTemperature?: string;
+    RelativeHumidity?: string;
+    AirPressure?: string;
+  };
+}
+
+export interface CwaObservationResponse {
+  records?: {
+    Station?: CwaObservationStation[];
+  };
 }
 
 export interface RawCamera {
