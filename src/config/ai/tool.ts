@@ -585,6 +585,54 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "getTransitAlerts",
+      description:
+        "查詢公車、捷運、台鐵或高鐵即時通阻、改道、停駛或營運異常警報。當使用者詢問大眾運輸是否有異常、改道、誤點、事故或通阻時使用；若使用者在導航中問「這班車有狀況嗎」，可配合導航上下文（如 routeName、city、railSystem、trainNo）查詢。",
+      parameters: {
+        type: "object",
+        properties: {
+          mode: {
+            type: "string",
+            enum: ["bus", "metro", "tra", "thsr"],
+            description:
+              "大眾運輸工具類型：bus（公車）、metro（捷運）、tra（台鐵）、thsr（高鐵）",
+          },
+          routeName: {
+            type: "string",
+            description:
+              "公車路線名稱（如 '307'、'承德幹線'）或捷運路線名稱（如 '淡水信義線'、'板南線'）",
+          },
+          city: {
+            type: "string",
+            description:
+              "公車所在縣市（如 'Taipei'、'NewTaipei'、'Taichung' 等，亦支援中文「台北」「台中」）。公車查詢時若未填會使用使用者位置推斷。",
+          },
+          railSystem: {
+            type: "string",
+            enum: ["TRTC", "KRTC", "TYMC", "TMRT", "NTMC", "KLRT"],
+            description: "捷運系統代碼（預設 TRTC 台北捷運）",
+          },
+          trainNo: {
+            type: "string",
+            description: "台鐵或高鐵車次號碼（如 '123'）",
+          },
+          stopName: {
+            type: "string",
+            description: "站牌名稱或捷運/火車站名",
+          },
+          direction: {
+            type: "number",
+            enum: [0, 1],
+            description: "行駛方向（0=去程，1=返程）",
+          },
+        },
+        required: ["mode"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "getNavInstructions",
       description:
         "回傳從起點到終點的**逐步**導航指引（「沿中山路直行 120 公尺」「請向右轉」「請在台北車站搭乘板南線」）。用於要「詳細步驟/每一步怎麼走/帶我走」時；不需先呼叫 planAccessibleRoute。與 planAccessibleRoute 差別＝逐步 vs 摘要。",

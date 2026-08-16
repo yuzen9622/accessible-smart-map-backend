@@ -2236,6 +2236,26 @@ describe("attachMetroAlerts", () => {
     expect((leg as any).alerts).toHaveLength(1);
   });
 
+  it("does not match station-specific alert on the same line when leg stations do not touch the affected station", async () => {
+    vi.mocked(getMetroAlerts).mockResolvedValue([
+      systemResult("TRTC", [
+        alert({
+          alertId: "fault-r02",
+          stations: [{ id: "R02", name: "象山" }],
+          lines: ["R"],
+        }),
+      ]),
+    ] as any);
+    const leg = metroLeg({
+      departureStationUid: "TRTC-R10",
+      arrivalStationUid: "TRTC-R11",
+    });
+
+    await attachMetroAlerts([routeOf(leg)]);
+
+    expect((leg as any).alerts).toBeUndefined();
+  });
+
   it("leaves untouched legs without alerts, but still reports the system", async () => {
     vi.mocked(getMetroAlerts).mockResolvedValue([
       systemResult("TRTC", [
@@ -2288,6 +2308,8 @@ describe("attachTransitAlerts", () => {
       direction: 0,
       departureStop: "板橋公車站",
       departureStopId: "NWT12345",
+      arrivalStop: "萬華車站",
+      arrivalStopId: "TPE56789",
       tdxCity: "NewTaipei",
     };
 
@@ -2315,6 +2337,8 @@ describe("attachTransitAlerts", () => {
       direction: 0,
       stopUid: "NWT12345",
       stopName: "板橋公車站",
+      stopUids: ["NWT12345", "TPE56789"],
+      stopNames: ["板橋公車站", "萬華車站"],
     });
     expect((busLeg as any).alerts).toHaveLength(1);
     expect((busLeg as any).alerts[0]).toMatchObject({ alertId: "bus-alert-1" });

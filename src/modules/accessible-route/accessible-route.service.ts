@@ -1193,13 +1193,17 @@ export async function attachTransitAlerts(
           .filter((uid): uid is string => Boolean(uid))
           .map(normalizeStationId),
       );
-      const matched: MetroAlert[] = result.alerts.filter(
-        (alert) =>
-          alert.stations.some((station) =>
+      const matched: MetroAlert[] = result.alerts.filter((alert) => {
+        const hasSpecificStations = alert.stations && alert.stations.length > 0;
+        if (hasSpecificStations) {
+          return alert.stations.some((station) =>
             stationIds.has(normalizeStationId(station.id)),
-          ) ||
-          alert.lines.some((line) => lineIds.has(normalizeStationId(line))),
-      );
+          );
+        }
+        return alert.lines.some((line) =>
+          lineIds.has(normalizeStationId(line)),
+        );
+      });
       if (matched.length) {
         leg.alerts = matched;
         for (const a of matched) {
@@ -1223,6 +1227,18 @@ export async function attachTransitAlerts(
     const busTasks = busLegs.map(async (leg) => {
       try {
         const city = resolveBusCityForAlert(leg);
+        const stopUids = [
+          leg.departureStopId,
+          leg.arrivalStopId,
+          ...(leg.intermediateStops ?? []).map((s) => s.stationUid),
+        ].filter((id): id is string => Boolean(id));
+
+        const stopNames = [
+          leg.departureStop,
+          leg.arrivalStop,
+          ...(leg.intermediateStops ?? []).map((s) => s.name),
+        ].filter((name): name is string => Boolean(name));
+
         const res = await getTransitAlerts({
           mode: "bus",
           city,
@@ -1230,6 +1246,8 @@ export async function attachTransitAlerts(
           direction: leg.direction,
           stopUid: leg.departureStopId,
           stopName: leg.departureStop,
+          stopUids,
+          stopNames,
         });
         if (res.ok && res.alerts.length > 0) {
           leg.alerts = res.alerts;

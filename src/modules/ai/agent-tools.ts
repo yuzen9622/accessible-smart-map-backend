@@ -3,6 +3,7 @@ import * as a11yOrchestration from "../a11y/a11y.orchestration";
 import * as busService from "../transit/bus.service";
 import * as metroService from "../transit/metro.service";
 import * as trainService from "../transit/train.service";
+import * as alertService from "../transit/alert.service";
 import * as airService from "../air/air.service";
 import * as campusService from "../campus/campus.service";
 import * as hazardService from "../hazard-report/hazard-report.service";
@@ -906,6 +907,121 @@ export async function getMetroAlerts(args: {
   } catch (error: any) {
     console.error("[agent-tool:getMetroAlerts]", error);
     return JSON.stringify({ ok: false, error: "捷運營運狀態查詢失敗" });
+  }
+}
+
+export async function getTransitAlerts(args: {
+  mode: "bus" | "metro" | "tra" | "thsr" | string;
+  city?: string;
+  routeName?: string;
+  railSystem?: string;
+  trainNo?: string;
+  stopName?: string;
+  direction?: number;
+  userLocation?: { latitude: number; longitude: number };
+}): Promise<string> {
+  try {
+    const mode = args.mode?.toLowerCase();
+    if (
+      mode !== "bus" &&
+      mode !== "metro" &&
+      mode !== "tra" &&
+      mode !== "thsr"
+    ) {
+      return JSON.stringify({
+        ok: false,
+        error: "不支援的運具類型，請指定 bus、metro、tra 或 thsr",
+      });
+    }
+
+    let ctx: alertService.TransitContext;
+
+    if (mode === "bus") {
+      const routeName = args.routeName?.trim() || "";
+      if (!routeName) {
+        return JSON.stringify({
+          ok: false,
+          error: "公車通阻查詢需要提供路線名稱（routeName，例如 '307'）",
+        });
+      }
+      const cityResult = await resolveBusCityOrError(
+        args.city,
+        args.userLocation,
+      );
+      if (typeof cityResult !== "string") {
+        return JSON.stringify({ ok: false, ...cityResult });
+      }
+      ctx = {
+        mode: "bus",
+        city: cityResult as TaiwanCityEn,
+        routeName,
+        direction:
+          args.direction === 0 || args.direction === 1
+            ? args.direction
+            : undefined,
+        stopName: args.stopName?.trim() || undefined,
+      };
+    } else if (mode === "metro") {
+      const validRailSystems = ["TRTC", "KRTC", "TYMC", "TMRT", "NTMC", "KLRT"];
+      const rawSystem = (args.railSystem || "TRTC").toUpperCase();
+      const railSystem = validRailSystems.includes(rawSystem)
+        ? (rawSystem as "TRTC" | "KRTC" | "TYMC" | "TMRT" | "NTMC" | "KLRT")
+        : "TRTC";
+      ctx = {
+        mode: "metro",
+        railSystem,
+        lineCode: args.routeName?.trim() || undefined,
+        stationIds: args.stopName?.trim() ? [args.stopName.trim()] : undefined,
+      };
+    } else if (mode === "tra") {
+      ctx = {
+        mode: "tra",
+        trainNo:
+          args.trainNo?.trim() ||
+          (args.routeName && /^\d+$/.test(args.routeName.trim())
+            ? args.routeName.trim()
+            : undefined),
+        lineId:
+          args.routeName && !/^\d+$/.test(args.routeName.trim())
+            ? args.routeName.trim()
+            : undefined,
+        stationIds: args.stopName?.trim() ? [args.stopName.trim()] : undefined,
+        direction:
+          args.direction === 0 || args.direction === 1
+            ? args.direction
+            : undefined,
+      };
+    } else {
+      ctx = {
+        mode: "thsr",
+        lineId: args.routeName?.trim() || undefined,
+        fromStationId: args.stopName?.trim() || undefined,
+        direction:
+          args.direction === 0 || args.direction === 1
+            ? args.direction
+            : undefined,
+      };
+    }
+
+    const result = await alertService.getTransitAlerts(ctx);
+    if (!result.ok) {
+      return JSON.stringify({ ok: false, error: result.error });
+    }
+
+    const alerts = result.alerts;
+    return JSON.stringify({
+      ok: true,
+      mode: ctx.mode,
+      total: alerts.length,
+      alerts,
+      summary:
+        alerts.length === 0
+          ? "目前營運正常，未發現通阻或異常公告"
+          : `發現 ${alerts.length} 則相關即時通阻/異常警報`,
+    });
+  } catch (error: any) {
+    console.error("[agent-tool:getTransitAlerts]", error);
+    return JSON.stringify({ ok: false, error: "大眾運輸通阻查詢失敗" });
   }
 }
 
@@ -1906,6 +2022,19 @@ export async function executeLocalTool(
 
     case "getMetroAlerts":
       return getMetroAlerts({ railSystem: args.railSystem });
+
+    case "getTransitAlerts":
+      return getTransitAlerts({
+        mode: args.mode as any,
+        city: args.city as string | undefined,
+        routeName: args.routeName as string | undefined,
+        railSystem: args.railSystem as string | undefined,
+        trainNo: args.trainNo as string | undefined,
+        stopName: args.stopName as string | undefined,
+        direction:
+          typeof args.direction === "number" ? args.direction : undefined,
+        userLocation,
+      });
 
     case "getNavInstructions":
       return getNavInstructions({

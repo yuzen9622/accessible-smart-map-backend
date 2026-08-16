@@ -15,6 +15,9 @@ vi.mock("../transit/bus.service", () => ({
 vi.mock("../transit/metro.service", () => ({
   getMetroAlerts: vi.fn(),
 }));
+vi.mock("../transit/alert.service", () => ({
+  getTransitAlerts: vi.fn(),
+}));
 vi.mock("../transit/train.service", () => ({
   getTrainTimetable: vi.fn(),
   getStationTimetable: vi.fn(),
@@ -111,6 +114,7 @@ import {
   getNearbyHazards,
   findNearbyParking,
   getMetroAlerts,
+  getTransitAlerts,
   getNavInstructions,
   saveMemory,
   deleteMemory,
@@ -124,6 +128,8 @@ import {
   bindLineAccountCode,
 } from "./agent-tools";
 import * as metroService from "../transit/metro.service";
+import * as alertService from "../transit/alert.service";
+import * as busService from "../transit/bus.service";
 
 const mockGetCoordinates = getCoordinates as unknown as ReturnType<
   typeof vi.fn
@@ -147,6 +153,11 @@ const mockA11yParking = a11yService.findNearbyParking as unknown as ReturnType<
   typeof vi.fn
 >;
 const mockMetroAlerts = metroService.getMetroAlerts as unknown as ReturnType<
+  typeof vi.fn
+>;
+const mockGetTransitAlerts =
+  alertService.getTransitAlerts as unknown as ReturnType<typeof vi.fn>;
+const mockResolveBusCity = busService.resolveBusCity as unknown as ReturnType<
   typeof vi.fn
 >;
 const mockPlanRoute = planAccessibleRouteFromRequest as unknown as ReturnType<
@@ -697,6 +708,145 @@ describe("getMetroAlerts", () => {
     const result = JSON.parse(raw);
 
     expect(result).toEqual({ ok: false, error: "捷運營運狀態查詢失敗" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getTransitAlerts
+// ---------------------------------------------------------------------------
+describe("getTransitAlerts", () => {
+  it("不支援的運具類型回傳錯誤", async () => {
+    const raw = await getTransitAlerts({ mode: "airplane" as any });
+    const result = JSON.parse(raw);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("不支援的運具類型");
+  });
+
+  it("公車模式缺少 routeName 時回傳錯誤", async () => {
+    const raw = await getTransitAlerts({ mode: "bus" });
+    const result = JSON.parse(raw);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("路線名稱");
+  });
+
+  it("公車模式縣市無法解析時回傳錯誤", async () => {
+    mockResolveBusCity.mockResolvedValue(null);
+    const raw = await getTransitAlerts({ mode: "bus", routeName: "307" });
+    const result = JSON.parse(raw);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("無法判斷縣市");
+  });
+
+  it("公車模式成功查詢並無通阻", async () => {
+    mockResolveBusCity.mockResolvedValue("Taipei");
+    mockGetTransitAlerts.mockResolvedValue({
+      ok: true,
+      mode: "bus",
+      matchedAt: "2026-08-15T10:00:00Z",
+      alerts: [],
+    });
+
+    const raw = await getTransitAlerts({
+      mode: "bus",
+      routeName: "307",
+      city: "Taipei",
+      direction: 0,
+    });
+    const result = JSON.parse(raw);
+
+    expect(result.ok).toBe(true);
+    expect(result.total).toBe(0);
+    expect(result.summary).toContain("正常");
+    expect(mockGetTransitAlerts).toHaveBeenCalledWith({
+      mode: "bus",
+      city: "Taipei",
+      routeName: "307",
+      direction: 0,
+      stopName: undefined,
+    });
+  });
+
+  it("公車模式成功查詢並回傳警報", async () => {
+    mockResolveBusCity.mockResolvedValue("Taipei");
+    const fakeAlert = {
+      alertId: "alert-307",
+      title: "307 路線改道通知",
+      description: "因施工改道",
+      status: 2,
+      matchKind: "route",
+    };
+    mockGetTransitAlerts.mockResolvedValue({
+      ok: true,
+      mode: "bus",
+      matchedAt: "2026-08-15T10:00:00Z",
+      alerts: [fakeAlert],
+    });
+
+    const raw = await getTransitAlerts({
+      mode: "bus",
+      routeName: "307",
+      city: "Taipei",
+    });
+    const result = JSON.parse(raw);
+
+    expect(result.ok).toBe(true);
+    expect(result.total).toBe(1);
+    expect(result.alerts[0].alertId).toBe("alert-307");
+  });
+
+  it("捷運行駛與台鐵查詢正常透傳", async () => {
+    mockGetTransitAlerts.mockResolvedValue({
+      ok: true,
+      mode: "metro",
+      matchedAt: "2026-08-15T10:00:00Z",
+      alerts: [],
+    });
+
+    const rawMetro = await getTransitAlerts({
+      mode: "metro",
+      routeName: "板南線",
+      railSystem: "TRTC",
+    });
+    expect(JSON.parse(rawMetro).ok).toBe(true);
+
+    mockGetTransitAlerts.mockResolvedValue({
+      ok: true,
+      mode: "tra",
+      matchedAt: "2026-08-15T10:00:00Z",
+      alerts: [],
+    });
+
+    const rawTra = await getTransitAlerts({
+      mode: "tra",
+      trainNo: "123",
+      stopName: "台北",
+    });
+    expect(JSON.parse(rawTra).ok).toBe(true);
+  });
+
+  it("executeLocalTool 支援 getTransitAlerts 派工", async () => {
+    mockGetTransitAlerts.mockResolvedValue({
+      ok: true,
+      mode: "thsr",
+      matchedAt: "2026-08-15T10:00:00Z",
+      alerts: [],
+    });
+
+    const raw = await executeLocalTool("getTransitAlerts", {
+      mode: "thsr",
+      trainNo: "603",
+    });
+    const result = JSON.parse(raw);
+    expect(result.ok).toBe(true);
+    expect(result.mode).toBe("thsr");
+  });
+
+  it("底層服務拋錯時回傳失敗", async () => {
+    mockGetTransitAlerts.mockRejectedValue(new Error("Network failure"));
+    const raw = await getTransitAlerts({ mode: "metro" });
+    const result = JSON.parse(raw);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("大眾運輸通阻查詢失敗");
   });
 });
 
