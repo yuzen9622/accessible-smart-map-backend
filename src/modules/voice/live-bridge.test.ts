@@ -1,20 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 
-const { connect, getRouteByToken } = vi.hoisted(() => ({
-  connect: vi.fn(),
-  getRouteByToken: vi.fn(),
-}));
+const { connect, getRouteByToken, getMemorySettings, loadMemories } =
+  vi.hoisted(() => ({
+    connect: vi.fn(),
+    getRouteByToken: vi.fn(),
+    getMemorySettings: vi.fn().mockResolvedValue({ memoryEnabled: false }),
+    loadMemories: vi.fn().mockResolvedValue([]),
+  }));
 vi.mock("../../config/ai", () => ({ googleGenAi: { live: { connect } } }));
 vi.mock("../agent/tool-catalog", () => ({ buildGeminiTools: vi.fn(() => []) }));
 vi.mock("../ai/agent-tools", () => ({ executeLocalTool: vi.fn() }));
 vi.mock("../accessible-route/route-token.service", () => ({ getRouteByToken }));
+vi.mock("../ai/memory.service", () => ({ getMemorySettings, loadMemories }));
 vi.mock("./transcript-corrector", () => ({
   correctUserTranscript: vi.fn(async (t: string) => t.replace("珠北", "竹北")),
 }));
 
 import { createLiveBridge } from "./live-bridge";
 import { executeLocalTool } from "../ai/agent-tools";
+import { buildGeminiTools } from "../agent/tool-catalog";
 
 function makeWs(): WebSocket {
   return {
@@ -406,6 +411,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
         {},
         { latitude: 25, longitude: 121 },
         "u",
+        { allowMemoryWrite: false },
       ),
     );
     expect(session.sendClientContent).not.toHaveBeenCalled();
@@ -603,6 +609,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
         {},
         { latitude: 25.05, longitude: 121.55, accuracy: 8 },
         "u",
+        { allowMemoryWrite: false },
       ),
     );
     await vi.waitFor(() =>
@@ -760,5 +767,95 @@ describe("createLiveBridge tool_result payload", () => {
     expect(msg.ok).toBe(false);
     expect("result" in msg).toBe(false);
     expect(msg.args).toEqual(args);
+  });
+});
+
+describe("createLiveBridge user memory integration", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env.GEMINI_LIVE_TEMPERATURE;
+    delete process.env.GEMINI_LIVE_LANGUAGE_CODE;
+    connect.mockResolvedValue(makeSession());
+  });
+
+  it("loads user memories and enables memory tools when memoryEnabled is true", async () => {
+    getMemorySettings.mockResolvedValue({ memoryEnabled: true });
+    loadMemories.mockResolvedValue([
+      {
+        _id: "mem1",
+        category: "preference",
+        promptText: "偏好輪椅友善路線",
+        content: "偏好輪椅友善路線",
+      },
+    ]);
+
+    const ws = makeWs();
+    await createLiveBridge({ ws, userId: "mem-user" });
+
+    expect(getMemorySettings).toHaveBeenCalledWith("mem-user");
+    expect(loadMemories).toHaveBeenCalledWith("mem-user", 20);
+    expect(buildGeminiTools).toHaveBeenCalledWith("mem-user", true);
+
+    const [config] = connect.mock.calls[0] as unknown as [
+      { config: { systemInstruction: string } },
+    ];
+    expect(config.config.systemInstruction).toContain("【使用者記憶】");
+    expect(config.config.systemInstruction).toContain("偏好輪椅友善路線");
+    expect(config.config.systemInstruction).toContain("(id:mem1)");
+  });
+
+  it("disables memory tools and omits memory prompt when memoryEnabled is false", async () => {
+    getMemorySettings.mockResolvedValue({ memoryEnabled: false });
+
+    const ws = makeWs();
+    await createLiveBridge({ ws, userId: "no-mem-user" });
+
+    expect(getMemorySettings).toHaveBeenCalledWith("no-mem-user");
+    expect(loadMemories).not.toHaveBeenCalled();
+    expect(buildGeminiTools).toHaveBeenCalledWith("no-mem-user", false);
+
+    const [config] = connect.mock.calls[0] as unknown as [
+      { config: { systemInstruction: string } },
+    ];
+    expect(config.config.systemInstruction).not.toContain("【使用者記憶】");
+  });
+
+  it("passes allowMemoryWrite: true to executeLocalTool when memoryEnabled is true", async () => {
+    getMemorySettings.mockResolvedValue({ memoryEnabled: true });
+    loadMemories.mockResolvedValue([]);
+    let onmessage: ((message: unknown) => Promise<void> | void) | undefined;
+    const session = makeSession();
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      return session;
+    });
+    vi.mocked(executeLocalTool).mockResolvedValue(
+      JSON.stringify({ ok: true, memory: { id: "m1", content: "記住了" } }),
+    );
+
+    const ws = makeWs();
+    await createLiveBridge({ ws, userId: "mem-user" });
+
+    onmessage?.({
+      toolCall: {
+        functionCalls: [
+          {
+            id: "call_save",
+            name: "saveMemory",
+            args: { content: "習慣搭乘307公車", category: "habit" },
+          },
+        ],
+      },
+    });
+
+    await vi.waitFor(() =>
+      expect(executeLocalTool).toHaveBeenCalledWith(
+        "saveMemory",
+        { content: "習慣搭乘307公車", category: "habit" },
+        undefined,
+        "mem-user",
+        { allowMemoryWrite: true },
+      ),
+    );
   });
 });

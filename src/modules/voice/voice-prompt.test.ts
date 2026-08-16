@@ -65,3 +65,41 @@ describe("buildVoiceSystemPrompt active-navigation context", () => {
     expect(prompt).toContain("不得把其他運具冒充公車即時資料");
   });
 });
+
+describe("buildVoiceSystemPrompt user memories", () => {
+  it("injects user memories with category labels and IDs when provided", () => {
+    const memories = [
+      {
+        _id: "60c72b2f9b1d8b0015f8e123",
+        category: "preference",
+        content: "使用者偏好輪椅友善路線",
+        promptText: "偏好輪椅友善路線",
+      },
+      {
+        _id: "60c72b2f9b1d8b0015f8e124",
+        category: "habit",
+        content: "常搭307公車通勤",
+      },
+    ];
+
+    const prompt = buildVoiceSystemPrompt(undefined, memories);
+
+    expect(prompt).toContain("【使用者記憶】");
+    expect(prompt).toContain(
+      "- [偏好] 偏好輪椅友善路線 (id:60c72b2f9b1d8b0015f8e123)",
+    );
+    expect(prompt).toContain(
+      "- [習慣] 常搭307公車通勤 (id:60c72b2f9b1d8b0015f8e124)",
+    );
+    expect(prompt).toContain("呼叫 saveMemory");
+    expect(prompt).toContain("呼叫 deleteMemory");
+  });
+
+  it("omits the memory section when memories array is empty or undefined", () => {
+    const promptWithoutMem = buildVoiceSystemPrompt();
+    expect(promptWithoutMem).not.toContain("【使用者記憶】");
+
+    const promptWithEmptyMem = buildVoiceSystemPrompt(undefined, []);
+    expect(promptWithEmptyMem).not.toContain("【使用者記憶】");
+  });
+});

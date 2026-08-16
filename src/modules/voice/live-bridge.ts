@@ -17,6 +17,7 @@ import { normalizeVoiceTranscript } from "./transcript-normalizer";
 import { correctUserTranscript } from "./transcript-corrector";
 import { withCurrentDate } from "../../config/ai/chat-prompt";
 import { getRouteByToken } from "../accessible-route/route-token.service";
+import { getMemorySettings, loadMemories } from "../ai/memory.service";
 import { NavigationSession, type NavEffect } from "./navigation-session";
 import type { NavPosition } from "./navigation.schema";
 
@@ -324,6 +325,9 @@ export async function createLiveBridge(
             (call.args ?? {}) as Record<string, unknown>,
             latestPosition ?? userLocation,
             userId,
+            {
+              allowMemoryWrite: memoryEnabled,
+            },
           );
         }
         response = { output: result };
@@ -444,13 +448,37 @@ export async function createLiveBridge(
     }
   };
 
+  let memoryEnabled = false;
+  let memories: Array<{
+    _id?: unknown;
+    category: string;
+    promptText?: string;
+    content: string;
+  }> = [];
+  if (userId) {
+    try {
+      const settings = await getMemorySettings(userId);
+      memoryEnabled = settings.memoryEnabled;
+      if (memoryEnabled) {
+        memories = await loadMemories(userId, 20);
+      }
+    } catch (err) {
+      console.error(
+        "[voice] loadMemories failed:",
+        summarizeError(err instanceof Error ? err.message : String(err)),
+      );
+    }
+  }
+
   const liveConfig: LiveConnectConfig = {
     responseModalities: [Modality.AUDIO],
     inputAudioTranscription: {},
     outputAudioTranscription: {},
-    systemInstruction: withCurrentDate(buildVoiceSystemPrompt(userLocation)),
+    systemInstruction: withCurrentDate(
+      buildVoiceSystemPrompt(userLocation, memories, { memoryEnabled }),
+    ),
     tools: [
-      ...buildGeminiTools(userId, false),
+      ...buildGeminiTools(userId, memoryEnabled),
       { functionDeclarations: NAV_FUNCTIONS },
     ],
     temperature: parseLiveTemperature(),
