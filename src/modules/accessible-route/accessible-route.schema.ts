@@ -290,6 +290,31 @@ const IntermediateStopSchema = z
   .strict()
   .openapi("IntermediateStop");
 
+const MatchedAlertSchema = z
+  .object({
+    alertId: z
+      .string()
+      .openapi({ example: "34265", description: "通阻事件代碼" }),
+    title: z.string().openapi({ example: "8月27日城隍祭改道" }),
+    description: z.string().openapi({ description: "事件描述" }),
+    status: z
+      .union([z.number(), z.string()])
+      .openapi({ description: "0/1/2（公車/臺鐵/捷運）或 ''/▲/X（高鐵）" }),
+    cause: z.union([z.number(), z.string()]).optional(),
+    effect: z.union([z.number(), z.string()]).optional(),
+    level: z.union([z.number(), z.string()]).optional(),
+    reason: z.string().optional(),
+    matchKind: z
+      .enum(["route", "stop", "station", "line", "train", "section"])
+      .openapi({
+        description: "匹配精度（train/stop/station 最精準，section 最寬）",
+      }),
+    startTime: z.string().nullable().optional(),
+    endTime: z.string().nullable().optional(),
+    alertUrl: z.string().optional(),
+  })
+  .openapi("MatchedAlert");
+
 const BusLegSchema = z
   .object({
     type: z.literal("BUS").openapi({ example: "BUS" }),
@@ -344,6 +369,9 @@ const BusLegSchema = z
           "（tdxCity + routeName + direction）做持續追蹤；公路客運（THB）無城市路徑、省略此欄。",
       }),
     intermediateStops: z.array(IntermediateStopSchema).optional(),
+    alerts: z.array(MatchedAlertSchema).optional().openapi({
+      description: "僅當該公車路線或站牌正在發布異常公告時出現。",
+    }),
   })
   .strict()
   .openapi("BusLeg");
@@ -454,6 +482,9 @@ const ThsrLegSchema = z
       example: ["高鐵站設有無障礙設施", "列車備有無障礙座位及輪椅空間"],
     }),
     intermediateStops: z.array(IntermediateStopSchema).optional(),
+    alerts: z.array(MatchedAlertSchema).optional().openapi({
+      description: "僅當該高鐵區間正在發布異常或通阻公告時出現。",
+    }),
   })
   .strict()
   .openapi("ThsrLeg");
@@ -491,6 +522,9 @@ const TraLegSchema = z
       .array(z.string())
       .openapi({ example: ["臺鐵自強 列車", "乘車站附近有電梯"] }),
     intermediateStops: z.array(IntermediateStopSchema).optional(),
+    alerts: z.array(MatchedAlertSchema).optional().openapi({
+      description: "僅當該臺鐵車次、路線或車站正在發布異常或通阻公告時出現。",
+    }),
   })
   .strict()
   .openapi("TraLeg");
@@ -774,6 +808,10 @@ export const AccessibleRouteDataSchema = z
     metroAlerts: z.array(MetroAlertResultSchema).optional().openapi({
       description:
         "僅當路線搭乘的捷運系統目前有異常營運公告時出現；依捷運系統分組。單一路段相關的公告另行挂在 METRO leg 的 alerts。",
+    }),
+    transitAlerts: z.array(MatchedAlertSchema).optional().openapi({
+      description:
+        "僅當路線搭乘的大眾運輸（公車、捷運、臺鐵、高鐵）目前有異常營運或通阻公告時出現。",
     }),
   })
   .openapi("AccessibleRouteData");

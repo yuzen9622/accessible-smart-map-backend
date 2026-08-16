@@ -96,7 +96,109 @@ describe("AccessibleRouteSchema METRO alerts", () => {
   });
 });
 
-describe("AccessibleRouteDataSchema metroAlerts", () => {
+describe("AccessibleRouteSchema BUS, TRA, THSR alerts", () => {
+  const matchedAlert = {
+    alertId: "alert-101",
+    title: "營運異常",
+    description: "受施工影響改道",
+    status: 2,
+    matchKind: "route" as const,
+  };
+
+  const busLeg = {
+    type: "BUS" as const,
+    routeName: "307",
+    departureStop: "板橋",
+    arrivalStop: "撫遠街",
+    waitInfo: { time: 5, source: "schedule" as const },
+    direction: 0 as const,
+    polyline: [
+      [121.5, 25.0],
+      [121.51, 25.01],
+    ],
+    departureStopA11y: [],
+    arrivalStopA11y: [],
+  };
+
+  const traLeg = {
+    type: "TRA" as const,
+    trainNo: "123",
+    trainTypeName: "自強",
+    departureStation: "台北",
+    arrivalStation: "基隆",
+    departureStationUID: "TRA-1000",
+    arrivalStationUID: "TRA-0900",
+    departureTime: "08:30",
+    arrivalTime: "09:02",
+    rideMinutes: 32,
+    waitInfo: { time: 10, source: "schedule" as const },
+    polyline: [
+      [121.5, 25.0],
+      [121.7, 25.1],
+    ],
+    departureStationA11y: [],
+    arrivalStationA11y: [],
+    facilityHighlights: [],
+  };
+
+  const thsrLeg = {
+    type: "THSR" as const,
+    trainNo: "0617",
+    departureStation: "台北",
+    arrivalStation: "台中",
+    departureStationUID: "THSR-1000",
+    arrivalStationUID: "THSR-1040",
+    departureTime: "09:00",
+    arrivalTime: "09:47",
+    rideMinutes: 47,
+    waitInfo: { time: 8, source: "schedule" as const },
+    polyline: [
+      [121.5, 25.0],
+      [120.6, 24.1],
+    ],
+    departureStationA11y: [],
+    arrivalStationA11y: [],
+    facilityHighlights: [],
+  };
+
+  it("accepts BUS leg with alerts", () => {
+    const busRoute = {
+      routeId: "bus-1",
+      routeName: "307公車",
+      totalMinutes: 20,
+      transferCount: 0,
+      legs: [{ ...busLeg, alerts: [matchedAlert] }],
+      accessibilityHighlights: [],
+    };
+    expect(AccessibleRouteSchema.safeParse(busRoute).success).toBe(true);
+  });
+
+  it("accepts TRA leg with alerts", () => {
+    const traRoute = {
+      routeId: "tra-1",
+      routeName: "臺鐵",
+      totalMinutes: 32,
+      transferCount: 0,
+      legs: [{ ...traLeg, alerts: [matchedAlert] }],
+      accessibilityHighlights: [],
+    };
+    expect(AccessibleRouteSchema.safeParse(traRoute).success).toBe(true);
+  });
+
+  it("accepts THSR leg with alerts", () => {
+    const thsrRoute = {
+      routeId: "thsr-1",
+      routeName: "高鐵",
+      totalMinutes: 47,
+      transferCount: 0,
+      legs: [{ ...thsrLeg, alerts: [matchedAlert] }],
+      accessibilityHighlights: [],
+    };
+    expect(AccessibleRouteSchema.safeParse(thsrRoute).success).toBe(true);
+  });
+});
+
+describe("AccessibleRouteDataSchema metroAlerts & transitAlerts", () => {
   const data = {
     origin: { lat: 25.05, lng: 121.52 },
     destination: { lat: 25.046, lng: 121.517 },
@@ -105,7 +207,7 @@ describe("AccessibleRouteDataSchema metroAlerts", () => {
     routes: [metroRoute],
   };
 
-  it("stays valid without metroAlerts and accepts per-system results", () => {
+  it("stays valid without metroAlerts and accepts per-system results and transitAlerts", () => {
     expect(AccessibleRouteDataSchema.safeParse(data).success).toBe(true);
     expect(
       AccessibleRouteDataSchema.safeParse({
@@ -115,6 +217,15 @@ describe("AccessibleRouteDataSchema metroAlerts", () => {
             railSystem: "TRTC",
             updatedAt: "2026-08-15T10:00:00+08:00",
             alerts: [metroAlert],
+          },
+        ],
+        transitAlerts: [
+          {
+            alertId: "alert-101",
+            title: "營運異常",
+            description: "受施工影響改道",
+            status: 2,
+            matchKind: "route",
           },
         ],
       }).success,

@@ -2,12 +2,15 @@ import { tdxFetch } from "../../config/fetch";
 import { alertUrl, metroUrl } from "../../config/transit";
 import { findBusRoutesByName } from "./alert.repository";
 import { ResponseCode } from "../../types/code";
+import type { MatchKind, MatchedAlert } from "../../types/transit";
 import { equalStopName, formatRouteName } from "../../utils/transit-text";
 import {
   clearAlertStore,
   getFreshAlertSnapshot,
   upsertAlertSnapshot,
 } from "./alert.store";
+
+export type { MatchKind, MatchedAlert };
 
 type LocalizedName = { Zh_tw?: string };
 type AlertStatus = number | string;
@@ -133,9 +136,6 @@ export type TransitContext =
       toStationId?: string;
     };
 
-export type MatchKind =
-  "route" | "stop" | "station" | "line" | "train" | "section";
-
 type Match = { kind: MatchKind };
 type BusRouteKeys = {
   routeIds: string[];
@@ -143,21 +143,6 @@ type BusRouteKeys = {
   stopIds: string[];
 };
 type AlertCandidate<T extends AlertMetadata> = { alert: T; match: Match };
-
-export type MatchedAlert = {
-  alertId: string;
-  title: string;
-  description: string;
-  status: AlertStatus;
-  cause?: number | string;
-  effect?: number | string;
-  level?: number | string;
-  reason?: string;
-  matchKind: MatchKind;
-  startTime?: string | null;
-  endTime?: string | null;
-  alertUrl?: string;
-};
 
 type TransitAlertSuccess = {
   ok: true;
@@ -298,7 +283,18 @@ export async function resolveBusRouteKeys(
     formatRouteName(ctx.routeName),
     ctx.routeName.trim(),
   ]);
-  if (!docs.length) return null;
+  if (!docs.length) {
+    const rawName = ctx.routeName?.trim();
+    const fmtName = formatRouteName(ctx.routeName);
+    const subRouteNames = [
+      ...new Set([rawName, fmtName].filter((s): s is string => Boolean(s))),
+    ];
+    return {
+      routeIds: [],
+      subRouteNames,
+      stopIds: ctx.stopUid ? [ctx.stopUid] : [],
+    };
+  }
 
   const scoped =
     ctx.direction == null
@@ -313,11 +309,13 @@ export async function resolveBusRouteKeys(
       ),
     ],
     subRouteNames: [
-      ...new Set(
-        scoped
+      ...new Set([
+        ...scoped
           .map((doc) => doc.subRouteName?.Zh_tw)
           .filter((name): name is string => Boolean(name)),
-      ),
+        ctx.routeName.trim(),
+        formatRouteName(ctx.routeName),
+      ]),
     ],
     stopIds: ctx.stopUid ? [ctx.stopUid] : [],
   };

@@ -290,3 +290,22 @@ export type MetroAlertResult = {
   updatedAt: string;
   alerts: MetroAlert[];
 };
+
+export type MatchKind =
+  "route" | "stop" | "station" | "line" | "train" | "section";
+
+/** A transit operating alert matched against a specific route/leg context. */
+export type MatchedAlert = {
+  alertId: string;
+  title: string;
+  description: string;
+  status: number | string;
+  cause?: number | string;
+  effect?: number | string;
+  level?: number | string;
+  reason?: string;
+  matchKind: MatchKind;
+  startTime?: string | null;
+  endTime?: string | null;
+  alertUrl?: string;
+};

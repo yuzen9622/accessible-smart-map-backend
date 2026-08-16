@@ -71,9 +71,13 @@ vi.mock("../../adapters/google.adapter", async (importActual) => {
 
 // Alerts are an advisory overlay on planned routes; keep the planner tests off TDX.
 vi.mock("../transit/metro.service", () => ({ getMetroAlerts: vi.fn() }));
+vi.mock("../transit/alert.service", () => ({
+  getTransitAlerts: vi.fn().mockResolvedValue({ ok: true, alerts: [] }),
+}));
 
 import {
   attachMetroAlerts,
+  attachTransitAlerts,
   planAccessibleRouteFromRequest,
 } from "./accessible-route.service";
 import { attachInternalSchedule } from "./route-schedule";
@@ -100,6 +104,7 @@ import {
 import { ResponseCode } from "../../types/code";
 import { getWeatherAndAirQuality } from "../environment/environment.service";
 import { getMetroAlerts } from "../transit/metro.service";
+import { getTransitAlerts } from "../transit/alert.service";
 import type { PlanRouteResult } from "./accessible-route.types";
 import type { OtpRoutePlanResult } from "./planners/otp-routing";
 
@@ -2270,5 +2275,190 @@ describe("attachMetroAlerts", () => {
     ] as any);
 
     expect(await attachMetroAlerts([routeOf(metroLeg())])).toEqual([]);
+  });
+});
+
+describe("attachTransitAlerts", () => {
+  const routeOf = (...legs: unknown[]) => ({ routeId: "r", legs }) as any;
+
+  it("attaches matched bus alerts to BUS legs", async () => {
+    const busLeg = {
+      type: "BUS",
+      routeName: "307",
+      direction: 0,
+      departureStop: "板橋公車站",
+      departureStopId: "NWT12345",
+      tdxCity: "NewTaipei",
+    };
+
+    vi.mocked(getTransitAlerts).mockResolvedValueOnce({
+      ok: true,
+      mode: "bus",
+      matchedAt: "2026-08-15T10:00:00Z",
+      alerts: [
+        {
+          alertId: "bus-alert-1",
+          title: "307公車改道",
+          description: "配合施工改道",
+          status: 2,
+          matchKind: "route",
+        },
+      ],
+    });
+
+    const res = await attachTransitAlerts([routeOf(busLeg)]);
+
+    expect(getTransitAlerts).toHaveBeenCalledWith({
+      mode: "bus",
+      city: "NewTaipei",
+      routeName: "307",
+      direction: 0,
+      stopUid: "NWT12345",
+      stopName: "板橋公車站",
+    });
+    expect((busLeg as any).alerts).toHaveLength(1);
+    expect((busLeg as any).alerts[0]).toMatchObject({ alertId: "bus-alert-1" });
+    expect(res.transitAlerts).toHaveLength(1);
+    expect(res.transitAlerts[0].alertId).toBe("bus-alert-1");
+  });
+
+  it("attaches matched TRA alerts to TRA legs", async () => {
+    const traLeg = {
+      type: "TRA",
+      trainNo: "123",
+      departureStation: "台北",
+      arrivalStation: "板橋",
+      departureStationUID: "TRA-1000",
+      arrivalStationUID: "TRA-1020",
+    };
+
+    vi.mocked(getTransitAlerts).mockResolvedValueOnce({
+      ok: true,
+      mode: "tra",
+      matchedAt: "2026-08-15T10:00:00Z",
+      alerts: [
+        {
+          alertId: "tra-alert-1",
+          title: "號誌故障",
+          description: "台北至板橋延誤",
+          status: 2,
+          matchKind: "train",
+        },
+      ],
+    });
+
+    const res = await attachTransitAlerts([routeOf(traLeg)]);
+
+    expect(getTransitAlerts).toHaveBeenCalledWith({
+      mode: "tra",
+      trainNo: "123",
+      stationIds: ["1000", "1020"],
+    });
+    expect((traLeg as any).alerts).toHaveLength(1);
+    expect((traLeg as any).alerts[0]).toMatchObject({ alertId: "tra-alert-1" });
+    expect(res.transitAlerts).toHaveLength(1);
+  });
+
+  it("attaches matched THSR alerts to THSR legs", async () => {
+    const thsrLeg = {
+      type: "THSR",
+      trainNo: "0617",
+      departureStation: "台北",
+      arrivalStation: "台中",
+      departureStationUID: "THSR-1000",
+      arrivalStationUID: "THSR-1040",
+    };
+
+    vi.mocked(getTransitAlerts).mockResolvedValueOnce({
+      ok: true,
+      mode: "thsr",
+      matchedAt: "2026-08-15T10:00:00Z",
+      alerts: [
+        {
+          alertId: "thsr-alert-1",
+          title: "運轉變更",
+          description: "台北台中區間降速行駛",
+          status: "▲",
+          matchKind: "section",
+        },
+      ],
+    });
+
+    const res = await attachTransitAlerts([routeOf(thsrLeg)]);
+
+    expect(getTransitAlerts).toHaveBeenCalledWith({
+      mode: "thsr",
+      fromStationId: "1000",
+      toStationId: "1040",
+    });
+    expect((thsrLeg as any).alerts).toHaveLength(1);
+    expect((thsrLeg as any).alerts[0]).toMatchObject({
+      alertId: "thsr-alert-1",
+    });
+    expect(res.transitAlerts).toHaveLength(1);
+  });
+
+  it("handles mixed multi-modal routes and aggregates all alerts", async () => {
+    const busLeg = {
+      type: "BUS",
+      routeName: "307",
+      direction: 0,
+      departureStop: "板橋公車站",
+      departureStopId: "NWT12345",
+      tdxCity: "NewTaipei",
+    };
+    const metroLeg = {
+      type: "METRO",
+      railSystem: "TRTC",
+      lineId: "BL",
+      lineUid: "TRTC-BL",
+      departureStationUid: "TRTC-BL07",
+      arrivalStationUid: "TRTC-BL12",
+    };
+
+    vi.mocked(getTransitAlerts).mockResolvedValueOnce({
+      ok: true,
+      mode: "bus",
+      matchedAt: "2026-08-15T10:00:00Z",
+      alerts: [
+        {
+          alertId: "bus-alert-1",
+          title: "公車改道",
+          description: "改道",
+          status: 2,
+          matchKind: "route",
+        },
+      ],
+    });
+
+    vi.mocked(getMetroAlerts).mockResolvedValueOnce([
+      {
+        railSystem: "TRTC",
+        updatedAt: "2026-08-15T10:00:00Z",
+        alerts: [
+          {
+            alertId: "metro-alert-1",
+            title: "捷運設備異常",
+            description: "BL07 站手扶梯維修",
+            status: 2,
+            stations: [{ id: "BL07", name: "板橋站" }],
+            lines: ["BL"],
+            publishTime: "2026-08-15T09:00:00Z",
+            updateTime: "2026-08-15T10:00:00Z",
+          },
+        ],
+      },
+    ]);
+
+    const res = await attachTransitAlerts([routeOf(busLeg, metroLeg)]);
+
+    expect((busLeg as any).alerts).toHaveLength(1);
+    expect((metroLeg as any).alerts).toHaveLength(1);
+    expect(res.metroAlerts).toHaveLength(1);
+    expect(res.transitAlerts).toHaveLength(2);
+    expect(res.transitAlerts.map((a) => a.alertId).sort()).toEqual([
+      "bus-alert-1",
+      "metro-alert-1",
+    ]);
   });
 });

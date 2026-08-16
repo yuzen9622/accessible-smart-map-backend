@@ -45,7 +45,12 @@ import {
 } from "./planners/walk-a11y";
 import { getWeatherAndAirQuality } from "../environment/environment.service";
 import { getMetroAlerts } from "../transit/metro.service";
-import type { MetroAlert, MetroAlertResult } from "../../types/transit";
+import { getTransitAlerts } from "../transit/alert.service";
+import type {
+  MatchedAlert,
+  MetroAlert,
+  MetroAlertResult,
+} from "../../types/transit";
 import { haversineMeters } from "../../utils/geo";
 import { attachRouteTokens } from "./route-token.service";
 import {
@@ -1079,6 +1084,235 @@ function normalizeStationId(id: string): string {
   return sep === null ? id : id.slice(id.indexOf(sep) + 1);
 }
 
+const CITY_PREFIX_MAP: Record<string, string> = {
+  TPE: "Taipei",
+  NWT: "NewTaipei",
+  TAO: "Taoyuan",
+  TXG: "Taichung",
+  TNN: "Tainan",
+  KHH: "Kaohsiung",
+  KEE: "Keelung",
+  HSZ: "Hsinchu",
+  HSQ: "HsinchuCounty",
+  MIA: "MiaoliCounty",
+  CHA: "ChanghuaCounty",
+  NAN: "NantouCounty",
+  YUN: "YunlinCounty",
+  CYQ: "ChiayiCounty",
+  CYI: "Chiayi",
+  PIF: "PingtungCounty",
+  ILA: "YilanCounty",
+  HUA: "HualienCounty",
+  TTT: "TaitungCounty",
+  KIN: "KinmenCounty",
+  PEN: "PenghuCounty",
+  LIE: "LienchiangCounty",
+};
+
+function resolveBusCityForAlert(leg: BusLeg): string {
+  if (leg.tdxCity) return leg.tdxCity;
+  if (leg.departureStopId?.startsWith("THB") || leg.cityCode === "THB") {
+    return "InterCity";
+  }
+  if (leg.departureStopId) {
+    const prefixMatch = leg.departureStopId.match(/^[A-Z]+/);
+    if (prefixMatch && CITY_PREFIX_MAP[prefixMatch[0]]) {
+      return CITY_PREFIX_MAP[prefixMatch[0]];
+    }
+  }
+  if (leg.cityCode && CITY_PREFIX_MAP[leg.cityCode]) {
+    return CITY_PREFIX_MAP[leg.cityCode];
+  }
+  return leg.cityCode ?? "Taipei";
+}
+
+/**
+ * Attach current operating alerts (TDX MQTT / snapshot cache / REST fallback)
+ * across all transit modes (Metro, Bus, TRA, THSR) to their respective legs,
+ * and collect system/mode summaries for the response envelope.
+ *
+ * Best-effort: failures in individual upstream lookups are logged and skipped.
+ *
+ * @param routes Planned routes; matching transit legs are annotated with `alerts` in place.
+ * @returns Object with `metroAlerts` and `transitAlerts` list.
+ */
+export async function attachTransitAlerts(
+  routes: AccessibleRoute[],
+): Promise<{ metroAlerts: MetroAlertResult[]; transitAlerts: MatchedAlert[] }> {
+  const metroLegs = metroLegsOf(routes);
+  const busLegs: BusLeg[] = [];
+  const traLegs: TraLeg[] = [];
+  const thsrLegs: ThsrLeg[] = [];
+
+  for (const route of routes) {
+    for (const leg of route.legs) {
+      if (leg.type === "BUS") busLegs.push(leg);
+      else if (leg.type === "TRA") traLegs.push(leg);
+      else if (leg.type === "THSR") thsrLegs.push(leg);
+    }
+  }
+
+  const allTransitAlertsMap = new Map<string, MatchedAlert>();
+
+  // 1. Metro alerts
+  let metroAlertsResult: MetroAlertResult[] = [];
+  if (metroLegs.length > 0) {
+    const railSystems = metroRailSystemsInRoutes(routes);
+    const settled = await Promise.allSettled(
+      railSystems.map((system) => getMetroAlerts(system)),
+    );
+
+    const alertsBySystem = new Map<string, MetroAlertResult>();
+    settled.forEach((outcome, index) => {
+      const system = railSystems[index];
+      if (outcome.status === "rejected") {
+        console.warn(
+          `[accessible-route] metro alerts unavailable for ${system}`,
+          outcome.reason,
+        );
+        return;
+      }
+      const result = outcome.value.find((item) => item.railSystem === system);
+      if (result?.alerts.length) alertsBySystem.set(system, result);
+    });
+
+    for (const leg of metroLegs) {
+      const result = alertsBySystem.get(leg.railSystem);
+      if (!result) continue;
+      const stationIds = new Set(
+        [
+          leg.departureStationUid,
+          leg.arrivalStationUid,
+          ...(leg.intermediateStops ?? []).map((stop) => stop.stationUid),
+        ]
+          .filter((uid): uid is string => Boolean(uid))
+          .map(normalizeStationId),
+      );
+      const lineIds = new Set(
+        [leg.lineUid, leg.lineId]
+          .filter((uid): uid is string => Boolean(uid))
+          .map(normalizeStationId),
+      );
+      const matched: MetroAlert[] = result.alerts.filter(
+        (alert) =>
+          alert.stations.some((station) =>
+            stationIds.has(normalizeStationId(station.id)),
+          ) ||
+          alert.lines.some((line) => lineIds.has(normalizeStationId(line))),
+      );
+      if (matched.length) {
+        leg.alerts = matched;
+        for (const a of matched) {
+          allTransitAlertsMap.set(a.alertId, {
+            alertId: a.alertId,
+            title: a.title,
+            description: a.description,
+            status: a.status,
+            matchKind: "station",
+            startTime: a.publishTime,
+            endTime: a.updateTime,
+          });
+        }
+      }
+    }
+    metroAlertsResult = [...alertsBySystem.values()];
+  }
+
+  // 2. Bus alerts
+  if (busLegs.length > 0) {
+    const busTasks = busLegs.map(async (leg) => {
+      try {
+        const city = resolveBusCityForAlert(leg);
+        const res = await getTransitAlerts({
+          mode: "bus",
+          city,
+          routeName: leg.routeName,
+          direction: leg.direction,
+          stopUid: leg.departureStopId,
+          stopName: leg.departureStop,
+        });
+        if (res.ok && res.alerts.length > 0) {
+          leg.alerts = res.alerts;
+          for (const a of res.alerts) allTransitAlertsMap.set(a.alertId, a);
+        }
+        return res;
+      } catch (err) {
+        console.warn(
+          `[accessible-route] bus alert lookup failed for ${leg.routeName}`,
+          err,
+        );
+        return null;
+      }
+    });
+    await Promise.allSettled(busTasks);
+  }
+
+  // 3. TRA alerts
+  if (traLegs.length > 0) {
+    const traTasks = traLegs.map(async (leg) => {
+      try {
+        const stationIds = [
+          leg.departureStationUID,
+          leg.arrivalStationUID,
+          ...(leg.intermediateStops ?? []).map((s) => s.stationUid),
+        ]
+          .filter((uid): uid is string => Boolean(uid))
+          .map(normalizeStationId);
+
+        const res = await getTransitAlerts({
+          mode: "tra",
+          trainNo: leg.trainNo,
+          stationIds,
+        });
+        if (res.ok && res.alerts.length > 0) {
+          leg.alerts = res.alerts;
+          for (const a of res.alerts) allTransitAlertsMap.set(a.alertId, a);
+        }
+        return res;
+      } catch (err) {
+        console.warn(
+          `[accessible-route] TRA alert lookup failed for train ${leg.trainNo}`,
+          err,
+        );
+        return null;
+      }
+    });
+    await Promise.allSettled(traTasks);
+  }
+
+  // 4. THSR alerts
+  if (thsrLegs.length > 0) {
+    const thsrTasks = thsrLegs.map(async (leg) => {
+      try {
+        const fromStationId = normalizeStationId(leg.departureStationUID);
+        const toStationId = normalizeStationId(leg.arrivalStationUID);
+        const res = await getTransitAlerts({
+          mode: "thsr",
+          fromStationId,
+          toStationId,
+        });
+        if (res.ok && res.alerts.length > 0) {
+          leg.alerts = res.alerts;
+          for (const a of res.alerts) allTransitAlertsMap.set(a.alertId, a);
+        }
+        return res;
+      } catch (err) {
+        console.warn(
+          `[accessible-route] THSR alert lookup failed for train ${leg.trainNo}`,
+          err,
+        );
+        return null;
+      }
+    });
+    await Promise.allSettled(thsrTasks);
+  }
+
+  return {
+    metroAlerts: metroAlertsResult,
+    transitAlerts: [...allTransitAlertsMap.values()],
+  };
+}
+
 /**
  * Attach current TDX metro alerts to every METRO leg they touch (by station or
  * line), and return the non-empty per-system results for the response envelope.
@@ -1090,56 +1324,8 @@ function normalizeStationId(id: string): string {
 export async function attachMetroAlerts(
   routes: AccessibleRoute[],
 ): Promise<MetroAlertResult[]> {
-  const metroLegs = metroLegsOf(routes);
-  if (!metroLegs.length) return [];
-
-  const railSystems = metroRailSystemsInRoutes(routes);
-  const settled = await Promise.allSettled(
-    railSystems.map((system) => getMetroAlerts(system)),
-  );
-
-  const alertsBySystem = new Map<string, MetroAlertResult>();
-  settled.forEach((outcome, index) => {
-    const system = railSystems[index];
-    if (outcome.status === "rejected") {
-      console.warn(
-        `[accessible-route] metro alerts unavailable for ${system}`,
-        outcome.reason,
-      );
-      return;
-    }
-    const result = outcome.value.find((item) => item.railSystem === system);
-    if (result?.alerts.length) alertsBySystem.set(system, result);
-  });
-  if (!alertsBySystem.size) return [];
-
-  for (const leg of metroLegs) {
-    const result = alertsBySystem.get(leg.railSystem);
-    if (!result) continue;
-    const stationIds = new Set(
-      [
-        leg.departureStationUid,
-        leg.arrivalStationUid,
-        ...(leg.intermediateStops ?? []).map((stop) => stop.stationUid),
-      ]
-        .filter((uid): uid is string => Boolean(uid))
-        .map(normalizeStationId),
-    );
-    const lineIds = new Set(
-      [leg.lineUid, leg.lineId]
-        .filter((uid): uid is string => Boolean(uid))
-        .map(normalizeStationId),
-    );
-    const matched: MetroAlert[] = result.alerts.filter(
-      (alert) =>
-        alert.stations.some((station) =>
-          stationIds.has(normalizeStationId(station.id)),
-        ) || alert.lines.some((line) => lineIds.has(normalizeStationId(line))),
-    );
-    if (matched.length) leg.alerts = matched;
-  }
-
-  return [...alertsBySystem.values()];
+  const result = await attachTransitAlerts(routes);
+  return result.metroAlerts;
 }
 
 export async function planAccessibleRouteFromRequest(
@@ -1531,11 +1717,14 @@ export async function planAccessibleRouteFromRequest(
 
   // Advisory overlay only — a failed alert lookup must never fail the plan.
   let metroAlerts: MetroAlertResult[] = [];
+  let transitAlerts: MatchedAlert[] = [];
   try {
-    metroAlerts = await attachMetroAlerts(routes);
+    const alertsResult = await attachTransitAlerts(routes);
+    metroAlerts = alertsResult.metroAlerts;
+    transitAlerts = alertsResult.transitAlerts;
   } catch (err) {
     console.warn(
-      "[accessible-route] metro alerts lookup failed; continuing without alerts",
+      "[accessible-route] transit alerts lookup failed; continuing without alerts",
       err,
     );
   }
@@ -1552,6 +1741,7 @@ export async function planAccessibleRouteFromRequest(
       ...(intent ? { intent } : {}),
       ...(slopeConstraint ? { slopeConstraint } : {}),
       ...(metroAlerts.length ? { metroAlerts } : {}),
+      ...(transitAlerts.length ? { transitAlerts } : {}),
     },
   };
 }

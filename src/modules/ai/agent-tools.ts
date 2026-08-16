@@ -362,6 +362,7 @@ function summarizeLeg(
       waitMinutes: leg.estimatedWaitMinutes,
       departureTime: leg.departureTime ?? null,
       arrivalTime: leg.arrivalTime ?? null,
+      ...(leg.alerts?.length ? { alerts: leg.alerts } : {}),
     };
   }
   if (leg.type === "METRO") {
@@ -376,6 +377,7 @@ function summarizeLeg(
       waitMinutes: leg.estimatedWaitMinutes,
       departureTime: leg.departureTime ?? null,
       arrivalTime: leg.arrivalTime ?? null,
+      ...(leg.alerts?.length ? { alerts: leg.alerts } : {}),
     };
   }
   if (leg.type === "THSR") {
@@ -387,6 +389,7 @@ function summarizeLeg(
       departureTime: leg.departureTime,
       arrivalTime: leg.arrivalTime,
       rideMinutes: leg.rideMinutes,
+      ...(leg.alerts?.length ? { alerts: leg.alerts } : {}),
     };
   }
   if (leg.type === "TRA") {
@@ -399,6 +402,7 @@ function summarizeLeg(
       departureTime: leg.departureTime,
       arrivalTime: leg.arrivalTime,
       rideMinutes: leg.rideMinutes,
+      ...(leg.alerts?.length ? { alerts: leg.alerts } : {}),
     };
   }
   return { type: (leg as any).type };
@@ -480,6 +484,7 @@ export async function planAccessibleRoute(args: {
       mode: validMode,
       routes: result.data.routes.slice(0, 3).map(summarizeRoute),
       metroAlerts: result.data.metroAlerts ?? [],
+      transitAlerts: result.data.transitAlerts ?? [],
     });
   } catch (error: any) {
     console.error("[agent-tool:planAccessibleRoute]", error);

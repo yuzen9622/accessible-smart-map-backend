@@ -8,7 +8,7 @@
  */
 
 import type { HazardSeverity, HazardType, IOsmA11y } from "./index";
-import type { MetroAlert } from "./transit";
+import type { MatchedAlert, MetroAlert } from "./transit";
 
 export type AccessibilityMode =
   "wheelchair" | "elderly" | "visual_impaired" | "normal";
@@ -135,6 +135,8 @@ export interface BusLeg {
   arrivalStopA11y: IOsmA11y[];
   tdxCity?: string;
   intermediateStops?: IntermediateStop[];
+  /** Current TDX operating alerts touching this bus route or stop. */
+  alerts?: MatchedAlert[];
 }
 
 export interface MetroLeg {
@@ -182,6 +184,8 @@ export interface ThsrLeg {
   arrivalStationA11y: IOsmA11y[];
   facilityHighlights: string[];
   intermediateStops?: IntermediateStop[];
+  /** Current TDX operating alerts touching this THSR train or line section. */
+  alerts?: MatchedAlert[];
 }
 
 export interface TraLeg {
@@ -203,6 +207,8 @@ export interface TraLeg {
   arrivalStationA11y: IOsmA11y[];
   facilityHighlights: string[];
   intermediateStops?: IntermediateStop[];
+  /** Current TDX operating alerts touching this TRA train, line, or stations. */
+  alerts?: MatchedAlert[];
 }
 
 export interface DriveStep {
