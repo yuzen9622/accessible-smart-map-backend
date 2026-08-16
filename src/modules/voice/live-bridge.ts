@@ -18,6 +18,9 @@ import { correctUserTranscript } from "./transcript-corrector";
 import { withCurrentDate } from "../../config/ai/chat-prompt";
 import { getRouteByToken } from "../accessible-route/route-token.service";
 import { getMemorySettings, loadMemories } from "../ai/memory.service";
+import { getTransitAlerts } from "../transit/alert.service";
+import { onAlertSnapshotUpdate } from "../transit/alert.store";
+import { keyRelevantToContext } from "../transit/alert.gateway";
 import { NavigationSession, type NavEffect } from "./navigation-session";
 import type { NavPosition } from "./navigation.schema";
 
@@ -226,6 +229,33 @@ export async function createLiveBridge(
       sendJson(event as unknown as Record<string, unknown>);
   };
 
+  const checkCurrentTransitAlerts = async (
+    sourceStoreKey?: string,
+  ): Promise<void> => {
+    if (disposed) return;
+    const transitCtx = navSession.getCurrentTransitAlertContext();
+    if (!transitCtx) return;
+    if (sourceStoreKey && !keyRelevantToContext(sourceStoreKey, transitCtx)) {
+      return;
+    }
+    try {
+      const result = await getTransitAlerts(transitCtx);
+      if (disposed) return;
+      if (result.ok && result.alerts.length > 0) {
+        const effect = navSession.onTransitAlerts(result.alerts);
+        applyEffect(effect);
+        driveNavigationSpeech();
+      }
+    } catch (err) {
+      console.warn("[voice] transit alert check failed", err);
+    }
+  };
+
+  const unsubscribeAlerts = onAlertSnapshotUpdate((key: string) => {
+    if (disposed || !session) return;
+    void checkCurrentTransitAlerts(key);
+  });
+
   const clearTurnTimeout = (): void => {
     if (turnTimeout) clearTimeout(turnTimeout);
     turnTimeout = null;
@@ -307,6 +337,9 @@ export async function createLiveBridge(
           }
           const effect = navSession.start(latestPosition ?? undefined);
           applyEffect(effect);
+          if (effect.ok) {
+            void checkCurrentTransitAlerts();
+          }
           result = JSON.stringify({
             ok: effect.ok,
             message: effect.ok ? "已開始導航" : "尚未選擇路線",
@@ -559,7 +592,15 @@ export async function createLiveBridge(
         positionTimer = null;
         if (disposed || !latestPosition) return;
         lastPositionProcessedAt = Date.now();
-        applyEffect(navSession.onPosition(latestPosition));
+        const effect = navSession.onPosition(latestPosition);
+        applyEffect(effect);
+        if (
+          effect.events.some(
+            (e) => e.type === "nav.transit" || e.type === "nav.start",
+          )
+        ) {
+          void checkCurrentTransitAlerts();
+        }
         driveNavigationSpeech();
       };
       if (
@@ -586,6 +627,7 @@ export async function createLiveBridge(
       if (disposed) return;
       closedByGateway = true;
       disposed = true;
+      unsubscribeAlerts();
       pendingToolMessages = 0;
       armGen++;
       if (positionTimer) clearTimeout(positionTimer);

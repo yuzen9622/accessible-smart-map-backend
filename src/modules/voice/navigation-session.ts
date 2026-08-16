@@ -1,4 +1,6 @@
 import type { AccessibleRoute } from "../../types/route";
+import type { MatchedAlert, TaiwanCityEn } from "../../types/transit";
+import type { TransitContext } from "../transit/alert.service";
 import type {
   NavInstruction,
   NavInstructionType,
@@ -58,6 +60,10 @@ export type NavServerEvent =
       type: "nav.error";
       code: "NAV_ROUTE_INVALID" | "NO_ROUTE_ARMED";
       message: string;
+    }
+  | {
+      type: "nav.transit_alert";
+      alerts: MatchedAlert[];
     };
 
 export interface NavEffect {
@@ -160,6 +166,7 @@ export class NavigationSession {
   private latestPosition: NavPosition | null = null;
   private currentSpeechText: string | null = null;
   private speechQueue: string[] = [];
+  private seenAlertIds = new Set<string>();
 
   constructor(
     private readonly generateSteps: StepGenerator = generateNavStepsWithLegIndex,
@@ -175,6 +182,7 @@ export class NavigationSession {
       return this.invalidRoute();
     }
     this.armedRoute = route;
+    this.seenAlertIds.clear();
     return emptyEffect();
   }
 
@@ -254,6 +262,7 @@ export class NavigationSession {
     this.steps = [];
     this.announcedIndex = -1;
     this.onVehicle = false;
+    this.seenAlertIds.clear();
     this.clearSpeech();
     return { ok: true, events: [{ type: "nav.stop", reason }] };
   }
@@ -336,7 +345,118 @@ export class NavigationSession {
     this.latestPosition = null;
     this.active = false;
     this.steps = [];
+    this.seenAlertIds.clear();
     this.clearSpeech();
+  }
+
+  /**
+   * Returns the TransitContext for the active or upcoming transit leg in this session,
+   * or null if no active transit leg is present.
+   */
+  getCurrentTransitAlertContext(): TransitContext | null {
+    if (this.disposed || !this.active || !this.activeRoute) return null;
+    const currentIndex =
+      this.announcedIndex >= 0 ? this.announcedIndex : this.nextCoordIndex(0);
+    const current =
+      currentIndex === null ? undefined : this.steps[currentIndex];
+    const currentTransitIndex =
+      this.onVehicle && current?.kind === "transit_board" ? currentIndex : null;
+    const upcomingTransitIndex =
+      currentTransitIndex === null
+        ? this.steps.findIndex(
+            (step, index) =>
+              index > this.announcedIndex && step.kind === "transit_board",
+          )
+        : -1;
+    const transitIndex =
+      currentTransitIndex ??
+      (upcomingTransitIndex >= 0 ? upcomingTransitIndex : null);
+    if (transitIndex === null) return null;
+
+    const legIndex = this.steps[transitIndex].legIndex;
+    const leg = this.activeRoute.legs[legIndex];
+    if (leg.type === "BUS") {
+      return {
+        mode: "bus",
+        city: (leg.tdxCity || leg.cityCode || "Taipei") as TaiwanCityEn,
+        routeName: leg.routeName,
+        direction: leg.direction,
+        stopName: leg.departureStop,
+      };
+    }
+    if (leg.type === "METRO") {
+      const validSystems = [
+        "TRTC",
+        "KRTC",
+        "TYMC",
+        "TMRT",
+        "NTMC",
+        "KLRT",
+      ] as const;
+      const rawSystem = (leg.railSystem || "TRTC").toUpperCase();
+      const railSystem = (validSystems as readonly string[]).includes(rawSystem)
+        ? (rawSystem as (typeof validSystems)[number])
+        : "TRTC";
+      return {
+        mode: "metro",
+        railSystem,
+        lineCode: leg.lineId || leg.lineUid || undefined,
+        stationIds: [leg.departureStationUid, leg.arrivalStationUid].flatMap(
+          (id) => (id ? [id.replace(/^[A-Za-z]+[-_]/, "")] : []),
+        ),
+      };
+    }
+    if (leg.type === "TRA") {
+      return {
+        mode: "tra",
+        trainNo: leg.trainNo,
+        stationIds: [leg.departureStationUID, leg.arrivalStationUID].flatMap(
+          (id) => (id ? [id.replace(/^[A-Za-z]+[-_]/, "")] : []),
+        ),
+      };
+    }
+    if (leg.type === "THSR") {
+      return {
+        mode: "thsr",
+        fromStationId: (leg.departureStationUID || "").replace(
+          /^[A-Za-z]+[-_]/,
+          "",
+        ),
+        toStationId: (leg.arrivalStationUID || "").replace(
+          /^[A-Za-z]+[-_]/,
+          "",
+        ),
+      };
+    }
+    return null;
+  }
+
+  /**
+   * Processes new transit alerts, deduping previously announced alerts,
+   * enqueuing a proactive speech prompt and returning server events.
+   */
+  onTransitAlerts(alerts: MatchedAlert[]): NavEffect {
+    if (this.disposed || !this.active || !alerts.length) return emptyEffect();
+    const newAlerts = alerts.filter((a) => !this.seenAlertIds.has(a.alertId));
+    if (!newAlerts.length) return emptyEffect();
+
+    for (const a of newAlerts) {
+      this.seenAlertIds.add(a.alertId);
+    }
+
+    const voiceAlert = newAlerts[0];
+    const speech = `注意，即時通阻警報：${voiceAlert.title}`;
+    this.enqueueSpeech(speech);
+
+    return {
+      ok: true,
+      events: [
+        {
+          type: "nav.transit_alert",
+          alerts: newAlerts,
+        },
+      ],
+    };
   }
 
   private invalidRoute(message = "路線資料無效，請重新規劃"): NavEffect {

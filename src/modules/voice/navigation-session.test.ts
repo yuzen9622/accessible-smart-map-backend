@@ -445,6 +445,74 @@ describe("NavigationSession pure domain state", () => {
     nav.dispose();
     expect(nav.onPosition(pos(coord(121))).events).toEqual([]);
   });
+
+  it("extracts current transit context and handles proactive transit alerts with deduping", () => {
+    const p1 = coord(121);
+    const p2 = coord(121.001);
+    const p3 = coord(121.002);
+    const nav = new NavigationSession();
+    nav.armRoute(route([walkLeg([p1, p2]), bus([p2, p3], "台北車站", "西門")]));
+    nav.start(pos(p1));
+
+    // Consume the initial start navigation speech
+    expect(nav.takeNextSpeech()).not.toBeNull();
+    nav.onTurnComplete();
+
+    const ctx = nav.getCurrentTransitAlertContext();
+    expect(ctx).toEqual({
+      mode: "bus",
+      city: "Taipei",
+      routeName: "307",
+      direction: 0,
+      stopName: "台北車站",
+      stopUid: undefined,
+    });
+
+    const alert1 = {
+      alertId: "alert-1",
+      title: "307 路線改道通知",
+      description: "因施工改道",
+      status: 2,
+      matchKind: "route" as const,
+    };
+
+    const effect1 = nav.onTransitAlerts([alert1]);
+    expect(effect1.ok).toBe(true);
+    expect(effect1.events).toEqual([
+      {
+        type: "nav.transit_alert",
+        alerts: [alert1],
+      },
+    ]);
+    expect(nav.takeNextSpeech()).toContain(
+      "注意，即時通阻警報：307 路線改道通知",
+    );
+    nav.onTurnComplete();
+
+    // Repeat same alert should be ignored (deduped)
+    const effect2 = nav.onTransitAlerts([alert1]);
+    expect(effect2.events).toEqual([]);
+    expect(nav.takeNextSpeech()).toBeNull();
+
+    // New alert arrives
+    const alert2 = {
+      alertId: "alert-2",
+      title: "捷運板南線號誌異常",
+      description: "班距拉長",
+      status: 2,
+      matchKind: "line" as const,
+    };
+    const effect3 = nav.onTransitAlerts([alert1, alert2]);
+    expect(effect3.events).toEqual([
+      {
+        type: "nav.transit_alert",
+        alerts: [alert2],
+      },
+    ]);
+    expect(nav.takeNextSpeech()).toContain(
+      "注意，即時通阻警報：捷運板南線號誌異常",
+    );
+  });
 });
 
 describe("navigation geometry uses [lng, lat]", () => {
