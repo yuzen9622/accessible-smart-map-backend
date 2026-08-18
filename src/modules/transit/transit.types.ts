@@ -98,14 +98,35 @@ export type BusArrivalResult =
     }
   | BusServiceError;
 
-export type BusFrequency = {
+/**
+ * One discrete published departure. `originDepartureTime` is named for the stop
+ * it actually belongs to because TDX city-bus schedules publish ONLY the origin
+ * terminal's time — never the time at an arbitrary stop along the route. The
+ * previous shape put that value in a generic `stopTimes[].arrivalTime`, which
+ * reads like a full timetable and invites callers (and the LLM) to present the
+ * origin's time as the queried stop's departure time.
+ */
+export type BusScheduledTrip = {
+  scheduleType: "trip";
+  serviceDays: string;
+  originStopName: string;
+  originDepartureTime: string;
+  /** Per-stop times, present only when the operator actually published more
+   * than the origin stop. Absent for every feed that publishes origin-only. */
+  stopTimes?: { seq: number; stopName: string; arrivalTime: string }[];
+};
+
+/** A headway-based service window: no discrete departures exist to enumerate. */
+export type BusHeadwayWindow = {
+  scheduleType: "headway";
+  serviceDays: string;
   start?: string;
   end?: string;
   minHeadwayMins?: number;
   maxHeadwayMins?: number;
-  serviceDays: string;
-  stopTimes?: { seq: number; stopName: string; arrivalTime: string }[];
 };
+
+export type BusFrequency = BusScheduledTrip | BusHeadwayWindow;
 
 export type BusScheduleByDirection = {
   direction: number;
@@ -121,6 +142,11 @@ export type BusTimetableResult =
       routeName: string;
       city: TaiwanCityEn | "InterCity";
       schedules: BusScheduleByDirection[];
+      /** States the upstream data's limit so callers never mistake an origin
+       * departure time for the queried stop's time. */
+      note: string;
+      /** True when `limit` dropped some departures. */
+      truncated?: boolean;
     }
   | BusServiceError;
 

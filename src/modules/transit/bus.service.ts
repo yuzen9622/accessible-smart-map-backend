@@ -636,6 +636,8 @@ function serviceDayLabel(sd?: Record<string, number>): string {
 export async function getBusTimetable(params: {
   routeName: string;
   city: TaiwanCityEn | "InterCity";
+  afterTime?: string;
+  limit?: number;
 }): Promise<BusTimetableResult> {
   const { city } = params;
   const routeId = formatRouteName(params.routeName);
@@ -662,6 +664,7 @@ export async function getBusTimetable(params: {
       const list = byDir.get(r.Direction) ?? [];
       for (const f of r.Frequencys ?? []) {
         list.push({
+          scheduleType: "headway",
           start: f.StartTime,
           end: f.EndTime,
           minHeadwayMins: f.MinHeadwayMins,
@@ -671,44 +674,103 @@ export async function getBusTimetable(params: {
       }
       // Some operators publish Timetables (explicit trips) instead of Frequencys.
       for (const t of r.Timetables ?? []) {
-        const dep = t.StopTimes?.[0]?.DepartureTime;
-        if (dep) {
-          const stopTimes = (t.StopTimes ?? [])
-            .map((st: any) => ({
-              seq: st.StopSequence,
-              stopName: st.StopName?.Zh_tw ?? "",
-              arrivalTime: st.ArrivalTime || st.DepartureTime || "",
-            }))
-            .filter((st: any) => st.arrivalTime);
+        const stopTimes = (t.StopTimes ?? [])
+          .map((st: any) => ({
+            seq: st.StopSequence,
+            stopName: st.StopName?.Zh_tw ?? "",
+            arrivalTime: st.ArrivalTime || st.DepartureTime || "",
+          }))
+          .filter((st: any) => st.arrivalTime);
+        const origin = stopTimes[0];
+        if (!origin) continue;
 
-          list.push({
-            start: dep,
-            end: dep,
-            serviceDays: serviceDayLabel(t.ServiceDay),
-            stopTimes,
-          });
-        }
+        list.push({
+          scheduleType: "trip",
+          serviceDays: serviceDayLabel(t.ServiceDay),
+          originStopName: origin.stopName,
+          originDepartureTime: origin.arrivalTime,
+          // Only surface per-stop times when upstream published more than the
+          // origin; otherwise the field would imply data that does not exist.
+          ...(stopTimes.length > 1 ? { stopTimes } : {}),
+        });
       }
       byDir.set(r.Direction, list);
     }
 
+    const after = /^\d{2}:\d{2}$/.test(params.afterTime ?? "")
+      ? params.afterTime
+      : undefined;
+    const limit =
+      typeof params.limit === "number" && params.limit > 0
+        ? Math.min(Math.floor(params.limit), 24)
+        : undefined;
+    let truncated = false;
+
     const schedules: BusScheduleByDirection[] = [...byDir.entries()]
       .sort((a, b) => a[0] - b[0])
-      .map(([direction, frequencies]) => {
-        const starts = frequencies
-          .map((f) => f.start)
-          .filter(Boolean) as string[];
-        const ends = frequencies.map((f) => f.end).filter(Boolean) as string[];
+      .map(([direction, all]) => {
+        // first/last describe the whole published service, so compute them
+        // BEFORE any afterTime/limit filtering narrows the view.
+        const times = all.flatMap((f) =>
+          f.scheduleType === "trip"
+            ? [f.originDepartureTime]
+            : [f.start, f.end].filter(
+                Boolean as unknown as (v: unknown) => boolean,
+              ),
+        ) as string[];
+        const sorted = [...times].sort();
+
+        // Multiple SubRoutes merge into one direction bucket, so upstream
+        // routinely yields byte-identical entries. Deduplicate before filtering
+        // or `limit` gets spent on repeats instead of distinct departures.
+        const seen = new Set<string>();
+        let frequencies = all.filter((f) => {
+          const key =
+            f.scheduleType === "trip"
+              ? `t|${f.serviceDays}|${f.originStopName}|${f.originDepartureTime}`
+              : `h|${f.serviceDays}|${f.start}|${f.end}|${f.minHeadwayMins}|${f.maxHeadwayMins}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+        if (after) {
+          // Headway windows are kept unless they have already ended: they still
+          // answer "how often", which is all such routes can offer.
+          frequencies = frequencies.filter((f) =>
+            f.scheduleType === "trip"
+              ? f.originDepartureTime >= after
+              : (f.end ?? "23:59") >= after,
+          );
+        }
+        frequencies = [...frequencies].sort((a, b) => {
+          const ka =
+            a.scheduleType === "trip" ? a.originDepartureTime : (a.start ?? "");
+          const kb =
+            b.scheduleType === "trip" ? b.originDepartureTime : (b.start ?? "");
+          return ka.localeCompare(kb);
+        });
+        if (limit && frequencies.length > limit) {
+          truncated = true;
+          frequencies = frequencies.slice(0, limit);
+        }
+
         return {
           direction,
           directionLabel: dirLabel(direction),
-          first: starts.length ? starts.sort()[0] : undefined,
-          last: ends.length ? ends.sort()[ends.length - 1] : undefined,
+          first: sorted[0],
+          last: sorted[sorted.length - 1],
           frequencies,
         };
       });
 
-    return { ok: true, routeName: scope?.routeId ?? routeId, city, schedules };
+    return {
+      ok: true,
+      routeName: scope?.routeId ?? routeId,
+      city,
+      schedules,
+      note: "本路線時刻僅為起站發車時刻（originDepartureTime）或班距（headway）；上游未提供中途站的到站時刻。要推估中途站時間必須自行估算並向使用者標明為估計值。",
+      ...(truncated ? { truncated } : {}),
+    };
   } catch (err) {
     return {
       ok: false,
