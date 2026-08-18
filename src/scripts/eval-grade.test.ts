@@ -1,7 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { extractCalls, gradeArgs } from "./eval-grade";
 
-const raw = (calls: any[]) => ({ functionCalls: calls }) as any;
+const raw = (calls: any[]) =>
+  ({
+    steps: calls.map((c) => ({
+      type: "function_call",
+      name: c.name,
+      arguments: c.args,
+    })),
+  }) as any;
 
 describe("extractCalls", () => {
   it("returns [] when there are no function calls", () => {

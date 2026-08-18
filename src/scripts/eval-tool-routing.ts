@@ -9,7 +9,7 @@
  */
 import fs from "fs";
 import path from "path";
-import type { Content } from "@google/genai";
+import type { InteractionInputStep } from "../types/agent";
 import { model } from "../config/ai";
 import {
   CHAT_SYSTEM_PROMPT,
@@ -166,12 +166,12 @@ interface CompositeRun {
 
 async function runCompositeOnce(): Promise<CompositeRun> {
   const sys = withUserLocation(CHAT_SYSTEM_PROMPT, NUTC);
-  const contents: Content[] = [
-    { role: "user", parts: [{ text: COMPOSITE_QUERY }] },
+  const input: InteractionInputStep[] = [
+    { type: "user_input", content: [{ type: "text", text: COMPOSITE_QUERY }] },
   ];
   const seq: string[] = [];
   const result = await runToolLoop(
-    contents,
+    input,
     sys,
     model,
     NUTC,

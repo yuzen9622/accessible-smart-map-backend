@@ -390,6 +390,37 @@ export const agentCases: AgentCase[] = [
       return null;
     },
   },
+  {
+    id: "bus-multihop-1",
+    query:
+      "我大約10:20會到台中車站 我想直接從台中車站的ABCD月台搭乘公車到中科大，有哪些班次可以銜接",
+    // Route discovery must start from real stop data, not a guessed route
+    // number. planAccessibleRoute is an acceptable alternative source of
+    // candidate routes; getBusTimetable first is not, since the model cannot
+    // know which route to look up yet.
+    expectTool: "findNearbyBusStops",
+    acceptAlso: ["planAccessibleRoute"],
+    mustNotCall: ["getNavInstructions"],
+    notes:
+      "多跳題：兩端站牌→逐月台取交集→班表推估。上游只有起站發車時刻，時間必須標為預估。",
+  },
+  {
+    id: "bus-multihop-2",
+    query: "台中車站D月台有哪些公車可以到中友百貨",
+    expectTool: "findNearbyBusStops",
+    acceptAlso: ["planAccessibleRoute"],
+    notes: "月台粒度就在 busstops.stopName 裡（臺中車站(D月台)）。",
+  },
+  {
+    id: "bus-timetable-window-1",
+    query: "台中132路早上十點二十以後的班次",
+    expectTool: "getBusTimetable",
+    expectArgs: (a) => {
+      if (!hhmmEq(a?.afterTime, "10:20")) return `afterTime=${a?.afterTime}`;
+      return null;
+    },
+    notes: "問特定時段要帶 afterTime，不要抓整天班表。",
+  },
 ];
 
 function hhmmEq(value: unknown, expected: string): boolean {

@@ -1,5 +1,5 @@
 import { runToolLoop } from "../modules/agent/agent-manager.service";
-import { toGeminiHistory } from "../modules/agent/history-adapter";
+import { toInteractionInput } from "../modules/agent/history-adapter";
 import { lineFamilyTools } from "../config/ai/tool";
 import { LINE_FAMILY_SYSTEM_PROMPT } from "../config/ai/line-family-prompt";
 import { withCurrentDate } from "../config/ai/chat-prompt";
@@ -70,7 +70,7 @@ async function runScenario(
   history: HistoryMessage[] = [],
 ): Promise<ScenarioRun> {
   const calls: RecordedCall[] = [];
-  const { systemInstruction, contents } = toGeminiHistory([
+  const { systemInstruction, input } = toInteractionInput([
     { role: "system", content: withCurrentDate(LINE_FAMILY_SYSTEM_PROMPT) },
     { role: "system", content: FIXED_LINE_CONTEXT },
     ...history,
@@ -78,7 +78,7 @@ async function runScenario(
   ]);
 
   const result = await runToolLoop(
-    contents,
+    input,
     systemInstruction,
     model,
     undefined,

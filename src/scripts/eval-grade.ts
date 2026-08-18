@@ -1,5 +1,3 @@
-import type { GenerateContentResponse } from "@google/genai";
-
 export interface ToolCall {
   name: string;
   args: any;
@@ -11,20 +9,21 @@ export interface ArgGradeCase {
 }
 
 /**
- * Extract tool calls (name + args) from a Gemini response. Calls without a
- * name are ignored; missing args default to {}.
+ * Extract tool calls (name + args) from a raw Interactions API interaction by
+ * scanning its `function_call` steps. Steps without a name are ignored; missing
+ * arguments default to {}.
  *
- * @param raw The raw Gemini response (or undefined).
+ * @param raw The raw interaction (or undefined).
  * @returns The extracted tool calls.
  */
-export function extractCalls(
-  raw: GenerateContentResponse | undefined,
-): ToolCall[] {
-  const calls = raw?.functionCalls ?? [];
+export function extractCalls(raw: unknown): ToolCall[] {
+  const steps = (raw as { steps?: Array<Record<string, any>> } | undefined)
+    ?.steps;
   const out: ToolCall[] = [];
-  for (const c of calls) {
-    if (typeof c?.name === "string" && c.name) {
-      out.push({ name: c.name, args: c.args ?? {} });
+  for (const s of steps ?? []) {
+    if (s?.type !== "function_call") continue;
+    if (typeof s.name === "string" && s.name) {
+      out.push({ name: s.name, args: s.arguments ?? {} });
     }
   }
   return out;
