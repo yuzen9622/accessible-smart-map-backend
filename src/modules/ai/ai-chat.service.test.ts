@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const { runAgent } = vi.hoisted(() => ({ runAgent: vi.fn() }));
 vi.mock("../agent/agent-manager.service", () => ({ runAgent }));
-vi.mock("../agent/history-adapter", () => ({ toGeminiHistory: vi.fn() }));
+vi.mock("../agent/history-adapter", () => ({ toInteractionInput: vi.fn() }));
 vi.mock("./agent-tools", () => ({ executeLocalTool: vi.fn() }));
 
 import { runChatAgent } from "./ai-chat.service";
