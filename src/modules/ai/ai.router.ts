@@ -4,7 +4,11 @@ import { aiChat } from "./ai.chat.controller";
 import { validateRequest } from "../../middleware/validate-request.middleware";
 import middleware from "../../middleware/middleware";
 import { optionalAuth } from "../../middleware/optional-auth.middleware";
-import { aiChatRateLimit, aiIntentRateLimit } from "./ai.middleware";
+import {
+  aiChatRateLimit,
+  aiExplainRateLimit,
+  aiIntentRateLimit,
+} from "./ai.middleware";
 import {
   AgentChatRequestSchema,
   CreateMemoryBodySchema,
@@ -37,7 +41,7 @@ export function createAiRouter(): Router {
   router.post(
     "/explain",
     optionalAuth,
-    aiIntentRateLimit,
+    aiExplainRateLimit,
     validateRequest({ body: ExplainBodySchema }),
     aiExplain,
   );

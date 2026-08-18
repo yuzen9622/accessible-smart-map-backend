@@ -121,12 +121,25 @@ export const aiChatRateLimit = buildIdentityTiers(
 );
 
 /**
- * Tiered limiters shared by POST /api/v1/ai/intent and /api/v1/ai/explain.
- * The two endpoints deliberately draw on one allowance: they are the same
- * one-shot model call from a quota point of view.
+ * Tiered limiters for POST /api/v1/ai/intent. Kept independent from
+ * `aiExplainRateLimit`'s bucket (different Redis key prefix) so traffic
+ * exhausting one endpoint's quota can never block the other's.
  */
 export const aiIntentRateLimit = buildIdentityTiers(
   "ai-intent-rl:",
+  INTENT_ANON_BURST,
+  INTENT_ANON_DAILY,
+  INTENT_USER_BURST,
+  INTENT_USER_DAILY,
+);
+
+/**
+ * Tiered limiters for POST /api/v1/ai/explain. Same allowance numbers as
+ * `aiIntentRateLimit` but a distinct Redis key prefix, so it is a fully
+ * separate bucket rather than the same one shared across both endpoints.
+ */
+export const aiExplainRateLimit = buildIdentityTiers(
+  "ai-explain-rl:",
   INTENT_ANON_BURST,
   INTENT_ANON_DAILY,
   INTENT_USER_BURST,

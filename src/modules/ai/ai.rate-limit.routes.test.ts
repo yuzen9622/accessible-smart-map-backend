@@ -225,3 +225,51 @@ describe("POST /api/v1/ai/intent 與 /api/v1/ai/explain 匿名限流", () => {
     expectRateLimitEnvelope(limited);
   });
 });
+
+describe("POST /api/v1/ai/intent 與 /api/v1/ai/explain 各自獨立的限流桶", () => {
+  it("A6c: /intent 匿名額度打爆後，同一 IP 打 /explain 仍是 200（兩桶互不污染）", async () => {
+    const ip = "203.0.113.63";
+    for (let i = 0; i < INTENT_ANON_BURST; i += 1) {
+      const res = await request(server)
+        .post(INTENT_URL)
+        .set("X-Forwarded-For", ip)
+        .send(INTENT_BODY);
+      expect(res.status).toBe(ResponseCode.OK);
+    }
+    expectRateLimitEnvelope(
+      await request(server)
+        .post(INTENT_URL)
+        .set("X-Forwarded-For", ip)
+        .send(INTENT_BODY),
+    );
+
+    const stillOk = await request(server)
+      .post(EXPLAIN_URL)
+      .set("X-Forwarded-For", ip)
+      .send(EXPLAIN_BODY);
+    expect(stillOk.status).toBe(ResponseCode.OK);
+  });
+
+  it("A6d: /explain 匿名額度打爆後，同一 IP 打 /intent 仍是 200（兩桶互不污染）", async () => {
+    const ip = "203.0.113.64";
+    for (let i = 0; i < INTENT_ANON_BURST; i += 1) {
+      const res = await request(server)
+        .post(EXPLAIN_URL)
+        .set("X-Forwarded-For", ip)
+        .send(EXPLAIN_BODY);
+      expect(res.status).toBe(ResponseCode.OK);
+    }
+    expectRateLimitEnvelope(
+      await request(server)
+        .post(EXPLAIN_URL)
+        .set("X-Forwarded-For", ip)
+        .send(EXPLAIN_BODY),
+    );
+
+    const stillOk = await request(server)
+      .post(INTENT_URL)
+      .set("X-Forwarded-For", ip)
+      .send(INTENT_BODY);
+    expect(stillOk.status).toBe(ResponseCode.OK);
+  });
+});
