@@ -9,7 +9,7 @@ import {
   ANSWER_FACT_RULE,
   ANSWER_UNCERTAINTY_RULE,
 } from "./agent-prompt-shared";
-import { taipeiYmdDash, taipeiWeekday } from "../taipei-time";
+import { taipeiYmdDash, taipeiWeekday, taipeiHHmm } from "../taipei-time";
 
 export const CHAT_SYSTEM_PROMPT = `${AGENT_IDENTITY}。
 用使用者的語言回覆、稱呼「您」，把工具回傳的 JSON 整理成自然、簡潔的話，不要把原始 JSON 丟給使用者。
@@ -32,7 +32,7 @@ export const CHAT_SYSTEM_PROMPT = `${AGENT_IDENTITY}。
 - getBusRoute：回傳某條公車路線的行駛方向與完整站序。
 - getBusArrival：回傳某條路線在某站牌的即時到站時間（還有幾分鐘）。
 - getBusRouteDetail：一次回傳某路線的所有站點＋各站到站時間＋班表（像公車 App 的完整動態）。
-- getBusTimetable：回傳某路線的首末班車與今日發車時刻。
+- getBusTimetable：回傳某路線的首末班車與班表。**班表只有兩種形態**：scheduleType 'trip' 只給 originStopName（起站）與 originDepartureTime（起站發車時刻）；scheduleType 'headway' 只給班距（每幾分鐘一班），沒有離散班次。**上游沒有中途站的到站時刻**，所以要講「某中途站幾點有車」一律是你自己推估的：可用 getBusRoute 的 stops 站序（例如該站是第 32/69 站）配上起站發車時刻推算，但**必須向使用者標明是預估**，不可講成確定時刻。查特定時段就帶 afterTime（HH:mm）與 limit，不要抓整天班表。
 - getTrainTimetable：回傳台鐵/高鐵某日「兩站間」的直達班次時刻表（車次、車種、出發/抵達）。「幾點的火車」填 departAfter、「幾點前要到」填 arriveBy；台鐵/火車→TRA、高鐵→THSR；相對日期先換算成 YYYY-MM-DD。缺起站或訖站時先追問，不要猜；需要轉乘的行程改用 planAccessibleRoute。
 - getStationTimetable：回傳「某車站」接下來的發車時刻（單站看板，不需目的地）。使用者只講一個站、問「最近的火車」時用它；兩站間班次用 getTrainTimetable。
 - trackBuses：回傳某路線目前在線車輛的即時位置與**是否低底盤/有無斜坡板**。**不需要車牌**，會自動取得在線車輛。
@@ -58,7 +58,8 @@ export const CHAT_SYSTEM_PROMPT = `${AGENT_IDENTITY}。
 - ${ANSWER_FACT_RULE}；若工具回傳 ok:false 或結果為空，就直接說「查不到相關資料」，不要硬湊。
 - 使用 webSearch 時，回答需附上工具回傳的 sources 中至少一個來源；若 sources 為空，要明確說明未取得可引用來源。
 - 不要聲稱記得任何不在【使用者記憶】區塊裡的事。沒有該區塊、或裡面沒有相關內容時，就說「我這邊沒有您的相關記錄」，不要假裝記得或順著使用者的話編造。
-- ${ANSWER_UNCERTAINTY_RULE}`;
+- ${ANSWER_UNCERTAINTY_RULE}
+- 無論工具結果是否完整，最後一定要輸出給使用者看的文字回答。資料不足時就說明已查到什麼、還缺什麼、建議下一步，絕不要只呼叫工具卻不作答。`;
 
 /**
  * Append the user's current location to a base prompt in the canonical format,
@@ -80,13 +81,15 @@ export function withUserLocation(
 const WEEKDAY_ZH = ["日", "一", "二", "三", "四", "五", "六"];
 
 /**
- * Append the current Asia/Taipei date and weekday to a base prompt, with the
- * rule for resolving relative dates. Injected at every agent entry point so
- * date-dependent tools (train timetables) resolve "明天/週五" consistently.
+ * Append the current Asia/Taipei date, weekday and wall-clock time to a base
+ * prompt, with the rules for resolving relative dates and bare times. Injected
+ * at every agent entry point so date-dependent tools (train timetables) resolve
+ * "明天/週五" consistently, and so a bare time ("10:20", "大約五點") can be
+ * anchored to today or tomorrow. Shared with the voice surface.
  *
  * @param prompt Base system prompt
  * @param now Reference instant (defaults to now)
- * @returns The prompt with a current-date block appended
+ * @returns The prompt with a current-time block appended
  */
 export function withCurrentDate(
   prompt: string,
@@ -94,5 +97,6 @@ export function withCurrentDate(
 ): string {
   const date = taipeiYmdDash(now);
   const weekday = WEEKDAY_ZH[taipeiWeekday(now)];
-  return `${prompt}\n\n【今天日期】${date}（Asia/Taipei，週${weekday}）。相對日期（明天、後天、週五）一律以此換算成 YYYY-MM-DD；「週X」指最近的未來該日，若今天就是週X 則指今天。`;
+  const time = taipeiHHmm(now);
+  return `${prompt}\n\n【現在時間】${date}（Asia/Taipei，週${weekday}）${time}。相對日期（明天、後天、週五）一律以此換算成 YYYY-MM-DD；「週X」指最近的未來該日，若今天就是週X 則指今天。使用者只說時刻（例如「10:20」「大約五點」）時，若該時刻已早於現在時間，視為明天的該時刻，否則視為今天。`;
 }

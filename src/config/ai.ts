@@ -15,6 +15,6 @@ const openai = new OpenAI({
     "https://generativelanguage.googleapis.com/v1beta/openai",
 });
 
-const model = process.env.GEMINI_MODEL || "gemini-3-flash-preview";
+const model = process.env.GEMINI_MODEL || "gemini-3.7-flash";
 
 export { googleGenAi, openai, model };

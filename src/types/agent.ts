@@ -1,5 +1,32 @@
 import type OpenAI from "openai";
-import type { Content, GenerateContentResponse } from "@google/genai";
+
+/**
+ * One `{ type: "function" }` entry of the Interactions API `tools` array. Kept
+ * as a local structural type (rather than importing the SDK's internal
+ * `FunctionT`) because that name is not exported from `@google/genai`.
+ */
+export interface InteractionFunctionTool {
+  type: "function";
+  name: string;
+  description?: string;
+  parameters?: unknown;
+}
+
+/**
+ * One step of an Interactions API `input`. Only the step kinds this backend
+ * actually sends are modelled: the user's turns, the model's own steps echoed
+ * back verbatim (so `thought` signatures round-trip), and our tool results.
+ */
+export type InteractionInputStep =
+  | { type: "user_input"; content: Array<{ type: "text"; text: string }> }
+  | {
+      type: "function_result";
+      call_id: string;
+      name?: string;
+      result: unknown;
+      is_error?: boolean;
+    }
+  | Record<string, unknown>;
 
 /**
  * The tool executor contract injected into the agent loop. Defined as a
@@ -32,7 +59,7 @@ export type AgentResult = RunToolLoopResult;
 export interface RouteOnceResult {
   calledTools: string[];
   text: string;
-  raw: GenerateContentResponse;
+  raw: unknown;
 }
 
 /**
@@ -40,7 +67,7 @@ export interface RouteOnceResult {
  * making the Input layer explicit and shared across the ai/agent/line surfaces.
  */
 export interface AgentInput {
-  contents: Content[];
+  input: InteractionInputStep[];
   systemInstruction: string | undefined;
   model: string;
   execTool: AgentToolExecutor;
@@ -52,4 +79,9 @@ export interface AgentInput {
   allowMemoryWrite?: boolean;
   explicitMemoryRequest?: boolean;
   extraTools?: OpenAI.Chat.Completions.ChatCompletionTool[];
+  toolAllowList?: string[];
+  allowedFunctionNames?: string[];
+  seedParts?: string[];
+  /** Streams the answer's text chunks as they are generated. */
+  onTextDelta?: (text: string) => void;
 }

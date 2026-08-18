@@ -1,39 +1,22 @@
-import {
-  findA11yPlacesDeclaration,
-  findGooglePlacesDeclaration,
-  planRouteDeclaration,
-} from "./tool";
-import {
-  GenerateContentConfig,
-  FunctionCallingConfigMode,
-} from "@google/genai";
+import { GenerateContentConfig } from "@google/genai";
 
 /**
- * Deterministic sampling temperature shared by the text agent's tool loop and
- * the voice Live session, so both surfaces route tools with the same rigor.
+ * Deterministic sampling temperature for the surfaces still on generateContent /
+ * the Live API (voice session, transcript corrector). The Interactions text
+ * agent does NOT use it — that API dropped temperature in favour of
+ * `AGENT_THINKING_LEVEL`.
  */
 export const AGENT_TEMPERATURE = 0;
-const agentConfig: GenerateContentConfig = {
-  tools: [
-    {
-      functionDeclarations: [
-        findA11yPlacesDeclaration,
-        findGooglePlacesDeclaration,
-        planRouteDeclaration,
-      ],
-    },
-  ],
-  temperature: 0.1,
-  topP: 0.95,
-  topK: 40,
-  candidateCount: 1,
-  maxOutputTokens: 1000,
-  toolConfig: {
-    functionCallingConfig: {
-      mode: FunctionCallingConfigMode.AUTO,
-    },
-  },
-};
+
+/**
+ * Reasoning depth for the Interactions API text agent. The Interactions API
+ * dropped `temperature` / `top_p` / `top_k` (deprecated 2026-07-21) in favour of
+ * this knob. Set to "high" because the agent's hard cases are multi-hop plans
+ * that need arithmetic over tool results (e.g. estimating a mid-route arrival
+ * time from an origin departure time plus stop sequence) — the failure mode
+ * here is too little reasoning, not too much, so do NOT lower it to save cost.
+ */
+export const AGENT_THINKING_LEVEL = "high";
 
 const rankConfig: GenerateContentConfig = {
   responseMimeType: "application/json",
@@ -199,7 +182,6 @@ const reviewSummaryConfig: GenerateContentConfig = {
 };
 
 export {
-  agentConfig,
   rankConfig,
   routeConfig,
   intentConfig,

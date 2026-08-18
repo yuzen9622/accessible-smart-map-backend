@@ -300,7 +300,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "getBusTimetable",
       description:
-        "回傳某條公車路線的時刻表：首班車/末班車時間與今日各班次發車時刻。",
+        "回傳某條公車路線的班表：首班車/末班車，以及每筆 scheduleType 為 'trip'（離散班次，只含 originStopName 起站與 originDepartureTime 起站發車時刻）或 'headway'（班距制，只有 start/end 與 minHeadwayMins/maxHeadwayMins，沒有離散班次）。上游未提供中途站的到站時刻：要講中途站的時間必須自行推估並向使用者標明為估計值。",
       parameters: {
         type: "object",
         properties: {
@@ -312,6 +312,16 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
             type: "string",
             description:
               "公車所在縣市，例如：'台北'。未提供時會用使用者位置推斷。",
+          },
+          afterTime: {
+            type: "string",
+            description:
+              "只取這個時刻之後的班次，格式 HH:mm（例如 '10:20'）。查特定時段的銜接時務必帶上，避免拿回整天班表。",
+          },
+          limit: {
+            type: "number",
+            description:
+              "每個方向最多回傳幾筆班次（上限 24）。配合 afterTime 使用，通常 6~12 就足夠。",
           },
         },
         required: ["routeName"],
