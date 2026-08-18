@@ -1,9 +1,8 @@
 import type { Request, Response } from "express";
 import { model } from "../../config/ai";
 import { sendResponse } from "../../config/lib";
-import { ResponseCode, ResponseMessage } from "../../types/code";
+import { ResponseCode } from "../../types/code";
 import { MSG, ERROR_MESSAGE } from "../../constants/messages";
-import { authenticateToken } from "../../config/auth";
 import {
   runChatAgent,
   toGeminiHistory,
@@ -21,18 +20,17 @@ function sendSse(res: Response, event: string, data: unknown): void {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
-async function resolveAuthUser(
-  req: Request,
-): Promise<{ user: IUser | null; expired: boolean; invalid: boolean }> {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) return { user: null, expired: false, invalid: false };
-  const token = authHeader.split(" ")[1];
-  if (!token) return { user: null, expired: false, invalid: false };
-  const result = await authenticateToken(token);
-  if (!result.ok) {
-    return { user: null, expired: result.expired, invalid: !result.expired };
-  }
-  return { user: result.user, expired: false, invalid: false };
+/**
+ * Reads the caller injected by the optionalAuth middleware.
+ *
+ * The middleware already rejected expired and invalid tokens, so reaching this
+ * point without `req.auth` means the caller is genuinely anonymous.
+ *
+ * @param req Incoming request.
+ * @returns The authenticated user, or null for an anonymous caller.
+ */
+function resolveAuthUser(req: Request): IUser | null {
+  return req.auth?.user ?? null;
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -76,26 +74,7 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
     userLocation?: { latitude: number; longitude: number };
   };
 
-  const authResult = await resolveAuthUser(req);
-  if (authResult.expired) {
-    return sendResponse(
-      res,
-      false,
-      "error",
-      ResponseCode.UNAUTHORIZED,
-      ResponseMessage.UNAUTHORIZED,
-    );
-  }
-  if (authResult.invalid) {
-    return sendResponse(
-      res,
-      false,
-      "error",
-      ResponseCode.FORBIDDEN,
-      ResponseMessage.FORBIDDEN,
-    );
-  }
-  const authUser = authResult.user;
+  const authUser = resolveAuthUser(req);
   const userId = authUser ? String(authUser._id) : undefined;
   const latestText = latestUserText(rawMessages);
 

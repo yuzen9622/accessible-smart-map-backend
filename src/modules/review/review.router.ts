@@ -1,6 +1,7 @@
 import { Router } from "express";
 import middleware from "../../middleware/middleware";
 import { validateRequest } from "../../middleware/validate-request.middleware";
+import { reviewSummaryRateLimit } from "../ai/ai.middleware";
 import {
   CreateReviewSchema,
   UpdateReviewSchema,
@@ -22,6 +23,7 @@ export function createReviewRouter(): Router {
   // summary must be declared before /:id to avoid Express treating "summary" as an id
   router.get(
     "/reviews/summary",
+    reviewSummaryRateLimit,
     validateRequest({ query: SummaryQuerySchema }),
     getAiSummary,
   );

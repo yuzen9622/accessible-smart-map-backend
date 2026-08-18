@@ -475,4 +475,33 @@ describe("GET /api/v1/a11y/reviews/summary", () => {
     expect(res.status).toBe(ResponseCode.INVALID_INPUT);
     expect(vi.mocked(service.getAiSummary)).not.toHaveBeenCalled();
   });
+
+  // The summary endpoint calls Gemini for anonymous callers, so it carries an
+  // IP-keyed limiter (20 per 10 minutes). Buckets are keyed on req.ip and
+  // `trust proxy` is a hop count, so the test uses its own X-Forwarded-For
+  // address to avoid sharing a bucket with the cases above.
+  it("A6c: 匿名連打第 21 次回 429，且走統一信封", async () => {
+    vi.mocked(service.getAiSummary).mockResolvedValue({
+      ok: true,
+      httpCode: ResponseCode.OK,
+      message: REVIEW_MSG.SUMMARY_OK,
+      data: { avgRating: 4.0, totalCount: 2, summary: null, highlights: null },
+    });
+    const ip = "203.0.113.63";
+    const fire = () =>
+      request(app)
+        .get(`${BASE}/summary`)
+        .set("X-Forwarded-For", ip)
+        .query(VALID_LIST_QUERY);
+
+    for (let i = 0; i < 20; i += 1) {
+      expect((await fire()).status).toBe(ResponseCode.OK);
+    }
+
+    const limited = await fire();
+    expect(limited.status).toBe(ResponseCode.TOO_MANY_REQUESTS);
+    expect(limited.body.ok).toBe(false);
+    expect(limited.body.code).toBe(ResponseCode.TOO_MANY_REQUESTS);
+    expect(typeof limited.body.message).toBe("string");
+  });
 });
