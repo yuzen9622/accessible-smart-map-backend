@@ -12,11 +12,11 @@
 稽核報告是靜態程式碼分析產出的，稽核者沒讀 `docs/FRONTEND_MIGRATION_*` 系列契約文件，
 也沒展開 logout 的呼叫鏈。核實後有三處必須偏離報告的「怎麼修」：
 
-| # | 稽核報告的建議 | 核實後的實況 | 本計畫採用的修法 |
-|---|---|---|---|
-| §5.1 | 給 `/ai/chat` 掛 `middleware`（強制認證） | **匿名可用是刻意的對外契約**：`docs/FRONTEND_MIGRATION_AUTH_BOUNDARIES.md:9,19` 明文定義 `PUBLIC_OPTIONAL_AUTH`，呼應需求 B8「允許匿名回報」 | 維持匿名，改掛**分層限流**（匿名 IP-key／登入 userId-key ＋每日總量上限）＝報告自己給的次選方案 |
-| §5.2 | 「logout 遞增 `tokenVersion`（一行）」 | `logout` 是**公開路由**（`middleware.ts:15` 白名單），`logout(_req, res)` 連 `req` 都沒收（`user.controller.ts:227`），**無從得知是誰**；且系統**沒有 refresh token 落地表**（純 JWT、無 jti、無 rotation、無重用偵測） 使用者拍板改做 **refresh token 落地表 ＋ per-device 撤銷**（`sid` 貫穿 access／refresh），見 §4。範圍從 0.5 小時擴大到 2–3 天 |
-| §5.5 | 登入類 limiter 改 fail-closed 回 503 | `REDIS_URL` 未設時 store 是 `undefined` → 退回 **in-memory store，仍有限流**（非報告暗示的完全失效）；真正的洞只在「Redis 有設但執行期出錯」 | 採**雙層**：in-memory backstop（放寬 3 倍）＋ Redis limiter `passOnStoreError: false`。Redis 掛掉時仍有單機天花板，不會整組登入失效 |
+| #    | 稽核報告的建議                            | 核實後的實況                                                                                                                                                                                                                                                                                                                                          | 本計畫採用的修法                                                                                                                    |
+| ---- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| §5.1 | 給 `/ai/chat` 掛 `middleware`（強制認證） | **匿名可用是刻意的對外契約**：`docs/FRONTEND_MIGRATION_AUTH_BOUNDARIES.md:9,19` 明文定義 `PUBLIC_OPTIONAL_AUTH`，呼應需求 B8「允許匿名回報」                                                                                                                                                                                                          | 維持匿名，改掛**分層限流**（匿名 IP-key／登入 userId-key ＋每日總量上限）＝報告自己給的次選方案                                     |
+| §5.2 | 「logout 遞增 `tokenVersion`（一行）」    | `logout` 是**公開路由**（`middleware.ts:15` 白名單），`logout(_req, res)` 連 `req` 都沒收（`user.controller.ts:227`），**無從得知是誰**；且系統**沒有 refresh token 落地表**（純 JWT、無 jti、無 rotation、無重用偵測） 使用者拍板改做 **refresh token 落地表 ＋ per-device 撤銷**（`sid` 貫穿 access／refresh），見 §4。範圍從 0.5 小時擴大到 2–3 天 |
+| §5.5 | 登入類 limiter 改 fail-closed 回 503      | `REDIS_URL` 未設時 store 是 `undefined` → 退回 **in-memory store，仍有限流**（非報告暗示的完全失效）；真正的洞只在「Redis 有設但執行期出錯」                                                                                                                                                                                                          | 採**雙層**：in-memory backstop（放寬 3 倍）＋ Redis limiter `passOnStoreError: false`。Redis 掛掉時仍有單機天花板，不會整組登入失效 |
 
 另外核實到**兩個稽核報告沒抓到的問題**（S7、S8），列在本計畫末尾。
 
@@ -27,6 +27,7 @@
 **In scope**：稽核報告 §5.1–§5.6 全部六條，加上核實過程中發現的 S7、S8。
 
 **Out of scope（明確不做，避免範圍蔓延）**：
+
 - §4.5 結構化 logging／request id — 是可觀測性，不是資安，另案。
 - §4.6 env 集中 + 啟動驗證 — 另案（但 S8 會用到其中一小塊）。
 - 重構既有 4 份重複的 limiter `makeStore`（`user` / `place-search` / `hazard-report` / `line`）
@@ -36,6 +37,7 @@
   但不在稽核 §5 點名範圍內，列為後續案（見 §10）。
 
 **禁改範圍**：
+
 - 不得把 `docs/FRONTEND_MIGRATION_AUTH_BOUNDARIES.md` 標為 PUBLIC / PUBLIC_OPTIONAL_AUTH 的端點改成需要認證。
 - 不得修改任何 AI prompt 的語意內容（只允許改座標精度，見 S4）。
 - 不得動 `src/scripts/`、`src/modules/accessible-route/planners/`、GTFS/OTP 相關程式。
@@ -46,12 +48,12 @@
 
 依「會修改同檔案的任務不得並行」拆成 4 批。**前三批並行，第四批等第二批完成**（兩者都改 `user.router.ts`）。
 
-| 批 | 內容 | 主要檔案 | 並行 |
-|---|---|---|---|
-| **A** | S1 AI／LLM 端點限流 | `middleware/optional-auth.middleware.ts`(新)、`middleware/rate-limit.ts`(新)、`modules/ai/ai.middleware.ts`(新)、`ai.router.ts`、`ai.chat.controller.ts`、`review.router.ts` | ✅ |
-| **B** | S2 登入工作階段落地表 ＋ per-device 撤銷 ＋ S5 limiter 失效 ＋ S6 設定不一致 ＋ S7 重設 token 改隨機值 | `model/auth-session.model.ts`(新)、`modules/user/*`、`config/jwt.ts`、`config/auth.ts`、`config/lib.ts` | ✅ |
-| **C** | S4 送 Gemini 的座標降精度 | `utils/geo-privacy.ts`(新)、`config/ai/chat-prompt.ts`、`modules/voice/voice-prompt.ts`、`modules/voice/live-bridge.ts` | ✅ |
-| **D** | S3 帳號／資料刪除 ＋ 位置保存期限 ＋ audit log | `model/access-audit.model.ts`(新)、`modules/user/user.account-deletion.*`(新)、`modules/privacy/retention.job.ts`(新)、多個 model 加 TTL、`sos`/`line` 掛 audit | ⛔ 等 B（同改 `user.router.ts`，且刪帳號要連帶撤銷 S2 的 session） |
+| 批    | 內容                                                                                                   | 主要檔案                                                                                                                                                                     | 並行                                                               |
+| ----- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| **A** | S1 AI／LLM 端點限流                                                                                    | `middleware/optional-auth.middleware.ts`(新)、`middleware/rate-limit.ts`(新)、`modules/ai/ai.middleware.ts`(新)、`ai.router.ts`、`ai.chat.controller.ts`、`review.router.ts` | ✅                                                                 |
+| **B** | S2 登入工作階段落地表 ＋ per-device 撤銷 ＋ S5 limiter 失效 ＋ S6 設定不一致 ＋ S7 重設 token 改隨機值 | `model/auth-session.model.ts`(新)、`modules/user/*`、`config/jwt.ts`、`config/auth.ts`、`config/lib.ts`                                                                      | ✅                                                                 |
+| **C** | S4 送 Gemini 的座標降精度                                                                              | `utils/geo-privacy.ts`(新)、`config/ai/chat-prompt.ts`、`modules/voice/voice-prompt.ts`、`modules/voice/live-bridge.ts`                                                      | ✅                                                                 |
+| **D** | S3 帳號／資料刪除 ＋ 位置保存期限 ＋ audit log                                                         | `model/access-audit.model.ts`(新)、`modules/user/user.account-deletion.*`(新)、`modules/privacy/retention.job.ts`(新)、多個 model 加 TTL、`sos`/`line` 掛 audit              | ⛔ 等 B（同改 `user.router.ts`，且刪帳號要連帶撤銷 S2 的 session） |
 
 ---
 
@@ -106,13 +108,13 @@ createRateLimiter({ prefix, windowMs, limit, keyBy, passOnStoreError })
 
 額度（寫成模組常數，**不吃環境變數**，避免加深 §4.6 的設定散落問題）：
 
-| 端點 | 身分 | burst | 每日總量 |
-|---|---|---|---|
-| `POST /ai/chat` | 匿名（IP） | 10 / 10 min | 60 / 24 h |
-| `POST /ai/chat` | 已登入（userId） | 40 / 10 min | 400 / 24 h |
-| `POST /ai/intent`、`/ai/explain` | 匿名（IP） | 30 / 10 min | 200 / 24 h |
+| 端點                             | 身分             | burst       | 每日總量   |
+| -------------------------------- | ---------------- | ----------- | ---------- |
+| `POST /ai/chat`                  | 匿名（IP）       | 10 / 10 min | 60 / 24 h  |
+| `POST /ai/chat`                  | 已登入（userId） | 40 / 10 min | 400 / 24 h |
+| `POST /ai/intent`、`/ai/explain` | 匿名（IP）       | 30 / 10 min | 200 / 24 h |
 | `POST /ai/intent`、`/ai/explain` | 已登入（userId） | 60 / 10 min | 600 / 24 h |
-| `GET /a11y/reviews/summary` | 不分身分（IP） | 20 / 10 min | 200 / 24 h |
+| `GET /a11y/reviews/summary`      | 不分身分（IP）   | 20 / 10 min | 200 / 24 h |
 
 - **失效行為（審核 B4 後修正）**：`passOnStoreError` 維持 `true`，**另外前置一層 in-memory backstop
   limiter**（額度為上表的 3 倍，不傳 store）。
@@ -148,15 +150,15 @@ route-level integration test（supertest，`tests/helpers/test-helpers.ts` 既�
 
 ### 現況（已核實）
 
-| 事實 | 證據 |
-|---|---|
-| `logout` 只清 cookie，不碰 DB，連 `req` 都沒收 | `user.controller.ts:227-245` |
-| `/logout` 是公開路由，不需要有效 token | `middleware.ts:15`、`user.router.ts:110` |
-| **沒有 refresh token 落地表**，無 jti、無 rotation、無重用偵測 | `user.controller.ts:181-226` |
-| `auth-token.model.ts` 只存 email 驗證／密碼重設一次性 token，與登入態無關 | `auth-token.model.ts:4-24` |
-| `tokenVersion` 只在改密碼／重設密碼／Google 接管時 +1 | `user.auth.service.ts:412,481`、`user.auth.repository.ts:142` |
-| 每個受保護請求都已經打一次 DB（`User.findById`）並比對 `tokenVersion` | `config/auth.ts:33,39` |
-| access TTL 60m、refresh JWT TTL 1d | `config/jwt.ts:8,9` |
+| 事實                                                                      | 證據                                                          |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `logout` 只清 cookie，不碰 DB，連 `req` 都沒收                            | `user.controller.ts:227-245`                                  |
+| `/logout` 是公開路由，不需要有效 token                                    | `middleware.ts:15`、`user.router.ts:110`                      |
+| **沒有 refresh token 落地表**，無 jti、無 rotation、無重用偵測            | `user.controller.ts:181-226`                                  |
+| `auth-token.model.ts` 只存 email 驗證／密碼重設一次性 token，與登入態無關 | `auth-token.model.ts:4-24`                                    |
+| `tokenVersion` 只在改密碼／重設密碼／Google 接管時 +1                     | `user.auth.service.ts:412,481`、`user.auth.repository.ts:142` |
+| 每個受保護請求都已經打一次 DB（`User.findById`）並比對 `tokenVersion`     | `config/auth.ts:33,39`                                        |
+| access TTL 60m、refresh JWT TTL 1d                                        | `config/jwt.ts:8,9`                                           |
 
 ### 關鍵設計問題：光有 refresh token 落地表**關不掉 access token**
 
@@ -170,17 +172,17 @@ per-device 撤銷 refresh token 只擋得住「換新 access token」，**擋不
 
 **S2-1 新增 `src/model/auth-session.model.ts`** — 一個 session = 一次裝置登入
 
-| 欄位 | 用途 |
-|---|---|
-| `_id` | 即 `sid`，寫進 access／refresh token payload |
-| `userId` | 擁有者，index |
-| `currentRefreshJti` | 目前有效的 refresh token jti（rotation 用） |
-| `previousRefreshJti` / `rotatedAt` | 上一代 jti 與輪替時間，供並發寬限窗判定（審核 B2） |
-| `revokedAt` | 撤銷時間；非 null 即失效 |
-| `revokedReason` | `"logout"` \| `"reuse-detected"` \| `"account-deleted"` \| `"password-changed"` |
-| `expiresAt` | TTL index（`expireAfterSeconds: 0`），等於 refresh TTL。**每次 rotation 必須往後推**（審核 B3） |
-| `createdAt` / `lastUsedAt` | 稽核與「最近活動」用 |
-| `userAgentHash` / `ipHash` | 裝置辨識（**存雜湊不存原文**，與 S3 的隱私原則一致） |
+| 欄位                               | 用途                                                                                            |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `_id`                              | 即 `sid`，寫進 access／refresh token payload                                                    |
+| `userId`                           | 擁有者，index                                                                                   |
+| `currentRefreshJti`                | 目前有效的 refresh token jti（rotation 用）                                                     |
+| `previousRefreshJti` / `rotatedAt` | 上一代 jti 與輪替時間，供並發寬限窗判定（審核 B2）                                              |
+| `revokedAt`                        | 撤銷時間；非 null 即失效                                                                        |
+| `revokedReason`                    | `"logout"` \| `"reuse-detected"` \| `"account-deleted"` \| `"password-changed"`                 |
+| `expiresAt`                        | TTL index（`expireAfterSeconds: 0`），等於 refresh TTL。**每次 rotation 必須往後推**（審核 B3） |
+| `createdAt` / `lastUsedAt`         | 稽核與「最近活動」用                                                                            |
+| `userAgentHash` / `ipHash`         | 裝置辨識（**存雜湊不存原文**，與 S3 的隱私原則一致）                                            |
 
 **S2-2 token payload 擴充**（`config/jwt.ts`）
 
@@ -306,13 +308,13 @@ per-device 撤銷 refresh token 只擋得住「換新 access token」，**擋不
 **S3b 位置與個資保存期限** — 新增 `src/modules/privacy/retention.job.ts`
 （沿用 `hazard-report.expire.ts` 的 `setInterval` 模式，不引入新的排程套件）
 
-| 資料 | 期限 | 做法 |
-|---|---|---|
-| `SosSession`（已 resolved） | 90 天 | TTL index on 新增的 `purgeAt` 欄位 |
-| `EmergencyContact.lastLineLat/lastLineLng` | 30 天 | retention job 清成 `null`（不能用 TTL，它不是獨立文件） |
-| `HazardReport.rawExifLat/rawExifLng` | 30 天 | retention job 清空（公開座標保留，原始 EXIF GPS 精度過高） |
-| `UserMemory`（已軟刪） | 30 天 | retention job 硬刪 |
-| `LineLinkCode` | 依既有 `expiresAt` | 改成真正的 TTL index（`expireAfterSeconds`） |
+| 資料                                       | 期限               | 做法                                                       |
+| ------------------------------------------ | ------------------ | ---------------------------------------------------------- |
+| `SosSession`（已 resolved）                | 90 天              | TTL index on 新增的 `purgeAt` 欄位                         |
+| `EmergencyContact.lastLineLat/lastLineLng` | 30 天              | retention job 清成 `null`（不能用 TTL，它不是獨立文件）    |
+| `HazardReport.rawExifLat/rawExifLng`       | 30 天              | retention job 清空（公開座標保留，原始 EXIF GPS 精度過高） |
+| `UserMemory`（已軟刪）                     | 30 天              | retention job 硬刪                                         |
+| `LineLinkCode`                             | 依既有 `expiresAt` | 改成真正的 TTL index（`expireAfterSeconds`）               |
 
 **S3c audit log** — 新增 `src/model/access-audit.model.ts`
 
@@ -339,11 +341,11 @@ per-device 撤銷 refresh token 只擋得住「換新 access token」，**擋不
 
 ### 現況（已核實）
 
-| 位置 | 送出內容 | 精度 |
-|---|---|---|
-| `config/ai/chat-prompt.ts:76` `withUserLocation()` | 使用者原始經緯度 | **完整精度** |
-| `modules/voice/voice-prompt.ts:71-73` | 使用者原始經緯度 | **完整精度** |
-| `modules/ai/ai.chat.controller.ts:121,130-133` | 完整對話原文 ＋ 使用者記憶 `promptText`/`content` ＋ memory `_id` | 原文 |
+| 位置                                               | 送出內容                                                          | 精度         |
+| -------------------------------------------------- | ----------------------------------------------------------------- | ------------ |
+| `config/ai/chat-prompt.ts:76` `withUserLocation()` | 使用者原始經緯度                                                  | **完整精度** |
+| `modules/voice/voice-prompt.ts:71-73`              | 使用者原始經緯度                                                  | **完整精度** |
+| `modules/ai/ai.chat.controller.ts:121,130-133`     | 完整對話原文 ＋ 使用者記憶 `promptText`/`content` ＋ memory `_id` | 原文         |
 
 既有的 `redactValue()`（`live-bridge.ts:146-168`，座標降到小數 2 位）**只用於本地 trace log**，
 `redactPreciseCoordinates()`（`memory.service.ts:100-107`）**只用於存 DB 前**。
@@ -364,6 +366,7 @@ per-device 撤銷 refresh token 只擋得住「換新 access token」，**擋不
 
 **完整對話原文送往 Gemini 是 LLM 產品的本質，無法去識別化。**
 本計畫不嘗試遮蔽對話內容，改為要求：
+
 - 補一份隱私政策文件，明列「對話內容與約 11 公尺精度的位置會送往 Google Gemini」。
 - 見 S8：`MEMORY_ENCRYPTION_KEY` 未設時記憶明文入庫，必須修掉。
 
@@ -413,6 +416,7 @@ per-device 撤銷 refresh token 只擋得住「換新 access token」，**擋不
 ### 驗收
 
 注入一個必定拋錯的 store，打 `POST /auth/login`：
+
 1. 超過 backstop 額度時回 **429**（改動前會被放行 → 測試先紅後綠）。
 2. **未**超過 backstop 額度時回 **200，不是 500**（審核 B4 專門守這條；
    原設計在這條路徑上會回 500，而原驗收只測第 1 條，永遠測不到）。
@@ -429,10 +433,10 @@ per-device 撤銷 refresh token 只擋得住「換新 access token」，**擋不
 
 **使用者已拍板（2026-08-18）：選 (a)，refresh JWT 拉長到 7 天對齊 cookie。**
 
-| 選項 | 做法 | 代價 |
-|---|---|---|
+| 選項                                           | 做法                                                               | 代價                                                                                                      |
+| ---------------------------------------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
 | **(a) 拉長 JWT 到 7 天對齊 cookie** ✅**採用** | `config/jwt.ts:9` 改 `7d`，`AuthSession.expiresAt` TTL 同步為 7 天 | 外洩的 refresh token 風險窗口從 1 天變 7 天；但它走 httpOnly cookie，且 S2 完成後可用 `tokenVersion` 撤銷 |
-| (b) 縮短 cookie 到 1 天對齊 JWT | `config/lib.ts` 用 `jwt.ts` 匯出的同一常數推導 | 使用者從「7 天免登入」退化成「1 天免登入」，是明顯的 UX 退化 |
+| (b) 縮短 cookie 到 1 天對齊 JWT                | `config/lib.ts` 用 `jwt.ts` 匯出的同一常數推導                     | 使用者從「7 天免登入」退化成「1 天免登入」，是明顯的 UX 退化                                              |
 
 無論選哪個，**cookie maxAge 與 JWT TTL 必須由同一個匯出常數推導**，不得各寫各的。
 
@@ -519,12 +523,12 @@ pnpm run build         # 必須 exit=0
 
 ## 13. 使用者已拍板的四個取捨（2026-08-18）
 
-| # | 問題 | 決定 | 影響 |
-|---|---|---|---|
-| S2 | 登出撤銷粒度 | **新增 refresh token 落地表，做 per-device 撤銷** | B 批從 0.5 小時擴大到 2–3 天；順帶解掉 rotation 與重用偵測（原列在 §10 後續案）；部署當下全體使用者被登出一次 |
-| S3a | 刪帳號時的障礙回報 | **匿名化保留**（`reporterId = null`、清空原始 EXIF GPS） | 其他使用者的路線品質不受影響 |
-| S6.1 | refresh 有效期 | **JWT 拉長到 7 天對齊 cookie** | 維持 7 天免登入；風險窗口由 S2 的 per-device 撤銷與重用偵測補償 |
-| S7 | 密碼重設 token | **納入本輪，改成隨機值** | 併入 B 批 |
+| #    | 問題               | 決定                                                     | 影響                                                                                                          |
+| ---- | ------------------ | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| S2   | 登出撤銷粒度       | **新增 refresh token 落地表，做 per-device 撤銷**        | B 批從 0.5 小時擴大到 2–3 天；順帶解掉 rotation 與重用偵測（原列在 §10 後續案）；部署當下全體使用者被登出一次 |
+| S3a  | 刪帳號時的障礙回報 | **匿名化保留**（`reporterId = null`、清空原始 EXIF GPS） | 其他使用者的路線品質不受影響                                                                                  |
+| S6.1 | refresh 有效期     | **JWT 拉長到 7 天對齊 cookie**                           | 維持 7 天免登入；風險窗口由 S2 的 per-device 撤銷與重用偵測補償                                               |
+| S7   | 密碼重設 token     | **納入本輪，改成隨機值**                                 | 併入 B 批                                                                                                     |
 
 > S2 選了重方案之後，§10 後續案的「refresh token rotation ＋ 重用偵測」已被納入本輪，故從該清單移除。
 
@@ -534,12 +538,12 @@ pnpm run build         # 必須 exit=0
 
 - **2026-08-18 Claude（Opus）fresh-context 計畫審核：`BLOCKING x 4`，四條全部採納並已改入本計畫。**
 
-  | # | 問題 | 落點 | 已修正處 |
-  |---|---|---|---|
-  | B1 | 簽發 token 的入口有 6 個不是 3 個（`verifyEmail`／`resetPassword`／`changePassword` 漏列），照原計畫做會「改完密碼立刻被登出且拿不到可用 token」 | S2-6 | 收斂到 `sendSession()` 一處＋硬性順序＋驗收第 9 條 |
-  | B2 | 「`jti !== currentRefreshJti` 即判定重用」在並發 refresh 下**必然**誤觸發全域登出；條件更新只防寫入覆蓋，不改變分類 | S2-4 步驟 3 | 改三分類＋`previousRefreshJti` 30 秒寬限窗 |
-  | B3 | `expiresAt` 只在建立時設定，會把活躍使用者每 7 天硬踢一次（現況 cookie 是滑動的） | S2-4 步驟 4 | rotation 時延展 `expiresAt`＋驗收第 10 條 |
-  | B4 | `passOnStoreError: false` 是 `throw` 不是回 429（`dist/index.cjs:942`），S5 與 S1-3 都會變成 **500** 並破壞信封契約 | §3 S1-3、§7 | 兩處都改回 `true`＋前置 in-memory backstop＋錯誤記錄 |
+  | #   | 問題                                                                                                                                             | 落點        | 已修正處                                             |
+  | --- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------- | ---------------------------------------------------- |
+  | B1  | 簽發 token 的入口有 6 個不是 3 個（`verifyEmail`／`resetPassword`／`changePassword` 漏列），照原計畫做會「改完密碼立刻被登出且拿不到可用 token」 | S2-6        | 收斂到 `sendSession()` 一處＋硬性順序＋驗收第 9 條   |
+  | B2  | 「`jti !== currentRefreshJti` 即判定重用」在並發 refresh 下**必然**誤觸發全域登出；條件更新只防寫入覆蓋，不改變分類                              | S2-4 步驟 3 | 改三分類＋`previousRefreshJti` 30 秒寬限窗           |
+  | B3  | `expiresAt` 只在建立時設定，會把活躍使用者每 7 天硬踢一次（現況 cookie 是滑動的）                                                                | S2-4 步驟 4 | rotation 時延展 `expiresAt`＋驗收第 10 條            |
+  | B4  | `passOnStoreError: false` 是 `throw` 不是回 429（`dist/index.cjs:942`），S5 與 S1-3 都會變成 **500** 並破壞信封契約                              | §3 S1-3、§7 | 兩處都改回 `true`＋前置 in-memory backstop＋錯誤記錄 |
 
   事實抽驗 18 條全部相符，僅 4 處行號字面偏差（不影響修法）。
   審核者另代查確認：全 repo 的 token 驗證入口只有 `authenticateToken` 一個，

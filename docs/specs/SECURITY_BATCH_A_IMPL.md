@@ -32,15 +32,15 @@
 
 ## 3. 工作範圍（允許新增／修改的檔案）
 
-| 檔案 | 動作 |
-|---|---|
-| `src/middleware/optional-auth.middleware.ts` | 新增 |
-| `src/middleware/rate-limit.ts` | 新增 |
-| `src/modules/ai/ai.middleware.ts` | 新增 |
-| `src/modules/ai/ai.router.ts` | 修改（掛載） |
-| `src/modules/ai/ai.chat.controller.ts` | 修改（`resolveAuthUser` 改讀 `req.auth`） |
-| `src/modules/review/review.router.ts` | 修改（掛載） |
-| 對應 `*.test.ts` | 新增／修改 |
+| 檔案                                         | 動作                                      |
+| -------------------------------------------- | ----------------------------------------- |
+| `src/middleware/optional-auth.middleware.ts` | 新增                                      |
+| `src/middleware/rate-limit.ts`               | 新增                                      |
+| `src/modules/ai/ai.middleware.ts`            | 新增                                      |
+| `src/modules/ai/ai.router.ts`                | 修改（掛載）                              |
+| `src/modules/ai/ai.chat.controller.ts`       | 修改（`resolveAuthUser` 改讀 `req.auth`） |
+| `src/modules/review/review.router.ts`        | 修改（掛載）                              |
+| 對應 `*.test.ts`                             | 新增／修改                                |
 
 ---
 
@@ -102,13 +102,13 @@ createRateLimiter({ prefix, windowMs, limit, keyBy })
 
 額度寫成**模組常數**（不吃環境變數）：
 
-| 端點 | 身分 | burst | 每日總量 |
-|---|---|---|---|
-| `POST /ai/chat` | 匿名（IP） | 10 / 10 min | 60 / 24 h |
-| `POST /ai/chat` | 已登入（userId） | 40 / 10 min | 400 / 24 h |
-| `POST /ai/intent`、`/ai/explain` | 匿名（IP） | 30 / 10 min | 200 / 24 h |
+| 端點                             | 身分             | burst       | 每日總量   |
+| -------------------------------- | ---------------- | ----------- | ---------- |
+| `POST /ai/chat`                  | 匿名（IP）       | 10 / 10 min | 60 / 24 h  |
+| `POST /ai/chat`                  | 已登入（userId） | 40 / 10 min | 400 / 24 h |
+| `POST /ai/intent`、`/ai/explain` | 匿名（IP）       | 30 / 10 min | 200 / 24 h |
 | `POST /ai/intent`、`/ai/explain` | 已登入（userId） | 60 / 10 min | 600 / 24 h |
-| `GET /a11y/reviews/summary` | 不分身分（IP） | 20 / 10 min | 200 / 24 h |
+| `GET /a11y/reviews/summary`      | 不分身分（IP）   | 20 / 10 min | 200 / 24 h |
 
 三層（順序即掛載順序）：
 

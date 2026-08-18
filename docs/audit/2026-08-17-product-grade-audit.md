@@ -36,19 +36,19 @@ route 測試把 service `vi.mock` 掉、只驗狀態碼透傳；repository 測�
 
 **成熟度速覽**
 
-| 面向 | 現況 | 差距 |
-|---|---|---|
-| 模組化與分層 | 🟡 骨架正確，但 67% 檔案不受 arch check 保護；45 處跨模組 reach-in；1 個循環 | 護欄覆蓋率，不是骨架 |
-| API 契約 | 🟢🟡 spec 從程式碼產生、回應信封統一、WebSocket 有 schema；但無一致性驗證、7 條路由未驗型 | 差一個「路由 vs spec 差集為空」的測試 |
-| 型別與工具鏈 | 🟡 typecheck 全綠、strict 開啟，但 585 warnings 不擋 CI | `--max-warnings` 未設 |
-| **測試真實性** | 🔴 **7 個突變 4 個存活**；route 測試 mock 掉 service，service 測試沒有對應 case | service 層商業規則零覆蓋 |
-| 測試分層 | 🟡 repository 有真 DB 測試（21 個）、route 有真 HTTP 測試；**中間與 E2E 完全空白** | 缺一條端到端旅程 |
-| 錯誤處理 | 🟡 有集中 handler 與統一信封，但無 error 型別階層、79 處 `new Error` 落回 500 | 見 §4.4 |
-| **可觀測性** | 🔴 **無結構化 logger、無 request id（`src/` 0 命中）** | 線上無法追查 |
-| 設定與 secret | 🟢 dotenvx、`.env` 從未進版控、git 歷史零真實金鑰 | — |
-| 資安 | 🔴 AI 端點無認證無限流；logout 不撤銷 token | 見 §5 |
-| 隱私（GPS／AI 對話） | 🔴 無帳號／資料刪除端點、無 audit log、位置無保存期限 | 見 §5 |
-| 前端工程 | ⚪ 不適用（本 repo 無前端程式碼） | — |
+| 面向                 | 現況                                                                                      | 差距                                  |
+| -------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------- |
+| 模組化與分層         | 🟡 骨架正確，但 67% 檔案不受 arch check 保護；45 處跨模組 reach-in；1 個循環              | 護欄覆蓋率，不是骨架                  |
+| API 契約             | 🟢🟡 spec 從程式碼產生、回應信封統一、WebSocket 有 schema；但無一致性驗證、7 條路由未驗型 | 差一個「路由 vs spec 差集為空」的測試 |
+| 型別與工具鏈         | 🟡 typecheck 全綠、strict 開啟，但 585 warnings 不擋 CI                                   | `--max-warnings` 未設                 |
+| **測試真實性**       | 🔴 **7 個突變 4 個存活**；route 測試 mock 掉 service，service 測試沒有對應 case           | service 層商業規則零覆蓋              |
+| 測試分層             | 🟡 repository 有真 DB 測試（21 個）、route 有真 HTTP 測試；**中間與 E2E 完全空白**        | 缺一條端到端旅程                      |
+| 錯誤處理             | 🟡 有集中 handler 與統一信封，但無 error 型別階層、79 處 `new Error` 落回 500             | 見 §4.4                               |
+| **可觀測性**         | 🔴 **無結構化 logger、無 request id（`src/` 0 命中）**                                    | 線上無法追查                          |
+| 設定與 secret        | 🟢 dotenvx、`.env` 從未進版控、git 歷史零真實金鑰                                         | —                                     |
+| 資安                 | 🔴 AI 端點無認證無限流；logout 不撤銷 token                                               | 見 §5                                 |
+| 隱私（GPS／AI 對話） | 🔴 無帳號／資料刪除端點、無 audit log、位置無保存期限                                     | 見 §5                                 |
+| 前端工程             | ⚪ 不適用（本 repo 無前端程式碼）                                                         | —                                     |
 
 ---
 
@@ -56,22 +56,22 @@ route 測試把 service `vi.mock` 掉、只驗狀態碼透傳；repository 測�
 
 這一節只放**實際跑出來的數字**。後面每一條發現都能追回這裡。
 
-| 項目 | 結果 | 指令 |
-|---|---|---|
-| 技術棧 | TypeScript / Express / Mongoose / pnpm / vitest；455 個 `.ts` | `repo_scan.sh` |
-| 規模 | `src/` 非測試 `.ts` 325 個；最大 2298 行 | 同上 |
-| **typecheck** | **exit=0**，零錯誤 | `pnpm run typecheck` |
-| **lint** | **exit=0**，0 errors / **585 warnings** | `pnpm run lint` |
-| lint 分布 | `no-explicit-any` 445、`no-non-null-assertion` 140 | 見 §3.2 |
-| **lint:arch** | **exit=0**，`Architecture boundary check passed.` | `pnpm run lint:arch` |
-| **測試** | **exit=0**，125 檔 / **1409 passed** / 0 skipped / **12.8 秒** | `pnpm test` |
-| 覆蓋率 | statements **70.38%** / branches **59.7%** / functions **73.5%** | `pnpm run test:coverage` |
-| 覆蓋率門檻 | 68 / 58 / 70 / 70（branches 只高門檻 1.7 個百分點） | `vitest.config.ts:45-50` |
-| 測試檔 : 原始檔 | 135 : 325（但 vitest 只跑 125 個，見 §7.4） | — |
-| 斷言總數 | 3434（平均每 case 2.37） | `test_forensics.py` |
-| 依賴掃描 | **No known vulnerabilities found** | `pnpm audit --prod` |
-| 循環相依 | 1 個 | `npx madge --circular --extensions ts src` |
-| git | 490 commits / 18 merge / 2 位作者（同一人）/ 30 branches | `repo_scan.sh` |
+| 項目            | 結果                                                             | 指令                                       |
+| --------------- | ---------------------------------------------------------------- | ------------------------------------------ |
+| 技術棧          | TypeScript / Express / Mongoose / pnpm / vitest；455 個 `.ts`    | `repo_scan.sh`                             |
+| 規模            | `src/` 非測試 `.ts` 325 個；最大 2298 行                         | 同上                                       |
+| **typecheck**   | **exit=0**，零錯誤                                               | `pnpm run typecheck`                       |
+| **lint**        | **exit=0**，0 errors / **585 warnings**                          | `pnpm run lint`                            |
+| lint 分布       | `no-explicit-any` 445、`no-non-null-assertion` 140               | 見 §3.2                                    |
+| **lint:arch**   | **exit=0**，`Architecture boundary check passed.`                | `pnpm run lint:arch`                       |
+| **測試**        | **exit=0**，125 檔 / **1409 passed** / 0 skipped / **12.8 秒**   | `pnpm test`                                |
+| 覆蓋率          | statements **70.38%** / branches **59.7%** / functions **73.5%** | `pnpm run test:coverage`                   |
+| 覆蓋率門檻      | 68 / 58 / 70 / 70（branches 只高門檻 1.7 個百分點）              | `vitest.config.ts:45-50`                   |
+| 測試檔 : 原始檔 | 135 : 325（但 vitest 只跑 125 個，見 §7.4）                      | —                                          |
+| 斷言總數        | 3434（平均每 case 2.37）                                         | `test_forensics.py`                        |
+| 依賴掃描        | **No known vulnerabilities found**                               | `pnpm audit --prod`                        |
+| 循環相依        | 1 個                                                             | `npx madge --circular --extensions ts src` |
+| git             | 490 commits / 18 merge / 2 位作者（同一人）/ 30 branches         | `repo_scan.sh`                             |
 
 **測試分層的實況（這一段很重要，因為它決定 §7 的洞在哪一層）**：
 
@@ -142,12 +142,12 @@ route 測試把 service `vi.mock` 掉、只驗狀態碼透傳；repository 測�
 
 ### 2.4 P2 — 兩個 god file 集中在同一個模組
 
-| 檔案 | 行數 | export 數 | 被幾個檔 import |
-|---|---|---|---|
-| `src/modules/accessible-route/accessible-route.service.ts` | 2298 | 11 | 13 |
-| `src/modules/ai/agent-tools.ts` | 2166 | **38** | 7 |
-| `src/modules/accessible-route/planners/otp-routing.ts` | 1459 | 12 | 8 |
-| `src/config/ai/tool.ts` | 1002 | 4 | 4 |
+| 檔案                                                       | 行數 | export 數 | 被幾個檔 import |
+| ---------------------------------------------------------- | ---- | --------- | --------------- |
+| `src/modules/accessible-route/accessible-route.service.ts` | 2298 | 11        | 13              |
+| `src/modules/ai/agent-tools.ts`                            | 2166 | **38**    | 7               |
+| `src/modules/accessible-route/planners/otp-routing.ts`     | 1459 | 12        | 8               |
+| `src/config/ai/tool.ts`                                    | 1002 | 4         | 4               |
 
 深層相對 import（`../../`）共 404 處（不含測試檔），其中 `src/modules/accessible-route` 一個模組
 就佔 114 處（約 1/5），與 god file 的集中點吻合。
@@ -185,15 +185,15 @@ modules/accessible-route/accessible-route.service.ts
 
 ### 2.7 已排除的疑點（列出來是為了證明本報告沒有灌水）
 
-| 疑點 | 實測結果 |
-|---|---|
-| controller / router 直接查 Mongoose | **零違規**。controller 唯一叫到的是 `service.findById(...)` |
-| service 層拿到 Express `req`/`res` | **零違規**。`planAccessibleRouteFromRequest` 是命名巧合，接的是已驗證 DTO |
-| repository 有商業規則 | 查了 5 個最大的 repository，只有一個邊界案例（`review.repository.ts:150` 的四捨五入與 service 重複），非分層錯置 |
-| `GET /a11y/reports/:id` 疑似 IDOR | **不是漏洞**。`hazard-report.repository.ts:7` 的 `PUBLIC_SELECT = "-reporterId -photoStoragePath -confirmedBy -deniedBy"` 已投影掉回報者身分，屬設計上公開的地圖資料 |
-| NoSQL injection | **零可達案例**。`validate-request.middleware.ts` 在 Zod 驗證後覆寫 `req.body/query/params` 為白名單值 |
-| 指令注入 / 路徑穿越 | `exec`/`spawn` 只出現在 `src/scripts/*` 離線 CLI；`path.join` 接 request 的唯一命中是寫死常數 |
-| secret 進 git 歷史 | **零真實金鑰**。`.env` / `.env.keys` 從未被追蹤；`sk-`／`AIzaSy`／`AKIA` 命中全部是註解或範本 |
+| 疑點                                | 實測結果                                                                                                                                                             |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| controller / router 直接查 Mongoose | **零違規**。controller 唯一叫到的是 `service.findById(...)`                                                                                                          |
+| service 層拿到 Express `req`/`res`  | **零違規**。`planAccessibleRouteFromRequest` 是命名巧合，接的是已驗證 DTO                                                                                            |
+| repository 有商業規則               | 查了 5 個最大的 repository，只有一個邊界案例（`review.repository.ts:150` 的四捨五入與 service 重複），非分層錯置                                                     |
+| `GET /a11y/reports/:id` 疑似 IDOR   | **不是漏洞**。`hazard-report.repository.ts:7` 的 `PUBLIC_SELECT = "-reporterId -photoStoragePath -confirmedBy -deniedBy"` 已投影掉回報者身分，屬設計上公開的地圖資料 |
+| NoSQL injection                     | **零可達案例**。`validate-request.middleware.ts` 在 Zod 驗證後覆寫 `req.body/query/params` 為白名單值                                                                |
+| 指令注入 / 路徑穿越                 | `exec`/`spawn` 只出現在 `src/scripts/*` 離線 CLI；`path.join` 接 request 的唯一命中是寫死常數                                                                        |
+| secret 進 git 歷史                  | **零真實金鑰**。`.env` / `.env.keys` 從未被追蹤；`sk-`／`AIzaSy`／`AKIA` 命中全部是註解或範本                                                                        |
 
 ### 2.8 P3 — 全域可變狀態 30+ 處
 
@@ -489,13 +489,13 @@ mock 對象本身是對的（chroma／embedding 是外部依賴），問題是�
 掃描最近 300 個 commit（排除格式化與整檔刪除），140 個同時改了實作與既有測試，
 腳本標出 2 個「測試被改鬆」嫌疑、33 個「修 bug 同時改測試」。**逐一看 diff 後，5 個抽查對象全部判定為正當**：
 
-| commit | 判定 |
-|---|---|
-| `d6b833e97` refactor(arch) 導入 repository 層 | **非放寬**。斷言從「檢查本地 mock 被 mutate」改成「檢查送給 DB 的 `$set` payload」，資訊量沒下降甚至更貼近真實持久化；「強斷言淨減少 2」是把 3 條分散斷言合併成 1 條 `toHaveBeenCalledWith(完整物件)` |
-| `e4ee353e3` feat(a11y) 校園無障礙 | **非放寬**。舊端點下線、測試同步刪除；新端點測試新增 |
-| `f2bc34ba4` fix(arch) 修獨立稽核找到的四個缺口 | **測試被加嚴**。`findOneAndUpdate` 的 filter 從 `{_id}` 加上 `confirmedBy: {$ne}`／`deniedBy: {$ne}`，修的是自己重構引入的併發重複投票 bug。**這是本 repo 最正面的回歸防護範例** |
+| commit                                             | 判定                                                                                                                                                                                                   |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `d6b833e97` refactor(arch) 導入 repository 層      | **非放寬**。斷言從「檢查本地 mock 被 mutate」改成「檢查送給 DB 的 `$set` payload」，資訊量沒下降甚至更貼近真實持久化；「強斷言淨減少 2」是把 3 條分散斷言合併成 1 條 `toHaveBeenCalledWith(完整物件)`  |
+| `e4ee353e3` feat(a11y) 校園無障礙                  | **非放寬**。舊端點下線、測試同步刪除；新端點測試新增                                                                                                                                                   |
+| `f2bc34ba4` fix(arch) 修獨立稽核找到的四個缺口     | **測試被加嚴**。`findOneAndUpdate` 的 filter 從 `{_id}` 加上 `confirmedBy: {$ne}`／`deniedBy: {$ne}`，修的是自己重構引入的併發重複投票 bug。**這是本 repo 最正面的回歸防護範例**                       |
 | `1c464561d` fix(test): suppress morgan access logs | **非造假，但 commit message 誤導**。標題像純測試改動，實際上 `src/app.ts` 也改了 4 行（測試環境不掛 morgan），新測試 spy `process.stdout.write` 驗證這個新行為。動了 source 卻沒在訊息裡揭露，值得注意 |
-| `6eb79aae2` fix(transit) 公告比對強化 | **非放寬**。新增案例用真實 TDX 公告文字（含「莒光新城」等站名）斷言 `matchKind`，非同義反覆 |
+| `6eb79aae2` fix(transit) 公告比對強化              | **非放寬**。新增案例用真實 TDX 公告文字（含「莒光新城」等站名）斷言 `matchKind`，非同義反覆                                                                                                            |
 
 **結論：這個 repo 沒有「為了讓測試過而改測試」的證據。**
 它的測試問題不是造假，是**寫在錯的層**——這兩件事的修法完全不同，前者要修文化，後者只要補測試。
@@ -515,15 +515,15 @@ mock 對象本身是對的（chroma／embedding 是外部依賴），問題是�
 每次只破壞一處實作、跑該範圍的測試、記錄、立刻 `git checkout --` 復原。
 **使用者的工作目錄自始至終未被修改**（稽核前後 `git status --porcelain` 皆為空）。
 
-| # | 關鍵行為 | 突變內容 | 測試結果 | 判定 |
-|---|---|---|---|---|
-| M1 | 認證中介層擋不擋人 | `middleware.ts` `if (!result.ok)` → `if (false)` | **49 失敗 / 90 通過** | 🟢 真實 |
-| M2 | JWT 有沒有驗簽名 | `config/jwt.ts` `jwt.verify` → `jwt.decode` | **21 失敗 / 131 通過** | 🟢 真實 |
-| M3 | **登入密碼比對** | `user.auth.service.ts:201` `bcrypt.compare(...)` → `true` | **71 全綠** | 🔴 **存活** |
-| M4 | **更新評論的作者檢查** | `review.service.ts:284` → `if (false)` | **37 全綠** | 🔴 **存活** |
-| M5 | **刪除評論的作者檢查** | `review.service.ts:341` → `if (false)` | **37 全綠** | 🔴 **存活** |
-| M6 | 無障礙寬度評分 | `scoring.ts` `widthMetres < 0.9 return -30` → `+30` | **1 失敗 / 281 通過** | 🟢 真實 |
-| M7 | **危害回報過期條件** | `hazard-report.expire.ts:18` `$lte` → `$gte` | **22 全綠** | 🔴 **存活** |
+| #   | 關鍵行為               | 突變內容                                                  | 測試結果               | 判定        |
+| --- | ---------------------- | --------------------------------------------------------- | ---------------------- | ----------- |
+| M1  | 認證中介層擋不擋人     | `middleware.ts` `if (!result.ok)` → `if (false)`          | **49 失敗 / 90 通過**  | 🟢 真實     |
+| M2  | JWT 有沒有驗簽名       | `config/jwt.ts` `jwt.verify` → `jwt.decode`               | **21 失敗 / 131 通過** | 🟢 真實     |
+| M3  | **登入密碼比對**       | `user.auth.service.ts:201` `bcrypt.compare(...)` → `true` | **71 全綠**            | 🔴 **存活** |
+| M4  | **更新評論的作者檢查** | `review.service.ts:284` → `if (false)`                    | **37 全綠**            | 🔴 **存活** |
+| M5  | **刪除評論的作者檢查** | `review.service.ts:341` → `if (false)`                    | **37 全綠**            | 🔴 **存活** |
+| M6  | 無障礙寬度評分         | `scoring.ts` `widthMetres < 0.9 return -30` → `+30`       | **1 失敗 / 281 通過**  | 🟢 真實     |
+| M7  | **危害回報過期條件**   | `hazard-report.expire.ts:18` `$lte` → `$gte`              | **22 全綠**            | 🔴 **存活** |
 
 **殺死 3 / 存活 4。** 認證的「門」有守住（M1、M2），但門後面的**授權與身分核對沒有任何測試守著**。
 
@@ -573,12 +573,12 @@ service 層的商業規則要有對應測試**。所以修法是補規矩與補�
 補測試時**不要再加 route 層的 mock 測試**，那正是造成這個洞的東西。要加在 service 層，
 每一條的驗收標準是「把對應的實作行改壞，這個測試必須紅」：
 
-| 行為 | 要測的位置 | 驗收（突變必須被殺死） |
-|---|---|---|
-| 密碼錯誤必須拒絕登入 | `user.auth.service.test.ts` 新增 `loginLocalUser` describe | `bcrypt.compare(...)` → `true` |
-| 非作者不能更新評論 | `review.service.test.ts` `updateReview` | `review.service.ts:284` → `if (false)` |
-| 非作者不能刪除評論 | `review.service.test.ts` 新增 `deleteReview` describe | `review.service.ts:341` → `if (false)` |
-| 只有已過期的回報會被標記 expired | `hazard-report` 的 expire 測試 | `$lte` → `$gte` |
+| 行為                             | 要測的位置                                                 | 驗收（突變必須被殺死）                 |
+| -------------------------------- | ---------------------------------------------------------- | -------------------------------------- |
+| 密碼錯誤必須拒絕登入             | `user.auth.service.test.ts` 新增 `loginLocalUser` describe | `bcrypt.compare(...)` → `true`         |
+| 非作者不能更新評論               | `review.service.test.ts` `updateReview`                    | `review.service.ts:284` → `if (false)` |
+| 非作者不能刪除評論               | `review.service.test.ts` 新增 `deleteReview` describe      | `review.service.ts:341` → `if (false)` |
+| 只有已過期的回報會被標記 expired | `hazard-report` 的 expire 測試                             | `$lte` → `$gte`                        |
 
 補完後把這四個突變重跑一次當回歸驗收——這比覆蓋率數字有意義得多。
 
@@ -631,11 +631,11 @@ branches 只比門檻高 **1.7 個百分點**。門檻是照現況訂的「basel
 
 ### 本報告修正過的三個數字（初稿引用掃描腳本，逐一核對後修正）
 
-| 初稿 | 實際 | 原因 |
-|---|---|---|
-| `console.log`/`print` 322 處 | `src/` 下 `console.log` 232 處，其中執行期路徑 17 處 | 掃描腳本把 Python `print(` 與測試檔一起算了 |
-| request/correlation id 5 處 | **`src/` 下 0 處** | 那 5 處在 `src/` 以外的檔案 |
-| 寫死模型名 9 處 | 真正寫死 2 處（另 2 處有 env 覆蓋） | 掃描 pattern 過寬，含註解與有 fallback 的情況 |
+| 初稿                         | 實際                                                 | 原因                                          |
+| ---------------------------- | ---------------------------------------------------- | --------------------------------------------- |
+| `console.log`/`print` 322 處 | `src/` 下 `console.log` 232 處，其中執行期路徑 17 處 | 掃描腳本把 Python `print(` 與測試檔一起算了   |
+| request/correlation id 5 處  | **`src/` 下 0 處**                                   | 那 5 處在 `src/` 以外的檔案                   |
+| 寫死模型名 9 處              | 真正寫死 2 處（另 2 處有 env 覆蓋）                  | 掃描 pattern 過寬，含註解與有 fallback 的情況 |
 
 列出來是因為**稽核報告自己的數字也必須可稽核**。掃描腳本的輸出是「候選」，不是「發現」。
 
@@ -646,21 +646,21 @@ branches 只比門檻高 **1.7 個百分點**。門檻是照現況訂的「basel
 排序邏輯：**先止血 → 再修護欄本身 → 才補測試與結構。**
 護欄要先修，因為在護欄漏的情況下補測試與重構，改壞了一樣不會有人知道。
 
-| 順序 | 項目 | 章節 | 預估 | 理由 |
-|---|---|---|---|---|
-| 1 | AI 端點掛認證 + rate limit | §5.1 | 0.5 天 | 正在燒錢，而且未認證的位置資料外送給 Gemini |
-| 2 | logout 遞增 `tokenVersion` | §5.2 | 0.5 小時 | 一行，關掉 60 分鐘的風險視窗 |
-| 3 | lint 加 `--max-warnings=585` 棘輪 | §3.2 | 0.5 小時 | 止血：先讓 585 不再長大，跟覆蓋率門檻同一招 |
-| 4 | request id + 結構化 logger（pino） | §4.5 | 0.5 天 | **沒有它，後面每一步出問題都查不出來**；本清單 CP 值最高 |
-| 5 | 補 §7.3 那四條 service 層測試 | §7.3 | 2 天 | **後續所有重構的前提**；驗收＝四個突變全部被殺死 |
-| 6 | 一條 E2E（註冊→登入→建 review→他人刪除 403→本人刪除） | §6.3 | 1 天 | 一條就同時殺掉 M3／M4／M5，可與 5 合併做 |
-| 7 | arch check 印出涵蓋率並改用目錄判定 | §2.1 | 1 天 | 護欄要先誠實，否則不知道 §2.2／§2.3 有沒有修完 |
-| 8 | env 集中 + 啟動時 zod 驗證 | §4.6 | 1 天 | 消掉「忘了設變數 → 靜默失去節流」這條複合風險 |
-| 9 | 資料刪除端點 + 位置 TTL + audit log | §5.3 | 3 天 | 個資合規，可與 5 併行 |
-| 10 | 「路由 vs spec 差集為空」的測試 + 補 3 個 import | §4.2 | 0.5 天 | 一個測試取代兩個單點斷言 |
-| 11 | 模組 `index.ts` 補 service 出口 + arch 規則 | §2.3 | 2 天 | 42 處 reach-in 一次性收斂 |
-| 12 | 斷循環相依、`user.controller` 套 `toPublicUser`、改名誤導的 integration test | §2.5 §2.6 §6.2 | 0.5 天 | 機械改動，零風險 |
-| 13 | 拆 `accessible-route.service.ts` / `agent-tools.ts` | §2.4 | 長期 | **5、6 沒做完之前不要動** |
+| 順序 | 項目                                                                         | 章節           | 預估     | 理由                                                     |
+| ---- | ---------------------------------------------------------------------------- | -------------- | -------- | -------------------------------------------------------- |
+| 1    | AI 端點掛認證 + rate limit                                                   | §5.1           | 0.5 天   | 正在燒錢，而且未認證的位置資料外送給 Gemini              |
+| 2    | logout 遞增 `tokenVersion`                                                   | §5.2           | 0.5 小時 | 一行，關掉 60 分鐘的風險視窗                             |
+| 3    | lint 加 `--max-warnings=585` 棘輪                                            | §3.2           | 0.5 小時 | 止血：先讓 585 不再長大，跟覆蓋率門檻同一招              |
+| 4    | request id + 結構化 logger（pino）                                           | §4.5           | 0.5 天   | **沒有它，後面每一步出問題都查不出來**；本清單 CP 值最高 |
+| 5    | 補 §7.3 那四條 service 層測試                                                | §7.3           | 2 天     | **後續所有重構的前提**；驗收＝四個突變全部被殺死         |
+| 6    | 一條 E2E（註冊→登入→建 review→他人刪除 403→本人刪除）                        | §6.3           | 1 天     | 一條就同時殺掉 M3／M4／M5，可與 5 合併做                 |
+| 7    | arch check 印出涵蓋率並改用目錄判定                                          | §2.1           | 1 天     | 護欄要先誠實，否則不知道 §2.2／§2.3 有沒有修完           |
+| 8    | env 集中 + 啟動時 zod 驗證                                                   | §4.6           | 1 天     | 消掉「忘了設變數 → 靜默失去節流」這條複合風險            |
+| 9    | 資料刪除端點 + 位置 TTL + audit log                                          | §5.3           | 3 天     | 個資合規，可與 5 併行                                    |
+| 10   | 「路由 vs spec 差集為空」的測試 + 補 3 個 import                             | §4.2           | 0.5 天   | 一個測試取代兩個單點斷言                                 |
+| 11   | 模組 `index.ts` 補 service 出口 + arch 規則                                  | §2.3           | 2 天     | 42 處 reach-in 一次性收斂                                |
+| 12   | 斷循環相依、`user.controller` 套 `toPublicUser`、改名誤導的 integration test | §2.5 §2.6 §6.2 | 0.5 天   | 機械改動，零風險                                         |
+| 13   | 拆 `accessible-route.service.ts` / `agent-tools.ts`                          | §2.4           | 長期     | **5、6 沒做完之前不要動**                                |
 
 ---
 
