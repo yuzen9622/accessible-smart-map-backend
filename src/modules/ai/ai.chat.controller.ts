@@ -6,7 +6,7 @@ import { MSG, ERROR_MESSAGE } from "../../constants/messages";
 import { authenticateToken } from "../../config/auth";
 import {
   runChatAgent,
-  toGeminiHistory,
+  toInteractionInput,
   type OAIMessage,
 } from "./ai-chat.service";
 import { getMemorySettings, searchMemoriesForPrompt } from "./memory.service";
@@ -16,6 +16,7 @@ import {
   withCurrentDate,
 } from "../../config/ai/chat-prompt";
 import type { IUser } from "../../types";
+import { AgentRateLimitError } from "../agent/agent-manager.service";
 
 function sendSse(res: Response, event: string, data: unknown): void {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -130,7 +131,7 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
   const messages: OAIMessage[] = [{ role: "system", content: systemPrompt }];
   messages.push(...rawMessages.filter((m) => m.role !== "system"));
 
-  const { systemInstruction, contents } = toGeminiHistory(messages);
+  const { systemInstruction, input } = toInteractionInput(messages);
 
   if (stream) {
     res.setHeader("Content-Type", "text/event-stream");
@@ -140,27 +141,53 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
     res.flushHeaders();
 
     try {
+      // Stream the answer as it is generated. `streamedChars` tracks whether
+      // anything reached the client, so the empty-answer guard below does not
+      // re-send text the client already has.
+      let streamedChars = 0;
       const loopResult = await runChatAgent({
-        contents,
+        input,
         systemInstruction,
         model,
         userLocation,
         onToolCall: (name, args) => sendSse(res, "tool_call", { name, args }),
         onToolResult: (name, result) =>
           sendSse(res, "tool_result", { name, result }),
+        onTextDelta: (text) => {
+          streamedChars += text.length;
+          sendSse(res, "token", { text });
+        },
         userId,
         memoryToolsEnabled,
         allowMemoryWrite,
         explicitMemoryRequest,
       });
 
-      sendSse(res, "token", { text: loopResult.text ?? "" });
+      const streamText = loopResult.text ?? "";
+      if (streamedChars > 0) {
+        // Already delivered incrementally; nothing more to send.
+      } else if (streamText) {
+        // The agent produced text without streaming it (e.g. the empty-answer
+        // fallback string), so deliver it in one chunk.
+        sendSse(res, "token", { text: streamText });
+      } else {
+        // Never emit an empty token as if it were a successful answer: that is
+        // indistinguishable from a broken client. Surface it as an error.
+        console.error("[ai/chat stream] empty answer from agent");
+        sendSse(res, "error", {
+          code: ResponseCode.INTERNAL_ERROR,
+          message: ERROR_MESSAGE.INTERNAL,
+        });
+      }
       res.write("event: done\ndata: done\n\n");
       res.end();
     } catch (error: any) {
       console.error("[ai/chat stream]", error);
       sendSse(res, "error", {
-        code: ResponseCode.INTERNAL_ERROR,
+        code:
+          error instanceof AgentRateLimitError
+            ? ResponseCode.TOO_MANY_REQUESTS
+            : ResponseCode.INTERNAL_ERROR,
         message: error?.message ?? ERROR_MESSAGE.INTERNAL,
       });
       res.write("event: done\ndata: done\n\n");
@@ -171,7 +198,7 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
 
   try {
     const loopResult = await runChatAgent({
-      contents,
+      input,
       systemInstruction,
       model,
       userLocation,
@@ -182,6 +209,17 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
     });
 
     const text = loopResult.text ?? "";
+    if (!text) {
+      console.error("[ai/chat] empty answer from agent");
+      sendResponse(
+        res,
+        false,
+        "error",
+        ResponseCode.INTERNAL_ERROR,
+        ERROR_MESSAGE.INTERNAL,
+      );
+      return;
+    }
     sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, {
       id: `chatcmpl-${Date.now().toString(36)}`,
       object: "chat.completion",
@@ -206,7 +244,9 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
       res,
       false,
       "error",
-      ResponseCode.INTERNAL_ERROR,
+      error instanceof AgentRateLimitError
+        ? ResponseCode.TOO_MANY_REQUESTS
+        : ResponseCode.INTERNAL_ERROR,
       error?.message ?? ERROR_MESSAGE.INTERNAL,
     );
   }

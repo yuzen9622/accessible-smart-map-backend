@@ -1,30 +1,24 @@
 import type OpenAI from "openai";
 import type { Tool, FunctionDeclaration } from "@google/genai";
+import type { InteractionFunctionTool } from "../../types/agent";
 import { openAiChatTools, memoryTools } from "../../config/ai/tool";
 
 /**
- * Build Gemini function declarations from the existing OpenAI tool specs by
- * passing their JSON Schema straight through (`parametersJsonSchema`), so the
- * tool catalogue stays defined in one place.
- *
- * @param userId Authenticated user id.
- * @param memoryEnabled When true, memory tools are appended to the catalogue.
- * @param extraTools Additional OpenAI tool specs to append (e.g. LINE family).
- * @param allowList Declaration filter. `undefined` declares every tool (legacy
- *   AUTO); any array (including `[]` → zero tools) is a membership filter.
- * @returns A single-entry Tool list holding every function declaration
+ * Select and filter the OpenAI tool specs backing both catalogue builders, so
+ * the Live (voice) and Interactions (text) surfaces can never drift on which
+ * tools exist.
  */
-export function buildGeminiTools(
+function selectSpecs(
   userId?: string,
   memoryEnabled = false,
   extraTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [],
   allowList?: string[],
-): Tool[] {
+) {
   const specs =
     userId && memoryEnabled
       ? [...openAiChatTools, ...memoryTools, ...extraTools]
       : [...openAiChatTools, ...extraTools];
-  const functionDeclarations: FunctionDeclaration[] = specs
+  return specs
     .filter(
       (
         t,
@@ -35,11 +29,61 @@ export function buildGeminiTools(
     )
     .filter(
       (t) => allowList === undefined || allowList.includes(t.function.name),
-    )
-    .map((t) => ({
-      name: t.function.name,
-      description: t.function.description,
-      parametersJsonSchema: t.function.parameters,
-    }));
+    );
+}
+
+/**
+ * Build Gemini `Tool[]` function declarations. Still required by the voice Live
+ * API bridge, which is a separate WebSocket surface and stays on the legacy
+ * shape; the text agent uses `buildInteractionTools` instead.
+ *
+ * @param userId Authenticated user id.
+ * @param memoryEnabled When true, memory tools are appended to the catalogue.
+ * @param extraTools Additional OpenAI tool specs to append.
+ * @param allowList Declaration filter; `undefined` declares every tool.
+ * @returns A single-entry Tool list holding every function declaration
+ */
+export function buildGeminiTools(
+  userId?: string,
+  memoryEnabled = false,
+  extraTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [],
+  allowList?: string[],
+): Tool[] {
+  const functionDeclarations: FunctionDeclaration[] = selectSpecs(
+    userId,
+    memoryEnabled,
+    extraTools,
+    allowList,
+  ).map((t) => ({
+    name: t.function.name,
+    description: t.function.description,
+    parametersJsonSchema: t.function.parameters,
+  }));
   return [{ functionDeclarations }];
+}
+
+/**
+ * Build Interactions API function tools from the existing OpenAI tool specs by
+ * passing their JSON Schema straight through, so the tool catalogue stays
+ * defined in one place.
+ *
+ * @param userId Authenticated user id.
+ * @param memoryEnabled When true, memory tools are appended to the catalogue.
+ * @param extraTools Additional OpenAI tool specs to append (e.g. LINE family).
+ * @param allowList Declaration filter. `undefined` declares every tool; any
+ *   array (including `[]` → zero tools) is a membership filter.
+ * @returns One `{ type: "function" }` tool per declaration
+ */
+export function buildInteractionTools(
+  userId?: string,
+  memoryEnabled = false,
+  extraTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [],
+  allowList?: string[],
+): InteractionFunctionTool[] {
+  return selectSpecs(userId, memoryEnabled, extraTools, allowList).map((t) => ({
+    type: "function" as const,
+    name: t.function.name,
+    description: t.function.description,
+    parameters: t.function.parameters,
+  }));
 }

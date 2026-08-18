@@ -1,5 +1,5 @@
 import { runToolLoop } from "../agent/agent-manager.service";
-import { toGeminiHistory } from "../agent/history-adapter";
+import { toInteractionInput } from "../agent/history-adapter";
 import { executeLocalTool } from "../ai/agent-tools";
 import { LINE_FAMILY_SYSTEM_PROMPT } from "../../config/ai/line-family-prompt";
 import { withCurrentDate, withUserLocation } from "../../config/ai/chat-prompt";
@@ -37,7 +37,7 @@ export function runLineAgent(params: RunLineAgentParams): Promise<AgentResult> {
   if (params.userLocation) {
     systemPrompt = withUserLocation(systemPrompt, params.userLocation);
   }
-  const { systemInstruction, contents } = toGeminiHistory([
+  const { systemInstruction, input } = toInteractionInput([
     { role: "system", content: systemPrompt },
     ...params.messages,
   ]);
@@ -55,7 +55,7 @@ export function runLineAgent(params: RunLineAgentParams): Promise<AgentResult> {
     });
 
   return runToolLoop(
-    contents,
+    input,
     systemInstruction,
     model,
     params.userLocation,

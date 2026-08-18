@@ -28,6 +28,6 @@ describe("voice live-bridge injects the current date (F23)", () => {
     const [config] = connect.mock.calls[0] as unknown as [
       { config: { systemInstruction: string } },
     ];
-    expect(config.config.systemInstruction).toContain("【今天日期】");
+    expect(config.config.systemInstruction).toContain("【現在時間】");
   });
 });

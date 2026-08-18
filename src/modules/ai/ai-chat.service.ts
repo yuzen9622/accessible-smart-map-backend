@@ -1,10 +1,10 @@
 import { runAgent } from "../agent/agent-manager.service";
-import { toGeminiHistory } from "../agent/history-adapter";
+import { toInteractionInput } from "../agent/history-adapter";
 import { executeLocalTool } from "./agent-tools";
 import type { AgentInput, AgentResult } from "../../types/agent";
 import type { OAIMessage } from "../../types/openai-chat";
 
-export { toGeminiHistory };
+export { toInteractionInput };
 export type { OAIMessage, AgentResult };
 export type { RunToolLoopResult, RouteOnceResult } from "../../types/agent";
 

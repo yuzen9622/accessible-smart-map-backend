@@ -578,6 +578,8 @@ export async function getBusArrival(args: {
 export async function getBusTimetable(args: {
   routeName: string;
   city?: string;
+  afterTime?: string;
+  limit?: number;
   userLocation?: { latitude: number; longitude: number };
 }): Promise<string> {
   try {
@@ -586,6 +588,8 @@ export async function getBusTimetable(args: {
     const result = await busService.getBusTimetable({
       routeName: args.routeName,
       city,
+      afterTime: args.afterTime,
+      limit: args.limit,
     });
     return JSON.stringify(result);
   } catch (error: any) {
@@ -1944,6 +1948,8 @@ export async function executeLocalTool(
       return getBusTimetable({
         routeName: args.routeName,
         city: args.city,
+        afterTime: args.afterTime,
+        limit: args.limit,
         userLocation,
       });
 

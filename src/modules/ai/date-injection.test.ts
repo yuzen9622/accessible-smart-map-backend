@@ -3,14 +3,14 @@ import request from "supertest";
 
 vi.mock("./ai-chat.service", () => ({
   runChatAgent: vi.fn().mockResolvedValue({ text: "ok" }),
-  toGeminiHistory: vi.fn(() => ({
+  toInteractionInput: vi.fn(() => ({
     systemInstruction: undefined,
-    contents: [],
+    input: [],
   })),
 }));
 
 import { buildTestApp } from "../../../tests/helpers/test-helpers";
-import { toGeminiHistory } from "./ai-chat.service";
+import { toInteractionInput } from "./ai-chat.service";
 
 const app = buildTestApp();
 
@@ -19,7 +19,7 @@ beforeEach(() => {
 });
 
 describe("HTTP chat entry injects the current date (F23)", () => {
-  it("passes a system prompt containing the date rule to toGeminiHistory", async () => {
+  it("passes a system prompt containing the date rule to toInteractionInput", async () => {
     await request(app)
       .post("/api/v1/ai/chat")
       .send({
@@ -27,12 +27,17 @@ describe("HTTP chat entry injects the current date (F23)", () => {
         stream: false,
       });
 
-    expect(toGeminiHistory).toHaveBeenCalled();
-    const messages = vi.mocked(toGeminiHistory).mock.calls[0][0] as Array<{
+    expect(toInteractionInput).toHaveBeenCalled();
+    const messages = vi.mocked(toInteractionInput).mock.calls[0][0] as Array<{
       role: string;
       content: string;
     }>;
     const system = messages.find((m) => m.role === "system");
-    expect(system?.content).toContain("【今天日期】");
+    expect(system?.content).toContain("【現在時間】");
+    // The wall-clock time must be injected too, not just the date: a user who
+    // says "10:20" or "大約五點" cannot be anchored without it.
+    expect(system?.content).toMatch(
+      /【現在時間】\d{4}-\d{2}-\d{2}（Asia\/Taipei，週.）\d{2}:\d{2}/,
+    );
   });
 });

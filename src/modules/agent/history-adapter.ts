@@ -1,22 +1,22 @@
-import type { Content, Part } from "@google/genai";
+import type { InteractionInputStep } from "../../types/agent";
 import type { OAIMessage } from "../../types/openai-chat";
 
 /**
- * Convert an OpenAI-format chat history into the Gemini request shape. System
- * messages collapse into `systemInstruction`; user/assistant/tool turns become
- * `contents`. Assistant `tool_calls` map to `functionCall` parts and `tool`
- * results map to `functionResponse` parts (name resolved via the preceding
- * tool_call id).
+ * Convert an OpenAI-format chat history into the Interactions API request
+ * shape. System messages collapse into `system_instruction`; the remaining
+ * turns become `input` steps — user turns are `user_input`, assistant text is
+ * `model_output`, assistant `tool_calls` are `function_call` steps and tool
+ * results are `function_result` steps matched back by `call_id`.
  *
  * @param messages OpenAI chat messages (system prompt already prepended)
- * @returns The Gemini `systemInstruction` text and `contents` array
+ * @returns The `system_instruction` text and the `input` step array
  */
-export function toGeminiHistory(messages: OAIMessage[]): {
+export function toInteractionInput(messages: OAIMessage[]): {
   systemInstruction?: string;
-  contents: Content[];
+  input: InteractionInputStep[];
 } {
   let systemInstruction: string | undefined;
-  const contents: Content[] = [];
+  const input: InteractionInputStep[] = [];
   const idToName = new Map<string, string>();
 
   for (const m of messages) {
@@ -27,43 +27,46 @@ export function toGeminiHistory(messages: OAIMessage[]): {
         : text;
     } else if (m.role === "user") {
       const text = typeof m.content === "string" ? m.content : "";
-      contents.push({ role: "user", parts: [{ text }] });
+      input.push({ type: "user_input", content: [{ type: "text", text }] });
     } else if (m.role === "assistant") {
-      const parts: Part[] = [];
-      if (typeof m.content === "string" && m.content)
-        parts.push({ text: m.content });
-      const toolCalls = m.tool_calls;
-      if (toolCalls?.length) {
-        for (const tc of toolCalls) {
-          if (tc.type !== "function") continue;
-          let args: Record<string, unknown> = {};
-          try {
-            args = JSON.parse(tc.function.arguments);
-          } catch {
-            /* keep {} */
-          }
-          idToName.set(tc.id, tc.function.name);
-          parts.push({ functionCall: { name: tc.function.name, args } });
+      if (typeof m.content === "string" && m.content) {
+        input.push({
+          type: "model_output",
+          content: [{ type: "text", text: m.content }],
+        });
+      }
+      for (const tc of m.tool_calls ?? []) {
+        if (tc.type !== "function") continue;
+        let args: Record<string, unknown> = {};
+        try {
+          args = JSON.parse(tc.function.arguments);
+        } catch {
+          /* keep {} */
         }
+        idToName.set(tc.id, tc.function.name);
+        input.push({
+          type: "function_call",
+          id: tc.id,
+          name: tc.function.name,
+          arguments: args,
+        });
       }
-      if (parts.length) contents.push({ role: "model", parts });
     } else if (m.role === "tool") {
-      const name = idToName.get(m.tool_call_id) ?? "unknown";
       const raw = typeof m.content === "string" ? m.content : "";
-      let response: Record<string, unknown>;
+      let result: unknown;
       try {
-        const parsed = JSON.parse(raw);
-        response =
-          parsed && typeof parsed === "object" ? parsed : { result: parsed };
+        result = JSON.parse(raw);
       } catch {
-        response = { result: raw };
+        result = { result: raw };
       }
-      contents.push({
-        role: "user",
-        parts: [{ functionResponse: { name, response } }],
+      input.push({
+        type: "function_result",
+        call_id: m.tool_call_id,
+        name: idToName.get(m.tool_call_id) ?? "unknown",
+        result,
       });
     }
   }
 
-  return { systemInstruction, contents };
+  return { systemInstruction, input };
 }
