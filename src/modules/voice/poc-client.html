@@ -154,6 +154,7 @@
       let lastSpeechEndAt = null;
       let awaitingFirstAudio = false;
       let userLineEl = null;
+      const userLinesById = new Map();
 
       function log(el, text, cls) {
         const div = document.createElement("div");
@@ -300,6 +301,9 @@
             case "transcript":
               handleTranscript(msg);
               break;
+            case "transcript.correction":
+              applyTranscriptCorrection(msg);
+              break;
             case "tool_call":
               log($("events"), "→ 呼叫工具 " + msg.name, "evt");
               break;
@@ -312,6 +316,9 @@
               break;
             case "interrupted":
               clearPlayback();
+              // 只結束當前字幕行；utteranceId 對照表要留著，因為被打斷那句的
+              // transcript.correction 會在 interrupted 之後才到。
+              userLineEl = null;
               log($("events"), "(打斷)", "evt");
               break;
             case "turn.complete":
@@ -341,6 +348,7 @@
           userLineEl.className = "line user";
           $("transcripts").appendChild(userLineEl);
         }
+        if (msg.utteranceId) userLinesById.set(msg.utteranceId, userLineEl);
         if (msg.final === true) {
           userLineEl.textContent = msg.text;
           userLineEl = null;
@@ -350,8 +358,16 @@
         $("transcripts").scrollTop = $("transcripts").scrollHeight;
       }
 
+      function applyTranscriptCorrection(msg) {
+        const el = userLinesById.get(msg.utteranceId);
+        if (!el) return;
+        el.textContent = msg.text;
+        userLinesById.delete(msg.utteranceId);
+      }
+
       function cleanup() {
         userLineEl = null;
+        userLinesById.clear();
         if (workletNode) workletNode.disconnect();
         if (micStream) micStream.getTracks().forEach((t) => t.stop());
         if (audioCtx) audioCtx.close();

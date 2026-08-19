@@ -20,6 +20,7 @@ vi.mock("./transcript-corrector", () => ({
 import { createLiveBridge } from "./live-bridge";
 import { executeLocalTool } from "../ai/agent-tools";
 import { buildGeminiTools } from "../agent/tool-catalog";
+import { correctUserTranscript } from "./transcript-corrector";
 
 function makeWs(): WebSocket {
   return {
@@ -112,6 +113,7 @@ describe("createLiveBridge transcript forwarding", () => {
         role: "user",
         text: "帶我去火車站",
         final: false,
+        utteranceId: "u1",
       }),
     );
     expect(ws.send).toHaveBeenCalledWith(
@@ -123,7 +125,7 @@ describe("createLiveBridge transcript forwarding", () => {
     );
   });
 
-  it("accumulates interim user fragments and emits one corrected final on finished", async () => {
+  it("accumulates interim user fragments and emits a raw final plus a later correction", async () => {
     let onmessage: ((message: unknown) => void) | undefined;
     connect.mockImplementation(async ({ callbacks }) => {
       onmessage = callbacks.onmessage;
@@ -139,7 +141,7 @@ describe("createLiveBridge transcript forwarding", () => {
       serverContent: { inputTranscription: { text: "車站", finished: true } },
     });
 
-    await vi.waitFor(() => expect(ws.send).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(ws.send).toHaveBeenCalledTimes(4));
     expect(ws.send).toHaveBeenNthCalledWith(
       1,
       JSON.stringify({
@@ -147,6 +149,7 @@ describe("createLiveBridge transcript forwarding", () => {
         role: "user",
         text: "我想去珠北",
         final: false,
+        utteranceId: "u1",
       }),
     );
     expect(ws.send).toHaveBeenNthCalledWith(
@@ -156,6 +159,7 @@ describe("createLiveBridge transcript forwarding", () => {
         role: "user",
         text: "車站",
         final: false,
+        utteranceId: "u1",
       }),
     );
     expect(ws.send).toHaveBeenNthCalledWith(
@@ -163,10 +167,119 @@ describe("createLiveBridge transcript forwarding", () => {
       JSON.stringify({
         type: "transcript",
         role: "user",
-        text: "我想去竹北車站",
+        text: "我想去珠北車站",
         final: true,
+        utteranceId: "u1",
       }),
     );
+    expect(ws.send).toHaveBeenNthCalledWith(
+      4,
+      JSON.stringify({
+        type: "transcript.correction",
+        role: "user",
+        text: "我想去竹北車站",
+        utteranceId: "u1",
+      }),
+    );
+  });
+
+  it("skips the correction frame when the corrector changes nothing", async () => {
+    let onmessage: ((message: unknown) => void) | undefined;
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      return makeSession();
+    });
+    const ws = makeWs();
+
+    await createLiveBridge({ ws, userId: "voice-user" });
+    onmessage?.({
+      serverContent: {
+        inputTranscription: { text: "我想去竹北車站", finished: true },
+      },
+    });
+
+    await vi.waitFor(() => expect(ws.send).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(ws.send).toHaveBeenCalledTimes(2);
+    expect(
+      (ws.send as unknown as { mock: { calls: string[][] } }).mock.calls.map(
+        (call) => JSON.parse(call[0]).type,
+      ),
+    ).toEqual(["transcript", "transcript"]);
+  });
+
+  it("does not send the correction frame when the session closed while it was in flight", async () => {
+    let onmessage: ((message: unknown) => void) | undefined;
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      return makeSession();
+    });
+    const ws = makeWs();
+    vi.mocked(correctUserTranscript).mockImplementationOnce(
+      (text: string) =>
+        new Promise((resolve) =>
+          setTimeout(() => resolve(text.replace("珠北", "竹北")), 300),
+        ),
+    );
+
+    const bridge = await createLiveBridge({ ws, userId: "voice-user" });
+    onmessage?.({
+      serverContent: {
+        inputTranscription: { text: "我想去珠北車站", finished: true },
+      },
+    });
+    await vi.waitFor(() => expect(ws.send).toHaveBeenCalledTimes(2));
+    bridge.close();
+
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    const types = (
+      ws.send as unknown as { mock: { calls: string[][] } }
+    ).mock.calls.map((call) => JSON.parse(call[0]).type);
+    expect(types).not.toContain("transcript.correction");
+  });
+
+  it("emits the user final before any model transcript even when correction is slow", async () => {
+    let onmessage: ((message: unknown) => void) | undefined;
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      return makeSession();
+    });
+    const ws = makeWs();
+    vi.mocked(correctUserTranscript).mockImplementationOnce(
+      (text: string) =>
+        new Promise((resolve) => setTimeout(() => resolve(text), 60)),
+    );
+
+    await createLiveBridge({ ws, userId: "voice-user" });
+    onmessage?.({ serverContent: { inputTranscription: { text: "你好。" } } });
+    onmessage?.({
+      serverContent: {
+        modelTurn: { parts: [{ text: "" }] },
+        outputTranscription: { text: "您好！有什麼我可以幫您的嗎？" },
+      },
+    });
+    onmessage?.({
+      serverContent: {
+        outputTranscription: { text: "無障礙設施查詢也可以。" },
+      },
+    });
+    onmessage?.({ serverContent: { turnComplete: true } });
+
+    await vi.waitFor(() =>
+      expect(
+        (ws.send as unknown as { mock: { calls: string[][] } }).mock.calls.some(
+          (call) => JSON.parse(call[0]).final === true,
+        ),
+      ).toBe(true),
+    );
+    const frames = (
+      ws.send as unknown as { mock: { calls: string[][] } }
+    ).mock.calls.map((call) => JSON.parse(call[0]));
+    const finalIndex = frames.findIndex((f) => f.final === true);
+    const firstModelIndex = frames.findIndex((f) => f.role === "model");
+    expect(finalIndex).toBeGreaterThanOrEqual(0);
+    expect(firstModelIndex).toBeGreaterThanOrEqual(0);
+    expect(finalIndex).toBeLessThan(firstModelIndex);
   });
 });
 

@@ -214,6 +214,8 @@ export async function createLiveBridge(
   let lastPositionProcessedAt = 0;
   let latestPosition: NavPosition | null = userLocation ?? null;
   let userTranscriptBuffer = "";
+  let utteranceSeq = 0;
+  let currentUtteranceId: string | null = null;
   let armGen = 0;
   let messageQueue = Promise.resolve();
   let pendingToolMessages = 0;
@@ -401,18 +403,45 @@ export async function createLiveBridge(
     if (!disposed && session) session.sendToolResponse({ functionResponses });
   };
 
-  const finalizeUserTranscript = async (): Promise<void> => {
+  /**
+   * Closes the current user utterance. The final text is emitted synchronously
+   * with the raw (uncorrected) transcript so it can never land after the model
+   * transcript of the turn it belongs to — homophone correction needs an LLM
+   * round-trip (up to 2.5s) and used to push this frame into the middle of the
+   * model's output stream. The corrected text follows later as a separate
+   * `transcript.correction` frame carrying the same `utteranceId`.
+   */
+  const finalizeUserTranscript = (): void => {
     const raw = userTranscriptBuffer.trim();
+    const utteranceId = currentUtteranceId;
     userTranscriptBuffer = "";
-    if (!raw) return;
-    const corrected = await correctUserTranscript(raw);
-    if (disposed) return;
+    currentUtteranceId = null;
+    if (!raw || !utteranceId) return;
     sendJson({
       type: "transcript",
       role: "user",
-      text: corrected,
+      text: raw,
       final: true,
+      utteranceId,
     });
+    void correctUserTranscript(raw)
+      .then((corrected) => {
+        if (disposed) return;
+        const cleaned = corrected.trim();
+        if (!cleaned || cleaned === raw) return;
+        sendJson({
+          type: "transcript.correction",
+          role: "user",
+          text: cleaned,
+          utteranceId,
+        });
+      })
+      .catch((err) => {
+        console.warn(
+          "[voice] transcript correction failed:",
+          summarizeError(err instanceof Error ? err.message : String(err)),
+        );
+      });
   };
 
   const handleServerMessage = async (
@@ -423,7 +452,7 @@ export async function createLiveBridge(
     if (content) {
       if (content.modelTurn?.parts?.length) {
         liveState = "MODEL_OUTPUT";
-        if (userTranscriptBuffer.trim()) void finalizeUserTranscript();
+        if (userTranscriptBuffer.trim()) finalizeUserTranscript();
       }
       for (const part of content.modelTurn?.parts ?? []) {
         if (part.inlineData?.data) forwardAudio(part.inlineData.data);
@@ -434,15 +463,17 @@ export async function createLiveBridge(
           const piece = normalizeVoiceTranscript(
             content.inputTranscription.text,
           );
+          if (!currentUtteranceId) currentUtteranceId = `u${++utteranceSeq}`;
           userTranscriptBuffer += piece;
           sendJson({
             type: "transcript",
             role: "user",
             text: piece,
             final: false,
+            utteranceId: currentUtteranceId,
           });
         }
-        if (content.inputTranscription.finished) void finalizeUserTranscript();
+        if (content.inputTranscription.finished) finalizeUserTranscript();
       }
       if (content.outputTranscription?.text) {
         sendJson({
@@ -452,7 +483,7 @@ export async function createLiveBridge(
         });
       }
       if (content.interrupted) {
-        if (userTranscriptBuffer.trim()) void finalizeUserTranscript();
+        if (userTranscriptBuffer.trim()) finalizeUserTranscript();
         navSession.onInterrupted();
         navSpeaking = false;
         clearTurnTimeout();
@@ -466,7 +497,7 @@ export async function createLiveBridge(
       await handleToolCalls(message.toolCall.functionCalls);
       if (!disposed) liveState = "AWAIT_MODEL";
     } else if (content?.turnComplete && !content.interrupted) {
-      if (userTranscriptBuffer.trim()) void finalizeUserTranscript();
+      if (userTranscriptBuffer.trim()) finalizeUserTranscript();
       if (navSpeaking) navSession.onTurnComplete();
       navSpeaking = false;
       turnTimeoutStrikes = 0;
