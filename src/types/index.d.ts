@@ -130,6 +130,8 @@ export interface IParkingSpace {
   hasChargingPoint: boolean;
   isDisabled: boolean;
   externalId: string;
+  latitude?: number;
+  longitude?: number;
   location: { type: "Point"; coordinates: [number, number] };
   importedAt: Date;
 }
@@ -146,7 +148,10 @@ export interface IParkingLot {
   wheelchairAccessible?: boolean;
   disabledSpaces?: number;
   totalCarSpaces?: number;
+  latitude?: number;
+  longitude?: number;
   position: { type: "Point"; coordinates: [number, number] };
+  location?: { type: "Point"; coordinates: [number, number] };
   importedAt: Date;
 }
 

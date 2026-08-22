@@ -63,6 +63,8 @@ export function spotRowToDocs(
     spaceType: typeof spaceType === "number" ? spaceType : SPACE_TYPE.CAR,
     hasChargingPoint: row.HasChargingPoint === 1,
     externalId: spotId,
+    latitude: lat,
+    longitude: lng,
     location: {
       type: "Point" as const,
       coordinates: [lng, lat] as [number, number],
@@ -151,7 +153,10 @@ export function carParkRowToDoc(
     wheelchairAccessible: row.WheelchairAccessible === 1 ? true : undefined,
     disabledSpaces,
     totalCarSpaces,
+    latitude: lat,
+    longitude: lng,
     position: { type: "Point", coordinates: [lng, lat] },
+    location: { type: "Point", coordinates: [lng, lat] },
     importedAt: new Date(),
   };
 }

@@ -855,7 +855,14 @@ describe("findNearbyParking", () => {
     });
     expect(chain.limit).toHaveBeenCalledWith(50);
     expect(result).toEqual([
-      { _id: "p1", placeName: "x", location: GEO, type: "disabled" },
+      {
+        _id: "p1",
+        placeName: "x",
+        latitude: 25.03,
+        longitude: 121.5,
+        location: GEO,
+        type: "disabled",
+      },
     ]);
   });
 
@@ -921,6 +928,8 @@ describe("findNearbyParking", () => {
         isMarked: false,
         source: "tdx",
         externalId: "ext-s1",
+        latitude: 25.03,
+        longitude: 121.5,
         location: GEO,
         importedAt: SPACE_IMPORTED_AT,
         type: "standard",

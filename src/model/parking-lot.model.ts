@@ -12,9 +12,15 @@ const parkingLotSchema = new Schema<IParkingLot>({
   wheelchairAccessible: { type: Boolean },
   disabledSpaces: { type: Number },
   totalCarSpaces: { type: Number },
+  latitude: { type: Number },
+  longitude: { type: Number },
   position: {
     type: { type: String, enum: ["Point"], required: true, default: "Point" },
     coordinates: { type: [Number], required: true },
+  },
+  location: {
+    type: { type: String, enum: ["Point"], default: "Point" },
+    coordinates: { type: [Number] },
   },
   importedAt: { type: Date, default: Date.now },
 });

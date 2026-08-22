@@ -571,7 +571,9 @@ export const ParkingLotNearbyItemSchema = z
       example: 36,
       description: "汽車總車位數（可能缺）",
     }),
-    position: GeoPointSchema,
+    latitude: z.number().optional().openapi({ example: 24.137 }),
+    longitude: z.number().optional().openapi({ example: 120.647 }),
+    location: GeoPointSchema,
     importedAt: z.string().openapi({ example: "2026-08-14T12:02:20.224Z" }),
   })
   .openapi("ParkingLotNearbyItem");

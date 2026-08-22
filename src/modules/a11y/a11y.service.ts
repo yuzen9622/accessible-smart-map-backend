@@ -362,19 +362,31 @@ export type ParkingLotNearbyItem = {
   wheelchairAccessible?: boolean;
   disabledSpaces?: number;
   totalCarSpaces?: number;
-  position: { type: "Point"; coordinates: [number, number] };
+  latitude?: number;
+  longitude?: number;
+  location: { type: "Point"; coordinates: [number, number] };
   importedAt: Date;
 };
 
 export type ParkingNearbyResult = ParkingNearbyItem | ParkingLotNearbyItem;
 
 function disabledParkingToItem(doc: IDisabledParking): ParkingNearbyItem {
-  return { ...doc, type: "disabled" };
+  const lat = doc.latitude ?? doc.location?.coordinates[1];
+  const lng = doc.longitude ?? doc.location?.coordinates[0];
+  return {
+    ...doc,
+    _id: String(doc._id),
+    ...(lat !== undefined ? { latitude: lat } : {}),
+    ...(lng !== undefined ? { longitude: lng } : {}),
+    type: "disabled",
+  };
 }
 
 function parkingSpaceToItem(doc: IParkingSpace): ParkingNearbyItem {
+  const lat = doc.latitude ?? doc.location?.coordinates[1];
+  const lng = doc.longitude ?? doc.location?.coordinates[0];
   return {
-    _id: doc._id,
+    _id: String(doc._id),
     city: doc.city,
     district: doc.city,
     areacode: "",
@@ -385,6 +397,8 @@ function parkingSpaceToItem(doc: IParkingSpace): ParkingNearbyItem {
     isMarked: false,
     source: "tdx",
     externalId: doc.externalId,
+    latitude: lat,
+    longitude: lng,
     location: doc.location,
     importedAt: doc.importedAt,
     type: "standard",
@@ -395,7 +409,29 @@ function parkingSpaceToItem(doc: IParkingSpace): ParkingNearbyItem {
 }
 
 function parkingLotToItem(doc: IParkingLot): ParkingLotNearbyItem {
-  return { ...doc, type: "lot" };
+  const coords = doc.location?.coordinates ?? doc.position?.coordinates;
+  const lat = doc.latitude ?? coords?.[1];
+  const lng = doc.longitude ?? coords?.[0];
+  return {
+    _id: String(doc._id),
+    carParkId: doc.carParkId,
+    name: doc.name,
+    address: doc.address,
+    city: doc.city,
+    district: doc.district,
+    carParkType: doc.carParkType,
+    chargeTypes: doc.chargeTypes,
+    wheelchairAccessible: doc.wheelchairAccessible,
+    disabledSpaces: doc.disabledSpaces,
+    totalCarSpaces: doc.totalCarSpaces,
+    latitude: lat,
+    longitude: lng,
+    location: coords
+      ? { type: "Point", coordinates: coords }
+      : (doc.location ?? { type: "Point", coordinates: [0, 0] }),
+    importedAt: doc.importedAt,
+    type: "lot",
+  };
 }
 
 /**

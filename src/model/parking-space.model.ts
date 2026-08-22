@@ -8,6 +8,8 @@ const parkingSpaceSchema = new Schema<IParkingSpace>({
   hasChargingPoint: { type: Boolean, default: false },
   isDisabled: { type: Boolean, default: false },
   externalId: { type: String, required: true },
+  latitude: { type: Number },
+  longitude: { type: Number },
   location: {
     type: { type: String, enum: ["Point"], required: true, default: "Point" },
     coordinates: { type: [Number], required: true },

@@ -63,6 +63,12 @@ describe("spotRowToDocs", () => {
       spaceType: 1,
       hasChargingPoint: true,
       isDisabled: false,
+      latitude: 25.03729,
+      longitude: 121.55917,
+      location: {
+        type: "Point",
+        coordinates: [121.55917, 25.03729],
+      },
     });
   });
 
@@ -133,6 +139,12 @@ describe("carParkRowToDoc", () => {
       wheelchairAccessible: true,
       disabledSpaces: 6,
       totalCarSpaces: 228,
+      latitude: 25.04947,
+      longitude: 121.51637,
+      location: {
+        type: "Point",
+        coordinates: [121.51637, 25.04947],
+      },
     });
     expect(doc?.position.coordinates).toEqual([121.51637, 25.04947]);
   });

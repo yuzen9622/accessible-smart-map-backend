@@ -404,6 +404,7 @@ function legFacilitiesEvenAfterCompacting(
   leg: WalkLeg,
 ): Array<{ tags?: Record<string, string> }> {
   if (leg.a11yFacilities.length) return leg.a11yFacilities;
+  // SAFETY: Legacy compacted legs may carry a11yRefs before facility resolution.
   const refs = (leg as unknown as { a11yRefs?: string[] }).a11yRefs;
   if (!refs?.length || !route.facilities) return [];
   return refs
@@ -1678,8 +1679,8 @@ export async function planAccessibleRouteFromRequest(
         const p = parking[0];
         const isLot = p.type === "lot";
         const anchor: LatLng = {
-          lat: isLot ? p.position.coordinates[1] : p.location.coordinates[1],
-          lng: isLot ? p.position.coordinates[0] : p.location.coordinates[0],
+          lat: p.location.coordinates[1],
+          lng: p.location.coordinates[0],
         };
         routingDest = anchor;
         finalWalkTarget = dest;
