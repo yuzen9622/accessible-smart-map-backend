@@ -133,18 +133,14 @@ class GraphStatisticsTests(unittest.TestCase):
             "outdoor_undirected_segment_count": 220_728,
             "outdoor_edge_type_distribution": {"10": 5},
         }
-        self.assertEqual(
-            MODULE.outdoor_graph_statistics(notes), (220_728, {"10": 5})
-        )
+        self.assertEqual(MODULE.outdoor_graph_statistics(notes), (220_728, {"10": 5}))
 
     def test_outdoor_statistics_fall_back_to_a_freshly_built_graph(self):
         notes = {
             "undirected_segment_count": 220_728,
             "edge_type_distribution": {10: 5},
         }
-        self.assertEqual(
-            MODULE.outdoor_graph_statistics(notes), (220_728, {"10": 5})
-        )
+        self.assertEqual(MODULE.outdoor_graph_statistics(notes), (220_728, {"10": 5}))
 
     def test_notes_without_outdoor_statistics_are_rejected(self):
         with self.assertRaises(SystemExit):
