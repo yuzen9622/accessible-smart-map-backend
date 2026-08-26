@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  buildFuzzyKeywordRegex,
   busRouteQueryCandidates,
   equalRouteName,
   escapeODataLiteral,
@@ -198,5 +199,29 @@ describe("equalRouteName & normalizeRouteName", () => {
     expect(equalRouteName("藍1", "1")).toBe(false);
     expect(equalRouteName("500", "500跳蛙")).toBe(false);
     expect(equalRouteName("153", "153副")).toBe(false);
+  });
+});
+
+describe("buildFuzzyKeywordRegex", () => {
+  it("expands 台 and 臺 to [台臺] character class", () => {
+    const rxStr1 = buildFuzzyKeywordRegex("台中車站");
+    expect(rxStr1).toBe("[台臺]中車站");
+    const rx1 = new RegExp(rxStr1);
+    expect(rx1.test("台中車站")).toBe(true);
+    expect(rx1.test("臺中車站")).toBe(true);
+    expect(rx1.test("台北車站")).toBe(false);
+
+    const rxStr2 = buildFuzzyKeywordRegex("臺北");
+    expect(rxStr2).toBe("[台臺]北");
+    const rx2 = new RegExp(rxStr2);
+    expect(rx2.test("台北車站")).toBe(true);
+    expect(rx2.test("臺北車站")).toBe(true);
+  });
+
+  it("escapes regex special characters safely", () => {
+    const rxStr = buildFuzzyKeywordRegex("綠1(副)");
+    const rx = new RegExp(rxStr);
+    expect(rx.test("綠1(副)")).toBe(true);
+    expect(rx.test("綠1副")).toBe(false);
   });
 });

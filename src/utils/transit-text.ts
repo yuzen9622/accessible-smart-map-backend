@@ -296,3 +296,13 @@ export function formatWalkStepInstruction(step: {
       return named ? `請沿「${street}」前進${suffix}` : `請繼續前行${suffix}`;
   }
 }
+
+/**
+ * Escapes regex special characters and expands 台/臺 to [台臺] character class
+ * so search terms match both variants in MongoDB regex queries.
+ */
+export function buildFuzzyKeywordRegex(keyword: string): string {
+  const normalized = keyword.normalize("NFKC").trim();
+  const escaped = normalized.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
+  return escaped.replace(/[台臺]/g, "[台臺]");
+}

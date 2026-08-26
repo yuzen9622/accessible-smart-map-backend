@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { haversineMeters } from "./geo";
+import { haversineMeters, parseLocation } from "./geo";
 
 describe("haversineMeters", () => {
   it("is zero for identical points", () => {
@@ -23,5 +23,69 @@ describe("haversineMeters", () => {
     const d = haversineMeters(25, 121, 25, 121.001);
     expect(d).toBeGreaterThan(95);
     expect(d).toBeLessThan(106);
+  });
+});
+
+describe("parseLocation", () => {
+  it("parses comma-separated lat,lng string", () => {
+    expect(parseLocation("24.137,120.686")).toEqual({
+      lat: 24.137,
+      lng: 120.686,
+    });
+    expect(parseLocation("24.137, 120.686")).toEqual({
+      lat: 24.137,
+      lng: 120.686,
+    });
+  });
+
+  it("auto-detects reversed lng,lat string (Taiwan coordinates)", () => {
+    expect(parseLocation("120.686,24.137")).toEqual({
+      lat: 24.137,
+      lng: 120.686,
+    });
+  });
+
+  it("parses JSON string with lat and lng or latitude and longitude", () => {
+    expect(parseLocation('{"lat":24.137,"lng":120.686}')).toEqual({
+      lat: 24.137,
+      lng: 120.686,
+    });
+    expect(parseLocation('{"latitude":24.137,"longitude":120.686}')).toEqual({
+      lat: 24.137,
+      lng: 120.686,
+    });
+  });
+
+  it("parses objects with lat/lng or latitude/longitude", () => {
+    expect(parseLocation({ lat: 24.137, lng: 120.686 })).toEqual({
+      lat: 24.137,
+      lng: 120.686,
+    });
+    expect(parseLocation({ latitude: "24.137", longitude: "120.686" })).toEqual(
+      {
+        lat: 24.137,
+        lng: 120.686,
+      },
+    );
+  });
+
+  it("parses GeoJSON array [lng, lat] and [lat, lng]", () => {
+    expect(parseLocation([120.686, 24.137])).toEqual({
+      lat: 24.137,
+      lng: 120.686,
+    });
+    expect(parseLocation([24.137, 120.686])).toEqual({
+      lat: 24.137,
+      lng: 120.686,
+    });
+  });
+
+  it("returns undefined for invalid inputs", () => {
+    expect(parseLocation(undefined)).toBeUndefined();
+    expect(parseLocation(null)).toBeUndefined();
+    expect(parseLocation("")).toBeUndefined();
+    expect(parseLocation("invalid,input")).toBeUndefined();
+    expect(parseLocation({})).toBeUndefined();
+    expect(parseLocation([999, 999])).toBeUndefined();
   });
 });
