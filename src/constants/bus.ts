@@ -52,6 +52,38 @@ export const CITY_ALIAS: Record<string, TaiwanCityEn> = {
   馬祖: TaiwanCityEn.LienchiangCounty,
 };
 
+/**
+ * Approximate center coordinates [lat, lng] for each city/county in Taiwan,
+ * used as distance calculation fallback when route stops lack GPS coordinates.
+ */
+export const CITY_COORDINATES: Record<
+  TaiwanCityEn,
+  { lat: number; lng: number }
+> = {
+  [TaiwanCityEn.Taipei]: { lat: 25.0375, lng: 121.5637 },
+  [TaiwanCityEn.NewTaipei]: { lat: 25.0117, lng: 121.4658 },
+  [TaiwanCityEn.Taoyuan]: { lat: 24.9936, lng: 121.301 },
+  [TaiwanCityEn.Taichung]: { lat: 24.1625, lng: 120.647 },
+  [TaiwanCityEn.Tainan]: { lat: 22.9997, lng: 120.227 },
+  [TaiwanCityEn.Kaohsiung]: { lat: 22.6273, lng: 120.3014 },
+  [TaiwanCityEn.Keelung]: { lat: 25.1276, lng: 121.7392 },
+  [TaiwanCityEn.Hsinchu]: { lat: 24.8138, lng: 120.9675 },
+  [TaiwanCityEn.HsinchuCounty]: { lat: 24.8387, lng: 121.0177 },
+  [TaiwanCityEn.MiaoliCounty]: { lat: 24.5602, lng: 120.8214 },
+  [TaiwanCityEn.ChanghuaCounty]: { lat: 24.0816, lng: 120.5385 },
+  [TaiwanCityEn.NantouCounty]: { lat: 23.9609, lng: 120.9719 },
+  [TaiwanCityEn.YunlinCounty]: { lat: 23.7092, lng: 120.4313 },
+  [TaiwanCityEn.Chiayi]: { lat: 23.4801, lng: 120.4491 },
+  [TaiwanCityEn.ChiayiCounty]: { lat: 23.4518, lng: 120.2555 },
+  [TaiwanCityEn.PingtungCounty]: { lat: 22.6762, lng: 120.4941 },
+  [TaiwanCityEn.YilanCounty]: { lat: 24.7021, lng: 121.7377 },
+  [TaiwanCityEn.HualienCounty]: { lat: 23.9872, lng: 121.6016 },
+  [TaiwanCityEn.TaitungCounty]: { lat: 22.7583, lng: 121.1444 },
+  [TaiwanCityEn.KinmenCounty]: { lat: 24.4493, lng: 118.3766 },
+  [TaiwanCityEn.PenghuCounty]: { lat: 23.5711, lng: 119.5793 },
+  [TaiwanCityEn.LienchiangCounty]: { lat: 26.1505, lng: 119.9499 },
+};
+
 const EN_CITIES = new Set<string>(Object.values(TaiwanCityEn));
 
 /**
