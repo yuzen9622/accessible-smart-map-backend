@@ -79,6 +79,24 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+  postgis:
+    image: postgis/postgis:16-3.4
+    container_name: postgis
+    environment:
+      POSTGRES_USER: ${PED_PG_USER}
+      POSTGRES_PASSWORD: ${PED_PG_PASSWORD}
+      POSTGRES_DB: ped_graph
+    volumes:
+      - postgis-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PED_PG_USER} -d ped_graph"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   otp:
     # Pin the minor version (spec §4.1) — never `latest`.
     # 2.9.0 (Java 25): planConnection supports stop-location origins, which
@@ -161,3 +179,4 @@ networks:
 volumes:
   mongo-data:
   chroma-data:
+  postgis-data:
