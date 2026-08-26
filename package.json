@@ -10,6 +10,7 @@
     "build:otp": "pnpm run generate:gtfs-parents && docker-compose run --rm otp --build --save",
     "build:ped-graph": "npx dotenvx run -- python3 src/scripts/build-ped-graph.py",
     "bench:ped-router": "npx dotenvx run -- node --expose-gc -r ts-node/register src/scripts/ped-router-phase0-bench.ts",
+    "bench:ped-router-vs-otp": "npx dotenvx run -- ts-node src/scripts/ped-router-otp-comparison.ts",
     "build:valhalla-tiles": "bash src/scripts/build-valhalla-tiles.sh",
     "capture:rail-fixtures": "npx dotenvx run -- ts-node src/scripts/capture-rail-station-fixtures.ts",
     "clean": "rimraf dist",
