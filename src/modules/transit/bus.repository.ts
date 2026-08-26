@@ -2,6 +2,7 @@ import BusRouteModel from "../../model/bus-route.model";
 import BusVehicleModel from "../../model/bus-vehicle.model";
 import BusStopModel from "../../model/bus-stop.model";
 import type { ITdxBusVehicle } from "../../types";
+import { buildFuzzyKeywordRegex } from "../../utils/transit-text";
 
 /** A stored bus route with the stop list the info endpoint reads. */
 export interface BusRouteDoc {
@@ -25,7 +26,12 @@ export interface BusRouteSearchRow {
   _id: { routeName: string; city: string };
   subRoutes: {
     direction: number;
-    stops?: { seq: number; stopName?: { Zh_tw?: string } }[];
+    stops?: {
+      seq: number;
+      stopName?: { Zh_tw?: string };
+      lat?: number;
+      lng?: number;
+    }[];
   }[];
 }
 
@@ -44,11 +50,6 @@ export interface BusStopDoc {
 export interface SubRouteNameRow {
   subRouteName?: { Zh_tw?: string };
   routeName?: { Zh_tw?: string };
-}
-
-/** Escapes a user keyword for safe use inside a `$regex`. */
-function escapeRegExp(keyword: string): string {
-  return keyword.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
 }
 
 /**
@@ -98,7 +99,10 @@ export async function searchRoutesByKeyword(
   return BusRouteModel.aggregate([
     {
       $match: {
-        "routeName.Zh_tw": { $regex: escapeRegExp(keyword), $options: "i" },
+        "routeName.Zh_tw": {
+          $regex: buildFuzzyKeywordRegex(keyword),
+          $options: "i",
+        },
       },
     },
     {
@@ -113,19 +117,47 @@ export async function searchRoutesByKeyword(
 
 /**
  * Stops whose Chinese name fuzzily matches a keyword.
+ * When `userLoc` is provided, utilizes MongoDB `$geoNear` to return the nearest
+ * stops matching the keyword first, avoiding premature truncation across regions.
  *
  * @param keyword Free-text search term
  * @param limit Maximum rows
+ * @param userLoc Optional reference location for spatial ordering
  * @returns Matching stops
  */
 export async function searchStopsByKeyword(
   keyword: string,
   limit: number,
+  userLoc?: { lat: number; lng: number } | null,
 ): Promise<BusStopDoc[]> {
+  const fuzzyRegex = buildFuzzyKeywordRegex(keyword);
+
+  if (userLoc) {
+    return BusStopModel.aggregate([
+      {
+        $geoNear: {
+          near: { type: "Point", coordinates: [userLoc.lng, userLoc.lat] },
+          distanceField: "distance",
+          spherical: true,
+          query: {
+            "stopName.Zh_tw": {
+              $regex: fuzzyRegex,
+              $options: "i",
+            },
+          },
+        },
+      },
+      { $limit: limit },
+    ]);
+  }
+
   return BusStopModel.aggregate([
     {
       $match: {
-        "stopName.Zh_tw": { $regex: escapeRegExp(keyword), $options: "i" },
+        "stopName.Zh_tw": {
+          $regex: fuzzyRegex,
+          $options: "i",
+        },
       },
     },
     { $limit: limit },

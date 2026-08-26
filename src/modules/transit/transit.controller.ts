@@ -4,6 +4,7 @@ import { MSG, TRANSIT_MSG } from "../../constants/messages";
 import type { ApiResponse } from "../../types/response";
 import type { Response, Request } from "express";
 import type { TaiwanCityEn } from "../../types/transit";
+import { parseLocation } from "../../utils/geo";
 import * as busService from "./bus.service";
 import * as alertService from "./alert.service";
 
@@ -219,8 +220,39 @@ async function searchBusRoutesHandler(
   res: Response<ApiResponse<any>>,
 ) {
   try {
-    const { keyword } = req.validated?.query as { keyword: string };
-    const result = await busService.searchBusRoutes(keyword);
+    const { keyword, location, lat, lng, latitude, longitude, limit } = req
+      .validated?.query as {
+      keyword: string;
+      location?: unknown;
+      lat?: number;
+      lng?: number;
+      latitude?: number;
+      longitude?: number;
+      limit?: number;
+    };
+
+    let userLoc: { lat: number; lng: number } | undefined;
+    if (location !== undefined && location !== null && location !== "") {
+      userLoc = parseLocation(location);
+    }
+    if (!userLoc) {
+      const parsedLat = lat ?? latitude;
+      const parsedLng = lng ?? longitude;
+      if (
+        parsedLat !== undefined &&
+        parsedLng !== undefined &&
+        !Number.isNaN(Number(parsedLat)) &&
+        !Number.isNaN(Number(parsedLng))
+      ) {
+        userLoc = { lat: Number(parsedLat), lng: Number(parsedLng) };
+      }
+    }
+
+    const result = await busService.searchBusRoutes(
+      keyword,
+      userLoc,
+      limit ?? 50,
+    );
     if (!result.ok) {
       return sendResponse(
         res,
@@ -248,8 +280,39 @@ async function searchBusStopsHandler(
   res: Response<ApiResponse<any>>,
 ) {
   try {
-    const { keyword } = req.validated?.query as { keyword: string };
-    const result = await busService.searchBusStops(keyword);
+    const { keyword, location, lat, lng, latitude, longitude, limit } = req
+      .validated?.query as {
+      keyword: string;
+      location?: unknown;
+      lat?: number;
+      lng?: number;
+      latitude?: number;
+      longitude?: number;
+      limit?: number;
+    };
+
+    let userLoc: { lat: number; lng: number } | undefined;
+    if (location !== undefined && location !== null && location !== "") {
+      userLoc = parseLocation(location);
+    }
+    if (!userLoc) {
+      const parsedLat = lat ?? latitude;
+      const parsedLng = lng ?? longitude;
+      if (
+        parsedLat !== undefined &&
+        parsedLng !== undefined &&
+        !Number.isNaN(Number(parsedLat)) &&
+        !Number.isNaN(Number(parsedLng))
+      ) {
+        userLoc = { lat: Number(parsedLat), lng: Number(parsedLng) };
+      }
+    }
+
+    const result = await busService.searchBusStops(
+      keyword,
+      userLoc,
+      limit ?? 50,
+    );
     if (!result.ok) {
       return sendResponse(
         res,

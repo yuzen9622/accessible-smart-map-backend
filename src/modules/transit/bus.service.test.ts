@@ -4,7 +4,9 @@ vi.mock("../../config/fetch", () => ({ tdxFetch: vi.fn() }));
 vi.mock("../../model/bus-vehicle.model", () => ({
   default: { find: vi.fn() },
 }));
-vi.mock("../../model/bus-route.model", () => ({ default: { find: vi.fn() } }));
+vi.mock("../../model/bus-route.model", () => ({
+  default: { find: vi.fn(), aggregate: vi.fn() },
+}));
 vi.mock("../../model/bus-stop.model", () => ({
   default: { aggregate: vi.fn() },
 }));
@@ -18,6 +20,7 @@ import {
   getBusRealtimeOnRoute,
   getBusArrivalAtStop,
   searchBusStops,
+  searchBusRoutes,
 } from "./bus.service";
 import { TaiwanCityEn } from "../../types/transit";
 
@@ -200,6 +203,45 @@ describe("searchBusStops — 站牌關鍵字搜尋", () => {
       "Taichung",
       "Taipei",
     ]);
+    expect(result.stops[0].distance).toBeUndefined();
+  });
+
+  it("提供 location（台中座標）時，台中站牌排在台北站牌前面並帶 distance", async () => {
+    stopAggregateMock.mockResolvedValue([
+      {
+        stopUid: "TPE1",
+        stopName: { Zh_tw: "台北車站" },
+        city: "Taipei",
+        subRouteIds: [],
+        location: { coordinates: [121.5171, 25.0478] },
+      },
+      {
+        stopUid: "TXG1",
+        stopName: { Zh_tw: "台中車站" },
+        city: "Taichung",
+        subRouteIds: [],
+        location: { coordinates: [120.686, 24.137] },
+      },
+    ]);
+    mockRouteMap([]);
+
+    // 使用者在台中（24.137, 120.686）
+    const result = await searchBusStops("車站", {
+      lat: 24.137,
+      lng: 120.686,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.stops).toHaveLength(2);
+    // 第一個應該是台中車站（最近）
+    expect(result.stops[0].stopName).toBe("台中車站");
+    expect(result.stops[0].city).toBe("Taichung");
+    expect(result.stops[0].distance).toBeLessThan(100);
+
+    // 第二個是台北車站（較遠，約 135 km）
+    expect(result.stops[1].stopName).toBe("台北車站");
+    expect(result.stops[1].city).toBe("Taipei");
+    expect(result.stops[1].distance).toBeGreaterThan(100_000);
   });
 
   it("以 subRouteName→routeName 映射顯示路線名（而非 subRouteId）", async () => {
@@ -368,5 +410,123 @@ describe("City / InterCity scope 探測（不從路線號碼寫死判斷）", ()
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.status).toBe(500);
+  });
+});
+
+describe("searchBusRoutes — 關鍵字與座標距離排序", () => {
+  it("未提供 location 時，按預設順序回傳且不含 distance", async () => {
+    (
+      BusRouteModel.aggregate as unknown as ReturnType<typeof vi.fn>
+    ).mockResolvedValueOnce([
+      {
+        _id: { routeName: "307", city: "Taipei" },
+        subRoutes: [
+          {
+            direction: 0,
+            stops: [
+              {
+                seq: 1,
+                stopName: { Zh_tw: "撫順街口" },
+                lat: 25.06,
+                lng: 121.52,
+              },
+              {
+                seq: 2,
+                stopName: { Zh_tw: "板橋國中" },
+                lat: 25.01,
+                lng: 121.46,
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+
+    const result = await searchBusRoutes("307");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.routes).toHaveLength(1);
+    expect(result.routes[0]).toEqual({
+      routeName: "307",
+      city: "Taipei",
+      departure: "撫順街口",
+      destination: "板橋國中",
+    });
+    expect(result.routes[0].distance).toBeUndefined();
+  });
+
+  it("提供 location（台中座標）時，台中路線排在台北路線前面並帶 distance", async () => {
+    (
+      BusRouteModel.aggregate as unknown as ReturnType<typeof vi.fn>
+    ).mockResolvedValueOnce([
+      {
+        _id: { routeName: "台北車站直達", city: "Taipei" },
+        subRoutes: [
+          {
+            direction: 0,
+            stops: [
+              {
+                seq: 1,
+                stopName: { Zh_tw: "台北車站" },
+                lat: 25.0478,
+                lng: 121.5171,
+              },
+            ],
+          },
+        ],
+      },
+      {
+        _id: { routeName: "台中車站接駁", city: "Taichung" },
+        subRoutes: [
+          {
+            direction: 0,
+            stops: [
+              {
+                seq: 1,
+                stopName: { Zh_tw: "台中車站" },
+                lat: 24.137,
+                lng: 120.686,
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+
+    // 使用者在台中（24.137, 120.686）
+    const result = await searchBusRoutes("車站", { lat: 24.137, lng: 120.686 });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.routes).toHaveLength(2);
+    // 第一個應該是台中車站接駁（最近）
+    expect(result.routes[0].routeName).toBe("台中車站接駁");
+    expect(result.routes[0].city).toBe("Taichung");
+    expect(result.routes[0].distance).toBeLessThan(100);
+
+    // 第二個是台北車站直達（較遠，約 135 km）
+    expect(result.routes[1].routeName).toBe("台北車站直達");
+    expect(result.routes[1].city).toBe("Taipei");
+    expect(result.routes[1].distance).toBeGreaterThan(100_000);
+  });
+
+  it("路線無站點座標時，以縣市中心座標作為 fallback 計算距離", async () => {
+    (
+      BusRouteModel.aggregate as unknown as ReturnType<typeof vi.fn>
+    ).mockResolvedValueOnce([
+      {
+        _id: { routeName: "台北無座標路線", city: "Taipei" },
+        subRoutes: [{ direction: 0, stops: [] }],
+      },
+      {
+        _id: { routeName: "台中無座標路線", city: "Taichung" },
+        subRoutes: [{ direction: 0, stops: [] }],
+      },
+    ]);
+
+    const result = await searchBusRoutes("路線", { lat: 24.16, lng: 120.64 });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.routes[0].routeName).toBe("台中無座標路線");
+    expect(result.routes[1].routeName).toBe("台北無座標路線");
   });
 });

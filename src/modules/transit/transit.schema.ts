@@ -54,6 +54,51 @@ export const BusSearchQuerySchema = z
       .string()
       .min(1)
       .openapi({ example: "307", description: "路線名稱搜尋關鍵字" }),
+    location: z
+      .union([
+        z.string(),
+        z.object({
+          lat: z.coerce.number().optional(),
+          lng: z.coerce.number().optional(),
+          latitude: z.coerce.number().optional(),
+          longitude: z.coerce.number().optional(),
+        }),
+        z.array(z.coerce.number()),
+      ])
+      .optional()
+      .openapi({
+        example: "25.0478,121.5171",
+        description:
+          "使用者座標（可為 '25.0478,121.5171' 或 {lat, lng}），用於依距離由近到遠排序",
+      }),
+    lat: z.coerce.number().min(-90).max(90).optional().openapi({
+      example: 25.0478,
+      description: "使用者緯度（與 lng 搭配使用）",
+    }),
+    lng: z.coerce.number().min(-180).max(180).optional().openapi({
+      example: 121.5171,
+      description: "使用者經度（與 lat 搭配使用）",
+    }),
+    latitude: z.coerce
+      .number()
+      .min(-90)
+      .max(90)
+      .optional()
+      .openapi({ example: 25.0478, description: "使用者緯度別名" }),
+    longitude: z.coerce
+      .number()
+      .min(-180)
+      .max(180)
+      .optional()
+      .openapi({ example: 121.5171, description: "使用者經度別名" }),
+    limit: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(100)
+      .default(50)
+      .optional()
+      .openapi({ example: 50, description: "回傳數量上限 (預設 50)" }),
   })
   .strict();
 
@@ -63,6 +108,51 @@ export const BusStopSearchQuerySchema = z
       .string()
       .min(1)
       .openapi({ example: "台北車站", description: "站牌名稱搜尋關鍵字" }),
+    location: z
+      .union([
+        z.string(),
+        z.object({
+          lat: z.coerce.number().optional(),
+          lng: z.coerce.number().optional(),
+          latitude: z.coerce.number().optional(),
+          longitude: z.coerce.number().optional(),
+        }),
+        z.array(z.coerce.number()),
+      ])
+      .optional()
+      .openapi({
+        example: "25.0478,121.5171",
+        description:
+          "使用者座標（可為 '25.0478,121.5171' 或 {lat, lng}），用於依距離由近到遠排序",
+      }),
+    lat: z.coerce.number().min(-90).max(90).optional().openapi({
+      example: 25.0478,
+      description: "使用者緯度（與 lng 搭配使用）",
+    }),
+    lng: z.coerce.number().min(-180).max(180).optional().openapi({
+      example: 121.5171,
+      description: "使用者經度（與 lat 搭配使用）",
+    }),
+    latitude: z.coerce
+      .number()
+      .min(-90)
+      .max(90)
+      .optional()
+      .openapi({ example: 25.0478, description: "使用者緯度別名" }),
+    longitude: z.coerce
+      .number()
+      .min(-180)
+      .max(180)
+      .optional()
+      .openapi({ example: 121.5171, description: "使用者經度別名" }),
+    limit: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(100)
+      .default(50)
+      .optional()
+      .openapi({ example: 50, description: "回傳數量上限 (預設 50)" }),
   })
   .strict();
 
@@ -195,6 +285,11 @@ export const BusSearchResultSchema = z
     destination: z
       .string()
       .openapi({ example: "板橋國中", description: "去程終點站" }),
+    distance: z.number().optional().openapi({
+      example: 1500,
+      description:
+        "路線最近站點與使用者位置的直線距離 (公尺)，有提供 location 時回傳",
+    }),
   })
   .openapi("BusSearchResult");
 
@@ -222,6 +317,10 @@ export const BusStopSearchResultSchema = z
     routes: z.array(z.string()).openapi({
       example: ["307", "652"],
       description: "停靠該站牌的公車路線清單",
+    }),
+    distance: z.number().optional().openapi({
+      example: 120,
+      description: "站牌與使用者位置的直線距離 (公尺)，有提供 location 時回傳",
     }),
   })
   .openapi("BusStopSearchResult");
@@ -520,7 +619,25 @@ registry.registerPath({
   tags: ["Transit"],
   summary: "搜尋公車路線",
   description:
-    "依關鍵字模糊搜尋所有縣市的公車路線，回傳匹配的路線、縣市及去程起迄站，供前端做下拉選擇。",
+    "依關鍵字模糊搜尋所有縣市的公車路線，回傳匹配的路線、縣市及去程起訖站。若有提供 location / lat+lng，將依與使用者位置的距離由近到遠排序。",
+  request: { query: BusSearchQuerySchema },
+  responses: {
+    200: {
+      description: "搜尋結果列表",
+      content: { "application/json": { schema: BusSearchResponseSchema } },
+    },
+    400: { description: "缺少必要參數" },
+    500: { description: "DB 錯誤" },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/transit/bus/search-route",
+  tags: ["Transit"],
+  summary: "搜尋公車路線（單數別名）",
+  description:
+    "依關鍵字模糊搜尋所有縣市的公車路線（/bus/search-routes 別名）。若有提供 location / lat+lng，將依與使用者位置的距離由近到遠排序。",
   request: { query: BusSearchQuerySchema },
   responses: {
     200: {
@@ -538,7 +655,25 @@ registry.registerPath({
   tags: ["Transit"],
   summary: "搜尋公車站牌",
   description:
-    "依關鍵字模糊搜尋所有縣市的公車站牌，回傳匹配的站牌、所屬縣市、座標及行經該站的路線清單，供前端做下拉選擇。同名站牌會依縣市區分；最多回傳 50 筆。",
+    "依關鍵字模糊搜尋所有縣市的公車站牌，回傳匹配的站牌、所屬縣市、座標及行經該站的路線清單。若有提供 location / lat+lng，將依與使用者位置的距離由近到遠排序。最多回傳 50 筆。",
+  request: { query: BusStopSearchQuerySchema },
+  responses: {
+    200: {
+      description: "搜尋結果列表",
+      content: { "application/json": { schema: BusStopSearchResponseSchema } },
+    },
+    400: { description: "缺少必要參數" },
+    500: { description: "DB 錯誤" },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/transit/bus/search-stop",
+  tags: ["Transit"],
+  summary: "搜尋公車站牌（單數別名）",
+  description:
+    "依關鍵字模糊搜尋所有縣市的公車站牌（/bus/search-stops 別名）。若有提供 location / lat+lng，將依與使用者位置的距離由近到遠排序。",
   request: { query: BusStopSearchQuerySchema },
   responses: {
     200: {

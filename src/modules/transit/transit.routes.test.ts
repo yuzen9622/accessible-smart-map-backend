@@ -33,7 +33,7 @@ import * as busService from "./bus.service";
 import { ResponseCode } from "../../types/code";
 import { MSG } from "../../constants/messages";
 
-let app: Awaited<ReturnType<typeof startTestServer>>;
+let app: any;
 const BASE = "/api/v1/transit";
 
 beforeAll(async () => {
@@ -334,6 +334,82 @@ describe("GET /api/v1/transit/bus/search-routes", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data.routes).toHaveLength(1);
+    expect(vi.mocked(busService.searchBusRoutes)).toHaveBeenCalledWith(
+      "307",
+      undefined,
+      50,
+    );
+  });
+
+  it("passes parsed user coordinates when location is provided", async () => {
+    vi.mocked(busService.searchBusRoutes).mockResolvedValue({
+      ok: true,
+      routes: [
+        {
+          routeName: "台中車站接駁",
+          city: "Taichung",
+          departure: "台中車站",
+          destination: "一中商圈",
+          distance: 50,
+        },
+      ],
+    } as any);
+
+    const res = await request(app)
+      .get(`${BASE}/bus/search-routes`)
+      .query({ keyword: "車站", location: "24.137,120.686" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.routes[0].routeName).toBe("台中車站接駁");
+    expect(vi.mocked(busService.searchBusRoutes)).toHaveBeenCalledWith(
+      "車站",
+      { lat: 24.137, lng: 120.686 },
+      50,
+    );
+  });
+
+  it("passes parsed user coordinates when lat and lng are provided", async () => {
+    vi.mocked(busService.searchBusRoutes).mockResolvedValue({
+      ok: true,
+      routes: [],
+    } as any);
+
+    const res = await request(app)
+      .get(`${BASE}/bus/search-routes`)
+      .query({ keyword: "車站", lat: "24.137", lng: "120.686", limit: "10" });
+
+    expect(res.status).toBe(200);
+    expect(vi.mocked(busService.searchBusRoutes)).toHaveBeenCalledWith(
+      "車站",
+      { lat: 24.137, lng: 120.686 },
+      10,
+    );
+  });
+
+  it("supports singular /bus/search-route alias", async () => {
+    vi.mocked(busService.searchBusRoutes).mockResolvedValue({
+      ok: true,
+      routes: [
+        {
+          routeName: "307",
+          city: "Taipei",
+          departure: "撫順街口",
+          destination: "板橋國中",
+        },
+      ],
+    } as any);
+
+    const res = await request(app)
+      .get(`${BASE}/bus/search-route`)
+      .query({ keyword: "307", location: "25.0478,121.5171" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.routes).toHaveLength(1);
+    expect(vi.mocked(busService.searchBusRoutes)).toHaveBeenCalledWith(
+      "307",
+      { lat: 25.0478, lng: 121.5171 },
+      50,
+    );
   });
 
   it("rejects an empty keyword", async () => {
@@ -367,7 +443,75 @@ describe("GET /api/v1/transit/bus/search-stops", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data.stops).toHaveLength(1);
-    expect(vi.mocked(busService.searchBusStops)).toHaveBeenCalledWith("台北");
+    expect(vi.mocked(busService.searchBusStops)).toHaveBeenCalledWith(
+      "台北",
+      undefined,
+      50,
+    );
+  });
+
+  it("passes parsed user coordinates when location is provided", async () => {
+    vi.mocked(busService.searchBusStops).mockResolvedValue({
+      ok: true,
+      stops: [
+        {
+          stopUid: "TXG1",
+          stopName: "台中車站",
+          city: "Taichung",
+          coordinates: [120.686, 24.137],
+          routes: ["300"],
+          distance: 50,
+        },
+      ],
+    } as any);
+
+    const res = await request(app)
+      .get(`${BASE}/bus/search-stops`)
+      .query({ keyword: "車站", location: "24.137,120.686" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.stops[0].stopName).toBe("台中車站");
+    expect(vi.mocked(busService.searchBusStops)).toHaveBeenCalledWith(
+      "車站",
+      { lat: 24.137, lng: 120.686 },
+      50,
+    );
+  });
+
+  it("passes parsed user coordinates when lat and lng are provided", async () => {
+    vi.mocked(busService.searchBusStops).mockResolvedValue({
+      ok: true,
+      stops: [],
+    } as any);
+
+    const res = await request(app)
+      .get(`${BASE}/bus/search-stops`)
+      .query({ keyword: "車站", lat: "24.137", lng: "120.686", limit: "20" });
+
+    expect(res.status).toBe(200);
+    expect(vi.mocked(busService.searchBusStops)).toHaveBeenCalledWith(
+      "車站",
+      { lat: 24.137, lng: 120.686 },
+      20,
+    );
+  });
+
+  it("supports singular /bus/search-stop alias", async () => {
+    vi.mocked(busService.searchBusStops).mockResolvedValue({
+      ok: true,
+      stops: [],
+    } as any);
+
+    const res = await request(app)
+      .get(`${BASE}/bus/search-stop`)
+      .query({ keyword: "車站", location: "25.0478,121.5171" });
+
+    expect(res.status).toBe(200);
+    expect(vi.mocked(busService.searchBusStops)).toHaveBeenCalledWith(
+      "車站",
+      { lat: 25.0478, lng: 121.5171 },
+      50,
+    );
   });
 
   it("rejects an empty keyword", async () => {

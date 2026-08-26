@@ -180,6 +180,7 @@ export type BusSearchResult = {
   city: string;
   departure: string;
   destination: string;
+  distance?: number;
 };
 
 export type BusSearchRouteResult =
@@ -211,6 +212,7 @@ export type BusStopSearchResult = {
   city: string;
   coordinates: [number, number];
   routes: string[];
+  distance?: number;
 };
 
 export type BusStopSearchRouteResult =

@@ -89,6 +89,20 @@ describe("transit bus repository with real MongoDB", () => {
         subRouteIds: [],
         location: { type: "Point", coordinates: [121.61, 25.09] },
       },
+      {
+        stopUid: "bus-stop-taichung-station",
+        stopName: { Zh_tw: "臺中車站" },
+        city: "Taichung",
+        subRouteIds: [],
+        location: { type: "Point", coordinates: [120.686, 24.137] },
+      },
+      {
+        stopUid: "bus-stop-taipei-station",
+        stopName: { Zh_tw: "臺北車站" },
+        city: "Taipei",
+        subRouteIds: [],
+        location: { type: "Point", coordinates: [121.5171, 25.0478] },
+      },
     ]);
     await BusVehicleModel.create({
       plateNumb: "BUS-001",
@@ -117,6 +131,34 @@ describe("transit bus repository with real MongoDB", () => {
     await expect(searchStopsByKeyword("中央", 10)).resolves.toEqual([
       expect.objectContaining({ stopUid: "bus-stop-central" }),
     ]);
+    // 關鍵字使用「台中」能查到「臺中車站」
+    await expect(searchStopsByKeyword("台中車站", 10)).resolves.toEqual([
+      expect.objectContaining({ stopUid: "bus-stop-taichung-station" }),
+    ]);
+    // 關鍵字使用「臺中」亦能查到「臺中車站」
+    await expect(searchStopsByKeyword("臺中車站", 10)).resolves.toEqual([
+      expect.objectContaining({ stopUid: "bus-stop-taichung-station" }),
+    ]);
+
+    // 帶台中座標搜尋「車站」時，MongoDB $geoNear 優先回傳台中車站
+    const tcStops = await searchStopsByKeyword("車站", 10, {
+      lat: 24.137,
+      lng: 120.686,
+    });
+    expect(tcStops[0]?.stopUid).toBe("bus-stop-taichung-station");
+    expect(tcStops[0]?.distance).toBeLessThan(100);
+    expect(tcStops[1]?.stopUid).toBe("bus-stop-taipei-station");
+    expect(tcStops[1]?.distance).toBeGreaterThan(100_000);
+
+    // 帶台北座標搜尋「車站」時，MongoDB $geoNear 優先回傳台北車站
+    const tpeStops = await searchStopsByKeyword("車站", 10, {
+      lat: 25.0478,
+      lng: 121.5171,
+    });
+    expect(tpeStops[0]?.stopUid).toBe("bus-stop-taipei-station");
+    expect(tpeStops[0]?.distance).toBeLessThan(100);
+    expect(tpeStops[1]?.stopUid).toBe("bus-stop-taichung-station");
+    expect(tpeStops[1]?.distance).toBeGreaterThan(100_000);
     const nearby = await findStopsNearby(25.033, 121.565, 1_000, 1);
     expect(nearby).toHaveLength(1);
     expect(nearby[0]?.stopUid).toBe("bus-stop-central");

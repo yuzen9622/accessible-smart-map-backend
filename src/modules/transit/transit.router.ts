@@ -63,7 +63,17 @@ export function createTransitRouter(): Router {
     searchBusRoutesHandler,
   );
   router.get(
+    "/bus/search-route",
+    validateRequest({ query: BusSearchQuerySchema }),
+    searchBusRoutesHandler,
+  );
+  router.get(
     "/bus/search-stops",
+    validateRequest({ query: BusStopSearchQuerySchema }),
+    searchBusStopsHandler,
+  );
+  router.get(
+    "/bus/search-stop",
     validateRequest({ query: BusStopSearchQuerySchema }),
     searchBusStopsHandler,
   );

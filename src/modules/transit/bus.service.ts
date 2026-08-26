@@ -39,7 +39,9 @@ import {
   DIRECTION_LABEL,
   BUS_STATUS_LABEL,
   STOP_STATUS_LABEL,
+  CITY_COORDINATES,
 } from "../../constants/bus";
+import { haversineMeters } from "../../utils/geo";
 import type {
   BusRouteInfoResult,
   BusRouteDirection,
@@ -50,6 +52,7 @@ import type {
   BusScheduleByDirection,
   BusRealtimeOnRouteResult,
   BusOnRoad,
+  BusSearchResult,
   BusSearchRouteResult,
   BusStopSearchRouteResult,
   BusStopSearchResult,
@@ -859,14 +862,28 @@ export async function getBusRealtimeOnRoute(params: {
 
 /**
  * Search bus routes by keyword across all cities in the DB.
+ * When `userLoc` is provided, calculates the distance from the user to each route
+ * (using the closest stop on the route, or city center fallback) and sorts ascending by distance.
+ *
+ * @param keyword Route name search keyword
+ * @param userLoc Optional user GPS coordinates { lat, lng }
+ * @param limit Maximum results to return (default: 50)
  */
 export async function searchBusRoutes(
   keyword: string,
+  userLoc?: { lat: number; lng: number } | null,
+  limit: number = 50,
 ): Promise<BusSearchRouteResult> {
   try {
-    const routes = await searchRoutesByKeyword(keyword, 50);
+    const queryLimit = userLoc ? 2000 : limit;
+    const routes = await searchRoutesByKeyword(keyword, queryLimit);
 
-    const result = routes.map((r) => {
+    type RouteWithDistance = {
+      item: BusSearchResult;
+      distance?: number;
+    };
+
+    const mapped: RouteWithDistance[] = routes.map((r) => {
       const dir0 =
         r.subRoutes.find((sr: any) => sr.direction === 0) || r.subRoutes[0];
       const stops = dir0?.stops || [];
@@ -875,13 +892,66 @@ export async function searchBusRoutes(
       const destination =
         sortedStops[sortedStops.length - 1]?.stopName?.Zh_tw || "";
 
+      let distance: number | undefined;
+      if (userLoc) {
+        let minDist = Infinity;
+        for (const sub of r.subRoutes) {
+          for (const s of sub.stops || []) {
+            if (
+              typeof s.lat === "number" &&
+              typeof s.lng === "number" &&
+              !Number.isNaN(s.lat) &&
+              !Number.isNaN(s.lng)
+            ) {
+              const d = haversineMeters(userLoc.lat, userLoc.lng, s.lat, s.lng);
+              if (d < minDist) minDist = d;
+            }
+          }
+        }
+        if (minDist === Infinity && r._id.city) {
+          const resolvedCity = cityFromAlias(r._id.city);
+          if (resolvedCity && CITY_COORDINATES[resolvedCity]) {
+            const cityCoord = CITY_COORDINATES[resolvedCity];
+            minDist = haversineMeters(
+              userLoc.lat,
+              userLoc.lng,
+              cityCoord.lat,
+              cityCoord.lng,
+            );
+          }
+        }
+        if (minDist !== Infinity) {
+          distance = Math.round(minDist);
+        }
+      }
+
       return {
-        routeName: r._id.routeName,
-        city: r._id.city,
-        departure,
-        destination,
+        item: {
+          routeName: r._id.routeName,
+          city: r._id.city,
+          departure,
+          destination,
+          ...(distance !== undefined ? { distance } : {}),
+        },
+        distance,
       };
     });
+
+    if (userLoc) {
+      mapped.sort((a, b) => {
+        const distA = a.distance ?? Infinity;
+        const distB = b.distance ?? Infinity;
+        if (distA !== distB) {
+          return distA - distB;
+        }
+        const aExact = a.item.routeName === keyword ? 0 : 1;
+        const bExact = b.item.routeName === keyword ? 0 : 1;
+        if (aExact !== bExact) return aExact - bExact;
+        return a.item.routeName.localeCompare(b.item.routeName, "zh-TW");
+      });
+    }
+
+    const result = mapped.slice(0, limit).map((m) => m.item);
 
     return { ok: true, routes: result };
   } catch (err) {
@@ -895,15 +965,22 @@ export async function searchBusRoutes(
 
 /**
  * Search bus stops by keyword across all cities in the DB.
+ * When `userLoc` is provided, calculates the distance from the user to each stop
+ * and sorts ascending by distance.
  *
  * @param keyword Fuzzy match against the stop's Chinese name.
- * @returns Matching stops (deduped by name + city), each with the routes passing through; capped at 50.
+ * @param userLoc Optional user coordinates { lat, lng } for distance sorting
+ * @param limit Maximum matching stops to return (default: 50)
+ * @returns Matching stops (deduped by name + city), each with the routes passing through; capped at limit.
  */
 export async function searchBusStops(
   keyword: string,
+  userLoc?: { lat: number; lng: number } | null,
+  limit: number = 50,
 ): Promise<BusStopSearchRouteResult> {
   try {
-    const stops = await searchStopsByKeyword(keyword, 250);
+    const queryLimit = userLoc ? 500 : 250;
+    const stops = await searchStopsByKeyword(keyword, queryLimit, userLoc);
 
     if (!stops.length) {
       return { ok: true, stops: [] };
@@ -929,11 +1006,52 @@ export async function searchBusStops(
         .map((id: string) => routeMap.get(id) || id)
         .filter(Boolean) as string[];
 
+      let distance: number | undefined;
+      if (userLoc) {
+        if (typeof s.distance === "number" && !Number.isNaN(s.distance)) {
+          distance = Math.round(s.distance);
+        } else {
+          const coords = s.location?.coordinates;
+          if (
+            Array.isArray(coords) &&
+            coords.length >= 2 &&
+            typeof coords[0] === "number" &&
+            typeof coords[1] === "number" &&
+            !Number.isNaN(coords[0]) &&
+            !Number.isNaN(coords[1])
+          ) {
+            // coords is [lng, lat]
+            distance = Math.round(
+              haversineMeters(userLoc.lat, userLoc.lng, coords[1], coords[0]),
+            );
+          } else if (s.city) {
+            const resolvedCity = cityFromAlias(s.city);
+            if (resolvedCity && CITY_COORDINATES[resolvedCity]) {
+              const cityCoord = CITY_COORDINATES[resolvedCity];
+              distance = Math.round(
+                haversineMeters(
+                  userLoc.lat,
+                  userLoc.lng,
+                  cityCoord.lat,
+                  cityCoord.lng,
+                ),
+              );
+            }
+          }
+        }
+      }
+
       const existing = mergedMap.get(key);
       if (existing) {
         existing.routes = [
           ...new Set([...existing.routes, ...routesForStop]),
         ].sort();
+        if (
+          distance !== undefined &&
+          (existing.distance === undefined || distance < existing.distance)
+        ) {
+          existing.distance = distance;
+        }
       } else {
         mergedMap.set(key, {
           stopUid: s.stopUid,
@@ -941,13 +1059,30 @@ export async function searchBusStops(
           city: s.city,
           coordinates: s.location.coordinates as [number, number],
           routes: [...new Set(routesForStop)].sort(),
+          ...(distance !== undefined ? { distance } : {}),
         });
       }
     }
 
-    const finalStops = [...mergedMap.values()]
-      .sort((a, b) => a.stopName.localeCompare(b.stopName))
-      .slice(0, 50);
+    const stopList = [...mergedMap.values()];
+
+    if (userLoc) {
+      stopList.sort((a, b) => {
+        const distA = a.distance ?? Infinity;
+        const distB = b.distance ?? Infinity;
+        if (distA !== distB) {
+          return distA - distB;
+        }
+        const aExact = a.stopName === keyword ? 0 : 1;
+        const bExact = b.stopName === keyword ? 0 : 1;
+        if (aExact !== bExact) return aExact - bExact;
+        return a.stopName.localeCompare(b.stopName, "zh-TW");
+      });
+    } else {
+      stopList.sort((a, b) => a.stopName.localeCompare(b.stopName, "zh-TW"));
+    }
+
+    const finalStops = stopList.slice(0, limit);
 
     return { ok: true, stops: finalStops };
   } catch (err) {
