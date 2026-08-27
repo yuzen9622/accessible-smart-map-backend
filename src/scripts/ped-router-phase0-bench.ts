@@ -26,6 +26,11 @@ import {
   type EdgeIndex,
   type SnapResult,
 } from "../modules/accessible-route/planners/pedestrian-a11y/spatial-index";
+import {
+  canTraverseFareGate,
+  FORBID_FARE_ACCESS,
+} from "../modules/accessible-route/planners/pedestrian-a11y/fare-access";
+import { resolvePlannedPathSteps } from "./ped-router-planned-path";
 import { haversineMeters } from "../utils/geo";
 
 const DEFAULT_OUTPUT_PATH = "/tmp/ped-phase0-bench.json";
@@ -583,13 +588,23 @@ function connectivitySample(
  * @param graph Loaded CSR graph.
  * @returns A finite-edge marker for strict wheelchair routing.
  */
-function strictFeasibility(graph: PedGraph): Uint8Array {
+function strictFeasibility(
+  graph: PedGraph,
+  topology: EdgeTopology,
+): Uint8Array {
   const feasible = new Uint8Array(graph.directedEdgeCount);
   const profile = wheelchairProfile(0);
   for (let attrIdx = 0; attrIdx < graph.directedEdgeCount; attrIdx += 1) {
-    feasible[attrIdx] = Number.isFinite(edgeCost(graph, attrIdx, profile))
-      ? 1
-      : 0;
+    feasible[attrIdx] =
+      canTraverseFareGate(
+        graph,
+        topology.from[attrIdx],
+        topology.to[attrIdx],
+        attrIdx,
+        FORBID_FARE_ACCESS,
+      ) && Number.isFinite(edgeCost(graph, attrIdx, profile))
+        ? 1
+        : 0;
   }
   return feasible;
 }
@@ -836,11 +851,11 @@ function findPhysicalAnchor(
 
 /**
  * @param graph Loaded CSR graph.
- * @param nodePath Planned node sequence.
- * @param edgeValue Edge value function matching the planner.
- * @returns Ordered selected adjacency edges for the node sequence.
+ * @param nodePath Unconstrained node sequence.
+ * @param edgeValue Unconstrained edge value function.
+ * @returns Ordered unfiltered adjacency edges for the node sequence.
  */
-function resolvePathSteps(
+function resolveUnconstrainedPathSteps(
   graph: PedGraph,
   nodePath: Int32Array,
   edgeValue: EdgeValue,
@@ -894,13 +909,15 @@ function planWithProfile(
   const result = aStar(graph, pair.from, pair.to, profile);
   if (result === null) return null;
   const edgeValue = (attrIdx: number) => edgeCost(graph, attrIdx, profile);
-  const steps = resolvePathSteps(graph, result.nodePath, edgeValue);
+  const steps = resolvePlannedPathSteps(graph, result.nodePath, edgeValue);
   const resolvedTotalCost = steps.reduce(
     (total, step) => total + step.value,
     0,
   );
   if (relativeError(resolvedTotalCost, result.totalCost) > 1e-9) {
-    throw new Error("resolved route edges do not reproduce the A* total cost");
+    throw new Error(
+      "resolved route edges do not reproduce the CSR search total cost",
+    );
   }
   return { pair, profile, result, steps };
 }
@@ -909,7 +926,7 @@ function planWithProfile(
  * @param graph Loaded CSR graph.
  * @param pairs Guaranteed strict-wheelchair-reachable pairs.
  * @param retainedSamples Number of timing measurements retained after warmup.
- * @returns Warmup-free A* core timing observations.
+ * @returns Warmup-free current `h=0` Dijkstra-equivalent core timing observations.
  */
 function measureCoreLatency(
   graph: PedGraph,
@@ -941,7 +958,7 @@ function measureCoreLatency(
       );
     }
     const edgeValue = (attrIdx: number) => edgeCost(graph, attrIdx, profile);
-    const steps = resolvePathSteps(graph, result.nodePath, edgeValue);
+    const steps = resolvePlannedPathSteps(graph, result.nodePath, edgeValue);
     measured.push({ pair, profile, result, steps, milliseconds });
   }
   return measured;
@@ -1222,7 +1239,7 @@ function evaluateDecisionRoutes(
       throw new Error("a wheelchair route had no unconstrained shortest route");
     }
     const wheelchairMetrics = routeDistanceMetrics(graph, planned.steps);
-    const unrestrictedSteps = resolvePathSteps(
+    const unrestrictedSteps = resolveUnconstrainedPathSteps(
       graph,
       unrestricted.nodePath,
       (attrIdx) => unconstrainedEdgeDistanceM(graph, attrIdx),
@@ -2093,7 +2110,7 @@ function printSummary(output: {
     `[ped-router-bench] snap_failures_50m=${zeroFour.snapFailure.failures}/${zeroFour.snapFailure.samples} (${zeroFour.snapFailure.failurePercent?.toFixed(3) ?? "n/a"}%)`,
   );
   console.log(
-    `[ped-router-bench] astar_core_ms p50=${zeroFour.aStarCoreLatency.milliseconds.p50?.toFixed(3) ?? "n/a"} p95=${zeroFour.aStarCoreLatency.milliseconds.p95?.toFixed(3) ?? "n/a"} p99=${zeroFour.aStarCoreLatency.milliseconds.p99?.toFixed(3) ?? "n/a"}`,
+    `[ped-router-bench] csr_search_h0_core_ms p50=${zeroFour.aStarCoreLatency.milliseconds.p50?.toFixed(3) ?? "n/a"} p95=${zeroFour.aStarCoreLatency.milliseconds.p95?.toFixed(3) ?? "n/a"} p99=${zeroFour.aStarCoreLatency.milliseconds.p99?.toFixed(3) ?? "n/a"}`,
   );
   console.log(
     `[ped-router-bench] measurable silent_proxy=${zeroFive.silentHardConstraintViolationRateUsingRelaxationLevelDegradedProxy.measurable}:${zeroFive.silentHardConstraintViolationRateUsingRelaxationLevelDegradedProxy.value.percent?.toFixed(3) ?? "n/a"}% marked_proxy=${zeroFive.markedHardConstraintViolationRateUsingRelaxationLevelDegradedProxy.measurable}:${zeroFive.markedHardConstraintViolationRateUsingRelaxationLevelDegradedProxy.value.percent?.toFixed(3) ?? "n/a"}% detour=${zeroFive.wheelchairGroundDistanceDetourRatio.measurable}:${zeroFive.wheelchairGroundDistanceDetourRatio.value.medianRatio?.toFixed(6) ?? "n/a"} latency=${zeroFive.aStarCoreLatency.measurable}:${zeroFive.aStarCoreLatency.value.p95Ms?.toFixed(3) ?? "n/a"}ms`,
@@ -2141,7 +2158,7 @@ async function main(): Promise<void> {
     ).length;
 
     const topology = buildEdgeTopology(graph);
-    const feasible = strictFeasibility(graph);
+    const feasible = strictFeasibility(graph, topology);
     const components = buildBidirectionalComponents(graph, topology, feasible);
     const latencyPairs = samplePairs(
       graph,
@@ -2324,7 +2341,8 @@ async function main(): Promise<void> {
               "ST_LineInterpolatePoint(ped_edge.geom, fraction)",
           },
           aStarCoreLatency: {
-            measurementScope: "aStar(graph, from, to, wheelchairProfile) only",
+            measurementScope:
+              "aStar(graph, from, to, wheelchairProfile) only; current h=0 Dijkstra-equivalent search",
             retainedSamples: measuredRoutes.length,
             warmupSamplesDiscarded: WARMUP_COUNT,
             milliseconds: summarize(coreMilliseconds),

@@ -2,11 +2,13 @@
 
 ## Functional Specification — Pedestrian Accessibility Routing Engine
 
-**版本**：v0.5.0
+**版本**：v0.5.1
 **狀態**：Phase 0 進行中（WP-1～WP-3、WP-7 已實作並實測）
-**日期**：2026-08-24
+**日期**：2026-08-27
 **作者**：yuzen9622
 
+> **v0.5.1 正確性修訂（2026-08-27）**：室內 traversal cost 可低於 proxy-coordinate 距離，既有代理座標公式沒有可機械驗證的全圖下界，故 production search 改為 `h ≡ 0`（Dijkstra-equivalent）。所有舊有 proxy-A* 核心延遲、重開數與投影吸附數字均為歷史量測，**不得宣稱適用於目前 production algorithm**；須以端點吸附與 `h=0` 重跑後才可更新。
+>
 > **v0.5.0 修訂（2026-08-24，Phase 0-2 實測回填）**：WP-1～WP-3 已實作，台北圖已建入 PostGIS 並載入 CSR 實測。
 > ① **§5.8 的「十餘 bytes／十餘 MB」被實測推翻**：每條有向邊實測 **43.1 bytes**，台北全圖 **18.13 MB**，六都外推峰值 **148.66 MB**（低估約 5 倍）。Phase 0-2 判定仍為通過，但理由是絕對值可接受而非符合原目標。
 > ② **量測方法更正**：`heapUsed` 量不到 CSR（TypedArray backing store 是 off-heap，強制 GC 後差值僅 0.83 MB vs 真實 18.13 MB）；且 `--max-old-space-size` 管不到這部分記憶體，真正的上限是 container memory limit。
@@ -407,25 +409,64 @@ gtfspathways ─┘                     ├ 節點表
 
 ### 5.5 引擎分工（前後對照）
 
-| 交通方式           | 現況      | 本規格實施後                   |
-| ------------------ | --------- | ------------------------------ |
-| 大眾運輸           | OTP2      | OTP2（不變）                   |
-| 汽車／機車         | Valhalla  | Valhalla（不變）               |
-| **純步行**         | OTP2 walk | **本引擎**；OTP walk 降為落回  |
-| 轉乘中的步行接駁段 | OTP2      | OTP2（階段一不變，階段二接管） |
+- **大眾運輸**：OTP2（不變）。
+- **汽車／機車**：Valhalla（不變）。
+- **純步行（目前限台北市）**：CSR 本引擎；OTP walk 為透明落回。
+- **轉乘中的步行接駁段（WALK leg）**：OTP2（階段一不變；不以本次純步行整合取代）。
 
-### 5.6 圖資範圍與驗收範圍分離
+### 5.6 目前 CSR production coverage 與驗收範圍
 
-- **圖資範圍：六都。**
+- **目前 production CSR coverage：台北市 bbox**（`121.43,24.95,121.68,25.22`）。bbox 外的純步行一律以 OTP2 為 primary，不可把未來圖資擴張當成已上線 coverage。
 - **驗收範圍：台北市。**
+- 六都資料與架構仍可作未來擴張，但不改變本次 Taipei-only 的服務宣告。
 
 所有既有 fixture（`~/otp-backup/walk-quality-fixtures/`）、14 組樓梯 OD、8 組引擎對照 OD 皆位於台北。「本引擎優於 OTP」之結論僅得由已驗證城市支持；六都其餘城市之圖資先行匯入，但不作為結論依據。
 
+### 5.6b 圖的連通性為已知限制（2026-08-27 實測回填）
+
+台北圖 version 1 有 **1,557 個弱連通元件**，最大元件涵蓋 **97.21%** 的節點；其餘 2.79%
+（4,613 節點、1,556 個 1–72 節點的孤島）**本引擎不可達**。OTP 對比實驗中 200 組 OD 有
+11 組因此無法路由。逐案證據與分類見 `docs/reports/PED_GRAPH_CONNECTIVITY_DIAGNOSIS.md`。
+
+四件事必須同時記住：
+
+1. **並非全部都是缺陷。** 11 組中有 2 組（捷運地下轉乘通道、`layer=3` 高架匝道）
+   **已證實不該連通**——平面投影上相交，實體差了兩到三層樓。
+2. **已證實的規則缺陷只有 1 組（案例 89）**：way/229778286 是 `highway=cycleway` 且明示
+   **`foot=designated`**，並共用島側與主元件側 OSM node。建圖器現在只對
+   `foot=yes|designated|permissive`、且無任何拒絕存取標記的 cycleway 納入（不將
+   `cycleway` 加入 `INCLUDED_HIGHWAYS`）；它會在下次 immutable rebuild 修復 89。
+   **已儲存的 `ped_graph_version.id=1` 仍是舊圖，本次沒有重建或啟用任何圖版本。**
+3. **其餘 8 組維持「證據不足」，不得升格為缺陷。** 案例 **140／170** 的候選連接 way 是
+   **無 `foot` 標記**的 `highway=cycleway`（170 含淡水河河濱自行車道），因此仍不符合
+   新規則且仍排除；本專案仍**沒有**「未標記 `cycleway` 視為行人可通行」的 profile 政策。
+   另有 2 組缺口間有 `barrier=wall`；「牆與直線代理相交」不等於「牆分隔兩個元件」，
+   需拓樸切割證明才成立。
+4. **禁止以距離啟發式縫合。** 任何「小於 N 公尺就連起來」的做法會直接製造穿牆與穿越
+   立體分隔的假路線（最小缺口僅 4.33 m）。補邊必須逐案引用該報告的機制性分類。
+
+主元件覆蓋率是否納入建圖驗收門檻，列為待決。
+
+### 5.6c 車站閘門在核心預設拒絕（Slice 1，2026-08-27）
+
+CSR 核心對 `INDOOR_FARE_GATE`（25）與 `INDOOR_EXIT_GATE`（26）預設拒絕；僅明確授權同一穩定母站 ID 的 transit context 可通過。純步行起點若已在付費區內也可能被過度阻擋，這是付費側拓撲尚未證實前的刻意 fail-closed 行為。Phase 0 benchmark／OTP 對照若省略授權 context，現在量測此預設，重跑時必須揭露。
+
+純步行 production assembly 現已接入 `travelMode: "walk"`；轉乘 itinerary 的 WALK leg 仍維持 OTP2。若 CSR 回 `fare_policy_blocked`，服務立即回 `422 NO_ROUTE`；若回 `accessibility_blocked`，服務立即回 `422 NO_ACCESSIBLE_ROUTE`。兩者都**不得**呼叫 OTP2 或 Valhalla，以免繞過 binding CSR block。空白或不相符的 station ID 仍在正常 gate policy 下 fail-closed；僅供 planner 丟棄結果的 allow-all diagnostic probe 可把這種損壞 gate 分類為 `fare_policy_blocked`，不會暴露給 client。
+
 ### 5.7 落回機制為一等公民
 
-落回並非例外處理，而是常態路徑，觸發條件包含：起終點在六都圖資範圍外、記憶體圖尚未載入完成、引擎異常。
+落回並非例外處理，而是常態路徑。所有純步行回應都帶 route-level `engine: "pedestrian-a11y" | "otp-fallback"`；大眾運輸與道路路線可省略它，絕不靜默替換。
 
-回應必須帶結構化欄位 `engine: "pedestrian-a11y" | "otp-fallback"`，不得靜默替換。此決議直接回應 D-4 與既有的靜默降級問題。
+| CSR 結果                                                          | 純步行後續                             | `engine` / `degraded` / warning                |
+| ----------------------------------------------------------------- | -------------------------------------- | ---------------------------------------------- |
+| `ok`                                                              | 回傳 CSR 路線                          | `pedestrian-a11y`；不降級                      |
+| feature disabled 或台北 bbox 外                                   | OTP2 primary                           | `otp-fallback`；不降級、無 CSR failure warning |
+| `unsupported_constraints`、`unavailable`、`topology_disconnected` | OTP2 first                             | `otp-fallback`；`degraded:true` 與原因 warning |
+| `fare_policy_blocked`                                             | 立即終止，回 `422 NO_ROUTE`            | 不回傳 route；不呼叫 OTP2 或 Valhalla          |
+| `accessibility_blocked`                                           | 立即終止，回 `422 NO_ACCESSIBLE_ROUTE` | 不回傳 route；不呼叫 OTP2 或 Valhalla          |
+| OTP2 unavailable（非上述 block）                                  | 既有 Valhalla 最後落回                 | `otp-fallback`；保留 OTP→Valhalla warning      |
+
+此決議直接回應 D-4 與既有的靜默降級問題。
 
 ---
 
@@ -541,6 +582,14 @@ v0.1.0 曾聲稱「backend 未設 memory limit，故不會被 OOM kill」。**�
 | `dynamic_snapshot_id` | **當次動態狀態快照**——有效 hazard 集合與電梯故障集合的內容雜湊 |
 
 §11 的所有評估執行必須同時記錄兩者。僅記錄靜態圖版本無法重現結果——per-request 動態覆蓋同樣會改變選路（此為 v0.1.0 §8.4 的邏輯漏洞，見 §8.4）。
+
+### 6.4a 圖版本生命週期（2026-08-27 新增）
+
+`lifecycle_status` 僅可為 `CANDIDATE`、`ACTIVE` 或 `RETIRED`；partial unique index 禁止兩個 `ACTIVE`。穩定狀態必須恰有一個 `ACTIVE`：既有 version 1 的 migration 會成為該版本，之後 promotion transaction 會先 retire 舊 active 再啟用目標。
+
+- builder 一律建立 `CANDIDATE`，且 durable `indoor_injection_complete=false`；indoor injector 只接受 requested candidate，成功完成總數與 metadata 驗證後才寫 `true`，**不得自行啟用**。
+- 未指定版本的 CSR loader 只讀 `ACTIVE`；指定 `versionId` 則可讀 candidate／retired 作診斷、bench 與驗證。沒有 active 時必須 fail closed。
+- `pnpm promote:ped-graph -- --version-id <candidate>` 會在 advisory-locked transaction 中比對儲存／實際 node、edge counts、`indoor_injection_complete` 與 generated pathway endpoint identity；fare／exit gate 兩端缺少、空白或不相符的 stable parent-station ID 都不得 activate。rollback 必須明確指定 `pnpm promote:ped-graph -- --version-id <retired> --allow-retired`。任何 count mismatch、未完成或非法轉換均不得改動 lifecycle。
 
 ### 6.5 寬度欄位不得互為 fallback（v0.5.0 新增）
 
@@ -793,21 +842,18 @@ v0.1.0 直接假定可產生 `edge_id → penalty`，但未定義如何取得該
 - **站內計價**：以 `traversalTime` / `stairCount` / `pathwayMode` 為成本基底，不使用距離。
 - **啟發函數**：見 §9.1b。
 
-### 9.1b 室內節點的啟發函數（v0.1.0 技術錯誤修正）
+### 9.1b 室內節點的 production heuristic（2026-08-27 正確性修訂）
 
-**v0.1.0 的 `h = 0` 設計是錯的。** 原文主張「`h=0` 恆不高估，於數十節點的子圖中退化為 Dijkstra 無實質代價」——**可採納性（admissibility）確實成立，但一致性（consistency）不成立**。室內節點屬於同一張戶外／室內合併圖：戶外節點使用直線距離、相鄰室內節點突然變成 0，heuristic 在接縫處違反一致性條件。後果是：
-
-- A\* 搭配 closed set 且不重開節點時，**可能回傳非最短路徑**；
-- 若允許重開節點以維持正確性，則沿途每座車站的子圖都可能被大量重複展開，p95 延遲顯著上升。
+**production 的 `h(n) ≡ 0`。** 室內節點的 proxy coordinate 只界定其幾何近似位置，`R_station` 只界定該近似位置的空間誤差；兩者都不能對「到終點的剩餘成本」給出全圖下界。尤其室內邊以 `traversalTime` 換算成本，該成本可能小於 proxy-coordinate 的直線距離。故先前的 `max(0, haversine(proxy(n), goal) − R_station)` 可能高估，不能作為 production A\* heuristic。
 
 **本版設計**：
 
-1. **代理座標**：每個無座標的室內節點（5,876 個 `locationType=3`）指派其**所屬車站的出入口質心**作為代理座標。
-2. **可採納的啟發函數**：`h(n) = max(0, haversine(proxy(n), goal) − R_station)`，其中 `R_station` 為該站出入口相對質心的最大距離。減去 `R_station` 保證不高估——節點真實位置與質心的偏差以該半徑為界。
-3. **安全網**：A\* 允許節點重開（re-open）。代理座標使 heuristic 接近一致，重開次數應極少；重開機制的存在是為了在一致性不完美時仍保證最佳性。
-4. **驗證**：§13 要求 A\*（含啟發函數）與 Dijkstra（`h≡0` 全圖）於同圖同 OD 必須得到相同成本。此測試會直接抓出一致性造成的次佳解。
+1. **零 heuristic**：每一個節點都使用 `h(n) = 0`；這在非負 edge cost 下同時可採納且一致，production `aStar` 因而等價於 Dijkstra。
+2. **保留重開安全網**：實作仍保留 closed node 收到較低 `g` 時重新推入的邏輯與 `reopenedNodes` 診斷；在目前的零 heuristic／非負成本下通常為零，不把它當成性能或正確性的證據。
+3. **代理座標仍保留**：室內幾何呈現與 station grouping 仍使用 proxy coordinate／`R_station`，但它們不再被宣稱為成本下界。
+4. **驗證**：§13 要求 production `aStar` 與獨立 `dijkstra` 於同圖同 OD 得到相同成本，並直接斷言 `h(n)=0`。未來只有在可機械證明的全圖 lower bound 存在時，才可重新引入非零 heuristic 並重跑效能量測。
 
-**為何 `R_station` 可算**：654 個出入口全部有真實座標（§3.4），故每站的質心與最大半徑皆可於建圖時算出。台北捷運車站尺度約在 100–300 公尺量級，此項扣減不會使啟發函數退化到失去引導力。
+過去以代理 heuristic 量得的 latency、expanded/reopened node 分布是歷史資料；端點吸附與零 heuristic 的 production 版本必須重新量測，不能把舊數字延用為 performance claim。
 
 ### 9.2 為何不採預算矩陣
 
@@ -952,7 +998,7 @@ v0.1.0 僅沿用既有樓梯 fixture，該資料集**只能支撐樓梯這一項
 | 0-1     | 建圖 pipeline（PBF → 節點／有向邊，路口切段、類型分類、行人 oneway 處理） | ✅ **已完成**：戶外 161,368 節點／441,456 有向邊（2026-08-22）；併入 WP-5 室內子圖後 **165,432 節點／453,144 有向邊／226,842 無向段**（2026-08-25）。連通性抽驗 94/100                                                              |
 | 0-2     | 記憶體圖與 CSR 表示法                                                     | ✅ **已完成（2026-08-25）**：**18.604 MB TypedArray footprint**、43.049 B/有向邊（**不得用 `heapUsed`**，同次量得 heapUsed 僅 0.548 MB、`arrayBuffers` 18.661 MB，見 §5.8）；六都外推 76.274 MB 常駐／**152.549 MB 峰值**，判定通過 |
 | 0-3     | 654 個出入口接上街道圖的對位率                                            | ✅ **已完成（2026-08-25）**：台北範圍 **375/375（100%，50 m）**，距離 p95 17.415 m；`R_station` p95 138.834 m／max 239.300 m，**落在 §9.1b 假設的 100–300 m 內**。§9 成立。報告 `docs/reports/PED_ROUTER_PHASE0.md`                 |
-| 0-4     | 記憶體空間索引的吸附品質與延遲                                            | ✅ **已完成（2026-08-25）**：吸附失敗 **1/200（0.5%）**，根因為 §4.4 的端點近似；A\* 核心平面 p50 **1.055 ms**／p95 **4.278 ms**（N=120，捨棄前 10 暖機）。不可達 OD 另計 p50 50.308 ms                                             |
+| 0-4     | 記憶體空間索引的吸附品質與延遲                                            | ⚠️ **歷史量測（2026-08-25）**：投影吸附與 proxy-A\* 核心曾量得 1/200（0.5%）與 p50 1.055 ms／p95 4.278 ms；目前 production 改為端點吸附與 `h≡0`，這些數字**不得套用**，須重跑。                                                     |
 | 0-5     | §11.3 判定門檻可量測性                                                    | ✅ **已完成（2026-08-25）**：四項皆 `measurable=true` 且已量到實際值（靜默違反 **0%**、標記後違反 26.957%、繞路中位 **1.05699**、延遲 p95 4.278 ms）。條件 2／4 的 OTP 對比需成對量測，屬 Phase 6                                   |
 | **0-6** | **§3.7 政府開放圖資評估**                                                 | ✅ **已完成（2026-08-19）**，報告 `docs/reports/PED_ROUTER_DATA_SOURCES.md`。結論回填於 §3.7、§3.8、§3.6b                                                                                                                           |
 
@@ -994,20 +1040,20 @@ elderly / visual_impaired / normal 三個 profile。定位為**能力展示**，
 
 ## 13. 測試策略
 
-| 層級                 | 內容                                                                                                                                        |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| **演算法最佳性**     | A\*（含代理座標啟發函數，§9.1b）與 Dijkstra（`h≡0` 全圖）於同圖同 OD 必須得到**相同成本**。此測試直接抓出室內外接縫的一致性問題造成的次佳解 |
-| **啟發函數可採納性** | 對含室內節點的 OD，`h(n)` 不得大於該節點到終點的實際最小成本；以 Dijkstra 反算實際成本比對                                                  |
-| **成本函數單元測試** | 各 profile 的門檻邊界（坡度 8% / 12%、有效寬度 0.9 m、有無 ramp 的 steps）純函數測試                                                        |
-| **放寬階梯**         | 依 §7.3b 的次序逐級放寬；須驗證「一次只放寬一項」「停在第一個有解層級」「`relaxedConstraints` 列出全部實際放寬項」                          |
-| **兩趟制不得靜默**   | 第一趟無解必觸發第二趟，且回應必帶 `degraded` 與 `relaxedConstraints`                                                                       |
-| **落回機制**         | 圖未就緒、範圍外、引擎異常三種情境皆須回 `engine:"otp-fallback"` 且不得靜默                                                                 |
-| **動態覆蓋涵蓋性**   | 構造一組「最佳路線走出起終點外接矩形」的 OD，驗證繞路邊上的 hazard 仍生效（此即 v0.1.0 bbox 設計的失效案例，須成為回歸測試）                |
-| **綁定跨圖版本穩定** | 重建圖後，既有 hazard 須仍綁定至等價的邊，不得錯位或失效（§8.2b）                                                                           |
-| **室內圖**           | 「使用電梯跨越樓層」與「穿越站內避開樓梯」須能被規劃出來                                                                                    |
-| **記憶體**           | 載入後常駐 heap 須在 §5.8 預算內；熱重載峰值須以雙圖並存量測                                                                                |
-| **路由整合測試**     | 沿用 `tests/helpers/test-helpers.ts` 的 supertest harness，`vi.mock` 引擎層                                                                 |
-| **回歸基準**         | §11.5 的 OD 集納入可重跑的評估腳本，記錄 `graph_version_id` 與 `dynamic_snapshot_id`                                                        |
+| 層級                 | 內容                                                                                                                         |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| **演算法最佳性**     | production `aStar` 使用 `h≡0`，與獨立 Dijkstra 於同圖同 OD 必須得到**相同成本**；此測試保護非負成本與 route reconstruction。 |
+| **啟發函數可採納性** | 對含室內與戶外節點的 OD，直接斷言 `h(n) === 0`；這是目前唯一已證明的全圖 lower bound。                                       |
+| **成本函數單元測試** | 各 profile 的門檻邊界（坡度 8% / 12%、有效寬度 0.9 m、有無 ramp 的 steps）純函數測試                                         |
+| **放寬階梯**         | 依 §7.3b 的次序逐級放寬；須驗證「一次只放寬一項」「停在第一個有解層級」「`relaxedConstraints` 列出全部實際放寬項」           |
+| **兩趟制不得靜默**   | 第一趟無解必觸發第二趟，且回應必帶 `degraded` 與 `relaxedConstraints`                                                        |
+| **落回機制**         | 圖未就緒、範圍外、引擎異常三種情境皆須回 `engine:"otp-fallback"` 且不得靜默                                                  |
+| **動態覆蓋涵蓋性**   | 構造一組「最佳路線走出起終點外接矩形」的 OD，驗證繞路邊上的 hazard 仍生效（此即 v0.1.0 bbox 設計的失效案例，須成為回歸測試） |
+| **綁定跨圖版本穩定** | 重建圖後，既有 hazard 須仍綁定至等價的邊，不得錯位或失效（§8.2b）                                                            |
+| **室內圖**           | 「使用電梯跨越樓層」與「穿越站內避開樓梯」須能被規劃出來                                                                     |
+| **記憶體**           | 載入後常駐 heap 須在 §5.8 預算內；熱重載峰值須以雙圖並存量測                                                                 |
+| **路由整合測試**     | 沿用 `tests/helpers/test-helpers.ts` 的 supertest harness，`vi.mock` 引擎層                                                  |
+| **回歸基準**         | §11.5 的 OD 集納入可重跑的評估腳本，記錄 `graph_version_id` 與 `dynamic_snapshot_id`                                         |
 
 **驗收原則**：綠燈測試不等於功能正確。依既有教訓，最終驗收須將新版本跑在備用埠、與現行版本以同一組 OD 並排對打。
 
@@ -1021,7 +1067,7 @@ elderly / visual_impaired / normal 三個 profile。定位為**能力展示**，
 | R-2  | **起終點吸附品質不佳**                          | 路由品質     | 既有 `otp-endpoint-snap-fix` 教訓顯示此為常見殺手；納入 Phase 0-4 明確驗收                                                                 |
 | R-3  | **654 出入口對位失敗**                          | §9 落空      | Phase 0-3 先量測；對位率過低則室內圖退回不整合並記錄於評估報告                                                                             |
 | R-4  | **記憶體在六都規模超出預算**                    | 架構         | §5.8 要求以台北實測外推並留 margin，Phase 6 複驗；超限則縮回台北市。CSR／TypedArray 為強制要求，非最佳化選項                               |
-| R-5  | **啟發函數一致性不完美導致次佳解或延遲上升**    | 正確性／效能 | §9.1b 代理座標 + 節點重開；§13 以 Dijkstra 交叉驗證最佳性，並量測重開次數                                                                  |
+| R-5  | **非零啟發函數沒有全圖 lower-bound 證明**       | 正確性／效能 | §9.1b production 固定 `h≡0`，保留重開安全網並以 Dijkstra 交叉驗證；任何非零 heuristic 與其效能主張都須先有機械證明並重測。                 |
 | R-6  | **成本函數權重無標準答案**                      | 研究效度     | 以 §11 三軸回饋校準；權重集中定義，變更可追溯；不以 `scoring.ts` 自評                                                                      |
 | R-7  | **資料過於稀疏，引擎與 OTP 結果趨同**           | 結論價值     | 此本身即為有效結論（§11.6）；且差異化來自非 OSM 資料（hazard／電梯故障），非 OSM tag                                                       |
 | R-8  | **`scoring.ts` 切割動到既有測試**               | 進度         | 已獨立為 Phase 4 並排在評估之前（§12）；影響範圍仍未估（§15）                                                                              |
@@ -1041,7 +1087,7 @@ elderly / visual_impaired / normal 三個 profile。定位為**能力展示**，
 | 5   | **前端契約遷移說明**                              | 實作後補寫                                                                                                                                                                                                                                   |
 | 6   | ~~pgRouting vs 記憶體 A\* 的最終決議~~            | **已決**：移除 pgRouting 對照臂，查詢路徑零資料庫往返（§5.1）                                                                                                                                                                                |
 | 7   | **動態事件吸附容差的具體數值**                    | §8.2b 定義了規則，容差數值待 Phase 0-4 的吸附品質量測後決定                                                                                                                                                                                  |
-| 8   | **`R_station` 過大時啟發函數失去引導力的臨界點**  | §9.1b 假設車站尺度 100–300 m 可接受，待 Phase 0-3 以實際出入口分布驗證                                                                                                                                                                       |
+| 8   | ~~`R_station` 過大時啟發函數失去引導力的臨界點~~  | **已移除作為 production heuristic 依據**：proxy coordinate／`R_station` 不足以證明成本 lower bound；目前 `h≡0`。                                                                                                                             |
 | 9   | **§11.3 判定門檻（1.5× 繞路、1.5× p95）的合理性** | 須於 Phase 0-5 確認可量測，並在首次評估前凍結                                                                                                                                                                                                |
 | 10  | **§3.7 政府人行道圖資是否可用**                   | 未下載驗證。決定 §11.5 寬度子集與 §11.6 elderly 限縮是否維持。由 Phase 0-6 回答                                                                                                                                                              |
 | 11  | ~~20 m DTM 的取得與轉檔~~                         | ✅ **已答**：可轉為已驗證的 EPSG:4326 GeoTIFF（3.2 s）；能力邊界經實測支持（§3.6b）                                                                                                                                                          |

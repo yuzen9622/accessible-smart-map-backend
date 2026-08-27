@@ -28,6 +28,11 @@ import {
 } from "../modules/accessible-route/planners/pedestrian-a11y/cost";
 import { loadPedGraph } from "../modules/accessible-route/planners/pedestrian-a11y/graph-loader";
 import {
+  readReplayPairsFile,
+  resolveReplayPairs,
+} from "./ped-router-otp-comparison-replay";
+import { resolvePlannedPathSteps } from "./ped-router-planned-path";
+import {
   EDGE_FLAG,
   NODE_FLAG,
   type PedGraph,
@@ -39,7 +44,7 @@ import {
 } from "../modules/accessible-route/planners/pedestrian-a11y/spatial-index";
 import { haversineMeters } from "../utils/geo";
 
-const SPEC_VERSION = "IMPL_PED_ROUTER_OTP_COMPARISON.md v1.0.0";
+const SPEC_VERSION = "IMPL_PED_ROUTER_OTP_COMPARISON.md v1.1.0";
 const DEFAULT_OUTPUT_PATH = "/tmp/ped-otp-comparison.json";
 
 /** Pre-registered sampling parameters (spec §3). */
@@ -140,6 +145,8 @@ interface MappedOtpRoute {
 
 interface PairOutcome {
   index: number;
+  /** Only set in replay mode: the case id in the file being replayed. */
+  sourceIndex?: number;
   from: { node: number; lat: number; lon: number };
   to: { node: number; lat: number; lon: number };
   straightLineDistanceM: number;
@@ -377,43 +384,6 @@ function unconstrainedShortestDistanceM(
 }
 
 /**
- * @param graph CSR pedestrian graph.
- * @param nodePath Dense node sequence from a search.
- * @param profile Profile whose cost selects among parallel edges.
- * @returns The traversed edge attribute indices.
- */
-function resolvePathSteps(
-  graph: PedGraph,
-  nodePath: Int32Array,
-  profile: CostProfile,
-): PathStep[] {
-  const steps: PathStep[] = [];
-  for (let index = 0; index < nodePath.length - 1; index += 1) {
-    const from = nodePath[index];
-    const to = nodePath[index + 1];
-    let selectedAttrIdx = -1;
-    let selectedValue = Number.POSITIVE_INFINITY;
-    for (
-      let adjacencyIndex = graph.adjOffset[from];
-      adjacencyIndex < graph.adjOffset[from + 1];
-      adjacencyIndex += 1
-    ) {
-      if (graph.adjTarget[adjacencyIndex] !== to) continue;
-      const attrIdx = graph.adjAttr[adjacencyIndex];
-      const value = edgeCost(graph, attrIdx, profile);
-      if (!Number.isFinite(value) || value >= selectedValue) continue;
-      selectedAttrIdx = attrIdx;
-      selectedValue = value;
-    }
-    if (selectedAttrIdx === -1) {
-      throw new Error(`route step ${from} -> ${to} has no finite edge`);
-    }
-    steps.push({ attrIdx: selectedAttrIdx });
-  }
-  return steps;
-}
-
-/**
  * Attributes a strict-infeasible edge to the first ladder level that unblocks it.
  *
  * @param graph CSR pedestrian graph.
@@ -495,7 +465,9 @@ function planWithLadder(
     latencyMs += performance.now() - startedAt;
     if (result === null) continue;
     return {
-      steps: resolvePathSteps(graph, result.nodePath, profile),
+      steps: resolvePlannedPathSteps(graph, result.nodePath, (attrIdx) =>
+        edgeCost(graph, attrIdx, profile),
+      ),
       relaxationLevel,
       latencyMs,
     };
@@ -644,33 +616,63 @@ function mapPolylineToEdges(
   };
 }
 
-/**
- * @param argv Raw process arguments.
- * @returns Parsed run options.
- */
-function parseArgs(argv: string[]): {
+export interface ComparisonOptions {
   dbUrl: string;
   otpUrl: string;
   seed: number;
   samples: number;
   versionId: number | undefined;
   output: string;
-} {
+  pairsInput: string | undefined;
+}
+
+/** Flags that consume a value, either as `--flag value` or `--flag=value`. */
+const VALUE_FLAGS = new Set([
+  "--db-url",
+  "--otp-url",
+  "--seed",
+  "--samples",
+  "--version-id",
+  "--output",
+  "--pairs-input",
+]);
+
+/**
+ * @param argv Raw process arguments.
+ * @returns Parsed run options.
+ */
+export function parseArgs(argv: string[]): ComparisonOptions {
   let dbUrl = process.env.PED_GRAPH_DATABASE_URL ?? "";
   let otpUrl = process.env.OTP_BASE_URL ?? "http://localhost:8080";
   let seed = DEFAULT_SEED;
   let samples = DEFAULT_SAMPLE_COUNT;
   let versionId: number | undefined;
   let output = DEFAULT_OUTPUT_PATH;
+  let pairsInput: string | undefined;
   for (let index = 0; index < argv.length; index += 1) {
-    const [flag, inlineValue] = argv[index].split("=", 2);
-    const value = inlineValue ?? argv[++index];
+    const argument = argv[index];
+    const separator = argument.indexOf("=");
+    const flag = separator === -1 ? argument : argument.slice(0, separator);
+    if (!VALUE_FLAGS.has(flag)) {
+      throw new Error(`unknown argument ${argument}`);
+    }
+    // A missing value must never fall through as undefined: silently keeping the
+    // default would turn `--pairs-input` with a lost value into a fresh seeded
+    // sample, i.e. a different experiment reported under the replay's name. A
+    // following flag is a lost value too, not a value that happens to start with
+    // a dash.
+    const value =
+      separator === -1 ? argv[++index] : argument.slice(separator + 1);
+    if (value === undefined || value === "" || value.startsWith("--")) {
+      throw new Error(`${flag} requires a value`);
+    }
     if (flag === "--db-url") dbUrl = value;
     else if (flag === "--otp-url") otpUrl = value;
     else if (flag === "--seed") seed = Number(value);
     else if (flag === "--samples") samples = Number(value);
     else if (flag === "--version-id") versionId = Number(value);
     else if (flag === "--output") output = value;
+    else pairsInput = value;
   }
   if (!dbUrl) {
     throw new Error("PED_GRAPH_DATABASE_URL or --db-url is required");
@@ -678,7 +680,13 @@ function parseArgs(argv: string[]): {
   if (!Number.isInteger(samples) || samples <= 0) {
     throw new Error("--samples must be a positive integer");
   }
-  return { dbUrl, otpUrl, seed, samples, versionId, output };
+  if (!Number.isFinite(seed)) {
+    throw new Error("--seed must be a finite number");
+  }
+  if (versionId !== undefined && !Number.isInteger(versionId)) {
+    throw new Error("--version-id must be an integer");
+  }
+  return { dbUrl, otpUrl, seed, samples, versionId, output, pairsInput };
 }
 
 /**
@@ -697,18 +705,31 @@ async function main(): Promise<void> {
   }
   const index = buildEdgeIndex(graph);
   const candidates = outdoorNodes(graph);
-  const pairs = samplePairs(
-    graph,
-    candidates,
-    seededRandom(options.seed),
-    options.samples,
-  );
+  let pairs: NodePair[];
+  let sourceIndexes: number[] | null = null;
+  if (options.pairsInput === undefined) {
+    pairs = samplePairs(
+      graph,
+      candidates,
+      seededRandom(options.seed),
+      options.samples,
+    );
+  } else {
+    const replayed = resolveReplayPairs(
+      graph,
+      readReplayPairsFile(options.pairsInput),
+    );
+    pairs = replayed.map((pair) => ({ from: pair.from, to: pair.to }));
+    sourceIndexes = replayed.map((pair) => pair.sourceIndex);
+  }
   console.log(
     `[otp-comparison] graph version=${graph.versionId} nodes=${graph.nodeCount} ` +
       `edges=${graph.directedEdgeCount} outdoor_nodes=${candidates.length}`,
   );
   console.log(
-    `[otp-comparison] sampling seed=${options.seed} pairs=${pairs.length} otp=${options.otpUrl}`,
+    sourceIndexes === null
+      ? `[otp-comparison] sampling seed=${options.seed} pairs=${pairs.length} otp=${options.otpUrl}`
+      : `[otp-comparison] replaying ${pairs.length} pair(s) from ${options.pairsInput} otp=${options.otpUrl}`,
   );
 
   const outcomes: PairOutcome[] = [];
@@ -774,6 +795,9 @@ async function main(): Promise<void> {
 
     outcomes.push({
       index: position,
+      ...(sourceIndexes === null
+        ? {}
+        : { sourceIndex: sourceIndexes[position] }),
       from: {
         node: pair.from,
         lat: graph.nodeLat[pair.from],
@@ -794,7 +818,7 @@ async function main(): Promise<void> {
     }
   }
 
-  const report = buildReport(options, graph, outcomes);
+  const report = buildReport(options, graph, outcomes, sourceIndexes !== null);
   fs.mkdirSync(path.dirname(options.output), { recursive: true });
   fs.writeFileSync(options.output, JSON.stringify(report, null, 2));
   printSummary(report);
@@ -811,6 +835,7 @@ function buildReport(
   options: ReturnType<typeof parseArgs>,
   graph: PedGraph,
   outcomes: PairOutcome[],
+  replayed: boolean,
 ): Record<string, unknown> {
   const oursRouted = outcomes.filter((item) => item.ours.status === "ok");
   const otpRouted = outcomes.filter((item) => item.otp.status === "ok");
@@ -887,6 +912,15 @@ function buildReport(
     configuration: {
       seed: options.seed,
       requestedSamples: options.samples,
+      ...(replayed
+        ? {
+            replay: {
+              pairsInput: options.pairsInput,
+              pairCount: outcomes.length,
+              note: "OD coordinates replayed from a prior run; seed sampling unused",
+            },
+          }
+        : {}),
       otpBaseUrl: options.otpUrl,
       otpQuery: {
         wheelchair: true,
@@ -941,7 +975,7 @@ function buildReport(
     condition4Latency: {
       decidable: false,
       reason:
-        "different measurement planes: ours is an in-process A* core call, OTP is end-to-end HTTP + GraphQL. Spec §6 forbids deciding condition 4 on these numbers.",
+        "different measurement planes: ours is an in-process CSR search core call (currently h=0 Dijkstra-equivalent), OTP is end-to-end HTTP + GraphQL. Spec §6 forbids deciding condition 4 on these numbers; pre-h=0 proxy-A* latency is historical only.",
       oursCoreMs: summarize(oursLatency),
       otpEndToEndMs: summarize(otpLatency),
     },
@@ -1022,7 +1056,11 @@ function printSummary(report: Record<string, unknown>): void {
   );
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+// Guarded so the pure argument parser can be imported by its test without the
+// bench connecting to PostGIS and OTP on import.
+if (typeof require !== "undefined" && require.main === module) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}

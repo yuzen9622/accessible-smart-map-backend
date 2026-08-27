@@ -2,11 +2,13 @@
 
 ## Implementation Spec — Pedestrian Accessibility Routing Engine, Phase 0
 
-**版本**：v1.4.0
+**版本**：v1.5.0
 **狀態**：**Phase 0 完成（WP-1～WP-7 全部實作並實測）**。驗收報告 `docs/reports/PED_ROUTER_PHASE0.md`
-**日期**：2026-08-25
-**上位文件**：`docs/specs/FUNCTIONAL_SPEC_PEDESTRIAN_A11Y_ROUTER.md` v0.5.0
-**範圍**：**僅 Phase 0（高風險前置驗證）。台北市。**
+**日期**：2026-08-27
+
+> **2026-08-27 production correctness correction**：室內 proxy coordinate 與 `traversalTime` 成本之間沒有已證明的全圖 lower bound。production search 使用 `h ≡ 0`（Dijkstra-equivalent）；過去 proxy-A\*／投影吸附的 Phase 0 latency 和 snap 數字是歷史資料，**不得當成目前 production algorithm 的效能主張**，必須重跑。
+> **上位文件**：`docs/specs/FUNCTIONAL_SPEC_PEDESTRIAN_A11Y_ROUTER.md` v0.5.0
+> **範圍**：**僅 Phase 0（高風險前置驗證）。台北市。**
 
 > **為何只寫 Phase 0**：上位規格 §12 明定 Phase 0 是 go／no-go 閘門，未通過即收手。在取得 0-1～0-5 的實測數字之前撰寫後續 Phase 的實作細節，等於預設閘門會過——與規格自身的風險立場矛盾。Phase 1 以後的實作規格待 Phase 0 報告產出後另立。
 
@@ -112,9 +114,13 @@ CREATE TABLE ped_graph_version (
   source_hash         TEXT        NOT NULL,
   built_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
   bbox                GEOMETRY(Polygon, 4326),
-  node_count          INTEGER     NOT NULL,
-  directed_edge_count INTEGER     NOT NULL,
-  notes               TEXT
+  node_count                INTEGER     NOT NULL,
+  directed_edge_count       INTEGER     NOT NULL,
+  notes                     TEXT,
+  lifecycle_status          TEXT        NOT NULL DEFAULT 'CANDIDATE',
+  indoor_injection_complete BOOLEAN     NOT NULL DEFAULT FALSE,
+  CONSTRAINT ped_graph_version_lifecycle_status_check
+    CHECK (lifecycle_status IN ('CANDIDATE', 'ACTIVE', 'RETIRED'))
 );
 
 CREATE TABLE ped_node (
@@ -161,18 +167,21 @@ CREATE INDEX ped_edge_from_idx   ON ped_edge (version_id, from_node);
 CREATE INDEX ped_edge_to_idx     ON ped_edge (version_id, to_node);
 CREATE INDEX ped_node_proxy_gix  ON ped_node USING GIST (proxy_geom);
 CREATE INDEX ped_node_station_idx ON ped_node (version_id, station_id);
+CREATE UNIQUE INDEX ped_graph_version_one_active_idx
+  ON ped_graph_version ((1))
+  WHERE lifecycle_status = 'ACTIVE';
 ```
 
 **欄位語意（實作者必讀）**
 
-| 欄位                  | 語意                                                                                                |
-| --------------------- | --------------------------------------------------------------------------------------------------- |
-| `geom`                | 真實幾何。**室內通用節點與室內邊為 `NULL`**（上位規格 §3.4：上游 GTFS 不提供座標）                  |
-| `proxy_geom`          | **恆非 NULL**。戶外節點等於 `geom`；室內節點為所屬車站出入口質心（上位規格 §9.1b）                  |
-| `station_radius_m`    | 該站出入口相對質心的最大距離，供 `h = max(0, dist(proxy, goal) − R)` 使用。非室內節點為 `NULL`      |
-| `length_m`            | 室內邊為 `NULL`（改用 `traversal_time_s` 計價）                                                     |
-| `attr_meta`           | 每個屬性的 `{value, source, confidence, updated_at}`（上位規格 §6.1）。**不得把來源資訊塞進主欄位** |
-| `width_m` / `slope_*` | 未知一律 `NULL`，**不得以 0 表示未知**（上位規格 §7.4：未知不等於最差）                             |
+| 欄位                  | 語意                                                                                                                             |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `geom`                | 真實幾何。**室內通用節點與室內邊為 `NULL`**（上位規格 §3.4：上游 GTFS 不提供座標）                                               |
+| `proxy_geom`          | **恆非 NULL**。戶外節點等於 `geom`；室內節點為所屬車站出入口質心（上位規格 §9.1b）                                               |
+| `station_radius_m`    | 該站出入口相對質心的最大距離，供 proxy geometry／資料品質診斷使用；**不是** production heuristic 的成本下界。非室內節點為 `NULL` |
+| `length_m`            | 室內邊為 `NULL`（改用 `traversal_time_s` 計價）                                                                                  |
+| `attr_meta`           | 每個屬性的 `{value, source, confidence, updated_at}`（上位規格 §6.1）。**不得把來源資訊塞進主欄位**                              |
+| `width_m` / `slope_*` | 未知一律 `NULL`，**不得以 0 表示未知**（上位規格 §7.4：未知不等於最差）                                                          |
 
 **列舉字典**（`edge_type` / `node_type` / `surface` / `smoothness` / `wheelchair` / `kerb`）以整數存放，字典表定義於 WP-3 的 `graph.types.ts`，**兩邊必須是同一份定義的兩種語言表述**。SQL 側以 `COMMENT ON COLUMN` 記錄對照，避免漂移。
 
@@ -199,21 +208,30 @@ CREATE INDEX ped_node_station_idx ON ped_node (version_id, station_id);
 
 台北僅 **7.2%** 的主要道路帶 `sidewalk` tag（上位規格 §3.1）。若只取 `highway=footway`，圖會嚴重斷裂、無法路由。**行人圖必須包含可徒步的一般道路。**
 
-```
-納入：highway ∈ {
+```text
+基本納入：highway ∈ {
   footway, path, pedestrian, steps, living_street, track, road,
   residential, service, unclassified,
   tertiary, tertiary_link, secondary, secondary_link, primary, primary_link
 }
 
-排除（依序判定）：
-  1. highway ∈ {motorway, motorway_link}                       → 一律排除
+窄例外納入（不加入 INCLUDED_HIGHWAYS）：
+  highway=cycleway 且 foot ∈ {yes, designated, permissive}
+  且 foot/access 均非 {no, private}，且共用禁行硬化規則未判為 foot=no
+  → 納入；edge_type 明確映射為既有 path-like type（code 4），不得落入 unknown fallback
+
+共通排除（依序判定）：
+  1. highway ∈ {motorway, motorway_link}                       → 一律排除，即使 foot 肯定
   2. foot ∈ {no, private} 或 access ∈ {no, private}            → 排除
   3. highway ∈ {trunk, trunk_link} 且 無明確 foot tag
      且 (sidewalk=no 或 bridge=yes)                            → 排除
 ```
 
 **規則 3 必須與 `src/scripts/deny-foot-on-expressways.py` 完全一致**——兩者若分歧，本引擎與 OTP 的比較就不是同一個可行集，評估失去意義。實作時直接引用該檔的判定函式，不要複製貼上。
+
+**此窄例外只修復已證實的案例 89。** OSM way/229778286 是 `highway=cycleway`、`foot=designated`、`segregated=yes`，且共用島側與最大元件側的 OSM node；下次建立不可變新版本時會被納入。案例 140／170 的候選 `cycleway` 沒有任何 `foot` 標記，故仍不符合本條件、仍排除；不得將 `cycleway` 整批納入。
+
+**已儲存的 version 1 不會被本次程式變更改寫。** 它以舊規則建立，會維持不可變；只有另行建立並啟用新的 immutable graph version 後，這條規則才會作用於圖資。
 
 **只看標籤，不看路名。** 依既有教訓，路由邏輯內禁止以名稱比對判定道路性質。
 
@@ -272,9 +290,16 @@ DEM 檔缺漏時該邊 `slope_longitudinal = NULL`，**腳本不得因此失敗*
 pnpm build:ped-graph -- --pbf <path> --dem-dir <path> --bbox taipei
 ```
 
-- 每次執行建立一筆 `ped_graph_version`，所有節點／邊掛在該 `version_id` 下。**不覆寫舊版本**（供比對與回滾）。
+- 每次執行建立一筆 `ped_graph_version`，所有節點／邊掛在該 `version_id` 下。**不覆寫舊版本**（供比對與回滾），初始固定為 `CANDIDATE` 與 `indoor_injection_complete=false`。
 - `source_hash` 為輸入 PBF 的內容雜湊。
 - 結尾印出並寫入 `notes`：節點數、有向邊數、各 `edge_type` 分布、坡度／surface／width 覆蓋率。
+
+### 3.6a 啟用與回滾契約（2026-08-27 新增）
+
+1. 先以 `pnpm migrate:ped-graph-lifecycle` 套用 idempotent schema migration；existing version 1 會 deterministic 地設為 `ACTIVE`，其餘 legacy versions 為 `RETIRED`。
+2. 對新 build 執行 `pnpm inject:ped-indoor -- --version-id <candidate> --bbox taipei`；injector 僅鎖定並更新 candidate，成功後才寫 durable completion field，絕不啟用。
+3. 執行 `pnpm promote:ped-graph -- --version-id <candidate>`。CLI 在 transaction 內持 advisory lock，比對 version record 與實際 `ped_node`／`ped_edge` counts、completion field，然後 retire 舊 active 並 activate candidate；最後再 assert active count 為一。
+4. 回滾必須明確指定一個完整的 retired version：`pnpm promote:ped-graph -- --version-id <retired> --allow-retired`。沒有 active、未完成 candidate、count mismatch 與非允許 transition 都 fail closed。
 
 ### 3.7 驗收
 
@@ -311,7 +336,7 @@ export interface PedGraph {
   directedEdgeCount: number;
   undirectedEdgeCount: number;
 
-  nodeLon: Float64Array; // proxy_geom，長度 nodeCount
+  nodeLon: Float64Array; // COALESCE(geom, proxy_geom)，長度 nodeCount
   nodeLat: Float64Array;
   nodeFlags: Uint8Array; // bit0 indoor, bit1 entrance, bit2 hasRealGeom
   nodeStationId: Int32Array; // -1 表非室內
@@ -345,7 +370,7 @@ export async function loadPedGraph(
 ): Promise<PedGraph>;
 ```
 
-- 未給 `versionId` 時取最新一筆。
+- 未給 `versionId` 時只取 `ACTIVE`；沒有 active 即 fail closed。指定 `versionId` 時不看 lifecycle status，保留 candidate／retired 的診斷、bench 與驗證能力。
 - 以 cursor／分批讀取，避免一次把整張表拉進 JS 陣列再轉 TypedArray（那會在轉換期間出現峰值）。
 - 節點 id 重新編號為 `0..nodeCount-1` 的稠密索引，並保留 `originalNodeId` 對照供除錯。
 - 載入完成後回報實測 heap（`process.memoryUsage().heapUsed` 前後差），供 Phase 0-2 驗收。
@@ -447,14 +472,16 @@ export function aStar(
 ): RouteResult | null;
 ```
 
-- 啟發函數：`h(n) = max(0, haversineM(nodeLon[n], nodeLat[n], goalLon, goalLat) − stationRadiusOf(n)) / maxSpeedFactor`，其中 `stationRadiusOf` 對非室內節點回 0（上位規格 §9.1b）。
-- 啟發值必須與 cost 同單位。若 cost 以距離為基底，`h` 直接用公尺；室內邊以時間計價時，須以 profile 步速換算成可比單位，且換算須**保守**（寧可低估，維持可採納性）。
-- **允許節點重開**：取出 closed 節點時若發現更低的 g 值，重新推入。回報 `reopenedNodes`，該數字是 §9.1b 設計是否有效的證據。
+- **production heuristic：`h(n) = 0`**。室內邊的 `traversalTime` 成本可能小於 proxy-coordinate 直線距離；`station_radius_m` 只界定幾何誤差，不能機械證明 remaining-cost lower bound。零是目前唯一全圖可採納的選擇。
+- 因所有可用 edge cost 非負，`aStar` 在 production 等價於 Dijkstra；保留函式名稱與 priority/reopen 實作以維持介面與防禦性。
+- **允許節點重開**：取出 closed 節點時若發現更低的 g 值，重新推入。`reopenedNodes` 繼續回報，但零 heuristic 下預期通常為零，不能作為 proxy heuristic 成功或效能證據。
 - 優先佇列以二元堆實作，鍵值存 `Float64Array`、節點存 `Int32Array`。
 
 ### 5.4 Dijkstra 參考實作
 
-同介面、`h ≡ 0`。存在的唯一目的是**交叉驗證 A\* 的最佳性**（上位規格 §13）。
+同介面、同樣 `h ≡ 0` priority semantics。存在的唯一目的是**獨立交叉驗證 production search 的最佳性與 route reconstruction**（上位規格 §13）。
+
+> **Slice 1 core／Slice 2 pure-walk assembly（2026-08-27）**：`INDOOR_FARE_GATE`（25）與 `INDOOR_EXIT_GATE`（26）在 A\*／Dijkstra 預設 fail-closed；只有明確授權相同穩定母站 ID 的 transit context 可通過。付費區內純步行起點可能被過度阻擋，直到付費側拓撲獲證實。Phase 0 benchmark／OTP 對照省略 context 時即量測此預設，重跑必須揭露。`travelMode: "walk"` 現已在台北 CSR coverage 內接入 production assembly，並以 structured `engine`／`degraded`／warning 表明 OTP2 fallback；轉乘 itinerary 的 WALK leg 仍由 OTP2 規劃，未在本 Slice 接管。
 
 ### 5.5 驗收
 
@@ -476,15 +503,17 @@ export function aStar(
 
 ### 6.2 內容
 
-1. 自 MongoDB 讀 `gtfspathways`（10,220 條）與 `gtfsstops`，建立室內節點與邊，寫入同一 `version_id`。
-2. 室內邊：`geom = NULL`、`length_m = NULL`、`traversal_time_s` 取自 `traversalTime`、`stair_count` 取自 `stairCount`、`edge_type` 由 `pathwayMode` 對映。
-3. **代理座標**：以每站 `locationType=2` 出入口的**質心**作為該站所有室內節點的 `proxy_geom`；`station_radius_m` = 該站出入口到質心的最大距離。
-4. **縫合**：654 個出入口各自吸附到最近的戶外邊，插入一個節點並產生連接邊。**吸附容差與成功率必須逐站記錄**。
+1. 僅接受 requested `CANDIDATE` version；以 `FOR UPDATE` 鎖定它，拒絕 `ACTIVE`／`RETIRED`，且不得自行改 lifecycle status。
+2. 自 MongoDB 讀 `gtfspathways`（10,220 條）與 `gtfsstops`，建立室內節點與邊，寫入同一 `version_id`。
+3. 室內邊：`geom = NULL`、`length_m = NULL`、`traversal_time_s` 取自 `traversalTime`、`stair_count` 取自 `stairCount`、`edge_type` 由 `pathwayMode` 對映。
+4. **代理座標**：以每站 `locationType=2` 出入口的**質心**作為該站所有室內節點的 `proxy_geom`；`station_radius_m` = 該站出入口到質心的最大距離。
+5. **縫合**：654 個出入口各自吸附到最近的戶外邊，插入一個節點並產生連接邊。**吸附容差與成功率必須逐站記錄**。
+6. 寫入 `indoor_injection_complete=true` 前必須驗證生成後 totals 與 version record 一致、generated metadata source 正確；promotion 將此 durable field 作為 readiness gate。promotion 另必須令 generated pathway endpoint mismatch count 為零：所有 GTFS fare／exit gate 的兩端都要有相同、非空白的 stable parent-station ID；任一 missing 或 mismatch 都不得 activate candidate。
 
 ### 6.3 驗收（**這是 Phase 0-3，決定 §9 是否成立**）
 
 - 報告 654 個出入口的對位成功數與距離分布。
-- 報告各站 `station_radius_m` 分布——上位規格 §9.1b 假設車站尺度 100–300 m，須實測驗證；若普遍遠大於此，啟發函數會失去引導力（上位規格 §15 待決項 8）。
+- 報告各站 `station_radius_m` 分布，作為 proxy geometry 的資料品質診斷；它不再被用來主張 production heuristic 的引導力。
 - 對位率過低時**如實回報並建議 §9 退回不整合**，不得為了讓數字好看而放寬容差。
 
 ---
@@ -501,18 +530,18 @@ export function aStar(
 
 ### 7.2 必須產出的數字（對應上位規格 §12 的 0-1～0-5）
 
-| 驗收項             | 指標                                                                |
-| ------------------ | ------------------------------------------------------------------- |
-| 0-1 建圖 pipeline  | 節點數、有向邊數、`edge_type` 分布、屬性覆蓋率、連通性抽驗可達率    |
-| 0-2 CSR 與記憶體   | 實測常駐 heap、六都外推值、與 §5.8 預算的比對                       |
-| 0-3 出入口對位     | 654 個的成功數、距離分布、`station_radius_m` 分布                   |
-| 0-4 吸附與延遲     | 吸附失敗率；**A\* 核心平面** p50 / p95（N ≥ 100，捨棄前 10 次暖機） |
-| 0-5 判定可量測性   | §11.3 四項條件是否皆可自動量測                                      |
-| 0-6 政府圖資與 DEM | 見 §7b（WP-7）                                                      |
+| 驗收項             | 指標                                                                                                                                     |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| 0-1 建圖 pipeline  | 節點數、有向邊數、`edge_type` 分布、屬性覆蓋率、連通性抽驗可達率                                                                         |
+| 0-2 CSR 與記憶體   | 實測常駐 heap、六都外推值、與 §5.8 預算的比對                                                                                            |
+| 0-3 出入口對位     | 654 個的成功數、距離分布、`station_radius_m` 分布                                                                                        |
+| 0-4 吸附與延遲     | **目前 production 的端點吸附＋`h≡0` CSR search core** p50 / p95（N ≥ 100，捨棄前 10 次暖機）；舊投影吸附／proxy-A\* 數字只保留為歷史資料 |
+| 0-5 判定可量測性   | §11.3 四項條件是否皆可自動量測                                                                                                           |
+| 0-6 政府圖資與 DEM | 見 §7b（WP-7）                                                                                                                           |
 
 ### 7.3 延遲量測的紀律
 
-- 上位規格 §11.2 協定一：**量測平面必須對齊**。Phase 0 只量「A\* 核心平面」，**不得**拿來與 §3.6 的 OTP GraphQL 端到端數字直接下結論——那要等 Phase 6 的成對量測。
+- 上位規格 §11.2 協定一：**量測平面必須對齊**。只量目前 production 的 CSR search core（端點吸附＋`h≡0`），**不得**拿來與 §3.6 的 OTP GraphQL 端到端數字直接下結論——那要等 Phase 6 的成對量測。舊 proxy-A\* core latency 不得延用。
 - 協定二：N ≥ 100、捨棄前 10 次暖機。**兩次 warm 值不是 p95。**
 - 報告須同時記錄 `graph_version_id`。
 

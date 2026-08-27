@@ -2,6 +2,8 @@
 
 版本 v1.1.0 · 狀態：**預先登記（pre-registered），正式評估執行前凍結**
 
+> **2026-08-27 production correctness correction（不改寫 v1.1.0 歷史結果）**：production CSR search 已改為 `h ≡ 0`（Dijkstra-equivalent），並改採端點而非邊投影的 snap acceptance。此前 proxy-A\* core latency、reopened-node 數與投影 snap 結果只屬歷史實作；它們**不得**當作目前 production algorithm 的延遲或 coverage 主張。要取得新的數字，須以本規格的 OD 程序重跑並明確記錄 current algorithm。
+
 本檔在**看到任何結果之前**固定量測程序。判定門檻本身不在此定義——它們已由
 `FUNCTIONAL_SPEC_PEDESTRIAN_A11Y_ROUTER.md` §11.3 凍結，本檔不得修改門檻，只補完
 「如何取得餵給那些門檻的數字」。
@@ -154,10 +156,10 @@ OTP 回傳 polyline,不回傳邊 ID,必須映射:
 §11.3 條件 4 要求「**同平面** p95」。目前:
 
 - OTP:HTTP + GraphQL 解析 + 圖查詢 + 序列化的端到端。
-- 本引擎:行程內函式呼叫的 A\* 核心平面,無 API 層。
+- 本引擎:行程內函式呼叫的 CSR search core（目前 `h≡0`，Dijkstra-equivalent）,無 API 層。
 
 兩者不同平面。Phase 0 報告 §0-3 已明文禁止跨平面比較。本實驗**照樣量測兩個數字並列出**,
-但標註為「**不可比較,不構成條件 4 的判定**」。要判定條件 4,必須等 Phase 1 的 API 層。
+但標註為「**不可比較,不構成條件 4 的判定**」。要判定條件 4,必須等 Phase 1 的 API 層；歷史 proxy-A\* core 數字也不得套用到目前版本。
 
 把 1 ms 的核心延遲拿去和 18 ms 的端到端相除得到「快 18 倍」是無意義的,報告不得如此陳述。
 
@@ -180,3 +182,44 @@ OTP 回傳 polyline,不回傳邊 ID,必須映射:
 
 腳本須輸出:圖版本 ID、節點/邊數、種子、樣本數、OTP endpoint 與查詢參數、
 每條 OD 的原始結果(供抽查)、以及本檔的版本號。
+
+---
+
+## 附錄 A. 重播模式 `--pairs-input`（v1.1.0 方法不變）
+
+本附錄**不修改** §1–§8 已凍結的方法。它只記錄一個新的執行模式：把先前某次執行的
+OD 座標原樣重跑，用於重現特定案例（例如無法路由的那 11 組）。
+
+```bash
+npx dotenvx run -f .env.development -- ts-node src/scripts/ped-router-otp-comparison.ts \
+  --version-id 1 --otp-url http://localhost:18080 \
+  --pairs-input <先前的 comparison JSON> --output <輸出路徑>
+```
+
+規則：
+
+1. **只在帶 `--pairs-input` 時生效。** 未帶此參數時，§3 的種子抽樣、樣本數、距離帶
+   與輸出結構完全不變（已實測：同種子前 8 組 OD 與凍結執行逐筆相同，輸出不含
+   `replay` 與 `sourceIndex` 欄位）。
+2. **座標必須精確解析，禁止就近吸附。** 容差 1e-7 度（約 1 cm）。找不到節點、或有
+   兩個以上節點落在容差內（歧義），一律**失敗中止**，不得靜默改用最近節點——否則
+   「這個節點消失了」會被悄悄換成另一個實驗。
+3. **保留來源案例編號。** 輸出每筆 outcome 帶 `sourceIndex`（來源檔的 `sourceIndex`，
+   缺則用 `index`），使 7/22/24/29/89/127/140/159/169/170/174 這組 ID 跨執行穩定。
+4. 重播模式下種子不參與抽樣；`configuration.replay` 記錄來源檔與筆數。
+5. 重播結果**不覆蓋** §7 的正式判定。正式評估仍以 §3 的預先登記抽樣為準。
+6. **參數值遺失必須中止，不得退回預設。** `--pairs-input` 寫了卻沒帶值（排在 argv
+   末尾、值為空字串、或下一個 token 其實是另一個旗標）時，舊行為會靈默回到 §3 的
+   種子抽樣——**那是一個不同的實驗，卻頂著重播的名字輸出**。現行 parser 對所有
+   取值旗標（`--db-url` / `--otp-url` / `--seed` / `--samples` / `--version-id` /
+   `--output` / `--pairs-input`）一律拋錯 `<flag> requires a value`，未知參數也拋錯。
+   回歸測試：`src/scripts/ped-router-otp-comparison-args.test.ts`。
+
+### 版本歷程
+
+| 版本   | 日期       | 變更                                                               |
+| ------ | ---------- | ------------------------------------------------------------------ |
+| v1.0.0 | 2026-08-26 | 預先登記凍結                                                       |
+| v1.1.0 | 2026-08-26 | §5.2a 距離與判定分離（dry run 發現 25% 距離失真）                  |
+| v1.1.0 | 2026-08-27 | 附錄 A：新增 `--pairs-input` 重播模式；§1–§8 方法未變              |
+| v1.1.0 | 2026-08-27 | 附錄 A.6：參數值遺失改為失敗中止（原會靈默退回種子抽樣）；方法未變 |

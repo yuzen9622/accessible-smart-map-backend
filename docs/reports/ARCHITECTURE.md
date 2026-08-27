@@ -1,11 +1,13 @@
 # 程式碼架構文件
 
-> 版本：1.1　最後更新：2026-06-13  
+> 版本：1.2　最後更新：2026-08-27
 > 說明：本文件描述現有架構的分層現況、已識別的耦合問題，以及建議的目標架構與重構路線圖。
 
 > **v1.1 變更（Opus 深度複查）**：v1.0（Sonnet）的分析遺漏了 `user` 模組——它被誤標為「正常」，
 > 實際上是全專案 DB 耦合最嚴重的檔案（已於 Phase 7 修正）。並新增了 v1.0 完全未提及的
 > **深層結構問題**：路由領域型別的「倒置依賴」與動態 `import()` 繞圈（見 §9，這才是「架構好亂」的真正根源）。
+>
+> **v1.2 補記（行人圖版本生命週期）**：PostGIS `ped_graph_version` 的 build／indoor injection／promotion 屬離線 infrastructure boundary；builder 只產生 `CANDIDATE`，injector 只完成 candidate，advisory-locked CLI 才能原子 retire／activate。`graph-loader.ts` 未指定版本時只讀 `ACTIVE`，顯式 version 仍可供診斷。此改動沒有接入 HTTP API，也不改 module 分層。
 
 ## ✅ 已完成的重構（Phase 1–7）
 
