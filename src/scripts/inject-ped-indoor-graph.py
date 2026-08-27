@@ -804,11 +804,11 @@ def nearest_outdoor_edge(
             CROSS JOIN target
             WHERE edge.version_id = %s
               AND edge.geom IS NOT NULL
-              AND COALESCE(edge.source_ref, '') NOT LIKE %s
+              AND NOT starts_with(COALESCE(edge.source_ref, ''), %s)
             ORDER BY edge.geom <-> target.geom, edge.edge_id
             LIMIT 1
             """,
-            (longitude, latitude, version_id, f"{GENERATED_SOURCE_PREFIX}%"),
+            (longitude, latitude, version_id, GENERATED_SOURCE_PREFIX),
         )
         row = cursor.fetchone()
     except Exception as error:
@@ -1371,14 +1371,15 @@ def count_outdoor_nodes(cursor: Any, version_id: int, prefix: str) -> int:
 
     @param cursor Active PostGIS cursor.
     @param version_id Pedestrian graph version ID.
-    @param prefix Generated source-ref prefix pattern.
+    @param prefix Generated source-ref prefix.
     @returns Outdoor node count.
     """
     try:
         cursor.execute(
             """
             SELECT count(*) FROM ped_node
-            WHERE version_id = %s AND COALESCE(source_ref, '') NOT LIKE %s
+            WHERE version_id = %s
+              AND NOT starts_with(COALESCE(source_ref, ''), %s)
             """,
             (version_id, prefix),
         )
@@ -1392,14 +1393,15 @@ def count_outdoor_edges(cursor: Any, version_id: int, prefix: str) -> int:
 
     @param cursor Active PostGIS cursor.
     @param version_id Pedestrian graph version ID.
-    @param prefix Generated source-ref prefix pattern.
+    @param prefix Generated source-ref prefix.
     @returns Outdoor directed edge count.
     """
     try:
         cursor.execute(
             """
             SELECT count(*) FROM ped_edge
-            WHERE version_id = %s AND COALESCE(source_ref, '') NOT LIKE %s
+            WHERE version_id = %s
+              AND NOT starts_with(COALESCE(source_ref, ''), %s)
             """,
             (version_id, prefix),
         )
@@ -1449,7 +1451,7 @@ def count_invalid_node_metadata(cursor: Any, version_id: int, prefix: str) -> in
 
     @param cursor Active PostGIS cursor.
     @param version_id Pedestrian graph version ID.
-    @param prefix Generated source-ref prefix pattern.
+    @param prefix Generated source-ref prefix.
     @returns Invalid generated node metadata count.
     """
     try:
@@ -1457,7 +1459,7 @@ def count_invalid_node_metadata(cursor: Any, version_id: int, prefix: str) -> in
             """
             SELECT count(*) FROM ped_node,
               LATERAL jsonb_each(attr_meta) AS attribute
-            WHERE version_id = %s AND source_ref LIKE %s
+            WHERE version_id = %s AND starts_with(source_ref, %s)
               AND COALESCE(attribute.value->>'source', '') <> %s
             """,
             (version_id, prefix, GTFS_SOURCE),
@@ -1472,7 +1474,7 @@ def count_invalid_edge_metadata(cursor: Any, version_id: int, prefix: str) -> in
 
     @param cursor Active PostGIS cursor.
     @param version_id Pedestrian graph version ID.
-    @param prefix Generated source-ref prefix pattern.
+    @param prefix Generated source-ref prefix.
     @returns Invalid generated edge metadata count.
     """
     try:
@@ -1480,7 +1482,7 @@ def count_invalid_edge_metadata(cursor: Any, version_id: int, prefix: str) -> in
             """
             SELECT count(*) FROM ped_edge,
               LATERAL jsonb_each(attr_meta) AS attribute
-            WHERE version_id = %s AND source_ref LIKE %s
+            WHERE version_id = %s AND starts_with(source_ref, %s)
               AND COALESCE(attribute.value->>'source', '') <> %s
             """,
             (version_id, prefix, GTFS_SOURCE),
@@ -1488,6 +1490,19 @@ def count_invalid_edge_metadata(cursor: Any, version_id: int, prefix: str) -> in
     except Exception as error:
         raise SystemExit(f"unable to query generated edge metadata: {error}") from error
     return count_result(cursor, "generated edge metadata")
+
+
+def require_candidate_lifecycle_status(status: Any, version_id: int) -> None:
+    """Fail unless the requested graph version remains eligible for injection.
+
+    @param status Stored lifecycle status.
+    @param version_id Pedestrian graph version ID.
+    @returns Nothing.
+    """
+    if status != "CANDIDATE":
+        raise SystemExit(
+            f"ped_graph_version {version_id} must be CANDIDATE for indoor injection"
+        )
 
 
 def replace_generated_rows(
@@ -1501,7 +1516,8 @@ def replace_generated_rows(
     """
     try:
         cursor.execute(
-            "SELECT notes FROM ped_graph_version WHERE id = %s FOR UPDATE",
+            "SELECT lifecycle_status, notes FROM ped_graph_version "
+            "WHERE id = %s FOR UPDATE",
             (version_id,),
         )
         version_row = cursor.fetchone()
@@ -1511,13 +1527,14 @@ def replace_generated_rows(
         ) from error
     if version_row is None:
         raise SystemExit(f"ped_graph_version {version_id} does not exist")
+    require_candidate_lifecycle_status(version_row[0], version_id)
     try:
-        existing_notes = json.loads(version_row[0]) if version_row[0] else {}
+        existing_notes = json.loads(version_row[1]) if version_row[1] else {}
     except (TypeError, json.JSONDecodeError) as error:
         raise SystemExit(
             f"ped_graph_version {version_id} notes are not JSON"
         ) from error
-    prefix = f"{GENERATED_SOURCE_PREFIX}%"
+    prefix = GENERATED_SOURCE_PREFIX
     outdoor_node_count = count_outdoor_nodes(cursor, version_id, prefix)
     outdoor_edge_count = count_outdoor_edges(cursor, version_id, prefix)
     for key, observed in (
@@ -1529,11 +1546,13 @@ def replace_generated_rows(
             raise SystemExit(f"stored {key} does not match preserved outdoor graph")
     try:
         cursor.execute(
-            "DELETE FROM ped_edge WHERE version_id = %s AND source_ref LIKE %s",
+            "DELETE FROM ped_edge WHERE version_id = %s "
+            "AND starts_with(source_ref, %s)",
             (version_id, prefix),
         )
         cursor.execute(
-            "DELETE FROM ped_node WHERE version_id = %s AND source_ref LIKE %s",
+            "DELETE FROM ped_node WHERE version_id = %s "
+            "AND starts_with(source_ref, %s)",
             (version_id, prefix),
         )
     except Exception as error:
@@ -1647,7 +1666,7 @@ def assert_metadata_sources(cursor: Any, version_id: int) -> None:
     @param version_id Pedestrian graph version ID.
     @returns Nothing.
     """
-    prefix = f"{GENERATED_SOURCE_PREFIX}%"
+    prefix = GENERATED_SOURCE_PREFIX
     if count_invalid_node_metadata(cursor, version_id, prefix):
         raise SystemExit("generated node metadata has a non-GTFS source")
     if count_invalid_edge_metadata(cursor, version_id, prefix):
@@ -1731,8 +1750,12 @@ def inject_prepared_graph(
                 cursor.execute(
                     """
                     UPDATE ped_graph_version
-                    SET node_count = %s, directed_edge_count = %s, notes = %s
-                    WHERE id = %s
+                    SET
+                      node_count = %s,
+                      directed_edge_count = %s,
+                      notes = %s,
+                      indoor_injection_complete = TRUE
+                    WHERE id = %s AND lifecycle_status = 'CANDIDATE'
                     """,
                     (
                         report["node_count"],

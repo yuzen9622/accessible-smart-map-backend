@@ -90,6 +90,127 @@ class SelectionTests(unittest.TestCase):
         self.assertTrue(all(identifier > 0 for identifier in identifiers))
 
 
+class LifecycleTests(unittest.TestCase):
+    def test_only_candidate_versions_may_receive_indoor_injection(self):
+        MODULE.require_candidate_lifecycle_status("CANDIDATE", 7)
+        for status in ("ACTIVE", "RETIRED", None):
+            with self.subTest(status=status), self.assertRaises(SystemExit):
+                MODULE.require_candidate_lifecycle_status(status, 7)
+
+    def test_gtfs_xpathways_is_preserved_as_outdoor_during_cleanup(self):
+        class FakeCursor:
+            def __init__(self):
+                self.calls = []
+                self.edge_refs = [
+                    "gtfs_pathways:connector-edge:generated",
+                    "gtfsXpathways:connector-edge:adversarial",
+                ]
+                self.node_refs = [
+                    "gtfs_pathways:stop:generated",
+                    "gtfsXpathways:stop:adversarial",
+                ]
+                self.row = None
+
+            def execute(self, query, params=None):
+                if params is None:
+                    raise AssertionError("query parameters are required")
+                self.calls.append((query, params))
+                normalized_query = " ".join(query.split())
+                if "SELECT lifecycle_status, notes" in normalized_query:
+                    self.row = ("CANDIDATE", "{}")
+                    return
+                if "SELECT count(*) FROM ped_node" in normalized_query:
+                    if "NOT starts_with(COALESCE(source_ref, ''), %s)" not in query:
+                        raise AssertionError("outdoor node count must use starts_with")
+                    self.row = (
+                        sum(
+                            not source_ref.startswith(params[1])
+                            for source_ref in self.node_refs
+                        ),
+                    )
+                    return
+                if "SELECT count(*) FROM ped_edge" in normalized_query:
+                    if "NOT starts_with(COALESCE(source_ref, ''), %s)" not in query:
+                        raise AssertionError("outdoor edge count must use starts_with")
+                    self.row = (
+                        sum(
+                            not source_ref.startswith(params[1])
+                            for source_ref in self.edge_refs
+                        ),
+                    )
+                    return
+                if "DELETE FROM ped_edge" in normalized_query:
+                    if "starts_with(source_ref, %s)" not in query:
+                        raise AssertionError(
+                            "generated edge cleanup must use starts_with"
+                        )
+                    self.edge_refs = [
+                        source_ref
+                        for source_ref in self.edge_refs
+                        if not source_ref.startswith(params[1])
+                    ]
+                    return
+                if "DELETE FROM ped_node" in normalized_query:
+                    if "starts_with(source_ref, %s)" not in query:
+                        raise AssertionError(
+                            "generated node cleanup must use starts_with"
+                        )
+                    self.node_refs = [
+                        source_ref
+                        for source_ref in self.node_refs
+                        if not source_ref.startswith(params[1])
+                    ]
+                    return
+                raise AssertionError(f"unexpected query: {normalized_query}")
+
+            def fetchone(self):
+                return self.row
+
+        cursor = FakeCursor()
+
+        self.assertEqual(
+            MODULE.replace_generated_rows(cursor, 7),
+            (1, 1, {}),
+        )
+        self.assertEqual(
+            cursor.node_refs,
+            ["gtfsXpathways:stop:adversarial"],
+        )
+        self.assertEqual(
+            cursor.edge_refs,
+            ["gtfsXpathways:connector-edge:adversarial"],
+        )
+        source_ref_queries = [
+            (query, params) for query, params in cursor.calls if "source_ref" in query
+        ]
+        self.assertTrue(source_ref_queries)
+        for query, params in source_ref_queries:
+            if params is None:
+                raise AssertionError("source-ref query parameters are required")
+            self.assertIn("starts_with", query)
+            self.assertNotIn("LIKE", query)
+            self.assertEqual(params[1], MODULE.GENERATED_SOURCE_PREFIX)
+
+    def test_active_version_is_rejected_before_generated_rows_are_deleted(self):
+        class FakeCursor:
+            def __init__(self):
+                self.calls = []
+
+            def execute(self, query, params=None):
+                self.calls.append((query, params))
+
+            def fetchone(self):
+                return ("ACTIVE", "{}")
+
+        cursor = FakeCursor()
+
+        with self.assertRaises(SystemExit):
+            MODULE.replace_generated_rows(cursor, 7)
+
+        self.assertIn("FOR UPDATE", cursor.calls[0][0])
+        self.assertFalse(any("DELETE FROM" in query for query, _ in cursor.calls))
+
+
 class GraphStatisticsTests(unittest.TestCase):
     @staticmethod
     def edge(edge_type, is_bidirectional):

@@ -47,6 +47,7 @@ INCLUDED_HIGHWAYS = frozenset(
 )
 EXPRESSWAY_HIGHWAYS = frozenset({"motorway", "motorway_link"})
 DENIED_ACCESS_VALUES = frozenset({"no", "private"})
+EXPLICIT_PEDESTRIAN_PERMISSION_VALUES = frozenset({"yes", "designated", "permissive"})
 FORWARD_ONEWAY_VALUES = frozenset({"yes", "true", "1"})
 REVERSE_ONEWAY_VALUES = frozenset({"-1", "reverse"})
 RAMP_VALUES = frozenset({"yes", "designated"})
@@ -78,6 +79,9 @@ EDGE_TYPE_CODES = {
     "primary_link": 18,
     "elevator": 19,
 }
+# Explicitly permitted cycleways use the existing path-like edge type rather than
+# falling through to the unknown-edge code.
+CYCLEWAY_EDGE_TYPE = EDGE_TYPE_CODES["path"]
 SURFACE_CODES = {
     "asphalt": 1,
     "concrete": 2,
@@ -345,6 +349,8 @@ def edge_type_for_tags(tags: Mapping[str, str]) -> int:
         return 2
     if highway == "crossing":
         return 3
+    if highway == "cycleway":
+        return CYCLEWAY_EDGE_TYPE
     return EDGE_TYPE_CODES.get(highway or "", 255)
 
 
@@ -421,17 +427,30 @@ def bool_tag(value: Any) -> bool | None:
     return None
 
 
+def pedestrian_access_is_denied(tags: Mapping[str, str]) -> bool:
+    """Apply the shared denial and expressway-hardening checks for pedestrian access."""
+    if normalized_tag(tags.get("foot")) in DENIED_ACCESS_VALUES:
+        return True
+    if normalized_tag(tags.get("access")) in DENIED_ACCESS_VALUES:
+        return True
+    hardened_tags, _ = DENY_FOOT_HELPER.rewritten_tags(tags)
+    return normalized_tag(hardened_tags.get("foot")) in DENIED_ACCESS_VALUES
+
+
+def has_explicit_pedestrian_permission(tags: Mapping[str, str]) -> bool:
+    """Return whether a way explicitly grants pedestrian access under the cycleway policy."""
+    highway = normalized_tag(tags.get("highway"))
+    if highway in EXPRESSWAY_HIGHWAYS or pedestrian_access_is_denied(tags):
+        return False
+    return normalized_tag(tags.get("foot")) in EXPLICIT_PEDESTRIAN_PERMISSION_VALUES
+
+
 def should_include_way(tags: Mapping[str, str]) -> bool:
     """Apply WP-2's walking-way eligibility rules using the shared expressway hardener."""
     highway = normalized_tag(tags.get("highway"))
-    if highway in EXPRESSWAY_HIGHWAYS:
-        return False
-    if normalized_tag(tags.get("foot")) in DENIED_ACCESS_VALUES:
-        return False
-    if normalized_tag(tags.get("access")) in DENIED_ACCESS_VALUES:
-        return False
-    hardened_tags, _ = DENY_FOOT_HELPER.rewritten_tags(tags)
-    if normalized_tag(hardened_tags.get("foot")) in DENIED_ACCESS_VALUES:
+    if highway == "cycleway":
+        return has_explicit_pedestrian_permission(tags)
+    if highway in EXPRESSWAY_HIGHWAYS or pedestrian_access_is_denied(tags):
         return False
     return highway in INCLUDED_HIGHWAYS
 
@@ -1466,9 +1485,12 @@ def write_graph_to_postgis(
             cursor.execute(
                 """
                     INSERT INTO ped_graph_version
-                      (source_hash, bbox, node_count, directed_edge_count, notes)
+                      (
+                        source_hash, bbox, node_count, directed_edge_count, notes,
+                        lifecycle_status, indoor_injection_complete
+                      )
                     VALUES
-                      (%s, ST_GeomFromText(%s, 4326), %s, %s, %s)
+                      (%s, ST_GeomFromText(%s, 4326), %s, %s, %s, %s, %s)
                     RETURNING id
                     """,
                 (
@@ -1477,6 +1499,8 @@ def write_graph_to_postgis(
                     len(graph.nodes),
                     len(graph.edges),
                     notes,
+                    "CANDIDATE",
+                    False,
                 ),
             )
             version_row = cursor.fetchone()
@@ -1577,6 +1601,10 @@ def print_report(version_id: int, source_hash: str, report: Mapping[str, Any]) -
     coverage = report["coverage_pct"]
     connectivity = report["connectivity"]
     print(f"[build-ped-graph] graph_version_id={version_id}")
+    print(
+        "[build-ped-graph] lifecycle_status=CANDIDATE "
+        "(run indoor injection and explicit promotion before use)"
+    )
     print(f"[build-ped-graph] source_hash={source_hash}")
     print(
         "[build-ped-graph] "

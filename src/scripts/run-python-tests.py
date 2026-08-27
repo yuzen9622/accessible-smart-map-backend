@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the repository's seven Python test entrypoints as one strict command."""
+"""Run every Python test entrypoint in TEST_FILES as one strict command."""
 
 import subprocess
 import sys
@@ -13,6 +13,7 @@ TEST_FILES = (
     "src/scripts/test_inject_metro_gtfs.py",
     "src/scripts/build-ped-graph.test.py",
     "src/scripts/inject-ped-indoor-graph.test.py",
+    "src/scripts/diagnose-ped-graph-connectivity.test.py",
 )
 
 

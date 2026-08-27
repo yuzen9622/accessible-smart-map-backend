@@ -5,9 +5,13 @@ CREATE TABLE ped_graph_version (
   source_hash         TEXT        NOT NULL,
   built_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
   bbox                GEOMETRY(Polygon, 4326),
-  node_count          INTEGER     NOT NULL,
-  directed_edge_count INTEGER     NOT NULL,
-  notes               TEXT
+  node_count                  INTEGER     NOT NULL,
+  directed_edge_count         INTEGER     NOT NULL,
+  notes                       TEXT,
+  lifecycle_status            TEXT        NOT NULL DEFAULT 'CANDIDATE',
+  indoor_injection_complete   BOOLEAN     NOT NULL DEFAULT FALSE,
+  CONSTRAINT ped_graph_version_lifecycle_status_check
+    CHECK (lifecycle_status IN ('CANDIDATE', 'ACTIVE', 'RETIRED'))
 );
 
 CREATE TABLE ped_node (
@@ -54,6 +58,9 @@ CREATE INDEX ped_edge_from_idx ON ped_edge (version_id, from_node);
 CREATE INDEX ped_edge_to_idx ON ped_edge (version_id, to_node);
 CREATE INDEX ped_node_proxy_gix ON ped_node USING GIST (proxy_geom);
 CREATE INDEX ped_node_station_idx ON ped_node (version_id, station_id);
+CREATE UNIQUE INDEX ped_graph_version_one_active_idx
+  ON ped_graph_version ((1))
+  WHERE lifecycle_status = 'ACTIVE';
 
 COMMENT ON COLUMN ped_edge.edge_type IS '0=unknown; 1=sidewalk (highway=footway with footway=sidewalk); 2=footway (highway=footway excluding sidewalk and crossing); 3=crossing (highway=footway with footway=crossing, or highway=crossing); 4=path (highway=path and WP-2 fallback for an unmapped included highway); 5=pedestrian (highway=pedestrian); 6=steps (highway=steps); 7=living_street (highway=living_street); 8=track (highway=track); 9=road (highway=road); 10=residential (highway=residential); 11=service (highway=service); 12=unclassified (highway=unclassified); 13=tertiary (highway=tertiary); 14=tertiary_link (highway=tertiary_link); 15=secondary (highway=secondary); 16=secondary_link (highway=secondary_link); 17=primary (highway=primary); 18=primary_link (highway=primary_link); 19=osm_elevator (highway=elevator); 20=indoor_walkway (GTFS pathway_mode=1); 21=indoor_stairs (GTFS pathway_mode=2); 22=indoor_moving_walkway (GTFS pathway_mode=3); 23=indoor_escalator (GTFS pathway_mode=4); 24=indoor_elevator (GTFS pathway_mode=5); 25=indoor_fare_gate (GTFS pathway_mode=6); 26=indoor_exit_gate (GTFS pathway_mode=7); 255=other concrete unlisted value, whose exact raw value must be retained in attr_meta. Code 0 is only unknown and never an actual classified edge.';
 

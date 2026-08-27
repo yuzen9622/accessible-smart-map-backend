@@ -5,8 +5,10 @@ import importlib.util
 import json
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 SCRIPT = Path(__file__).with_name("build-ped-graph.py")
 SPEC = importlib.util.spec_from_file_location("build_ped_graph", SCRIPT)
@@ -51,6 +53,24 @@ class EligibleWayTests(unittest.TestCase):
             with self.subTest(tags=tags):
                 self.assertFalse(MODULE.should_include_way(tags))
 
+    def test_includes_only_explicitly_permitted_cycleways(self):
+        for foot in ("yes", "designated", "permissive"):
+            with self.subTest(foot=foot):
+                self.assertTrue(
+                    MODULE.should_include_way({"highway": "cycleway", "foot": foot})
+                )
+        for tags in (
+            {"highway": "cycleway"},
+            {"highway": "cycleway", "foot": "no"},
+            {"highway": "cycleway", "foot": "private"},
+            {"highway": "cycleway", "foot": "yes", "access": "no"},
+            {"highway": "cycleway", "foot": "designated", "access": "private"},
+            {"highway": "motorway", "foot": "yes"},
+            {"highway": "motorway_link", "foot": "designated"},
+        ):
+            with self.subTest(tags=tags):
+                self.assertFalse(MODULE.should_include_way(tags))
+
     def test_eligibility_uses_tags_not_way_names(self):
         self.assertTrue(
             MODULE.should_include_way({"highway": "residential", "name": "高速公路"})
@@ -71,6 +91,10 @@ class AttributeExtractionTests(unittest.TestCase):
             3,
         )
         self.assertEqual(MODULE.edge_type_for_tags({"highway": "footway"}), 2)
+        self.assertEqual(
+            MODULE.edge_type_for_tags({"highway": "cycleway", "foot": "designated"}),
+            MODULE.EDGE_TYPE_CODES["path"],
+        )
         self.assertEqual(MODULE.edge_type_for_tags({"highway": "elevator"}), 19)
         self.assertEqual(MODULE.enum_code("bricks", MODULE.SURFACE_CODES), 9)
         self.assertEqual(MODULE.enum_code("unlisted", MODULE.SURFACE_CODES), 255)
@@ -250,6 +274,73 @@ class DemAndSidewalkTests(unittest.TestCase):
             )
         self.assertEqual(len(sidewalk_index.records), 1)
         self.assertIsNotNone(match)
+
+
+class GraphLifecycleTests(unittest.TestCase):
+    def test_write_creates_a_candidate_that_is_not_indoor_complete(self):
+        class FakeCursor:
+            def __init__(self):
+                self.calls = []
+                self.next_row = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+            def execute(self, query, params=None):
+                self.calls.append((query, params))
+                if "to_regclass" in query:
+                    self.next_row = ("ped_graph_version", "ped_node", "ped_edge")
+                elif "INSERT INTO ped_graph_version" in query:
+                    self.next_row = (2,)
+
+            def fetchone(self):
+                return self.next_row
+
+        class FakeConnection:
+            def __init__(self, cursor):
+                self.cursor_value = cursor
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+            def cursor(self):
+                return self.cursor_value
+
+            def close(self):
+                return None
+
+        cursor = FakeCursor()
+        connection = FakeConnection(cursor)
+        psycopg2 = types.SimpleNamespace(connect=lambda _db_url: connection)
+        extras = types.SimpleNamespace(execute_values=lambda *_args, **_kwargs: None)
+        graph = MODULE.GraphBuild({}, [], 0, 0, 0)
+
+        with patch.dict(
+            sys.modules,
+            {"psycopg2": psycopg2, "psycopg2.extras": extras},
+        ):
+            version_id = MODULE.write_graph_to_postgis(
+                graph,
+                "source-hash",
+                (121.43, 24.95, 121.68, 25.22),
+                {},
+                "postgresql://example.test/ped_graph",
+            )
+
+        version_insert = next(
+            params
+            for query, params in cursor.calls
+            if "INSERT INTO ped_graph_version" in query
+        )
+        self.assertEqual(version_id, 2)
+        self.assertEqual(version_insert[-2], "CANDIDATE")
+        self.assertFalse(version_insert[-1])
 
 
 class GraphUtilityTests(unittest.TestCase):
