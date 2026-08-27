@@ -50,6 +50,14 @@ A planner-local diagnostic allow-all probe exists only to classify a discarded s
 - When an approximate selected indoor edge has no stored `length_m`, CSR derives its distance from `traversal_time_s × profile.walkSpeedMps`, matching the base cost semantics; it never derives distance from coincident station-centroid proxies. Missing, invalid, or non-positive traversal time in that case makes CSR `unavailable` rather than reporting a zero-distance route.
 - The strict Zod/OpenAPI `AccessibleRoute` response publishes only `pedestrian-a11y` and `otp-fallback` for `engine`. Invalid values are rejected by the schema.
 
+### 4.1 CSR-only facility segments (`a11ySegments`)
+
+- CSR-selected WALK legs carry an additional `a11ySegments: WalkA11ySegment[]` field (`src/types/route.ts`, `WalkA11yFeature` / `WalkA11ySegment`). Each entry is one contiguous run of the leg's `polyline` classified by source-backed facility type (`elevator`, `escalator`, `moving_walkway`, `ramp`, `curb_ramp_crossing`, `crossing`, `stairs`, `fare_gate`, `exit_gate`). This is a classification, not a quality judgement — the client owns colour choice.
+- `startIndex` / `endIndex` are inclusive indices into the **same leg's** `polyline`, so a client slices coordinates directly instead of re-matching geometry. `startIndex === endIndex` is a point feature (typically an indoor elevator whose both endpoints proxy to one ground coordinate across floors) and must be rendered as a marker, not a line.
+- Unclassified stretches of the path are never emitted (no `"normal"` run). `distanceM` on a run is `null`, not a partial sum, whenever any edge inside that merged run lacked a usable stored length — this is intentional fail-honest behaviour, not a bug.
+- **This field only exists on `engine=pedestrian-a11y` legs.** OTP fallback and Valhalla WALK legs never receive it — not even as an empty array — because those engines carry no per-edge facility provenance. Its absence means "this engine did not observe", never "no facilities on the ground". Frontend migration: treat `a11ySegments` as purely additive/optional; existing consumers that ignore it see no change. A client wanting to colour CSR paths should iterate the array, slice `polyline.slice(startIndex, endIndex + 1)` for line features, and drop a marker for `startIndex === endIndex` entries.
+- Implementation: `src/modules/accessible-route/planners/pedestrian-a11y/a11y-segments.ts` (pure classify/merge functions) plus polyline-index tracking added to `assembleGeometry()` / `addSnapConnectors()` in `csr-walk-planner.ts`. `summarizeAccessibility()`'s existing aggregate fields are unchanged.
+
 ## 5. Deferred work
 
 Transit WALK-leg replacement, station canonicalization for transit authorization, and any client-visible transit policy are explicitly deferred. This integration does not alter OTP transit planning or use CSR inside transit itineraries.
