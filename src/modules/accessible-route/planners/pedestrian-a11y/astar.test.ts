@@ -27,6 +27,7 @@ interface GraphDefinition {
   edges: EdgeDefinition[];
   nodeFlags?: number[];
   nodeStationId?: number[];
+  stationIds?: string[];
   stationRadiusM?: number[];
 }
 
@@ -87,6 +88,7 @@ function graphFromEdges(input: GraphDefinition): PedGraph {
     nodeLat: Float64Array.from(input.nodeLat),
     nodeFlags: Uint8Array.from(input.nodeFlags ?? new Array(nodeCount).fill(0)),
     nodeStationId,
+    stationIds: Object.freeze([...(input.stationIds ?? [])]),
     stationRadiusM: Float32Array.from(input.stationRadiusM ?? []),
     originalNodeId: BigInt64Array.from(
       Array.from({ length: nodeCount }, (_, node) => BigInt(node)),
@@ -94,6 +96,11 @@ function graphFromEdges(input: GraphDefinition): PedGraph {
     adjOffset,
     adjTarget,
     adjAttr,
+    edgeOriginalId: BigInt64Array.from(
+      Array.from({ length: directedEdgeCount }, (_, attrIdx) =>
+        BigInt(1_000 + attrIdx),
+      ),
+    ),
     edgeLengthM,
     edgeType,
     edgeSlope,
@@ -144,7 +151,7 @@ function relativeError(actual: number, expected: number): number {
 }
 
 /**
- * @returns A graph whose proxy-coordinate heuristic requires reopening an indoor node.
+ * @returns A graph whose retired proxy-coordinate heuristic required reopening an indoor node.
  */
 function createReopenGraph(): PedGraph {
   const latitude = 25;
@@ -300,7 +307,7 @@ describe("BinaryMinHeap", () => {
 });
 
 describe("aStar", () => {
-  it("returns null for invalid or unreachable endpoints and validates the profile", () => {
+  it("returns null for invalid or unreachable endpoints", () => {
     const graph = graphFromEdges({
       nodeLon: [121.5, 121.501],
       nodeLat: [25.05, 25.05],
@@ -312,17 +319,74 @@ describe("aStar", () => {
     expect(aStar(graph, 0, 1, wheelchairProfile())).toBeNull();
     expect(aStar(graph, 1, 1, wheelchairProfile())).toEqual({
       nodePath: Int32Array.of(1),
+      edgeAttrPath: new Int32Array(0),
       totalCost: 0,
       expandedNodes: 0,
       reopenedNodes: 0,
     });
-    expect(() =>
-      aStar(graph, 0, 1, {
-        name: "normal",
+  });
+
+  it("plans all four accessibility modes without throwing", () => {
+    const graph = graphFromEdges({
+      nodeLon: [121.5, 121.501, 121.502],
+      nodeLat: [25.05, 25.05, 25.05],
+      edges: [
+        { from: 0, to: 1, lengthM: 100 },
+        { from: 1, to: 2, lengthM: 100 },
+      ],
+    });
+
+    for (const name of [
+      "wheelchair",
+      "normal",
+      "elderly",
+      "visual_impaired",
+    ] as const) {
+      const result = aStar(graph, 0, 2, {
+        name,
         walkSpeedMps: WHEELCHAIR_WALK_SPEED_MPS,
         relaxationLevel: 0,
-      }),
-    ).toThrow(/not implemented/);
+      });
+      expect(Array.from(result?.nodePath ?? [])).toEqual([0, 1, 2]);
+    }
+  });
+
+  it("reports the exact selected directed edge among parallel edges", () => {
+    // Three parallel 0 -> 1 edges: the node pair alone is ambiguous, so only
+    // edgeAttrPath can identify which geometry and attributes were chosen.
+    const graph = graphFromEdges({
+      nodeLon: [121.5, 121.501],
+      nodeLat: [25.05, 25.05],
+      edges: [
+        { from: 0, to: 1, lengthM: 400 },
+        { from: 0, to: 1, lengthM: 120 },
+        { from: 0, to: 1, lengthM: 900 },
+      ],
+    });
+
+    const result = aStar(graph, 0, 1, wheelchairProfile());
+
+    expect(Array.from(result?.nodePath ?? [])).toEqual([0, 1]);
+    expect(Array.from(result?.edgeAttrPath ?? [])).toEqual([1]);
+    expect(graph.edgeLengthM[result?.edgeAttrPath[0] ?? -1]).toBe(120);
+    expect(graph.edgeOriginalId[result?.edgeAttrPath[0] ?? -1]).toBe(1_001n);
+  });
+
+  it("picks the lowest adjacency slot deterministically for tied parallel edges", () => {
+    const graph = graphFromEdges({
+      nodeLon: [121.5, 121.501],
+      nodeLat: [25.05, 25.05],
+      edges: [
+        { from: 0, to: 1, lengthM: 250 },
+        { from: 0, to: 1, lengthM: 250 },
+      ],
+    });
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      expect(
+        Array.from(aStar(graph, 0, 1, wheelchairProfile())?.edgeAttrPath ?? []),
+      ).toEqual([0]);
+    }
   });
 
   it("finds the lower-cost route when a direct edge has a slope penalty", () => {
@@ -343,7 +407,7 @@ describe("aStar", () => {
     expect(result?.expandedNodes).toBeGreaterThan(0);
   });
 
-  it("reopens a proxy-coordinate indoor node and preserves optimality", () => {
+  it("uses the zero heuristic and preserves optimality on a retired-reopen graph", () => {
     const graph = createReopenGraph();
     const result = aStar(graph, 0, 3, wheelchairProfile());
     const reference = dijkstra(graph, 0, 3, wheelchairProfile());
@@ -358,10 +422,10 @@ describe("aStar", () => {
       ),
     ).toBeLessThanOrEqual(1e-9);
     expect(Array.from(result?.nodePath ?? [])).toEqual([0, 1, 2, 3]);
-    expect(result?.reopenedNodes).toBe(1);
+    expect(result?.reopenedNodes).toBe(0);
   });
 
-  it("keeps the proxy-coordinate heuristic admissible for indoor and outdoor sources", () => {
+  it("uses zero as the admissible lower bound for every proxy-coordinate node", () => {
     const graph = createReopenGraph();
 
     for (let node = 0; node < graph.nodeCount; node += 1) {
@@ -369,6 +433,7 @@ describe("aStar", () => {
       if (result === null) {
         throw new Error("reopen graph unexpectedly lost a path to its goal");
       }
+      expect(heuristicCost(graph, node, 3)).toBe(0);
       expect(heuristicCost(graph, node, 3)).toBeLessThanOrEqual(
         result.totalCost,
       );
@@ -405,6 +470,7 @@ describe("aStar", () => {
           "synthetic indoor node unexpectedly lost a path to its goal",
         );
       }
+      expect(heuristicCost(graph, indoorNode, 23)).toBe(0);
       expect(heuristicCost(graph, indoorNode, 23)).toBeLessThanOrEqual(
         reference.totalCost,
       );

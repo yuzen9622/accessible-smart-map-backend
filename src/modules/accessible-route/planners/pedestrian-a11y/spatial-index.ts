@@ -6,7 +6,9 @@ const METERS_PER_DEGREE = 110_000;
 const MIN_LONGITUDE_COSINE = 0.000_001;
 
 export interface SnapResult {
+  /** Chosen routable graph endpoint. */
   nodeId: number;
+  /** Request-point distance to `nodeId`, in metres. */
   distanceM: number;
   edgeAttrIdx: number;
 }
@@ -169,55 +171,12 @@ function queryBounds(
 }
 
 /**
- * @param lat Latitude in degrees of the point to measure.
- * @param lon Longitude in degrees of the point to measure.
- * @param fromLat Latitude in degrees of the segment source.
- * @param fromLon Longitude in degrees of the segment source.
- * @param toLat Latitude in degrees of the segment target.
- * @param toLon Longitude in degrees of the segment target.
- * @returns The point-to-finite-segment distance in metres.
- */
-function pointToSegmentDistanceM(
-  lat: number,
-  lon: number,
-  fromLat: number,
-  fromLon: number,
-  toLat: number,
-  toLon: number,
-): number {
-  const longitudeScale = Math.max(
-    Math.abs(Math.cos((lat * Math.PI) / 180)),
-    MIN_LONGITUDE_COSINE,
-  );
-  const fromX = (fromLon - lon) * longitudeScale;
-  const fromY = fromLat - lat;
-  const toX = (toLon - lon) * longitudeScale;
-  const toY = toLat - lat;
-  const deltaX = toX - fromX;
-  const deltaY = toY - fromY;
-  const segmentLengthSquared = deltaX * deltaX + deltaY * deltaY;
-  const projection =
-    segmentLengthSquared === 0
-      ? 0
-      : Math.min(
-          1,
-          Math.max(
-            0,
-            -(fromX * deltaX + fromY * deltaY) / segmentLengthSquared,
-          ),
-        );
-  const nearestLat = fromLat + (toLat - fromLat) * projection;
-  const nearestLon = fromLon + (toLon - fromLon) * projection;
-  return haversineMeters(lat, lon, nearestLat, nearestLon);
-}
-
-/**
  * @param graph CSR pedestrian graph.
  * @param fromNode Directed edge source node.
  * @param toNode Directed edge target node.
  * @param lat Query latitude in degrees.
  * @param lon Query longitude in degrees.
- * @returns The closest endpoint's dense node identifier.
+ * @returns The closest routable endpoint and its request-point distance.
  */
 function closestEndpoint(
   graph: PedGraph,
@@ -225,7 +184,7 @@ function closestEndpoint(
   toNode: number,
   lat: number,
   lon: number,
-): number {
+): Pick<SnapResult, "nodeId" | "distanceM"> {
   const fromDistance = haversineMeters(
     lat,
     lon,
@@ -238,7 +197,9 @@ function closestEndpoint(
     graph.nodeLat[toNode],
     graph.nodeLon[toNode],
   );
-  return fromDistance <= toDistance ? fromNode : toNode;
+  return fromDistance <= toDistance
+    ? { nodeId: fromNode, distanceM: fromDistance }
+    : { nodeId: toNode, distanceM: toDistance };
 }
 
 /**
@@ -246,7 +207,7 @@ function closestEndpoint(
  * @param lat Query latitude in degrees.
  * @param lon Query longitude in degrees.
  * @param toleranceM Maximum snapping distance in metres.
- * @returns The closest edge endpoint and attribute index, or null outside tolerance.
+ * @returns The closest routable endpoint and attribute index, or null outside tolerance.
  */
 export function snapToGraph(
   index: EdgeIndex,
@@ -273,23 +234,15 @@ export function snapToGraph(
   for (const candidate of candidates) {
     const fromNode = index.edgeFromNode[candidate];
     const toNode = index.edgeToNode[candidate];
-    const distanceM = pointToSegmentDistanceM(
-      lat,
-      lon,
-      index.graph.nodeLat[fromNode],
-      index.graph.nodeLon[fromNode],
-      index.graph.nodeLat[toNode],
-      index.graph.nodeLon[toNode],
-    );
+    const endpoint = closestEndpoint(index.graph, fromNode, toNode, lat, lon);
     if (
-      distanceM > toleranceM ||
-      (result !== null && distanceM >= result.distanceM)
+      endpoint.distanceM > toleranceM ||
+      (result !== null && endpoint.distanceM >= result.distanceM)
     ) {
       continue;
     }
     result = {
-      nodeId: closestEndpoint(index.graph, fromNode, toNode, lat, lon),
-      distanceM,
+      ...endpoint,
       edgeAttrIdx: index.edgeAttrIdx[candidate],
     };
   }

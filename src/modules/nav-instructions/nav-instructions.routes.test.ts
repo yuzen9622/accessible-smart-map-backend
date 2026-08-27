@@ -131,10 +131,14 @@ describe("POST /api/v1/a11y/route/instructions", () => {
     );
   });
 
-  it("publishes stairs on the NavInstruction OpenAPI schema", async () => {
+  it("publishes stairs and the CSR-aware walking contract in OpenAPI", async () => {
     const res = await request(app).get("/api/v1/openapi.json");
 
     expect(res.status).toBe(200);
+    const operation = res.body.paths["/a11y/route/instructions"].post;
+    expect(operation.description).toContain("台北 CSR-primary");
+    expect(operation.description).toContain("OTP2");
+    expect(operation.description).not.toContain("所有正常步行段源自 OTP");
     expect(
       res.body.components.schemas.NavInstruction.properties.stairs,
     ).toMatchObject({ type: "boolean" });

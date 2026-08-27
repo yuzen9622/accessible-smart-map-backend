@@ -479,11 +479,16 @@ describe("POST /api/v1/a11y/accessible-route travel modes + waypoints", () => {
 });
 
 describe("accessible-route OpenAPI", () => {
-  it("publishes 422 route reasons, the 503 timeout reason, and no stale route 404", async () => {
+  it("publishes route failures and the Taipei CSR-primary walking contract", async () => {
     const res = await request(app).get("/api/v1/openapi.json");
 
     expect(res.status).toBe(200);
-    const responses = res.body.paths["/a11y/accessible-route"].post.responses;
+    const operation = res.body.paths["/a11y/accessible-route"].post;
+    const responses = operation.responses;
+    expect(operation.description).toContain("台北 CSR bbox");
+    expect(operation.description).toContain("OTP2 fallback");
+    expect(operation.description).toContain("OTP2 本來就是 primary");
+    expect(operation.description).not.toContain("walk 與所有步行銜接走 OTP");
     for (const reason of [
       ROUTE_REASON.OUT_OF_RANGE,
       ROUTE_REASON.OUT_OF_COVERAGE,
@@ -495,6 +500,7 @@ describe("accessible-route OpenAPI", () => {
     expect(responses["503"].description).toContain(
       ROUTE_REASON.UPSTREAM_TIMEOUT,
     );
+    expect(responses["503"].description).toContain("CSR");
     expect(responses["404"]).toBeUndefined();
     expect(res.body.components.schemas.RouteFailureData).toMatchObject({
       type: "object",
@@ -524,6 +530,18 @@ describe("accessible-route OpenAPI", () => {
         avoided: { type: "array" },
         blockingOnRoute: { type: "integer" },
         penaltyPoints: { type: "number" },
+      },
+    });
+    expect(res.body.components.schemas.AccessibleRoute).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        engine: {
+          type: "string",
+          enum: ["pedestrian-a11y", "otp-fallback"],
+          example: "pedestrian-a11y",
+          description: expect.stringContaining("純步行路線的選路來源"),
+        },
       },
     });
     expect(res.body.components.schemas.WalkLeg.properties).toEqual(

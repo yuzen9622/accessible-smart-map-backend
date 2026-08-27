@@ -56,6 +56,7 @@ function graphFromEdges(nodeCount: number, edges: EdgeDefinition[]): PedGraph {
     nodeLat: Float64Array.from(new Array(nodeCount).fill(25.05)),
     nodeFlags: new Uint8Array(nodeCount),
     nodeStationId: new Int32Array(nodeCount).fill(-1),
+    stationIds: Object.freeze([]),
     stationRadiusM: new Float32Array(),
     originalNodeId: BigInt64Array.from(
       Array.from({ length: nodeCount }, (_, node) => BigInt(node)),
@@ -63,6 +64,9 @@ function graphFromEdges(nodeCount: number, edges: EdgeDefinition[]): PedGraph {
     adjOffset,
     adjTarget,
     adjAttr,
+    edgeOriginalId: BigInt64Array.from(
+      edges.map((_edge, attrIdx) => BigInt(1_000 + attrIdx)),
+    ),
     edgeLengthM: Float32Array.from(edges.map((edge) => edge.lengthM)),
     edgeType: Uint8Array.from(
       edges.map((edge) => edge.edgeType ?? EDGE_TYPE.SIDEWALK),
@@ -134,7 +138,7 @@ describe("dijkstra", () => {
     );
   });
 
-  it("returns null for invalid or unreachable endpoints and validates the profile", () => {
+  it("returns null for invalid or unreachable endpoints", () => {
     const graph = graphFromEdges(2, []);
 
     expect(dijkstra(graph, -1, 1, wheelchairProfile())).toBeNull();
@@ -142,16 +146,47 @@ describe("dijkstra", () => {
     expect(dijkstra(graph, 0, 1, wheelchairProfile())).toBeNull();
     expect(dijkstra(graph, 1, 1, wheelchairProfile())).toEqual({
       nodePath: Int32Array.of(1),
+      edgeAttrPath: new Int32Array(0),
       totalCost: 0,
       expandedNodes: 0,
       reopenedNodes: 0,
     });
-    expect(() =>
-      dijkstra(graph, 0, 1, {
-        name: "elderly",
-        walkSpeedMps: WHEELCHAIR_WALK_SPEED_MPS,
+  });
+
+  it("plans every accessibility mode without throwing and stays neutral outside wheelchair", () => {
+    // The direct 0 -> 2 edge is steeper than the wheelchair hard slope limit,
+    // so wheelchair must detour while a neutral profile takes the short edge.
+    const graph = graphFromEdges(3, [
+      { from: 0, to: 1, lengthM: 100 },
+      { from: 1, to: 2, lengthM: 100 },
+      { from: 0, to: 2, lengthM: 150, slopeRatio: 0.2 },
+    ]);
+
+    const wheelchair = dijkstra(graph, 0, 2, wheelchairProfile());
+    expect(Array.from(wheelchair?.nodePath ?? [])).toEqual([0, 1, 2]);
+
+    for (const name of ["normal", "elderly", "visual_impaired"] as const) {
+      const result = dijkstra(graph, 0, 2, {
+        name,
+        walkSpeedMps: 1.3,
         relaxationLevel: 0,
-      }),
-    ).toThrow(/not implemented/);
+      });
+      expect(Array.from(result?.nodePath ?? [])).toEqual([0, 2]);
+      expect(result?.totalCost).toBeCloseTo(150, 4);
+    }
+  });
+
+  it("reports the exact selected directed edge for each traversal", () => {
+    const graph = graphFromEdges(3, [
+      { from: 0, to: 1, lengthM: 100 },
+      { from: 1, to: 2, lengthM: 100 },
+    ]);
+
+    const result = dijkstra(graph, 0, 2, wheelchairProfile());
+
+    expect(Array.from(result?.edgeAttrPath ?? [])).toEqual([0, 1]);
+    expect(result?.edgeAttrPath).toHaveLength(
+      (result?.nodePath.length ?? 0) - 1,
+    );
   });
 });

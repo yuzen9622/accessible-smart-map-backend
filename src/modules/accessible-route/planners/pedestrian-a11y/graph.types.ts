@@ -147,6 +147,32 @@ export const EDGE_FLAG = {
   INDOOR: 2,
 } as const;
 
+const GTFS_INDOOR_EDGE_SOURCE_REF_PREFIXES = [
+  "gtfs_pathways:pathway:",
+  "gtfs_pathways:connector-edge:",
+] as const;
+
+/**
+ * Decide whether a directed edge is eligible for indoor proxy geometry.
+ *
+ * The GTFS injector emits pathways as
+ * `gtfs_pathways:pathway:<pathway-id>:(forward|reverse)` and connectors as
+ * `gtfs_pathways:connector-edge:<entrance-id>:<role>`. A NULL geometry is not
+ * provenance: outdoor rows (or other GTFS rows) can legitimately lack one and
+ * must remain outdoor. These exact prefixes also match promotion's active-graph
+ * provenance aggregate.
+ *
+ * @param sourceRef Stable edge provenance loaded from `ped_edge.source_ref`.
+ * @returns Whether the CSR loader should set `EDGE_FLAG.INDOOR`.
+ */
+export function isGtfsIndoorEdge(sourceRef: string | null): boolean {
+  if (sourceRef === null) return false;
+  const normalized = sourceRef.trim();
+  return GTFS_INDOOR_EDGE_SOURCE_REF_PREFIXES.some((prefix) =>
+    normalized.startsWith(prefix),
+  );
+}
+
 export interface PedGraph {
   versionId: number;
   nodeCount: number;
@@ -157,6 +183,7 @@ export interface PedGraph {
   nodeLat: Float64Array;
   nodeFlags: Uint8Array;
   nodeStationId: Int32Array;
+  readonly stationIds: readonly string[];
   stationRadiusM: Float32Array;
   originalNodeId: BigInt64Array;
 
@@ -164,6 +191,12 @@ export interface PedGraph {
   adjTarget: Int32Array;
   adjAttr: Int32Array;
 
+  /**
+   * `ped_edge.edge_id` per dense edge attribute index. Directed rows keep their
+   * own identifier, so a selected traversal maps back to exactly one database
+   * row even where parallel edges share both endpoints.
+   */
+  edgeOriginalId: BigInt64Array;
   edgeLengthM: Float32Array;
   edgeType: Uint8Array;
   edgeSlope: Float32Array;

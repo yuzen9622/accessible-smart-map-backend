@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
 import { buildEdgeIndex, snapToGraph } from "./spatial-index";
 import { loadPedGraph } from "./graph-loader";
+import { haversineMeters } from "../../../../utils/geo";
 
 const databaseUrl = process.env.PED_GRAPH_DATABASE_URL;
 
@@ -101,5 +102,44 @@ describe.skipIf(!databaseUrl)("PostGIS pedestrian graph loader", () => {
       graph.originalNodeId.indexOf(BigInt(firstSample.from_node)),
       graph.originalNodeId.indexOf(BigInt(firstSample.to_node)),
     ]).toContain(firstSnap.nodeId);
+  }, 600_000);
+
+  it("places every surveyed node at its own geom, not its station centroid", async () => {
+    const graph = await loadPedGraph(pool, 1);
+    const surveyed = await pool.query<{
+      node_id: string;
+      lon: number;
+      lat: number;
+    }>(
+      `
+        SELECT
+          node_id::text AS node_id,
+          ST_X(geom) AS lon,
+          ST_Y(geom) AS lat
+        FROM ped_node
+        WHERE version_id = $1
+          AND geom IS NOT NULL
+          AND NOT ST_Equals(geom, proxy_geom)
+        ORDER BY node_id
+      `,
+      [1],
+    );
+    expect(surveyed.rows.length).toBeGreaterThan(0);
+
+    let worstOffsetM = 0;
+    for (const row of surveyed.rows) {
+      const node = graph.originalNodeId.indexOf(BigInt(row.node_id));
+      if (node < 0) throw new Error(`node ${row.node_id} missing from graph`);
+      worstOffsetM = Math.max(
+        worstOffsetM,
+        haversineMeters(
+          row.lat,
+          row.lon,
+          graph.nodeLat[node],
+          graph.nodeLon[node],
+        ),
+      );
+    }
+    expect(worstOffsetM).toBeLessThan(0.5);
   }, 600_000);
 });

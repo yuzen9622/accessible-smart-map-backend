@@ -1,4 +1,10 @@
-import { EDGE_FLAG, NODE_FLAG, NODE_TYPE, type PedGraph } from "./graph.types";
+import {
+  EDGE_FLAG,
+  isGtfsIndoorEdge,
+  NODE_FLAG,
+  NODE_TYPE,
+  type PedGraph,
+} from "./graph.types";
 
 const PAGE_SIZE = 10_000;
 const MIN_BIGINT = "-9223372036854775808";
@@ -8,6 +14,7 @@ const MAX_UINT16 = 65_535;
 const LATEST_VERSION_QUERY = `
   SELECT id, node_count, directed_edge_count
   FROM ped_graph_version
+  WHERE lifecycle_status = 'ACTIVE'
   ORDER BY built_at DESC, id DESC
   LIMIT 1
 `;
@@ -18,11 +25,19 @@ const VERSION_QUERY = `
   WHERE id = $1
 `;
 
+/**
+ * `proxy_geom` is a station centroid shared by every node of that station, so
+ * it may only stand in for a node that genuinely has no surveyed position
+ * (indoor concourse/platform rows). Entrance and outdoor-connector rows do
+ * carry a real `geom`, and their connector edges store real geometry and real
+ * lengths against it — reading the centroid for them collapses a station's
+ * portals onto one point and contradicts those stored lengths.
+ */
 const NODE_PAGE_QUERY = `
   SELECT
     node_id::text AS node_id,
-    ST_X(proxy_geom) AS lon,
-    ST_Y(proxy_geom) AS lat,
+    ST_X(COALESCE(geom, proxy_geom)) AS lon,
+    ST_Y(COALESCE(geom, proxy_geom)) AS lat,
     station_id,
     station_radius_m,
     node_type,
@@ -60,7 +75,7 @@ const EDGE_PAGE_QUERY = `
     stair_count,
     traversal_time_s,
     has_ramp,
-    geom IS NULL AS is_indoor
+    source_ref
   FROM ped_edge
   WHERE version_id = $1 AND edge_id > $2
   ORDER BY edge_id
@@ -105,7 +120,7 @@ interface EdgeRow extends EdgeCountRow {
   stair_count: unknown;
   traversal_time_s: unknown;
   has_ramp: unknown;
-  is_indoor: unknown;
+  source_ref: unknown;
 }
 
 interface NodeStorage {
@@ -117,9 +132,15 @@ interface NodeStorage {
   adjOffset: Int32Array;
 }
 
+interface StationTables {
+  stationIds: readonly string[];
+  stationRadiusM: Float32Array;
+}
+
 interface EdgeStorage {
   adjTarget: Int32Array;
   adjAttr: Int32Array;
+  edgeOriginalId: BigInt64Array;
   edgeLengthM: Float32Array;
   edgeType: Uint8Array;
   edgeSlope: Float32Array;
@@ -237,6 +258,19 @@ function nullableUint16(value: unknown, label: string): number {
 }
 
 /**
+ * @param value Raw nullable PostgreSQL text value.
+ * @param label Database column name for failures.
+ * @returns A text value, or null when the database value is NULL.
+ */
+function nullableText(value: unknown, label: string): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "string") {
+    throw new Error(`pedestrian graph ${label} is not text`);
+  }
+  return value;
+}
+
+/**
  * @param value Raw PostgreSQL boolean value.
  * @param label Database column name for failures.
  * @returns The decoded boolean.
@@ -319,6 +353,7 @@ function createEdgeStorage(directedEdgeCount: number): EdgeStorage {
   return {
     adjTarget: new Int32Array(directedEdgeCount),
     adjAttr: new Int32Array(directedEdgeCount),
+    edgeOriginalId: new BigInt64Array(directedEdgeCount),
     edgeLengthM,
     edgeType: new Uint8Array(directedEdgeCount),
     edgeSlope,
@@ -369,15 +404,17 @@ async function loadGraphVersion(
  * @param client Queryable PostgreSQL client.
  * @param versionId Resolved graph version identifier.
  * @param storage Preallocated node storage to fill.
- * @returns The compact station-radius table. Indoor is station_id or node_type 7–12;
- * entrance is node_type 4 or 11; hasRealGeom is geom IS NOT NULL.
+ * @returns Compact station tables whose reverse dictionary matches `nodeStationId`.
+ * Indoor is station_id or node_type 7–12; entrance is node_type 4 or 11;
+ * hasRealGeom is geom IS NOT NULL.
  */
 async function loadNodes(
   client: PedGraphQueryable,
   versionId: number,
   storage: NodeStorage,
-): Promise<Float32Array> {
+): Promise<StationTables> {
   const stationIndexes = new Map<string, number>();
+  const stationIds: string[] = [];
   const stationRadii: number[] = [];
   let cursor = BigInt(MIN_BIGINT);
   let nodeIndex = 0;
@@ -426,21 +463,16 @@ async function loadNodes(
       ) {
         flags |= NODE_FLAG.ENTRANCE;
       }
-      storage.nodeLon[nodeIndex] = requiredNumber(
-        row.lon,
-        "proxy_geom longitude",
-      );
-      storage.nodeLat[nodeIndex] = requiredNumber(
-        row.lat,
-        "proxy_geom latitude",
-      );
+      storage.nodeLon[nodeIndex] = requiredNumber(row.lon, "node longitude");
+      storage.nodeLat[nodeIndex] = requiredNumber(row.lat, "node latitude");
       storage.nodeFlags[nodeIndex] = flags;
       storage.originalNodeId[nodeIndex] = nodeId;
       if (stationId !== undefined) {
         let stationIndex = stationIndexes.get(stationId);
         if (stationIndex === undefined) {
-          stationIndex = stationRadii.length;
+          stationIndex = stationIds.length;
           stationIndexes.set(stationId, stationIndex);
+          stationIds.push(stationId);
           stationRadii.push(Number.NaN);
         }
         storage.nodeStationId[nodeIndex] = stationIndex;
@@ -464,7 +496,10 @@ async function loadNodes(
   if (nodeIndex !== storage.originalNodeId.length) {
     throw new Error("pedestrian graph has fewer nodes than its version record");
   }
-  return Float32Array.from(stationRadii);
+  return {
+    stationIds: Object.freeze(stationIds),
+    stationRadiusM: Float32Array.from(stationRadii),
+  };
 }
 
 /**
@@ -629,8 +664,11 @@ async function fillEdges(
       }
       storage.adjTarget[adjacencyIndex] = to.denseId;
       storage.adjAttr[adjacencyIndex] = edgeIndex;
+      storage.edgeOriginalId[edgeIndex] = edgeId;
       storage.edgeLengthM[edgeIndex] = nullableNumber(row.length_m, "length_m");
-      storage.edgeType[edgeIndex] = nullableUint8(row.edge_type, "edge_type");
+      const edgeType = nullableUint8(row.edge_type, "edge_type");
+      storage.edgeType[edgeIndex] = edgeType;
+      const sourceRef = nullableText(row.source_ref, "source_ref");
       storage.edgeSlope[edgeIndex] = nullableNumber(
         row.slope_longitudinal,
         "slope_longitudinal",
@@ -656,7 +694,7 @@ async function fillEdges(
       let flags = booleanValue(row.has_ramp, "has_ramp")
         ? EDGE_FLAG.HAS_RAMP
         : 0;
-      if (booleanValue(row.is_indoor, "is_indoor")) {
+      if (isGtfsIndoorEdge(sourceRef)) {
         flags |= EDGE_FLAG.INDOOR;
       }
       storage.edgeFlags[edgeIndex] = flags;
@@ -681,7 +719,7 @@ async function fillEdges(
 
 /**
  * @param client Queryable PostgreSQL client.
- * @param versionId Optional graph version identifier; the newest version is used when omitted.
+ * @param versionId Optional graph version identifier; the active version is used when omitted.
  * @returns A dense CSR pedestrian graph backed only by typed arrays. `edgeWidthM`
  * carries net usable width only and never falls back to `ped_edge.width_m`, whose
  * gross sidewalk and carriageway values would read as known-passable clearance.
@@ -693,11 +731,7 @@ export async function loadPedGraph(
   const version = await loadGraphVersion(client, versionId);
   const nodeStorage = createNodeStorage(version.nodeCount);
   const edgeStorage = createEdgeStorage(version.directedEdgeCount);
-  const stationRadiusM = await loadNodes(
-    client,
-    version.versionId,
-    nodeStorage,
-  );
+  const stationTables = await loadNodes(client, version.versionId, nodeStorage);
   const edgeCount = await countEdges(
     client,
     version.versionId,
@@ -730,11 +764,13 @@ export async function loadPedGraph(
     nodeLat: nodeStorage.nodeLat,
     nodeFlags: nodeStorage.nodeFlags,
     nodeStationId: nodeStorage.nodeStationId,
-    stationRadiusM,
+    stationIds: stationTables.stationIds,
+    stationRadiusM: stationTables.stationRadiusM,
     originalNodeId: nodeStorage.originalNodeId,
     adjOffset: nodeStorage.adjOffset,
     adjTarget: edgeStorage.adjTarget,
     adjAttr: edgeStorage.adjAttr,
+    edgeOriginalId: edgeStorage.edgeOriginalId,
     edgeLengthM: edgeStorage.edgeLengthM,
     edgeType: edgeStorage.edgeType,
     edgeSlope: edgeStorage.edgeSlope,

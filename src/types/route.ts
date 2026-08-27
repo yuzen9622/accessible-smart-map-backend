@@ -19,6 +19,13 @@ export type AccessibilityMode =
  */
 export type TravelMode = "transit" | "drive" | "motorcycle" | "walk";
 
+/**
+ * Pure-walk route selection provenance. `otp-fallback` means the CSR pedestrian
+ * graph did not choose the route; when OTP2 itself is unavailable, the route's
+ * warnings identify the final Valhalla recovery without widening this contract.
+ */
+type PureWalkRouteEngine = "pedestrian-a11y" | "otp-fallback";
+
 export interface SlimA11y {
   osmId: string;
   category: IOsmA11y["category"];
@@ -245,6 +252,13 @@ export interface AccessibleRoute {
   transferCount: number;
   legs: (WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg | DriveLeg)[];
   accessibilityHighlights: string[];
+  /**
+   * Pure-walk planner provenance. `pedestrian-a11y` is a CSR-selected route;
+   * `otp-fallback` states plainly that CSR did not decide it, so its
+   * stair/slope/width/fare-gate protection was not applied. Transit and driving
+   * routes omit this optional field.
+   */
+  engine?: PureWalkRouteEngine;
   degraded?: boolean;
   warnings?: string[];
   departureDate?: string;

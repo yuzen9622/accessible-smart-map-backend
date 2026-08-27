@@ -45,6 +45,13 @@ vi.mock("./planners/otp-routing", () => ({
   isOtpCircuitOpen: () => false,
 }));
 
+// The service dynamically imports this production module. Mocking that module
+// boundary is the stable CSR selection seam; individual cases inject its
+// structured result without opening PostGIS or constructing a graph.
+vi.mock("./planners/pedestrian-a11y/csr-walk-planner", () => ({
+  planCsrWalkRoute: vi.fn(),
+}));
+
 vi.mock("../user/user.service", () => ({
   getA11yProfile: vi.fn(),
 }));
@@ -91,6 +98,7 @@ import {
   planOtpRouteDetailed,
   planOtpWalkDetailed,
 } from "./planners/otp-routing";
+import { planCsrWalkRoute } from "./planners/pedestrian-a11y/csr-walk-planner";
 import { getA11yProfile } from "../user/user.service";
 import { findConfirmedHazardsWithin } from "../hazard-report/hazard-report.service";
 import { enrichLegIndoor } from "./planners/route-a11y";
@@ -107,6 +115,7 @@ import { getMetroAlerts } from "../transit/metro.service";
 import { getTransitAlerts } from "../transit/alert.service";
 import type { PlanRouteResult } from "./accessible-route.types";
 import type { OtpRoutePlanResult } from "./planners/otp-routing";
+import type { CsrWalkPlan } from "./planners/pedestrian-a11y/csr-walk.types";
 
 /**
  * Narrow a successful plan result to its payload. The tests below assert
@@ -166,6 +175,9 @@ beforeEach(() => {
   vi.mocked(planOtpWalkDetailed).mockResolvedValue({
     status: "no_route",
     routes: [],
+  });
+  vi.mocked(planCsrWalkRoute).mockResolvedValue({
+    status: "outside_coverage",
   });
   vi.mocked(getWeatherAndAirQuality).mockResolvedValue({});
   vi.mocked(findConfirmedHazardsWithin).mockResolvedValue([]);
@@ -414,6 +426,246 @@ const walkRoute = () => ({
     },
   ],
   accessibilityHighlights: [],
+});
+
+/** Build a complete CSR plan without depending on a real PostGIS graph. */
+const csrWalkPlan = (
+  from: [number, number] = [121.56, 25.04],
+  to: [number, number] = [121.55, 25.03],
+): CsrWalkPlan => ({
+  polyline: [from, to],
+  distanceM: 800,
+  durationS: 600,
+  graphVersionId: 7,
+  approximateIndoorSegmentCount: 0,
+  accessibility: {
+    maxSlopePercent: 4,
+    crossings: 1,
+    crossingsWithCurbRamp: 1,
+    minPathWidthCm: 150,
+    surfaceType: "paved",
+  },
+  diagnostics: {
+    expandedNodes: 4,
+    reopenedNodes: 0,
+    edgeCount: 2,
+    totalCostM: 800,
+    relaxationLevel: 0,
+    originSnapDistanceM: 1,
+    destinationSnapDistanceM: 1,
+  },
+});
+
+describe("planAccessibleRouteFromRequest walk mode CSR selection", () => {
+  it("uses a successful CSR plan, sets engine provenance, and preserves waypoint order", async () => {
+    vi.mocked(planCsrWalkRoute).mockResolvedValue({
+      status: "ok",
+      plans: [
+        csrWalkPlan([121.56, 25.04], [121.555, 25.035]),
+        csrWalkPlan([121.555, 25.035], [121.55, 25.03]),
+      ],
+    });
+
+    const res = await planAccessibleRouteFromRequest({
+      ...walkRequest,
+      waypoints: [{ latitude: 25.035, longitude: 121.555 }],
+    });
+
+    expect(res.ok).toBe(true);
+    expect(vi.mocked(planCsrWalkRoute)).toHaveBeenCalledWith(
+      [
+        { lat: 25.04, lng: 121.56 },
+        { lat: 25.035, lng: 121.555 },
+        { lat: 25.03, lng: 121.55 },
+      ],
+      { mode: "normal", avoidStairs: false },
+    );
+    expect(okData(res).routes[0].engine).toBe("pedestrian-a11y");
+    expect(okData(res).routes[0].degraded).toBeUndefined();
+    expect(
+      okData(res).routes[0].legs.map((leg) =>
+        leg.type === "WALK" ? [leg.from, leg.to] : null,
+      ),
+    ).toEqual([
+      ["起點", "中途點 1"],
+      ["中途點 1", "終點"],
+    ]);
+    expect(vi.mocked(planOtpWalkDetailed)).not.toHaveBeenCalled();
+    expect(vi.mocked(planValhallaRoute)).not.toHaveBeenCalled();
+  });
+
+  it("reports an arbitrary maxSlopePercent as unenforced for a CSR route", async () => {
+    vi.mocked(planCsrWalkRoute).mockResolvedValue({
+      status: "ok",
+      plans: [csrWalkPlan()],
+    });
+
+    const res = await planAccessibleRouteFromRequest({
+      ...walkRequest,
+      mode: "wheelchair",
+      avoidStairs: true,
+      maxSlopePercent: 10,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(okData(res).slopeConstraint).toEqual({
+      requestedMaxPercent: 10,
+      enforced: false,
+      note: ROUTE_WARNING.CSR_SLOPE_LIMIT_NOT_ENFORCED,
+    });
+    expect(okData(res).routes[0].warnings).toContain(
+      ROUTE_WARNING.CSR_SLOPE_LIMIT_NOT_ENFORCED,
+    );
+  });
+
+  it("falls back to marked OTP when CSR is unavailable", async () => {
+    vi.mocked(planCsrWalkRoute).mockResolvedValue({
+      status: "unavailable",
+      reason: "graph load timed out",
+    });
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "ok",
+      routes: [walkRoute()] as any,
+    });
+
+    const res = await planAccessibleRouteFromRequest(walkRequest);
+
+    expect(res.ok).toBe(true);
+    expect(okData(res).routes[0]).toMatchObject({
+      engine: "otp-fallback",
+      degraded: true,
+    });
+    expect(okData(res).routes[0].warnings).toContain(
+      ROUTE_WARNING.CSR_WALK_FALLBACK_PLANNER_UNAVAILABLE,
+    );
+    expect(vi.mocked(planOtpWalkDetailed)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(planValhallaRoute)).not.toHaveBeenCalled();
+  });
+
+  it("turns a CSR planner exception into a marked OTP fallback", async () => {
+    vi.mocked(planCsrWalkRoute).mockRejectedValue(
+      new Error("mock CSR planner failure"),
+    );
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "ok",
+      routes: [walkRoute()] as any,
+    });
+
+    const res = await planAccessibleRouteFromRequest(walkRequest);
+
+    expect(res.ok).toBe(true);
+    expect(okData(res).routes[0]).toMatchObject({
+      engine: "otp-fallback",
+      degraded: true,
+    });
+    expect(okData(res).routes[0].warnings).toContain(
+      ROUTE_WARNING.CSR_WALK_FALLBACK_PLANNER_UNAVAILABLE,
+    );
+    expect(vi.mocked(planOtpWalkDetailed)).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to marked OTP when CSR topology is disconnected", async () => {
+    vi.mocked(planCsrWalkRoute).mockResolvedValue({
+      status: "topology_disconnected",
+    });
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "ok",
+      routes: [walkRoute()] as any,
+    });
+
+    const res = await planAccessibleRouteFromRequest(walkRequest);
+
+    expect(res.ok).toBe(true);
+    expect(okData(res).routes[0]).toMatchObject({
+      engine: "otp-fallback",
+      degraded: true,
+    });
+    expect(okData(res).routes[0].warnings).toContain(
+      ROUTE_WARNING.CSR_WALK_FALLBACK_TOPOLOGY_DISCONNECTED,
+    );
+    expect(vi.mocked(planOtpWalkDetailed)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(planValhallaRoute)).not.toHaveBeenCalled();
+  });
+
+  for (const [csrStatus, reason] of [
+    ["fare_policy_blocked", ROUTE_REASON.NO_ROUTE],
+    ["accessibility_blocked", ROUTE_REASON.NO_ACCESSIBLE_ROUTE],
+  ] as const) {
+    it(`returns terminal ${reason} without OTP or Valhalla after CSR ${csrStatus}`, async () => {
+      vi.mocked(planCsrWalkRoute).mockResolvedValue({ status: csrStatus });
+
+      await expect(
+        planAccessibleRouteFromRequest(walkRequest),
+      ).resolves.toEqual({
+        ok: false,
+        status: ResponseCode.UNPROCESSABLE_ENTITY,
+        error: ROUTE_MSG[reason],
+        data: { reason },
+      });
+      expect(vi.mocked(planOtpWalkDetailed)).not.toHaveBeenCalled();
+      expect(vi.mocked(planValhallaRoute)).not.toHaveBeenCalled();
+    });
+  }
+
+  it("marks unsupported explicit constraints as a degraded OTP fallback", async () => {
+    vi.mocked(planCsrWalkRoute).mockResolvedValue({
+      status: "unsupported_constraints",
+    });
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "ok",
+      routes: [walkRoute()] as any,
+    });
+
+    const res = await planAccessibleRouteFromRequest({
+      ...walkRequest,
+      mode: "normal",
+      avoidStairs: true,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(vi.mocked(planCsrWalkRoute)).toHaveBeenCalledWith(
+      expect.any(Array),
+      { mode: "normal", avoidStairs: true },
+    );
+    expect(okData(res).routes[0]).toMatchObject({
+      engine: "otp-fallback",
+      degraded: true,
+    });
+    expect(okData(res).routes[0].warnings).toContain(
+      ROUTE_WARNING.CSR_WALK_FALLBACK_UNSUPPORTED_CONSTRAINTS,
+    );
+  });
+
+  for (const source of ["outside Taipei", "feature disabled"] as const) {
+    it(`uses unmarked OTP provenance when CSR is ${source}`, async () => {
+      // The planner collapses these OTP-primary cases to outside_coverage; the
+      // service must not turn that status into a CSR-failure warning.
+      vi.mocked(planCsrWalkRoute).mockResolvedValue({
+        status: "outside_coverage",
+      });
+      vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+        status: "ok",
+        routes: [walkRoute()] as any,
+      });
+
+      const res = await planAccessibleRouteFromRequest(walkRequest);
+
+      expect(res.ok).toBe(true);
+      expect(okData(res).routes[0].engine).toBe("otp-fallback");
+      expect(okData(res).routes[0].degraded).toBeUndefined();
+      expect(okData(res).routes[0].warnings).toBeUndefined();
+      expect(vi.mocked(planValhallaRoute)).not.toHaveBeenCalled();
+    });
+  }
+
+  it("does not call CSR for transit planning", async () => {
+    await planAccessibleRouteFromRequest({
+      ...walkRequest,
+      travelMode: "transit",
+    });
+
+    expect(vi.mocked(planCsrWalkRoute)).not.toHaveBeenCalled();
+  });
 });
 
 describe("planAccessibleRouteFromRequest walk mode OTP", () => {

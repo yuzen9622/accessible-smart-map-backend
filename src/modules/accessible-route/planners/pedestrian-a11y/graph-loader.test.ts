@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { EDGE_FLAG, NODE_FLAG, type PedGraph } from "./graph.types";
+import { EDGE_FLAG, EDGE_TYPE, NODE_FLAG, type PedGraph } from "./graph.types";
+import {
+  canTraverseFareGate,
+  createTransitAuthorizedFareAccess,
+} from "./fare-access";
 import { loadPedGraph, type PedGraphQueryable } from "./graph-loader";
 
 type FakeRow = Record<string, unknown>;
@@ -46,8 +50,12 @@ function createQueryable(fixture: GraphFixture): {
     async query<R>(sql: string, params?: unknown[]): Promise<{ rows: R[] }> {
       calls.push({ sql, params });
       if (sql.includes("FROM ped_graph_version")) {
-        if (sql.includes("ORDER BY built_at DESC")) {
-          return { rows: fixture.versions.slice(0, 1) as R[] };
+        if (sql.includes("WHERE lifecycle_status = 'ACTIVE'")) {
+          return {
+            rows: fixture.versions.filter(
+              (row) => row.lifecycle_status === "ACTIVE",
+            ) as R[],
+          };
         }
         return {
           rows: fixture.versions.filter((row) => row.id === params?.[0]) as R[],
@@ -81,7 +89,14 @@ function createQueryable(fixture: GraphFixture): {
 
 function coreFixture(): GraphFixture {
   return {
-    versions: [{ id: 7, node_count: 4, directed_edge_count: 3 }],
+    versions: [
+      {
+        id: 7,
+        lifecycle_status: "ACTIVE",
+        node_count: 4,
+        directed_edge_count: 3,
+      },
+    ],
     nodes: [
       {
         node_id: "1003992167379",
@@ -137,6 +152,7 @@ function coreFixture(): GraphFixture {
         traversal_time_s: null,
         has_ramp: false,
         is_indoor: false,
+        source_ref: "osm:way/outdoor-forward",
       },
       {
         edge_id: "2000000000002",
@@ -154,6 +170,7 @@ function coreFixture(): GraphFixture {
         traversal_time_s: null,
         has_ramp: true,
         is_indoor: false,
+        source_ref: "osm:way/outdoor-reverse",
       },
       {
         edge_id: "2000000000003",
@@ -171,6 +188,7 @@ function coreFixture(): GraphFixture {
         traversal_time_s: 30,
         has_ramp: false,
         is_indoor: true,
+        source_ref: "gtfs_pathways:pathway:station-a:forward",
       },
     ],
   };
@@ -188,6 +206,8 @@ function expectCoreGraph(graph: PedGraph): void {
     1003992167382n,
   ]);
   expect(Array.from(graph.nodeStationId)).toEqual([-1, -1, 0, 0]);
+  expect(graph.stationIds).toEqual(["station-a"]);
+  expect(Object.isFrozen(graph.stationIds)).toBe(true);
   expect(Array.from(graph.stationRadiusM)).toEqual([50]);
   expect(Array.from(graph.nodeFlags)).toEqual([
     NODE_FLAG.HAS_REAL_GEOM,
@@ -198,6 +218,11 @@ function expectCoreGraph(graph: PedGraph): void {
   expect(Array.from(graph.adjOffset)).toEqual([0, 1, 2, 3, 3]);
   expect(Array.from(graph.adjTarget)).toEqual([1, 0, 3]);
   expect(Array.from(graph.adjAttr)).toEqual([0, 1, 2]);
+  expect(Array.from(graph.edgeOriginalId)).toEqual([
+    2000000000001n,
+    2000000000002n,
+    2000000000003n,
+  ]);
   expect(graph.edgeLengthM[0]).toBe(10);
   expect(Number.isNaN(graph.edgeLengthM[2])).toBe(true);
   expect(Number.isNaN(graph.edgeSlope[0])).toBe(true);
@@ -217,29 +242,201 @@ function expectCoreGraph(graph: PedGraph): void {
 }
 
 describe("loadPedGraph", () => {
-  it("loads the newest version into dense CSR storage with documented null semantics", async () => {
-    const { client, calls } = createQueryable(coreFixture());
+  it("loads only the active version into dense CSR storage when omitted", async () => {
+    const fixture = coreFixture();
+    fixture.versions.unshift({
+      id: 8,
+      lifecycle_status: "CANDIDATE",
+      node_count: 4,
+      directed_edge_count: 3,
+    });
+    const { client, calls } = createQueryable(fixture);
 
     const graph = await loadPedGraph(client);
 
     expectCoreGraph(graph);
-    expect(calls[0].sql).toContain("ORDER BY built_at DESC, id DESC");
+    expect(calls[0].sql).toContain("WHERE lifecycle_status = 'ACTIVE'");
     expect(calls[0].params).toBeUndefined();
   });
 
-  it("loads an explicitly requested version", async () => {
+  it("classifies indoor proxy eligibility from generated GTFS provenance, not null geometry", async () => {
     const fixture = coreFixture();
-    fixture.versions = [
-      { id: 8, node_count: 0, directed_edge_count: 0 },
-      ...fixture.versions,
-    ];
+    // This value simulates the old `geom IS NULL AS is_indoor` query result.
+    // The OSM edge must still stay outdoor even when a stored geometry is absent.
+    fixture.edges[0].is_indoor = true;
+    fixture.edges[0].source_ref = "osm:way/geometry-absent";
+    // Connector edges are normally real LineStrings, but their actual injector
+    // provenance remains proxy-eligible if one legitimately lacks geometry.
+    fixture.edges[2].is_indoor = false;
+    fixture.edges[2].edge_type = EDGE_TYPE.FOOTWAY;
+    fixture.edges[2].source_ref =
+      "gtfs_pathways:connector-edge:entrance-a:entrance-forward";
     const { client, calls } = createQueryable(fixture);
 
-    const graph = await loadPedGraph(client, 7);
+    const graph = await loadPedGraph(client);
 
-    expectCoreGraph(graph);
+    expect(Array.from(graph.edgeFlags)).toEqual([
+      0,
+      EDGE_FLAG.HAS_RAMP,
+      EDGE_FLAG.INDOOR,
+    ]);
+    const attributeQuery = calls.find(
+      (call) =>
+        call.sql.includes("FROM ped_edge") && call.sql.includes("surface"),
+    );
+    expect(attributeQuery?.sql).toContain("source_ref");
+    expect(attributeQuery?.sql).not.toContain("geom IS NULL AS is_indoor");
+  });
+
+  it("loads an explicitly requested candidate version for diagnosis", async () => {
+    const fixture = coreFixture();
+    fixture.versions.unshift({
+      id: 8,
+      lifecycle_status: "CANDIDATE",
+      node_count: 4,
+      directed_edge_count: 3,
+    });
+    const { client, calls } = createQueryable(fixture);
+
+    const graph = await loadPedGraph(client, 8);
+
+    expect(graph.versionId).toBe(8);
     expect(calls[0].sql).toContain("WHERE id = $1");
-    expect(calls[0].params).toEqual([7]);
+    expect(calls[0].params).toEqual([8]);
+  });
+
+  it("fails closed when no active version exists", async () => {
+    const fixture = coreFixture();
+    fixture.versions[0].lifecycle_status = "CANDIDATE";
+
+    await expect(loadPedGraph(createQueryable(fixture).client)).rejects.toThrow(
+      "pedestrian graph version was not found",
+    );
+  });
+
+  it("round-trips stable station IDs in dense-index order deterministically", async () => {
+    const nodes = [
+      {
+        node_id: "30",
+        lon: 121.003,
+        lat: 25,
+        station_id: "station-b",
+        station_radius_m: 10,
+        node_type: 8,
+        has_real_geom: false,
+      },
+      {
+        node_id: "10",
+        lon: 121.001,
+        lat: 25,
+        station_id: "station-a",
+        station_radius_m: 20,
+        node_type: 8,
+        has_real_geom: false,
+      },
+      {
+        node_id: "20",
+        lon: 121.002,
+        lat: 25,
+        station_id: "station-a",
+        station_radius_m: 25,
+        node_type: 9,
+        has_real_geom: false,
+      },
+    ];
+    const createFixture = (fixtureNodes: FakeRow[]): GraphFixture => ({
+      versions: [
+        {
+          id: 12,
+          lifecycle_status: "ACTIVE",
+          node_count: fixtureNodes.length,
+          directed_edge_count: 0,
+        },
+      ],
+      nodes: fixtureNodes,
+      edges: [],
+    });
+
+    const first = await loadPedGraph(
+      createQueryable(createFixture(nodes)).client,
+    );
+    const second = await loadPedGraph(
+      createQueryable(createFixture([...nodes].reverse())).client,
+    );
+
+    for (const graph of [first, second]) {
+      expect(Array.from(graph.nodeStationId)).toEqual([0, 0, 1]);
+      expect(graph.stationIds).toEqual(["station-a", "station-b"]);
+      expect(Object.isFrozen(graph.stationIds)).toBe(true);
+      expect(Array.from(graph.stationRadiusM)).toEqual([25, 10]);
+    }
+  });
+
+  it("keeps malformed gate station identity fail-closed after CSR loading", async () => {
+    const malformedFixtures: readonly {
+      name: string;
+      configure: (fixture: GraphFixture) => void;
+    }[] = [
+      {
+        name: "missing station identity",
+        configure: (fixture) => {
+          fixture.nodes[2].station_id = null;
+        },
+      },
+      {
+        name: "mismatched station identity",
+        configure: (fixture) => {
+          fixture.nodes[3].station_id = "station-b";
+        },
+      },
+    ];
+
+    for (const malformed of malformedFixtures) {
+      const fixture = coreFixture();
+      fixture.edges[2].edge_type = EDGE_TYPE.INDOOR_FARE_GATE;
+      malformed.configure(fixture);
+
+      const graph = await loadPedGraph(createQueryable(fixture).client);
+      const allowKnownStations = createTransitAuthorizedFareAccess([
+        "station-a",
+        "station-b",
+      ]);
+
+      expect(
+        canTraverseFareGate(graph, 2, 3, 2, allowKnownStations),
+        malformed.name,
+      ).toBe(false);
+    }
+  });
+
+  it("keeps distinct original edge IDs for parallel edges sharing endpoints", async () => {
+    const fixture = coreFixture();
+    fixture.versions[0].directed_edge_count = 4;
+    fixture.edges.push({
+      ...fixture.edges[0],
+      edge_id: "2000000000004",
+      length_m: 41,
+    });
+    const { client } = createQueryable(fixture);
+
+    const graph = await loadPedGraph(client);
+
+    // Both 0 -> 1 edges live in node 0's adjacency range and must stay
+    // separately addressable back to their own ped_edge rows.
+    const slots = Array.from(
+      { length: graph.adjOffset[1] - graph.adjOffset[0] },
+      (_, offset) => graph.adjAttr[graph.adjOffset[0] + offset],
+    );
+    expect(slots).toHaveLength(2);
+    expect(slots.map((attrIdx) => graph.adjTarget[attrIdx])).toBeDefined();
+    expect(slots.map((attrIdx) => graph.edgeOriginalId[attrIdx])).toEqual([
+      2000000000001n,
+      2000000000004n,
+    ]);
+    expect(slots.map((attrIdx) => graph.edgeLengthM[attrIdx])).toEqual([
+      10, 41,
+    ]);
+    expect(new Set(Array.from(graph.edgeOriginalId)).size).toBe(4);
   });
 
   it("counts a bidirectional self-loop as one physical edge", async () => {
@@ -261,7 +458,14 @@ describe("loadPedGraph", () => {
       is_indoor: false,
     });
     const { client } = createQueryable({
-      versions: [{ id: 11, node_count: 1, directed_edge_count: 2 }],
+      versions: [
+        {
+          id: 11,
+          lifecycle_status: "ACTIVE",
+          node_count: 1,
+          directed_edge_count: 2,
+        },
+      ],
       nodes: [
         {
           node_id: "1",
@@ -293,7 +497,14 @@ describe("loadPedGraph", () => {
       has_real_geom: true,
     }));
     const { client, calls } = createQueryable({
-      versions: [{ id: 9, node_count: nodes.length, directed_edge_count: 0 }],
+      versions: [
+        {
+          id: 9,
+          lifecycle_status: "ACTIVE",
+          node_count: nodes.length,
+          directed_edge_count: 0,
+        },
+      ],
       nodes,
       edges: [],
     });
@@ -326,7 +537,14 @@ describe("loadPedGraph", () => {
       is_indoor: false,
     }));
     const { client, calls } = createQueryable({
-      versions: [{ id: 10, node_count: 2, directed_edge_count: edges.length }],
+      versions: [
+        {
+          id: 10,
+          lifecycle_status: "ACTIVE",
+          node_count: 2,
+          directed_edge_count: edges.length,
+        },
+      ],
       nodes: [
         {
           node_id: "1",
@@ -374,7 +592,14 @@ describe("loadPedGraph", () => {
 
   it("fails when the version record and node stream disagree", async () => {
     const fixture = coreFixture();
-    fixture.versions = [{ id: 7, node_count: 5, directed_edge_count: 3 }];
+    fixture.versions = [
+      {
+        id: 7,
+        lifecycle_status: "ACTIVE",
+        node_count: 5,
+        directed_edge_count: 3,
+      },
+    ];
 
     await expect(loadPedGraph(createQueryable(fixture).client)).rejects.toThrow(
       "fewer nodes",

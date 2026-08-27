@@ -1,5 +1,11 @@
-import { BinaryMinHeap, type RouteResult } from "./astar";
+import { BinaryMinHeap, buildRouteResult, type RouteResult } from "./astar";
 import { edgeCost, type CostProfile } from "./cost";
+import {
+  FORBID_FARE_ACCESS,
+  canTraverseFareGate,
+  normalizeFareAccessPolicy,
+  type FareAccessPolicy,
+} from "./fare-access";
 import type { PedGraph } from "./graph.types";
 
 /**
@@ -12,56 +18,11 @@ function isValidNode(graph: PedGraph, node: number): boolean {
 }
 
 /**
- * @param profile Requested accessibility cost profile.
- * @returns Nothing.
- */
-function assertWheelchairProfile(profile: CostProfile): void {
-  if (profile.name !== "wheelchair") {
-    throw new Error(`${profile.name} profile not implemented`);
-  }
-}
-
-/**
- * @param parent Parent node for each settled route node.
- * @param from Dense graph start node identifier.
- * @param to Dense graph goal node identifier.
- * @param totalCost Final route cost in weighted metres.
- * @param expandedNodes Number of nodes removed from the open set for expansion.
- * @param reopenedNodes Number of closed nodes returned to the open set.
- * @returns A completed route result.
- */
-function routeResult(
-  parent: Int32Array,
-  from: number,
-  to: number,
-  totalCost: number,
-  expandedNodes: number,
-  reopenedNodes: number,
-): RouteResult {
-  const reversedPath: number[] = [];
-  let node = to;
-  while (node !== from) {
-    reversedPath.push(node);
-    node = parent[node];
-    if (node === -1) {
-      throw new Error("route parent chain is incomplete");
-    }
-  }
-  reversedPath.push(from);
-  reversedPath.reverse();
-  return {
-    nodePath: Int32Array.from(reversedPath),
-    totalCost,
-    expandedNodes,
-    reopenedNodes,
-  };
-}
-
-/**
  * @param graph CSR pedestrian graph.
  * @param from Dense graph start node identifier.
  * @param to Dense graph goal node identifier.
  * @param profile Requested accessibility cost profile.
+ * @param fareAccess Immutable gate policy; omitted routes use frozen fail-closed forbid.
  * @returns The lowest-cost route, or null when no feasible route exists.
  */
 export function dijkstra(
@@ -69,14 +30,16 @@ export function dijkstra(
   from: number,
   to: number,
   profile: CostProfile,
+  fareAccess: FareAccessPolicy = FORBID_FARE_ACCESS,
 ): RouteResult | null {
-  assertWheelchairProfile(profile);
+  const normalizedFareAccess = normalizeFareAccessPolicy(fareAccess);
   if (!isValidNode(graph, from) || !isValidNode(graph, to)) {
     return null;
   }
   if (from === to) {
     return {
       nodePath: Int32Array.of(from),
+      edgeAttrPath: new Int32Array(0),
       totalCost: 0,
       expandedNodes: 0,
       reopenedNodes: 0,
@@ -86,6 +49,8 @@ export function dijkstra(
   gScore.fill(Number.POSITIVE_INFINITY);
   const parent = new Int32Array(graph.nodeCount);
   parent.fill(-1);
+  const parentEdgeAttr = new Int32Array(graph.nodeCount);
+  parentEdgeAttr.fill(-1);
   const closed = new Uint8Array(graph.nodeCount);
   const open = new BinaryMinHeap();
   gScore[from] = 0;
@@ -105,8 +70,9 @@ export function dijkstra(
     closed[node] = 1;
     expandedNodes += 1;
     if (node === to) {
-      return routeResult(
+      return buildRouteResult(
         parent,
+        parentEdgeAttr,
         from,
         to,
         gScore[to],
@@ -120,11 +86,16 @@ export function dijkstra(
       adjacencyIndex += 1
     ) {
       const attrIdx = graph.adjAttr[adjacencyIndex];
+      const target = graph.adjTarget[adjacencyIndex];
+      if (
+        !canTraverseFareGate(graph, node, target, attrIdx, normalizedFareAccess)
+      ) {
+        continue;
+      }
       const edgeCostM = edgeCost(graph, attrIdx, profile);
       if (!Number.isFinite(edgeCostM)) {
         continue;
       }
-      const target = graph.adjTarget[adjacencyIndex];
       const tentativeCost = gScore[node] + edgeCostM;
       if (!Number.isFinite(tentativeCost) || tentativeCost >= gScore[target]) {
         continue;
@@ -135,6 +106,7 @@ export function dijkstra(
       }
       gScore[target] = tentativeCost;
       parent[target] = node;
+      parentEdgeAttr[target] = attrIdx;
       open.push(target, tentativeCost);
     }
   }

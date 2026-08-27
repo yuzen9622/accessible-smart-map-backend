@@ -21,6 +21,7 @@ function graphFromAdjacency(input: {
     nodeLat: Float64Array.from(input.nodeLat),
     nodeFlags: Uint8Array.from(input.nodeFlags),
     nodeStationId: new Int32Array(input.nodeLon.length).fill(-1),
+    stationIds: Object.freeze([]),
     stationRadiusM: new Float32Array(),
     originalNodeId: BigInt64Array.from(
       input.nodeLon.map((_, index) => BigInt(index)),
@@ -28,6 +29,11 @@ function graphFromAdjacency(input: {
     adjOffset: Int32Array.from(input.adjOffset),
     adjTarget: Int32Array.from(input.adjTarget),
     adjAttr: Int32Array.from(input.adjAttr),
+    edgeOriginalId: BigInt64Array.from(
+      Array.from({ length: directedEdgeCount }, (_, attrIdx) =>
+        BigInt(1_000 + attrIdx),
+      ),
+    ),
     edgeLengthM: new Float32Array(directedEdgeCount),
     edgeType: new Uint8Array(directedEdgeCount),
     edgeSlope: new Float32Array(directedEdgeCount),
@@ -95,12 +101,13 @@ describe("snapToGraph", () => {
     const index = buildEdgeIndex(graph);
 
     expect(index.indexedEdgeCount).toBe(1);
-    expect(snapToGraph(index, 25, 121.001, 50)).toMatchObject({
+    expect(snapToGraph(index, 25, 121.0001, 50)).toMatchObject({
       edgeAttrIdx: 9,
+      nodeId: 0,
     });
   });
 
-  it("uses exact segment distance when overlapping boxes contain a farther diagonal", () => {
+  it("selects the nearest routable endpoint when overlapping edge boxes match", () => {
     const graph = graphFromAdjacency({
       nodeLon: [121, 121.001, 121, 121.001],
       nodeLat: [25, 25.001, 25.0009, 25.0009],
@@ -120,8 +127,9 @@ describe("snapToGraph", () => {
       throw new Error("expected the horizontal edge to snap");
     }
 
+    const endpointDistance = haversineMeters(25.0009, 121.0001, 25.0009, 121);
     expect(result).toMatchObject({ nodeId: 2, edgeAttrIdx: 20 });
-    expect(result.distanceM).toBeLessThan(0.01);
+    expect(result.distanceM).toBeCloseTo(endpointDistance, 0);
   });
 
   it("returns a metre-scale accurate distance and enforces tolerance", () => {
@@ -135,16 +143,32 @@ describe("snapToGraph", () => {
     });
     const index = buildEdgeIndex(graph);
     const lat = 25 + 100 / 111_195;
-    const expectedDistance = haversineMeters(lat, 121.001, 25, 121.001);
+    const expectedDistance = haversineMeters(lat, 121, 25, 121);
 
-    const result = snapToGraph(index, lat, 121.001, 110);
+    const result = snapToGraph(index, lat, 121, 110);
     if (result === null) {
       throw new Error("expected the nearby edge to snap");
     }
 
-    expect(result).toMatchObject({ edgeAttrIdx: 4 });
+    expect(result).toMatchObject({ edgeAttrIdx: 4, nodeId: 0 });
     expect(result.distanceM).toBeCloseTo(expectedDistance, 0);
-    expect(snapToGraph(index, lat, 121.001, 50)).toBeNull();
-    expect(snapToGraph(index, lat, 121.001, -1)).toBeNull();
+    expect(snapToGraph(index, lat, 121, 50)).toBeNull();
+    expect(snapToGraph(index, lat, 121, -1)).toBeNull();
+  });
+
+  it("rejects a close mid-edge projection when both routable endpoints are too far", () => {
+    const graph = graphFromAdjacency({
+      nodeLon: [121, 121.004],
+      nodeLat: [25, 25],
+      nodeFlags: [NODE_FLAG.HAS_REAL_GEOM, NODE_FLAG.HAS_REAL_GEOM],
+      adjOffset: [0, 1, 2],
+      adjTarget: [1, 0],
+      adjAttr: [4, 5],
+    });
+    const index = buildEdgeIndex(graph);
+
+    // The request lies exactly on the edge's geometric midpoint, but each
+    // endpoint is over 200 m away. Routing from either endpoint would teleport.
+    expect(snapToGraph(index, 25, 121.002, 50)).toBeNull();
   });
 });

@@ -3,6 +3,7 @@ import {
   AccessibleRouteDataSchema,
   AccessibleRouteSchema,
 } from "./accessible-route.schema";
+import { ROUTE_WARNING } from "../../constants/messages";
 
 const walkLeg = {
   type: "WALK" as const,
@@ -93,6 +94,42 @@ describe("AccessibleRouteSchema METRO alerts", () => {
         legs: [{ ...metroLeg, alerts: [{ ...metroAlert, status: "2" }] }],
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("AccessibleRouteSchema pure-walk engine", () => {
+  it("accepts only the two optional pure-walk provenance values", () => {
+    for (const engine of ["pedestrian-a11y", "otp-fallback"] as const) {
+      expect(
+        AccessibleRouteSchema.safeParse({ ...route, engine }).success,
+      ).toBe(true);
+    }
+    expect(
+      AccessibleRouteSchema.safeParse({ ...route, engine: "valhalla" }).success,
+    ).toBe(false);
+  });
+
+  it("keeps engine optional so transit routes remain compatible", () => {
+    expect(AccessibleRouteSchema.safeParse(metroRoute).success).toBe(true);
+  });
+});
+
+describe("AccessibleRouteDataSchema CSR slope constraint", () => {
+  it("accepts a truthful unenforced arbitrary slope limit for a CSR route", () => {
+    expect(
+      AccessibleRouteDataSchema.safeParse({
+        origin: { lat: 25.04, lng: 121.56 },
+        destination: { lat: 25.03, lng: 121.55 },
+        city: "Taipei",
+        travelMode: "walk",
+        routes: [{ ...route, engine: "pedestrian-a11y" }],
+        slopeConstraint: {
+          requestedMaxPercent: 10,
+          enforced: false,
+          note: ROUTE_WARNING.CSR_SLOPE_LIMIT_NOT_ENFORCED,
+        },
+      }).success,
+    ).toBe(true);
   });
 });
 

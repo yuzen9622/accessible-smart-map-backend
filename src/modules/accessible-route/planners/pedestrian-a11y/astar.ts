@@ -1,11 +1,23 @@
-import { haversineMeters } from "../../../../utils/geo";
 import { edgeCost, type CostProfile } from "./cost";
+import {
+  FORBID_FARE_ACCESS,
+  canTraverseFareGate,
+  normalizeFareAccessPolicy,
+  type FareAccessPolicy,
+} from "./fare-access";
 import type { PedGraph } from "./graph.types";
 
 const INITIAL_HEAP_CAPACITY = 64;
 
 export interface RouteResult {
   nodePath: Int32Array;
+  /**
+   * Dense edge attribute index of the directed edge actually selected between
+   * each adjacent `nodePath` pair, so `length === nodePath.length - 1`. Needed
+   * because parallel edges share endpoints: a node pair alone cannot identify
+   * which edge — and therefore which geometry and attributes — was chosen.
+   */
+  edgeAttrPath: Int32Array;
   totalCost: number;
   expandedNodes: number;
   reopenedNodes: number;
@@ -161,57 +173,28 @@ function isValidNode(graph: PedGraph, node: number): boolean {
 }
 
 /**
- * @param graph CSR pedestrian graph.
- * @param node Dense graph node identifier.
- * @returns The station-radius correction in metres.
- */
-function stationRadiusOf(graph: PedGraph, node: number): number {
-  const stationId = graph.nodeStationId[node];
-  if (stationId === -1) {
-    return 0;
-  }
-  const radius = graph.stationRadiusM[stationId];
-  return Number.isFinite(radius) ? radius : 0;
-}
-
-/**
- * @param graph CSR pedestrian graph.
- * @param node Dense graph node identifier.
- * @param goal Dense graph goal node identifier.
- * @returns An admissible straight-line lower bound in weighted metres.
+ * @param _graph CSR pedestrian graph.
+ * @param _node Dense graph node identifier.
+ * @param _goal Dense graph goal node identifier.
+ * @returns The globally proven admissible lower bound in weighted metres.
+ *
+ * Indoor traversals use proxy coordinates and may cost less than the
+ * proxy-coordinate separation. Until the graph supplies a mechanically proven
+ * global lower bound, zero is the only admissible heuristic. Keeping this
+ * function preserves the search's reopen-safe implementation while making the
+ * production search Dijkstra-equivalent.
  */
 export function heuristicCost(
-  graph: PedGraph,
-  node: number,
-  goal: number,
+  _graph: PedGraph,
+  _node: number,
+  _goal: number,
 ): number {
-  if (!isValidNode(graph, node) || !isValidNode(graph, goal)) {
-    return 0;
-  }
-  const distanceM = haversineMeters(
-    graph.nodeLat[node],
-    graph.nodeLon[node],
-    graph.nodeLat[goal],
-    graph.nodeLon[goal],
-  );
-  if (!Number.isFinite(distanceM)) {
-    return 0;
-  }
-  return Math.max(0, distanceM - stationRadiusOf(graph, node));
-}
-
-/**
- * @param profile Requested accessibility cost profile.
- * @returns Nothing.
- */
-function assertWheelchairProfile(profile: CostProfile): void {
-  if (profile.name !== "wheelchair") {
-    throw new Error(`${profile.name} profile not implemented`);
-  }
+  return 0;
 }
 
 /**
  * @param parent Parent node for each settled route node.
+ * @param parentEdgeAttr Dense edge attribute index of the edge that reached each node.
  * @param from Dense graph start node identifier.
  * @param to Dense graph goal node identifier.
  * @param totalCost Final route cost in weighted metres.
@@ -219,8 +202,9 @@ function assertWheelchairProfile(profile: CostProfile): void {
  * @param reopenedNodes Number of closed nodes returned to the open set.
  * @returns A completed route result.
  */
-function routeResult(
+export function buildRouteResult(
   parent: Int32Array,
+  parentEdgeAttr: Int32Array,
   from: number,
   to: number,
   totalCost: number,
@@ -228,9 +212,11 @@ function routeResult(
   reopenedNodes: number,
 ): RouteResult {
   const reversedPath: number[] = [];
+  const reversedEdges: number[] = [];
   let node = to;
   while (node !== from) {
     reversedPath.push(node);
+    reversedEdges.push(parentEdgeAttr[node]);
     node = parent[node];
     if (node === -1) {
       throw new Error("route parent chain is incomplete");
@@ -238,8 +224,10 @@ function routeResult(
   }
   reversedPath.push(from);
   reversedPath.reverse();
+  reversedEdges.reverse();
   return {
     nodePath: Int32Array.from(reversedPath),
+    edgeAttrPath: Int32Array.from(reversedEdges),
     totalCost,
     expandedNodes,
     reopenedNodes,
@@ -251,6 +239,7 @@ function routeResult(
  * @param from Dense graph start node identifier.
  * @param to Dense graph goal node identifier.
  * @param profile Requested accessibility cost profile.
+ * @param fareAccess Immutable gate policy; omitted routes use frozen fail-closed forbid.
  * @returns The lowest-cost route, or null when no feasible route exists.
  */
 export function aStar(
@@ -258,14 +247,16 @@ export function aStar(
   from: number,
   to: number,
   profile: CostProfile,
+  fareAccess: FareAccessPolicy = FORBID_FARE_ACCESS,
 ): RouteResult | null {
-  assertWheelchairProfile(profile);
+  const normalizedFareAccess = normalizeFareAccessPolicy(fareAccess);
   if (!isValidNode(graph, from) || !isValidNode(graph, to)) {
     return null;
   }
   if (from === to) {
     return {
       nodePath: Int32Array.of(from),
+      edgeAttrPath: new Int32Array(0),
       totalCost: 0,
       expandedNodes: 0,
       reopenedNodes: 0,
@@ -275,6 +266,8 @@ export function aStar(
   gScore.fill(Number.POSITIVE_INFINITY);
   const parent = new Int32Array(graph.nodeCount);
   parent.fill(-1);
+  const parentEdgeAttr = new Int32Array(graph.nodeCount);
+  parentEdgeAttr.fill(-1);
   const closed = new Uint8Array(graph.nodeCount);
   const open = new BinaryMinHeap();
   gScore[from] = 0;
@@ -295,8 +288,9 @@ export function aStar(
     closed[node] = 1;
     expandedNodes += 1;
     if (node === to) {
-      return routeResult(
+      return buildRouteResult(
         parent,
+        parentEdgeAttr,
         from,
         to,
         gScore[to],
@@ -310,11 +304,16 @@ export function aStar(
       adjacencyIndex += 1
     ) {
       const attrIdx = graph.adjAttr[adjacencyIndex];
+      const target = graph.adjTarget[adjacencyIndex];
+      if (
+        !canTraverseFareGate(graph, node, target, attrIdx, normalizedFareAccess)
+      ) {
+        continue;
+      }
       const edgeCostM = edgeCost(graph, attrIdx, profile);
       if (!Number.isFinite(edgeCostM)) {
         continue;
       }
-      const target = graph.adjTarget[adjacencyIndex];
       const tentativeCost = gScore[node] + edgeCostM;
       if (!Number.isFinite(tentativeCost) || tentativeCost >= gScore[target]) {
         continue;
@@ -325,6 +324,7 @@ export function aStar(
       }
       gScore[target] = tentativeCost;
       parent[target] = node;
+      parentEdgeAttr[target] = attrIdx;
       const priorityKey = tentativeCost + heuristicCost(graph, target, to);
       if (!Number.isFinite(priorityKey)) {
         continue;

@@ -3,6 +3,11 @@ import { getCity, getCoordinates } from "../../adapters/google.adapter";
 import { parseRouteIntent } from "./route-intent.port";
 import { getA11yProfile } from "../user/user.service";
 import type { RouteIntent } from "../../types/ai";
+import type {
+  CsrWalkFailureReason,
+  CsrWalkPlan,
+  CsrWalkResult,
+} from "./planners/pedestrian-a11y/csr-walk.types";
 import { ResponseCode } from "../../types/code";
 import { getServiceCoverageConfig } from "../../config/coverage";
 import {
@@ -502,7 +507,16 @@ async function applyExtraA11yAnnotations(
     | undefined;
   if (opts.maxSlopePercent !== undefined) {
     const requestedMaxPercent = opts.maxSlopePercent;
-    if (
+    const hasCsrWalkRoute = routes.some(
+      (route) => route.engine === "pedestrian-a11y",
+    );
+    if (hasCsrWalkRoute) {
+      slopeConstraint = {
+        requestedMaxPercent,
+        enforced: false,
+        note: ROUTE_WARNING.CSR_SLOPE_LIMIT_NOT_ENFORCED,
+      };
+    } else if (
       travelMode === "drive" ||
       travelMode === "motorcycle" ||
       opts.routedByEngineWithNoElevationData
@@ -1600,68 +1614,114 @@ export async function planAccessibleRouteFromRequest(
     const roadMode = mode ?? "normal";
     const constraints = resolveA11yConstraints(roadMode, { avoidStairs });
     const walkPoints = [originLatLng, ...waypoints, dest];
-    const otpWalk = await planOtpWalkSegments(
+
+    const csrWalk = await planCsrWalkForRequest(
       walkPoints,
       roadMode,
       constraints.avoidStairs,
     );
-    if (otpWalk.status === "no_route") {
-      if (constraints.avoidStairs) {
-        const relaxed = await planOtpWalkSegments(walkPoints, roadMode, false);
+    logCsrWalkOutcome(csrWalk, walkPoints.length - 1, roadMode);
+
+    if (csrWalk.status === "ok") {
+      routes = await finalizeDrivingRoutes(
+        [buildCsrWalkRoute(csrWalk.plans)],
+        "walk",
+        dest,
+      );
+      logRequestTiming();
+    } else {
+      if (csrWalk.status === "fare_policy_blocked") {
         logRequestTiming();
-        if (relaxed.status === "unavailable") {
+        return routeFailure(ROUTE_REASON.NO_ROUTE);
+      }
+      if (csrWalk.status === "accessibility_blocked") {
+        logRequestTiming();
+        return routeFailure(ROUTE_REASON.NO_ACCESSIBLE_ROUTE);
+      }
+
+      const csrFallbackWarning = CSR_WALK_FALLBACK_WARNING[csrWalk.status];
+      const otpWalk = await planOtpWalkSegments(
+        walkPoints,
+        roadMode,
+        constraints.avoidStairs,
+      );
+      if (otpWalk.status === "no_route") {
+        if (constraints.avoidStairs) {
+          const relaxed = await planOtpWalkSegments(
+            walkPoints,
+            roadMode,
+            false,
+          );
+          logRequestTiming();
+          if (relaxed.status === "unavailable") {
+            return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT);
+          }
+          if (relaxed.status === "ok" && relaxed.routes.length) {
+            return routeFailure(ROUTE_REASON.NO_ACCESSIBLE_ROUTE);
+          }
+          return routeFailure(ROUTE_REASON.NO_ROUTE);
+        }
+        logRequestTiming();
+        return routeFailure(ROUTE_REASON.NO_ROUTE);
+      }
+      if (otpWalk.status === "ok") {
+        routes = await finalizeDrivingRoutes(otpWalk.routes, "walk", dest);
+      } else {
+        console.warn(
+          "[accessible-route] OTP walk unavailable; falling back to Valhalla for the full route",
+          JSON.stringify({ segments: waypoints.length + 1 }),
+        );
+        const outcome = await findDrivingRoutes(originLatLng, dest, {
+          travelMode,
+          waypoints: waypointsOpt,
+          departureTime: futureDeparture,
+          mode: roadMode,
+          avoidStairs: constraints.avoidStairs,
+        });
+        if (outcome.kind === "unavailable") {
+          logRequestTiming();
           return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT);
         }
-        if (relaxed.status === "ok" && relaxed.routes.length) {
-          return routeFailure(ROUTE_REASON.NO_ACCESSIBLE_ROUTE);
+        if (outcome.kind === "error") {
+          logRequestTiming();
+          return {
+            ok: false,
+            status: ResponseCode.INTERNAL_ERROR,
+            error: "路線規劃失敗，請稍後再試",
+          };
         }
-        return routeFailure(ROUTE_REASON.NO_ROUTE);
+        if (outcome.kind === "empty") {
+          logRequestTiming();
+          return routeFailure(ROUTE_REASON.NO_ROUTE);
+        }
+        routes = outcome.routes.map((route) => ({
+          ...route,
+          warnings: [
+            ...new Set([
+              ...(route.warnings ?? []),
+              ROUTE_WARNING.OTP_WALK_FALLBACK,
+            ]),
+          ],
+        }));
+        routedByEngineWithNoElevationData = true;
       }
-      logRequestTiming();
-      return routeFailure(ROUTE_REASON.NO_ROUTE);
-    }
-    if (otpWalk.status === "ok") {
-      routes = await finalizeDrivingRoutes(otpWalk.routes, "walk", dest);
-    } else {
-      console.warn(
-        "[accessible-route] OTP walk unavailable; falling back to Valhalla for the full route",
-        JSON.stringify({ segments: waypoints.length + 1 }),
-      );
-      const outcome = await findDrivingRoutes(originLatLng, dest, {
-        travelMode,
-        waypoints: waypointsOpt,
-        departureTime: futureDeparture,
-        mode: roadMode,
-        avoidStairs: constraints.avoidStairs,
-      });
-      if (outcome.kind === "unavailable") {
-        logRequestTiming();
-        return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT);
-      }
-      if (outcome.kind === "error") {
-        logRequestTiming();
-        return {
-          ok: false,
-          status: ResponseCode.INTERNAL_ERROR,
-          error: "路線規劃失敗，請稍後再試",
-        };
-      }
-      if (outcome.kind === "empty") {
-        logRequestTiming();
-        return routeFailure(ROUTE_REASON.NO_ROUTE);
-      }
-      routes = outcome.routes.map((route) => ({
+      routes = routes.map((route) => ({
         ...route,
-        warnings: [
-          ...new Set([
-            ...(route.warnings ?? []),
-            ROUTE_WARNING.OTP_WALK_FALLBACK,
-          ]),
-        ],
+        // `otp-fallback` means CSR did not select this pure-walk route. If
+        // OTP2 itself was unavailable, the existing OTP warning identifies
+        // the final Valhalla recovery without adding a third public engine tag.
+        engine: "otp-fallback",
+        ...(csrFallbackWarning === null
+          ? {}
+          : {
+              degraded: true,
+              warnings: [
+                ...new Set([...(route.warnings ?? []), csrFallbackWarning]),
+              ],
+            }),
       }));
-      routedByEngineWithNoElevationData = true;
+      logRequestTiming();
     }
-    logRequestTiming();
   } else {
     const roadMode = mode ?? "normal";
     const constraints = resolveA11yConstraints(roadMode, { avoidStairs });
@@ -2103,6 +2163,167 @@ function combineWalkSegments(segments: AccessibleRoute[]): AccessibleRoute {
     ),
     attribution: segments[0]?.attribution,
   };
+}
+
+const CSR_WALK_ATTRIBUTION = "© OpenStreetMap contributors";
+
+/**
+ * Warning to attach when the CSR walk planner did not decide the route.
+ *
+ * `outside_coverage` maps to null on purpose: OTP2 is the primary engine there
+ * (outside the Taipei graph bbox, or a deployment that never enabled CSR), so
+ * warning about a protection that was never promised would be pure noise.
+ */
+const CSR_WALK_FALLBACK_WARNING: Record<CsrWalkFailureReason, string | null> = {
+  outside_coverage: null,
+  unsupported_constraints:
+    ROUTE_WARNING.CSR_WALK_FALLBACK_UNSUPPORTED_CONSTRAINTS,
+  unavailable: ROUTE_WARNING.CSR_WALK_FALLBACK_PLANNER_UNAVAILABLE,
+  topology_disconnected: ROUTE_WARNING.CSR_WALK_FALLBACK_TOPOLOGY_DISCONNECTED,
+  fare_policy_blocked: ROUTE_WARNING.CSR_WALK_FALLBACK_FARE_POLICY_BLOCKED,
+  accessibility_blocked: ROUTE_WARNING.CSR_WALK_FALLBACK_ACCESSIBILITY_BLOCKED,
+};
+
+/**
+ * Run the CSR pedestrian planner for a pure-walking request.
+ *
+ * The CSR planner first checks feature and Taipei coverage, then reports an
+ * explicit unsupported result when the requested stair constraint is not the
+ * one its mode profile enforces. Its cost model applies wheelchair hard limits
+ * only to the wheelchair profile, so `avoidStairs` on a neutral profile (or a
+ * wheelchair request that explicitly waived it) cannot be represented
+ * faithfully. That ordering keeps outside/disabled requests OTP-primary while
+ * making in-coverage loss of CSR protection observable.
+ *
+ * @param points Ordered origin, waypoint, and destination coordinates.
+ * @param mode Resolved accessibility mode.
+ * @param avoidStairs Resolved stair constraint actually requested.
+ * @returns The CSR outcome, including `unsupported_constraints` for an
+ * in-coverage request that its selected CSR cost profile cannot represent.
+ */
+async function planCsrWalkForRequest(
+  points: LatLng[],
+  mode: AccessibilityMode,
+  avoidStairs: boolean,
+): Promise<CsrWalkResult> {
+  try {
+    const { planCsrWalkRoute } =
+      await import("./planners/pedestrian-a11y/csr-walk-planner");
+    return await planCsrWalkRoute(points, { mode, avoidStairs });
+  } catch (error: unknown) {
+    return {
+      status: "unavailable",
+      reason:
+        error instanceof Error
+          ? `CSR pedestrian planner failed: ${error.message}`
+          : "CSR pedestrian planner failed",
+    };
+  }
+}
+
+/**
+ * Assemble ordered CSR segment plans into the existing walking route contract.
+ *
+ * One WalkLeg per requested segment, in request order, so waypoint `legIndex`
+ * values stay meaningful. `steps` is deliberately absent: the CSR graph selects
+ * edges and never produces turn-by-turn instruction text, so emitting a step
+ * list would claim guidance this engine did not generate.
+ *
+ * @param plans Ordered per-segment CSR plans.
+ * @returns One multi-leg walking route.
+ */
+function buildCsrWalkRoute(plans: readonly CsrWalkPlan[]): AccessibleRoute {
+  const lastIndex = plans.length - 1;
+  const legs: WalkLeg[] = plans.map((plan, index) => ({
+    type: "WALK",
+    from: index === 0 ? "起點" : `中途點 ${index}`,
+    to: index === lastIndex ? "終點" : `中途點 ${index + 1}`,
+    distanceM: Math.round(plan.distanceM),
+    minutesEst: Math.max(1, Math.round(plan.durationS / 60)),
+    polyline: plan.polyline,
+    a11yFacilities: [],
+    maxSlopePercent: plan.accessibility.maxSlopePercent,
+    crossings: plan.accessibility.crossings,
+    crossingsWithCurbRamp: plan.accessibility.crossingsWithCurbRamp,
+    minPathWidthCm: plan.accessibility.minPathWidthCm,
+    surfaceType: plan.accessibility.surfaceType,
+    restPoints: [],
+    exitInfo: null,
+  }));
+
+  const approximateIndoorSegments = plans.reduce(
+    (sum, plan) => sum + plan.approximateIndoorSegmentCount,
+    0,
+  );
+  const totalDurationS = plans.reduce((sum, plan) => sum + plan.durationS, 0);
+
+  return {
+    routeId: "csr-walk-0",
+    routeName: "步行",
+    totalMinutes: Math.max(1, Math.round(totalDurationS / 60)),
+    transferCount: 0,
+    legs,
+    accessibilityHighlights: [],
+    engine: "pedestrian-a11y",
+    totalWalkDistanceM: legs.reduce((sum, leg) => sum + leg.distanceM, 0),
+    attribution: CSR_WALK_ATTRIBUTION,
+    ...(approximateIndoorSegments > 0
+      ? { warnings: [ROUTE_WARNING.CSR_WALK_APPROXIMATE_INDOOR_GEOMETRY] }
+      : {}),
+  };
+}
+
+/**
+ * Emit one structured line describing what the CSR planner decided and why.
+ *
+ * @param result CSR walk planner outcome.
+ * @param segmentCount Number of adjacent coordinate pairs requested.
+ * @param mode Resolved accessibility mode.
+ * @returns Nothing.
+ */
+function logCsrWalkOutcome(
+  result: CsrWalkResult,
+  segmentCount: number,
+  mode: AccessibilityMode,
+): void {
+  const base = {
+    engine: "pedestrian-a11y",
+    status: result.status,
+    segmentCount,
+    mode,
+  };
+
+  if (result.status === "ok") {
+    console.log(
+      "[csr-walk] planned",
+      JSON.stringify({
+        ...base,
+        graphVersionId: result.plans[0]?.graphVersionId ?? null,
+        distanceM: Math.round(
+          result.plans.reduce((sum, plan) => sum + plan.distanceM, 0),
+        ),
+        approximateIndoorSegmentCount: result.plans.reduce(
+          (sum, plan) => sum + plan.approximateIndoorSegmentCount,
+          0,
+        ),
+      }),
+    );
+    return;
+  }
+
+  if (result.status === "outside_coverage") {
+    console.log("[csr-walk] skipped", JSON.stringify(base));
+    return;
+  }
+
+  console.warn(
+    "[csr-walk] no route",
+    JSON.stringify(
+      result.status === "unavailable"
+        ? { ...base, reason: result.reason }
+        : base,
+    ),
+  );
 }
 
 /**

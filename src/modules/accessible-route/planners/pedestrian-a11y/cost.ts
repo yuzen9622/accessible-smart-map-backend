@@ -8,6 +8,13 @@ import {
 } from "./graph.types";
 
 export const INFEASIBLE = Number.POSITIVE_INFINITY;
+/**
+ * A finite last-resort search cost for an indoor edge that has neither a usable
+ * traversal time nor a stored length. It lets the planner reach geometry
+ * assembly, which returns `unavailable` instead of misclassifying an unknown
+ * indoor distance as an accessibility refusal.
+ */
+export const UNMEASURABLE_INDOOR_PROXY_COST_M = 1_000_000_000;
 export const WHEELCHAIR_WALK_SPEED_MPS = 0.8;
 export const SLOPE_PERCENT_SCALE = 100;
 export const SLOPE_COMPARISON_PRECISION = 1_000_000;
@@ -63,20 +70,11 @@ function isValidAttributeIndex(graph: PedGraph, attrIdx: number): boolean {
 }
 
 /**
- * @param profile Requested accessibility cost profile.
- * @returns Nothing.
- */
-function assertWheelchairProfile(profile: CostProfile): void {
-  if (profile.name !== "wheelchair") {
-    throw new Error(`${profile.name} profile not implemented`);
-  }
-}
-
-/**
  * @param graph CSR pedestrian graph.
  * @param attrIdx Edge attribute index.
  * @param profile Requested accessibility cost profile.
- * @returns The unpenalized edge cost in metres, or INFEASIBLE when its base is invalid.
+ * @returns The unpenalized edge cost in metres, a finite diagnostic cost for an
+ * unmeasurable indoor proxy, or INFEASIBLE when its base is otherwise invalid.
  */
 function baseCost(
   graph: PedGraph,
@@ -84,10 +82,26 @@ function baseCost(
   profile: CostProfile,
 ): number {
   const isIndoor = (graph.edgeFlags[attrIdx] & EDGE_FLAG.INDOOR) !== 0;
-  const cost = isIndoor
-    ? graph.edgeTraversalTimeS[attrIdx] * profile.walkSpeedMps
-    : graph.edgeLengthM[attrIdx];
-  return Number.isFinite(cost) && cost >= 0 ? cost : INFEASIBLE;
+  const lengthM = graph.edgeLengthM[attrIdx];
+  if (!isIndoor) {
+    return Number.isFinite(lengthM) && lengthM >= 0 ? lengthM : INFEASIBLE;
+  }
+  if (!Number.isFinite(profile.walkSpeedMps) || profile.walkSpeedMps <= 0) {
+    return INFEASIBLE;
+  }
+
+  const traversalTimeS = graph.edgeTraversalTimeS[attrIdx];
+  const traversalDistanceM = traversalTimeS * profile.walkSpeedMps;
+  if (Number.isFinite(traversalDistanceM) && traversalDistanceM > 0) {
+    return traversalDistanceM;
+  }
+  // Injector connectors have real length but no GTFS pathway traversal time.
+  // They are explicitly indoor provenance for geometry proxy policy, yet their
+  // physical connector length remains the correct cost basis.
+  if (Number.isFinite(lengthM) && lengthM >= 0) {
+    return lengthM;
+  }
+  return UNMEASURABLE_INDOOR_PROXY_COST_M;
 }
 
 /**
@@ -301,11 +315,19 @@ function applyAdditivePenalty(cost: number, penaltyM: number): number {
 }
 
 /**
- * Returns a wheelchair edge cost in weighted metres.
+ * Returns an edge cost in weighted metres.
+ *
+ * The wheelchair profile applies the full penalty model. `normal`, `elderly`
+ * and `visual_impaired` are deliberately NEUTRAL in this phase: base traversal
+ * only, with no invented per-mode penalty, because no source-backed elderly or
+ * visual-impairment edge attribute exists in the graph yet. Selection for those
+ * modes is therefore shortest-path; the fare-gate policy still applies to all
+ * four modes because it is enforced in the search, not in this cost model.
+ *
  * All multipliers are checked before application to remain at least 1.0 and all
- * additive penalties are checked to remain non-negative. Those invariants make
- * straight-line distance an admissible A* lower bound because traversing each
- * metre can never cost less than one weighted metre.
+ * additive penalties are checked to remain non-negative. Those invariants keep
+ * edge costs non-negative for the Dijkstra-equivalent production search; they
+ * do not prove a non-zero coordinate-based lower bound across indoor proxies.
  *
  * @param graph CSR pedestrian graph.
  * @param attrIdx Edge attribute index.
@@ -317,13 +339,15 @@ export function edgeCost(
   attrIdx: number,
   profile: CostProfile,
 ): number {
-  assertWheelchairProfile(profile);
   if (!isValidAttributeIndex(graph, attrIdx)) {
     return INFEASIBLE;
   }
   const unpenalizedCost = baseCost(graph, attrIdx, profile);
   if (unpenalizedCost === INFEASIBLE) {
     return INFEASIBLE;
+  }
+  if (profile.name !== "wheelchair") {
+    return applyAdditivePenalty(unpenalizedCost, MINIMUM_ADDITIVE_PENALTY_M);
   }
   const multipliers = [
     slopePenalty(graph, attrIdx, profile),
