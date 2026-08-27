@@ -75,7 +75,9 @@ const EDGE_PAGE_QUERY = `
     stair_count,
     traversal_time_s,
     has_ramp,
-    source_ref
+    source_ref,
+    attr_meta->'gov_sidewalk_source_id'->>'value' AS sidewalk_source_id,
+    attr_meta->'sidewalk_ramp_count'->>'value' AS sidewalk_ramp_count
   FROM ped_edge
   WHERE version_id = $1 AND edge_id > $2
   ORDER BY edge_id
@@ -121,6 +123,8 @@ interface EdgeRow extends EdgeCountRow {
   traversal_time_s: unknown;
   has_ramp: unknown;
   source_ref: unknown;
+  sidewalk_source_id: unknown;
+  sidewalk_ramp_count: unknown;
 }
 
 interface NodeStorage {
@@ -151,6 +155,12 @@ interface EdgeStorage {
   edgeStairCount: Uint16Array;
   edgeTraversalTimeS: Float32Array;
   edgeFlags: Uint8Array;
+  edgeSidewalkId: Int32Array;
+  edgeSidewalkRampCount: Uint16Array;
+}
+
+interface SidewalkTables {
+  sidewalkIds: readonly string[];
 }
 
 interface EdgeCountResult {
@@ -350,6 +360,8 @@ function createEdgeStorage(directedEdgeCount: number): EdgeStorage {
   edgeSlope.fill(Number.NaN);
   edgeWidthM.fill(Number.NaN);
   edgeTraversalTimeS.fill(Number.NaN);
+  const edgeSidewalkId = new Int32Array(directedEdgeCount);
+  edgeSidewalkId.fill(-1);
   return {
     adjTarget: new Int32Array(directedEdgeCount),
     adjAttr: new Int32Array(directedEdgeCount),
@@ -364,7 +376,27 @@ function createEdgeStorage(directedEdgeCount: number): EdgeStorage {
     edgeStairCount: new Uint16Array(directedEdgeCount),
     edgeTraversalTimeS,
     edgeFlags: new Uint8Array(directedEdgeCount),
+    edgeSidewalkId,
+    edgeSidewalkRampCount: new Uint16Array(directedEdgeCount),
   };
+}
+
+/**
+ * @param value Raw nullable government sidewalk ramp count value.
+ * @param label Database column name for failures.
+ * @returns An unsigned 16-bit ramp count, rounded from the source float;
+ * non-finite or negative values are treated as zero rather than thrown, since
+ * a malformed count must never block loading the sidewalk match itself.
+ */
+function nonNegativeRoundedUint16(value: unknown): number {
+  if (value === null || value === undefined || value === "") {
+    return 0;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 0;
+  }
+  return Math.min(MAX_UINT16, Math.round(parsed));
 }
 
 /**
@@ -621,7 +653,8 @@ function buildAdjOffset(adjOffset: Int32Array, degree: Int32Array): void {
  * @param originalNodeId Sorted original database node identifiers.
  * @param adjOffset CSR offsets built from the first edge pass.
  * @param storage Preallocated edge storage to fill.
- * @returns Nothing.
+ * @returns Interned government sidewalk identifiers whose dense index matches
+ * `storage.edgeSidewalkId`.
  */
 async function fillEdges(
   client: PedGraphQueryable,
@@ -629,9 +662,11 @@ async function fillEdges(
   originalNodeId: BigInt64Array,
   adjOffset: Int32Array,
   storage: EdgeStorage,
-): Promise<void> {
+): Promise<SidewalkTables> {
   const writeOffset = new Int32Array(adjOffset.length - 1);
   writeOffset.set(adjOffset.subarray(0, adjOffset.length - 1));
+  const sidewalkIndexes = new Map<string, number>();
+  const sidewalkIds: string[] = [];
   let cursor = BigInt(MIN_BIGINT);
   let edgeIndex = 0;
 
@@ -698,6 +733,25 @@ async function fillEdges(
         flags |= EDGE_FLAG.INDOOR;
       }
       storage.edgeFlags[edgeIndex] = flags;
+      const sidewalkSourceId = nullableText(
+        row.sidewalk_source_id,
+        "sidewalk_source_id",
+      );
+      if (sidewalkSourceId === null) {
+        storage.edgeSidewalkId[edgeIndex] = -1;
+        storage.edgeSidewalkRampCount[edgeIndex] = 0;
+      } else {
+        let sidewalkIndex = sidewalkIndexes.get(sidewalkSourceId);
+        if (sidewalkIndex === undefined) {
+          sidewalkIndex = sidewalkIds.length;
+          sidewalkIndexes.set(sidewalkSourceId, sidewalkIndex);
+          sidewalkIds.push(sidewalkSourceId);
+        }
+        storage.edgeSidewalkId[edgeIndex] = sidewalkIndex;
+        storage.edgeSidewalkRampCount[edgeIndex] = nonNegativeRoundedUint16(
+          row.sidewalk_ramp_count,
+        );
+      }
       writeOffset[from.denseId] += 1;
       cursor = edgeId;
       edgeIndex += 1;
@@ -715,6 +769,7 @@ async function fillEdges(
       throw new Error("pedestrian graph edge count changed between CSR passes");
     }
   }
+  return { sidewalkIds: Object.freeze(sidewalkIds) };
 }
 
 /**
@@ -747,7 +802,7 @@ export async function loadPedGraph(
       "pedestrian graph CSR count does not match its version record",
     );
   }
-  await fillEdges(
+  const sidewalkTables = await fillEdges(
     client,
     version.versionId,
     nodeStorage.originalNodeId,
@@ -781,5 +836,8 @@ export async function loadPedGraph(
     edgeStairCount: edgeStorage.edgeStairCount,
     edgeTraversalTimeS: edgeStorage.edgeTraversalTimeS,
     edgeFlags: edgeStorage.edgeFlags,
+    edgeSidewalkId: edgeStorage.edgeSidewalkId,
+    sidewalkIds: sidewalkTables.sidewalkIds,
+    edgeSidewalkRampCount: edgeStorage.edgeSidewalkRampCount,
   };
 }

@@ -81,6 +81,9 @@ function graphFromEdges(nodeCount: number, edges: EdgeDefinition[]): PedGraph {
       new Array(edges.length).fill(Number.NaN),
     ),
     edgeFlags: new Uint8Array(edges.length),
+    edgeSidewalkId: new Int32Array(edges.length).fill(-1),
+    sidewalkIds: Object.freeze([]),
+    edgeSidewalkRampCount: new Uint16Array(edges.length),
   };
 }
 

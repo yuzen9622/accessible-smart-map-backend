@@ -127,6 +127,20 @@ export const HAZARD_REASON = {
   REPORT_EXPIRED: "REPORT_EXPIRED",
 } as const;
 
+/**
+ * User-facing strings for turn-by-turn navigation instruction generation
+ * (`src/modules/nav-instructions`), including CSR-graph-derived facility steps.
+ */
+export const NAV_MSG = {
+  SLOPE_NOTICE: "，此路段坡度較陡",
+  ELEVATOR: "請進入電梯",
+  ESCALATOR: "請搭乘手扶梯",
+  MOVING_WALKWAY: "請搭乘電動步道",
+  FARE_GATE: "請通過閘門",
+  ENTER_STATION: "請進入車站",
+  EXIT_STATION: "請離開車站",
+} as const;
+
 export const CAMPUS_MSG = {
   NOT_FOUND: "查無此校區",
 } as const;

@@ -36,6 +36,9 @@ import type {
   CsrWalkPlan,
   CsrWalkResult,
 } from "./csr-walk.types";
+import { buildA11ySegments, type EdgeGeometrySpan } from "./a11y-segments";
+import { buildCsrWalkSteps } from "./csr-steps";
+import { sumSidewalkRampCount } from "./sidewalk-ramp-count";
 import { snapToGraph, type EdgeIndex, type SnapResult } from "./spatial-index";
 
 /**
@@ -178,6 +181,7 @@ type GeometryAssembly =
   | {
       status: "ok";
       polyline: LngLat[];
+      spans: EdgeGeometrySpan[];
       approximateIndoorSegmentCount: number;
     }
   | { status: "unavailable"; reason: string };
@@ -203,6 +207,7 @@ function assembleGeometry(
   geometries: readonly PedEdgeGeometry[],
 ): GeometryAssembly {
   const polyline: LngLat[] = [];
+  const spans: EdgeGeometrySpan[] = [];
   let approximateIndoorSegmentCount = 0;
 
   for (let step = 0; step < geometries.length; step += 1) {
@@ -224,42 +229,50 @@ function assembleGeometry(
       ];
       approximateIndoorSegmentCount += 1;
     }
+    const startIndex = polyline.length === 0 ? 0 : polyline.length - 1;
     for (const point of points) {
       const previous = polyline[polyline.length - 1];
       if (previous !== undefined && isSameVertex(previous, point)) continue;
       polyline.push(point);
     }
+    spans.push({
+      startIndex,
+      endIndex: Math.max(startIndex, polyline.length - 1),
+    });
   }
 
   if (polyline.length === 0 && nodePath.length > 0) {
     polyline.push(nodeCoordinate(graph, nodePath[0]));
   }
-  return { status: "ok", polyline, approximateIndoorSegmentCount };
+  return { status: "ok", polyline, spans, approximateIndoorSegmentCount };
 }
 
 /**
  * @param polyline Selected graph geometry.
  * @param from Requested segment origin.
  * @param to Requested segment destination.
- * @returns Geometry with the counted straight snap connectors at both ends.
+ * @returns Geometry with the counted straight snap connectors at both ends,
+ * plus the index shift an unshifted origin connector applies to `polyline`.
  */
 function addSnapConnectors(
   polyline: readonly LngLat[],
   from: CsrWalkPoint,
   to: CsrWalkPoint,
-): LngLat[] {
+): { polyline: LngLat[]; indexOffset: number } {
   const connected = [...polyline];
   const origin: LngLat = [from.lng, from.lat];
   const destination: LngLat = [to.lng, to.lat];
+  let indexOffset = 0;
   const first = connected[0];
   if (first === undefined || !isSameVertex(origin, first)) {
     connected.unshift(origin);
+    indexOffset = 1;
   }
   const last = connected[connected.length - 1];
   if (last === undefined || !isSameVertex(last, destination)) {
     connected.push(destination);
   }
-  return connected;
+  return { polyline: connected, indexOffset };
 }
 
 /**
@@ -674,14 +687,31 @@ export async function planCsrWalkRoute(
     }
     const connectorDistanceM = origin.distanceM + destination.distanceM;
     const connectorDurationS = connectorDistanceM / profile.walkSpeedMps;
+    const connectors = addSnapConnectors(geometry.polyline, from, to);
 
     plans.push({
-      polyline: addSnapConnectors(geometry.polyline, from, to),
+      polyline: connectors.polyline,
       distanceM: pathMeasurement.distanceM + connectorDistanceM,
       durationS: pathMeasurement.durationS + connectorDurationS,
       graphVersionId: graph.versionId,
       approximateIndoorSegmentCount: geometry.approximateIndoorSegmentCount,
       accessibility: summarizeAccessibility(graph, route.edgeAttrPath),
+      a11ySegments: buildA11ySegments(
+        graph,
+        route.edgeAttrPath,
+        geometry.spans,
+        connectors.indexOffset,
+      ),
+      steps: buildCsrWalkSteps(
+        graph,
+        route.nodePath,
+        route.edgeAttrPath,
+        geometry.spans,
+        connectors.polyline,
+        connectors.indexOffset,
+        options.mode,
+      ),
+      sidewalkRampCount: sumSidewalkRampCount(graph, route.edgeAttrPath),
       diagnostics: {
         expandedNodes: route.expandedNodes,
         reopenedNodes: route.reopenedNodes,

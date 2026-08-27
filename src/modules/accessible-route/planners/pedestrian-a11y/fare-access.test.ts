@@ -92,6 +92,9 @@ function graphFromEdges(input: GateGraphInput): PedGraph {
       new Array(directedEdgeCount).fill(Number.NaN),
     ),
     edgeFlags: new Uint8Array(directedEdgeCount),
+    edgeSidewalkId: new Int32Array(directedEdgeCount).fill(-1),
+    sidewalkIds: Object.freeze([]),
+    edgeSidewalkRampCount: new Uint16Array(directedEdgeCount),
   };
 }
 

@@ -111,6 +111,9 @@ function graphFromEdges(input: GraphDefinition): PedGraph {
     edgeStairCount: new Uint16Array(directedEdgeCount),
     edgeTraversalTimeS,
     edgeFlags,
+    edgeSidewalkId: new Int32Array(directedEdgeCount).fill(-1),
+    sidewalkIds: Object.freeze([]),
+    edgeSidewalkRampCount: new Uint16Array(directedEdgeCount),
   };
 }
 

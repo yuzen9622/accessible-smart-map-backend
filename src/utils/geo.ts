@@ -38,6 +38,38 @@ export function haversineCoords(
 }
 
 /**
+ * 計算從點 A 到點 B 的初始方位角（forward azimuth，度，0–359，正北 = 0，順時針）。
+ * @param from 起點 [lng, lat]
+ * @param to 終點 [lng, lat]
+ * @returns 方位角（度）
+ */
+export function calcBearing(
+  from: [number, number],
+  to: [number, number],
+): number {
+  const [lng1, lat1] = from.map((v) => (v * Math.PI) / 180);
+  const [lng2, lat2] = to.map((v) => (v * Math.PI) / 180);
+  const dLng = lng2 - lng1;
+  const y = Math.sin(dLng) * Math.cos(lat2);
+  const x =
+    Math.cos(lat1) * Math.sin(lat2) -
+    Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+  const bearing = (Math.atan2(y, x) * 180) / Math.PI;
+  return (bearing + 360) % 360;
+}
+
+const COMPASS_WORDS = ["北", "東北", "東", "東南", "南", "西南", "西", "西北"];
+
+/**
+ * @param deg 方位角（度，正北 = 0，順時針）
+ * @returns 八方位中文詞
+ */
+export function degToCompassWord(deg: number): string {
+  const idx = Math.round((((deg % 360) + 360) % 360) / 45) % 8;
+  return COMPASS_WORDS[idx];
+}
+
+/**
  * Parses diverse location representations (string, object, array) into a
  * normalized { lat, lng } object.
  *

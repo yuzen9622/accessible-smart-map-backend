@@ -172,7 +172,7 @@ registry.registerPath({
   tags: ["Accessibility"],
   summary: "路線逐步導航指引產生",
   description:
-    "以 /accessible-route 回傳的 routeToken（優先）或完整 route 轉為可語音朗讀的逐步指引。台北 CSR-primary 的純步行路線不提供 turn-by-turn steps，故會走 200 的概略指引；transit itinerary 的 WALK legs 與 CSR fallback 的 OTP2 步行仍可帶 OTP steps，OTP2 不可用後的 Valhalla 步行也支援相同輸出。步行指引以 stairs 標示該段含樓梯並在 text 加入定性提示，不代表整段 distanceM 都是樓梯。若缺少 steps 仍回傳 200 概略指引。WALK 過渡期同時回 WALK_STEPS_UNAVAILABLE 與 legacy ORS_STEPS_UNAVAILABLE，車行回 ROAD_STEPS_UNAVAILABLE。",
+    "以 /accessible-route 回傳的 routeToken（優先）或完整 route 轉為可語音朗讀的逐步指引。台北 CSR-primary 的純步行路線由圖上選定的邊與設施型別（電梯／手扶梯／電動步道／閘門／進出站）推導出 turn-by-turn steps，但不含路名；transit itinerary 的 WALK legs 與 CSR fallback 的 OTP2 步行仍可帶 OTP steps，OTP2 不可用後的 Valhalla 步行也支援相同輸出。步行指引以 stairs 標示該段含樓梯並在 text 加入定性提示，不代表整段 distanceM 都是樓梯；steepSlope 以同樣方式標示坡度較陡的段落。若缺少 steps 仍回傳 200 概略指引。WALK 過渡期同時回 WALK_STEPS_UNAVAILABLE 與 legacy ORS_STEPS_UNAVAILABLE，車行回 ROAD_STEPS_UNAVAILABLE。",
   request: {
     body: {
       content: { "application/json": { schema: NavInstructionsRequestSchema } },

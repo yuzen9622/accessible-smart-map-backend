@@ -44,6 +44,9 @@ function graphFromAdjacency(input: {
     edgeStairCount: new Uint16Array(directedEdgeCount),
     edgeTraversalTimeS: new Float32Array(directedEdgeCount),
     edgeFlags: new Uint8Array(directedEdgeCount),
+    edgeSidewalkId: new Int32Array(directedEdgeCount).fill(-1),
+    sidewalkIds: Object.freeze([]),
+    edgeSidewalkRampCount: new Uint16Array(directedEdgeCount),
   };
 }
 

@@ -2225,9 +2225,10 @@ async function planCsrWalkForRequest(
  * Assemble ordered CSR segment plans into the existing walking route contract.
  *
  * One WalkLeg per requested segment, in request order, so waypoint `legIndex`
- * values stay meaningful. `steps` is deliberately absent: the CSR graph selects
- * edges and never produces turn-by-turn instruction text, so emitting a step
- * list would claim guidance this engine did not generate.
+ * values stay meaningful. `steps` are derived from the selected edges' own
+ * geometry and facility types (`buildCsrWalkSteps`) — they carry no street
+ * names, since the CSR graph has none, but do describe real turns, elevators,
+ * escalators, moving walkways, fare gates, and station entry/exit crossings.
  *
  * @param plans Ordered per-segment CSR plans.
  * @returns One multi-leg walking route.
@@ -2249,6 +2250,9 @@ function buildCsrWalkRoute(plans: readonly CsrWalkPlan[]): AccessibleRoute {
     surfaceType: plan.accessibility.surfaceType,
     restPoints: [],
     exitInfo: null,
+    a11ySegments: plan.a11ySegments,
+    steps: plan.steps,
+    sidewalkRampCount: plan.sidewalkRampCount,
   }));
 
   const approximateIndoorSegments = plans.reduce(

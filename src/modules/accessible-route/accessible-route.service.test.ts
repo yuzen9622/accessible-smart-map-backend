@@ -116,6 +116,7 @@ import { getTransitAlerts } from "../transit/alert.service";
 import type { PlanRouteResult } from "./accessible-route.types";
 import type { OtpRoutePlanResult } from "./planners/otp-routing";
 import type { CsrWalkPlan } from "./planners/pedestrian-a11y/csr-walk.types";
+import type { WalkStep } from "../../types/route";
 
 /**
  * Narrow a successful plan result to its payload. The tests below assert
@@ -423,10 +424,50 @@ const walkRoute = () => ({
         [121.55, 25.03],
       ],
       a11yFacilities: [],
+      steps: [
+        {
+          relativeDirection: "DEPART",
+          absoluteDirection: null,
+          streetName: "中山北路",
+          bogusName: false,
+          area: false,
+          stairs: false,
+          distanceM: 800,
+          location: [121.56, 25.04],
+        },
+      ],
     },
   ],
   accessibilityHighlights: [],
 });
+
+const csrWalkStepsFixture = (
+  from: [number, number],
+  to: [number, number],
+): WalkStep[] => [
+  {
+    relativeDirection: "DEPART",
+    absoluteDirection: null,
+    streetName: "",
+    bogusName: true,
+    area: false,
+    stairs: false,
+    distanceM: 800,
+    location: from,
+    steepSlope: false,
+  },
+  {
+    relativeDirection: "CONTINUE",
+    absoluteDirection: null,
+    streetName: "",
+    bogusName: true,
+    area: false,
+    stairs: false,
+    distanceM: 0,
+    location: to,
+    steepSlope: false,
+  },
+];
 
 /** Build a complete CSR plan without depending on a real PostGIS graph. */
 const csrWalkPlan = (
@@ -434,6 +475,7 @@ const csrWalkPlan = (
   to: [number, number] = [121.55, 25.03],
 ): CsrWalkPlan => ({
   polyline: [from, to],
+  steps: csrWalkStepsFixture(from, to),
   distanceM: 800,
   durationS: 600,
   graphVersionId: 7,
@@ -445,6 +487,18 @@ const csrWalkPlan = (
     minPathWidthCm: 150,
     surfaceType: "paved",
   },
+  a11ySegments: [
+    {
+      feature: "curb_ramp_crossing",
+      startIndex: 0,
+      endIndex: 1,
+      indoor: false,
+      distanceM: 8,
+      maxSlopePercent: null,
+      minWidthCm: null,
+    },
+  ],
+  sidewalkRampCount: 6,
   diagnostics: {
     expandedNodes: 4,
     reopenedNodes: 0,
@@ -494,6 +548,59 @@ describe("planAccessibleRouteFromRequest walk mode CSR selection", () => {
     expect(vi.mocked(planValhallaRoute)).not.toHaveBeenCalled();
   });
 
+  it("carries the CSR plan's a11ySegments onto the WalkLeg", async () => {
+    vi.mocked(planCsrWalkRoute).mockResolvedValue({
+      status: "ok",
+      plans: [csrWalkPlan()],
+    });
+
+    const res = await planAccessibleRouteFromRequest(walkRequest);
+
+    expect(res.ok).toBe(true);
+    const leg = okData(res).routes[0].legs[0];
+    expect(leg.type === "WALK" ? leg.a11ySegments : undefined).toEqual([
+      {
+        feature: "curb_ramp_crossing",
+        startIndex: 0,
+        endIndex: 1,
+        indoor: false,
+        distanceM: 8,
+        maxSlopePercent: null,
+        minWidthCm: null,
+      },
+    ]);
+  });
+
+  it("carries the CSR plan's sidewalkRampCount onto the WalkLeg", async () => {
+    vi.mocked(planCsrWalkRoute).mockResolvedValue({
+      status: "ok",
+      plans: [csrWalkPlan()],
+    });
+
+    const res = await planAccessibleRouteFromRequest(walkRequest);
+
+    expect(res.ok).toBe(true);
+    const leg = okData(res).routes[0].legs[0];
+    expect(leg.type === "WALK" ? leg.sidewalkRampCount : undefined).toBe(6);
+  });
+
+  it("carries the CSR plan's steps onto the WalkLeg", async () => {
+    vi.mocked(planCsrWalkRoute).mockResolvedValue({
+      status: "ok",
+      plans: [csrWalkPlan()],
+    });
+
+    const res = await planAccessibleRouteFromRequest(walkRequest);
+
+    expect(res.ok).toBe(true);
+    const leg = okData(res).routes[0].legs[0];
+    const steps = leg.type === "WALK" ? leg.steps : undefined;
+    expect(steps).toBeDefined();
+    expect(steps).toEqual(
+      csrWalkStepsFixture([121.56, 25.04], [121.55, 25.03]),
+    );
+  });
+
   it("reports an arbitrary maxSlopePercent as unenforced for a CSR route", async () => {
     vi.mocked(planCsrWalkRoute).mockResolvedValue({
       status: "ok",
@@ -540,6 +647,14 @@ describe("planAccessibleRouteFromRequest walk mode CSR selection", () => {
     );
     expect(vi.mocked(planOtpWalkDetailed)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(planValhallaRoute)).not.toHaveBeenCalled();
+    expect(okData(res).routes[0].legs[0]).not.toHaveProperty("a11ySegments");
+    expect(okData(res).routes[0].legs[0]).not.toHaveProperty(
+      "sidewalkRampCount",
+    );
+    const leg = okData(res).routes[0].legs[0];
+    expect(leg.type === "WALK" ? leg.steps : undefined).toEqual(
+      walkRoute().legs[0].steps,
+    );
   });
 
   it("turns a CSR planner exception into a marked OTP fallback", async () => {

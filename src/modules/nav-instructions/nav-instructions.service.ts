@@ -1,5 +1,9 @@
 import { ResponseCode } from "../../types/code";
-import { haversineCoords } from "../../utils/geo";
+import {
+  calcBearing,
+  degToCompassWord,
+  haversineCoords,
+} from "../../utils/geo";
 import type {
   BusLeg,
   DriveLeg,
@@ -33,6 +37,8 @@ export type {
   GenerateNavResult,
   NavWarningCode,
 };
+
+export { calcBearing, degToCompassWord };
 
 export const WARN_STEPS_UNAVAILABLE = "ORS_STEPS_UNAVAILABLE";
 export const WARN_WALK_STEPS_UNAVAILABLE = "WALK_STEPS_UNAVAILABLE";
@@ -74,8 +80,6 @@ const COMPASS_TO_DEG: Record<string, number> = {
   NORTHWEST: 315,
 };
 
-const COMPASS_WORDS = ["北", "東北", "東", "東南", "南", "西南", "西", "西北"];
-
 const RAIL_SYSTEM_NAMES: Record<string, string> = {
   TRTC: "台北捷運",
   KRTC: "高雄捷運",
@@ -84,27 +88,6 @@ const RAIL_SYSTEM_NAMES: Record<string, string> = {
   KLRT: "高雄輕軌",
   TYMC: "桃園捷運",
 };
-
-/**
- * 計算從點 A 到點 B 的初始方位角（forward azimuth，度，0–359，正北 = 0，順時針）。
- * @param from 起點 [lng, lat]
- * @param to 終點 [lng, lat]
- * @returns 方位角（度）
- */
-export function calcBearing(
-  from: [number, number],
-  to: [number, number],
-): number {
-  const [lng1, lat1] = from.map((v) => (v * Math.PI) / 180);
-  const [lng2, lat2] = to.map((v) => (v * Math.PI) / 180);
-  const dLng = lng2 - lng1;
-  const y = Math.sin(dLng) * Math.cos(lat2);
-  const x =
-    Math.cos(lat1) * Math.sin(lat2) -
-    Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
-  const bearing = (Math.atan2(y, x) * 180) / Math.PI;
-  return (bearing + 360) % 360;
-}
 
 /**
  * 以使用者當前朝向（heading）與目標方位角（bearing）計算八方位相對方向。
@@ -125,16 +108,6 @@ export function calcRelativeDirection(
   if (diff < 247.5) return "左後方";
   if (diff < 292.5) return "左側";
   return "左前方";
-}
-
-/**
- * 將正北方位角（度）轉為八方位中文詞（北 / 東北 / …）。
- * @param deg 方位角（度）
- * @returns 八方位中文詞
- */
-export function degToCompassWord(deg: number): string {
-  const idx = Math.round((((deg % 360) + 360) % 360) / 45) % 8;
-  return COMPASS_WORDS[idx];
 }
 
 function absoluteDirectionToDeg(dir: string | null): number | null {
@@ -195,7 +168,10 @@ function isFacilityDirection(relativeDirection: string): boolean {
   return (
     direction === "ELEVATOR" ||
     direction === "ENTER_STATION" ||
-    direction === "EXIT_STATION"
+    direction === "EXIT_STATION" ||
+    direction === "ESCALATOR" ||
+    direction === "MOVING_WALKWAY" ||
+    direction === "FARE_GATE"
   );
 }
 
@@ -332,6 +308,11 @@ function stepType(relativeDirection: string): NavInstructionType {
 }
 
 import { formatWalkStepInstruction } from "../../utils/transit-text";
+import { NAV_MSG } from "../../constants/messages";
+
+function stripTrailingNotice(text: string, notice: string): string {
+  return text.endsWith(notice) ? text.slice(0, -notice.length) : text;
+}
 
 function walkStepText(
   step: WalkStep,
@@ -348,10 +329,11 @@ function walkStepText(
     isFacilityDirection(step.relativeDirection) && upstreamText
       ? upstreamText
       : formatWalkStepInstruction({ ...step, targetStreetName }) + compass;
-  const normalizedText = baseText.endsWith(STAIRS_NOTICE)
-    ? baseText.slice(0, -STAIRS_NOTICE.length)
-    : baseText;
-  return step.stairs ? normalizedText + STAIRS_NOTICE : normalizedText;
+  let normalizedText = stripTrailingNotice(baseText, STAIRS_NOTICE);
+  normalizedText = stripTrailingNotice(normalizedText, NAV_MSG.SLOPE_NOTICE);
+  if (step.steepSlope) normalizedText += NAV_MSG.SLOPE_NOTICE;
+  if (step.stairs) normalizedText += STAIRS_NOTICE;
+  return normalizedText;
 }
 
 function roadStepType(maneuver: string | undefined): NavInstructionType {

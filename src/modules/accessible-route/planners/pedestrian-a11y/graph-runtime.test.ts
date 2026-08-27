@@ -48,6 +48,9 @@ function fakeGraph(versionId: number): PedGraph {
     edgeStairCount: new Uint16Array(1),
     edgeTraversalTimeS: Float32Array.from([Number.NaN]),
     edgeFlags: new Uint8Array(1),
+    edgeSidewalkId: Int32Array.from([-1]),
+    sidewalkIds: Object.freeze([]),
+    edgeSidewalkRampCount: new Uint16Array(1),
   };
 }
 

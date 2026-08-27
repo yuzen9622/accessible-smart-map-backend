@@ -86,6 +86,9 @@ function createGraph(edge: Partial<EdgeFixture> = {}): PedGraph {
     edgeStairCount: new Uint16Array(1),
     edgeTraversalTimeS: Float32Array.from([edge.traversalTimeS ?? Number.NaN]),
     edgeFlags: Uint8Array.from([edge.flags ?? 0]),
+    edgeSidewalkId: Int32Array.from([-1]),
+    sidewalkIds: Object.freeze([]),
+    edgeSidewalkRampCount: new Uint16Array(1),
   };
 }
 

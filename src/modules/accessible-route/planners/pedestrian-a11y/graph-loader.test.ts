@@ -288,6 +288,55 @@ describe("loadPedGraph", () => {
     expect(attributeQuery?.sql).not.toContain("geom IS NULL AS is_indoor");
   });
 
+  it("interns government sidewalk ids and ramp counts, failing closed on malformed attr_meta", async () => {
+    const fixture = coreFixture();
+    fixture.edges[0].sidewalk_source_id = "sidewalk:3955";
+    fixture.edges[0].sidewalk_ramp_count = "6.0";
+    fixture.edges[1].sidewalk_source_id = "sidewalk:3955";
+    fixture.edges[1].sidewalk_ramp_count = "6.0";
+    fixture.edges[2].sidewalk_source_id = null;
+    const { client } = createQueryable(fixture);
+
+    const graph = await loadPedGraph(client);
+
+    expect(graph.sidewalkIds).toEqual(["sidewalk:3955"]);
+    expect(Object.isFrozen(graph.sidewalkIds)).toBe(true);
+    expect(Array.from(graph.edgeSidewalkId)).toEqual([0, 0, -1]);
+    expect(Array.from(graph.edgeSidewalkRampCount)).toEqual([6, 6, 0]);
+  });
+
+  it("treats a missing, non-numeric, or negative sidewalk ramp count as unmatched-safe zero", async () => {
+    const fixture = coreFixture();
+    fixture.edges[0].sidewalk_source_id = "sidewalk:1000";
+    fixture.edges[0].sidewalk_ramp_count = undefined;
+    fixture.edges[1].sidewalk_source_id = "sidewalk:1001";
+    fixture.edges[1].sidewalk_ramp_count = "not-a-number";
+    fixture.edges[2].sidewalk_source_id = "sidewalk:1002";
+    fixture.edges[2].sidewalk_ramp_count = "-3";
+    const { client } = createQueryable(fixture);
+
+    const graph = await loadPedGraph(client);
+
+    expect(graph.sidewalkIds).toEqual([
+      "sidewalk:1000",
+      "sidewalk:1001",
+      "sidewalk:1002",
+    ]);
+    expect(Array.from(graph.edgeSidewalkId)).toEqual([0, 1, 2]);
+    expect(Array.from(graph.edgeSidewalkRampCount)).toEqual([0, 0, 0]);
+  });
+
+  it("leaves edges with no sidewalk match at id -1 and count 0 by default", async () => {
+    const fixture = coreFixture();
+    const { client } = createQueryable(fixture);
+
+    const graph = await loadPedGraph(client);
+
+    expect(graph.sidewalkIds).toEqual([]);
+    expect(Array.from(graph.edgeSidewalkId)).toEqual([-1, -1, -1]);
+    expect(Array.from(graph.edgeSidewalkRampCount)).toEqual([0, 0, 0]);
+  });
+
   it("loads an explicitly requested candidate version for diagnosis", async () => {
     const fixture = coreFixture();
     fixture.versions.unshift({

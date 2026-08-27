@@ -17,6 +17,7 @@ import {
   WARN_ROAD_STEPS_UNAVAILABLE,
 } from "./nav-instructions.service";
 import type { DriveLeg, MetroLeg, ThsrLeg, WalkLeg } from "../../types/route";
+import { NAV_MSG } from "../../constants/messages";
 
 describe("calcBearing", () => {
   it("正北方向應回傳 0", () => {
@@ -546,6 +547,64 @@ describe("generateNavInstructions", () => {
       type: "depart",
       stairs: false,
     });
+  });
+
+  it("CSR 形狀的步行段（無路名、含 steepSlope 與 facility instruction）不降級且完整產生指引", () => {
+    const leg: WalkLeg = {
+      type: "WALK",
+      from: "起點",
+      to: "終點",
+      distanceM: 30,
+      minutesEst: 1,
+      polyline: [
+        [121.5, 25.04],
+        [121.501, 25.041],
+        [121.502, 25.042],
+      ],
+      a11yFacilities: [],
+      exitInfo: null,
+      maxSlopePercent: null,
+      crossings: null,
+      crossingsWithCurbRamp: null,
+      minPathWidthCm: null,
+      surfaceType: "unknown",
+      restPoints: [],
+      steps: [
+        {
+          relativeDirection: "DEPART",
+          absoluteDirection: "NORTH",
+          streetName: "",
+          bogusName: true,
+          area: false,
+          stairs: false,
+          distanceM: 15,
+          location: [121.5, 25.04],
+          steepSlope: true,
+        },
+        {
+          relativeDirection: "ELEVATOR",
+          absoluteDirection: null,
+          streetName: "",
+          bogusName: true,
+          area: false,
+          stairs: false,
+          distanceM: 5,
+          location: [121.502, 25.042],
+          steepSlope: false,
+          instruction: NAV_MSG.ELEVATOR,
+        },
+      ],
+    };
+
+    const result = generateNavInstructions({ legs: [leg] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.warnings).not.toContain(WARN_WALK_STEPS_UNAVAILABLE);
+    expect(result.data.instructions[0].text).toContain(NAV_MSG.SLOPE_NOTICE);
+    const facility = result.data.instructions.find(
+      (i) => i.type === "facility",
+    );
+    expect(facility?.text).toBe(NAV_MSG.ELEVATOR);
   });
 
   it("DRIVE guidance 轉成 depart + turn + arrive", () => {

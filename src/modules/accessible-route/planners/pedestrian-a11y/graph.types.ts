@@ -207,4 +207,10 @@ export interface PedGraph {
   edgeStairCount: Uint16Array;
   edgeTraversalTimeS: Float32Array;
   edgeFlags: Uint8Array;
+
+  /** Interned index into `sidewalkIds`, or -1 when this edge matched no government sidewalk. */
+  edgeSidewalkId: Int32Array;
+  readonly sidewalkIds: readonly string[];
+  /** Ramps recorded on the matched sidewalk segment, 0 when absent or unmatched. */
+  edgeSidewalkRampCount: Uint16Array;
 }

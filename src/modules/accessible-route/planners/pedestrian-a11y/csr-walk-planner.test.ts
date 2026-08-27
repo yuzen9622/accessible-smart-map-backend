@@ -27,6 +27,8 @@ interface EdgeDefinition {
   slopeRatio?: number;
   widthM?: number;
   surface?: number;
+  sidewalkId?: number;
+  sidewalkRampCount?: number;
 }
 
 interface GraphDefinition {
@@ -38,6 +40,7 @@ interface GraphDefinition {
   stationIds?: string[];
   stationRadiusM?: number[];
   versionId?: number;
+  sidewalkIds?: string[];
 }
 
 /**
@@ -62,6 +65,8 @@ function graphFromEdges(input: GraphDefinition): PedGraph {
   const edgeTraversalTimeS = new Float32Array(directedEdgeCount);
   const edgeFlags = new Uint8Array(directedEdgeCount);
   const edgeSurface = new Uint8Array(directedEdgeCount);
+  const edgeSidewalkId = new Int32Array(directedEdgeCount).fill(-1);
+  const edgeSidewalkRampCount = new Uint16Array(directedEdgeCount);
   const nodeStationId = new Int32Array(nodeCount);
   nodeStationId.fill(-1);
   edgeLengthM.fill(Number.NaN);
@@ -90,6 +95,8 @@ function graphFromEdges(input: GraphDefinition): PedGraph {
     edgeTraversalTimeS[attrIdx] = edge.traversalTimeS ?? Number.NaN;
     edgeFlags[attrIdx] = edge.flags ?? 0;
     edgeSurface[attrIdx] = edge.surface ?? SURFACE.UNKNOWN;
+    edgeSidewalkId[attrIdx] = edge.sidewalkId ?? -1;
+    edgeSidewalkRampCount[attrIdx] = edge.sidewalkRampCount ?? 0;
   }
   if (input.nodeStationId !== undefined) {
     nodeStationId.set(input.nodeStationId);
@@ -129,6 +136,9 @@ function graphFromEdges(input: GraphDefinition): PedGraph {
     edgeStairCount: new Uint16Array(directedEdgeCount),
     edgeTraversalTimeS,
     edgeFlags,
+    edgeSidewalkId,
+    sidewalkIds: Object.freeze([...(input.sidewalkIds ?? [])]),
+    edgeSidewalkRampCount,
   };
 }
 
@@ -599,6 +609,54 @@ describe("planCsrWalkRoute geometry assembly", () => {
     expect(result.plans[0].polyline).toEqual(direct);
   });
 
+  it("de-duplicates sidewalkRampCount across the two edges of one government sidewalk", async () => {
+    serveGraph(
+      graphFromEdges({
+        nodeLon: [TAIPEI_LNG, TAIPEI_LNG, TAIPEI_LNG],
+        nodeLat: [A_LAT, B_LAT, C_LAT],
+        sidewalkIds: ["sidewalk:3955"],
+        edges: [
+          {
+            from: 0,
+            to: 1,
+            lengthM: 55,
+            sidewalkId: 0,
+            sidewalkRampCount: 6,
+          },
+          { from: 1, to: 0, lengthM: 55 },
+          {
+            from: 1,
+            to: 2,
+            lengthM: 55,
+            sidewalkId: 0,
+            sidewalkRampCount: 6,
+          },
+          { from: 2, to: 1, lengthM: 55 },
+        ],
+      }),
+    );
+    vi.mocked(getPedGraphClient).mockResolvedValue(
+      geometryClient({
+        "1000": lineString([
+          [TAIPEI_LNG, A_LAT],
+          [TAIPEI_LNG, B_LAT],
+        ]),
+        "1002": lineString([
+          [TAIPEI_LNG, B_LAT],
+          [TAIPEI_LNG, C_LAT],
+        ]),
+      }),
+    );
+
+    const result = await planCsrWalkRoute([originPoint, destinationPoint], {
+      mode: "normal",
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.plans[0].sidewalkRampCount).toBe(6);
+  });
+
   it("returns one plan per requested segment in request order", async () => {
     serveGraph(corridorGraph());
     vi.mocked(getPedGraphClient).mockResolvedValue(
@@ -626,6 +684,196 @@ describe("planCsrWalkRoute geometry assembly", () => {
     expect(result.plans[0].polyline.at(-1)).toEqual([TAIPEI_LNG, B_LAT]);
     expect(result.plans[1].polyline[0]).toEqual([TAIPEI_LNG, B_LAT]);
     expect(result.plans[1].polyline.at(-1)).toEqual([TAIPEI_LNG, C_LAT]);
+  });
+
+  it("classifies a11ySegments whose indices resolve to the real traversed coordinates", async () => {
+    const D_LAT = C_LAT + 5 / 111_195;
+    const graph = graphFromEdges({
+      nodeLon: [TAIPEI_LNG, TAIPEI_LNG, TAIPEI_LNG, TAIPEI_LNG],
+      nodeLat: [A_LAT, B_LAT, C_LAT, D_LAT],
+      edges: [
+        { from: 0, to: 1, lengthM: 50 },
+        { from: 1, to: 0, lengthM: 50 },
+        {
+          from: 1,
+          to: 2,
+          lengthM: 8,
+          edgeType: EDGE_TYPE.CROSSING,
+          flags: EDGE_FLAG.HAS_RAMP,
+        },
+        {
+          from: 2,
+          to: 1,
+          lengthM: 8,
+          edgeType: EDGE_TYPE.CROSSING,
+          flags: EDGE_FLAG.HAS_RAMP,
+        },
+        {
+          from: 2,
+          to: 3,
+          traversalTimeS: 15,
+          edgeType: EDGE_TYPE.INDOOR_ELEVATOR,
+          flags: EDGE_FLAG.INDOOR,
+        },
+        {
+          from: 3,
+          to: 2,
+          traversalTimeS: 15,
+          edgeType: EDGE_TYPE.INDOOR_ELEVATOR,
+          flags: EDGE_FLAG.INDOOR,
+        },
+      ],
+    });
+    serveGraph(graph);
+    vi.mocked(getPedGraphClient).mockResolvedValue(
+      geometryClient({
+        "1000": lineString([
+          [TAIPEI_LNG, A_LAT],
+          [TAIPEI_LNG, B_LAT],
+        ]),
+        "1002": lineString([
+          [TAIPEI_LNG, B_LAT],
+          [TAIPEI_LNG, C_LAT],
+        ]),
+      }),
+    );
+
+    const result = await planCsrWalkRoute(
+      [originPoint, { lat: D_LAT, lng: TAIPEI_LNG }],
+      { mode: "normal" },
+    );
+
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    const plan = result.plans[0];
+    expect(plan.polyline).toEqual([
+      [TAIPEI_LNG, A_LAT],
+      [TAIPEI_LNG, B_LAT],
+      [TAIPEI_LNG, C_LAT],
+      [TAIPEI_LNG, D_LAT],
+    ]);
+    expect(plan.a11ySegments).toEqual([
+      {
+        feature: "curb_ramp_crossing",
+        startIndex: 1,
+        endIndex: 2,
+        indoor: false,
+        distanceM: 8,
+        maxSlopePercent: null,
+        minWidthCm: null,
+      },
+      {
+        feature: "elevator",
+        startIndex: 2,
+        endIndex: 3,
+        indoor: true,
+        distanceM: null,
+        maxSlopePercent: null,
+        minWidthCm: null,
+      },
+    ]);
+    for (const segment of plan.a11ySegments) {
+      expect(plan.polyline[segment.startIndex]).toBeDefined();
+      expect(plan.polyline[segment.endIndex]).toBeDefined();
+    }
+    expect(plan.polyline[plan.a11ySegments[0].startIndex]).toEqual([
+      TAIPEI_LNG,
+      B_LAT,
+    ]);
+    expect(plan.polyline[plan.a11ySegments[1].startIndex]).toEqual([
+      TAIPEI_LNG,
+      C_LAT,
+    ]);
+    expect(plan.polyline[plan.a11ySegments[1].endIndex]).toEqual([
+      TAIPEI_LNG,
+      D_LAT,
+    ]);
+  });
+
+  it("shifts a11ySegments indices by the unshifted origin snap connector", async () => {
+    const graph = graphFromEdges({
+      nodeLon: [TAIPEI_LNG, TAIPEI_LNG],
+      nodeLat: [A_LAT, C_LAT],
+      edges: [
+        {
+          from: 0,
+          to: 1,
+          lengthM: 110,
+          edgeType: EDGE_TYPE.CROSSING,
+          flags: EDGE_FLAG.HAS_RAMP,
+        },
+        {
+          from: 1,
+          to: 0,
+          lengthM: 110,
+          edgeType: EDGE_TYPE.CROSSING,
+          flags: EDGE_FLAG.HAS_RAMP,
+        },
+      ],
+    });
+    serveGraph(graph);
+    vi.mocked(getPedGraphClient).mockResolvedValue(
+      geometryClient({
+        "1000": lineString([
+          [TAIPEI_LNG, A_LAT],
+          [TAIPEI_LNG, C_LAT],
+        ]),
+      }),
+    );
+    const connectorOrigin = { lat: A_LAT - 5 / 111_195, lng: TAIPEI_LNG };
+
+    const result = await planCsrWalkRoute([connectorOrigin, destinationPoint], {
+      mode: "normal",
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    const plan = result.plans[0];
+    expect(plan.polyline).toEqual([
+      [TAIPEI_LNG, connectorOrigin.lat],
+      [TAIPEI_LNG, A_LAT],
+      [TAIPEI_LNG, C_LAT],
+    ]);
+    expect(plan.a11ySegments).toEqual([
+      {
+        feature: "curb_ramp_crossing",
+        startIndex: 1,
+        endIndex: 2,
+        indoor: false,
+        distanceM: 110,
+        maxSlopePercent: null,
+        minWidthCm: null,
+      },
+    ]);
+  });
+
+  it("emits one step per traversed edge, each located on the returned polyline", async () => {
+    serveGraph(corridorGraph());
+    vi.mocked(getPedGraphClient).mockResolvedValue(
+      geometryClient({
+        "1000": lineString([
+          [TAIPEI_LNG, A_LAT],
+          [TAIPEI_LNG, B_LAT],
+        ]),
+        "1002": lineString([
+          [TAIPEI_LNG, B_LAT],
+          [TAIPEI_LNG, C_LAT],
+        ]),
+      }),
+    );
+
+    const result = await planCsrWalkRoute([originPoint, destinationPoint], {
+      mode: "normal",
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    const plan = result.plans[0];
+    expect(plan.steps).toHaveLength(2);
+    expect(plan.steps[0].relativeDirection).toBe("DEPART");
+    for (const step of plan.steps) {
+      expect(plan.polyline).toContainEqual(step.location);
+    }
   });
 });
 

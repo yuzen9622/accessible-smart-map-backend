@@ -84,6 +84,52 @@ export interface WaitInfo {
   source: "realtime" | "schedule" | "unavailable";
 }
 
+/**
+ * Accessibility-relevant facility class of one traversed graph run.
+ *
+ * These are source-backed edge classifications, not quality judgements: the
+ * client decides how to colour each class. `crossing` is the no-observed-ramp
+ * counterpart of `curb_ramp_crossing` and is reported so a client can style
+ * them differently; its presence is not a claim that no ramp exists on the
+ * ground, only that the graph carries no ramp observation for that edge.
+ */
+export type WalkA11yFeature =
+  | "elevator"
+  | "escalator"
+  | "moving_walkway"
+  | "ramp"
+  | "curb_ramp_crossing"
+  | "crossing"
+  | "stairs"
+  | "fare_gate"
+  | "exit_gate";
+
+/**
+ * One contiguous run of a WalkLeg's `polyline` carrying a facility class.
+ *
+ * `startIndex` / `endIndex` are inclusive indices into that same polyline, so a
+ * client slices rather than re-matches coordinates. `startIndex === endIndex`
+ * is a point feature, not a drawable line: a vertical facility such as an
+ * elevator has both endpoints at one ground coordinate and must be rendered as
+ * a marker. Runs never overlap and are ordered by `startIndex`.
+ *
+ * Unannotated stretches are deliberately absent; the client draws its base
+ * walking colour and overlays only these runs.
+ */
+export interface WalkA11ySegment {
+  feature: WalkA11yFeature;
+  startIndex: number;
+  endIndex: number;
+  /** Whether the whole run is inside a station or building. */
+  indoor: boolean;
+  /** Run ground length, or null when any of its edges carries no usable length. */
+  distanceM: number | null;
+  /** Steepest absolute slope on the run, or null when unmeasured. */
+  maxSlopePercent: number | null;
+  /** Narrowest observed width on the run in centimetres, or null when unmeasured. */
+  minWidthCm: number | null;
+}
+
 export interface WalkStep {
   /** Upstream turn-by-turn text when the planner already provides localized guidance. */
   instruction?: string;
@@ -97,6 +143,13 @@ export interface WalkStep {
   stairs: boolean;
   distanceM: number;
   location: [number, number];
+  /**
+   * Whether this step's edge slope exceeds the mode-dependent steep-slope
+   * threshold (wheelchair 8.3%, others 12%). Absent or false when the
+   * generating engine has no slope measurement for this step — that always
+   * means "not observed", never "confirmed flat".
+   */
+  steepSlope?: boolean;
 }
 
 export interface IntermediateStop {
@@ -121,6 +174,21 @@ export interface WalkLeg extends WalkA11yDetails {
     coords: [number, number];
   } | null;
   steps?: WalkStep[];
+  /**
+   * CSR-engine facility runs over this leg's `polyline`, ordered and
+   * non-overlapping. Absent on OTP / Valhalla walking legs, which carry no
+   * per-edge facility provenance; absent therefore means "not observed by this
+   * engine", never "no facilities on the ground".
+   */
+  a11ySegments?: WalkA11ySegment[];
+  /**
+   * Ramps recorded on the government sidewalk segments this CSR leg travels along.
+   *
+   * This is a sidewalk-segment attribute, not a located feature: it says how many kerb
+   * ramps the traversed sidewalks carry, never where they are. Absent on OTP / Valhalla
+   * legs, which have no government sidewalk match.
+   */
+  sidewalkRampCount?: number;
 }
 
 export interface BusLeg {

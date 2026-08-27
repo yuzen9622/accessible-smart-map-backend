@@ -221,6 +221,69 @@ const WalkLegSchema = z
         description:
           "只列出已附帶且明確標記為無障礙的 OSM 廁所。distanceM 為從 WALK 起點至該點最近路線位置的進度，不含繞行；空陣列不代表沿途沒有廁所。",
       }),
+    a11ySegments: z
+      .array(
+        z
+          .object({
+            feature: z
+              .enum([
+                "elevator",
+                "escalator",
+                "moving_walkway",
+                "ramp",
+                "curb_ramp_crossing",
+                "crossing",
+                "stairs",
+                "fare_gate",
+                "exit_gate",
+              ])
+              .openapi({
+                description:
+                  "此段來源標註的設施類別，僅為分類、不含品質判斷；配色由前端決定。crossing 為沒有坡道觀測的路口，不代表現場真的沒有坡道，僅代表圖資無此觀測。",
+              }),
+            startIndex: z.number().int().nonnegative().openapi({
+              description:
+                "此段在同一 leg `polyline` 中的起點索引（inclusive）。startIndex === endIndex 代表點設施（例如電梯），前端應畫成 marker 而非線段。",
+            }),
+            endIndex: z.number().int().nonnegative().openapi({
+              description:
+                "此段在同一 leg `polyline` 中的終點索引（inclusive）。startIndex === endIndex 代表點設施（例如電梯），前端應畫成 marker 而非線段。",
+            }),
+            indoor: z.boolean().openapi({
+              description: "此段是否整段位於室內（站內或建物內）。",
+            }),
+            distanceM: z.number().nonnegative().nullable().openapi({
+              description:
+                "此段地面距離；null 代表段內至少一條邊沒有可用長度量測，不是 0 公尺。",
+            }),
+            maxSlopePercent: z.number().nonnegative().nullable().openapi({
+              description: "此段最大絕對坡度百分比；null 代表沒有可用量測。",
+            }),
+            minWidthCm: z.number().positive().nullable().openapi({
+              description: "此段最小觀測寬度（公分）；null 代表沒有可用量測。",
+            }),
+          })
+          .strict()
+          .openapi("WalkA11ySegment"),
+      )
+      .optional()
+      .openapi({
+        description:
+          "只有 engine=pedestrian-a11y 的純步行路線會有此欄位；欄位不存在代表該引擎沒有逐邊設施來源，不代表沿途沒有設施。各段依 startIndex 排序且不重疊。",
+      }),
+    sidewalkRampCount: z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .openapi({
+        example: 12,
+        description:
+          "只有 engine=pedestrian-a11y 會有此欄位。此為路線沿線經過的政府人行道段上登錄的緣石坡道（curb ramp）總數，" +
+          "不是本路徑上的定點坡道，且不代表坡道位於使用者會走到的位置。同一段人行道只計一次" +
+          "（來源值為人行道面屬性，會複製到該面衍生的每條邊，已依人行道段去重後才相加）。" +
+          "來源為政府人行道圖資，以鄰近比對（≤ 10 公尺）掛上；0 代表沿線人行道未登錄坡道，而非確定沒有坡道。",
+      }),
     steps: z
       .array(
         z
@@ -234,10 +297,14 @@ const WalkLegSchema = z
             area: z.boolean(),
             stairs: z.boolean().openapi({
               description:
-                "OTP step.feature 為 StairsUse 時為 true；Valhalla 步行備援固定為 false。CSR 選出的純步行路線不產生 turn-by-turn steps，故該路線會省略 steps。僅代表合併 step 內含樓梯，不代表整個 distanceM 都是樓梯。",
+                "OTP step.feature 為 StairsUse 時為 true；Valhalla 步行備援固定為 false；CSR 選出的純步行路線依 edgeType 為 STEPS/INDOOR_STAIRS 判定。僅代表合併 step 內含樓梯，不代表整個 distanceM 都是樓梯。",
             }),
             distanceM: z.number(),
             location: z.tuple([z.number(), z.number()]),
+            steepSlope: z.boolean().optional().openapi({
+              description:
+                "此步是否達到坡度警示門檻（wheelchair 模式 8.3%、其餘模式 12%）；僅 CSR 純步行路線會提供。無坡度量測時為 false，代表未觀測，不代表路段平坦。",
+            }),
           })
           .strict()
           .openapi("WalkStep"),

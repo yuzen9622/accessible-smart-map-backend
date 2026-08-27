@@ -296,4 +296,150 @@ describe("AccessibleRouteSchema B12 WALK details", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("omits a11ySegments on non-CSR WALK legs without failing", () => {
+    expect(AccessibleRouteSchema.safeParse(route).success).toBe(true);
+  });
+
+  it("accepts a legal a11ySegments array on a WALK leg", () => {
+    expect(
+      AccessibleRouteSchema.safeParse({
+        ...route,
+        legs: [
+          {
+            ...walkLeg,
+            a11ySegments: [
+              {
+                feature: "curb_ramp_crossing",
+                startIndex: 0,
+                endIndex: 1,
+                indoor: false,
+                distanceM: 8,
+                maxSlopePercent: null,
+                minWidthCm: null,
+              },
+            ],
+          },
+        ],
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects an a11ySegments entry with a negative endIndex", () => {
+    expect(
+      AccessibleRouteSchema.safeParse({
+        ...route,
+        legs: [
+          {
+            ...walkLeg,
+            a11ySegments: [
+              {
+                feature: "elevator",
+                startIndex: 0,
+                endIndex: -1,
+                indoor: true,
+                distanceM: null,
+                maxSlopePercent: null,
+                minWidthCm: null,
+              },
+            ],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects an a11ySegments entry with an unknown feature", () => {
+    expect(
+      AccessibleRouteSchema.safeParse({
+        ...route,
+        legs: [
+          {
+            ...walkLeg,
+            a11ySegments: [
+              {
+                feature: "bench",
+                startIndex: 0,
+                endIndex: 1,
+                indoor: false,
+                distanceM: null,
+                maxSlopePercent: null,
+                minWidthCm: null,
+              },
+            ],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts a WALK leg with sidewalkRampCount", () => {
+    expect(
+      AccessibleRouteSchema.safeParse({
+        ...route,
+        legs: [{ ...walkLeg, sidewalkRampCount: 12 }],
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects a non-integer sidewalkRampCount", () => {
+    expect(
+      AccessibleRouteSchema.safeParse({
+        ...route,
+        legs: [{ ...walkLeg, sidewalkRampCount: 1.5 }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a negative sidewalkRampCount", () => {
+    expect(
+      AccessibleRouteSchema.safeParse({
+        ...route,
+        legs: [{ ...walkLeg, sidewalkRampCount: -1 }],
+      }).success,
+    ).toBe(false);
+  });
+
+  const baseStep = {
+    relativeDirection: "DEPART",
+    absoluteDirection: null,
+    streetName: "",
+    bogusName: true,
+    area: false,
+    stairs: false,
+    distanceM: 15,
+    location: [121.56, 25.04] as [number, number],
+  };
+
+  it("accepts a WalkStep with a legal steepSlope value", () => {
+    expect(
+      AccessibleRouteSchema.safeParse({
+        ...route,
+        legs: [{ ...walkLeg, steps: [{ ...baseStep, steepSlope: true }] }],
+      }).success,
+    ).toBe(true);
+  });
+
+  it("accepts a WalkStep that omits steepSlope", () => {
+    expect(
+      AccessibleRouteSchema.safeParse({
+        ...route,
+        legs: [{ ...walkLeg, steps: [baseStep] }],
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects a WalkStep whose steepSlope is not a boolean", () => {
+    expect(
+      AccessibleRouteSchema.safeParse({
+        ...route,
+        legs: [
+          {
+            ...walkLeg,
+            steps: [{ ...baseStep, steepSlope: "yes" }],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
 });

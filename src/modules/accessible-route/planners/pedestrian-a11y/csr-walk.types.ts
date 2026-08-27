@@ -1,5 +1,16 @@
-import type { AccessibilityMode } from "../../../../types/route";
+import type {
+  AccessibilityMode,
+  WalkA11yFeature,
+  WalkA11ySegment,
+  WalkStep,
+} from "../../../../types/route";
 import type { LngLat } from "./ped-graph-geometry.repository";
+
+/** Alias of the single source of truth in `types/route.ts`. */
+export type CsrWalkA11yFeature = WalkA11yFeature;
+
+/** Alias of the single source of truth in `types/route.ts`. */
+export type CsrWalkA11ySegment = WalkA11ySegment;
 
 /** Source-backed accessibility observations for a CSR-selected walking path. */
 export interface CsrWalkAccessibility {
@@ -44,6 +55,21 @@ export interface CsrWalkPlan {
    */
   approximateIndoorSegmentCount: number;
   accessibility: CsrWalkAccessibility;
+  /**
+   * Facility-classified runs of `polyline`, ordered and non-overlapping.
+   * Empty means no traversed edge carried a classified facility observation.
+   */
+  a11ySegments: CsrWalkA11ySegment[];
+  /**
+   * Turn-by-turn steps derived from the selected edges' geometry and facility
+   * types. Carries no street names — the CSR graph has none.
+   */
+  steps: WalkStep[];
+  /**
+   * De-duplicated ramp total recorded on the government sidewalk segments
+   * this plan travels along. See `sumSidewalkRampCount`.
+   */
+  sidewalkRampCount: number;
   diagnostics: CsrWalkDiagnostics;
 }
 
