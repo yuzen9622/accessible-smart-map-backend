@@ -34,6 +34,7 @@
     "import:parking": "npx dotenvx run -- ts-node src/scripts/import-disabled-parking.ts",
     "import:parking-tdx": "npx dotenvx run -- ts-node src/scripts/import-tdx-parking.ts",
     "import:rag": "npx dotenvx run -- ts-node src/scripts/import-rag.ts",
+    "import:taipei-ramps": "npx dotenvx run -- ts-node src/scripts/import-taipei-ramps.ts",
     "import:tdx-bus-routes": "npx dotenvx run -- ts-node src/scripts/import-tdx-bus-routes.ts",
     "import:tdx-bus-vehicles": "npx dotenvx run -- ts-node src/scripts/import-tdx-bus-vehicles.ts",
     "import:tdx-metro": "npx dotenvx run -- ts-node src/scripts/import-tdx-metro.ts",
