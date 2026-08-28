@@ -14,6 +14,7 @@ interface EdgeFixture {
   edgeType: number;
   lengthM: number;
   slopeRatio: number;
+  streetName: string;
 }
 
 interface NodeFixture {
@@ -34,10 +35,20 @@ function createGraph(
   const edgeType = new Uint8Array(edgeCount);
   const edgeLengthM = new Float32Array(edgeCount);
   const edgeSlope = new Float32Array(edgeCount);
+  const edgeStreetName = new Int32Array(edgeCount).fill(-1);
+  const streetNames: string[] = [];
   edges.forEach((edge, index) => {
     edgeType[index] = edge.edgeType ?? EDGE_TYPE.SIDEWALK;
     edgeLengthM[index] = edge.lengthM ?? Number.NaN;
     edgeSlope[index] = edge.slopeRatio ?? Number.NaN;
+    if (edge.streetName !== undefined) {
+      let streetNameIndex = streetNames.indexOf(edge.streetName);
+      if (streetNameIndex === -1) {
+        streetNameIndex = streetNames.length;
+        streetNames.push(edge.streetName);
+      }
+      edgeStreetName[index] = streetNameIndex;
+    }
   });
 
   const nodeFlags = new Uint8Array(nodeCount);
@@ -76,6 +87,8 @@ function createGraph(
     edgeSidewalkId: new Int32Array(edgeCount).fill(-1),
     sidewalkIds: Object.freeze([]),
     edgeSidewalkRampCount: new Uint16Array(edgeCount),
+    edgeStreetName,
+    streetNames: Object.freeze(streetNames),
   };
 }
 
@@ -400,7 +413,7 @@ describe("buildCsrWalkSteps", () => {
     expect(steps[0].distanceM).toBeGreaterThan(0);
   });
 
-  it("emits streetName '' and bogusName true, matching the CSR graph's lack of street names", () => {
+  it("emits streetName '' and bogusName true when the edge's way has no recorded name", () => {
     const graph = createGraph([{ edgeType: EDGE_TYPE.SIDEWALK }], nodes(2));
 
     const steps = buildCsrWalkSteps(
@@ -415,5 +428,25 @@ describe("buildCsrWalkSteps", () => {
 
     expect(steps[0].streetName).toBe("");
     expect(steps[0].bogusName).toBe(true);
+  });
+
+  it("emits the backfilled street name and bogusName false when the edge's way has one", () => {
+    const graph = createGraph(
+      [{ edgeType: EDGE_TYPE.SIDEWALK, streetName: "羅斯福路" }],
+      nodes(2),
+    );
+
+    const steps = buildCsrWalkSteps(
+      graph,
+      Int32Array.from([0, 1]),
+      Int32Array.from([0]),
+      contiguousSpans(1),
+      [BASE, NORTH],
+      0,
+      "normal",
+    );
+
+    expect(steps[0].streetName).toBe("羅斯福路");
+    expect(steps[0].bogusName).toBe(false);
   });
 });

@@ -142,4 +142,53 @@ describe.skipIf(!databaseUrl)("PostGIS pedestrian graph loader", () => {
     }
     expect(worstOffsetM).toBeLessThan(0.5);
   }, 600_000);
+
+  it("resolves the street-name join without throwing when a GTFS-style source_ref has no slash", async () => {
+    const sample = await pool.query<{ osm_way_id: string; name: string }>(
+      "SELECT osm_way_id::text AS osm_way_id, name FROM ped_osm_way_name WHERE name IS NOT NULL LIMIT 1",
+    );
+    const namedWay = sample.rows[0];
+    if (namedWay === undefined) {
+      throw new Error("ped_osm_way_name has no named row to test against");
+    }
+
+    // Mirrors the LEFT JOIN in graph-loader.ts's EDGE_PAGE_QUERY_WITH_STREET_NAME
+    // exactly, against a synthetic edge fixture instead of the real ped_edge
+    // table, so it never touches version_id=1 data. The GTFS-style source_ref
+    // (no `/`) previously reached `''::bigint` and threw
+    // "invalid input syntax for type bigint" because a LIKE guard in a plain
+    // AND is not guaranteed to short-circuit before the cast.
+    const result = await pool.query<{
+      source_ref: string;
+      street_name: string | null;
+    }>(
+      `
+        WITH edge_fixture (source_ref) AS (
+          VALUES
+            ('gtfs_pathways:pathway:9995:reverse'),
+            ('osm:way/' || $1::text)
+        )
+        SELECT
+          edge_fixture.source_ref,
+          way_name.name AS street_name
+        FROM edge_fixture
+        LEFT JOIN ped_osm_way_name AS way_name
+          ON way_name.osm_way_id = CASE
+            WHEN edge_fixture.source_ref ~ '^osm:way/[0-9]+$'
+            THEN split_part(edge_fixture.source_ref, '/', 2)::bigint
+          END
+        ORDER BY edge_fixture.source_ref
+      `,
+      [namedWay.osm_way_id],
+    );
+
+    const gtfsRow = result.rows.find((row) =>
+      row.source_ref.startsWith("gtfs_pathways:"),
+    );
+    const osmRow = result.rows.find((row) =>
+      row.source_ref.startsWith("osm:way/"),
+    );
+    expect(gtfsRow?.street_name ?? null).toBeNull();
+    expect(osmRow?.street_name).toBe(namedWay.name);
+  });
 });

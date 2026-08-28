@@ -26,6 +26,16 @@ const VERSION_QUERY = `
 `;
 
 /**
+ * `ped_osm_way_name` is a standalone backfill table (see
+ * `src/scripts/backfill-osm-way-names.py`) that may not exist yet on a fresh
+ * database. Checking `to_regclass` first lets the loader fail soft to "no
+ * street names" instead of failing the whole graph load.
+ */
+const WAY_NAME_TABLE_EXISTS_QUERY = `
+  SELECT to_regclass('ped_osm_way_name') IS NOT NULL AS table_exists
+`;
+
+/**
  * `proxy_geom` is a station centroid shared by every node of that station, so
  * it may only stand in for a node that genuinely has no surveyed position
  * (indoor concourse/platform rows). Entrance and outdoor-connector rows do
@@ -84,6 +94,49 @@ const EDGE_PAGE_QUERY = `
   LIMIT $3
 `;
 
+/**
+ * Same as `EDGE_PAGE_QUERY`, plus the OSM way name backfilled into
+ * `ped_osm_way_name`. Only used once `WAY_NAME_TABLE_EXISTS_QUERY` confirms
+ * the table exists; GTFS indoor edges never match (their `source_ref` is not
+ * `osm:way/<id>`) and read back as NULL, same as an unnamed way.
+ *
+ * The `bigint` cast lives inside a `CASE` rather than after a `LIKE` guard:
+ * Postgres does not guarantee `AND` short-circuits before evaluating the
+ * cast, and a GTFS `source_ref` (e.g. `gtfs_pathways:pathway:9995:reverse`)
+ * has no `/`, so `split_part(..., '/', 2)` yields `''` and `''::bigint`
+ * throws. `CASE` does guarantee ordered evaluation, and the regex guard only
+ * matches a well-formed `osm:way/<digits>` id.
+ */
+const EDGE_PAGE_QUERY_WITH_STREET_NAME = `
+  SELECT
+    edge_id::text AS edge_id,
+    from_node::text AS from_node,
+    to_node::text AS to_node,
+    length_m,
+    edge_type,
+    slope_longitudinal,
+    surface,
+    smoothness,
+    effective_width_m AS width_m,
+    wheelchair,
+    stair_count,
+    traversal_time_s,
+    has_ramp,
+    source_ref,
+    attr_meta->'gov_sidewalk_source_id'->>'value' AS sidewalk_source_id,
+    attr_meta->'sidewalk_ramp_count'->>'value' AS sidewalk_ramp_count,
+    way_name.name AS street_name
+  FROM ped_edge
+  LEFT JOIN ped_osm_way_name AS way_name
+    ON way_name.osm_way_id = CASE
+      WHEN ped_edge.source_ref ~ '^osm:way/[0-9]+$'
+      THEN split_part(ped_edge.source_ref, '/', 2)::bigint
+    END
+  WHERE ped_edge.version_id = $1 AND ped_edge.edge_id > $2
+  ORDER BY ped_edge.edge_id
+  LIMIT $3
+`;
+
 export interface PedGraphQueryable {
   query<R>(sql: string, params?: unknown[]): Promise<{ rows: R[] }>;
 }
@@ -125,6 +178,11 @@ interface EdgeRow extends EdgeCountRow {
   source_ref: unknown;
   sidewalk_source_id: unknown;
   sidewalk_ramp_count: unknown;
+  street_name?: unknown;
+}
+
+interface WayNameTableRow {
+  table_exists: unknown;
 }
 
 interface NodeStorage {
@@ -157,10 +215,15 @@ interface EdgeStorage {
   edgeFlags: Uint8Array;
   edgeSidewalkId: Int32Array;
   edgeSidewalkRampCount: Uint16Array;
+  edgeStreetName: Int32Array;
 }
 
 interface SidewalkTables {
   sidewalkIds: readonly string[];
+}
+
+interface StreetNameTables {
+  streetNames: readonly string[];
 }
 
 interface EdgeCountResult {
@@ -362,6 +425,8 @@ function createEdgeStorage(directedEdgeCount: number): EdgeStorage {
   edgeTraversalTimeS.fill(Number.NaN);
   const edgeSidewalkId = new Int32Array(directedEdgeCount);
   edgeSidewalkId.fill(-1);
+  const edgeStreetName = new Int32Array(directedEdgeCount);
+  edgeStreetName.fill(-1);
   return {
     adjTarget: new Int32Array(directedEdgeCount),
     adjAttr: new Int32Array(directedEdgeCount),
@@ -378,7 +443,23 @@ function createEdgeStorage(directedEdgeCount: number): EdgeStorage {
     edgeFlags: new Uint8Array(directedEdgeCount),
     edgeSidewalkId,
     edgeSidewalkRampCount: new Uint16Array(directedEdgeCount),
+    edgeStreetName,
   };
+}
+
+/**
+ * @param client Queryable PostgreSQL client.
+ * @returns Whether `ped_osm_way_name` exists yet. The backfill table is
+ * created by a standalone script and may not have run yet, so its absence
+ * must never fail loading the graph itself.
+ */
+async function wayNameTableExists(client: PedGraphQueryable): Promise<boolean> {
+  const result = await client.query<WayNameTableRow>(
+    WAY_NAME_TABLE_EXISTS_QUERY,
+  );
+  const row = result.rows[0];
+  if (row === undefined) return false;
+  return booleanValue(row.table_exists, "table_exists");
 }
 
 /**
@@ -653,8 +734,10 @@ function buildAdjOffset(adjOffset: Int32Array, degree: Int32Array): void {
  * @param originalNodeId Sorted original database node identifiers.
  * @param adjOffset CSR offsets built from the first edge pass.
  * @param storage Preallocated edge storage to fill.
+ * @param edgeQuery Resolved edge page query, with or without the street-name join.
  * @returns Interned government sidewalk identifiers whose dense index matches
- * `storage.edgeSidewalkId`.
+ * `storage.edgeSidewalkId`, and interned street names whose dense index
+ * matches `storage.edgeStreetName`.
  */
 async function fillEdges(
   client: PedGraphQueryable,
@@ -662,16 +745,19 @@ async function fillEdges(
   originalNodeId: BigInt64Array,
   adjOffset: Int32Array,
   storage: EdgeStorage,
-): Promise<SidewalkTables> {
+  edgeQuery: string,
+): Promise<SidewalkTables & StreetNameTables> {
   const writeOffset = new Int32Array(adjOffset.length - 1);
   writeOffset.set(adjOffset.subarray(0, adjOffset.length - 1));
   const sidewalkIndexes = new Map<string, number>();
   const sidewalkIds: string[] = [];
+  const streetNameIndexes = new Map<string, number>();
+  const streetNames: string[] = [];
   let cursor = BigInt(MIN_BIGINT);
   let edgeIndex = 0;
 
   while (true) {
-    const result = await client.query<EdgeRow>(EDGE_PAGE_QUERY, [
+    const result = await client.query<EdgeRow>(edgeQuery, [
       versionId,
       cursor.toString(),
       PAGE_SIZE,
@@ -752,6 +838,18 @@ async function fillEdges(
           row.sidewalk_ramp_count,
         );
       }
+      const streetName = nullableText(row.street_name, "street_name");
+      if (streetName === null) {
+        storage.edgeStreetName[edgeIndex] = -1;
+      } else {
+        let streetNameIndex = streetNameIndexes.get(streetName);
+        if (streetNameIndex === undefined) {
+          streetNameIndex = streetNames.length;
+          streetNameIndexes.set(streetName, streetNameIndex);
+          streetNames.push(streetName);
+        }
+        storage.edgeStreetName[edgeIndex] = streetNameIndex;
+      }
       writeOffset[from.denseId] += 1;
       cursor = edgeId;
       edgeIndex += 1;
@@ -769,7 +867,10 @@ async function fillEdges(
       throw new Error("pedestrian graph edge count changed between CSR passes");
     }
   }
-  return { sidewalkIds: Object.freeze(sidewalkIds) };
+  return {
+    sidewalkIds: Object.freeze(sidewalkIds),
+    streetNames: Object.freeze(streetNames),
+  };
 }
 
 /**
@@ -802,12 +903,19 @@ export async function loadPedGraph(
       "pedestrian graph CSR count does not match its version record",
     );
   }
-  const sidewalkTables = await fillEdges(
+  const hasWayNameTable = await wayNameTableExists(client);
+  if (!hasWayNameTable) {
+    console.warn(
+      "[graph-loader] ped_osm_way_name not found; street names disabled until the backfill runs",
+    );
+  }
+  const { sidewalkIds, streetNames } = await fillEdges(
     client,
     version.versionId,
     nodeStorage.originalNodeId,
     nodeStorage.adjOffset,
     edgeStorage,
+    hasWayNameTable ? EDGE_PAGE_QUERY_WITH_STREET_NAME : EDGE_PAGE_QUERY,
   );
 
   return {
@@ -837,7 +945,9 @@ export async function loadPedGraph(
     edgeTraversalTimeS: edgeStorage.edgeTraversalTimeS,
     edgeFlags: edgeStorage.edgeFlags,
     edgeSidewalkId: edgeStorage.edgeSidewalkId,
-    sidewalkIds: sidewalkTables.sidewalkIds,
+    sidewalkIds,
     edgeSidewalkRampCount: edgeStorage.edgeSidewalkRampCount,
+    edgeStreetName: edgeStorage.edgeStreetName,
+    streetNames,
   };
 }

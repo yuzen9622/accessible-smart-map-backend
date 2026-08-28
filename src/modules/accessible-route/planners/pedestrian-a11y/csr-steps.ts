@@ -201,10 +201,11 @@ function absoluteDirectionWord(degrees: number | null): string | null {
  *
  * Every step's location and bearing are read from the assembled polyline
  * geometry (never approximated from node coordinates), reusing the same
- * `spans` + `indexOffset` index mapping `buildA11ySegments` establishes. The
- * CSR graph carries no street names, so every step is emitted with
- * `streetName: ""` and `bogusName: true`; downstream text generation already
- * degrades gracefully for that combination.
+ * `spans` + `indexOffset` index mapping `buildA11ySegments` establishes. When
+ * the traversed edge's way has a backfilled OSM name, the step reports it
+ * with `bogusName: false`; otherwise it keeps `streetName: ""` and
+ * `bogusName: true` (never a synthesized placeholder), and downstream text
+ * generation already degrades gracefully for that combination.
  *
  * @param graph CSR pedestrian graph.
  * @param nodePath Traversed dense node identifiers, in traversal order (one
@@ -277,11 +278,15 @@ export function buildCsrWalkSteps(
       relativeDirection !== "DEPART" &&
       (facility !== null || connector !== null);
 
+    const streetNameIdx = graph.edgeStreetName[attrIdx];
+    const streetName =
+      streetNameIdx >= 0 ? graph.streetNames[streetNameIdx] : "";
+
     const walkStep: WalkStep = {
       relativeDirection,
       absoluteDirection: absoluteDirectionWord(entryBearing),
-      streetName: "",
-      bogusName: true,
+      streetName,
+      bogusName: streetName === "",
       area: false,
       stairs,
       distanceM,

@@ -213,4 +213,8 @@ export interface PedGraph {
   readonly sidewalkIds: readonly string[];
   /** Ramps recorded on the matched sidewalk segment, 0 when absent or unmatched. */
   edgeSidewalkRampCount: Uint16Array;
+
+  /** Interned index into `streetNames`, or -1 when this edge's way has no recorded name. */
+  edgeStreetName: Int32Array;
+  readonly streetNames: readonly string[];
 }

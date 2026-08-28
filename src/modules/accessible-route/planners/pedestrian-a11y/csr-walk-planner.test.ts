@@ -139,6 +139,8 @@ function graphFromEdges(input: GraphDefinition): PedGraph {
     edgeSidewalkId,
     sidewalkIds: Object.freeze([...(input.sidewalkIds ?? [])]),
     edgeSidewalkRampCount,
+    edgeStreetName: new Int32Array(directedEdgeCount).fill(-1),
+    streetNames: Object.freeze([]),
   };
 }
 

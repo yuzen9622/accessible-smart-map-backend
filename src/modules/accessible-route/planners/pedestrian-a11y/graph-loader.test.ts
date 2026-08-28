@@ -12,6 +12,7 @@ interface GraphFixture {
   versions: FakeRow[];
   nodes: FakeRow[];
   edges: FakeRow[];
+  wayNameTableExists?: boolean;
 }
 
 interface QueryCall {
@@ -49,6 +50,11 @@ function createQueryable(fixture: GraphFixture): {
   const client: PedGraphQueryable = {
     async query<R>(sql: string, params?: unknown[]): Promise<{ rows: R[] }> {
       calls.push({ sql, params });
+      if (sql.includes("to_regclass")) {
+        return {
+          rows: [{ table_exists: fixture.wayNameTableExists ?? true }] as R[],
+        };
+      }
       if (sql.includes("FROM ped_graph_version")) {
         if (sql.includes("WHERE lifecycle_status = 'ACTIVE'")) {
           return {
@@ -72,14 +78,18 @@ function createQueryable(fixture: GraphFixture): {
         };
       }
       if (sql.includes("FROM ped_edge")) {
-        return {
-          rows: keysetPage(
-            fixture.edges,
-            params?.[1],
-            params?.[2],
-            "edge_id",
-          ) as R[],
-        };
+        const page = keysetPage(
+          fixture.edges,
+          params?.[1],
+          params?.[2],
+          "edge_id",
+        );
+        if (!sql.includes("ped_osm_way_name")) {
+          return {
+            rows: page.map(({ street_name, ...rest }) => rest) as R[],
+          };
+        }
+        return { rows: page as R[] };
       }
       throw new Error("unexpected query");
     },
@@ -335,6 +345,43 @@ describe("loadPedGraph", () => {
     expect(graph.sidewalkIds).toEqual([]);
     expect(Array.from(graph.edgeSidewalkId)).toEqual([-1, -1, -1]);
     expect(Array.from(graph.edgeSidewalkRampCount)).toEqual([0, 0, 0]);
+  });
+
+  it("interns backfilled OSM street names, leaving unnamed and GTFS edges at -1", async () => {
+    const fixture = coreFixture();
+    fixture.edges[0].street_name = "羅斯福路";
+    fixture.edges[1].street_name = null;
+    // edges[2] is a GTFS indoor edge; its source_ref never matches the
+    // join's `osm:way/%` condition, so it stays unset like a real query.
+    const { client, calls } = createQueryable(fixture);
+
+    const graph = await loadPedGraph(client);
+
+    expect(graph.streetNames).toEqual(["羅斯福路"]);
+    expect(Object.isFrozen(graph.streetNames)).toBe(true);
+    expect(Array.from(graph.edgeStreetName)).toEqual([0, -1, -1]);
+    const edgeQuery = calls.find(
+      (call) =>
+        call.sql.includes("FROM ped_edge") && call.sql.includes("surface"),
+    );
+    expect(edgeQuery?.sql).toContain("ped_osm_way_name");
+  });
+
+  it("does not fail graph load when ped_osm_way_name does not exist yet", async () => {
+    const fixture = coreFixture();
+    fixture.wayNameTableExists = false;
+    fixture.edges[0].street_name = "羅斯福路";
+    const { client, calls } = createQueryable(fixture);
+
+    const graph = await loadPedGraph(client);
+
+    expect(graph.streetNames).toEqual([]);
+    expect(Array.from(graph.edgeStreetName)).toEqual([-1, -1, -1]);
+    const edgeQuery = calls.find(
+      (call) =>
+        call.sql.includes("FROM ped_edge") && call.sql.includes("surface"),
+    );
+    expect(edgeQuery?.sql).not.toContain("ped_osm_way_name");
   });
 
   it("loads an explicitly requested candidate version for diagnosis", async () => {
