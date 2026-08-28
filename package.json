@@ -6,6 +6,7 @@
   "packageManager": "pnpm@10.30.0",
   "scripts": {
     "backfill:campus-search": "npx dotenvx run -- ts-node src/scripts/backfill-campus-search.ts",
+    "backfill:way-names": "npx dotenvx run -- python3 src/scripts/backfill-osm-way-names.py",
     "build": "pnpm run lint:arch && tsc",
     "build:otp": "pnpm run generate:gtfs-parents && docker-compose run --rm otp --build --save",
     "build:ped-graph": "npx dotenvx run -- python3 src/scripts/build-ped-graph.py",
