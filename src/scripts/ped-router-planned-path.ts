@@ -5,7 +5,11 @@ import {
 } from "../modules/accessible-route/planners/pedestrian-a11y/fare-access";
 import type { PedGraph } from "../modules/accessible-route/planners/pedestrian-a11y/graph.types";
 
-export type EdgeValue = (attrIdx: number) => number;
+export type EdgeValue = (
+  attrIdx: number,
+  fromNode: number,
+  toNode: number,
+) => number;
 
 export interface PlannedPathStep {
   from: number;
@@ -46,7 +50,7 @@ export function resolvePlannedPathSteps(
       if (!canTraverseFareGate(graph, from, to, attrIdx, fareAccess)) {
         continue;
       }
-      const value = edgeValue(attrIdx);
+      const value = edgeValue(attrIdx, from, to);
       if (!Number.isFinite(value) || value >= selectedValue) continue;
       selectedAttrIdx = attrIdx;
       selectedValue = value;

@@ -602,7 +602,16 @@ function strictFeasibility(
         topology.to[attrIdx],
         attrIdx,
         FORBID_FARE_ACCESS,
-      ) && Number.isFinite(edgeCost(graph, attrIdx, profile))
+      ) &&
+      Number.isFinite(
+        edgeCost(
+          graph,
+          attrIdx,
+          profile,
+          topology.from[attrIdx],
+          topology.to[attrIdx],
+        ),
+      )
         ? 1
         : 0;
   }
@@ -908,7 +917,8 @@ function planWithProfile(
 ): PlannedRoute | null {
   const result = aStar(graph, pair.from, pair.to, profile);
   if (result === null) return null;
-  const edgeValue = (attrIdx: number) => edgeCost(graph, attrIdx, profile);
+  const edgeValue = (attrIdx: number, from: number, to: number) =>
+    edgeCost(graph, attrIdx, profile, from, to);
   const steps = resolvePlannedPathSteps(graph, result.nodePath, edgeValue);
   const resolvedTotalCost = steps.reduce(
     (total, step) => total + step.value,
@@ -957,7 +967,8 @@ function measureCoreLatency(
         "a strict-wheelchair timing OD was unexpectedly unreachable",
       );
     }
-    const edgeValue = (attrIdx: number) => edgeCost(graph, attrIdx, profile);
+    const edgeValue = (attrIdx: number, from: number, to: number) =>
+      edgeCost(graph, attrIdx, profile, from, to);
     const steps = resolvePlannedPathSteps(graph, result.nodePath, edgeValue);
     measured.push({ pair, profile, result, steps, milliseconds });
   }
@@ -1225,7 +1236,10 @@ function evaluateDecisionRoutes(
     }
     routes.push(planned);
     const strictViolations = planned.steps.filter(
-      (step) => !Number.isFinite(edgeCost(graph, step.attrIdx, strictProfile)),
+      (step) =>
+        !Number.isFinite(
+          edgeCost(graph, step.attrIdx, strictProfile, step.from, step.to),
+        ),
     );
     const hasViolation = strictViolations.length > 0;
     const degradedProxy = planned.profile.relaxationLevel > 0;

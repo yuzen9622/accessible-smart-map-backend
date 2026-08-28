@@ -97,6 +97,38 @@ interface PathStep {
   attrIdx: number;
 }
 
+/**
+ * Graph-inherent directed-edge endpoints, dense-index aligned with every
+ * `PedGraph` attribute array. Unlike a planned route's per-step `from`/`to`,
+ * these hold regardless of how an edge's `attrIdx` was discovered — including
+ * an OTP-mapped step, which carries only `attrIdx` and no path-order context.
+ */
+interface EdgeEndpoints {
+  from: Int32Array;
+  to: Int32Array;
+}
+
+/**
+ * @param graph CSR pedestrian graph.
+ * @returns The dense start/end node of every directed edge, keyed by `attrIdx`.
+ */
+function buildEdgeEndpoints(graph: PedGraph): EdgeEndpoints {
+  const from = new Int32Array(graph.directedEdgeCount);
+  const to = new Int32Array(graph.directedEdgeCount);
+  for (let node = 0; node < graph.nodeCount; node += 1) {
+    for (
+      let adjacencyIndex = graph.adjOffset[node];
+      adjacencyIndex < graph.adjOffset[node + 1];
+      adjacencyIndex += 1
+    ) {
+      const attrIdx = graph.adjAttr[adjacencyIndex];
+      from[attrIdx] = node;
+      to[attrIdx] = graph.adjTarget[adjacencyIndex];
+    }
+  }
+  return { from, to };
+}
+
 interface NumberSummary {
   count: number;
   min: number | null;
@@ -390,14 +422,24 @@ function unconstrainedShortestDistanceM(
  * @param attrIdx Edge attribute index known to be infeasible at level 0.
  * @returns The blocking hard constraint.
  */
-function violationCause(graph: PedGraph, attrIdx: number): ViolationCause {
+function violationCause(
+  graph: PedGraph,
+  attrIdx: number,
+  edgeEndpoints: EdgeEndpoints,
+): ViolationCause {
+  const fromNode = edgeEndpoints.from[attrIdx];
+  const toNode = edgeEndpoints.to[attrIdx];
   const causeByLevel: ViolationCause[] = [
     "extreme_slope",
     "narrow_width",
     "unramped_steps",
   ];
   for (let level = 1; level <= WHEELCHAIR_MAX_RELAXATION_LEVEL; level += 1) {
-    if (Number.isFinite(edgeCost(graph, attrIdx, wheelchairProfile(level)))) {
+    if (
+      Number.isFinite(
+        edgeCost(graph, attrIdx, wheelchairProfile(level), fromNode, toNode),
+      )
+    ) {
       return causeByLevel[level - 1];
     }
   }
@@ -411,7 +453,11 @@ function violationCause(graph: PedGraph, attrIdx: number): ViolationCause {
  * @param steps Traversed edges.
  * @returns Violation counts, causes, and ground distance.
  */
-function judgeRoute(graph: PedGraph, steps: PathStep[]): RouteJudgement {
+function judgeRoute(
+  graph: PedGraph,
+  steps: PathStep[],
+  edgeEndpoints: EdgeEndpoints,
+): RouteJudgement {
   const strictProfile = wheelchairProfile(0);
   const causeCounts: Record<ViolationCause, number> = {
     extreme_slope: 0,
@@ -423,9 +469,19 @@ function judgeRoute(graph: PedGraph, steps: PathStep[]): RouteJudgement {
   let groundDistanceM = 0;
   let hasIndoorEdge = false;
   for (const step of steps) {
-    if (!Number.isFinite(edgeCost(graph, step.attrIdx, strictProfile))) {
+    if (
+      !Number.isFinite(
+        edgeCost(
+          graph,
+          step.attrIdx,
+          strictProfile,
+          edgeEndpoints.from[step.attrIdx],
+          edgeEndpoints.to[step.attrIdx],
+        ),
+      )
+    ) {
       violatingEdgeCount += 1;
-      causeCounts[violationCause(graph, step.attrIdx)] += 1;
+      causeCounts[violationCause(graph, step.attrIdx, edgeEndpoints)] += 1;
     }
     if ((graph.edgeFlags[step.attrIdx] & EDGE_FLAG.INDOOR) !== 0) {
       hasIndoorEdge = true;
@@ -465,8 +521,10 @@ function planWithLadder(
     latencyMs += performance.now() - startedAt;
     if (result === null) continue;
     return {
-      steps: resolvePlannedPathSteps(graph, result.nodePath, (attrIdx) =>
-        edgeCost(graph, attrIdx, profile),
+      steps: resolvePlannedPathSteps(
+        graph,
+        result.nodePath,
+        (attrIdx, from, to) => edgeCost(graph, attrIdx, profile, from, to),
       ),
       relaxationLevel,
       latencyMs,
@@ -704,6 +762,7 @@ async function main(): Promise<void> {
     await pool.end();
   }
   const index = buildEdgeIndex(graph);
+  const edgeEndpoints = buildEdgeEndpoints(graph);
   const candidates = outdoorNodes(graph);
   let pairs: NodePair[];
   let sourceIndexes: number[] | null = null;
@@ -742,7 +801,7 @@ async function main(): Promise<void> {
     if (ours === null) {
       oursOut = { status: "no_route", latencyMs: 0 };
     } else {
-      const judgement = judgeRoute(graph, ours.steps);
+      const judgement = judgeRoute(graph, ours.steps, edgeEndpoints);
       oursOut = {
         status: "ok",
         relaxationLevel: ours.relaxationLevel,
@@ -761,7 +820,9 @@ async function main(): Promise<void> {
     if (otpOutcome.status === "ok") {
       const mapped = mapPolylineToEdges(index, otpOutcome.route.coordinates);
       const excluded = mapped.unmappedRatio > MAX_UNMAPPED_SUBSEGMENT_RATIO;
-      const judgement = excluded ? null : judgeRoute(graph, mapped.steps);
+      const judgement = excluded
+        ? null
+        : judgeRoute(graph, mapped.steps, edgeEndpoints);
       otpOut = {
         status: "ok",
         latencyMs: otpOutcome.route.latencyMs,
