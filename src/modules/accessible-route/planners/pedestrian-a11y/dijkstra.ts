@@ -92,7 +92,7 @@ export function dijkstra(
       ) {
         continue;
       }
-      const edgeCostM = edgeCost(graph, attrIdx, profile);
+      const edgeCostM = edgeCost(graph, attrIdx, profile, node, target);
       if (!Number.isFinite(edgeCostM)) {
         continue;
       }

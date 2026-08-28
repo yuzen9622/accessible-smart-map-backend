@@ -15,6 +15,8 @@ interface GraphFixture {
   wayNameTableExists?: boolean;
   rampEdgeTableExists?: boolean;
   rampPoints?: FakeRow[];
+  rampNodeTableExists?: boolean;
+  rampNodeIds?: FakeRow[];
 }
 
 interface QueryCall {
@@ -64,6 +66,14 @@ function createQueryable(fixture: GraphFixture): {
       }
       if (sql.includes("FROM ped_ramp_edge")) {
         return { rows: (fixture.rampPoints ?? []) as R[] };
+      }
+      if (sql.includes("to_regclass('ped_ramp_node')")) {
+        return {
+          rows: [{ table_exists: fixture.rampNodeTableExists ?? true }] as R[],
+        };
+      }
+      if (sql.includes("FROM ped_ramp_node")) {
+        return { rows: (fixture.rampNodeIds ?? []) as R[] };
       }
       if (sql.includes("FROM ped_graph_version")) {
         if (sql.includes("WHERE lifecycle_status = 'ACTIVE'")) {
@@ -418,6 +428,64 @@ describe("loadPedGraph", () => {
     const graph = await loadPedGraph(client);
 
     expect(graph.edgeRampPoints.size).toBe(0);
+  });
+
+  it("derives HAS_KERB_RAMP from ped_ramp_edge for every mapped edge and no other", async () => {
+    const fixture = coreFixture();
+    fixture.rampPoints = [
+      { edge_id: "2000000000001", lon: 121.5005, lat: 25.0501 },
+    ];
+    const { client } = createQueryable(fixture);
+
+    const graph = await loadPedGraph(client);
+
+    expect(graph.edgeFlags[0] & EDGE_FLAG.HAS_KERB_RAMP).toBe(
+      EDGE_FLAG.HAS_KERB_RAMP,
+    );
+    expect(graph.edgeFlags[1] & EDGE_FLAG.HAS_KERB_RAMP).toBe(0);
+  });
+
+  it("leaves HAS_KERB_RAMP at zero without throwing when ped_ramp_edge does not exist", async () => {
+    const fixture = coreFixture();
+    fixture.rampEdgeTableExists = false;
+    fixture.rampPoints = [
+      { edge_id: "2000000000001", lon: 121.5005, lat: 25.0501 },
+    ];
+    const { client } = createQueryable(fixture);
+
+    const graph = await loadPedGraph(client);
+
+    for (const flags of graph.edgeFlags) {
+      expect(flags & EDGE_FLAG.HAS_KERB_RAMP).toBe(0);
+    }
+  });
+
+  it("derives NODE_FLAG.HAS_KERB_RAMP from ped_ramp_node for every matched node and no other", async () => {
+    const fixture = coreFixture();
+    fixture.rampNodeIds = [{ node_id: "1003992167380" }];
+    const { client } = createQueryable(fixture);
+
+    const graph = await loadPedGraph(client);
+
+    expect(graph.nodeFlags[0] & NODE_FLAG.HAS_KERB_RAMP).toBe(0);
+    expect(graph.nodeFlags[1] & NODE_FLAG.HAS_KERB_RAMP).toBe(
+      NODE_FLAG.HAS_KERB_RAMP,
+    );
+    expect(graph.nodeFlags[2] & NODE_FLAG.HAS_KERB_RAMP).toBe(0);
+    expect(graph.nodeFlags[3] & NODE_FLAG.HAS_KERB_RAMP).toBe(0);
+  });
+
+  it("leaves NODE_FLAG.HAS_KERB_RAMP at zero without throwing when ped_ramp_node does not exist", async () => {
+    const fixture = coreFixture();
+    fixture.rampNodeTableExists = false;
+    fixture.rampNodeIds = [{ node_id: "1003992167380" }];
+    const { client } = createQueryable(fixture);
+
+    const graph = await loadPedGraph(client);
+
+    for (const flags of graph.nodeFlags) {
+      expect(flags & NODE_FLAG.HAS_KERB_RAMP).toBe(0);
+    }
   });
 
   it("loads an explicitly requested candidate version for diagnosis", async () => {

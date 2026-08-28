@@ -1,6 +1,7 @@
 import {
   EDGE_FLAG,
   EDGE_TYPE,
+  NODE_FLAG,
   SMOOTHNESS,
   SURFACE,
   WHEELCHAIR,
@@ -49,6 +50,22 @@ export const WHEELCHAIR_HORRIBLE_SMOOTHNESS_PENALTY_MULTIPLIER = 3;
 export const WHEELCHAIR_VERY_HORRIBLE_SMOOTHNESS_PENALTY_MULTIPLIER = 4;
 export const WHEELCHAIR_RELAXED_STEPS_PENALTY_MULTIPLIER = 12;
 export const WHEELCHAIR_ESCALATOR_PENALTY_MULTIPLIER = 8;
+/**
+ * Node-level matching (a curb ramp physically sits at the corner, i.e. the
+ * crossing's endpoint node) found neither endpoint ramped for 36.8% of
+ * crossings, so a missing observation means "not observed", not "no ramp
+ * exists". This multiplier must stay finite: treating that 36.8% as
+ * INFEASIBLE would collapse wheelchair routing across the graph.
+ */
+export const WHEELCHAIR_UNRAMPED_CROSSING_PENALTY_MULTIPLIER = 3;
+/**
+ * Applied when exactly one endpoint of a crossing has an observed curb ramp.
+ * A wheelchair user who can descend one side but not climb the other still
+ * cannot complete the crossing, so this stays strictly between the neutral
+ * multiplier (both ends ramped) and {@link WHEELCHAIR_UNRAMPED_CROSSING_PENALTY_MULTIPLIER}
+ * (neither end observed) rather than matching either extreme.
+ */
+export const WHEELCHAIR_ONE_SIDED_KERB_RAMP_PENALTY_MULTIPLIER = 2;
 
 export interface CostProfile {
   name: "wheelchair" | "elderly" | "visual_impaired" | "normal";
@@ -280,6 +297,40 @@ function stepsPenalty(
 /**
  * @param graph CSR pedestrian graph.
  * @param attrIdx Edge attribute index.
+ * @param fromNode Dense node index of the edge's start endpoint.
+ * @param toNode Dense node index of the edge's end endpoint.
+ * @returns A finite penalty multiplier keyed on how many endpoints of a
+ * crossing carry an observed curb ramp: neutral when both do, a middle
+ * multiplier when only one does, and the full unramped multiplier when
+ * neither does. The neutral multiplier applies to every non-`CROSSING` edge
+ * type. Never INFEASIBLE: missing curb ramp data means the corner was not
+ * observed, not that it is impassable.
+ */
+function kerbRampPenalty(
+  graph: PedGraph,
+  attrIdx: number,
+  fromNode: number,
+  toNode: number,
+): number {
+  if (graph.edgeType[attrIdx] !== EDGE_TYPE.CROSSING) {
+    return MINIMUM_PENALTY_MULTIPLIER;
+  }
+  const fromHasKerbRamp =
+    (graph.nodeFlags[fromNode] & NODE_FLAG.HAS_KERB_RAMP) !== 0;
+  const toHasKerbRamp =
+    (graph.nodeFlags[toNode] & NODE_FLAG.HAS_KERB_RAMP) !== 0;
+  if (fromHasKerbRamp && toHasKerbRamp) {
+    return MINIMUM_PENALTY_MULTIPLIER;
+  }
+  if (fromHasKerbRamp || toHasKerbRamp) {
+    return WHEELCHAIR_ONE_SIDED_KERB_RAMP_PENALTY_MULTIPLIER;
+  }
+  return WHEELCHAIR_UNRAMPED_CROSSING_PENALTY_MULTIPLIER;
+}
+
+/**
+ * @param graph CSR pedestrian graph.
+ * @param attrIdx Edge attribute index.
  * @returns The escalator multiplier, high but finite so the edge stays usable.
  */
 function escalatorPenalty(graph: PedGraph, attrIdx: number): number {
@@ -332,12 +383,18 @@ function applyAdditivePenalty(cost: number, penaltyM: number): number {
  * @param graph CSR pedestrian graph.
  * @param attrIdx Edge attribute index.
  * @param profile Requested accessibility cost profile.
+ * @param fromNode Dense node index of the edge's start endpoint, used only by
+ * the node-level {@link kerbRampPenalty}.
+ * @param toNode Dense node index of the edge's end endpoint, used only by the
+ * node-level {@link kerbRampPenalty}.
  * @returns A finite weighted-metre cost or INFEASIBLE when the edge cannot be used.
  */
 export function edgeCost(
   graph: PedGraph,
   attrIdx: number,
   profile: CostProfile,
+  fromNode: number,
+  toNode: number,
 ): number {
   if (!isValidAttributeIndex(graph, attrIdx)) {
     return INFEASIBLE;
@@ -357,6 +414,7 @@ export function edgeCost(
     wheelchairTagPenalty(graph, attrIdx),
     stepsPenalty(graph, attrIdx, profile),
     escalatorPenalty(graph, attrIdx),
+    kerbRampPenalty(graph, attrIdx, fromNode, toNode),
   ];
   let cost = unpenalizedCost;
   for (const multiplier of multipliers) {

@@ -16,6 +16,7 @@ import {
   WHEELCHAIR_MODERATE_SLOPE_PENALTY_MULTIPLIER,
   WHEELCHAIR_NARROW_WIDTH_M,
   WHEELCHAIR_NARROW_WIDTH_PENALTY_MULTIPLIER,
+  WHEELCHAIR_ONE_SIDED_KERB_RAMP_PENALTY_MULTIPLIER,
   WHEELCHAIR_RELAXED_EXTREME_SLOPE_PENALTY_MULTIPLIER,
   WHEELCHAIR_RELAXED_MIN_WIDTH_PENALTY_MULTIPLIER,
   WHEELCHAIR_RELAXED_STEPS_PENALTY_MULTIPLIER,
@@ -25,6 +26,7 @@ import {
   WHEELCHAIR_RELAX_NARROW_WIDTH_LEVEL,
   WHEELCHAIR_RELAX_STEPS_LEVEL,
   WHEELCHAIR_STEEP_SLOPE_PENALTY_MULTIPLIER,
+  WHEELCHAIR_UNRAMPED_CROSSING_PENALTY_MULTIPLIER,
   WHEELCHAIR_UNSTABLE_SURFACE_PENALTY_MULTIPLIER,
   WHEELCHAIR_VERY_BAD_SMOOTHNESS_PENALTY_MULTIPLIER,
   WHEELCHAIR_VERY_HORRIBLE_SMOOTHNESS_PENALTY_MULTIPLIER,
@@ -37,6 +39,7 @@ import {
 import {
   EDGE_FLAG,
   EDGE_TYPE,
+  NODE_FLAG,
   SMOOTHNESS,
   SURFACE,
   WHEELCHAIR,
@@ -53,10 +56,13 @@ interface EdgeFixture {
   traversalTimeS: number;
   edgeType: number;
   flags: number;
+  fromNodeFlags: number;
+  toNodeFlags: number;
 }
 
 /**
- * @param edge Edge values to place at attribute index zero.
+ * @param edge Edge values to place at attribute index zero, plus optional
+ * node flags for the edge's two endpoints (dense node 0 and node 1).
  * @returns A minimal CSR graph containing the supplied edge attributes.
  */
 function createGraph(edge: Partial<EdgeFixture> = {}): PedGraph {
@@ -67,7 +73,10 @@ function createGraph(edge: Partial<EdgeFixture> = {}): PedGraph {
     undirectedEdgeCount: 1,
     nodeLon: Float64Array.from([121.5, 121.501]),
     nodeLat: Float64Array.from([25.05, 25.05]),
-    nodeFlags: new Uint8Array(2),
+    nodeFlags: Uint8Array.from([
+      edge.fromNodeFlags ?? 0,
+      edge.toNodeFlags ?? 0,
+    ]),
     nodeStationId: Int32Array.from([-1, -1]),
     stationIds: Object.freeze([]),
     stationRadiusM: new Float32Array(),
@@ -111,8 +120,8 @@ describe("edgeCost", () => {
   it("rejects invalid edge indices", () => {
     const graph = createGraph();
 
-    expect(edgeCost(graph, -1, wheelchairProfile())).toBe(INFEASIBLE);
-    expect(edgeCost(graph, 0.5, wheelchairProfile())).toBe(INFEASIBLE);
+    expect(edgeCost(graph, -1, wheelchairProfile(), 0, 1)).toBe(INFEASIBLE);
+    expect(edgeCost(graph, 0.5, wheelchairProfile(), 0, 1)).toBe(INFEASIBLE);
   });
 
   it("costs the three neutral profiles as base traversal without any penalty", () => {
@@ -132,11 +141,17 @@ describe("edgeCost", () => {
     for (const name of ["normal", "elderly", "visual_impaired"] as const) {
       for (const relaxationLevel of [0, 1, 2, 3]) {
         expect(
-          edgeCost(graph, 0, { name, walkSpeedMps: 1.3, relaxationLevel }),
+          edgeCost(
+            graph,
+            0,
+            { name, walkSpeedMps: 1.3, relaxationLevel },
+            0,
+            1,
+          ),
         ).toBe(100);
       }
     }
-    expect(edgeCost(graph, 0, wheelchairProfile())).toBe(INFEASIBLE);
+    expect(edgeCost(graph, 0, wheelchairProfile(), 0, 1)).toBe(INFEASIBLE);
   });
 
   it("keeps neutral indoor cost at traversal time times the profile speed", () => {
@@ -148,11 +163,17 @@ describe("edgeCost", () => {
     });
 
     expect(
-      edgeCost(graph, 0, {
-        name: "normal",
-        walkSpeedMps: 1.3,
-        relaxationLevel: 0,
-      }),
+      edgeCost(
+        graph,
+        0,
+        {
+          name: "normal",
+          walkSpeedMps: 1.3,
+          relaxationLevel: 0,
+        },
+        0,
+        1,
+      ),
     ).toBeCloseTo(26, 4);
   });
 
@@ -160,7 +181,7 @@ describe("edgeCost", () => {
     const graph = createGraph({ lengthM: 100, slopeRatio: 0.06 });
 
     // Locked wheelchair value: 100 m at 6% keeps the moderate-slope multiplier.
-    expect(edgeCost(graph, 0, wheelchairProfile())).toBeCloseTo(150, 4);
+    expect(edgeCost(graph, 0, wheelchairProfile(), 0, 1)).toBeCloseTo(150, 4);
     for (const name of [
       "wheelchair",
       "normal",
@@ -168,14 +189,14 @@ describe("edgeCost", () => {
       "visual_impaired",
     ] as const) {
       expect(() =>
-        edgeCost(graph, 0, { name, walkSpeedMps: 1, relaxationLevel: 0 }),
+        edgeCost(graph, 0, { name, walkSpeedMps: 1, relaxationLevel: 0 }, 0, 1),
       ).not.toThrow();
     }
   });
 
   it("uses outdoor length and indoor traversal time as weighted metres", () => {
     expect(
-      edgeCost(createGraph({ lengthM: 100 }), 0, wheelchairProfile()),
+      edgeCost(createGraph({ lengthM: 100 }), 0, wheelchairProfile(), 0, 1),
     ).toBe(100);
     expect(
       edgeCost(
@@ -186,6 +207,8 @@ describe("edgeCost", () => {
         }),
         0,
         wheelchairProfile(),
+        0,
+        1,
       ),
     ).toBe(25 * WHEELCHAIR_WALK_SPEED_MPS);
     expect(
@@ -198,6 +221,8 @@ describe("edgeCost", () => {
         }),
         0,
         wheelchairProfile(),
+        0,
+        1,
       ),
     ).toBe(5);
     expect(
@@ -209,10 +234,18 @@ describe("edgeCost", () => {
         }),
         0,
         wheelchairProfile(),
+        0,
+        1,
       ),
     ).toBe(UNMEASURABLE_INDOOR_PROXY_COST_M);
     expect(
-      edgeCost(createGraph({ lengthM: Number.NaN }), 0, wheelchairProfile()),
+      edgeCost(
+        createGraph({ lengthM: Number.NaN }),
+        0,
+        wheelchairProfile(),
+        0,
+        1,
+      ),
     ).toBe(INFEASIBLE);
     expect(
       edgeCost(
@@ -222,36 +255,48 @@ describe("edgeCost", () => {
         }),
         0,
         wheelchairProfile(0, -WHEELCHAIR_WALK_SPEED_MPS),
+        0,
+        1,
       ),
     ).toBe(INFEASIBLE);
   });
 
   it("keeps the 8-12 percent band at a fixed cost that no relaxation level lowers", () => {
     expect(
-      edgeCost(createGraph({ slopeRatio: 0.08 }), 0, wheelchairProfile()),
+      edgeCost(createGraph({ slopeRatio: 0.08 }), 0, wheelchairProfile(), 0, 1),
     ).toBe(100 * WHEELCHAIR_STEEP_SLOPE_PENALTY_MULTIPLIER);
     expect(
-      edgeCost(createGraph({ slopeRatio: 0.12 }), 0, wheelchairProfile()),
+      edgeCost(createGraph({ slopeRatio: 0.12 }), 0, wheelchairProfile(), 0, 1),
     ).toBe(100 * WHEELCHAIR_STEEP_SLOPE_PENALTY_MULTIPLIER);
     expect(
       edgeCost(
         createGraph({ slopeRatio: 0.08 }),
         0,
         wheelchairProfile(WHEELCHAIR_MAX_RELAXATION_LEVEL),
+        0,
+        1,
       ),
     ).toBe(100 * WHEELCHAIR_STEEP_SLOPE_PENALTY_MULTIPLIER);
     expect(
-      edgeCost(createGraph({ slopeRatio: 0.1201 }), 0, wheelchairProfile()),
+      edgeCost(
+        createGraph({ slopeRatio: 0.1201 }),
+        0,
+        wheelchairProfile(),
+        0,
+        1,
+      ),
     ).toBe(INFEASIBLE);
     expect(
       edgeCost(
         createGraph({ slopeRatio: 0.1201 }),
         0,
         wheelchairProfile(WHEELCHAIR_RELAX_EXTREME_SLOPE_LEVEL),
+        0,
+        1,
       ),
     ).toBe(100 * WHEELCHAIR_RELAXED_EXTREME_SLOPE_PENALTY_MULTIPLIER);
     expect(
-      edgeCost(createGraph({ slopeRatio: 0.05 }), 0, wheelchairProfile()),
+      edgeCost(createGraph({ slopeRatio: 0.05 }), 0, wheelchairProfile(), 0, 1),
     ).toBe(100 * WHEELCHAIR_MODERATE_SLOPE_PENALTY_MULTIPLIER);
   });
 
@@ -261,16 +306,20 @@ describe("edgeCost", () => {
         createGraph({ widthM: WHEELCHAIR_MIN_EFFECTIVE_WIDTH_M }),
         0,
         wheelchairProfile(),
+        0,
+        1,
       ),
     ).toBe(100 * WHEELCHAIR_NARROW_WIDTH_PENALTY_MULTIPLIER);
     expect(
-      edgeCost(createGraph({ widthM: 0.899 }), 0, wheelchairProfile()),
+      edgeCost(createGraph({ widthM: 0.899 }), 0, wheelchairProfile(), 0, 1),
     ).toBe(INFEASIBLE);
     expect(
       edgeCost(
         createGraph({ widthM: 0.899 }),
         0,
         wheelchairProfile(WHEELCHAIR_RELAX_NARROW_WIDTH_LEVEL),
+        0,
+        1,
       ),
     ).toBe(100 * WHEELCHAIR_RELAXED_MIN_WIDTH_PENALTY_MULTIPLIER);
     expect(
@@ -278,6 +327,8 @@ describe("edgeCost", () => {
         createGraph({ widthM: WHEELCHAIR_NARROW_WIDTH_M }),
         0,
         wheelchairProfile(),
+        0,
+        1,
       ),
     ).toBe(100 * WHEELCHAIR_MEDIUM_WIDTH_PENALTY_MULTIPLIER);
     expect(
@@ -285,6 +336,8 @@ describe("edgeCost", () => {
         createGraph({ widthM: WHEELCHAIR_MEDIUM_WIDTH_M }),
         0,
         wheelchairProfile(),
+        0,
+        1,
       ),
     ).toBe(100 * WHEELCHAIR_WIDE_WIDTH_PENALTY_MULTIPLIER);
     expect(
@@ -292,6 +345,8 @@ describe("edgeCost", () => {
         createGraph({ widthM: WHEELCHAIR_WIDE_WIDTH_M }),
         0,
         wheelchairProfile(),
+        0,
+        1,
       ),
     ).toBe(100);
   });
@@ -304,12 +359,16 @@ describe("edgeCost", () => {
     });
     const baseCost = 50 * WHEELCHAIR_WALK_SPEED_MPS;
 
-    expect(edgeCost(indoorStairs, 0, wheelchairProfile())).toBe(INFEASIBLE);
+    expect(edgeCost(indoorStairs, 0, wheelchairProfile(), 0, 1)).toBe(
+      INFEASIBLE,
+    );
     expect(
       edgeCost(
         indoorStairs,
         0,
         wheelchairProfile(WHEELCHAIR_RELAX_STEPS_LEVEL),
+        0,
+        1,
       ),
     ).toBe(baseCost * WHEELCHAIR_RELAXED_STEPS_PENALTY_MULTIPLIER);
     expect(
@@ -321,6 +380,8 @@ describe("edgeCost", () => {
         }),
         0,
         wheelchairProfile(),
+        0,
+        1,
       ),
     ).toBe(INFEASIBLE);
   });
@@ -338,10 +399,10 @@ describe("edgeCost", () => {
     });
     const baseCost = 20 * WHEELCHAIR_WALK_SPEED_MPS;
 
-    expect(edgeCost(escalator, 0, wheelchairProfile())).toBe(
+    expect(edgeCost(escalator, 0, wheelchairProfile(), 0, 1)).toBe(
       baseCost * WHEELCHAIR_ESCALATOR_PENALTY_MULTIPLIER,
     );
-    expect(edgeCost(walkway, 0, wheelchairProfile())).toBe(baseCost);
+    expect(edgeCost(walkway, 0, wheelchairProfile(), 0, 1)).toBe(baseCost);
     expect(
       edgeCost(
         createGraph({
@@ -351,6 +412,8 @@ describe("edgeCost", () => {
         }),
         0,
         wheelchairProfile(),
+        0,
+        1,
       ),
     ).toBe(baseCost);
   });
@@ -358,9 +421,9 @@ describe("edgeCost", () => {
   it("keeps unramped steps infeasible until level four", () => {
     const steps = createGraph({ edgeType: EDGE_TYPE.STEPS });
 
-    expect(edgeCost(steps, 0, wheelchairProfile())).toBe(INFEASIBLE);
+    expect(edgeCost(steps, 0, wheelchairProfile(), 0, 1)).toBe(INFEASIBLE);
     expect(
-      edgeCost(steps, 0, wheelchairProfile(WHEELCHAIR_RELAX_STEPS_LEVEL)),
+      edgeCost(steps, 0, wheelchairProfile(WHEELCHAIR_RELAX_STEPS_LEVEL), 0, 1),
     ).toBe(100 * WHEELCHAIR_RELAXED_STEPS_PENALTY_MULTIPLIER);
     expect(
       edgeCost(
@@ -370,8 +433,105 @@ describe("edgeCost", () => {
         }),
         0,
         wheelchairProfile(),
+        0,
+        1,
       ),
     ).toBe(100);
+  });
+
+  it("penalizes an unramped crossing and leaves a both-ends-ramped crossing neutral for wheelchairs", () => {
+    const unramped = createGraph({ edgeType: EDGE_TYPE.CROSSING });
+    const bothRamped = createGraph({
+      edgeType: EDGE_TYPE.CROSSING,
+      fromNodeFlags: NODE_FLAG.HAS_KERB_RAMP,
+      toNodeFlags: NODE_FLAG.HAS_KERB_RAMP,
+    });
+
+    expect(edgeCost(unramped, 0, wheelchairProfile(), 0, 1)).toBe(
+      100 * WHEELCHAIR_UNRAMPED_CROSSING_PENALTY_MULTIPLIER,
+    );
+    expect(edgeCost(bothRamped, 0, wheelchairProfile(), 0, 1)).toBe(100);
+  });
+
+  it("applies a middle penalty when only one endpoint of a crossing has an observed kerb ramp", () => {
+    const rampedFromOnly = createGraph({
+      edgeType: EDGE_TYPE.CROSSING,
+      fromNodeFlags: NODE_FLAG.HAS_KERB_RAMP,
+    });
+    const rampedToOnly = createGraph({
+      edgeType: EDGE_TYPE.CROSSING,
+      toNodeFlags: NODE_FLAG.HAS_KERB_RAMP,
+    });
+
+    expect(edgeCost(rampedFromOnly, 0, wheelchairProfile(), 0, 1)).toBe(
+      100 * WHEELCHAIR_ONE_SIDED_KERB_RAMP_PENALTY_MULTIPLIER,
+    );
+    expect(edgeCost(rampedToOnly, 0, wheelchairProfile(), 0, 1)).toBe(
+      100 * WHEELCHAIR_ONE_SIDED_KERB_RAMP_PENALTY_MULTIPLIER,
+    );
+  });
+
+  it("strictly orders crossing cost by endpoint ramp observation: both < one < neither", () => {
+    const both = createGraph({
+      edgeType: EDGE_TYPE.CROSSING,
+      fromNodeFlags: NODE_FLAG.HAS_KERB_RAMP,
+      toNodeFlags: NODE_FLAG.HAS_KERB_RAMP,
+    });
+    const one = createGraph({
+      edgeType: EDGE_TYPE.CROSSING,
+      fromNodeFlags: NODE_FLAG.HAS_KERB_RAMP,
+    });
+    const neither = createGraph({ edgeType: EDGE_TYPE.CROSSING });
+
+    const bothCost = edgeCost(both, 0, wheelchairProfile(), 0, 1);
+    const oneCost = edgeCost(one, 0, wheelchairProfile(), 0, 1);
+    const neitherCost = edgeCost(neither, 0, wheelchairProfile(), 0, 1);
+
+    expect(bothCost).toBeLessThan(oneCost);
+    expect(oneCost).toBeLessThan(neitherCost);
+  });
+
+  it("never returns INFEASIBLE for an unramped crossing at any relaxation level", () => {
+    const unramped = createGraph({ edgeType: EDGE_TYPE.CROSSING });
+
+    for (
+      let relaxationLevel = 0;
+      relaxationLevel <= WHEELCHAIR_MAX_RELAXATION_LEVEL;
+      relaxationLevel += 1
+    ) {
+      expect(
+        edgeCost(unramped, 0, wheelchairProfile(relaxationLevel), 0, 1),
+      ).not.toBe(INFEASIBLE);
+    }
+  });
+
+  it("does not let NODE_FLAG.HAS_KERB_RAMP make unramped steps passable for wheelchairs", () => {
+    const kerbRampedSteps = createGraph({
+      edgeType: EDGE_TYPE.STEPS,
+      fromNodeFlags: NODE_FLAG.HAS_KERB_RAMP,
+      toNodeFlags: NODE_FLAG.HAS_KERB_RAMP,
+    });
+
+    expect(edgeCost(kerbRampedSteps, 0, wheelchairProfile(), 0, 1)).toBe(
+      INFEASIBLE,
+    );
+  });
+
+  it("leaves the normal profile unaffected by NODE_FLAG.HAS_KERB_RAMP on a crossing", () => {
+    const unramped = createGraph({ edgeType: EDGE_TYPE.CROSSING });
+    const bothRamped = createGraph({
+      edgeType: EDGE_TYPE.CROSSING,
+      fromNodeFlags: NODE_FLAG.HAS_KERB_RAMP,
+      toNodeFlags: NODE_FLAG.HAS_KERB_RAMP,
+    });
+    const normalProfile: CostProfile = {
+      name: "normal",
+      walkSpeedMps: WHEELCHAIR_WALK_SPEED_MPS,
+      relaxationLevel: 0,
+    };
+
+    expect(edgeCost(unramped, 0, normalProfile, 0, 1)).toBe(100);
+    expect(edgeCost(bothRamped, 0, normalProfile, 0, 1)).toBe(100);
   });
 
   it("treats unknown numeric and dictionary attributes as neutral", () => {
@@ -385,6 +545,8 @@ describe("edgeCost", () => {
       }),
       0,
       wheelchairProfile(),
+      0,
+      1,
     );
     const knownNeutral = edgeCost(
       createGraph({
@@ -394,6 +556,8 @@ describe("edgeCost", () => {
       }),
       0,
       wheelchairProfile(),
+      0,
+      1,
     );
 
     expect(unknown).toBe(100);
@@ -434,17 +598,23 @@ describe("edgeCost", () => {
     ];
 
     for (const surface of looseSurfaces) {
-      expect(edgeCost(createGraph({ surface }), 0, wheelchairProfile())).toBe(
-        100 * WHEELCHAIR_LOOSE_SURFACE_PENALTY_MULTIPLIER,
-      );
+      expect(
+        edgeCost(createGraph({ surface }), 0, wheelchairProfile(), 0, 1),
+      ).toBe(100 * WHEELCHAIR_LOOSE_SURFACE_PENALTY_MULTIPLIER);
     }
     for (const surface of unstableSurfaces) {
-      expect(edgeCost(createGraph({ surface }), 0, wheelchairProfile())).toBe(
-        100 * WHEELCHAIR_UNSTABLE_SURFACE_PENALTY_MULTIPLIER,
-      );
+      expect(
+        edgeCost(createGraph({ surface }), 0, wheelchairProfile(), 0, 1),
+      ).toBe(100 * WHEELCHAIR_UNSTABLE_SURFACE_PENALTY_MULTIPLIER);
     }
     expect(
-      edgeCost(createGraph({ surface: SURFACE.OTHER }), 0, wheelchairProfile()),
+      edgeCost(
+        createGraph({ surface: SURFACE.OTHER }),
+        0,
+        wheelchairProfile(),
+        0,
+        1,
+      ),
     ).toBe(100);
   });
 
@@ -454,6 +624,8 @@ describe("edgeCost", () => {
         createGraph({ smoothness: SMOOTHNESS.INTERMEDIATE }),
         0,
         wheelchairProfile(),
+        0,
+        1,
       ),
     ).toBe(100 * WHEELCHAIR_INTERMEDIATE_SMOOTHNESS_PENALTY_MULTIPLIER);
     expect(
@@ -461,6 +633,8 @@ describe("edgeCost", () => {
         createGraph({ smoothness: SMOOTHNESS.BAD }),
         0,
         wheelchairProfile(),
+        0,
+        1,
       ),
     ).toBe(100 * WHEELCHAIR_BAD_SMOOTHNESS_PENALTY_MULTIPLIER);
     expect(
@@ -468,6 +642,8 @@ describe("edgeCost", () => {
         createGraph({ smoothness: SMOOTHNESS.VERY_BAD }),
         0,
         wheelchairProfile(),
+        0,
+        1,
       ),
     ).toBe(100 * WHEELCHAIR_VERY_BAD_SMOOTHNESS_PENALTY_MULTIPLIER);
     expect(
@@ -475,6 +651,8 @@ describe("edgeCost", () => {
         createGraph({ smoothness: SMOOTHNESS.HORRIBLE }),
         0,
         wheelchairProfile(),
+        0,
+        1,
       ),
     ).toBe(100 * WHEELCHAIR_HORRIBLE_SMOOTHNESS_PENALTY_MULTIPLIER);
     expect(
@@ -482,6 +660,8 @@ describe("edgeCost", () => {
         createGraph({ smoothness: SMOOTHNESS.VERY_HORRIBLE }),
         0,
         wheelchairProfile(),
+        0,
+        1,
       ),
     ).toBe(100 * WHEELCHAIR_VERY_HORRIBLE_SMOOTHNESS_PENALTY_MULTIPLIER);
     expect(
@@ -489,6 +669,8 @@ describe("edgeCost", () => {
         createGraph({ smoothness: SMOOTHNESS.IMPASSABLE }),
         0,
         wheelchairProfile(),
+        0,
+        1,
       ),
     ).toBe(INFEASIBLE);
     expect(
@@ -496,6 +678,8 @@ describe("edgeCost", () => {
         createGraph({ wheelchair: WHEELCHAIR.LIMITED }),
         0,
         wheelchairProfile(),
+        0,
+        1,
       ),
     ).toBe(100 * WHEELCHAIR_LIMITED_TAG_PENALTY_MULTIPLIER);
     expect(
@@ -503,6 +687,8 @@ describe("edgeCost", () => {
         createGraph({ wheelchair: WHEELCHAIR.NO }),
         0,
         wheelchairProfile(),
+        0,
+        1,
       ),
     ).toBe(INFEASIBLE);
   });
@@ -527,6 +713,7 @@ describe("edgeCost", () => {
       WHEELCHAIR_VERY_HORRIBLE_SMOOTHNESS_PENALTY_MULTIPLIER,
       WHEELCHAIR_RELAXED_STEPS_PENALTY_MULTIPLIER,
       WHEELCHAIR_ESCALATOR_PENALTY_MULTIPLIER,
+      WHEELCHAIR_UNRAMPED_CROSSING_PENALTY_MULTIPLIER,
     ];
 
     for (const multiplier of multipliers) {

@@ -19,7 +19,14 @@ export interface CsrWalkAccessibility {
   maxSlopePercent: number | null;
   /** Number of traversed crossing edges, or null when the path has no edges. */
   crossings: number | null;
-  /** Crossing edges whose kerb is tagged as ramped, or null when unmeasured. */
+  /**
+   * Crossing edges counted as ramped: either the OSM `has_ramp` edge tag, or
+   * a government curb ramp point (Taipei New Construction Office) matched to
+   * BOTH endpoint nodes. Only-one-endpoint matches are deliberately excluded
+   * — a wheelchair user who can descend one side but not climb the other
+   * still cannot cross — so this never overstates usable crossings. Null
+   * when unmeasured, not zero.
+   */
   crossingsWithCurbRamp: number | null;
   /** Narrowest net usable width in centimetres, or null when unmeasured. */
   minPathWidthCm: number | null;

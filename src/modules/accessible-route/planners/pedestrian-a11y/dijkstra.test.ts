@@ -114,8 +114,8 @@ describe("dijkstra", () => {
     expect(result).not.toBeNull();
     expect(Array.from(result?.nodePath ?? [])).toEqual([0, 1, 2]);
     expect(result?.totalCost).toBe(
-      edgeCost(graph, 1, wheelchairProfile()) +
-        edgeCost(graph, 2, wheelchairProfile()),
+      edgeCost(graph, 1, wheelchairProfile(), 0, 1) +
+        edgeCost(graph, 2, wheelchairProfile(), 1, 2),
     );
     expect(result?.reopenedNodes).toBe(0);
   });
@@ -140,7 +140,7 @@ describe("dijkstra", () => {
     expect(relaxed).not.toBeNull();
     expect(Array.from(relaxed?.nodePath ?? [])).toEqual([0, 2]);
     expect(relaxed?.totalCost).toBe(
-      edgeCost(graph, 0, wheelchairProfile(WHEELCHAIR_RELAX_STEPS_LEVEL)),
+      edgeCost(graph, 0, wheelchairProfile(WHEELCHAIR_RELAX_STEPS_LEVEL), 0, 2),
     );
   });
 

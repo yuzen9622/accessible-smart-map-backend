@@ -6,6 +6,16 @@ import {
   type PedGraph,
 } from "./graph.types";
 
+const RAMP_NODE_TABLE_EXISTS_QUERY = `
+  SELECT to_regclass('ped_ramp_node') IS NOT NULL AS table_exists
+`;
+
+const RAMP_NODE_IDS_QUERY = `
+  SELECT DISTINCT node_id::text AS node_id
+  FROM ped_ramp_node
+  WHERE version_id = $1
+`;
+
 const PAGE_SIZE = 10_000;
 const MIN_BIGINT = "-9223372036854775808";
 const MAX_INT32 = 2_147_483_647;
@@ -209,6 +219,10 @@ interface RampPointRow {
   edge_id: unknown;
   lon: unknown;
   lat: unknown;
+}
+
+interface RampNodeIdRow {
+  node_id: unknown;
 }
 
 interface NodeStorage {
@@ -536,6 +550,47 @@ async function loadEdgeRampPoints(
     }
   }
   return edgeRampPoints;
+}
+
+/**
+ * @param client Queryable PostgreSQL client.
+ * @returns Whether `ped_ramp_node` exists yet. It is created by the same
+ * standalone import script as `ped_ramp_edge` and may not have run yet, so
+ * its absence must never fail loading the graph itself.
+ */
+async function rampNodeTableExists(
+  client: PedGraphQueryable,
+): Promise<boolean> {
+  const result = await client.query<WayNameTableRow>(
+    RAMP_NODE_TABLE_EXISTS_QUERY,
+  );
+  const row = result.rows[0];
+  if (row === undefined) return false;
+  return booleanValue(row.table_exists, "table_exists");
+}
+
+/**
+ * @param client Queryable PostgreSQL client.
+ * @param versionId Resolved graph version identifier.
+ * @param originalNodeId Sorted original database node identifiers, dense-index aligned.
+ * @returns Dense node indexes with at least one matched curb ramp point.
+ */
+async function loadRampNodeIndexes(
+  client: PedGraphQueryable,
+  versionId: number,
+  originalNodeId: BigInt64Array,
+): Promise<number[]> {
+  const result = await client.query<RampNodeIdRow>(RAMP_NODE_IDS_QUERY, [
+    versionId,
+  ]);
+  const nodeIndexes: number[] = [];
+  for (const row of result.rows) {
+    const nodeId = bigintValue(row.node_id, "ramp node_id");
+    const nodeIndex = findNodeIndex(originalNodeId, nodeId);
+    if (nodeIndex === -1) continue;
+    nodeIndexes.push(nodeIndex);
+  }
+  return nodeIndexes;
 }
 
 /**
@@ -1006,6 +1061,26 @@ export async function loadPedGraph(
         edgeStorage.edgeOriginalId,
       )
     : new Map<number, readonly [number, number][]>();
+  for (const attrIdx of edgeRampPoints.keys()) {
+    edgeStorage.edgeFlags[attrIdx] |= EDGE_FLAG.HAS_KERB_RAMP;
+  }
+
+  const hasRampNodeTable = await rampNodeTableExists(client);
+  if (!hasRampNodeTable) {
+    console.warn(
+      "[graph-loader] ped_ramp_node not found; node-level kerb ramps disabled until the import runs",
+    );
+  }
+  if (hasRampNodeTable) {
+    const rampNodeIndexes = await loadRampNodeIndexes(
+      client,
+      version.versionId,
+      nodeStorage.originalNodeId,
+    );
+    for (const nodeIndex of rampNodeIndexes) {
+      nodeStorage.nodeFlags[nodeIndex] |= NODE_FLAG.HAS_KERB_RAMP;
+    }
+  }
 
   return {
     versionId: version.versionId,

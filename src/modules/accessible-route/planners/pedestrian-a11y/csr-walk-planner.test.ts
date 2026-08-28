@@ -1019,6 +1019,112 @@ describe("planCsrWalkRoute mode profiles", () => {
   });
 });
 
+describe("planCsrWalkRoute crossingsWithCurbRamp", () => {
+  /**
+   * @param fromNodeFlags Node flags for the crossing's start endpoint.
+   * @param toNodeFlags Node flags for the crossing's end endpoint.
+   * @param edgeFlags Edge-level flags on both directed crossing edges.
+   * @returns A single-crossing corridor with the requested endpoint and edge flags.
+   */
+  function singleCrossingGraph(
+    fromNodeFlags: number,
+    toNodeFlags: number,
+    edgeFlags = 0,
+  ): PedGraph {
+    return graphFromEdges({
+      nodeLon: [TAIPEI_LNG, TAIPEI_LNG],
+      nodeLat: [A_LAT, C_LAT],
+      nodeFlags: [
+        NODE_FLAG.HAS_REAL_GEOM | fromNodeFlags,
+        NODE_FLAG.HAS_REAL_GEOM | toNodeFlags,
+      ],
+      edges: [
+        {
+          from: 0,
+          to: 1,
+          lengthM: 110,
+          edgeType: EDGE_TYPE.CROSSING,
+          flags: edgeFlags,
+        },
+        {
+          from: 1,
+          to: 0,
+          lengthM: 110,
+          edgeType: EDGE_TYPE.CROSSING,
+          flags: edgeFlags,
+        },
+      ],
+    });
+  }
+
+  /** @returns The geometry client stub shared by every crossing scenario. */
+  function crossingGeometryClient() {
+    return geometryClient({
+      "1000": lineString([
+        [TAIPEI_LNG, A_LAT],
+        [TAIPEI_LNG, C_LAT],
+      ]),
+    });
+  }
+
+  it("counts a crossing whose BOTH endpoint nodes carry a matched kerb ramp", async () => {
+    serveGraph(
+      singleCrossingGraph(NODE_FLAG.HAS_KERB_RAMP, NODE_FLAG.HAS_KERB_RAMP),
+    );
+    vi.mocked(getPedGraphClient).mockResolvedValue(crossingGeometryClient());
+
+    const result = await planCsrWalkRoute([originPoint, destinationPoint], {
+      mode: "normal",
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.plans[0].accessibility.crossings).toBe(1);
+    expect(result.plans[0].accessibility.crossingsWithCurbRamp).toBe(1);
+  });
+
+  it("does NOT count a crossing whose kerb ramp is matched at only one endpoint", async () => {
+    serveGraph(singleCrossingGraph(NODE_FLAG.HAS_KERB_RAMP, 0));
+    vi.mocked(getPedGraphClient).mockResolvedValue(crossingGeometryClient());
+
+    const result = await planCsrWalkRoute([originPoint, destinationPoint], {
+      mode: "normal",
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.plans[0].accessibility.crossings).toBe(1);
+    expect(result.plans[0].accessibility.crossingsWithCurbRamp).toBe(0);
+  });
+
+  it("does not count a crossing with no endpoint kerb ramp observation", async () => {
+    serveGraph(singleCrossingGraph(0, 0));
+    vi.mocked(getPedGraphClient).mockResolvedValue(crossingGeometryClient());
+
+    const result = await planCsrWalkRoute([originPoint, destinationPoint], {
+      mode: "normal",
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.plans[0].accessibility.crossings).toBe(1);
+    expect(result.plans[0].accessibility.crossingsWithCurbRamp).toBe(0);
+  });
+
+  it("still counts a crossing via the legacy OSM HAS_RAMP edge flag with no node observation", async () => {
+    serveGraph(singleCrossingGraph(0, 0, EDGE_FLAG.HAS_RAMP));
+    vi.mocked(getPedGraphClient).mockResolvedValue(crossingGeometryClient());
+
+    const result = await planCsrWalkRoute([originPoint, destinationPoint], {
+      mode: "normal",
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.plans[0].accessibility.crossingsWithCurbRamp).toBe(1);
+  });
+});
+
 describe("planCsrWalkRoute blocking classification", () => {
   /**
    * Corridor whose only 0 -> 4 path crosses a station fare gate, with outdoor

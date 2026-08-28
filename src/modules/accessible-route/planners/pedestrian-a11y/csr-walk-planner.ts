@@ -24,7 +24,13 @@ import {
 } from "./fare-access";
 import type { PedGraphQueryable } from "./graph-loader";
 import { getPedGraphClient, getPedGraphRuntime } from "./graph-runtime";
-import { EDGE_FLAG, EDGE_TYPE, SURFACE, type PedGraph } from "./graph.types";
+import {
+  EDGE_FLAG,
+  EDGE_TYPE,
+  NODE_FLAG,
+  SURFACE,
+  type PedGraph,
+} from "./graph.types";
 import {
   findPedEdgeGeometries,
   type LngLat,
@@ -307,11 +313,15 @@ function edgeGroundDistanceM(
  * measurement for it, so absent data is never rendered as a favourable value.
  *
  * @param graph CSR pedestrian graph.
+ * @param nodePath Dense node sequence traversed by the route, one longer than
+ * `edgeAttrPath`; `nodePath[i]`/`nodePath[i + 1]` are the endpoints of
+ * `edgeAttrPath[i]`.
  * @param edgeAttrPath Dense edge attribute identifiers, in traversal order.
  * @returns The observed accessibility summary for the path.
  */
 function summarizeAccessibility(
   graph: PedGraph,
+  nodePath: Int32Array,
   edgeAttrPath: Int32Array,
 ): CsrWalkAccessibility {
   if (edgeAttrPath.length === 0) {
@@ -331,7 +341,8 @@ function summarizeAccessibility(
   let sawLooseSurface = false;
   let sawFirmSurface = false;
 
-  for (const attrIdx of edgeAttrPath) {
+  for (let index = 0; index < edgeAttrPath.length; index += 1) {
+    const attrIdx = edgeAttrPath[index];
     const slopeRatio = graph.edgeSlope[attrIdx];
     if (Number.isFinite(slopeRatio)) {
       const slopePercent = Math.abs(slopeRatio) * 100;
@@ -350,7 +361,14 @@ function summarizeAccessibility(
 
     if (graph.edgeType[attrIdx] === EDGE_TYPE.CROSSING) {
       crossings += 1;
-      if ((graph.edgeFlags[attrIdx] & EDGE_FLAG.HAS_RAMP) !== 0) {
+      const hasOsmRampTag =
+        (graph.edgeFlags[attrIdx] & EDGE_FLAG.HAS_RAMP) !== 0;
+      const fromNode = nodePath[index];
+      const toNode = nodePath[index + 1];
+      const bothEndpointsHaveKerbRamp =
+        (graph.nodeFlags[fromNode] & NODE_FLAG.HAS_KERB_RAMP) !== 0 &&
+        (graph.nodeFlags[toNode] & NODE_FLAG.HAS_KERB_RAMP) !== 0;
+      if (hasOsmRampTag || bothEndpointsHaveKerbRamp) {
         crossingsWithCurbRamp += 1;
       }
     }
@@ -696,7 +714,11 @@ export async function planCsrWalkRoute(
       durationS: pathMeasurement.durationS + connectorDurationS,
       graphVersionId: graph.versionId,
       approximateIndoorSegmentCount: geometry.approximateIndoorSegmentCount,
-      accessibility: summarizeAccessibility(graph, route.edgeAttrPath),
+      accessibility: summarizeAccessibility(
+        graph,
+        route.nodePath,
+        route.edgeAttrPath,
+      ),
       a11ySegments: buildA11ySegments(
         graph,
         route.edgeAttrPath,

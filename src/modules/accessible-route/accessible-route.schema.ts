@@ -195,7 +195,7 @@ const WalkLegSchema = z
     crossingsWithCurbRamp: z.number().int().nonnegative().nullable().openapi({
       example: null,
       description:
-        "上述已觀測 crossing 中，明確帶 kerb_cut／dropped_kerb／坡道標籤者；null = 沒有正向的坡道觀測，不能解讀為 0。",
+        "上述已觀測 crossing 中，判定為有坡道者：來源一為 OSM kerb_cut／dropped_kerb／坡道標籤（邊層級）；來源二為臺北市新工處坡道點位資料，且須兩端路口節點皆比對到坡道點（節點層級）才計入——僅單側有坡道時輪椅仍可能過不去，因此不計入，避免高估可通行性；null = 沒有正向的坡道觀測，不能解讀為 0。",
     }),
     minPathWidthCm: z.number().positive().nullable().openapi({
       example: null,

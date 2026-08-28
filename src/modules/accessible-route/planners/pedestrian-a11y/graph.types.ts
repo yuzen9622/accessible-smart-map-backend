@@ -140,11 +140,20 @@ export const NODE_FLAG = {
   INDOOR: 1,
   ENTRANCE: 2,
   HAS_REAL_GEOM: 4,
+  /**
+   * A government curb ramp point (Taipei New Construction Office) snapped to
+   * this node within 8m, or an OSM kerb tag directly on this node. Only
+   * `edgeCost`'s `kerbRampPenalty` reads this flag, and only for
+   * `EDGE_TYPE.CROSSING`; it must never feed `stepsPenalty` — a kerb ramp at a
+   * corner does not make a staircase wheelchair-passable.
+   */
+  HAS_KERB_RAMP: 8,
 } as const;
 
 export const EDGE_FLAG = {
   HAS_RAMP: 1,
   INDOOR: 2,
+  HAS_KERB_RAMP: 4,
 } as const;
 
 const GTFS_INDOOR_EDGE_SOURCE_REF_PREFIXES = [
