@@ -451,7 +451,7 @@ gtfspathways ─┘                     ├ 節點表
 
 CSR 核心對 `INDOOR_FARE_GATE`（25）與 `INDOOR_EXIT_GATE`（26）預設拒絕；僅明確授權同一穩定母站 ID 的 transit context 可通過。純步行起點若已在付費區內也可能被過度阻擋，這是付費側拓撲尚未證實前的刻意 fail-closed 行為。Phase 0 benchmark／OTP 對照若省略授權 context，現在量測此預設，重跑時必須揭露。
 
-純步行 production assembly 現已接入 `travelMode: "walk"`；轉乘 itinerary 的 WALK leg 仍維持 OTP2。若 CSR 回 `fare_policy_blocked`，服務立即回 `422 NO_ROUTE`；若回 `accessibility_blocked`，服務立即回 `422 NO_ACCESSIBLE_ROUTE`。兩者都**不得**呼叫 OTP2 或 Valhalla，以免繞過 binding CSR block。空白或不相符的 station ID 仍在正常 gate policy 下 fail-closed；僅供 planner 丟棄結果的 allow-all diagnostic probe 可把這種損壞 gate 分類為 `fare_policy_blocked`，不會暴露給 client。
+純步行 production assembly 現已接入 `travelMode: "walk"`；轉乘 itinerary 的 WALK leg 仍維持 OTP2。若 CSR 回 `fare_policy_blocked` 或 `accessibility_blocked`，服務會落回 OTP2 first（同其餘 fallback-eligible 狀態），標記 `engine: "otp-fallback"`、`degraded: true` 並附對應原因 warning；只有 OTP2 也無路線時才回 422（`NO_ROUTE` 或 `NO_ACCESSIBLE_ROUTE`）。CSR 圖本身覆蓋率有缺口（坡道點位約 35% 無法吸附、footway 標註稀疏），把它的判定當終局會誤把資料缺口當「現場沒有無障礙路線」。空白或不相符的 station ID 仍在正常 gate policy 下 fail-closed；僅供 planner 丟棄結果的 allow-all diagnostic probe 可把這種損壞 gate 分類為 `fare_policy_blocked`，不會暴露給 client。
 
 ### 5.7 落回機制為一等公民
 
@@ -461,9 +461,8 @@ CSR 核心對 `INDOOR_FARE_GATE`（25）與 `INDOOR_EXIT_GATE`（26）預設拒�
 | ----------------------------------------------------------------- | -------------------------------------- | ---------------------------------------------- |
 | `ok`                                                              | 回傳 CSR 路線                          | `pedestrian-a11y`；不降級                      |
 | feature disabled 或台北 bbox 外                                   | OTP2 primary                           | `otp-fallback`；不降級、無 CSR failure warning |
-| `unsupported_constraints`、`unavailable`、`topology_disconnected` | OTP2 first                             | `otp-fallback`；`degraded:true` 與原因 warning |
-| `fare_policy_blocked`                                             | 立即終止，回 `422 NO_ROUTE`            | 不回傳 route；不呼叫 OTP2 或 Valhalla          |
-| `accessibility_blocked`                                           | 立即終止，回 `422 NO_ACCESSIBLE_ROUTE` | 不回傳 route；不呼叫 OTP2 或 Valhalla          |
+| `unsupported_constraints`、`unavailable`、`topology_disconnected`、`fare_policy_blocked`、`accessibility_blocked` | OTP2 first                             | `otp-fallback`；`degraded:true` 與原因 warning |
+| OTP2 也無路線（上述任一狀態之後）                                  | 回 `422`（`NO_ROUTE` 或 `NO_ACCESSIBLE_ROUTE`） | 不回傳 route                                   |
 | OTP2 unavailable（非上述 block）                                  | 既有 Valhalla 最後落回                 | `otp-fallback`；保留 OTP→Valhalla warning      |
 
 此決議直接回應 D-4 與既有的靜默降級問題。

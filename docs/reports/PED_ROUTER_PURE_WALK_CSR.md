@@ -24,18 +24,16 @@ CSR 只在 `PED_GRAPH_CSR_WALK_ENABLED=true` 且所有點都位於台北 bbox �
 | feature disabled（包括未設定 flag）or `outside_coverage` | OTP2 primary                       | `otp-fallback`    | omitted; no CSR failure warning                    | only if OTP2 is unavailable       |
 | `unsupported_constraints`                                | OTP2 first                         | `otp-fallback`    | `true` plus unsupported-constraint warning         | existing OTP-unavailable recovery |
 | `unavailable` or `topology_disconnected`                 | OTP2 first                         | `otp-fallback`    | `true` plus cause warning                          | existing OTP-unavailable recovery |
-| `fare_policy_blocked`                                    | terminal `422 NO_ROUTE`            | omitted           | no fallback route                                  | not called                        |
-| `accessibility_blocked`                                  | terminal `422 NO_ACCESSIBLE_ROUTE` | omitted           | no fallback route                                  | not called                        |
+| `fare_policy_blocked`                                    | OTP2 first                         | `otp-fallback`    | `true` plus fare-policy warning                    | existing OTP-unavailable recovery |
+| `accessibility_blocked`                                  | OTP2 first                         | `otp-fallback`    | `true` plus accessibility warning                  | existing OTP-unavailable recovery |
 
-The second row is deliberately non-degraded: a disabled deployment（包括缺少 flag）or ground outside the Taipei graph never promised CSR protection. The fallback-eligible non-CSR results inside coverage are visible to clients as a degradation. The warnings state that CSR stair, slope, width, and fare-gate protection was not enforced by the returned OTP2 route. A CSR fare-policy or accessibility block is instead a terminal failure, so no unprotected route is returned.
+The second row is deliberately non-degraded: a disabled deployment（包括缺少 flag）or ground outside the Taipei graph never promised CSR protection. All other fallback-eligible non-CSR results inside coverage — including a fare-policy or accessibility block — are visible to clients as a degradation. The warnings state that CSR stair, slope, width, and fare-gate protection was not enforced by the returned OTP2 route.
 
 The compatibility gate is also explicit. When an enabled, in-Taipei request asks for an `avoidStairs` value the selected CSR mode cannot faithfully represent (for example normal plus `avoidStairs: true`, or wheelchair plus `avoidStairs: false`), it returns `unsupported_constraints`, then uses marked OTP2 fallback. Coverage and feature checks happen first, so the same combination outside Taipei or while disabled remains ordinary OTP-primary behavior.
 
 ## 3. Fallback ordering and fare-gate safety
 
-For fallback-eligible CSR results, the normal order is CSR → OTP2 → Valhalla only when OTP2 is unavailable. It preserves the existing OTP-first behavior.
-
-CSR fare and accessibility blocks are terminal before either fallback planner runs: `fare_policy_blocked` returns `422 NO_ROUTE`, and `accessibility_blocked` returns `422 NO_ACCESSIBLE_ROUTE`. This prevents any unprotected engine from bypassing a binding CSR result. A returned OTP2 fallback is never presented as CSR-protected; its `engine`, `degraded`, and warning fields make the loss of protection explicit.
+For fallback-eligible CSR results, the normal order is CSR → OTP2 → Valhalla only when OTP2 is unavailable. It preserves the existing OTP-first behavior. This now includes `fare_policy_blocked` and `accessibility_blocked`: CSR's own graph has known coverage gaps (sparse ramp/footway tagging), so a block on that graph no longer short-circuits to a terminal 422 — it flows into the same OTP2-first fallback as the other CSR non-selection statuses. A returned OTP2 fallback is never presented as CSR-protected; its `engine`, `degraded`, and warning fields make the loss of protection explicit, so callers can tell that CSR's fare-gate or accessibility check was not enforced on the returned route.
 
 Fare and exit gates remain fail-closed under normal policy. Both endpoints must have the same non-blank stable parent-station ID authorized by transit context. There is no request field, public route policy, or client-accessible allow-all mode.
 
