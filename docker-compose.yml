@@ -19,6 +19,8 @@ services:
       OTP_BASE_URL: http://otp:8080
       VALHALLA_BASE_URL: http://valhalla:8002
       DATABASE_URL: mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongo:27017/accessible_map?authSource=admin
+      # 容器內走服務名；.env 的 127.0.0.1:5433 是給 host 腳本與測試用
+      PED_GRAPH_DATABASE_URL: postgresql://${PED_PG_USER}:${PED_PG_PASSWORD}@postgis:5432/ped_graph
       # .env's CHROMA_URL is host-centric (localhost:8100); inside the container
       # localhost is the container itself, so reach the chroma service by name.
       CHROMA_URL: http://chroma:8000
