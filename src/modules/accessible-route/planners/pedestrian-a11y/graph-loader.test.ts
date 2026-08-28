@@ -13,6 +13,8 @@ interface GraphFixture {
   nodes: FakeRow[];
   edges: FakeRow[];
   wayNameTableExists?: boolean;
+  rampEdgeTableExists?: boolean;
+  rampPoints?: FakeRow[];
 }
 
 interface QueryCall {
@@ -50,10 +52,18 @@ function createQueryable(fixture: GraphFixture): {
   const client: PedGraphQueryable = {
     async query<R>(sql: string, params?: unknown[]): Promise<{ rows: R[] }> {
       calls.push({ sql, params });
-      if (sql.includes("to_regclass")) {
+      if (sql.includes("to_regclass('ped_osm_way_name')")) {
         return {
           rows: [{ table_exists: fixture.wayNameTableExists ?? true }] as R[],
         };
+      }
+      if (sql.includes("to_regclass('ped_ramp_edge')")) {
+        return {
+          rows: [{ table_exists: fixture.rampEdgeTableExists ?? true }] as R[],
+        };
+      }
+      if (sql.includes("FROM ped_ramp_edge")) {
+        return { rows: (fixture.rampPoints ?? []) as R[] };
       }
       if (sql.includes("FROM ped_graph_version")) {
         if (sql.includes("WHERE lifecycle_status = 'ACTIVE'")) {
@@ -382,6 +392,32 @@ describe("loadPedGraph", () => {
         call.sql.includes("FROM ped_edge") && call.sql.includes("surface"),
     );
     expect(edgeQuery?.sql).not.toContain("ped_osm_way_name");
+  });
+
+  it("maps ped_ramp_edge rows onto their dense edge attribute index", async () => {
+    const fixture = coreFixture();
+    fixture.rampPoints = [
+      { edge_id: "2000000000001", lon: 121.5005, lat: 25.0501 },
+    ];
+    const { client } = createQueryable(fixture);
+
+    const graph = await loadPedGraph(client);
+
+    expect(graph.edgeRampPoints.get(0)).toEqual([[121.5005, 25.0501]]);
+    expect(graph.edgeRampPoints.get(1)).toBeUndefined();
+  });
+
+  it("does not fail graph load when ped_ramp_edge does not exist yet", async () => {
+    const fixture = coreFixture();
+    fixture.rampEdgeTableExists = false;
+    fixture.rampPoints = [
+      { edge_id: "2000000000001", lon: 121.5005, lat: 25.0501 },
+    ];
+    const { client } = createQueryable(fixture);
+
+    const graph = await loadPedGraph(client);
+
+    expect(graph.edgeRampPoints.size).toBe(0);
   });
 
   it("loads an explicitly requested candidate version for diagnosis", async () => {

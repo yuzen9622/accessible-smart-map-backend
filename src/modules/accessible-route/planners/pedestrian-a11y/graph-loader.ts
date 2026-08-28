@@ -36,6 +36,26 @@ const WAY_NAME_TABLE_EXISTS_QUERY = `
 `;
 
 /**
+ * `ped_ramp_edge` is built by `src/scripts/import-taipei-ramps.ts` and is
+ * absent until that import has run at least once, so its absence must fail
+ * soft to "no ramp points" instead of failing the whole graph load — the
+ * same fail-soft contract as `ped_osm_way_name` above.
+ */
+const RAMP_EDGE_TABLE_EXISTS_QUERY = `
+  SELECT to_regclass('ped_ramp_edge') IS NOT NULL AS table_exists
+`;
+
+const RAMP_POINTS_QUERY = `
+  SELECT
+    ramp_edge.edge_id::text AS edge_id,
+    ST_X(ramp_point.geom) AS lon,
+    ST_Y(ramp_point.geom) AS lat
+  FROM ped_ramp_edge AS ramp_edge
+  JOIN ped_ramp_point AS ramp_point ON ramp_point.objectid = ramp_edge.objectid
+  WHERE ramp_edge.version_id = $1
+`;
+
+/**
  * `proxy_geom` is a station centroid shared by every node of that station, so
  * it may only stand in for a node that genuinely has no surveyed position
  * (indoor concourse/platform rows). Entrance and outdoor-connector rows do
@@ -183,6 +203,12 @@ interface EdgeRow extends EdgeCountRow {
 
 interface WayNameTableRow {
   table_exists: unknown;
+}
+
+interface RampPointRow {
+  edge_id: unknown;
+  lon: unknown;
+  lat: unknown;
 }
 
 interface NodeStorage {
@@ -460,6 +486,56 @@ async function wayNameTableExists(client: PedGraphQueryable): Promise<boolean> {
   const row = result.rows[0];
   if (row === undefined) return false;
   return booleanValue(row.table_exists, "table_exists");
+}
+
+/**
+ * @param client Queryable PostgreSQL client.
+ * @returns Whether `ped_ramp_edge` exists yet. It is created by a standalone
+ * import script and may not have run yet, so its absence must never fail
+ * loading the graph itself.
+ */
+async function rampEdgeTableExists(
+  client: PedGraphQueryable,
+): Promise<boolean> {
+  const result = await client.query<WayNameTableRow>(
+    RAMP_EDGE_TABLE_EXISTS_QUERY,
+  );
+  const row = result.rows[0];
+  if (row === undefined) return false;
+  return booleanValue(row.table_exists, "table_exists");
+}
+
+/**
+ * @param client Queryable PostgreSQL client.
+ * @param versionId Resolved graph version identifier.
+ * @param edgeOriginalId Sorted original database edge identifiers, dense-index aligned.
+ * @returns Curb ramp point coordinates keyed by dense edge attribute index.
+ */
+async function loadEdgeRampPoints(
+  client: PedGraphQueryable,
+  versionId: number,
+  edgeOriginalId: BigInt64Array,
+): Promise<ReadonlyMap<number, readonly [number, number][]>> {
+  const result = await client.query<RampPointRow>(RAMP_POINTS_QUERY, [
+    versionId,
+  ]);
+  const edgeRampPoints = new Map<number, [number, number][]>();
+  for (const row of result.rows) {
+    const edgeId = bigintValue(row.edge_id, "ramp edge_id");
+    const attrIdx = findNodeIndex(edgeOriginalId, edgeId);
+    if (attrIdx === -1) continue;
+    const point: [number, number] = [
+      requiredNumber(row.lon, "ramp point longitude"),
+      requiredNumber(row.lat, "ramp point latitude"),
+    ];
+    const existing = edgeRampPoints.get(attrIdx);
+    if (existing === undefined) {
+      edgeRampPoints.set(attrIdx, [point]);
+    } else {
+      existing.push(point);
+    }
+  }
+  return edgeRampPoints;
 }
 
 /**
@@ -917,6 +993,19 @@ export async function loadPedGraph(
     edgeStorage,
     hasWayNameTable ? EDGE_PAGE_QUERY_WITH_STREET_NAME : EDGE_PAGE_QUERY,
   );
+  const hasRampEdgeTable = await rampEdgeTableExists(client);
+  if (!hasRampEdgeTable) {
+    console.warn(
+      "[graph-loader] ped_ramp_edge not found; ramp points disabled until the import runs",
+    );
+  }
+  const edgeRampPoints = hasRampEdgeTable
+    ? await loadEdgeRampPoints(
+        client,
+        version.versionId,
+        edgeStorage.edgeOriginalId,
+      )
+    : new Map<number, readonly [number, number][]>();
 
   return {
     versionId: version.versionId,
@@ -949,5 +1038,6 @@ export async function loadPedGraph(
     edgeSidewalkRampCount: edgeStorage.edgeSidewalkRampCount,
     edgeStreetName: edgeStorage.edgeStreetName,
     streetNames,
+    edgeRampPoints,
   };
 }

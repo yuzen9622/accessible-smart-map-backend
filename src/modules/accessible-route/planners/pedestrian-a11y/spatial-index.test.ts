@@ -49,6 +49,7 @@ function graphFromAdjacency(input: {
     edgeSidewalkRampCount: new Uint16Array(directedEdgeCount),
     edgeStreetName: new Int32Array(directedEdgeCount).fill(-1),
     streetNames: Object.freeze([]),
+    edgeRampPoints: new Map(),
   };
 }
 

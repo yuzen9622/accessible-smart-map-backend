@@ -499,6 +499,7 @@ const csrWalkPlan = (
     },
   ],
   sidewalkRampCount: 6,
+  a11yPoints: [{ type: "curb_ramp", location: [121.555, 25.035] }],
   diagnostics: {
     expandedNodes: 4,
     reopenedNodes: 0,
@@ -584,6 +585,21 @@ describe("planAccessibleRouteFromRequest walk mode CSR selection", () => {
     expect(leg.type === "WALK" ? leg.sidewalkRampCount : undefined).toBe(6);
   });
 
+  it("carries the CSR plan's a11yPoints onto the WalkLeg", async () => {
+    vi.mocked(planCsrWalkRoute).mockResolvedValue({
+      status: "ok",
+      plans: [csrWalkPlan()],
+    });
+
+    const res = await planAccessibleRouteFromRequest(walkRequest);
+
+    expect(res.ok).toBe(true);
+    const leg = okData(res).routes[0].legs[0];
+    expect(leg.type === "WALK" ? leg.a11yPoints : undefined).toEqual([
+      { type: "curb_ramp", location: [121.555, 25.035] },
+    ]);
+  });
+
   it("carries the CSR plan's steps onto the WalkLeg", async () => {
     vi.mocked(planCsrWalkRoute).mockResolvedValue({
       status: "ok",
@@ -651,6 +667,7 @@ describe("planAccessibleRouteFromRequest walk mode CSR selection", () => {
     expect(okData(res).routes[0].legs[0]).not.toHaveProperty(
       "sidewalkRampCount",
     );
+    expect(okData(res).routes[0].legs[0]).not.toHaveProperty("a11yPoints");
     const leg = okData(res).routes[0].legs[0];
     expect(leg.type === "WALK" ? leg.steps : undefined).toEqual(
       walkRoute().legs[0].steps,

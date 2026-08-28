@@ -217,4 +217,12 @@ export interface PedGraph {
   /** Interned index into `streetNames`, or -1 when this edge's way has no recorded name. */
   edgeStreetName: Int32Array;
   readonly streetNames: readonly string[];
+
+  /**
+   * Curb ramp point coordinates recorded near this dense edge, WGS84
+   * `[lng, lat]`. A missing key means no recorded ramp matched this edge, not
+   * that the ground has none: only ~65% of recorded ramp points fall within
+   * snapping distance of a sidewalk/footway/crossing edge.
+   */
+  edgeRampPoints: ReadonlyMap<number, readonly [number, number][]>;
 }

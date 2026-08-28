@@ -2253,6 +2253,7 @@ function buildCsrWalkRoute(plans: readonly CsrWalkPlan[]): AccessibleRoute {
     a11ySegments: plan.a11ySegments,
     steps: plan.steps,
     sidewalkRampCount: plan.sidewalkRampCount,
+    a11yPoints: plan.a11yPoints,
   }));
 
   const approximateIndoorSegments = plans.reduce(

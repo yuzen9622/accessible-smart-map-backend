@@ -1,6 +1,7 @@
 import type {
   AccessibilityMode,
   WalkA11yFeature,
+  WalkA11yPoint,
   WalkA11ySegment,
   WalkStep,
 } from "../../../../types/route";
@@ -60,6 +61,13 @@ export interface CsrWalkPlan {
    * Empty means no traversed edge carried a classified facility observation.
    */
   a11ySegments: CsrWalkA11ySegment[];
+  /**
+   * De-duplicated, path-ordered curb ramp points recorded on the traversed
+   * edges. Ramp points are locations, not runs, so they are reported as their
+   * own coordinates rather than folded into `a11ySegments` — colouring a
+   * whole edge as a ramp would misreport its extent.
+   */
+  a11yPoints: WalkA11yPoint[];
   /**
    * Turn-by-turn steps derived from the selected edges' geometry and facility
    * types. Carries no street names — the CSR graph has none.

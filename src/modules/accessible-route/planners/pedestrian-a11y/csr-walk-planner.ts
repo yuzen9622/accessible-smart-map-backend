@@ -38,6 +38,7 @@ import type {
 } from "./csr-walk.types";
 import { buildA11ySegments, type EdgeGeometrySpan } from "./a11y-segments";
 import { buildCsrWalkSteps } from "./csr-steps";
+import { collectRampPoints } from "./ramp-points";
 import { sumSidewalkRampCount } from "./sidewalk-ramp-count";
 import { snapToGraph, type EdgeIndex, type SnapResult } from "./spatial-index";
 
@@ -712,6 +713,7 @@ export async function planCsrWalkRoute(
         options.mode,
       ),
       sidewalkRampCount: sumSidewalkRampCount(graph, route.edgeAttrPath),
+      a11yPoints: collectRampPoints(graph, route.edgeAttrPath),
       diagnostics: {
         expandedNodes: route.expandedNodes,
         reopenedNodes: route.reopenedNodes,

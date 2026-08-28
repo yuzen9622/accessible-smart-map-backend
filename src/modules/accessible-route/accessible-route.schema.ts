@@ -284,6 +284,27 @@ const WalkLegSchema = z
           "（來源值為人行道面屬性，會複製到該面衍生的每條邊，已依人行道段去重後才相加）。" +
           "來源為政府人行道圖資，以鄰近比對（≤ 10 公尺）掛上；0 代表沿線人行道未登錄坡道，而非確定沒有坡道。",
       }),
+    a11yPoints: z
+      .array(
+        z
+          .object({
+            type: z.literal("curb_ramp").openapi({ example: "curb_ramp" }),
+            location: z.tuple([z.number(), z.number()]).openapi({
+              example: [121.567, 25.041],
+              description: "設施本身的 WGS84 [經度, 緯度]，非路徑上的投影點。",
+            }),
+          })
+          .strict()
+          .openapi("WalkA11yPoint"),
+      )
+      .optional()
+      .openapi({
+        description:
+          "只有 engine=pedestrian-a11y 會有此欄位。座標是無障礙斜坡道設施本身的位置，" +
+          "不是路徑上的投影點。來源為臺北市新工處人行道無障礙斜坡道點位（已排除汽車斜坡道），" +
+          "以 8 公尺內最近人行道邊吸附。欄位為空或不存在不代表沿途沒有坡道" +
+          "（約 35% 點位因該處圖上無人行道線而未吸附）。",
+      }),
     steps: z
       .array(
         z

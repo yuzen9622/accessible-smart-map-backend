@@ -68,6 +68,7 @@ function createGraph(edges: readonly Partial<EdgeFixture>[]): PedGraph {
     edgeSidewalkRampCount: new Uint16Array(count),
     edgeStreetName: new Int32Array(count).fill(-1),
     streetNames: Object.freeze([]),
+    edgeRampPoints: new Map(),
   };
 }
 

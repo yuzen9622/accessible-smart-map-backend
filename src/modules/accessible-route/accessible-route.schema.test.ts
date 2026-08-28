@@ -349,6 +349,38 @@ describe("AccessibleRouteSchema B12 WALK details", () => {
     ).toBe(false);
   });
 
+  it("omits a11yPoints on non-CSR WALK legs without failing", () => {
+    expect(AccessibleRouteSchema.safeParse(route).success).toBe(true);
+  });
+
+  it("accepts a legal a11yPoints array on a WALK leg", () => {
+    expect(
+      AccessibleRouteSchema.safeParse({
+        ...route,
+        legs: [
+          {
+            ...walkLeg,
+            a11yPoints: [{ type: "curb_ramp", location: [121.567, 25.041] }],
+          },
+        ],
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects an a11yPoints entry whose type is not curb_ramp", () => {
+    expect(
+      AccessibleRouteSchema.safeParse({
+        ...route,
+        legs: [
+          {
+            ...walkLeg,
+            a11yPoints: [{ type: "elevator", location: [121.567, 25.041] }],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
   it("rejects an a11ySegments entry with an unknown feature", () => {
     expect(
       AccessibleRouteSchema.safeParse({

@@ -130,6 +130,19 @@ export interface WalkA11ySegment {
   minWidthCm: number | null;
 }
 
+/**
+ * A curb-ramp facility recorded near a CSR walking leg's path.
+ *
+ * `location` is the facility's own surveyed coordinate, not a projection onto
+ * the leg's `polyline`: a ramp point is a point, and snapping it onto the
+ * path would misreport where it actually is.
+ */
+export interface WalkA11yPoint {
+  type: "curb_ramp";
+  /** WGS84 [longitude, latitude] of the recorded facility itself. */
+  location: [number, number];
+}
+
 export interface WalkStep {
   /** Upstream turn-by-turn text when the planner already provides localized guidance. */
   instruction?: string;
@@ -189,6 +202,16 @@ export interface WalkLeg extends WalkA11yDetails {
    * legs, which have no government sidewalk match.
    */
   sidewalkRampCount?: number;
+  /**
+   * Curb-ramp facilities recorded near this CSR leg's traversed edges, in
+   * path order and de-duplicated by coordinate. Absent on OTP / Valhalla
+   * walking legs, which carry no per-edge facility provenance; absence
+   * therefore means "not observed by this engine", never "no ramps on the
+   * ground". An empty array does not mean no ramps exist along the way
+   * either: roughly a third of recorded ramp points sit where the graph has
+   * no matching sidewalk/footway/crossing edge to snap to.
+   */
+  a11yPoints?: WalkA11yPoint[];
 }
 
 export interface BusLeg {

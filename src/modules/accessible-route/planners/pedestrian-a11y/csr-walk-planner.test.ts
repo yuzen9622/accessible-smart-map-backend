@@ -29,6 +29,7 @@ interface EdgeDefinition {
   surface?: number;
   sidewalkId?: number;
   sidewalkRampCount?: number;
+  rampPoints?: [number, number][];
 }
 
 interface GraphDefinition {
@@ -67,6 +68,7 @@ function graphFromEdges(input: GraphDefinition): PedGraph {
   const edgeSurface = new Uint8Array(directedEdgeCount);
   const edgeSidewalkId = new Int32Array(directedEdgeCount).fill(-1);
   const edgeSidewalkRampCount = new Uint16Array(directedEdgeCount);
+  const edgeRampPoints = new Map<number, readonly [number, number][]>();
   const nodeStationId = new Int32Array(nodeCount);
   nodeStationId.fill(-1);
   edgeLengthM.fill(Number.NaN);
@@ -97,6 +99,9 @@ function graphFromEdges(input: GraphDefinition): PedGraph {
     edgeSurface[attrIdx] = edge.surface ?? SURFACE.UNKNOWN;
     edgeSidewalkId[attrIdx] = edge.sidewalkId ?? -1;
     edgeSidewalkRampCount[attrIdx] = edge.sidewalkRampCount ?? 0;
+    if (edge.rampPoints !== undefined) {
+      edgeRampPoints.set(attrIdx, edge.rampPoints);
+    }
   }
   if (input.nodeStationId !== undefined) {
     nodeStationId.set(input.nodeStationId);
@@ -141,6 +146,7 @@ function graphFromEdges(input: GraphDefinition): PedGraph {
     edgeSidewalkRampCount,
     edgeStreetName: new Int32Array(directedEdgeCount).fill(-1),
     streetNames: Object.freeze([]),
+    edgeRampPoints,
   };
 }
 
@@ -657,6 +663,54 @@ describe("planCsrWalkRoute geometry assembly", () => {
     expect(result.status).toBe("ok");
     if (result.status !== "ok") return;
     expect(result.plans[0].sidewalkRampCount).toBe(6);
+  });
+
+  it("carries a11yPoints from the traversed edges in path order", async () => {
+    serveGraph(
+      graphFromEdges({
+        nodeLon: [TAIPEI_LNG, TAIPEI_LNG, TAIPEI_LNG],
+        nodeLat: [A_LAT, B_LAT, C_LAT],
+        edges: [
+          {
+            from: 0,
+            to: 1,
+            lengthM: 55,
+            rampPoints: [[TAIPEI_LNG, 25.0402]],
+          },
+          { from: 1, to: 0, lengthM: 55 },
+          {
+            from: 1,
+            to: 2,
+            lengthM: 55,
+            rampPoints: [[TAIPEI_LNG, 25.0407]],
+          },
+          { from: 2, to: 1, lengthM: 55 },
+        ],
+      }),
+    );
+    vi.mocked(getPedGraphClient).mockResolvedValue(
+      geometryClient({
+        "1000": lineString([
+          [TAIPEI_LNG, A_LAT],
+          [TAIPEI_LNG, B_LAT],
+        ]),
+        "1002": lineString([
+          [TAIPEI_LNG, B_LAT],
+          [TAIPEI_LNG, C_LAT],
+        ]),
+      }),
+    );
+
+    const result = await planCsrWalkRoute([originPoint, destinationPoint], {
+      mode: "normal",
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.plans[0].a11yPoints).toEqual([
+      { type: "curb_ramp", location: [TAIPEI_LNG, 25.0402] },
+      { type: "curb_ramp", location: [TAIPEI_LNG, 25.0407] },
+    ]);
   });
 
   it("returns one plan per requested segment in request order", async () => {

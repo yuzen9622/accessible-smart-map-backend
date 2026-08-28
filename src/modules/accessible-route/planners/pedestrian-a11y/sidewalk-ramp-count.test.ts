@@ -50,6 +50,7 @@ function createGraph(
     edgeSidewalkRampCount: Uint16Array.from(rampCount),
     edgeStreetName: new Int32Array(count).fill(-1),
     streetNames: Object.freeze([]),
+    edgeRampPoints: new Map(),
   };
 }
 

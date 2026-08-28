@@ -89,6 +89,7 @@ function createGraph(
     edgeSidewalkRampCount: new Uint16Array(edgeCount),
     edgeStreetName,
     streetNames: Object.freeze(streetNames),
+    edgeRampPoints: new Map(),
   };
 }
 
