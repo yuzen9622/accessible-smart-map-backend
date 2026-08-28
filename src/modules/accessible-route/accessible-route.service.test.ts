@@ -719,22 +719,50 @@ describe("planAccessibleRouteFromRequest walk mode CSR selection", () => {
     expect(vi.mocked(planValhallaRoute)).not.toHaveBeenCalled();
   });
 
-  for (const [csrStatus, reason] of [
-    ["fare_policy_blocked", ROUTE_REASON.NO_ROUTE],
-    ["accessibility_blocked", ROUTE_REASON.NO_ACCESSIBLE_ROUTE],
+  for (const [csrStatus, warning] of [
+    [
+      "fare_policy_blocked",
+      ROUTE_WARNING.CSR_WALK_FALLBACK_FARE_POLICY_BLOCKED,
+    ],
+    [
+      "accessibility_blocked",
+      ROUTE_WARNING.CSR_WALK_FALLBACK_ACCESSIBILITY_BLOCKED,
+    ],
   ] as const) {
-    it(`returns terminal ${reason} without OTP or Valhalla after CSR ${csrStatus}`, async () => {
+    it(`falls back to marked OTP when CSR reports ${csrStatus}`, async () => {
       vi.mocked(planCsrWalkRoute).mockResolvedValue({ status: csrStatus });
+      vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+        status: "ok",
+        routes: [walkRoute()] as any,
+      });
+
+      const res = await planAccessibleRouteFromRequest(walkRequest);
+
+      expect(res.ok).toBe(true);
+      expect(okData(res).routes[0]).toMatchObject({
+        engine: "otp-fallback",
+        degraded: true,
+      });
+      expect(okData(res).routes[0].warnings).toContain(warning);
+      expect(vi.mocked(planOtpWalkDetailed)).toHaveBeenCalledTimes(1);
+    });
+
+    it(`returns 422 NO_ROUTE when OTP also has no route after CSR ${csrStatus}`, async () => {
+      vi.mocked(planCsrWalkRoute).mockResolvedValue({ status: csrStatus });
+      vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+        status: "no_route",
+        routes: [],
+      });
 
       await expect(
         planAccessibleRouteFromRequest(walkRequest),
       ).resolves.toEqual({
         ok: false,
         status: ResponseCode.UNPROCESSABLE_ENTITY,
-        error: ROUTE_MSG[reason],
-        data: { reason },
+        error: ROUTE_MSG.NO_ROUTE,
+        data: { reason: ROUTE_REASON.NO_ROUTE },
       });
-      expect(vi.mocked(planOtpWalkDetailed)).not.toHaveBeenCalled();
+      expect(vi.mocked(planOtpWalkDetailed)).toHaveBeenCalledTimes(1);
       expect(vi.mocked(planValhallaRoute)).not.toHaveBeenCalled();
     });
   }

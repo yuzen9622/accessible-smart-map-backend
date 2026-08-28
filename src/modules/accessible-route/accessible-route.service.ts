@@ -1630,15 +1630,6 @@ export async function planAccessibleRouteFromRequest(
       );
       logRequestTiming();
     } else {
-      if (csrWalk.status === "fare_policy_blocked") {
-        logRequestTiming();
-        return routeFailure(ROUTE_REASON.NO_ROUTE);
-      }
-      if (csrWalk.status === "accessibility_blocked") {
-        logRequestTiming();
-        return routeFailure(ROUTE_REASON.NO_ACCESSIBLE_ROUTE);
-      }
-
       const csrFallbackWarning = CSR_WALK_FALLBACK_WARNING[csrWalk.status];
       const otpWalk = await planOtpWalkSegments(
         walkPoints,
