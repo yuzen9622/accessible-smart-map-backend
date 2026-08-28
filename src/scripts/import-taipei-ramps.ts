@@ -1,12 +1,19 @@
 /**
  * One-shot import: Taipei New Construction Office curb ramp points → PostGIS.
  *
- * Two tables are maintained:
+ * Three tables are maintained:
  *  - `ped_ramp_point`: a graph-version-independent reference table (like
  *    `ped_osm_way_name`), upserted by `objectid`.
  *  - `ped_ramp_edge`: a graph-version-bound mapping from each ramp point to
  *    its nearest sidewalk/footway/crossing edge, rebuilt for the ACTIVE
  *    version on every run.
+ *  - `ped_ramp_node`: a graph-version-bound mapping from each ramp point to
+ *    every graph node within the 8m tolerance, rebuilt alongside
+ *    `ped_ramp_edge`. A curb ramp physically sits at the corner, so any
+ *    graph node within tolerance is on the same kerb — this is a
+ *    many-to-many mapping, not nearest-1. Node-level matching reaches far
+ *    more crossings (63.2% at least one end, 35.7% both ends, measured on
+ *    22,754 distinct ramped nodes) than edge-level matching alone (13.3%).
  *
  * Run: npm run import:taipei-ramps -- [--file <path> | --url <endpoint>] [--db-url <url>]
  */
@@ -32,6 +39,46 @@ const DEFAULT_SOURCE_URL =
  */
 export const RAMP_SNAP_TOLERANCE_M = 8;
 
+/**
+ * Degree-space prefilter radius for `ST_DWithin` against `ped_edge.geom`.
+ *
+ * Measured: casting `ped_edge.geom` (or the comparison) to `::geography`
+ * inside `ST_DWithin` disables the `ped_edge_geom_gix` GiST index — 28,337
+ * points took over 600s and left the query alive for 1h32m holding write
+ * locks after cancellation. Prefiltering in raw degrees keeps the index live;
+ * the same 28,337 points then finish in 1.784s.
+ *
+ * 0.00012° latitude ≈ 13.3m; at 25°N, 0.00012° longitude ≈ 12.1m. Both exceed
+ * the {@link RAMP_SNAP_TOLERANCE_M} 8m final tolerance, so this coarse
+ * degree-space prefilter cannot discard a point that the exact
+ * `ST_Distance(::geography)` check below would have accepted.
+ */
+export const RAMP_SNAP_PREFILTER_DEGREES = 0.00012;
+
+/**
+ * Degree-space prefilter radius for `ST_DWithin` against `ped_node.geom`.
+ *
+ * A curb ramp physically sits at the corner (the crossing's endpoint node),
+ * so it is matched against nodes here using the same proven technique as
+ * {@link RAMP_SNAP_PREFILTER_DEGREES} above — casting the indexed column to
+ * `::geography` inside `ST_DWithin` disabled the `ped_node_geom_gix` index
+ * the same way it disabled `ped_edge_geom_gix`, so this stays in raw degrees.
+ *
+ * 0.00014° latitude ≈ 15.5m; at 25°N, 0.00014° longitude ≈ 14.1m. Both exceed
+ * the {@link RAMP_SNAP_TOLERANCE_M} 8m final tolerance, so this coarse
+ * degree-space prefilter cannot discard a point that the exact
+ * `ST_Distance(::geography)` check below would have accepted.
+ */
+export const NODE_RAMP_SNAP_PREFILTER_DEGREES = 0.00014;
+
+/**
+ * `statement_timeout` applied before rebuilding `ped_ramp_edge`. The prior
+ * per-point implementation ran unbounded and, once cancelled, still held
+ * write locks for 1h32m; this caps a runaway rebuild instead of letting it
+ * jam the database indefinitely.
+ */
+const RAMP_REBUILD_STATEMENT_TIMEOUT_SQL = `SET statement_timeout = '300s'`;
+
 const UPSERT_CHUNK_SIZE = 500;
 
 const CREATE_RAMP_POINT_TABLE_SQL = `
@@ -56,6 +103,25 @@ const CREATE_RAMP_EDGE_TABLE_SQL = `
   );
 `;
 
+const CREATE_RAMP_NODE_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS ped_ramp_node (
+    version_id BIGINT NOT NULL,
+    node_id    BIGINT NOT NULL,
+    objectid   BIGINT NOT NULL,
+    PRIMARY KEY (version_id, node_id, objectid)
+  );
+`;
+
+/**
+ * `ped_node` only carried a GiST index on `proxy_geom` (the station-centroid
+ * fallback), never on `geom` (the real surveyed position), so a node-level
+ * `ST_DWithin` scanned the full table and hung for 10+ minutes. This mirrors
+ * `ped_edge_geom_gix` for nodes; `IF NOT EXISTS` keeps every run idempotent.
+ */
+const CREATE_NODE_GEOM_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS ped_node_geom_gix ON ped_node USING GIST (geom);
+`;
+
 const ACTIVE_VERSION_ID_QUERY = `
   SELECT id
   FROM ped_graph_version
@@ -68,7 +134,17 @@ const DELETE_RAMP_EDGE_SQL = `
   DELETE FROM ped_ramp_edge WHERE version_id = $1
 `;
 
-const REBUILD_RAMP_EDGE_SQL = `
+const DELETE_RAMP_NODE_SQL = `
+  DELETE FROM ped_ramp_node WHERE version_id = $1
+`;
+
+/**
+ * A single set-based statement, never a per-point loop: the prior per-point
+ * implementation ran 600+ seconds over 28,337 points and, once cancelled,
+ * left the query alive for 1h32m holding write locks. Exported so tests can
+ * assert on this structure directly.
+ */
+export const REBUILD_RAMP_EDGE_SQL = `
   INSERT INTO ped_ramp_edge (version_id, edge_id, objectid)
   SELECT $1, nearest.edge_id, point.objectid
   FROM ped_ramp_point AS point
@@ -78,10 +154,31 @@ const REBUILD_RAMP_EDGE_SQL = `
     WHERE edge.version_id = $1
       AND edge.edge_type IN (1, 2, 3)
       AND edge.geom IS NOT NULL
-      AND ST_DWithin(edge.geom::geography, point.geom::geography, $2)
-    ORDER BY edge.geom::geography <-> point.geom::geography
+      AND ST_DWithin(edge.geom, point.geom, $3)
+      AND ST_Distance(edge.geom::geography, point.geom::geography) <= $2
+    ORDER BY edge.geom <-> point.geom
     LIMIT 1
   ) AS nearest
+  ON CONFLICT DO NOTHING
+`;
+
+/**
+ * A single set-based statement, mirroring {@link REBUILD_RAMP_EDGE_SQL}, but
+ * many-to-many rather than nearest-1: a curb ramp is physically at the
+ * corner, so every graph node within the exact 8m tolerance is on the same
+ * kerb as the ramp, not just the single closest one. One node can match
+ * multiple ramp points, and one ramp point can match multiple nodes.
+ */
+export const REBUILD_RAMP_NODE_SQL = `
+  INSERT INTO ped_ramp_node (version_id, node_id, objectid)
+  SELECT $1, node.node_id, point.objectid
+  FROM ped_ramp_point AS point
+  JOIN ped_node AS node
+    ON node.version_id = $1
+   AND node.geom IS NOT NULL
+   AND ST_DWithin(node.geom, point.geom, $3)
+   AND ST_Distance(node.geom::geography, point.geom::geography) <= $2
+  ON CONFLICT DO NOTHING
 `;
 
 interface ImportOptions {
@@ -258,6 +355,61 @@ async function loadActiveVersionId(
 }
 
 /**
+ * Rebuilds `ped_ramp_edge` for one graph version as a single set-based
+ * statement (see {@link REBUILD_RAMP_EDGE_SQL}), replacing the prior
+ * per-point loop that could run unbounded and hold write locks after
+ * cancellation.
+ *
+ * @param client PostGIS client.
+ * @param activeVersionId ACTIVE graph version id to rebuild ramp edges for.
+ * @returns The number of `ped_ramp_edge` rows now stored for that version.
+ */
+export async function rebuildRampEdges(
+  client: QueryableClient,
+  activeVersionId: number,
+): Promise<number> {
+  await client.query(DELETE_RAMP_EDGE_SQL, [activeVersionId]);
+  await client.query(RAMP_REBUILD_STATEMENT_TIMEOUT_SQL);
+  await client.query(REBUILD_RAMP_EDGE_SQL, [
+    activeVersionId,
+    RAMP_SNAP_TOLERANCE_M,
+    RAMP_SNAP_PREFILTER_DEGREES,
+  ]);
+  const matched = await client.query<{ count: unknown }>(
+    "SELECT count(*) FROM ped_ramp_edge WHERE version_id = $1",
+    [activeVersionId],
+  );
+  return Number(matched.rows[0]?.count ?? 0);
+}
+
+/**
+ * Rebuilds `ped_ramp_node` for one graph version as a single set-based
+ * statement (see {@link REBUILD_RAMP_NODE_SQL}), the node-level counterpart
+ * of {@link rebuildRampEdges}.
+ *
+ * @param client PostGIS client.
+ * @param activeVersionId ACTIVE graph version id to rebuild ramp nodes for.
+ * @returns The number of `ped_ramp_node` rows now stored for that version.
+ */
+export async function rebuildRampNodes(
+  client: QueryableClient,
+  activeVersionId: number,
+): Promise<number> {
+  await client.query(DELETE_RAMP_NODE_SQL, [activeVersionId]);
+  await client.query(RAMP_REBUILD_STATEMENT_TIMEOUT_SQL);
+  await client.query(REBUILD_RAMP_NODE_SQL, [
+    activeVersionId,
+    RAMP_SNAP_TOLERANCE_M,
+    NODE_RAMP_SNAP_PREFILTER_DEGREES,
+  ]);
+  const matched = await client.query<{ count: unknown }>(
+    "SELECT count(DISTINCT node_id) FROM ped_ramp_node WHERE version_id = $1",
+    [activeVersionId],
+  );
+  return Number(matched.rows[0]?.count ?? 0);
+}
+
+/**
  * @returns Process exit status.
  */
 async function main(): Promise<void> {
@@ -280,6 +432,8 @@ async function main(): Promise<void> {
     await client.query(CREATE_RAMP_POINT_TABLE_SQL);
     await client.query(CREATE_RAMP_POINT_INDEX_SQL);
     await client.query(CREATE_RAMP_EDGE_TABLE_SQL);
+    await client.query(CREATE_RAMP_NODE_TABLE_SQL);
+    await client.query(CREATE_NODE_GEOM_INDEX_SQL);
 
     const sourceVersion = new Date().toISOString();
     await upsertRampPoints(client, summary.points, sourceVersion);
@@ -295,23 +449,20 @@ async function main(): Promise<void> {
       return;
     }
 
-    await client.query(DELETE_RAMP_EDGE_SQL, [activeVersionId]);
-    await client.query(REBUILD_RAMP_EDGE_SQL, [
-      activeVersionId,
-      RAMP_SNAP_TOLERANCE_M,
-    ]);
-    const matched = await client.query<{ count: unknown }>(
-      "SELECT count(*) FROM ped_ramp_edge WHERE version_id = $1",
-      [activeVersionId],
-    );
-    const matchedCount = Number(matched.rows[0]?.count ?? 0);
-    const ratio =
+    const matchedEdgeCount = await rebuildRampEdges(client, activeVersionId);
+    const edgeRatio =
       summary.points.length === 0
         ? 0
-        : (matchedCount / summary.points.length) * 100;
+        : (matchedEdgeCount / summary.points.length) * 100;
     console.log(
       `[import-taipei-ramps] version_id=${activeVersionId} ` +
-        `matched=${matchedCount}/${summary.points.length} (${ratio.toFixed(1)}%)`,
+        `edges matched=${matchedEdgeCount}/${summary.points.length} (${edgeRatio.toFixed(1)}%)`,
+    );
+
+    const rampedNodeCount = await rebuildRampNodes(client, activeVersionId);
+    console.log(
+      `[import-taipei-ramps] version_id=${activeVersionId} ` +
+        `distinct ramped nodes=${rampedNodeCount}`,
     );
   } finally {
     await client.end();
