@@ -1,4 +1,3 @@
-import { NAV_MSG } from "../../../../constants/messages";
 import type { AccessibilityMode, WalkStep } from "../../../../types/route";
 import {
   calcBearing,
@@ -23,15 +22,6 @@ export const TURN_ANGLE_STANDARD_DEG = 45;
 
 /** Turn-angle boundary, in degrees, at and above which a turn reports as `HARD_LEFT`/`HARD_RIGHT`. */
 export const TURN_ANGLE_HARD_DEG = 135;
-
-const FACILITY_INSTRUCTION: Record<string, string> = {
-  ELEVATOR: NAV_MSG.ELEVATOR,
-  ESCALATOR: NAV_MSG.ESCALATOR,
-  MOVING_WALKWAY: NAV_MSG.MOVING_WALKWAY,
-  FARE_GATE: NAV_MSG.FARE_GATE,
-  ENTER_STATION: NAV_MSG.ENTER_STATION,
-  EXIT_STATION: NAV_MSG.EXIT_STATION,
-};
 
 /**
  * @param mode Requested accessibility mode.
@@ -274,10 +264,6 @@ export function buildCsrWalkSteps(
       );
     }
 
-    const isFacilityStep =
-      relativeDirection !== "DEPART" &&
-      (facility !== null || connector !== null);
-
     const streetNameIdx = graph.edgeStreetName[attrIdx];
     const streetName =
       streetNameIdx >= 0 ? graph.streetNames[streetNameIdx] : "";
@@ -292,9 +278,6 @@ export function buildCsrWalkSteps(
       distanceM,
       location,
       steepSlope: isSteepSlope(graph, attrIdx, mode),
-      ...(isFacilityStep
-        ? { instruction: FACILITY_INSTRUCTION[relativeDirection] }
-        : {}),
     };
     steps.push(walkStep);
 

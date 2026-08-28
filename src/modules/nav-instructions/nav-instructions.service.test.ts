@@ -607,6 +607,36 @@ describe("generateNavInstructions", () => {
     expect(facility?.text).toBe(NAV_MSG.ELEVATOR);
   });
 
+  it.each([
+    ["ELEVATOR", NAV_MSG.ELEVATOR],
+    ["ESCALATOR", NAV_MSG.ESCALATOR],
+    ["MOVING_WALKWAY", NAV_MSG.MOVING_WALKWAY],
+    ["FARE_GATE", NAV_MSG.FARE_GATE],
+    ["ENTER_STATION", NAV_MSG.ENTER_STATION],
+    ["EXIT_STATION", NAV_MSG.EXIT_STATION],
+  ])(
+    "produces the %s facility text from formatWalkStepInstruction when the CSR step carries no instruction field",
+    (relativeDirection, expectedText) => {
+      const leg = walkWithSteps();
+      leg.steps = [
+        {
+          ...leg.steps![0],
+          relativeDirection,
+          streetName: "",
+          bogusName: true,
+        },
+      ];
+
+      const result = generateNavInstructions({ legs: [leg] });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const facility = result.data.instructions.find(
+        (i) => i.type === "facility",
+      );
+      expect(facility?.text).toBe(expectedText);
+    },
+  );
+
   it("DRIVE guidance 轉成 depart + turn + arrive", () => {
     const result = generateNavInstructions({ legs: [roadLeg("DRIVE")] });
     expect(result.ok).toBe(true);

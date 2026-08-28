@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { NAV_MSG } from "../../../../constants/messages";
 import type { EdgeGeometrySpan } from "./a11y-segments";
 import {
   STANDARD_STEEP_SLOPE_THRESHOLD_PERCENT,
@@ -165,19 +164,15 @@ describe("buildCsrWalkSteps", () => {
   });
 
   it.each([
-    ["ELEVATOR" as const, EDGE_TYPE.OSM_ELEVATOR, NAV_MSG.ELEVATOR],
-    ["ELEVATOR" as const, EDGE_TYPE.INDOOR_ELEVATOR, NAV_MSG.ELEVATOR],
-    ["ESCALATOR" as const, EDGE_TYPE.INDOOR_ESCALATOR, NAV_MSG.ESCALATOR],
-    [
-      "MOVING_WALKWAY" as const,
-      EDGE_TYPE.INDOOR_MOVING_WALKWAY,
-      NAV_MSG.MOVING_WALKWAY,
-    ],
-    ["FARE_GATE" as const, EDGE_TYPE.INDOOR_FARE_GATE, NAV_MSG.FARE_GATE],
-    ["FARE_GATE" as const, EDGE_TYPE.INDOOR_EXIT_GATE, NAV_MSG.FARE_GATE],
+    ["ELEVATOR" as const, EDGE_TYPE.OSM_ELEVATOR],
+    ["ELEVATOR" as const, EDGE_TYPE.INDOOR_ELEVATOR],
+    ["ESCALATOR" as const, EDGE_TYPE.INDOOR_ESCALATOR],
+    ["MOVING_WALKWAY" as const, EDGE_TYPE.INDOOR_MOVING_WALKWAY],
+    ["FARE_GATE" as const, EDGE_TYPE.INDOOR_FARE_GATE],
+    ["FARE_GATE" as const, EDGE_TYPE.INDOOR_EXIT_GATE],
   ])(
-    "classifies edgeType %s (%d) as the facility token with its instruction text",
-    (expectedDirection, edgeType, expectedInstruction) => {
+    "classifies edgeType %s (%d) as the facility token without an instruction field",
+    (expectedDirection, edgeType) => {
       const graph = createGraph(
         [{ edgeType: EDGE_TYPE.SIDEWALK }, { edgeType }],
         nodes(3),
@@ -193,11 +188,11 @@ describe("buildCsrWalkSteps", () => {
       );
 
       expect(steps[1].relativeDirection).toBe(expectedDirection);
-      expect(steps[1].instruction).toBe(expectedInstruction);
+      expect(steps[1]).not.toHaveProperty("instruction");
     },
   );
 
-  it("classifies an outdoor-to-indoor node transition as ENTER_STATION", () => {
+  it("classifies an outdoor-to-indoor node transition as ENTER_STATION without an instruction field", () => {
     const graph = createGraph(
       [{ edgeType: EDGE_TYPE.SIDEWALK }, { edgeType: EDGE_TYPE.SIDEWALK }],
       nodes(3, { 2: true }),
@@ -213,10 +208,10 @@ describe("buildCsrWalkSteps", () => {
     );
 
     expect(steps[1].relativeDirection).toBe("ENTER_STATION");
-    expect(steps[1].instruction).toBe(NAV_MSG.ENTER_STATION);
+    expect(steps[1]).not.toHaveProperty("instruction");
   });
 
-  it("classifies an indoor-to-outdoor node transition as EXIT_STATION", () => {
+  it("classifies an indoor-to-outdoor node transition as EXIT_STATION without an instruction field", () => {
     const graph = createGraph(
       [{ edgeType: EDGE_TYPE.SIDEWALK }, { edgeType: EDGE_TYPE.SIDEWALK }],
       nodes(3, { 1: true }),
@@ -232,7 +227,7 @@ describe("buildCsrWalkSteps", () => {
     );
 
     expect(steps[1].relativeDirection).toBe("EXIT_STATION");
-    expect(steps[1].instruction).toBe(NAV_MSG.EXIT_STATION);
+    expect(steps[1]).not.toHaveProperty("instruction");
   });
 
   it.each([EDGE_TYPE.STEPS, EDGE_TYPE.INDOOR_STAIRS])(

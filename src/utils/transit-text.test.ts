@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { NAV_MSG } from "../constants/messages";
 import {
   buildFuzzyKeywordRegex,
   busRouteQueryCandidates,
@@ -114,16 +115,25 @@ describe("formatWalkStepInstruction", () => {
     ).toBe("沿「忠孝東路」繼續直行");
   });
 
-  it("formats ELEVATOR, ENTER_STATION, EXIT_STATION", () => {
+  it("formats all six facility tokens from NAV_MSG", () => {
     expect(formatWalkStepInstruction({ relativeDirection: "ELEVATOR" })).toBe(
-      "請進入電梯",
+      NAV_MSG.ELEVATOR,
+    );
+    expect(formatWalkStepInstruction({ relativeDirection: "ESCALATOR" })).toBe(
+      NAV_MSG.ESCALATOR,
+    );
+    expect(
+      formatWalkStepInstruction({ relativeDirection: "MOVING_WALKWAY" }),
+    ).toBe(NAV_MSG.MOVING_WALKWAY);
+    expect(formatWalkStepInstruction({ relativeDirection: "FARE_GATE" })).toBe(
+      NAV_MSG.FARE_GATE,
     );
     expect(
       formatWalkStepInstruction({ relativeDirection: "ENTER_STATION" }),
-    ).toBe("請進入車站");
+    ).toBe(NAV_MSG.ENTER_STATION);
     expect(
       formatWalkStepInstruction({ relativeDirection: "EXIT_STATION" }),
-    ).toBe("請離開車站");
+    ).toBe(NAV_MSG.EXIT_STATION);
   });
 
   it("formats maneuver distance and the next named target", () => {

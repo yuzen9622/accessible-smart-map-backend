@@ -1,3 +1,4 @@
+import { NAV_MSG } from "../constants/messages";
 import type {
   BusApiType,
   BusRealtimeNearbyStop,
@@ -287,11 +288,17 @@ export function formatWalkStepInstruction(step: {
     case "CIRCLE_COUNTERCLOCKWISE":
       return `請進入圓環，依指示繞行${suffix}`;
     case "ELEVATOR":
-      return "請進入電梯";
+      return NAV_MSG.ELEVATOR;
+    case "ESCALATOR":
+      return NAV_MSG.ESCALATOR;
+    case "MOVING_WALKWAY":
+      return NAV_MSG.MOVING_WALKWAY;
+    case "FARE_GATE":
+      return NAV_MSG.FARE_GATE;
     case "ENTER_STATION":
-      return "請進入車站";
+      return NAV_MSG.ENTER_STATION;
     case "EXIT_STATION":
-      return "請離開車站";
+      return NAV_MSG.EXIT_STATION;
     default:
       return named ? `請沿「${street}」前進${suffix}` : `請繼續前行${suffix}`;
   }
