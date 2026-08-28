@@ -309,9 +309,15 @@ const WalkLegSchema = z
       .array(
         z
           .object({
-            instruction: z.string().optional(),
+            instruction: z.string().optional().openapi({
+              description:
+                "僅在上游規劃器（如 OTP）自帶逐字文案時才會出現；CSR（engine=pedestrian-a11y）選出的路線不會有此欄位。可朗讀的中文逐步指引請改呼叫 POST /api/v1/a11y/route/instructions（帶 routeToken 或完整 route echo），該端點另會合併過短步驟。",
+            }),
             maneuver: z.string().optional(),
-            relativeDirection: z.string(),
+            relativeDirection: z.string().openapi({
+              description:
+                "機器可讀的方向 enum（如 DEPART / CONTINUE / LEFT / RIGHT / ELEVATOR…），不是可直接顯示的文字。",
+            }),
             absoluteDirection: z.string().nullable(),
             streetName: z.string(),
             bogusName: z.boolean(),
