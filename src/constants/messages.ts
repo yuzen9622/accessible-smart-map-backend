@@ -50,16 +50,6 @@ export const ROUTE_WARNING = {
     "此路線經過社群已確認的路況障礙（hazardAdvisory.onRoute），請留意或改採其他候選路線",
   HAZARD_ALL_ROUTES_BLOCKED:
     "所有候選路線都經過社群已確認的路況障礙，已為您保留受影響最小的路線，出發前請務必確認現場狀況",
-  CSR_WALK_FALLBACK_PLANNER_UNAVAILABLE:
-    "無障礙行人圖引擎本次無法規劃（圖資尚未就緒或起訖點無法對位），已改用 OTP2 步行路線；本路線未經過本引擎的樓梯／坡度／寬度與車站閘門保護，請自行確認現場路況",
-  CSR_WALK_FALLBACK_TOPOLOGY_DISCONNECTED:
-    "無障礙行人圖在此起訖點之間不連通（已知圖資缺口），已改用 OTP2 步行路線；本路線未經過本引擎的樓梯／坡度／寬度與車站閘門保護，請自行確認現場路況",
-  CSR_WALK_FALLBACK_FARE_POLICY_BLOCKED:
-    "無障礙行人圖因車站付費區保護拒絕此路線，已改用 OTP2 步行路線；本路線未經過本引擎的車站閘門與其他無障礙保護，請自行確認現場路況",
-  CSR_WALK_FALLBACK_ACCESSIBILITY_BLOCKED:
-    "無障礙行人圖找不到符合目前無障礙條件的路線，已改用 OTP2 步行路線；本路線未經過本引擎的樓梯／坡度／寬度與車站閘門保護，請自行確認現場路況",
-  CSR_WALK_FALLBACK_UNSUPPORTED_CONSTRAINTS:
-    "您指定的模式與避開樓梯組合無法由無障礙行人圖引擎忠實表達，已改用 OTP2 步行路線；本路線未經過本引擎的樓梯／坡度／寬度與車站閘門保護，請自行確認現場路況",
   CSR_WALK_APPROXIMATE_INDOOR_GEOMETRY:
     "路線包含車站室內段落，該段僅有出入口代理座標、無實測室內線形，地圖上以直線近似呈現，實際步行路徑會不同",
 } as const;

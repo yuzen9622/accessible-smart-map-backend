@@ -109,7 +109,7 @@ export const AccessibleRouteBodySchema = z
       .default("transit")
       .openapi({
         description:
-          "交通工具（與無障礙 mode 正交）：transit（預設，大眾運輸及其 WALK legs 均走 OTP2）、drive（開車）、motorcycle（騎車）、walk（純步行）。純步行在台北 CSR bbox 內且功能啟用時優先走 CSR；bbox 外或功能停用時 OTP2 為 primary，CSR 在範圍內無法選路時改以 warnings 標記 OTP2 fallback。僅當 OTP2 不可用才由 Valhalla 作停機備援。車行時間為自由流估計，不含即時路況。",
+          "交通工具（與無障礙 mode 正交）：transit（預設，大眾運輸及其 WALK legs 均走 OTP2）、drive（開車）、motorcycle（騎車）、walk（純步行）。純步行在台北 CSR bbox 內且功能啟用時優先走 CSR；bbox 外、功能停用或 CSR 無法選路時改走 OTP2，CSR fallback 本身不附 warning。僅當 OTP2 不可用才由 Valhalla 作停機備援並附 warning。車行時間為自由流估計，不含即時路況。",
         example: "drive",
       }),
     waypoints: z
@@ -793,12 +793,12 @@ export const AccessibleRouteSchema = z
     engine: z.enum(["pedestrian-a11y", "otp-fallback"]).optional().openapi({
       example: "pedestrian-a11y",
       description:
-        "純步行路線的選路來源：pedestrian-a11y 表示由 CSR 無障礙行人圖選路；otp-fallback 表示 CSR 未決定該路線，須搭配 warnings 了解 OTP2 或 OTP2 不可用後的 Valhalla 降級。大眾運輸與開車／機車路線省略。",
+        "純步行路線的選路來源：pedestrian-a11y 表示由 CSR 無障礙行人圖選路；otp-fallback 表示 CSR 未決定該路線，後續可能由 OTP2 或 OTP2 不可用後的 Valhalla 規劃。只有後者的 Valhalla 停機備援會附 warning。大眾運輸與開車／機車路線省略。",
     }),
     degraded: z.boolean().optional().openapi({
       example: true,
       description:
-        "硬性無障礙條件未完全滿足，或台北 CSR 本應保護但無法選路而改用 OTP2 時為 true；前端必須搭配 warnings 顯示風險。",
+        "硬性無障礙條件未完全滿足，或台北 CSR 本應保護但無法選路而改用 OTP2 時為 true。CSR fallback 本身不附 warning。",
     }),
     warnings: z
       .array(z.string())
@@ -993,7 +993,7 @@ registry.registerPath({
   tags: ["Accessibility"],
   summary: "無障礙路線規劃",
   description:
-    "規劃起訖點間無障礙路線。travelMode=transit（預設）並行搜尋公車、捷運、高鐵與台鐵，且 transit itinerary 的 WALK legs 維持 OTP2；純 walk 在台北 CSR bbox 內且啟用時以 CSR 為 primary，CSR 在範圍內無法選路時改以 warnings 標記 OTP2 fallback，bbox 外或 CSR 停用時 OTP2 本來就是 primary。只有 OTP2 步行不可用時才以 warnings 標記後降級至 Valhalla pedestrian。drive／motorcycle 主體走自架 Valhalla（自由流時間、不含即時路況）。支援最多 5 個中途點（waypoints），回傳最多 3 筆。選填帶 Bearer token：帶時，未明確傳入的 mode/avoidStairs/requireElevator/needsAccessibleToilet/needsHandrail/maxSlopePercent 會從登入者已儲存的 a11y-profile 推導；不帶則完全公開不受影響；帶但無效/過期回 401/403。",
+    "規劃起訖點間無障礙路線。travelMode=transit（預設）並行搜尋公車、捷運、高鐵與台鐵，且 transit itinerary 的 WALK legs 維持 OTP2；純 walk 在台北 CSR bbox 內且啟用時以 CSR 為 primary，CSR 在範圍內無法選路時改走 OTP2 fallback，且不附 CSR fallback warning；bbox 外或 CSR 停用時 OTP2 本來就是 primary。只有 OTP2 步行不可用時才附 warning 並降級至 Valhalla pedestrian。drive／motorcycle 主體走自架 Valhalla（自由流時間、不含即時路況）。支援最多 5 個中途點（waypoints），回傳最多 3 筆。選填帶 Bearer token：帶時，未明確傳入的 mode/avoidStairs/requireElevator/needsAccessibleToilet/needsHandrail/maxSlopePercent 會從登入者已儲存的 a11y-profile 推導；不帶則完全公開不受影響；帶但無效/過期回 401/403。",
   security: [{ bearerAuth: [] }, {}],
   request: {
     body: {

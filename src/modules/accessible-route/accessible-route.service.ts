@@ -4,7 +4,6 @@ import { parseRouteIntent } from "./route-intent.port";
 import { getA11yProfile } from "../user/user.service";
 import type { RouteIntent } from "../../types/ai";
 import type {
-  CsrWalkFailureReason,
   CsrWalkPlan,
   CsrWalkResult,
 } from "./planners/pedestrian-a11y/csr-walk.types";
@@ -1631,7 +1630,7 @@ export async function planAccessibleRouteFromRequest(
       );
       logRequestTiming();
     } else {
-      const csrFallbackWarning = CSR_WALK_FALLBACK_WARNING[csrWalk.status];
+      const csrFallbackIsDegraded = csrWalk.status !== "outside_coverage";
       const otpWalk = await planOtpWalkSegments(
         walkPoints,
         roadMode,
@@ -1703,14 +1702,7 @@ export async function planAccessibleRouteFromRequest(
         // OTP2 itself was unavailable, the existing OTP warning identifies
         // the final Valhalla recovery without adding a third public engine tag.
         engine: "otp-fallback",
-        ...(csrFallbackWarning === null
-          ? {}
-          : {
-              degraded: true,
-              warnings: [
-                ...new Set([...(route.warnings ?? []), csrFallbackWarning]),
-              ],
-            }),
+        ...(csrFallbackIsDegraded ? { degraded: true } : {}),
       }));
       logRequestTiming();
     }
@@ -2191,23 +2183,6 @@ function combineWalkSegments(segments: AccessibleRoute[]): AccessibleRoute {
 }
 
 const CSR_WALK_ATTRIBUTION = "© OpenStreetMap contributors";
-
-/**
- * Warning to attach when the CSR walk planner did not decide the route.
- *
- * `outside_coverage` maps to null on purpose: OTP2 is the primary engine there
- * (outside the Taipei graph bbox, or a deployment that never enabled CSR), so
- * warning about a protection that was never promised would be pure noise.
- */
-const CSR_WALK_FALLBACK_WARNING: Record<CsrWalkFailureReason, string | null> = {
-  outside_coverage: null,
-  unsupported_constraints:
-    ROUTE_WARNING.CSR_WALK_FALLBACK_UNSUPPORTED_CONSTRAINTS,
-  unavailable: ROUTE_WARNING.CSR_WALK_FALLBACK_PLANNER_UNAVAILABLE,
-  topology_disconnected: ROUTE_WARNING.CSR_WALK_FALLBACK_TOPOLOGY_DISCONNECTED,
-  fare_policy_blocked: ROUTE_WARNING.CSR_WALK_FALLBACK_FARE_POLICY_BLOCKED,
-  accessibility_blocked: ROUTE_WARNING.CSR_WALK_FALLBACK_ACCESSIBILITY_BLOCKED,
-};
 
 /**
  * Run the CSR pedestrian planner for a pure-walking request.

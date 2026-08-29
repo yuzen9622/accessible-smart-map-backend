@@ -660,7 +660,7 @@ describe("planAccessibleRouteFromRequest walk mode CSR selection", () => {
     );
   });
 
-  it("falls back to marked OTP when CSR is unavailable", async () => {
+  it("falls back to OTP without a CSR warning when CSR is unavailable", async () => {
     vi.mocked(planCsrWalkRoute).mockResolvedValue({
       status: "unavailable",
       reason: "graph load timed out",
@@ -677,9 +677,7 @@ describe("planAccessibleRouteFromRequest walk mode CSR selection", () => {
       engine: "otp-fallback",
       degraded: true,
     });
-    expect(okData(res).routes[0].warnings).toContain(
-      ROUTE_WARNING.CSR_WALK_FALLBACK_PLANNER_UNAVAILABLE,
-    );
+    expect(okData(res).routes[0].warnings).toBeUndefined();
     expect(vi.mocked(planOtpWalkDetailed)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(planValhallaRoute)).not.toHaveBeenCalled();
     expect(okData(res).routes[0].legs[0]).not.toHaveProperty("a11ySegments");
@@ -693,7 +691,7 @@ describe("planAccessibleRouteFromRequest walk mode CSR selection", () => {
     expect(steps?.every((step) => step.steepSlope === false)).toBe(true);
   });
 
-  it("turns a CSR planner exception into a marked OTP fallback", async () => {
+  it("turns a CSR planner exception into an OTP fallback without a warning", async () => {
     vi.mocked(planCsrWalkRoute).mockRejectedValue(
       new Error("mock CSR planner failure"),
     );
@@ -709,13 +707,11 @@ describe("planAccessibleRouteFromRequest walk mode CSR selection", () => {
       engine: "otp-fallback",
       degraded: true,
     });
-    expect(okData(res).routes[0].warnings).toContain(
-      ROUTE_WARNING.CSR_WALK_FALLBACK_PLANNER_UNAVAILABLE,
-    );
+    expect(okData(res).routes[0].warnings).toBeUndefined();
     expect(vi.mocked(planOtpWalkDetailed)).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to marked OTP when CSR topology is disconnected", async () => {
+  it("falls back to OTP without a warning when CSR topology is disconnected", async () => {
     vi.mocked(planCsrWalkRoute).mockResolvedValue({
       status: "topology_disconnected",
     });
@@ -731,24 +727,16 @@ describe("planAccessibleRouteFromRequest walk mode CSR selection", () => {
       engine: "otp-fallback",
       degraded: true,
     });
-    expect(okData(res).routes[0].warnings).toContain(
-      ROUTE_WARNING.CSR_WALK_FALLBACK_TOPOLOGY_DISCONNECTED,
-    );
+    expect(okData(res).routes[0].warnings).toBeUndefined();
     expect(vi.mocked(planOtpWalkDetailed)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(planValhallaRoute)).not.toHaveBeenCalled();
   });
 
-  for (const [csrStatus, warning] of [
-    [
-      "fare_policy_blocked",
-      ROUTE_WARNING.CSR_WALK_FALLBACK_FARE_POLICY_BLOCKED,
-    ],
-    [
-      "accessibility_blocked",
-      ROUTE_WARNING.CSR_WALK_FALLBACK_ACCESSIBILITY_BLOCKED,
-    ],
+  for (const csrStatus of [
+    "fare_policy_blocked",
+    "accessibility_blocked",
   ] as const) {
-    it(`falls back to marked OTP when CSR reports ${csrStatus}`, async () => {
+    it(`falls back to OTP without a warning when CSR reports ${csrStatus}`, async () => {
       vi.mocked(planCsrWalkRoute).mockResolvedValue({ status: csrStatus });
       vi.mocked(planOtpWalkDetailed).mockResolvedValue({
         status: "ok",
@@ -762,7 +750,7 @@ describe("planAccessibleRouteFromRequest walk mode CSR selection", () => {
         engine: "otp-fallback",
         degraded: true,
       });
-      expect(okData(res).routes[0].warnings).toContain(warning);
+      expect(okData(res).routes[0].warnings).toBeUndefined();
       expect(vi.mocked(planOtpWalkDetailed)).toHaveBeenCalledTimes(1);
     });
 
@@ -786,7 +774,7 @@ describe("planAccessibleRouteFromRequest walk mode CSR selection", () => {
     });
   }
 
-  it("marks unsupported explicit constraints as a degraded OTP fallback", async () => {
+  it("uses a degraded OTP fallback without a warning for unsupported explicit constraints", async () => {
     vi.mocked(planCsrWalkRoute).mockResolvedValue({
       status: "unsupported_constraints",
     });
@@ -810,9 +798,7 @@ describe("planAccessibleRouteFromRequest walk mode CSR selection", () => {
       engine: "otp-fallback",
       degraded: true,
     });
-    expect(okData(res).routes[0].warnings).toContain(
-      ROUTE_WARNING.CSR_WALK_FALLBACK_UNSUPPORTED_CONSTRAINTS,
-    );
+    expect(okData(res).routes[0].warnings).toBeUndefined();
   });
 
   for (const source of ["outside Taipei", "feature disabled"] as const) {
