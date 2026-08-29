@@ -18,22 +18,22 @@
 
 CSR 只在 `PED_GRAPH_CSR_WALK_ENABLED=true` 且所有點都位於台北 bbox 時參與選路。此旗標未設定時一律為 `false`，即使 `PED_GRAPH_DATABASE_URL` 已設定，仍由 OTP2 作為 non-degraded primary。normal、elderly 與 visual_impaired 的預設組合會進 CSR 的各自 neutral profile；不會把非輪椅請求偷偷改成 wheelchair profile。
 
-| CSR disposition                                          | Next planner                       | `engine`          | `degraded` and warning                             | Valhalla                          |
-| -------------------------------------------------------- | ---------------------------------- | ----------------- | -------------------------------------------------- | --------------------------------- |
-| `ok`                                                     | CSR route                          | `pedestrian-a11y` | omitted; indoor proxy warning only when applicable | not called                        |
-| feature disabled（包括未設定 flag）or `outside_coverage` | OTP2 primary                       | `otp-fallback`    | omitted; no CSR failure warning                    | only if OTP2 is unavailable       |
-| `unsupported_constraints`                                | OTP2 first                         | `otp-fallback`    | `true` plus unsupported-constraint warning         | existing OTP-unavailable recovery |
-| `unavailable` or `topology_disconnected`                 | OTP2 first                         | `otp-fallback`    | `true` plus cause warning                          | existing OTP-unavailable recovery |
-| `fare_policy_blocked`                                    | OTP2 first                         | `otp-fallback`    | `true` plus fare-policy warning                    | existing OTP-unavailable recovery |
-| `accessibility_blocked`                                  | OTP2 first                         | `otp-fallback`    | `true` plus accessibility warning                  | existing OTP-unavailable recovery |
+| CSR disposition                                          | Next planner | `engine`          | `degraded` and warning                             | Valhalla                          |
+| -------------------------------------------------------- | ------------ | ----------------- | -------------------------------------------------- | --------------------------------- |
+| `ok`                                                     | CSR route    | `pedestrian-a11y` | omitted; indoor proxy warning only when applicable | not called                        |
+| feature disabled（包括未設定 flag）or `outside_coverage` | OTP2 primary | `otp-fallback`    | omitted; no CSR fallback warning                   | only if OTP2 is unavailable       |
+| `unsupported_constraints`                                | OTP2 first   | `otp-fallback`    | `true`; no CSR fallback warning                    | existing OTP-unavailable recovery |
+| `unavailable` or `topology_disconnected`                 | OTP2 first   | `otp-fallback`    | `true`; no CSR fallback warning                    | existing OTP-unavailable recovery |
+| `fare_policy_blocked`                                    | OTP2 first   | `otp-fallback`    | `true`; no CSR fallback warning                    | existing OTP-unavailable recovery |
+| `accessibility_blocked`                                  | OTP2 first   | `otp-fallback`    | `true`; no CSR fallback warning                    | existing OTP-unavailable recovery |
 
-The second row is deliberately non-degraded: a disabled deployment（包括缺少 flag）or ground outside the Taipei graph never promised CSR protection. All other fallback-eligible non-CSR results inside coverage — including a fare-policy or accessibility block — are visible to clients as a degradation. The warnings state that CSR stair, slope, width, and fare-gate protection was not enforced by the returned OTP2 route.
+The second row is deliberately non-degraded: a disabled deployment（包括缺少 flag）or ground outside the Taipei graph never promised CSR protection. All other fallback-eligible non-CSR results inside coverage — including a fare-policy or accessibility block — remain visible to clients through `engine: "otp-fallback"` and `degraded: true`, but CSR fallback itself does not add a warning.
 
 The compatibility gate is also explicit. When an enabled, in-Taipei request asks for an `avoidStairs` value the selected CSR mode cannot faithfully represent (for example normal plus `avoidStairs: true`, or wheelchair plus `avoidStairs: false`), it returns `unsupported_constraints`, then uses marked OTP2 fallback. Coverage and feature checks happen first, so the same combination outside Taipei or while disabled remains ordinary OTP-primary behavior.
 
 ## 3. Fallback ordering and fare-gate safety
 
-For fallback-eligible CSR results, the normal order is CSR → OTP2 → Valhalla only when OTP2 is unavailable. It preserves the existing OTP-first behavior. This now includes `fare_policy_blocked` and `accessibility_blocked`: CSR's own graph has known coverage gaps (sparse ramp/footway tagging), so a block on that graph no longer short-circuits to a terminal 422 — it flows into the same OTP2-first fallback as the other CSR non-selection statuses. A returned OTP2 fallback is never presented as CSR-protected; its `engine`, `degraded`, and warning fields make the loss of protection explicit, so callers can tell that CSR's fare-gate or accessibility check was not enforced on the returned route.
+For fallback-eligible CSR results, the normal order is CSR → OTP2 → Valhalla only when OTP2 is unavailable. It preserves the existing OTP-first behavior. This now includes `fare_policy_blocked` and `accessibility_blocked`: CSR's own graph has known coverage gaps (sparse ramp/footway tagging), so a block on that graph no longer short-circuits to a terminal 422 — it flows into the same OTP2-first fallback as the other CSR non-selection statuses. A returned OTP2 fallback is identified by `engine: "otp-fallback"`; in-coverage CSR non-selection also retains `degraded: true`, but does not add a CSR-specific warning.
 
 Fare and exit gates remain fail-closed under normal policy. Both endpoints must have the same non-blank stable parent-station ID authorized by transit context. There is no request field, public route policy, or client-accessible allow-all mode.
 
@@ -70,7 +70,7 @@ Development PostGIS 已套用 idempotent lifecycle migration；既有 version 1 
 | -------------------- | ------------------------ | ---------------------------------------------------------------------- |
 | `route_2`            | `200`／`pedestrian-a11y` | 1,065 m、44 edges、fare gate 0、exit gate 0；首次 graph load 約 14.5 s |
 | `indoor_route`       | `200`／`pedestrian-a11y` | 356 m、7 edges、fare gate 0、exit gate 0；cached planning 約 1 ms      |
-| 故意無效 PostGIS URL | `200`／`otp-fallback`    | `degraded=true`，warning 明示 CSR 樓梯／坡度／寬度／閘門保護未套用     |
+| 故意無效 PostGIS URL | `200`／`otp-fallback`    | `degraded=true`；目前行為不附 CSR fallback warning                     |
 
 以上是本機功能證據，不代表 production latency/SLA。首次載入時間包含完整 ACTIVE graph 與 spatial index 建置；常駐程序後續重用 cache。
 

@@ -481,7 +481,7 @@ export function aStar(
 
 同介面、同樣 `h ≡ 0` priority semantics。存在的唯一目的是**獨立交叉驗證 production search 的最佳性與 route reconstruction**（上位規格 §13）。
 
-> **Slice 1 core／Slice 2 pure-walk assembly（2026-08-27）**：`INDOOR_FARE_GATE`（25）與 `INDOOR_EXIT_GATE`（26）在 A\*／Dijkstra 預設 fail-closed；只有明確授權相同穩定母站 ID 的 transit context 可通過。付費區內純步行起點可能被過度阻擋，直到付費側拓撲獲證實。Phase 0 benchmark／OTP 對照省略 context 時即量測此預設，重跑必須揭露。`travelMode: "walk"` 現已在台北 CSR coverage 內接入 production assembly，並以 structured `engine`／`degraded`／warning 表明 OTP2 fallback；轉乘 itinerary 的 WALK leg 仍由 OTP2 規劃，未在本 Slice 接管。
+> **Slice 1 core／Slice 2 pure-walk assembly（2026-08-27）**：`INDOOR_FARE_GATE`（25）與 `INDOOR_EXIT_GATE`（26）在 A\*／Dijkstra 預設 fail-closed；只有明確授權相同穩定母站 ID 的 transit context 可通過。付費區內純步行起點可能被過度阻擋，直到付費側拓撲獲證實。Phase 0 benchmark／OTP 對照省略 context 時即量測此預設，重跑必須揭露。`travelMode: "walk"` 現已在台北 CSR coverage 內接入 production assembly，並以 structured `engine`／`degraded` 表明 OTP2 fallback；CSR fallback 本身不附 warning。轉乘 itinerary 的 WALK leg 仍由 OTP2 規劃，未在本 Slice 接管。
 
 ### 5.5 驗收
 
