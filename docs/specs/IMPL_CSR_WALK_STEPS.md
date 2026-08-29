@@ -1,6 +1,11 @@
 # IMPL：CSR 純步行逐步導航指引（`WalkLeg.steps`）
 
-狀態：待實作（Claude 規劃，實作者依 session ledger）
+> **已被取代（2026-08-29）**：現行對外契約以
+> [`WALK_STEPS_I18N_VOCABULARY.md`](./WALK_STEPS_I18N_VOCABULARY.md) 為準。
+> 本文件僅保留歷史設計脈絡；其中中文 `absoluteDirection`、WALK step
+> `instruction` 與選用 `steepSlope` 的內容不得作為實作依據。
+
+原狀態：待實作（Claude 規劃，實作者依 session ledger）
 使用者本輪決策：**先做導航 steps**；分段維度擴充（`steep_slope` / `narrow` / `rough_surface`）之後另案，門檻由**後端依 mode** 決定。
 
 ## 1. 問題

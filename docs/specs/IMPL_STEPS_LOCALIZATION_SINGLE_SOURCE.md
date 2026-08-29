@@ -1,6 +1,11 @@
 # IMPL：步行指引本地化收斂為單一來源
 
-狀態：待實作。使用者回報前端顯示英文 enum 而發現。**範圍極小。**
+> **已被取代（2026-08-29）**：現行對外契約以
+> [`WALK_STEPS_I18N_VOCABULARY.md`](./WALK_STEPS_I18N_VOCABULARY.md) 為準。
+> 本文件僅保留歷史設計脈絡；WALK step 不得保留 `instruction`、`text`、
+> `type` 或任何後端文案欄位。
+
+原狀態：待實作。使用者回報前端顯示英文 enum 而發現。**範圍極小。**
 
 ## 1. 問題
 
