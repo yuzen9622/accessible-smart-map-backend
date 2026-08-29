@@ -21,7 +21,10 @@ import MetroStationModel from "../../../model/metro-station.model";
 import TrainStationModel from "../../../model/train-station.model";
 import BusStopModel from "../../../model/bus-stop.model";
 import { haversineCoords } from "../../../utils/geo";
-import { formatWalkStepInstruction } from "../../../utils/transit-text";
+import {
+  normalizeAbsoluteDirection,
+  normalizeRelativeDirection,
+} from "../../../utils/nav-instructions-engine";
 import { taipeiHHmm, taipeiYmdDash } from "../../../config/taipei-time";
 import { metroLineCode } from "../../../config/transit";
 import { ROUTE_WARNING } from "../../../constants/messages";
@@ -786,23 +789,18 @@ function walkLegFrom(leg: OtpLeg, isFirst: boolean, isLast: boolean): WalkLeg {
     ...unknownWalkA11yDetails(),
     exitInfo: null,
     steps: (leg.steps ?? []).map((s): WalkStep => {
-      const relativeDirection = s.relativeDirection ?? "CONTINUE";
+      const relativeDirection = normalizeRelativeDirection(s.relativeDirection);
       const streetName = s.streetName ?? "";
       const bogusName = s.bogusName ?? false;
       const stairs = s.feature?.__typename === "StairsUse";
-      const instruction = formatWalkStepInstruction({
-        relativeDirection,
-        streetName,
-        bogusName,
-      });
       return {
-        instruction: stairs ? `${instruction}，此路段含樓梯` : instruction,
         relativeDirection,
-        absoluteDirection: s.absoluteDirection ?? null,
+        absoluteDirection: normalizeAbsoluteDirection(s.absoluteDirection),
         streetName,
         bogusName,
         area: s.area ?? false,
         stairs,
+        steepSlope: false,
         distanceM: Math.round(s.distance ?? 0),
         location: [s.lon ?? 0, s.lat ?? 0],
       };

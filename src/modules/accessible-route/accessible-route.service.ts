@@ -58,6 +58,7 @@ import type {
 } from "../../types/transit";
 import { haversineMeters } from "../../utils/geo";
 import { attachRouteTokens } from "./route-token.service";
+import { normalizeWalkLegSteps } from "../../utils/nav-instructions-engine";
 import {
   attachInternalSchedule,
   retainEarliestFutureRoute,
@@ -1814,6 +1815,8 @@ export async function planAccessibleRouteFromRequest(
     );
   }
 
+  const normalizedRoutes = routes.map(normalizeWalkSteps);
+
   return {
     ok: true,
     data: {
@@ -1822,13 +1825,44 @@ export async function planAccessibleRouteFromRequest(
       city,
       travelMode,
       ...(waypoints.length ? { waypoints } : {}),
-      routes,
+      routes: normalizedRoutes,
       ...(intent ? { intent } : {}),
       ...(slopeConstraint ? { slopeConstraint } : {}),
       ...(metroAlerts.length ? { metroAlerts } : {}),
       ...(transitAlerts.length ? { transitAlerts } : {}),
     },
   };
+}
+
+/**
+ * Replace every WALK leg's `steps` with their merged, split, machine-only
+ * normalized form, best-effort per leg.
+ * @param route The route whose WALK legs' `steps` should be normalized.
+ * @returns The route with each WALK leg's `steps` normalized where possible;
+ *   a leg is left with its original `steps` unchanged when normalization
+ *   produces no usable result, and the whole route is left unchanged if
+ *   normalization throws.
+ */
+function normalizeWalkSteps(route: AccessibleRoute): AccessibleRoute {
+  try {
+    const legs = route.legs.map((leg, index) => {
+      if (leg.type !== "WALK") return leg;
+      const normalizedSteps = normalizeWalkLegSteps(leg, index === 0);
+      if (normalizedSteps.length === 0) return leg;
+      return { ...leg, steps: normalizedSteps };
+    });
+    return Object.defineProperties(
+      { ...route, legs },
+      Object.fromEntries(
+        Object.entries(Object.getOwnPropertyDescriptors(route)).filter(
+          ([, descriptor]) => !descriptor.enumerable,
+        ),
+      ),
+    ) as AccessibleRoute;
+  } catch (err) {
+    console.error("[accessible-route] walk step localization failed", err);
+    return route;
+  }
 }
 
 /** HTTP response variant that makes successful routes armable by voice Live. */

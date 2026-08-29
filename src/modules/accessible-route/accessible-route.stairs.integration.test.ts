@@ -114,13 +114,13 @@ beforeEach(() => {
             restPoints: [],
             steps: [
               {
-                instruction: "沿「圓山市景步道」繼續直行，此路段含樓梯",
                 relativeDirection: "CONTINUE",
                 absoluteDirection: "NORTH",
                 streetName: "圓山市景步道",
                 bogusName: false,
                 area: false,
                 stairs: true,
+                steepSlope: false,
                 distanceM: 420,
                 location: [121.56, 25.04],
               },

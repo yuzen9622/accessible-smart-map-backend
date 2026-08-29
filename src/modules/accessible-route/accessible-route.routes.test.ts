@@ -141,6 +141,89 @@ describe("POST /api/v1/a11y/accessible-route travel modes + waypoints", () => {
     ).toBe(false);
   });
 
+  it("passes through the exact machine-only WalkStep contract and validates against the schema", async () => {
+    const route = {
+      routeId: "walk-with-nav",
+      routeName: "步行",
+      totalMinutes: 3,
+      transferCount: 0,
+      legs: [
+        {
+          type: "WALK",
+          from: "起點",
+          to: "終點",
+          distanceM: 120,
+          minutesEst: 2,
+          polyline: [
+            [121.567, 25.041],
+            [121.568, 25.042],
+          ],
+          a11yFacilities: [],
+          maxSlopePercent: null,
+          crossings: null,
+          crossingsWithCurbRamp: null,
+          minPathWidthCm: null,
+          surfaceType: "unknown",
+          restPoints: [],
+          steps: [
+            {
+              relativeDirection: "DEPART",
+              absoluteDirection: null,
+              streetName: "中山北路",
+              bogusName: false,
+              area: false,
+              stairs: false,
+              steepSlope: false,
+              distanceM: 120,
+              location: [121.567, 25.041],
+            },
+          ],
+        },
+      ],
+      accessibilityHighlights: [],
+    };
+    mockPlan.mockResolvedValue({
+      ok: true,
+      data: okData({ routes: [route] }),
+    } as any);
+
+    const res = await request(app)
+      .post(URL)
+      .send({
+        origin: { latitude: 25, longitude: 121 },
+        destination: { latitude: 25.1, longitude: 121.1 },
+      });
+
+    expect(res.status).toBe(200);
+    expect(
+      Object.keys(res.body.data.routes[0].legs[0].steps[0]).sort(),
+    ).toEqual([
+      "absoluteDirection",
+      "area",
+      "bogusName",
+      "distanceM",
+      "location",
+      "relativeDirection",
+      "stairs",
+      "steepSlope",
+      "streetName",
+    ]);
+    expect(
+      JSON.stringify(
+        res.body.data.routes[0].legs
+          .filter((leg: { type: string }) => leg.type === "WALK")
+          .flatMap((leg: { steps?: unknown[] }) => leg.steps ?? []),
+      ),
+    ).not.toMatch(/"(?:instruction|maneuver|text|type)"/);
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        res.body.data.routes[0],
+        "navInstructions",
+      ),
+    ).toBe(false);
+    expect(AccessibleRouteSchema.safeParse(route).success).toBe(true);
+  });
+
   it("returns 200 with a next-service-day scheduled departure", async () => {
     mockPlan.mockResolvedValue({
       ok: true,

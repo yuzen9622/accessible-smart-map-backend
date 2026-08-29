@@ -74,10 +74,22 @@ describe("planOtpWalk", () => {
     expect(r.totalWalkDistanceM).toBe(823);
     expect(r.totalMinutes).toBe(12);
     expect(r.attribution).toBe("© OpenStreetMap contributors");
-    expect((r.legs[0] as WalkLeg).steps?.[0].instruction).toBe(
-      "沿「信義路」出發",
-    );
-    expect((r.legs[0] as WalkLeg).steps?.[0].stairs).toBe(false);
+    const step = (r.legs[0] as WalkLeg).steps?.[0];
+    expect(Object.keys(step ?? {}).sort()).toEqual([
+      "absoluteDirection",
+      "area",
+      "bogusName",
+      "distanceM",
+      "location",
+      "relativeDirection",
+      "stairs",
+      "steepSlope",
+      "streetName",
+    ]);
+    expect(step?.stairs).toBe(false);
+    expect(step?.steepSlope).toBe(false);
+    expect(step).not.toHaveProperty("instruction");
+    expect(step).not.toHaveProperty("maneuver");
     expect(r.legs[0]).toMatchObject({
       maxSlopePercent: null,
       crossings: null,
@@ -126,9 +138,23 @@ describe("planOtpWalk", () => {
         ? result.routes[0].legs[0].steps?.[0]
         : undefined;
     expect(step?.stairs).toBe(true);
-    expect(step?.instruction).toContain("此路段含樓梯");
-    expect(step?.instruction).not.toContain("823");
+    expect(step?.steepSlope).toBe(false);
+    expect(step).not.toHaveProperty("instruction");
     expect(post.mock.calls[0][1].variables.numItineraries).toBe(8);
+  });
+
+  it("normalizes an OTP relative-direction token outside the public vocabulary", async () => {
+    const itinerary = walkItin() as any;
+    itinerary.legs[0].steps[0].relativeDirection = "FOLLOW_SIGNS";
+    post.mockResolvedValue(okResp([itinerary]));
+
+    const result = await planOtpWalk(origin, destination);
+
+    const step =
+      result[0].legs[0].type === "WALK"
+        ? result[0].legs[0].steps?.[0]
+        : undefined;
+    expect(step?.relativeDirection).toBe("CONTINUE");
   });
 
   it("prefers every stair-free candidate when avoidStairs is active", async () => {

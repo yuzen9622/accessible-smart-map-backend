@@ -143,26 +143,27 @@ export interface WalkA11yPoint {
   location: [number, number];
 }
 
+export type WalkAbsoluteDirection =
+  | "NORTH"
+  | "NORTHEAST"
+  | "EAST"
+  | "SOUTHEAST"
+  | "SOUTH"
+  | "SOUTHWEST"
+  | "WEST"
+  | "NORTHWEST";
+
 export interface WalkStep {
-  /** Upstream turn-by-turn text when the planner already provides localized guidance. */
-  instruction?: string;
-  /** Normalized maneuver code when supplied by the road planner. */
-  maneuver?: string;
   relativeDirection: string;
-  absoluteDirection: string | null;
+  absoluteDirection: WalkAbsoluteDirection | null;
   streetName: string;
   bogusName: boolean;
   area: boolean;
   stairs: boolean;
+  /** False means no steep slope was observed; it does not confirm a flat step. */
+  steepSlope: boolean;
   distanceM: number;
   location: [number, number];
-  /**
-   * Whether this step's edge slope exceeds the mode-dependent steep-slope
-   * threshold (wheelchair 8.3%, others 12%). Absent or false when the
-   * generating engine has no slope measurement for this step — that always
-   * means "not observed", never "confirmed flat".
-   */
-  steepSlope?: boolean;
 }
 
 export interface IntermediateStop {

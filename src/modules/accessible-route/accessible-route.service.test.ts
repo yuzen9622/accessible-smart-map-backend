@@ -56,6 +56,17 @@ vi.mock("../user/user.service", () => ({
   getA11yProfile: vi.fn(),
 }));
 
+// Spread-actual: keep the real (pure) step normalizer by default so tests
+// exercise its actual output, override per-test to force a failure.
+vi.mock("../../utils/nav-instructions-engine", async (importActual) => {
+  const actual =
+    await importActual<typeof import("../../utils/nav-instructions-engine")>();
+  return {
+    ...actual,
+    normalizeWalkLegSteps: vi.fn(actual.normalizeWalkLegSteps),
+  };
+});
+
 // Confirmed-hazard lookup is an optional best-effort overlay; keep legacy route
 // tests DB-free unless a B11 case explicitly supplies a verified hazard.
 vi.mock("../hazard-report/hazard-report.service", () => ({
@@ -85,8 +96,10 @@ vi.mock("../transit/alert.service", () => ({
 import {
   attachMetroAlerts,
   attachTransitAlerts,
+  planAccessibleRouteForHttp,
   planAccessibleRouteFromRequest,
 } from "./accessible-route.service";
+import { normalizeWalkLegSteps } from "../../utils/nav-instructions-engine";
 import { attachInternalSchedule } from "./route-schedule";
 import {
   planValhallaRoute,
@@ -432,6 +445,7 @@ const walkRoute = () => ({
           bogusName: false,
           area: false,
           stairs: false,
+          steepSlope: false,
           distanceM: 800,
           location: [121.56, 25.04],
         },
@@ -612,9 +626,14 @@ describe("planAccessibleRouteFromRequest walk mode CSR selection", () => {
     const leg = okData(res).routes[0].legs[0];
     const steps = leg.type === "WALK" ? leg.steps : undefined;
     expect(steps).toBeDefined();
-    expect(steps).toEqual(
-      csrWalkStepsFixture([121.56, 25.04], [121.55, 25.03]),
-    );
+    expect(steps?.reduce((sum, step) => sum + step.distanceM, 0)).toBe(800);
+    expect(
+      steps?.every(
+        (step) =>
+          typeof step.steepSlope === "boolean" &&
+          Object.keys(step).length === 9,
+      ),
+    ).toBe(true);
   });
 
   it("reports an arbitrary maxSlopePercent as unenforced for a CSR route", async () => {
@@ -669,9 +688,9 @@ describe("planAccessibleRouteFromRequest walk mode CSR selection", () => {
     );
     expect(okData(res).routes[0].legs[0]).not.toHaveProperty("a11yPoints");
     const leg = okData(res).routes[0].legs[0];
-    expect(leg.type === "WALK" ? leg.steps : undefined).toEqual(
-      walkRoute().legs[0].steps,
-    );
+    const steps = leg.type === "WALK" ? leg.steps : undefined;
+    expect(steps?.reduce((sum, step) => sum + step.distanceM, 0)).toBe(800);
+    expect(steps?.every((step) => step.steepSlope === false)).toBe(true);
   });
 
   it("turns a CSR planner exception into a marked OTP fallback", async () => {
@@ -825,6 +844,146 @@ describe("planAccessibleRouteFromRequest walk mode CSR selection", () => {
     });
 
     expect(vi.mocked(planCsrWalkRoute)).not.toHaveBeenCalled();
+  });
+});
+
+describe("walk-step normalization", () => {
+  const walkStepKeys = [
+    "absoluteDirection",
+    "area",
+    "bogusName",
+    "distanceM",
+    "location",
+    "relativeDirection",
+    "stairs",
+    "steepSlope",
+    "streetName",
+  ];
+
+  it("returns only the nine machine fields for a successful CSR route", async () => {
+    vi.mocked(planCsrWalkRoute).mockResolvedValue({
+      status: "ok",
+      plans: [csrWalkPlan()],
+    });
+
+    const res = await planAccessibleRouteFromRequest(walkRequest);
+
+    expect(res.ok).toBe(true);
+    const route = okData(res).routes[0];
+    const walkLeg = route.legs.find((leg) => leg.type === "WALK");
+    expect(walkLeg?.steps?.length).toBeGreaterThan(0);
+    for (const step of walkLeg!.steps!) {
+      expect(Object.keys(step).sort()).toEqual(walkStepKeys);
+      expect(typeof step.relativeDirection).toBe("string");
+      expect(typeof step.streetName).toBe("string");
+      expect(typeof step.distanceM).toBe("number");
+      expect(Array.isArray(step.location)).toBe(true);
+      expect(typeof step.steepSlope).toBe("boolean");
+    }
+    expect(JSON.stringify(walkLeg!.steps!)).not.toMatch(
+      /"(?:instruction|maneuver|text|type)"/,
+    );
+  });
+
+  it("merges consecutive short continuation steps into fewer machine-only entries", () => {
+    const denseLine: [number, number][] = [
+      [121.56, 25.04],
+      [121.5605, 25.0402],
+      [121.561, 25.0404],
+      [121.5615, 25.0406],
+      [121.562, 25.0408],
+    ];
+    const leg = {
+      type: "WALK" as const,
+      from: "起點",
+      to: "終點",
+      distanceM: 150,
+      minutesEst: 2,
+      polyline: denseLine,
+      a11yFacilities: [],
+      steps: [
+        {
+          relativeDirection: "DEPART",
+          absoluteDirection: null,
+          streetName: "中山北路",
+          bogusName: false,
+          area: false,
+          stairs: false,
+          steepSlope: false,
+          distanceM: 50,
+          location: denseLine[0],
+        },
+        {
+          relativeDirection: "CONTINUE",
+          absoluteDirection: null,
+          streetName: "中山北路",
+          bogusName: false,
+          area: false,
+          stairs: false,
+          steepSlope: false,
+          distanceM: 50,
+          location: denseLine[2],
+        },
+        {
+          relativeDirection: "CONTINUE",
+          absoluteDirection: null,
+          streetName: "中山北路",
+          bogusName: false,
+          area: false,
+          stairs: false,
+          steepSlope: false,
+          distanceM: 50,
+          location: denseLine[4],
+        },
+      ],
+    } as unknown as Parameters<typeof normalizeWalkLegSteps>[0];
+
+    const normalized = normalizeWalkLegSteps(leg, true);
+
+    expect(normalized.length).toBeLessThan(leg.steps!.length);
+    expect(normalized.map((step) => Object.keys(step).sort())).toEqual(
+      normalized.map(() => walkStepKeys),
+    );
+    expect(normalized.reduce((sum, step) => sum + step.distanceM, 0)).toBe(150);
+  });
+
+  it("keeps a WALK leg's original steps unchanged when normalization produces no result", async () => {
+    vi.mocked(planCsrWalkRoute).mockResolvedValue({
+      status: "ok",
+      plans: [csrWalkPlan()],
+    });
+    vi.mocked(normalizeWalkLegSteps).mockReturnValueOnce([]);
+
+    const res = await planAccessibleRouteFromRequest(walkRequest);
+
+    expect(res.ok).toBe(true);
+    const walkLeg = okData(res).routes[0].legs.find(
+      (leg) => leg.type === "WALK",
+    );
+    expect(walkLeg?.steps).toEqual(
+      csrWalkStepsFixture([121.56, 25.04], [121.55, 25.03]),
+    );
+  });
+
+  it("normalizes once in the agent path and exposes identical steps through HTTP", async () => {
+    vi.mocked(planCsrWalkRoute).mockResolvedValue({
+      status: "ok",
+      plans: [csrWalkPlan()],
+    });
+
+    const agentResult = await planAccessibleRouteFromRequest(walkRequest);
+    const httpResult = await planAccessibleRouteForHttp(walkRequest);
+
+    expect(agentResult.ok).toBe(true);
+    expect(httpResult.ok).toBe(true);
+    const agentWalkLeg = okData(agentResult).routes[0].legs.find(
+      (leg) => leg.type === "WALK",
+    );
+    const httpWalkLeg = okData(httpResult).routes[0].legs.find(
+      (leg) => leg.type === "WALK",
+    );
+    expect(httpWalkLeg?.steps).toEqual(agentWalkLeg?.steps);
+    expect(vi.mocked(normalizeWalkLegSteps)).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -1929,6 +2088,7 @@ describe("planAccessibleRouteFromRequest — avoidStairs / requireElevator const
             bogusName: false,
             area: false,
             stairs: true,
+            steepSlope: false,
             distanceM: 300,
             location: [121.56, 25.04],
           },
@@ -1953,6 +2113,7 @@ describe("planAccessibleRouteFromRequest — avoidStairs / requireElevator const
             bogusName: true,
             area: false,
             stairs: true,
+            steepSlope: false,
             distanceM: 300,
             location: [121.56, 25.04],
           },

@@ -7,6 +7,10 @@ import {
   ROUTE_WARNING,
 } from "../../constants/messages";
 import { RouteIntentSchema } from "../../schemas/route-intent.schema";
+import {
+  WALK_ABSOLUTE_DIRECTION_VALUES,
+  WALK_RELATIVE_DIRECTION_VALUES,
+} from "../../utils/nav-instructions-engine";
 
 extendZodWithOpenApi(z);
 
@@ -309,16 +313,16 @@ const WalkLegSchema = z
       .array(
         z
           .object({
-            instruction: z.string().optional().openapi({
+            relativeDirection: z.enum(WALK_RELATIVE_DIRECTION_VALUES).openapi({
               description:
-                "僅在上游規劃器（如 OTP）自帶逐字文案時才會出現；CSR（engine=pedestrian-a11y）選出的路線不會有此欄位。可朗讀的中文逐步指引請改呼叫 POST /api/v1/a11y/route/instructions（帶 routeToken 或完整 route echo），該端點另會合併過短步驟。",
+                "機器可讀的方向 enum，供前端 i18n、地圖對位與方位計算使用；未知上游值一律正規化為 CONTINUE。",
             }),
-            maneuver: z.string().optional(),
-            relativeDirection: z.string().openapi({
-              description:
-                "機器可讀的方向 enum（如 DEPART / CONTINUE / LEFT / RIGHT / ELEVATOR…），不是可直接顯示的文字。",
-            }),
-            absoluteDirection: z.string().nullable(),
+            absoluteDirection: z
+              .enum(WALK_ABSOLUTE_DIRECTION_VALUES)
+              .nullable()
+              .openapi({
+                description: "英文八方位 enum；無法觀測 bearing 時為 null。",
+              }),
             streetName: z.string(),
             bogusName: z.boolean(),
             area: z.boolean(),
@@ -326,12 +330,12 @@ const WalkLegSchema = z
               description:
                 "OTP step.feature 為 StairsUse 時為 true；Valhalla 步行備援固定為 false；CSR 選出的純步行路線依 edgeType 為 STEPS/INDOOR_STAIRS 判定。僅代表合併 step 內含樓梯，不代表整個 distanceM 都是樓梯。",
             }),
+            steepSlope: z.boolean().openapi({
+              description:
+                "此步是否達到坡度警示門檻（wheelchair 模式 8.3%、其餘模式 12%）；false 代表未觀測或未達門檻，並不代表路段已確認平坦。",
+            }),
             distanceM: z.number(),
             location: z.tuple([z.number(), z.number()]),
-            steepSlope: z.boolean().optional().openapi({
-              description:
-                "此步是否達到坡度警示門檻（wheelchair 模式 8.3%、其餘模式 12%）；僅 CSR 純步行路線會提供。無坡度量測時為 false，代表未觀測，不代表路段平坦。",
-            }),
           })
           .strict()
           .openapi("WalkStep"),

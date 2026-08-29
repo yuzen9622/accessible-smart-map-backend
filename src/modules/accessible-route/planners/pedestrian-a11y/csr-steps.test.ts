@@ -161,6 +161,19 @@ describe("buildCsrWalkSteps", () => {
     );
 
     expect(steps[0].relativeDirection).toBe("DEPART");
+    expect(steps[0].absoluteDirection).toBe("NORTH");
+    expect(steps[0].absoluteDirection).not.toMatch(/[\u4e00-\u9fff]/);
+    expect(Object.keys(steps[0]).sort()).toEqual([
+      "absoluteDirection",
+      "area",
+      "bogusName",
+      "distanceM",
+      "location",
+      "relativeDirection",
+      "stairs",
+      "steepSlope",
+      "streetName",
+    ]);
   });
 
   it.each([

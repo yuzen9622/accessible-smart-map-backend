@@ -59,14 +59,37 @@ export function calcBearing(
 }
 
 const COMPASS_WORDS = ["北", "東北", "東", "東南", "南", "西南", "西", "西北"];
+const COMPASS_TOKENS = [
+  "NORTH",
+  "NORTHEAST",
+  "EAST",
+  "SOUTHEAST",
+  "SOUTH",
+  "SOUTHWEST",
+  "WEST",
+  "NORTHWEST",
+] as const;
+
+function compassIndex(deg: number): number {
+  return Math.round((((deg % 360) + 360) % 360) / 45) % 8;
+}
 
 /**
  * @param deg 方位角（度，正北 = 0，順時針）
  * @returns 八方位中文詞
  */
 export function degToCompassWord(deg: number): string {
-  const idx = Math.round((((deg % 360) + 360) % 360) / 45) % 8;
-  return COMPASS_WORDS[idx];
+  return COMPASS_WORDS[compassIndex(deg)];
+}
+
+/**
+ * @param deg 方位角（度，正北 = 0，順時針）
+ * @returns Eight-point English compass token for machine-readable route data.
+ */
+export function degToCompassToken(
+  deg: number,
+): (typeof COMPASS_TOKENS)[number] {
+  return COMPASS_TOKENS[compassIndex(deg)];
 }
 
 /**

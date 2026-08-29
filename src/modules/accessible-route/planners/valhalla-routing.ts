@@ -20,6 +20,7 @@ import type {
   RoadTravelMode,
 } from "../accessible-route.types";
 import { haversineCoords, haversineMeters } from "../../../utils/geo";
+import { normalizeRelativeDirection } from "../../../utils/nav-instructions-engine";
 import { ROUTE_WARNING } from "../../../constants/messages";
 import { ValhallaRoutingError } from "./valhalla-routing.types";
 import { planOtpWalkDetailed } from "./otp-routing";
@@ -254,14 +255,15 @@ function walkSteps(
       const maneuver = maneuverCode(m);
       const streetName = m.streetNames?.[0] ?? "";
       return {
-        instruction: localizedInstruction(m, maneuver),
-        maneuver,
-        relativeDirection: WALK_DIRECTION[maneuver] ?? "CONTINUE",
+        relativeDirection: normalizeRelativeDirection(
+          WALK_DIRECTION[maneuver] ?? "CONTINUE",
+        ),
         absoluteDirection: null,
         streetName,
         bogusName: streetName.length === 0,
         area: false,
         stairs: m.stairs,
+        steepSlope: false,
         distanceM: Math.round(m.lengthKm * 1000),
         location: points[m.beginShapeIndex],
       };

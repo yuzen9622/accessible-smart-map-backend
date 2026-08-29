@@ -97,6 +97,89 @@ describe("AccessibleRouteSchema METRO alerts", () => {
   });
 });
 
+const machineWalkStep = {
+  relativeDirection: "DEPART",
+  absoluteDirection: null,
+  streetName: "中山北路",
+  bogusName: false,
+  area: false,
+  stairs: false,
+  steepSlope: false,
+  distanceM: 120,
+  location: [121.56, 25.04] as [number, number],
+};
+
+describe("AccessibleRouteSchema WalkStep machine-only contract", () => {
+  it("accepts a route without any WalkStep (steps optional)", () => {
+    expect(AccessibleRouteSchema.safeParse(route).success).toBe(true);
+  });
+
+  it("accepts all and only the required machine fields", () => {
+    expect(
+      AccessibleRouteSchema.safeParse({
+        ...route,
+        legs: [{ ...walkLeg, steps: [machineWalkStep] }],
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each(["instruction", "maneuver", "text", "type"])(
+    "rejects removed WalkStep field %s",
+    (removedField) => {
+      expect(
+        AccessibleRouteSchema.safeParse({
+          ...route,
+          legs: [
+            {
+              ...walkLeg,
+              steps: [{ ...machineWalkStep, [removedField]: "legacy" }],
+            },
+          ],
+        }).success,
+      ).toBe(false);
+    },
+  );
+
+  it("rejects unknown relative-direction and non-English absolute-direction values", () => {
+    expect(
+      AccessibleRouteSchema.safeParse({
+        ...route,
+        legs: [
+          {
+            ...walkLeg,
+            steps: [{ ...machineWalkStep, relativeDirection: "FOLLOW_SIGNS" }],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      AccessibleRouteSchema.safeParse({
+        ...route,
+        legs: [
+          {
+            ...walkLeg,
+            steps: [{ ...machineWalkStep, absoluteDirection: "東北" }],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects the removed navInstructions field", () => {
+    expect(
+      AccessibleRouteSchema.safeParse({
+        ...route,
+        navInstructions: {
+          instructions: [],
+          initialBearing: 0,
+          totalSteps: 0,
+          warnings: [],
+        },
+      }).success,
+    ).toBe(false);
+  });
+});
+
 describe("AccessibleRouteSchema pure-walk engine", () => {
   it("accepts only the two optional pure-walk provenance values", () => {
     for (const engine of ["pedestrian-a11y", "otp-fallback"] as const) {
@@ -439,6 +522,7 @@ describe("AccessibleRouteSchema B12 WALK details", () => {
     bogusName: true,
     area: false,
     stairs: false,
+    steepSlope: false,
     distanceM: 15,
     location: [121.56, 25.04] as [number, number],
   };
@@ -452,13 +536,24 @@ describe("AccessibleRouteSchema B12 WALK details", () => {
     ).toBe(true);
   });
 
-  it("accepts a WalkStep that omits steepSlope", () => {
+  it("rejects a WalkStep that omits steepSlope", () => {
     expect(
       AccessibleRouteSchema.safeParse({
         ...route,
-        legs: [{ ...walkLeg, steps: [baseStep] }],
+        legs: [
+          {
+            ...walkLeg,
+            steps: [
+              (() => {
+                const { steepSlope: _steepSlope, ...withoutSteepSlope } =
+                  baseStep;
+                return withoutSteepSlope;
+              })(),
+            ],
+          },
+        ],
       }).success,
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("rejects a WalkStep whose steepSlope is not a boolean", () => {

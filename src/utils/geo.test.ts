@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { haversineMeters, parseLocation } from "./geo";
+import { degToCompassToken, haversineMeters, parseLocation } from "./geo";
 
 describe("haversineMeters", () => {
   it("is zero for identical points", () => {
@@ -23,6 +23,17 @@ describe("haversineMeters", () => {
     const d = haversineMeters(25, 121, 25, 121.001);
     expect(d).toBeGreaterThan(95);
     expect(d).toBeLessThan(106);
+  });
+});
+
+describe("degToCompassToken", () => {
+  it("returns the public English eight-direction vocabulary", () => {
+    expect(degToCompassToken(0)).toBe("NORTH");
+    expect(degToCompassToken(45)).toBe("NORTHEAST");
+    expect(degToCompassToken(90)).toBe("EAST");
+    expect(degToCompassToken(180)).toBe("SOUTH");
+    expect(degToCompassToken(270)).toBe("WEST");
+    expect(degToCompassToken(360)).toBe("NORTH");
   });
 });
 

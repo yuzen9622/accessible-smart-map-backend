@@ -1,9 +1,14 @@
-import type { AccessibilityMode, WalkStep } from "../../../../types/route";
+import type {
+  AccessibilityMode,
+  WalkAbsoluteDirection,
+  WalkStep,
+} from "../../../../types/route";
 import {
   calcBearing,
-  degToCompassWord,
+  degToCompassToken,
   haversineCoords,
 } from "../../../../utils/geo";
+import { normalizeRelativeDirection } from "../../../../utils/nav-instructions-engine";
 import type { EdgeGeometrySpan } from "./a11y-segments";
 import { EDGE_TYPE, NODE_FLAG, type PedGraph } from "./graph.types";
 import type { LngLat } from "./ped-graph-geometry.repository";
@@ -179,11 +184,13 @@ function spanHaversineM(
 
 /**
  * @param degrees Bearing in degrees, or null when unavailable.
- * @returns The eight-point compass word for that bearing, or null when the
+ * @returns The eight-point English compass token for that bearing, or null when the
  * bearing itself is unavailable.
  */
-function absoluteDirectionWord(degrees: number | null): string | null {
-  return degrees === null ? null : degToCompassWord(degrees);
+function absoluteDirectionToken(
+  degrees: number | null,
+): WalkAbsoluteDirection | null {
+  return degrees === null ? null : degToCompassToken(degrees);
 }
 
 /**
@@ -269,8 +276,8 @@ export function buildCsrWalkSteps(
       streetNameIdx >= 0 ? graph.streetNames[streetNameIdx] : "";
 
     const walkStep: WalkStep = {
-      relativeDirection,
-      absoluteDirection: absoluteDirectionWord(entryBearing),
+      relativeDirection: normalizeRelativeDirection(relativeDirection),
+      absoluteDirection: absoluteDirectionToken(entryBearing),
       streetName,
       bogusName: streetName === "",
       area: false,

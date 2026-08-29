@@ -110,11 +110,29 @@ describe("planValhallaRoute", () => {
     expect(
       routes[0].legs[0].type === "WALK" && routes[0].legs[0].steps?.[0],
     ).toMatchObject({
-      instruction: "沿「信義路」出發",
       location: [121.567, 25.041],
       relativeDirection: "DEPART",
+      absoluteDirection: null,
       stairs: false,
+      steepSlope: false,
     });
+    const step =
+      routes[0].legs[0].type === "WALK"
+        ? routes[0].legs[0].steps?.[0]
+        : undefined;
+    expect(Object.keys(step ?? {}).sort()).toEqual([
+      "absoluteDirection",
+      "area",
+      "bogusName",
+      "distanceM",
+      "location",
+      "relativeDirection",
+      "stairs",
+      "steepSlope",
+      "streetName",
+    ]);
+    expect(step).not.toHaveProperty("instruction");
+    expect(step).not.toHaveProperty("maneuver");
   });
 
   it("omits whole-leg steps for out-of-bounds guidance", async () => {
