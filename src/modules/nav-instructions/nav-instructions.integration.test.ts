@@ -47,6 +47,7 @@ const otpRoute = {
         bogusName: true,
         area: true,
         stairs: false,
+        steepSlope: false,
         distanceM: 40,
         location: WALK_POLYLINE[0],
       },
@@ -57,6 +58,7 @@ const otpRoute = {
         bogusName: false,
         area: false,
         stairs: false,
+        steepSlope: false,
         distanceM: 600,
         location: WALK_POLYLINE[2],
       },
@@ -73,14 +75,13 @@ const valhallaRoute = {
   legs: [
     walkLeg([
       {
-        instruction: "沿目前道路出發",
-        maneuver: "DEPART",
         relativeDirection: "DEPART",
         absoluteDirection: null,
         streetName: "",
         bogusName: true,
         area: false,
         stairs: false,
+        steepSlope: false,
         distanceM: 1040,
         location: WALK_POLYLINE[0],
       },

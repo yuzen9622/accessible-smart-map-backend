@@ -103,13 +103,13 @@ describe("POST /api/v1/a11y/route/instructions", () => {
               a11yFacilities: [],
               steps: [
                 {
-                  instruction: "上游文字不應直接沿用",
                   relativeDirection: "RIGHT",
                   absoluteDirection: "EAST",
                   streetName: "測試階梯路段",
                   bogusName: false,
                   area: false,
                   stairs: true,
+                  steepSlope: false,
                   distanceM: 80,
                   location: [121.5, 25],
                 },
@@ -126,9 +126,6 @@ describe("POST /api/v1/a11y/route/instructions", () => {
     });
     expect(res.body.data.instructions[0].text).toContain("向右轉");
     expect(res.body.data.instructions[0].text).toContain("此路段含樓梯");
-    expect(res.body.data.instructions[0].text).not.toContain(
-      "上游文字不應直接沿用",
-    );
   });
 
   it("publishes stairs and the CSR-aware walking contract in OpenAPI", async () => {

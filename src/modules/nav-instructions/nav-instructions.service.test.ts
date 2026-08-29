@@ -16,6 +16,7 @@ import {
   WARN_WALK_STEPS_UNAVAILABLE,
   WARN_ROAD_STEPS_UNAVAILABLE,
 } from "./nav-instructions.service";
+import { normalizeWalkLegSteps } from "../../utils/nav-instructions-engine";
 import type { DriveLeg, MetroLeg, ThsrLeg, WalkLeg } from "../../types/route";
 import { NAV_MSG } from "../../constants/messages";
 
@@ -113,6 +114,7 @@ describe("walk geometry helpers", () => {
           bogusName: false,
           area: false,
           stairs: false,
+          steepSlope: false,
           distanceM: 40,
           location: [121, 25],
         },
@@ -152,6 +154,7 @@ const walkWithSteps = (): WalkLeg => ({
       bogusName: false,
       area: false,
       stairs: false,
+      steepSlope: false,
       distanceM: 120,
       location: [121.517, 25.047],
     },
@@ -162,6 +165,7 @@ const walkWithSteps = (): WalkLeg => ({
       bogusName: false,
       area: false,
       stairs: false,
+      steepSlope: false,
       distanceM: 80,
       location: [121.518, 25.048],
     },
@@ -270,7 +274,6 @@ describe("generateNavInstructions", () => {
     leg.steps![1] = {
       ...leg.steps![1],
       stairs: true,
-      instruction: "上游不應主導一般轉向文字",
     };
 
     const result = generateNavInstructions({ legs: [leg] });
@@ -282,7 +285,6 @@ describe("generateNavInstructions", () => {
     });
     expect(result.data.instructions[1].text).toContain("向右轉");
     expect(result.data.instructions[1].text).toContain("此路段含樓梯");
-    expect(result.data.instructions[1].text).not.toContain("上游不應主導");
   });
 
   it("merges only continuation fragments and preserves turns, facilities and exitInfo", () => {
@@ -313,7 +315,6 @@ describe("generateNavInstructions", () => {
         relativeDirection: "ELEVATOR",
         distanceM: 2,
         location: leg.polyline[3],
-        instruction: "請進入電梯",
       },
     ];
     leg.exitInfo = {
@@ -430,6 +431,7 @@ describe("generateNavInstructions", () => {
           bogusName: false,
           area: false,
           stairs: true,
+          steepSlope: false,
           distanceM: 1201,
           location: polyline[0],
         },
@@ -549,7 +551,7 @@ describe("generateNavInstructions", () => {
     });
   });
 
-  it("CSR 形狀的步行段（無路名、含 steepSlope 與 facility instruction）不降級且完整產生指引", () => {
+  it("CSR 形狀的步行段（無路名、含 steepSlope 與 facility token）不降級且完整產生指引", () => {
     const leg: WalkLeg = {
       type: "WALK",
       from: "起點",
@@ -591,7 +593,6 @@ describe("generateNavInstructions", () => {
           distanceM: 5,
           location: [121.502, 25.042],
           steepSlope: false,
-          instruction: NAV_MSG.ELEVATOR,
         },
       ],
     };
@@ -615,7 +616,7 @@ describe("generateNavInstructions", () => {
     ["ENTER_STATION", NAV_MSG.ENTER_STATION],
     ["EXIT_STATION", NAV_MSG.EXIT_STATION],
   ])(
-    "produces the %s facility text from formatWalkStepInstruction when the CSR step carries no instruction field",
+    "produces the %s facility text from NAV_MSG for a machine-only step",
     (relativeDirection, expectedText) => {
       const leg = walkWithSteps();
       leg.steps = [
@@ -763,5 +764,51 @@ describe("generateNavInstructions", () => {
   it("requires either an inline route or routeToken", async () => {
     const valid = await generateNavInstructionsFromInput({});
     expect(valid.ok).toBe(false);
+  });
+
+  it("新的無文案 steps 仍產生與原始 steps 逐字相同的中文指引", () => {
+    const rawWalkLeg = walkWithSteps();
+    const rawRoute = { legs: [rawWalkLeg, metroLeg()] };
+    const fromRaw = generateNavInstructions(rawRoute);
+    expect(fromRaw.ok).toBe(true);
+
+    const normalizedWalkLeg = {
+      ...walkWithSteps(),
+      steps: normalizeWalkLegSteps(walkWithSteps(), true),
+    };
+    expect(normalizedWalkLeg.steps.length).toBeGreaterThan(0);
+    expect(JSON.stringify(normalizedWalkLeg.steps)).not.toMatch(
+      /"(?:instruction|maneuver|text|type)"/,
+    );
+
+    const fromNormalized = generateNavInstructions({
+      legs: [normalizedWalkLeg, metroLeg()],
+    });
+    expect(fromNormalized.ok).toBe(true);
+    expect(fromNormalized).toEqual(fromRaw);
+  });
+
+  it("語音流程：routeToken 快取到的機器欄位 steps 仍能正常產生指引", async () => {
+    const normalizedWalkLeg = {
+      ...walkWithSteps(),
+      steps: normalizeWalkLegSteps(walkWithSteps(), true),
+    };
+    getRouteByToken.mockResolvedValueOnce({ legs: [normalizedWalkLeg] });
+
+    const result = await generateNavInstructionsFromInput({
+      routeToken: "voice-capability",
+    });
+
+    expect(getRouteByToken).toHaveBeenCalledWith("voice-capability");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.instructions.length).toBeGreaterThan(0);
+    expect(result.data.instructions[0].type).toBe("depart");
+    expect(result.data.instructions.at(-1)?.type).toBe("arrive");
+
+    // Cross-check against generating straight from the raw leg — the token
+    // round-trip must preserve the resulting guidance exactly.
+    const direct = generateNavInstructions({ legs: [walkWithSteps()] });
+    expect(result).toEqual(direct);
   });
 });

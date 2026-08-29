@@ -39,9 +39,9 @@ function walkLeg(
             bogusName: false,
             area: false,
             stairs: false,
+            steepSlope: false,
             distanceM: 20,
             location,
-            instruction: `步行指引${index}`,
           })),
         }
       : {}),
