@@ -618,3 +618,89 @@ describe("AccessibleRouteSchema B12 WALK details", () => {
     ).toBe(false);
   });
 });
+
+describe("AccessibleRouteSchema BusLeg low-floor enrichment", () => {
+  const baseBusLeg = {
+    type: "BUS" as const,
+    routeName: "307",
+    departureStop: "板橋",
+    arrivalStop: "撫遠街",
+    waitInfo: { time: 5, source: "schedule" as const },
+    direction: 0 as const,
+    polyline: [
+      [121.5, 25.0] as [number, number],
+      [121.51, 25.01] as [number, number],
+    ],
+    departureStopA11y: [],
+    arrivalStopA11y: [],
+  };
+
+  const makeBusRoute = (legOverrides: Record<string, unknown> = {}) => ({
+    routeId: "bus-lf-1",
+    routeName: "307",
+    totalMinutes: 20,
+    transferCount: 0,
+    legs: [{ ...baseBusLeg, ...legOverrides }],
+    accessibilityHighlights: [],
+  });
+
+  it("accepts a BUS leg without any new low-floor fields (optional semantics)", () => {
+    expect(AccessibleRouteSchema.safeParse(makeBusRoute()).success).toBe(true);
+  });
+
+  it("accepts a BUS leg with full low-floor and alternative metadata", () => {
+    const valid = makeBusRoute({
+      plateNumb: "KEA-1234",
+      isLowFloor: false,
+      hasLiftOrRamp: false,
+      lowFloorAlternative: {
+        plateNumb: "KEB-5678",
+        etaMinutes: 12,
+        stopsAway: null,
+      },
+    });
+    expect(AccessibleRouteSchema.safeParse(valid).success).toBe(true);
+  });
+
+  it("accepts lowFloorAlternative with null etaMinutes and numeric stopsAway", () => {
+    const valid = makeBusRoute({
+      plateNumb: "KEA-1234",
+      isLowFloor: false,
+      lowFloorAlternative: {
+        plateNumb: "KEC-9999",
+        etaMinutes: null,
+        stopsAway: 4,
+      },
+    });
+    expect(AccessibleRouteSchema.safeParse(valid).success).toBe(true);
+  });
+
+  it("rejects non-boolean isLowFloor", () => {
+    const invalid = makeBusRoute({
+      isLowFloor: "是",
+    });
+    expect(AccessibleRouteSchema.safeParse(invalid).success).toBe(false);
+  });
+
+  it("rejects lowFloorAlternative missing plateNumb", () => {
+    const invalid = makeBusRoute({
+      lowFloorAlternative: {
+        etaMinutes: 12,
+        stopsAway: null,
+      },
+    });
+    expect(AccessibleRouteSchema.safeParse(invalid).success).toBe(false);
+  });
+
+  it("rejects unknown extra fields on lowFloorAlternative (.strict())", () => {
+    const invalid = makeBusRoute({
+      lowFloorAlternative: {
+        plateNumb: "KEB-5678",
+        etaMinutes: 12,
+        stopsAway: null,
+        extraField: "not allowed",
+      },
+    });
+    expect(AccessibleRouteSchema.safeParse(invalid).success).toBe(false);
+  });
+});

@@ -10,7 +10,17 @@ export interface TdxEtaRecord {
   Direction?: number;
   StopSequence?: number;
   NextBusTime?: string;
+  PlateNumb?: string;
 }
+
+/** Minimal shape of TDX Bus/RealTimeNearStop (on-road vehicle positions by stop). */
+export interface TdxRealTimeNearStopRecord {
+  PlateNumb?: string;
+  Direction?: number;
+  StopSequence?: number;
+  BusStatus?: number;
+}
+export type TdxRealTimeByFrequencyRecord = TdxRealTimeNearStopRecord;
 
 export interface TdxTrainLiveBoardItem {
   TrainNo?: string;

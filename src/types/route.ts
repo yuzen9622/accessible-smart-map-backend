@@ -85,6 +85,20 @@ export interface WaitInfo {
 }
 
 /**
+ * A later low-floor bus on the same route/direction, reported only when the
+ * first arriving bus is confirmed high-floor.
+ *
+ * `etaMinutes` is only set when the source is another TDX ETA record for the
+ * same stop; when the source is on-road vehicle positions it stays null and
+ * only `stopsAway` is known — the gap is never converted into a time estimate.
+ */
+export interface LowFloorAlternative {
+  plateNumb: string;
+  etaMinutes: number | null;
+  stopsAway: number | null;
+}
+
+/**
  * Accessibility-relevant facility class of one traversed graph run.
  *
  * These are source-backed edge classifications, not quality judgements: the
@@ -236,6 +250,16 @@ export interface BusLeg {
   intermediateStops?: IntermediateStop[];
   /** Current TDX operating alerts touching this bus route or stop. */
   alerts?: MatchedAlert[];
+  /** Plate of the vehicle behind the live ETA; only the first (boarding now) bus leg. */
+  plateNumb?: string;
+  /**
+   * Measured low-floor flag for that plate. An absent field means no record for
+   * this plate — it must never be rendered as false.
+   */
+  isLowFloor?: boolean;
+  /** Whether that plate carries a lift or ramp; absence has the same meaning as isLowFloor. */
+  hasLiftOrRamp?: boolean;
+  lowFloorAlternative?: LowFloorAlternative;
 }
 
 export interface MetroLeg {

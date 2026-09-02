@@ -14,6 +14,10 @@
  *    chosen by the TDX system code — GTFS legs carry it in the stop-id
  *    prefix ("TXG2646"), MaaS legs in cityCode (from agency_id): THB →
  *    intercity (公路客運), city codes (TPE/NWT/TXG/…) → per-city ETA.
+ *    That same leg also carries the TDX plate number and the BusVehicle
+ *    low-floor flags for it; when the first bus is confirmed high-floor, a
+ *    later low-floor service is looked up (other ETA records for the stop
+ *    first, then on-road vehicle positions) and reported as an alternative.
  *  • TRA — v3 TrainLiveBoard reports the delay of every currently-running
  *    train. MaaS legs have no train number (only a line name) — their real
  *    TrainNo is first recovered from the OD daily timetable (departure
@@ -45,15 +49,19 @@ import { odataUrlLiteral } from "../../../utils/transit-text";
 import { fetchRailLegGeometry } from "./otp-routing";
 import { gtfsTimeToSeconds, secondsToHHmm } from "./gtfs-time";
 import { taipeiSecondsOfDay, taipeiYmdDash } from "../../../config/taipei-time";
+import { findVehiclesByPlate } from "../../transit/bus.repository";
+import type { ITdxBusVehicle } from "../../../types";
 import type {
   AccessibleRoute,
   BusLeg,
+  LowFloorAlternative,
   TraLeg,
   ThsrLeg,
 } from "../../../types/route";
 import type {
   CacheEntry,
   TdxEtaRecord,
+  TdxRealTimeByFrequencyRecord,
   TdxTrainLiveBoardItem,
   TdxTrainLiveBoardEnvelope,
   TdxTraStation,
@@ -93,6 +101,10 @@ const CITY_BY_STOP_PREFIX: Record<string, string> = {
 };
 
 const etaCache = new Map<string, CacheEntry<TdxEtaRecord[]>>();
+const onRoadCache = new Map<
+  string,
+  CacheEntry<TdxRealTimeByFrequencyRecord[]>
+>();
 let liveBoardCache: CacheEntry<Map<string, number>> | null = null;
 
 function cachedEntry<T>(
@@ -217,7 +229,9 @@ async function fetchEtaRecords(url: string): Promise<TdxEtaRecord[]> {
         const data = (await resp.json()) as TdxEtaRecord[];
         if (Array.isArray(data)) records = data;
       }
-    } catch {}
+    } catch {
+      // Fail-soft: TDX network/parse failure falls back to empty ETA records.
+    }
     cacheSet(etaCache, url, {
       data: records,
       expiresAt: Date.now() + CACHE_TTL_MS,
@@ -261,6 +275,27 @@ function recordForStop(
 }
 
 /**
+ * Wait seconds an ETA record implies: EstimateTime first, then a future
+ * NextBusTime difference.
+ *
+ * @param record The ETA record to read.
+ * @returns The wait in seconds, or null when the record carries neither.
+ */
+function estimateSeconds(record: TdxEtaRecord): number | null {
+  if (record.EstimateTime != null && record.EstimateTime >= 0) {
+    return record.EstimateTime;
+  }
+  if (record.NextBusTime) {
+    const parsedMs = Date.parse(record.NextBusTime);
+    if (!Number.isNaN(parsedMs)) {
+      const diffMs = parsedMs - Date.now();
+      if (diffMs > 0) return Math.round(diffMs / 1000);
+    }
+  }
+  return null;
+}
+
+/**
  * Once the wait is live, the scheduled clock times no longer describe the bus
  * the rider will actually board — shift departure to now + ETA and preserve
  * the scheduled ride duration, so a leg is either fully schedule-based or
@@ -290,27 +325,23 @@ async function overlayBusEta(route: AccessibleRoute): Promise<void> {
   const records = await fetchEtaRecords(url);
   if (!records.length) return;
 
-  const candidates: { est: number; dir: number; live: boolean }[] = [];
+  const candidates: {
+    est: number;
+    dir: number;
+    live: boolean;
+    board: TdxEtaRecord;
+  }[] = [];
   const boards: TdxEtaRecord[] = [];
   for (const dir of [0, 1]) {
     const board = recordForStop(records, leg.departureStop, dir);
     if (!board) continue;
     boards.push(board);
 
-    let estSeconds: number | null = null;
-    let live = false;
-    if (board.EstimateTime != null && board.EstimateTime >= 0) {
-      estSeconds = board.EstimateTime;
-      live = (board.StopStatus ?? 0) === 0;
-    } else if (board.NextBusTime) {
-      const parsedMs = Date.parse(board.NextBusTime);
-      if (!isNaN(parsedMs)) {
-        const diffMs = parsedMs - Date.now();
-        if (diffMs > 0) {
-          estSeconds = Math.round(diffMs / 1000);
-        }
-      }
-    }
+    const estSeconds = estimateSeconds(board);
+    const live =
+      board.EstimateTime != null &&
+      board.EstimateTime >= 0 &&
+      (board.StopStatus ?? 0) === 0;
     if (estSeconds == null) continue;
 
     const alight = recordForStop(records, leg.arrivalStop, dir);
@@ -326,7 +357,7 @@ async function overlayBusEta(route: AccessibleRoute): Promise<void> {
         continue;
       }
     }
-    candidates.push({ est: estSeconds, dir, live });
+    candidates.push({ est: estSeconds, dir, live, board });
   }
 
   if (candidates.length) {
@@ -345,6 +376,9 @@ async function overlayBusEta(route: AccessibleRoute): Promise<void> {
     if (route.transferCount === 0) {
       route.totalMinutes = Math.max(1, route.totalMinutes - prevWait + minutes);
     }
+    await annotateBusVehicle(route, leg, records, pick.dir, pick.board).catch(
+      () => undefined,
+    );
     return;
   }
 
@@ -361,6 +395,225 @@ async function overlayBusEta(route: AccessibleRoute): Promise<void> {
       }，請確認時刻表`,
     );
   }
+}
+
+/**
+ * TDX 0/1 flag to boolean. Anything else stays undefined (unknown) — it must
+ * never collapse into false.
+ *
+ * @param code The raw TDX flag.
+ * @returns true, false, or undefined for unknown.
+ */
+function tdxFlag(code: number | undefined): boolean | undefined {
+  if (code === 1) return true;
+  if (code === 0) return false;
+  return undefined;
+}
+
+/**
+ * Plate to vehicle record lookup. Fail-soft: an empty Map on any failure.
+ *
+ * @param plates Candidate plate numbers (may contain blanks/duplicates).
+ * @returns Vehicle records keyed by plate.
+ */
+async function vehiclesByPlate(
+  plates: (string | undefined)[],
+): Promise<Map<string, ITdxBusVehicle>> {
+  const uniq = [
+    ...new Set(plates.filter((p): p is string => !!p && p !== "-1")),
+  ];
+  if (!uniq.length) return new Map();
+  try {
+    const docs = await findVehiclesByPlate(uniq);
+    return new Map(docs.map((d): [string, ITdxBusVehicle] => [d.plateNumb, d]));
+  } catch {
+    return new Map();
+  }
+}
+
+/**
+ * Every ETA record for one stop and direction, soonest first (unknown last).
+ *
+ * @param records The ETA records to search.
+ * @param name The stop name to match.
+ * @param direction The TDX direction to filter on.
+ * @returns The matching records, sorted by wait.
+ */
+function recordsForStop(
+  records: TdxEtaRecord[],
+  name: string,
+  direction: number,
+): TdxEtaRecord[] {
+  const inDir = records.filter((r) => r.Direction === direction);
+  const exact = inDir.filter((r) => r.StopName?.Zh_tw === name);
+  const matched = exact.length
+    ? exact
+    : inDir.filter((r) => r.StopName?.Zh_tw?.includes(name));
+  return [...matched].sort(
+    (a, b) =>
+      (estimateSeconds(a) ?? Infinity) - (estimateSeconds(b) ?? Infinity),
+  );
+}
+
+/**
+ * RealTimeNearStop endpoint for a bus leg's route and direction.
+ * TDX RealTimeNearStop (A2) reports each on-road vehicle's current StopSequence,
+ * which allows finding low-floor buses positioned upstream of the boarding stop.
+ *
+ * @param leg The bus leg.
+ * @param direction The TDX direction.
+ * @returns The endpoint URL, or null when it cannot be derived.
+ */
+function onRoadUrl(leg: BusLeg, direction: number): string | null {
+  const prefix = busSystemCode(leg);
+  if (!prefix || !leg.routeName) return null;
+  if (prefix === "THB") {
+    return (
+      `${busUrl.interCityRealtimeNearStopUrl}?$format=JSON&$filter=` +
+      `RouteName/Zh_tw eq '${odataUrlLiteral(leg.routeName)}' and Direction eq ${direction}`
+    );
+  }
+  const city = CITY_BY_STOP_PREFIX[prefix];
+  if (!city) return null;
+  return (
+    `${busUrl.cityRealtimeNearStopUrl}/${city}/${encodeURIComponent(leg.routeName)}` +
+    `?$format=JSON&$filter=Direction eq ${direction}`
+  );
+}
+
+async function fetchOnRoadRecords(
+  url: string,
+): Promise<TdxRealTimeByFrequencyRecord[]> {
+  const hit = cachedEntry(onRoadCache, url);
+  if (hit) return hit;
+  return dedup(`onroad|${url}`, async () => {
+    let records: TdxRealTimeByFrequencyRecord[] = [];
+    try {
+      const resp = await tdxFetch(url);
+      if (resp.ok) {
+        const data = (await resp.json()) as TdxRealTimeByFrequencyRecord[];
+        if (Array.isArray(data)) records = data;
+      }
+    } catch {
+      // Fail-soft: on-road frequency fetch failure falls back to empty records.
+      records = [];
+    }
+    cacheSet(onRoadCache, url, {
+      data: records,
+      expiresAt: Date.now() + CACHE_TTL_MS,
+    });
+    return records;
+  });
+}
+
+/**
+ * Tier 2 alternative: the closest low-floor vehicle still upstream of the
+ * boarding stop. Only the stop gap is known — no ETA is inferred from it.
+ *
+ * @param leg The bus leg being boarded.
+ * @param direction The TDX direction.
+ * @param boardSeq Stop sequence of the boarding stop.
+ * @returns The alternative, or null when none is found.
+ */
+async function onRoadLowFloorAlternative(
+  leg: BusLeg,
+  direction: number,
+  boardSeq: number | undefined,
+): Promise<LowFloorAlternative | null> {
+  if (boardSeq == null) return null;
+  const url = onRoadUrl(leg, direction);
+  if (!url) return null;
+  const records = await fetchOnRoadRecords(url);
+  const upstream = records
+    .filter(
+      (r) =>
+        r.Direction === direction &&
+        typeof r.StopSequence === "number" &&
+        r.StopSequence < boardSeq &&
+        !!r.PlateNumb,
+    )
+    .sort((a, b) => (b.StopSequence as number) - (a.StopSequence as number));
+  if (!upstream.length) return null;
+  const vehicles = await vehiclesByPlate(upstream.map((r) => r.PlateNumb));
+  for (const r of upstream) {
+    if (tdxFlag(vehicles.get(r.PlateNumb as string)?.isLowFloor) === true) {
+      return {
+        plateNumb: r.PlateNumb as string,
+        etaMinutes: null,
+        stopsAway: boardSeq - (r.StopSequence as number),
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Attach the boarding vehicle's plate and measured low-floor flags to the leg,
+ * plus a later low-floor service when the first bus is confirmed high-floor.
+ * Fail-soft throughout: missing data drops a field, it never alters the ETA.
+ *
+ * @param route The route owning the leg (for highlights).
+ * @param leg The first bus leg, boarded now.
+ * @param records The ETA records the overlay already fetched.
+ * @param direction The TDX direction that was picked.
+ * @param board The ETA record the live wait came from.
+ */
+async function annotateBusVehicle(
+  route: AccessibleRoute,
+  leg: BusLeg,
+  records: TdxEtaRecord[],
+  direction: number,
+  board: TdxEtaRecord,
+): Promise<void> {
+  const sameStop = recordsForStop(records, leg.departureStop, direction);
+  const vehicles = await vehiclesByPlate([
+    board.PlateNumb,
+    ...sameStop.map((r) => r.PlateNumb),
+  ]);
+
+  if (board.PlateNumb) leg.plateNumb = board.PlateNumb;
+  const veh = board.PlateNumb ? vehicles.get(board.PlateNumb) : undefined;
+  const lowFloor = tdxFlag(veh?.isLowFloor);
+  if (lowFloor !== undefined) leg.isLowFloor = lowFloor;
+  const liftOrRamp = tdxFlag(veh?.hasLiftOrRamp);
+  if (liftOrRamp !== undefined) leg.hasLiftOrRamp = liftOrRamp;
+
+  if (lowFloor !== false) return;
+
+  for (const r of sameStop) {
+    if (!r.PlateNumb || r.PlateNumb === board.PlateNumb) continue;
+    if (tdxFlag(vehicles.get(r.PlateNumb)?.isLowFloor) !== true) continue;
+    const sec = estimateSeconds(r);
+    leg.lowFloorAlternative = {
+      plateNumb: r.PlateNumb,
+      etaMinutes: sec == null ? null : Math.round(sec / 60),
+      stopsAway: null,
+    };
+    break;
+  }
+
+  if (!leg.lowFloorAlternative) {
+    const found = await onRoadLowFloorAlternative(
+      leg,
+      direction,
+      board.StopSequence,
+    );
+    if (found) leg.lowFloorAlternative = found;
+  }
+
+  const alt = leg.lowFloorAlternative;
+  pushUnique(
+    route.accessibilityHighlights,
+    alt
+      ? `⚠️ 首班公車「${leg.routeName}」為高底盤車；後續 ${alt.plateNumb} 為低地板車${
+          alt.etaMinutes != null
+            ? `（約 ${alt.etaMinutes} 分後到站）`
+            : alt.stopsAway != null
+              ? `（尚差 ${alt.stopsAway} 站）`
+              : ""
+        }`
+      : `⚠️ 首班公車「${leg.routeName}」為高底盤車，未查到後續低地板班次`,
+  );
 }
 
 const STATION_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
@@ -405,7 +658,9 @@ async function traStationIndex(): Promise<Map<string, string>> {
           }
         }
       }
-    } catch {}
+    } catch {
+      // Fail-soft: TRA station index fetch failure falls back to empty index.
+    }
     traStationCache = {
       data: index,
       expiresAt:
@@ -433,7 +688,9 @@ async function fetchOdTimetable(
         const data = (await resp.json()) as TdxTraOdItem[];
         if (Array.isArray(data)) items = data;
       }
-    } catch {}
+    } catch {
+      // Fail-soft: TRA OD timetable fetch failure falls back to empty timetable.
+    }
     cacheSet(odCache, key, {
       data: items,
       expiresAt:
@@ -489,7 +746,9 @@ async function fetchTrainDelays(): Promise<Map<string, number>> {
           if (item?.TrainNo) delays.set(item.TrainNo, item.DelayTime ?? 0);
         }
       }
-    } catch {}
+    } catch {
+      // Fail-soft: TRA live board fetch failure falls back to empty delays.
+    }
     liveBoardCache = { data: delays, expiresAt: Date.now() + CACHE_TTL_MS };
     return delays;
   });
@@ -556,7 +815,9 @@ async function thsrStationIndex(): Promise<Map<string, string>> {
           }
         }
       }
-    } catch {}
+    } catch {
+      // Fail-soft: THSR station index fetch failure falls back to empty index.
+    }
     thsrStationCache = {
       data: index,
       expiresAt:
@@ -584,7 +845,9 @@ async function fetchThsrOdTimetable(
         const data = (await resp.json()) as TdxThsrOdItem[];
         if (Array.isArray(data)) items = data;
       }
-    } catch {}
+    } catch {
+      // Fail-soft: THSR OD timetable fetch failure falls back to empty timetable.
+    }
     cacheSet(thsrOdCache, key, {
       data: items,
       expiresAt:

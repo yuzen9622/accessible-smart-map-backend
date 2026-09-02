@@ -7,6 +7,8 @@ export const busUrl = {
     "https://tdx.transportdata.tw/api/basic/v2/Bus/StopOfRoute/City",
   cityRealtimeByFrequencyUrl:
     "https://tdx.transportdata.tw/api/basic/v2/Bus/RealTimeByFrequency/City",
+  cityRealtimeNearStopUrl:
+    "https://tdx.transportdata.tw/api/basic/v2/Bus/RealTimeNearStop/City",
   cityEstimatedTimeOfArrivalUrl:
     "https://tdx.transportdata.tw/api/basic/v2/Bus/EstimatedTimeOfArrival/City",
   cityScheduleUrl:
@@ -20,6 +22,8 @@ export const busUrl = {
     "https://tdx.transportdata.tw/api/basic/v2/Bus/EstimatedTimeOfArrival/Streaming/InterCity",
   interCityRealTimeByFrequencyUrl:
     "https://tdx.transportdata.tw/api/basic/v2/Bus/RealTimeByFrequency/Streaming/InterCity",
+  interCityRealtimeNearStopUrl:
+    "https://tdx.transportdata.tw/api/basic/v2/Bus/RealTimeNearStop/Streaming/InterCity",
 };
 
 export const alertUrl = {

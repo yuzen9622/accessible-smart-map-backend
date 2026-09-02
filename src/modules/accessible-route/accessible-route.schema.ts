@@ -434,6 +434,21 @@ const MatchedAlertSchema = z
   })
   .openapi("MatchedAlert");
 
+const LowFloorAlternativeSchema = z
+  .object({
+    plateNumb: z.string().openapi({ example: "KEB-5678" }),
+    etaMinutes: z.number().nullable().openapi({
+      example: 12,
+      description: "真實 TDX ETA（分鐘）；來源為在途車輛推導時為 null",
+    }),
+    stopsAway: z.number().nullable().openapi({
+      example: 4,
+      description: "距上車站尚差幾站；來源為額外 ETA 記錄時為 null",
+    }),
+  })
+  .strict()
+  .openapi("LowFloorAlternative");
+
 const BusLegSchema = z
   .object({
     type: z.literal("BUS").openapi({ example: "BUS" }),
@@ -490,6 +505,23 @@ const BusLegSchema = z
     intermediateStops: z.array(IntermediateStopSchema).optional(),
     alerts: z.array(MatchedAlertSchema).optional().openapi({
       description: "僅當該公車路線或站牌正在發布異常公告時出現。",
+    }),
+    plateNumb: z.string().optional().openapi({
+      example: "KEA-1234",
+      description:
+        "即時 ETA 對應車輛的車牌；僅首段（現在就要上車）公車且 TDX 回報車牌時出現",
+    }),
+    isLowFloor: z.boolean().optional().openapi({
+      example: true,
+      description:
+        "該車牌的低地板實測旗標。欄位省略＝查無此車牌資料（未知），前端不得顯示為「否」",
+    }),
+    hasLiftOrRamp: z.boolean().optional().openapi({
+      example: true,
+      description: "該車牌是否配備升降機／斜坡板；省略語意同 isLowFloor",
+    }),
+    lowFloorAlternative: LowFloorAlternativeSchema.optional().openapi({
+      description: "僅當首班公車確定為高底盤、且查到後續低地板班次時出現",
     }),
   })
   .strict()

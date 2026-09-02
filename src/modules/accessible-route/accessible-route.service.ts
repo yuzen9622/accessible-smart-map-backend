@@ -35,6 +35,7 @@ export type {
 import type { IOsmA11y } from "../../types";
 import type { TaiwanCityEn } from "../../types/transit";
 import { slimRoutes, compactRoutes } from "./facility-slim";
+import { rerankByLowFloor } from "./low-floor-rerank";
 import {
   scoreRoute,
   routeCost,
@@ -930,7 +931,8 @@ export async function applyConfirmedHazardPlanning(
  * (fail-soft) → hard-constraint exclusion → mode-aware score + final
  * confirmed-hazard ranking → top 3 → realtime facility overlay (fail-soft) →
  * realtime transit overlay
- * (bus ETA + TRA delays, fail-soft) → facility slimming (runs LAST so scoring
+ * (bus ETA + TRA delays, fail-soft) → boarding-accessibility tie-break within
+ * the top 3 (fail-soft) → facility slimming (runs LAST so scoring
  * and the overlays see full documents).
  *
  * @param routes Candidate routes to finalize.
@@ -1046,6 +1048,13 @@ async function finalizeRoutes(
     console.warn("[accessible-route] realtime transit overlay failed", err);
   }
   t.realtimeOverlay = Date.now() - t0;
+  t0 = Date.now();
+  try {
+    rerankByLowFloor(top, mode);
+  } catch (err) {
+    console.warn("[accessible-route] low-floor rerank failed", err);
+  }
+  t.lowFloorRerank = Date.now() - t0;
   // Derive B12 details while full facility tags are still attached. slimRoutes
   // and compactRoutes only project/move facility arrays, so these direct WALK
   // fields remain stable in either response format.
