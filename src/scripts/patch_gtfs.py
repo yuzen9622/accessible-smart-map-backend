@@ -150,6 +150,8 @@ def get_tdx_token(client_id, client_secret):
         }
     ).encode("utf-8")
 
+    if not url.startswith(("http://", "https://")):
+        raise ValueError(f"invalid TDX auth url scheme: {url}")
     req = urllib.request.Request(
         url, data=data, headers={"Content-Type": "application/x-www-form-urlencoded"}
     )
@@ -242,6 +244,8 @@ def fetch_paginated_api(token, url_template, page_key=None, strict=False):
             )
         )
 
+        if not url.startswith(("http://", "https://")):
+            raise ValueError(f"invalid url scheme: {url}")
         req = urllib.request.Request(
             url,
             headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
@@ -363,9 +367,12 @@ def fetch_with_version(token, v2_url, v3_url, page_key):
 def fetch_city_schedule(token, city):
     """Schedule for a city, v2 -> v3. Both versions 400 means the city has
     vanished from TDX entirely (the original incident), so it is fatal rather
-    than a silent skip."""
+    than a silent skip. When Schedule returns 200 with 0 records (e.g. Kaohsiung),
+    falls back to DailyTimeTable with default daily ServiceDay."""
     try:
-        return fetch_with_version(token, V2_SCHED(city), V3_SCHED(city), "Schedules")
+        recs, src = fetch_with_version(token, V2_SCHED(city), V3_SCHED(city), "Schedules")
+        if recs:
+            return recs, src
     except TdxHttpError as e:
         if e.status == 400:
             raise TdxFetchError(
@@ -374,6 +381,20 @@ def fetch_city_schedule(token, city):
                 f"without it. TDX body: {e.body[:200]}"
             ) from e
         raise
+
+    # When Schedule returns HTTP 200 empty list (e.g. Kaohsiung publishes DailyTimeTable only),
+    # fall back to DailyTimeTable as the schedule source.
+    try:
+        daily_recs = fetch_paginated_api(token, V2_DAILY(city), strict=True)
+        if daily_recs:
+            default_service_day = dict.fromkeys(WEEKDAY_KEYS, 1)
+            for r in daily_recs:
+                for tt in (r.get("Timetables") or r.get("TimeTables") or []):
+                    tt.setdefault("ServiceDay", default_service_day)
+            return daily_recs, "daily_as_sched"
+    except (TdxHttpError, TdxFetchError):
+        pass
+    return [], "none"
 
 
 def fetch_daily_timetable(token, city):
@@ -839,13 +860,18 @@ def _valhalla_route_times(locations):
         "costing": "auto",
     }
     data = json.dumps(payload).encode("utf-8")
+    if not url.startswith(("http://", "https://")):
+        raise ValueError(f"invalid valhalla url scheme: {url}")
     req = urllib.request.Request(
         url, data=data, headers={"Content-Type": "application/json"}
     )
     with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as res:
-        body = json.loads(res.read().decode("utf-8"))
-    legs = body["trip"]["legs"]
-    return [leg["summary"]["time"] for leg in legs]
+        try:
+            body = json.loads(res.read().decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as err:
+            raise RuntimeError(f"invalid JSON response from Valhalla: {err}") from err
+    legs = body.get("trip", {}).get("legs", [])
+    return [leg.get("summary", {}).get("time", 0) for leg in legs]
 
 
 def _valhalla_profile(stops):
@@ -955,7 +981,10 @@ class ShapeAssigner:
             return points
         flat = array("d")
         for lat, lon in points:
-            flat.extend((float(lat), float(lon)))
+            try:
+                flat.extend((float(lat), float(lon)))
+            except (ValueError, TypeError):
+                continue
         return flat
 
     def _fits(self, points, stop_ids, shape_cache_key):
@@ -999,8 +1028,11 @@ class ShapeAssigner:
 
         fits = True
         for lat, lon in located_stops:
-            px = float(lon) * kx
-            py = float(lat) * ky
+            try:
+                px = float(lon) * kx
+                py = float(lat) * ky
+            except (ValueError, TypeError):
+                continue
             stop_fits = False
             for i in range(0, len(projected) - 2, 2):
                 ax, ay = projected[i], projected[i + 1]
@@ -1363,11 +1395,10 @@ def process_schedule_records_to_gtfs(
             for r in route_list:
                 r_id = r["route_id"]
                 r_short = r.get("route_short_name")
-                if r_short == name or r_short == route_id_tdx:
-                    if r_id.endswith(suffix):
-                        matched_id = r_id
-                        stats["route_match_name"] += 1
-                        break
+                if r_short in (name, route_id_tdx) and r_id.endswith(suffix):
+                    matched_id = r_id
+                    stats["route_match_name"] += 1
+                    break
 
         if not matched_id:
             stats["route_unmatched"] += 1
@@ -1702,108 +1733,110 @@ def patch_gtfs_zip(
             "start_date": cal_start,
             "end_date": cal_end,
         }
-        for col, active in zip(GTFS_WEEKDAY_COLS, pattern):
+        for col, active in zip(GTFS_WEEKDAY_COLS, pattern, strict=True):
             row[col] = str(active)
         final_calendar.append(row)
 
     # 8. Rewrite Zip
-    with zipfile.ZipFile(zip_path, "r") as zin:
-        with zipfile.ZipFile(temp_zip_path, "w", zipfile.ZIP_DEFLATED) as zout:
-            # Copy all entries except those we overwrite
-            for item in zin.infolist():
-                if item.filename in (
-                    "trips.txt",
-                    "stop_times.txt",
-                    "calendar.txt",
-                    "calendar_dates.txt",
-                    "shapes.txt",
-                    "frequencies.txt",
-                ):
-                    continue
-                zout.writestr(item, zin.read(item.filename))
+    with (
+        zipfile.ZipFile(zip_path, "r") as zin,
+        zipfile.ZipFile(temp_zip_path, "w", zipfile.ZIP_DEFLATED) as zout,
+    ):
+        # Copy all entries except those we overwrite
+        for item in zin.infolist():
+            if item.filename in (
+                "trips.txt",
+                "stop_times.txt",
+                "calendar.txt",
+                "calendar_dates.txt",
+                "shapes.txt",
+                "frequencies.txt",
+            ):
+                continue
+            zout.writestr(item, zin.read(item.filename))
 
-            # Write trips.txt
-            trips_out = io.StringIO()
-            trips_writer = csv.DictWriter(
-                trips_out, fieldnames=trips_fields, extrasaction="ignore"
-            )
-            trips_writer.writeheader()
-            trips_writer.writerows(final_trips)
-            zout.writestr("trips.txt", trips_out.getvalue())
+        # Write trips.txt
+        trips_out = io.StringIO()
+        trips_writer = csv.DictWriter(
+            trips_out, fieldnames=trips_fields, extrasaction="ignore"
+        )
+        trips_writer.writeheader()
+        trips_writer.writerows(final_trips)
+        zout.writestr("trips.txt", trips_out.getvalue())
 
-            # Write stop_times.txt
-            st_out = io.StringIO()
-            st_writer = csv.DictWriter(
-                st_out, fieldnames=st_fields, extrasaction="ignore"
-            )
-            st_writer.writeheader()
-            st_writer.writerows(final_stop_times)
-            zout.writestr("stop_times.txt", st_out.getvalue())
+        # Write stop_times.txt
+        st_out = io.StringIO()
+        st_writer = csv.DictWriter(
+            st_out, fieldnames=st_fields, extrasaction="ignore"
+        )
+        st_writer.writeheader()
+        st_writer.writerows(final_stop_times)
+        zout.writestr("stop_times.txt", st_out.getvalue())
 
-            # Write calendar.txt
-            cal_out = io.StringIO()
-            cal_writer = csv.DictWriter(
-                cal_out, fieldnames=cal_fields, extrasaction="ignore"
-            )
-            cal_writer.writeheader()
-            cal_writer.writerows(final_calendar)
-            zout.writestr("calendar.txt", cal_out.getvalue())
+        # Write calendar.txt
+        cal_out = io.StringIO()
+        cal_writer = csv.DictWriter(
+            cal_out, fieldnames=cal_fields, extrasaction="ignore"
+        )
+        cal_writer.writeheader()
+        cal_writer.writerows(final_calendar)
+        zout.writestr("calendar.txt", cal_out.getvalue())
 
-            # Write calendar_dates.txt
-            cd_out = io.StringIO()
-            cd_writer = csv.DictWriter(
-                cd_out, fieldnames=cd_fields, extrasaction="ignore"
-            )
-            cd_writer.writeheader()
-            cd_writer.writerows(kept_calendar_dates)
-            zout.writestr("calendar_dates.txt", cd_out.getvalue())
+        # Write calendar_dates.txt
+        cd_out = io.StringIO()
+        cd_writer = csv.DictWriter(
+            cd_out, fieldnames=cd_fields, extrasaction="ignore"
+        )
+        cd_writer.writeheader()
+        cd_writer.writerows(kept_calendar_dates)
+        zout.writestr("calendar_dates.txt", cd_out.getvalue())
 
-            # Overwrite shapes.txt with memory-efficient streaming copy + append
-            print(
-                f"Writing shapes.txt (injecting {len(new_shapes)} new bus route shapes)..."
-            )
-            with zout.open("shapes.txt", "w") as f:
-                wrapper = io.TextIOWrapper(f, encoding="utf-8")
-                wrapper.write("shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\n")
+        # Overwrite shapes.txt with memory-efficient streaming copy + append
+        print(
+            f"Writing shapes.txt (injecting {len(new_shapes)} new bus route shapes)..."
+        )
+        with zout.open("shapes.txt", "w") as f:
+            wrapper = io.TextIOWrapper(f, encoding="utf-8")
+            wrapper.write("shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\n")
 
-                # Copy existing shapes
-                if "shapes.txt" in zin.namelist():
-                    with zin.open("shapes.txt") as in_f:
-                        in_wrapper = io.TextIOWrapper(in_f, encoding="utf-8-sig")
-                        in_wrapper.readline()  # skip original header
-                        for line in in_wrapper:
-                            wrapper.write(line.strip() + "\n")
+            # Copy existing shapes
+            if "shapes.txt" in zin.namelist():
+                with zin.open("shapes.txt") as in_f:
+                    in_wrapper = io.TextIOWrapper(in_f, encoding="utf-8-sig")
+                    in_wrapper.readline()  # skip original header
+                    for line in in_wrapper:
+                        wrapper.write(line.strip() + "\n")
 
-                # Append new shapes
-                for shape_id, points in sorted(new_shapes.items()):
-                    for seq, (lat, lon) in enumerate(points, start=1):
-                        wrapper.write(f"{shape_id},{lat},{lon},{seq}\n")
-                wrapper.flush()
+            # Append new shapes
+            for shape_id, points in sorted(new_shapes.items()):
+                for seq, (lat, lon) in enumerate(points, start=1):
+                    wrapper.write(f"{shape_id},{lat},{lon},{seq}\n")
+            wrapper.flush()
 
-            # Write frequencies.txt unconditionally: canonical header, any
-            # upstream rows preserved, then the new bus template windows appended.
-            # (inject-metro-gtfs.py later appends metro rows on top of this file.)
-            print(
-                f"Writing frequencies.txt (injecting {len(new_frequencies)} new bus frequency windows)..."
-            )
-            freq_fields = [
-                "trip_id",
-                "start_time",
-                "end_time",
-                "headway_secs",
-                "exact_times",
-            ]
-            freq_out = io.StringIO()
-            freq_writer = csv.DictWriter(
-                freq_out, fieldnames=freq_fields, extrasaction="ignore"
-            )
-            freq_writer.writeheader()
-            if "frequencies.txt" in zin.namelist():
-                with zin.open("frequencies.txt") as in_f:
-                    in_text = io.TextIOWrapper(in_f, encoding="utf-8-sig")
-                    freq_writer.writerows(csv.DictReader(in_text))
-            freq_writer.writerows(new_frequencies)
-            zout.writestr("frequencies.txt", freq_out.getvalue())
+        # Write frequencies.txt unconditionally: canonical header, any
+        # upstream rows preserved, then the new bus template windows appended.
+        # (inject-metro-gtfs.py later appends metro rows on top of this file.)
+        print(
+            f"Writing frequencies.txt (injecting {len(new_frequencies)} new bus frequency windows)..."
+        )
+        freq_fields = [
+            "trip_id",
+            "start_time",
+            "end_time",
+            "headway_secs",
+            "exact_times",
+        ]
+        freq_out = io.StringIO()
+        freq_writer = csv.DictWriter(
+            freq_out, fieldnames=freq_fields, extrasaction="ignore"
+        )
+        freq_writer.writeheader()
+        if "frequencies.txt" in zin.namelist():
+            with zin.open("frequencies.txt") as in_f:
+                in_text = io.TextIOWrapper(in_f, encoding="utf-8-sig")
+                freq_writer.writerows(csv.DictReader(in_text))
+        freq_writer.writerows(new_frequencies)
+        zout.writestr("frequencies.txt", freq_out.getvalue())
 
     os.replace(temp_zip_path, zip_path)
     print("GTFS zip successfully patched with general timetables and shape geometry!")
