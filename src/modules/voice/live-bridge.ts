@@ -1,4 +1,5 @@
 import { WebSocket } from "ws";
+import { randomUUID } from "crypto";
 import {
   FunctionCall,
   FunctionDeclaration,
@@ -16,21 +17,43 @@ import { buildVoiceSystemPrompt } from "./voice-prompt";
 import { normalizeVoiceTranscript } from "./transcript-normalizer";
 import { correctUserTranscript } from "./transcript-corrector";
 import { withCurrentDate } from "../../config/ai/chat-prompt";
-import { getRouteByToken } from "../accessible-route/route-token.service";
+import {
+  getNavigationEnvelopeByToken,
+  getRouteByToken,
+} from "../accessible-route/route-token.service";
+import { rerouteAccessibleRoute } from "../accessible-route/reroute.service";
 import { getMemorySettings, loadMemories } from "../ai/memory.service";
 import { getTransitAlerts } from "../transit/alert.service";
 import { onAlertSnapshotUpdate } from "../transit/alert.store";
 import { keyRelevantToContext } from "../transit/alert.gateway";
 import { NavigationSession, type NavEffect } from "./navigation-session";
 import type { NavPosition } from "./navigation.schema";
+import {
+  VoiceRerouteOutboundMessageSchema,
+  type VoiceRerouteOutboundMessage,
+} from "./voice.ws.schema";
 
 const MAX_BUFFERED_BYTES = 1024 * 1024;
 const ERROR_SUMMARY_MAX_CHARS = 200;
 const INPUT_AUDIO_MIME_TYPE = "audio/pcm;rate=16000";
 const POSITION_MIN_INTERVAL_MS = 500;
+const REROUTE_COOLDOWN_MS = 30_000;
 const TURN_TIMEOUT_MS = 15_000;
 const TURN_TIMEOUT_STRIKES = 2;
 export const LIVE_TURN_TIMEOUT_CLOSE_CODE = 4410;
+
+type ActiveNavigation = {
+  routeToken: string;
+  navigationId: string;
+  routeVersion: number;
+  generation: number;
+};
+
+type RerouteGenerationState = {
+  inFlight: boolean;
+  lastStartedAt: number;
+  clientRequestId?: string;
+};
 
 type LiveTurnState =
   "IDLE" | "USER_INPUT" | "TOOL_PENDING" | "AWAIT_MODEL" | "MODEL_OUTPUT";
@@ -134,6 +157,15 @@ function summarizeError(message?: string): string {
   return text.slice(0, ERROR_SUMMARY_MAX_CHARS);
 }
 
+type RedactedValue =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | RedactedValue[]
+  | { [key: string]: RedactedValue };
+
 /**
  * Recursively masks personally identifiable fields in a value for trace logs:
  * token/secret-like keys, user ids, contact fields, and coordinate values
@@ -143,7 +175,7 @@ function summarizeError(message?: string): string {
  * @param key The property name of the value in its parent object, if any.
  * @returns A redacted copy safe for local trace output.
  */
-function redactValue(value: unknown, key?: string): unknown {
+function redactValue(value: unknown, key?: string): RedactedValue {
   if (key) {
     if (/token|secret|password|authorization/i.test(key)) return "[redacted]";
     if (/user_?id/i.test(key)) return "[redacted]";
@@ -157,14 +189,22 @@ function redactValue(value: unknown, key?: string): unknown {
   }
   if (Array.isArray(value)) return value.map((item) => redactValue(item));
   if (value && typeof value === "object") {
-    const out: Record<string, unknown> = {};
+    const out: { [key: string]: RedactedValue } = {};
     for (const [k, v] of Object.entries(value)) out[k] = redactValue(v, k);
     return out;
   }
   if (typeof value === "string") {
     return value.replace(/-?\d{1,3}\.\d{3,}/g, (m) => Number(m).toFixed(2));
   }
-  return value;
+  if (
+    value === null ||
+    value === undefined ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  return String(value);
 }
 
 /**
@@ -177,7 +217,7 @@ function redactValue(value: unknown, key?: string): unknown {
  */
 function traceToolCall(tool: string, args: unknown, result: string): void {
   if (process.env.VOICE_POC_TRACE !== "true") return;
-  let redactedResult: unknown;
+  let redactedResult: RedactedValue;
   try {
     redactedResult = redactValue(JSON.parse(result));
   } catch {
@@ -219,16 +259,42 @@ export async function createLiveBridge(
   let armGen = 0;
   let messageQueue = Promise.resolve();
   let pendingToolMessages = 0;
-  const navSession = new NavigationSession();
+  let navSession = new NavigationSession();
+  let activeNavigation: ActiveNavigation | null = null;
+  let navigationGeneration = 0;
+  const rerouteStateByGeneration = new Map<number, RerouteGenerationState>();
+  let pendingRouteArm: {
+    armGeneration: number;
+  } | null = null;
 
-  const sendJson = (payload: Record<string, unknown>): void => {
+  const sendJson = (payload: unknown): void => {
     if (!disposed && ws.readyState === WebSocket.OPEN)
       ws.send(JSON.stringify(payload));
   };
 
+  const sendRerouteJson = (payload: VoiceRerouteOutboundMessage): void => {
+    sendJson(VoiceRerouteOutboundMessageSchema.parse(payload));
+  };
+
   const applyEffect = (effect: NavEffect): void => {
-    for (const event of effect.events)
-      sendJson(event as unknown as Record<string, unknown>);
+    for (const event of effect.events) sendJson(event);
+    if (
+      effect.events.some(
+        (e) =>
+          e.type === "nav.arrived" ||
+          (e.type === "nav.stop" &&
+            (e.reason === "arrived" ||
+              e.reason === "user_voice" ||
+              e.reason === "user_ui" ||
+              e.reason === "session_end")),
+      )
+    ) {
+      armGen++;
+      navigationGeneration++;
+      pruneRerouteState();
+      pendingRouteArm = null;
+      activeNavigation = null;
+    }
   };
 
   const checkCurrentTransitAlerts = async (
@@ -299,6 +365,155 @@ export async function createLiveBridge(
     startTurnTimeout();
   };
 
+  /**
+   * Drops reroute bookkeeping for generations that are neither current nor
+   * still settling, so a superseded generation can never gate a newer one.
+   */
+  const pruneRerouteState = (): void => {
+    for (const [generation, state] of rerouteStateByGeneration) {
+      if (!state.inFlight && generation !== navigationGeneration) {
+        rerouteStateByGeneration.delete(generation);
+      }
+    }
+  };
+
+  const isCurrentReroute = (snapshot: {
+    generation: number;
+    navigationId: string;
+    routeVersion: number;
+  }): boolean =>
+    !disposed &&
+    navigationGeneration === snapshot.generation &&
+    activeNavigation?.generation === snapshot.generation &&
+    activeNavigation?.navigationId === snapshot.navigationId &&
+    activeNavigation.routeVersion === snapshot.routeVersion;
+
+  const rerouteAfterOffRoute = async (
+    triggerPosition: NavPosition | null = latestPosition,
+  ): Promise<void> => {
+    const navigation = activeNavigation;
+    const now = Date.now();
+    if (
+      disposed ||
+      !navigation ||
+      navigation.generation !== navigationGeneration ||
+      !triggerPosition
+    ) {
+      return;
+    }
+    const ownState = rerouteStateByGeneration.get(navigation.generation);
+    if (
+      ownState &&
+      (ownState.inFlight || now - ownState.lastStartedAt < REROUTE_COOLDOWN_MS)
+    ) {
+      return;
+    }
+    const clientRequestId = ownState?.clientRequestId ?? randomUUID();
+    rerouteStateByGeneration.set(navigation.generation, {
+      inFlight: true,
+      lastStartedAt: now,
+      clientRequestId,
+    });
+    const snapshot = {
+      generation: navigation.generation,
+      navigationId: navigation.navigationId,
+      routeVersion: navigation.routeVersion,
+    };
+    const rerouteRequest = {
+      routeToken: navigation.routeToken,
+      currentPosition: triggerPosition,
+      previousRouteVersion: navigation.routeVersion,
+      reason: "OFF_ROUTE" as const,
+      clientRequestId,
+    };
+    sendRerouteJson({
+      type: "nav.rerouting",
+      navigationId: navigation.navigationId,
+      previousRouteVersion: rerouteRequest.previousRouteVersion,
+      clientRequestId: rerouteRequest.clientRequestId,
+    });
+    try {
+      const result = await rerouteAccessibleRoute(rerouteRequest);
+      if (!isCurrentReroute(snapshot)) return;
+      if (!result.ok) {
+        sendRerouteJson({
+          type: "nav.reroute_failed",
+          navigationId: navigation.navigationId,
+          previousRouteVersion: rerouteRequest.previousRouteVersion,
+          code: result.status,
+          message: result.error,
+          retryable: result.status === 429 || result.status >= 500,
+        });
+        return;
+      }
+      const replacement = new NavigationSession();
+      const armed = replacement.armRoute(result.data.route);
+      const started = replacement.start(latestPosition ?? undefined);
+      const startEvent = started.events.find(
+        (event) => event.type === "nav.start",
+      );
+      if (
+        !armed.ok ||
+        !started.ok ||
+        !startEvent ||
+        startEvent.type !== "nav.start"
+      ) {
+        if (!isCurrentReroute(snapshot)) return;
+        sendRerouteJson({
+          type: "nav.reroute_failed",
+          navigationId: navigation.navigationId,
+          previousRouteVersion: rerouteRequest.previousRouteVersion,
+          code: "NAV_ROUTE_INVALID",
+          message: "替代路線無法啟動",
+          retryable: false,
+        });
+        return;
+      }
+      if (!isCurrentReroute(snapshot)) return;
+      const replacementGeneration = ++navigationGeneration;
+      rerouteStateByGeneration.set(replacementGeneration, {
+        inFlight: false,
+        lastStartedAt: now,
+      });
+      navSession = replacement;
+      activeNavigation = {
+        routeToken: result.data.routeToken,
+        navigationId: result.data.navigationId,
+        routeVersion: result.data.routeVersion,
+        generation: replacementGeneration,
+      };
+      sendRerouteJson({
+        type: "nav.route_replaced",
+        navigationId: result.data.navigationId,
+        previousRouteVersion: result.data.previousRouteVersion,
+        routeVersion: result.data.routeVersion,
+        routeToken: result.data.routeToken,
+        route: result.data.route,
+        steps: startEvent.steps,
+        warnings: result.data.warnings,
+        currentStepIndex: 0,
+      });
+      driveNavigationSpeech();
+    } catch (err) {
+      if (isCurrentReroute(snapshot)) {
+        sendRerouteJson({
+          type: "nav.reroute_failed",
+          navigationId: navigation.navigationId,
+          previousRouteVersion: rerouteRequest.previousRouteVersion,
+          code: "REROUTE_FAILED",
+          message: summarizeError(
+            err instanceof Error ? err.message : String(err),
+          ),
+          retryable: true,
+        });
+      }
+    } finally {
+      const settled = rerouteStateByGeneration.get(snapshot.generation);
+      if (settled) settled.inFlight = false;
+      pruneRerouteState();
+    }
+  };
+
   const forwardAudio = (base64Data: string): void => {
     if (ws.readyState !== WebSocket.OPEN) return;
     if (ws.bufferedAmount > MAX_BUFFERED_BYTES) {
@@ -348,6 +563,11 @@ export async function createLiveBridge(
           });
         } else if (name === "stopNavigation") {
           applyEffect(navSession.stop("user_voice"));
+          armGen++;
+          pendingRouteArm = null;
+          navigationGeneration++;
+          pruneRerouteState();
+          activeNavigation = null;
           result = JSON.stringify({ ok: true, message: "已停止導航" });
         } else if (name === "repeatNavStep") {
           applyEffect(navSession.repeatCurrent());
@@ -597,22 +817,46 @@ export async function createLiveBridge(
     },
     async armRouteToken(routeToken: string): Promise<void> {
       const generation = ++armGen;
-      const route = await getRouteByToken(routeToken);
-      if (disposed || generation !== armGen) return;
-      if (!route) {
-        applyEffect({
-          ok: false,
-          events: [
-            {
-              type: "nav.error",
-              code: "NAV_ROUTE_INVALID",
-              message: "路線已過期，請重新規劃",
-            },
-          ],
-        });
-        return;
+      const arm = { armGeneration: generation };
+      pendingRouteArm = arm;
+      const isCurrentArm = (): boolean =>
+        !disposed && arm.armGeneration === armGen && pendingRouteArm === arm;
+      try {
+        const [route, envelope] = await Promise.all([
+          getRouteByToken(routeToken),
+          getNavigationEnvelopeByToken(routeToken),
+        ]);
+        if (!isCurrentArm()) return;
+        if (!route) {
+          pendingRouteArm = null;
+          applyEffect({
+            ok: false,
+            events: [
+              {
+                type: "nav.error",
+                code: "NAV_ROUTE_INVALID",
+                message: "路線已過期，請重新規劃",
+              },
+            ],
+          });
+          return;
+        }
+        const committedGeneration = ++navigationGeneration;
+        pruneRerouteState();
+        pendingRouteArm = null;
+        applyEffect(navSession.armRoute(route));
+        activeNavigation = envelope
+          ? {
+              routeToken,
+              navigationId: envelope.navigationId,
+              routeVersion: envelope.routeVersion,
+              generation: committedGeneration,
+            }
+          : null;
+      } catch (err) {
+        if (isCurrentArm()) pendingRouteArm = null;
+        throw err;
       }
-      applyEffect(navSession.armRoute(route));
     },
     updatePosition(position: NavPosition): void {
       if (disposed) return;
@@ -625,6 +869,9 @@ export async function createLiveBridge(
         lastPositionProcessedAt = Date.now();
         const effect = navSession.onPosition(latestPosition);
         applyEffect(effect);
+        if (effect.events.some((event) => event.type === "nav.offroute")) {
+          void rerouteAfterOffRoute();
+        }
         if (
           effect.events.some(
             (e) => e.type === "nav.transit" || e.type === "nav.start",
@@ -650,9 +897,14 @@ export async function createLiveBridge(
       }
     },
     cancelNav(): void {
+      armGen++;
+      navigationGeneration++;
+      pruneRerouteState();
+      pendingRouteArm = null;
       if (positionTimer) clearTimeout(positionTimer);
       positionTimer = null;
       applyEffect(navSession.cancel());
+      activeNavigation = null;
     },
     close(): void {
       if (disposed) return;
@@ -661,10 +913,14 @@ export async function createLiveBridge(
       unsubscribeAlerts();
       pendingToolMessages = 0;
       armGen++;
+      navigationGeneration++;
+      rerouteStateByGeneration.clear();
+      pendingRouteArm = null;
       if (positionTimer) clearTimeout(positionTimer);
       positionTimer = null;
       clearTurnTimeout();
       navSession.dispose();
+      activeNavigation = null;
       try {
         session?.close();
       } catch (err) {

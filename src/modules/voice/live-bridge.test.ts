@@ -1,17 +1,31 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 
-const { connect, getRouteByToken, getMemorySettings, loadMemories } =
-  vi.hoisted(() => ({
-    connect: vi.fn(),
-    getRouteByToken: vi.fn(),
-    getMemorySettings: vi.fn().mockResolvedValue({ memoryEnabled: false }),
-    loadMemories: vi.fn().mockResolvedValue([]),
-  }));
+const {
+  connect,
+  getRouteByToken,
+  getNavigationEnvelopeByToken,
+  rerouteAccessibleRoute,
+  getMemorySettings,
+  loadMemories,
+} = vi.hoisted(() => ({
+  connect: vi.fn(),
+  getRouteByToken: vi.fn(),
+  getNavigationEnvelopeByToken: vi.fn(),
+  rerouteAccessibleRoute: vi.fn(),
+  getMemorySettings: vi.fn().mockResolvedValue({ memoryEnabled: false }),
+  loadMemories: vi.fn().mockResolvedValue([]),
+}));
 vi.mock("../../config/ai", () => ({ googleGenAi: { live: { connect } } }));
 vi.mock("../agent/tool-catalog", () => ({ buildGeminiTools: vi.fn(() => []) }));
 vi.mock("../ai/agent-tools", () => ({ executeLocalTool: vi.fn() }));
-vi.mock("../accessible-route/route-token.service", () => ({ getRouteByToken }));
+vi.mock("../accessible-route/route-token.service", () => ({
+  getRouteByToken,
+  getNavigationEnvelopeByToken,
+}));
+vi.mock("../accessible-route/reroute.service", () => ({
+  rerouteAccessibleRoute,
+}));
 vi.mock("../ai/memory.service", () => ({ getMemorySettings, loadMemories }));
 vi.mock("./transcript-corrector", () => ({
   correctUserTranscript: vi.fn(async (t: string) => t.replace("珠北", "竹北")),
@@ -40,6 +54,17 @@ function makeSession() {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+const REROUTE_COOLDOWN_MS = 30_000;
 const start = [121, 25] as [number, number];
 const end = [121.001, 25] as [number, number];
 const walkRoute = {
@@ -86,6 +111,7 @@ const walkRoute = {
 describe("createLiveBridge transcript forwarding", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getNavigationEnvelopeByToken.mockResolvedValue(null);
     delete process.env.GEMINI_LIVE_TEMPERATURE;
     delete process.env.GEMINI_LIVE_LANGUAGE_CODE;
   });
@@ -342,6 +368,648 @@ describe("createLiveBridge navigation turn arbiter", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getRouteByToken.mockResolvedValue(walkRoute);
+    getNavigationEnvelopeByToken.mockResolvedValue(null);
+  });
+
+  it("emits one ordered backend reroute episode and atomically replaces the active session", async () => {
+    vi.useFakeTimers();
+    try {
+      let onmessage: ((message: unknown) => void) | undefined;
+      const session = makeSession();
+      const ws = makeWs();
+      connect.mockImplementation(async ({ callbacks }) => {
+        onmessage = callbacks.onmessage;
+        return session;
+      });
+      getNavigationEnvelopeByToken.mockResolvedValue({
+        navigationId: "11111111-1111-4111-8111-111111111111",
+        routeVersion: 1,
+      });
+      const pendingReroute = deferred<any>();
+      rerouteAccessibleRoute.mockReturnValue(pendingReroute.promise);
+      const rerouteResult = {
+        ok: true,
+        data: {
+          navigationId: "11111111-1111-4111-8111-111111111111",
+          previousRouteVersion: 1,
+          routeVersion: 2,
+          routeToken: "replacement",
+          route: walkRoute,
+          instructions: [],
+          steps: [],
+          warnings: [],
+          currentStepIndex: 0,
+          replayed: false,
+        },
+      };
+      const bridge = await createLiveBridge({
+        ws,
+        userId: "u",
+        userLocation: { latitude: 25, longitude: 121 },
+      });
+      await bridge.armRouteToken("initial");
+      onmessage?.({
+        toolCall: {
+          functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      const far = { latitude: 26, longitude: 122 };
+      for (let i = 0; i < 3; i++) {
+        bridge.updatePosition(far);
+        await vi.advanceTimersByTimeAsync(500);
+      }
+      expect(rerouteAccessibleRoute).toHaveBeenCalledOnce();
+      pendingReroute.resolve(rerouteResult);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const messages = vi
+        .mocked(ws.send)
+        .mock.calls.map(([value]) => value)
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => JSON.parse(value));
+      const types = messages.map((message) => message.type);
+      expect(types.filter((type) => type === "nav.rerouting")).toHaveLength(1);
+      expect(types.indexOf("nav.offroute")).toBeLessThan(
+        types.indexOf("nav.rerouting"),
+      );
+      expect(types.indexOf("nav.rerouting")).toBeLessThan(
+        types.indexOf("nav.route_replaced"),
+      );
+      const rerouting = messages.find(
+        (message) => message.type === "nav.rerouting",
+      );
+      expect(rerouting).toEqual({
+        type: "nav.rerouting",
+        navigationId: "11111111-1111-4111-8111-111111111111",
+        previousRouteVersion: 1,
+        clientRequestId: expect.stringMatching(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+        ),
+      });
+      const routeReplaced = messages.find(
+        (message) => message.type === "nav.route_replaced",
+      );
+      const initialStart = messages.find(
+        (message) => message.type === "nav.start",
+      );
+      expect(routeReplaced).toEqual({
+        type: "nav.route_replaced",
+        navigationId: "11111111-1111-4111-8111-111111111111",
+        previousRouteVersion: 1,
+        routeToken: "replacement",
+        routeVersion: 2,
+        route: walkRoute,
+        steps: initialStart.steps,
+        warnings: [],
+        currentStepIndex: 0,
+      });
+      expect(rerouteAccessibleRoute).toHaveBeenCalledWith({
+        routeToken: "initial",
+        currentPosition: far,
+        previousRouteVersion: 1,
+        reason: "OFF_ROUTE",
+        clientRequestId: rerouting.clientRequestId,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("discards an in-flight reroute result after navigation is cancelled", async () => {
+    vi.useFakeTimers();
+    try {
+      let onmessage: ((message: unknown) => void) | undefined;
+      const session = makeSession();
+      const ws = makeWs();
+      connect.mockImplementation(async ({ callbacks }) => {
+        onmessage = callbacks.onmessage;
+        return session;
+      });
+      getNavigationEnvelopeByToken.mockResolvedValue({
+        navigationId: "11111111-1111-4111-8111-111111111111",
+        routeVersion: 1,
+      });
+      const pendingReroute = deferred<any>();
+      rerouteAccessibleRoute.mockReturnValue(pendingReroute.promise);
+      const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.armRouteToken("initial");
+      onmessage?.({
+        toolCall: {
+          functionCalls: [{ id: "start", name: "startNavigation", args: {} }],
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      const far = { latitude: 26, longitude: 122 };
+      for (let i = 0; i < 3; i++) {
+        bridge.updatePosition(far);
+        await vi.advanceTimersByTimeAsync(500);
+      }
+      expect(rerouteAccessibleRoute).toHaveBeenCalledOnce();
+
+      bridge.cancelNav();
+      pendingReroute.resolve({
+        ok: true,
+        data: {
+          navigationId: "11111111-1111-4111-8111-111111111111",
+          previousRouteVersion: 1,
+          routeVersion: 2,
+          routeToken: "stale-replacement",
+          route: walkRoute,
+          instructions: [],
+          steps: [],
+          warnings: [],
+          currentStepIndex: 0,
+          replayed: false,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      const types = vi
+        .mocked(ws.send)
+        .mock.calls.map(([value]) => value)
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => JSON.parse(value).type);
+      expect(types).toContain("nav.stop");
+      expect(types).not.toContain("nav.route_replaced");
+      expect(types).not.toContain("nav.reroute_failed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets an old reroute commit while a newer lookup is pending, then lets the latest setRoute win", async () => {
+    vi.useFakeTimers();
+    try {
+      let onmessage: ((message: unknown) => void) | undefined;
+      const session = makeSession();
+      const ws = makeWs();
+      connect.mockImplementation(async ({ callbacks }) => {
+        onmessage = callbacks.onmessage;
+        return session;
+      });
+      const newerRoute = structuredClone(walkRoute);
+      newerRoute.legs[0].steps[0].streetName = "新路線";
+      const pendingNewRoute = deferred<typeof newerRoute>();
+      getRouteByToken.mockImplementation((token) =>
+        token === "newer"
+          ? pendingNewRoute.promise
+          : Promise.resolve(walkRoute),
+      );
+      getNavigationEnvelopeByToken.mockImplementation(async (token) => ({
+        navigationId:
+          token === "newer"
+            ? "22222222-2222-4222-8222-222222222222"
+            : "11111111-1111-4111-8111-111111111111",
+        routeVersion: 1,
+      }));
+      const pendingReroute = deferred<any>();
+      rerouteAccessibleRoute.mockReturnValue(pendingReroute.promise);
+      const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.armRouteToken("initial");
+      onmessage?.({
+        toolCall: {
+          functionCalls: [
+            { id: "start-old", name: "startNavigation", args: {} },
+          ],
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      const far = { latitude: 26, longitude: 122 };
+      for (let i = 0; i < 3; i++) {
+        bridge.updatePosition(far);
+        await vi.advanceTimersByTimeAsync(500);
+      }
+      expect(rerouteAccessibleRoute).toHaveBeenCalledOnce();
+
+      const pendingNewArm = bridge.armRouteToken("newer");
+      pendingReroute.resolve({
+        ok: true,
+        data: {
+          navigationId: "11111111-1111-4111-8111-111111111111",
+          previousRouteVersion: 1,
+          routeVersion: 2,
+          routeToken: "old-reroute",
+          route: walkRoute,
+          instructions: [],
+          steps: [],
+          warnings: [],
+          currentStepIndex: 0,
+          replayed: false,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      let messages = vi
+        .mocked(ws.send)
+        .mock.calls.map(([value]) => value)
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => JSON.parse(value));
+      expect(
+        messages.filter((message) => message.type === "nav.route_replaced"),
+      ).toHaveLength(1);
+      expect(
+        messages.find((message) => message.type === "nav.route_replaced"),
+      ).toMatchObject({ routeToken: "old-reroute", routeVersion: 2 });
+
+      pendingNewRoute.resolve(newerRoute);
+      await pendingNewArm;
+      onmessage?.({
+        toolCall: {
+          functionCalls: [{ id: "stop-old", name: "stopNavigation", args: {} }],
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      onmessage?.({
+        toolCall: {
+          functionCalls: [
+            { id: "start-new", name: "startNavigation", args: {} },
+          ],
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      messages = vi
+        .mocked(ws.send)
+        .mock.calls.map(([value]) => value)
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => JSON.parse(value));
+      expect(
+        messages.some((message) => message.type === "nav.reroute_failed"),
+      ).toBe(false);
+      const starts = messages.filter((message) => message.type === "nav.start");
+      expect(starts.at(-1).steps[0].instruction).toContain("新路線");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("discards an old reroute when the newer setRoute commits first", async () => {
+    vi.useFakeTimers();
+    try {
+      let onmessage: ((message: unknown) => void) | undefined;
+      const session = makeSession();
+      const ws = makeWs();
+      connect.mockImplementation(async ({ callbacks }) => {
+        onmessage = callbacks.onmessage;
+        return session;
+      });
+      const newerRoute = structuredClone(walkRoute);
+      newerRoute.legs[0].steps[0].streetName = "新路線";
+      const pendingNewRoute = deferred<typeof newerRoute>();
+      getRouteByToken.mockImplementation((token) =>
+        token === "newer"
+          ? pendingNewRoute.promise
+          : Promise.resolve(walkRoute),
+      );
+      getNavigationEnvelopeByToken.mockImplementation(async (token) => ({
+        navigationId:
+          token === "newer"
+            ? "22222222-2222-4222-8222-222222222222"
+            : "11111111-1111-4111-8111-111111111111",
+        routeVersion: 1,
+      }));
+      const pendingReroute = deferred<any>();
+      rerouteAccessibleRoute.mockReturnValue(pendingReroute.promise);
+      const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.armRouteToken("initial");
+      onmessage?.({
+        toolCall: {
+          functionCalls: [
+            { id: "start-old", name: "startNavigation", args: {} },
+          ],
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      const far = { latitude: 26, longitude: 122 };
+      for (let i = 0; i < 3; i++) {
+        bridge.updatePosition(far);
+        await vi.advanceTimersByTimeAsync(500);
+      }
+      expect(rerouteAccessibleRoute).toHaveBeenCalledOnce();
+
+      const pendingNewArm = bridge.armRouteToken("newer");
+      pendingNewRoute.resolve(newerRoute);
+      await pendingNewArm;
+      pendingReroute.resolve({
+        ok: true,
+        data: {
+          navigationId: "11111111-1111-4111-8111-111111111111",
+          previousRouteVersion: 1,
+          routeVersion: 2,
+          routeToken: "stale-reroute",
+          route: walkRoute,
+          instructions: [],
+          steps: [],
+          warnings: [],
+          currentStepIndex: 0,
+          replayed: false,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      onmessage?.({
+        toolCall: {
+          functionCalls: [{ id: "stop-old", name: "stopNavigation", args: {} }],
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      onmessage?.({
+        toolCall: {
+          functionCalls: [
+            { id: "start-new", name: "startNavigation", args: {} },
+          ],
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      const messages = vi
+        .mocked(ws.send)
+        .mock.calls.map(([value]) => value)
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => JSON.parse(value));
+      expect(
+        messages.some((message) => message.type === "nav.route_replaced"),
+      ).toBe(false);
+      expect(
+        messages.some((message) => message.type === "nav.reroute_failed"),
+      ).toBe(false);
+      const starts = messages.filter((message) => message.type === "nav.start");
+      expect(starts.at(-1).steps[0].instruction).toContain("新路線");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the old offroute reroute active when the pending setRoute lookup fails", async () => {
+    vi.useFakeTimers();
+    try {
+      let onmessage: ((message: unknown) => void) | undefined;
+      const session = makeSession();
+      const ws = makeWs();
+      connect.mockImplementation(async ({ callbacks }) => {
+        onmessage = callbacks.onmessage;
+        return session;
+      });
+      const pendingNewRoute = deferred<typeof walkRoute | null>();
+      getRouteByToken.mockImplementation((token) =>
+        token === "newer"
+          ? pendingNewRoute.promise
+          : Promise.resolve(walkRoute),
+      );
+      getNavigationEnvelopeByToken.mockResolvedValue({
+        navigationId: "11111111-1111-4111-8111-111111111111",
+        routeVersion: 1,
+      });
+      const pendingReroute = deferred<any>();
+      rerouteAccessibleRoute.mockReturnValue(pendingReroute.promise);
+      const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.armRouteToken("initial");
+      onmessage?.({
+        toolCall: {
+          functionCalls: [
+            { id: "start-old", name: "startNavigation", args: {} },
+          ],
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      const pendingNewArm = bridge.armRouteToken("newer");
+      const far = { latitude: 26, longitude: 122 };
+      for (let i = 0; i < 3; i++) {
+        bridge.updatePosition(far);
+        await vi.advanceTimersByTimeAsync(500);
+      }
+      expect(rerouteAccessibleRoute).toHaveBeenCalledOnce();
+      expect(rerouteAccessibleRoute).toHaveBeenCalledWith({
+        routeToken: "initial",
+        currentPosition: far,
+        previousRouteVersion: 1,
+        reason: "OFF_ROUTE",
+        clientRequestId: expect.any(String),
+      });
+
+      pendingNewRoute.resolve(null);
+      await pendingNewArm;
+      expect(rerouteAccessibleRoute).toHaveBeenCalledOnce();
+      pendingReroute.resolve({
+        ok: true,
+        data: {
+          navigationId: "11111111-1111-4111-8111-111111111111",
+          previousRouteVersion: 1,
+          routeVersion: 2,
+          routeToken: "replacement",
+          route: walkRoute,
+          instructions: [],
+          steps: [],
+          warnings: [],
+          currentStepIndex: 0,
+          replayed: false,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      const types = vi
+        .mocked(ws.send)
+        .mock.calls.map(([value]) => value)
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => JSON.parse(value).type);
+      expect(types.filter((type) => type === "nav.rerouting")).toHaveLength(1);
+      expect(
+        types.filter((type) => type === "nav.route_replaced"),
+      ).toHaveLength(1);
+      expect(types.filter((type) => type === "nav.error")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let a superseded pending lookup commit", async () => {
+    vi.useFakeTimers();
+    try {
+      let onmessage: ((message: unknown) => void) | undefined;
+      connect.mockImplementation(async ({ callbacks }) => {
+        onmessage = callbacks.onmessage;
+        return makeSession();
+      });
+      const firstRoute = structuredClone(walkRoute);
+      firstRoute.legs[0].steps[0].streetName = "被取代的路線";
+      const secondRoute = structuredClone(walkRoute);
+      secondRoute.legs[0].steps[0].streetName = "最新路線";
+      const firstPending = deferred<typeof firstRoute>();
+      const secondPending = deferred<typeof secondRoute>();
+      getRouteByToken.mockImplementation((token) => {
+        if (token === "first-pending") return firstPending.promise;
+        if (token === "second-pending") return secondPending.promise;
+        return Promise.resolve(null);
+      });
+      getNavigationEnvelopeByToken.mockResolvedValue(null);
+      const ws = makeWs();
+      const bridge = await createLiveBridge({ ws, userId: "u" });
+
+      const firstArm = bridge.armRouteToken("first-pending");
+      const secondArm = bridge.armRouteToken("second-pending");
+      firstPending.resolve(firstRoute);
+      await firstArm;
+      secondPending.resolve(secondRoute);
+      await secondArm;
+      onmessage?.({
+        toolCall: {
+          functionCalls: [{ id: "start", name: "startNavigation", args: {} }],
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      const starts = vi
+        .mocked(ws.send)
+        .mock.calls.map(([value]) => value)
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => JSON.parse(value))
+        .filter((message) => message.type === "nav.start");
+      expect(starts).toHaveLength(1);
+      expect(starts[0].steps[0].instruction).toContain("最新路線");
+      expect(starts[0].steps[0].instruction).not.toContain("被取代的路線");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not resurrect a pending lookup after cancellation", async () => {
+    vi.useFakeTimers();
+    try {
+      let onmessage: ((message: unknown) => void) | undefined;
+      connect.mockImplementation(async ({ callbacks }) => {
+        onmessage = callbacks.onmessage;
+        return makeSession();
+      });
+      const pendingRouteValue = structuredClone(walkRoute);
+      pendingRouteValue.legs[0].steps[0].streetName = "不應復活的路線";
+      const pendingRoute = deferred<typeof pendingRouteValue>();
+      getRouteByToken.mockImplementation((token) =>
+        token === "pending" ? pendingRoute.promise : Promise.resolve(walkRoute),
+      );
+      getNavigationEnvelopeByToken.mockResolvedValue({
+        navigationId: "11111111-1111-4111-8111-111111111111",
+        routeVersion: 1,
+      });
+      const ws = makeWs();
+      const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.armRouteToken("initial");
+      onmessage?.({
+        toolCall: {
+          functionCalls: [{ id: "start", name: "startNavigation", args: {} }],
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      const pendingArm = bridge.armRouteToken("pending");
+      bridge.cancelNav();
+      pendingRoute.resolve(pendingRouteValue);
+      await pendingArm;
+      onmessage?.({
+        toolCall: {
+          functionCalls: [
+            { id: "restart-old", name: "startNavigation", args: {} },
+          ],
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      const starts = vi
+        .mocked(ws.send)
+        .mock.calls.map(([value]) => value)
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => JSON.parse(value))
+        .filter((message) => message.type === "nav.start");
+      expect(starts).toHaveLength(2);
+      expect(starts.at(-1).steps[0].instruction).toBe(
+        starts[0].steps[0].instruction,
+      );
+      expect(starts.at(-1).steps[0].instruction).not.toContain(
+        "不應復活的路線",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("emits reroute_failed and retains the old active session", async () => {
+    vi.useFakeTimers();
+    try {
+      let onmessage: ((message: unknown) => void) | undefined;
+      const session = makeSession();
+      const ws = makeWs();
+      connect.mockImplementation(async ({ callbacks }) => {
+        onmessage = callbacks.onmessage;
+        return session;
+      });
+      getNavigationEnvelopeByToken.mockResolvedValue({
+        navigationId: "11111111-1111-4111-8111-111111111111",
+        routeVersion: 1,
+      });
+      rerouteAccessibleRoute.mockResolvedValue({
+        ok: false,
+        status: 503,
+        error: "Redis unavailable",
+      });
+      const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.armRouteToken("initial");
+      onmessage?.({
+        toolCall: {
+          functionCalls: [{ id: "start", name: "startNavigation", args: {} }],
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      const far = { latitude: 26, longitude: 122 };
+      for (let i = 0; i < 3; i++) {
+        bridge.updatePosition(far);
+        await vi.advanceTimersByTimeAsync(500);
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      onmessage?.({
+        toolCall: {
+          functionCalls: [
+            { id: "context", name: "getActiveNavigationContext", args: {} },
+          ],
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      const messages = vi
+        .mocked(ws.send)
+        .mock.calls.map(([value]) => value)
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => JSON.parse(value));
+      const rerouting = messages.find(
+        (message) => message.type === "nav.rerouting",
+      );
+      expect(
+        messages.find((message) => message.type === "nav.reroute_failed"),
+      ).toEqual({
+        type: "nav.reroute_failed",
+        navigationId: "11111111-1111-4111-8111-111111111111",
+        previousRouteVersion: 1,
+        code: 503,
+        message: "Redis unavailable",
+        retryable: true,
+      });
+      expect(rerouteAccessibleRoute).toHaveBeenCalledWith({
+        routeToken: "initial",
+        currentPosition: far,
+        previousRouteVersion: 1,
+        reason: "OFF_ROUTE",
+        clientRequestId: rerouting.clientRequestId,
+      });
+      const contextResponse = session.sendToolResponse.mock.calls
+        .flatMap(([payload]) => payload.functionResponses)
+        .find((response: any) => response.id === "context");
+      expect(JSON.parse(contextResponse.response.output)).toMatchObject({
+        active: true,
+        destination: "B",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("sends a navigation tool response before the queued verbatim speech turn", async () => {
@@ -970,5 +1638,247 @@ describe("createLiveBridge user memory integration", () => {
         { allowMemoryWrite: true },
       ),
     );
+  });
+});
+
+describe("createLiveBridge reroute generation ownership", () => {
+  const NAV_OLD = "11111111-1111-4111-8111-111111111111";
+  const NAV_NEW = "22222222-2222-4222-8222-222222222222";
+  const FAR = { latitude: 26, longitude: 122 };
+  const ON_ROUTE = { latitude: 25, longitude: 121 };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getRouteByToken.mockResolvedValue(walkRoute);
+    getNavigationEnvelopeByToken.mockResolvedValue(null);
+  });
+
+  function makeHarness() {
+    let onmessage: ((message: unknown) => void) | undefined;
+    const session = makeSession();
+    const ws = makeWs();
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      return session;
+    });
+    const newerRoute = structuredClone(walkRoute);
+    newerRoute.legs[0].steps[0].streetName = "新路線";
+    getRouteByToken.mockImplementation(async (token: string) =>
+      token === "newer" ? newerRoute : walkRoute,
+    );
+    getNavigationEnvelopeByToken.mockImplementation(async (token: string) => ({
+      navigationId: token === "newer" ? NAV_NEW : NAV_OLD,
+      routeVersion: 1,
+    }));
+    const call = async (id: string, name: string): Promise<void> => {
+      onmessage?.({ toolCall: { functionCalls: [{ id, name, args: {} }] } });
+      await vi.advanceTimersByTimeAsync(0);
+    };
+    return { ws, session, call };
+  }
+
+  type Bridge = Awaited<ReturnType<typeof createLiveBridge>>;
+
+  async function drive(
+    bridge: Bridge,
+    position: { latitude: number; longitude: number },
+    times: number,
+  ): Promise<void> {
+    for (let i = 0; i < times; i++) {
+      bridge.updatePosition(position);
+      await vi.advanceTimersByTimeAsync(500);
+    }
+  }
+
+  function rerouteTokens(): string[] {
+    return vi
+      .mocked(rerouteAccessibleRoute)
+      .mock.calls.map((call) => (call[0] as any).routeToken as string);
+  }
+
+  /**
+   * Commits the client-selected replacement route as a brand new navigation
+   * generation, mirroring the stop -> setRoute -> start sequence the gateway
+   * drives when the user picks a different route mid-session.
+   */
+  async function commitNewerGeneration(
+    bridge: Bridge,
+    call: (id: string, name: string) => Promise<void>,
+  ): Promise<void> {
+    await call("stop-old", "stopNavigation");
+    await bridge.armRouteToken("newer");
+    await call("start-new", "startNavigation");
+  }
+
+  it("lets a newly committed generation reroute while the old generation's reroute is still pending", async () => {
+    vi.useFakeTimers();
+    try {
+      const { ws, call } = makeHarness();
+      const pendingOld = deferred<any>();
+      const pendingNew = deferred<any>();
+      rerouteAccessibleRoute.mockImplementation(({ routeToken }: any) =>
+        routeToken === "newer" ? pendingNew.promise : pendingOld.promise,
+      );
+      const bridge = await createLiveBridge({ ws, userId: "u" });
+
+      await bridge.armRouteToken("initial");
+      await call("start-old", "startNavigation");
+      await drive(bridge, FAR, 3);
+      expect(rerouteTokens()).toEqual(["initial"]);
+
+      await commitNewerGeneration(bridge, call);
+      await drive(bridge, FAR, 3);
+
+      expect(rerouteTokens()).toEqual(["initial", "newer"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not inherit the old generation's cooldown after a new setRoute commits", async () => {
+    vi.useFakeTimers();
+    try {
+      const { ws, call } = makeHarness();
+      rerouteAccessibleRoute.mockResolvedValue({
+        ok: false,
+        status: 404,
+        error: "no route",
+      });
+      const bridge = await createLiveBridge({ ws, userId: "u" });
+
+      await bridge.armRouteToken("initial");
+      await call("start-old", "startNavigation");
+      await drive(bridge, FAR, 3);
+      expect(rerouteTokens()).toEqual(["initial"]);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await commitNewerGeneration(bridge, call);
+      await drive(bridge, FAR, 3);
+
+      expect(rerouteTokens()).toEqual(["initial", "newer"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the new generation's in-flight guard when the old generation's reroute settles late", async () => {
+    vi.useFakeTimers();
+    try {
+      const { ws, call } = makeHarness();
+      const pendingOld = deferred<any>();
+      const pendingNew = deferred<any>();
+      rerouteAccessibleRoute.mockImplementation(({ routeToken }: any) =>
+        routeToken === "newer" ? pendingNew.promise : pendingOld.promise,
+      );
+      const bridge = await createLiveBridge({ ws, userId: "u" });
+
+      await bridge.armRouteToken("initial");
+      await call("start-old", "startNavigation");
+      await drive(bridge, FAR, 3);
+
+      await commitNewerGeneration(bridge, call);
+      await drive(bridge, FAR, 3);
+      expect(rerouteTokens()).toEqual(["initial", "newer"]);
+
+      await vi.advanceTimersByTimeAsync(REROUTE_COOLDOWN_MS + 1_000);
+      pendingOld.resolve({ ok: false, status: 404, error: "stale" });
+      await vi.advanceTimersByTimeAsync(0);
+
+      await drive(bridge, ON_ROUTE, 2);
+      await drive(bridge, FAR, 3);
+
+      expect(rerouteTokens()).toEqual(["initial", "newer"]);
+      const messages = vi
+        .mocked(ws.send)
+        .mock.calls.map(([value]) => value)
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => JSON.parse(value));
+      expect(
+        messages.some((message) => message.type === "nav.reroute_failed"),
+      ).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reuses the same clientRequestId when retrying reroute in the same generation", async () => {
+    vi.useFakeTimers();
+    try {
+      const { ws, call } = makeHarness();
+      rerouteAccessibleRoute.mockResolvedValue({
+        ok: false,
+        status: 503,
+        error: "temporarily unavailable",
+      });
+      const bridge = await createLiveBridge({ ws, userId: "u" });
+
+      await bridge.armRouteToken("initial");
+      await call("start-old", "startNavigation");
+      await drive(bridge, FAR, 3);
+      expect(rerouteAccessibleRoute).toHaveBeenCalledTimes(1);
+      const firstRequestId = (
+        vi.mocked(rerouteAccessibleRoute).mock.calls[0]![0] as any
+      ).clientRequestId;
+
+      // Advance past cooldown and trigger another off-route attempt for the same generation
+      await vi.advanceTimersByTimeAsync(REROUTE_COOLDOWN_MS + 1_000);
+      await drive(bridge, ON_ROUTE, 2);
+      await drive(bridge, FAR, 3);
+
+      expect(rerouteAccessibleRoute).toHaveBeenCalledTimes(2);
+      const secondRequestId = (
+        vi.mocked(rerouteAccessibleRoute).mock.calls[1]![0] as any
+      ).clientRequestId;
+
+      expect(firstRequestId).toBeTruthy();
+      expect(secondRequestId).toBe(firstRequestId);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not emit nav.route_replaced if navigation was cancelled/stopped while reroute was pending", async () => {
+    vi.useFakeTimers();
+    try {
+      const { ws, call } = makeHarness();
+      const pendingReroute = deferred<any>();
+      rerouteAccessibleRoute.mockImplementation(() => pendingReroute.promise);
+      const bridge = await createLiveBridge({ ws, userId: "u" });
+
+      await bridge.armRouteToken("initial");
+      await call("start-old", "startNavigation");
+      await drive(bridge, FAR, 3);
+      expect(rerouteAccessibleRoute).toHaveBeenCalledTimes(1);
+
+      // Stop navigation before reroute settles
+      await call("stop-old", "stopNavigation");
+
+      // Now the pending reroute resolves with replacement route
+      const replacementRoute = structuredClone(walkRoute);
+      replacementRoute.routeVersion = 2;
+      pendingReroute.resolve({
+        ok: true,
+        data: {
+          route: replacementRoute,
+          navigationId: NAV_OLD,
+          routeVersion: 2,
+          routeToken: "token-v2",
+          steps: [],
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      const messages = vi
+        .mocked(ws.send)
+        .mock.calls.map(([value]) => value)
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => JSON.parse(value));
+
+      expect(
+        messages.some((message) => message.type === "nav.route_replaced"),
+      ).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { NavPositionSchema, NavSetRouteSchema } from "./navigation.schema";
+import type { AccessibleRoute } from "../../types/route";
 
 /**
  * Machine-checkable contract for the voice WebSocket.
@@ -11,7 +12,8 @@ import { NavPositionSchema, NavSetRouteSchema } from "./navigation.schema";
  * Message objects are intentionally NOT `.strict()`. The gateway used to
  * validate a freshly-built object holding just the fields it read, so unknown
  * keys on the wire were always ignored — rejecting them now would turn
- * previously-accepted traffic into errors.
+ * previously-accepted traffic into errors. The reroute outbound frames below
+ * are strict because they are a frozen server-to-client contract.
  */
 
 /**
@@ -73,10 +75,79 @@ export type VoiceControlMessage = z.infer<typeof VoiceControlMessageSchema>;
 export type SessionStartMessage = z.infer<typeof SessionStartMessageSchema>;
 
 /** Server-to-client frames emitted by the gateway itself. */
+const NavStepDtoSchema = z
+  .object({
+    index: z.number().int().nonnegative(),
+    instruction: z.string(),
+    legType: z.enum([
+      "WALK",
+      "DRIVE",
+      "MOTORCYCLE",
+      "BUS",
+      "METRO",
+      "THSR",
+      "TRA",
+    ]),
+    distanceM: z.number().nonnegative().nullable(),
+    isTransit: z.boolean(),
+  })
+  .strict();
+
+export const NavReroutingMessageSchema = z
+  .object({
+    type: z.literal("nav.rerouting"),
+    navigationId: z.string(),
+    previousRouteVersion: z.number().int().positive(),
+    clientRequestId: z.string().uuid(),
+  })
+  .strict();
+
+export const NavRouteReplacedMessageSchema = z
+  .object({
+    type: z.literal("nav.route_replaced"),
+    navigationId: z.string(),
+    previousRouteVersion: z.number().int().positive(),
+    routeVersion: z.number().int().positive(),
+    routeToken: z.string().min(1),
+    route: z.custom<AccessibleRoute>(
+      (value) => typeof value === "object" && value !== null,
+    ),
+    steps: z.array(NavStepDtoSchema),
+    warnings: z.array(z.string()),
+    currentStepIndex: z.literal(0),
+  })
+  .strict();
+
+export const NavRerouteFailedMessageSchema = z
+  .object({
+    type: z.literal("nav.reroute_failed"),
+    navigationId: z.string(),
+    previousRouteVersion: z.number().int().positive(),
+    code: z.union([
+      z.number().int(),
+      z.literal("NAV_ROUTE_INVALID"),
+      z.literal("REROUTE_FAILED"),
+    ]),
+    message: z.string(),
+    retryable: z.boolean(),
+  })
+  .strict();
+
+export const VoiceRerouteOutboundMessageSchema = z.discriminatedUnion("type", [
+  NavReroutingMessageSchema,
+  NavRouteReplacedMessageSchema,
+  NavRerouteFailedMessageSchema,
+]);
+
+export type VoiceRerouteOutboundMessage = z.infer<
+  typeof VoiceRerouteOutboundMessageSchema
+>;
+
 export type VoiceOutboundMessage =
   | { type: "session.ready" }
   | { type: "error"; code: "LIVE_CONNECT_FAILED" }
-  | { type: "nav.error"; code: "NAV_ROUTE_INVALID"; message: string };
+  | { type: "nav.error"; code: "NAV_ROUTE_INVALID"; message: string }
+  | VoiceRerouteOutboundMessage;
 
 /**
  * Renders a parse failure as a single-line reason for the server log.
