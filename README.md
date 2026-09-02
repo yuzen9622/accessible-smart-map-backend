@@ -274,16 +274,14 @@ pnpm import:gtfs-all
 # 台北市無障礙廁所資料
 pnpm import:bathrooms
 
-# 新北市與全台身障停車格資料
-pnpm import:parking
+# 全台身障停車格與停車場資料（TDX）
 pnpm import:parking-tdx
 
 # 全國身心障礙福利機構資料
 pnpm import:welfare
 
-# 教育部校園無障礙設施與搜尋索引
+# 教育部校園無障礙設施與詳情
 pnpm import:campus-a11y
-pnpm backfill:campus-search
 pnpm import:campus-facility-detail
 
 # OSM 視覺無障礙設施（導盲磚、有聲號誌）
