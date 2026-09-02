@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  NavProgressSchema,
   NavRerouteFailedMessageSchema,
   NavReroutingMessageSchema,
 } from "./voice.ws.schema";
@@ -52,6 +53,58 @@ describe("voice reroute outbound schemas", () => {
       expect(NavRerouteFailedMessageSchema.safeParse(incomplete).success).toBe(
         false,
       );
+    }
+  });
+});
+
+describe("nav.progress outbound schema", () => {
+  const payload = {
+    type: "nav.progress" as const,
+    navigationId: "11111111-1111-4111-8111-111111111111",
+    routeVersion: 2,
+    currentStepIndex: 0,
+    remainingDistanceM: 1200.5,
+    remainingDurationSec: 940,
+    estimatedArrivalAt: "2026-01-01T00:15:40.000Z",
+    etaSource: "realtime" as const,
+    distanceToNextM: 42,
+  };
+
+  it("accepts a complete progress frame including a null distanceToNextM", () => {
+    expect(NavProgressSchema.parse(payload)).toEqual(payload);
+    expect(
+      NavProgressSchema.safeParse({ ...payload, distanceToNextM: null })
+        .success,
+    ).toBe(true);
+  });
+
+  it("rejects an uncorrelated, negative, or unknown-source frame", () => {
+    for (const invalid of [
+      { navigationId: "nav-1" },
+      { routeVersion: 0 },
+      { currentStepIndex: -1 },
+      { remainingDistanceM: -1 },
+      { remainingDurationSec: -1 },
+      { distanceToNextM: -1 },
+      { etaSource: "guessed" },
+    ]) {
+      expect(
+        NavProgressSchema.safeParse({ ...payload, ...invalid }).success,
+      ).toBe(false);
+    }
+    for (const field of [
+      "navigationId",
+      "routeVersion",
+      "currentStepIndex",
+      "remainingDistanceM",
+      "remainingDurationSec",
+      "estimatedArrivalAt",
+      "etaSource",
+      "distanceToNextM",
+    ] as const) {
+      const incomplete = { ...payload } as Record<string, unknown>;
+      delete incomplete[field];
+      expect(NavProgressSchema.safeParse(incomplete).success).toBe(false);
     }
   });
 });

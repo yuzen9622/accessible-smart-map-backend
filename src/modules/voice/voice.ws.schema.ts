@@ -133,6 +133,27 @@ export const NavRerouteFailedMessageSchema = z
   })
   .strict();
 
+/**
+ * Live progress push emitted on every processed position while navigating.
+ *
+ * `etaSource` states how `remainingDurationSec` was obtained so the client can
+ * present a schedule- or realtime-backed arrival differently from a walking
+ * estimate; it is never a confidence score.
+ */
+export const NavProgressSchema = z.object({
+  type: z.literal("nav.progress"),
+  navigationId: z.string().uuid(),
+  routeVersion: z.number().int().positive(),
+  currentStepIndex: z.number().int().nonnegative(),
+  remainingDistanceM: z.number().nonnegative(),
+  remainingDurationSec: z.number().nonnegative(),
+  estimatedArrivalAt: z.string(),
+  etaSource: z.enum(["schedule", "realtime", "free_flow", "estimated"]),
+  distanceToNextM: z.number().nonnegative().nullable(),
+});
+
+export type NavProgressEvent = z.infer<typeof NavProgressSchema>;
+
 export const VoiceRerouteOutboundMessageSchema = z.discriminatedUnion("type", [
   NavReroutingMessageSchema,
   NavRouteReplacedMessageSchema,
@@ -147,6 +168,7 @@ export type VoiceOutboundMessage =
   | { type: "session.ready" }
   | { type: "error"; code: "LIVE_CONNECT_FAILED" }
   | { type: "nav.error"; code: "NAV_ROUTE_INVALID"; message: string }
+  | NavProgressEvent
   | VoiceRerouteOutboundMessage;
 
 /**

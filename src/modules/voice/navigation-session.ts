@@ -12,6 +12,7 @@ import {
   type GenerateVoiceNavStepsResult,
 } from "../nav-instructions/nav-instructions.service";
 import type { NavPosition } from "./navigation.schema";
+import type { NavProgressEvent } from "./voice.ws.schema";
 
 const ARRIVE_RADIUS_M = 30;
 const RESUME_RADIUS_M = 60;
@@ -23,6 +24,11 @@ export const MAX_LOOKAHEAD_STEPS = 2;
 const MAX_SKIP_DIST_M = 60;
 const TRANSFER_SNAP_M = 15;
 export const SPEECH_QUEUE_MAX = 8;
+const DEFAULT_WALK_SPEED_MPS = 1;
+const MIN_WALK_SPEED_MPS = 0.3;
+const MAX_WALK_SPEED_MPS = 2.5;
+/** ~30 km/h, used only when a transit leg carries no timetable at all. */
+const DEFAULT_TRANSIT_SPEED_MPS = 8.3;
 
 type Coord = [number, number];
 type StopReason = "user_voice" | "user_ui" | "arrived" | "session_end";
@@ -64,7 +70,8 @@ export type NavServerEvent =
   | {
       type: "nav.transit_alert";
       alerts: MatchedAlert[];
-    };
+    }
+  | NavProgressEvent;
 
 export interface NavEffect {
   ok: boolean;
@@ -151,6 +158,107 @@ export function distanceToPolylineM(point: Coord, polyline: Coord[]): number {
   return min;
 }
 
+/** Geodesic length of `polyline` between two of its vertices, inclusive. */
+function polylineLengthM(polyline: Coord[], from = 0, to = -1): number {
+  const last = polyline.length - 1;
+  const start = Math.max(0, Math.min(from, to < 0 ? last : to));
+  const end = Math.min(last, Math.max(from, to < 0 ? last : to));
+  let total = 0;
+  for (let i = start + 1; i <= end; i++) {
+    total += haversineLngLat(polyline[i - 1], polyline[i]);
+  }
+  return total;
+}
+
+/** Minutes past midnight for an `HH:MM` departure/arrival stamp. */
+function clockMinutes(value?: string): number | null {
+  const match = /^(\d{1,2}):(\d{2})/.exec(value ?? "");
+  if (!match) return null;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+type RouteLeg = AccessibleRoute["legs"][number];
+type TransitLeg = Extract<RouteLeg, { waitInfo: unknown }>;
+
+const isTransitLeg = (leg: RouteLeg): leg is TransitLeg =>
+  isTransitType(leg.type);
+
+function walkSpeedMpsOf(leg: RouteLeg): number {
+  if (leg.type !== "WALK") return DEFAULT_WALK_SPEED_MPS;
+  const seconds = leg.minutesEst * 60;
+  if (!Number.isFinite(seconds) || seconds <= 0) return DEFAULT_WALK_SPEED_MPS;
+  if (!Number.isFinite(leg.distanceM) || leg.distanceM <= 0)
+    return DEFAULT_WALK_SPEED_MPS;
+  return Math.min(
+    MAX_WALK_SPEED_MPS,
+    Math.max(MIN_WALK_SPEED_MPS, leg.distanceM / seconds),
+  );
+}
+
+/** In-vehicle seconds for one transit leg, ignoring the wait before boarding. */
+function transitRideSec(leg: TransitLeg): number {
+  if (leg.type !== "BUS" && Number.isFinite(leg.rideMinutes)) {
+    if (leg.rideMinutes > 0) return leg.rideMinutes * 60;
+  }
+  const departure = clockMinutes(leg.departureTime);
+  const arrival = clockMinutes(leg.arrivalTime);
+  if (departure !== null && arrival !== null) {
+    const minutes = (arrival - departure + 1440) % 1440;
+    if (minutes > 0) return minutes * 60;
+  }
+  return polylineLengthM(leg.polyline) / DEFAULT_TRANSIT_SPEED_MPS;
+}
+
+/** Seconds still to be spent waiting before boarding a not-yet-boarded leg. */
+function transitWaitSec(leg: TransitLeg, nowMs: number = Date.now()): number {
+  const estimated = leg.estimatedWaitMinutes;
+  if (
+    typeof estimated === "number" &&
+    Number.isFinite(estimated) &&
+    estimated > 0
+  ) {
+    return estimated * 60;
+  }
+  const scheduled = leg.waitInfo?.time;
+  if (
+    typeof scheduled === "number" &&
+    Number.isFinite(scheduled) &&
+    scheduled > 0
+  ) {
+    return scheduled * 60;
+  }
+  const depStr = typeof scheduled === "string" ? scheduled : leg.departureTime;
+  if (depStr) {
+    const depMins = clockMinutes(depStr);
+    if (depMins !== null) {
+      const now = new Date(nowMs);
+      const nowSecFromMidnight =
+        now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+      const depSecFromMidnight = depMins * 60;
+      const waitSec = (depSecFromMidnight - nowSecFromMidnight + 86400) % 86400;
+      return waitSec;
+    }
+    const parsed = Number(depStr);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed * 60;
+  }
+  return 0;
+}
+
+/** Travel cost from one coord-bearing step to the next one. */
+interface StepSpan {
+  distanceM: number;
+  durationSec: number;
+  speedMps: number;
+  transitLeg: TransitLeg | null;
+}
+
+const emptySpan = (): StepSpan => ({
+  distanceM: 0,
+  durationSec: 0,
+  speedMps: DEFAULT_WALK_SPEED_MPS,
+  transitLeg: null,
+});
+
 export class NavigationSession {
   private armedRoute: AccessibleRoute | null = null;
   private activeRoute: AccessibleRoute | null = null;
@@ -164,6 +272,7 @@ export class NavigationSession {
   private recoverCount = 0;
   private terminalCoordIndex = -1;
   private latestPosition: NavPosition | null = null;
+  private spans: StepSpan[] = [];
   private currentSpeechText: string | null = null;
   private speechQueue: string[] = [];
   private seenAlertIds = new Set<string>();
@@ -215,6 +324,7 @@ export class NavigationSession {
     if (!built) return this.invalidRoute();
     this.activeRoute = this.armedRoute;
     this.steps = built;
+    this.spans = this.buildSpans(this.armedRoute, built);
     this.terminalCoordIndex = built
       .map((s) => s.coord)
       .lastIndexOf([...built].reverse().find((s) => s.coord)?.coord ?? null);
@@ -252,7 +362,10 @@ export class NavigationSession {
       .filter(Boolean)
       .join(" ");
     if (speech) this.enqueueSpeech(speech);
-    return { ok: true, events: [...advanced.events, ...offroute.events] };
+    const events = [...advanced.events, ...offroute.events];
+    const progress = this.active ? this.progressEvent(position) : null;
+    if (progress) events.push(progress);
+    return { ok: true, events };
   }
 
   stop(reason: StopReason): NavEffect {
@@ -260,6 +373,7 @@ export class NavigationSession {
     this.active = false;
     this.activeRoute = null;
     this.steps = [];
+    this.spans = [];
     this.announcedIndex = -1;
     this.onVehicle = false;
     this.seenAlertIds.clear();
@@ -345,6 +459,7 @@ export class NavigationSession {
     this.latestPosition = null;
     this.active = false;
     this.steps = [];
+    this.spans = [];
     this.seenAlertIds.clear();
     this.clearSpeech();
   }
@@ -664,6 +779,146 @@ export class NavigationSession {
       );
     }
     return { events, speech };
+  }
+
+  /**
+   * Precomputes, for every coord-bearing step, the travel cost to the next
+   * coord-bearing step. Walking spans are measured along the leg geometry, a
+   * transit ride spans the whole vehicle polyline, and anything crossing a leg
+   * boundary is a short transfer walk.
+   */
+  private buildSpans(
+    route: AccessibleRoute,
+    steps: ResolvedStep[],
+  ): StepSpan[] {
+    const spans = steps.map(() => emptySpan());
+    for (let i = 0; i < steps.length; i++) {
+      const from = steps[i];
+      if (!from.coord) continue;
+      const leg = route.legs[from.legIndex];
+      const boarding = from.kind === "transit_board" && isTransitLeg(leg);
+      spans[i].transitLeg = boarding ? (leg as TransitLeg) : null;
+      let next: ResolvedStep | null = null;
+      for (let j = i + 1; j < steps.length && !next; j++) {
+        if (steps[j].coord) next = steps[j];
+      }
+      if (!next) continue;
+      if (boarding) {
+        spans[i].distanceM = polylineLengthM(leg.polyline);
+        spans[i].durationSec = transitRideSec(leg as TransitLeg);
+      } else if (
+        from.legIndex === next.legIndex &&
+        from.polylineIndex !== null &&
+        next.polylineIndex !== null
+      ) {
+        spans[i].distanceM = polylineLengthM(
+          leg.polyline,
+          from.polylineIndex,
+          next.polylineIndex,
+        );
+        spans[i].durationSec = spans[i].distanceM / walkSpeedMpsOf(leg);
+      } else {
+        spans[i].distanceM = haversineLngLat(from.coord, next.coord!);
+        spans[i].durationSec = spans[i].distanceM / DEFAULT_WALK_SPEED_MPS;
+      }
+      if (spans[i].distanceM > 0 && spans[i].durationSec > 0) {
+        spans[i].speedMps = spans[i].distanceM / spans[i].durationSec;
+      }
+    }
+    return spans;
+  }
+
+  /**
+   * Remaining distance/time push for the current fix. Returns null for routes
+   * that carry no navigation identity, because the frame is correlated to a
+   * navigationId and routeVersion the client can match against its route.
+   */
+  private progressEvent(position: NavPosition): NavProgressEvent | null {
+    const route = this.activeRoute;
+    const navigationId = route?.navigationId;
+    const routeVersion = route?.routeVersion;
+    if (!route || !navigationId) return null;
+    if (!Number.isInteger(routeVersion) || (routeVersion as number) <= 0)
+      return null;
+
+    const nextIndex = this.nextCoordIndex(this.announcedIndex + 1);
+    const distanceToNextM =
+      nextIndex === null
+        ? null
+        : haversineLngLat(
+            [position.longitude, position.latitude],
+            this.steps[nextIndex].coord!,
+          );
+    let remainingDistanceM = distanceToNextM ?? 0;
+    let remainingDurationSec =
+      distanceToNextM === null
+        ? 0
+        : distanceToNextM / this.currentSpeedMps(nextIndex!);
+    const now = Date.now();
+    for (let i = nextIndex ?? this.steps.length; i < this.steps.length; i++) {
+      remainingDistanceM += this.spans[i].distanceM;
+      const leg = this.spans[i].transitLeg;
+      const waitSec = leg ? transitWaitSec(leg, now) : 0;
+      remainingDurationSec += this.spans[i].durationSec + waitSec;
+    }
+    const durationSec = Math.max(0, Math.round(remainingDurationSec));
+    return {
+      type: "nav.progress",
+      navigationId,
+      routeVersion: routeVersion as number,
+      currentStepIndex: Math.max(0, this.announcedIndex),
+      remainingDistanceM: Math.max(0, Math.round(remainingDistanceM)),
+      remainingDurationSec: durationSec,
+      estimatedArrivalAt: new Date(
+        Date.now() + durationSec * 1000,
+      ).toISOString(),
+      etaSource: this.etaSource(Math.max(0, this.announcedIndex)),
+      distanceToNextM:
+        distanceToNextM === null ? null : Math.round(distanceToNextM),
+    };
+  }
+
+  /** Speed of the span currently being traversed, for the partial remainder. */
+  private currentSpeedMps(nextIndex: number): number {
+    const traversing =
+      this.announcedIndex >= 0 ? this.spans[this.announcedIndex] : null;
+    if (traversing && traversing.speedMps > 0) return traversing.speedMps;
+    return walkSpeedMpsOf(
+      this.activeRoute!.legs[this.steps[nextIndex].legIndex],
+    );
+  }
+
+  private etaSource(currentStepIndex: number): NavProgressEvent["etaSource"] {
+    const route = this.activeRoute;
+    if (!route) return "estimated";
+    const remainingSteps = this.steps.slice(Math.max(0, currentStepIndex));
+    const remainingTransitLegIndices = new Set<number>();
+    let driving = false;
+    for (const step of remainingSteps) {
+      if (step.kind === "transit_board") {
+        remainingTransitLegIndices.add(step.legIndex);
+      } else if (
+        step.legType === "DRIVE" ||
+        step.legType === "MOTORCYCLE" ||
+        route.legs[step.legIndex]?.type === "DRIVE" ||
+        route.legs[step.legIndex]?.type === "MOTORCYCLE"
+      ) {
+        driving = true;
+      }
+    }
+    let scheduled = false;
+    for (const legIndex of remainingTransitLegIndices) {
+      const leg = route.legs[legIndex];
+      if (!leg || !isTransitLeg(leg)) continue;
+      const source = leg.waitInfo?.source;
+      if (source === "realtime") return "realtime";
+      if (source === "schedule") {
+        scheduled = true;
+      }
+    }
+    if (scheduled) return "schedule";
+    if (driving) return "free_flow";
+    return "estimated";
   }
 
   private nextCoordIndex(from: number): number | null {

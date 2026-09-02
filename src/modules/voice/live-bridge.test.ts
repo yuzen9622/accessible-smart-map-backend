@@ -32,6 +32,7 @@ vi.mock("./transcript-corrector", () => ({
 }));
 
 import { createLiveBridge } from "./live-bridge";
+import { NavProgressSchema } from "./voice.ws.schema";
 import { executeLocalTool } from "../ai/agent-tools";
 import { buildGeminiTools } from "../agent/tool-catalog";
 import { correctUserTranscript } from "./transcript-corrector";
@@ -1010,6 +1011,44 @@ describe("createLiveBridge navigation turn arbiter", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("forwards schema-valid nav.progress frames produced by the session", async () => {
+    let onmessage: ((message: unknown) => void) | undefined;
+    const session = makeSession();
+    const ws = makeWs();
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      return session;
+    });
+    const navigationRoute = structuredClone(walkRoute);
+    navigationRoute.navigationId = "44444444-4444-4444-8444-444444444444";
+    navigationRoute.routeVersion = 1;
+    getRouteByToken.mockResolvedValue(navigationRoute);
+
+    const bridge = await createLiveBridge({ ws, userId: "u" });
+    await bridge.armRouteToken("cap");
+    onmessage?.({
+      toolCall: {
+        functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
+      },
+    });
+    await vi.waitFor(() =>
+      expect(session.sendToolResponse).toHaveBeenCalledOnce(),
+    );
+    bridge.updatePosition({ latitude: start[1], longitude: start[0] });
+
+    const progress = vi
+      .mocked(ws.send)
+      .mock.calls.map(([value]) => value)
+      .filter((value): value is string => typeof value === "string")
+      .map((value) => JSON.parse(value))
+      .find((message) => message.type === "nav.progress");
+    expect(NavProgressSchema.parse(progress)).toMatchObject({
+      navigationId: "44444444-4444-4444-8444-444444444444",
+      routeVersion: 1,
+      etaSource: "estimated",
+    });
   });
 
   it("sends a navigation tool response before the queued verbatim speech turn", async () => {

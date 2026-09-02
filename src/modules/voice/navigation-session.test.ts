@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AccessibleRoute, WalkLeg } from "../../types/route";
+import { NavProgressSchema, type NavProgressEvent } from "./voice.ws.schema";
 import {
   NavigationSession,
   distanceToPolylineM,
@@ -512,6 +513,219 @@ describe("NavigationSession pure domain state", () => {
     expect(nav.takeNextSpeech()).toContain(
       "注意，即時通阻警報：捷運板南線號誌異常",
     );
+  });
+});
+
+describe("NavigationSession progress and ETA pushes", () => {
+  const navigationId = "33333333-3333-4333-8333-333333333333";
+  const identified = (base: AccessibleRoute): AccessibleRoute => ({
+    ...base,
+    navigationId,
+    routeVersion: 2,
+  });
+  const progressOf = (effect: {
+    events: { type: string }[];
+  }): NavProgressEvent | undefined =>
+    effect.events.find((event) => event.type === "nav.progress") as
+      NavProgressEvent | undefined;
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("reports remaining walk distance, duration and a matching arrival stamp", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    const start = coord(121);
+    const end = coord(121.001);
+    const nav = new NavigationSession();
+    nav.armRoute(identified(route([walkLeg([start, end])])));
+
+    const atStart = progressOf(nav.start(pos(start)))!;
+    expect(NavProgressSchema.parse(atStart)).toEqual(atStart);
+    expect(atStart).toMatchObject({
+      type: "nav.progress",
+      navigationId,
+      routeVersion: 2,
+      currentStepIndex: 0,
+      etaSource: "estimated",
+    });
+    // 100 m in 2 minutes ≈ 0.83 m/s over the whole remaining leg.
+    expect(atStart.remainingDistanceM).toBeGreaterThan(95);
+    expect(atStart.remainingDistanceM).toBeLessThan(110);
+    expect(atStart.distanceToNextM).toBe(atStart.remainingDistanceM);
+    expect(atStart.remainingDurationSec).toBeGreaterThan(110);
+    expect(atStart.remainingDurationSec).toBeLessThan(135);
+    expect(atStart.estimatedArrivalAt).toBe(
+      new Date(
+        Date.parse("2026-01-01T00:00:00.000Z") +
+          atStart.remainingDurationSec * 1000,
+      ).toISOString(),
+    );
+
+    const midway = progressOf(nav.onPosition(pos(coord(121.0005))))!;
+    expect(midway.remainingDistanceM).toBeLessThan(
+      atStart.remainingDistanceM / 1.5,
+    );
+    expect(midway.remainingDurationSec).toBeLessThan(
+      atStart.remainingDurationSec / 1.5,
+    );
+  });
+
+  it("stays silent for routes carrying no navigation identity", () => {
+    const start = coord(121);
+    const nav = new NavigationSession();
+    nav.armRoute(route([walkLeg([start, coord(121.001)])]));
+    expect(progressOf(nav.start(pos(start)))).toBeUndefined();
+  });
+
+  it("omits the frame after arrival instead of pushing a post-stop update", () => {
+    const start = coord(121);
+    const end = coord(121.001);
+    const nav = new NavigationSession();
+    nav.armRoute(identified(route([walkLeg([start, end])])));
+    nav.start(pos(start));
+    const arrival = nav.onPosition(pos(end));
+    expect(arrival.events.map((event) => event.type)).toEqual([
+      "nav.step",
+      "nav.arrived",
+      "nav.stop",
+    ]);
+  });
+
+  it("counts the upcoming ride plus its wait, then drops the wait once boarded", () => {
+    const p1 = coord(121);
+    const p2 = coord(121.001);
+    const p3 = coord(121.01);
+    const ride = {
+      ...metro([p2, p3]),
+      waitInfo: { time: 2, source: "schedule" as const },
+      estimatedWaitMinutes: undefined,
+    };
+    const nav = new NavigationSession();
+    nav.armRoute(identified(route([walkLeg([p1, p2]), ride])));
+
+    const beforeBoarding = progressOf(nav.start(pos(p1)))!;
+    expect(beforeBoarding.etaSource).toBe("schedule");
+    // ~100 m walk + ~906 m ride.
+    expect(beforeBoarding.remainingDistanceM).toBeGreaterThan(950);
+    expect(beforeBoarding.remainingDistanceM).toBeLessThan(1060);
+    // ~121 s walk + 180 s ride + 120 s wait.
+    expect(beforeBoarding.remainingDurationSec).toBeGreaterThan(390);
+    expect(beforeBoarding.remainingDurationSec).toBeLessThan(450);
+
+    nav.onPosition(pos(p2));
+    const boarded = progressOf(nav.onPosition(pos(p2)))!;
+    expect(boarded.currentStepIndex).toBeGreaterThan(
+      beforeBoarding.currentStepIndex,
+    );
+    expect(boarded.remainingDistanceM).toBeGreaterThan(850);
+    expect(boarded.remainingDistanceM).toBeLessThan(960);
+    expect(boarded.remainingDurationSec).toBeGreaterThan(150);
+    expect(boarded.remainingDurationSec).toBeLessThan(215);
+  });
+
+  it("prefers a realtime wait source over the scheduled one", () => {
+    const p1 = coord(121);
+    const p2 = coord(121.001);
+    const nav = new NavigationSession();
+    nav.armRoute(
+      identified(
+        route([
+          walkLeg([p1, p2]),
+          {
+            ...metro([p2, coord(121.01)]),
+            waitInfo: { time: 3, source: "realtime" as const },
+          },
+        ]),
+      ),
+    );
+    expect(progressOf(nav.start(pos(p1)))!.etaSource).toBe("realtime");
+  });
+
+  it("switches etaSource to estimated after alighting and entering the final walk leg", () => {
+    const p1 = coord(121);
+    const p2 = coord(121.001);
+    const p3 = coord(121.01);
+    const p4 = coord(121.011);
+    const ride = {
+      ...metro([p2, p3]),
+      waitInfo: { time: 2, source: "schedule" as const },
+      estimatedWaitMinutes: undefined,
+    };
+    const nav = new NavigationSession();
+    nav.armRoute(
+      identified(route([walkLeg([p1, p2]), ride, walkLeg([p3, p4])])),
+    );
+
+    const atStart = progressOf(nav.start(pos(p1)))!;
+    expect(atStart.etaSource).toBe("schedule");
+
+    // Reach boarding station and board
+    nav.onPosition(pos(p2));
+    const boarded = progressOf(nav.onPosition(pos(p2)))!;
+    expect(boarded.etaSource).toBe("schedule");
+
+    // Reach alight station (triggering transit_alight)
+    const alighted = progressOf(nav.onPosition(pos(p3)))!;
+    expect(alighted.etaSource).toBe("estimated");
+
+    // Continuing on final walking leg
+    const walkingFinal = progressOf(nav.onPosition(pos(coord(121.0105))))!;
+    expect(walkingFinal.etaSource).toBe("estimated");
+  });
+
+  it("calculates wait duration when waitInfo.time is an HH:MM string and updates dynamically as time passes", () => {
+    vi.useFakeTimers();
+    try {
+      // Fix current time at 10:00:00
+      const baseTime = new Date(2026, 8, 2, 10, 0, 0);
+      vi.setSystemTime(baseTime);
+
+      const p1 = coord(121);
+      const p2 = coord(121.001);
+      const p3 = coord(121.01);
+      // Scheduled departure at 10:10
+      const ride = {
+        ...metro([p2, p3]),
+        waitInfo: { time: "10:10", source: "schedule" as const },
+        estimatedWaitMinutes: undefined,
+      };
+      const nav = new NavigationSession();
+      nav.armRoute(identified(route([walkLeg([p1, p2]), ride])));
+
+      const atStart = progressOf(nav.start(pos(p1)));
+      expect(atStart).toBeDefined();
+      expect(atStart?.etaSource).toBe("schedule");
+      const initialWaitAndRide = atStart?.remainingDurationSec ?? 0;
+      // At 10:00:00, wait to 10:10 is 600s
+      expect(initialWaitAndRide).toBeGreaterThanOrEqual(600);
+
+      // Advance time by 300 seconds (5 minutes to 10:05:00) without moving position
+      vi.advanceTimersByTime(300 * 1000);
+      const after5Min = progressOf(nav.onPosition(pos(p1)));
+      expect(after5Min).toBeDefined();
+      // Remaining duration should decrease by ~300 seconds
+      expect(after5Min?.remainingDurationSec).toBe(initialWaitAndRide - 300);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back to estimated when transit waitInfo source is unavailable or carries no schedule", () => {
+    const p1 = coord(121);
+    const p2 = coord(121.001);
+    const p3 = coord(121.01);
+    const ride = {
+      ...metro([p2, p3]),
+      waitInfo: { time: null, source: "unavailable" as const },
+      estimatedWaitMinutes: undefined,
+    };
+    const nav = new NavigationSession();
+    nav.armRoute(identified(route([walkLeg([p1, p2]), ride])));
+
+    const atStart = progressOf(nav.start(pos(p1)))!;
+    expect(atStart.etaSource).toBe("estimated");
   });
 });
 
