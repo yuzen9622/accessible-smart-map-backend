@@ -370,7 +370,9 @@ def fetch_city_schedule(token, city):
     than a silent skip. When Schedule returns 200 with 0 records (e.g. Kaohsiung),
     falls back to DailyTimeTable with default daily ServiceDay."""
     try:
-        recs, src = fetch_with_version(token, V2_SCHED(city), V3_SCHED(city), "Schedules")
+        recs, src = fetch_with_version(
+            token, V2_SCHED(city), V3_SCHED(city), "Schedules"
+        )
         if recs:
             return recs, src
     except TdxHttpError as e:
@@ -389,7 +391,7 @@ def fetch_city_schedule(token, city):
         if daily_recs:
             default_service_day = dict.fromkeys(WEEKDAY_KEYS, 1)
             for r in daily_recs:
-                for tt in (r.get("Timetables") or r.get("TimeTables") or []):
+                for tt in r.get("Timetables") or r.get("TimeTables") or []:
                     tt.setdefault("ServiceDay", default_service_day)
             return daily_recs, "daily_as_sched"
     except (TdxHttpError, TdxFetchError):
@@ -1766,9 +1768,7 @@ def patch_gtfs_zip(
 
         # Write stop_times.txt
         st_out = io.StringIO()
-        st_writer = csv.DictWriter(
-            st_out, fieldnames=st_fields, extrasaction="ignore"
-        )
+        st_writer = csv.DictWriter(st_out, fieldnames=st_fields, extrasaction="ignore")
         st_writer.writeheader()
         st_writer.writerows(final_stop_times)
         zout.writestr("stop_times.txt", st_out.getvalue())
@@ -1784,9 +1784,7 @@ def patch_gtfs_zip(
 
         # Write calendar_dates.txt
         cd_out = io.StringIO()
-        cd_writer = csv.DictWriter(
-            cd_out, fieldnames=cd_fields, extrasaction="ignore"
-        )
+        cd_writer = csv.DictWriter(cd_out, fieldnames=cd_fields, extrasaction="ignore")
         cd_writer.writeheader()
         cd_writer.writerows(kept_calendar_dates)
         zout.writestr("calendar_dates.txt", cd_out.getvalue())
