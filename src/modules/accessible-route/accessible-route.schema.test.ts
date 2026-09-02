@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   AccessibleRouteDataSchema,
+  AccessibleRouteRerouteBodySchema,
+  AccessibleRouteRerouteDataSchema,
   AccessibleRouteSchema,
 } from "./accessible-route.schema";
 import { ROUTE_WARNING } from "../../constants/messages";
@@ -64,6 +66,52 @@ const metroRoute = {
   legs: [metroLeg],
   accessibilityHighlights: [],
 };
+
+describe("AccessibleRouteRerouteBodySchema", () => {
+  const valid = {
+    routeToken: "capability",
+    currentPosition: { latitude: 25.04, longitude: 121.56, accuracy: 8 },
+    previousRouteVersion: 1,
+    reason: "OFF_ROUTE",
+    clientRequestId: "11111111-1111-4111-8111-111111111111",
+  };
+
+  it("accepts only the frozen package-1 body and rejects resubmitted intent", () => {
+    expect(AccessibleRouteRerouteBodySchema.safeParse(valid).success).toBe(
+      true,
+    );
+    expect(
+      AccessibleRouteRerouteBodySchema.safeParse({
+        ...valid,
+        destination: "不得重送",
+      }).success,
+    ).toBe(false);
+    expect(
+      AccessibleRouteRerouteBodySchema.safeParse({
+        ...valid,
+        reason: "FACILITY_OUTAGE",
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("AccessibleRouteRerouteDataSchema", () => {
+  it("publishes the frozen previous-version success field", () => {
+    const data = {
+      navigationId: "11111111-1111-4111-8111-111111111111",
+      previousRouteVersion: 1,
+      routeVersion: 2,
+      routeToken: "replacement",
+      route,
+      instructions: [],
+      steps: [],
+      warnings: [],
+      currentStepIndex: 0,
+      replayed: false,
+    };
+    expect(AccessibleRouteRerouteDataSchema.parse(data)).toEqual(data);
+  });
+});
 
 const metroAlert = {
   alertId: "fault-1",

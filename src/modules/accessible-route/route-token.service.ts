@@ -1,31 +1,38 @@
-import { randomBytes } from "crypto";
-import { redisGet, redisSetChecked } from "../../config/redis";
+import { randomBytes, randomUUID } from "crypto";
+import { redisGet } from "../../config/redis";
 import type { AccessibleRoute } from "../../types/route";
-
-const ROUTE_TOKEN_PREFIX = "voice-nav:route:";
-const ROUTE_TOKEN_TTL_SEC = 30 * 60;
-
-function routeTokenKey(token: string): string {
-  return `${ROUTE_TOKEN_PREFIX}${token}`;
-}
+import type {
+  CanonicalPlanRouteRequest,
+  NavigationRouteEnvelope,
+} from "./accessible-route.types";
+import {
+  navigationTokenKey,
+  storeInitialNavigationEnvelope,
+} from "./navigation-state.repository";
 
 /** Cache each trusted planner route and add a token only after Redis confirms it. */
 export async function attachRouteTokens(
   routes: AccessibleRoute[],
+  canonicalRequest: CanonicalPlanRouteRequest,
 ): Promise<AccessibleRoute[]> {
   return Promise.all(
     routes.map(async (route) => {
       const routeToken = randomBytes(32).toString("base64url");
-      const stored = await redisSetChecked(
-        routeTokenKey(routeToken),
-        JSON.stringify(route),
-        ROUTE_TOKEN_TTL_SEC,
-      );
+      const navigationId = randomUUID();
+      const routeVersion = 1;
+      const navigationRoute = { ...route, navigationId, routeVersion };
+      const stored = await storeInitialNavigationEnvelope(routeToken, {
+        schemaVersion: 1,
+        route: navigationRoute,
+        navigationId,
+        routeVersion,
+        canonicalRequest,
+      });
       if (!stored) {
         console.warn("[accessible-route] route token cache unavailable");
         return route;
       }
-      return { ...route, routeToken };
+      return { ...navigationRoute, routeToken };
     }),
   );
 }
@@ -34,10 +41,38 @@ export async function attachRouteTokens(
 export async function getRouteByToken(
   routeToken: string,
 ): Promise<AccessibleRoute | null> {
-  const raw = await redisGet(routeTokenKey(routeToken));
+  const raw = await redisGet(navigationTokenKey(routeToken));
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as AccessibleRoute;
+    const parsed = JSON.parse(raw) as AccessibleRoute | NavigationRouteEnvelope;
+    return isNavigationEnvelope(parsed) ? parsed.route : parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function isNavigationEnvelope(
+  value: unknown,
+): value is NavigationRouteEnvelope {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<NavigationRouteEnvelope>;
+  return (
+    candidate.schemaVersion === 1 &&
+    typeof candidate.navigationId === "string" &&
+    Number.isInteger(candidate.routeVersion) &&
+    Boolean(candidate.route) &&
+    Boolean(candidate.canonicalRequest)
+  );
+}
+
+export async function getNavigationEnvelopeByToken(
+  routeToken: string,
+): Promise<NavigationRouteEnvelope | null> {
+  const raw = await redisGet(navigationTokenKey(routeToken));
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return isNavigationEnvelope(parsed) ? parsed : null;
   } catch {
     return null;
   }

@@ -21,7 +21,6 @@ import type {
 } from "../accessible-route.types";
 import { haversineCoords, haversineMeters } from "../../../utils/geo";
 import { normalizeRelativeDirection } from "../../../utils/nav-instructions-engine";
-import { ROUTE_WARNING } from "../../../constants/messages";
 import { ValhallaRoutingError } from "./valhalla-routing.types";
 import { planOtpWalkDetailed } from "./otp-routing";
 import { unknownWalkA11yDetails } from "./walk-a11y";
@@ -619,18 +618,6 @@ async function attachWalkAccessLegs(
         totalMinutes: route.totalMinutes + walkMinutes,
         totalWalkDistanceM: walkDistanceM,
         accessibilityHighlights: highlights,
-        ...(headResult?.degraded ||
-        tailResult?.degraded ||
-        wpResolved.some((slot) => slot.degraded)
-          ? {
-              warnings: [
-                ...new Set([
-                  ...(route.warnings ?? []),
-                  ROUTE_WARNING.OTP_WALK_FALLBACK,
-                ]),
-              ],
-            }
-          : {}),
       };
     }),
   );

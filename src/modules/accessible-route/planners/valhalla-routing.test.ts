@@ -323,9 +323,7 @@ describe("planValhallaRoute walk access legs", () => {
       (call) => call[0].costing === "pedestrian",
     );
     expect(pedestrianCall?.[0].wheelchair).toBe(true);
-    expect(route.warnings).toContain(
-      "OTP 步行規劃暫時不可用，已降級使用 Valhalla 步行路線，指引品質可能不同",
-    );
+    expect(route.warnings).toBeUndefined();
     expect(route.legs[0]).toMatchObject({
       type: "WALK",
       maxSlopePercent: null,

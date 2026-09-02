@@ -32,8 +32,6 @@ export const ERROR_MESSAGE = {
 } as const;
 
 export const ROUTE_WARNING = {
-  OTP_WALK_FALLBACK:
-    "OTP 步行規劃暫時不可用，已降級使用 Valhalla 步行路線，指引品質可能不同",
   STAIRS_CONSTRAINT_UNSATISFIED:
     "目前候選路線仍包含無坡道樓梯，無法完全滿足避開樓梯條件",
   NO_ACCESSIBLE_TOILET_NEARBY:
@@ -73,6 +71,13 @@ export const ROUTE_MSG = {
   NO_ROUTE: "找不到可行路線",
   UPSTREAM_TIMEOUT: "路線規劃服務逾時，請稍後再試",
 } as const satisfies Record<keyof typeof ROUTE_REASON, string>;
+
+export const REROUTE_MSG = {
+  OK: "路線已重新規劃",
+  GONE: "routeToken 已過期或不支援重新規劃",
+  CONFLICT: "路線版本或重新規劃狀態衝突",
+  UNAVAILABLE: "導航狀態服務暫時無法使用",
+} as const;
 
 export const MEMORY_MSG = {
   CREATED: "記憶已建立",

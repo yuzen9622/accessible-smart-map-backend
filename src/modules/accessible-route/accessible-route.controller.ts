@@ -4,7 +4,9 @@ import { authenticateToken } from "../../config/auth";
 import { planAccessibleRouteForHttp } from "./accessible-route.service";
 import { ApiResponse } from "../../types/response";
 import { ResponseCode, ResponseMessage } from "../../types/code";
-import { MSG, ERROR_MESSAGE } from "../../constants/messages";
+import { MSG, ERROR_MESSAGE, REROUTE_MSG } from "../../constants/messages";
+import { rerouteAccessibleRoute } from "./reroute.service";
+import type { RerouteRequest } from "./accessible-route.types";
 
 /**
  * Resolves the caller's identity from an optional Bearer token so a logged-in
@@ -76,6 +78,61 @@ export async function accessibleRoute(
     );
   } catch (error: any) {
     console.error("[accessible-route]", error);
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      error?.message ?? ERROR_MESSAGE.INTERNAL,
+    );
+  }
+}
+
+export async function rerouteAccessibleRouteHttp(
+  req: Request,
+  res: Response<ApiResponse<any>>,
+) {
+  try {
+    const auth = await resolveOptionalUserId(req);
+    if (auth.expired) {
+      return sendResponse(
+        res,
+        false,
+        "error",
+        ResponseCode.UNAUTHORIZED,
+        ResponseMessage.UNAUTHORIZED,
+      );
+    }
+    if (auth.invalid) {
+      return sendResponse(
+        res,
+        false,
+        "error",
+        ResponseCode.FORBIDDEN,
+        ResponseMessage.FORBIDDEN,
+      );
+    }
+    const result = await rerouteAccessibleRoute(req.body as RerouteRequest);
+    if (!result.ok) {
+      return sendResponse(
+        res,
+        false,
+        "error",
+        result.status,
+        result.error,
+        result.data,
+      );
+    }
+    return sendResponse(
+      res,
+      true,
+      "success",
+      ResponseCode.OK,
+      REROUTE_MSG.OK,
+      result.data,
+    );
+  } catch (error: any) {
+    console.error("[accessible-route-reroute]", error);
     return sendResponse(
       res,
       false,

@@ -139,6 +139,83 @@ export interface PlanRouteRequest {
   userId?: string;
 }
 
+export interface CanonicalPlanRouteRequest extends PlanRouteRequest {
+  origin: { latitude: number; longitude: number };
+  destination: { latitude: number; longitude: number };
+  userLocation: { latitude: number; longitude: number };
+  travelMode: TravelMode;
+  mode: AccessibilityMode;
+  maxTransfers: number;
+  format: "standard" | "compact";
+  waypoints: { latitude: number; longitude: number }[];
+  avoidStairs: boolean;
+  requireElevator: boolean;
+  needsAccessibleToilet: boolean;
+  needsHandrail: boolean;
+}
+
+export type RerouteReason =
+  | "OFF_ROUTE"
+  | "FACILITY_OUTAGE"
+  | "CONFIRMED_HAZARD"
+  | "TRANSIT_DISRUPTION"
+  | "MANUAL";
+
+export interface NavigationRouteEnvelope {
+  schemaVersion: 1;
+  route: AccessibleRoute;
+  navigationId: string;
+  routeVersion: number;
+  canonicalRequest: CanonicalPlanRouteRequest;
+}
+
+export interface RerouteRequest {
+  routeToken: string;
+  currentPosition: {
+    latitude: number;
+    longitude: number;
+    accuracy?: number;
+  };
+  previousRouteVersion: number;
+  reason: RerouteReason;
+  clientRequestId: string;
+}
+
+export interface RerouteStep {
+  index: number;
+  instruction: string;
+  legType: string;
+  distanceM: number | null;
+  isTransit: boolean;
+}
+
+export interface RerouteInstruction {
+  text: string;
+  type: string;
+  bearing: number | null;
+  relativeDirection: string | null;
+  distanceM: number | null;
+  streetName: string | null;
+  legType: string;
+  stairs: boolean;
+  legIndex: number;
+  polylineIndex: number | null;
+  cumulativeDistanceM: number;
+}
+
+export interface RerouteData {
+  navigationId: string;
+  previousRouteVersion: number;
+  routeVersion: number;
+  routeToken: string;
+  route: AccessibleRoute;
+  instructions: RerouteInstruction[];
+  steps: RerouteStep[];
+  warnings: string[];
+  currentStepIndex: 0;
+  replayed: boolean;
+}
+
 export type PlanRouteResult =
   | {
       ok: true;
@@ -160,6 +237,8 @@ export type PlanRouteResult =
         metroAlerts?: MetroAlertResult[];
         /** Present only when ridden transit legs (bus/metro/tra/thsr) have active alerts. */
         transitAlerts?: MatchedAlert[];
+        /** Internal, non-enumerable reroute intent captured after resolution. */
+        _canonicalRequest?: CanonicalPlanRouteRequest;
       };
     }
   | {

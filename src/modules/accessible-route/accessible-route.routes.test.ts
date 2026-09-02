@@ -19,6 +19,7 @@ vi.mock("./accessible-route.service", async (importActual) => {
     await importActual<typeof import("./accessible-route.service")>();
   return { ...actual, planAccessibleRouteForHttp: vi.fn() };
 });
+vi.mock("./reroute.service", () => ({ rerouteAccessibleRoute: vi.fn() }));
 
 import {
   buildAuthorizationHeader,
@@ -30,11 +31,13 @@ import {
   stubAuthUserLookup,
 } from "../../../tests/helpers/real-auth";
 import * as service from "./accessible-route.service";
+import { rerouteAccessibleRoute } from "./reroute.service";
 import { AccessibleRouteSchema } from "./accessible-route.schema";
 
 let app: Awaited<ReturnType<typeof startTestServer>>;
 const URL = "/api/v1/a11y/accessible-route";
 const mockPlan = vi.mocked(service.planAccessibleRouteForHttp);
+const mockReroute = vi.mocked(rerouteAccessibleRoute);
 const AUTH = buildAuthorizationHeader({
   _id: "user-abc",
   email: "user@test.com",
@@ -64,6 +67,54 @@ beforeEach(() => {
   stubAuthUserLookup(buildDbUser({ _id: "user-abc", email: "user@test.com" }));
 });
 
+describe("POST /api/v1/a11y/accessible-route/reroute", () => {
+  const body = {
+    routeToken: "capability",
+    currentPosition: { latitude: 25.04, longitude: 121.56 },
+    previousRouteVersion: 1,
+    reason: "MANUAL",
+    clientRequestId: "11111111-1111-4111-8111-111111111111",
+  };
+
+  it("mounts the frozen endpoint and rejects destination resubmission at the edge", async () => {
+    const invalid = await request(app)
+      .post(`${URL}/reroute`)
+      .send({ ...body, destination: "不得重送" });
+    expect(invalid.status).toBe(400);
+    expect(mockReroute).not.toHaveBeenCalled();
+  });
+
+  it("uses the shared response envelope", async () => {
+    mockReroute.mockResolvedValue({
+      ok: true,
+      data: {
+        navigationId: "22222222-2222-4222-8222-222222222222",
+        previousRouteVersion: 1,
+        routeVersion: 2,
+        routeToken: "replacement",
+        route: { routeId: "r2" },
+        instructions: [],
+        steps: [],
+        warnings: [],
+        currentStepIndex: 0,
+        replayed: false,
+      },
+    } as any);
+    const res = await request(app).post(`${URL}/reroute`).send(body);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      ok: true,
+      status: "success",
+      code: 200,
+      data: {
+        previousRouteVersion: 1,
+        routeVersion: 2,
+        replayed: false,
+      },
+    });
+  });
+});
+
 describe("POST /api/v1/a11y/accessible-route travel modes + waypoints", () => {
   it("returns the additive routeToken contract when caching succeeds", async () => {
     mockPlan.mockResolvedValue({
@@ -73,6 +124,8 @@ describe("POST /api/v1/a11y/accessible-route travel modes + waypoints", () => {
           {
             routeId: "walk-0",
             routeToken: "high-entropy-capability",
+            navigationId: "11111111-1111-4111-8111-111111111111",
+            routeVersion: 1,
             routeName: "步行",
             totalMinutes: 3,
             transferCount: 0,
@@ -90,6 +143,10 @@ describe("POST /api/v1/a11y/accessible-route travel modes + waypoints", () => {
       });
     expect(res.status).toBe(200);
     expect(res.body.data.routes[0].routeToken).toBe("high-entropy-capability");
+    expect(res.body.data.routes[0]).toMatchObject({
+      navigationId: "11111111-1111-4111-8111-111111111111",
+      routeVersion: 1,
+    });
   });
 
   it("serializes the additive strict confirmed-hazard advisory contract", async () => {

@@ -455,6 +455,32 @@ const walkRoute = () => ({
   accessibilityHighlights: [],
 });
 
+describe("planAccessibleRouteFromRequest navigation envelope intent", () => {
+  it("captures resolved effective defaults as non-enumerable canonical intent", async () => {
+    vi.mocked(planCsrWalkRoute).mockResolvedValue({
+      status: "ok",
+      plans: [csrWalkPlan()],
+    });
+    const res = await planAccessibleRouteFromRequest(walkRequest);
+    expect(res.ok).toBe(true);
+    expect(okData(res)._canonicalRequest).toMatchObject({
+      origin: { latitude: 25.04, longitude: 121.56 },
+      destination: { latitude: 25.03, longitude: 121.55 },
+      userLocation: { latitude: 25.04, longitude: 121.56 },
+      travelMode: "walk",
+      mode: "normal",
+      maxTransfers: 2,
+      format: "standard",
+      waypoints: [],
+      avoidStairs: false,
+      requireElevator: false,
+      needsAccessibleToilet: false,
+      needsHandrail: false,
+    });
+    expect(JSON.stringify(okData(res))).not.toContain("_canonicalRequest");
+  });
+});
+
 const csrWalkStepsFixture = (
   from: [number, number],
   to: [number, number],
@@ -1108,9 +1134,8 @@ describe("planAccessibleRouteFromRequest walk mode OTP", () => {
 
     expect(res.ok).toBe(true);
     expect(vi.mocked(planValhallaRoute).mock.calls.length).toBeGreaterThan(0);
-    expect(okData(res).routes[0].warnings).toContain(
-      "OTP 步行規劃暫時不可用，已降級使用 Valhalla 步行路線，指引品質可能不同",
-    );
+    expect(okData(res).routes[0].engine).toBe("otp-fallback");
+    expect(okData(res).routes[0].warnings).toBeUndefined();
   });
 
   it("reports slopeConstraint enforced=false when a nominal walk request actually fell back to Valhalla", async () => {

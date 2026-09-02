@@ -339,6 +339,10 @@ export interface DriveLeg {
 
 export interface AccessibleRoute {
   routeId: string;
+  /** Stable identity shared by every replacement route in one navigation. */
+  navigationId?: string;
+  /** Monotonic navigation route version; initial tokenized routes start at 1. */
+  routeVersion?: number;
   routeName: string;
   totalMinutes: number;
   transferCount: number;

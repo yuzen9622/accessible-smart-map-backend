@@ -16,6 +16,7 @@ import {
 } from "../../constants/messages";
 import type {
   A11yConstraints,
+  CanonicalPlanRouteRequest,
   FindAccessibleRoutesOptions,
   FindAccessibleRoutesResult,
   FindDrivingRoutesOptions,
@@ -1685,22 +1686,12 @@ export async function planAccessibleRouteFromRequest(
           logRequestTiming();
           return routeFailure(ROUTE_REASON.NO_ROUTE);
         }
-        routes = outcome.routes.map((route) => ({
-          ...route,
-          warnings: [
-            ...new Set([
-              ...(route.warnings ?? []),
-              ROUTE_WARNING.OTP_WALK_FALLBACK,
-            ]),
-          ],
-        }));
+        routes = outcome.routes;
         routedByEngineWithNoElevationData = true;
       }
       routes = routes.map((route) => ({
         ...route,
-        // `otp-fallback` means CSR did not select this pure-walk route. If
-        // OTP2 itself was unavailable, the existing OTP warning identifies
-        // the final Valhalla recovery without adding a third public engine tag.
+        // `otp-fallback` means CSR did not select this pure-walk route.
         engine: "otp-fallback",
         ...(csrFallbackIsDegraded ? { degraded: true } : {}),
       }));
@@ -1809,20 +1800,57 @@ export async function planAccessibleRouteFromRequest(
 
   const normalizedRoutes = routes.map(normalizeWalkSteps);
 
+  const effectiveMode = mode ?? "normal";
+  const effectiveConstraints = resolveA11yConstraints(effectiveMode, {
+    avoidStairs,
+    requireElevator,
+  });
+  const canonicalRequest: CanonicalPlanRouteRequest = {
+    origin: {
+      latitude: originLatLng.lat,
+      longitude: originLatLng.lng,
+    },
+    destination: { latitude: dest.lat, longitude: dest.lng },
+    userLocation: {
+      latitude: originLatLng.lat,
+      longitude: originLatLng.lng,
+    },
+    travelMode,
+    mode: effectiveMode,
+    maxTransfers: maxTransfers ?? 2,
+    format: format === "compact" ? "compact" : "standard",
+    waypoints: waypoints.map((waypoint) => ({
+      latitude: waypoint.lat,
+      longitude: waypoint.lng,
+    })),
+    avoidStairs: effectiveConstraints.avoidStairs,
+    requireElevator: effectiveConstraints.requireElevator,
+    needsAccessibleToilet: needsAccessibleToilet ?? false,
+    needsHandrail: needsHandrail ?? false,
+    ...(maxSlopePercent === undefined ? {} : { maxSlopePercent }),
+    ...(futureDeparture
+      ? { departureTime: futureDeparture.toISOString() }
+      : {}),
+  };
+  const data = {
+    origin: originLatLng,
+    destination: dest,
+    city,
+    travelMode,
+    ...(waypoints.length ? { waypoints } : {}),
+    routes: normalizedRoutes,
+    ...(intent ? { intent } : {}),
+    ...(slopeConstraint ? { slopeConstraint } : {}),
+    ...(metroAlerts.length ? { metroAlerts } : {}),
+    ...(transitAlerts.length ? { transitAlerts } : {}),
+  };
+  Object.defineProperty(data, "_canonicalRequest", {
+    value: canonicalRequest,
+    enumerable: false,
+  });
   return {
     ok: true,
-    data: {
-      origin: originLatLng,
-      destination: dest,
-      city,
-      travelMode,
-      ...(waypoints.length ? { waypoints } : {}),
-      routes: normalizedRoutes,
-      ...(intent ? { intent } : {}),
-      ...(slopeConstraint ? { slopeConstraint } : {}),
-      ...(metroAlerts.length ? { metroAlerts } : {}),
-      ...(transitAlerts.length ? { transitAlerts } : {}),
-    },
+    data,
   };
 }
 
@@ -1863,11 +1891,13 @@ export async function planAccessibleRouteForHttp(
 ): Promise<PlanRouteResult> {
   const result = await planAccessibleRouteFromRequest(body);
   if (!result.ok) return result;
+  const canonicalRequest = result.data._canonicalRequest;
+  if (!canonicalRequest) return result;
   return {
     ...result,
     data: {
       ...result.data,
-      routes: await attachRouteTokens(result.data.routes),
+      routes: await attachRouteTokens(result.data.routes, canonicalRequest),
     },
   };
 }

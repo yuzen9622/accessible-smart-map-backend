@@ -109,7 +109,7 @@ export const AccessibleRouteBodySchema = z
       .default("transit")
       .openapi({
         description:
-          "交通工具（與無障礙 mode 正交）：transit（預設，大眾運輸及其 WALK legs 均走 OTP2）、drive（開車）、motorcycle（騎車）、walk（純步行）。純步行在台北 CSR bbox 內且功能啟用時優先走 CSR；bbox 外、功能停用或 CSR 無法選路時改走 OTP2，CSR fallback 本身不附 warning。僅當 OTP2 不可用才由 Valhalla 作停機備援並附 warning。車行時間為自由流估計，不含即時路況。",
+          "交通工具（與無障礙 mode 正交）：transit（預設，大眾運輸及其 WALK legs 均走 OTP2）、drive（開車）、motorcycle（騎車）、walk（純步行）。純步行在台北 CSR bbox 內且功能啟用時優先走 CSR；bbox 外、功能停用或 CSR 無法選路時改走 OTP2，CSR fallback 本身不附 warning。僅當 OTP2 不可用才由 Valhalla 作停機備援。車行時間為自由流估計，不含即時路況。",
         example: "drive",
       }),
     waypoints: z
@@ -126,6 +126,23 @@ export const AccessibleRouteBodySchema = z
   .refine((b) => (b.origin && b.destination) || b.query, {
     message: "請提供 origin+destination，或自然語言 query",
   });
+
+export const AccessibleRouteRerouteBodySchema = z
+  .object({
+    routeToken: z.string().trim().min(1).max(256),
+    currentPosition: z
+      .object({
+        latitude: z.number().finite().min(-90).max(90),
+        longitude: z.number().finite().min(-180).max(180),
+        accuracy: z.number().finite().min(0).max(10_000).optional(),
+      })
+      .strict(),
+    previousRouteVersion: z.number().int().positive(),
+    reason: z.enum(["OFF_ROUTE", "MANUAL"]),
+    clientRequestId: z.string().uuid(),
+  })
+  .strict()
+  .openapi("AccessibleRouteRerouteBody");
 
 const OsmA11ySchema = z
   .object({
@@ -761,10 +778,16 @@ const RouteHazardAdvisorySchema = z
 export const AccessibleRouteSchema = z
   .object({
     routeId: z.string().openapi({ example: "route-001" }),
+    navigationId: z.string().uuid().optional().openapi({
+      description: "同一次導航的穩定 UUID；只有成功 tokenized 的路線提供。",
+    }),
+    routeVersion: z.number().int().positive().optional().openapi({
+      description: "此 navigationId 的單調遞增路線版本；初始版本為 1。",
+    }),
     routeToken: z.string().optional().openapi({
       example: "M2F1...short-lived-capability",
       description:
-        "30 分鐘內可用於語音 WS nav.setRoute 的高熵 bearer capability；Redis 不可用時省略。",
+        "30 分鐘內可用於語音 WS nav.setRoute 與 POST /a11y/accessible-route/reroute 的高熵 bearer capability；Redis 不可用時省略。",
     }),
     routeName: z.string().openapi({ example: "信義幹線" }),
     totalMinutes: z.number().openapi({ example: 18 }),
@@ -793,7 +816,7 @@ export const AccessibleRouteSchema = z
     engine: z.enum(["pedestrian-a11y", "otp-fallback"]).optional().openapi({
       example: "pedestrian-a11y",
       description:
-        "純步行路線的選路來源：pedestrian-a11y 表示由 CSR 無障礙行人圖選路；otp-fallback 表示 CSR 未決定該路線，後續可能由 OTP2 或 OTP2 不可用後的 Valhalla 規劃。只有後者的 Valhalla 停機備援會附 warning。大眾運輸與開車／機車路線省略。",
+        "純步行路線的選路來源：pedestrian-a11y 表示由 CSR 無障礙行人圖選路；otp-fallback 表示 CSR 未決定該路線，後續可能由 OTP2 或 OTP2 不可用後的 Valhalla 規劃。大眾運輸與開車／機車路線省略。",
     }),
     degraded: z.boolean().optional().openapi({
       example: true,
@@ -804,9 +827,7 @@ export const AccessibleRouteSchema = z
       .array(z.string())
       .optional()
       .openapi({
-        example: [
-          "OTP 步行規劃暫時不可用，已降級使用 Valhalla 步行路線，指引品質可能不同",
-        ],
+        example: ["目前候選路線仍包含無坡道樓梯，無法完全滿足避開樓梯條件"],
         description: "路線引擎降級或硬性無障礙條件無法完全滿足時的使用者警示",
       }),
     hazardAdvisory: RouteHazardAdvisorySchema.optional().openapi({
@@ -987,13 +1008,100 @@ export const ErrorResponseSchema = z
   .strict()
   .openapi("ErrorResponse");
 
+const RerouteStepSchema = z
+  .object({
+    index: z.number().int().nonnegative(),
+    instruction: z.string(),
+    legType: z.enum([
+      "WALK",
+      "DRIVE",
+      "MOTORCYCLE",
+      "BUS",
+      "METRO",
+      "THSR",
+      "TRA",
+    ]),
+    distanceM: z.number().nullable(),
+    isTransit: z.boolean(),
+  })
+  .strict();
+
+const RerouteInstructionSchema = z
+  .object({
+    text: z.string(),
+    type: z.enum([
+      "turn",
+      "transit_board",
+      "transit_alight",
+      "facility",
+      "depart",
+      "arrive",
+    ]),
+    bearing: z.number().nullable(),
+    relativeDirection: z
+      .enum([
+        "正前方",
+        "左前方",
+        "右前方",
+        "左側",
+        "右側",
+        "左後方",
+        "右後方",
+        "正後方",
+      ])
+      .nullable(),
+    distanceM: z.number().nullable(),
+    streetName: z.string().nullable(),
+    legType: z.enum([
+      "WALK",
+      "DRIVE",
+      "MOTORCYCLE",
+      "BUS",
+      "METRO",
+      "THSR",
+      "TRA",
+    ]),
+    stairs: z.boolean(),
+    legIndex: z.number().int().nonnegative(),
+    polylineIndex: z.number().int().nonnegative().nullable(),
+    cumulativeDistanceM: z.number().nonnegative(),
+  })
+  .strict();
+
+export const AccessibleRouteRerouteDataSchema = z
+  .object({
+    navigationId: z.string().uuid(),
+    previousRouteVersion: z.number().int().positive(),
+    routeVersion: z.number().int().positive(),
+    routeToken: z.string(),
+    route: AccessibleRouteSchema,
+    instructions: z.array(RerouteInstructionSchema),
+    steps: z.array(RerouteStepSchema),
+    warnings: z.array(z.string()),
+    currentStepIndex: z.literal(0),
+    replayed: z.boolean(),
+  })
+  .strict()
+  .openapi("AccessibleRouteRerouteData");
+
+export const AccessibleRouteRerouteResponseSchema = z
+  .object({
+    ok: z.literal(true),
+    status: z.literal("success"),
+    code: z.literal(200),
+    message: z.string(),
+    data: AccessibleRouteRerouteDataSchema,
+    accessToken: z.string().optional(),
+  })
+  .openapi("AccessibleRouteRerouteResponse");
+
 registry.registerPath({
   method: "post",
   path: "/a11y/accessible-route",
   tags: ["Accessibility"],
   summary: "無障礙路線規劃",
   description:
-    "規劃起訖點間無障礙路線。travelMode=transit（預設）並行搜尋公車、捷運、高鐵與台鐵，且 transit itinerary 的 WALK legs 維持 OTP2；純 walk 在台北 CSR bbox 內且啟用時以 CSR 為 primary，CSR 在範圍內無法選路時改走 OTP2 fallback，且不附 CSR fallback warning；bbox 外或 CSR 停用時 OTP2 本來就是 primary。只有 OTP2 步行不可用時才附 warning 並降級至 Valhalla pedestrian。drive／motorcycle 主體走自架 Valhalla（自由流時間、不含即時路況）。支援最多 5 個中途點（waypoints），回傳最多 3 筆。選填帶 Bearer token：帶時，未明確傳入的 mode/avoidStairs/requireElevator/needsAccessibleToilet/needsHandrail/maxSlopePercent 會從登入者已儲存的 a11y-profile 推導；不帶則完全公開不受影響；帶但無效/過期回 401/403。",
+    "規劃起訖點間無障礙路線。travelMode=transit（預設）並行搜尋公車、捷運、高鐵與台鐵，且 transit itinerary 的 WALK legs 維持 OTP2；純 walk 在台北 CSR bbox 內且啟用時以 CSR 為 primary，CSR 在範圍內無法選路時改走 OTP2 fallback，且不附 CSR fallback warning；bbox 外或 CSR 停用時 OTP2 本來就是 primary。只有 OTP2 步行不可用時才降級至 Valhalla pedestrian。drive／motorcycle 主體走自架 Valhalla（自由流時間、不含即時路況）。支援最多 5 個中途點（waypoints），回傳最多 3 筆。選填帶 Bearer token：帶時，未明確傳入的 mode/avoidStairs/requireElevator/needsAccessibleToilet/needsHandrail/maxSlopePercent 會從登入者已儲存的 a11y-profile 推導；不帶則完全公開不受影響；帶但無效/過期回 401/403。",
   security: [{ bearerAuth: [] }, {}],
   request: {
     body: {
@@ -1032,5 +1140,38 @@ registry.registerPath({
         "CSR、OTP2 或 Valhalla 路線規劃上游暫時不可用",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/a11y/accessible-route/reroute",
+  tags: ["Accessibility"],
+  summary: "依目前位置重新規劃既有導航路線",
+  description:
+    "以 30 分鐘 routeToken 內的 canonical intent 重新規劃；client 不得重送目的地、偏好或 waypoints。Redis 不可用時 fail closed，且不呼叫 planner。選填 Authorization 的過期/無效行為與初始規劃相同。",
+  security: [{ bearerAuth: [] }, {}],
+  request: {
+    body: {
+      content: {
+        "application/json": { schema: AccessibleRouteRerouteBodySchema },
+      },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      description: "替代路線，或相同 clientRequestId 的 idempotent replay",
+      content: {
+        "application/json": { schema: AccessibleRouteRerouteResponseSchema },
+      },
+    },
+    400: { description: "嚴格 body schema 驗證失敗" },
+    401: { description: "帶了 Bearer token 但已過期" },
+    403: { description: "Bearer token 無效" },
+    409: { description: "stale route version 或已有 reroute in flight" },
+    410: { description: "routeToken 過期，或 token 是 legacy raw-route 格式" },
+    422: { description: "planner 找不到可行替代路線" },
+    503: { description: "Redis navigation state unavailable" },
   },
 });
