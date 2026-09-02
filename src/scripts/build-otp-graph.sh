@@ -47,7 +47,10 @@ VALIDATION_DIR="$(mktemp -d /tmp/otp-validation.XXXXXX)"
 # renders as station-to-station straight lines.
 AUX_DIR="$(mktemp -d /tmp/otp-aux.XXXXXX)"
 log() { echo "[build-otp-graph] $(date '+%F %T') $*"; }
-die() { log "FATAL: $*"; exit 1; }
+die() {
+  log "FATAL: $*"
+  exit 1
+}
 
 OTP_STOPPED_BY_SCRIPT=0
 OTP_RESTART_HANDLED=0
@@ -81,9 +84,9 @@ log "fetching TDX access token"
 TOKEN=$(curl -fsS -X POST \
   "https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token" \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "grant_type=client_credentials&client_id=${TDX_CLIENT_ID}&client_secret=${TDX_CLIENT_SECRET}" \
-  | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])") \
-  || die "TDX token acquisition failed"
+  -d "grant_type=client_credentials&client_id=${TDX_CLIENT_ID}&client_secret=${TDX_CLIENT_SECRET}" |
+  python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])") ||
+  die "TDX token acquisition failed"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 i=0
@@ -91,8 +94,8 @@ for url in $OTP_GTFS_URLS; do
   i=$((i + 1))
   out="$WORK_DIR/feed-${i}.gtfs.zip"
   log "downloading GTFS feed $i: $url"
-  curl -fsSL -H "Authorization: Bearer $TOKEN" -o "$out" "$url" \
-    || die "GTFS download failed: $url"
+  curl -fsSL -H "Authorization: Bearer $TOKEN" -o "$out" "$url" ||
+    die "GTFS download failed: $url"
   unzip -l "$out" >/dev/null 2>&1 || die "GTFS feed $i is not a valid zip"
   # TDX feed quality fixes (duplicate ids, broken refs, self-loop pathways —
   # the latter build a graph that NPEs on load). See clean-gtfs-feed.py.
@@ -127,8 +130,8 @@ if curl -fsSL --compressed -H "Authorization: Bearer $TOKEN" \
     log "WARN: TRA Shape download failed — injecting TRA without track geometry"
   fi
   python3 "$SCRIPT_DIR/inject-tra-gtfs.py" \
-    "$WORK_DIR/feed-1.gtfs.zip" "$WORK_DIR/tra-timetable.json" $TRA_SHAPE_ARG \
-    || log "WARN: TRA injection failed — continuing without TRA legs"
+    "$WORK_DIR/feed-1.gtfs.zip" "$WORK_DIR/tra-timetable.json" $TRA_SHAPE_ARG ||
+    log "WARN: TRA injection failed — continuing without TRA legs"
 else
   log "WARN: TRA timetable download failed — continuing without TRA legs"
 fi
@@ -149,8 +152,8 @@ if curl -fsSL --compressed -H "Authorization: Bearer $TOKEN" \
   "https://tdx.transportdata.tw/api/gtfs/V3/Map/GTFS/Static/Rail/TRTC"; then
   if unzip -l "$AUX_DIR/trtc-official.gtfs.zip" >/dev/null 2>&1; then
     python3 "$SCRIPT_DIR/inject-trtc-official-gtfs.py" \
-      "$WORK_DIR/feed-1.gtfs.zip" "$AUX_DIR/trtc-official.gtfs.zip" \
-      || log "WARN: official TRTC injection failed — continuing (metro block synthesizes 文湖線)"
+      "$WORK_DIR/feed-1.gtfs.zip" "$AUX_DIR/trtc-official.gtfs.zip" ||
+      log "WARN: official TRTC injection failed — continuing (metro block synthesizes 文湖線)"
   else
     log "WARN: official TRTC GTFS is not a valid zip — skipping (metro block synthesizes 文湖線)"
   fi
@@ -178,23 +181,23 @@ log "fetching metro S2STravelTime + Frequency + Shape: $METRO_SYSTEMS"
 for sys in $METRO_SYSTEMS; do
   curl -fsSL --compressed -H "Authorization: Bearer $TOKEN" \
     -o "$METRO_DIR/$sys.s2s.json" \
-    "$METRO_BASE/S2STravelTime/$sys?%24format=JSON" \
-    || log "WARN: metro S2STravelTime fetch failed for $sys"
+    "$METRO_BASE/S2STravelTime/$sys?%24format=JSON" ||
+    log "WARN: metro S2STravelTime fetch failed for $sys"
   sleep 3
   curl -fsSL --compressed -H "Authorization: Bearer $TOKEN" \
     -o "$METRO_DIR/$sys.freq.json" \
-    "$METRO_BASE/Frequency/$sys?%24format=JSON" \
-    || log "WARN: metro Frequency fetch failed for $sys"
+    "$METRO_BASE/Frequency/$sys?%24format=JSON" ||
+    log "WARN: metro Frequency fetch failed for $sys"
   sleep 3
   curl -fsSL --compressed -H "Authorization: Bearer $TOKEN" \
     -o "$METRO_DIR/$sys.shape.json" \
-    "$METRO_BASE/Shape/$sys?%24format=JSON" \
-    || log "WARN: metro Shape fetch failed for $sys"
+    "$METRO_BASE/Shape/$sys?%24format=JSON" ||
+    log "WARN: metro Shape fetch failed for $sys"
   sleep 3
 done
 python3 "$SCRIPT_DIR/inject-metro-gtfs.py" \
-  "$WORK_DIR/feed-1.gtfs.zip" "$METRO_DIR" \
-  || log "WARN: metro injection failed — continuing without metro gap-fill"
+  "$WORK_DIR/feed-1.gtfs.zip" "$METRO_DIR" ||
+  log "WARN: metro injection failed — continuing without metro gap-fill"
 
 # ── 1d. Stop wheelchair_boarding injection — the TDX feed ships no
 # wheelchair_boarding column, so OTP treats every stop as unknown accessibility
@@ -216,30 +219,33 @@ log "fetching Metro StationFacility (wheelchair): $FACILITY_SYSTEMS"
 for sys in $FACILITY_SYSTEMS; do
   curl -fsSL --compressed -H "Authorization: Bearer $TOKEN" \
     -o "$FACILITY_DIR/$sys.facility.json" \
-    "$METRO_BASE/StationFacility/$sys?%24format=JSON" \
-    || log "WARN: metro StationFacility fetch failed for $sys"
+    "$METRO_BASE/StationFacility/$sys?%24format=JSON" ||
+    log "WARN: metro StationFacility fetch failed for $sys"
   sleep 3
 done
 python3 "$SCRIPT_DIR/inject-station-wheelchair.py" \
-  "$WORK_DIR/feed-1.gtfs.zip" "$FACILITY_DIR" \
-  || log "WARN: station wheelchair injection failed — continuing"
+  "$WORK_DIR/feed-1.gtfs.zip" "$FACILITY_DIR" ||
+  log "WARN: station wheelchair injection failed — continuing"
 
 # ── 1e. TRTC local database wheelchair injection ──
 log "injecting TRTC station wheelchair flags from local MongoDB accessibilities"
-npx dotenvx run -- ts-node "$SCRIPT_DIR/inject-db-a11y-stops.ts" "$WORK_DIR/feed-1.gtfs.zip" \
-  || log "WARN: TRTC local database injection failed — continuing"
+npx dotenvx run -- ts-node "$SCRIPT_DIR/inject-db-a11y-stops.ts" "$WORK_DIR/feed-1.gtfs.zip" ||
+  log "WARN: TRTC local database injection failed — continuing"
 
-# ── 1f. Bus trip wheelchair accessibility injection ──
-log "injecting bus trip wheelchair accessibility flags from TDX schedules"
-npx dotenvx run -- ts-node "$SCRIPT_DIR/inject-tdx-bus-trips-a11y.ts" "$WORK_DIR/feed-1.gtfs.zip" \
-  || log "WARN: bus trip accessibility injection failed — continuing"
+# ── 1f. Trip wheelchair accessibility injection ──
+# route_type==1 (metro/light rail/gondola) gets wheelchair_accessible=1;
+# route_type==3 (bus) stays 0 (unknown); an existing 1 (TRA WheelChairFlag,
+# official TRTC feed) is preserved. Never writes 2 (inaccessible) — router-config
+# sets trip.inaccessibleCost=3600, which would push wheelchair journeys off an
+# entire city's bus network. Pure CSV transform; no MongoDB needed.
+log "injecting trip wheelchair accessibility flags (route_type based)"
+npx dotenvx run -- ts-node "$SCRIPT_DIR/inject-tdx-bus-trips-a11y.ts" "$WORK_DIR/feed-1.gtfs.zip" ||
+  log "WARN: trip accessibility injection failed — continuing"
 
 # ── 1g. Bus stop logical clustering (parent_station) ──
 log "generating logical parent stations for nearby bus stops"
-npx dotenvx run -- ts-node "$SCRIPT_DIR/generate-gtfs-parents.ts" "$WORK_DIR/feed-1.gtfs.zip" \
-  || log "WARN: parent station generation failed — continuing"
-
-
+npx dotenvx run -- ts-node "$SCRIPT_DIR/generate-gtfs-parents.ts" "$WORK_DIR/feed-1.gtfs.zip" ||
+  log "WARN: parent station generation failed — continuing"
 
 # ── 2. OSM extract (monthly refresh, spec §5) ──
 OSM_CACHE="$OTP_DATA_DIR/taiwan-latest.osm.pbf"
@@ -258,8 +264,8 @@ if [ -z "$OTP_OSM_BBOX" ]; then
   cp "$OSM_CACHE" "$OSM_CLIPPED"
 elif command -v osmium >/dev/null 2>&1; then
   log "clipping OSM to bbox $OTP_OSM_BBOX"
-  osmium extract -b "$OTP_OSM_BBOX" -o "$OSM_CLIPPED" --overwrite "$OSM_CACHE" \
-    || die "osmium extract failed"
+  osmium extract -b "$OTP_OSM_BBOX" -o "$OSM_CLIPPED" --overwrite "$OSM_CACHE" ||
+    die "osmium extract failed"
 else
   log "WARN: osmium not installed — building with the full Taiwan pbf"
   cp "$OSM_CACHE" "$OSM_CLIPPED"
@@ -268,18 +274,18 @@ fi
 # ── 2b. Inject road slopes from DEM GeoTIFFs ──
 log "injecting road slopes from DEM GeoTIFFs..."
 python3 "$SCRIPT_DIR/inject-osm-dem-slopes.py" \
-  "$OSM_CLIPPED" "$OSM_ENRICHED" "${OTP_DEM_DIR:-$OTP_DATA_DIR/dem}" \
-  || log "WARN: DEM slope injection failed — continuing"
+  "$OSM_CLIPPED" "$OSM_ENRICHED" "${OTP_DEM_DIR:-$OTP_DATA_DIR/dem}" ||
+  log "WARN: DEM slope injection failed — continuing"
 if [ -f "$OSM_ENRICHED" ]; then
   mv "$OSM_ENRICHED" "$OSM_CLIPPED"
 fi
 
 log "hardening pedestrian access tags for expressways and stairs"
 python3 "$SCRIPT_DIR/deny-foot-on-expressways.py" \
-  "$OSM_CLIPPED" "$OSM_WALK_SAFE" \
-  || die "pedestrian access hardening failed — keeping old graph"
-[ -f "$OSM_WALK_SAFE" ] \
-  || die "pedestrian access hardening produced no PBF — keeping old graph"
+  "$OSM_CLIPPED" "$OSM_WALK_SAFE" ||
+  die "pedestrian access hardening failed — keeping old graph"
+[ -f "$OSM_WALK_SAFE" ] ||
+  die "pedestrian access hardening produced no PBF — keeping old graph"
 mv "$OSM_WALK_SAFE" "$OSM_CLIPPED"
 
 # ── 3. Feed validation gate (red light = abort, old graph keeps serving) ──
@@ -290,8 +296,8 @@ mv "$OSM_WALK_SAFE" "$OSM_CLIPPED"
 if command -v gtfs-validator >/dev/null 2>&1; then
   for zip in "$WORK_DIR"/feed-*.gtfs.zip; do
     log "validating $(basename "$zip")"
-    gtfs-validator -i "$zip" -o "$VALIDATION_DIR/$(basename "$zip" .zip)" \
-      || die "gtfs-validator reported errors for $zip — keeping old graph"
+    gtfs-validator -i "$zip" -o "$VALIDATION_DIR/$(basename "$zip" .zip)" ||
+      die "gtfs-validator reported errors for $zip — keeping old graph"
   done
 else
   log "WARN: gtfs-validator not installed — skipping validation gate"
@@ -299,8 +305,8 @@ fi
 
 # ── 4. Brief service interruption: stop OTP for the offline temp-dir build ──
 cp "$OTP_DATA_DIR"/otp-config.json "$OTP_DATA_DIR"/build-config.json \
-  "$OTP_DATA_DIR"/router-config.json "$WORK_DIR/" 2>/dev/null \
-  || die "OTP config files missing in $OTP_DATA_DIR"
+  "$OTP_DATA_DIR"/router-config.json "$WORK_DIR/" 2>/dev/null ||
+  die "OTP config files missing in $OTP_DATA_DIR"
 mv "$OSM_CLIPPED" "$WORK_DIR/taiwan-otp.osm.pbf"
 
 # Nothing but the feeds we validated may be visible to the scanner: OTP loads
@@ -311,8 +317,8 @@ mv "$OSM_CLIPPED" "$WORK_DIR/taiwan-otp.osm.pbf"
 # subdirectories, so a future zip-producing step there must trip this too.
 while IFS= read -r zip; do
   case "${zip#"$WORK_DIR"/}" in
-    feed-*.gtfs.zip) ;;
-    *) die "unexpected zip in the build directory: ${zip#"$WORK_DIR"/} — OTP would ingest it as a duplicate transit feed; injection inputs belong in AUX_DIR" ;;
+  feed-*.gtfs.zip) ;;
+  *) die "unexpected zip in the build directory: ${zip#"$WORK_DIR"/} — OTP would ingest it as a duplicate transit feed; injection inputs belong in AUX_DIR" ;;
   esac
 done < <(find "$WORK_DIR" -type f -name '*.zip')
 
@@ -334,8 +340,8 @@ fi
 docker run --rm \
   -e JAVA_TOOL_OPTIONS="-Xmx${OTP_JAVA_XMX}" \
   -v "$WORK_DIR:/var/opentripplanner" \
-  "$OTP_IMAGE" --build --save \
-  || die "otp --build failed — keeping old graph"
+  "$OTP_IMAGE" --build --save ||
+  die "otp --build failed — keeping old graph"
 [ -f "$WORK_DIR/graph.obj" ] || die "build produced no graph.obj — keeping old graph"
 
 # ── 5. Atomic swap + restart + healthcheck before declaring success ──

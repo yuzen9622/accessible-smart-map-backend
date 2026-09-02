@@ -1,9 +1,22 @@
+/**
+ * Injects trip-level `wheelchair_accessible` into a GTFS feed, keyed solely on
+ * `route_type` from routes.txt. Pure CSV transform — no database, no network.
+ *
+ * Decision table (top-down, and it NEVER writes "2"):
+ *   existing "1"      → keep  (TRA WheelChairFlag / official TRTC feed measured)
+ *   route_type "1"    → "1"   (metro / light rail / gondola are step-free)
+ *   route_type "3"    → "0"   (bus: unknown, per-vehicle and unknowable here)
+ *   anything else     → "0"   (unknown; also normalises stray "2" downward)
+ *
+ * Writing "2" (inaccessible) is what this script exists to avoid: OTP's
+ * router-config sets `wheelchairAccessibility.trip.inaccessibleCost = 3600`,
+ * so a guessed "2" adds an hour of penalty per trip and pushes wheelchair
+ * journeys off an entire city's bus network. Unknown ≠ inaccessible.
+ */
 import "dotenv/config";
 import fs from "fs";
 import path from "path";
-import { execSync } from "child_process";
-import mongoose from "mongoose";
-import BusVehicleModel from "../model/bus-vehicle.model";
+import { execSync, execFileSync } from "child_process";
 
 function parseCSV(csvText: string): {
   headers: string[];
@@ -68,6 +81,75 @@ function stringifyCSV(
   return [headerLine, ...lines].join("\n");
 }
 
+export interface TripA11yCounts {
+  preserved: number;
+  railAccessible: number;
+  busUnknown: number;
+  otherUnknown: number;
+}
+
+/**
+ * Applies the wheelchair_accessible decision table to trips.txt rows in place.
+ *
+ * @param headers trips.txt headers; wheelchair_accessible is appended if absent
+ * @param rows trips.txt rows, mutated in place
+ * @param routeType route_id to route_type index built from routes.txt
+ * @returns Per-branch counts for the run summary
+ */
+export function applyTripA11y(
+  headers: string[],
+  rows: Record<string, string>[],
+  routeType: Map<string, string>,
+): TripA11yCounts {
+  if (!headers.includes("wheelchair_accessible")) {
+    headers.push("wheelchair_accessible");
+  }
+
+  const counts: TripA11yCounts = {
+    preserved: 0,
+    railAccessible: 0,
+    busUnknown: 0,
+    otherUnknown: 0,
+  };
+
+  for (const r of rows) {
+    if (!r.trip_id) continue;
+
+    const rt = routeType.get(r.route_id) ?? "";
+    if (rt === "1") {
+      r.wheelchair_accessible = "1";
+      counts.railAccessible++;
+    } else if (rt === "3") {
+      // Buses are uniformly reset to "0" (unknown) — even if an upstream feed
+      // or prior heuristic set "1" or "2", the bus domain stays strictly unknown.
+      r.wheelchair_accessible = "0";
+      counts.busUnknown++;
+    } else if (r.wheelchair_accessible === "1") {
+      // Preserved non-bus feeds (e.g. TRA rail trips injected by inject-tra-gtfs.py)
+      counts.preserved++;
+    } else {
+      r.wheelchair_accessible = "0";
+      counts.otherUnknown++;
+    }
+  }
+
+  return counts;
+}
+
+function readFromZip(zipPath: string, entry: string): string {
+  try {
+    // execFileSync, not execSync: no shell, so the paths cannot be interpreted
+    // as commands regardless of what the operator passes on the CLI.
+    return execFileSync("unzip", ["-p", zipPath, entry], {
+      encoding: "utf-8",
+      maxBuffer: 100 * 1024 * 1024,
+    });
+  } catch (err) {
+    console.error(`Failed to extract ${entry} from zip:`, err);
+    process.exit(1);
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args.length < 1) {
@@ -83,108 +165,24 @@ async function main() {
     process.exit(1);
   }
 
-  const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) {
-    console.error("Error: DATABASE_URL environment variable is required.");
-    process.exit(1);
+  // 1. routes.txt -> route_id to route_type index
+  console.log(`Reading routes.txt from ${path.basename(zipPath)}...`);
+  const routeType = new Map<string, string>();
+  for (const r of parseCSV(readFromZip(zipPath, "routes.txt")).rows) {
+    if (r.route_id) routeType.set(r.route_id, (r.route_type ?? "").trim());
   }
+  console.log(`Indexed ${routeType.size} routes from routes.txt.`);
 
-  console.log("Connecting to MongoDB to read bus vehicle stats...");
-  await mongoose.connect(dbUrl);
-  console.log("Connected to MongoDB.");
-
-  // 1. Calculate low floor ratio for each city based on BusVehicle collection
-  const cities = [
-    "Taipei",
-    "NewTaipei",
-    "Taoyuan",
-    "Taichung",
-    "Tainan",
-    "Kaohsiung",
-  ];
-  const cityRatios: Record<string, number> = {};
-
-  for (const city of cities) {
-    const total = await BusVehicleModel.countDocuments({ city });
-    const lowFloor = await BusVehicleModel.countDocuments({
-      city,
-      isLowFloor: 1,
-    });
-    cityRatios[city] = total > 0 ? lowFloor / total : 0;
-    console.log(
-      `  City ${city}: low floor ratio = ${(cityRatios[city] * 100).toFixed(1)}% (${lowFloor}/${total})`,
-    );
-  }
-
-  // 2. Extract trips.txt from GTFS zip
+  // 2. trips.txt -> apply the decision table
   console.log(`Extracting trips.txt from ${path.basename(zipPath)}...`);
-  let tripsCSV: string;
-  try {
-    tripsCSV = execSync(`unzip -p "${zipPath}" trips.txt`, {
-      encoding: "utf-8",
-      maxBuffer: 100 * 1024 * 1024,
-    });
-  } catch (err) {
-    console.error("Failed to extract trips.txt from zip:", err);
-    await mongoose.disconnect();
-    process.exit(1);
-  }
-
-  const { headers, rows } = parseCSV(tripsCSV);
-  if (!headers.includes("wheelchair_accessible")) {
-    headers.push("wheelchair_accessible");
-  }
-
-  // Prefix mapping to city keys
-  const prefixMap: Record<string, string> = {
-    TPE: "Taipei",
-    NWT: "NewTaipei",
-    TYC: "Taoyuan",
-    TXG: "Taichung",
-    TNN: "Tainan",
-    KHH: "Kaohsiung",
-  };
-
-  let accessibleCount = 0;
-  let inaccessibleCount = 0;
-  let unchangedCount = 0;
-
-  for (const r of rows) {
-    if (!r.trip_id) continue;
-
-    // Preserve existing flags (e.g. 台鐵 trips injected by inject-tra-gtfs.py)
-    if (r.wheelchair_accessible === "1" || r.wheelchair_accessible === "2") {
-      unchangedCount++;
-      continue;
-    }
-
-    // Determine city based on prefix in trip_id
-    // e.g. TPE10873_00... -> TPE -> Taipei
-    const prefix = r.trip_id.substring(0, 3);
-    const city = prefixMap[prefix];
-
-    if (city) {
-      const ratio = cityRatios[city] ?? 0;
-      // Heuristic: If city low-floor ratio > 70%, mark as accessible (1).
-      // If < 30%, mark as inaccessible (2). Otherwise leave as unknown (0).
-      if (ratio > 0.7) {
-        r.wheelchair_accessible = "1";
-        accessibleCount++;
-      } else if (ratio < 0.3 && ratio > 0) {
-        r.wheelchair_accessible = "2";
-        inaccessibleCount++;
-      } else {
-        r.wheelchair_accessible = "0";
-        unchangedCount++;
-      }
-    } else {
-      r.wheelchair_accessible = "0";
-      unchangedCount++;
-    }
-  }
+  const { headers, rows } = parseCSV(readFromZip(zipPath, "trips.txt"));
+  const counts = applyTripA11y(headers, rows, routeType);
 
   console.log(
-    `Updated wheelchair_accessible=1 on ${accessibleCount} trips, set to 2 on ${inaccessibleCount} trips, left ${unchangedCount} trips unchanged.`,
+    `wheelchair_accessible: preserved=1 on ${counts.preserved} trips, ` +
+      `set 1 on ${counts.railAccessible} rail (route_type=1) trips, ` +
+      `set 0 (unknown) on ${counts.busUnknown} bus + ${counts.otherUnknown} other trips. ` +
+      `Never writes 2 (inaccessible).`,
   );
 
   // 3. Write updated trips.txt back to ZIP
@@ -208,11 +206,12 @@ async function main() {
     }
   }
 
-  await mongoose.disconnect();
-  console.log("Disconnected from MongoDB. Done.");
+  console.log("Done.");
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
