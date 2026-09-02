@@ -2,14 +2,15 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
 import { rebuildRampEdges } from "./import-taipei-ramps";
 
-const databaseUrl = process.env.PED_GRAPH_DATABASE_URL;
+const testDatabaseUrl = process.env.PED_GRAPH_TEST_DATABASE_URL;
+const describeWithDatabase = testDatabaseUrl ? describe : describe.skip;
 
-describe.skipIf(!databaseUrl)("rebuildRampEdges against PostGIS", () => {
+describeWithDatabase("rebuildRampEdges against PostGIS", () => {
   let pool: Pool;
   let versionId: number;
 
   beforeAll(async () => {
-    pool = new Pool({ connectionString: databaseUrl ?? "" });
+    pool = new Pool({ connectionString: testDatabaseUrl });
     await pool.query(`
       CREATE TABLE IF NOT EXISTS ped_ramp_point (
         objectid       BIGINT PRIMARY KEY,

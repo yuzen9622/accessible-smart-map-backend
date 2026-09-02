@@ -38,6 +38,12 @@ function parallelEdgeGraph(): PedGraph {
     edgeStairCount: new Uint16Array(3),
     edgeTraversalTimeS: Float32Array.of(Number.NaN, Number.NaN, Number.NaN),
     edgeFlags: new Uint8Array(3),
+    edgeSidewalkId: new Int32Array(3).fill(-1),
+    sidewalkIds: Object.freeze([]),
+    edgeSidewalkRampCount: new Uint16Array(3),
+    edgeStreetName: new Int32Array(3).fill(-1),
+    streetNames: Object.freeze([]),
+    edgeRampPoints: new Map(),
   };
 }
 
