@@ -17,6 +17,9 @@ import type { NavProgressEvent } from "./voice.ws.schema";
 const ARRIVE_RADIUS_M = 30;
 const RESUME_RADIUS_M = 60;
 const OFFROUTE_RADIUS_M = 50;
+/** Road legs are announced earlier and drift more, so both gates widen. */
+const ROAD_ARRIVE_RADIUS_M = 60;
+const ROAD_OFFROUTE_RADIUS_M = 80;
 const OFFROUTE_CONSECUTIVE = 3;
 const OFFROUTE_RECOVER_CONSECUTIVE = 2;
 const ACCURACY_CAP_M = 30;
@@ -29,10 +32,15 @@ const MIN_WALK_SPEED_MPS = 0.3;
 const MAX_WALK_SPEED_MPS = 2.5;
 /** ~30 km/h, used only when a transit leg carries no timetable at all. */
 const DEFAULT_TRANSIT_SPEED_MPS = 8.3;
+/** ~40 km/h, used only when a road leg carries no usable duration. */
+const DEFAULT_DRIVE_SPEED_MPS = 11.1;
+/** ~35 km/h, used only when a road leg carries no usable duration. */
+const DEFAULT_MOTORCYCLE_SPEED_MPS = 9.7;
+const ROAD_LEG_END_TEXT = "抵達車行路段終點，請停車";
 
 type Coord = [number, number];
 type StopReason = "user_voice" | "user_ui" | "arrived" | "session_end";
-type StepKind = NavInstructionType | "walk_leg_end";
+type StepKind = NavInstructionType | "leg_end";
 
 export interface NavStepDto {
   index: number;
@@ -40,6 +48,10 @@ export interface NavStepDto {
   legType: NavLegType;
   distanceM: number | null;
   isTransit: boolean;
+  type?: string;
+  relativeDirection?: string | null;
+  streetName?: string | null;
+  bearing?: number | null;
 }
 
 export type NavServerEvent =
@@ -107,6 +119,10 @@ export interface ResolvedStep {
   isTransit: boolean;
   distanceM: number | null;
   kind: StepKind;
+  type?: string;
+  relativeDirection?: string | null;
+  streetName?: string | null;
+  bearing?: number | null;
 }
 
 type StepGenerator = (route: NavRouteInput) => GenerateVoiceNavStepsResult;
@@ -114,6 +130,8 @@ type StepGenerator = (route: NavRouteInput) => GenerateVoiceNavStepsResult;
 const emptyEffect = (ok = true): NavEffect => ({ ok, events: [] });
 const isTransitType = (type: NavLegType): boolean =>
   type === "BUS" || type === "METRO" || type === "THSR" || type === "TRA";
+const isRoadType = (type: NavLegType): boolean =>
+  type === "DRIVE" || type === "MOTORCYCLE";
 const sameCoord = (a: Coord, b: Coord): boolean =>
   a[0] === b[0] && a[1] === b[1];
 
@@ -179,11 +197,27 @@ function clockMinutes(value?: string): number | null {
 
 type RouteLeg = AccessibleRoute["legs"][number];
 type TransitLeg = Extract<RouteLeg, { waitInfo: unknown }>;
+type RoadLeg = Extract<RouteLeg, { type: "DRIVE" | "MOTORCYCLE" }>;
 
 const isTransitLeg = (leg: RouteLeg): leg is TransitLeg =>
   isTransitType(leg.type);
 
-function walkSpeedMpsOf(leg: RouteLeg): number {
+const isRoadLeg = (leg: RouteLeg): leg is RoadLeg => isRoadType(leg.type);
+
+/** Free-flow driving speed of one road leg, from its own duration estimate. */
+function roadSpeedMpsOf(leg: RoadLeg): number {
+  const fallback =
+    leg.type === "MOTORCYCLE"
+      ? DEFAULT_MOTORCYCLE_SPEED_MPS
+      : DEFAULT_DRIVE_SPEED_MPS;
+  const seconds = leg.durationMin * 60;
+  if (!Number.isFinite(seconds) || seconds <= 0) return fallback;
+  if (!Number.isFinite(leg.distanceM) || leg.distanceM <= 0) return fallback;
+  return leg.distanceM / seconds;
+}
+
+function legSpeedMpsOf(leg: RouteLeg): number {
+  if (isRoadLeg(leg)) return roadSpeedMpsOf(leg);
   if (leg.type !== "WALK") return DEFAULT_WALK_SPEED_MPS;
   const seconds = leg.minutesEst * 60;
   if (!Number.isFinite(seconds) || seconds <= 0) return DEFAULT_WALK_SPEED_MPS;
@@ -313,13 +347,6 @@ export class NavigationSession {
         ],
       };
     }
-    if (
-      this.armedRoute.legs.some(
-        (leg) => leg.type === "DRIVE" || leg.type === "MOTORCYCLE",
-      )
-    ) {
-      return this.invalidRoute("語音逐步導航目前僅支援步行與大眾運輸");
-    }
     const built = this.buildResolvedSteps(this.armedRoute);
     if (!built) return this.invalidRoute();
     this.activeRoute = this.armedRoute;
@@ -343,6 +370,10 @@ export class NavigationSession {
           legType: step.legType,
           distanceM: step.distanceM,
           isTransit: step.isTransit,
+          type: step.type,
+          relativeDirection: step.relativeDirection ?? null,
+          streetName: step.streetName ?? null,
+          bearing: step.bearing ?? null,
         })),
         currentStepIndex: 0,
         totalSteps: this.steps.length,
@@ -583,8 +614,14 @@ export class NavigationSession {
 
   private buildResolvedSteps(route: AccessibleRoute): ResolvedStep[] | null {
     for (const leg of route.legs) {
-      if (leg.type === "DRIVE" || leg.type === "MOTORCYCLE") return null;
-      if (isTransitType(leg.type)) {
+      if (isRoadLeg(leg)) {
+        if (
+          leg.polyline.length < 2 ||
+          sameCoord(leg.polyline[0], leg.polyline.at(-1)!)
+        )
+          return null;
+        if (leg.steps?.some((step) => !step.polyline?.length)) return null;
+      } else if (isTransitType(leg.type)) {
         if (
           leg.polyline.length < 2 ||
           sameCoord(leg.polyline[0], leg.polyline.at(-1)!)
@@ -616,27 +653,30 @@ export class NavigationSession {
           this.resolveInstruction(item.instruction, legIndex, route),
         );
       }
-      const walkEnd =
-        leg.type === "WALK" ? (leg.polyline.at(-1) ?? null) : null;
+      const legEnd =
+        leg.type === "WALK" || isRoadLeg(leg)
+          ? (leg.polyline.at(-1) ?? null)
+          : null;
       const lastLegCoord =
         [...resolved]
           .reverse()
           .find((step) => step.legIndex === legIndex && step.coord)?.coord ??
         null;
-      if (
-        leg.type === "WALK" &&
-        walkEnd &&
-        (!lastLegCoord || !sameCoord(lastLegCoord, walkEnd))
-      ) {
+      if (legEnd && (!lastLegCoord || !sameCoord(lastLegCoord, legEnd))) {
         resolved.push({
-          instruction: `抵達「${leg.to}」`,
+          instruction:
+            leg.type === "WALK" ? `抵達「${leg.to}」` : ROAD_LEG_END_TEXT,
           legIndex,
-          legType: "WALK",
+          legType: leg.type,
           polylineIndex: leg.polyline.length - 1,
-          coord: walkEnd,
+          coord: legEnd,
           isTransit: false,
           distanceM: null,
-          kind: "walk_leg_end",
+          kind: "leg_end",
+          type: "arrive",
+          relativeDirection: null,
+          streetName: null,
+          bearing: null,
         });
       }
     });
@@ -667,7 +707,10 @@ export class NavigationSession {
     if (instruction.type === "transit_board") coord = leg.polyline[0] ?? null;
     else if (instruction.type === "transit_alight")
       coord = leg.polyline.at(-1) ?? null;
-    else if (leg.type === "WALK" && instruction.polylineIndex !== null) {
+    else if (
+      (leg.type === "WALK" || isRoadLeg(leg)) &&
+      instruction.polylineIndex !== null
+    ) {
       coord = leg.polyline[instruction.polylineIndex] ?? null;
     }
     return {
@@ -679,7 +722,25 @@ export class NavigationSession {
       isTransit: isTransitType(instruction.legType),
       distanceM: instruction.distanceM,
       kind: instruction.type,
+      type: instruction.type,
+      relativeDirection: instruction.relativeDirection ?? null,
+      streetName: instruction.streetName ?? null,
+      bearing: instruction.bearing ?? null,
     };
+  }
+
+  /** The step whose geofence and corridor the current fix is judged against. */
+  private referenceStep(): ResolvedStep | undefined {
+    const next = this.nextCoordIndex(this.announcedIndex + 1);
+    return next !== null ? this.steps[next] : this.steps[this.announcedIndex];
+  }
+
+  private advanceRadiusM(): number {
+    if (this.onVehicle) return RESUME_RADIUS_M;
+    const reference = this.referenceStep();
+    return reference && isRoadType(reference.legType)
+      ? ROAD_ARRIVE_RADIUS_M
+      : ARRIVE_RADIUS_M;
   }
 
   private advanceFrom(position: NavPosition): {
@@ -687,7 +748,7 @@ export class NavigationSession {
     speech: string[];
   } {
     const point: Coord = [position.longitude, position.latitude];
-    const radius = this.onVehicle ? RESUME_RADIUS_M : ARRIVE_RADIUS_M;
+    const radius = this.advanceRadiusM();
     const effectiveRadius =
       radius + Math.min(position.accuracy ?? 0, ACCURACY_CAP_M);
     const candidates: number[] = [];
@@ -816,7 +877,7 @@ export class NavigationSession {
           from.polylineIndex,
           next.polylineIndex,
         );
-        spans[i].durationSec = spans[i].distanceM / walkSpeedMpsOf(leg);
+        spans[i].durationSec = spans[i].distanceM / legSpeedMpsOf(leg);
       } else {
         spans[i].distanceM = haversineLngLat(from.coord, next.coord!);
         spans[i].durationSec = spans[i].distanceM / DEFAULT_WALK_SPEED_MPS;
@@ -883,7 +944,7 @@ export class NavigationSession {
     const traversing =
       this.announcedIndex >= 0 ? this.spans[this.announcedIndex] : null;
     if (traversing && traversing.speedMps > 0) return traversing.speedMps;
-    return walkSpeedMpsOf(
+    return legSpeedMpsOf(
       this.activeRoute!.legs[this.steps[nextIndex].legIndex],
     );
   }
@@ -1016,19 +1077,22 @@ export class NavigationSession {
   } {
     if (!this.active || this.onVehicle || !this.activeRoute)
       return { events: [], speech: [] };
-    const next = this.nextCoordIndex(this.announcedIndex + 1);
-    const reference =
-      next !== null ? this.steps[next] : this.steps[this.announcedIndex];
-    if (!reference || reference.legType !== "WALK")
+    const reference = this.referenceStep();
+    if (
+      !reference ||
+      (reference.legType !== "WALK" && !isRoadType(reference.legType))
+    )
       return { events: [], speech: [] };
     const leg = this.activeRoute.legs[reference.legIndex];
-    if (leg.type !== "WALK") return { events: [], speech: [] };
+    const road = isRoadLeg(leg);
+    if (leg.type !== "WALK" && !road) return { events: [], speech: [] };
     const distance = distanceToPolylineM(
       [position.longitude, position.latitude],
       leg.polyline,
     );
     const threshold =
-      OFFROUTE_RADIUS_M + Math.min(position.accuracy ?? 0, ACCURACY_CAP_M);
+      (road ? ROAD_OFFROUTE_RADIUS_M : OFFROUTE_RADIUS_M) +
+      Math.min(position.accuracy ?? 0, ACCURACY_CAP_M);
     if (distance > threshold) {
       this.recoverCount = 0;
       this.offrouteCount++;

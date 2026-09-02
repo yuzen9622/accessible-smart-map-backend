@@ -90,6 +90,10 @@ const NavStepDtoSchema = z
     ]),
     distanceM: z.number().nonnegative().nullable(),
     isTransit: z.boolean(),
+    type: z.string().optional(),
+    relativeDirection: z.string().nullable().optional(),
+    streetName: z.string().nullable().optional(),
+    bearing: z.number().nullable().optional(),
   })
   .strict();
 

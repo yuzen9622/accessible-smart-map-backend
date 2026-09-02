@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AccessibleRoute, WalkLeg } from "../../types/route";
+import type { AccessibleRoute, DriveLeg, WalkLeg } from "../../types/route";
 import { NavProgressSchema, type NavProgressEvent } from "./voice.ws.schema";
 import {
   NavigationSession,
@@ -46,6 +46,31 @@ function walkLeg(
           })),
         }
       : {}),
+  };
+}
+
+function driveLeg(
+  points: [number, number][],
+  type: "DRIVE" | "MOTORCYCLE" = "DRIVE",
+  overrides: Partial<DriveLeg> = {},
+): DriveLeg {
+  const first = points[0] ?? coord(121);
+  const last = points.at(-1) ?? first;
+  return {
+    type,
+    from: { lat: first[1], lng: first[0] },
+    to: { lat: last[1], lng: last[0] },
+    distanceM: 1000,
+    durationMin: 5,
+    polyline: points,
+    steps: points.slice(0, -1).map((location, index) => ({
+      instruction: `車行指示${index}`,
+      distanceM: 200,
+      durationMin: 1,
+      polyline: [location, points[index + 1]],
+      maneuver: index === 0 ? "DEPART" : "TURN_LEFT",
+    })),
+    ...overrides,
   };
 }
 
@@ -126,7 +151,17 @@ describe("NavigationSession pure domain state", () => {
     });
     const firstStep = (effect.events[0] as any).steps[0];
     expect(Object.keys(firstStep).sort()).toEqual(
-      ["distanceM", "index", "instruction", "isTransit", "legType"].sort(),
+      [
+        "bearing",
+        "distanceM",
+        "index",
+        "instruction",
+        "isTransit",
+        "legType",
+        "relativeDirection",
+        "streetName",
+        "type",
+      ].sort(),
     );
     expect(nav.takeNextSpeech()).toBeNull();
     nav.onPosition(pos(start));
@@ -280,30 +315,25 @@ describe("NavigationSession pure domain state", () => {
     );
   });
 
-  it("rejects malformed terminal geometry and DRIVE/MOTORCYCLE legs", () => {
+  it("rejects malformed terminal geometry, including road legs", () => {
     const same = coord(121);
     for (const invalid of [
       route([walkLeg([same, same], false)]),
       route([bus([same]) as any]),
+      route([driveLeg([same])]),
+      route([driveLeg([same, same])]),
       route([
-        {
-          type: "DRIVE",
-          from: { lat: 25, lng: 121 },
-          to: { lat: 25, lng: 122 },
-          distanceM: 10,
-          durationMin: 1,
-          polyline: [same, coord(122)],
-        },
-      ]),
-      route([
-        {
-          type: "MOTORCYCLE",
-          from: { lat: 25, lng: 121 },
-          to: { lat: 25, lng: 122 },
-          distanceM: 10,
-          durationMin: 1,
-          polyline: [same, coord(122)],
-        },
+        driveLeg([same, coord(121.01)], "MOTORCYCLE", {
+          steps: [
+            {
+              instruction: "出發",
+              distanceM: 10,
+              durationMin: 1,
+              polyline: [],
+              maneuver: "DEPART",
+            },
+          ],
+        }),
       ]),
     ]) {
       const nav = new NavigationSession();
@@ -313,14 +343,6 @@ describe("NavigationSession pure domain state", () => {
         type: "nav.error",
         code: "NAV_ROUTE_INVALID",
       });
-      if (
-        invalid.legs[0].type === "DRIVE" ||
-        invalid.legs[0].type === "MOTORCYCLE"
-      ) {
-        expect(effect.events[0]).toMatchObject({
-          message: "語音逐步導航目前僅支援步行與大眾運輸",
-        });
-      }
     }
   });
 
@@ -513,6 +535,154 @@ describe("NavigationSession pure domain state", () => {
     expect(nav.takeNextSpeech()).toContain(
       "注意，即時通阻警報：捷運板南線號誌異常",
     );
+  });
+});
+
+describe("NavigationSession road-leg navigation", () => {
+  const A = coord(121);
+  const B = coord(121.005);
+  const P = coord(121.01);
+  const W = coord(121.02);
+  const M_PER_DEG_LNG = 100_891;
+  const M_PER_DEG_LAT = 110_540;
+  const shortOf = (
+    point: [number, number],
+    metres: number,
+  ): [number, number] => [point[0] - metres / M_PER_DEG_LNG, point[1]];
+  const driftedFrom = (
+    point: [number, number],
+    metres: number,
+  ): [number, number] => [point[0], point[1] + metres / M_PER_DEG_LAT];
+  const composite = (): AccessibleRoute =>
+    route([driveLeg([A, B, P]), walkLeg([P, W], false)]);
+  const drainSpeech = (nav: NavigationSession): string => {
+    const spoken: string[] = [];
+    for (let next = nav.takeNextSpeech(); next; next = nav.takeNextSpeech()) {
+      spoken.push(next);
+      nav.onTurnComplete();
+    }
+    return spoken.join(" ");
+  };
+
+  it.each(["DRIVE", "MOTORCYCLE"] as const)(
+    "arms, starts and arrives a %s route",
+    (type) => {
+      const nav = new NavigationSession();
+      expect(nav.armRoute(route([driveLeg([A, B, P], type)])).ok).toBe(true);
+
+      const started = nav.start(pos(A));
+      expect(started.ok).toBe(true);
+      const start = started.events[0];
+      expect(start.type).toBe("nav.start");
+      if (start.type !== "nav.start") throw new Error("expected nav.start");
+      expect(start.steps.map((step) => step.legType)).toEqual(
+        start.steps.map(() => type),
+      );
+      expect(start.steps.some((step) => step.isTransit)).toBe(false);
+      expect(started.events.some((event) => event.type === "nav.step")).toBe(
+        true,
+      );
+
+      nav.onPosition(pos(B));
+      const arrival = nav.onPosition(pos(P));
+      expect(
+        arrival.events.find((event) => event.type === "nav.step"),
+      ).toMatchObject({ instruction: "抵達車行路段終點，請停車" });
+      expect(arrival.events.map((event) => event.type)).toContain(
+        "nav.arrived",
+      );
+      expect(drainSpeech(nav)).toContain("您已抵達目的地");
+    },
+  );
+
+  it("opens a 60 m turn geofence on a road leg instead of 30 m", () => {
+    const nav = new NavigationSession();
+    nav.armRoute(route([driveLeg([A, B, P])]));
+    nav.start(pos(A));
+
+    const tooFar = nav.onPosition(pos(shortOf(B, 70)));
+    expect(tooFar.events.some((event) => event.type === "nav.step")).toBe(
+      false,
+    );
+
+    const withinRoadGate = nav.onPosition(pos(shortOf(B, 45)));
+    expect(
+      withinRoadGate.events.find((event) => event.type === "nav.step"),
+    ).toMatchObject({ currentStepIndex: 1 });
+  });
+
+  it("tolerates 65 m of road drift but still warns past 80 m", () => {
+    const nav = new NavigationSession();
+    nav.armRoute(route([driveLeg([A, P])]));
+    nav.start(pos(A));
+
+    const tolerated = driftedFrom(coord(121.002), 65);
+    for (let i = 0; i < 3; i++) {
+      expect(
+        nav
+          .onPosition(pos(tolerated))
+          .events.some((event) => event.type === "nav.offroute"),
+      ).toBe(false);
+    }
+
+    const beyond = driftedFrom(coord(121.002), 100);
+    const samples = [0, 1, 2].map(() =>
+      nav
+        .onPosition(pos(beyond))
+        .events.some((event) => event.type === "nav.offroute"),
+    );
+    expect(samples).toEqual([false, false, true]);
+  });
+
+  it("warns at 50 m on the walking equivalent of the tolerated road drift", () => {
+    const nav = new NavigationSession();
+    nav.armRoute(route([walkLeg([A, P], false)]));
+    nav.start(pos(A));
+
+    const drift = driftedFrom(coord(121.002), 65);
+    const samples = [0, 1, 2].map(() =>
+      nav
+        .onPosition(pos(drift))
+        .events.some((event) => event.type === "nav.offroute"),
+    );
+    expect(samples).toEqual([false, false, true]);
+  });
+
+  it("hands a DRIVE leg over to the following WALK leg and restores the 30 m gate", () => {
+    const nav = new NavigationSession();
+    nav.armRoute(composite());
+    nav.start(pos(A));
+    nav.onPosition(pos(B));
+
+    const parked = nav.onPosition(pos(P));
+    expect(parked.events.map((event) => event.type)).not.toContain(
+      "nav.arrived",
+    );
+    expect(drainSpeech(nav)).toContain("抵達車行路段終點，請停車");
+
+    const roadGateOnly = nav.onPosition(pos(shortOf(W, 45)));
+    expect(roadGateOnly.events.some((event) => event.type === "nav.step")).toBe(
+      false,
+    );
+
+    const walkGate = nav.onPosition(pos(shortOf(W, 20)));
+    expect(walkGate.events.map((event) => event.type)).toContain("nav.arrived");
+  });
+
+  it("restores the 50 m off-route gate once the WALK leg begins", () => {
+    const nav = new NavigationSession();
+    nav.armRoute(composite());
+    nav.start(pos(A));
+    nav.onPosition(pos(B));
+    nav.onPosition(pos(P));
+
+    const drift = driftedFrom(coord(121.015), 65);
+    const samples = [0, 1, 2].map(() =>
+      nav
+        .onPosition(pos(drift))
+        .events.some((event) => event.type === "nav.offroute"),
+    );
+    expect(samples).toEqual([false, false, true]);
   });
 });
 
@@ -710,6 +880,53 @@ describe("NavigationSession progress and ETA pushes", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("reports free_flow while a road leg remains and estimated once parked", () => {
+    const A = coord(121);
+    const B = coord(121.005);
+    const P = coord(121.01);
+    const W = coord(121.02);
+    const nav = new NavigationSession();
+    nav.armRoute(
+      identified(route([driveLeg([A, B, P]), walkLeg([P, W], false)])),
+    );
+
+    const atStart = progressOf(nav.start(pos(A)))!;
+    expect(NavProgressSchema.parse(atStart)).toEqual(atStart);
+    expect(atStart.etaSource).toBe("free_flow");
+
+    expect(progressOf(nav.onPosition(pos(B)))!.etaSource).toBe("free_flow");
+    expect(progressOf(nav.onPosition(pos(P)))!.etaSource).toBe("estimated");
+  });
+
+  it("drives road ETAs from the leg duration, else 40/35 km/h defaults", () => {
+    const A = coord(121);
+    const B = coord(121.005);
+    const P = coord(121.01);
+    const durationOf = (type: "DRIVE" | "MOTORCYCLE", durationMin: number) => {
+      const nav = new NavigationSession();
+      nav.armRoute(
+        identified(route([driveLeg([A, B, P], type, { durationMin })])),
+      );
+      return progressOf(nav.start(pos(A)))!;
+    };
+
+    // ~1009 m of geometry at the 11.1 m/s and 9.7 m/s free-flow fallbacks.
+    const drive = durationOf("DRIVE", 0);
+    expect(drive.remainingDistanceM).toBeGreaterThan(1000);
+    expect(drive.remainingDistanceM).toBeLessThan(1020);
+    expect(drive.remainingDurationSec).toBeGreaterThan(88);
+    expect(drive.remainingDurationSec).toBeLessThan(94);
+
+    const motorcycle = durationOf("MOTORCYCLE", 0);
+    expect(motorcycle.remainingDurationSec).toBeGreaterThan(101);
+    expect(motorcycle.remainingDurationSec).toBeLessThan(107);
+
+    // 1000 m / 5 min = 3.33 m/s from the leg's own estimate, not the default.
+    const timetabled = durationOf("DRIVE", 5);
+    expect(timetabled.remainingDurationSec).toBeGreaterThan(295);
+    expect(timetabled.remainingDurationSec).toBeLessThan(310);
   });
 
   it("falls back to estimated when transit waitInfo source is unavailable or carries no schedule", () => {
