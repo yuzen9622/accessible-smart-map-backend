@@ -142,4 +142,5 @@ __pycache__/
 .codex/
 .agents/
 .claude/
+.pi/
 memory/
