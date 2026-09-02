@@ -141,6 +141,10 @@ def _unwrap_page(body, page_key, skip, strict):
                 raise TdxFetchError(f"expected wrapper object for '{page_key}' at skip={skip}, got {type(body).__name__}")
             return []
         if page_key not in body:
+            # TDX v3 empty response convention: when 0 records exist, TDX returns
+            # the metadata header (UpdateTime, AuthorityCode, etc.) without the array property.
+            if skip == 0 and any(k in body for k in ("UpdateTime", "SrcUpdateTime", "AuthorityCode")):
+                return []
             if strict:
                 raise TdxFetchError(f"v3 wrapper missing key '{page_key}' at skip={skip} (schema drift)")
             return []
@@ -185,6 +189,7 @@ def fetch_paginated_api(token, url_template, page_key=None, strict=False):
         req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "accept": "application/json"})
 
         success = False
+        page_size = 0
         for retry in range(5):
             try:
                 with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as res:
