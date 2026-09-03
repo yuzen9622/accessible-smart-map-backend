@@ -22,6 +22,11 @@ import {
   getRouteByToken,
 } from "../accessible-route/route-token.service";
 import { rerouteAccessibleRoute } from "../accessible-route/reroute.service";
+import {
+  deleteNavigationSnapshot,
+  getNavigationSnapshot,
+  storeNavigationSnapshot,
+} from "../accessible-route/navigation-state.repository";
 import { getMemorySettings, loadMemories } from "../ai/memory.service";
 import { getTransitAlerts } from "../transit/alert.service";
 import { onAlertSnapshotUpdate } from "../transit/alert.store";
@@ -29,7 +34,10 @@ import { keyRelevantToContext } from "../transit/alert.gateway";
 import { NavigationSession, type NavEffect } from "./navigation-session";
 import type { NavPosition } from "./navigation.schema";
 import {
+  NavResumeFailedMessageSchema,
   VoiceRerouteOutboundMessageSchema,
+  type NavResumeFailedMessage,
+  type NavResumeMessage,
   type VoiceRerouteOutboundMessage,
 } from "./voice.ws.schema";
 
@@ -38,6 +46,7 @@ const ERROR_SUMMARY_MAX_CHARS = 200;
 const INPUT_AUDIO_MIME_TYPE = "audio/pcm;rate=16000";
 const POSITION_MIN_INTERVAL_MS = 500;
 const REROUTE_COOLDOWN_MS = 30_000;
+const SNAPSHOT_MIN_INTERVAL_MS = 5_000;
 const TURN_TIMEOUT_MS = 15_000;
 const TURN_TIMEOUT_STRIKES = 2;
 export const LIVE_TURN_TIMEOUT_CLOSE_CODE = 4410;
@@ -138,8 +147,10 @@ export interface LiveBridgeOptions {
 export interface LiveBridge {
   sendAudio(data: Buffer): void;
   armRouteToken(routeToken: string): Promise<void>;
+  resumeNavigation(message: NavResumeMessage): Promise<void>;
   updatePosition(position: NavPosition): void;
   cancelNav(): void;
+  endSession(): void;
   close(): void;
 }
 
@@ -262,10 +273,12 @@ export async function createLiveBridge(
   let navSession = new NavigationSession();
   let activeNavigation: ActiveNavigation | null = null;
   let navigationGeneration = 0;
+  let lastSnapshotPersistedAt = 0;
   const rerouteStateByGeneration = new Map<number, RerouteGenerationState>();
   let pendingRouteArm: {
     armGeneration: number;
   } | null = null;
+  let pendingResumeNavigationId: string | null = null;
 
   const sendJson = (payload: unknown): void => {
     if (!disposed && ws.readyState === WebSocket.OPEN)
@@ -274,6 +287,44 @@ export async function createLiveBridge(
 
   const sendRerouteJson = (payload: VoiceRerouteOutboundMessage): void => {
     sendJson(VoiceRerouteOutboundMessageSchema.parse(payload));
+  };
+
+  const sendResumeFailed = (payload: NavResumeFailedMessage): void => {
+    sendJson(NavResumeFailedMessageSchema.parse(payload));
+  };
+
+  /**
+   * Mirrors turn-by-turn progress to Redis so a backgrounded or disconnected
+   * client can resume mid-route. Throttled on ordinary position ticks and
+   * forced on the transitions worth losing nothing over.
+   */
+  const persistNavigationSnapshot = (force = false): void => {
+    const navigation = activeNavigation;
+    if (disposed || !navigation) return;
+    const state = navSession.getSnapshotState();
+    if (!state) return;
+    const now = Date.now();
+    if (!force && now - lastSnapshotPersistedAt < SNAPSHOT_MIN_INTERVAL_MS)
+      return;
+    lastSnapshotPersistedAt = now;
+    void storeNavigationSnapshot({
+      navigationId: navigation.navigationId,
+      userId,
+      routeToken: navigation.routeToken,
+      routeVersion: navigation.routeVersion,
+      currentStepIndex: state.currentStepIndex,
+      onVehicle: state.onVehicle,
+      latestPosition: latestPosition
+        ? {
+            latitude: latestPosition.latitude,
+            longitude: latestPosition.longitude,
+            ...(latestPosition.heading === undefined
+              ? {}
+              : { heading: latestPosition.heading }),
+          }
+        : null,
+      updatedAt: now,
+    });
   };
 
   const applyEffect = (effect: NavEffect): void => {
@@ -289,11 +340,24 @@ export async function createLiveBridge(
               e.reason === "session_end")),
       )
     ) {
+      const idsToDelete = new Set<string>();
+      if (activeNavigation?.navigationId)
+        idsToDelete.add(activeNavigation.navigationId);
+      if (pendingResumeNavigationId) idsToDelete.add(pendingResumeNavigationId);
       armGen++;
       navigationGeneration++;
       pruneRerouteState();
       pendingRouteArm = null;
+      pendingResumeNavigationId = null;
       activeNavigation = null;
+      lastSnapshotPersistedAt = 0;
+      // A deliberate end must not leave a snapshot a later reconnect could
+      // resume from; an unannounced disconnect leaves it to expire on its TTL.
+      for (const id of idsToDelete) {
+        void Promise.resolve(deleteNavigationSnapshot(id, userId)).catch(
+          () => {},
+        );
+      }
     }
   };
 
@@ -493,6 +557,7 @@ export async function createLiveBridge(
         warnings: result.data.warnings,
         currentStepIndex: 0,
       });
+      persistNavigationSnapshot(true);
       driveNavigationSpeech();
     } catch (err) {
       if (isCurrentReroute(snapshot)) {
@@ -555,6 +620,7 @@ export async function createLiveBridge(
           const effect = navSession.start(latestPosition ?? undefined);
           applyEffect(effect);
           if (effect.ok) {
+            persistNavigationSnapshot(true);
             void checkCurrentTransitAlerts();
           }
           result = JSON.stringify({
@@ -858,6 +924,105 @@ export async function createLiveBridge(
         throw err;
       }
     },
+    async resumeNavigation(message: NavResumeMessage): Promise<void> {
+      if (disposed) return;
+      const arm = { armGeneration: ++armGen };
+      pendingRouteArm = arm;
+      pendingResumeNavigationId = message.navigationId;
+      const isCurrentArm = (): boolean =>
+        !disposed && arm.armGeneration === armGen && pendingRouteArm === arm;
+      const fail = (
+        code: NavResumeFailedMessage["code"],
+        text: string,
+      ): void => {
+        if (!isCurrentArm()) return;
+        pendingRouteArm = null;
+        pendingResumeNavigationId = null;
+        sendResumeFailed({
+          type: "nav.resume_failed",
+          navigationId: message.navigationId,
+          code,
+          message: text,
+          retryable: false,
+        });
+      };
+      try {
+        const snapshot = await getNavigationSnapshot(message.navigationId);
+        if (!isCurrentArm()) return;
+        if (!snapshot) {
+          fail("SNAPSHOT_NOT_FOUND", "導航進度已過期，請重新規劃");
+          return;
+        }
+        if (snapshot.userId !== userId) {
+          fail("USER_MISMATCH", "導航進度不屬於此帳號");
+          return;
+        }
+        if (
+          snapshot.routeVersion !== message.routeVersion ||
+          snapshot.routeToken !== message.routeToken
+        ) {
+          fail("ROUTE_VERSION_MISMATCH", "導航版本已更新，請重新規劃");
+          return;
+        }
+        const [route, envelope] = await Promise.all([
+          getRouteByToken(snapshot.routeToken),
+          getNavigationEnvelopeByToken(snapshot.routeToken),
+        ]);
+        if (!isCurrentArm()) return;
+        if (
+          !route ||
+          !envelope ||
+          envelope.navigationId !== snapshot.navigationId ||
+          envelope.routeVersion !== snapshot.routeVersion
+        ) {
+          fail("ROUTE_EXPIRED", "路線已過期，請重新規劃");
+          return;
+        }
+        const resumePosition =
+          message.currentPosition ?? snapshot.latestPosition ?? undefined;
+        const committedGeneration = ++navigationGeneration;
+        pruneRerouteState();
+        pendingRouteArm = null;
+        pendingResumeNavigationId = null;
+        if (positionTimer) {
+          clearTimeout(positionTimer);
+          positionTimer = null;
+        }
+        const effect = navSession.resume(route, snapshot, resumePosition);
+        if (!effect.ok) {
+          activeNavigation = null;
+          applyEffect(effect);
+          fail("ROUTE_EXPIRED", "路線已過期，請重新規劃");
+          return;
+        }
+        if (resumePosition) latestPosition = resumePosition;
+        activeNavigation = {
+          routeToken: snapshot.routeToken,
+          navigationId: snapshot.navigationId,
+          routeVersion: snapshot.routeVersion,
+          generation: committedGeneration,
+        };
+        applyEffect(effect);
+        persistNavigationSnapshot(true);
+        void checkCurrentTransitAlerts();
+        driveNavigationSpeech();
+      } catch (err) {
+        if (!isCurrentArm()) return;
+        pendingRouteArm = null;
+        pendingResumeNavigationId = null;
+        console.warn(
+          "[voice] nav.resume failed",
+          summarizeError(err instanceof Error ? err.message : String(err)),
+        );
+        sendResumeFailed({
+          type: "nav.resume_failed",
+          navigationId: message.navigationId,
+          code: "SNAPSHOT_NOT_FOUND",
+          message: "無法恢復導航，請重新規劃",
+          retryable: true,
+        });
+      }
+    },
     updatePosition(position: NavPosition): void {
       if (disposed) return;
       latestPosition = position;
@@ -869,6 +1034,12 @@ export async function createLiveBridge(
         lastPositionProcessedAt = Date.now();
         const effect = navSession.onPosition(latestPosition);
         applyEffect(effect);
+        persistNavigationSnapshot(
+          effect.events.some(
+            (event) =>
+              event.type === "nav.step" || event.type === "nav.transit",
+          ),
+        );
         if (effect.events.some((event) => event.type === "nav.offroute")) {
           void rerouteAfterOffRoute();
         }
@@ -897,39 +1068,71 @@ export async function createLiveBridge(
       }
     },
     cancelNav(): void {
+      const idsToDelete = new Set<string>();
+      if (activeNavigation?.navigationId)
+        idsToDelete.add(activeNavigation.navigationId);
+      if (pendingResumeNavigationId) idsToDelete.add(pendingResumeNavigationId);
       armGen++;
       navigationGeneration++;
       pruneRerouteState();
       pendingRouteArm = null;
+      pendingResumeNavigationId = null;
       if (positionTimer) clearTimeout(positionTimer);
       positionTimer = null;
       applyEffect(navSession.cancel());
       activeNavigation = null;
-    },
-    close(): void {
-      if (disposed) return;
-      closedByGateway = true;
-      disposed = true;
-      unsubscribeAlerts();
-      pendingToolMessages = 0;
-      armGen++;
-      navigationGeneration++;
-      rerouteStateByGeneration.clear();
-      pendingRouteArm = null;
-      if (positionTimer) clearTimeout(positionTimer);
-      positionTimer = null;
-      clearTurnTimeout();
-      navSession.dispose();
-      activeNavigation = null;
-      try {
-        session?.close();
-      } catch (err) {
-        console.warn(
-          "[voice] live session close failed:",
-          summarizeError(err instanceof Error ? err.message : String(err)),
+      for (const id of idsToDelete) {
+        void Promise.resolve(deleteNavigationSnapshot(id, userId)).catch(
+          () => {},
         );
       }
-      session = null;
+    },
+    endSession(): void {
+      const idsToDelete = new Set<string>();
+      if (activeNavigation?.navigationId)
+        idsToDelete.add(activeNavigation.navigationId);
+      if (pendingResumeNavigationId) idsToDelete.add(pendingResumeNavigationId);
+      armGen++;
+      navigationGeneration++;
+      pruneRerouteState();
+      pendingRouteArm = null;
+      pendingResumeNavigationId = null;
+      applyEffect(navSession.stop("session_end"));
+      for (const id of idsToDelete) {
+        void Promise.resolve(deleteNavigationSnapshot(id, userId)).catch(
+          () => {},
+        );
+      }
+      closeBridge();
+    },
+    close(): void {
+      closeBridge();
     },
   };
+
+  function closeBridge(): void {
+    if (disposed) return;
+    closedByGateway = true;
+    disposed = true;
+    unsubscribeAlerts();
+    pendingToolMessages = 0;
+    armGen++;
+    navigationGeneration++;
+    rerouteStateByGeneration.clear();
+    pendingRouteArm = null;
+    if (positionTimer) clearTimeout(positionTimer);
+    positionTimer = null;
+    clearTurnTimeout();
+    navSession.dispose();
+    activeNavigation = null;
+    try {
+      session?.close();
+    } catch (err) {
+      console.warn(
+        "[voice] live session close failed:",
+        summarizeError(err instanceof Error ? err.message : String(err)),
+      );
+    }
+    session = null;
+  }
 }

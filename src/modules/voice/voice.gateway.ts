@@ -7,12 +7,15 @@ import { type NavPosition } from "./navigation.schema";
 import {
   NavCancelMessageSchema,
   NavPositionMessageSchema,
+  NavResumeMessageSchema,
   NavSetRouteMessageSchema,
   SessionEndMessageSchema,
   SessionStartMessageSchema,
   UserLocationSchema,
   describeIssues,
+  type NavResumeMessage,
 } from "./voice.ws.schema";
+import { deleteNavigationSnapshot } from "../accessible-route/navigation-state.repository";
 
 const VOICE_WS_PATH = "/api/v1/voice/ws";
 const DEFAULT_AUTH_TIMEOUT_MS = 5000;
@@ -123,6 +126,7 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
   let connGen = 0;
   let pendingRouteToken: string | null = null;
   let pendingPosition: NavPosition | null = null;
+  let pendingResume: NavResumeMessage | null = null;
   const frameBucket = new TokenBucket(
     CONTROL_FRAMES_PER_SEC,
     CONTROL_FRAMES_BURST,
@@ -254,8 +258,10 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
     }
     sendJson({ type: "session.ready" });
     if (pendingRouteToken) void bridge.armRouteToken(pendingRouteToken);
+    if (pendingResume) void bridge.resumeNavigation(pendingResume);
     if (pendingPosition) bridge.updatePosition(pendingPosition);
     pendingRouteToken = null;
+    pendingResume = null;
     pendingPosition = null;
   };
 
@@ -282,8 +288,19 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
     if (SessionEndMessageSchema.safeParse(parsed).success) {
       disposed = true;
       connGen++;
+      const resumeNavId = pendingResume?.navigationId;
       pendingRouteToken = null;
+      pendingResume = null;
       pendingPosition = null;
+      if (bridge) {
+        if (typeof bridge.endSession === "function") {
+          bridge.endSession();
+        } else {
+          bridge.close();
+        }
+      } else if (resumeNavId && userId) {
+        void deleteNavigationSnapshot(resumeNavId, userId).catch(() => {});
+      }
       ws.close(1000, "client-end");
       return;
     }
@@ -323,11 +340,38 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
       else pendingPosition = position;
       return;
     }
+    if (parsed?.type === "nav.resume") {
+      if (!controlBucket.take()) return;
+      const result = NavResumeMessageSchema.safeParse(parsed);
+      if (!result.success) {
+        console.warn(
+          `[voice] rejecting nav.resume: ${describeIssues(result.error)}`,
+        );
+        sendJson({
+          type: "nav.resume_failed",
+          navigationId:
+            typeof parsed.navigationId === "string" ? parsed.navigationId : "",
+          code: "INVALID_REQUEST",
+          message: "恢復導航請求格式無效",
+          retryable: false,
+        });
+        return;
+      }
+      if (bridge) void bridge.resumeNavigation(result.data);
+      else pendingResume = result.data;
+      return;
+    }
     if (NavCancelMessageSchema.safeParse(parsed).success) {
       if (!controlBucket.take()) return;
+      const resumeNavId = pendingResume?.navigationId;
       pendingRouteToken = null;
+      pendingResume = null;
       pendingPosition = null;
-      bridge?.cancelNav();
+      if (bridge) {
+        bridge.cancelNav();
+      } else if (resumeNavId && userId) {
+        void deleteNavigationSnapshot(resumeNavId, userId).catch(() => {});
+      }
       return;
     }
     console.warn(
@@ -366,6 +410,7 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
     disposed = true;
     connGen++;
     pendingRouteToken = null;
+    pendingResume = null;
     pendingPosition = null;
     clearTimeout(authTimer);
     clearInterval(heartbeatTimer);

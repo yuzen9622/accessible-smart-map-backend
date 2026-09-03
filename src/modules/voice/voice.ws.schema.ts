@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { NavPositionSchema, NavSetRouteSchema } from "./navigation.schema";
+import {
+  NavPositionSchema,
+  NavSetRouteSchema,
+  ROUTE_TOKEN_MAX_LENGTH,
+} from "./navigation.schema";
 import type { AccessibleRoute } from "../../types/route";
 
 /**
@@ -63,15 +67,33 @@ export const NavCancelMessageSchema = z.object({
   type: z.literal("nav.cancel"),
 });
 
+/**
+ * Re-arms an interrupted navigation from the server-side progress snapshot.
+ *
+ * `lastKnownStepIndex` is what the client believes it reached; the server
+ * snapshot stays authoritative, so this is only a diagnostic hint and never
+ * moves progress forward on its own.
+ */
+export const NavResumeMessageSchema = z.object({
+  type: z.literal("nav.resume"),
+  navigationId: z.string().trim().min(1).max(128),
+  routeVersion: z.number().int().positive(),
+  routeToken: z.string().trim().min(1).max(ROUTE_TOKEN_MAX_LENGTH),
+  lastKnownStepIndex: z.number().int().nonnegative(),
+  currentPosition: NavPositionSchema.optional(),
+});
+
 /** Every control frame accepted after authentication. */
 export const VoiceControlMessageSchema = z.discriminatedUnion("type", [
   SessionEndMessageSchema,
   NavSetRouteMessageSchema,
   NavPositionMessageSchema,
   NavCancelMessageSchema,
+  NavResumeMessageSchema,
 ]);
 
 export type VoiceControlMessage = z.infer<typeof VoiceControlMessageSchema>;
+export type NavResumeMessage = z.infer<typeof NavResumeMessageSchema>;
 export type SessionStartMessage = z.infer<typeof SessionStartMessageSchema>;
 
 /** Server-to-client frames emitted by the gateway itself. */
@@ -168,12 +190,60 @@ export type VoiceRerouteOutboundMessage = z.infer<
   typeof VoiceRerouteOutboundMessageSchema
 >;
 
+/**
+ * Confirms a resumed navigation. `currentStepIndex` is the snapshot's step
+ * clamped to the rebuilt step list, which can differ from the client's
+ * `lastKnownStepIndex`; the client must adopt this value.
+ */
+export const NavResumeOkMessageSchema = z
+  .object({
+    type: z.literal("nav.resume_ok"),
+    navigationId: z.string(),
+    routeVersion: z.number().int().positive(),
+    routeToken: z.string().min(1),
+    currentStepIndex: z.number().int().nonnegative(),
+    totalSteps: z.number().int().positive(),
+    onVehicle: z.boolean(),
+    steps: z.array(NavStepDtoSchema),
+  })
+  .strict();
+
+export const NavResumeFailedMessageSchema = z
+  .object({
+    type: z.literal("nav.resume_failed"),
+    navigationId: z.string(),
+    code: z.enum([
+      "INVALID_REQUEST",
+      "SNAPSHOT_NOT_FOUND",
+      "USER_MISMATCH",
+      "ROUTE_VERSION_MISMATCH",
+      "ROUTE_EXPIRED",
+    ]),
+    message: z.string(),
+    retryable: z.boolean(),
+  })
+  .strict();
+
+export const VoiceResumeOutboundMessageSchema = z.discriminatedUnion("type", [
+  NavResumeOkMessageSchema,
+  NavResumeFailedMessageSchema,
+]);
+
+export type VoiceResumeOutboundMessage = z.infer<
+  typeof VoiceResumeOutboundMessageSchema
+>;
+export type NavResumeFailedMessage = z.infer<
+  typeof NavResumeFailedMessageSchema
+>;
+export type NavResumeOkEvent = z.infer<typeof NavResumeOkMessageSchema>;
+
 export type VoiceOutboundMessage =
   | { type: "session.ready" }
   | { type: "error"; code: "LIVE_CONNECT_FAILED" }
   | { type: "nav.error"; code: "NAV_ROUTE_INVALID"; message: string }
   | NavProgressEvent
-  | VoiceRerouteOutboundMessage;
+  | VoiceRerouteOutboundMessage
+  | VoiceResumeOutboundMessage;
 
 /**
  * Renders a parse failure as a single-line reason for the server log.

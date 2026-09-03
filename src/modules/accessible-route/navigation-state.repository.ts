@@ -8,6 +8,7 @@ const TOKEN_PREFIX = "voice-nav:route:";
 const HEAD_PREFIX = "voice-nav:head:";
 const LOCK_PREFIX = "voice-nav:reroute-lock:";
 const COMPLETED_PREFIX = "voice-nav:reroute-completed:";
+const SNAPSHOT_PREFIX = "voice-nav:snapshot:";
 export const ROUTE_TOKEN_TTL_SEC = 30 * 60;
 const REROUTE_LOCK_TTL_SEC = 120;
 
@@ -49,11 +50,23 @@ if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) 
 return 0
 `;
 
+const DELETE_SNAPSHOT_USER_SCRIPT = `
+local raw = redis.call("GET", KEYS[1])
+if not raw then return 0 end
+local ok, snapshot = pcall(cjson.decode, raw)
+if ok and snapshot and snapshot.userId == ARGV[1] then
+  return redis.call("DEL", KEYS[1])
+end
+return 0
+`;
+
 export function navigationTokenKey(token: string): string {
   return `${TOKEN_PREFIX}${token}`;
 }
 
 const headKey = (navigationId: string) => `${HEAD_PREFIX}${navigationId}`;
+const snapshotKey = (navigationId: string) =>
+  `${SNAPSHOT_PREFIX}${navigationId}`;
 const lockKey = (navigationId: string, version: number) =>
   `${LOCK_PREFIX}${navigationId}:${version}`;
 const completedKey = (navigationId: string, requestId: string) =>
@@ -195,5 +208,99 @@ export async function releaseReroute(
     );
   } catch {
     // Fail closed for future requests: the bounded lock expires after 120s.
+  }
+}
+
+/**
+ * Turn-by-turn progress durable enough to survive a client going to the
+ * background or losing its socket, so a reconnect can resume mid-route instead
+ * of replanning from the current position.
+ */
+export interface NavigationSessionSnapshot {
+  navigationId: string;
+  userId: string;
+  routeToken: string;
+  routeVersion: number;
+  currentStepIndex: number;
+  onVehicle: boolean;
+  latestPosition: {
+    latitude: number;
+    longitude: number;
+    heading?: number;
+  } | null;
+  updatedAt: number;
+}
+
+function isSnapshot(value: unknown): value is NavigationSessionSnapshot {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<NavigationSessionSnapshot>;
+  const position = candidate.latestPosition;
+  const positionOk =
+    position === null ||
+    (typeof position === "object" &&
+      position !== null &&
+      Number.isFinite(position.latitude) &&
+      Number.isFinite(position.longitude));
+  return (
+    typeof candidate.navigationId === "string" &&
+    typeof candidate.userId === "string" &&
+    typeof candidate.routeToken === "string" &&
+    Number.isInteger(candidate.routeVersion) &&
+    Number.isInteger(candidate.currentStepIndex) &&
+    typeof candidate.onVehicle === "boolean" &&
+    positionOk &&
+    Number.isFinite(candidate.updatedAt)
+  );
+}
+
+/**
+ * Writes the snapshot with a fresh TTL, so an active navigation keeps sliding
+ * its expiry forward while an abandoned one ages out on its own.
+ */
+export async function storeNavigationSnapshot(
+  snapshot: NavigationSessionSnapshot,
+  ttlSec = ROUTE_TOKEN_TTL_SEC,
+): Promise<void> {
+  try {
+    await (
+      await strictClient()
+    ).set(
+      snapshotKey(snapshot.navigationId),
+      JSON.stringify(snapshot),
+      "EX",
+      ttlSec,
+    );
+  } catch {
+    // Fail soft: a missing snapshot only costs the client its resume path.
+  }
+}
+
+export async function getNavigationSnapshot(
+  navigationId: string,
+): Promise<NavigationSessionSnapshot | null> {
+  try {
+    const raw = await (await strictClient()).get(snapshotKey(navigationId));
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    return isSnapshot(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteNavigationSnapshot(
+  navigationId: string,
+  userId: string,
+): Promise<void> {
+  try {
+    const client = await strictClient();
+    await client.eval(
+      DELETE_SNAPSHOT_USER_SCRIPT,
+      1,
+      snapshotKey(navigationId),
+      userId,
+    );
+  } catch {
+    // Fail soft: the snapshot expires on its own TTL.
   }
 }

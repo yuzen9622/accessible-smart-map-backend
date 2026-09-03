@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AccessibleRoute, DriveLeg, WalkLeg } from "../../types/route";
-import { NavProgressSchema, type NavProgressEvent } from "./voice.ws.schema";
+import {
+  NavProgressSchema,
+  NavResumeOkMessageSchema,
+  type NavProgressEvent,
+} from "./voice.ws.schema";
+import type { NavigationSessionSnapshot } from "../accessible-route/navigation-state.repository";
 import {
   NavigationSession,
   distanceToPolylineM,
@@ -959,6 +964,133 @@ describe("navigation geometry uses [lng, lat]", () => {
         ],
       ),
     ).toBeLessThan(1);
+  });
+});
+
+describe("NavigationSession resume from snapshot", () => {
+  const navigationId = "44444444-4444-4444-8444-444444444444";
+  const identified = (base: AccessibleRoute): AccessibleRoute => ({
+    ...base,
+    navigationId,
+    routeVersion: 3,
+  });
+  const snapshotOf = (
+    overrides: Partial<NavigationSessionSnapshot> = {},
+  ): NavigationSessionSnapshot => ({
+    navigationId,
+    userId: "user-1",
+    routeToken: "token",
+    routeVersion: 3,
+    currentStepIndex: 1,
+    onVehicle: false,
+    latestPosition: null,
+    updatedAt: Date.now(),
+    ...overrides,
+  });
+
+  const points: [number, number][] = [
+    coord(121),
+    coord(121.001),
+    coord(121.002),
+  ];
+
+  it("emits nav.resume_ok carrying the snapshot correlation and full step list", () => {
+    const nav = new NavigationSession();
+    const effect = nav.resume(
+      identified(route([walkLeg(points)])),
+      snapshotOf(),
+    );
+    expect(effect.ok).toBe(true);
+    const resumed = effect.events.find((e) => e.type === "nav.resume_ok");
+    expect(resumed).toMatchObject({
+      navigationId,
+      routeVersion: 3,
+      routeToken: "token",
+      currentStepIndex: 1,
+      onVehicle: false,
+    });
+    expect(NavResumeOkMessageSchema.parse(resumed)).toEqual(resumed);
+    expect(
+      (resumed as { steps: unknown[] }).steps.length,
+    ).toBeGreaterThanOrEqual(2);
+    expect(nav.getSnapshotState()).toEqual({
+      currentStepIndex: 1,
+      onVehicle: false,
+    });
+  });
+
+  it("does not replay already-announced steps", () => {
+    const nav = new NavigationSession();
+    const effect = nav.resume(
+      identified(route([walkLeg(points)])),
+      snapshotOf({ currentStepIndex: 1 }),
+    );
+    expect(effect.events.some((e) => e.type === "nav.start")).toBe(false);
+    expect(effect.events.some((e) => e.type === "nav.step")).toBe(false);
+  });
+
+  it("clamps a snapshot index past the rebuilt step list", () => {
+    const nav = new NavigationSession();
+    const effect = nav.resume(
+      identified(route([walkLeg(points)])),
+      snapshotOf({ currentStepIndex: 999 }),
+    );
+    const resumed = effect.events.find((e) => e.type === "nav.resume_ok") as {
+      currentStepIndex: number;
+      totalSteps: number;
+    };
+    expect(resumed.currentStepIndex).toBe(resumed.totalSteps - 1);
+  });
+
+  it("restores the on-vehicle flag from the snapshot", () => {
+    const nav = new NavigationSession();
+    nav.resume(
+      identified(route([bus(points)])),
+      snapshotOf({ onVehicle: true }),
+    );
+    expect(nav.getSnapshotState()?.onVehicle).toBe(true);
+  });
+
+  it("advances from the supplied position and pushes progress", () => {
+    const nav = new NavigationSession();
+    const effect = nav.resume(
+      identified(route([walkLeg(points)])),
+      snapshotOf({ currentStepIndex: 0 }),
+      pos(points[1]),
+    );
+    const progress = effect.events.find((e) => e.type === "nav.progress");
+    expect(progress).toMatchObject({ navigationId, routeVersion: 3 });
+    expect(NavProgressSchema.parse(progress)).toEqual(progress);
+    expect(nav.getSnapshotState()!.currentStepIndex).toBeGreaterThan(0);
+  });
+
+  it("accepts positions and reports conversation context after resuming", () => {
+    const nav = new NavigationSession();
+    nav.resume(identified(route([walkLeg(points)])), snapshotOf());
+    expect(nav.getConversationContext().active).toBe(true);
+    expect(nav.onPosition(pos(points[1])).ok).toBe(true);
+  });
+
+  it("rejects an empty route and a disposed session", () => {
+    expect(new NavigationSession().resume(route([]), snapshotOf()).ok).toBe(
+      false,
+    );
+    const disposed = new NavigationSession();
+    disposed.dispose();
+    const effect = disposed.resume(
+      identified(route([walkLeg(points)])),
+      snapshotOf(),
+    );
+    expect(effect.ok).toBe(false);
+    expect(effect.events).toEqual([]);
+  });
+
+  it("reports no snapshot state before resuming or after stopping", () => {
+    const nav = new NavigationSession();
+    expect(nav.getSnapshotState()).toBeNull();
+    nav.resume(identified(route([walkLeg(points)])), snapshotOf());
+    nav.stop("user_ui");
+    expect(nav.getSnapshotState()).toBeNull();
   });
 });
 

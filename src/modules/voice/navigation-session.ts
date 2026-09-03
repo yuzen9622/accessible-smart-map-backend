@@ -12,7 +12,8 @@ import {
   type GenerateVoiceNavStepsResult,
 } from "../nav-instructions/nav-instructions.service";
 import type { NavPosition } from "./navigation.schema";
-import type { NavProgressEvent } from "./voice.ws.schema";
+import type { NavProgressEvent, NavResumeOkEvent } from "./voice.ws.schema";
+import type { NavigationSessionSnapshot } from "../accessible-route/navigation-state.repository";
 
 const ARRIVE_RADIUS_M = 30;
 const RESUME_RADIUS_M = 60;
@@ -83,7 +84,8 @@ export type NavServerEvent =
       type: "nav.transit_alert";
       alerts: MatchedAlert[];
     }
-  | NavProgressEvent;
+  | NavProgressEvent
+  | NavResumeOkEvent;
 
 export interface NavEffect {
   ok: boolean;
@@ -347,14 +349,7 @@ export class NavigationSession {
         ],
       };
     }
-    const built = this.buildResolvedSteps(this.armedRoute);
-    if (!built) return this.invalidRoute();
-    this.activeRoute = this.armedRoute;
-    this.steps = built;
-    this.spans = this.buildSpans(this.armedRoute, built);
-    this.terminalCoordIndex = built
-      .map((s) => s.coord)
-      .lastIndexOf([...built].reverse().find((s) => s.coord)?.coord ?? null);
+    if (!this.loadRoute(this.armedRoute)) return this.invalidRoute();
     this.active = true;
     this.announcedIndex = -1;
     this.onVehicle = false;
@@ -364,17 +359,7 @@ export class NavigationSession {
     const events: NavServerEvent[] = [
       {
         type: "nav.start",
-        steps: this.steps.map((step, index) => ({
-          index,
-          instruction: step.instruction,
-          legType: step.legType,
-          distanceM: step.distanceM,
-          isTransit: step.isTransit,
-          type: step.type,
-          relativeDirection: step.relativeDirection ?? null,
-          streetName: step.streetName ?? null,
-          bearing: step.bearing ?? null,
-        })),
+        steps: this.stepDtos(),
         currentStepIndex: 0,
         totalSteps: this.steps.length,
       },
@@ -382,6 +367,62 @@ export class NavigationSession {
     const seed = seedPosition ?? this.latestPosition;
     if (seed) events.push(...this.onPosition(seed).events);
     return { ok: true, events };
+  }
+
+  /**
+   * Re-arms navigation from a persisted snapshot after a reconnect or a
+   * foreground return, without replaying the steps already announced.
+   *
+   * The snapshot is authoritative for progress; the rebuilt step list is
+   * authoritative for bounds, so a route whose steps shrank clamps instead of
+   * resuming past the end.
+   */
+  resume(
+    route: AccessibleRoute,
+    snapshot: NavigationSessionSnapshot,
+    currentPosition?: NavPosition,
+  ): NavEffect {
+    if (this.disposed) return emptyEffect(false);
+    if (!route || !Array.isArray(route.legs) || route.legs.length === 0) {
+      return this.invalidRoute();
+    }
+    if (!this.loadRoute(route)) return this.invalidRoute();
+    this.armedRoute = route;
+    this.active = true;
+    this.announcedIndex = Math.min(
+      snapshot.currentStepIndex,
+      this.steps.length - 1,
+    );
+    this.onVehicle = snapshot.onVehicle;
+    this.offrouteWarned = false;
+    this.offrouteCount = 0;
+    this.recoverCount = 0;
+    this.seenAlertIds.clear();
+    this.clearSpeech();
+    const events: NavServerEvent[] = [
+      {
+        type: "nav.resume_ok",
+        navigationId: snapshot.navigationId,
+        routeVersion: snapshot.routeVersion,
+        routeToken: snapshot.routeToken,
+        currentStepIndex: Math.max(0, this.announcedIndex),
+        totalSteps: this.steps.length,
+        onVehicle: this.onVehicle,
+        steps: this.stepDtos(),
+      },
+    ];
+    const seed = currentPosition ?? this.latestPosition;
+    if (seed) events.push(...this.onPosition(seed).events);
+    return { ok: true, events };
+  }
+
+  /** Progress worth persisting, or null when there is nothing to resume. */
+  getSnapshotState(): { currentStepIndex: number; onVehicle: boolean } | null {
+    if (this.disposed || !this.active) return null;
+    return {
+      currentStepIndex: Math.max(0, this.announcedIndex),
+      onVehicle: this.onVehicle,
+    };
   }
 
   onPosition(position: NavPosition): NavEffect {
@@ -603,6 +644,33 @@ export class NavigationSession {
         },
       ],
     };
+  }
+
+  /** Builds the step/span tables for a route and installs it as active. */
+  private loadRoute(route: AccessibleRoute): boolean {
+    const built = this.buildResolvedSteps(route);
+    if (!built) return false;
+    this.activeRoute = route;
+    this.steps = built;
+    this.spans = this.buildSpans(route, built);
+    this.terminalCoordIndex = built
+      .map((s) => s.coord)
+      .lastIndexOf([...built].reverse().find((s) => s.coord)?.coord ?? null);
+    return true;
+  }
+
+  private stepDtos(): NavStepDto[] {
+    return this.steps.map((step, index) => ({
+      index,
+      instruction: step.instruction,
+      legType: step.legType,
+      distanceM: step.distanceM,
+      isTransit: step.isTransit,
+      type: step.type,
+      relativeDirection: step.relativeDirection ?? null,
+      streetName: step.streetName ?? null,
+      bearing: step.bearing ?? null,
+    }));
   }
 
   private invalidRoute(message = "路線資料無效，請重新規劃"): NavEffect {

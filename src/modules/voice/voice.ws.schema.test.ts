@@ -3,6 +3,10 @@ import {
   NavProgressSchema,
   NavRerouteFailedMessageSchema,
   NavReroutingMessageSchema,
+  NavResumeFailedMessageSchema,
+  NavResumeMessageSchema,
+  NavResumeOkMessageSchema,
+  VoiceControlMessageSchema,
 } from "./voice.ws.schema";
 
 describe("voice reroute outbound schemas", () => {
@@ -106,5 +110,113 @@ describe("nav.progress outbound schema", () => {
       delete incomplete[field];
       expect(NavProgressSchema.safeParse(incomplete).success).toBe(false);
     }
+  });
+});
+
+describe("nav.resume inbound schema", () => {
+  const payload = {
+    type: "nav.resume",
+    navigationId: "nav-1",
+    routeVersion: 2,
+    routeToken: "token",
+    lastKnownStepIndex: 4,
+  };
+
+  it("accepts a resume frame with and without a position", () => {
+    expect(NavResumeMessageSchema.parse(payload)).toMatchObject(payload);
+    expect(
+      NavResumeMessageSchema.parse({
+        ...payload,
+        currentPosition: { latitude: 25, longitude: 121, heading: 90 },
+      }).currentPosition,
+    ).toEqual({ latitude: 25, longitude: 121, heading: 90 });
+  });
+
+  it("is routable through the authenticated control union", () => {
+    const parsed = VoiceControlMessageSchema.parse(payload);
+    expect(parsed.type).toBe("nav.resume");
+  });
+
+  it.each([
+    ["an empty navigationId", { navigationId: "" }],
+    ["a zero routeVersion", { routeVersion: 0 }],
+    ["a fractional routeVersion", { routeVersion: 1.5 }],
+    ["an empty routeToken", { routeToken: "" }],
+    ["a negative lastKnownStepIndex", { lastKnownStepIndex: -1 }],
+    [
+      "an out-of-range position",
+      { currentPosition: { latitude: 200, longitude: 121 } },
+    ],
+  ])("rejects %s", (_label, invalid) => {
+    expect(
+      NavResumeMessageSchema.safeParse({ ...payload, ...invalid }).success,
+    ).toBe(false);
+  });
+});
+
+describe("nav.resume outbound schemas", () => {
+  const okPayload = {
+    type: "nav.resume_ok",
+    navigationId: "nav-1",
+    routeVersion: 2,
+    routeToken: "token",
+    currentStepIndex: 1,
+    totalSteps: 3,
+    onVehicle: false,
+    steps: [
+      {
+        index: 0,
+        instruction: "向前走",
+        legType: "WALK",
+        distanceM: 50,
+        isTransit: false,
+      },
+    ],
+  };
+
+  it("carries the authoritative progress the client must adopt", () => {
+    expect(NavResumeOkMessageSchema.parse(okPayload)).toEqual(okPayload);
+  });
+
+  it("rejects unknown keys and an out-of-contract step", () => {
+    expect(
+      NavResumeOkMessageSchema.safeParse({ ...okPayload, extra: 1 }).success,
+    ).toBe(false);
+    expect(
+      NavResumeOkMessageSchema.safeParse({
+        ...okPayload,
+        steps: [{ index: 0, instruction: "x", legType: "PLANE" }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it.each([
+    "INVALID_REQUEST",
+    "SNAPSHOT_NOT_FOUND",
+    "USER_MISMATCH",
+    "ROUTE_VERSION_MISMATCH",
+    "ROUTE_EXPIRED",
+  ])("accepts the %s failure code", (code) => {
+    expect(
+      NavResumeFailedMessageSchema.parse({
+        type: "nav.resume_failed",
+        navigationId: "nav-1",
+        code,
+        message: "nope",
+        retryable: false,
+      }).code,
+    ).toBe(code);
+  });
+
+  it("rejects an unknown failure code", () => {
+    expect(
+      NavResumeFailedMessageSchema.safeParse({
+        type: "nav.resume_failed",
+        navigationId: "nav-1",
+        code: "WHATEVER",
+        message: "nope",
+        retryable: false,
+      }).success,
+    ).toBe(false);
   });
 });

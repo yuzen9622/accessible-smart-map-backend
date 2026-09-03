@@ -16,8 +16,10 @@ vi.mock("./live-bridge", () => ({
   createLiveBridge: vi.fn(async () => ({
     sendAudio: vi.fn(),
     armRouteToken: vi.fn(),
+    resumeNavigation: vi.fn(),
     updatePosition: vi.fn(),
     cancelNav: vi.fn(),
+    endSession: vi.fn(),
     close: vi.fn(),
   })),
 }));

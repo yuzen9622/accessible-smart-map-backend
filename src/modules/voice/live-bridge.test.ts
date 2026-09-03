@@ -8,6 +8,9 @@ const {
   rerouteAccessibleRoute,
   getMemorySettings,
   loadMemories,
+  storeNavigationSnapshot,
+  getNavigationSnapshot,
+  deleteNavigationSnapshot,
 } = vi.hoisted(() => ({
   connect: vi.fn(),
   getRouteByToken: vi.fn(),
@@ -15,6 +18,9 @@ const {
   rerouteAccessibleRoute: vi.fn(),
   getMemorySettings: vi.fn().mockResolvedValue({ memoryEnabled: false }),
   loadMemories: vi.fn().mockResolvedValue([]),
+  storeNavigationSnapshot: vi.fn(),
+  getNavigationSnapshot: vi.fn(),
+  deleteNavigationSnapshot: vi.fn(),
 }));
 vi.mock("../../config/ai", () => ({ googleGenAi: { live: { connect } } }));
 vi.mock("../agent/tool-catalog", () => ({ buildGeminiTools: vi.fn(() => []) }));
@@ -26,13 +32,22 @@ vi.mock("../accessible-route/route-token.service", () => ({
 vi.mock("../accessible-route/reroute.service", () => ({
   rerouteAccessibleRoute,
 }));
+vi.mock("../accessible-route/navigation-state.repository", () => ({
+  storeNavigationSnapshot,
+  getNavigationSnapshot,
+  deleteNavigationSnapshot,
+}));
 vi.mock("../ai/memory.service", () => ({ getMemorySettings, loadMemories }));
 vi.mock("./transcript-corrector", () => ({
   correctUserTranscript: vi.fn(async (t: string) => t.replace("珠北", "竹北")),
 }));
 
 import { createLiveBridge } from "./live-bridge";
-import { NavProgressSchema } from "./voice.ws.schema";
+import {
+  NavProgressSchema,
+  NavResumeFailedMessageSchema,
+  NavResumeOkMessageSchema,
+} from "./voice.ws.schema";
 import { executeLocalTool } from "../ai/agent-tools";
 import { buildGeminiTools } from "../agent/tool-catalog";
 import { correctUserTranscript } from "./transcript-corrector";
@@ -1919,5 +1934,307 @@ describe("createLiveBridge reroute generation ownership", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("createLiveBridge navigation resume and snapshot lifecycle", () => {
+  const NAV_ID = "55555555-5555-4555-8555-555555555555";
+  const ON_ROUTE = { latitude: 25, longitude: 121 };
+  const MID_ROUTE = { latitude: 25, longitude: 121.0005 };
+  const ARRIVAL = { latitude: 25, longitude: 121.001 };
+  const identifiedRoute = {
+    ...walkRoute,
+    navigationId: NAV_ID,
+    routeVersion: 1,
+  };
+
+  const snapshot = (overrides: Record<string, unknown> = {}) => ({
+    navigationId: NAV_ID,
+    userId: "u",
+    routeToken: "token",
+    routeVersion: 1,
+    currentStepIndex: 1,
+    onVehicle: false,
+    latestPosition: null,
+    updatedAt: Date.now(),
+    ...overrides,
+  });
+
+  const resumeMessage = (overrides: Record<string, unknown> = {}) => ({
+    type: "nav.resume" as const,
+    navigationId: NAV_ID,
+    routeVersion: 1,
+    routeToken: "token",
+    lastKnownStepIndex: 1,
+    ...overrides,
+  });
+
+  function frames(ws: WebSocket): any[] {
+    return vi
+      .mocked(ws.send)
+      .mock.calls.map(([value]) => value)
+      .filter((value): value is string => typeof value === "string")
+      .map((value) => JSON.parse(value));
+  }
+
+  function frameOf(ws: WebSocket, type: string): any | undefined {
+    return frames(ws).find((frame) => frame.type === type);
+  }
+
+  function makeHarness() {
+    let onmessage: ((message: unknown) => void) | undefined;
+    const session = makeSession();
+    const ws = makeWs();
+    connect.mockImplementation(async ({ callbacks }: any) => {
+      onmessage = callbacks.onmessage;
+      return session;
+    });
+    const call = async (id: string, name: string): Promise<void> => {
+      onmessage?.({ toolCall: { functionCalls: [{ id, name, args: {} }] } });
+      await vi.advanceTimersByTimeAsync(0);
+    };
+    return { ws, session, call };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getRouteByToken.mockResolvedValue(identifiedRoute);
+    getNavigationEnvelopeByToken.mockResolvedValue({
+      navigationId: NAV_ID,
+      routeVersion: 1,
+    });
+    getNavigationSnapshot.mockResolvedValue(snapshot());
+    storeNavigationSnapshot.mockResolvedValue(undefined);
+    deleteNavigationSnapshot.mockResolvedValue(undefined);
+  });
+
+  it("resumes from the snapshot and emits a contract-valid nav.resume_ok", async () => {
+    const { ws } = makeHarness();
+    const bridge = await createLiveBridge({ ws, userId: "u" });
+
+    await bridge.resumeNavigation(resumeMessage());
+
+    const ok = frameOf(ws, "nav.resume_ok");
+    expect(ok).toMatchObject({
+      navigationId: NAV_ID,
+      routeVersion: 1,
+      routeToken: "token",
+      currentStepIndex: 1,
+      onVehicle: false,
+    });
+    expect(NavResumeOkMessageSchema.parse(ok)).toEqual(ok);
+    expect(frameOf(ws, "nav.resume_failed")).toBeUndefined();
+  });
+
+  it("re-persists the snapshot immediately after a successful resume", async () => {
+    const { ws } = makeHarness();
+    const bridge = await createLiveBridge({ ws, userId: "u" });
+
+    await bridge.resumeNavigation(resumeMessage());
+
+    expect(storeNavigationSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        navigationId: NAV_ID,
+        userId: "u",
+        routeToken: "token",
+        routeVersion: 1,
+        currentStepIndex: 1,
+      }),
+    );
+  });
+
+  it("resumes onto the snapshot position when the client sends none", async () => {
+    getNavigationSnapshot.mockResolvedValue(
+      snapshot({ latestPosition: { latitude: 25, longitude: 121 } }),
+    );
+    const { ws } = makeHarness();
+    const bridge = await createLiveBridge({ ws, userId: "u" });
+
+    await bridge.resumeNavigation(resumeMessage());
+
+    expect(frameOf(ws, "nav.progress")).toBeDefined();
+    expect(NavProgressSchema.parse(frameOf(ws, "nav.progress"))).toBeDefined();
+  });
+
+  it.each([
+    [
+      "no snapshot exists",
+      "SNAPSHOT_NOT_FOUND",
+      () => getNavigationSnapshot.mockResolvedValue(null),
+    ],
+    [
+      "the snapshot belongs to another user",
+      "USER_MISMATCH",
+      () =>
+        getNavigationSnapshot.mockResolvedValue(snapshot({ userId: "other" })),
+    ],
+    [
+      "the snapshot route version moved on",
+      "ROUTE_VERSION_MISMATCH",
+      () =>
+        getNavigationSnapshot.mockResolvedValue(snapshot({ routeVersion: 9 })),
+    ],
+    [
+      "the snapshot route token no longer matches",
+      "ROUTE_VERSION_MISMATCH",
+      () =>
+        getNavigationSnapshot.mockResolvedValue(
+          snapshot({ routeToken: "other" }),
+        ),
+    ],
+    [
+      "the route token expired",
+      "ROUTE_EXPIRED",
+      () => getRouteByToken.mockResolvedValue(null),
+    ],
+    [
+      "the envelope no longer binds the navigation",
+      "ROUTE_EXPIRED",
+      () =>
+        getNavigationEnvelopeByToken.mockResolvedValue({
+          navigationId: "other-nav",
+          routeVersion: 1,
+        }),
+    ],
+  ])("fails with %s", async (_label, code, arrange) => {
+    arrange();
+    const { ws } = makeHarness();
+    const bridge = await createLiveBridge({ ws, userId: "u" });
+
+    await bridge.resumeNavigation(resumeMessage());
+
+    const failed = frameOf(ws, "nav.resume_failed");
+    expect(failed).toMatchObject({ navigationId: NAV_ID, code });
+    expect(NavResumeFailedMessageSchema.parse(failed)).toEqual(failed);
+    expect(frameOf(ws, "nav.resume_ok")).toBeUndefined();
+    expect(storeNavigationSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("throttles snapshot writes between position ticks and resumes them after the interval", async () => {
+    vi.useFakeTimers();
+    try {
+      const { ws, call } = makeHarness();
+      const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.armRouteToken("token");
+      await call("start", "startNavigation");
+      const afterStart = storeNavigationSnapshot.mock.calls.length;
+      expect(afterStart).toBeGreaterThan(0);
+
+      // A step advance forces a write regardless of the throttle.
+      bridge.updatePosition(ON_ROUTE);
+      await vi.advanceTimersByTimeAsync(600);
+      const afterStep = storeNavigationSnapshot.mock.calls.length;
+      expect(afterStep).toBeGreaterThan(afterStart);
+
+      // A tick that advances nothing inside the interval is throttled away.
+      bridge.updatePosition(ON_ROUTE);
+      await vi.advanceTimersByTimeAsync(600);
+      expect(storeNavigationSnapshot.mock.calls.length).toBe(afterStep);
+
+      await vi.advanceTimersByTimeAsync(6_000);
+      bridge.updatePosition(MID_ROUTE);
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(storeNavigationSnapshot.mock.calls.length).toBeGreaterThan(
+        afterStep,
+      );
+      expect(storeNavigationSnapshot).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          navigationId: NAV_ID,
+          userId: "u",
+          routeToken: "token",
+          routeVersion: 1,
+          latestPosition: expect.objectContaining({
+            latitude: 25,
+            longitude: 121.0005,
+          }),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("deletes the snapshot once the route is completed", async () => {
+    vi.useFakeTimers();
+    try {
+      const { ws, call } = makeHarness();
+      const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.armRouteToken("token");
+      await call("start", "startNavigation");
+
+      bridge.updatePosition(ON_ROUTE);
+      await vi.advanceTimersByTimeAsync(600);
+      bridge.updatePosition(ARRIVAL);
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(frameOf(ws, "nav.arrived")).toBeDefined();
+      expect(deleteNavigationSnapshot).toHaveBeenCalledWith(NAV_ID, "u");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ["the voice stopNavigation tool", "tool"],
+    ["an explicit cancelNav", "cancel"],
+    ["an explicit endSession", "end"],
+  ])("deletes the snapshot on %s", async (_label, how) => {
+    vi.useFakeTimers();
+    try {
+      const { ws, call } = makeHarness();
+      const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.armRouteToken("token");
+      await call("start", "startNavigation");
+      expect(deleteNavigationSnapshot).not.toHaveBeenCalled();
+
+      if (how === "tool") await call("stop", "stopNavigation");
+      else if (how === "cancel") bridge.cancelNav();
+      else bridge.endSession();
+
+      expect(deleteNavigationSnapshot).toHaveBeenCalledWith(NAV_ID, "u");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the snapshot when the socket closes so a reconnect can resume", async () => {
+    vi.useFakeTimers();
+    try {
+      const { ws, call } = makeHarness();
+      const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.armRouteToken("token");
+      await call("start", "startNavigation");
+
+      bridge.close();
+
+      expect(deleteNavigationSnapshot).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores a resume once the bridge is closed", async () => {
+    const { ws } = makeHarness();
+    const bridge = await createLiveBridge({ ws, userId: "u" });
+    bridge.close();
+
+    await bridge.resumeNavigation(resumeMessage());
+
+    expect(getNavigationSnapshot).not.toHaveBeenCalled();
+    expect(frameOf(ws, "nav.resume_ok")).toBeUndefined();
+  });
+
+  it("reports a retryable failure when the snapshot read throws", async () => {
+    getNavigationSnapshot.mockRejectedValue(new Error("redis down"));
+    const { ws } = makeHarness();
+    const bridge = await createLiveBridge({ ws, userId: "u" });
+
+    await bridge.resumeNavigation(resumeMessage());
+
+    expect(frameOf(ws, "nav.resume_failed")).toMatchObject({
+      code: "SNAPSHOT_NOT_FOUND",
+      retryable: true,
+    });
   });
 });
