@@ -24,13 +24,15 @@ export function attachInternalSchedule(
 }
 
 /**
- * Put the earliest future-scheduled route first and retain it within a limit,
- * while leaving ordinary same-window rankings unchanged.
+ * Put the earliest future-scheduled route first and retain it within a limit ONLY
+ * when there are no currently-departing valid transit routes (e.g. late night service
+ * closed, only long-walk options available). If there are valid current transit
+ * routes available in the window, keep the original ranked order.
  *
  * @param ranked Ranked routes before limiting.
  * @param candidates Eligible routes from which to select the earliest future departure.
  * @param limit Maximum routes to retain.
- * @returns A limited route list with the earliest future departure at index zero.
+ * @returns A limited route list, with earliest future departure at index 0 only if no immediate transit is available.
  */
 export function retainEarliestFutureRoute(
   ranked: AccessibleRoute[],
@@ -39,6 +41,19 @@ export function retainEarliestFutureRoute(
 ): AccessibleRoute[] {
   if (limit <= 0) return [];
   const limited = ranked.slice(0, limit);
+
+  // Check if there is any valid immediate transit route in candidates/ranked
+  const hasCurrentTransit = candidates.some(
+    (route) =>
+      !route._isFutureScheduled &&
+      route.legs.some((leg) => leg.type !== "WALK"),
+  );
+
+  // If there are current transit routes, do not override with future route at index 0
+  if (hasCurrentTransit) {
+    return limited;
+  }
+
   const earliest = candidates
     .filter(
       (route) =>
