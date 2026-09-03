@@ -13,6 +13,9 @@ otp-data/
 valhalla-data/
 graphify-out/
 
+# Documentation and specs — avoid breaking markdown formatting
+docs/
+
 # Python and shell scripts — not Prettier-managed
 *.py
 *.sh
