@@ -3,8 +3,8 @@
 ## Functional Specification — Driving Traffic & Parking for Family Caregivers
 
 **版本**：v1.1.0  
-**狀態**：Proposed — 未實作  
-**日期**：2026-06-19  
+**狀態**：Implemented — 已實作完成  
+**日期**：2026-09-03  
 **作者**：yuzen9622
 
 > **v1.1.0 變更**
