@@ -16,6 +16,7 @@ import type {
   ModeProfile,
   DataConfidence,
   RouteAccessibilityScore,
+  ScoreFactor,
   A11yConstraints,
   A11yConstraintOverrides,
 } from "./accessible-route.types";
@@ -25,6 +26,7 @@ export type {
   ModeProfile,
   DataConfidence,
   RouteAccessibilityScore,
+  ScoreFactor,
   A11yConstraints,
   A11yConstraintOverrides,
 };
@@ -184,13 +186,13 @@ export function crossSlopeContribution(crossSlopePercent: number): number {
 const NODE_SCORE_DENOM = 100;
 
 /**
- * Score for a stop/station with NO accessibility data — "fair / unknown", not
- * "critical". Treating unknown as 0 collapsed the accessibility budget on
- * Taiwan's sparse OSM coverage (every data-less route scored the same), so the
- * ranking degenerated to pure travel time. A neutral baseline keeps unknown from
- * masquerading as bad; dataConfidence / warnings carry the uncertainty instead.
+ * Score for a stop/station with NO accessibility data — neutral baseline (70).
+ * Treating unknown as 0 collapsed the accessibility budget on Taiwan's sparse OSM
+ * coverage, so the ranking degenerated to pure travel time. A neutral baseline keeps
+ * unknown from masquerading as bad; dataConfidence / warnings carry the uncertainty instead.
  */
-export const FACILITY_NEUTRAL = 40;
+export const FACILITY_NEUTRAL = 70;
+export const CRITICAL_FEATURE_NEUTRAL = 65;
 
 /**
  * Score a single OsmA11y node on a 0–100 scale, representing how much the
@@ -231,15 +233,15 @@ export function scoreOsmNode(node: IOsmA11y): number {
 
   const widthRaw = tags["width"];
   if (widthRaw) {
-    const widthM = parseFloat(widthRaw);
-    if (!isNaN(widthM)) raw += widthContribution(widthM);
+    const widthM = Number.parseFloat(widthRaw);
+    if (!Number.isNaN(widthM)) raw += widthContribution(widthM);
   }
 
   const inclineRaw = tags["incline"];
   if (inclineRaw) {
-    const cleaned = inclineRaw.replace("%", "").replace("°", "");
-    const grade = parseFloat(cleaned);
-    if (!isNaN(grade)) raw += slopeContribution(grade);
+    const cleaned = inclineRaw.replace(/[%°]/g, "");
+    const grade = Number.parseFloat(cleaned);
+    if (!Number.isNaN(grade)) raw += slopeContribution(grade);
   }
 
   const clamped = Math.max(0, Math.min(raw, NODE_SCORE_DENOM));
@@ -250,8 +252,9 @@ export function scoreOsmNode(node: IOsmA11y): number {
  * Score a collection of OSM nodes around a stop/station on 0–100.
  *
  * Combines the MAX node score (best single asset) with the average (environment
- * density), then adds binary bonuses for Tier 1 presence (elevator, flush kerb,
- * ramp, accessible toilet). An empty node set returns 0 (unknown = worst case).
+ * density), then adds bonuses for Tier 1 presence (elevator, flush kerb,
+ * ramp, accessible toilet) and penalises confirmed barriers (stairs without ramp,
+ * raised kerb, wheelchair=no). An empty node set returns the neutral baseline (70).
  *
  * @param nodes OSM a11y nodes near the stop/station.
  * @returns The facility-set score on a 0–100 scale.
@@ -259,10 +262,9 @@ export function scoreOsmNode(node: IOsmA11y): number {
 export function scoreFacilitySet(nodes: IOsmA11y[]): number {
   if (!nodes.length) return FACILITY_NEUTRAL;
 
-  const maxNodeScore = Math.max(...nodes.map(scoreOsmNode));
-
-  const avgNodeScore =
-    nodes.reduce((sum, n) => sum + scoreOsmNode(n), 0) / nodes.length;
+  const nodeScores = nodes.map(scoreOsmNode);
+  const maxNodeScore = Math.max(...nodeScores);
+  const avgNodeScore = nodeScores.reduce((sum, n) => sum + n, 0) / nodes.length;
 
   const hasElevator = nodes.some(
     (n) =>
@@ -283,15 +285,29 @@ export function scoreFacilitySet(nodes: IOsmA11y[]): number {
   const hasAccessibleToilet = nodes.some(
     (n) => n.tags?.["toilets:wheelchair"] === "yes",
   );
+  const hasStairs = nodes.some(
+    (n) =>
+      (n.tags?.["highway"] === "steps" || n.tags?.["stairs"] === "yes") &&
+      n.tags?.["ramp:wheelchair"] !== "yes" &&
+      n.tags?.["wheelchair"] !== "yes",
+  );
+  const hasInaccessible = nodes.some(
+    (n) => n.tags?.["wheelchair"] === "no" || n.tags?.["kerb"] === "raised",
+  );
 
-  let score = maxNodeScore * 0.6 + avgNodeScore * 0.4;
+  let score = FACILITY_NEUTRAL;
 
-  if (hasElevator) score = Math.min(score + 15, 95);
-  if (hasFlushKerb) score = Math.min(score + 8, 95);
-  if (hasRamp) score = Math.min(score + 5, 95);
-  if (hasAccessibleToilet) score = Math.min(score + 4, 95);
+  if (hasElevator) score += 15;
+  if (hasFlushKerb) score += 8;
+  if (hasRamp) score += 5;
+  if (hasAccessibleToilet) score += 4;
+  if (hasStairs) score -= 30;
+  if (hasInaccessible) score -= 20;
 
-  return Math.min(score, 100);
+  const qualityBonus = (maxNodeScore * 0.6 + avgNodeScore * 0.4) * 0.2;
+  score += qualityBonus;
+
+  return Math.max(0, Math.min(Math.round(score), 100));
 }
 
 export function scoreLabel(score: number): ScoreLabel {
@@ -544,6 +560,24 @@ export function environmentPenalty(
 }
 
 /**
+ * Transfer penalty as a positive magnitude (subtracted from score).
+ * Zero for direct routes (transferCount <= 0), then scaled by mode multiplier.
+ *
+ * @param transferCount Number of transfers in the route.
+ * @param mode Accessibility mode driving the multiplier. Default "normal".
+ * @returns The transfer penalty magnitude (0 to 20).
+ */
+export function transferPenaltyScore(
+  transferCount: number,
+  mode: AccessibilityMode = "normal",
+): number {
+  if (transferCount <= 0) return 0;
+  const profile = MODE_PROFILES[mode] ?? MODE_PROFILES.normal;
+  const base = transferCount * 5 * profile.transferPenaltyMultiplier;
+  return Math.min(20, Math.round(base));
+}
+
+/**
  * Route-ranking cost — lower is better. NOT the user-facing score:
  * cost = travelTime + transferCount × 5 × modePenalty + (100 − a11yScore) × 0.3
  *        + walkPenalty.
@@ -619,6 +653,7 @@ export function scoreRoute(
   walkDistanceM = 0,
   dataCoverageRatio = 1,
   env?: EnvConditions,
+  transferCount = 0,
 ): RouteAccessibilityScore {
   const profile = MODE_PROFILES[mode] ?? MODE_PROFILES.normal;
   const facilityScore = scoreFacilitySet(facilityNodes);
@@ -653,17 +688,42 @@ export function scoreRoute(
   const hasTactilePaving = facilityNodes.some(
     (n) => n.tags?.["tactile_paving"] === "yes",
   );
+  const hasStairs = facilityNodes.some(
+    (n) =>
+      (n.tags?.["highway"] === "steps" || n.tags?.["stairs"] === "yes") &&
+      n.tags?.["ramp:wheelchair"] !== "yes" &&
+      n.tags?.["wheelchair"] !== "yes",
+  );
+  const hasInaccessible = facilityNodes.some(
+    (n) => n.tags?.["wheelchair"] === "no" || n.tags?.["kerb"] === "raised",
+  );
+  const hasSteepSlope = facilityNodes.some((n) => {
+    const inc = n.tags?.["incline"];
+    if (!inc) return false;
+    const grade = Number.parseFloat(inc.replace(/[%°]/g, ""));
+    return !Number.isNaN(grade) && Math.abs(grade) > 8.33;
+  });
 
   const w = profile.criticalWeights;
-  const criticalRaw =
-    (hasElevator ? w.elevator : 0) +
-    (hasFlushKerb ? w.flushKerb : 0) +
-    (hasRamp ? w.ramp : 0) +
-    (hasWheelchairYes ? w.wheelchairYes : 0) +
-    (hasAccessibleToilet ? w.accessibleToilet : 0) +
-    (hasAudioSignal ? w.audioSignal : 0) +
-    (hasTactilePaving ? w.tactilePaving : 0);
-  const criticalFeatureScore = Math.min(criticalRaw, 100);
+  let criticalFeatureScore: number;
+  if (facilityNodes.length === 0) {
+    criticalFeatureScore = CRITICAL_FEATURE_NEUTRAL;
+  } else {
+    const criticalRaw =
+      (hasElevator ? w.elevator : 0) +
+      (hasFlushKerb ? w.flushKerb : 0) +
+      (hasRamp ? w.ramp : 0) +
+      (hasWheelchairYes ? w.wheelchairYes : 0) +
+      (hasAccessibleToilet ? w.accessibleToilet : 0) +
+      (hasAudioSignal ? w.audioSignal : 0) +
+      (hasTactilePaving ? w.tactilePaving : 0);
+    const penalty =
+      (hasStairs ? 35 : 0) +
+      (hasInaccessible ? 20 : 0) +
+      (hasSteepSlope ? 18 : 0);
+    const raw = CRITICAL_FEATURE_NEUTRAL + criticalRaw * 0.4 - penalty;
+    criticalFeatureScore = Math.max(0, Math.min(100, Math.round(raw)));
+  }
 
   const timeRange = maxMinutes - minMinutes;
   const timeScore =
@@ -676,6 +736,7 @@ export function scoreRoute(
     adjustedFacilityScore * (40 / 65) + criticalFeatureScore * (25 / 65);
 
   const walkPenalty = walkPenaltyScore(walkDistanceM, mode);
+  const transferPenalty = transferPenaltyScore(transferCount, mode);
 
   const envPenalty = env ? environmentPenalty(env, mode, walkDistanceM) : 0;
 
@@ -683,6 +744,7 @@ export function scoreRoute(
     a11yScore * profile.a11yWeight +
     timeScore * profile.timeWeight -
     walkPenalty -
+    transferPenalty -
     envPenalty;
   const totalScore = Math.max(0, Math.min(100, Math.round(rawTotal)));
 
@@ -691,6 +753,7 @@ export function scoreRoute(
   if (dataConfidence === "low")
     warnings.push("沿途無障礙資料不足，分數為保守估計");
   if (walkPenalty >= 20) warnings.push("步行距離較長，行動不便者請留意");
+  if (transferPenalty >= 10) warnings.push("轉乘次數較多，行動不便者請留意");
   if (envPenalty >= 10) warnings.push("天候或空氣品質不佳，通行較費力");
 
   const components: RouteAccessibilityScore["components"] = {
@@ -698,8 +761,96 @@ export function scoreRoute(
     timeScore: Math.round(timeScore),
     criticalFeatureScore: Math.round(criticalFeatureScore),
     walkPenalty: Math.round(walkPenalty),
+    transferPenalty: Math.round(transferPenalty),
   };
   if (env) components.environmentScore = Math.round(100 - envPenalty);
+
+  const factors: ScoreFactor[] = [];
+
+  // Positive factors
+  if (hasElevator) {
+    factors.push({
+      type: "positive",
+      icon: "elevator",
+      text: "車站或沿途設有無障礙電梯",
+      impact: 15,
+    });
+  }
+  if (hasRamp || hasFlushKerb) {
+    factors.push({
+      type: "positive",
+      icon: "ramp",
+      text: "設有無障礙坡道或平接緣石",
+      impact: 10,
+    });
+  }
+  if (highlightCount > 0) {
+    factors.push({
+      type: "positive",
+      icon: "bus_accessible",
+      text: "配置低地板公車或友善大眾運輸",
+      impact: Math.min(highlightCount * 5, 10),
+    });
+  }
+  if (transferCount === 0) {
+    factors.push({
+      type: "positive",
+      icon: "bus_accessible",
+      text: "一車直達無需轉乘",
+      impact: 5,
+    });
+  }
+
+  // Negative factors
+  if (hasStairs) {
+    factors.push({
+      type: "negative",
+      icon: "stairs",
+      text: "沿途包含階梯且無坡道替代",
+      impact: -35,
+    });
+  }
+  if (hasSteepSlope) {
+    factors.push({
+      type: "negative",
+      icon: "slope",
+      text: "沿途包含較陡坡道",
+      impact: -18,
+    });
+  }
+  if (walkPenalty >= 10) {
+    factors.push({
+      type: "negative",
+      icon: "long_walk",
+      text: `步行距離較長（${Math.round(walkDistanceM)} 公尺）`,
+      impact: -Math.round(walkPenalty),
+    });
+  }
+  if (transferCount === 1) {
+    factors.push({
+      type: "info",
+      icon: "transfer",
+      text: "途中需轉乘 1 次",
+      impact: -Math.round(transferPenalty),
+    });
+  } else if (transferCount >= 2) {
+    factors.push({
+      type: "negative",
+      icon: "transfer",
+      text: `途中需轉乘 ${transferCount} 次，轉乘負擔較大`,
+      impact: -Math.round(transferPenalty),
+    });
+  }
+
+  // Info factors
+  if (dataConfidence === "low") {
+    factors.push({
+      type: "info",
+      icon: "sparse_data",
+      text: "沿途無障礙資料稀疏，評分採保守估計",
+      impact: 0,
+    });
+  }
 
   return {
     totalScore,
@@ -707,6 +858,7 @@ export function scoreRoute(
     dataConfidence,
     warnings,
     components,
+    factors,
   };
 }
 

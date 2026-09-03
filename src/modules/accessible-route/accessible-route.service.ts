@@ -268,10 +268,12 @@ export function scoreAndRank(
         walkDistanceM,
         legDataCoverageRatio(r),
         env,
+        r.transferCount,
       );
       r.accessibilityScore = result.totalScore;
       r.accessibilityLabel = result.label;
       r.scoreComponents = result.components;
+      r.factors = result.factors;
       r.dataConfidence = result.dataConfidence;
       r.scoreWarnings = result.warnings;
       r.totalWalkDistanceM = walkDistanceM;

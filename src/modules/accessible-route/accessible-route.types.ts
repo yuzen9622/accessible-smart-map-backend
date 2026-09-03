@@ -16,7 +16,9 @@ import type {
   ThsrLeg,
   TraLeg,
   DriveLeg,
+  ScoreFactor,
 } from "../../types/route";
+export type { ScoreFactor } from "../../types/route";
 import type { RouteIntent } from "../../types/ai";
 import type {
   MatchedAlert,
@@ -74,8 +76,10 @@ export interface RouteAccessibilityScore {
     timeScore: number;
     criticalFeatureScore: number;
     walkPenalty: number;
+    transferPenalty?: number;
     environmentScore?: number;
   };
+  factors?: ScoreFactor[];
 }
 
 export type LatLng = { lat: number; lng: number };

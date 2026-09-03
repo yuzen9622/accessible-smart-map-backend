@@ -361,6 +361,21 @@ export interface DriveLeg {
   modeFallback?: "DRIVE";
 }
 
+export interface ScoreFactor {
+  type: "positive" | "negative" | "info";
+  icon:
+    | "elevator"
+    | "ramp"
+    | "bus_accessible"
+    | "stairs"
+    | "slope"
+    | "long_walk"
+    | "sparse_data"
+    | "transfer";
+  text: string;
+  impact: number;
+}
+
 export interface AccessibleRoute {
   routeId: string;
   /** Stable identity shared by every replacement route in one navigation. */
@@ -396,8 +411,10 @@ export interface AccessibleRoute {
     timeScore: number;
     criticalFeatureScore: number;
     walkPenalty: number;
+    transferPenalty?: number;
     environmentScore?: number;
   };
+  factors?: ScoreFactor[];
   accessibilitySummary?: string;
   hazardAdvisory?: RouteHazardAdvisory;
   attribution?: string;

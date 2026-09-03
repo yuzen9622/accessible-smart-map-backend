@@ -738,6 +738,25 @@ const MotorcycleLegSchema = DriveLegSchema.extend({
   type: z.literal("MOTORCYCLE").openapi({ example: "MOTORCYCLE" }),
 }).openapi("MotorcycleLeg");
 
+const ScoreFactorSchema = z
+  .object({
+    type: z.enum(["positive", "negative", "info"]),
+    icon: z.enum([
+      "elevator",
+      "ramp",
+      "bus_accessible",
+      "stairs",
+      "slope",
+      "long_walk",
+      "sparse_data",
+      "transfer",
+    ]),
+    text: z.string(),
+    impact: z.number(),
+  })
+  .strict()
+  .openapi("ScoreFactor");
+
 const ScoreComponentsSchema = z
   .object({
     facilityScore: z.number().openapi({
@@ -756,6 +775,10 @@ const ScoreComponentsSchema = z
       example: 8,
       description:
         "依模式扣分的步行距離懲罰（0 至模式上限；輪椅 35、長者 30、視障 25、一般 15）",
+    }),
+    transferPenalty: z.number().optional().openapi({
+      example: 8,
+      description: "依模式與轉乘次數扣分的轉乘負擔懲罰（上限 20 分）",
     }),
     environmentScore: z.number().optional().openapi({
       example: 88,
@@ -890,6 +913,9 @@ export const AccessibleRouteSchema = z
       }),
     scoreComponents: ScoreComponentsSchema.optional().openapi({
       description: "accessibilityScore 的子項目拆解",
+    }),
+    factors: z.array(ScoreFactorSchema).optional().openapi({
+      description: "影響路線無障礙評分的結構化關鍵因素清單",
     }),
     accessibilitySummary: z.string().optional().openapi({
       example: "全程設有電梯，步行約 450 公尺、路面大致平坦，適合輪椅通行",

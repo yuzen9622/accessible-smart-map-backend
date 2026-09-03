@@ -7,6 +7,7 @@ import {
   widthContribution,
   crossSlopeContribution,
   walkPenaltyScore,
+  transferPenaltyScore,
   walkSpeedMps,
   dataConfidenceFromRatio,
   routeCost,
@@ -41,14 +42,18 @@ describe("slope / width / cross-slope contributions", () => {
   });
 });
 
-describe("scoreFacilitySet — P3 neutral baseline", () => {
-  it("returns the neutral baseline (40) for NO data, not 0", () => {
+describe("scoreFacilitySet — neutral baseline", () => {
+  it("returns the neutral baseline (70) for NO data, not 0", () => {
     expect(scoreFacilitySet([])).toBe(FACILITY_NEUTRAL);
-    expect(FACILITY_NEUTRAL).toBe(40);
+    expect(FACILITY_NEUTRAL).toBe(70);
   });
   it("scores an elevator node above the neutral baseline", () => {
     const score = scoreFacilitySet([node("elevator", { elevator: "yes" })]);
     expect(score).toBeGreaterThan(FACILITY_NEUTRAL);
+  });
+  it("scores stairs below the neutral baseline", () => {
+    const score = scoreFacilitySet([node("stairs", { highway: "steps" })]);
+    expect(score).toBeLessThan(FACILITY_NEUTRAL);
   });
   it("scoreOsmNode rewards a wheelchair=yes elevator", () => {
     expect(
@@ -109,7 +114,7 @@ describe("routeCost / prerankCost — walk distance & transfers count", () => {
   });
 });
 
-describe("scoreRoute — walk penalty, confidence, warnings", () => {
+describe("scoreRoute — walk penalty, confidence, warnings, neutral baseline, and factors", () => {
   it("a long walk lowers the total score", () => {
     const short = scoreRoute([], 30, 40, 30, 0, "wheelchair", 425, 1);
     const long = scoreRoute([], 30, 40, 30, 0, "wheelchair", 1444, 1);
@@ -122,6 +127,76 @@ describe("scoreRoute — walk penalty, confidence, warnings", () => {
     const r = scoreRoute([], 30, 40, 30, 0, "wheelchair", 0, 0);
     expect(r.dataConfidence).toBe("low");
     expect(r.warnings).toContain("沿途無障礙資料不足，分數為保守估計");
+  });
+  it("provides neutral baseline (65~70 a11y baseline) when no OSM facility data is present", () => {
+    const r = scoreRoute([], 30, 40, 30, 0, "wheelchair", 0, 0);
+    // components.facilityScore = 70, criticalFeatureScore = 65
+    // a11yScore = 70*(40/65) + 65*(25/65) = 68.08
+    expect(r.components.facilityScore).toBe(70);
+    expect(r.components.criticalFeatureScore).toBe(65);
+    expect(r.totalScore).toBeGreaterThanOrEqual(65);
+    expect(r.factors).toBeDefined();
+    expect(r.factors?.some((f) => f.icon === "sparse_data")).toBe(true);
+  });
+  it("produces structured explainability factors for positive, negative, and info signals", () => {
+    const positiveNodes = [
+      node("elevator", { elevator: "yes" }),
+      node("kerb_cut", { kerb: "flush" }),
+    ];
+    const posRoute = scoreRoute(
+      positiveNodes,
+      30,
+      40,
+      30,
+      2,
+      "wheelchair",
+      0,
+      1,
+    );
+    expect(posRoute.factors).toBeDefined();
+    expect(
+      posRoute.factors?.some(
+        (f) => f.icon === "elevator" && f.type === "positive",
+      ),
+    ).toBe(true);
+    expect(
+      posRoute.factors?.some((f) => f.icon === "ramp" && f.type === "positive"),
+    ).toBe(true);
+    expect(
+      posRoute.factors?.some(
+        (f) => f.icon === "bus_accessible" && f.type === "positive",
+      ),
+    ).toBe(true);
+
+    const negativeNodes = [
+      node("stairs", { highway: "steps" }),
+      node("crossing", { incline: "12%" }),
+    ];
+    const negRoute = scoreRoute(
+      negativeNodes,
+      30,
+      40,
+      30,
+      0,
+      "wheelchair",
+      1200,
+      1,
+    );
+    expect(
+      negRoute.factors?.some(
+        (f) => f.icon === "stairs" && f.type === "negative",
+      ),
+    ).toBe(true);
+    expect(
+      negRoute.factors?.some(
+        (f) => f.icon === "slope" && f.type === "negative",
+      ),
+    ).toBe(true);
+    expect(
+      negRoute.factors?.some(
+        (f) => f.icon === "long_walk" && f.type === "negative",
+      ),
+    ).toBe(true);
   });
   it("keeps totalScore within 0–100", () => {
     const r = scoreRoute([], 200, 40, 30, 0, "wheelchair", 100000, 0);
@@ -364,5 +439,71 @@ describe("resolveA11yConstraints", () => {
         "bogus" as Parameters<typeof resolveA11yConstraints>[0],
       ),
     ).toEqual({ avoidStairs: false, requireElevator: false });
+  });
+});
+
+describe("transferPenaltyScore & transfer integration in scoreRoute", () => {
+  it("transferPenaltyScore: 0 for direct routes, scaled by mode", () => {
+    expect(transferPenaltyScore(0, "wheelchair")).toBe(0);
+    expect(transferPenaltyScore(1, "wheelchair")).toBe(10); // 1 * 5 * 2 = 10
+    expect(transferPenaltyScore(2, "wheelchair")).toBe(20); // 2 * 5 * 2 = 20 (capped at 20)
+    expect(transferPenaltyScore(3, "wheelchair")).toBe(20); // capped at 20
+    expect(transferPenaltyScore(1, "elderly")).toBe(8); // 1 * 5 * 1.5 = 7.5 -> 8
+    expect(transferPenaltyScore(1, "normal")).toBe(5); // 1 * 5 * 1 = 5
+  });
+
+  it("scoreRoute penalizes routes with transfers compared to direct routes", () => {
+    const direct = scoreRoute(
+      [],
+      20,
+      30,
+      10,
+      1,
+      "wheelchair",
+      150,
+      1,
+      undefined,
+      0,
+    );
+    const with1Transfer = scoreRoute(
+      [],
+      20,
+      30,
+      10,
+      1,
+      "wheelchair",
+      150,
+      1,
+      undefined,
+      1,
+    );
+    const with2Transfers = scoreRoute(
+      [],
+      20,
+      30,
+      10,
+      1,
+      "wheelchair",
+      150,
+      1,
+      undefined,
+      2,
+    );
+
+    expect(direct.components.transferPenalty).toBe(0);
+    expect(with1Transfer.components.transferPenalty).toBe(10);
+    expect(with2Transfers.components.transferPenalty).toBe(20);
+
+    expect(direct.totalScore).toBeGreaterThan(with1Transfer.totalScore);
+    expect(with1Transfer.totalScore).toBeGreaterThan(with2Transfers.totalScore);
+
+    // Factors verification
+    expect(direct.factors?.some((f) => f.text.includes("一車直達"))).toBe(true);
+    expect(
+      with1Transfer.factors?.some((f) => f.text.includes("需轉乘 1 次")),
+    ).toBe(true);
+    expect(
+      with2Transfers.factors?.some((f) => f.text.includes("需轉乘 2 次")),
+    ).toBe(true);
   });
 });
