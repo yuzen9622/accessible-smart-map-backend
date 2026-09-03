@@ -83,6 +83,7 @@ import type {
   MetroLeg,
   ThsrLeg,
   TraLeg,
+  DriveLeg,
   AccessibleRoute,
   TravelMode,
 } from "../../types/route";
@@ -1556,20 +1557,25 @@ export async function planAccessibleRouteFromRequest(
   const waypointsOpt = waypoints.length ? waypoints : undefined;
 
   const tPlan = Date.now();
+  let trafficHookMs = 0;
   let routes: AccessibleRoute[];
   // Set when a nominal "walk" request actually got routed via Valhalla (no
   // elevation data) instead of OTP, so slopeConstraint reporting isn't fooled
   // by the request's travelMode into claiming the OTP 8.3% default applied.
   let routedByEngineWithNoElevationData = false;
-  const logRequestTiming = () =>
+  const logRequestTiming = () => {
+    const planTotal = Date.now() - tPlan;
     console.log(
       "[route-timing] request",
       JSON.stringify({
         geocode: geocodeMs,
         city: cityMs,
-        plan: Date.now() - tPlan,
+        "plan.total": planTotal,
+        "plan.routing": Math.max(planTotal - trafficHookMs, 0),
+        "plan.traffic.total": trafficHookMs,
       }),
     );
+  };
 
   if (travelMode === "transit") {
     const transitMode = mode ?? "normal";
@@ -1681,6 +1687,9 @@ export async function planAccessibleRouteFromRequest(
           mode: roadMode,
           avoidStairs: constraints.avoidStairs,
         });
+        if (outcome.kind === "ok") {
+          trafficHookMs += outcome.trafficMs ?? 0;
+        }
         if (outcome.kind === "unavailable") {
           logRequestTiming();
           return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT);
@@ -1752,6 +1761,9 @@ export async function planAccessibleRouteFromRequest(
       ...(finalWalkTarget ? { finalWalkTarget } : {}),
       ...(arrivalParking ? { arrivalParking } : {}),
     });
+    if (outcome.kind === "ok") {
+      trafficHookMs += outcome.trafficMs ?? 0;
+    }
     // Two-stage fallback: if the parking bay is not drivable (NO_ROUTE → empty),
     // retry once with the true destination and the plain current-behavior path.
     // Only "empty" retries; "unavailable"/"error" keep their existing meaning.
@@ -1763,6 +1775,9 @@ export async function planAccessibleRouteFromRequest(
         mode: roadMode,
         avoidStairs: constraints.avoidStairs,
       });
+      if (outcome.kind === "ok") {
+        trafficHookMs += outcome.trafficMs ?? 0;
+      }
     }
     logRequestTiming();
     if (outcome.kind === "unavailable") {
@@ -2029,10 +2044,29 @@ async function finalizeDrivingRoutes(
 }
 
 type DrivingOutcome =
-  | { kind: "ok"; routes: AccessibleRoute[] }
+  | { kind: "ok"; routes: AccessibleRoute[]; trafficMs?: number }
   | { kind: "unavailable" }
   | { kind: "empty" }
   | { kind: "error" };
+
+/**
+ * Executes a promise with an explicit timeout, guaranteeing timer cleanup via clearTimeout.
+ */
+function withTimeoutBudget<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutMessage: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  });
+}
 
 /**
  * Plan + finalize a drive/motorcycle/walk route via self-hosted Valhalla.
@@ -2049,6 +2083,46 @@ async function findDrivingRoutes(
 ): Promise<DrivingOutcome> {
   const { planValhallaRoute, ValhallaRoutingError } =
     await import("./planners/valhalla-routing");
+
+  let incidents: import("../../types/traffic").RoadIncident[] = [];
+  let excludeLocations: LatLng[] | undefined;
+
+  const { TRAFFIC_ROUTE_HOOK_TIMEOUT_MS } =
+    await import("../../config/traffic");
+
+  if (opts.travelMode !== "walk") {
+    try {
+      const { getActiveRoadIncidents } =
+        await import("../traffic/road-incident.service");
+      const { bboxOfPoints, pickExcludeLocations } =
+        await import("./planners/traffic-overlay");
+
+      const allPoints: LatLng[] = [
+        origin,
+        ...(opts.waypoints ?? []),
+        destination,
+      ];
+      const searchBbox = bboxOfPoints(allPoints, 0.02);
+
+      incidents = await withTimeoutBudget(
+        getActiveRoadIncidents({ bbox: searchBbox }),
+        TRAFFIC_ROUTE_HOOK_TIMEOUT_MS,
+        "Traffic incident fetch timeout",
+      );
+      const closures = incidents.filter((i) => i.severity === "closure");
+      if (closures.length > 0) {
+        excludeLocations = pickExcludeLocations(closures, origin, destination);
+      }
+    } catch (incidentErr) {
+      console.warn(
+        "[accessible-route] incident avoidance fetch failed or timed out:",
+        incidentErr,
+      );
+      incidents = [];
+      excludeLocations = undefined;
+    }
+  }
+
   let raw: AccessibleRoute[];
   try {
     raw = await planValhallaRoute(origin, destination, {
@@ -2058,6 +2132,7 @@ async function findDrivingRoutes(
       finalWalkTarget: opts.finalWalkTarget,
       mode: opts.mode,
       avoidStairs: opts.avoidStairs,
+      excludeLocations,
     });
   } catch (err) {
     if (err instanceof ValhallaRoutingError) return { kind: "unavailable" };
@@ -2082,7 +2157,121 @@ async function findDrivingRoutes(
       ];
     }
   }
-  return routes.length ? { kind: "ok", routes } : { kind: "empty" };
+
+  let trafficHookMs = 0;
+  if (opts.travelMode !== "walk" && routes.length > 0) {
+    const tTrafficStart = Date.now();
+    try {
+      await withTimeoutBudget(
+        (async () => {
+          const tGeo = Date.now();
+          const { getTrafficGeometrySnapshot } =
+            await import("../traffic/traffic-geometry.runtime");
+          const snapshot = getTrafficGeometrySnapshot();
+          const loadGeometryMs = Date.now() - tGeo;
+
+          let routeSegments = 0;
+          for (const r of routes) {
+            for (const leg of r.legs) {
+              if (
+                (leg.type === "DRIVE" || leg.type === "MOTORCYCLE") &&
+                (leg as DriveLeg).polyline &&
+                (leg as DriveLeg).polyline.length >= 2
+              ) {
+                routeSegments += (leg as DriveLeg).polyline.length - 1;
+              }
+            }
+          }
+
+          let loadLiveMs = 0;
+          let spatialMatchMs = 0;
+          let aggregateMs = 0;
+          let candidateProbes = 0;
+          let matchedSections = 0;
+
+          if (snapshot && routeSegments > 0) {
+            const { getLiveSectionsForBbox } =
+              await import("../traffic/traffic-flow.service");
+            const { applyTrafficOverlay, bboxOfPolyline } =
+              await import("./planners/traffic-overlay");
+
+            const allCoords: [number, number][] = [];
+            for (const r of routes) {
+              for (const leg of r.legs) {
+                if (
+                  (leg.type === "DRIVE" || leg.type === "MOTORCYCLE") &&
+                  (leg as DriveLeg).polyline
+                ) {
+                  allCoords.push(...(leg as DriveLeg).polyline);
+                }
+              }
+            }
+
+            const routesBbox = bboxOfPolyline(allCoords);
+            const [minLng, minLat, maxLng, maxLat] = routesBbox;
+            const paddedBbox: [number, number, number, number] = [
+              minLng - 0.01,
+              minLat - 0.01,
+              maxLng + 0.01,
+              maxLat + 0.01,
+            ];
+
+            const tLive = Date.now();
+            const liveSectionsMap = await getLiveSectionsForBbox(paddedBbox);
+            loadLiveMs = Date.now() - tLive;
+
+            const overlayMetrics = applyTrafficOverlay(
+              routes,
+              liveSectionsMap,
+              snapshot.index,
+            );
+            spatialMatchMs = overlayMetrics.spatialMatchMs;
+            aggregateMs = overlayMetrics.aggregateMs;
+            candidateProbes = overlayMetrics.candidateProbes;
+            matchedSections = overlayMetrics.matchedSections;
+          }
+
+          if (incidents.length > 0) {
+            const tIncStart = performance.now();
+            const { applyIncidentAdvisories } =
+              await import("./planners/traffic-overlay");
+            applyIncidentAdvisories(routes, incidents);
+            aggregateMs += Math.round(performance.now() - tIncStart);
+          }
+
+          const trafficTotalMs = Date.now() - tTrafficStart;
+          console.log(
+            "[route-timing] traffic",
+            JSON.stringify({
+              "plan.traffic.total": trafficTotalMs,
+              "plan.traffic.loadLive": loadLiveMs,
+              "plan.traffic.loadGeometry": loadGeometryMs,
+              "plan.traffic.spatialMatch": spatialMatchMs,
+              "plan.traffic.aggregate": aggregateMs,
+              "plan.traffic.routeSegments": routeSegments,
+              "plan.traffic.indexedSegments": snapshot
+                ? snapshot.index.segmentCount
+                : 0,
+              "plan.traffic.candidateProbes": candidateProbes,
+              "plan.traffic.matchedSections": matchedSections,
+            }),
+          );
+        })(),
+        TRAFFIC_ROUTE_HOOK_TIMEOUT_MS,
+        "Traffic overlay hook timeout",
+      );
+    } catch (trafficErr) {
+      console.warn(
+        "[accessible-route] traffic overlay failed or timed out, degrading to free flow:",
+        trafficErr,
+      );
+    }
+    trafficHookMs = Date.now() - tTrafficStart;
+  }
+
+  return routes.length
+    ? { kind: "ok", routes, trafficMs: trafficHookMs }
+    : { kind: "empty" };
 }
 
 /**

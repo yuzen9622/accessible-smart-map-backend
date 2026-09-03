@@ -1,6 +1,7 @@
 import axios from "axios";
 import {
   VALHALLA_BASE_URL,
+  VALHALLA_MAX_EXCLUDE_LOCATIONS,
   VALHALLA_ROUTE_PATH,
   VALHALLA_TIMEOUT_MS,
 } from "../config/valhalla";
@@ -41,6 +42,8 @@ export interface ComputeValhallaRoutesParams {
   costing: ValhallaCosting;
   computeAlternatives?: boolean;
   wheelchair?: boolean;
+  /** Points the route must not pass through, e.g. closed-road incidents. */
+  excludeLocations?: { lat: number; lng: number }[];
 }
 
 export type ComputeValhallaRoutesResult =
@@ -165,6 +168,14 @@ export async function computeValhallaRoutes(
   };
   if (params.computeAlternatives && !params.waypoints?.length)
     body.alternates = 2;
+  // exclude_locations is a top-level /route field (not a costing option) and a
+  // HARD exclusion: Valhalla answers error_code 442 rather than routing through
+  // the point. The key is omitted when empty so existing requests are unchanged.
+  if (params.excludeLocations?.length) {
+    body.exclude_locations = params.excludeLocations
+      .slice(0, VALHALLA_MAX_EXCLUDE_LOCATIONS)
+      .map(({ lat, lng }) => ({ lat, lon: lng }));
+  }
 
   try {
     const response = await axios.post(

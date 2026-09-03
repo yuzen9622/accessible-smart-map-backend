@@ -1,6 +1,7 @@
 import { encode } from "@googlemaps/polyline-codec";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { computeValhallaRoutes } from "../../../adapters/valhalla.adapter";
+import { TRAFFIC_MSG } from "../../../constants/messages";
 import { planOtpWalkDetailed } from "./otp-routing";
 import {
   decodeValhallaShape,
@@ -719,5 +720,78 @@ describe("planValhallaRoute finalWalkTarget (parking-aware tail)", () => {
     expect(tail.type === "WALK" && near(tail.polyline.at(-1)!, DEST)).toBe(
       true,
     );
+  });
+});
+
+describe("planValhallaRoute closed-road exclusions", () => {
+  beforeEach(resetPlannerMocks);
+
+  const CLOSURES = [
+    { lat: 25.0439, lng: 121.5445 },
+    { lat: 25.0401, lng: 121.5502 },
+  ];
+
+  /** Drive attempts only, excluding the pedestrian connector calls. */
+  const driveCalls = () =>
+    compute.mock.calls.filter((call) => call[0].costing === "auto");
+
+  it("forwards the requested exclusions on the first attempt", async () => {
+    compute.mockResolvedValue({ status: "OK", trips: [normalizedTrip] });
+    await planValhallaRoute(
+      { lat: 25, lng: 121 },
+      { lat: 25.1, lng: 121.1 },
+      {
+        travelMode: "drive",
+        excludeLocations: CLOSURES,
+      },
+    );
+    expect(driveCalls()).toHaveLength(1);
+    expect(driveCalls()[0][0]).toMatchObject({ excludeLocations: CLOSURES });
+  });
+
+  it("retries without exclusions and warns when they remove every route", async () => {
+    compute
+      .mockResolvedValueOnce({ status: "NO_ROUTE", trips: [] })
+      .mockResolvedValueOnce({ status: "OK", trips: [normalizedTrip] });
+    const routes = await planValhallaRoute(
+      { lat: 25, lng: 121 },
+      { lat: 25.1, lng: 121.1 },
+      { travelMode: "drive", excludeLocations: CLOSURES },
+    );
+    expect(driveCalls()).toHaveLength(2);
+    expect(driveCalls()[1][0]).not.toHaveProperty("excludeLocations");
+    expect(routes).not.toHaveLength(0);
+    expect(routes[0].accessibilityHighlights).toContain(
+      TRAFFIC_MSG.CLOSURE_BYPASS_FAILED,
+    );
+  });
+
+  it("does not retry when no exclusions were requested", async () => {
+    compute.mockResolvedValue({ status: "NO_ROUTE", trips: [] });
+    await expect(
+      planValhallaRoute(
+        { lat: 25, lng: 121 },
+        { lat: 25.1, lng: 121.1 },
+        {
+          travelMode: "drive",
+        },
+      ),
+    ).resolves.toEqual([]);
+    expect(driveCalls()).toHaveLength(1);
+  });
+
+  it("gives up after the unexcluded retry also finds no route", async () => {
+    compute.mockResolvedValue({ status: "NO_ROUTE", trips: [] });
+    await expect(
+      planValhallaRoute(
+        { lat: 25, lng: 121 },
+        { lat: 25.1, lng: 121.1 },
+        {
+          travelMode: "drive",
+          excludeLocations: CLOSURES,
+        },
+      ),
+    ).resolves.toEqual([]);
+    expect(driveCalls()).toHaveLength(2);
   });
 });

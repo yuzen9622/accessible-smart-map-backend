@@ -434,6 +434,28 @@ const MatchedAlertSchema = z
   })
   .openapi("MatchedAlert");
 
+const RoadIncidentSchema = z
+  .object({
+    incidentId: z.string().openapi({ example: "379530000H_001-01-11501977" }),
+    title: z.string().openapi({ example: "道路施工" }),
+    description: z.string().optional().openapi({ example: "道路維護" }),
+    severity: z.enum(["closure", "advisory"]).openapi({
+      example: "advisory",
+      description: "closure 會觸發避讓；advisory 僅警示",
+    }),
+    roadName: z.string().optional().openapi({ example: "大度路" }),
+    location: CoordSchema.openapi({
+      example: { lat: 25.12333, lng: 121.463906 },
+    }),
+    startTime: z.string().optional(),
+    endTime: z
+      .string()
+      .optional()
+      .openapi({ description: "缺值＝TDX 未公布結束時間，視為仍有效" }),
+  })
+  .strict()
+  .openapi("RoadIncident");
+
 const LowFloorAlternativeSchema = z
   .object({
     plateNumb: z.string().openapi({ example: "KEB-5678" }),
@@ -709,12 +731,12 @@ const DriveLegSchema = z
     durationInTrafficMin: z.number().optional().openapi({
       example: 21,
       description:
-        "交通感知行駛時間（塞車預測）；目前自架 Valhalla 引擎未提供，保留供未來擴充",
+        "以 TDX 即時路況路段幾何比對本路段推導的行駛時間；比對覆蓋率不足時缺值（缺值＝未知）",
     }),
-    trafficLevel: z
-      .enum(["light", "moderate", "heavy"])
-      .optional()
-      .openapi({ example: "heavy", description: "由塞車/自由流時間比值推導" }),
+    trafficLevel: z.enum(["light", "moderate", "heavy"]).optional().openapi({
+      example: "heavy",
+      description: "由即時路況推導時間與自由流時間的比值推導；缺值＝未知",
+    }),
     summary: z
       .string()
       .optional()
@@ -726,6 +748,36 @@ const DriveLegSchema = z
       ],
     }),
     steps: z.array(DriveStepSchema).optional(),
+    incidents: z.array(RoadIncidentSchema).optional().openapi({
+      description:
+        "本路段上的 TDX 即時路況事件；缺值＝未比對到事件（不代表沒有事件）",
+    }),
+    trafficSegments: z
+      .array(
+        z.object({
+          fromIndex: z
+            .number()
+            .openapi({ example: 0, description: "對應 polyline 起點索引" }),
+          toIndex: z
+            .number()
+            .openapi({ example: 15, description: "對應 polyline 終點索引" }),
+          trafficLevel: z
+            .enum(["light", "moderate", "heavy", "severe", "closed", "unknown"])
+            .openapi({
+              example: "heavy",
+              description: "分段語意等級：供前端依主題/色弱模式自行對應顏色",
+            }),
+          congestionLevel: z.number().openapi({
+            example: 4,
+            description: "TDX 原始壅塞等級數值 (1..6, -1, -99)",
+          }),
+        }),
+      )
+      .optional()
+      .openapi({
+        description:
+          "沿線分段路況等級（供前端客戶端決定具體色碼與多色路徑渲染）",
+      }),
     modeFallback: z.literal("DRIVE").optional().openapi({
       description:
         "僅騎車模式：該地區不支援 TWO_WHEELER 時，改用開車路線的標記",

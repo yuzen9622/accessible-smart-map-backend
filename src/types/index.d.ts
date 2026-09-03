@@ -483,3 +483,16 @@ export interface ISosSession {
   createdAt: Date;
   updatedAt: Date;
 }
+
+export interface ITrafficSection {
+  sectionId: string;
+  city: string;
+  roadName?: string;
+  roadClass?: number;
+  geometry: {
+    type: "LineString" | "MultiLineString";
+    coordinates: number[][] | number[][][];
+  };
+  lengthM?: number;
+  updatedAt?: Date;
+}

@@ -8,6 +8,7 @@
  */
 
 import type { HazardSeverity, HazardType, IOsmA11y } from "./index";
+import type { RoadIncident } from "./traffic";
 import type { MatchedAlert, MetroAlert } from "./transit";
 
 export type AccessibilityMode =
@@ -344,8 +345,10 @@ export interface DriveStep {
 
 /**
  * A road-driving leg (car or motorcycle) produced by the road router.
- * `durationMin` is free-flow; `durationInTrafficMin` is the traffic-aware
- * estimate when a future departure time was supplied.
+ * `durationMin` is always free-flow. `durationInTrafficMin` and `trafficLevel`
+ * are derived by matching TDX live section geometry onto this leg's polyline,
+ * so they are absent whenever matched coverage is too thin to be meaningful —
+ * absent means unknown, not "no congestion".
  */
 export interface DriveLeg {
   type: "DRIVE" | "MOTORCYCLE";
@@ -359,6 +362,22 @@ export interface DriveLeg {
   polyline: [number, number][];
   steps?: DriveStep[];
   modeFallback?: "DRIVE";
+  /** Active TDX road events on this leg; absent means none were matched. */
+  incidents?: RoadIncident[];
+  /**
+   * Road traffic segments along the polyline.
+   * Defined as intervals [fromIndex, toIndex] referencing `polyline`,
+   * with semantic trafficLevel for frontend client-side coloring.
+   */
+  trafficSegments?: DriveTrafficSegment[];
+}
+
+export interface DriveTrafficSegment {
+  fromIndex: number;
+  toIndex: number;
+  trafficLevel:
+    "light" | "moderate" | "heavy" | "severe" | "closed" | "unknown";
+  congestionLevel: number;
 }
 
 export interface ScoreFactor {

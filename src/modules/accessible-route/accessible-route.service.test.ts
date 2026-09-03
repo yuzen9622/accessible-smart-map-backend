@@ -411,6 +411,20 @@ describe("planAccessibleRouteFromRequest parking-aware arrival", () => {
     expect(findNearbyParking).not.toHaveBeenCalled();
     expect(res.ok).toBe(true);
   });
+
+  it("degrades gracefully to free-flow routes when traffic overlay fails or times out", async () => {
+    vi.mocked(findNearbyParking).mockResolvedValue(null as any);
+    const mockRoute = driveRoute([]);
+    vi.mocked(planValhallaRoute).mockResolvedValue([mockRoute] as any);
+
+    const res = await planAccessibleRouteFromRequest(driveRequest);
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.data.routes.length).toBeGreaterThan(0);
+      expect(res.data.routes[0].totalMinutes).toBe(20);
+    }
+  });
 });
 
 const walkRequest = {

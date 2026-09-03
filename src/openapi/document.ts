@@ -16,6 +16,7 @@ import "../modules/emergency-contact/emergency-contact.schema";
 import "../modules/sos/sos.schema";
 import "../modules/line/line.schema";
 import "../modules/place-search/place-search.schema";
+import "../modules/traffic/traffic.schema";
 
 export function generateOpenAPIDocument() {
   const generator = new OpenApiGeneratorV3(registry.definitions);

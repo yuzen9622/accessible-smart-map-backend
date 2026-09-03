@@ -9,8 +9,14 @@ import { startAlertIngestion } from "./modules/transit/alert.ingest";
 import { mqttConfig } from "./config/mqtt";
 import type { TdxMqttHandle } from "./adapters/tdx-mqtt.adapter";
 import { closePedGraphRuntime } from "./modules/accessible-route/planners/pedestrian-a11y/graph-runtime";
+import {
+  warmTrafficGeometryRuntime,
+  startTrafficGeometryRefreshJob,
+} from "./modules/traffic/traffic-geometry.runtime";
+import { startTrafficLiveRefreshJob } from "./modules/traffic/traffic-live.worker";
 const PORT = process.env.PORT || 3000;
 let passwordAssistanceTimer: NodeJS.Timeout | undefined;
+let trafficGeometryTimer: NodeJS.Timeout | undefined;
 let mqttHandle: TdxMqttHandle | undefined;
 let shutdownStarted = false;
 
@@ -35,12 +41,18 @@ if (mqttConfig.enabled) {
 }
 const uri = process.env.DATABASE_URL ?? "";
 
+// Live traffic refresher is SWR + Redis only (no Mongo dependency); start unconditionally.
+const trafficLiveTimer = startTrafficLiveRefreshJob();
+
 mongoose
   .connect(uri)
   .then(() => {
     console.log("Connected to MongoDB");
     startHazardExpiryJob();
     passwordAssistanceTimer = startPasswordAssistanceWorker();
+    void warmTrafficGeometryRuntime().then(() => {
+      trafficGeometryTimer = startTrafficGeometryRefreshJob();
+    });
   })
   .catch((err) => {
     console.error("Error connecting to MongoDB:", err);
@@ -51,6 +63,8 @@ function shutdown(signalLog: string): void {
   if (shutdownStarted) return;
   shutdownStarted = true;
   if (passwordAssistanceTimer) clearInterval(passwordAssistanceTimer);
+  if (trafficGeometryTimer) clearInterval(trafficGeometryTimer);
+  if (trafficLiveTimer) clearInterval(trafficLiveTimer);
   void (async () => {
     await Promise.allSettled([
       mqttHandle ? mqttHandle.stop() : Promise.resolve(),

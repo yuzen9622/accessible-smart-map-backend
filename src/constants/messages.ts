@@ -72,6 +72,22 @@ export const ROUTE_MSG = {
   UPSTREAM_TIMEOUT: "路線規劃服務逾時，請稍後再試",
 } as const satisfies Record<keyof typeof ROUTE_REASON, string>;
 
+/** User-facing strings for the TDX Road/Traffic integration. */
+export const TRAFFIC_MSG = {
+  OK: "即時路況查詢成功",
+  FLOW_LIVE_DEGRADED: "即時路況資料暫時不可用，已降級為路網基本資訊",
+  SECTION_DB_ERROR: "路段幾何資料庫未初始化或無法存取",
+  BBOX_TOO_LARGE: "查詢範圍過大，請縮小 bounding box 範圍",
+  INCIDENT_OK: "即時路況事件查詢成功",
+  INCIDENT_DEGRADED: "即時路況事件資料暫時不可用",
+  CLOSURE_BYPASS_FAILED: "無法繞開封閉路段，路線仍會經過該處，請留意現場管制",
+} as const;
+
+export const TRAFFIC_REASON = {
+  SECTION_DB_ERROR: "TRAFFIC_SECTION_DB_ERROR",
+  BBOX_TOO_LARGE: "TRAFFIC_BBOX_TOO_LARGE",
+} as const;
+
 export const REROUTE_MSG = {
   OK: "路線已重新規劃",
   GONE: "routeToken 已過期或不支援重新規劃",

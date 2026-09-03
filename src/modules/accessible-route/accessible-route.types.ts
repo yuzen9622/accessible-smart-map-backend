@@ -109,6 +109,8 @@ export interface PlanRoadRouteOptions {
   avoidStairs?: boolean;
   /** True destination for the tail walk when the drive routes to a proxy arrival point (e.g. disabled parking). */
   finalWalkTarget?: LatLng;
+  /** Closed-road points the route must avoid; dropped when no route survives them. */
+  excludeLocations?: LatLng[];
 }
 
 export interface FindDrivingRoutesOptions {

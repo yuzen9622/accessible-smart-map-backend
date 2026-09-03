@@ -7,6 +7,7 @@ import {
   type ValhallaCosting,
 } from "../../../adapters/valhalla.adapter";
 import { VALHALLA_OSM_ATTRIBUTION } from "../../../config/valhalla";
+import { TRAFFIC_MSG } from "../../../constants/messages";
 import type {
   AccessibleRoute,
   DriveLeg,
@@ -628,16 +629,31 @@ export async function planValhallaRoute(
   destination: LatLng,
   opts: PlanRoadRouteOptions,
 ): Promise<AccessibleRoute[]> {
-  const result = await computeValhallaRoutes({
-    origin,
-    destination,
-    waypoints: opts.waypoints,
-    costing: COSTING[opts.travelMode],
-    computeAlternatives: true,
-    wheelchair:
-      opts.travelMode === "walk" &&
-      (opts.avoidStairs ?? opts.mode === "wheelchair"),
-  });
+  const callValhalla = (excludeLocations?: LatLng[]) =>
+    computeValhallaRoutes({
+      origin,
+      destination,
+      waypoints: opts.waypoints,
+      costing: COSTING[opts.travelMode],
+      computeAlternatives: true,
+      wheelchair:
+        opts.travelMode === "walk" &&
+        (opts.avoidStairs ?? opts.mode === "wheelchair"),
+      ...(excludeLocations?.length ? { excludeLocations } : {}),
+    });
+
+  const requested = opts.excludeLocations?.length
+    ? opts.excludeLocations
+    : undefined;
+  let result = await callValhalla(requested);
+  // exclude_locations is a hard exclusion, so a closure sitting on the only
+  // viable road makes Valhalla answer 442. Routing through it with a warning
+  // beats handing back no route at all.
+  let bypassFailed = false;
+  if (result.status === "NO_ROUTE" && requested) {
+    result = await callValhalla();
+    bypassFailed = true;
+  }
   if (result.status === "NO_ROUTE") return [];
   if (result.status === "UPSTREAM_ERROR") {
     throw new ValhallaRoutingError(
@@ -653,6 +669,10 @@ export async function planValhallaRoute(
   } catch (error) {
     if (error instanceof ValhallaRoutingError) throw error;
     throw new ValhallaRoutingError("Malformed Valhalla response");
+  }
+  if (bypassFailed) {
+    for (const route of routes)
+      route.accessibilityHighlights.push(TRAFFIC_MSG.CLOSURE_BYPASS_FAILED);
   }
   if (opts.travelMode === "walk" || routes.length === 0) return routes;
   return attachWalkAccessLegs(

@@ -1,7 +1,11 @@
 import axios from "axios";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { computeValhallaRoutes } from "./valhalla.adapter";
-import { VALHALLA_BASE_URL, VALHALLA_ROUTE_PATH } from "../config/valhalla";
+import {
+  VALHALLA_BASE_URL,
+  VALHALLA_MAX_EXCLUDE_LOCATIONS,
+  VALHALLA_ROUTE_PATH,
+} from "../config/valhalla";
 
 vi.mock("axios", () => ({ default: { post: vi.fn(), isAxiosError: vi.fn() } }));
 const post = vi.mocked(axios.post);
@@ -110,6 +114,60 @@ describe("computeValhallaRoutes", () => {
       computeAlternatives: true,
     });
     expect(post.mock.calls[0][1]).not.toHaveProperty("alternates");
+  });
+
+  it("omits exclude_locations when none are requested", async () => {
+    post.mockResolvedValue({ data: { trip } });
+    await computeValhallaRoutes({
+      origin: { lat: 1, lng: 2 },
+      destination: { lat: 3, lng: 4 },
+      costing: "auto",
+    });
+    expect(post.mock.calls[0][1]).not.toHaveProperty("exclude_locations");
+
+    post.mockResolvedValue({ data: { trip } });
+    await computeValhallaRoutes({
+      origin: { lat: 1, lng: 2 },
+      destination: { lat: 3, lng: 4 },
+      costing: "auto",
+      excludeLocations: [],
+    });
+    expect(post.mock.calls[1][1]).not.toHaveProperty("exclude_locations");
+  });
+
+  it("sends exclude_locations as top-level lat/lon points", async () => {
+    post.mockResolvedValue({ data: { trip } });
+    await computeValhallaRoutes({
+      origin: { lat: 1, lng: 2 },
+      destination: { lat: 3, lng: 4 },
+      costing: "auto",
+      excludeLocations: [
+        { lat: 25.0439, lng: 121.5445 },
+        { lat: 25.0401, lng: 121.5502 },
+      ],
+    });
+    expect(post.mock.calls[0][1]).toMatchObject({
+      exclude_locations: [
+        { lat: 25.0439, lon: 121.5445 },
+        { lat: 25.0401, lon: 121.5502 },
+      ],
+    });
+  });
+
+  it("truncates exclude_locations to the deployment limit", async () => {
+    post.mockResolvedValue({ data: { trip } });
+    await computeValhallaRoutes({
+      origin: { lat: 1, lng: 2 },
+      destination: { lat: 3, lng: 4 },
+      costing: "auto",
+      excludeLocations: Array.from(
+        { length: VALHALLA_MAX_EXCLUDE_LOCATIONS + 10 },
+        (_, i) => ({ lat: 25 + i / 1000, lng: 121 }),
+      ),
+    });
+    const body = post.mock.calls[0][1] as { exclude_locations: unknown[] };
+    expect(body.exclude_locations).toHaveLength(VALHALLA_MAX_EXCLUDE_LOCATIONS);
+    expect(body.exclude_locations[0]).toEqual({ lat: 25, lon: 121 });
   });
 
   it("rejects malformed alternatives without partial trips", async () => {
