@@ -1,2 +1,3 @@
 # Enables the pyosmium-backed PBF integration test in test_deny_foot_on_expressways.py.
 osmium==4.3.1
+shapely>=2.0.0
