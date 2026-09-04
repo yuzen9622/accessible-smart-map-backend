@@ -65,6 +65,13 @@ async function fetchJsonRows<T>(url: string, rowsKey: string): Promise<T[]> {
   }
 }
 
+function parseKm(raw?: string): number | undefined {
+  if (!raw) return undefined;
+  const m = /^(\d+)K\+(\d+)$/i.exec(raw.trim());
+  if (!m) return undefined;
+  return parseInt(m[1], 10) + parseInt(m[2], 10) / 1000;
+}
+
 async function importDataset(
   label: string,
   sectionUrl: string,
@@ -120,6 +127,10 @@ async function importDataset(
     }
 
     const meta = sectionMap.get(shape.SectionID);
+    const startPoint: [number, number] | undefined =
+      parsedGeo.type === "LineString" && parsedGeo.coordinates.length > 0
+        ? parsedGeo.coordinates[0]
+        : undefined;
 
     docsToUpsert.push({
       sectionId: shape.SectionID,
@@ -128,6 +139,10 @@ async function importDataset(
       roadClass: meta?.RoadClass,
       geometry: parsedGeo,
       lengthM: meta?.SectionLength,
+      roadDirection: meta?.RoadDirection,
+      startKm: parseKm(meta?.SectionMile?.StartKM),
+      endKm: parseKm(meta?.SectionMile?.EndKM),
+      startPoint,
       updatedAt: new Date(),
     });
   }

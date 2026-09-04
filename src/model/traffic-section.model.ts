@@ -15,6 +15,10 @@ const trafficSectionSchema = new Schema<ITrafficSection>({
     coordinates: { type: Schema.Types.Mixed, required: true },
   },
   lengthM: { type: Number },
+  roadDirection: { type: String },
+  startKm: { type: Number },
+  endKm: { type: Number },
+  startPoint: { type: [Number] },
   updatedAt: { type: Date, default: Date.now },
 });
 

@@ -21,6 +21,7 @@ export interface NormalizedValhallaManeuver {
   beginShapeIndex: number;
   endShapeIndex: number;
   streetNames?: string[];
+  highway?: boolean;
   stairs: false;
 }
 
@@ -44,6 +45,13 @@ export interface ComputeValhallaRoutesParams {
   wheelchair?: boolean;
   /** Points the route must not pass through, e.g. closed-road incidents. */
   excludeLocations?: { lat: number; lng: number }[];
+  /**
+   * Date and time configuration for dynamic costing and live traffic reading.
+   * type 0: current departure time (enables Valhalla native live traffic evaluation)
+   * type 1: specified departure time (format: YYYY-MM-DDTHH:MM)
+   * type 2: specified arrival time (format: YYYY-MM-DDTHH:MM)
+   */
+  dateTime?: { type: 0 | 1 | 2; value?: string };
 }
 
 export type ComputeValhallaRoutesResult =
@@ -93,20 +101,24 @@ function normalizeManeuver(value: unknown): NormalizedValhallaManeuver | null {
       raw.street_names.some((v) => typeof v !== "string"))
   )
     return null;
-  return {
-    ...(typeof raw.instruction === "string"
-      ? { instruction: raw.instruction }
-      : {}),
+  const maneuver: NormalizedValhallaManeuver = {
     type: raw.type as number,
     lengthKm: raw.length,
     timeSec: raw.time,
     beginShapeIndex: begin as number,
     endShapeIndex: end as number,
     stairs: false,
-    ...(Array.isArray(raw.street_names)
-      ? { streetNames: raw.street_names as string[] }
-      : {}),
   };
+  if (typeof raw.instruction === "string") {
+    maneuver.instruction = raw.instruction;
+  }
+  if (Array.isArray(raw.street_names)) {
+    maneuver.streetNames = raw.street_names as string[];
+  }
+  if (raw.highway === true) {
+    maneuver.highway = true;
+  }
+  return maneuver;
 }
 
 function normalizeLeg(value: unknown): NormalizedValhallaLeg | null {
@@ -168,6 +180,15 @@ export async function computeValhallaRoutes(
   };
   if (params.computeAlternatives && !params.waypoints?.length)
     body.alternates = 2;
+  if (params.dateTime) {
+    const dt: { type: 0 | 1 | 2; value?: string } = {
+      type: params.dateTime.type,
+    };
+    if (params.dateTime.value) {
+      dt.value = params.dateTime.value;
+    }
+    body.date_time = dt;
+  }
   // exclude_locations is a top-level /route field (not a costing option) and a
   // HARD exclusion: Valhalla answers error_code 442 rather than routing through
   // the point. The key is omitted when empty so existing requests are unchanged.

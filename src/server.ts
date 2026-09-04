@@ -14,6 +14,7 @@ import {
   startTrafficGeometryRefreshJob,
 } from "./modules/traffic/traffic-geometry.runtime";
 import { startTrafficLiveRefreshJob } from "./modules/traffic/traffic-live.worker";
+import { startValhallaTrafficTarWorker } from "./modules/traffic/valhalla-traffic.worker";
 const PORT = process.env.PORT || 3000;
 let passwordAssistanceTimer: NodeJS.Timeout | undefined;
 let trafficGeometryTimer: NodeJS.Timeout | undefined;
@@ -43,6 +44,7 @@ const uri = process.env.DATABASE_URL ?? "";
 
 // Live traffic refresher is SWR + Redis only (no Mongo dependency); start unconditionally.
 const trafficLiveTimer = startTrafficLiveRefreshJob();
+const valhallaTrafficTarTimer = startValhallaTrafficTarWorker();
 
 mongoose
   .connect(uri)
@@ -65,6 +67,7 @@ function shutdown(signalLog: string): void {
   if (passwordAssistanceTimer) clearInterval(passwordAssistanceTimer);
   if (trafficGeometryTimer) clearInterval(trafficGeometryTimer);
   if (trafficLiveTimer) clearInterval(trafficLiveTimer);
+  if (valhallaTrafficTarTimer) clearInterval(valhallaTrafficTarTimer);
   void (async () => {
     await Promise.allSettled([
       mqttHandle ? mqttHandle.stop() : Promise.resolve(),

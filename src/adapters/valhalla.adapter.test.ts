@@ -170,6 +170,40 @@ describe("computeValhallaRoutes", () => {
     expect(body.exclude_locations[0]).toEqual({ lat: 25, lon: 121 });
   });
 
+  it("omits date_time when dateTime is not requested", async () => {
+    post.mockResolvedValue({ data: { trip } });
+    await computeValhallaRoutes({
+      origin: { lat: 1, lng: 2 },
+      destination: { lat: 3, lng: 4 },
+      costing: "auto",
+    });
+    expect(post.mock.calls[0][1]).not.toHaveProperty("date_time");
+  });
+
+  it("serializes date_time when dateTime is provided", async () => {
+    post.mockResolvedValue({ data: { trip } });
+    await computeValhallaRoutes({
+      origin: { lat: 1, lng: 2 },
+      destination: { lat: 3, lng: 4 },
+      costing: "auto",
+      dateTime: { type: 0 },
+    });
+    expect(post.mock.calls[0][1]).toMatchObject({
+      date_time: { type: 0 },
+    });
+
+    post.mockResolvedValue({ data: { trip } });
+    await computeValhallaRoutes({
+      origin: { lat: 1, lng: 2 },
+      destination: { lat: 3, lng: 4 },
+      costing: "auto",
+      dateTime: { type: 1, value: "2026-09-04T08:30" },
+    });
+    expect(post.mock.calls[1][1]).toMatchObject({
+      date_time: { type: 1, value: "2026-09-04T08:30" },
+    });
+  });
+
   it("rejects malformed alternatives without partial trips", async () => {
     post.mockResolvedValue({ data: { trip, alternates: [{}] } });
     expect(

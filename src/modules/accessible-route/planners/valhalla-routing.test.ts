@@ -90,6 +90,11 @@ describe("planValhallaRoute", () => {
         routes[0].legs[0].steps?.[0].instruction,
     ).toBe("沿「信義路」出發");
     expect(routes[0].legs[0]).not.toHaveProperty("durationInTrafficMin");
+    expect(compute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dateTime: { type: 0 },
+      }),
+    );
   });
 
   it("maps walk steps using true shape locations", async () => {

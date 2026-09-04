@@ -19,6 +19,7 @@ import type {
 } from "../../../types/traffic";
 import { haversineCoords } from "../../../utils/geo";
 import type { SegmentIndex } from "../../traffic/traffic-segment-index";
+import { matchLegByFreewayLinearReferencing } from "./freeway-linear-referencing";
 import {
   matchLegToSegmentIndex,
   type CorridorMatchResult,
@@ -116,8 +117,41 @@ export function matchSectionsToLeg(
   index: SegmentIndex,
   liveSectionsMap: Map<string, LiveSection>,
   precomputed?: CorridorMatchResult,
+  unifiedSectionIds?: (string | null)[],
 ): MatchedSection[] {
-  if (legPolyline.length < 2 || index.segmentCount === 0) {
+  if (legPolyline.length < 2) {
+    return [];
+  }
+
+  const numSegments = legPolyline.length - 1;
+
+  // Primary path: if unifiedSectionIds provided (from linear referencing + spatial fallback)
+  if (unifiedSectionIds && unifiedSectionIds.length === numSegments) {
+    const sectionCovered = new Map<string, number>();
+    for (let i = 0; i < numSegments; i++) {
+      const sid = unifiedSectionIds[i];
+      if (sid) {
+        const segLen = haversineCoords(legPolyline[i], legPolyline[i + 1]);
+        sectionCovered.set(sid, (sectionCovered.get(sid) ?? 0) + segLen);
+      }
+    }
+
+    const matchedList: MatchedSection[] = [];
+    for (const [sectionId, coveredM] of sectionCovered.entries()) {
+      const live = liveSectionsMap.get(sectionId);
+      matchedList.push({
+        sectionId,
+        congestionLevel: live?.congestionLevel ?? TDX_CONGESTION_UNKNOWN,
+        speedKmh: live?.speedKmh,
+        travelTimeSec: live?.travelTimeSec,
+        coveredM,
+      });
+    }
+
+    return matchedList;
+  }
+
+  if (index.segmentCount === 0) {
     return [];
   }
 
@@ -364,13 +398,11 @@ export function deriveTrafficSegments(
   index: SegmentIndex,
   liveSectionsMap: Map<string, LiveSection>,
   precomputed?: CorridorMatchResult,
+  unifiedSectionIds?: (string | null)[],
 ): DriveTrafficSegment[] {
-  if (legPolyline.length < 2 || index.segmentCount === 0) {
+  if (legPolyline.length < 2) {
     return [];
   }
-
-  const match =
-    precomputed ?? matchLegToSegmentIndex(legPolyline, index, liveSectionsMap);
 
   const numSegments = legPolyline.length - 1;
   if (numSegments <= 0) {
@@ -379,14 +411,34 @@ export function deriveTrafficSegments(
 
   // 1. Get congestion level for each route segment
   const segmentCongestion = new Int8Array(numSegments);
-  for (let i = 0; i < numSegments; i++) {
-    const secIdx = match.segmentSectionIdx[i];
-    if (secIdx === -1) {
-      segmentCongestion[i] = TDX_CONGESTION_UNKNOWN;
-    } else {
-      const secId = index.sectionIds[secIdx];
-      const live = liveSectionsMap.get(secId);
-      segmentCongestion[i] = live?.congestionLevel ?? TDX_CONGESTION_UNKNOWN;
+
+  if (unifiedSectionIds && unifiedSectionIds.length === numSegments) {
+    for (let i = 0; i < numSegments; i++) {
+      const sid = unifiedSectionIds[i];
+      if (!sid) {
+        segmentCongestion[i] = TDX_CONGESTION_UNKNOWN;
+      } else {
+        const live = liveSectionsMap.get(sid);
+        segmentCongestion[i] = live?.congestionLevel ?? TDX_CONGESTION_UNKNOWN;
+      }
+    }
+  } else {
+    if (index.segmentCount === 0) {
+      return [];
+    }
+    const match =
+      precomputed ??
+      matchLegToSegmentIndex(legPolyline, index, liveSectionsMap);
+
+    for (let i = 0; i < numSegments; i++) {
+      const secIdx = match.segmentSectionIdx[i];
+      if (secIdx === -1) {
+        segmentCongestion[i] = TDX_CONGESTION_UNKNOWN;
+      } else {
+        const secId = index.sectionIds[secIdx];
+        const live = liveSectionsMap.get(secId);
+        segmentCongestion[i] = live?.congestionLevel ?? TDX_CONGESTION_UNKNOWN;
+      }
     }
   }
 
@@ -434,7 +486,7 @@ export function applyTrafficOverlay(
   let candidateProbes = 0;
   let matchedSections = 0;
 
-  if (routes.length === 0 || index.segmentCount === 0) {
+  if (routes.length === 0) {
     return { spatialMatchMs, aggregateMs, candidateProbes, matchedSections };
   }
 
@@ -448,21 +500,48 @@ export function applyTrafficOverlay(
         continue;
       }
 
-      const tMatch0 = performance.now();
-      const matchResult = matchLegToSegmentIndex(
-        driveLeg.polyline,
-        index,
-        liveSectionsMap,
-      );
-      spatialMatchMs += performance.now() - tMatch0;
-      candidateProbes += matchResult.candidateProbes;
+      const numSegments = driveLeg.polyline.length - 1;
 
+      // Phase 1: Freeway Linear Referencing (Primary)
+      const freewayRes = matchLegByFreewayLinearReferencing(
+        driveLeg.polyline,
+        driveLeg.maneuvers,
+      );
+
+      // Phase 2: Spatial Geometry Matching (Fallback for non-freeway segments)
+      let matchResult: CorridorMatchResult | undefined;
+      if (index.segmentCount > 0 && index.flatbush) {
+        const tMatch0 = performance.now();
+        matchResult = matchLegToSegmentIndex(
+          driveLeg.polyline,
+          index,
+          liveSectionsMap,
+        );
+        spatialMatchMs += performance.now() - tMatch0;
+        candidateProbes += matchResult.candidateProbes;
+      }
+
+      // Phase 3: Combine into Unified Section IDs array (Freeway > Spatial > Unknown)
+      const unifiedSectionIds: (string | null)[] = Array.from<string | null>({
+        length: numSegments,
+      }).fill(null);
+      for (let i = 0; i < numSegments; i++) {
+        if (freewayRes.segmentSectionIds[i] !== null) {
+          unifiedSectionIds[i] = freewayRes.segmentSectionIds[i];
+        } else if (matchResult && matchResult.segmentSectionIdx[i] !== -1) {
+          const secIdx = matchResult.segmentSectionIdx[i];
+          unifiedSectionIds[i] = index.sectionIds[secIdx];
+        }
+      }
+
+      // Phase 4: Derive Traffic and Segments
       const tAgg0 = performance.now();
       const matched = matchSectionsToLeg(
         driveLeg.polyline,
         index,
         liveSectionsMap,
         matchResult,
+        unifiedSectionIds,
       );
       matchedSections += matched.length;
 
@@ -480,6 +559,7 @@ export function applyTrafficOverlay(
         index,
         liveSectionsMap,
         matchResult,
+        unifiedSectionIds,
       );
       if (segments.length > 0) {
         driveLeg.trafficSegments = segments;

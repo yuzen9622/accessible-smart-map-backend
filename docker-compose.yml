@@ -33,6 +33,7 @@ services:
     volumes:
       # Bind the service-account JSON (host path from .env) read-only.
       - ${GCS_KEY_FILE}:/secrets/gcs-key.json:ro
+      - ${VALHALLA_DATA_DIR:-./valhalla-data}:/app/valhalla-data
     ports:
       # Publish the API. Prefix 127.0.0.1: to keep it host-only.
       - "127.0.0.1:${PORT:-8000}:${PORT:-8000}"
@@ -129,7 +130,7 @@ services:
     restart: unless-stopped
 
   valhalla:
-    image: ghcr.io/valhalla/valhalla:3.8.2@sha256:a4eae918af15ffb392a6c1434bc64083d28f022d5968a02cba09780ba54cd62d
+    image: ghcr.io/valhalla/valhalla:3.8.2@sha256:a4eae918af15ffb392a6c1434bc64083d28f022d5968a02cba09780ba54cd62d # yamllint disable-line rule:line-length
     container_name: valhalla
     command:
       - bash
@@ -137,7 +138,7 @@ services:
       - >-
         test -f /custom_files/active/valhalla.json ||
         { echo 'Valhalla config missing: run pnpm build:valhalla-tiles first' >&2; exit 78; };
-        exec valhalla_service /custom_files/active/valhalla.json ${VALHALLA_THREADS:-2}
+        exec valhalla_service /custom_files/active/valhalla.json ${VALHALLA_THREADS:-2} # yamllint disable-line rule:line-length
     ports:
       - "127.0.0.1:8002:8002"
     volumes:
@@ -151,7 +152,7 @@ services:
     restart: unless-stopped
 
   valhalla-build:
-    image: ghcr.io/valhalla/valhalla:3.8.2@sha256:a4eae918af15ffb392a6c1434bc64083d28f022d5968a02cba09780ba54cd62d
+    image: ghcr.io/valhalla/valhalla:3.8.2@sha256:a4eae918af15ffb392a6c1434bc64083d28f022d5968a02cba09780ba54cd62d # yamllint disable-line rule:line-length
     profiles: ["valhalla-build"]
     entrypoint: ["bash", "-lc"]
     volumes:

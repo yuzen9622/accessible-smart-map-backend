@@ -494,5 +494,9 @@ export interface ITrafficSection {
     coordinates: number[][] | number[][][];
   };
   lengthM?: number;
+  roadDirection?: string;
+  startKm?: number;
+  endKm?: number;
+  startPoint?: [number, number];
   updatedAt?: Date;
 }

@@ -16,7 +16,10 @@ LOCK_ACQUIRED=false
 FIRST_DEPLOY=true
 OLD_ACTIVE_TARGET=
 
-fail() { printf 'valhalla-build: %s\n' "$*" >&2; exit 1; }
+fail() {
+  printf 'valhalla-build: %s\n' "$*" >&2
+  exit 1
+}
 
 # GNU mv needs -T while macOS mv needs -h to replace a symlink-to-directory
 # instead of treating it as the destination directory.
@@ -37,12 +40,15 @@ probe() {
   curl -fsS --max-time 5 http://localhost:8002/status >/dev/null &&
     curl -fsS --max-time 15 -X POST http://localhost:8002/route \
       -H 'Content-Type: application/json' \
-      -d '{"locations":[{"lat":25.0478,"lon":121.5170},{"lat":25.0421,"lon":121.5079}],"costing":"pedestrian"}' \
-      | jq -e '.trip.legs[0].shape | type == "string" and length > 0' >/dev/null
+      -d '{"locations":[{"lat":25.0478,"lon":121.5170},{"lat":25.0421,"lon":121.5079}],"costing":"pedestrian"}' |
+    jq -e '.trip.legs[0].shape | type == "string" and length > 0' >/dev/null
 }
 
 wait_ready() {
-  for _ in $(seq 1 40); do probe && return 0; sleep 3; done
+  for _ in $(seq 1 40); do
+    probe && return 0
+    sleep 3
+  done
   return 1
 }
 
@@ -88,7 +94,7 @@ command -v jq >/dev/null || fail "jq is required"
 mkdir -p "$DATA_DIR/releases"
 mkdir "$LOCK_DIR" || fail "another build is active: $LOCK_DIR"
 LOCK_ACQUIRED=true
-printf 'pid=%s\nhost=%s\nbuild_id=%s\nstarted_at=%s\n' "$$" "$(hostname)" "$BUILD_ID" "$(date -u +%FT%TZ)" > "$LOCK_DIR/owner"
+printf 'pid=%s\nhost=%s\nbuild_id=%s\nstarted_at=%s\n' "$$" "$(hostname)" "$BUILD_ID" "$(date -u +%FT%TZ)" >"$LOCK_DIR/owner"
 
 if [ -L "$ACTIVE_LINK" ]; then
   OLD_ACTIVE_TARGET=$(readlink "$ACTIVE_LINK")
@@ -100,10 +106,11 @@ fi
 
 [ ! -e "$RELEASE_DIR" ] || fail "release already exists: $RELEASE_REL"
 mkdir -p "$RELEASE_DIR/valhalla_tiles"
+mkdir -p "$DATA_DIR/traffic"
 
 export VALHALLA_DATA_DIR="$DATA_DIR" VALHALLA_PBF_PATH="$PBF_PATH"
 docker compose --profile valhalla-build run --rm --no-deps valhalla-build \
-  "valhalla_build_config --mjolnir-tile-dir /custom_files/$RELEASE_REL/valhalla_tiles > /custom_files/$RELEASE_REL/valhalla.json && valhalla_build_tiles -c /custom_files/$RELEASE_REL/valhalla.json /data/input.osm.pbf"
+  "valhalla_build_config --mjolnir-tile-dir /custom_files/$RELEASE_REL/valhalla_tiles --mjolnir-traffic-extract /custom_files/traffic/traffic.tar > /custom_files/$RELEASE_REL/valhalla.json && valhalla_build_tiles -c /custom_files/$RELEASE_REL/valhalla.json /data/input.osm.pbf"
 
 [ -s "$RELEASE_DIR/valhalla.json" ] || fail "missing valhalla.json"
 find "$RELEASE_DIR/valhalla_tiles" -type f -print -quit | grep -q . || fail "tile build produced no files"

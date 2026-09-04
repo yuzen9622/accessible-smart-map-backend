@@ -266,3 +266,28 @@ export const TRAFFIC_INCIDENT_HARD_EXCLUDE_KEYWORDS: readonly string[] = [
   "中斷",
   "管制通行",
 ];
+
+/** Path where the Valhalla traffic.tar extract is written and mounted. */
+export const VALHALLA_TRAFFIC_EXTRACT_PATH = envText(
+  "VALHALLA_TRAFFIC_EXTRACT_PATH",
+  "./valhalla-data/traffic/traffic.tar",
+);
+
+/** Path to the offline-generated TDX Section -> Valhalla GraphId mapping cache. */
+export const VALHALLA_EDGE_MAP_PATH = envText(
+  "VALHALLA_EDGE_MAP_PATH",
+  "./valhalla-data/traffic/tdx-valhalla-edge-map.json",
+);
+
+/** Path to directory containing active Valhalla tiles (.gph files). */
+export const VALHALLA_TILES_DIR = envText(
+  "VALHALLA_TILES_DIR",
+  "./valhalla-data/active/valhalla_tiles",
+);
+
+/** Distributed lock settings for Valhalla traffic.tar background generator. */
+export const TRAFFIC_TAR_LOCK_KEY = "traffic:tar:lock";
+export const TRAFFIC_TAR_LOCK_TTL_SEC = envPositive(
+  "TRAFFIC_TAR_LOCK_TTL_SEC",
+  50,
+);

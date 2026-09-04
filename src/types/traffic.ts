@@ -41,6 +41,8 @@ export interface TdxSectionRow {
   RoadClass?: number;
   RoadDirection?: string;
   SectionLength?: number;
+  SectionMile?: { StartKM?: string; EndKM?: string };
+  RoadSection?: { Start?: string; End?: string };
 }
 
 export interface TdxSectionShapeRow {
@@ -97,6 +99,10 @@ export interface TrafficSectionMeta {
   roadName?: string;
   roadClass?: number;
   lengthM?: number;
+  roadDirection?: string;
+  startKm?: number;
+  endKm?: number;
+  startPoint?: [number, number];
 }
 
 /** A section centreline from the TDX `SectionShape` endpoint, parsed from WKT. */
@@ -117,6 +123,10 @@ export interface TrafficSectionGeometry {
   city: string;
   geometry: TrafficGeometry;
   coordinates?: [number, number][];
+  roadDirection?: string;
+  startKm?: number;
+  endKm?: number;
+  startPoint?: [number, number];
 }
 
 export type SemanticTrafficLevel =

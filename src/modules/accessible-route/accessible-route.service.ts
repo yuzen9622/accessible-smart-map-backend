@@ -2189,11 +2189,13 @@ async function findDrivingRoutes(
           let candidateProbes = 0;
           let matchedSections = 0;
 
-          if (snapshot && routeSegments > 0) {
+          if (routeSegments > 0) {
             const { getLiveSectionsForBbox } =
               await import("../traffic/traffic-flow.service");
             const { applyTrafficOverlay, bboxOfPolyline } =
               await import("./planners/traffic-overlay");
+            const { buildSegmentIndex } =
+              await import("../traffic/traffic-segment-index");
 
             const allCoords: [number, number][] = [];
             for (const r of routes) {
@@ -2220,10 +2222,13 @@ async function findDrivingRoutes(
             const liveSectionsMap = await getLiveSectionsForBbox(paddedBbox);
             loadLiveMs = Date.now() - tLive;
 
+            const segmentIndex = snapshot
+              ? snapshot.index
+              : buildSegmentIndex([]);
             const overlayMetrics = applyTrafficOverlay(
               routes,
               liveSectionsMap,
-              snapshot.index,
+              segmentIndex,
             );
             spatialMatchMs = overlayMetrics.spatialMatchMs;
             aggregateMs = overlayMetrics.aggregateMs;

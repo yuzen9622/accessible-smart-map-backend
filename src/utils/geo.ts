@@ -58,6 +58,14 @@ export function calcBearing(
   return (bearing + 360) % 360;
 }
 
+/**
+ * 計算兩方位角之間的最短角差（度，0–180）。
+ */
+export function bearingDiffDeg(a: number, b: number): number {
+  const diff = Math.abs(a - b) % 360;
+  return Math.min(diff, 360 - diff);
+}
+
 const COMPASS_WORDS = ["北", "東北", "東", "東南", "南", "西南", "西", "西北"];
 const COMPASS_TOKENS = [
   "NORTH",

@@ -343,6 +343,18 @@ export interface DriveStep {
   maneuver?: string;
 }
 
+export interface DriveManeuver {
+  instruction?: string;
+  type: number;
+  lengthKm: number;
+  timeSec: number;
+  beginShapeIndex: number;
+  endShapeIndex: number;
+  streetNames?: string[];
+  highway?: boolean;
+  stairs?: boolean;
+}
+
 /**
  * A road-driving leg (car or motorcycle) produced by the road router.
  * `durationMin` is always free-flow. `durationInTrafficMin` and `trafficLevel`
@@ -361,6 +373,7 @@ export interface DriveLeg {
   summary?: string;
   polyline: [number, number][];
   steps?: DriveStep[];
+  maneuvers?: DriveManeuver[];
   modeFallback?: "DRIVE";
   /** Active TDX road events on this leg; absent means none were matched. */
   incidents?: RoadIncident[];

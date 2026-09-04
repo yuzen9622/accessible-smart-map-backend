@@ -306,6 +306,7 @@ function mapTrip(
       durationMin: minutes(leg.summary.timeSec),
       polyline: points,
       ...(driveSteps(leg, points) ? { steps: driveSteps(leg, points) } : {}),
+      maneuvers: leg.maneuvers,
     };
   });
   return {
@@ -629,8 +630,8 @@ export async function planValhallaRoute(
   destination: LatLng,
   opts: PlanRoadRouteOptions,
 ): Promise<AccessibleRoute[]> {
-  const callValhalla = (excludeLocations?: LatLng[]) =>
-    computeValhallaRoutes({
+  const callValhalla = (excludeLocations?: LatLng[]) => {
+    const params: Parameters<typeof computeValhallaRoutes>[0] = {
       origin,
       destination,
       waypoints: opts.waypoints,
@@ -639,8 +640,13 @@ export async function planValhallaRoute(
       wheelchair:
         opts.travelMode === "walk" &&
         (opts.avoidStairs ?? opts.mode === "wheelchair"),
-      ...(excludeLocations?.length ? { excludeLocations } : {}),
-    });
+      dateTime: { type: 0 },
+    };
+    if (excludeLocations?.length) {
+      params.excludeLocations = excludeLocations;
+    }
+    return computeValhallaRoutes(params);
+  };
 
   const requested = opts.excludeLocations?.length
     ? opts.excludeLocations

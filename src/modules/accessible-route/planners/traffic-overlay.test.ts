@@ -711,5 +711,100 @@ describe("traffic-overlay", () => {
       // Ensure no color field exists in semantic DriveTrafficSegment (pure semantic design)
       expect((leg.trafficSegments?.[0] as any).color).toBeUndefined();
     });
+
+    it("prioritizes Freeway Linear Referencing for highway maneuvers and falls back to spatial for local roads", () => {
+      // Points 0..4 are on 國道1號 (圓山 0021 -> 台北 25.1K -> 三重 0023)
+      // Points 4..6 are on a local city street
+      const polyline: [number, number][] = [
+        [121.53199, 25.07281], // 0021 start (圓山)
+        [121.5299, 25.0735],
+        [121.52783, 25.07434], // 0021 end / 0023 start (台北 25.1K)
+        [121.515, 25.073],
+        [121.503, 25.071], // 0023 end (三重 27.1K)
+        [121.501, 25.068], // Local street turn
+        [121.498, 25.065], // Local street end
+      ];
+
+      // Spatial index only has the local street section (not the freeway sections)
+      const localCandidates: TrafficSectionGeometry[] = [
+        {
+          sectionId: "sec-local",
+          city: "NewTaipei",
+          geometry: {
+            type: "LineString",
+            coordinates: [
+              [121.503, 25.071],
+              [121.501, 25.068],
+              [121.498, 25.065],
+            ],
+          },
+        },
+      ];
+
+      const leg: DriveLeg = {
+        type: "DRIVE",
+        from: { lat: 25.07281, lng: 121.53199 },
+        to: { lat: 25.065, lng: 121.498 },
+        distanceM: 5000,
+        durationMin: 8,
+        polyline,
+        maneuvers: [
+          {
+            type: 24,
+            beginShapeIndex: 0,
+            endShapeIndex: 4,
+            highway: true,
+            streetNames: ["1", "中山高速公路"],
+            lengthKm: 3.9,
+            timeSec: 150,
+          },
+          {
+            type: 10,
+            beginShapeIndex: 4,
+            endShapeIndex: 6,
+            streetNames: ["重新路"],
+            lengthKm: 1.1,
+            timeSec: 120,
+          },
+        ],
+      };
+
+      const route: AccessibleRoute = {
+        routeId: "two-tier-route",
+        routeName: "國道轉市區混合路線",
+        totalMinutes: 8,
+        transferCount: 0,
+        accessibilityHighlights: [],
+        legs: [leg],
+      };
+
+      const liveMap = new Map<string, LiveSection>([
+        ["0021", { sectionId: "0021", congestionLevel: 1, speedKmh: 90 }], // 順暢 90 km/h
+        ["0023", { sectionId: "0023", congestionLevel: 5, speedKmh: 20 }], // 壅塞 20 km/h
+        [
+          "sec-local",
+          { sectionId: "sec-local", congestionLevel: 3, speedKmh: 35 },
+        ], // 車多 35 km/h
+      ]);
+
+      const metrics = applyTrafficOverlay(
+        [route],
+        liveMap,
+        buildSegmentIndex(localCandidates),
+      );
+
+      expect(metrics.matchedSections).toBeGreaterThanOrEqual(2);
+      expect(leg.trafficSegments).toBeDefined();
+
+      // Verify that freeway sections 0021 and 0023 are matched on the freeway segment
+      const levels = leg.trafficSegments!.map((s) => s.congestionLevel);
+      expect(levels).toContain(1); // from 0021
+      expect(levels).toContain(5); // from 0023
+      expect(levels).toContain(3); // from sec-local fallback!
+
+      // Verify duration in traffic is derived and reflects traffic delay
+      expect(leg.durationInTrafficMin).toBeDefined();
+      expect(leg.trafficLevel).toBeDefined();
+    });
   });
 });

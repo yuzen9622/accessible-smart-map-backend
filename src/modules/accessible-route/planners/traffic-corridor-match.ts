@@ -1,6 +1,10 @@
 import { TRAFFIC_MATCH } from "../../../config/traffic";
 import type { LiveSection } from "../../../types/traffic";
-import { calcBearing, haversineCoords } from "../../../utils/geo";
+import {
+  calcBearing,
+  haversineCoords,
+  bearingDiffDeg,
+} from "../../../utils/geo";
 import {
   querySegmentCandidates,
   type SegmentIndex,
@@ -20,13 +24,7 @@ export interface CorridorMatchResult {
 
 const DEG_TO_METERS = 111_320;
 
-/**
- * Computes directed angular difference between two forward azimuths (0-180 degrees).
- */
-export function bearingDiffDeg(a: number, b: number): number {
-  const diff = Math.abs(a - b) % 360;
-  return Math.min(diff, 360 - diff);
-}
+export { bearingDiffDeg } from "../../../utils/geo";
 
 /**
  * Computes symmetric approximate distance between two line segments AB and CD.
