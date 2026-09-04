@@ -14,81 +14,6 @@ const app = buildTestApp();
 const URL = "/api/v1/a11y/route/instructions";
 const generate = vi.mocked(generateNavInstructionsFromInput);
 
-const WALK_POLYLINE: [number, number][] = [
-  [121.5654, 25.0418],
-  [121.5651, 25.0417],
-  [121.5648, 25.0421],
-  [121.562, 25.0455],
-];
-
-const walkLeg = (steps: Record<string, unknown>[]) => ({
-  type: "WALK",
-  from: { lat: 25.0418, lng: 121.5654 },
-  to: "終點",
-  distanceM: 640,
-  minutesEst: 9,
-  polyline: WALK_POLYLINE,
-  a11yFacilities: [],
-  steps,
-});
-
-const otpRoute = {
-  routeId: "walk-0",
-  routeName: "步行",
-  totalMinutes: 9,
-  transferCount: 0,
-  totalWalkDistanceM: 640,
-  legs: [
-    walkLeg([
-      {
-        relativeDirection: "DEPART",
-        absoluteDirection: "NORTHWEST",
-        streetName: "open area",
-        bogusName: true,
-        area: true,
-        stairs: false,
-        steepSlope: false,
-        distanceM: 40,
-        location: WALK_POLYLINE[0],
-      },
-      {
-        relativeDirection: "RIGHT",
-        absoluteDirection: "NORTHEAST",
-        streetName: "基隆路一段147巷",
-        bogusName: false,
-        area: false,
-        stairs: false,
-        steepSlope: false,
-        distanceM: 600,
-        location: WALK_POLYLINE[2],
-      },
-    ]),
-  ],
-};
-
-const valhallaRoute = {
-  routeId: "walk-1",
-  routeName: "步行",
-  totalMinutes: 14,
-  transferCount: 0,
-  totalWalkDistanceM: 1040,
-  legs: [
-    walkLeg([
-      {
-        relativeDirection: "DEPART",
-        absoluteDirection: null,
-        streetName: "",
-        bogusName: true,
-        area: false,
-        stairs: false,
-        steepSlope: false,
-        distanceM: 1040,
-        location: WALK_POLYLINE[0],
-      },
-    ]),
-  ],
-};
-
 beforeEach(() => {
   vi.resetAllMocks();
   generate.mockResolvedValue({
@@ -117,44 +42,36 @@ beforeEach(() => {
 });
 
 describe("POST /api/v1/a11y/route/instructions route contracts", () => {
-  it.each([
-    ["OTP walk", otpRoute],
-    ["Valhalla fallback walk", valhallaRoute],
-  ])("accepts the %s route shape", async (_label, route) => {
-    const response = await request(app).post(URL).send({ route });
-    expect(response.status).toBe(200);
-    expect(response.body.data.instructions[0]).toMatchObject({
-      legIndex: 0,
-      cumulativeDistanceM: 0,
-    });
-    expect(generate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        route: expect.objectContaining({ routeId: route.routeId }),
-      }),
-    );
-  });
-
-  it("accepts a multi-leg walk + waypoints route", async () => {
-    const route = {
-      ...otpRoute,
-      routeId: "fixture-waypoints",
-      legs: [otpRoute.legs[0], otpRoute.legs[0]],
-    };
-    const response = await request(app).post(URL).send({ route });
-    expect(response.status).toBe(200);
-    expect(generate.mock.calls[0][0].route?.legs).toHaveLength(2);
-  });
-
-  it("accepts routeToken without requiring an inline route", async () => {
+  it("resolves the route from routeToken", async () => {
     const response = await request(app).post(URL).send({
       routeToken: "fixture-capability",
       userHeading: 45,
     });
     expect(response.status).toBe(200);
+    expect(response.body.data.instructions[0]).toMatchObject({
+      legIndex: 0,
+      cumulativeDistanceM: 0,
+    });
     expect(generate).toHaveBeenCalledWith({
-      route: undefined,
       routeToken: "fixture-capability",
       userHeading: 45,
     });
+  });
+
+  it("rejects a request without routeToken", async () => {
+    const response = await request(app).post(URL).send({ userHeading: 45 });
+    expect(response.status).toBe(400);
+    expect(generate).not.toHaveBeenCalled();
+  });
+
+  it("rejects an inline route payload", async () => {
+    const response = await request(app)
+      .post(URL)
+      .send({
+        routeToken: "fixture-capability",
+        route: { routeId: "walk-0", legs: [{ type: "WALK", polyline: [] }] },
+      });
+    expect(response.status).toBe(400);
+    expect(generate).not.toHaveBeenCalled();
   });
 });

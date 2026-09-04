@@ -1,5 +1,23 @@
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+
+const { getRouteByToken } = vi.hoisted(() => ({ getRouteByToken: vi.fn() }));
+vi.mock("../accessible-route/route-token.service", async (importActual) => {
+  const actual =
+    await importActual<
+      typeof import("../accessible-route/route-token.service")
+    >();
+  return { ...actual, getRouteByToken };
+});
+
 import {
   startTestServer,
   stopTestServer,
@@ -11,6 +29,16 @@ let app: Awaited<ReturnType<typeof startTestServer>>;
 beforeAll(async () => {
   app = await startTestServer();
 });
+
+beforeEach(() => {
+  getRouteByToken.mockReset();
+});
+
+/** Serve the given planner route to the endpoint through a stubbed routeToken. */
+const tokenFor = (route: unknown) => {
+  getRouteByToken.mockResolvedValue(route);
+  return "test-route-token";
+};
 
 afterAll(async () => {
   await stopTestServer(app);
@@ -52,7 +80,9 @@ const driveRoute = {
 
 describe("POST /api/v1/a11y/route/instructions", () => {
   it("returns the full success envelope for DRIVE guidance", async () => {
-    const res = await request(app).post(URL).send({ route: driveRoute });
+    const res = await request(app)
+      .post(URL)
+      .send({ routeToken: tokenFor(driveRoute) });
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
@@ -87,7 +117,7 @@ describe("POST /api/v1/a11y/route/instructions", () => {
     const res = await request(app)
       .post(URL)
       .send({
-        route: {
+        routeToken: tokenFor({
           routeId: "walk-stairs-contract",
           legs: [
             {
@@ -116,7 +146,7 @@ describe("POST /api/v1/a11y/route/instructions", () => {
               ],
             },
           ],
-        },
+        }),
       });
 
     expect(res.status).toBe(200);
@@ -148,7 +178,7 @@ describe("POST /api/v1/a11y/route/instructions", () => {
     const res = await request(app)
       .post(URL)
       .send({
-        route: {
+        routeToken: tokenFor({
           ...driveRoute,
           legs: [
             {
@@ -159,7 +189,7 @@ describe("POST /api/v1/a11y/route/instructions", () => {
               ],
             },
           ],
-        },
+        }),
       });
 
     expect(res.status).toBe(400);
@@ -175,7 +205,7 @@ describe("POST /api/v1/a11y/route/instructions", () => {
     const res = await request(app)
       .post(URL)
       .send({
-        route: {
+        routeToken: tokenFor({
           ...driveRoute,
           legs: [
             {
@@ -206,7 +236,7 @@ describe("POST /api/v1/a11y/route/instructions", () => {
               arrivalStationA11y: [],
             },
           ],
-        },
+        }),
       });
 
     expect(res.status).toBe(200);
@@ -217,7 +247,7 @@ describe("POST /api/v1/a11y/route/instructions", () => {
     const res = await request(app)
       .post(URL)
       .send({
-        route: {
+        routeToken: tokenFor({
           ...driveRoute,
           someFutureRouteField: { nested: true },
           legs: [
@@ -233,7 +263,7 @@ describe("POST /api/v1/a11y/route/instructions", () => {
               ],
             },
           ],
-        },
+        }),
       });
 
     expect(res.status).toBe(200);
@@ -244,7 +274,7 @@ describe("POST /api/v1/a11y/route/instructions", () => {
     const res = await request(app)
       .post(URL)
       .send({
-        route: {
+        routeToken: tokenFor({
           routeId: "walk-0",
           routeName: "步行",
           totalMinutes: 2,
@@ -265,7 +295,7 @@ describe("POST /api/v1/a11y/route/instructions", () => {
               a11yFacilities: [],
             },
           ],
-        },
+        }),
       });
     expect(res.status).toBe(200);
     expect(res.body.data.warnings).toEqual([
@@ -277,7 +307,9 @@ describe("POST /api/v1/a11y/route/instructions", () => {
   it("accepts a next-day route carrying departureDate", async () => {
     const res = await request(app)
       .post(URL)
-      .send({ route: { ...driveRoute, departureDate: "2026-07-29" } });
+      .send({
+        routeToken: tokenFor({ ...driveRoute, departureDate: "2026-07-29" }),
+      });
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
@@ -286,7 +318,7 @@ describe("POST /api/v1/a11y/route/instructions", () => {
   it("returns 400 when the strict request body contains an unknown key", async () => {
     const res = await request(app)
       .post(URL)
-      .send({ route: driveRoute, unexpected: true });
+      .send({ routeToken: tokenFor(driveRoute), unexpected: true });
 
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({

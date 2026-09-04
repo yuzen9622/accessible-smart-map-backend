@@ -10,13 +10,11 @@ export async function navInstructions(
   res: Response<ApiResponse<any>>,
 ) {
   try {
-    const { route, routeToken, userHeading } = req.validated?.body as {
-      route?: { routeId?: string; legs: unknown[] };
-      routeToken?: string;
+    const { routeToken, userHeading } = req.validated?.body as {
+      routeToken: string;
       userHeading?: number;
     };
     const result = await generateNavInstructionsFromInput({
-      route,
       routeToken,
       userHeading,
     });

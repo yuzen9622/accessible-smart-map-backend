@@ -741,11 +741,10 @@ describe("generateNavInstructions", () => {
     expect(result.reason).toBe("UNSUPPORTED_LEG_TYPE");
   });
 
-  it("prefers routeToken over an inline route and rejects expired tokens", async () => {
+  it("resolves the route from routeToken and rejects expired tokens", async () => {
     getRouteByToken.mockResolvedValueOnce({ legs: [walkWithSteps()] });
     const valid = await generateNavInstructionsFromInput({
       routeToken: "capability",
-      route: { legs: [] },
     });
     expect(getRouteByToken).toHaveBeenCalledWith("capability");
     expect(valid.ok).toBe(true);
@@ -753,17 +752,11 @@ describe("generateNavInstructions", () => {
     getRouteByToken.mockResolvedValueOnce(null);
     const expired = await generateNavInstructionsFromInput({
       routeToken: "expired",
-      route: { legs: [walkWithSteps()] },
     });
     expect(expired.ok).toBe(false);
     if (expired.ok) return;
     expect(expired.reason).toBe("INVALID_ROUTE_TOKEN");
     expect(expired.status).toBe(400);
-  });
-
-  it("requires either an inline route or routeToken", async () => {
-    const valid = await generateNavInstructionsFromInput({});
-    expect(valid.ok).toBe(false);
   });
 
   it("新的無文案 steps 仍產生與原始 steps 逐字相同的中文指引", () => {

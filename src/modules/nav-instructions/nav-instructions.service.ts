@@ -50,34 +50,22 @@ export type {
 import { generateNavInstructions } from "../../utils/nav-instructions-engine";
 
 /**
- * Resolve the preferred route token or use the compatible inline route before
- * generating instructions.
- * @param input Token/route input plus an optional current heading.
+ * Resolve the server-side route behind the token before generating instructions.
+ * @param input The routeToken plus an optional current heading.
  * @returns Generated instructions or a bounded input error.
  */
 export async function generateNavInstructionsFromInput(
   input: NavInstructionsInput,
 ): Promise<GenerateNavResult> {
-  let route = input.route;
-  if (input.routeToken) {
-    const { getRouteByToken } =
-      await import("../accessible-route/route-token.service");
-    route = (await getRouteByToken(input.routeToken)) ?? undefined;
-    if (!route) {
-      return {
-        ok: false,
-        status: ResponseCode.INVALID_INPUT,
-        reason: "INVALID_ROUTE_TOKEN",
-        message: "routeToken 無效或已過期",
-      };
-    }
-  }
+  const { getRouteByToken } =
+    await import("../accessible-route/route-token.service");
+  const route = await getRouteByToken(input.routeToken);
   if (!route) {
     return {
       ok: false,
       status: ResponseCode.INVALID_INPUT,
-      reason: "INVALID_ROUTE_INPUT",
-      message: "請提供 route 或 routeToken",
+      reason: "INVALID_ROUTE_TOKEN",
+      message: "routeToken 無效或已過期",
     };
   }
   return generateNavInstructions(route, input.userHeading);

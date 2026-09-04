@@ -56,8 +56,7 @@ export interface NavRouteInput {
 }
 
 export interface NavInstructionsInput {
-  route?: NavRouteInput;
-  routeToken?: string;
+  routeToken: string;
   userHeading?: number;
 }
 
