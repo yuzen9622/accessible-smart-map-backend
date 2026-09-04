@@ -4,6 +4,7 @@ import express, {
   type Request,
   type Response,
 } from "express";
+import compression from "compression";
 import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
@@ -54,6 +55,25 @@ app.set("trust proxy", Number(process.env.TRUST_PROXY_HOPS ?? 1));
 app.use(
   helmet({
     contentSecurityPolicy: false,
+  }),
+);
+
+// Long-distance routes can produce roughly 420 KB of raw JSON; sending it
+// uncompressed from the origin across the network dominates TTFB. SSE is
+// excluded because compression buffers writes, delaying events that must be
+// flushed individually.
+app.use(
+  compression({
+    filter: (req, res) => {
+      const contentType = res.getHeader("Content-Type");
+      if (
+        typeof contentType === "string" &&
+        contentType.includes("text/event-stream")
+      ) {
+        return false;
+      }
+      return compression.filter(req, res);
+    },
   }),
 );
 
