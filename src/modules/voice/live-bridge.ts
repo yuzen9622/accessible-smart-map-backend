@@ -32,10 +32,14 @@ import { getTransitAlerts } from "../transit/alert.service";
 import { onAlertSnapshotUpdate } from "../transit/alert.store";
 import { keyRelevantToContext } from "../transit/alert.gateway";
 import { NavigationSession, type NavEffect } from "./navigation-session";
+import { scanRemainingCorridor } from "./corridor-monitor";
+import type { RerouteReason } from "../accessible-route/accessible-route.types";
 import type { NavPosition } from "./navigation.schema";
 import {
+  NavAdvisoryMessageSchema,
   NavResumeFailedMessageSchema,
   VoiceRerouteOutboundMessageSchema,
+  type NavAdvisoryMessage,
   type NavResumeFailedMessage,
   type NavResumeMessage,
   type VoiceRerouteOutboundMessage,
@@ -46,6 +50,7 @@ const ERROR_SUMMARY_MAX_CHARS = 200;
 const INPUT_AUDIO_MIME_TYPE = "audio/pcm;rate=16000";
 const POSITION_MIN_INTERVAL_MS = 500;
 const REROUTE_COOLDOWN_MS = 30_000;
+const CORRIDOR_SCAN_MIN_INTERVAL_MS = 20_000;
 const SNAPSHOT_MIN_INTERVAL_MS = 5_000;
 const TURN_TIMEOUT_MS = 15_000;
 const TURN_TIMEOUT_STRIKES = 2;
@@ -56,6 +61,8 @@ type ActiveNavigation = {
   navigationId: string;
   routeVersion: number;
   generation: number;
+  /** From the canonical request; decides whether an outage is blocking. */
+  requireElevator: boolean;
 };
 
 type RerouteGenerationState = {
@@ -275,6 +282,11 @@ export async function createLiveBridge(
   let navigationGeneration = 0;
   let lastSnapshotPersistedAt = 0;
   const rerouteStateByGeneration = new Map<number, RerouteGenerationState>();
+  let corridorScanInFlight = false;
+  let corridorScanDirty = false;
+  let lastCorridorScanAt = 0;
+  let corridorScanTimer: ReturnType<typeof setTimeout> | null = null;
+  let pendingCriticalRerouteReason: RerouteReason | null = null;
   let pendingRouteArm: {
     armGeneration: number;
   } | null = null;
@@ -287,6 +299,26 @@ export async function createLiveBridge(
 
   const sendRerouteJson = (payload: VoiceRerouteOutboundMessage): void => {
     sendJson(VoiceRerouteOutboundMessageSchema.parse(payload));
+  };
+
+  const sendAdvisoryJson = (payload: NavAdvisoryMessage): void => {
+    sendJson(NavAdvisoryMessageSchema.parse(payload));
+  };
+
+  /**
+   * Drops the scan throttle so a new route is evaluated immediately. Advisory
+   * dedup state lives in the NavigationSession and is cleared with it.
+   * `corridorScanInFlight` is deliberately untouched — only the scan's own
+   * `finally` may clear it, or two scans would overlap.
+   */
+  const resetCorridorState = (): void => {
+    corridorScanDirty = false;
+    lastCorridorScanAt = 0;
+    if (corridorScanTimer) {
+      clearTimeout(corridorScanTimer);
+      corridorScanTimer = null;
+    }
+    pendingCriticalRerouteReason = null;
   };
 
   const sendResumeFailed = (payload: NavResumeFailedMessage): void => {
@@ -351,6 +383,7 @@ export async function createLiveBridge(
       pendingResumeNavigationId = null;
       activeNavigation = null;
       lastSnapshotPersistedAt = 0;
+      resetCorridorState();
       // A deliberate end must not leave a snapshot a later reconnect could
       // resume from; an unannounced disconnect leaves it to expire on its TTL.
       for (const id of idsToDelete) {
@@ -370,12 +403,43 @@ export async function createLiveBridge(
     if (sourceStoreKey && !keyRelevantToContext(sourceStoreKey, transitCtx)) {
       return;
     }
+    const snapshot = {
+      generation: navigationGeneration,
+      navigationId: activeNavigation?.navigationId ?? "",
+      routeVersion: activeNavigation?.routeVersion ?? 0,
+    };
     try {
       const result = await getTransitAlerts(transitCtx);
-      if (disposed) return;
+      if (disposed || !isCurrentReroute(snapshot)) return;
       if (result.ok && result.alerts.length > 0) {
         const effect = navSession.onTransitAlerts(result.alerts);
-        applyEffect(effect);
+        let canReroute = false;
+        if (effect.rerouteReason) {
+          if (!latestPosition) {
+            pendingCriticalRerouteReason = effect.rerouteReason;
+          } else {
+            canReroute = await rerouteForReason(
+              effect.rerouteReason,
+              latestPosition,
+            );
+          }
+        }
+        for (const event of effect.events) {
+          if (event.type !== "nav.advisory") continue;
+          const navigation = activeNavigation;
+          if (!navigation) continue;
+          const advisories = event.advisories.map((a) =>
+            a.action === "reroute_applied" && !canReroute
+              ? { ...a, action: "reroute_suggested" as const }
+              : a,
+          );
+          sendAdvisoryJson({
+            type: "nav.advisory",
+            navigationId: navigation.navigationId,
+            routeVersion: navigation.routeVersion,
+            advisories,
+          });
+        }
         driveNavigationSpeech();
       }
     } catch (err) {
@@ -386,6 +450,7 @@ export async function createLiveBridge(
   const unsubscribeAlerts = onAlertSnapshotUpdate((key: string) => {
     if (disposed || !session) return;
     void checkCurrentTransitAlerts(key);
+    void runCorridorScan();
   });
 
   const clearTurnTimeout = (): void => {
@@ -452,9 +517,10 @@ export async function createLiveBridge(
     activeNavigation?.navigationId === snapshot.navigationId &&
     activeNavigation.routeVersion === snapshot.routeVersion;
 
-  const rerouteAfterOffRoute = async (
+  const rerouteForReason = async (
+    reason: RerouteReason,
     triggerPosition: NavPosition | null = latestPosition,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     const navigation = activeNavigation;
     const now = Date.now();
     if (
@@ -463,14 +529,24 @@ export async function createLiveBridge(
       navigation.generation !== navigationGeneration ||
       !triggerPosition
     ) {
-      return;
+      if (reason !== "OFF_ROUTE") {
+        pendingCriticalRerouteReason = reason;
+      }
+      return false;
     }
     const ownState = rerouteStateByGeneration.get(navigation.generation);
+    if (ownState?.inFlight) {
+      if (reason !== "OFF_ROUTE") {
+        pendingCriticalRerouteReason = reason;
+      }
+      return false;
+    }
     if (
+      reason === "OFF_ROUTE" &&
       ownState &&
-      (ownState.inFlight || now - ownState.lastStartedAt < REROUTE_COOLDOWN_MS)
+      now - ownState.lastStartedAt < REROUTE_COOLDOWN_MS
     ) {
-      return;
+      return false;
     }
     const clientRequestId = ownState?.clientRequestId ?? randomUUID();
     rerouteStateByGeneration.set(navigation.generation, {
@@ -487,7 +563,7 @@ export async function createLiveBridge(
       routeToken: navigation.routeToken,
       currentPosition: triggerPosition,
       previousRouteVersion: navigation.routeVersion,
-      reason: "OFF_ROUTE" as const,
+      reason,
       clientRequestId,
     };
     sendRerouteJson({
@@ -495,10 +571,11 @@ export async function createLiveBridge(
       navigationId: navigation.navigationId,
       previousRouteVersion: rerouteRequest.previousRouteVersion,
       clientRequestId: rerouteRequest.clientRequestId,
+      reason,
     });
     try {
       const result = await rerouteAccessibleRoute(rerouteRequest);
-      if (!isCurrentReroute(snapshot)) return;
+      if (!isCurrentReroute(snapshot)) return false;
       if (!result.ok) {
         sendRerouteJson({
           type: "nav.reroute_failed",
@@ -508,7 +585,7 @@ export async function createLiveBridge(
           message: result.error,
           retryable: result.status === 429 || result.status >= 500,
         });
-        return;
+        return false;
       }
       const replacement = new NavigationSession();
       const armed = replacement.armRoute(result.data.route);
@@ -522,7 +599,7 @@ export async function createLiveBridge(
         !startEvent ||
         startEvent.type !== "nav.start"
       ) {
-        if (!isCurrentReroute(snapshot)) return;
+        if (!isCurrentReroute(snapshot)) return false;
         sendRerouteJson({
           type: "nav.reroute_failed",
           navigationId: navigation.navigationId,
@@ -531,9 +608,9 @@ export async function createLiveBridge(
           message: "替代路線無法啟動",
           retryable: false,
         });
-        return;
+        return false;
       }
-      if (!isCurrentReroute(snapshot)) return;
+      if (!isCurrentReroute(snapshot)) return false;
       const replacementGeneration = ++navigationGeneration;
       rerouteStateByGeneration.set(replacementGeneration, {
         inFlight: false,
@@ -545,6 +622,7 @@ export async function createLiveBridge(
         navigationId: result.data.navigationId,
         routeVersion: result.data.routeVersion,
         generation: replacementGeneration,
+        requireElevator: navigation.requireElevator,
       };
       sendRerouteJson({
         type: "nav.route_replaced",
@@ -556,7 +634,9 @@ export async function createLiveBridge(
         steps: startEvent.steps,
         warnings: result.data.warnings,
         currentStepIndex: 0,
+        reason,
       });
+      resetCorridorState();
       persistNavigationSnapshot(true);
       driveNavigationSpeech();
     } catch (err) {
@@ -576,6 +656,102 @@ export async function createLiveBridge(
       const settled = rerouteStateByGeneration.get(snapshot.generation);
       if (settled) settled.inFlight = false;
       pruneRerouteState();
+    }
+    return true;
+  };
+
+  const rerouteAfterOffRoute = async (): Promise<void> => {
+    void (await rerouteForReason("OFF_ROUTE"));
+  };
+
+  /**
+   * Scans the corridor ahead, broadcasts advisories and triggers a
+   * reason-carrying reroute when a blocking event is found. Throttling,
+   * mutual exclusion and generation binding all live here, so callers may
+   * trigger unconditionally.
+   */
+  const runCorridorScan = async (): Promise<void> => {
+    if (process.env.USE_CORRIDOR_MONITOR === "false") return;
+    const navigation = activeNavigation;
+    if (
+      disposed ||
+      !navigation ||
+      navigation.generation !== navigationGeneration
+    )
+      return;
+    const now = Date.now();
+    if (
+      corridorScanInFlight ||
+      now - lastCorridorScanAt < CORRIDOR_SCAN_MIN_INTERVAL_MS
+    ) {
+      corridorScanDirty = true;
+      if (!corridorScanTimer && !corridorScanInFlight) {
+        const delay = Math.max(
+          100,
+          CORRIDOR_SCAN_MIN_INTERVAL_MS - (now - lastCorridorScanAt),
+        );
+        corridorScanTimer = setTimeout(() => {
+          corridorScanTimer = null;
+          void runCorridorScan();
+        }, delay);
+      }
+      return;
+    }
+    const corridor = navSession.getRemainingCorridor();
+    if (!corridor) return;
+
+    corridorScanInFlight = true;
+    lastCorridorScanAt = now;
+    corridorScanDirty = false;
+    const scanGeneration = navigation.generation;
+    try {
+      const findings = await scanRemainingCorridor(corridor);
+      if (disposed || navigationGeneration !== scanGeneration) return;
+      if (!findings.length) return;
+      const effect = navSession.onCorridorFindings(findings, {
+        requireElevator: navigation.requireElevator,
+      });
+      let canReroute = false;
+      if (effect.rerouteReason) {
+        if (!latestPosition) {
+          pendingCriticalRerouteReason = effect.rerouteReason;
+        } else {
+          canReroute = await rerouteForReason(
+            effect.rerouteReason,
+            latestPosition,
+          );
+        }
+      }
+      for (const event of effect.events) {
+        if (event.type !== "nav.advisory") continue;
+        const navigation = activeNavigation;
+        if (!navigation) continue;
+        const advisories = event.advisories.map((a) =>
+          a.action === "reroute_applied" && !canReroute
+            ? { ...a, action: "reroute_suggested" as const }
+            : a,
+        );
+        sendAdvisoryJson({
+          type: "nav.advisory",
+          navigationId: navigation.navigationId,
+          routeVersion: navigation.routeVersion,
+          advisories,
+        });
+      }
+      driveNavigationSpeech();
+    } catch (err) {
+      console.warn("[voice] corridor scan failed", err);
+    } finally {
+      corridorScanInFlight = false;
+      if (corridorScanDirty && !disposed && activeNavigation) {
+        corridorScanDirty = false;
+        if (!corridorScanTimer) {
+          corridorScanTimer = setTimeout(() => {
+            corridorScanTimer = null;
+            void runCorridorScan();
+          }, CORRIDOR_SCAN_MIN_INTERVAL_MS);
+        }
+      }
     }
   };
 
@@ -917,8 +1093,11 @@ export async function createLiveBridge(
               navigationId: envelope.navigationId,
               routeVersion: envelope.routeVersion,
               generation: committedGeneration,
+              requireElevator:
+                envelope.canonicalRequest?.requireElevator ?? false,
             }
           : null;
+        resetCorridorState();
       } catch (err) {
         if (isCurrentArm()) pendingRouteArm = null;
         throw err;
@@ -1001,7 +1180,9 @@ export async function createLiveBridge(
           navigationId: snapshot.navigationId,
           routeVersion: snapshot.routeVersion,
           generation: committedGeneration,
+          requireElevator: envelope.canonicalRequest?.requireElevator ?? false,
         };
+        resetCorridorState();
         applyEffect(effect);
         persistNavigationSnapshot(true);
         void checkCurrentTransitAlerts();
@@ -1043,6 +1224,11 @@ export async function createLiveBridge(
         if (effect.events.some((event) => event.type === "nav.offroute")) {
           void rerouteAfterOffRoute();
         }
+        if (pendingCriticalRerouteReason) {
+          const reason = pendingCriticalRerouteReason;
+          pendingCriticalRerouteReason = null;
+          void rerouteForReason(reason, latestPosition);
+        }
         if (
           effect.events.some(
             (e) => e.type === "nav.transit" || e.type === "nav.start",
@@ -1050,6 +1236,7 @@ export async function createLiveBridge(
         ) {
           void checkCurrentTransitAlerts();
         }
+        void runCorridorScan();
         driveNavigationSpeech();
       };
       if (
@@ -1079,6 +1266,7 @@ export async function createLiveBridge(
       pendingResumeNavigationId = null;
       if (positionTimer) clearTimeout(positionTimer);
       positionTimer = null;
+      resetCorridorState();
       applyEffect(navSession.cancel());
       activeNavigation = null;
       for (const id of idsToDelete) {
@@ -1097,6 +1285,7 @@ export async function createLiveBridge(
       pruneRerouteState();
       pendingRouteArm = null;
       pendingResumeNavigationId = null;
+      resetCorridorState();
       applyEffect(navSession.stop("session_end"));
       for (const id of idsToDelete) {
         void Promise.resolve(deleteNavigationSnapshot(id, userId)).catch(
@@ -1119,9 +1308,15 @@ export async function createLiveBridge(
     armGen++;
     navigationGeneration++;
     rerouteStateByGeneration.clear();
+    resetCorridorState();
     pendingRouteArm = null;
     if (positionTimer) clearTimeout(positionTimer);
     positionTimer = null;
+    if (corridorScanTimer) {
+      clearTimeout(corridorScanTimer);
+      corridorScanTimer = null;
+    }
+    pendingCriticalRerouteReason = null;
     clearTurnTimeout();
     navSession.dispose();
     activeNavigation = null;

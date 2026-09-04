@@ -138,7 +138,13 @@ export const AccessibleRouteRerouteBodySchema = z
       })
       .strict(),
     previousRouteVersion: z.number().int().positive(),
-    reason: z.enum(["OFF_ROUTE", "MANUAL"]),
+    reason: z.enum([
+      "OFF_ROUTE",
+      "FACILITY_OUTAGE",
+      "CONFIRMED_HAZARD",
+      "TRANSIT_DISRUPTION",
+      "MANUAL",
+    ]),
     clientRequestId: z.string().uuid(),
   })
   .strict()

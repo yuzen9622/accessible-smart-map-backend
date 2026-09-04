@@ -506,10 +506,18 @@ describe("NavigationSession pure domain state", () => {
 
     const effect1 = nav.onTransitAlerts([alert1]);
     expect(effect1.ok).toBe(true);
-    expect(effect1.events).toEqual([
+    expect(effect1.events).toMatchObject([
       {
-        type: "nav.transit_alert",
-        alerts: [alert1],
+        type: "nav.advisory",
+        advisories: [
+          {
+            advisoryId: "transit_alert:alert-1",
+            category: "transit_alert",
+            title: "307 路線改道通知",
+            detail: "因施工改道",
+            action: "none",
+          },
+        ],
       },
     ]);
     expect(nav.takeNextSpeech()).toContain(
@@ -531,10 +539,18 @@ describe("NavigationSession pure domain state", () => {
       matchKind: "line" as const,
     };
     const effect3 = nav.onTransitAlerts([alert1, alert2]);
-    expect(effect3.events).toEqual([
+    expect(effect3.events).toMatchObject([
       {
-        type: "nav.transit_alert",
-        alerts: [alert2],
+        type: "nav.advisory",
+        advisories: [
+          {
+            advisoryId: "transit_alert:alert-2",
+            category: "transit_alert",
+            title: "捷運板南線號誌異常",
+            detail: "班距拉長",
+            action: "none",
+          },
+        ],
       },
     ]);
     expect(nav.takeNextSpeech()).toContain(

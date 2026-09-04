@@ -12,6 +12,15 @@ import {
   type GenerateVoiceNavStepsResult,
 } from "../nav-instructions/nav-instructions.service";
 import type { NavPosition } from "./navigation.schema";
+import {
+  AdvisoryDeduper,
+  classifyCorridorFinding,
+  compareAdvisorySeverity,
+  selectRerouteTrigger,
+  type CorridorFinding,
+  type NavAdvisory,
+} from "./nav-advisory";
+import type { RerouteReason } from "../accessible-route/accessible-route.types";
 import type { NavProgressEvent, NavResumeOkEvent } from "./voice.ws.schema";
 import type { NavigationSessionSnapshot } from "../accessible-route/navigation-state.repository";
 
@@ -81,8 +90,8 @@ export type NavServerEvent =
       message: string;
     }
   | {
-      type: "nav.transit_alert";
-      alerts: MatchedAlert[];
+      type: "nav.advisory";
+      advisories: NavAdvisory[];
     }
   | NavProgressEvent
   | NavResumeOkEvent;
@@ -110,6 +119,29 @@ export interface NavigationConversationContext {
   };
   destination?: string;
   transit?: NavigationTransitContext;
+}
+
+/** One ground-level span of the remaining corridor. */
+export interface RemainingGroundSpan {
+  legIndex: number;
+  legType: "WALK" | "DRIVE" | "MOTORCYCLE";
+  /** [lng, lat] sequence; the first point is where the user currently is. */
+  coords: Coord[];
+}
+
+/** One transit leg of the remaining corridor. */
+export interface RemainingTransitLeg {
+  legIndex: number;
+  legType: "BUS" | "METRO" | "THSR" | "TRA";
+  /** METRO only. */
+  railSystem?: string;
+  /** METRO only: the boarding/alighting stations not yet passed. */
+  stations?: { stationUid: string; stationName: string }[];
+}
+
+export interface RemainingCorridor {
+  ground: RemainingGroundSpan[];
+  transit: RemainingTransitLeg[];
 }
 
 export interface ResolvedStep {
@@ -311,7 +343,7 @@ export class NavigationSession {
   private spans: StepSpan[] = [];
   private currentSpeechText: string | null = null;
   private speechQueue: string[] = [];
-  private seenAlertIds = new Set<string>();
+  private advisoryDeduper = new AdvisoryDeduper();
 
   constructor(
     private readonly generateSteps: StepGenerator = generateNavStepsWithLegIndex,
@@ -327,7 +359,7 @@ export class NavigationSession {
       return this.invalidRoute();
     }
     this.armedRoute = route;
-    this.seenAlertIds.clear();
+    this.advisoryDeduper.clear();
     return emptyEffect();
   }
 
@@ -397,7 +429,7 @@ export class NavigationSession {
     this.offrouteWarned = false;
     this.offrouteCount = 0;
     this.recoverCount = 0;
-    this.seenAlertIds.clear();
+    this.advisoryDeduper.clear();
     this.clearSpeech();
     const events: NavServerEvent[] = [
       {
@@ -448,7 +480,7 @@ export class NavigationSession {
     this.spans = [];
     this.announcedIndex = -1;
     this.onVehicle = false;
-    this.seenAlertIds.clear();
+    this.advisoryDeduper.clear();
     this.clearSpeech();
     return { ok: true, events: [{ type: "nav.stop", reason }] };
   }
@@ -532,8 +564,79 @@ export class NavigationSession {
     this.active = false;
     this.steps = [];
     this.spans = [];
-    this.seenAlertIds.clear();
+    this.advisoryDeduper.clear();
     this.clearSpeech();
+  }
+
+  /**
+   * The route geometry and modes still ahead of the current position.
+   * Ground already covered is never returned, so corridor monitoring can never
+   * warn about something behind the user.
+   *
+   * @returns The remaining corridor, or null when not navigating.
+   */
+  getRemainingCorridor(): RemainingCorridor | null {
+    if (this.disposed || !this.active || !this.activeRoute) return null;
+    const cursor =
+      this.announcedIndex >= 0
+        ? this.announcedIndex
+        : (this.nextCoordIndex(0) ?? 0);
+    const step = this.steps[cursor];
+    if (!step) return null;
+    const startLegIndex = step.legIndex;
+    const startPolylineIndex = step.polylineIndex ?? 0;
+
+    const ground: RemainingGroundSpan[] = [];
+    const transit: RemainingTransitLeg[] = [];
+    this.activeRoute.legs.forEach((leg, legIndex) => {
+      if (legIndex < startLegIndex) return;
+      if (leg.type === "WALK" || isRoadType(leg.type)) {
+        const coords =
+          legIndex === startLegIndex
+            ? leg.polyline.slice(startPolylineIndex)
+            : leg.polyline;
+        if (coords.length < 2) return;
+        ground.push({
+          legIndex,
+          legType: leg.type as RemainingGroundSpan["legType"],
+          coords: coords.map((c) => [c[0], c[1]] as Coord),
+        });
+        return;
+      }
+      if (leg.type === "BUS" || leg.type === "THSR" || leg.type === "TRA") {
+        transit.push({ legIndex, legType: leg.type });
+        return;
+      }
+      if (leg.type !== "METRO") return;
+      if (
+        legIndex === startLegIndex &&
+        (step.kind === "transit_alight" || step.kind === "leg_end")
+      ) {
+        return;
+      }
+      const boarded = legIndex === startLegIndex && this.onVehicle;
+      const stations = [
+        ...(boarded
+          ? []
+          : [
+              {
+                stationUid: leg.departureStationUid,
+                stationName: leg.departureStation,
+              },
+            ]),
+        {
+          stationUid: leg.arrivalStationUid,
+          stationName: leg.arrivalStation,
+        },
+      ].filter((s) => s.stationUid);
+      transit.push({
+        legIndex,
+        legType: "METRO",
+        railSystem: leg.railSystem,
+        stations,
+      });
+    });
+    return { ground, transit };
   }
 
   /**
@@ -619,30 +722,57 @@ export class NavigationSession {
   }
 
   /**
-   * Processes new transit alerts, deduping previously announced alerts,
-   * enqueuing a proactive speech prompt and returning server events.
+   * Processes new transit alerts as corridor findings.
+   *
+   * @param alerts The alerts matched against the current/next transit leg.
+   * @returns The advisory effect, plus the reason a reroute is warranted.
    */
-  onTransitAlerts(alerts: MatchedAlert[]): NavEffect {
-    if (this.disposed || !this.active || !alerts.length) return emptyEffect();
-    const newAlerts = alerts.filter((a) => !this.seenAlertIds.has(a.alertId));
-    if (!newAlerts.length) return emptyEffect();
+  onTransitAlerts(
+    alerts: MatchedAlert[],
+  ): NavEffect & { rerouteReason: RerouteReason | null } {
+    if (this.disposed || !this.active || !alerts.length)
+      return { ok: true, events: [], rerouteReason: null };
+    const findings: CorridorFinding[] = alerts.map((a) => ({
+      category: "transit_alert" as const,
+      alertId: a.alertId,
+      title: a.title,
+      description: a.description,
+    }));
+    return this.onCorridorFindings(findings, { requireElevator: false });
+  }
 
-    for (const a of newAlerts) {
-      this.seenAlertIds.add(a.alertId);
-    }
+  /**
+   * Classifies, dedupes, queues one line of speech and emits a single
+   * nav.advisory event.
+   *
+   * @param findings The raw facts from a corridor scan.
+   * @param options requireElevator, taken from the canonical request.
+   * @returns An effect carrying 0 or 1 nav.advisory, plus the reroute reason.
+   */
+  onCorridorFindings(
+    findings: readonly CorridorFinding[],
+    options: { requireElevator: boolean },
+  ): NavEffect & { rerouteReason: RerouteReason | null } {
+    if (this.disposed || !this.active || !findings.length)
+      return { ok: true, events: [], rerouteReason: null };
 
-    const voiceAlert = newAlerts[0];
-    const speech = `注意，即時通阻警報：${voiceAlert.title}`;
-    this.enqueueSpeech(speech);
+    const classified = findings.map((finding) =>
+      classifyCorridorFinding(finding, {
+        requireElevator: options.requireElevator,
+        onVehicle: this.onVehicle,
+      }),
+    );
+    const fresh = this.advisoryDeduper.take(classified);
+    if (!fresh.length) return { ok: true, events: [], rerouteReason: null };
+
+    const { advisories, rerouteReason } = selectRerouteTrigger(fresh);
+    const spoken = [...advisories].sort(compareAdvisorySeverity)[0];
+    this.enqueueSpeech(spoken.speech);
 
     return {
       ok: true,
-      events: [
-        {
-          type: "nav.transit_alert",
-          alerts: newAlerts,
-        },
-      ],
+      events: [{ type: "nav.advisory", advisories }],
+      rerouteReason,
     };
   }
 

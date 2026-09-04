@@ -400,6 +400,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
       getNavigationEnvelopeByToken.mockResolvedValue({
         navigationId: "11111111-1111-4111-8111-111111111111",
         routeVersion: 1,
+        canonicalRequest: { requireElevator: false },
       });
       const pendingReroute = deferred<any>();
       rerouteAccessibleRoute.mockReturnValue(pendingReroute.promise);
@@ -459,6 +460,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
         type: "nav.rerouting",
         navigationId: "11111111-1111-4111-8111-111111111111",
         previousRouteVersion: 1,
+        reason: "OFF_ROUTE",
         clientRequestId: expect.stringMatching(
           /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
         ),
@@ -473,6 +475,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
         type: "nav.route_replaced",
         navigationId: "11111111-1111-4111-8111-111111111111",
         previousRouteVersion: 1,
+        reason: "OFF_ROUTE",
         routeToken: "replacement",
         routeVersion: 2,
         route: walkRoute,
@@ -505,6 +508,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
       getNavigationEnvelopeByToken.mockResolvedValue({
         navigationId: "11111111-1111-4111-8111-111111111111",
         routeVersion: 1,
+        canonicalRequest: { requireElevator: false },
       });
       const pendingReroute = deferred<any>();
       rerouteAccessibleRoute.mockReturnValue(pendingReroute.promise);
@@ -776,6 +780,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
       getNavigationEnvelopeByToken.mockResolvedValue({
         navigationId: "11111111-1111-4111-8111-111111111111",
         routeVersion: 1,
+        canonicalRequest: { requireElevator: false },
       });
       const pendingReroute = deferred<any>();
       rerouteAccessibleRoute.mockReturnValue(pendingReroute.promise);
@@ -907,6 +912,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
       getNavigationEnvelopeByToken.mockResolvedValue({
         navigationId: "11111111-1111-4111-8111-111111111111",
         routeVersion: 1,
+        canonicalRequest: { requireElevator: false },
       });
       const ws = makeWs();
       const bridge = await createLiveBridge({ ws, userId: "u" });
@@ -962,6 +968,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
       getNavigationEnvelopeByToken.mockResolvedValue({
         navigationId: "11111111-1111-4111-8111-111111111111",
         routeVersion: 1,
+        canonicalRequest: { requireElevator: false },
       });
       rerouteAccessibleRoute.mockResolvedValue({
         ok: false,
@@ -2002,6 +2009,7 @@ describe("createLiveBridge navigation resume and snapshot lifecycle", () => {
     getNavigationEnvelopeByToken.mockResolvedValue({
       navigationId: NAV_ID,
       routeVersion: 1,
+      canonicalRequest: { requireElevator: false },
     });
     getNavigationSnapshot.mockResolvedValue(snapshot());
     storeNavigationSnapshot.mockResolvedValue(undefined);
@@ -2094,6 +2102,7 @@ describe("createLiveBridge navigation resume and snapshot lifecycle", () => {
         getNavigationEnvelopeByToken.mockResolvedValue({
           navigationId: "other-nav",
           routeVersion: 1,
+          canonicalRequest: { requireElevator: false },
         }),
     ],
   ])("fails with %s", async (_label, code, arrange) => {

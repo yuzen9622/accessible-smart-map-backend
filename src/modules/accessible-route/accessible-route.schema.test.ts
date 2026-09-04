@@ -76,7 +76,7 @@ describe("AccessibleRouteRerouteBodySchema", () => {
     clientRequestId: "11111111-1111-4111-8111-111111111111",
   };
 
-  it("accepts only the frozen package-1 body and rejects resubmitted intent", () => {
+  it("accepts all valid RerouteReason values and rejects resubmitted intent", () => {
     expect(AccessibleRouteRerouteBodySchema.safeParse(valid).success).toBe(
       true,
     );
@@ -86,10 +86,24 @@ describe("AccessibleRouteRerouteBodySchema", () => {
         destination: "不得重送",
       }).success,
     ).toBe(false);
+    for (const reason of [
+      "OFF_ROUTE",
+      "FACILITY_OUTAGE",
+      "CONFIRMED_HAZARD",
+      "TRANSIT_DISRUPTION",
+      "MANUAL",
+    ] as const) {
+      expect(
+        AccessibleRouteRerouteBodySchema.safeParse({
+          ...valid,
+          reason,
+        }).success,
+      ).toBe(true);
+    }
     expect(
       AccessibleRouteRerouteBodySchema.safeParse({
         ...valid,
-        reason: "FACILITY_OUTAGE",
+        reason: "INVALID_REASON",
       }).success,
     ).toBe(false);
   });

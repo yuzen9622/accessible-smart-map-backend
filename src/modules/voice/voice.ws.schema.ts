@@ -119,12 +119,21 @@ const NavStepDtoSchema = z
   })
   .strict();
 
+const RerouteReasonSchema = z.enum([
+  "OFF_ROUTE",
+  "FACILITY_OUTAGE",
+  "CONFIRMED_HAZARD",
+  "TRANSIT_DISRUPTION",
+  "MANUAL",
+]);
+
 export const NavReroutingMessageSchema = z
   .object({
     type: z.literal("nav.rerouting"),
     navigationId: z.string(),
     previousRouteVersion: z.number().int().positive(),
     clientRequestId: z.string().uuid(),
+    reason: RerouteReasonSchema.optional(),
   })
   .strict();
 
@@ -141,6 +150,7 @@ export const NavRouteReplacedMessageSchema = z
     steps: z.array(NavStepDtoSchema),
     warnings: z.array(z.string()),
     currentStepIndex: z.literal(0),
+    reason: RerouteReasonSchema.optional(),
   })
   .strict();
 
@@ -158,6 +168,46 @@ export const NavRerouteFailedMessageSchema = z
     retryable: z.boolean(),
   })
   .strict();
+
+/**
+ * One graded corridor event. `rerouteReason` is mandatory whenever the backend
+ * proposes or has already applied a reroute, because the client replays it as
+ * the reason on its own HTTP reroute call.
+ */
+export const NavAdvisorySchema = z
+  .object({
+    advisoryId: z.string().min(1),
+    category: z.enum(["facility", "transit_alert", "hazard", "traffic"]),
+    severity: z.enum(["info", "warning", "critical"]),
+    action: z.enum(["none", "reroute_suggested", "reroute_applied"]),
+    title: z.string().min(1),
+    detail: z.string().optional(),
+    speech: z.string().min(1),
+    rerouteReason: RerouteReasonSchema.optional(),
+    location: z
+      .object({
+        latitude: z.number().finite().min(-90).max(90),
+        longitude: z.number().finite().min(-180).max(180),
+      })
+      .optional(),
+    distanceAheadM: z.number().nonnegative().optional(),
+    issuedAt: z.string().min(1),
+  })
+  .strict()
+  .refine((v) => v.action === "none" || v.rerouteReason !== undefined, {
+    message: 'rerouteReason is required when action is not "none"',
+  });
+
+export const NavAdvisoryMessageSchema = z
+  .object({
+    type: z.literal("nav.advisory"),
+    navigationId: z.string(),
+    routeVersion: z.number().int().positive(),
+    advisories: z.array(NavAdvisorySchema).min(1),
+  })
+  .strict();
+
+export type NavAdvisoryMessage = z.infer<typeof NavAdvisoryMessageSchema>;
 
 /**
  * Live progress push emitted on every processed position while navigating.
@@ -243,7 +293,8 @@ export type VoiceOutboundMessage =
   | { type: "nav.error"; code: "NAV_ROUTE_INVALID"; message: string }
   | NavProgressEvent
   | VoiceRerouteOutboundMessage
-  | VoiceResumeOutboundMessage;
+  | VoiceResumeOutboundMessage
+  | NavAdvisoryMessage;
 
 /**
  * Renders a parse failure as a single-line reason for the server log.

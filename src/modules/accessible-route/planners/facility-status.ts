@@ -264,3 +264,129 @@ export async function overlayFacilityStatus(
     applyAlerts(leg, route, data.alerts);
   }
 }
+
+/** One elevator outage fact for a station still ahead on the corridor. */
+export interface MetroElevatorOutage {
+  railSystem: string;
+  stationId: string;
+  stationName: string;
+  /** Stable dedup sub-key: the elevator title, or "station" when absent. */
+  elevatorKey: string;
+  /** The OUTAGE_RE keyword that matched, e.g. 「維修」. */
+  keyword: string;
+  /** Original description, truncated to 120 characters. */
+  description: string;
+}
+
+/** A station to probe, as seen from the remaining corridor. */
+export interface MetroStationProbe {
+  railSystem: string;
+  stationUid: string;
+  stationName: string;
+}
+
+/** TDX alerts carry an id in the wild even though the overlay never reads it. */
+type IdentifiedMetroAlert = TdxMetroAlertItem & { AlertID?: string };
+
+function alertTouchesStation(
+  alert: TdxMetroAlertItem,
+  stationId: string,
+  stationName: string,
+): boolean {
+  const stations = alert.Scope?.Stations ?? [];
+  if (!stations.length) return true;
+  return stations.some((s) => {
+    const name = s.StationName?.Zh_tw ?? "";
+    const byName =
+      name &&
+      stationName &&
+      (stationName.includes(name) || name.includes(stationName));
+    const byId = s.StationID && s.StationID === stationId;
+    return Boolean(byName || byId);
+  });
+}
+
+/**
+ * Reports elevator 維修/故障/暫停/停用 for the metro stations still ahead on the
+ * corridor. Shares the overlay's caches, so it adds no TDX call volume.
+ * Entirely fail-soft: any error yields an empty array.
+ *
+ * @param stations The stations to probe, from the remaining corridor.
+ * @returns One outage per station/elevator that carries a positive signal.
+ */
+export async function probeMetroElevatorOutages(
+  stations: readonly MetroStationProbe[],
+): Promise<MetroElevatorOutage[]> {
+  if (process.env.USE_REALTIME_FACILITY === "false") return [];
+  if (!stations.length) return [];
+
+  try {
+    const systems = [...new Set(stations.map((s) => s.railSystem))];
+    const bySystem = new Map<
+      string,
+      {
+        facilities: Map<string, TdxStationFacilityItem>;
+        alerts: TdxMetroAlertItem[];
+      }
+    >();
+    await Promise.all(
+      systems.map(async (sys) => {
+        const [facilities, alerts] = await Promise.all([
+          fetchFacilityIndex(sys),
+          fetchMetroAlerts(sys),
+        ]);
+        bySystem.set(sys, { facilities, alerts });
+      }),
+    );
+
+    const outages: MetroElevatorOutage[] = [];
+    const seen = new Set<string>();
+    const push = (outage: MetroElevatorOutage): void => {
+      const key = `${outage.railSystem}|${outage.stationId}|${outage.elevatorKey}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      outages.push(outage);
+    };
+
+    for (const station of stations) {
+      const data = bySystem.get(station.railSystem);
+      if (!data) continue;
+      const stationId = toStationId(station.stationUid);
+      if (!stationId) continue;
+
+      const item = data.facilities.get(stationId);
+      for (const e of item?.Elevators ?? []) {
+        const description = `${e.Title?.Zh_tw ?? ""}${e.Description ?? ""}`;
+        const flagged = description.match(OUTAGE_RE);
+        if (!flagged) continue;
+        push({
+          railSystem: station.railSystem,
+          stationId,
+          stationName: station.stationName,
+          elevatorKey: e.Title?.Zh_tw || "station",
+          keyword: flagged[0],
+          description: description.slice(0, 120),
+        });
+      }
+
+      for (const alert of data.alerts as IdentifiedMetroAlert[]) {
+        const text = `${alert.Title ?? ""} ${alert.Description ?? ""}`;
+        if (!/電梯|電扶梯/.test(text)) continue;
+        if (!alertTouchesStation(alert, stationId, station.stationName))
+          continue;
+        push({
+          railSystem: station.railSystem,
+          stationId,
+          stationName: station.stationName,
+          elevatorKey: `alert:${alert.AlertID ?? alert.Title ?? ""}`,
+          keyword: text.match(OUTAGE_RE)?.[0] ?? "異常",
+          description: text.trim().slice(0, 120),
+        });
+      }
+    }
+    return outages;
+  } catch (err) {
+    console.warn("[facility-status] elevator outage probe failed", err);
+    return [];
+  }
+}
