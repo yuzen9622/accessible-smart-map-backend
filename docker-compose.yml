@@ -30,6 +30,9 @@ services:
       # LINE conversation state (pending intent + chat history) lives in Redis;
       # reach the redis service by name on the compose network.
       REDIS_URL: redis://redis:6379
+    networks:
+      - default
+      - shared
     volumes:
       # Bind the service-account JSON (host path from .env) read-only.
       - ${GCS_KEY_FILE}:/secrets/gcs-key.json:ro
@@ -177,8 +180,9 @@ services:
     restart: always
 
 networks:
-  tunnel-net:
-    driver: bridge
+  shared:
+    external: true
+    name: accessible-shared
 volumes:
   mongo-data:
   chroma-data:
