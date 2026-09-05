@@ -62,15 +62,17 @@ async function getBusRouteDetailHandler(
   res: Response<ApiResponse<any>>,
 ) {
   try {
-    const { routeName, city } = req.validated?.query as {
+    const { routeName, city, subRouteUid } = req.validated?.query as {
       routeName: string;
       city?: string;
+      subRouteUid?: string;
     };
     const resolved = await resolveCityOr400(city, res);
     if (!resolved) return;
     const result = await busService.getBusRouteDetail({
       routeName,
       city: resolved,
+      subRouteUid,
     });
     if (!result.ok)
       return sendResponse(res, false, "error", result.status, result.error);

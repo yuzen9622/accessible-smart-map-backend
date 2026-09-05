@@ -148,6 +148,33 @@ describe("GET /api/v1/transit/bus/route-detail", () => {
       directions: [{ direction: 0, stops: [] }],
     });
   });
+
+  it("accepts subRouteUid and forwards it to the service", async () => {
+    vi.mocked(busService.resolveBusCity).mockResolvedValue("Taichung" as any);
+    vi.mocked(busService.getBusRouteDetail).mockResolvedValue({
+      ok: true,
+      routeName: "99",
+      directions: [
+        {
+          subRouteUid: "TXG991",
+          subRouteName: "99延",
+          direction: 0,
+          stops: [],
+        },
+      ],
+    } as any);
+
+    const res = await request(app)
+      .get(`${BASE}/bus/route-detail`)
+      .query({ routeName: "99", city: "台中", subRouteUid: "TXG991" });
+
+    expect(res.status).toBe(200);
+    expect(vi.mocked(busService.getBusRouteDetail)).toHaveBeenCalledWith({
+      routeName: "99",
+      city: "Taichung",
+      subRouteUid: "TXG991",
+    });
+  });
 });
 
 describe("GET /api/v1/transit/bus/arrival", () => {
@@ -161,14 +188,28 @@ describe("GET /api/v1/transit/bus/arrival", () => {
   it("returns 200 + service data on success", async () => {
     vi.mocked(busService.getBusArrivalAtStop).mockResolvedValue({
       ok: true,
-      arrivals: [{ estimateMinutes: 3, isLowFloor: true }],
+      arrivals: [
+        {
+          estimateMinutes: 3,
+          isLowFloor: true,
+          subRouteUid: "TPE3070",
+          subRouteName: "307 往撫遠街",
+        },
+      ],
     } as any);
 
     const res = await request(app).get(`${BASE}/bus/arrival`).query(VALID);
 
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual({
-      arrivals: [{ estimateMinutes: 3, isLowFloor: true }],
+      arrivals: [
+        {
+          estimateMinutes: 3,
+          isLowFloor: true,
+          subRouteUid: "TPE3070",
+          subRouteName: "307 往撫遠街",
+        },
+      ],
     });
     expect(vi.mocked(busService.getBusArrivalAtStop)).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -268,7 +309,14 @@ describe("GET /api/v1/transit/bus/positions", () => {
   it("returns 200 + service data and coerces direction to a number", async () => {
     vi.mocked(busService.getBusRealtimeOnRoute).mockResolvedValue({
       ok: true,
-      vehicles: [{ plate: "AAA-1", isLowFloor: true }],
+      buses: [
+        {
+          plateNumb: "AAA-1",
+          isLowFloor: true,
+          subRouteUid: "TPE3071",
+          subRouteName: "307 往板橋",
+        },
+      ],
     } as any);
 
     const res = await request(app)
@@ -277,7 +325,14 @@ describe("GET /api/v1/transit/bus/positions", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual({
-      vehicles: [{ plate: "AAA-1", isLowFloor: true }],
+      buses: [
+        {
+          plateNumb: "AAA-1",
+          isLowFloor: true,
+          subRouteUid: "TPE3071",
+          subRouteName: "307 往板橋",
+        },
+      ],
     });
     expect(vi.mocked(busService.getBusRealtimeOnRoute)).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -311,6 +366,51 @@ describe("GET /api/v1/transit/bus/positions", () => {
 
     expect(res.status).toBe(ResponseCode.NOT_FOUND);
     expect(res.body.message).toBe("目前無營運車輛");
+  });
+});
+
+describe("transit bus OpenAPI response contracts", () => {
+  it("documents sub-route identity on arrival and position records", async () => {
+    const res = await request(app).get("/api/v1/openapi.json");
+    const schemas = res.body.components.schemas;
+
+    expect(schemas.BusArrivalRecord.required).toEqual(
+      expect.arrayContaining(["subRouteUid", "subRouteName"]),
+    );
+    expect(schemas.BusPositionRecord.required).toEqual(
+      expect.arrayContaining(["subRouteUid", "subRouteName"]),
+    );
+    expect(
+      res.body.paths["/transit/bus/arrival"].get.responses["200"].content[
+        "application/json"
+      ].schema,
+    ).toEqual({ $ref: "#/components/schemas/BusArrivalResponse" });
+    expect(
+      res.body.paths["/transit/bus/positions"].get.responses["200"].content[
+        "application/json"
+      ].schema,
+    ).toEqual({ $ref: "#/components/schemas/BusPositionsResponse" });
+  });
+
+  it("documents route-detail subRouteUid filtering and branch identity", async () => {
+    const res = await request(app).get("/api/v1/openapi.json");
+    const operation = res.body.paths["/transit/bus/route-detail"].get;
+    const subRouteUid = operation.parameters.find(
+      (parameter: any) => parameter.name === "subRouteUid",
+    );
+
+    expect(subRouteUid).toMatchObject({ in: "query", required: false });
+    expect(
+      operation.responses["200"].content["application/json"].schema,
+    ).toEqual({ $ref: "#/components/schemas/BusRouteDetailResponse" });
+    expect(res.body.components.schemas.BusRouteDirection.required).toEqual(
+      expect.arrayContaining(["subRouteUid", "subRouteName"]),
+    );
+    expect(res.body.components.schemas.BusRouteDetailDirection.allOf).toEqual(
+      expect.arrayContaining([
+        { $ref: "#/components/schemas/BusRouteDirection" },
+      ]),
+    );
   });
 });
 

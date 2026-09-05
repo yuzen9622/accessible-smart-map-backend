@@ -203,25 +203,32 @@ async function lowFloorMap(
 
 type NormalizedRoute = {
   subRouteUid: string;
+  subRouteName: string;
   direction: number;
   operators: string[];
   stops: { seq: number; name: string; lat?: number; lng?: number }[];
 };
 
 function buildDirections(records: NormalizedRoute[]): BusRouteDirection[] {
-  const byDir = new Map<number, NormalizedRoute>();
+  const bySubRouteAndDir = new Map<string, NormalizedRoute>();
   for (const r of records) {
-    const existing = byDir.get(r.direction);
-    // Keep the representative (longest) sub-route per direction.
+    const key = `${r.subRouteUid}_${r.direction}`;
+    const existing = bySubRouteAndDir.get(key);
+    // Duplicate upstream rows for the same sub-route/direction occasionally
+    // differ in completeness; keep the longest one without merging branches.
     if (!existing || r.stops.length > existing.stops.length)
-      byDir.set(r.direction, r);
+      bySubRouteAndDir.set(key, r);
   }
-  return [...byDir.values()]
-    .sort((a, b) => a.direction - b.direction)
+  return [...bySubRouteAndDir.values()]
+    .sort(
+      (a, b) =>
+        a.direction - b.direction || a.subRouteUid.localeCompare(b.subRouteUid),
+    )
     .map((r) => {
       const stops = [...r.stops].sort((a, b) => a.seq - b.seq);
       return {
         subRouteUid: r.subRouteUid,
+        subRouteName: r.subRouteName,
         direction: r.direction,
         directionLabel: dirLabel(r.direction),
         from: stops[0]?.name ?? "",
@@ -239,6 +246,7 @@ function buildDirections(records: NormalizedRoute[]): BusRouteDirection[] {
 export async function getBusRouteInfo(params: {
   routeName: string;
   city: TaiwanCityEn | "InterCity";
+  subRouteUid?: string;
 }): Promise<BusRouteInfoResult> {
   const { city } = params;
   const routeId = formatRouteName(params.routeName);
@@ -249,9 +257,14 @@ export async function getBusRouteInfo(params: {
   try {
     const docs = await findRoutesByName(city, names);
 
-    if (docs.length) {
-      const normalized: NormalizedRoute[] = docs.map((d) => ({
+    const matchingDocs = params.subRouteUid
+      ? docs.filter((d) => d.subRouteUid === params.subRouteUid)
+      : docs;
+
+    if (matchingDocs.length) {
+      const normalized: NormalizedRoute[] = matchingDocs.map((d) => ({
         subRouteUid: d.subRouteUid,
+        subRouteName: d.subRouteName?.Zh_tw || d.routeName?.Zh_tw || routeId,
         direction: d.direction,
         operators: (d.operators ?? [])
           .map((o) => o.name)
@@ -265,7 +278,7 @@ export async function getBusRouteInfo(params: {
       }));
       return {
         ok: true,
-        routeName: docs[0].routeName?.Zh_tw || routeId,
+        routeName: matchingDocs[0].routeName?.Zh_tw || routeId,
         city,
         source: "db",
         operators: [...new Set(normalized.flatMap((n) => n.operators))],
@@ -281,16 +294,25 @@ export async function getBusRouteInfo(params: {
         type === "City"
           ? `${busUrl.stopOfRouteUrl}/${city}?$format=JSON&$filter=RouteName/Zh_tw eq '${odataUrlLiteral(id)}'`
           : `${busUrl.interCityStopOfRouteUrl}?$format=JSON&$filter=RouteName/Zh_tw eq '${odataUrlLiteral(id)}'`,
+      params.subRouteUid
+        ? (records) =>
+            records.some((r: any) => r.SubRouteUID === params.subRouteUid)
+        : undefined,
     );
-    if (!live.length) {
+    const matchingLive = params.subRouteUid
+      ? live.filter((r: any) => r.SubRouteUID === params.subRouteUid)
+      : live;
+    if (!matchingLive.length) {
       return {
         ok: false,
         error: `找不到路線「${params.routeName}」的站序資料`,
         status: 404,
       };
     }
-    const normalized: NormalizedRoute[] = live.map((r: any) => ({
+    const normalized: NormalizedRoute[] = matchingLive.map((r: any) => ({
       subRouteUid: r.SubRouteUID,
+      subRouteName:
+        r.SubRouteName?.Zh_tw ?? r.RouteName?.Zh_tw ?? params.routeName,
       direction: r.Direction,
       operators: (r.Operators ?? [])
         .map((o: any) => o.OperatorName?.Zh_tw)
@@ -370,6 +392,8 @@ export async function getBusArrivalAtStop(params: {
             ? Math.round(r.EstimateTime / 60)
             : null;
         return {
+          subRouteUid: r.SubRouteUID,
+          subRouteName: r.SubRouteName?.Zh_tw,
           stopName: r.StopName?.Zh_tw ?? stopName,
           direction: r.Direction,
           directionLabel: dirLabel(r.Direction),
@@ -452,6 +476,7 @@ function getNextDepartureForStop(
 export async function getBusRouteDetail(params: {
   routeName: string;
   city: TaiwanCityEn | "InterCity";
+  subRouteUid?: string;
 }): Promise<BusRouteDetailResult> {
   const { city, routeName } = params;
   const routeId = formatRouteName(routeName);
@@ -462,7 +487,10 @@ export async function getBusRouteDetail(params: {
     if (!routeInfoRes.ok) return routeInfoRes;
 
     // 2. Get timetable (optional, we won't fail if not found)
-    const timetableRes = await getBusTimetable(params);
+    const timetableRes = await getBusTimetable({
+      ...params,
+      preserveSubRoutes: true,
+    });
 
     // 3. Get ETAs for all stops on the route
     let etaRecords: any[] = [];
@@ -475,8 +503,14 @@ export async function getBusRouteDetail(params: {
           type === "City"
             ? `${busUrl.cityEstimatedTimeOfArrivalUrl}/${city}/${encodeURIComponent(id)}?$format=JSON`
             : `${busUrl.interCityEstimatedTimeOfArrivalUrl}/${encodeURIComponent(id)}?$format=JSON`,
+        params.subRouteUid
+          ? (records) =>
+              records.some((r: any) => r.SubRouteUID === params.subRouteUid)
+          : undefined,
       );
-      etaRecords = eta.records;
+      etaRecords = params.subRouteUid
+        ? eta.records.filter((r: any) => r.SubRouteUID === params.subRouteUid)
+        : eta.records;
       etaScope = eta.scope;
     } catch (e) {
       console.error("Failed to fetch ETA in getBusRouteDetail", e);
@@ -532,9 +566,14 @@ export async function getBusRouteDetail(params: {
         const dirKey = `${d.subRouteUid}_${d.direction}`;
         const dirMap = etaMap.get(dirKey);
         const dirSchedule = timetableRes.ok
-          ? timetableRes.schedules.find(
-              (sched) => sched.direction === d.direction,
-            )
+          ? (timetableRes.schedules.find(
+              (sched) =>
+                sched.subRouteUid === d.subRouteUid &&
+                sched.direction === d.direction,
+            ) ??
+            timetableRes.schedules.find(
+              (sched) => !sched.subRouteUid && sched.direction === d.direction,
+            ))
           : null;
         const frequencies = dirSchedule?.frequencies || [];
         const nowHHmm = taipeiHHmm();
@@ -639,6 +678,9 @@ function serviceDayLabel(sd?: Record<string, number>): string {
 export async function getBusTimetable(params: {
   routeName: string;
   city: TaiwanCityEn | "InterCity";
+  subRouteUid?: string;
+  /** Internal route-detail mode; the standalone timetable endpoint stays grouped by direction. */
+  preserveSubRoutes?: boolean;
   afterTime?: string;
   limit?: number;
 }): Promise<BusTimetableResult> {
@@ -653,8 +695,14 @@ export async function getBusTimetable(params: {
         type === "City"
           ? `${busUrl.cityScheduleUrl}/${city}?$format=JSON&$filter=RouteName/Zh_tw eq '${odataUrlLiteral(id)}'`
           : `${busUrl.interCityScheduleUrl}?$format=JSON&$filter=RouteName/Zh_tw eq '${odataUrlLiteral(id)}'`,
+      params.subRouteUid
+        ? (rows) => rows.some((r: any) => r.SubRouteUID === params.subRouteUid)
+        : undefined,
     );
-    if (!records.length) {
+    const matchingRecords = params.subRouteUid
+      ? records.filter((r: any) => r.SubRouteUID === params.subRouteUid)
+      : records;
+    if (!matchingRecords.length) {
       return {
         ok: false,
         error: `找不到路線「${params.routeName}」的時刻表`,
@@ -662,9 +710,26 @@ export async function getBusTimetable(params: {
       };
     }
 
-    const byDir = new Map<number, BusFrequency[]>();
-    for (const r of records) {
-      const list = byDir.get(r.Direction) ?? [];
+    type ScheduleBucket = {
+      subRouteUid?: string;
+      subRouteName?: string;
+      direction: number;
+      frequencies: BusFrequency[];
+    };
+    const bySubRouteAndDir = new Map<string, ScheduleBucket>();
+    for (const r of matchingRecords) {
+      const keepSubRoute = params.preserveSubRoutes || !!params.subRouteUid;
+      const subRouteUid = keepSubRoute ? r.SubRouteUID || undefined : undefined;
+      const key = keepSubRoute
+        ? `${subRouteUid ?? ""}_${r.Direction}`
+        : String(r.Direction);
+      const bucket = bySubRouteAndDir.get(key) ?? {
+        subRouteUid,
+        subRouteName: keepSubRoute ? r.SubRouteName?.Zh_tw : undefined,
+        direction: r.Direction,
+        frequencies: [] as BusFrequency[],
+      };
+      const list = bucket.frequencies;
       for (const f of r.Frequencys ?? []) {
         list.push({
           scheduleType: "headway",
@@ -697,7 +762,7 @@ export async function getBusTimetable(params: {
           ...(stopTimes.length > 1 ? { stopTimes } : {}),
         });
       }
-      byDir.set(r.Direction, list);
+      bySubRouteAndDir.set(key, bucket);
     }
 
     const after = /^\d{2}:\d{2}$/.test(params.afterTime ?? "")
@@ -709,9 +774,13 @@ export async function getBusTimetable(params: {
         : undefined;
     let truncated = false;
 
-    const schedules: BusScheduleByDirection[] = [...byDir.entries()]
-      .sort((a, b) => a[0] - b[0])
-      .map(([direction, all]) => {
+    const schedules: BusScheduleByDirection[] = [...bySubRouteAndDir.values()]
+      .sort(
+        (a, b) =>
+          a.direction - b.direction ||
+          (a.subRouteUid ?? "").localeCompare(b.subRouteUid ?? ""),
+      )
+      .map(({ subRouteUid, subRouteName, direction, frequencies: all }) => {
         // first/last describe the whole published service, so compute them
         // BEFORE any afterTime/limit filtering narrows the view.
         const times = all.flatMap((f) =>
@@ -723,9 +792,8 @@ export async function getBusTimetable(params: {
         ) as string[];
         const sorted = [...times].sort();
 
-        // Multiple SubRoutes merge into one direction bucket, so upstream
-        // routinely yields byte-identical entries. Deduplicate before filtering
-        // or `limit` gets spent on repeats instead of distinct departures.
+        // Upstream can repeat byte-identical entries for the same branch.
+        // Deduplicate before filtering so `limit` counts distinct departures.
         const seen = new Set<string>();
         let frequencies = all.filter((f) => {
           const key =
@@ -758,6 +826,8 @@ export async function getBusTimetable(params: {
         }
 
         return {
+          ...(subRouteUid ? { subRouteUid } : {}),
+          ...(subRouteName ? { subRouteName } : {}),
           direction,
           directionLabel: dirLabel(direction),
           first: sorted[0],
@@ -826,6 +896,8 @@ export async function getBusRealtimeOnRoute(params: {
     const buses: BusOnRoad[] = records.map((r: any) => {
       const veh = vehicles.get(r.PlateNumb);
       return {
+        subRouteUid: r.SubRouteUID,
+        subRouteName: r.SubRouteName?.Zh_tw,
         plateNumb: r.PlateNumb,
         direction: r.Direction,
         directionLabel: dirLabel(r.Direction),

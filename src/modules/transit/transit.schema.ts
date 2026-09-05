@@ -24,6 +24,18 @@ export const BusRouteQuerySchema = z
   })
   .strict();
 
+export const BusRouteDetailQuerySchema = z
+  .object({
+    routeName: z.string().min(1).openapi({ example: "99" }),
+    city: CityQuery,
+    subRouteUid: z.string().min(1).optional().openapi({
+      example: "TXG991",
+      description:
+        "TDX SubRouteUID；提供時只回傳該支線，省略時回傳 routeName 下所有支線",
+    }),
+  })
+  .strict();
+
 export const BusArrivalQuerySchema = z
   .object({
     routeName: z.string().min(1).openapi({ example: "307" }),
@@ -272,6 +284,132 @@ const ApiResponseSchema = <T extends z.ZodTypeAny>(data: T) =>
 const BusServiceResponseSchema = ApiResponseSchema(
   z.object({ ok: z.boolean() }).passthrough(),
 ).openapi("BusServiceResponse");
+
+const BusRouteStopSchema = z.object({
+  seq: z.number().openapi({ example: 1 }),
+  name: z.string().openapi({ example: "干城站" }),
+  lat: z.number().optional().openapi({ example: 24.1402 }),
+  lng: z.number().optional().openapi({ example: 120.6845 }),
+});
+
+const BusRouteDirectionSchema = z
+  .object({
+    subRouteUid: z.string().openapi({ example: "TXG991" }),
+    subRouteName: z.string().openapi({ example: "99延" }),
+    direction: DirectionSchema,
+    directionLabel: z.string().openapi({ example: "去程" }),
+    from: z.string().openapi({ example: "精武車站" }),
+    to: z.string().openapi({ example: "臺中區監理所" }),
+    stopCount: z.number().openapi({ example: 57 }),
+    stops: z.array(BusRouteStopSchema),
+  })
+  .openapi("BusRouteDirection");
+
+const BusRouteResponseSchema = ApiResponseSchema(
+  z.object({
+    routeName: z.string().openapi({ example: "99" }),
+    city: z.string().openapi({ example: "Taichung" }),
+    source: z.enum(["db", "tdx"]),
+    operators: z.array(z.string()),
+    directions: z.array(BusRouteDirectionSchema),
+  }),
+).openapi("BusRouteResponse");
+
+const BusRouteDetailDirectionSchema = BusRouteDirectionSchema.extend({
+  stops: z.array(
+    BusRouteStopSchema.extend({
+      estimateMinutes: z.number().nullable().openapi({ example: 3 }),
+      statusLabel: z.string().openapi({ example: "正常" }),
+    }),
+  ),
+}).openapi("BusRouteDetailDirection");
+
+const BusScheduleSchema = z
+  .object({
+    subRouteUid: z.string().optional().openapi({ example: "TXG991" }),
+    subRouteName: z.string().optional().openapi({ example: "99延" }),
+    direction: DirectionSchema,
+    directionLabel: z.string().openapi({ example: "去程" }),
+    first: z.string().optional().openapi({ example: "06:00" }),
+    last: z.string().optional().openapi({ example: "22:00" }),
+    frequencies: z.array(z.object({}).passthrough()),
+  })
+  .openapi("BusSchedule");
+
+const BusRouteDetailResponseSchema = ApiResponseSchema(
+  z.object({
+    routeName: z.string().openapi({ example: "99" }),
+    city: z.string().openapi({ example: "Taichung" }),
+    operators: z.array(z.string()),
+    schedules: z.array(BusScheduleSchema).optional(),
+    directions: z.array(BusRouteDetailDirectionSchema),
+  }),
+).openapi("BusRouteDetailResponse");
+
+const BusArrivalRecordSchema = z
+  .object({
+    subRouteUid: z.string().openapi({
+      example: "TPE3070",
+      description: "TDX SubRouteUID，可用來精確過濾子路線",
+    }),
+    subRouteName: z.string().openapi({
+      example: "307 往撫遠街",
+      description: "TDX SubRouteName.Zh_tw",
+    }),
+    stopName: z.string().openapi({ example: "台北車站" }),
+    direction: DirectionSchema,
+    directionLabel: z.string().openapi({ example: "去程" }),
+    estimateMinutes: z.number().nullable().openapi({ example: 3 }),
+    statusLabel: z.string().openapi({ example: "正常" }),
+    plateNumb: z.string().optional().openapi({ example: "KKA-1234" }),
+  })
+  .openapi("BusArrivalRecord");
+
+const BusArrivalResponseSchema = ApiResponseSchema(
+  z.object({
+    routeName: z.string().openapi({ example: "307" }),
+    city: z.string().openapi({ example: "Taipei" }),
+    stopName: z.string().openapi({ example: "台北車站" }),
+    arrivals: z.array(BusArrivalRecordSchema),
+  }),
+).openapi("BusArrivalResponse");
+
+const BusPositionRecordSchema = z
+  .object({
+    subRouteUid: z.string().openapi({
+      example: "TPE3070",
+      description: "TDX SubRouteUID，可用來精確過濾子路線",
+    }),
+    subRouteName: z.string().openapi({
+      example: "307 往撫遠街",
+      description: "TDX SubRouteName.Zh_tw",
+    }),
+    plateNumb: z.string().openapi({ example: "KKA-1234" }),
+    direction: DirectionSchema,
+    directionLabel: z.string().openapi({ example: "去程" }),
+    lat: z.number().optional().openapi({ example: 25.0478 }),
+    lng: z.number().optional().openapi({ example: 121.5171 }),
+    speed: z.number().optional().openapi({ example: 32.5 }),
+    statusLabel: z.string().openapi({ example: "正常" }),
+    gpsTime: z
+      .string()
+      .optional()
+      .openapi({ example: "2026-09-05T18:30:00+08:00" }),
+    isLowFloor: z.enum(["是", "否", "未知"]),
+    hasLiftOrRamp: z.enum(["是", "否", "未知"]),
+    vehicleClass: z.string().optional().openapi({ example: "大型巴士" }),
+  })
+  .openapi("BusPositionRecord");
+
+const BusPositionsResponseSchema = ApiResponseSchema(
+  z.object({
+    routeName: z.string().openapi({ example: "307" }),
+    city: z.string().openapi({ example: "Taipei" }),
+    count: z.number().openapi({ example: 3 }),
+    lowFloorCount: z.number().openapi({ example: 2 }),
+    buses: z.array(BusPositionRecordSchema),
+  }),
+).openapi("BusPositionsResponse");
 
 export const BusSearchResultSchema = z
   .object({
@@ -530,7 +668,7 @@ registry.registerPath({
   responses: {
     200: {
       description: "路線站序",
-      content: { "application/json": { schema: BusServiceResponseSchema } },
+      content: { "application/json": { schema: BusRouteResponseSchema } },
     },
     400: { description: "缺少縣市或參數" },
     404: { description: "找不到路線" },
@@ -545,11 +683,13 @@ registry.registerPath({
   summary: "公車路線詳細資訊",
   description:
     "回傳指定路線的所有站點列表、每個站點的預估到站時間（ETA）以及當前時刻表。",
-  request: { query: BusRouteQuerySchema },
+  request: { query: BusRouteDetailQuerySchema },
   responses: {
     200: {
       description: "路線詳細資訊",
-      content: { "application/json": { schema: BusServiceResponseSchema } },
+      content: {
+        "application/json": { schema: BusRouteDetailResponseSchema },
+      },
     },
     400: { description: "缺少縣市或參數" },
     404: { description: "找不到路線" },
@@ -568,7 +708,7 @@ registry.registerPath({
   responses: {
     200: {
       description: "到站預估",
-      content: { "application/json": { schema: BusServiceResponseSchema } },
+      content: { "application/json": { schema: BusArrivalResponseSchema } },
     },
     400: { description: "缺少縣市或參數" },
     404: { description: "找不到到站資料" },
@@ -605,7 +745,7 @@ registry.registerPath({
   responses: {
     200: {
       description: "在線車輛清單",
-      content: { "application/json": { schema: BusServiceResponseSchema } },
+      content: { "application/json": { schema: BusPositionsResponseSchema } },
     },
     400: { description: "缺少縣市或參數" },
     404: { description: "目前無營運車輛" },

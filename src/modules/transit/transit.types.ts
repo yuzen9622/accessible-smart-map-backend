@@ -29,7 +29,8 @@ export type BusServiceError = {
 };
 
 export type BusRouteDirection = {
-  subRouteUid?: string;
+  subRouteUid: string;
+  subRouteName: string;
   direction: number;
   directionLabel: string;
   from: string;
@@ -59,7 +60,8 @@ export type BusRouteDetailStop = {
 };
 
 export type BusRouteDetailDirection = {
-  subRouteUid?: string;
+  subRouteUid: string;
+  subRouteName: string;
   direction: number;
   directionLabel: string;
   from: string;
@@ -80,6 +82,8 @@ export type BusRouteDetailResult =
   | BusServiceError;
 
 export type BusArrival = {
+  subRouteUid: string;
+  subRouteName: string;
   stopName: string;
   direction: number;
   directionLabel: string;
@@ -129,6 +133,9 @@ export type BusHeadwayWindow = {
 export type BusFrequency = BusScheduledTrip | BusHeadwayWindow;
 
 export type BusScheduleByDirection = {
+  /** Present when TDX identifies which branch published this schedule. */
+  subRouteUid?: string;
+  subRouteName?: string;
   direction: number;
   directionLabel: string;
   first?: string;
@@ -151,6 +158,8 @@ export type BusTimetableResult =
   | BusServiceError;
 
 export type BusOnRoad = {
+  subRouteUid: string;
+  subRouteName: string;
   plateNumb: string;
   direction: number;
   directionLabel: string;

@@ -13,6 +13,7 @@ import {
 import { validateRequest } from "../../middleware/validate-request.middleware";
 import {
   BusRouteQuerySchema,
+  BusRouteDetailQuerySchema,
   BusArrivalQuerySchema,
   BusTimetableQuerySchema,
   BusPositionsQuerySchema,
@@ -38,7 +39,7 @@ export function createTransitRouter(): Router {
   );
   router.get(
     "/bus/route-detail",
-    validateRequest({ query: BusRouteQuerySchema }), // Use the same schema
+    validateRequest({ query: BusRouteDetailQuerySchema }),
     getBusRouteDetailHandler,
   );
   router.get(

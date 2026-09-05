@@ -17,6 +17,7 @@ import BusVehicleModel from "../../model/bus-vehicle.model";
 import BusRouteModel from "../../model/bus-route.model";
 import BusStopModel from "../../model/bus-stop.model";
 import {
+  getBusRouteDetail,
   getBusRealtimeOnRoute,
   getBusArrivalAtStop,
   searchBusStops,
@@ -34,8 +35,10 @@ const stopAggregateMock = BusStopModel.aggregate as unknown as ReturnType<
 >;
 
 function mockRouteMap(rows: unknown[]) {
+  const lean = () => Promise.resolve(rows);
   routeFindMock.mockReturnValue({
-    select: () => ({ lean: () => Promise.resolve(rows) }),
+    lean,
+    select: () => ({ lean }),
   });
 }
 
@@ -55,6 +58,8 @@ describe("getBusRealtimeOnRoute — 低底盤 join（招牌功能）", () => {
     mockTdxJson([
       {
         PlateNumb: "AAA-1",
+        SubRouteUID: "TPE3070",
+        SubRouteName: { Zh_tw: "307 往撫遠街" },
         Direction: 0,
         BusPosition: { PositionLat: 25.05, PositionLon: 121.51 },
         Speed: 30,
@@ -62,6 +67,8 @@ describe("getBusRealtimeOnRoute — 低底盤 join（招牌功能）", () => {
       },
       {
         PlateNumb: "BBB-2",
+        SubRouteUID: "TPE3071",
+        SubRouteName: { Zh_tw: "307 往板橋" },
         Direction: 0,
         BusPosition: { PositionLat: 25.04, PositionLon: 121.52 },
         Speed: 0,
@@ -88,10 +95,14 @@ describe("getBusRealtimeOnRoute — 低底盤 join（招牌功能）", () => {
     expect(aaa.hasLiftOrRamp).toBe("是");
     expect(aaa.vehicleClass).toBe("大型巴士");
     expect(aaa.lat).toBe(25.05);
+    expect(aaa.subRouteUid).toBe("TPE3070");
+    expect(aaa.subRouteName).toBe("307 往撫遠街");
 
     const bbb = result.buses.find((b) => b.plateNumb === "BBB-2")!;
     expect(bbb.isLowFloor).toBe("未知");
     expect(bbb.statusLabel).toBe("塞車");
+    expect(bbb.subRouteUid).toBe("TPE3071");
+    expect(bbb.subRouteName).toBe("307 往板橋");
   });
 
   it("路線目前沒有在線車輛時回 404", async () => {
@@ -112,6 +123,8 @@ describe("getBusArrivalAtStop", () => {
     mockTdxJson([
       {
         StopName: { Zh_tw: "台北車站" },
+        SubRouteUID: "TPE3070",
+        SubRouteName: { Zh_tw: "307 往撫遠街" },
         Direction: 0,
         EstimateTime: 180,
         StopStatus: 0,
@@ -130,6 +143,8 @@ describe("getBusArrivalAtStop", () => {
     expect(result.arrivals[0].stopName).toBe("台北車站");
     expect(result.arrivals[0].directionLabel).toBe("去程");
     expect(result.arrivals[0].statusLabel).toBe("正常");
+    expect(result.arrivals[0].subRouteUid).toBe("TPE3070");
+    expect(result.arrivals[0].subRouteName).toBe("307 往撫遠街");
   });
 
   it("EstimateTime 缺值時 estimateMinutes 為 null", async () => {
@@ -410,6 +425,129 @@ describe("City / InterCity scope 探測（不從路線號碼寫死判斷）", ()
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.status).toBe(500);
+  });
+});
+
+describe("route-detail 子路線識別", () => {
+  const stops = (prefix: string, count: number) =>
+    Array.from({ length: count }, (_, index) => ({
+      seq: index + 1,
+      stopName: { Zh_tw: `${prefix}${index + 1}` },
+      lat: 24.1 + index / 1000,
+      lng: 120.6 + index / 1000,
+    }));
+
+  it("route-detail 保留同方向的主線與支線及各自名稱", async () => {
+    mockRouteMap([
+      {
+        subRouteUid: "TXG99",
+        subRouteName: { Zh_tw: "99" },
+        routeName: { Zh_tw: "99" },
+        direction: 0,
+        stops: stops("主線", 4),
+      },
+      {
+        subRouteUid: "TXG991",
+        subRouteName: { Zh_tw: "99延" },
+        routeName: { Zh_tw: "99" },
+        direction: 0,
+        stops: stops("延駛", 3),
+      },
+    ]);
+    mockTdxJson([]);
+
+    const result = await getBusRouteDetail({
+      routeName: "99",
+      city: TaiwanCityEn.Taichung,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.directions).toMatchObject([
+      { subRouteUid: "TXG99", subRouteName: "99", direction: 0 },
+      { subRouteUid: "TXG991", subRouteName: "99延", direction: 0 },
+    ]);
+  });
+
+  it("subRouteUid 精確篩選站序、ETA 與時刻表", async () => {
+    mockRouteMap([
+      {
+        subRouteUid: "TXG99",
+        subRouteName: { Zh_tw: "99" },
+        routeName: { Zh_tw: "99" },
+        direction: 0,
+        stops: stops("主線", 4),
+      },
+      {
+        subRouteUid: "TXG991",
+        subRouteName: { Zh_tw: "99延" },
+        routeName: { Zh_tw: "99" },
+        direction: 0,
+        stops: stops("延駛", 3),
+      },
+    ]);
+    tdxFetchMock.mockImplementation(async (url: string) => ({
+      ok: true,
+      json: async () =>
+        url.includes("Schedule")
+          ? [
+              {
+                SubRouteUID: "TXG99",
+                SubRouteName: { Zh_tw: "99" },
+                Direction: 0,
+                Frequencys: [{ StartTime: "06:00", EndTime: "22:00" }],
+              },
+              {
+                SubRouteUID: "TXG991",
+                SubRouteName: { Zh_tw: "99延" },
+                Direction: 0,
+                Frequencys: [{ StartTime: "07:00", EndTime: "21:00" }],
+              },
+            ]
+          : [
+              {
+                SubRouteUID: "TXG99",
+                Direction: 0,
+                StopName: { Zh_tw: "主線1" },
+                EstimateTime: 60,
+                StopStatus: 0,
+              },
+              {
+                SubRouteUID: "TXG991",
+                Direction: 0,
+                StopName: { Zh_tw: "延駛1" },
+                EstimateTime: 180,
+                StopStatus: 0,
+              },
+            ],
+    }));
+
+    const result = await getBusRouteDetail({
+      routeName: "99",
+      city: TaiwanCityEn.Taichung,
+      subRouteUid: "TXG991",
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.directions).toHaveLength(1);
+    expect(result.directions[0]).toMatchObject({
+      subRouteUid: "TXG991",
+      subRouteName: "99延",
+      direction: 0,
+    });
+    expect(result.directions[0].stops[0]).toMatchObject({
+      name: "延駛1",
+      estimateMinutes: 3,
+    });
+    expect(result.schedules).toMatchObject([
+      {
+        subRouteUid: "TXG991",
+        subRouteName: "99延",
+        direction: 0,
+        first: "07:00",
+      },
+    ]);
   });
 });
 
