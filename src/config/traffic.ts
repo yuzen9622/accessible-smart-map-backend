@@ -100,16 +100,53 @@ export const TDX_SUPPORTED_CITIES = [
 export type TdxSupportedCity = (typeof TDX_SUPPORTED_CITIES)[number];
 
 /**
+ * Cities accepted by the TDX Road/Traffic **Live** endpoint. Verified 2026-09-05 by
+ * calling /v2/Road/Traffic/Live/City/{city}; NewTaipei, Kaohsiung and HsinchuCounty are
+ * rejected with HTTP 400 even though Section/CongestionLevel accept them.
+ */
+export const TDX_LIVE_TRAFFIC_CITIES = [
+  "Taipei",
+  "Taoyuan",
+  "Taichung",
+  "Tainan",
+  "Keelung",
+  "YilanCounty",
+  "ChanghuaCounty",
+  "YunlinCounty",
+  "PingtungCounty",
+] as const;
+
+/**
  * Cities the traffic feature covers. Setting the variable to an empty value is
  * a supported kill switch: no city means no TDX call and no traffic overlay.
  */
 export const TRAFFIC_TARGET_CITIES: readonly string[] = envText(
   "TRAFFIC_TARGET_CITIES",
-  "Taipei,NewTaipei",
+  "Taipei,NewTaipei,Taoyuan,Taichung,Tainan,Keelung,YilanCounty,ChanghuaCounty,YunlinCounty,PingtungCounty",
 )
   .split(",")
   .map((city) => city.trim())
   .filter(Boolean);
+
+/**
+ * Subset of TRAFFIC_TARGET_CITIES the live-traffic endpoint actually serves.
+ * Cities outside TDX_LIVE_TRAFFIC_CITIES are dropped here instead of burning a
+ * guaranteed-400 TDX call on every refresh tick and every route request.
+ */
+export const TRAFFIC_LIVE_TARGET_CITIES: readonly string[] =
+  TRAFFIC_TARGET_CITIES.filter((city) =>
+    (TDX_LIVE_TRAFFIC_CITIES as readonly string[]).includes(city),
+  );
+
+const TRAFFIC_LIVE_UNSUPPORTED_TARGETS = TRAFFIC_TARGET_CITIES.filter(
+  (city) => !TRAFFIC_LIVE_TARGET_CITIES.includes(city),
+);
+
+if (TRAFFIC_LIVE_UNSUPPORTED_TARGETS.length > 0) {
+  console.warn(
+    `[traffic] live traffic is not served for: ${TRAFFIC_LIVE_UNSUPPORTED_TARGETS.join(", ")}`,
+  );
+}
 
 /** Redis cache-aside lifetimes, in seconds. */
 export const TRAFFIC_TTL = {
@@ -130,6 +167,18 @@ export const TRAFFIC_REFRESH = {
   geometryIntervalMs: envPositive(
     "TRAFFIC_GEOMETRY_REFRESH_INTERVAL_MS",
     21_600_000,
+  ),
+  liveRefreshBatchSize: envPositive("TRAFFIC_LIVE_REFRESH_BATCH_SIZE", 3),
+  liveRefreshBatchGapMs: envPositive("TRAFFIC_LIVE_REFRESH_BATCH_GAP_MS", 400),
+  /**
+   * Per-target wall-clock ceiling for one refresh attempt inside the worker.
+   * Literal default (TRAFFIC_FETCH_TIMEOUT_MS 8s + 2s margin) on purpose: this object is
+   * declared before TRAFFIC_FETCH_TIMEOUT_MS, so referencing the latter here throws a
+   * TDZ ReferenceError at module load.
+   */
+  liveRefreshTargetTimeoutMs: envPositive(
+    "TRAFFIC_LIVE_REFRESH_TARGET_TIMEOUT_MS",
+    10_000,
   ),
 } as const;
 

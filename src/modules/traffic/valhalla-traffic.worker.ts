@@ -14,8 +14,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { redisSetNx } from "../../config/redis";
 import {
+  TRAFFIC_LIVE_TARGET_CITIES,
   TRAFFIC_REFRESH,
-  TRAFFIC_TARGET_CITIES,
   TRAFFIC_TAR_LOCK_KEY,
   TRAFFIC_TAR_LOCK_TTL_SEC,
   VALHALLA_EDGE_MAP_PATH,
@@ -159,7 +159,7 @@ export function getDirectedEdgeCountForTile(
  */
 async function collectSectionSpeeds(): Promise<Map<string, number>> {
   const targets = Array.from(
-    new Set([...TRAFFIC_TARGET_CITIES, "Freeway", "Highway"]),
+    new Set([...TRAFFIC_LIVE_TARGET_CITIES, "Freeway", "Highway"]),
   );
   const hits = await Promise.all(
     targets.map(async (target) => {

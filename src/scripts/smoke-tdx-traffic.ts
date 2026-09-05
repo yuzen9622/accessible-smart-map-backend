@@ -19,6 +19,7 @@ import "dotenv/config";
 import axios from "axios";
 import { tdxFetch } from "../config/fetch";
 import {
+  TDX_LIVE_TRAFFIC_CITIES,
   TRAFFIC_FETCH_TIMEOUT_MS,
   TRAFFIC_TARGET_CITIES,
   trafficUrl,
@@ -142,6 +143,13 @@ async function main(): Promise<void> {
   for (const city of parseCities()) {
     console.log(`\n=== ${city} ===`);
     for (const { label, url, rowsKey } of PROBES) {
+      if (
+        label === "Live" &&
+        !(TDX_LIVE_TRAFFIC_CITIES as readonly string[]).includes(city)
+      ) {
+        console.log(`  ${label.padEnd(16)} SKIP (Live 不支援)`);
+        continue;
+      }
       await probe(label, url(city), rowsKey);
     }
   }

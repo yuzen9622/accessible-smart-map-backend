@@ -4,7 +4,7 @@ import {
   congestionToSemanticLevel,
   TDX_CONGESTION_UNKNOWN,
   TRAFFIC_FETCH_TIMEOUT_MS,
-  TRAFFIC_TARGET_CITIES,
+  TRAFFIC_LIVE_TARGET_CITIES,
   TRAFFIC_TTL,
   trafficUrl,
 } from "../../config/traffic";
@@ -143,7 +143,7 @@ export async function getLiveSectionsForBbox(
 ): Promise<Map<string, LiveSection>> {
   try {
     const targets = Array.from(
-      new Set([...TRAFFIC_TARGET_CITIES, "Freeway", "Highway"]),
+      new Set([...TRAFFIC_LIVE_TARGET_CITIES, "Freeway", "Highway"]),
     );
     const hits = await Promise.all(
       targets.map(async (target) => {
