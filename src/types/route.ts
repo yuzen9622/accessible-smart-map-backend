@@ -234,6 +234,10 @@ export interface BusLeg {
   type: "BUS";
   a11yRefs?: string[];
   routeName: string;
+  /** TDX SubRouteUID reconstructed from the scheduled GTFS route id. */
+  subRouteUid: string;
+  /** Published sub-route display name from GTFS route_long_name. */
+  subRouteName: string;
   departureStop: string;
   arrivalStop: string;
   departureStopId?: string;

@@ -220,6 +220,40 @@ describe("OTP PLAN_QUERY searchWindow", () => {
   });
 });
 
+describe("OTP BUS leg sub-route identity", () => {
+  it("maps the scheduled GTFS sub-route UID and name onto the BUS leg", async () => {
+    const itineraries = threeDistinctTransitItineraries();
+    itineraries[0].legs[0].route.gtfsId = "1:TPE3070_0";
+    itineraries[0].legs[0].route.longName = "307 往撫遠街";
+    post.mockResolvedValue(okResp(itineraries));
+
+    const routes = await planOtpRoute(origin, destination);
+    const busLeg = routes.find((route) => route.routeName === "R1")?.legs[0];
+
+    expect(busLeg).toMatchObject({
+      type: "BUS",
+      subRouteUid: "TPE3070",
+      subRouteName: "307 往撫遠街",
+    });
+  });
+
+  it("uses the GTFS route suffix as TDX direction even when trip direction disagrees", async () => {
+    const itineraries = threeDistinctTransitItineraries();
+    itineraries[0].legs[0].route.gtfsId = "1:TXG7_1";
+    tripLean.mockResolvedValue([{ tripId: "R1_trip", directionId: 0 }]);
+    post.mockResolvedValue(okResp(itineraries));
+
+    const routes = await planOtpRoute(origin, destination);
+    const busLeg = routes.find((route) => route.routeName === "R1")?.legs[0];
+
+    expect(busLeg).toMatchObject({
+      type: "BUS",
+      subRouteUid: "TXG7",
+      direction: 1,
+    });
+  });
+});
+
 // The OTP `wheelchair` flag is step-free routing, so it must follow the caller's
 // avoidStairs constraint — not the accessibility mode, which only tunes scoring.
 describe("planOtpRoute wheelchair flag follows avoidStairs", () => {

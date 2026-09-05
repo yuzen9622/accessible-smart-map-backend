@@ -170,11 +170,11 @@ function busSystemCode(leg: BusLeg): string | null {
 }
 
 /**
- * Set `leg.tdxCity` on every BUS leg lacking it — the TDX City path segment the
- * FRONTEND needs to poll RealTimeByFrequency on its own. GTFS/OTP legs derive it
+ * Set `leg.tdxCity` on every BUS leg lacking it — the TDX query scope the
+ * frontend needs to poll RealTimeByFrequency on its own. GTFS/OTP legs derive it
  * from the stop-id prefix, MaaS legs from cityCode; intercity (公路客運, THB)
- * buses have no city path and are left undefined (frontend uses the InterCity
- * endpoint). Legacy-path legs come in with tdxCity already set from the request
+ * buses use the explicit "InterCity" query scope. Legacy-path legs come in with
+ * tdxCity already set from the request
  * city, so are skipped here. Pure + local (no TDX call): runs unconditionally in
  * finalizeRoutes.
  *
@@ -185,7 +185,11 @@ export function annotateBusTdxCity(routes: AccessibleRoute[]): void {
     for (const leg of route.legs) {
       if (leg.type !== "BUS" || leg.tdxCity) continue;
       const code = busSystemCode(leg);
-      if (!code || code === "THB") continue;
+      if (!code) continue;
+      if (code === "THB") {
+        leg.tdxCity = "InterCity";
+        continue;
+      }
       const city = CITY_BY_STOP_PREFIX[code];
       if (city) leg.tdxCity = city;
     }

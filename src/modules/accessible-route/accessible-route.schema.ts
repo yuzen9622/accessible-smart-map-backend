@@ -482,6 +482,14 @@ const BusLegSchema = z
     type: z.literal("BUS").openapi({ example: "BUS" }),
     a11yRefs: A11yRefsSchema,
     routeName: z.string().openapi({ example: "信義幹線" }),
+    subRouteUid: z.string().openapi({
+      example: "TPE15790",
+      description: "TDX SubRouteUID；由本次排程採用的 GTFS route_id 還原",
+    }),
+    subRouteName: z.string().openapi({
+      example: "信義幹線往捷運昆陽站",
+      description: "本次排程採用的子路線名稱（GTFS route_long_name）",
+    }),
     departureStop: z.string().openapi({ example: "市政府站" }),
     arrivalStop: z.string().openapi({ example: "台北101" }),
     departureStopId: z.string().optional().openapi({
@@ -527,8 +535,8 @@ const BusLegSchema = z
       .openapi({
         example: "NewTaipei",
         description:
-          "TDX City 路徑段，前端用來「另外打」RealTimeByFrequency 即時車輛位置 " +
-          "（tdxCity + routeName + direction）做持續追蹤；公路客運（THB）無城市路徑、省略此欄。",
+          "TDX 查詢範圍，前端用來「另外打」RealTimeByFrequency 即時車輛位置 " +
+          "（tdxCity + routeName + direction）做持續追蹤；公路客運（THB）為 InterCity。",
       }),
     intermediateStops: z.array(IntermediateStopSchema).optional(),
     alerts: z.array(MatchedAlertSchema).optional().openapi({

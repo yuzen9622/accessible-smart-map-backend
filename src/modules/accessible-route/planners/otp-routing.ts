@@ -183,6 +183,23 @@ function stripFeedId(gtfsId: string | undefined): string {
 }
 
 /**
+ * Bus routes in the generated GTFS feed use `{SubRouteUID}_{Direction}`.
+ * OTP exposes that route id with a feed prefix, already removed by stripFeedId.
+ */
+function busSubRouteUid(routeId: string): string {
+  return routeId.replace(/_[01]$/, "");
+}
+
+/**
+ * The generated bus GTFS route id suffix is copied from TDX Direction and is
+ * therefore a stronger contract than a trip direction imported separately.
+ */
+function busDirection(routeId: string, fallback: 0 | 1): 0 | 1 {
+  const match = routeId.match(/_([01])$/);
+  return match ? (Number(match[1]) as 0 | 1) : fallback;
+}
+
+/**
  * System code prefix of a stripped GTFS id, e.g. "TRTC_BL12" → "TRTC".
  *
  * @param id The stripped GTFS id.
@@ -921,6 +938,8 @@ function transitLegFrom(
   return {
     type: "BUS",
     routeName,
+    subRouteUid: busSubRouteUid(routeId),
+    subRouteName: leg.route?.longName || routeName,
     departureStop: fromName,
     arrivalStop: toName,
     departureStopId: fromStopId || undefined,
@@ -929,7 +948,7 @@ function transitLegFrom(
     arrivalTime,
     waitInfo,
     ...(estimatedWaitMinutes === undefined ? {} : { estimatedWaitMinutes }),
-    direction,
+    direction: busDirection(routeId, direction),
     polyline,
     departureStopA11y: [],
     arrivalStopA11y: [],

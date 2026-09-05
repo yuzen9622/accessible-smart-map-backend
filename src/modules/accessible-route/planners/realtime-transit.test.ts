@@ -12,6 +12,7 @@ vi.mock("../../../config/fetch", () => ({ tdxFetch }));
 vi.mock("../../transit/bus.repository", () => ({ findVehiclesByPlate }));
 
 import {
+  annotateBusTdxCity,
   overlayRealtimeTransit,
   recoverRailTrainNos,
 } from "./realtime-transit";
@@ -30,6 +31,39 @@ afterEach(() => {
   } else {
     process.env.USE_REALTIME_TRANSIT = originalUseRealtimeTransit;
   }
+});
+
+describe("BUS tdxCity annotation", () => {
+  it("maps a THB intercity leg to the public InterCity query scope", () => {
+    const route: AccessibleRoute = {
+      routeId: "intercity",
+      routeName: "0968",
+      totalMinutes: 60,
+      transferCount: 0,
+      legs: [
+        {
+          type: "BUS",
+          routeName: "0968",
+          subRouteUid: "THB0968",
+          subRouteName: "0968",
+          departureStop: "起站",
+          arrivalStop: "終站",
+          departureStopId: "THB001",
+          arrivalStopId: "THB002",
+          waitInfo: { time: "10:00", source: "schedule" },
+          direction: 0,
+          polyline: [],
+          departureStopA11y: [],
+          arrivalStopA11y: [],
+        },
+      ],
+      accessibilityHighlights: [],
+    };
+
+    annotateBusTdxCity([route]);
+
+    expect(route.legs[0]).toMatchObject({ tdxCity: "InterCity" });
+  });
 });
 
 describe("future scheduled realtime handling", () => {

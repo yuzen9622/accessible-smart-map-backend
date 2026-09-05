@@ -290,6 +290,8 @@ describe("AccessibleRouteSchema BUS, TRA, THSR alerts", () => {
   const busLeg = {
     type: "BUS" as const,
     routeName: "307",
+    subRouteUid: "TPE3070",
+    subRouteName: "307 往撫遠街",
     departureStop: "板橋",
     arrivalStop: "撫遠街",
     waitInfo: { time: 5, source: "schedule" as const },
@@ -637,6 +639,8 @@ describe("AccessibleRouteSchema BusLeg low-floor enrichment", () => {
   const baseBusLeg = {
     type: "BUS" as const,
     routeName: "307",
+    subRouteUid: "TPE3070",
+    subRouteName: "307 往撫遠街",
     departureStop: "板橋",
     arrivalStop: "撫遠街",
     waitInfo: { time: 5, source: "schedule" as const },
@@ -664,6 +668,8 @@ describe("AccessibleRouteSchema BusLeg low-floor enrichment", () => {
 
   it("accepts a BUS leg with full low-floor and alternative metadata", () => {
     const valid = makeBusRoute({
+      subRouteUid: "TPE3070",
+      subRouteName: "307 往撫遠街",
       plateNumb: "KEA-1234",
       isLowFloor: false,
       hasLiftOrRamp: false,
@@ -674,6 +680,15 @@ describe("AccessibleRouteSchema BusLeg low-floor enrichment", () => {
       },
     });
     expect(AccessibleRouteSchema.safeParse(valid).success).toBe(true);
+  });
+
+  it("requires BUS sub-route identity", () => {
+    expect(AccessibleRouteSchema.safeParse(makeBusRoute()).success).toBe(true);
+    expect(
+      AccessibleRouteSchema.safeParse(
+        makeBusRoute({ subRouteUid: undefined, subRouteName: undefined }),
+      ).success,
+    ).toBe(false);
   });
 
   it("accepts lowFloorAlternative with null etaMinutes and numeric stopsAway", () => {
