@@ -471,6 +471,16 @@ export function deriveTrafficSegments(
   return rawSegments;
 }
 
+/**
+ * Writes live-traffic fields onto every drive leg and keeps each route's
+ * `totalMinutes` consistent with them, so the headline duration never
+ * contradicts the legs the client renders underneath it.
+ *
+ * @param routes Routes to annotate in place.
+ * @param liveSectionsMap Live congestion keyed by TDX section id.
+ * @param index Resident segment index used for spatial matching.
+ * @returns Timing and match-volume metrics for the caller's telemetry.
+ */
 export function applyTrafficOverlay(
   routes: AccessibleRoute[],
   liveSectionsMap: Map<string, LiveSection>,
@@ -491,6 +501,8 @@ export function applyTrafficOverlay(
   }
 
   for (const route of routes) {
+    let trafficDeltaMin = 0;
+
     for (const leg of route.legs) {
       if (leg.type !== "DRIVE" && leg.type !== "MOTORCYCLE") {
         continue;
@@ -549,6 +561,7 @@ export function applyTrafficOverlay(
 
       if (traffic.durationInTrafficMin !== undefined) {
         driveLeg.durationInTrafficMin = traffic.durationInTrafficMin;
+        trafficDeltaMin += traffic.durationInTrafficMin - driveLeg.durationMin;
       }
       if (traffic.trafficLevel !== undefined) {
         driveLeg.trafficLevel = traffic.trafficLevel;
@@ -565,6 +578,13 @@ export function applyTrafficOverlay(
         driveLeg.trafficSegments = segments;
       }
       aggregateMs += performance.now() - tAgg0;
+    }
+
+    if (trafficDeltaMin !== 0) {
+      route.totalMinutes = Math.max(
+        1,
+        Math.round(route.totalMinutes + trafficDeltaMin),
+      );
     }
   }
 

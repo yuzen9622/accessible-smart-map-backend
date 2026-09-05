@@ -903,7 +903,11 @@ export const AccessibleRouteSchema = z
         "30 分鐘內可用於語音 WS nav.setRoute 與 POST /a11y/accessible-route/reroute 的高熵 bearer capability；Redis 不可用時省略。",
     }),
     routeName: z.string().openapi({ example: "信義幹線" }),
-    totalMinutes: z.number().openapi({ example: 18 }),
+    totalMinutes: z.number().openapi({
+      example: 18,
+      description:
+        "整趟總時間。開車路段一旦比對到即時路況，此值已含壅塞增減（與各 leg 的 durationInTrafficMin 一致）；查無即時覆蓋時為自由流時間。",
+    }),
     transferCount: z
       .number()
       .openapi({ example: 0, description: "0=直達，1=轉乘一次，2=轉乘兩次" }),

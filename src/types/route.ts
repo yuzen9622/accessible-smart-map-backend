@@ -415,6 +415,11 @@ export interface AccessibleRoute {
   /** Monotonic navigation route version; initial tokenized routes start at 1. */
   routeVersion?: number;
   routeName: string;
+  /**
+   * End-to-end duration. Once live traffic is matched onto a drive leg this
+   * absorbs the congestion delta, so it always agrees with the sum the client
+   * can compute from the legs; without live coverage it stays free-flow.
+   */
   totalMinutes: number;
   transferCount: number;
   legs: (WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg | DriveLeg)[];

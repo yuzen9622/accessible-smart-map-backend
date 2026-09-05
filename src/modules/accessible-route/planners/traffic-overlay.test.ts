@@ -418,7 +418,7 @@ describe("traffic-overlay", () => {
   });
 
   describe("applyTrafficOverlay invariant protection", () => {
-    it("does not mutate totalMinutes, durationMin, or polyline on routes", () => {
+    it("absorbs the congestion delta into totalMinutes while leaving durationMin and polyline untouched", () => {
       const originalPolyline: [number, number][] = [
         [121.52, 25.042],
         [121.53, 25.042],
@@ -465,14 +465,221 @@ describe("traffic-overlay", () => {
 
       applyTrafficOverlay([route], liveMap, buildSegmentIndex(geometries));
 
-      // Invariants preserved
-      expect(route.totalMinutes).toBe(2);
       expect(leg.durationMin).toBe(2);
       expect(leg.polyline).toEqual(originalPolyline);
 
-      // Traffic fields populated
       expect(leg.durationInTrafficMin).toBeDefined();
       expect(leg.trafficLevel).toBeDefined();
+
+      expect(route.totalMinutes).toBe(
+        Math.max(1, Math.round(2 + (leg.durationInTrafficMin! - 2))),
+      );
+      expect(route.totalMinutes).toBe(leg.durationInTrafficMin);
+      expect(route.totalMinutes).toBeGreaterThan(2);
+    });
+
+    it("shifts totalMinutes by the delta only, preserving non-drive time such as walk access legs", () => {
+      const leg: DriveLeg = {
+        type: "DRIVE",
+        from: { lat: 25.042, lng: 121.52 },
+        to: { lat: 25.042, lng: 121.53 },
+        distanceM: 1000,
+        durationMin: 2,
+        polyline: [
+          [121.52, 25.042],
+          [121.53, 25.042],
+        ],
+      };
+
+      const route: AccessibleRoute = {
+        routeId: "test-route-walk-tail",
+        routeName: "測試路線含步行銜接",
+        totalMinutes: 10,
+        transferCount: 0,
+        accessibilityHighlights: [],
+        legs: [leg],
+      };
+
+      const liveMap = new Map<string, LiveSection>();
+      liveMap.set("sec-test", {
+        sectionId: "sec-test",
+        congestionLevel: 4,
+        speedKmh: 12,
+      });
+
+      const geometries: TrafficSectionGeometry[] = [
+        {
+          sectionId: "sec-test",
+          city: "Taipei",
+          geometry: {
+            type: "LineString",
+            coordinates: [
+              [121.522, 25.042],
+              [121.528, 25.042],
+            ],
+          },
+        },
+      ];
+
+      applyTrafficOverlay([route], liveMap, buildSegmentIndex(geometries));
+
+      expect(leg.durationInTrafficMin).toBeDefined();
+      expect(route.totalMinutes).toBe(10 + (leg.durationInTrafficMin! - 2));
+    });
+
+    it("accumulates the delta across every drive leg of a waypoint route", () => {
+      const makeLeg = (lngFrom: number, lngTo: number): DriveLeg => ({
+        type: "DRIVE",
+        from: { lat: 25.042, lng: lngFrom },
+        to: { lat: 25.042, lng: lngTo },
+        distanceM: 1000,
+        durationMin: 2,
+        polyline: [
+          [lngFrom, 25.042],
+          [lngTo, 25.042],
+        ],
+      });
+
+      const legA = makeLeg(121.52, 121.53);
+      const legB = makeLeg(121.54, 121.55);
+
+      const route: AccessibleRoute = {
+        routeId: "test-route-waypoints",
+        routeName: "測試中途點路線",
+        totalMinutes: 4,
+        transferCount: 0,
+        accessibilityHighlights: [],
+        legs: [legA, legB],
+      };
+
+      const liveMap = new Map<string, LiveSection>();
+      liveMap.set("sec-a", {
+        sectionId: "sec-a",
+        congestionLevel: 4,
+        speedKmh: 12,
+      });
+      liveMap.set("sec-b", {
+        sectionId: "sec-b",
+        congestionLevel: 4,
+        speedKmh: 12,
+      });
+
+      const geometries: TrafficSectionGeometry[] = [
+        {
+          sectionId: "sec-a",
+          city: "Taipei",
+          geometry: {
+            type: "LineString",
+            coordinates: [
+              [121.522, 25.042],
+              [121.528, 25.042],
+            ],
+          },
+        },
+        {
+          sectionId: "sec-b",
+          city: "Taipei",
+          geometry: {
+            type: "LineString",
+            coordinates: [
+              [121.542, 25.042],
+              [121.548, 25.042],
+            ],
+          },
+        },
+      ];
+
+      applyTrafficOverlay([route], liveMap, buildSegmentIndex(geometries));
+
+      expect(legA.durationInTrafficMin).toBeDefined();
+      expect(legB.durationInTrafficMin).toBeDefined();
+
+      const expectedDelta =
+        legA.durationInTrafficMin! - 2 + (legB.durationInTrafficMin! - 2);
+      expect(expectedDelta).toBeGreaterThan(0);
+      expect(route.totalMinutes).toBe(4 + expectedDelta);
+    });
+
+    it("subtracts from totalMinutes when live traffic runs faster than the free-flow estimate", () => {
+      const leg: DriveLeg = {
+        type: "DRIVE",
+        from: { lat: 25.042, lng: 121.52 },
+        to: { lat: 25.042, lng: 121.53 },
+        distanceM: 1000,
+        durationMin: 10,
+        polyline: [
+          [121.52, 25.042],
+          [121.53, 25.042],
+        ],
+      };
+
+      const route: AccessibleRoute = {
+        routeId: "test-route-faster",
+        routeName: "測試路線車流順暢",
+        totalMinutes: 12,
+        transferCount: 0,
+        accessibilityHighlights: [],
+        legs: [leg],
+      };
+
+      const liveMap = new Map<string, LiveSection>();
+      liveMap.set("sec-fast", {
+        sectionId: "sec-fast",
+        congestionLevel: 1,
+        speedKmh: 60,
+      });
+
+      const geometries: TrafficSectionGeometry[] = [
+        {
+          sectionId: "sec-fast",
+          city: "Taipei",
+          geometry: {
+            type: "LineString",
+            coordinates: [
+              [121.522, 25.042],
+              [121.528, 25.042],
+            ],
+          },
+        },
+      ];
+
+      applyTrafficOverlay([route], liveMap, buildSegmentIndex(geometries));
+
+      expect(leg.durationInTrafficMin).toBeDefined();
+      expect(leg.durationInTrafficMin!).toBeLessThan(leg.durationMin);
+      expect(route.totalMinutes).toBe(12 + (leg.durationInTrafficMin! - 10));
+      expect(route.totalMinutes).toBeGreaterThanOrEqual(1);
+    });
+
+    it("leaves totalMinutes untouched when no live section matches the leg", () => {
+      const leg: DriveLeg = {
+        type: "DRIVE",
+        from: { lat: 25.042, lng: 121.52 },
+        to: { lat: 25.042, lng: 121.53 },
+        distanceM: 1000,
+        durationMin: 2,
+        polyline: [
+          [121.52, 25.042],
+          [121.53, 25.042],
+        ],
+      };
+
+      const route: AccessibleRoute = {
+        routeId: "test-route-no-live",
+        routeName: "測試路線無即時資料",
+        totalMinutes: 7,
+        transferCount: 0,
+        accessibilityHighlights: [],
+        legs: [leg],
+      };
+
+      applyTrafficOverlay(
+        [route],
+        new Map<string, LiveSection>(),
+        buildSegmentIndex([]),
+      );
+
+      expect(route.totalMinutes).toBe(7);
     });
 
     it("handles MultiLineString geometries without generating false connecting segments", () => {
