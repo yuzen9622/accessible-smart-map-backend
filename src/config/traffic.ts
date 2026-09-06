@@ -117,8 +117,8 @@ export const TDX_LIVE_TRAFFIC_CITIES = [
 ] as const;
 
 /**
- * Cities the traffic feature covers. Setting the variable to an empty value is
- * a supported kill switch: no city means no TDX call and no traffic overlay.
+ * Cities the traffic feature covers. Unset or blank falls back to the full
+ * list, so the feature cannot be switched off by clearing the variable.
  */
 export const TRAFFIC_TARGET_CITIES: readonly string[] = envText(
   "TRAFFIC_TARGET_CITIES",
