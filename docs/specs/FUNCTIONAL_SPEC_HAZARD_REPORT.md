@@ -810,13 +810,12 @@ interface AiVerifyResult {
 
 **Fail-soft 策略**
 
-| 情境                         | 處理                                                                                          |
-| ---------------------------- | --------------------------------------------------------------------------------------------- |
-| Cloud Vision 預篩呼叫失敗    | 略過預篩、直接進 Gemini（`prefilter.passed` 留空）；不阻擋流程                                |
-| Gemini API 呼叫失敗          | `verdict: 'skipped'`，`confidence: 0`，`reason: 'AI 服務暫時不可用'`，`status` 維持 `pending` |
-| JSON 解析失敗                | `verdict: 'skipped'`                                                                          |
-| 超時（10 秒）                | `verdict: 'skipped'`                                                                          |
-| `USE_HAZARD_AI_VERIFY=false` | 兩階段皆跳過，`verdict: 'skipped'`，`status` 維持 `pending`                                   |
+| 情境                      | 處理                                                                                          |
+| ------------------------- | --------------------------------------------------------------------------------------------- |
+| Cloud Vision 預篩呼叫失敗 | 略過預篩、直接進 Gemini（`prefilter.passed` 留空）；不阻擋流程                                |
+| Gemini API 呼叫失敗       | `verdict: 'skipped'`，`confidence: 0`，`reason: 'AI 服務暫時不可用'`，`status` 維持 `pending` |
+| JSON 解析失敗             | `verdict: 'skipped'`                                                                          |
+| 超時（10 秒）             | `verdict: 'skipped'`                                                                          |
 
 ---
 
@@ -1054,14 +1053,14 @@ export function createHazardReportRouter(): Router {
 
 ## 11. 新增環境變數
 
-| 變數                           | 用途                                                               | 必要性               | 預設值 |
-| ------------------------------ | ------------------------------------------------------------------ | -------------------- | ------ |
-| `GCS_BUCKET_NAME`              | GCS bucket 名稱，照片儲存目標                                      | **必要**             | —      |
-| `GCS_KEY_FILE`                 | GCS Service Account JSON 金鑰路徑（或使用 Workload Identity）      | **必要**（GCS 認證） | —      |
-| `HAZARD_REPORT_MAX_DISTANCE_M` | 地理柵欄最大允許距離（公尺）                                       | 選配                 | `20`   |
-| `HAZARD_PHOTO_MAX_SIZE_MB`     | 照片檔案大小上限（MB）                                             | 選配                 | `10`   |
-| `USE_HAZARD_AI_VERIFY`         | `false` 時跳過整個 AI 辨識（兩階段皆略過，省 API 費用 / 開發環境） | 選配                 | `true` |
-| `USE_VISION_PREFILTER`         | `false` 時跳過 Cloud Vision 預篩，直接進 Gemini                    | 選配                 | `true` |
+| 變數                           | 用途                                                          | 必要性               | 預設值 |
+| ------------------------------ | ------------------------------------------------------------- | -------------------- | ------ |
+| `GCS_BUCKET_NAME`              | GCS bucket 名稱，照片儲存目標                                 | **必要**             | —      |
+| `GCS_KEY_FILE`                 | GCS Service Account JSON 金鑰路徑（或使用 Workload Identity） | **必要**（GCS 認證） | —      |
+| `HAZARD_REPORT_MAX_DISTANCE_M` | 地理柵欄最大允許距離（公尺）                                  | 選配                 | `20`   |
+| `HAZARD_PHOTO_MAX_SIZE_MB`     | 照片檔案大小上限（MB）                                        | 選配                 | `10`   |
+
+> Cloud Vision 預篩與 Gemini 語意審核是必要流程，不可關閉；原 `USE_HAZARD_AI_VERIFY` / `USE_VISION_PREFILTER` 開關已於 2026-09 移除。
 
 > `GEMINI_API_KEY` / `GEMINI_API_URL` / `GEMINI_MODEL` 已存在於現有環境，無需重複新增。Cloud Vision 沿用 `GCS_KEY_FILE`（同一 GCP 專案的 service account）認證，需在 GCP 啟用 Cloud Vision API。`GOOGLE_MAPS_API_KEY` 本系統已不再需要（移除街景後）。
 

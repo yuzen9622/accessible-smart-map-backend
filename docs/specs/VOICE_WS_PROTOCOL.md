@@ -274,7 +274,7 @@ HTTP accessible-route ── route + routeToken ──▶ 前端選路
 ## 9. 本機開發環境
 
 ```bash
-VOICE_POC_ENABLED=true npm run dev
+pnpm dev
 ```
 
 啟動後瀏覽器開 `http://localhost:<PORT>/api/v1/voice/poc`，即可用後端提供的參考測試頁（`poc-client.html`）貼上 accessToken 實際跑一次語音對話，用來對照自己前端實作的行為是否一致。

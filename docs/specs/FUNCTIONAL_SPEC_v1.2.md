@@ -1720,7 +1720,7 @@ TDX routing 為查詢時外部呼叫（受 `USE_TDX_ROUTING` 控制，可單獨�
 
 - `gtfs-router.service.ts` 的軌道 leg（METRO/THSR/TRA）以 `enrichLegIndoor()` 補：相鄰 WalkLeg 的 `exitInfo`（**僅在 step-free 出入口才掛**，避免誤導）+ leg 的 `facilityHighlights`（「乘車站可由出口1電梯無障礙進站（電梯2F）」）。
 - `a11y-exit.service.ts buildExitWalkLeg` 改為 **GTFS pathways 優先、TRTC A11y collection fallback**（spec §10.5）。
-- 受 `USE_INDOOR_GRAPH`（預設開啟）控制。
+- 一律啟用（原 `USE_INDOOR_GRAPH` 開關已於 2026-09 移除）。
 - **系統無關**：同一套遍歷自動涵蓋 TRTC/NTMC/KLRT/TMRT/KRTC/TYMC/THSR/TRA。實測 淡水（TRTC）、市政府（TRTC，自動避開樓梯-only 的出口1，改走出口4 電梯）、美麗島（KRTC）皆正確；THSR/TRA 站若 feed 無出入口座標則 `stepFree=null`，退回站體中心點。
 
 ---
@@ -1778,7 +1778,7 @@ TDX routing 為查詢時外部呼叫（受 `USE_TDX_ROUTING` 控制，可單獨�
 - `overlayFacilityStatus(routes, mode)` 在**最終 top-3** 上疊加（省 TDX 額度），由 `finalizeRoutes()` 統一呼叫（GTFS 與舊版路徑皆生效）。
 - **StationFacility**：METRO leg 的乘車/下車站補 TDX 設施標籤（有電梯/無障礙廁所/導盲磚…）；GTFS UID（`TRTC_O12`）自動映射 TDX UID（`TRTC-O12`）。設施清單存在但無電梯、且 mode 為 wheelchair/elderly → `⚠️` 警告；電梯名稱含維修/故障/暫停 → `⚠️` 警告（同時餵給 §11.3 排除規則）。
 - **Metro Alert（營運通阻）**：提及電梯/電扶梯且涵蓋本 leg 車站（或全線）的告警 → `⚠️` 警告。
-- 全 fail-soft：每個 TDX 呼叫 5 分鐘快取、錯誤吞掉不影響路由；`USE_REALTIME_FACILITY=false` 可整體關閉。
+- 全 fail-soft：每個 TDX 呼叫 5 分鐘快取、錯誤吞掉不影響路由。
 
 ### Phase 14 — 回應酬載瘦身：OSM 設施欄位投影（✅ 已實作）
 
@@ -1847,26 +1847,26 @@ TDX routing 為查詢時外部呼叫（受 `USE_TDX_ROUTING` 控制，可單獨�
 
 ## 17. 環境變數總覽
 
-| 變數                    | 用途                                                                                                            | 必要性                  | 使用位置                                         |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------- | ----------------------- | ------------------------------------------------ |
-| `PORT`                  | Server 監聽 port                                                                                                | 選配（預設 5000）       | `server.ts`                                      |
-| `CORS_ORIGINS`          | CORS 白名單                                                                                                     | 選配                    | `app.ts`                                         |
-| `GOOGLE_MAPS_API_KEY`   | 地理編碼 + Places Search                                                                                        | **必要**                | `config/map.ts`                                  |
-| `GEMINI_API_KEY`        | Gemini AI                                                                                                       | **必要**                | `@google/genai` 自動讀取                         |
-| `JWT_ACCESS_SECRET`     | JWT 簽署                                                                                                        | **必要**                | `config/jwt.ts`                                  |
-| `JWT_REFRESH_SECRET`    | JWT Refresh                                                                                                     | **必要**                | `config/jwt.ts`                                  |
-| `DATABASE_URL`          | MongoDB 連線                                                                                                    | **必要**                | `server.ts`                                      |
-| `TDX_CLIENT_ID`         | TDX OAuth                                                                                                       | **必要**                | `TdxTokenManger.ts`                              |
-| `TDX_CLIENT_SECRET`     | TDX OAuth                                                                                                       | **必要**                | `TdxTokenManger.ts`                              |
-| `ORS_API_KEY`           | OpenRouteService                                                                                                | **必要**（有 fallback） | `config/ors.ts`                                  |
-| `REDIS_URL`             | Walk-time 快取                                                                                                  | 選配（有降級）          | `config/redis.ts`                                |
-| `USE_OTP_ROUTER`        | 主路由引擎（OTP2 sidecar）。`false`｜`shadow`（並跑只記 diff）｜`true`（併入結果）                              | 選配（預設 `false`）    | `accessible-route.service.ts`                    |
-| `USE_TDX_ROUTING`       | `true` 時並用 TDX MaaS routing 補 OTP 缺口（台鐵/城際）                                                         | 選配（預設關閉）        | `accessible-route.service.ts`                    |
-| ~~`USE_GTFS_ROUTER`~~   | 🗑️ **已移除（2026-06）**——本地 GTFS router 退役，改由 `USE_OTP_ROUTER` + `USE_TDX_ROUTING` 取代                 | —                       | —                                                |
-| `USE_INDOOR_GRAPH`      | Phase 8 室內圖出口/電梯導引。設為 `false` 可關閉（省去每段軌道 leg 的 pathways 查詢）；其餘值（含未設定）皆啟用 | 選配（**預設開啟**）    | `route-a11y.service.ts` / `a11y-exit.service.ts` |
-| `USE_REALTIME_FACILITY` | Phase 13 TDX 即時設施狀態 overlay（top-3 的 METRO leg）。設為 `false` 關閉以省 TDX 額度                         | 選配（**預設開啟**）    | `facility-status.service.ts`                     |
-| `USE_REALTIME_TRANSIT`  | Phase 15 即時大眾運輸 overlay（top-3：首段公車 TDX ETA + 全部 TRA leg 誤點）。設為 `false` 關閉以省 TDX 額度    | 選配（**預設開啟**）    | `realtime-transit.service.ts`                    |
-| ~~`GTFS_DEBUG`~~        | 🗑️ **已移除**——隨 `gtfs-router.service.ts` 退役（兩次轉乘 chain join 的除錯 log）                               | —                       | —                                                |
+| 變數                        | 用途                                                                                            | 必要性                  | 使用位置                      |
+| --------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------- | ----------------------------- |
+| `PORT`                      | Server 監聽 port                                                                                | 選配（預設 5000）       | `server.ts`                   |
+| `CORS_ORIGINS`              | CORS 白名單                                                                                     | 選配                    | `app.ts`                      |
+| `GOOGLE_MAPS_API_KEY`       | 地理編碼 + Places Search                                                                        | **必要**                | `config/map.ts`               |
+| `GEMINI_API_KEY`            | Gemini AI                                                                                       | **必要**                | `@google/genai` 自動讀取      |
+| `JWT_ACCESS_SECRET`         | JWT 簽署                                                                                        | **必要**                | `config/jwt.ts`               |
+| `JWT_REFRESH_SECRET`        | JWT Refresh                                                                                     | **必要**                | `config/jwt.ts`               |
+| `DATABASE_URL`              | MongoDB 連線                                                                                    | **必要**                | `server.ts`                   |
+| `TDX_CLIENT_ID`             | TDX OAuth                                                                                       | **必要**                | `TdxTokenManger.ts`           |
+| `TDX_CLIENT_SECRET`         | TDX OAuth                                                                                       | **必要**                | `TdxTokenManger.ts`           |
+| `ORS_API_KEY`               | OpenRouteService                                                                                | **必要**（有 fallback） | `config/ors.ts`               |
+| `REDIS_URL`                 | Walk-time 快取                                                                                  | 選配（有降級）          | `config/redis.ts`             |
+| `USE_OTP_ROUTER`            | 主路由引擎（OTP2 sidecar）。`false`｜`shadow`（並跑只記 diff）｜`true`（併入結果）              | 選配（預設 `false`）    | `accessible-route.service.ts` |
+| `USE_TDX_ROUTING`           | `true` 時並用 TDX MaaS routing 補 OTP 缺口（台鐵/城際）                                         | 選配（預設關閉）        | `accessible-route.service.ts` |
+| ~~`USE_GTFS_ROUTER`~~       | 🗑️ **已移除（2026-06）**——本地 GTFS router 退役，改由 `USE_OTP_ROUTER` + `USE_TDX_ROUTING` 取代 | —                       | —                             |
+| ~~`USE_INDOOR_GRAPH`~~      | 🗑️ **已移除（2026-09）**——Phase 8 室內圖出口/電梯導引改為一律啟用                               | —                       | —                             |
+| ~~`USE_REALTIME_FACILITY`~~ | 🗑️ **已移除（2026-09）**——Phase 13 TDX 即時設施狀態 overlay 改為一律啟用                        | —                       | —                             |
+| ~~`USE_REALTIME_TRANSIT`~~  | 🗑️ **已移除（2026-09）**——Phase 15 即時大眾運輸 overlay 改為一律啟用                            | —                       | —                             |
+| ~~`GTFS_DEBUG`~~            | 🗑️ **已移除**——隨 `gtfs-router.service.ts` 退役（兩次轉乘 chain join 的除錯 log）               | —                       | —                             |
 
 ---
 
