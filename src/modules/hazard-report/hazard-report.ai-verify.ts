@@ -5,9 +5,6 @@ import { parseAiVerifyResult } from "./hazard-report.parse";
 import type { AiVerdict, HazardStatus } from "../../types";
 import type { AiVerifyResult } from "./hazard-report.types";
 
-const aiEnabled = () => process.env.USE_HAZARD_AI_VERIFY !== "false";
-const prefilterEnabled = () => process.env.USE_VISION_PREFILTER !== "false";
-
 function statusForVerdict(verdict: AiVerdict): HazardStatus | null {
   if (verdict === "verified") return "verified";
   if (verdict === "rejected") return "rejected";
@@ -34,44 +31,40 @@ export async function verifyHazardReport(
   hazardType: string,
   description?: string,
 ): Promise<void> {
-  if (!aiEnabled()) return;
-
   let prefilter:
     | { passed: boolean; detectedLabels?: string[]; safeSearchBlocked: boolean }
     | undefined;
   let detectedLabels: string[] | undefined;
 
-  if (prefilterEnabled()) {
-    try {
-      const r = await prefilterImage(buffer);
-      detectedLabels = r.detectedLabels;
-      prefilter = {
-        passed: !r.safeSearchBlocked,
-        detectedLabels: r.detectedLabels,
-        safeSearchBlocked: r.safeSearchBlocked,
-      };
-      if (r.safeSearchBlocked) {
-        await HazardReport.updateOne({ _id: reportId }, [
-          {
-            $set: {
-              aiVerification: {
-                verdict: "rejected",
-                confidence: 1,
-                reason: "影像未通過安全檢測",
-                prefilter,
-                attemptedAt: new Date(),
-              },
-              status: {
-                $cond: [{ $eq: ["$status", "pending"] }, "rejected", "$status"],
-              },
+  try {
+    const r = await prefilterImage(buffer);
+    detectedLabels = r.detectedLabels;
+    prefilter = {
+      passed: !r.safeSearchBlocked,
+      detectedLabels: r.detectedLabels,
+      safeSearchBlocked: r.safeSearchBlocked,
+    };
+    if (r.safeSearchBlocked) {
+      await HazardReport.updateOne({ _id: reportId }, [
+        {
+          $set: {
+            aiVerification: {
+              verdict: "rejected",
+              confidence: 1,
+              reason: "影像未通過安全檢測",
+              prefilter,
+              attemptedAt: new Date(),
+            },
+            status: {
+              $cond: [{ $eq: ["$status", "pending"] }, "rejected", "$status"],
             },
           },
-        ]);
-        return;
-      }
-    } catch {
-      prefilter = undefined;
+        },
+      ]);
+      return;
     }
+  } catch {
+    prefilter = undefined;
   }
 
   let result: AiVerifyResult;
