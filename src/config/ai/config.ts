@@ -181,6 +181,37 @@ const reviewSummaryConfig: GenerateContentConfig = {
   topK: 1,
 };
 
+const hazardVerifyConfig: GenerateContentConfig = {
+  responseMimeType: "application/json",
+  responseJsonSchema: {
+    type: "object",
+    properties: {
+      verdict: {
+        type: "string",
+        enum: ["verified", "suspicious", "rejected"],
+        description:
+          "verified=確為戶外路況場景且可見相符障礙；suspicious=障礙不明確或類型不完全相符；rejected=明顯非戶外路況場景或看不到障礙",
+      },
+      confidence: {
+        type: "number",
+        minimum: 0,
+        maximum: 1,
+        description: "對此判斷的信心分數",
+      },
+      reason: {
+        type: "string",
+        maxLength: 100,
+        description: "繁體中文說明",
+      },
+    },
+    propertyOrdering: ["verdict", "confidence", "reason"],
+    required: ["verdict", "confidence", "reason"],
+  },
+  temperature: 0,
+  topP: 0,
+  topK: 1,
+};
+
 export {
   rankConfig,
   routeConfig,
@@ -188,4 +219,5 @@ export {
   explainConfig,
   airConfig,
   reviewSummaryConfig,
+  hazardVerifyConfig,
 };

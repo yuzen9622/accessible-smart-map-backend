@@ -1,5 +1,4 @@
 import { GoogleGenAI } from "@google/genai";
-import OpenAI from "openai";
 
 const googleGenAi = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
@@ -8,13 +7,6 @@ const googleGenAi = new GoogleGenAI({
     : undefined,
 });
 
-const openai = new OpenAI({
-  apiKey: process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY,
-  baseURL:
-    process.env.GEMINI_API_URL ||
-    "https://generativelanguage.googleapis.com/v1beta/openai",
-});
-
 const model = process.env.GEMINI_MODEL || "gemini-3.7-flash";
 
-export { googleGenAi, openai, model };
+export { googleGenAi, model };

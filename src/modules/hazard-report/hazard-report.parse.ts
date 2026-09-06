@@ -169,7 +169,7 @@ export function parseAiVerifyResult(text: string): AiVerifyResult {
         : 0;
     const reason =
       typeof obj.reason === "string" && obj.reason.trim()
-        ? obj.reason.trim().slice(0, 200)
+        ? obj.reason.trim().slice(0, 100)
         : "";
     return { verdict, confidence, reason };
   } catch {
