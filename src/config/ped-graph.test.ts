@@ -8,7 +8,6 @@ import {
 
 const PED_GRAPH_ENV_KEYS = [
   "PED_GRAPH_DATABASE_URL",
-  "PED_GRAPH_CSR_WALK_ENABLED",
   "PED_GRAPH_LOAD_TIMEOUT_MS",
   "PED_GRAPH_REFRESH_INTERVAL_MS",
 ] as const;
@@ -31,16 +30,15 @@ afterEach(() => {
 });
 
 describe("getPedGraphConfig", () => {
-  it("keeps CSR disabled without a graph database while retaining safe defaults", () => {
+  it("falls back to safe defaults without a graph database", () => {
     expect(getPedGraphConfig()).toEqual({
       databaseUrl: null,
-      csrWalkEnabled: false,
       loadTimeoutMs: DEFAULT_PED_GRAPH_LOAD_TIMEOUT_MS,
       refreshIntervalMs: DEFAULT_PED_GRAPH_REFRESH_INTERVAL_MS,
     });
   });
 
-  it("keeps CSR disabled when the flag is absent even with a configured graph database", () => {
+  it("trims the graph database URL and reads explicit timing overrides", () => {
     process.env.PED_GRAPH_DATABASE_URL =
       " postgresql://example.test/ped_graph ";
     process.env.PED_GRAPH_LOAD_TIMEOUT_MS = "1234";
@@ -48,31 +46,12 @@ describe("getPedGraphConfig", () => {
 
     expect(getPedGraphConfig()).toEqual({
       databaseUrl: "postgresql://example.test/ped_graph",
-      csrWalkEnabled: false,
       loadTimeoutMs: 1234,
       refreshIntervalMs: 5678,
     });
   });
 
-  it("enables CSR only with an explicit true flag", () => {
-    process.env.PED_GRAPH_DATABASE_URL = "postgresql://example.test/ped_graph";
-    process.env.PED_GRAPH_CSR_WALK_ENABLED = "true";
-
-    expect(getPedGraphConfig().csrWalkEnabled).toBe(true);
-  });
-
-  it("allows an explicit feature rollback without removing the graph connection", () => {
-    process.env.PED_GRAPH_DATABASE_URL = "postgresql://example.test/ped_graph";
-    process.env.PED_GRAPH_CSR_WALK_ENABLED = "false";
-
-    expect(getPedGraphConfig().csrWalkEnabled).toBe(false);
-  });
-
-  it("rejects invalid feature and timeout configuration instead of silently guessing", () => {
-    process.env.PED_GRAPH_CSR_WALK_ENABLED = "sometimes";
-    expect(() => getPedGraphConfig()).toThrow("PED_GRAPH_CSR_WALK_ENABLED");
-
-    process.env.PED_GRAPH_CSR_WALK_ENABLED = "true";
+  it("rejects invalid timeout configuration instead of silently guessing", () => {
     process.env.PED_GRAPH_LOAD_TIMEOUT_MS = "0";
     expect(() => getPedGraphConfig()).toThrow("PED_GRAPH_LOAD_TIMEOUT_MS");
 
