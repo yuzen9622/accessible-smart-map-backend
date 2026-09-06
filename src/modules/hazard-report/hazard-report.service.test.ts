@@ -5,6 +5,7 @@ vi.mock("../../model/hazard-report.model", () => ({
     findOne: vi.fn(),
     findById: vi.fn(),
     findOneAndUpdate: vi.fn(),
+    findByIdAndUpdate: vi.fn(),
     find: vi.fn(),
     create: vi.fn(),
   },
@@ -31,12 +32,15 @@ import {
   confirmReport,
   createReport,
   findConfirmedHazardsWithin,
+  findReviewQueue,
+  submitManualReview,
 } from "./hazard-report.service";
 
 const hazardReportModel = HazardReport as unknown as {
   findOne: ReturnType<typeof vi.fn>;
   findById: ReturnType<typeof vi.fn>;
   findOneAndUpdate: ReturnType<typeof vi.fn>;
+  findByIdAndUpdate: ReturnType<typeof vi.fn>;
   find: ReturnType<typeof vi.fn>;
   create: ReturnType<typeof vi.fn>;
 };
@@ -253,6 +257,101 @@ describe("hazard report confirmations", () => {
     });
     expect(chain.select).toHaveBeenCalledWith(
       "hazardType severity description reportedLocation reporterId confirmedBy status expiredAt",
+    );
+  });
+});
+
+/** A `.select().sort().limit().lean()`-terminated query chain resolving to `items`. */
+function sortedFindChain(items: unknown[]) {
+  const chain = {
+    select: vi.fn(),
+    sort: vi.fn(),
+    limit: vi.fn(),
+    lean: vi.fn(),
+  };
+  chain.select.mockReturnValue(chain);
+  chain.sort.mockReturnValue(chain);
+  chain.limit.mockReturnValue(chain);
+  chain.lean.mockResolvedValue(items);
+  return chain;
+}
+
+describe("manual review queue and decisions", () => {
+  it("queries pending suspicious or stale-skipped reports, oldest first", async () => {
+    const chain = sortedFindChain([{ _id: REPORT_ID, status: "pending" }]);
+    hazardReportModel.find.mockReturnValue(chain);
+
+    const result = await findReviewQueue({});
+
+    expect(result).toMatchObject({
+      ok: true,
+      httpCode: ResponseCode.OK,
+      data: { total: 1, nextCursor: null },
+    });
+    expect(hazardReportModel.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "pending",
+        $or: [
+          { "aiVerification.verdict": "suspicious" },
+          {
+            "aiVerification.verdict": "skipped",
+            createdAt: { $lt: expect.any(Date) },
+          },
+        ],
+      }),
+    );
+    expect(chain.sort).toHaveBeenCalledWith({ createdAt: 1 });
+  });
+
+  it("returns a 404 domain failure when the report does not exist", async () => {
+    hazardReportModel.findById.mockReturnValue(leanChain(null));
+
+    const result = await submitManualReview({
+      reportId: REPORT_ID,
+      reviewerId: "admin-1",
+      decision: "verified",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      httpCode: ResponseCode.NOT_FOUND,
+      data: { reason: HAZARD_REASON.REPORT_NOT_FOUND },
+    });
+    expect(hazardReportModel.findByIdAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it("persists the manual review and moves the status straight to the decision", async () => {
+    const report = duplicateReport("reporter-1");
+    hazardReportModel.findById.mockReturnValue(leanChain(report));
+    hazardReportModel.findByIdAndUpdate.mockReturnValue(
+      leanChain({ ...report, status: "rejected" }),
+    );
+
+    const result = await submitManualReview({
+      reportId: REPORT_ID,
+      reviewerId: "admin-1",
+      decision: "rejected",
+      note: "現場未見障礙",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      data: { report: { status: "rejected" } },
+    });
+    expect(hazardReportModel.findByIdAndUpdate).toHaveBeenCalledWith(
+      REPORT_ID,
+      {
+        $set: {
+          manualReview: {
+            reviewerId: "admin-1",
+            decision: "rejected",
+            note: "現場未見障礙",
+            reviewedAt: expect.any(Date),
+          },
+          status: "rejected",
+        },
+      },
+      { returnDocument: "after" },
     );
   });
 });

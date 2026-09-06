@@ -1,5 +1,6 @@
 import { Router } from "express";
 import middleware from "../../middleware/middleware";
+import { requireAdmin } from "../../middleware/require-admin.middleware";
 import { validateRequest } from "../../middleware/validate-request.middleware";
 import {
   createReport,
@@ -7,6 +8,8 @@ import {
   getReport,
   getMyReports,
   confirmReport,
+  getReviewQueue,
+  reviewReport,
 } from "./hazard-report.controller";
 import {
   CreateHazardReportSchema,
@@ -14,6 +17,8 @@ import {
   MyReportsQuerySchema,
   ReportIdParamSchema,
   ConfirmSchema,
+  ReviewQueueQuerySchema,
+  ReviewDecisionSchema,
 } from "./hazard-report.schema";
 import {
   uploadPhoto,
@@ -49,6 +54,16 @@ export function createHazardReportRouter(): Router {
     getNearbyReports,
   );
 
+  // Must be registered before "/reports/:id" so "review-queue" is not
+  // captured as an :id path parameter.
+  router.get(
+    "/reports/review-queue",
+    middleware,
+    requireAdmin,
+    validateRequest({ query: ReviewQueueQuerySchema }),
+    getReviewQueue,
+  );
+
   router.get(
     "/reports/:id",
     validateRequest({ params: ReportIdParamSchema }),
@@ -60,6 +75,17 @@ export function createHazardReportRouter(): Router {
     confirmLimiter,
     validateRequest({ params: ReportIdParamSchema, body: ConfirmSchema }),
     confirmReport,
+  );
+
+  router.post(
+    "/reports/:id/review",
+    middleware,
+    requireAdmin,
+    validateRequest({
+      params: ReportIdParamSchema,
+      body: ReviewDecisionSchema,
+    }),
+    reviewReport,
   );
 
   return router;

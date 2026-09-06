@@ -137,10 +137,35 @@ async function confirmReport(req: Request, res: Response) {
   return send(res, result);
 }
 
+async function getReviewQueue(req: Request, res: Response) {
+  const query = req.validated?.query as { limit?: number; cursor?: string };
+  const result = await service.findReviewQueue({
+    limit: query.limit,
+    cursor: query.cursor,
+  });
+  return send(res, result);
+}
+
+async function reviewReport(req: Request, res: Response) {
+  const body = req.validated?.body as {
+    decision: "verified" | "rejected";
+    note?: string;
+  };
+  const result = await service.submitManualReview({
+    reportId: req.params.id as string,
+    reviewerId: req.auth!.userId,
+    decision: body.decision,
+    note: body.note,
+  });
+  return send(res, result);
+}
+
 export {
   createReport,
   getNearbyReports,
   getReport,
   getMyReports,
   confirmReport,
+  getReviewQueue,
+  reviewReport,
 };

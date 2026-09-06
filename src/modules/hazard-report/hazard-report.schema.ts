@@ -358,3 +358,46 @@ registry.registerPath({
     410: { description: "回報已過期，無法投票" },
   },
 });
+
+registry.registerPath({
+  method: "get",
+  path: "/a11y/reports/review-queue",
+  tags: ["Hazard Report"],
+  summary: "待人工審核回報清單（管理員）",
+  description:
+    "回傳需要人工審核的回報：AI 判定 suspicious，或 AI 判定 skipped 且建立時間已超過設定的逾時門檻（預設 10 分鐘，代表 AI 服務失敗而非處理中），以建立時間由舊到新排序。僅限 role=admin。",
+  security: [{ bearerAuth: [] }],
+  request: { query: ReviewQueueQuerySchema },
+  responses: {
+    200: {
+      description: "待審核清單",
+      content: { "application/json": { schema: ReviewQueueResponseSchema } },
+    },
+    401: { description: "未登入或 token 過期" },
+    403: { description: "非管理員" },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/a11y/reports/{id}/review",
+  tags: ["Hazard Report"],
+  summary: "人工審核回報（管理員）",
+  description:
+    "管理員直接核定回報為 verified 或 rejected，略過 AI/社群流程，並留下審核紀錄（manualReview）。僅限 role=admin。",
+  security: [{ bearerAuth: [] }],
+  request: {
+    params: ReportIdParamSchema,
+    body: { content: { "application/json": { schema: ReviewDecisionSchema } } },
+  },
+  responses: {
+    200: {
+      description: "審核結果",
+      content: { "application/json": { schema: ReviewDecisionResponseSchema } },
+    },
+    400: { description: "無效的回報 ID 格式" },
+    401: { description: "未登入或 token 過期" },
+    403: { description: "非管理員" },
+    404: { description: "找不到對應的回報" },
+  },
+});
