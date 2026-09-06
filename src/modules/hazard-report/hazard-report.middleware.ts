@@ -9,6 +9,14 @@ import { redisClient, redisReady } from "../../config/redis";
 
 const MAX_PHOTO_MB = Number(process.env.HAZARD_PHOTO_MAX_SIZE_MB ?? 10);
 
+export const ALLOWED_PHOTO_MIME_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/heic",
+  "image/heif",
+]);
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
@@ -22,7 +30,7 @@ const upload = multer({
     parts: 12,
   },
   fileFilter: (_req, file, cb) => {
-    if (file.mimetype === "image/jpeg" || file.mimetype === "image/png") {
+    if (ALLOWED_PHOTO_MIME_TYPES.has(file.mimetype)) {
       cb(null, true);
     } else {
       cb(new Error(HAZARD_REASON.INVALID_PHOTO_TYPE));
@@ -123,6 +131,6 @@ function makeLimiter(limit: number, windowMs: number) {
   });
 }
 
-export const postReportsLimiter = makeLimiter(3, 10 * 60 * 1000);
+export const postReportsLimiter = makeLimiter(10, 10 * 60 * 1000);
 export const confirmLimiter = makeLimiter(10, 60 * 1000);
 export const nearbyLimiter = makeLimiter(30, 60 * 1000);
