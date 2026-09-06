@@ -6,7 +6,6 @@ import { attachVoiceWebSocket } from "./modules/voice";
 import { attachAlertWebSocket } from "./modules/transit/alert.gateway";
 import { startPasswordAssistanceWorker } from "./modules/user/user.password-assistance.worker";
 import { startAlertIngestion } from "./modules/transit/alert.ingest";
-import { mqttConfig } from "./config/mqtt";
 import type { TdxMqttHandle } from "./adapters/tdx-mqtt.adapter";
 import { closePedGraphRuntime } from "./modules/accessible-route/planners/pedestrian-a11y/graph-runtime";
 import {
@@ -30,16 +29,14 @@ server.listen(PORT, () => {
   console.log(`Health check: http://localhost:${PORT}/health`);
 });
 
-if (mqttConfig.enabled) {
-  startAlertIngestion()
-    .then((handle) => {
-      mqttHandle = handle;
-      console.log("TDX MQTT connected");
-    })
-    .catch((err) => {
-      console.error("TDX MQTT failed", err);
-    });
-}
+startAlertIngestion()
+  .then((handle) => {
+    mqttHandle = handle;
+    console.log("TDX MQTT connected");
+  })
+  .catch((err) => {
+    console.error("TDX MQTT failed", err);
+  });
 const uri = process.env.DATABASE_URL ?? "";
 
 // Live traffic refresher is SWR + Redis only (no Mongo dependency); start unconditionally.

@@ -1,5 +1,4 @@
 export const mqttConfig = {
-  enabled: process.env.TDX_MQTT_ENABLED === "true",
   host: process.env.TDX_MQTT_HOST || "mqtt.transportdata.tw",
   port: Number(process.env.TDX_MQTT_PORT || 8883),
   clientId: process.env.TDX_MQTT_CLIENT_ID || "",
