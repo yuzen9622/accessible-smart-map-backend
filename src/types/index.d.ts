@@ -10,6 +10,7 @@ export interface IUser {
   authProviders: AuthProvider[];
   emailVerified: boolean;
   tokenVersion: number;
+  role?: "user" | "admin";
   passwordResetTokens?: Array<{
     jobId: string;
     tokenHash: string;

@@ -14,6 +14,7 @@ const userSchema = new Schema<IUser>(
     },
     emailVerified: { type: Boolean, default: false },
     tokenVersion: { type: Number, default: 0 },
+    role: { type: String, enum: ["user", "admin"], default: "user" },
     passwordResetTokens: {
       type: [
         new Schema(

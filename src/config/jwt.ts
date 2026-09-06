@@ -30,6 +30,7 @@ const toPublicUser = (user: IUser): IUser => {
     authProviders: source.authProviders ?? [],
     emailVerified: Boolean(source.emailVerified),
     tokenVersion: Number(source.tokenVersion ?? 0),
+    role: source.role ?? "user",
     lineUserId: source.lineUserId ?? null,
     createdAt: source.createdAt,
     updatedAt: source.updatedAt,
