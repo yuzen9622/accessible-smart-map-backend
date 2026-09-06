@@ -222,7 +222,6 @@ export function attachA11yToLeg(
  *  • the rail leg's `facilityHighlights` gains step-free / elevator notes.
  *
  * Best-effort and non-throwing: stations without indoor data are left untouched.
- * Gated by env so the extra DB work can be disabled (USE_INDOOR_GRAPH=false).
  *
  * @param leg The rail leg to enrich.
  * @param walkIn The walk leg into the boarding station, or null.
@@ -243,8 +242,6 @@ export async function enrichLegIndoor(
   alightCoords: [number, number],
   mode: AccessibilityMode = "wheelchair",
 ): Promise<void> {
-  if (process.env.USE_INDOOR_GRAPH === "false") return;
-
   const boardName = leg.departureStation;
   const alightName = leg.arrivalStation;
 

@@ -261,12 +261,10 @@ function oneEdgeGraph(flags = 0, indoorTraversalTimeS = 80): PedGraph {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  process.env.PED_GRAPH_CSR_WALK_ENABLED = "true";
   vi.mocked(getPedGraphClient).mockResolvedValue(geometryClient({}));
 });
 
 afterEach(() => {
-  delete process.env.PED_GRAPH_CSR_WALK_ENABLED;
   delete process.env.PED_GRAPH_DATABASE_URL;
 });
 
@@ -283,34 +281,7 @@ describe("planCsrWalkRoute coverage and enablement", () => {
     expect(getPedGraphRuntime).not.toHaveBeenCalled();
   });
 
-  it("skips CSR as outside coverage when the feature flag is disabled", async () => {
-    process.env.PED_GRAPH_CSR_WALK_ENABLED = "false";
-    serveGraph(corridorGraph());
-
-    const result = await planCsrWalkRoute([originPoint, destinationPoint], {
-      mode: "normal",
-      avoidStairs: true,
-    });
-
-    expect(result).toEqual({ status: "outside_coverage" });
-    expect(getPedGraphRuntime).not.toHaveBeenCalled();
-  });
-
-  it("keeps OTP primary when a graph database is configured but the flag is absent", async () => {
-    delete process.env.PED_GRAPH_CSR_WALK_ENABLED;
-    process.env.PED_GRAPH_DATABASE_URL = "postgresql://example.test/ped_graph";
-    serveGraph(corridorGraph());
-
-    const result = await planCsrWalkRoute([originPoint, destinationPoint], {
-      mode: "normal",
-      avoidStairs: true,
-    });
-
-    expect(result).toEqual({ status: "outside_coverage" });
-    expect(getPedGraphRuntime).not.toHaveBeenCalled();
-  });
-
-  it("reports unsupported constraints only after enabled Taipei coverage passes", async () => {
+  it("reports unsupported constraints only after Taipei coverage passes", async () => {
     serveGraph(corridorGraph());
 
     const result = await planCsrWalkRoute([originPoint, destinationPoint], {

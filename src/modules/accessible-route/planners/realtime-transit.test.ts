@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AccessibleRoute } from "../../../types/route";
 
 const { tdxFetch } = vi.hoisted(() => ({
@@ -17,20 +17,9 @@ import {
   recoverRailTrainNos,
 } from "./realtime-transit";
 
-const originalUseRealtimeTransit = process.env.USE_REALTIME_TRANSIT;
-
 beforeEach(() => {
   vi.clearAllMocks();
   findVehiclesByPlate.mockResolvedValue([]);
-  process.env.USE_REALTIME_TRANSIT = "true";
-});
-
-afterEach(() => {
-  if (originalUseRealtimeTransit === undefined) {
-    delete process.env.USE_REALTIME_TRANSIT;
-  } else {
-    process.env.USE_REALTIME_TRANSIT = originalUseRealtimeTransit;
-  }
 });
 
 describe("BUS tdxCity annotation", () => {

@@ -10,7 +10,6 @@
 
 import {
   PED_GRAPH_MAX_SNAP_TOLERANCE_M,
-  getPedGraphConfig,
   isWithinPedGraphCoverage,
 } from "../../../../config/ped-graph";
 import type { AccessibilityMode } from "../../../../types/route";
@@ -595,14 +594,6 @@ export async function planCsrWalkRoute(
   options: CsrWalkOptions,
 ): Promise<CsrWalkResult> {
   if (points.length < 2) {
-    return { status: "outside_coverage" };
-  }
-
-  const { csrWalkEnabled } = getPedGraphConfig();
-  // A deployment that never enabled CSR walking is not a degraded deployment:
-  // OTP2 is its primary walk engine, so this reads as unrepresented coverage
-  // rather than a runtime failure that should warn on every request.
-  if (!csrWalkEnabled) {
     return { status: "outside_coverage" };
   }
 

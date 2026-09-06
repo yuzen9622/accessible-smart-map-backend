@@ -16,7 +16,7 @@
  *
  * Entirely fail-soft: TDX responses are cached (alerts 5 min, facility list
  * 6 h, one call per rail system), and every error is swallowed — a TDX outage
- * never degrades routing. Disable with USE_REALTIME_FACILITY=false.
+ * never degrades routing.
  */
 
 import { tdxFetch } from "../../../config/fetch";
@@ -214,8 +214,6 @@ export async function overlayFacilityStatus(
   routes: AccessibleRoute[],
   _mode: AccessibilityMode = "normal",
 ): Promise<void> {
-  if (process.env.USE_REALTIME_FACILITY === "false") return;
-
   const metroLegs: { route: AccessibleRoute; leg: MetroLeg }[] = [];
   for (const route of routes) {
     for (const leg of route.legs) {
@@ -317,7 +315,6 @@ function alertTouchesStation(
 export async function probeMetroElevatorOutages(
   stations: readonly MetroStationProbe[],
 ): Promise<MetroElevatorOutage[]> {
-  if (process.env.USE_REALTIME_FACILITY === "false") return [];
   if (!stations.length) return [];
 
   try {

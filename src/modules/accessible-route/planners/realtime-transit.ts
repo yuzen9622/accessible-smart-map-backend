@@ -40,7 +40,7 @@
  * the route's absolute scheduled departure is more than 15 minutes after the
  * requested departureTime (or now when omitted). Entirely
  * fail-soft: responses are cached 30 s, every error is swallowed — a TDX
- * outage never degrades routing. Disable with USE_REALTIME_TRANSIT=false.
+ * outage never degrades routing.
  */
 
 import { tdxFetch } from "../../../config/fetch";
@@ -1006,14 +1006,13 @@ async function recoverRailLeg(
  * routes, in place. Schedule-based (not realtime), so — unlike
  * overlayRealtimeTransit — it runs regardless of how far the departure is from
  * now and for next-day routes (departureDate → that day's OD timetable).
- * Fail-soft; skipped entirely when USE_REALTIME_TRANSIT=false (it hits TDX).
+ * Fail-soft.
  *
  * @param routes The routes whose rail legs are recovered in place.
  */
 export async function recoverRailTrainNos(
   routes: AccessibleRoute[],
 ): Promise<void> {
-  if (process.env.USE_REALTIME_TRANSIT === "false") return;
   const hasTra = routes.some((r) => r.legs.some((l) => l.type === "TRA"));
   const hasThsr = routes.some((r) => r.legs.some((l) => l.type === "THSR"));
   if (!hasTra && !hasThsr) return;
@@ -1055,8 +1054,6 @@ export async function overlayRealtimeTransit(
   routes: AccessibleRoute[],
   opts: { departureTime?: Date } = {},
 ): Promise<void> {
-  if (process.env.USE_REALTIME_TRANSIT === "false") return;
-
   const referenceTime = opts.departureTime?.getTime() ?? Date.now();
   const live = routes.filter(
     (route) =>
