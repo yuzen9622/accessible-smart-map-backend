@@ -139,9 +139,7 @@ app.use("/api/v1/air", createAirRouter());
 app.use("/api/v1/traffic", createTrafficRouter());
 app.use("/api/v1/ai", createAiRouter());
 
-if (process.env.VOICE_POC_ENABLED === "true") {
-  app.use("/api/v1/voice", createVoiceRouter());
-}
+app.use("/api/v1/voice", createVoiceRouter());
 
 app.use("/{*splat}", (req: Request, res: Response<ApiResponse<null>>) => {
   sendResponse(

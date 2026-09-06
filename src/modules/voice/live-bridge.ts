@@ -175,78 +175,6 @@ function summarizeError(message?: string): string {
   return text.slice(0, ERROR_SUMMARY_MAX_CHARS);
 }
 
-type RedactedValue =
-  | string
-  | number
-  | boolean
-  | null
-  | undefined
-  | RedactedValue[]
-  | { [key: string]: RedactedValue };
-
-/**
- * Recursively masks personally identifiable fields in a value for trace logs:
- * token/secret-like keys, user ids, contact fields, and coordinate values
- * truncated to two decimals.
- *
- * @param value The value to redact.
- * @param key The property name of the value in its parent object, if any.
- * @returns A redacted copy safe for local trace output.
- */
-function redactValue(value: unknown, key?: string): RedactedValue {
-  if (key) {
-    if (/token|secret|password|authorization/i.test(key)) return "[redacted]";
-    if (/user_?id/i.test(key)) return "[redacted]";
-    if (/phone|email|contact/i.test(key)) return "[redacted]";
-    if (
-      /^(lat|latitude|lng|lon|longitude)$/i.test(key) &&
-      typeof value === "number"
-    ) {
-      return Number(value.toFixed(2));
-    }
-  }
-  if (Array.isArray(value)) return value.map((item) => redactValue(item));
-  if (value && typeof value === "object") {
-    const out: { [key: string]: RedactedValue } = {};
-    for (const [k, v] of Object.entries(value)) out[k] = redactValue(v, k);
-    return out;
-  }
-  if (typeof value === "string") {
-    return value.replace(/-?\d{1,3}\.\d{3,}/g, (m) => Number(m).toFixed(2));
-  }
-  if (
-    value === null ||
-    value === undefined ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-  ) {
-    return value;
-  }
-  return String(value);
-}
-
-/**
- * Emits a full tool trace to the local console when VOICE_POC_TRACE=true,
- * with arguments and results passed through the redactor first.
- *
- * @param tool The tool name.
- * @param args The tool call arguments.
- * @param result The raw tool result string.
- */
-function traceToolCall(tool: string, args: unknown, result: string): void {
-  if (process.env.VOICE_POC_TRACE !== "true") return;
-  let redactedResult: RedactedValue;
-  try {
-    redactedResult = redactValue(JSON.parse(result));
-  } catch {
-    redactedResult = redactValue(result);
-  }
-  console.log(
-    "[voice-trace]",
-    JSON.stringify({ tool, args: redactValue(args), result: redactedResult }),
-  );
-}
-
 /**
  * Opens a Gemini Live API session bound to one authenticated WebSocket
  * connection: upstream PCM16/16kHz audio flows into the session, downstream
@@ -671,7 +599,6 @@ export async function createLiveBridge(
    * trigger unconditionally.
    */
   const runCorridorScan = async (): Promise<void> => {
-    if (process.env.USE_CORRIDOR_MONITOR === "false") return;
     const navigation = activeNavigation;
     if (
       disposed ||
@@ -833,7 +760,6 @@ export async function createLiveBridge(
         } catch {
           toolResult = { result };
         }
-        traceToolCall(name, call.args ?? {}, result);
       } catch (err) {
         ok = false;
         response = {

@@ -3,8 +3,7 @@ import { Router, Request, Response } from "express";
 
 /**
  * Creates the voice module router. Currently serves only the browser POC
- * test page; the router is mounted in app.ts exclusively when
- * VOICE_POC_ENABLED=true.
+ * test page.
  *
  * @returns The configured Express router.
  */
