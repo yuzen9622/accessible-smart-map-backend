@@ -4,13 +4,13 @@
 
 ## 測試環境
 
-| 項目                        | 值                                                                                        |
-| --------------------------- | ----------------------------------------------------------------------------------------- |
-| 實測日期                    | 2026-07-10                                                                                |
-| 模型（`GEMINI_LIVE_MODEL`） | `gemini-3.1-flash-live-preview`（實測當日以伺服器 log 為準）                              |
-| `@google/genai` SDK 版本    | 1.22.0                                                                                    |
-| 測試方式                    | `VOICE_POC_ENABLED=true npm run dev`，瀏覽器開 `http://localhost:<PORT>/api/v1/voice/poc` |
-| 音訊格式                    | 上行 PCM16/16kHz、下行 PCM16/24kHz                                                        |
+| 項目                        | 值                                                              |
+| --------------------------- | --------------------------------------------------------------- |
+| 實測日期                    | 2026-07-10                                                      |
+| 模型（`GEMINI_LIVE_MODEL`） | `gemini-3.1-flash-live-preview`（實測當日以伺服器 log 為準）    |
+| `@google/genai` SDK 版本    | 1.22.0                                                          |
+| 測試方式                    | `pnpm dev`，瀏覽器開 `http://localhost:<PORT>/api/v1/voice/poc` |
+| 音訊格式                    | 上行 PCM16/16kHz、下行 PCM16/24kHz                              |
 
 ## 情境一：一般問答（繁中閒聊＋中英夾雜地名）
 

@@ -15,7 +15,6 @@ function modelText(text: string) {
 describe("correctUserTranscript", () => {
   beforeEach(() => {
     generateContent.mockReset();
-    delete process.env.VOICE_TRANSCRIPT_CORRECTION;
     delete process.env.GEMINI_CORRECTION_MODEL;
   });
 
@@ -38,13 +37,6 @@ describe("correctUserTranscript", () => {
   it("returns input unchanged for blank text without calling the model", async () => {
     const result = await correctUserTranscript("   ");
     expect(result).toBe("   ");
-    expect(generateContent).not.toHaveBeenCalled();
-  });
-
-  it("skips correction when disabled via env", async () => {
-    process.env.VOICE_TRANSCRIPT_CORRECTION = "false";
-    const result = await correctUserTranscript("我想去珠北車站");
-    expect(result).toBe("我想去珠北車站");
     expect(generateContent).not.toHaveBeenCalled();
   });
 

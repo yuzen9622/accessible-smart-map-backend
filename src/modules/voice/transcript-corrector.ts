@@ -29,17 +29,6 @@ function resolveModel(): string {
 }
 
 /**
- * Whether transcript correction is enabled. Defaults to on; set
- * VOICE_TRANSCRIPT_CORRECTION=false to disable and fall back to the raw
- * (interim) transcript as the final text.
- *
- * @returns True when correction should run.
- */
-function isEnabled(): boolean {
-  return process.env.VOICE_TRANSCRIPT_CORRECTION !== "false";
-}
-
-/**
  * Issues a single non-streaming correction request and extracts the model's
  * text output.
  *
@@ -73,7 +62,7 @@ async function requestCorrection(text: string): Promise<string> {
  */
 export async function correctUserTranscript(text: string): Promise<string> {
   const trimmed = text.trim();
-  if (!trimmed || !isEnabled()) return text;
+  if (!trimmed) return text;
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<string>((resolve) => {

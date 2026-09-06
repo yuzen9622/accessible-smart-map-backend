@@ -185,7 +185,7 @@ HTTP accessible-route ── route + routeToken ──▶ 前端選路
 - `role:"model"`：不帶 `final` 也不帶 `utteranceId`，維持逐段 append。**助理訊息的結束以 `turn.complete`（或 `interrupted`）為界，不可用「收到 user 逐字稿」當結束訊號**——barge-in 時使用者的 interim 本來就會與模型輸出交錯。
 - barge-in（收到 `interrupted`）時，只重置「當前使用者字幕」狀態（避免下一句的片段被接到殘留的半句上）；**`utteranceId` 對照表要保留**——被打斷那句的 `transcript.correction` 會在 `interrupted` 之後才到，清掉對照表等於把該句的校正靜默丟掉。斷線／結束 session 時才整個清空。
 
-參考實作見 `poc-client.html` 的 `handleTranscript()` 與 `applyTranscriptCorrection()`。校正為顯示層功能，不影響工具呼叫參數與路線規劃；可用後端 env `VOICE_TRANSCRIPT_CORRECTION=false` 關閉（關閉後只會有 interim 與未校正的 final，永不送 correction）。
+參考實作見 `poc-client.html` 的 `handleTranscript()` 與 `applyTranscriptCorrection()`。校正為必要的顯示層流程，不影響工具呼叫參數與路線規劃；LLM 逾時或失敗時會自動沿用未校正的 final。
 
 ## 4. 一次完整對話 turn 的時序
 
