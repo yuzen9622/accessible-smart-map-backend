@@ -158,6 +158,8 @@ export async function insertReport(
   doc: HazardReportInsert,
 ): Promise<HazardReportRecord> {
   const created = await HazardReport.create(doc);
+  // SAFETY: `doc` supplies every required field, so the created document always
+  // matches HazardReportRecord's shape once plainified.
   return created.toObject() as unknown as HazardReportRecord;
 }
 
@@ -280,4 +282,68 @@ export async function findReportById(
 ): Promise<HazardReportRecord | null> {
   if (!Types.ObjectId.isValid(id)) return null;
   return HazardReport.findById(id).lean<HazardReportRecord | null>();
+}
+
+/**
+ * Reports awaiting manual review, oldest first, with id-based cursor paging.
+ *
+ * A report needs manual review when it is still `pending` and either the AI
+ * verdict is `suspicious`, or the verdict is still `skipped` and the report
+ * was created before `staleSkippedBefore` — normal AI processing finishes in
+ * seconds, so a `skipped` report older than that means the AI service itself
+ * failed rather than being mid-flight.
+ *
+ * @param staleSkippedBefore Cutoff before which a `skipped` verdict counts as stalled
+ * @param cursor Id of the last report from the previous page
+ * @param limit Page size
+ * @returns The matching reports, admin-projected
+ */
+export async function findReviewQueueReports(
+  staleSkippedBefore: Date,
+  cursor: string | undefined,
+  limit: number,
+): Promise<(Record<string, unknown> & { _id: unknown })[]> {
+  const query: Record<string, unknown> = {
+    status: "pending",
+    $or: [
+      { "aiVerification.verdict": "suspicious" },
+      {
+        "aiVerification.verdict": "skipped",
+        createdAt: { $lt: staleSkippedBefore },
+      },
+    ],
+  };
+  if (cursor && Types.ObjectId.isValid(cursor)) {
+    query._id = { $gt: new Types.ObjectId(cursor) };
+  }
+
+  return HazardReport.find(query)
+    .select(MINE_SELECT)
+    .sort({ createdAt: 1 })
+    .limit(limit)
+    .lean<(Record<string, unknown> & { _id: unknown })[]>();
+}
+
+/**
+ * Records a manual review decision and moves the report straight to the
+ * corresponding status, bypassing the AI/community path.
+ *
+ * @param reportId Report id
+ * @param manualReview The review record to persist
+ * @returns The report after the update, or null when it vanished
+ */
+export async function setManualReview(
+  reportId: string,
+  manualReview: {
+    reviewerId: string;
+    decision: "verified" | "rejected";
+    note?: string;
+    reviewedAt: Date;
+  },
+): Promise<HazardReportRecord | null> {
+  return HazardReport.findByIdAndUpdate(
+    reportId,
+    { $set: { manualReview, status: manualReview.decision } },
+    { returnDocument: "after" },
+  ).lean<HazardReportRecord | null>();
 }

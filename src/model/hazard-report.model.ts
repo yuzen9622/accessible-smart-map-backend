@@ -68,6 +68,13 @@ const hazardReportSchema = new Schema<IHazardReport>(
     confirmedBy: { type: [String], default: [] },
     deniedBy: { type: [String], default: [] },
 
+    manualReview: {
+      reviewerId: { type: String },
+      decision: { type: String, enum: ["verified", "rejected"] },
+      note: { type: String, maxlength: 500 },
+      reviewedAt: { type: Date },
+    },
+
     expiredAt: { type: Date, required: true },
   },
   { timestamps: true },

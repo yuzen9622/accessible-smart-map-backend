@@ -1,6 +1,7 @@
 import type { AiVerdict, HazardSeverity, HazardType } from "../../types";
 
-export type PhotoMimeType = "image/jpeg" | "image/png";
+export type PhotoMimeType =
+  "image/jpeg" | "image/png" | "image/webp" | "image/heic" | "image/heif";
 
 export interface UploadedPhoto {
   buffer: Buffer;
@@ -65,6 +66,20 @@ export interface ConfirmInput {
   reportId: string;
   action: ConfirmAction;
   voterId: string;
+}
+
+export type ManualReviewDecision = "verified" | "rejected";
+
+export interface ReviewQueueInput {
+  limit?: number;
+  cursor?: string;
+}
+
+export interface ReviewDecisionInput {
+  reportId: string;
+  reviewerId: string;
+  decision: ManualReviewDecision;
+  note?: string;
 }
 
 export interface ExifValidationResult {

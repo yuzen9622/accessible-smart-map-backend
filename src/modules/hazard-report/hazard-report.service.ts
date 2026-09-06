@@ -8,7 +8,9 @@ import {
   findPublicReportById,
   findReportById,
   findReportsByReporter,
+  findReviewQueueReports,
   insertReport,
+  setManualReview,
   type HazardGeoProjection,
   type HazardReportRecord,
 } from "./hazard-report.repository";
@@ -24,6 +26,8 @@ import type {
   CreateReportInput,
   MyReportsInput,
   NearbyReportsInput,
+  ReviewDecisionInput,
+  ReviewQueueInput,
   ServiceResult,
 } from "./hazard-report.types";
 
@@ -32,6 +36,13 @@ const DEFAULT_NEARBY_RADIUS_M = 500;
 const MAX_NEARBY_RADIUS_M = 5000;
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
+
+// Normal AI verification finishes in seconds; a `skipped` verdict still on a
+// report older than this means the AI service itself failed, not that it is
+// mid-flight, so it needs a human to look at it.
+const REVIEW_STALE_SKIPPED_MS = Number(
+  process.env.HAZARD_REVIEW_STALE_SKIPPED_MS ?? 10 * 60 * 1000,
+);
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
@@ -382,5 +393,67 @@ export async function confirmReport(
       confirmCount: counts.confirmCount,
       denyCount: counts.denyCount,
     },
+  };
+}
+
+/**
+ * Lists reports awaiting manual review — AI-`suspicious`, or AI-`skipped` and
+ * stale — oldest first, with id-based cursor paging.
+ *
+ * @param input Optional limit and paging cursor.
+ * @returns A 200 with the queue and the next cursor.
+ */
+export async function findReviewQueue(
+  input: ReviewQueueInput,
+): Promise<ServiceResult> {
+  const limit = Math.min(input.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
+  const staleSkippedBefore = new Date(Date.now() - REVIEW_STALE_SKIPPED_MS);
+  const reports = await findReviewQueueReports(
+    staleSkippedBefore,
+    input.cursor,
+    limit,
+  );
+
+  const nextCursor =
+    reports.length === limit ? String(reports[reports.length - 1]._id) : null;
+
+  return {
+    ok: true,
+    httpCode: ResponseCode.OK,
+    message: `找到 ${reports.length} 筆待人工審核的回報`,
+    data: { reports, total: reports.length, nextCursor },
+  };
+}
+
+/**
+ * Records an admin's manual review decision, moving the report straight to
+ * `verified`/`rejected` and bypassing the AI/community path.
+ *
+ * @param input Report id, resolved reviewer id, decision and optional note.
+ * @returns A 200 with the updated report, or a 400/404 domain failure.
+ */
+export async function submitManualReview(
+  input: ReviewDecisionInput,
+): Promise<ServiceResult> {
+  if (!Types.ObjectId.isValid(input.reportId)) {
+    return fail(ResponseCode.INVALID_INPUT, "INVALID_ID");
+  }
+  const report = await findReportById(input.reportId);
+  if (!report) {
+    return fail(ResponseCode.NOT_FOUND, "REPORT_NOT_FOUND");
+  }
+
+  const updated = await setManualReview(input.reportId, {
+    reviewerId: input.reviewerId,
+    decision: input.decision,
+    note: input.note,
+    reviewedAt: new Date(),
+  });
+
+  return {
+    ok: true,
+    httpCode: ResponseCode.OK,
+    message: HAZARD_MSG.REVIEWED,
+    data: { report: toView(updated ?? report, true) },
   };
 }

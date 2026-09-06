@@ -25,11 +25,13 @@ import {
 export function createHazardReportRouter(): Router {
   const router = Router();
 
+  // Rate limit after validation so malformed/incomplete requests don't burn
+  // the submitter's quota — only requests that reach `createReport` count.
   router.post(
     "/reports",
-    postReportsLimiter,
     uploadPhoto,
     validateRequest({ body: CreateHazardReportSchema }),
+    postReportsLimiter,
     createReport,
   );
 

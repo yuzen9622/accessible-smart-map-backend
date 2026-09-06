@@ -172,7 +172,7 @@ export const HAZARD_MSG = {
   EXIF_GPS_MISMATCH: "照片 GPS 位置與宣稱位置不符",
   PHOTO_REQUIRED: "未上傳照片",
   PHOTO_TOO_LARGE: "照片超過大小上限",
-  INVALID_PHOTO_TYPE: "僅接受 JPEG 或 PNG",
+  INVALID_PHOTO_TYPE: "僅接受 JPEG、PNG、WebP、HEIC 或 HEIF",
   RATE_LIMITED: "回報提交過於頻繁，請稍後再試",
   UPLOAD_FAILED: "照片上傳失敗，請重試",
   INVALID_ID: "無效的回報 ID 格式",
@@ -184,6 +184,7 @@ export const HAZARD_MSG = {
   MERGED: "已合併至附近的既有回報",
   CONFIRMED: "已確認此回報",
   DENIED: "已否認此回報",
+  REVIEWED: "已完成人工審核",
 } as const;
 
 export const CONTACT_REASON = {

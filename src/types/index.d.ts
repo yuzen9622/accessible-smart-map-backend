@@ -406,6 +406,12 @@ export interface IHazardReport {
   denyCount: number;
   confirmedBy: string[];
   deniedBy: string[];
+  manualReview?: {
+    reviewerId: string;
+    decision: "verified" | "rejected";
+    note?: string;
+    reviewedAt: Date;
+  };
   createdAt: Date;
   updatedAt: Date;
   expiredAt: Date;

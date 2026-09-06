@@ -97,6 +97,27 @@ export const ConfirmSchema = z
   })
   .strict();
 
+export const ReviewQueueQuerySchema = z
+  .object({
+    limit: z.coerce.number().min(1).max(50).optional().openapi({ example: 20 }),
+    cursor: z
+      .string()
+      .optional()
+      .openapi({ example: "6670abc123def4567890abcd" }),
+  })
+  .strict();
+
+export const ReviewDecisionSchema = z
+  .object({
+    decision: z.enum(["verified", "rejected"]).openapi({ example: "verified" }),
+    note: z
+      .string()
+      .max(500)
+      .optional()
+      .openapi({ example: "現場已確認施工鐵板仍在" }),
+  })
+  .strict();
+
 const GeoPointSchema = z
   .object({
     type: z.literal("Point").openapi({ example: "Point" }),
@@ -146,6 +167,14 @@ const HazardReportSchema = z
       .optional(),
     confirmCount: z.number().openapi({ example: 0 }),
     denyCount: z.number().openapi({ example: 0 }),
+    manualReview: z
+      .object({
+        reviewerId: z.string(),
+        decision: z.enum(["verified", "rejected"]),
+        note: z.string().optional(),
+        reviewedAt: z.string(),
+      })
+      .optional(),
     createdAt: z.string().openapi({ example: "2026-06-17T08:30:00.000Z" }),
     expiredAt: z.string().openapi({ example: "2026-06-17T14:30:00.000Z" }),
   })
@@ -202,6 +231,20 @@ export const ConfirmResponseSchema = ApiResponseSchema(
   "ConfirmHazardReportResponse",
 );
 
+export const ReviewQueueResponseSchema = ApiResponseSchema(
+  z.object({
+    reports: z.array(HazardReportSchema),
+    total: z.number(),
+    nextCursor: z.string().nullable(),
+  }),
+  "HazardReviewQueueResponse",
+);
+
+export const ReviewDecisionResponseSchema = ApiResponseSchema(
+  z.object({ report: HazardReportSchema }),
+  "HazardReviewDecisionResponse",
+);
+
 registry.registerPath({
   method: "post",
   path: "/a11y/reports",
@@ -214,7 +257,11 @@ registry.registerPath({
       content: {
         "multipart/form-data": {
           schema: z.object({
-            photo: z.string().openapi({ type: "string", format: "binary" }),
+            photo: z.string().openapi({
+              type: "string",
+              format: "binary",
+              description: "路況照片（支援 JPEG、PNG、WebP、HEIC、HEIF）",
+            }),
             hazardType: z.enum(HAZARD_TYPES),
             severity: z.enum(SEVERITIES),
             latitude: z.number(),
