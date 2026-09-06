@@ -72,7 +72,9 @@ async function fetchFacilityIndex(
         index = new Map(items.map((i) => [i.StationID, i]));
       }
     }
-  } catch {}
+  } catch (error) {
+    console.warn("[facility-status] facility fetch failed", railSystem, error);
+  }
   facilityCache.set(railSystem, {
     data: index,
     expiresAt: Date.now() + FACILITY_CACHE_TTL_MS,
@@ -95,7 +97,9 @@ async function fetchMetroAlerts(
         TdxMetroAlertEnvelope | TdxMetroAlertItem[];
       alerts = Array.isArray(data) ? data : (data?.Alerts ?? []);
     }
-  } catch {}
+  } catch (error) {
+    console.warn("[facility-status] alert fetch failed", railSystem, error);
+  }
   alertCache.set(railSystem, {
     data: alerts,
     expiresAt: Date.now() + ALERT_CACHE_TTL_MS,
@@ -236,7 +240,7 @@ export async function overlayFacilityStatus(
         fetchFacilityIndex(sys),
         fetchMetroAlerts(sys),
       ]);
-      bySystem.set(sys, { facilities, alerts });
+      return bySystem.set(sys, { facilities, alerts });
     }),
   );
 
@@ -332,7 +336,7 @@ export async function probeMetroElevatorOutages(
           fetchFacilityIndex(sys),
           fetchMetroAlerts(sys),
         ]);
-        bySystem.set(sys, { facilities, alerts });
+        return bySystem.set(sys, { facilities, alerts });
       }),
     );
 
