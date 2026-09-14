@@ -5,7 +5,6 @@ import {
   TDX_CONGESTION_UNKNOWN,
   TRAFFIC_FETCH_TIMEOUT_MS,
   TRAFFIC_LIVE_TARGET_CITIES,
-  TRAFFIC_TTL,
   trafficUrl,
 } from "../../config/traffic";
 import type {
@@ -112,7 +111,7 @@ export async function refreshCityLiveTraffics(
         });
       }
 
-      await setLiveTraffics(city, normalized, TRAFFIC_TTL.liveHardSec);
+      await setLiveTraffics(city, normalized);
       return normalized;
     } catch (err) {
       console.warn(`[traffic] Failed fetching live traffic for ${city}:`, err);

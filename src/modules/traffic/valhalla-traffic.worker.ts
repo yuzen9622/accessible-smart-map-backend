@@ -14,8 +14,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { redisSetNx } from "../../config/redis";
 import {
+  TRAFFIC_LIVE_BASE_TICK_MS,
   TRAFFIC_LIVE_TARGET_CITIES,
-  TRAFFIC_REFRESH,
   TRAFFIC_TAR_LOCK_KEY,
   TRAFFIC_TAR_LOCK_TTL_SEC,
   VALHALLA_EDGE_MAP_PATH,
@@ -375,7 +375,7 @@ export function startValhallaTrafficTarWorker(): NodeJS.Timeout {
         err,
       );
     });
-  }, TRAFFIC_REFRESH.liveIntervalMs);
+  }, TRAFFIC_LIVE_BASE_TICK_MS);
 
   timer.unref();
   return timer;

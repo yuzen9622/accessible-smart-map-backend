@@ -147,7 +147,7 @@ describe("traffic-flow.service", () => {
       expect(res[0].sectionId).toBe("sec-2");
       expect(res[0].congestionLevel).toBe(3);
       expect(res[0].speedKmh).toBe(25);
-      expect(mockedSetCache).toHaveBeenCalledWith("Taipei", res, 300);
+      expect(mockedSetCache).toHaveBeenCalledWith("Taipei", res);
     });
 
     it("writes failure cache and returns empty array when TDX upstream fails", async () => {

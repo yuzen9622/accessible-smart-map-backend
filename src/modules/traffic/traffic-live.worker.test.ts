@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as redisConfig from "../../config/redis";
-import { TRAFFIC_REFRESH } from "../../config/traffic";
+import {
+  TRAFFIC_LIVE_TIERS,
+  TRAFFIC_REFRESH,
+  tierForTarget,
+} from "../../config/traffic";
 import type { LiveSection } from "../../types/traffic";
+import * as cacheRepo from "./traffic-cache.repository";
 import * as flowService from "./traffic-flow.service";
 import {
   refreshAllLiveTraffics,
@@ -16,8 +21,22 @@ vi.mock("./traffic-flow.service", () => ({
   refreshCityLiveTraffics: vi.fn(),
 }));
 
+vi.mock("./traffic-cache.repository", () => ({
+  getLiveTrafficsSwr: vi.fn(),
+}));
+
 const mockedRedisSetNx = vi.mocked(redisConfig.redisSetNx);
 const mockedRefreshCity = vi.mocked(flowService.refreshCityLiveTraffics);
+const mockedSwr = vi.mocked(cacheRepo.getLiveTrafficsSwr);
+
+/** Makes every target report the given cache age, so tier cadence decides the round. */
+function stubCacheAge(ageMs: number): void {
+  mockedSwr.mockImplementation(async () => ({
+    state: "fresh" as const,
+    data: [],
+    ageMs,
+  }));
+}
 
 const ROUND_DEADLINE_MS = TRAFFIC_REFRESH.lockTtlSec * 1000 * 0.9;
 
@@ -48,6 +67,9 @@ async function runRound(
 describe("traffic-live.worker", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    // Default: nothing cached, so every target is due and the existing
+    // batching/deadline assertions see the full target list.
+    mockedSwr.mockResolvedValue({ state: "miss", data: [], ageMs: 0 });
   });
 
   describe("refreshAllLiveTraffics", () => {
@@ -182,6 +204,73 @@ describe("traffic-live.worker", () => {
       } finally {
         vi.unstubAllEnvs();
       }
+    });
+  });
+
+  describe("tier cadence", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      mockedRedisSetNx.mockResolvedValue(true);
+      mockedRefreshCity.mockResolvedValue([]);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("refreshes nothing while every target is still within its interval", async () => {
+      stubCacheAge(0);
+
+      const { result } = await runRound();
+      expect(mockedRefreshCity).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        refreshed: 0,
+        skipped: false,
+        skippedTargets: 0,
+      });
+    });
+
+    it("refreshes only the primary tier when the standard tier is not due yet", async () => {
+      stubCacheAge(TRAFFIC_LIVE_TIERS.primary.intervalMs);
+
+      await runRound();
+      const called = new Set(
+        mockedRefreshCity.mock.calls.map(([target]) => target),
+      );
+      expect(called.size).toBeGreaterThan(0);
+      for (const target of called) {
+        expect(tierForTarget(target)).toBe(TRAFFIC_LIVE_TIERS.primary);
+      }
+      expect(called).not.toContain("Highway");
+    });
+
+    it("refreshes every tier once the slowest interval has elapsed", async () => {
+      stubCacheAge(TRAFFIC_LIVE_TIERS.standard.intervalMs);
+
+      await runRound();
+      const called = new Set(
+        mockedRefreshCity.mock.calls.map(([target]) => target),
+      );
+      expect(called).toContain("Taipei");
+      expect(called).toContain("Highway");
+      expect(called).toContain("Freeway");
+    });
+
+    it("treats a target due half a tick from now as due, so cadence never slips a full tick", async () => {
+      // The cache is written seconds after the tick that fetched it, so at the next
+      // same-cadence tick its age is always a hair under the interval. Without the
+      // grace window this round would defer and the effective period would double.
+      stubCacheAge(TRAFFIC_LIVE_TIERS.primary.intervalMs - 1_500);
+
+      await runRound();
+      expect(mockedRefreshCity).toHaveBeenCalledWith("Taipei");
+    });
+
+    it("refreshes a failed target immediately regardless of its tier", async () => {
+      mockedSwr.mockResolvedValue({ state: "failed", data: [], ageMs: 0 });
+
+      await runRound();
+      expect(mockedRefreshCity).toHaveBeenCalledWith("Highway");
     });
   });
 

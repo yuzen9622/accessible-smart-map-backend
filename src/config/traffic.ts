@@ -148,20 +148,75 @@ if (TRAFFIC_LIVE_UNSUPPORTED_TARGETS.length > 0) {
   );
 }
 
-/** Redis cache-aside lifetimes, in seconds. */
+/** Redis cache-aside lifetimes, in seconds. Live-traffic lifetimes are per-tier
+ * (see `TRAFFIC_LIVE_TIERS`) and deliberately absent here. */
 export const TRAFFIC_TTL = {
-  liveSoftSec: envPositive("TRAFFIC_FLOW_LIVE_SOFT_TTL_SEC", 90),
-  liveHardSec: envPositive("TRAFFIC_FLOW_LIVE_HARD_TTL_SEC", 300),
   liveErrSec: envPositive("TRAFFIC_FLOW_LIVE_ERR_TTL_SEC", 15),
   congestionDefSec: envPositive("TRAFFIC_CONGESTION_DEF_TTL_SEC", 86_400),
   incidentSec: envPositive("TRAFFIC_INCIDENT_TTL_SEC", 60),
   incidentErrSec: envPositive("TRAFFIC_INCIDENT_ERR_TTL_SEC", 15),
 } as const;
 
+/** Refresh cadence plus the cache lifetimes that cadence implies. */
+export interface TrafficLiveTier {
+  readonly intervalMs: number;
+  readonly softTtlSec: number;
+  readonly hardTtlSec: number;
+}
+
+/**
+ * Both TTLs are DERIVED from the interval and must never become independent
+ * knobs: a soft TTL shorter than the interval makes every read see `stale`, and
+ * the SWR read path then fires an on-demand refresh per request — which
+ * multiplies upstream calls instead of reducing them.
+ */
+function tierFromInterval(intervalMs: number): TrafficLiveTier {
+  const intervalSec = intervalMs / 1000;
+  return {
+    intervalMs,
+    softTtlSec: Math.ceil(intervalSec * 1.5),
+    hardTtlSec: Math.ceil(intervalSec * 5),
+  };
+}
+
+/**
+ * Targets served at the fast cadence. Everything else falls to `standard`:
+ * payload size and congestion volatility differ by two orders of magnitude
+ * across targets, so one global interval either burns quota on the near-empty
+ * counties or under-serves the core city.
+ */
+export const TRAFFIC_LIVE_PRIMARY_TARGETS: readonly string[] = envText(
+  "TRAFFIC_LIVE_PRIMARY_TARGETS",
+  "Taipei",
+)
+  .split(",")
+  .map((target) => target.trim())
+  .filter(Boolean);
+
+export const TRAFFIC_LIVE_TIERS = {
+  primary: tierFromInterval(
+    envPositive("TRAFFIC_LIVE_PRIMARY_INTERVAL_MS", 60_000),
+  ),
+  standard: tierFromInterval(
+    envPositive("TRAFFIC_LIVE_STANDARD_INTERVAL_MS", 300_000),
+  ),
+} as const;
+
+export function tierForTarget(target: string): TrafficLiveTier {
+  return TRAFFIC_LIVE_PRIMARY_TARGETS.includes(target)
+    ? TRAFFIC_LIVE_TIERS.primary
+    : TRAFFIC_LIVE_TIERS.standard;
+}
+
+/** Worker heartbeat: the shortest tier interval, so every tier can be served on time. */
+export const TRAFFIC_LIVE_BASE_TICK_MS = Math.min(
+  TRAFFIC_LIVE_TIERS.primary.intervalMs,
+  TRAFFIC_LIVE_TIERS.standard.intervalMs,
+);
+
 /** Background live-traffic refresher cadence and the cross-instance lock. */
 export const TRAFFIC_REFRESH = {
-  liveIntervalMs: envPositive("TRAFFIC_LIVE_REFRESH_INTERVAL_MS", 60_000),
-  /** Must stay below liveIntervalMs so the lock always self-expires between ticks. */
+  /** Must stay below TRAFFIC_LIVE_BASE_TICK_MS so the lock self-expires between ticks. */
   lockTtlSec: envPositive("TRAFFIC_REFRESH_LOCK_TTL_SEC", 50),
   lockKey: "traffic:refresh:lock",
   geometryIntervalMs: envPositive(

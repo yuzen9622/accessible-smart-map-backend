@@ -1,5 +1,5 @@
 import { redisClient, redisReady } from "../../config/redis";
-import { TRAFFIC_TTL } from "../../config/traffic";
+import { TRAFFIC_TTL, tierForTarget } from "../../config/traffic";
 import type { LiveSection, RawRoadIncident } from "../../types/traffic";
 
 const LIVE_PREFIX = "traffic:flow:live:";
@@ -111,7 +111,7 @@ export async function getLiveTrafficsSwr(
         typeof parsed.fetchedAtMs === "number" ? parsed.fetchedAtMs : 0;
       const ageMs = Math.max(0, Date.now() - fetchedAtMs);
       const state: LiveTrafficCacheState =
-        ageMs <= TRAFFIC_TTL.liveSoftSec * 1000 ? "fresh" : "stale";
+        ageMs <= tierForTarget(city).softTtlSec * 1000 ? "fresh" : "stale";
       return {
         state,
         data: parsed.data as LiveSection[],
@@ -127,7 +127,7 @@ export async function getLiveTrafficsSwr(
 export async function setLiveTraffics(
   city: string,
   data: LiveSection[],
-  ttlSec: number = TRAFFIC_TTL.liveHardSec,
+  ttlSec: number = tierForTarget(city).hardTtlSec,
 ): Promise<boolean> {
   try {
     const client = await strictClient();
