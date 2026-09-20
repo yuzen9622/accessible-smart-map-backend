@@ -9,6 +9,7 @@ import {
   NavPositionMessageSchema,
   NavResumeMessageSchema,
   NavSetRouteMessageSchema,
+  NavStartMessageSchema,
   SessionEndMessageSchema,
   SessionStartMessageSchema,
   UserLocationSchema,
@@ -127,6 +128,16 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
   let pendingRouteToken: string | null = null;
   let pendingPosition: NavPosition | null = null;
   let pendingResume: NavResumeMessage | null = null;
+  let pendingNavStart = false;
+  /**
+   * Always the latest arm-class operation, already caught. Resolves false when
+   * the arm failed, so a queued nav.start can tell "armed" from "rejected".
+   */
+  let armChain: Promise<boolean> = Promise.resolve(true);
+  /** Bumped by nav.cancel / session.end / close to void queued nav.start. */
+  let navStartGen = 0;
+  /** Bumped by every nav.setRoute so a queued nav.start can detect a newer one. */
+  let routeArmGen = 0;
   const frameBucket = new TokenBucket(
     CONTROL_FRAMES_PER_SEC,
     CONTROL_FRAMES_BURST,
@@ -224,6 +235,22 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
     void startBridge(id, generation, connection, userLocation);
   };
 
+  /**
+   * `nav.start` must land after the route is armed, or navSession.start() sees
+   * no route. Queue it on the arm chain and re-verify on the way out: a
+   * cancel, a session end or a replaced bridge all void it, a newer
+   * nav.setRoute makes it stale, and a failed arm leaves nothing to start.
+   */
+  const queueNavStart = (target: LiveBridge): void => {
+    const generation = navStartGen;
+    const expectedArmGen = routeArmGen;
+    void armChain.then((armed) => {
+      if (disposed || navStartGen !== generation || bridge !== target) return;
+      if (routeArmGen !== expectedArmGen || !armed) return;
+      target.startNavigation();
+    });
+  };
+
   const startBridge = async (
     id: string,
     generation: number,
@@ -248,21 +275,33 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
       bridge = createdBridge;
       connection.bridge = createdBridge;
     } catch (err) {
+      // Voice failures are absorbed inside createLiveBridge; reaching here
+      // means the bridge object itself could not be built. Report it and leave
+      // the socket to the client rather than tearing navigation down.
       console.error(
-        "[voice] live connect failed:",
+        "[voice] live bridge creation failed:",
         err instanceof Error ? err.message : String(err),
       );
       sendJson({ type: "error", code: "LIVE_CONNECT_FAILED" });
-      ws.close(1011, "live-connect-failed");
       return;
     }
     sendJson({ type: "session.ready" });
-    if (pendingRouteToken) void bridge.armRouteToken(pendingRouteToken);
-    if (pendingResume) void bridge.resumeNavigation(pendingResume);
-    if (pendingPosition) bridge.updatePosition(pendingPosition);
+    const readyBridge = bridge;
+    armChain = pendingRouteToken
+      ? readyBridge.armRouteToken(pendingRouteToken).catch(() => false)
+      : Promise.resolve(true);
+    if (pendingResume) {
+      armChain = readyBridge.resumeNavigation(pendingResume).then(
+        () => true,
+        () => false,
+      );
+    }
+    if (pendingPosition) readyBridge.updatePosition(pendingPosition);
+    if (pendingNavStart) queueNavStart(readyBridge);
     pendingRouteToken = null;
     pendingResume = null;
     pendingPosition = null;
+    pendingNavStart = false;
   };
 
   const handleControlMessage = (data: RawData): void => {
@@ -289,6 +328,9 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
       disposed = true;
       connGen++;
       const resumeNavId = pendingResume?.navigationId;
+      navStartGen++;
+      pendingNavStart = false;
+      armChain = Promise.resolve(true);
       pendingRouteToken = null;
       pendingResume = null;
       pendingPosition = null;
@@ -322,7 +364,11 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
         });
         return;
       }
-      if (bridge) void bridge.armRouteToken(result.data.routeToken);
+      routeArmGen++;
+      if (bridge)
+        armChain = bridge
+          .armRouteToken(result.data.routeToken)
+          .catch(() => false);
       else pendingRouteToken = result.data.routeToken;
       return;
     }
@@ -338,6 +384,19 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
       const { type: _type, ...position } = result.data;
       if (bridge) bridge.updatePosition(position);
       else pendingPosition = position;
+      return;
+    }
+    if (parsed?.type === "nav.start") {
+      if (!controlBucket.take()) return;
+      const result = NavStartMessageSchema.safeParse(parsed);
+      if (!result.success) {
+        console.warn(
+          `[voice] ignoring nav.start: ${describeIssues(result.error)}`,
+        );
+        return;
+      }
+      if (bridge) queueNavStart(bridge);
+      else pendingNavStart = true;
       return;
     }
     if (parsed?.type === "nav.resume") {
@@ -357,13 +416,20 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
         });
         return;
       }
-      if (bridge) void bridge.resumeNavigation(result.data);
+      if (bridge)
+        armChain = bridge.resumeNavigation(result.data).then(
+          () => true,
+          () => false,
+        );
       else pendingResume = result.data;
       return;
     }
     if (NavCancelMessageSchema.safeParse(parsed).success) {
       if (!controlBucket.take()) return;
       const resumeNavId = pendingResume?.navigationId;
+      navStartGen++;
+      pendingNavStart = false;
+      armChain = Promise.resolve(true);
       pendingRouteToken = null;
       pendingResume = null;
       pendingPosition = null;
@@ -409,6 +475,9 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
   ws.on("close", () => {
     disposed = true;
     connGen++;
+    navStartGen++;
+    pendingNavStart = false;
+    armChain = Promise.resolve(true);
     pendingRouteToken = null;
     pendingResume = null;
     pendingPosition = null;

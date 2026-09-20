@@ -21,7 +21,11 @@ beforeEach(() => {
 
 describe("voice live-bridge injects the current date (F23)", () => {
   it("passes a systemInstruction containing the date rule to live.connect", async () => {
-    await createLiveBridge({ ws: fakeWs(), userId: "u1" } as any);
+    const bridge = await createLiveBridge({
+      ws: fakeWs(),
+      userId: "u1",
+    } as any);
+    await bridge.voiceReady;
     expect(connect).toHaveBeenCalled();
     // connect.mock.calls entries are argument tuples; the first arg carries the
     // `{ config: { systemInstruction } }` payload the bridge passes to live.

@@ -363,6 +363,15 @@ export class NavigationSession {
     return emptyEffect();
   }
 
+  /**
+   * Drops a route that was armed but never started, so a later start() reports
+   * NO_ROUTE_ARMED instead of running it. A run already in progress is left
+   * alone: arming a replacement never owned the active route.
+   */
+  clearArmedRoute(): void {
+    this.armedRoute = null;
+  }
+
   start(seedPosition?: NavPosition): NavEffect {
     if (this.disposed) return emptyEffect(false);
     if (this.active) {

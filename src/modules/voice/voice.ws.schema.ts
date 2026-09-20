@@ -68,6 +68,15 @@ export const NavCancelMessageSchema = z.object({
 });
 
 /**
+ * Starts navigation on the already-armed route. Named to mirror the outbound
+ * `nav.start` event it results in, the same way `nav.resume` mirrors
+ * `nav.resume_ok`.
+ */
+export const NavStartMessageSchema = z.object({
+  type: z.literal("nav.start"),
+});
+
+/**
  * Re-arms an interrupted navigation from the server-side progress snapshot.
  *
  * `lastKnownStepIndex` is what the client believes it reached; the server
@@ -88,6 +97,7 @@ export const VoiceControlMessageSchema = z.discriminatedUnion("type", [
   SessionEndMessageSchema,
   NavSetRouteMessageSchema,
   NavPositionMessageSchema,
+  NavStartMessageSchema,
   NavCancelMessageSchema,
   NavResumeMessageSchema,
 ]);

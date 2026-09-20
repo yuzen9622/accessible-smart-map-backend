@@ -54,7 +54,6 @@ const CORRIDOR_SCAN_MIN_INTERVAL_MS = 20_000;
 const SNAPSHOT_MIN_INTERVAL_MS = 5_000;
 const TURN_TIMEOUT_MS = 15_000;
 const TURN_TIMEOUT_STRIKES = 2;
-export const LIVE_TURN_TIMEOUT_CLOSE_CODE = 4410;
 
 type ActiveNavigation = {
   routeToken: string;
@@ -69,6 +68,16 @@ type RerouteGenerationState = {
   inFlight: boolean;
   lastStartedAt: number;
   clientRequestId?: string;
+};
+
+type AlertEffect = NavEffect & { rerouteReason: RerouteReason | null };
+
+type VoiceState = "connecting" | "ready" | "unavailable";
+
+type NavSnapshot = {
+  generation: number;
+  navigationId: string;
+  routeVersion: number;
 };
 
 type LiveTurnState =
@@ -153,12 +162,19 @@ export interface LiveBridgeOptions {
 
 export interface LiveBridge {
   sendAudio(data: Buffer): void;
-  armRouteToken(routeToken: string): Promise<void>;
+  /** Resolves true only when the route is armed and ready to start. */
+  armRouteToken(routeToken: string): Promise<boolean>;
   resumeNavigation(message: NavResumeMessage): Promise<void>;
+  startNavigation(): void;
   updatePosition(position: NavPosition): void;
   cancelNav(): void;
   endSession(): void;
   close(): void;
+  /**
+   * Settles when the Gemini bootstrap has either connected or degraded.
+   * Navigation never waits on it; it exists so tests can be deterministic.
+   */
+  readonly voiceReady: Promise<void>;
 }
 
 /**
@@ -189,6 +205,8 @@ export async function createLiveBridge(
 ): Promise<LiveBridge> {
   const { ws, userId, userLocation } = options;
   let session: Session | null = null;
+  let voiceState: VoiceState = "connecting";
+  let memoryEnabled = false;
   let closedByGateway = false;
   let disposed = false;
   let cumulativeTokens = 0;
@@ -203,6 +221,12 @@ export async function createLiveBridge(
   let utteranceSeq = 0;
   let currentUtteranceId: string | null = null;
   let armGen = 0;
+  /**
+   * Bumped whenever voice degrades. Messages queued under an older epoch are
+   * dropped instead of replayed: a tool call the model emitted before the
+   * session died must never reach navigation state after it.
+   */
+  let voiceEpoch = 0;
   let messageQueue = Promise.resolve();
   let pendingToolMessages = 0;
   let navSession = new NavigationSession();
@@ -212,6 +236,8 @@ export async function createLiveBridge(
   const rerouteStateByGeneration = new Map<number, RerouteGenerationState>();
   let corridorScanInFlight = false;
   let corridorScanDirty = false;
+  let transitAlertCheckInFlight = false;
+  let transitAlertCheckDirty = false;
   let lastCorridorScanAt = 0;
   let corridorScanTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingCriticalRerouteReason: RerouteReason | null = null;
@@ -251,6 +277,47 @@ export async function createLiveBridge(
 
   const sendResumeFailed = (payload: NavResumeFailedMessage): void => {
     sendJson(NavResumeFailedMessageSchema.parse(payload));
+  };
+
+  /**
+   * Clears the speech pipeline when nothing will ever play it. The leading
+   * onTurnComplete() is mandatory: takeNextSpeech() returns null while
+   * currentSpeechText is set, so a line cut off mid-turn would otherwise wedge
+   * the queue shut and enqueueSpeech() would start concatenating every later
+   * line onto one unbounded string once SPEECH_QUEUE_MAX is reached.
+   */
+  const drainNavigationSpeech = (): void => {
+    navSession.onTurnComplete();
+    while (navSession.takeNextSpeech()) navSession.onTurnComplete();
+  };
+
+  /**
+   * Ends voice playback without touching navigation. One-way and idempotent:
+   * the Gemini session is not re-established on this connection. The client
+   * socket is deliberately left open — alerts and reroutes keep flowing.
+   */
+  const markVoiceUnavailable = (
+    code: "LIVE_CONNECT_FAILED" | "LIVE_SESSION_ENDED",
+  ): void => {
+    if (disposed || voiceState === "unavailable") return;
+    voiceState = "unavailable";
+    voiceEpoch++;
+    const ending = session;
+    session = null;
+    navSpeaking = false;
+    turnTimeoutStrikes = 0;
+    clearTurnTimeout();
+    liveState = "IDLE";
+    try {
+      ending?.close();
+    } catch (err) {
+      console.warn(
+        "[voice] live session close failed:",
+        summarizeError(err instanceof Error ? err.message : String(err)),
+      );
+    }
+    sendJson({ type: "error", code });
+    drainNavigationSpeech();
   };
 
   /**
@@ -322,6 +389,52 @@ export async function createLiveBridge(
     }
   };
 
+  /**
+   * The single path every alert source takes: escalate to a reroute when the
+   * effect demands one, downgrade `reroute_applied` to `reroute_suggested`
+   * when the reroute could not actually run, broadcast the advisory, then let
+   * speech drain. Transit alerts and corridor findings must never diverge.
+   *
+   * `snapshot` is the navigation the effect was computed against. A reroute we
+   * performed ourselves legitimately supersedes it; any other replacement
+   * means this advisory describes a route the user has already left.
+   */
+  const dispatchAlertEffect = async (
+    effect: AlertEffect,
+    snapshot: NavSnapshot,
+  ): Promise<void> => {
+    if (disposed) return;
+    let canReroute = false;
+    if (effect.rerouteReason) {
+      if (!latestPosition) {
+        pendingCriticalRerouteReason = effect.rerouteReason;
+      } else {
+        canReroute = await rerouteForReason(
+          effect.rerouteReason,
+          latestPosition,
+        );
+      }
+    }
+    if (disposed) return;
+    if (!canReroute && !isCurrentReroute(snapshot)) return;
+    const navigation = activeNavigation;
+    if (!navigation) return;
+    for (const event of effect.events) {
+      if (event.type !== "nav.advisory") continue;
+      sendAdvisoryJson({
+        type: "nav.advisory",
+        navigationId: navigation.navigationId,
+        routeVersion: navigation.routeVersion,
+        advisories: event.advisories.map((a) =>
+          a.action === "reroute_applied" && !canReroute
+            ? { ...a, action: "reroute_suggested" as const }
+            : a,
+        ),
+      });
+    }
+    driveNavigationSpeech();
+  };
+
   const checkCurrentTransitAlerts = async (
     sourceStoreKey?: string,
   ): Promise<void> => {
@@ -331,7 +444,16 @@ export async function createLiveBridge(
     if (sourceStoreKey && !keyRelevantToContext(sourceStoreKey, transitCtx)) {
       return;
     }
-    const snapshot = {
+    // A TDX MQTT burst fans out to one callback per message. Without this the
+    // same key would launch concurrent getTransitAlerts() calls; fold them into
+    // the in-flight one plus at most one catch-up pass.
+    if (transitAlertCheckInFlight) {
+      transitAlertCheckDirty = true;
+      return;
+    }
+    transitAlertCheckInFlight = true;
+    transitAlertCheckDirty = false;
+    const snapshot: NavSnapshot = {
       generation: navigationGeneration,
       navigationId: activeNavigation?.navigationId ?? "",
       routeVersion: activeNavigation?.routeVersion ?? 0,
@@ -340,43 +462,27 @@ export async function createLiveBridge(
       const result = await getTransitAlerts(transitCtx);
       if (disposed || !isCurrentReroute(snapshot)) return;
       if (result.ok && result.alerts.length > 0) {
-        const effect = navSession.onTransitAlerts(result.alerts);
-        let canReroute = false;
-        if (effect.rerouteReason) {
-          if (!latestPosition) {
-            pendingCriticalRerouteReason = effect.rerouteReason;
-          } else {
-            canReroute = await rerouteForReason(
-              effect.rerouteReason,
-              latestPosition,
-            );
-          }
-        }
-        for (const event of effect.events) {
-          if (event.type !== "nav.advisory") continue;
-          const navigation = activeNavigation;
-          if (!navigation) continue;
-          const advisories = event.advisories.map((a) =>
-            a.action === "reroute_applied" && !canReroute
-              ? { ...a, action: "reroute_suggested" as const }
-              : a,
-          );
-          sendAdvisoryJson({
-            type: "nav.advisory",
-            navigationId: navigation.navigationId,
-            routeVersion: navigation.routeVersion,
-            advisories,
-          });
-        }
-        driveNavigationSpeech();
+        await dispatchAlertEffect(
+          navSession.onTransitAlerts(result.alerts),
+          snapshot,
+        );
       }
     } catch (err) {
       console.warn("[voice] transit alert check failed", err);
+    } finally {
+      transitAlertCheckInFlight = false;
+      if (transitAlertCheckDirty && !disposed) {
+        transitAlertCheckDirty = false;
+        // Re-read the live context rather than replaying the stale store key.
+        void checkCurrentTransitAlerts();
+      }
     }
   };
 
+  // Alert delivery is bound to the client connection, not to voice: a bridge
+  // with no Gemini session must still detect, broadcast and reroute on alerts.
   const unsubscribeAlerts = onAlertSnapshotUpdate((key: string) => {
-    if (disposed || !session) return;
+    if (disposed) return;
     void checkCurrentTransitAlerts(key);
     void runCorridorScan();
   });
@@ -384,11 +490,6 @@ export async function createLiveBridge(
   const clearTurnTimeout = (): void => {
     if (turnTimeout) clearTimeout(turnTimeout);
     turnTimeout = null;
-  };
-
-  const closeForTurnTimeout = (): void => {
-    if (disposed || ws.readyState !== WebSocket.OPEN) return;
-    ws.close(LIVE_TURN_TIMEOUT_CLOSE_CODE, "live-turn-timeout");
   };
 
   const startTurnTimeout = (): void => {
@@ -401,7 +502,11 @@ export async function createLiveBridge(
         JSON.stringify({ strikes: turnTimeoutStrikes }),
       );
       if (turnTimeoutStrikes >= TURN_TIMEOUT_STRIKES) {
-        closeForTurnTimeout();
+        // A stuck model turn is a voice-quality failure. Navigation, alerts and
+        // the client socket all survive it; only playback stops. The Gemini
+        // session really is closed here, so LIVE_SESSION_ENDED is accurate and
+        // no new frame type is needed.
+        markVoiceUnavailable("LIVE_SESSION_ENDED");
         return;
       }
       startTurnTimeout();
@@ -409,14 +514,31 @@ export async function createLiveBridge(
   };
 
   const driveNavigationSpeech = (): void => {
-    if (disposed || !session || ws.readyState !== WebSocket.OPEN) return;
+    if (disposed) return;
+    if (voiceState === "unavailable") {
+      drainNavigationSpeech();
+      return;
+    }
+    if (!session || ws.readyState !== WebSocket.OPEN) return;
     if (liveState !== "IDLE" || navSpeaking || pendingToolMessages > 0) return;
     const text = navSession.takeNextSpeech();
     if (!text) return;
-    session.sendClientContent({
-      turns: `請逐字唸出以下導航指引，不得增減內容：${text}`,
-      turnComplete: true,
-    });
+    try {
+      session.sendClientContent({
+        turns: `請逐字唸出以下導航指引，不得增減內容：${text}`,
+        turnComplete: true,
+      });
+    } catch (err) {
+      // A dead Live socket must not throw out through updatePosition() or the
+      // alert pipeline. Degrade instead; markVoiceUnavailable() releases the
+      // line we just took.
+      console.error(
+        "[voice] sendClientContent failed:",
+        summarizeError(err instanceof Error ? err.message : String(err)),
+      );
+      markVoiceUnavailable("LIVE_SESSION_ENDED");
+      return;
+    }
     navSpeaking = true;
     liveState = "AWAIT_MODEL";
     startTurnTimeout();
@@ -580,6 +702,10 @@ export async function createLiveBridge(
           retryable: true,
         });
       }
+      // Falling through to the trailing `return true` would tell the caller the
+      // route was replaced when it was not, leaving advisories on
+      // `reroute_applied`.
+      return false;
     } finally {
       const settled = rerouteStateByGeneration.get(snapshot.generation);
       if (settled) settled.inFlight = false;
@@ -590,6 +716,28 @@ export async function createLiveBridge(
 
   const rerouteAfterOffRoute = async (): Promise<void> => {
     void (await rerouteForReason("OFF_ROUTE"));
+  };
+
+  /**
+   * The only way navigation starts. Reached from the WS `nav.start` frame and
+   * from the Gemini `startNavigation` tool call, so both produce identical
+   * state, persistence and alert scheduling.
+   */
+  const startNavigation = (): { ok: boolean } => {
+    if (disposed) return { ok: false };
+    if (positionTimer) {
+      clearTimeout(positionTimer);
+      positionTimer = null;
+    }
+    const effect = navSession.start(latestPosition ?? undefined);
+    applyEffect(effect);
+    if (effect.ok) {
+      persistNavigationSnapshot(true);
+      void checkCurrentTransitAlerts();
+      void runCorridorScan();
+      driveNavigationSpeech();
+    }
+    return { ok: effect.ok };
   };
 
   /**
@@ -635,37 +783,16 @@ export async function createLiveBridge(
       const findings = await scanRemainingCorridor(corridor);
       if (disposed || navigationGeneration !== scanGeneration) return;
       if (!findings.length) return;
-      const effect = navSession.onCorridorFindings(findings, {
-        requireElevator: navigation.requireElevator,
-      });
-      let canReroute = false;
-      if (effect.rerouteReason) {
-        if (!latestPosition) {
-          pendingCriticalRerouteReason = effect.rerouteReason;
-        } else {
-          canReroute = await rerouteForReason(
-            effect.rerouteReason,
-            latestPosition,
-          );
-        }
-      }
-      for (const event of effect.events) {
-        if (event.type !== "nav.advisory") continue;
-        const navigation = activeNavigation;
-        if (!navigation) continue;
-        const advisories = event.advisories.map((a) =>
-          a.action === "reroute_applied" && !canReroute
-            ? { ...a, action: "reroute_suggested" as const }
-            : a,
-        );
-        sendAdvisoryJson({
-          type: "nav.advisory",
+      await dispatchAlertEffect(
+        navSession.onCorridorFindings(findings, {
+          requireElevator: navigation.requireElevator,
+        }),
+        {
+          generation: scanGeneration,
           navigationId: navigation.navigationId,
           routeVersion: navigation.routeVersion,
-          advisories,
-        });
-      }
-      driveNavigationSpeech();
+        },
+      );
     } catch (err) {
       console.warn("[voice] corridor scan failed", err);
     } finally {
@@ -696,9 +823,15 @@ export async function createLiveBridge(
 
   const handleToolCalls = async (
     functionCalls: FunctionCall[],
+    msgEpoch: number,
   ): Promise<void> => {
+    // Re-read through a call: voice can degrade across any await below, and a
+    // tool from a dead session must not reach startNavigation/stopNavigation.
+    const voiceCurrent = (): boolean =>
+      !disposed && voiceState === "ready" && msgEpoch === voiceEpoch;
     const functionResponses: FunctionResponse[] = [];
     for (const call of functionCalls) {
+      if (!voiceCurrent()) return;
       const name = call.name ?? "";
       if (navSpeaking) {
         functionResponses.push({
@@ -716,19 +849,10 @@ export async function createLiveBridge(
       try {
         let result: string;
         if (name === "startNavigation") {
-          if (positionTimer) {
-            clearTimeout(positionTimer);
-            positionTimer = null;
-          }
-          const effect = navSession.start(latestPosition ?? undefined);
-          applyEffect(effect);
-          if (effect.ok) {
-            persistNavigationSnapshot(true);
-            void checkCurrentTransitAlerts();
-          }
+          const { ok: started } = startNavigation();
           result = JSON.stringify({
-            ok: effect.ok,
-            message: effect.ok ? "已開始導航" : "尚未選擇路線",
+            ok: started,
+            message: started ? "已開始導航" : "尚未選擇路線",
           });
         } else if (name === "stopNavigation") {
           applyEffect(navSession.stop("user_voice"));
@@ -768,6 +892,7 @@ export async function createLiveBridge(
           ),
         };
       }
+      if (!voiceCurrent()) return;
       const durationMs = Date.now() - startedAt;
       console.log(
         "[voice] tool",
@@ -788,7 +913,8 @@ export async function createLiveBridge(
       });
       functionResponses.push({ id: call.id, name, response });
     }
-    if (!disposed && session) session.sendToolResponse({ functionResponses });
+    if (voiceCurrent() && session)
+      session.sendToolResponse({ functionResponses });
   };
 
   /**
@@ -834,8 +960,11 @@ export async function createLiveBridge(
 
   const handleServerMessage = async (
     message: LiveServerMessage,
+    msgEpoch: number,
   ): Promise<void> => {
-    if (disposed) return;
+    // The queue can hold this message across a degradation; replaying it would
+    // drive navigation from a session that no longer exists.
+    if (disposed || voiceState !== "ready" || msgEpoch !== voiceEpoch) return;
     const content = message.serverContent;
     if (content) {
       if (content.modelTurn?.parts?.length) {
@@ -882,8 +1011,9 @@ export async function createLiveBridge(
     if (message.toolCall?.functionCalls?.length) {
       if (content?.interrupted) return;
       liveState = "TOOL_PENDING";
-      await handleToolCalls(message.toolCall.functionCalls);
-      if (!disposed) liveState = "AWAIT_MODEL";
+      await handleToolCalls(message.toolCall.functionCalls, msgEpoch);
+      if (!disposed && voiceState === "ready" && msgEpoch === voiceEpoch)
+        liveState = "AWAIT_MODEL";
     } else if (content?.turnComplete && !content.interrupted) {
       if (userTranscriptBuffer.trim()) finalizeUserTranscript();
       if (navSpeaking) navSession.onTurnComplete();
@@ -900,77 +1030,120 @@ export async function createLiveBridge(
     }
   };
 
-  let memoryEnabled = false;
-  let memories: Array<{
-    _id?: unknown;
-    category: string;
-    promptText?: string;
-    content: string;
-  }> = [];
-  if (userId) {
+  // Read through a call so control-flow analysis cannot narrow `voiceState`
+  // across an await: markVoiceUnavailable() may flip it while one is pending.
+  const voiceUnavailable = (): boolean => voiceState === "unavailable";
+
+  /**
+   * Everything Gemini needs, off the critical path. Never rejects: navigation
+   * readiness must not depend on memory lookups or a Live handshake. Anything
+   * throwing during bootstrap lands on a settled `unavailable` state, ensuring
+   * voiceReady never rejects unhandled and voiceState transitions to "unavailable".
+   */
+  const bootstrapVoice = async (): Promise<void> => {
     try {
-      const settings = await getMemorySettings(userId);
-      memoryEnabled = settings.memoryEnabled;
-      if (memoryEnabled) {
-        memories = await loadMemories(userId, 20);
+      let memories: Array<{
+        _id?: unknown;
+        category: string;
+        promptText?: string;
+        content: string;
+      }> = [];
+      if (userId) {
+        try {
+          const settings = await getMemorySettings(userId);
+          memoryEnabled = settings.memoryEnabled;
+          if (memoryEnabled) {
+            memories = await loadMemories(userId, 20);
+          }
+        } catch (err) {
+          console.error(
+            "[voice] loadMemories failed:",
+            summarizeError(err instanceof Error ? err.message : String(err)),
+          );
+        }
       }
+      if (disposed || voiceUnavailable()) return;
+
+      const liveConfig: LiveConnectConfig = {
+        responseModalities: [Modality.AUDIO],
+        inputAudioTranscription: {},
+        outputAudioTranscription: {},
+        systemInstruction: withCurrentDate(
+          buildVoiceSystemPrompt(userLocation, memories, { memoryEnabled }),
+        ),
+        tools: [
+          ...buildGeminiTools(userId, memoryEnabled),
+          { functionDeclarations: NAV_FUNCTIONS },
+        ],
+        temperature: parseLiveTemperature(),
+      };
+      const languageCode = parseLiveLanguageCode();
+      if (languageCode) liveConfig.speechConfig = { languageCode };
+
+      const connected = await googleGenAi.live.connect({
+        model: process.env.GEMINI_LIVE_MODEL ?? "gemini-3.1-flash-live-preview",
+        config: liveConfig,
+        callbacks: {
+          onmessage: (message: LiveServerMessage) => {
+            const hasToolCalls = Boolean(
+              message.toolCall?.functionCalls?.length,
+            );
+            if (hasToolCalls) pendingToolMessages++;
+            const msgEpoch = voiceEpoch;
+            messageQueue = messageQueue
+              .then(() => handleServerMessage(message, msgEpoch))
+              .catch((err) => {
+                console.error(
+                  "[voice] server message handling failed:",
+                  summarizeError(
+                    err instanceof Error ? err.message : String(err),
+                  ),
+                );
+              })
+              .finally(() => {
+                if (hasToolCalls)
+                  pendingToolMessages = Math.max(0, pendingToolMessages - 1);
+              });
+          },
+          onerror: (e) => {
+            console.error(
+              "[voice] live session error:",
+              summarizeError(e?.message),
+            );
+            // Errors on the Live socket are terminal for playback but harmless
+            // to navigation. Degrade rather than let a later send throw.
+            if (!closedByGateway) markVoiceUnavailable("LIVE_SESSION_ENDED");
+          },
+          onclose: () => {
+            // Gemini hanging up must never hang up on the client: navigation
+            // and alerts keep running on this same socket.
+            if (closedByGateway) return;
+            markVoiceUnavailable("LIVE_SESSION_ENDED");
+          },
+        },
+      });
+
+      if (disposed || voiceUnavailable()) {
+        try {
+          connected.close();
+        } catch {
+          /* already gone */
+        }
+        return;
+      }
+      session = connected;
+      voiceState = "ready";
+      driveNavigationSpeech();
     } catch (err) {
       console.error(
-        "[voice] loadMemories failed:",
+        "[voice] live connect failed:",
         summarizeError(err instanceof Error ? err.message : String(err)),
       );
+      markVoiceUnavailable("LIVE_CONNECT_FAILED");
     }
-  }
-
-  const liveConfig: LiveConnectConfig = {
-    responseModalities: [Modality.AUDIO],
-    inputAudioTranscription: {},
-    outputAudioTranscription: {},
-    systemInstruction: withCurrentDate(
-      buildVoiceSystemPrompt(userLocation, memories, { memoryEnabled }),
-    ),
-    tools: [
-      ...buildGeminiTools(userId, memoryEnabled),
-      { functionDeclarations: NAV_FUNCTIONS },
-    ],
-    temperature: parseLiveTemperature(),
   };
-  const languageCode = parseLiveLanguageCode();
-  if (languageCode) liveConfig.speechConfig = { languageCode };
 
-  session = await googleGenAi.live.connect({
-    model: process.env.GEMINI_LIVE_MODEL ?? "gemini-3.1-flash-live-preview",
-    config: liveConfig,
-    callbacks: {
-      onmessage: (message: LiveServerMessage) => {
-        const hasToolCalls = Boolean(message.toolCall?.functionCalls?.length);
-        if (hasToolCalls) pendingToolMessages++;
-        messageQueue = messageQueue
-          .then(() => handleServerMessage(message))
-          .catch((err) => {
-            console.error(
-              "[voice] server message handling failed:",
-              summarizeError(err instanceof Error ? err.message : String(err)),
-            );
-          })
-          .finally(() => {
-            if (hasToolCalls)
-              pendingToolMessages = Math.max(0, pendingToolMessages - 1);
-          });
-      },
-      onerror: (e) => {
-        console.error(
-          "[voice] live session error:",
-          summarizeError(e?.message),
-        );
-      },
-      onclose: () => {
-        if (closedByGateway || ws.readyState !== WebSocket.OPEN) return;
-        sendJson({ type: "error", code: "LIVE_SESSION_ENDED" });
-        ws.close(1000, "live-session-ended");
-      },
-    },
-  });
+  const voiceReady = bootstrapVoice();
 
   return {
     sendAudio(data: Buffer): void {
@@ -983,7 +1156,7 @@ export async function createLiveBridge(
         },
       });
     },
-    async armRouteToken(routeToken: string): Promise<void> {
+    async armRouteToken(routeToken: string): Promise<boolean> {
       const generation = ++armGen;
       const arm = { armGeneration: generation };
       pendingRouteArm = arm;
@@ -994,9 +1167,21 @@ export async function createLiveBridge(
           getRouteByToken(routeToken),
           getNavigationEnvelopeByToken(routeToken),
         ]);
-        if (!isCurrentArm()) return;
+        if (!isCurrentArm()) return false;
         if (!route) {
           pendingRouteArm = null;
+          // The client asked to replace the route and the replacement is gone.
+          // Leaving the previous one armed would let a later nav.start run a
+          // route the user already navigated away from, so drop it. cancel()
+          // only clears a *started* session, hence the fresh NavigationSession
+          // for the armed-but-not-started case.
+          applyEffect(navSession.cancel());
+          navSession.dispose();
+          navSession = new NavigationSession();
+          activeNavigation = null;
+          navigationGeneration++;
+          pruneRerouteState();
+          resetCorridorState();
           applyEffect({
             ok: false,
             events: [
@@ -1007,7 +1192,7 @@ export async function createLiveBridge(
               },
             ],
           });
-          return;
+          return false;
         }
         const committedGeneration = ++navigationGeneration;
         pruneRerouteState();
@@ -1024,10 +1209,14 @@ export async function createLiveBridge(
             }
           : null;
         resetCorridorState();
+        return true;
       } catch (err) {
         if (isCurrentArm()) pendingRouteArm = null;
         throw err;
       }
+    },
+    startNavigation(): void {
+      startNavigation();
     },
     async resumeNavigation(message: NavResumeMessage): Promise<void> {
       if (disposed) return;
@@ -1223,6 +1412,7 @@ export async function createLiveBridge(
     close(): void {
       closeBridge();
     },
+    voiceReady,
   };
 
   function closeBridge(): void {
@@ -1243,6 +1433,9 @@ export async function createLiveBridge(
       corridorScanTimer = null;
     }
     pendingCriticalRerouteReason = null;
+    voiceState = "unavailable";
+    transitAlertCheckInFlight = false;
+    transitAlertCheckDirty = false;
     clearTurnTimeout();
     navSession.dispose();
     activeNavigation = null;

@@ -15,12 +15,14 @@ import {
 vi.mock("./live-bridge", () => ({
   createLiveBridge: vi.fn(async () => ({
     sendAudio: vi.fn(),
-    armRouteToken: vi.fn(),
-    resumeNavigation: vi.fn(),
+    armRouteToken: vi.fn(async () => true),
+    resumeNavigation: vi.fn(async () => {}),
+    startNavigation: vi.fn(),
     updatePosition: vi.fn(),
     cancelNav: vi.fn(),
     endSession: vi.fn(),
     close: vi.fn(),
+    voiceReady: Promise.resolve(),
   })),
 }));
 
@@ -268,6 +270,276 @@ describe("voice gateway", () => {
     expect(bridge.cancelNav).toHaveBeenCalledOnce();
   });
 
+  it("forwards nav.start to the bridge", async () => {
+    const ws = connect();
+    await waitForOpen(ws);
+    const ready = waitForJson(ws);
+    sendSessionStart(ws, "voice-user-nav-start");
+    await ready;
+    const bridge = await mockCreateLiveBridge.mock.results.at(-1)!.value;
+    ws.send(JSON.stringify({ type: "nav.start" }));
+    await vi.waitFor(() =>
+      expect(bridge.startNavigation).toHaveBeenCalledOnce(),
+    );
+  });
+
+  it("buffers nav.start until the bridge is ready and applies it after the route is armed", async () => {
+    const order: string[] = [];
+    let resolveBridge!: (bridge: any) => void;
+    const pending = new Promise<any>((resolve) => {
+      resolveBridge = resolve;
+    });
+    mockCreateLiveBridge.mockImplementationOnce(() => pending);
+    const ws = connect();
+    await waitForOpen(ws);
+    sendSessionStart(ws, "voice-user-buffered-start");
+    ws.send(JSON.stringify({ type: "nav.setRoute", routeToken: "cap" }));
+    ws.send(JSON.stringify({ type: "nav.start" }));
+
+    let releaseArm!: () => void;
+    const armGate = new Promise<void>((resolve) => {
+      releaseArm = resolve;
+    });
+    const bridge = {
+      sendAudio: vi.fn(),
+      armRouteToken: vi.fn(async () => {
+        await armGate;
+        order.push("arm");
+        return true;
+      }),
+      startNavigation: vi.fn(() => {
+        order.push("start");
+      }),
+      updatePosition: vi.fn(),
+      cancelNav: vi.fn(),
+      close: vi.fn(),
+      voiceReady: Promise.resolve(),
+    };
+    const ready = waitForJson(ws);
+    resolveBridge(bridge);
+    await expect(ready).resolves.toEqual({ type: "session.ready" });
+    await vi.waitFor(() => expect(bridge.armRouteToken).toHaveBeenCalled());
+    expect(bridge.startNavigation).not.toHaveBeenCalled();
+
+    releaseArm();
+    await vi.waitFor(() => expect(bridge.startNavigation).toHaveBeenCalled());
+    expect(order).toEqual(["arm", "start"]);
+  });
+
+  it("applies nav.start after an in-flight nav.setRoute on a ready bridge", async () => {
+    const order: string[] = [];
+    let releaseArm!: () => void;
+    const armGate = new Promise<void>((resolve) => {
+      releaseArm = resolve;
+    });
+    const bridge = {
+      sendAudio: vi.fn(),
+      armRouteToken: vi.fn(async () => {
+        await armGate;
+        order.push("arm");
+        return true;
+      }),
+      resumeNavigation: vi.fn(async () => {}),
+      startNavigation: vi.fn(() => {
+        order.push("start");
+      }),
+      updatePosition: vi.fn(),
+      cancelNav: vi.fn(),
+      endSession: vi.fn(),
+      close: vi.fn(),
+      voiceReady: Promise.resolve(),
+    };
+    mockCreateLiveBridge.mockImplementationOnce(async () => bridge);
+    const ws = connect();
+    await waitForOpen(ws);
+    const ready = waitForJson(ws);
+    sendSessionStart(ws, "voice-user-inflight-arm");
+    await ready;
+
+    ws.send(JSON.stringify({ type: "nav.setRoute", routeToken: "cap" }));
+    ws.send(JSON.stringify({ type: "nav.start" }));
+    await vi.waitFor(() => expect(bridge.armRouteToken).toHaveBeenCalled());
+    expect(bridge.startNavigation).not.toHaveBeenCalled();
+
+    releaseArm();
+    await vi.waitFor(() => expect(bridge.startNavigation).toHaveBeenCalled());
+    expect(order).toEqual(["arm", "start"]);
+  });
+
+  it("does not start navigation when nav.start follows an invalid or failed route token", async () => {
+    let releaseArm!: () => void;
+    const armGate = new Promise<void>((resolve) => {
+      releaseArm = resolve;
+    });
+    const bridge = {
+      sendAudio: vi.fn(),
+      armRouteToken: vi.fn(async () => {
+        await armGate;
+        return false;
+      }),
+      resumeNavigation: vi.fn(async () => {}),
+      startNavigation: vi.fn(),
+      updatePosition: vi.fn(),
+      cancelNav: vi.fn(),
+      endSession: vi.fn(),
+      close: vi.fn(),
+      voiceReady: Promise.resolve(),
+    };
+    mockCreateLiveBridge.mockImplementationOnce(async () => bridge);
+    const ws = connect();
+    await waitForOpen(ws);
+    const ready = waitForJson(ws);
+    sendSessionStart(ws, "voice-user-failed-arm");
+    await ready;
+
+    ws.send(
+      JSON.stringify({ type: "nav.setRoute", routeToken: "expired-token" }),
+    );
+    ws.send(JSON.stringify({ type: "nav.start" }));
+    await vi.waitFor(() =>
+      expect(bridge.armRouteToken).toHaveBeenCalledWith("expired-token"),
+    );
+
+    releaseArm();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(bridge.startNavigation).not.toHaveBeenCalled();
+  });
+
+  it("does not start route A when setRoute(A) -> nav.start -> setRoute(B) occurs and A resolves", async () => {
+    let releaseA!: () => void;
+    const gateA = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    let releaseB!: () => void;
+    const gateB = new Promise<void>((resolve) => {
+      releaseB = resolve;
+    });
+    const bridge = {
+      sendAudio: vi.fn(),
+      armRouteToken: vi.fn(async (token: string) => {
+        if (token === "routeA") {
+          await gateA;
+          return true;
+        }
+        if (token === "routeB") {
+          await gateB;
+          return true;
+        }
+        return false;
+      }),
+      resumeNavigation: vi.fn(async () => {}),
+      startNavigation: vi.fn(),
+      updatePosition: vi.fn(),
+      cancelNav: vi.fn(),
+      endSession: vi.fn(),
+      close: vi.fn(),
+      voiceReady: Promise.resolve(),
+    };
+    mockCreateLiveBridge.mockImplementationOnce(async () => bridge);
+    const ws = connect();
+    await waitForOpen(ws);
+    const ready = waitForJson(ws);
+    sendSessionStart(ws, "voice-user-route-superseded");
+    await ready;
+
+    ws.send(JSON.stringify({ type: "nav.setRoute", routeToken: "routeA" }));
+    ws.send(JSON.stringify({ type: "nav.start" }));
+    ws.send(JSON.stringify({ type: "nav.setRoute", routeToken: "routeB" }));
+    await vi.waitFor(() =>
+      expect(bridge.armRouteToken).toHaveBeenCalledWith("routeB"),
+    );
+
+    // Resolving route A must not trigger startNavigation because route B superseded it
+    releaseA();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(bridge.startNavigation).not.toHaveBeenCalled();
+
+    // Now if nav.start is sent for route B and route B resolves, B starts navigation
+    ws.send(JSON.stringify({ type: "nav.start" }));
+    releaseB();
+    await vi.waitFor(() =>
+      expect(bridge.startNavigation).toHaveBeenCalledOnce(),
+    );
+  });
+
+  it("keeps the socket open when bridge creation fails", async () => {
+    mockCreateLiveBridge.mockRejectedValueOnce(new Error("boom"));
+    const ws = connect();
+    await waitForOpen(ws);
+    const errored = waitForJson(ws);
+    sendSessionStart(ws, "voice-user-bridge-fail");
+    await expect(errored).resolves.toEqual({
+      type: "error",
+      code: "LIVE_CONNECT_FAILED",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it("drops a buffered nav.start on nav.cancel", async () => {
+    let resolveBridge!: (bridge: any) => void;
+    const pending = new Promise<any>((resolve) => {
+      resolveBridge = resolve;
+    });
+    mockCreateLiveBridge.mockImplementationOnce(() => pending);
+    const ws = connect();
+    await waitForOpen(ws);
+    sendSessionStart(ws, "voice-user-cancel-buffered");
+    ws.send(JSON.stringify({ type: "nav.start" }));
+    ws.send(JSON.stringify({ type: "nav.cancel" }));
+
+    const bridge = {
+      sendAudio: vi.fn(),
+      armRouteToken: vi.fn(async () => true),
+      startNavigation: vi.fn(),
+      updatePosition: vi.fn(),
+      cancelNav: vi.fn(),
+      close: vi.fn(),
+      voiceReady: Promise.resolve(),
+    };
+    const ready = waitForJson(ws);
+    resolveBridge(bridge);
+    await expect(ready).resolves.toEqual({ type: "session.ready" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(bridge.startNavigation).not.toHaveBeenCalled();
+  });
+
+  it("drops a queued nav.start on nav.cancel after the bridge is ready", async () => {
+    let releaseArm!: () => void;
+    const armGate = new Promise<void>((resolve) => {
+      releaseArm = resolve;
+    });
+    const bridge = {
+      sendAudio: vi.fn(),
+      armRouteToken: vi.fn(async () => {
+        await armGate;
+        return true;
+      }),
+      resumeNavigation: vi.fn(async () => {}),
+      startNavigation: vi.fn(),
+      updatePosition: vi.fn(),
+      cancelNav: vi.fn(),
+      endSession: vi.fn(),
+      close: vi.fn(),
+      voiceReady: Promise.resolve(),
+    };
+    mockCreateLiveBridge.mockImplementationOnce(async () => bridge);
+    const ws = connect();
+    await waitForOpen(ws);
+    const ready = waitForJson(ws);
+    sendSessionStart(ws, "voice-user-cancel-queued");
+    await ready;
+
+    ws.send(JSON.stringify({ type: "nav.setRoute", routeToken: "cap" }));
+    ws.send(JSON.stringify({ type: "nav.start" }));
+    ws.send(JSON.stringify({ type: "nav.cancel" }));
+    await vi.waitFor(() => expect(bridge.cancelNav).toHaveBeenCalledOnce());
+
+    releaseArm();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(bridge.startNavigation).not.toHaveBeenCalled();
+  });
+
   it("emits nav.error for a parsed nav.setRoute with an invalid token", async () => {
     const ws = connect();
     await waitForOpen(ws);
@@ -313,10 +585,12 @@ describe("voice gateway", () => {
     );
     const bridge = {
       sendAudio: vi.fn(),
-      armRouteToken: vi.fn(),
+      armRouteToken: vi.fn(async () => true),
+      startNavigation: vi.fn(),
       updatePosition: vi.fn(),
       cancelNav: vi.fn(),
       close: vi.fn(),
+      voiceReady: Promise.resolve(),
     };
     const ready = waitForJson(ws);
     resolveBridge(bridge);
@@ -345,10 +619,12 @@ describe("voice gateway", () => {
     await closed;
     const bridge = {
       sendAudio: vi.fn(),
-      armRouteToken: vi.fn(),
+      armRouteToken: vi.fn(async () => true),
+      startNavigation: vi.fn(),
       updatePosition: vi.fn(),
       cancelNav: vi.fn(),
       close: vi.fn(),
+      voiceReady: Promise.resolve(),
     };
     resolveBridge(bridge);
     await vi.waitFor(() => expect(bridge.close).toHaveBeenCalledOnce());

@@ -140,7 +140,9 @@ describe("createLiveBridge transcript forwarding", () => {
     });
     const ws = makeWs();
 
-    await createLiveBridge({ ws, userId: "voice-user" });
+    await (
+      await createLiveBridge({ ws, userId: "voice-user" })
+    ).voiceReady;
     onmessage?.({
       serverContent: {
         inputTranscription: { text: "带我去火车站" },
@@ -175,7 +177,9 @@ describe("createLiveBridge transcript forwarding", () => {
     });
     const ws = makeWs();
 
-    await createLiveBridge({ ws, userId: "voice-user" });
+    await (
+      await createLiveBridge({ ws, userId: "voice-user" })
+    ).voiceReady;
     onmessage?.({
       serverContent: { inputTranscription: { text: "我想去珠北" } },
     });
@@ -233,7 +237,9 @@ describe("createLiveBridge transcript forwarding", () => {
     });
     const ws = makeWs();
 
-    await createLiveBridge({ ws, userId: "voice-user" });
+    await (
+      await createLiveBridge({ ws, userId: "voice-user" })
+    ).voiceReady;
     onmessage?.({
       serverContent: {
         inputTranscription: { text: "我想去竹北車站", finished: true },
@@ -265,6 +271,7 @@ describe("createLiveBridge transcript forwarding", () => {
     );
 
     const bridge = await createLiveBridge({ ws, userId: "voice-user" });
+    await bridge.voiceReady;
     onmessage?.({
       serverContent: {
         inputTranscription: { text: "我想去珠北車站", finished: true },
@@ -292,7 +299,9 @@ describe("createLiveBridge transcript forwarding", () => {
         new Promise((resolve) => setTimeout(() => resolve(text), 60)),
     );
 
-    await createLiveBridge({ ws, userId: "voice-user" });
+    await (
+      await createLiveBridge({ ws, userId: "voice-user" })
+    ).voiceReady;
     onmessage?.({ serverContent: { inputTranscription: { text: "你好。" } } });
     onmessage?.({
       serverContent: {
@@ -334,41 +343,55 @@ describe("createLiveBridge Live config", () => {
   });
 
   it("defaults temperature to 0 (aligned with the text agent)", async () => {
-    await createLiveBridge({ ws: makeWs(), userId: "u" });
+    await (
+      await createLiveBridge({ ws: makeWs(), userId: "u" })
+    ).voiceReady;
     expect(connect.mock.calls[0][0].config.temperature).toBe(0);
   });
 
   it("uses a valid GEMINI_LIVE_TEMPERATURE and falls back for an invalid one", async () => {
     process.env.GEMINI_LIVE_TEMPERATURE = "0.4";
-    await createLiveBridge({ ws: makeWs(), userId: "u" });
+    await (
+      await createLiveBridge({ ws: makeWs(), userId: "u" })
+    ).voiceReady;
     expect(connect.mock.calls[0][0].config.temperature).toBe(0.4);
 
     connect.mockClear();
     process.env.GEMINI_LIVE_TEMPERATURE = "abc";
-    await createLiveBridge({ ws: makeWs(), userId: "u" });
+    await (
+      await createLiveBridge({ ws: makeWs(), userId: "u" })
+    ).voiceReady;
     expect(connect.mock.calls[0][0].config.temperature).toBe(0);
   });
 
   it("adds speechConfig only for a validly-formatted language code", async () => {
     process.env.GEMINI_LIVE_LANGUAGE_CODE = "cmn-TW";
-    await createLiveBridge({ ws: makeWs(), userId: "u" });
+    await (
+      await createLiveBridge({ ws: makeWs(), userId: "u" })
+    ).voiceReady;
     expect(connect.mock.calls[0][0].config.speechConfig).toEqual({
       languageCode: "cmn-TW",
     });
   });
 
   it("omits speechConfig when the language code is unset or malformed", async () => {
-    await createLiveBridge({ ws: makeWs(), userId: "u" });
+    await (
+      await createLiveBridge({ ws: makeWs(), userId: "u" })
+    ).voiceReady;
     expect(connect.mock.calls[0][0].config.speechConfig).toBeUndefined();
 
     connect.mockClear();
     process.env.GEMINI_LIVE_LANGUAGE_CODE = "zh_TW";
-    await createLiveBridge({ ws: makeWs(), userId: "u" });
+    await (
+      await createLiveBridge({ ws: makeWs(), userId: "u" })
+    ).voiceReady;
     expect(connect.mock.calls[0][0].config.speechConfig).toBeUndefined();
   });
 
   it("adds navigation functions only to the Live tool config", async () => {
-    await createLiveBridge({ ws: makeWs(), userId: "u" });
+    await (
+      await createLiveBridge({ ws: makeWs(), userId: "u" })
+    ).voiceReady;
     const declarations =
       connect.mock.calls[0][0].config.tools.at(-1).functionDeclarations;
     expect(declarations.map((item: any) => item.name)).toEqual([
@@ -424,6 +447,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
         userId: "u",
         userLocation: { latitude: 25, longitude: 121 },
       });
+      await bridge.voiceReady;
       await bridge.armRouteToken("initial");
       onmessage?.({
         toolCall: {
@@ -513,6 +537,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
       const pendingReroute = deferred<any>();
       rerouteAccessibleRoute.mockReturnValue(pendingReroute.promise);
       const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.voiceReady;
       await bridge.armRouteToken("initial");
       onmessage?.({
         toolCall: {
@@ -586,6 +611,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
       const pendingReroute = deferred<any>();
       rerouteAccessibleRoute.mockReturnValue(pendingReroute.promise);
       const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.voiceReady;
       await bridge.armRouteToken("initial");
       onmessage?.({
         toolCall: {
@@ -691,6 +717,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
       const pendingReroute = deferred<any>();
       rerouteAccessibleRoute.mockReturnValue(pendingReroute.promise);
       const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.voiceReady;
       await bridge.armRouteToken("initial");
       onmessage?.({
         toolCall: {
@@ -761,7 +788,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
     }
   });
 
-  it("keeps the old offroute reroute active when the pending setRoute lookup fails", async () => {
+  it("discards the old offroute reroute and cleans up the active session when the pending setRoute lookup fails", async () => {
     vi.useFakeTimers();
     try {
       let onmessage: ((message: unknown) => void) | undefined;
@@ -785,6 +812,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
       const pendingReroute = deferred<any>();
       rerouteAccessibleRoute.mockReturnValue(pendingReroute.promise);
       const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.voiceReady;
       await bridge.armRouteToken("initial");
       onmessage?.({
         toolCall: {
@@ -811,7 +839,8 @@ describe("createLiveBridge navigation turn arbiter", () => {
       });
 
       pendingNewRoute.resolve(null);
-      await pendingNewArm;
+      const armSuccess = await pendingNewArm;
+      expect(armSuccess).toBe(false);
       expect(rerouteAccessibleRoute).toHaveBeenCalledOnce();
       pendingReroute.resolve({
         ok: true,
@@ -838,7 +867,8 @@ describe("createLiveBridge navigation turn arbiter", () => {
       expect(types.filter((type) => type === "nav.rerouting")).toHaveLength(1);
       expect(
         types.filter((type) => type === "nav.route_replaced"),
-      ).toHaveLength(1);
+      ).toHaveLength(0);
+      expect(types.filter((type) => type === "nav.stop")).toHaveLength(1);
       expect(types.filter((type) => type === "nav.error")).toHaveLength(1);
     } finally {
       vi.useRealTimers();
@@ -867,6 +897,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
       getNavigationEnvelopeByToken.mockResolvedValue(null);
       const ws = makeWs();
       const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.voiceReady;
 
       const firstArm = bridge.armRouteToken("first-pending");
       const secondArm = bridge.armRouteToken("second-pending");
@@ -916,6 +947,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
       });
       const ws = makeWs();
       const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.voiceReady;
       await bridge.armRouteToken("initial");
       onmessage?.({
         toolCall: {
@@ -976,6 +1008,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
         error: "Redis unavailable",
       });
       const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.voiceReady;
       await bridge.armRouteToken("initial");
       onmessage?.({
         toolCall: {
@@ -1049,6 +1082,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
     getRouteByToken.mockResolvedValue(navigationRoute);
 
     const bridge = await createLiveBridge({ ws, userId: "u" });
+    await bridge.voiceReady;
     await bridge.armRouteToken("cap");
     onmessage?.({
       toolCall: {
@@ -1085,6 +1119,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
       userId: "u",
       userLocation: { latitude: 25, longitude: 121 },
     });
+    await bridge.voiceReady;
     await bridge.armRouteToken("cap");
     onmessage?.({
       toolCall: {
@@ -1115,6 +1150,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
       return session;
     });
     const bridge = await createLiveBridge({ ws: makeWs(), userId: "u" });
+    await bridge.voiceReady;
     await bridge.armRouteToken("cap");
     onmessage?.({
       serverContent: { modelTurn: { parts: [{ text: "一般回覆" }] } },
@@ -1147,6 +1183,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
       userId: "u",
       userLocation: { latitude: 25, longitude: 121 },
     });
+    await bridge.voiceReady;
     await bridge.armRouteToken("cap");
     onmessage?.({
       toolCall: {
@@ -1172,7 +1209,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
     );
   });
 
-  it("does not overlap turns on timeout and closes after consecutive timeout strikes", async () => {
+  it("does not overlap turns on timeout and degrades voice after consecutive timeout strikes", async () => {
     vi.useFakeTimers();
     try {
       let onmessage: ((message: unknown) => void) | undefined;
@@ -1187,6 +1224,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
         userId: "u",
         userLocation: { latitude: 25, longitude: 121 },
       });
+      await bridge.voiceReady;
       await bridge.armRouteToken("cap");
       onmessage?.({
         toolCall: {
@@ -1199,7 +1237,14 @@ describe("createLiveBridge navigation turn arbiter", () => {
       expect(session.sendClientContent).toHaveBeenCalledOnce();
       await vi.advanceTimersByTimeAsync(30_000);
       expect(session.sendClientContent).toHaveBeenCalledOnce();
-      expect(ws.close).toHaveBeenCalledWith(4410, "live-turn-timeout");
+      expect(ws.close).not.toHaveBeenCalled();
+      const frames = (ws.send as unknown as ReturnType<typeof vi.fn>).mock.calls
+        .filter((c: unknown[]) => typeof c[0] === "string")
+        .map((c: unknown[]) => JSON.parse(c[0] as string));
+      expect(frames).toContainEqual({
+        type: "error",
+        code: "LIVE_SESSION_ENDED",
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -1229,6 +1274,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
       userId: "u",
       userLocation: { latitude: 25, longitude: 121 },
     });
+    await bridge.voiceReady;
     await bridge.armRouteToken("cap");
     onmessage?.({
       toolCall: {
@@ -1294,6 +1340,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
     newRoute.legs[0].steps[0].streetName = "新路線";
 
     const bridge = await createLiveBridge({ ws, userId: "u" });
+    await bridge.voiceReady;
     const oldArm = bridge.armRouteToken("old");
     const newArm = bridge.armRouteToken("new");
     resolveNew(newRoute);
@@ -1332,6 +1379,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
         return session;
       });
       const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.voiceReady;
       await bridge.armRouteToken("cap");
       onmessage?.({
         toolCall: {
@@ -1387,6 +1435,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
     ];
     getRouteByToken.mockResolvedValue(transitRoute);
     const bridge = await createLiveBridge({ ws: makeWs(), userId: "u" });
+    await bridge.voiceReady;
     await bridge.armRouteToken("cap");
     onmessage?.({
       toolCall: {
@@ -1437,6 +1486,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
       userId: "u",
       userLocation: { latitude: 25, longitude: 121 },
     });
+    await bridge.voiceReady;
     bridge.updatePosition({ latitude: 25.05, longitude: 121.55, accuracy: 8 });
     onmessage?.({
       toolCall: {
@@ -1476,7 +1526,9 @@ describe("createLiveBridge consecutive tool calls", () => {
     });
     vi.mocked(executeLocalTool).mockResolvedValue(JSON.stringify({ ok: true }));
 
-    await createLiveBridge({ ws: makeWs(), userId: "voice-user" });
+    await (
+      await createLiveBridge({ ws: makeWs(), userId: "voice-user" })
+    ).voiceReady;
 
     onmessage?.({
       toolCall: {
@@ -1552,7 +1604,9 @@ describe("createLiveBridge tool_result payload", () => {
     vi.mocked(executeLocalTool).mockResolvedValue(JSON.stringify({ places }));
     const ws = makeWs();
 
-    await createLiveBridge({ ws, userId: "voice-user" });
+    await (
+      await createLiveBridge({ ws, userId: "voice-user" })
+    ).voiceReady;
     const args = { latitude: 25.033, longitude: 121.5654, radius: 500 };
     onmessage?.({
       toolCall: { functionCalls: [{ id: "c1", name: "findA11yPlaces", args }] },
@@ -1576,7 +1630,9 @@ describe("createLiveBridge tool_result payload", () => {
     vi.mocked(executeLocalTool).mockResolvedValue("plain string result");
     const ws = makeWs();
 
-    await createLiveBridge({ ws, userId: "voice-user" });
+    await (
+      await createLiveBridge({ ws, userId: "voice-user" })
+    ).voiceReady;
     onmessage?.({
       toolCall: {
         functionCalls: [{ id: "c1", name: "findA11yPlaces", args: {} }],
@@ -1598,7 +1654,9 @@ describe("createLiveBridge tool_result payload", () => {
     vi.mocked(executeLocalTool).mockRejectedValue(new Error("tool blew up"));
     const ws = makeWs();
 
-    await createLiveBridge({ ws, userId: "voice-user" });
+    await (
+      await createLiveBridge({ ws, userId: "voice-user" })
+    ).voiceReady;
     const args = { latitude: 25.033, longitude: 121.5654 };
     onmessage?.({
       toolCall: { functionCalls: [{ id: "c1", name: "findA11yPlaces", args }] },
@@ -1632,7 +1690,9 @@ describe("createLiveBridge user memory integration", () => {
     ]);
 
     const ws = makeWs();
-    await createLiveBridge({ ws, userId: "mem-user" });
+    await (
+      await createLiveBridge({ ws, userId: "mem-user" })
+    ).voiceReady;
 
     expect(getMemorySettings).toHaveBeenCalledWith("mem-user");
     expect(loadMemories).toHaveBeenCalledWith("mem-user", 20);
@@ -1650,7 +1710,9 @@ describe("createLiveBridge user memory integration", () => {
     getMemorySettings.mockResolvedValue({ memoryEnabled: false });
 
     const ws = makeWs();
-    await createLiveBridge({ ws, userId: "no-mem-user" });
+    await (
+      await createLiveBridge({ ws, userId: "no-mem-user" })
+    ).voiceReady;
 
     expect(getMemorySettings).toHaveBeenCalledWith("no-mem-user");
     expect(loadMemories).not.toHaveBeenCalled();
@@ -1676,7 +1738,9 @@ describe("createLiveBridge user memory integration", () => {
     );
 
     const ws = makeWs();
-    await createLiveBridge({ ws, userId: "mem-user" });
+    await (
+      await createLiveBridge({ ws, userId: "mem-user" })
+    ).voiceReady;
 
     onmessage?.({
       toolCall: {
@@ -1781,6 +1845,7 @@ describe("createLiveBridge reroute generation ownership", () => {
         routeToken === "newer" ? pendingNew.promise : pendingOld.promise,
       );
       const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.voiceReady;
 
       await bridge.armRouteToken("initial");
       await call("start-old", "startNavigation");
@@ -1806,6 +1871,7 @@ describe("createLiveBridge reroute generation ownership", () => {
         error: "no route",
       });
       const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.voiceReady;
 
       await bridge.armRouteToken("initial");
       await call("start-old", "startNavigation");
@@ -1832,6 +1898,7 @@ describe("createLiveBridge reroute generation ownership", () => {
         routeToken === "newer" ? pendingNew.promise : pendingOld.promise,
       );
       const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.voiceReady;
 
       await bridge.armRouteToken("initial");
       await call("start-old", "startNavigation");
@@ -1872,6 +1939,7 @@ describe("createLiveBridge reroute generation ownership", () => {
         error: "temporarily unavailable",
       });
       const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.voiceReady;
 
       await bridge.armRouteToken("initial");
       await call("start-old", "startNavigation");
@@ -1905,6 +1973,7 @@ describe("createLiveBridge reroute generation ownership", () => {
       const pendingReroute = deferred<any>();
       rerouteAccessibleRoute.mockImplementation(() => pendingReroute.promise);
       const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.voiceReady;
 
       await bridge.armRouteToken("initial");
       await call("start-old", "startNavigation");
@@ -2019,6 +2088,7 @@ describe("createLiveBridge navigation resume and snapshot lifecycle", () => {
   it("resumes from the snapshot and emits a contract-valid nav.resume_ok", async () => {
     const { ws } = makeHarness();
     const bridge = await createLiveBridge({ ws, userId: "u" });
+    await bridge.voiceReady;
 
     await bridge.resumeNavigation(resumeMessage());
 
@@ -2037,6 +2107,7 @@ describe("createLiveBridge navigation resume and snapshot lifecycle", () => {
   it("re-persists the snapshot immediately after a successful resume", async () => {
     const { ws } = makeHarness();
     const bridge = await createLiveBridge({ ws, userId: "u" });
+    await bridge.voiceReady;
 
     await bridge.resumeNavigation(resumeMessage());
 
@@ -2057,6 +2128,7 @@ describe("createLiveBridge navigation resume and snapshot lifecycle", () => {
     );
     const { ws } = makeHarness();
     const bridge = await createLiveBridge({ ws, userId: "u" });
+    await bridge.voiceReady;
 
     await bridge.resumeNavigation(resumeMessage());
 
@@ -2109,6 +2181,7 @@ describe("createLiveBridge navigation resume and snapshot lifecycle", () => {
     arrange();
     const { ws } = makeHarness();
     const bridge = await createLiveBridge({ ws, userId: "u" });
+    await bridge.voiceReady;
 
     await bridge.resumeNavigation(resumeMessage());
 
@@ -2124,6 +2197,7 @@ describe("createLiveBridge navigation resume and snapshot lifecycle", () => {
     try {
       const { ws, call } = makeHarness();
       const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.voiceReady;
       await bridge.armRouteToken("token");
       await call("start", "startNavigation");
       const afterStart = storeNavigationSnapshot.mock.calls.length;
@@ -2169,6 +2243,7 @@ describe("createLiveBridge navigation resume and snapshot lifecycle", () => {
     try {
       const { ws, call } = makeHarness();
       const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.voiceReady;
       await bridge.armRouteToken("token");
       await call("start", "startNavigation");
 
@@ -2193,6 +2268,7 @@ describe("createLiveBridge navigation resume and snapshot lifecycle", () => {
     try {
       const { ws, call } = makeHarness();
       const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.voiceReady;
       await bridge.armRouteToken("token");
       await call("start", "startNavigation");
       expect(deleteNavigationSnapshot).not.toHaveBeenCalled();
@@ -2212,6 +2288,7 @@ describe("createLiveBridge navigation resume and snapshot lifecycle", () => {
     try {
       const { ws, call } = makeHarness();
       const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.voiceReady;
       await bridge.armRouteToken("token");
       await call("start", "startNavigation");
 
@@ -2226,6 +2303,7 @@ describe("createLiveBridge navigation resume and snapshot lifecycle", () => {
   it("ignores a resume once the bridge is closed", async () => {
     const { ws } = makeHarness();
     const bridge = await createLiveBridge({ ws, userId: "u" });
+    await bridge.voiceReady;
     bridge.close();
 
     await bridge.resumeNavigation(resumeMessage());
@@ -2238,6 +2316,7 @@ describe("createLiveBridge navigation resume and snapshot lifecycle", () => {
     getNavigationSnapshot.mockRejectedValue(new Error("redis down"));
     const { ws } = makeHarness();
     const bridge = await createLiveBridge({ ws, userId: "u" });
+    await bridge.voiceReady;
 
     await bridge.resumeNavigation(resumeMessage());
 
@@ -2245,5 +2324,100 @@ describe("createLiveBridge navigation resume and snapshot lifecycle", () => {
       code: "SNAPSHOT_NOT_FOUND",
       retryable: true,
     });
+  });
+});
+
+describe("createLiveBridge navigation independence from the voice session", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getRouteByToken.mockResolvedValue(walkRoute);
+    getNavigationEnvelopeByToken.mockResolvedValue({
+      navigationId: "nav-1",
+      routeVersion: 1,
+      canonicalRequest: { requireElevator: false },
+    });
+    connect.mockResolvedValue(makeSession());
+  });
+
+  const framesOf = (ws: WebSocket) =>
+    vi
+      .mocked(ws.send)
+      .mock.calls.map(([value]) => value)
+      .filter((value): value is string => typeof value === "string")
+      .map((value) => JSON.parse(value));
+
+  it("bridge.startNavigation() produces the same effect as the startNavigation tool call", async () => {
+    const wsViaTool = makeWs();
+    let onmessage: ((message: unknown) => void) | undefined;
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      return makeSession();
+    });
+    const toolBridge = await createLiveBridge({ ws: wsViaTool, userId: "u" });
+    await toolBridge.voiceReady;
+    await toolBridge.armRouteToken("cap");
+    onmessage?.({
+      toolCall: {
+        functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const wsViaWire = makeWs();
+    connect.mockResolvedValue(makeSession());
+    const wireBridge = await createLiveBridge({ ws: wsViaWire, userId: "u" });
+    await wireBridge.voiceReady;
+    await wireBridge.armRouteToken("cap");
+    wireBridge.startNavigation();
+
+    const toolStart = framesOf(wsViaTool).find((f) => f.type === "nav.start");
+    const wireStart = framesOf(wsViaWire).find((f) => f.type === "nav.start");
+    expect(wireStart).toBeDefined();
+    expect(wireStart).toEqual(toolStart);
+    expect(storeNavigationSnapshot).toHaveBeenCalled();
+
+    toolBridge.close();
+    wireBridge.close();
+  });
+
+  it("session.onclose keeps the client socket open and reports LIVE_SESSION_ENDED", async () => {
+    const ws = makeWs();
+    let onclose: (() => void) | undefined;
+    connect.mockImplementation(async ({ callbacks }) => {
+      onclose = callbacks.onclose;
+      return makeSession();
+    });
+    const bridge = await createLiveBridge({ ws, userId: "u" });
+    await bridge.voiceReady;
+
+    onclose?.();
+
+    expect(ws.close).not.toHaveBeenCalled();
+    expect(framesOf(ws)).toContainEqual({
+      type: "error",
+      code: "LIVE_SESSION_ENDED",
+    });
+    bridge.close();
+  });
+
+  it("resolves before the Gemini handshake settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const ws = makeWs();
+      const pendingConnect = deferred<any>();
+      connect.mockReturnValue(pendingConnect.promise);
+
+      const bridge = await createLiveBridge({ ws, userId: "u" });
+      expect(vi.getTimerCount()).toBe(0);
+
+      await bridge.armRouteToken("cap");
+      bridge.startNavigation();
+
+      expect(framesOf(ws).some((f) => f.type === "nav.start")).toBe(true);
+      bridge.close();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

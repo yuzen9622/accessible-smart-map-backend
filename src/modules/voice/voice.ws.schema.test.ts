@@ -6,6 +6,7 @@ import {
   NavResumeFailedMessageSchema,
   NavResumeMessageSchema,
   NavResumeOkMessageSchema,
+  NavStartMessageSchema,
   VoiceControlMessageSchema,
 } from "./voice.ws.schema";
 
@@ -151,6 +152,31 @@ describe("nav.resume inbound schema", () => {
     expect(
       NavResumeMessageSchema.safeParse({ ...payload, ...invalid }).success,
     ).toBe(false);
+  });
+});
+
+describe("nav.start inbound schema", () => {
+  it("accepts nav.start as a control frame", () => {
+    expect(NavStartMessageSchema.safeParse({ type: "nav.start" }).success).toBe(
+      true,
+    );
+    const parsed = VoiceControlMessageSchema.parse({ type: "nav.start" });
+    expect(parsed.type).toBe("nav.start");
+  });
+
+  it("ignores unknown fields like every other inbound frame", () => {
+    const result = NavStartMessageSchema.safeParse({
+      type: "nav.start",
+      extra: 1,
+    });
+    expect(result.success).toBe(true);
+    expect(result.data).toEqual({ type: "nav.start" });
+  });
+
+  it("rejects a mistyped nav.start", () => {
+    expect(NavStartMessageSchema.safeParse({ type: "nav.begin" }).success).toBe(
+      false,
+    );
   });
 });
 
