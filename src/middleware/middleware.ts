@@ -27,6 +27,8 @@ const middleware = async (req: Request, res: Response, next: NextFunction) => {
   const result = await authenticateToken(token ?? "");
 
   if (!result.ok) {
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Pragma", "no-cache");
     return sendResponse(
       res,
       false,

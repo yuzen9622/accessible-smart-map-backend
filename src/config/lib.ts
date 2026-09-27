@@ -61,6 +61,15 @@ function stripRedundancies(obj: any): any {
   return cleanObj;
 }
 
+export const clearAuthCookie = (res: Response) => {
+  res.cookie("refreshToken", "", {
+    httpOnly: true,
+    secure: process.env.SECURE_COOKIE === "true",
+    maxAge: 0,
+    sameSite: process.env.SECURE_COOKIE === "true" ? "none" : "lax",
+  });
+};
+
 export const sendResponse = <T = unknown>(
   res: Response<ApiResponse<T>>,
   ok: boolean,
@@ -70,24 +79,31 @@ export const sendResponse = <T = unknown>(
   data?: T,
   accessToken?: string,
   refreshToken?: string,
+  mode: "web" | "mobile" = "web",
 ) => {
-  if (refreshToken) {
+  if (refreshToken && mode !== "mobile") {
     res.cookie("refreshToken", refreshToken, {
       httpOnly: true,
       secure: process.env.SECURE_COOKIE === "true",
-      maxAge: 24 * 60 * 60 * 1000 * 7,
+      maxAge: 24 * 60 * 60 * 1000,
       sameSite: process.env.SECURE_COOKIE === "true" ? "none" : "lax",
     });
   }
 
   const cleanedData = data !== undefined ? stripRedundancies(data) : undefined;
 
-  res.status(code).json({
+  const responsePayload: ApiResponse<T> = {
     ok,
     status,
     code,
     message,
     data: cleanedData,
     accessToken,
-  });
+  };
+
+  if (mode === "mobile" && refreshToken) {
+    responsePayload.refreshToken = refreshToken;
+  }
+
+  res.status(code).json(responsePayload);
 };

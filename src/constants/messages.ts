@@ -289,4 +289,9 @@ export const AUTH_MSG = {
   PASSWORD_CHANGED: "密碼已更新，其他裝置的登入狀態已失效",
   PASSWORD_REQUIRED: "請提供目前的密碼",
   RATE_LIMITED: "操作過於頻繁，請稍後再試",
+  LOGOUT_SUCCESS: "登出成功",
+  LOGOUT_FAILED: "登出失敗",
+  UNSUPPORTED_AUTH_HEADER: "不支援的 Authorization 標頭",
+  INVALID_CLIENT_HEADER: "無效的 X-Client 標頭",
+  MIXED_TOKEN_SOURCES: "不可同時混合多種權杖來源",
 } as const;

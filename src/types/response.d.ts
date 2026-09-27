@@ -6,4 +6,5 @@ export interface ApiResponse<T> {
   message: string;
   data?: T;
   accessToken?: string;
+  refreshToken?: string;
 }
