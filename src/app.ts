@@ -23,7 +23,7 @@ import {
 import { createNavInstructionsRouter } from "./modules/nav-instructions";
 import { createPlaceSearchRouter } from "./modules/place-search";
 import { createTransitRouter } from "./modules/transit";
-import { createUserRouter } from "./modules/user";
+import { authCacheControl, createUserRouter } from "./modules/user";
 import { createAirRouter } from "./modules/air";
 import { createTrafficRouter } from "./modules/traffic";
 import { createAiRouter, parseRouteIntent } from "./modules/ai";
@@ -121,6 +121,7 @@ if (process.env.NODE_ENV !== "production") {
   );
 }
 
+app.use("/api/v1/user", authCacheControl);
 app.use("/api/v1/user", middleware, createUserRouter());
 app.use("/api/v1/user", middleware, createEmergencyContactRouter());
 app.use("/api/v1/sos", createSosRouter());

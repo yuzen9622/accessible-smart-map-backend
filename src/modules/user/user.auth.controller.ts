@@ -3,22 +3,30 @@ import { ApiResponse } from "../../types/response";
 import { ResponseCode, ResponseMessage } from "../../types/code";
 import { AUTH_MSG } from "../../constants/messages";
 import { sendResponse } from "../../config/lib";
-import {
-  createAccessToken,
-  createRefreshToken,
-  toPublicUser,
-} from "../../config/jwt";
+import { toPublicUser } from "../../config/jwt";
 import { IConfig, IUser } from "../../types";
 import { AuthError } from "./user.auth.service";
 import * as authService from "./user.auth.service";
 
-type SessionPayload = { user: IUser; config: IConfig | null };
+type SessionData = {
+  user: IUser;
+  config: IConfig | null;
+};
+
+type SessionPayload = SessionData & {
+  accessToken: string;
+  refreshToken: string;
+};
 
 function sendSession(
-  res: Response<ApiResponse<SessionPayload>>,
+  res: Response<ApiResponse<SessionData>>,
   payload: SessionPayload,
   message: string,
+  mode: "web" | "mobile" = "web",
 ) {
+  if (!payload.accessToken || !payload.refreshToken) {
+    throw new Error("Session issuance payload tokens must be present");
+  }
   // Re-filter here rather than trusting the service: this is the only place a
   // user object reaches the client, so making the guarantee structural keeps a
   // future raw document from carrying passwordHash out with it.
@@ -30,8 +38,9 @@ function sendSession(
     ResponseCode.OK,
     message,
     { user, config: payload.config },
-    createAccessToken(user),
-    createRefreshToken(user),
+    payload.accessToken,
+    payload.refreshToken,
+    mode,
   );
 }
 
@@ -124,14 +133,19 @@ async function register(req: Request, res: Response) {
   }
 }
 
-async function login(req: Request, res: Response<ApiResponse<SessionPayload>>) {
+async function login(req: Request, res: Response<ApiResponse<SessionData>>) {
   try {
     const { email, password } = req.validated!.body as {
       email: string;
       password: string;
     };
     const session = await authService.loginLocalUser({ email, password });
-    return sendSession(res, session, ResponseMessage.OK);
+    return sendSession(
+      res,
+      session,
+      ResponseMessage.OK,
+      req.clientMode ?? "web",
+    );
   } catch (error) {
     return sendAuthError(res, error);
   }
@@ -139,12 +153,17 @@ async function login(req: Request, res: Response<ApiResponse<SessionPayload>>) {
 
 async function googleAuth(
   req: Request,
-  res: Response<ApiResponse<SessionPayload>>,
+  res: Response<ApiResponse<SessionData>>,
 ) {
   try {
     const { idToken } = req.validated!.body as { idToken: string };
     const session = await authService.authenticateWithGoogle(idToken);
-    return sendSession(res, session, ResponseMessage.OK);
+    return sendSession(
+      res,
+      session,
+      ResponseMessage.OK,
+      req.clientMode ?? "web",
+    );
   } catch (error) {
     return sendAuthError(res, error);
   }
@@ -152,12 +171,17 @@ async function googleAuth(
 
 async function verifyEmail(
   req: Request,
-  res: Response<ApiResponse<SessionPayload>>,
+  res: Response<ApiResponse<SessionData>>,
 ) {
   try {
     const { token } = req.validated!.body as { token: string };
     const session = await authService.verifyEmail(token);
-    return sendSession(res, session, AUTH_MSG.EMAIL_VERIFIED);
+    return sendSession(
+      res,
+      session,
+      AUTH_MSG.EMAIL_VERIFIED,
+      req.clientMode ?? "web",
+    );
   } catch (error) {
     return sendAuthError(res, error);
   }
@@ -206,7 +230,7 @@ async function forgotPassword(req: Request, res: Response) {
 
 async function resetPassword(
   req: Request,
-  res: Response<ApiResponse<SessionPayload>>,
+  res: Response<ApiResponse<SessionData>>,
 ) {
   try {
     const { token, password } = req.validated!.body as {
@@ -214,7 +238,12 @@ async function resetPassword(
       password: string;
     };
     const session = await authService.resetPassword({ token, password });
-    return sendSession(res, session, AUTH_MSG.PASSWORD_RESET);
+    return sendSession(
+      res,
+      session,
+      AUTH_MSG.PASSWORD_RESET,
+      req.clientMode ?? "web",
+    );
   } catch (error) {
     return sendAuthError(res, error);
   }
@@ -246,6 +275,11 @@ async function changePassword(
       newPassword,
     });
     const user = toPublicUser(result.user);
+    const mode = req.clientMode ?? "web";
+
+    if (!result.accessToken || !result.refreshToken) {
+      throw new Error("Session issuance payload tokens must be present");
+    }
 
     return sendResponse(
       res,
@@ -254,8 +288,9 @@ async function changePassword(
       ResponseCode.OK,
       AUTH_MSG.PASSWORD_CHANGED,
       { user },
-      createAccessToken(user),
-      createRefreshToken(user),
+      result.accessToken,
+      result.refreshToken,
+      mode,
     );
   } catch (error) {
     return sendAuthError(res, error);

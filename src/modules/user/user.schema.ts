@@ -153,7 +153,35 @@ const apiResponse = <T extends z.ZodTypeAny>(data?: T) =>
       .string()
       .optional()
       .openapi({ description: "短期有效的 JWT 存取權杖" }),
+    refreshToken: z.string().optional().openapi({
+      description:
+        "行動裝置模式 (X-Client: mobile) 簽發的 refresh token，請妥善存放於 Secure Storage（Keychain/Keystore）",
+    }),
   });
+
+export const WebRefreshBodySchema = z
+  .object({})
+  .strict()
+  .openapi("WebRefreshBody");
+
+export const MobileRefreshBodySchema = z
+  .object({
+    refreshToken: z.string().min(1).openapi({
+      description:
+        "行動裝置模式 (X-Client: mobile) 傳入的 refresh token，請妥善存放於 Secure Storage（Keychain/Keystore）",
+      example: "eyJhbGciOi...",
+    }),
+  })
+  .strict()
+  .openapi("MobileRefreshBody");
+
+export const RefreshBodySchema = z
+  .union([WebRefreshBodySchema, MobileRefreshBodySchema])
+  .openapi("RefreshBody");
+
+export const LogoutBodySchema = z
+  .union([WebRefreshBodySchema, MobileRefreshBodySchema])
+  .openapi("LogoutBody");
 
 export const LoginResponseSchema = apiResponse(
   z.object({
@@ -269,7 +297,18 @@ registry.registerPath({
   summary: "Google 登入",
   description:
     "後端以 GOOGLE_CLIENT_ID 驗證前端傳來的 Google ID token，身分僅取自驗證後的 payload。" +
-    "同 email 的既有帳號會自動連結；若該帳號原為未驗證的帳密帳號，其密碼會被移除並撤銷既有權杖。",
+    "同 email 的既有帳號會自動連結；若該帳號原為未驗證的帳密帳號，其密碼會被移除並撤銷既有權杖。" +
+    "Web 模式存取權杖於 body，refresh 權杖寫入 httpOnly cookie（有效期限 1 天 / 1d）；Mobile 模式（X-Client: mobile）於回應 body 同時回傳 accessToken 與 refreshToken，不設定 Set-Cookie。",
+  parameters: [
+    {
+      in: "header",
+      name: "X-Client",
+      schema: { type: "string", enum: ["mobile"] },
+      required: false,
+      description:
+        "選填；若為 'mobile' 啟用行動裝置傳輸模式（refresh token 於 body 回傳，不設定 Set-Cookie），否則預設為 Web 模式（refresh token 寫入 httpOnly cookie，有效期限 1 天）",
+    },
+  ],
   request: {
     body: {
       content: { "application/json": { schema: GoogleAuthBodySchema } },
@@ -278,11 +317,14 @@ registry.registerPath({
   },
   responses: {
     200: {
-      description: "存取權杖於 body，refresh 權杖於 cookie",
+      description:
+        "存取權杖於 body；Web 模式 refresh 權杖寫入 cookie (1d)，Mobile 模式 refresh 權杖於 body",
       content: { "application/json": { schema: LoginResponseSchema } },
     },
-    400: errorResponse("缺少 idToken"),
+    400: errorResponse("缺少 idToken 或請求格式錯誤"),
     401: errorResponse("ID token 無效"),
+    403: errorResponse("Web 模式 CSRF Origin / Referer 驗證失敗"),
+    429: errorResponse("登入請求過於頻繁"),
     500: errorResponse("伺服器錯誤或未設定 GOOGLE_CLIENT_ID"),
   },
 });
@@ -318,7 +360,18 @@ registry.registerPath({
   tags: ["User"],
   summary: "帳密登入",
   description:
-    "以電子郵件與密碼登入。帳號不存在與密碼錯誤回傳完全相同的 401，以避免洩漏哪些信箱已註冊。",
+    "以電子郵件與密碼登入。帳號不存在與密碼錯誤回傳完全相同的 401，以避免洩漏哪些信箱已註冊。" +
+    "Web 模式存取權杖於 body，refresh 權杖寫入 httpOnly cookie（有效期限 1 天 / 1d）；Mobile 模式（X-Client: mobile）於回應 body 同時回傳 accessToken 與 refreshToken，不設定 Set-Cookie。",
+  parameters: [
+    {
+      in: "header",
+      name: "X-Client",
+      schema: { type: "string", enum: ["mobile"] },
+      required: false,
+      description:
+        "選填；若為 'mobile' 啟用行動裝置傳輸模式（refresh token 於 body 回傳，不設定 Set-Cookie），否則預設為 Web 模式（refresh token 寫入 httpOnly cookie，有效期限 1 天）",
+    },
+  ],
   request: {
     body: {
       content: { "application/json": { schema: LoginBodySchema } },
@@ -327,14 +380,17 @@ registry.registerPath({
   },
   responses: {
     200: {
-      description: "存取權杖於 body，refresh 權杖於 cookie",
+      description:
+        "存取權杖於 body；Web 模式 refresh 權杖寫入 cookie (1d)，Mobile 模式 refresh 權杖於 body",
       content: { "application/json": { schema: LoginResponseSchema } },
     },
     400: errorResponse("欄位格式錯誤"),
     401: errorResponse(
       "電子郵件或密碼錯誤（data.reason = INVALID_CREDENTIALS）",
     ),
-    403: errorResponse("信箱尚未驗證（data.reason = EMAIL_NOT_VERIFIED）"),
+    403: errorResponse(
+      "信箱尚未驗證（data.reason = EMAIL_NOT_VERIFIED）或 Web 模式 CSRF 驗證失敗",
+    ),
     429: errorResponse("登入請求過於頻繁"),
   },
 });
@@ -344,7 +400,19 @@ registry.registerPath({
   path: "/user/auth/verify-email",
   tags: ["User"],
   summary: "驗證電子郵件",
-  description: "以驗證信中的一次性權杖完成驗證，並直接回傳登入權杖。",
+  description:
+    "以驗證信中的一次性權杖完成驗證，並直接回傳登入權杖。" +
+    "Web 模式存取權杖於 body，refresh 權杖寫入 httpOnly cookie（有效期限 1 天 / 1d）；Mobile 模式（X-Client: mobile）於回應 body 同時回傳 accessToken 與 refreshToken，不設定 Set-Cookie。",
+  parameters: [
+    {
+      in: "header",
+      name: "X-Client",
+      schema: { type: "string", enum: ["mobile"] },
+      required: false,
+      description:
+        "選填；若為 'mobile' 啟用行動裝置傳輸模式（refresh token 於 body 回傳，不設定 Set-Cookie），否則預設為 Web 模式（refresh token 寫入 httpOnly cookie，有效期限 1 天）",
+    },
+  ],
   request: {
     body: {
       content: { "application/json": { schema: VerifyEmailBodySchema } },
@@ -353,10 +421,14 @@ registry.registerPath({
   },
   responses: {
     200: {
-      description: "驗證成功並登入",
+      description:
+        "驗證成功並登入；Web 模式 refresh 權杖寫入 cookie (1d)，Mobile 模式 refresh 權杖於 body",
       content: { "application/json": { schema: LoginResponseSchema } },
     },
+    400: errorResponse("缺少 token 或格式錯誤"),
     401: errorResponse("連結無效或已過期"),
+    403: errorResponse("Web 模式 CSRF Origin / Referer 驗證失敗"),
+    429: errorResponse("請求過於頻繁"),
   },
 });
 
@@ -413,7 +485,18 @@ registry.registerPath({
   summary: "重設密碼",
   description:
     "以本地密碼帳號重設信中的一次性權杖設定新密碼。Google-only 帳號不能透過此流程新增本站密碼。" +
-    "成功後信箱一併標記為已驗證，並撤銷所有既有權杖。",
+    "成功後信箱一併標記為已驗證，並撤銷所有既有權杖。" +
+    "Web 模式存取權杖於 body，refresh 權杖寫入 httpOnly cookie（有效期限 1 天 / 1d）；Mobile 模式（X-Client: mobile）於回應 body 同時回傳 accessToken 與 refreshToken，不設定 Set-Cookie。",
+  parameters: [
+    {
+      in: "header",
+      name: "X-Client",
+      schema: { type: "string", enum: ["mobile"] },
+      required: false,
+      description:
+        "選填；若為 'mobile' 啟用行動裝置傳輸模式（refresh token 於 body 回傳，不設定 Set-Cookie），否則預設為 Web 模式（refresh token 寫入 httpOnly cookie，有效期限 1 天）",
+    },
+  ],
   request: {
     body: {
       content: { "application/json": { schema: ResetPasswordBodySchema } },
@@ -422,11 +505,13 @@ registry.registerPath({
   },
   responses: {
     200: {
-      description: "密碼已重設並登入",
+      description:
+        "密碼已重設並登入；Web 模式 refresh 權杖寫入 cookie (1d)，Mobile 模式 refresh 權杖於 body",
       content: { "application/json": { schema: LoginResponseSchema } },
     },
     400: errorResponse("新密碼不符規則"),
     401: errorResponse("連結無效或已過期"),
+    403: errorResponse("Web 模式 CSRF Origin / Referer 驗證失敗"),
     429: errorResponse("密碼重設嘗試過於頻繁"),
   },
 });
@@ -438,8 +523,19 @@ registry.registerPath({
   summary: "變更密碼",
   description:
     "變更已登入帳號的密碼並撤銷其他既有權杖（回應會附上新的權杖）。" +
-    "帳號尚無密碼（純 Google 登入）時可省略 currentPassword，即為新增密碼登入方式。",
+    "帳號尚無密碼（純 Google 登入）時可省略 currentPassword，即為新增密碼登入方式。" +
+    "Web 模式存取權杖於 body，refresh 權杖寫入 httpOnly cookie（有效期限 1 天 / 1d）；Mobile 模式（X-Client: mobile）於回應 body 同時回傳 accessToken 與 refreshToken，不設定 Set-Cookie。",
   security: [{ bearerAuth: [] }],
+  parameters: [
+    {
+      in: "header",
+      name: "X-Client",
+      schema: { type: "string", enum: ["mobile"] },
+      required: false,
+      description:
+        "選填；若為 'mobile' 啟用行動裝置傳輸模式（refresh token 於 body 回傳，不設定 Set-Cookie），否則預設為 Web 模式（refresh token 寫入 httpOnly cookie，有效期限 1 天）",
+    },
+  ],
   request: {
     body: {
       content: { "application/json": { schema: ChangePasswordBodySchema } },
@@ -448,12 +544,13 @@ registry.registerPath({
   },
   responses: {
     200: {
-      description: "密碼已更新，並回傳新權杖",
+      description:
+        "密碼已更新，並回傳新權杖；Web 模式 refresh 權杖寫入 cookie (1d)，Mobile 模式 refresh 權杖於 body",
       content: { "application/json": { schema: ChangePasswordResponseSchema } },
     },
     400: errorResponse("新密碼不符規則或缺少 currentPassword"),
     401: errorResponse("目前密碼錯誤"),
-    403: errorResponse("未授權"),
+    403: errorResponse("未授權或 Web 模式 CSRF 驗證失敗"),
     429: errorResponse("請求過於頻繁"),
   },
 });
@@ -462,18 +559,39 @@ registry.registerPath({
   method: "post",
   path: "/user/refresh",
   tags: ["User"],
-  summary: "Cookie 換發權杖",
+  summary: "換發權杖 (Web cookie / Mobile JSON)",
   description:
-    "讀取 refreshToken cookie，簽發新的存取與 refresh 權杖，免請求內容。",
+    "Web 模式透過 httpOnly cookie 傳遞 refreshToken（有效期限 1 天 / 1d）；Mobile 模式（X-Client: mobile）須於 JSON body 帶入 refreshToken 並建議存於 Secure Storage（Keychain/Keystore）。" +
+    "換發成功會簽發新 JTI 與 sid。注意：升級後舊版無 sid 權杖將失效，需重新登入一次。",
+  parameters: [
+    {
+      in: "header",
+      name: "X-Client",
+      schema: { type: "string", enum: ["mobile"] },
+      required: false,
+      description:
+        "選填；若為 'mobile' 啟用行動裝置傳輸模式，否則預設為 Web 模式（cookie 有效期限 1 天）",
+    },
+  ],
+  request: {
+    body: {
+      content: { "application/json": { schema: RefreshBodySchema } },
+      required: false,
+    },
+  },
   responses: {
     200: {
-      description: "新的存取與 refresh 權杖",
+      description:
+        "新的存取與 refresh 權杖；Web 模式 refresh 權杖寫入 cookie (1d)，Mobile 模式 refresh 權杖於 body",
       content: { "application/json": { schema: RefreshResponseSchema } },
     },
+    400: errorResponse("請求格式錯誤、混合傳輸來源或重複/未知 X-Client 標頭"),
     401: {
-      description: "refresh cookie 無效或不存在",
+      description: "refresh 權杖無效、已過期或已輪換（不清除 winner cookie）",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
+    403: errorResponse("Web 模式 CSRF Origin / Referer 驗證失敗"),
+    429: errorResponse("請求過於頻繁"),
   },
 });
 
@@ -635,14 +753,36 @@ registry.registerPath({
   path: "/user/logout",
   tags: ["User"],
   summary: "使用者登出",
-  description: "清除 refreshToken cookie，用戶端須自行捨棄存取權杖。",
+  description:
+    "支援 Web cookie 登出（清除有效期限 1 天的 httpOnly cookie）與 Mobile JSON refreshToken 登出。嚴禁攜帶 Authorization 標頭（若攜帶將以 400 拒絕且不執行任何撤銷）。" +
+    "Web 模式清除 refreshToken cookie 並撤銷 session；Mobile 模式由 JSON body 傳入 refreshToken 並撤銷 session。",
+  parameters: [
+    {
+      in: "header",
+      name: "X-Client",
+      schema: { type: "string", enum: ["mobile"] },
+      required: false,
+      description:
+        "選填；若為 'mobile' 啟用行動裝置傳輸模式，否則預設為 Web 模式（清除 1 天 cookie）",
+    },
+  ],
+  request: {
+    body: {
+      content: { "application/json": { schema: LogoutBodySchema } },
+      required: false,
+    },
+  },
   responses: {
     200: {
       description: "登出成功",
       content: { "application/json": { schema: LogoutResponseSchema } },
     },
+    400: errorResponse("攜帶 Authorization 標頭、混合來源或無效格式"),
+    401: errorResponse("權杖格式無效或已撤銷"),
+    403: errorResponse("Web 模式 CSRF Origin / Referer 驗證失敗"),
+    429: errorResponse("請求過於頻繁"),
     500: {
-      description: "伺服器錯誤",
+      description: "伺服器錯誤（撤銷失敗時絕不假冒成功）",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },

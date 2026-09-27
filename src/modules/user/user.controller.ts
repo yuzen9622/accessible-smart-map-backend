@@ -1,14 +1,11 @@
 import type { Request, Response } from "express";
 import type { ApiResponse } from "../../types/response";
 import { ResponseCode, ResponseMessage } from "../../types/code";
-import { sendResponse } from "../../config/lib";
+import { clearAuthCookie, sendResponse } from "../../config/lib";
+import { AUTH_MSG } from "../../constants/messages";
 import type { IConfig, IUser } from "../../types";
-import {
-  createAccessToken,
-  createRefreshToken,
-  verifyRefreshToken,
-} from "../../config/jwt";
 import * as userService from "./user.service";
+import * as authService from "./user.auth.service";
 
 async function info(
   req: Request,
@@ -183,24 +180,66 @@ async function refresh(
   res: Response<ApiResponse<{ user: IUser }>>,
 ) {
   try {
-    const { refreshToken } = req.cookies ?? {};
+    const isMobile = req.clientMode === "mobile";
 
-    const verify = verifyRefreshToken(refreshToken ?? "");
-    if (!verify.success || !verify.decoded) {
-      res.cookie("refreshToken", "", { maxAge: 0 });
-      throw new Error("Invalid refresh token");
+    // 1. Strict transport segregation
+    if (isMobile) {
+      if (req.cookies?.refreshToken) {
+        return sendResponse(
+          res,
+          false,
+          "error",
+          ResponseCode.INVALID_INPUT,
+          AUTH_MSG.MIXED_TOKEN_SOURCES,
+        );
+      }
+    } else {
+      if (
+        req.body &&
+        typeof req.body === "object" &&
+        "refreshToken" in req.body
+      ) {
+        return sendResponse(
+          res,
+          false,
+          "error",
+          ResponseCode.INVALID_INPUT,
+          AUTH_MSG.MIXED_TOKEN_SOURCES,
+        );
+      }
     }
 
-    const claimed = verify.decoded.user as IUser | undefined;
-    const user = claimed?._id
-      ? await userService.getUserById(String(claimed._id))
-      : null;
-    if (
-      !user ||
-      Number(user.tokenVersion ?? 0) !== Number(claimed?.tokenVersion ?? -1)
-    ) {
-      res.cookie("refreshToken", "", { maxAge: 0 });
-      throw new Error("Revoked refresh token");
+    // 2. Extract refresh token based on resolved transport
+    const rawToken = isMobile
+      ? (
+          (req.validated?.body ?? req.body) as {
+            refreshToken?: string;
+          }
+        )?.refreshToken
+      : req.cookies?.refreshToken;
+
+    if (!rawToken || typeof rawToken !== "string") {
+      // Missing or invalid token format -> 401 without clearing cookie (never clear winner's cookie)
+      return sendResponse(
+        res,
+        false,
+        "error",
+        ResponseCode.UNAUTHORIZED,
+        ResponseMessage.UNAUTHORIZED,
+      );
+    }
+
+    // 3. Delegate rotation and session lifecycle to auth service
+    const result = await authService.refreshSession(rawToken);
+    if (!result.ok) {
+      // 401 on invalid/expired/grace/reuse without clearing cookie
+      return sendResponse(
+        res,
+        false,
+        "error",
+        ResponseCode.UNAUTHORIZED,
+        ResponseMessage.UNAUTHORIZED,
+      );
     }
 
     return sendResponse(
@@ -209,9 +248,10 @@ async function refresh(
       "success",
       ResponseCode.OK,
       ResponseMessage.OK,
-      { user },
-      createAccessToken(user),
-      createRefreshToken(user),
+      { user: result.user },
+      result.accessToken,
+      result.refreshToken,
+      isMobile ? "mobile" : "web",
     );
   } catch (error) {
     console.error("[user] refresh 失敗", error);
@@ -225,23 +265,95 @@ async function refresh(
   }
 }
 
-async function logout(_req: Request, res: Response) {
+async function logout(req: Request, res: Response) {
   try {
-    res.cookie("refreshToken", "", { maxAge: 0 });
+    // FROZEN USER DECISION: reject ANY Authorization header on logout with 400 and zero DB writes
+    if (req.headers.authorization) {
+      return sendResponse(
+        res,
+        false,
+        "error",
+        ResponseCode.INVALID_INPUT,
+        AUTH_MSG.UNSUPPORTED_AUTH_HEADER,
+      );
+    }
+
+    const isMobile = req.clientMode === "mobile";
+
+    if (isMobile) {
+      if (req.cookies?.refreshToken) {
+        return sendResponse(
+          res,
+          false,
+          "error",
+          ResponseCode.INVALID_INPUT,
+          AUTH_MSG.MIXED_TOKEN_SOURCES,
+        );
+      }
+
+      const rawToken = (
+        (req.validated?.body ?? req.body) as {
+          refreshToken?: string;
+        }
+      )?.refreshToken;
+
+      if (!rawToken || typeof rawToken !== "string") {
+        return sendResponse(
+          res,
+          false,
+          "error",
+          ResponseCode.INVALID_INPUT,
+          ResponseMessage.INVALID_INPUT,
+        );
+      }
+
+      await authService.logoutSession(rawToken);
+      return sendResponse(
+        res,
+        true,
+        "success",
+        ResponseCode.OK,
+        AUTH_MSG.LOGOUT_SUCCESS,
+      );
+    }
+
+    // Web mode: reject token in body, clear cookie, revoke if valid cookie present
+    if (
+      req.body &&
+      typeof req.body === "object" &&
+      "refreshToken" in req.body
+    ) {
+      return sendResponse(
+        res,
+        false,
+        "error",
+        ResponseCode.INVALID_INPUT,
+        AUTH_MSG.MIXED_TOKEN_SOURCES,
+      );
+    }
+
+    const rawToken = req.cookies?.refreshToken;
+    clearAuthCookie(res);
+
+    if (rawToken && typeof rawToken === "string") {
+      await authService.logoutSession(rawToken);
+    }
+
     return sendResponse(
       res,
       true,
       "success",
       ResponseCode.OK,
-      "Logout successful",
+      AUTH_MSG.LOGOUT_SUCCESS,
     );
-  } catch (_error) {
+  } catch (error) {
+    console.error("[user] logout 失敗", error);
     return sendResponse(
       res,
       false,
       "error",
       ResponseCode.INTERNAL_ERROR,
-      "Logout failed",
+      AUTH_MSG.LOGOUT_FAILED,
     );
   }
 }
