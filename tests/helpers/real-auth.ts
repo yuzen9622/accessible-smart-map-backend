@@ -229,11 +229,18 @@ export function revokedBearerFor(
  */
 export function stubAuthSessionLookup(
   resolve?:
-    DbSessionFixture | null | ((sid: string) => DbSessionFixture | null),
+    | DbSessionFixture
+    | null
+    | ((
+        sid: string,
+      ) =>
+        DbSessionFixture | Promise<DbSessionFixture | null> | null | undefined),
 ) {
-  const sessionLookup = (sid: string): DbSessionFixture | null => {
+  const sessionLookup = (
+    sid: string,
+  ): DbSessionFixture | Promise<DbSessionFixture | null> | null => {
     if (resolve === null) return null;
-    if (typeof resolve === "function") return resolve(sid);
+    if (typeof resolve === "function") return resolve(sid) ?? null;
     if (resolve && typeof resolve === "object") {
       return resolve._id === sid ? resolve : null;
     }
@@ -251,12 +258,17 @@ export function stubAuthSessionLookup(
 
   return vi
     .spyOn(AuthSession, "findById")
-    .mockImplementation(
-      (id?: unknown) =>
-        toSessionDoc(sessionLookup(String(id))) as unknown as ReturnType<
-          typeof AuthSession.findById
-        >,
-    );
+    .mockImplementation((id?: unknown) => {
+      const result = sessionLookup(String(id));
+      if (result && typeof result === "object" && "then" in result) {
+        return (result as Promise<DbSessionFixture | null>).then((sess) =>
+          toSessionDoc(sess),
+        ) as unknown as ReturnType<typeof AuthSession.findById>;
+      }
+      return toSessionDoc(
+        result as DbSessionFixture | null,
+      ) as unknown as ReturnType<typeof AuthSession.findById>;
+    });
 }
 
 /**

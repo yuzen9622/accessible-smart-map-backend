@@ -48,7 +48,7 @@ describe("Generated OpenAPI document for auth issuance and session routes", () =
       name: "logout",
       expectedResponses: ["200", "400", "401", "403", "429"],
     },
-  ];
+  ] as const;
 
   for (const route of EXPECTED_ROUTES) {
     describe(`${route.method.toUpperCase()} ${route.path} (${route.name})`, () => {
@@ -62,7 +62,7 @@ describe("Generated OpenAPI document for auth issuance and session routes", () =
         expect(operation?.parameters).toBeDefined();
         const xClientParam = operation?.parameters?.find(
           (p: any) => p.name === "X-Client" && p.in === "header",
-        );
+        ) as { required?: boolean; schema?: { enum?: string[] } } | undefined;
         expect(xClientParam).toBeDefined();
         expect(xClientParam?.required).toBe(false);
         expect(xClientParam?.schema?.enum).toContain("mobile");

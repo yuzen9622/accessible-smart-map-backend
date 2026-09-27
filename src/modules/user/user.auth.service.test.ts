@@ -84,12 +84,28 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { createRefreshToken } from "../../config/jwt";
 
+import type { IUser } from "../../types";
+
 function account(authProviders: Array<"google" | "local">) {
   return {
     _id: "user-1",
     name: "Jane",
     email: "jane@example.com",
     authProviders,
+  };
+}
+
+function makeUser(overrides: Partial<IUser> = {}): IUser {
+  return {
+    _id: "665f1a2b3c4d5e6f7a8b9c0d",
+    email: "jane@example.com",
+    name: "Jane",
+    emailVerified: true,
+    authProviders: ["local"],
+    tokenVersion: 0,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    ...overrides,
   };
 }
 
@@ -620,14 +636,7 @@ describe("refreshSession", () => {
     vi.mocked(User.findById).mockResolvedValue(userDoc as any);
 
     const token = createRefreshToken(
-      {
-        _id: "665f1a2b3c4d5e6f7a8b9c0d",
-        email: "jane@example.com",
-        name: "Jane",
-        emailVerified: true,
-        authProviders: ["local"],
-        tokenVersion: 4, // Stale tokenVersion
-      },
+      makeUser({ tokenVersion: 4 }), // Stale tokenVersion
       "665f1a2b3c4d5e6f7a8b9c0e",
       crypto.randomUUID(),
     );
@@ -657,14 +666,7 @@ describe("refreshSession", () => {
 
     const oldJti = crypto.randomUUID();
     const token = createRefreshToken(
-      {
-        _id: "665f1a2b3c4d5e6f7a8b9c0d",
-        email: "jane@example.com",
-        name: "Jane",
-        emailVerified: true,
-        authProviders: ["local"],
-        tokenVersion: 0,
-      },
+      makeUser(),
       "665f1a2b3c4d5e6f7a8b9c0e",
       oldJti,
     );
@@ -696,14 +698,7 @@ describe("refreshSession", () => {
     });
 
     const token = createRefreshToken(
-      {
-        _id: "665f1a2b3c4d5e6f7a8b9c0d",
-        email: "jane@example.com",
-        name: "Jane",
-        emailVerified: true,
-        authProviders: ["local"],
-        tokenVersion: 0,
-      },
+      makeUser(),
       "665f1a2b3c4d5e6f7a8b9c0e",
       crypto.randomUUID(),
     );
@@ -732,14 +727,7 @@ describe("refreshSession", () => {
     });
 
     const token = createRefreshToken(
-      {
-        _id: "665f1a2b3c4d5e6f7a8b9c0d",
-        email: "jane@example.com",
-        name: "Jane",
-        emailVerified: true,
-        authProviders: ["local"],
-        tokenVersion: 0,
-      },
+      makeUser(),
       "665f1a2b3c4d5e6f7a8b9c0e",
       crypto.randomUUID(),
     );
@@ -771,14 +759,7 @@ describe("logoutSession", () => {
 
   it("revokes session for a valid refresh token", async () => {
     const token = createRefreshToken(
-      {
-        _id: "665f1a2b3c4d5e6f7a8b9c0d",
-        email: "jane@example.com",
-        name: "Jane",
-        emailVerified: true,
-        authProviders: ["local"],
-        tokenVersion: 0,
-      },
+      makeUser(),
       "665f1a2b3c4d5e6f7a8b9c0e",
       crypto.randomUUID(),
     );
@@ -796,14 +777,7 @@ describe("logoutSession", () => {
 
   it("propagates DB failure when revokeSession throws", async () => {
     const token = createRefreshToken(
-      {
-        _id: "665f1a2b3c4d5e6f7a8b9c0d",
-        email: "jane@example.com",
-        name: "Jane",
-        emailVerified: true,
-        authProviders: ["local"],
-        tokenVersion: 0,
-      },
+      makeUser(),
       "665f1a2b3c4d5e6f7a8b9c0e",
       crypto.randomUUID(),
     );

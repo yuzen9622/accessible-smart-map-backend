@@ -55,6 +55,8 @@ const MOCK_USER: IUser = {
   authProviders: ["local"],
   emailVerified: true,
   tokenVersion: 0,
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
 };
 
 beforeAll(async () => {

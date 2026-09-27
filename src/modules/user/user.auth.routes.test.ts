@@ -200,6 +200,8 @@ describe("POST /user/auth/login", () => {
     vi.mocked(service.loginLocalUser).mockResolvedValue({
       user: { ...USER, passwordHash: "$2b$12$leaked" },
       config: null,
+      accessToken: "mock-access-token",
+      refreshToken: "mock-refresh-token",
     });
 
     const res = await request(app)
