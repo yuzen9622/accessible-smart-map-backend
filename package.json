@@ -105,7 +105,7 @@
     "mongoose": "^9.9.2",
     "morgan": "^1.10.0",
     "mqtt": "^5.15.2",
-    "multer": "^2.2.0",
+    "multer": "^2.3.0",
     "openai": "^7.4.0",
     "opencc-js": "^1.4.0",
     "pdf-parse": "^2.4.5",
@@ -120,7 +120,10 @@
     "overrides": {
       "gaxios": "^7.3.1",
       "teeny-request": "^11.0.1",
-      "@types/express": "^5.0.6"
+      "@types/express": "^5.0.6",
+      "@xmldom/xmldom": ">=0.8.15",
+      "js-yaml": ">=4.3.2",
+      "multer": ">=2.3.0"
     }
   },
   "devDependencies": {
