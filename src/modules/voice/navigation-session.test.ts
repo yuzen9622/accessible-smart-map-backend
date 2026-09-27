@@ -94,6 +94,8 @@ function bus(points: [number, number][], from = "甲站", to = "乙站") {
   return {
     type: "BUS" as const,
     routeName: "307",
+    subRouteUid: "30701",
+    subRouteName: "307",
     departureStop: from,
     arrivalStop: to,
     waitInfo: { time: null, source: "unavailable" as const },

@@ -6,6 +6,8 @@ function busLeg(isLowFloor?: boolean): BusLeg {
   const leg: BusLeg = {
     type: "BUS",
     routeName: "299",
+    subRouteUid: "29901",
+    subRouteName: "299",
     departureStop: "起站",
     arrivalStop: "終站",
     waitInfo: { time: 5, source: "schedule" },

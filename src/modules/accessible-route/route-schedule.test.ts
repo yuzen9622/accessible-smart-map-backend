@@ -44,6 +44,8 @@ const makeRoute = (
           {
             type: "BUS",
             routeName: "307",
+            subRouteUid: "30701",
+            subRouteName: "307",
             departureStop: "Stop A",
             arrivalStop: "Stop B",
             direction: 0,

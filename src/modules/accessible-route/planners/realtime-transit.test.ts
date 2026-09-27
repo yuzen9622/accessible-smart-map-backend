@@ -67,6 +67,8 @@ describe("future scheduled realtime handling", () => {
         {
           type: "BUS",
           routeName: "NEXT",
+          subRouteUid: "NEXT01",
+          subRouteName: "NEXT",
           departureStop: "起站",
           arrivalStop: "終站",
           departureStopId: "TPE-A",
@@ -167,6 +169,8 @@ describe("bus low-floor enrichment", () => {
         {
           type: "BUS",
           routeName,
+          subRouteUid: `SUB_${routeName}`,
+          subRouteName: routeName,
           departureStop: stop,
           arrivalStop: "終站",
           departureStopId: "TPE-A",

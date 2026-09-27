@@ -69,6 +69,8 @@ const bus = (
 ): BusLeg => ({
   type: "BUS",
   routeName,
+  subRouteUid: "TPE_BUS",
+  subRouteName: routeName,
   departureStop,
   arrivalStop,
   cityCode: "Taipei",

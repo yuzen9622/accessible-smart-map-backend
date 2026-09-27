@@ -96,6 +96,8 @@ describe("confirmed hazard ground-geometry matching", () => {
     const busLeg: BusLeg = {
       type: "BUS",
       routeName: "示範公車",
+      subRouteUid: "BUS_1",
+      subRouteName: "示範公車",
       departureStop: "A",
       arrivalStop: "B",
       waitInfo: { time: null, source: "unavailable" },

@@ -33,6 +33,8 @@ const walk = (distanceM: number): WalkLeg => ({
 const bus = (routeName: string): BusLeg => ({
   type: "BUS",
   routeName,
+  subRouteUid: `SUB_${routeName}`,
+  subRouteName: routeName,
   departureStop: "",
   arrivalStop: "",
   waitInfo: { time: null, source: "unavailable" },
