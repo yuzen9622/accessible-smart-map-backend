@@ -24,6 +24,25 @@ export interface IUser {
 
 export type AuthTokenType = "email_verify" | "password_reset";
 
+export interface IAuthSessionRecentJti {
+  jti: string;
+  rotatedAt: Date;
+}
+
+export interface IAuthSession {
+  _id: string;
+  userId: string;
+  currentRefreshJti: string;
+  previousRefreshJti?: string | null;
+  recentRefreshJtis?: IAuthSessionRecentJti[];
+  rotatedAt?: Date | null;
+  expiresAt: Date;
+  revokedAt?: Date | null;
+  revokedReason?: string | null;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
 export interface IAuthToken {
   _id: string;
   userId: string;

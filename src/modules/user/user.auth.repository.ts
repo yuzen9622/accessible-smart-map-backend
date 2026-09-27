@@ -104,7 +104,11 @@ export async function rotatePasswordResetToken(
         },
       },
     ],
-    { returnDocument: "after", maxTimeMS: DB_OPERATION_MAX_MS },
+    {
+      returnDocument: "after",
+      maxTimeMS: DB_OPERATION_MAX_MS,
+      updatePipeline: true,
+    },
   );
   return Boolean(user);
 }
@@ -160,7 +164,11 @@ export async function consumePasswordResetToken(
         },
       },
     ],
-    { returnDocument: "after", maxTimeMS: DB_OPERATION_MAX_MS },
+    {
+      returnDocument: "after",
+      maxTimeMS: DB_OPERATION_MAX_MS,
+      updatePipeline: true,
+    },
   );
 }
 
@@ -208,6 +216,7 @@ export async function emailExists(email: string): Promise<boolean> {
  */
 export async function insertUser(doc: Record<string, unknown>): Promise<IUser> {
   const created = await User.create(doc);
+  // SAFETY: Mongoose toObject() returns a plain POJO conforming to the IUser schema
   return created.toObject() as unknown as IUser;
 }
 
@@ -242,6 +251,7 @@ export async function findUserByEmailBounded(
 export async function findUserByEmailWithPassword(
   email: string,
 ): Promise<UserWithPasswordHash | null> {
+  // SAFETY: Mongoose query with select("+passwordHash") resolves to a User document including the passwordHash field
   return User.findOne({ email }).select(
     "+passwordHash",
   ) as unknown as Promise<UserWithPasswordHash | null>;
@@ -256,6 +266,7 @@ export async function findUserByEmailWithPassword(
 export async function findUserByIdWithPassword(
   userId: string,
 ): Promise<UserWithPasswordHash | null> {
+  // SAFETY: Mongoose query with select("+passwordHash") resolves to a User document including the passwordHash field
   return User.findById(userId).select(
     "+passwordHash",
   ) as unknown as Promise<UserWithPasswordHash | null>;
@@ -303,9 +314,120 @@ export async function updateUserById(
   if (unset?.length) {
     update.$unset = Object.fromEntries(unset.map((field) => [field, ""]));
   }
+  // SAFETY: Mongoose query with select("+passwordHash") resolves to a User document including the passwordHash field
   return User.findOneAndUpdate(
     { _id: userId } as Record<string, unknown>,
     update,
     { returnDocument: "after" },
+  ).select("+passwordHash") as unknown as Promise<UserWithPasswordHash | null>;
+}
+
+/**
+ * Atomically updates a user's password and increments tokenVersion using CAS.
+ * Matches _id, expected tokenVersion, and expected passwordHash (or null if unset).
+ * If a concurrent update modified the credentials or tokenVersion, returns null (loser).
+ */
+export async function atomicChangePassword(params: {
+  userId: string;
+  expectedTokenVersion: number;
+  expectedPasswordHash: string | null;
+  newPasswordHash: string;
+  authProviders: string[];
+}): Promise<UserWithPasswordHash | null> {
+  const filter: Record<string, unknown> = {
+    _id: params.userId,
+    tokenVersion: params.expectedTokenVersion,
+  };
+  if (params.expectedPasswordHash) {
+    filter.passwordHash = params.expectedPasswordHash;
+  } else {
+    filter.$or = [{ passwordHash: null }, { passwordHash: { $exists: false } }];
+  }
+
+  // SAFETY: Mongoose query with select("+passwordHash") resolves to a User document including the passwordHash field
+  return User.findOneAndUpdate(
+    filter,
+    {
+      $set: {
+        passwordHash: params.newPasswordHash,
+        authProviders: params.authProviders,
+      },
+      $inc: { tokenVersion: 1 },
+    },
+    { returnDocument: "after", maxTimeMS: DB_OPERATION_MAX_MS },
+  ).select("+passwordHash") as unknown as Promise<UserWithPasswordHash | null>;
+}
+
+/**
+ * Atomically performs Google takeover of an unverified local account:
+ * matches _id, expectedTokenVersion, emailVerified: false, and expectedPasswordHash.
+ * Drops passwordHash, sets client_id, emailVerified: true, updates authProviders,
+ * and atomically increments tokenVersion by 1.
+ * If credentials or version changed concurrently, returns null (loser).
+ */
+export async function atomicGoogleTakeover(params: {
+  userId: string;
+  expectedTokenVersion: number;
+  expectedPasswordHash: string;
+  clientId: string;
+  authProviders: string[];
+  avatar?: string;
+}): Promise<UserWithPasswordHash | null> {
+  const filter: Record<string, unknown> = {
+    _id: params.userId,
+    tokenVersion: params.expectedTokenVersion,
+    emailVerified: false,
+    passwordHash: params.expectedPasswordHash,
+  };
+
+  const setObj: Record<string, unknown> = {
+    client_id: params.clientId,
+    emailVerified: true,
+    authProviders: params.authProviders,
+  };
+  if (params.avatar) {
+    setObj.avatar = params.avatar;
+  }
+
+  // SAFETY: Mongoose query with select("+passwordHash") resolves to a User document including the passwordHash field
+  return User.findOneAndUpdate(
+    filter,
+    {
+      $set: setObj,
+      $unset: { passwordHash: "" },
+      $inc: { tokenVersion: 1 },
+    },
+    { returnDocument: "after", maxTimeMS: DB_OPERATION_MAX_MS },
+  ).select("+passwordHash") as unknown as Promise<UserWithPasswordHash | null>;
+}
+
+/**
+ * Atomically links Google to an existing account without dropping password.
+ */
+export async function atomicLinkGoogle(params: {
+  userId: string;
+  expectedTokenVersion: number;
+  clientId: string;
+  avatar?: string;
+}): Promise<UserWithPasswordHash | null> {
+  const setObj: Record<string, unknown> = {
+    client_id: params.clientId,
+    emailVerified: true,
+  };
+  if (params.avatar) {
+    setObj.avatar = params.avatar;
+  }
+
+  // SAFETY: Mongoose query with select("+passwordHash") resolves to a User document including the passwordHash field
+  return User.findOneAndUpdate(
+    {
+      _id: params.userId,
+      tokenVersion: params.expectedTokenVersion,
+    },
+    {
+      $set: setObj,
+      $addToSet: { authProviders: "google" },
+    },
+    { returnDocument: "after", maxTimeMS: DB_OPERATION_MAX_MS },
   ).select("+passwordHash") as unknown as Promise<UserWithPasswordHash | null>;
 }

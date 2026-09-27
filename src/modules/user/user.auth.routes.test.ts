@@ -9,16 +9,20 @@ import {
 } from "vitest";
 import request from "supertest";
 
-vi.mock("./user.middleware", () => {
+vi.mock("./user.middleware", async (importActual) => {
+  const actual = await importActual<typeof import("./user.middleware")>();
   const passthrough = (_req: unknown, _res: unknown, next: () => void) =>
     next();
   return {
+    ...actual,
     loginLimiter: passthrough,
     registerLimiter: passthrough,
     resendLimiter: passthrough,
     forgotLimiter: passthrough,
     resetLimiter: passthrough,
     passwordLimiter: passthrough,
+    refreshLimiter: passthrough,
+    logoutLimiter: passthrough,
   };
 });
 
@@ -51,6 +55,7 @@ import { AUTH_MSG } from "../../constants/messages";
 let app: Awaited<ReturnType<typeof startTestServer>>;
 const BASE = "/api/v1/user/auth";
 const auth = buildAuthorizationHeader();
+const ORIGIN = "http://localhost:3000";
 
 const USER = {
   _id: "665f1a2b3c4d5e6f7a8b9c0d",
@@ -64,7 +69,12 @@ const USER = {
   updatedAt: "2026-01-01T00:00:00.000Z",
 } as any;
 
-const SESSION = { user: USER, config: null };
+const SESSION = {
+  user: USER,
+  config: null,
+  accessToken: "mock.access.token",
+  refreshToken: "mock.refresh.token",
+};
 
 beforeAll(async () => {
   app = await startTestServer();
@@ -177,6 +187,7 @@ describe("POST /user/auth/login", () => {
 
     const res = await request(app)
       .post(`${BASE}/login`)
+      .set("Origin", ORIGIN)
       .send({ email: "jane@example.com", password: "taipei2026" });
 
     expect(res.status).toBe(ResponseCode.OK);
@@ -189,10 +200,13 @@ describe("POST /user/auth/login", () => {
     vi.mocked(service.loginLocalUser).mockResolvedValue({
       user: { ...USER, passwordHash: "$2b$12$leaked" },
       config: null,
+      accessToken: "mock-access-token",
+      refreshToken: "mock-refresh-token",
     });
 
     const res = await request(app)
       .post(`${BASE}/login`)
+      .set("Origin", ORIGIN)
       .send({ email: "jane@example.com", password: "taipei2026" });
 
     expect(JSON.stringify(res.body)).not.toContain("leaked");
@@ -205,6 +219,7 @@ describe("POST /user/auth/login", () => {
 
     const res = await request(app)
       .post(`${BASE}/login`)
+      .set("Origin", ORIGIN)
       .send({ email: "nobody@example.com", password: "taipei2026" });
 
     expect(res.status).toBe(ResponseCode.UNAUTHORIZED);
@@ -219,6 +234,7 @@ describe("POST /user/auth/login", () => {
 
     const res = await request(app)
       .post(`${BASE}/login`)
+      .set("Origin", ORIGIN)
       .send({ email: "jane@example.com", password: "taipei2026" });
 
     expect(res.status).toBe(ResponseCode.FORBIDDEN);
@@ -232,6 +248,7 @@ describe("POST /user/auth/google", () => {
 
     const res = await request(app)
       .post(`${BASE}/google`)
+      .set("Origin", ORIGIN)
       .send({ idToken: "valid.id.token" });
 
     expect(res.status).toBe(ResponseCode.OK);
@@ -248,6 +265,7 @@ describe("POST /user/auth/google", () => {
 
     const res = await request(app)
       .post(`${BASE}/google`)
+      .set("Origin", ORIGIN)
       .send({ idToken: "forged" });
 
     expect(res.status).toBe(ResponseCode.UNAUTHORIZED);
@@ -256,6 +274,7 @@ describe("POST /user/auth/google", () => {
   it("rejects the legacy client-supplied identity body", async () => {
     const res = await request(app)
       .post(`${BASE}/google`)
+      .set("Origin", ORIGIN)
       .send({ name: "Jane", email: "victim@example.com", client_id: "12345" });
 
     expect(res.status).toBe(ResponseCode.INVALID_INPUT);
@@ -269,6 +288,7 @@ describe("POST /user/auth/verify-email", () => {
 
     const res = await request(app)
       .post(`${BASE}/verify-email`)
+      .set("Origin", ORIGIN)
       .send({ token: "raw-token" });
 
     expect(res.status).toBe(ResponseCode.OK);
@@ -283,6 +303,7 @@ describe("POST /user/auth/verify-email", () => {
 
     const res = await request(app)
       .post(`${BASE}/verify-email`)
+      .set("Origin", ORIGIN)
       .send({ token: "stale" });
 
     expect(res.status).toBe(ResponseCode.UNAUTHORIZED);
@@ -340,6 +361,7 @@ describe("POST /user/auth/password/reset", () => {
 
     const res = await request(app)
       .post(`${BASE}/password/reset`)
+      .set("Origin", ORIGIN)
       .send({ token: "raw-token", password: "taipei2026" });
 
     expect(res.status).toBe(ResponseCode.OK);
@@ -350,6 +372,7 @@ describe("POST /user/auth/password/reset", () => {
   it("applies the same password rules as registration", async () => {
     const res = await request(app)
       .post(`${BASE}/password/reset`)
+      .set("Origin", ORIGIN)
       .send({ token: "raw-token", password: "short" });
 
     expect(res.status).toBe(ResponseCode.INVALID_INPUT);
@@ -363,6 +386,7 @@ describe("POST /user/auth/password/reset", () => {
 
     const res = await request(app)
       .post(`${BASE}/password/reset`)
+      .set("Origin", ORIGIN)
       .send({ token: "used", password: "taipei2026" });
 
     expect(res.status).toBe(ResponseCode.UNAUTHORIZED);
@@ -373,6 +397,7 @@ describe("POST /user/auth/password", () => {
   it("rejects an unauthenticated request at the middleware", async () => {
     const res = await request(app)
       .post(`${BASE}/password`)
+      .set("Origin", ORIGIN)
       .send({ newPassword: "taipei2026" });
 
     expect(res.status).toBe(ResponseCode.FORBIDDEN);
@@ -380,11 +405,16 @@ describe("POST /user/auth/password", () => {
   });
 
   it("returns 200 with replacement tokens for the caller", async () => {
-    vi.mocked(service.changePassword).mockResolvedValue({ user: USER });
+    vi.mocked(service.changePassword).mockResolvedValue({
+      user: USER,
+      accessToken: "mock.access.token",
+      refreshToken: "mock.refresh.token",
+    });
 
     const res = await request(app)
       .post(`${BASE}/password`)
       .set("Authorization", auth)
+      .set("Origin", ORIGIN)
       .send({ currentPassword: "taipei2026", newPassword: "taipei2027" });
 
     expect(res.status).toBe(ResponseCode.OK);
@@ -405,6 +435,7 @@ describe("POST /user/auth/password", () => {
     const res = await request(app)
       .post(`${BASE}/password`)
       .set("Authorization", auth)
+      .set("Origin", ORIGIN)
       .send({ currentPassword: "wrong", newPassword: "taipei2027" });
 
     expect(res.status).toBe(ResponseCode.UNAUTHORIZED);
@@ -418,6 +449,7 @@ describe("POST /user/auth/password", () => {
     const res = await request(app)
       .post(`${BASE}/password`)
       .set("Authorization", auth)
+      .set("Origin", ORIGIN)
       .send({ newPassword: "taipei2027" });
 
     expect(res.status).toBe(ResponseCode.INVALID_INPUT);

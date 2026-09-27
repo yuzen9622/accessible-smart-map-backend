@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import jwt, {
   JsonWebTokenError,
   JwtPayload,
@@ -37,15 +38,61 @@ const toPublicUser = (user: IUser): IUser => {
   };
 };
 
-const createAccessToken = (user: IUser): string =>
-  jwt.sign({ user: toPublicUser(user) }, process.env.JWT_ACCESS_SECRET ?? "", {
+export interface AccessTokenPayload extends JwtPayload {
+  user: IUser;
+  sid: string;
+}
+
+export interface RefreshTokenPayload extends JwtPayload {
+  user: IUser;
+  sid: string;
+  jti: string;
+}
+
+const createAccessToken = (
+  user: IUser,
+  sidOrOptions: string | { sid: string },
+): string => {
+  const sid =
+    typeof sidOrOptions === "string" ? sidOrOptions : sidOrOptions?.sid;
+  if (!sid || typeof sid !== "string") {
+    throw new Error("createAccessToken requires a valid sid");
+  }
+  const payload: Record<string, unknown> = {
+    user: toPublicUser(user),
+    sid,
+  };
+  return jwt.sign(payload, process.env.JWT_ACCESS_SECRET ?? "", {
     expiresIn: ACCESS_TOKEN_TTL,
   });
+};
 
-const createRefreshToken = (user: IUser): string =>
-  jwt.sign({ user: toPublicUser(user) }, process.env.JWT_REFRESH_SECRET ?? "", {
+const createRefreshToken = (
+  user: IUser,
+  sidOrOptions: string | { sid: string; jti?: string },
+  jtiParam?: string,
+): string => {
+  const sid =
+    typeof sidOrOptions === "string" ? sidOrOptions : sidOrOptions?.sid;
+  if (!sid || typeof sid !== "string") {
+    throw new Error("createRefreshToken requires a valid sid");
+  }
+  const jti =
+    typeof sidOrOptions === "object" && sidOrOptions?.jti
+      ? sidOrOptions.jti
+      : (jtiParam ?? randomUUID());
+  if (!jti || typeof jti !== "string") {
+    throw new Error("createRefreshToken requires a valid jti");
+  }
+  const payload: Record<string, unknown> = {
+    user: toPublicUser(user),
+    sid,
+    jti,
+  };
+  return jwt.sign(payload, process.env.JWT_REFRESH_SECRET ?? "", {
     expiresIn: REFRESH_TOKEN_TTL,
   });
+};
 
 const verifyAccessToken = (token: string) => {
   try {

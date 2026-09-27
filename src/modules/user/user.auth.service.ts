@@ -2,6 +2,9 @@ import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import { OAuth2Client } from "google-auth-library";
 import {
+  atomicChangePassword,
+  atomicGoogleTakeover,
+  atomicLinkGoogle,
   consumeAuthTokenRecord,
   consumePasswordResetToken,
   emailExists,
@@ -19,11 +22,22 @@ import {
   upsertAuthToken,
 } from "./user.auth.repository";
 import {
+  createSession,
+  revokeSession,
+  revokeAllSessionsByUserId,
+  rotateSession,
+} from "./user.auth-session.repository";
+import {
   sendGooglePasswordResetGuidanceEmail,
   sendPasswordResetEmail,
   sendVerificationEmail,
 } from "../../adapters/email.adapter";
-import { toPublicUser } from "../../config/jwt";
+import {
+  createAccessToken,
+  createRefreshToken,
+  verifyRefreshToken,
+  toPublicUser,
+} from "../../config/jwt";
 import type { AuthTokenType, IConfig, IUser } from "../../types";
 import {
   enqueuePasswordAssistance,
@@ -193,7 +207,12 @@ export async function registerLocalUser(input: {
 export async function loginLocalUser(input: {
   email: string;
   password: string;
-}): Promise<{ user: IUser; config: IConfig | null }> {
+}): Promise<{
+  user: IUser;
+  config: IConfig | null;
+  accessToken: string;
+  refreshToken: string;
+}> {
   const email = normalizeEmail(input.email);
   const user = await findUserByEmailWithPassword(email);
 
@@ -208,8 +227,20 @@ export async function loginLocalUser(input: {
     throw new AuthError("EMAIL_NOT_VERIFIED");
   }
 
+  const initialJti = crypto.randomUUID();
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const session = await createSession({
+    userId: String(user._id),
+    currentRefreshJti: initialJti,
+    expiresAt,
+  });
+
+  const publicUser = toPublicUser(user);
+  const accessToken = createAccessToken(publicUser, session._id);
+  const refreshToken = createRefreshToken(publicUser, session._id, initialJti);
+
   const config = await findConfigForUser(user._id);
-  return { user: toPublicUser(user), config };
+  return { user: publicUser, config, accessToken, refreshToken };
 }
 
 /**
@@ -220,16 +251,31 @@ export async function loginLocalUser(input: {
  * @returns The verified user and its config.
  * @throws AuthError INVALID_TOKEN when the token is unknown, expired or used.
  */
-export async function verifyEmail(
-  rawToken: string,
-): Promise<{ user: IUser; config: IConfig | null }> {
+export async function verifyEmail(rawToken: string): Promise<{
+  user: IUser;
+  config: IConfig | null;
+  accessToken: string;
+  refreshToken: string;
+}> {
   const claimed = await consumeAuthToken(rawToken, "email_verify");
 
   const user =
     (await updateUserById(claimed._id, { emailVerified: true })) ?? claimed;
 
+  const initialJti = crypto.randomUUID();
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const session = await createSession({
+    userId: String(user._id),
+    currentRefreshJti: initialJti,
+    expiresAt,
+  });
+
+  const publicUser = toPublicUser(user);
+  const accessToken = createAccessToken(publicUser, session._id);
+  const refreshToken = createRefreshToken(publicUser, session._id, initialJti);
+
   const config = await ensureConfig(user._id);
-  return { user: toPublicUser(user), config };
+  return { user: publicUser, config, accessToken, refreshToken };
 }
 
 /**
@@ -359,7 +405,12 @@ export async function processPasswordAssistance(input: {
 export async function resetPassword(input: {
   token: string;
   password: string;
-}): Promise<{ user: IUser; config: IConfig | null }> {
+}): Promise<{
+  user: IUser;
+  config: IConfig | null;
+  accessToken: string;
+  refreshToken: string;
+}> {
   // Hash first so a local CPU failure cannot consume an otherwise valid token.
   // Token validation, provider guard, password write, revocation increment and
   // token removal then happen in one atomic update on the same User document.
@@ -372,8 +423,23 @@ export async function resetPassword(input: {
   );
   if (!user) throw new AuthError("INVALID_TOKEN");
 
+  // Old-session revoke before new create. Reject DB failure.
+  await revokeAllSessionsByUserId(String(user._id), "password_reset");
+
+  const initialJti = crypto.randomUUID();
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const session = await createSession({
+    userId: String(user._id),
+    currentRefreshJti: initialJti,
+    expiresAt,
+  });
+
+  const publicUser = toPublicUser(user);
+  const accessToken = createAccessToken(publicUser, session._id);
+  const refreshToken = createRefreshToken(publicUser, session._id, initialJti);
+
   const config = await ensureConfig(user._id);
-  return { user: toPublicUser(user), config };
+  return { user: publicUser, config, accessToken, refreshToken };
 }
 
 /**
@@ -383,14 +449,14 @@ export async function resetPassword(input: {
  * which is how a Google-only user adds password login.
  *
  * @param input Target user id, optional current password and the new password.
- * @returns The updated user, whose earlier tokens are now revoked.
+ * @returns The updated user and newly issued tokens, whose earlier tokens/sessions are revoked.
  * @throws AuthError INVALID_TOKEN when the user is gone, PASSWORD_REQUIRED or INVALID_CREDENTIALS otherwise.
  */
 export async function changePassword(input: {
   userId: string;
   currentPassword?: string;
   newPassword: string;
-}): Promise<{ user: IUser }> {
+}): Promise<{ user: IUser; accessToken: string; refreshToken: string }> {
   const user = await findUserByIdWithPassword(input.userId);
   if (!user) throw new AuthError("INVALID_TOKEN");
 
@@ -406,14 +472,38 @@ export async function changePassword(input: {
   const authProviders = user.authProviders.includes("local")
     ? user.authProviders
     : [...user.authProviders, "local"];
-  const updated =
-    (await updateUserById(user._id, {
-      passwordHash: await bcrypt.hash(input.newPassword, BCRYPT_COST),
-      tokenVersion: Number(user.tokenVersion ?? 0) + 1,
-      authProviders,
-    })) ?? user;
+  const newPasswordHash = await bcrypt.hash(input.newPassword, BCRYPT_COST);
 
-  return { user: toPublicUser(updated) };
+  // Atomic CAS: match observed tokenVersion and verified passwordHash.
+  // A loser MUST NOT revoke/create/sign.
+  const updated = await atomicChangePassword({
+    userId: String(user._id),
+    expectedTokenVersion: Number(user.tokenVersion ?? 0),
+    expectedPasswordHash: user.passwordHash ?? null,
+    newPasswordHash,
+    authProviders,
+  });
+
+  if (!updated) {
+    throw new AuthError("INVALID_CREDENTIALS");
+  }
+
+  // Old-session revoke before new create. Reject DB failure.
+  await revokeAllSessionsByUserId(String(user._id), "password_changed");
+
+  const initialJti = crypto.randomUUID();
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const session = await createSession({
+    userId: String(user._id),
+    currentRefreshJti: initialJti,
+    expiresAt,
+  });
+
+  const publicUser = toPublicUser(updated);
+  const accessToken = createAccessToken(publicUser, session._id);
+  const refreshToken = createRefreshToken(publicUser, session._id, initialJti);
+
+  return { user: publicUser, accessToken, refreshToken };
 }
 
 let googleClient: OAuth2Client | null = null;
@@ -435,9 +525,12 @@ function getGoogleClient(): OAuth2Client {
  * @returns The resolved user and its config.
  * @throws AuthError INVALID_TOKEN when the ID token or its email claim is unusable.
  */
-export async function authenticateWithGoogle(
-  idToken: string,
-): Promise<{ user: IUser; config: IConfig | null }> {
+export async function authenticateWithGoogle(idToken: string): Promise<{
+  user: IUser;
+  config: IConfig | null;
+  accessToken: string;
+  refreshToken: string;
+}> {
   const audience = process.env.GOOGLE_CLIENT_ID;
   if (!audience) {
     throw new Error("GOOGLE_CLIENT_ID is not configured");
@@ -466,26 +559,93 @@ export async function authenticateWithGoogle(
     const byEmail = await findUserByEmailWithPassword(email);
 
     if (byEmail) {
-      const set: Record<string, unknown> = {
-        client_id: payload.sub,
-        emailVerified: true,
-      };
-      const unset: string[] = [];
-      let authProviders = byEmail.authProviders;
-      // An unverified local account never proved it owns the address, so the
-      // Google sign-in takes it over: drop the password login and revoke any
-      // token minted under it.
       if (!byEmail.emailVerified && byEmail.passwordHash) {
-        unset.push("passwordHash");
-        authProviders = authProviders.filter((p) => p !== "local");
-        set.tokenVersion = Number(byEmail.tokenVersion ?? 0) + 1;
+        // Unverified local account: Google sign-in takes it over.
+        // Conditional CAS on observed tokenVersion, passwordHash, and emailVerified: false.
+        const observedVersion = Number(byEmail.tokenVersion ?? 0);
+        const observedPasswordHash = byEmail.passwordHash;
+        const authProviders = byEmail.authProviders.filter(
+          (p) => p !== "local",
+        );
+        if (!authProviders.includes("google")) {
+          authProviders.push("google");
+        }
+
+        const takeover = await atomicGoogleTakeover({
+          userId: String(byEmail._id),
+          expectedTokenVersion: observedVersion,
+          expectedPasswordHash: observedPasswordHash,
+          clientId: payload.sub,
+          authProviders,
+          avatar: avatar && !byEmail.avatar ? avatar : undefined,
+        });
+
+        if (takeover) {
+          // Success: atomic CAS updated user and incremented tokenVersion.
+          // Revoke ALL old sessions BEFORE issuing new session.
+          await revokeAllSessionsByUserId(
+            String(takeover._id),
+            "google_takeover",
+          );
+          user = takeover;
+        } else {
+          // CAS lost! Re-read user to inspect concurrent mutation.
+          const recheck = await findUserByEmailWithPassword(email);
+          if (!recheck) {
+            throw new AuthError("INVALID_TOKEN");
+          }
+          if (recheck.emailVerified) {
+            // Account was verified concurrently (e.g. by resetPassword or verifyEmail).
+            // Do NOT drop passwordHash or overwrite reset password/tokenVersion!
+            // Safely link Google as an additional provider:
+            const linked = await atomicLinkGoogle({
+              userId: String(recheck._id),
+              expectedTokenVersion: Number(recheck.tokenVersion ?? 0),
+              clientId: payload.sub,
+              avatar: avatar && !recheck.avatar ? avatar : undefined,
+            });
+            user =
+              linked ??
+              (await findUserByIdBounded(String(recheck._id))) ??
+              recheck;
+          } else {
+            // Still unverified local account (e.g. tokenVersion bumped concurrently).
+            // Retry takeover once with freshly observed credentials:
+            const retryTakeover = await atomicGoogleTakeover({
+              userId: String(recheck._id),
+              expectedTokenVersion: Number(recheck.tokenVersion ?? 0),
+              expectedPasswordHash: recheck.passwordHash!,
+              clientId: payload.sub,
+              authProviders: recheck.authProviders
+                .filter((p) => p !== "local")
+                .concat(
+                  recheck.authProviders.includes("google") ? [] : ["google"],
+                ),
+              avatar: avatar && !recheck.avatar ? avatar : undefined,
+            });
+            if (retryTakeover) {
+              await revokeAllSessionsByUserId(
+                String(retryTakeover._id),
+                "google_takeover",
+              );
+              user = retryTakeover;
+            } else {
+              user =
+                (await findUserByIdBounded(String(recheck._id))) ?? recheck;
+            }
+          }
+        }
+      } else {
+        // Account already verified or has no local password: safe link
+        const linked = await atomicLinkGoogle({
+          userId: String(byEmail._id),
+          expectedTokenVersion: Number(byEmail.tokenVersion ?? 0),
+          clientId: payload.sub,
+          avatar: avatar && !byEmail.avatar ? avatar : undefined,
+        });
+        user =
+          linked ?? (await findUserByIdBounded(String(byEmail._id))) ?? byEmail;
       }
-      if (!authProviders.includes("google")) {
-        authProviders = [...authProviders, "google"];
-      }
-      set.authProviders = authProviders;
-      if (avatar && !byEmail.avatar) set.avatar = avatar;
-      user = (await updateUserById(byEmail._id, set, unset)) ?? byEmail;
     }
   }
 
@@ -505,6 +665,139 @@ export async function authenticateWithGoogle(
     }
   }
 
+  const initialJti = crypto.randomUUID();
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const session = await createSession({
+    userId: String(user._id),
+    currentRefreshJti: initialJti,
+    expiresAt,
+  });
+
+  const publicUser = toPublicUser(user);
+  const accessToken = createAccessToken(publicUser, session._id);
+  const refreshToken = createRefreshToken(publicUser, session._id, initialJti);
+
   const config = await ensureConfig(user._id);
-  return { user: toPublicUser(user), config };
+  return { user: publicUser, config, accessToken, refreshToken };
+}
+
+export type RefreshResult =
+  | { ok: true; user: IUser; accessToken: string; refreshToken: string }
+  | {
+      ok: false;
+      reason:
+        | "INVALID_TOKEN"
+        | "REVOKED"
+        | "EXPIRED"
+        | "GRACE_PERIOD"
+        | "REUSE_DETECTED";
+    };
+
+const OBJECT_ID_REGEX = /^[0-9a-fA-F]{24}$/;
+const UUID_REGEX =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/**
+ * Validates a refresh token, verifies the user and session, rotates the session
+ * with a new JTI and refreshed expiry, and issues new tokens.
+ */
+export async function refreshSession(
+  rawRefreshToken: string,
+): Promise<RefreshResult> {
+  const verify = verifyRefreshToken(rawRefreshToken);
+  if (!verify.success || !verify.decoded) {
+    return { ok: false, reason: "INVALID_TOKEN" };
+  }
+
+  const claimed = verify.decoded.user as IUser | undefined;
+  const userId = claimed?._id ? String(claimed._id) : "";
+  const sid = typeof verify.decoded.sid === "string" ? verify.decoded.sid : "";
+  const jti = typeof verify.decoded.jti === "string" ? verify.decoded.jti : "";
+
+  if (
+    !userId ||
+    !sid ||
+    !jti ||
+    !OBJECT_ID_REGEX.test(sid) ||
+    !UUID_REGEX.test(jti)
+  ) {
+    return { ok: false, reason: "INVALID_TOKEN" };
+  }
+
+  let user;
+  try {
+    user = await findUserByIdBounded(userId);
+  } catch {
+    return { ok: false, reason: "REVOKED" };
+  }
+
+  if (
+    !user ||
+    Number(user.tokenVersion ?? 0) !== Number(claimed?.tokenVersion ?? -1)
+  ) {
+    return { ok: false, reason: "REVOKED" };
+  }
+
+  const newJti = crypto.randomUUID();
+  const newExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+  const rotateResult = await rotateSession({
+    sid,
+    userId,
+    oldJti: jti,
+    newJti,
+    newExpiresAt,
+  });
+
+  if (rotateResult.status === "SUCCESS") {
+    const publicUser = toPublicUser(user);
+    const accessToken = createAccessToken(publicUser, sid);
+    const newRefreshToken = createRefreshToken(publicUser, sid, newJti);
+    return {
+      ok: true,
+      user: publicUser,
+      accessToken,
+      refreshToken: newRefreshToken,
+    };
+  }
+
+  if (rotateResult.status === "GRACE_PERIOD") {
+    return { ok: false, reason: "GRACE_PERIOD" };
+  }
+
+  if (rotateResult.status === "REUSE_DETECTED") {
+    return { ok: false, reason: "REUSE_DETECTED" };
+  }
+
+  if (rotateResult.status === "REVOKED") {
+    return { ok: false, reason: "REVOKED" };
+  }
+
+  if (rotateResult.status === "EXPIRED") {
+    return { ok: false, reason: "EXPIRED" };
+  }
+
+  return { ok: false, reason: "INVALID_TOKEN" };
+}
+
+/**
+ * Revokes a session associated with a valid refresh token.
+ * If the token is already invalid, returns true idempotently without DB mutation.
+ * If DB revoke fails, throws to signal failure to the caller.
+ */
+export async function logoutSession(rawRefreshToken: string): Promise<boolean> {
+  const verify = verifyRefreshToken(rawRefreshToken);
+  if (!verify.success || !verify.decoded) {
+    return true;
+  }
+
+  const claimed = verify.decoded.user as IUser | undefined;
+  const userId = claimed?._id ? String(claimed._id) : "";
+  const sid = typeof verify.decoded.sid === "string" ? verify.decoded.sid : "";
+
+  if (!userId || !sid || !OBJECT_ID_REGEX.test(sid)) {
+    return true;
+  }
+
+  return revokeSession(sid, userId, "user_logout");
 }

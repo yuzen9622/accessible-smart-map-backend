@@ -1,6 +1,7 @@
 import http from "http";
 import jwt from "jsonwebtoken";
 import app from "../../src/app";
+import { DEFAULT_AUTH_SESSION_ID } from "./real-auth";
 
 /**
  * Returns the real Express app for route-level integration tests.
@@ -63,9 +64,10 @@ export function buildAuthorizationHeader(
     _id: "test-user-id",
     email: "test@example.com",
   },
+  sid: string = DEFAULT_AUTH_SESSION_ID,
 ): string {
   const token = jwt.sign(
-    { user: { tokenVersion: 0, ...user } },
+    { user: { tokenVersion: 0, ...user }, sid },
     process.env.JWT_ACCESS_SECRET ?? "test-access-secret",
   );
   return `Bearer ${token}`;

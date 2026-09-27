@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { sendResponse } from "../../config/lib";
 import { ResponseCode } from "../../types/code";
+import { verifyActiveSession } from "../../config/auth";
 import * as service from "./sos.service";
 import { onSosUpdate } from "./sos-events";
 import type { ServiceResult, SosType } from "./sos.types";
@@ -74,11 +75,20 @@ async function getSession(req: Request, res: Response) {
   return send(res, result);
 }
 
+/**
+ * Bounded heartbeat interval for SSE streams. Re-verifies session status
+ * on each tick to guarantee bounded idle close latency (<= 25s).
+ */
+const SOS_SSE_HEARTBEAT_MS = 25000;
+
 async function streamSession(req: Request, res: Response) {
   const params = req.validated?.params as { id: string };
   const sessionId = params.id;
+  const userId = req.auth!.userId;
+  const authHeader = req.headers.authorization ?? "";
+
   const result = await service.getSessionForOwner({
-    userId: req.auth!.userId,
+    userId,
     sessionId,
   });
   if (!result.ok) return send(res, result);
@@ -91,16 +101,67 @@ async function streamSession(req: Request, res: Response) {
 
   res.write(`event: update\ndata: ${JSON.stringify(result.data)}\n\n`);
 
-  const unsubscribe = onSosUpdate(sessionId, (snapshot) => {
-    res.write(`event: update\ndata: ${JSON.stringify(snapshot)}\n\n`);
-  });
-  const heartbeat = setInterval(() => res.write(": ping\n\n"), 25000);
+  let closed = false;
+  let heartbeat: NodeJS.Timeout | null = null;
+  let unsubscribe: (() => void) | null = null;
 
-  req.on("close", () => {
-    clearInterval(heartbeat);
-    unsubscribe();
-    res.end();
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
+    if (heartbeat) {
+      clearInterval(heartbeat);
+      heartbeat = null;
+    }
+    if (unsubscribe) {
+      unsubscribe();
+      unsubscribe = null;
+    }
+    if (!res.writableEnded) {
+      res.end();
+    }
+  };
+
+  let updateChain = Promise.resolve();
+
+  unsubscribe = onSosUpdate(sessionId, (snapshot) => {
+    updateChain = updateChain
+      .then(async () => {
+        if (closed || res.writableEnded) return;
+        const valid = await verifyActiveSession(authHeader, userId).catch(
+          () => false,
+        );
+        if (!valid) {
+          cleanup();
+          return;
+        }
+        if (closed || res.writableEnded) return;
+        res.write(`event: update\ndata: ${JSON.stringify(snapshot)}\n\n`);
+      })
+      .catch(() => {
+        cleanup();
+      });
   });
+
+  const heartbeatInterval =
+    Number(process.env.SOS_SSE_HEARTBEAT_MS) || SOS_SSE_HEARTBEAT_MS;
+
+  heartbeat = setInterval(async () => {
+    if (closed || res.writableEnded) return;
+    const valid = await verifyActiveSession(authHeader, userId).catch(
+      () => false,
+    );
+    if (!valid) {
+      cleanup();
+      return;
+    }
+    if (!closed && !res.writableEnded) {
+      res.write(": ping\n\n");
+    }
+  }, heartbeatInterval);
+
+  req.on("close", cleanup);
+  res.on("close", cleanup);
+  res.on("error", cleanup);
 }
 
 export {

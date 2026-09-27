@@ -24,7 +24,14 @@ import {
   startTestServer,
   stopTestServer,
 } from "../../../tests/helpers/test-helpers";
-import { stubAuthUserLookup } from "../../../tests/helpers/real-auth";
+import {
+  stubAuthUserLookup,
+  stubAuthSessionLookup,
+  buildDbSession,
+  buildDbUser,
+  DEFAULT_AUTH_SESSION_ID,
+} from "../../../tests/helpers/real-auth";
+import { emitSosUpdate, type SosSnapshot } from "./sos-events";
 import * as service from "./sos.service";
 import { ResponseCode } from "../../types/code";
 import { SOS_MSG, SOS_REASON } from "../../constants/messages";
@@ -284,5 +291,238 @@ describe("GET /sos/sessions/:id/stream (SSE)", () => {
       userId: "test-user-id",
       sessionId: OID,
     });
+  });
+
+  it("terminates stream and drops private update when session is revoked before onSosUpdate", async () => {
+    vi.mocked(service.getSessionForOwner).mockResolvedValue({
+      ok: true,
+      httpCode: ResponseCode.OK,
+      message: SOS_MSG.PUBLIC_OK,
+      data: { sessionId: OID, status: "active", handlingStatus: "notified" },
+    });
+
+    const receivedChunks: string[] = [];
+
+    await new Promise<void>((resolve, reject) => {
+      const req = request(app)
+        .get(`${BASE}/${OID}/stream`)
+        .set("Authorization", auth)
+        .buffer(false)
+        .parse(
+          (
+            res: supertestTypes.Response,
+            _callback: (err: Error | null, body: unknown) => void,
+          ) => {
+            const stream = res as unknown as Readable;
+            stream.on("data", (chunk: Buffer) => {
+              receivedChunks.push(chunk.toString());
+              if (receivedChunks.join("").includes("notified")) {
+                // Initial update received. Now simulate session revocation in DB!
+                stubAuthSessionLookup(() =>
+                  buildDbSession({
+                    _id: DEFAULT_AUTH_SESSION_ID,
+                    userId: "test-user-id",
+                    revokedAt: new Date(),
+                    revokedReason: "user_logout",
+                  }),
+                );
+                // Emit an SOS update that carries sensitive data
+                const sensitiveSnapshot: SosSnapshot = {
+                  sessionId: OID,
+                  status: "active",
+                  handlingStatus: "acknowledged",
+                  acknowledgements: [],
+                  timeline: [],
+                  location: {
+                    lat: 25.01,
+                    lng: 121.51,
+                    address: "Secret Location",
+                    updatedAt: new Date(),
+                  },
+                  updatedAt: new Date(),
+                };
+                emitSosUpdate(OID, sensitiveSnapshot);
+              }
+            });
+            stream.on("end", () => {
+              resolve();
+            });
+            stream.on("error", (err) => {
+              reject(err);
+            });
+          },
+        );
+      req.on("error", () => {});
+      req.end();
+      setTimeout(
+        () => reject(new Error("Stream did not terminate after revocation")),
+        4000,
+      );
+    });
+
+    const combined = receivedChunks.join("");
+    expect(combined).toContain("notified");
+    expect(combined).not.toContain("Secret Location");
+    expect(combined).not.toContain("acknowledged");
+  });
+
+  it("terminates idle stream on heartbeat when session is revoked", async () => {
+    process.env.SOS_SSE_HEARTBEAT_MS = "50";
+    try {
+      vi.mocked(service.getSessionForOwner).mockResolvedValue({
+        ok: true,
+        httpCode: ResponseCode.OK,
+        message: SOS_MSG.PUBLIC_OK,
+        data: { sessionId: OID, status: "active", handlingStatus: "notified" },
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        const req = request(app)
+          .get(`${BASE}/${OID}/stream`)
+          .set("Authorization", auth)
+          .buffer(false)
+          .parse(
+            (
+              res: supertestTypes.Response,
+              _callback: (err: Error | null, body: unknown) => void,
+            ) => {
+              const stream = res as unknown as Readable;
+              stream.on("data", (chunk: Buffer) => {
+                if (chunk.toString().includes("notified")) {
+                  // Now revoke session while connection is idle
+                  stubAuthSessionLookup(() =>
+                    buildDbSession({
+                      _id: DEFAULT_AUTH_SESSION_ID,
+                      userId: "test-user-id",
+                      revokedAt: new Date(),
+                      revokedReason: "user_logout",
+                    }),
+                  );
+                }
+              });
+              stream.on("end", () => {
+                resolve();
+              });
+              stream.on("error", (err) => reject(err));
+            },
+          );
+        req.on("error", () => {});
+        req.end();
+        setTimeout(
+          () => reject(new Error("Idle stream did not terminate on heartbeat")),
+          4000,
+        );
+      });
+    } finally {
+      delete process.env.SOS_SSE_HEARTBEAT_MS;
+    }
+  });
+
+  it("fails closed and terminates stream when DB lookup throws an error", async () => {
+    vi.mocked(service.getSessionForOwner).mockResolvedValue({
+      ok: true,
+      httpCode: ResponseCode.OK,
+      message: SOS_MSG.PUBLIC_OK,
+      data: { sessionId: OID, status: "active", handlingStatus: "notified" },
+    });
+
+    const receivedChunks: string[] = [];
+
+    await new Promise<void>((resolve, reject) => {
+      const req = request(app)
+        .get(`${BASE}/${OID}/stream`)
+        .set("Authorization", auth)
+        .buffer(false)
+        .parse(
+          (
+            res: supertestTypes.Response,
+            _callback: (err: Error | null, body: unknown) => void,
+          ) => {
+            const stream = res as unknown as Readable;
+            stream.on("data", (chunk: Buffer) => {
+              receivedChunks.push(chunk.toString());
+              if (receivedChunks.join("").includes("notified")) {
+                // Simulate DB failure
+                stubAuthSessionLookup(() => {
+                  throw new Error("DB connection lost");
+                });
+                emitSosUpdate(OID, {
+                  sessionId: OID,
+                  status: "active",
+                  handlingStatus: "acknowledged",
+                  acknowledgements: [],
+                  timeline: [],
+                  location: { lat: 25.01, lng: 121.51, updatedAt: new Date() },
+                  updatedAt: new Date(),
+                });
+              }
+            });
+            stream.on("end", () => resolve());
+            stream.on("error", (err) => reject(err));
+          },
+        );
+      req.on("error", () => {});
+      req.end();
+      setTimeout(
+        () => reject(new Error("Stream did not terminate on DB failure")),
+        4000,
+      );
+    });
+
+    expect(receivedChunks.join("")).not.toContain("acknowledged");
+  });
+
+  it("terminates stream when tokenVersion changes (e.g. password reset)", async () => {
+    vi.mocked(service.getSessionForOwner).mockResolvedValue({
+      ok: true,
+      httpCode: ResponseCode.OK,
+      message: SOS_MSG.PUBLIC_OK,
+      data: { sessionId: OID, status: "active", handlingStatus: "notified" },
+    });
+
+    const receivedChunks: string[] = [];
+
+    await new Promise<void>((resolve, reject) => {
+      const req = request(app)
+        .get(`${BASE}/${OID}/stream`)
+        .set("Authorization", auth)
+        .buffer(false)
+        .parse(
+          (
+            res: supertestTypes.Response,
+            _callback: (err: Error | null, body: unknown) => void,
+          ) => {
+            const stream = res as unknown as Readable;
+            stream.on("data", (chunk: Buffer) => {
+              receivedChunks.push(chunk.toString());
+              if (receivedChunks.join("").includes("notified")) {
+                // Password changed -> tokenVersion bumped to 1
+                stubAuthUserLookup(() =>
+                  buildDbUser({ _id: "test-user-id", tokenVersion: 1 }),
+                );
+                emitSosUpdate(OID, {
+                  sessionId: OID,
+                  status: "active",
+                  handlingStatus: "acknowledged",
+                  acknowledgements: [],
+                  timeline: [],
+                  location: { lat: 25.01, lng: 121.51, updatedAt: new Date() },
+                  updatedAt: new Date(),
+                });
+              }
+            });
+            stream.on("end", () => resolve());
+            stream.on("error", (err) => reject(err));
+          },
+        );
+      req.on("error", () => {});
+      req.end();
+      setTimeout(
+        () => reject(new Error("Stream did not terminate on password reset")),
+        4000,
+      );
+    });
+
+    expect(receivedChunks.join("")).not.toContain("acknowledged");
   });
 });

@@ -8,7 +8,8 @@ declare global {
         query?: unknown;
         params?: unknown;
       };
-      auth?: { userId: string; user: IUser };
+      auth?: { userId: string; user: IUser; sessionId?: string };
+      clientMode?: "web" | "mobile";
     }
   }
 }

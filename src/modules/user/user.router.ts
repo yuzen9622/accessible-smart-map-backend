@@ -21,12 +21,19 @@ import {
 } from "./user.auth.controller";
 import { validateRequest } from "../../middleware/validate-request.middleware";
 import {
+  authCacheControl,
+  csrfProtection,
+  forgotLimiter,
   loginLimiter,
+  logoutLimiter,
+  passwordLimiter,
+  refreshLimiter,
   registerLimiter,
   resendLimiter,
-  forgotLimiter,
   resetLimiter,
-  passwordLimiter,
+  resolveClientMode,
+  validateLogoutTransport,
+  validateRefreshTransport,
 } from "./user.middleware";
 import {
   GoogleAuthBodySchema,
@@ -44,9 +51,14 @@ import {
 export function createUserRouter(): Router {
   const router = Router();
 
+  // Edge middlewares: cache headers and typed transport resolver
+  router.use(authCacheControl);
+  router.use(resolveClientMode);
+
   router.post(
     "/auth/google",
     loginLimiter,
+    csrfProtection,
     validateRequest({ body: GoogleAuthBodySchema }),
     googleAuth,
   );
@@ -59,11 +71,13 @@ export function createUserRouter(): Router {
   router.post(
     "/auth/login",
     loginLimiter,
+    csrfProtection,
     validateRequest({ body: LoginBodySchema }),
     login,
   );
   router.post(
     "/auth/verify-email",
+    csrfProtection,
     validateRequest({ body: VerifyEmailBodySchema }),
     verifyEmail,
   );
@@ -82,17 +96,25 @@ export function createUserRouter(): Router {
   router.post(
     "/auth/password/reset",
     resetLimiter,
+    csrfProtection,
     validateRequest({ body: ResetPasswordBodySchema }),
     resetPassword,
   );
   router.post(
     "/auth/password",
     passwordLimiter,
+    csrfProtection,
     validateRequest({ body: ChangePasswordBodySchema }),
     changePassword,
   );
 
-  router.post("/refresh", refresh);
+  router.post(
+    "/refresh",
+    refreshLimiter,
+    validateRefreshTransport,
+    csrfProtection,
+    refresh,
+  );
   router.get("/info", info);
   router.post("/line-link-code", lineLinkCode);
   router.post("/config", validateRequest({ body: ConfigBodySchema }), config);
@@ -107,7 +129,13 @@ export function createUserRouter(): Router {
     validateRequest({ body: UpdateA11yProfileBodySchema }),
     updateA11yProfile,
   );
-  router.post("/logout", logout);
+  router.post(
+    "/logout",
+    logoutLimiter,
+    validateLogoutTransport,
+    csrfProtection,
+    logout,
+  );
 
   return router;
 }

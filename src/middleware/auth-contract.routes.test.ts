@@ -336,6 +336,31 @@ describe("tokenVersion revocation regression (deleting the comparison turns this
   });
 });
 
+describe("no-store regression on middleware auth failure", () => {
+  it("sets Cache-Control: no-store and Pragma: no-cache when middleware rejects missing token", async () => {
+    const res = await request(app).get("/api/v1/user/info");
+    expect(res.status).toBe(ResponseCode.FORBIDDEN);
+    expect(res.headers["cache-control"]).toContain("no-store");
+    expect(res.headers["pragma"]).toBe("no-cache");
+  });
+
+  it("sets Cache-Control: no-store and Pragma: no-cache when middleware rejects expired token", async () => {
+    const res = await request(app)
+      .get("/api/v1/user/info")
+      .set("Authorization", expiredBearerFor());
+    expect(res.status).toBe(ResponseCode.UNAUTHORIZED);
+    expect(res.headers["cache-control"]).toContain("no-store");
+    expect(res.headers["pragma"]).toBe("no-cache");
+  });
+
+  it("sets Cache-Control: no-store and Pragma: no-cache on non-user middleware-guarded routes", async () => {
+    const res = await request(app).post("/api/v1/sos/sessions");
+    expect(res.status).toBe(ResponseCode.FORBIDDEN);
+    expect(res.headers["cache-control"]).toContain("no-store");
+    expect(res.headers["pragma"]).toBe("no-cache");
+  });
+});
+
 describe("IDOR: another user's resource is rejected with 403 (auth valid, ownership fails)", () => {
   it("DELETE /api/v1/a11y/reviews/:id — deleting someone else's review", async () => {
     vi.mocked(reviewService.deleteReview).mockResolvedValue({
