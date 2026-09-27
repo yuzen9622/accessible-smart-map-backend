@@ -1,7 +1,7 @@
 import type http from "http";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
 import { registerWsRoute } from "../../config/ws-upgrade";
-import { authenticateToken } from "../../config/auth";
+import { authenticateToken, verifyActiveSession } from "../../config/auth";
 import { createLiveBridge, type LiveBridge } from "./live-bridge";
 import { type NavPosition } from "./navigation.schema";
 import {
@@ -46,6 +46,8 @@ interface VoiceConnection {
 
 export interface AttachVoiceWebSocketOptions {
   authTimeoutMs?: number;
+  /** Bounded heartbeat and session re-check interval in ms. Default: 30000 (30s). */
+  heartbeatIntervalMs?: number;
 }
 
 const connections = new Map<string, VoiceConnection>();
@@ -116,10 +118,15 @@ function parseUserLocation(
  * @param ws The accepted WebSocket connection.
  * @param authTimeoutMs Milliseconds the client has to send session.start.
  */
-function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
+function handleConnection(
+  ws: WebSocket,
+  authTimeoutMs: number,
+  heartbeatIntervalMs: number = HEARTBEAT_INTERVAL_MS,
+): void {
   let authenticated = false;
   let authInFlight: Promise<void> | null = null;
   let authQueue: { data: RawData; isBinary: boolean }[] = [];
+  let authToken: string | null = null;
   let userId: string | null = null;
   let bridge: LiveBridge | null = null;
   let missedPongs = 0;
@@ -129,6 +136,7 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
   let pendingPosition: NavPosition | null = null;
   let pendingResume: NavResumeMessage | null = null;
   let pendingNavStart = false;
+  let messageChain: Promise<void> = Promise.resolve();
   /**
    * Always the latest arm-class operation, already caught. Resolves false when
    * the arm failed, so a queued nav.start can tell "armed" from "rejected".
@@ -159,18 +167,63 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload));
   };
 
-  const authTimer = setTimeout(() => {
+  const closeUnauthorized = (): void => {
+    if (disposed) return;
+    disposed = true;
+    connGen++;
+    navStartGen++;
+    pendingNavStart = false;
+    armChain = Promise.resolve(true);
+    pendingRouteToken = null;
+    pendingResume = null;
+    pendingPosition = null;
+    if (authTimer) {
+      clearTimeout(authTimer);
+      authTimer = null;
+    }
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+    if (bridge) {
+      bridge.close();
+      bridge = null;
+    }
+    if (userId && connections.get(userId)?.ws === ws) {
+      connections.delete(userId);
+    }
+    if (
+      ws.readyState === WebSocket.OPEN ||
+      ws.readyState === WebSocket.CONNECTING
+    ) {
+      ws.close(4401, "unauthorized");
+    }
+  };
+
+  let authTimer: NodeJS.Timeout | null = setTimeout(() => {
     if (!authenticated) ws.close(4401, "unauthorized");
   }, authTimeoutMs);
 
-  const heartbeatTimer = setInterval(() => {
+  let heartbeatTimer: NodeJS.Timeout | null = setInterval(async () => {
+    if (disposed || ws.readyState !== WebSocket.OPEN) return;
     if (missedPongs >= MAX_MISSED_PONGS) {
       ws.terminate();
       return;
     }
+    if (authenticated && authToken) {
+      const valid = await verifyActiveSession(
+        authToken,
+        userId ?? undefined,
+      ).catch(() => false);
+      if (!valid) {
+        closeUnauthorized();
+        return;
+      }
+    }
+    if (disposed || ws.readyState !== WebSocket.OPEN) return;
     missedPongs++;
     ws.ping();
-  }, HEARTBEAT_INTERVAL_MS);
+  }, heartbeatIntervalMs);
 
   const handleAuthMessage = async (
     data: RawData,
@@ -206,10 +259,14 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
       ws.close(4401, "unauthorized");
       return;
     }
+    authToken = handshake.data.token;
     const id = result.userId;
     authenticated = true;
     const generation = ++connGen;
-    clearTimeout(authTimer);
+    if (authTimer) {
+      clearTimeout(authTimer);
+      authTimer = null;
+    }
     userId = id;
     const userLocation = parseUserLocation(handshake.data.userLocation);
     const existing = connections.get(id);
@@ -224,7 +281,7 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
     const queued = authQueue;
     authQueue = [];
     for (const frame of queued) {
-      if (ws.readyState !== WebSocket.OPEN) break;
+      if (ws.readyState !== WebSocket.OPEN || disposed) break;
       if (frame.isBinary) bridge?.sendAudio(rawDataToBuffer(frame.data));
       else handleControlMessage(frame.data);
     }
@@ -270,6 +327,9 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
         connections.get(id) !== connection
       ) {
         createdBridge.close();
+        if (connections.get(id) === connection) {
+          connections.delete(id);
+        }
         return;
       }
       bridge = createdBridge;
@@ -465,11 +525,33 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
       authInFlight = handleAuthMessage(data, isBinary);
       return;
     }
-    if (isBinary) {
-      bridge?.sendAudio(rawDataToBuffer(data));
-      return;
-    }
-    handleControlMessage(data);
+
+    messageChain = messageChain
+      .then(async () => {
+        if (disposed || ws.readyState !== WebSocket.OPEN) return;
+        const valid = authToken
+          ? await verifyActiveSession(authToken, userId ?? undefined).catch(
+              () => false,
+            )
+          : false;
+        if (!valid) {
+          closeUnauthorized();
+          return;
+        }
+        if (disposed || ws.readyState !== WebSocket.OPEN) return;
+        if (isBinary) {
+          bridge?.sendAudio(rawDataToBuffer(data));
+          return;
+        }
+        handleControlMessage(data);
+      })
+      .catch((err) => {
+        console.error(
+          "[voice] message processing failed:",
+          err instanceof Error ? err.message : String(err),
+        );
+        closeUnauthorized();
+      });
   });
 
   ws.on("close", () => {
@@ -481,9 +563,18 @@ function handleConnection(ws: WebSocket, authTimeoutMs: number): void {
     pendingRouteToken = null;
     pendingResume = null;
     pendingPosition = null;
-    clearTimeout(authTimer);
-    clearInterval(heartbeatTimer);
-    bridge?.close();
+    if (authTimer) {
+      clearTimeout(authTimer);
+      authTimer = null;
+    }
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+    if (bridge) {
+      bridge.close();
+      bridge = null;
+    }
     if (userId && connections.get(userId)?.ws === ws) {
       connections.delete(userId);
     }
@@ -509,6 +600,8 @@ export function attachVoiceWebSocket(
   options: AttachVoiceWebSocketOptions = {},
 ): void {
   const authTimeoutMs = options.authTimeoutMs ?? DEFAULT_AUTH_TIMEOUT_MS;
+  const heartbeatIntervalMs =
+    options.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS;
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: VOICE_MAX_PAYLOAD_BYTES,
@@ -517,6 +610,6 @@ export function attachVoiceWebSocket(
   registerWsRoute(server, { path: VOICE_WS_PATH, wss });
 
   wss.on("connection", (ws: WebSocket) => {
-    handleConnection(ws, authTimeoutMs);
+    handleConnection(ws, authTimeoutMs, heartbeatIntervalMs);
   });
 }

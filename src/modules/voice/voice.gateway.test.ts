@@ -31,7 +31,10 @@ import { attachVoiceWebSocket } from "./voice.gateway";
 import { createLiveBridge } from "./live-bridge";
 import {
   buildDbUser,
+  buildDbSession,
   stubAuthUserLookup,
+  stubAuthSessionLookup,
+  DEFAULT_AUTH_SESSION_ID,
 } from "../../../tests/helpers/real-auth";
 
 const mockCreateLiveBridge = createLiveBridge as unknown as ReturnType<
@@ -52,15 +55,22 @@ const openSockets: WebSocket[] = [];
  * @param userId The user _id embedded in the JWT payload.
  * @returns A signed access token string.
  */
-function signToken(userId: string): string {
-  return jwt.sign(
-    {
-      user: {
-        _id: userId,
-        email: `${userId}@example.com`,
-        tokenVersion: 0,
-      },
+function signToken(
+  userId: string,
+  sid: string | null = DEFAULT_AUTH_SESSION_ID,
+): string {
+  const payload: Record<string, unknown> = {
+    user: {
+      _id: userId,
+      email: `${userId}@example.com`,
+      tokenVersion: 0,
     },
+  };
+  if (sid !== null) {
+    payload.sid = sid;
+  }
+  return jwt.sign(
+    payload,
     process.env.JWT_ACCESS_SECRET ?? "test-access-secret",
   );
 }
@@ -155,6 +165,7 @@ afterEach(() => {
     ws.terminate();
   }
   vi.clearAllMocks();
+  stubAuthUserLookup((id) => buildDbUser({ _id: id }));
 });
 
 afterAll(async () => {
@@ -174,6 +185,19 @@ describe("voice gateway", () => {
     await waitForOpen(ws);
     ws.send(
       JSON.stringify({ type: "session.start", token: "not-a-valid-token" }),
+    );
+    const { code } = await waitForClose(ws);
+    expect(code).toBe(4401);
+  });
+
+  it("closes 4401 when session.start carries a legacy sid-less token", async () => {
+    const ws = connect();
+    await waitForOpen(ws);
+    ws.send(
+      JSON.stringify({
+        type: "session.start",
+        token: signToken("voice-user-sidless", null),
+      }),
     );
     const { code } = await waitForClose(ws);
     expect(code).toBe(4401);
@@ -715,5 +739,244 @@ describe("voice gateway", () => {
       ws.on("error", (err) => resolve(err));
     });
     expect(error.message).toContain("404");
+  });
+
+  it("closes 4401 and does not pass audio to bridge when session is revoked after handshake", async () => {
+    const ws = connect();
+    await waitForOpen(ws);
+    const ready = waitForJson(ws);
+    sendSessionStart(ws, "voice-user-logout-audio");
+    await ready;
+    const bridge = await mockCreateLiveBridge.mock.results.at(-1)!.value;
+
+    // Simulate session revocation in DB (logout)
+    stubAuthSessionLookup((sid) =>
+      buildDbSession({
+        _id: sid,
+        userId: "voice-user-logout-audio",
+        revokedAt: new Date(),
+        revokedReason: "user_logout",
+      }),
+    );
+
+    const closed = waitForClose(ws);
+    ws.send(Buffer.from([0x01, 0x02, 0x03]));
+    const result = await closed;
+
+    expect(result.code).toBe(4401);
+    expect(result.reason).toBe("unauthorized");
+    expect(bridge.sendAudio).not.toHaveBeenCalled();
+  });
+
+  it("closes 4401 and does not pass control frame to bridge when session is revoked after handshake", async () => {
+    const ws = connect();
+    await waitForOpen(ws);
+    const ready = waitForJson(ws);
+    sendSessionStart(ws, "voice-user-logout-control");
+    await ready;
+    const bridge = await mockCreateLiveBridge.mock.results.at(-1)!.value;
+
+    // Simulate session revocation in DB (logout)
+    stubAuthSessionLookup((sid) =>
+      buildDbSession({
+        _id: sid,
+        userId: "voice-user-logout-control",
+        revokedAt: new Date(),
+        revokedReason: "user_logout",
+      }),
+    );
+
+    const closed = waitForClose(ws);
+    ws.send(JSON.stringify({ type: "nav.setRoute", routeToken: "cap-secret" }));
+    const result = await closed;
+
+    expect(result.code).toBe(4401);
+    expect(result.reason).toBe("unauthorized");
+    expect(bridge.armRouteToken).not.toHaveBeenCalled();
+  });
+
+  it("closes 4401 and drops subsequent frames when user tokenVersion increments (e.g. password reset)", async () => {
+    const ws = connect();
+    await waitForOpen(ws);
+    const ready = waitForJson(ws);
+    sendSessionStart(ws, "voice-user-password-reset");
+    await ready;
+    const bridge = await mockCreateLiveBridge.mock.results.at(-1)!.value;
+
+    // Password reset / change in DB bumps tokenVersion to 1
+    stubAuthUserLookup((id) => buildDbUser({ _id: id, tokenVersion: 1 }));
+
+    const closed = waitForClose(ws);
+    ws.send(Buffer.from([0x09, 0x08, 0x07]));
+    const result = await closed;
+
+    expect(result.code).toBe(4401);
+    expect(result.reason).toBe("unauthorized");
+    expect(bridge.sendAudio).not.toHaveBeenCalled();
+  });
+
+  it("fails closed with 4401 when DB lookup throws an error during message re-verification", async () => {
+    const ws = connect();
+    await waitForOpen(ws);
+    const ready = waitForJson(ws);
+    sendSessionStart(ws, "voice-user-db-fail");
+    await ready;
+    const bridge = await mockCreateLiveBridge.mock.results.at(-1)!.value;
+
+    // Simulate DB failure
+    stubAuthSessionLookup(() => {
+      throw new Error("DB connection lost");
+    });
+
+    const closed = waitForClose(ws);
+    ws.send(
+      JSON.stringify({ type: "nav.position", latitude: 25, longitude: 121 }),
+    );
+    const result = await closed;
+
+    expect(result.code).toBe(4401);
+    expect(result.reason).toBe("unauthorized");
+    expect(bridge.updatePosition).not.toHaveBeenCalled();
+  });
+
+  it("terminates idle connection on heartbeat tick when session is revoked", async () => {
+    const idleServer = http.createServer(app);
+    attachVoiceWebSocket(idleServer, {
+      authTimeoutMs: AUTH_TIMEOUT_MS,
+      heartbeatIntervalMs: 50,
+    });
+    await new Promise<void>((resolve) =>
+      idleServer.listen(0, "127.0.0.1", resolve),
+    );
+    const idlePort = (idleServer.address() as AddressInfo).port;
+
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${idlePort}/api/v1/voice/ws`);
+      openSockets.push(ws);
+      await waitForOpen(ws);
+      const ready = waitForJson(ws);
+      ws.send(
+        JSON.stringify({
+          type: "session.start",
+          token: signToken("voice-user-idle-heartbeat"),
+        }),
+      );
+      await ready;
+
+      // Revoke session in DB while idle (client sends no messages)
+      stubAuthSessionLookup((sid) =>
+        buildDbSession({
+          _id: sid,
+          userId: "voice-user-idle-heartbeat",
+          revokedAt: new Date(),
+          revokedReason: "user_logout",
+        }),
+      );
+
+      const closed = waitForClose(ws);
+      const result = await closed;
+      expect(result.code).toBe(4401);
+      expect(result.reason).toBe("unauthorized");
+    } finally {
+      await new Promise<void>((resolve) => idleServer.close(() => resolve()));
+    }
+  });
+
+  it("handles client close during in-flight message re-verification without bridge leakage or error", async () => {
+    const ws = connect();
+    await waitForOpen(ws);
+    const ready = waitForJson(ws);
+    sendSessionStart(ws, "voice-user-reverify-close-race");
+    await ready;
+    const bridge = await mockCreateLiveBridge.mock.results.at(-1)!.value;
+
+    let releaseReverify!: () => void;
+    const reverifyGate = new Promise<void>((resolve) => {
+      releaseReverify = resolve;
+    });
+
+    stubAuthSessionLookup(async (sid) => {
+      await reverifyGate;
+      return buildDbSession({
+        _id: sid,
+        userId: "voice-user-reverify-close-race",
+      });
+    });
+
+    // Send frame which triggers async DB lookup
+    ws.send(Buffer.from([0xaa, 0xbb]));
+    // Close the socket immediately while lookup is pending
+    const closed = waitForClose(ws);
+    ws.close(1000, "client-aborted");
+    await closed;
+
+    // Now let the DB lookup complete
+    releaseReverify();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(bridge.sendAudio).not.toHaveBeenCalled();
+  });
+
+  it("cleans up connection and closes bridge if socket closes during handshake", async () => {
+    let resolveBridge!: (bridge: unknown) => void;
+    const pending = new Promise<unknown>((resolve) => {
+      resolveBridge = resolve;
+    });
+    mockCreateLiveBridge.mockImplementationOnce(() => pending);
+
+    const ws = connect();
+    await waitForOpen(ws);
+    sendSessionStart(ws, "voice-user-handshake-race");
+
+    // Close socket while handshake/bridge creation is in flight
+    const closed = waitForClose(ws);
+    ws.close(1000, "abort-handshake");
+    await closed;
+
+    const bridge = {
+      sendAudio: vi.fn(),
+      armRouteToken: vi.fn(async () => true),
+      startNavigation: vi.fn(),
+      updatePosition: vi.fn(),
+      cancelNav: vi.fn(),
+      close: vi.fn(),
+      voiceReady: Promise.resolve(),
+    };
+    resolveBridge(bridge);
+
+    await vi.waitFor(() => expect(bridge.close).toHaveBeenCalledOnce());
+    expect(bridge.armRouteToken).not.toHaveBeenCalled();
+    expect(bridge.sendAudio).not.toHaveBeenCalled();
+  });
+
+  it("preserves sequential frame order during async verification avoiding audio/control races", async () => {
+    const ws = connect();
+    await waitForOpen(ws);
+    const ready = waitForJson(ws);
+    sendSessionStart(ws, "voice-user-order-race");
+    await ready;
+    const bridge = await mockCreateLiveBridge.mock.results.at(-1)!.value;
+
+    const executionOrder: string[] = [];
+    bridge.sendAudio.mockImplementation(() => {
+      executionOrder.push("audio");
+    });
+    bridge.updatePosition.mockImplementation(() => {
+      executionOrder.push("position");
+    });
+
+    // Send rapid sequence of frames: audio -> position -> audio
+    ws.send(Buffer.from([0x01]));
+    ws.send(
+      JSON.stringify({
+        type: "nav.position",
+        latitude: 25.1,
+        longitude: 121.5,
+      }),
+    );
+    ws.send(Buffer.from([0x02]));
+
+    await vi.waitFor(() => expect(executionOrder).toHaveLength(3));
+    expect(executionOrder).toEqual(["audio", "position", "audio"]);
   });
 });
