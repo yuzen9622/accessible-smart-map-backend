@@ -1,10 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../model/user.model", () => ({
   default: {
     findOne: vi.fn(),
     findById: vi.fn(),
     findOneAndUpdate: vi.fn(),
+    create: vi.fn(),
   },
 }));
 
@@ -67,7 +68,10 @@ import {
   renewPasswordAssistanceLease,
 } from "./user.password-assistance.queue";
 import {
+  AuthError,
+  authenticateWithGoogle,
   changePassword,
+  getGoogleAudiences,
   logoutSession,
   processPasswordAssistance,
   refreshSession,
@@ -80,6 +84,7 @@ import {
   revokeSession,
   rotateSession,
 } from "./user.auth-session.repository";
+import { OAuth2Client } from "google-auth-library";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { createRefreshToken } from "../../config/jwt";
@@ -109,10 +114,20 @@ function makeUser(overrides: Partial<IUser> = {}): IUser {
   };
 }
 
+const ORIGINAL_ENV = { ...process.env };
+
 beforeEach(() => {
   vi.resetAllMocks();
+  for (const key of Object.keys(process.env)) {
+    if (!(key in ORIGINAL_ENV)) {
+      delete process.env[key];
+    }
+  }
+  Object.assign(process.env, ORIGINAL_ENV);
   process.env.PASSWORD_RESET_TOKEN_SECRET =
     "test-secret-that-is-at-least-32-bytes-long";
+  process.env.JWT_ACCESS_SECRET = "test-jwt-access-secret";
+  process.env.JWT_REFRESH_SECRET = "test-jwt-refresh-secret";
   vi.mocked(getOrSetPasswordResetExpiry).mockResolvedValue(
     new Date("2030-01-01T01:00:00Z"),
   );
@@ -125,6 +140,15 @@ beforeEach(() => {
     expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
   });
   vi.mocked(revokeAllSessionsByUserId).mockResolvedValue(1);
+});
+
+afterEach(() => {
+  for (const key of Object.keys(process.env)) {
+    if (!(key in ORIGINAL_ENV)) {
+      delete process.env[key];
+    }
+  }
+  Object.assign(process.env, ORIGINAL_ENV);
 });
 
 describe("requestPasswordReset", () => {
@@ -787,5 +811,292 @@ describe("logoutSession", () => {
     );
 
     await expect(logoutSession(token)).rejects.toThrow("Mongo network error");
+  });
+});
+
+describe("getGoogleAudiences", () => {
+  it("parses comma-separated values, trims whitespace, and deduplicates in GOOGLE_CLIENT_IDS", () => {
+    process.env.GOOGLE_CLIENT_IDS =
+      "  aud-web , aud-mobile , aud-web , , aud-tablet  ";
+    delete process.env.GOOGLE_CLIENT_ID;
+
+    expect(getGoogleAudiences()).toEqual([
+      "aud-web",
+      "aud-mobile",
+      "aud-tablet",
+    ]);
+  });
+
+  it("prioritizes GOOGLE_CLIENT_IDS exclusively over GOOGLE_CLIENT_ID without merging", () => {
+    process.env.GOOGLE_CLIENT_IDS = "aud-new-1, aud-new-2";
+    process.env.GOOGLE_CLIENT_ID = "aud-legacy";
+
+    expect(getGoogleAudiences()).toEqual(["aud-new-1", "aud-new-2"]);
+  });
+
+  it("falls back to trimmed GOOGLE_CLIENT_ID when GOOGLE_CLIENT_IDS is undefined", () => {
+    delete process.env.GOOGLE_CLIENT_IDS;
+    process.env.GOOGLE_CLIENT_ID = "  aud-legacy  ";
+
+    expect(getGoogleAudiences()).toEqual(["aud-legacy"]);
+  });
+
+  it("fails closed when GOOGLE_CLIENT_IDS is defined but empty or only whitespace/commas, and never falls back to legacy", () => {
+    process.env.GOOGLE_CLIENT_IDS = "  ,  ,  ";
+    process.env.GOOGLE_CLIENT_ID = "aud-legacy";
+
+    expect(() => getGoogleAudiences()).toThrow(
+      "GOOGLE_CLIENT_IDS is configured but contains no valid client ID",
+    );
+  });
+
+  it("fails closed when GOOGLE_CLIENT_IDS is undefined and GOOGLE_CLIENT_ID is undefined or only whitespace", () => {
+    delete process.env.GOOGLE_CLIENT_IDS;
+    process.env.GOOGLE_CLIENT_ID = "    ";
+
+    expect(() => getGoogleAudiences()).toThrow(
+      "GOOGLE_CLIENT_ID is not configured",
+    );
+
+    delete process.env.GOOGLE_CLIENT_ID;
+    expect(() => getGoogleAudiences()).toThrow(
+      "GOOGLE_CLIENT_ID is not configured",
+    );
+  });
+});
+
+describe("authenticateWithGoogle", () => {
+  let verifyIdTokenSpy: ReturnType<typeof vi.spyOn>;
+  let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+
+  const mockPayload = {
+    sub: "google-sub-12345",
+    email: "jane@example.com",
+    email_verified: true,
+    name: "Jane Doe",
+    picture: "https://example.com/avatar.jpg",
+  };
+
+  const existingGoogleUser = {
+    _id: "665f1a2b3c4d5e6f7a8b9c0d",
+    client_id: "google-sub-12345",
+    email: "jane@example.com",
+    name: "Jane Doe",
+    emailVerified: true,
+    authProviders: ["google"],
+    tokenVersion: 0,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  beforeEach(() => {
+    verifyIdTokenSpy = vi.spyOn(OAuth2Client.prototype, "verifyIdToken");
+    consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(Config.findOne).mockResolvedValue({
+      user_id: existingGoogleUser._id,
+      wheelChair: false,
+    } as any);
+  });
+
+  afterEach(() => {
+    verifyIdTokenSpy.mockRestore();
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("passes parsed and deduplicated audiences array to verifyIdToken when GOOGLE_CLIENT_IDS is set", async () => {
+    process.env.GOOGLE_CLIENT_IDS =
+      "web-client-id, mobile-client-id, web-client-id";
+    delete process.env.GOOGLE_CLIENT_ID;
+
+    verifyIdTokenSpy.mockResolvedValue({
+      getPayload: () => mockPayload,
+    } as any);
+    vi.mocked(User.findOne).mockResolvedValue(existingGoogleUser as any);
+
+    const result = await authenticateWithGoogle("valid-token-1");
+
+    expect(verifyIdTokenSpy).toHaveBeenCalledTimes(1);
+    expect(verifyIdTokenSpy).toHaveBeenCalledWith({
+      idToken: "valid-token-1",
+      audience: ["web-client-id", "mobile-client-id"],
+    });
+    expect(result.user.email).toBe("jane@example.com");
+    expect(result.accessToken).toBeTruthy();
+    expect(result.refreshToken).toBeTruthy();
+  });
+
+  it("trims whitespace and ignores empty entries in GOOGLE_CLIENT_IDS", async () => {
+    process.env.GOOGLE_CLIENT_IDS = "  client-1 ,  client-2 , , client-1  ,  ";
+    delete process.env.GOOGLE_CLIENT_ID;
+
+    verifyIdTokenSpy.mockResolvedValue({
+      getPayload: () => mockPayload,
+    } as any);
+    vi.mocked(User.findOne).mockResolvedValue(existingGoogleUser as any);
+
+    await authenticateWithGoogle("token-trim-test");
+
+    expect(verifyIdTokenSpy).toHaveBeenCalledWith({
+      idToken: "token-trim-test",
+      audience: ["client-1", "client-2"],
+    });
+  });
+
+  it("gives GOOGLE_CLIENT_IDS exclusive precedence over GOOGLE_CLIENT_ID without merging", async () => {
+    process.env.GOOGLE_CLIENT_IDS = "new-audience-a, new-audience-b";
+    process.env.GOOGLE_CLIENT_ID = "legacy-audience-should-be-ignored";
+
+    verifyIdTokenSpy.mockResolvedValue({
+      getPayload: () => mockPayload,
+    } as any);
+    vi.mocked(User.findOne).mockResolvedValue(existingGoogleUser as any);
+
+    await authenticateWithGoogle("token-precedence-test");
+
+    expect(verifyIdTokenSpy).toHaveBeenCalledWith({
+      idToken: "token-precedence-test",
+      audience: ["new-audience-a", "new-audience-b"],
+    });
+  });
+
+  it("falls back to trimmed single GOOGLE_CLIENT_ID only when GOOGLE_CLIENT_IDS is undefined", async () => {
+    delete process.env.GOOGLE_CLIENT_IDS;
+    process.env.GOOGLE_CLIENT_ID = "  legacy-single-client-id  ";
+
+    verifyIdTokenSpy.mockResolvedValue({
+      getPayload: () => mockPayload,
+    } as any);
+    vi.mocked(User.findOne).mockResolvedValue(existingGoogleUser as any);
+
+    await authenticateWithGoogle("token-legacy-test");
+
+    expect(verifyIdTokenSpy).toHaveBeenCalledWith({
+      idToken: "token-legacy-test",
+      audience: ["legacy-single-client-id"],
+    });
+  });
+
+  it("fails closed when GOOGLE_CLIENT_IDS is set but empty or contains only whitespace, and does NOT fallback to legacy", async () => {
+    process.env.GOOGLE_CLIENT_IDS = "   ,   ";
+    process.env.GOOGLE_CLIENT_ID = "legacy-single-client-id";
+
+    await expect(authenticateWithGoogle("token-empty-ids")).rejects.toThrow(
+      "GOOGLE_CLIENT_IDS is configured but contains no valid client ID",
+    );
+    expect(verifyIdTokenSpy).not.toHaveBeenCalled();
+    expect(User.findOne).not.toHaveBeenCalled();
+    expect(Config.findOne).not.toHaveBeenCalled();
+    expect(Config.create).not.toHaveBeenCalled();
+    expect(createSession).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when GOOGLE_CLIENT_IDS is unset and GOOGLE_CLIENT_ID is unset or whitespace", async () => {
+    delete process.env.GOOGLE_CLIENT_IDS;
+    process.env.GOOGLE_CLIENT_ID = "   ";
+
+    await expect(
+      authenticateWithGoogle("token-missing-config"),
+    ).rejects.toThrow("GOOGLE_CLIENT_ID is not configured");
+    expect(verifyIdTokenSpy).not.toHaveBeenCalled();
+    expect(User.findOne).not.toHaveBeenCalled();
+    expect(Config.findOne).not.toHaveBeenCalled();
+    expect(Config.create).not.toHaveBeenCalled();
+    expect(createSession).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when both GOOGLE_CLIENT_IDS and GOOGLE_CLIENT_ID are undefined", async () => {
+    delete process.env.GOOGLE_CLIENT_IDS;
+    delete process.env.GOOGLE_CLIENT_ID;
+
+    await expect(authenticateWithGoogle("token-no-env")).rejects.toThrow(
+      "GOOGLE_CLIENT_ID is not configured",
+    );
+    expect(verifyIdTokenSpy).not.toHaveBeenCalled();
+    expect(User.findOne).not.toHaveBeenCalled();
+    expect(Config.findOne).not.toHaveBeenCalled();
+    expect(Config.create).not.toHaveBeenCalled();
+    expect(createSession).not.toHaveBeenCalled();
+  });
+
+  it("rejects unallowed audience at verifier stage with AuthError(INVALID_TOKEN) without calling User.findOne, config writes, or createSession", async () => {
+    process.env.GOOGLE_CLIENT_IDS = "allowed-audience-1, allowed-audience-2";
+
+    verifyIdTokenSpy.mockRejectedValue(
+      new Error("Wrong recipient, payload audience != requiredAudience"),
+    );
+
+    await expect(authenticateWithGoogle("token-unallowed-aud")).rejects.toThrow(
+      AuthError,
+    );
+    await expect(authenticateWithGoogle("token-unallowed-aud")).rejects.toThrow(
+      "INVALID_TOKEN",
+    );
+
+    expect(verifyIdTokenSpy).toHaveBeenCalledWith({
+      idToken: "token-unallowed-aud",
+      audience: ["allowed-audience-1", "allowed-audience-2"],
+    });
+
+    // Verify zero side-effects before rejection
+    expect(User.findOne).not.toHaveBeenCalled();
+    expect(Config.findOne).not.toHaveBeenCalled();
+    expect(Config.create).not.toHaveBeenCalled();
+    expect(createSession).not.toHaveBeenCalled();
+  });
+
+  it("resolves the same existing user account via sub lookup regardless of which allowed audience issued the token", async () => {
+    process.env.GOOGLE_CLIENT_IDS = "web-client-id, mobile-client-id";
+
+    // Simulate tokens from different audiences, both carrying the same verified sub
+    const tokenFromWeb = "token-from-web-client";
+    const tokenFromMobile = "token-from-mobile-client";
+
+    verifyIdTokenSpy.mockImplementation(
+      async ({ idToken }: { idToken?: string }) => {
+        if (idToken === tokenFromWeb) {
+          return {
+            getPayload: () => ({
+              ...mockPayload,
+              aud: "web-client-id",
+            }),
+          } as any;
+        }
+        if (idToken === tokenFromMobile) {
+          return {
+            getPayload: () => ({
+              ...mockPayload,
+              aud: "mobile-client-id",
+            }),
+          } as any;
+        }
+        throw new Error("Unexpected token");
+      },
+    );
+
+    vi.mocked(User.findOne).mockResolvedValue(existingGoogleUser as any);
+
+    // Call 1: from Web audience
+    const result1 = await authenticateWithGoogle(tokenFromWeb);
+    expect(result1.user._id).toBe(existingGoogleUser._id);
+    expect(User.findOne).toHaveBeenCalledWith({
+      client_id: mockPayload.sub,
+    });
+
+    // Call 2: from Mobile audience
+    const result2 = await authenticateWithGoogle(tokenFromMobile);
+    expect(result2.user._id).toBe(existingGoogleUser._id);
+    expect(User.findOne).toHaveBeenCalledWith({
+      client_id: mockPayload.sub,
+    });
+
+    // Verifier was invoked with the full allowlist for both tokens
+    expect(verifyIdTokenSpy).toHaveBeenNthCalledWith(1, {
+      idToken: tokenFromWeb,
+      audience: ["web-client-id", "mobile-client-id"],
+    });
+    expect(verifyIdTokenSpy).toHaveBeenNthCalledWith(2, {
+      idToken: tokenFromMobile,
+      audience: ["web-client-id", "mobile-client-id"],
+    });
   });
 });

@@ -513,6 +513,32 @@ function getGoogleClient(): OAuth2Client {
   return googleClient;
 }
 
+export function getGoogleAudiences(): string[] {
+  if (process.env.GOOGLE_CLIENT_IDS !== undefined) {
+    const raw = process.env.GOOGLE_CLIENT_IDS;
+    const audiences = Array.from(
+      new Set(
+        raw
+          .split(",")
+          .map((id) => id.trim())
+          .filter((id) => id.length > 0),
+      ),
+    );
+    if (audiences.length === 0) {
+      throw new Error(
+        "GOOGLE_CLIENT_IDS is configured but contains no valid client ID",
+      );
+    }
+    return audiences;
+  }
+
+  const legacy = process.env.GOOGLE_CLIENT_ID?.trim();
+  if (!legacy) {
+    throw new Error("GOOGLE_CLIENT_ID is not configured");
+  }
+  return [legacy];
+}
+
 /**
  * Verify a Google ID token server-side and resolve it to an account.
  *
@@ -531,10 +557,7 @@ export async function authenticateWithGoogle(idToken: string): Promise<{
   accessToken: string;
   refreshToken: string;
 }> {
-  const audience = process.env.GOOGLE_CLIENT_ID;
-  if (!audience) {
-    throw new Error("GOOGLE_CLIENT_ID is not configured");
-  }
+  const audience = getGoogleAudiences();
 
   let payload;
   try {
