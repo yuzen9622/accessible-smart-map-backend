@@ -31,7 +31,7 @@ const res = await fetch("/api/v1/user/auth/google", {
 
 回應形狀與舊 `/login` 相同：`{ ok, status, code, message, data: { user, config }, accessToken }`。
 
-> 後端需要 `GOOGLE_CLIENT_ID` 環境變數，且必須與前端使用的 OAuth client ID 一致，否則所有 Google 登入都會 401。
+> 後端以 `GOOGLE_CLIENT_IDS`（逗號分隔；未設定時相容舊的 `GOOGLE_CLIENT_ID`）allowlist 驗證 Google ID token。清單只應包含實際送到此 backend 的 token `aud`；請依原生 SDK 的 server-client 設定確認，不要直接假定所有 iOS／Android platform OAuth IDs 都是 token audience。
 
 ---
 
@@ -184,7 +184,7 @@ TTL 1 小時、一次性。密碼規則同註冊。無效 → 401 `INVALID_TOKEN
 ## 五、後端部署前置（不是前端的事，但會影響你能不能測）
 
 1. **必須先跑 `pnpm migrate:auth`，再重建 image。** 除了替換舊的 user indexes，migration 會刪除舊 `AuthToken(password_reset)`（舊連結需重新申請）、移除其餘重複 auth token，並建立 `(userId, type)` 唯一索引。新的 password-reset token entries 直接存在 User document；每個 queue job 的連結彼此獨立，兌換時會在同一個原子操作內更新密碼，並只把實際命中的 entry 標為 consumed。
-2. 新環境變數：`GOOGLE_CLIENT_ID`、`RESEND_API_KEY`、`RESEND_FROM`、`APP_WEB_BASE_URL`、`PASSWORD_RESET_TOKEN_SECRET`、`TRUST_PROXY_HOPS`。`PASSWORD_RESET_TOKEN_SECRET` 至少 32 bytes，且跨部署必須保持不變，讓同一 queue job 的重試使用相同 reset token。
+2. Google audience 設定可使用新環境變數 `GOOGLE_CLIENT_IDS`（逗號分隔、只列出實際 backend token audiences）；它設定時具有優先權且不與舊值合併。未設定時相容單一 `GOOGLE_CLIENT_ID`。其他新環境變數：`RESEND_API_KEY`、`RESEND_FROM`、`APP_WEB_BASE_URL`、`PASSWORD_RESET_TOKEN_SECRET`、`TRUST_PROXY_HOPS`。`PASSWORD_RESET_TOKEN_SECRET` 至少 32 bytes，且跨部署必須保持不變，讓同一 queue job 的重試使用相同 reset token。
 3. `RESEND_API_KEY` 未設定時寄信會 fail closed；背景帳號協助 job 會重試，且不會把一次性 token 寫入 log。若要在本機測完整信件流程，必須提供測試用 Resend key。
 4. `RESEND_FROM` 的網域（`2026.yuzen.dev`）**必須先在 Resend 完成 DNS 驗證**，否則寄信會被拒。
 5. MongoDB 連線成功後，API process 會自動啟動 password-assistance worker；queue job 以 majority+journal write concern 寫入 MongoDB，不依賴無持久化的 Redis cache。Worker 以 lease fencing 防止舊 instance 完成新 lease 的工作，並以 job ID 產生穩定 reset token 與 Resend `Idempotency-Key`；同一小時內不同 job 的連結可並存且各自一次性，避免背景寄送競態讓最新抵達的信件一開始就失效。
