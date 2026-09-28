@@ -296,7 +296,7 @@ registry.registerPath({
   tags: ["User"],
   summary: "Google 登入",
   description:
-    "後端以 GOOGLE_CLIENT_ID 驗證前端傳來的 Google ID token，身分僅取自驗證後的 payload。" +
+    "後端以 GOOGLE_CLIENT_IDS（逗號分隔；未設定時相容 GOOGLE_CLIENT_ID）作為 audience allowlist 驗證 Google ID token，身分僅取自驗證後的 payload。" +
     "同 email 的既有帳號會自動連結；若該帳號原為未驗證的帳密帳號，其密碼會被移除並撤銷既有權杖。" +
     "Web 模式存取權杖於 body，refresh 權杖寫入 httpOnly cookie（有效期限 1 天 / 1d）；Mobile 模式（X-Client: mobile）於回應 body 同時回傳 accessToken 與 refreshToken，不設定 Set-Cookie。",
   parameters: [
@@ -325,7 +325,9 @@ registry.registerPath({
     401: errorResponse("ID token 無效"),
     403: errorResponse("Web 模式 CSRF Origin / Referer 驗證失敗"),
     429: errorResponse("登入請求過於頻繁"),
-    500: errorResponse("伺服器錯誤或未設定 GOOGLE_CLIENT_ID"),
+    500: errorResponse(
+      "伺服器錯誤或未設定 GOOGLE_CLIENT_IDS / GOOGLE_CLIENT_ID",
+    ),
   },
 });
 
