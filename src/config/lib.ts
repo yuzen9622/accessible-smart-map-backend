@@ -1,6 +1,7 @@
 import { ResponseCode } from "../types/code";
 import { Response } from "express";
 import type { ApiResponse } from "../types/response";
+import { REFRESH_TOKEN_TTL_MS } from "./jwt";
 
 function stripRedundancies(obj: any): any {
   if (!obj || typeof obj !== "object") {
@@ -85,7 +86,7 @@ export const sendResponse = <T = unknown>(
     res.cookie("refreshToken", refreshToken, {
       httpOnly: true,
       secure: process.env.SECURE_COOKIE === "true",
-      maxAge: 24 * 60 * 60 * 1000,
+      maxAge: REFRESH_TOKEN_TTL_MS,
       sameSite: process.env.SECURE_COOKIE === "true" ? "none" : "lax",
     });
   }

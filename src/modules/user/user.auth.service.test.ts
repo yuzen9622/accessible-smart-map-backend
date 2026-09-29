@@ -72,11 +72,13 @@ import {
   authenticateWithGoogle,
   changePassword,
   getGoogleAudiences,
+  loginLocalUser,
   logoutSession,
   processPasswordAssistance,
   refreshSession,
   requestPasswordReset,
   resetPassword,
+  verifyEmail,
 } from "./user.auth.service";
 import {
   createSession,
@@ -87,7 +89,7 @@ import {
 import { OAuth2Client } from "google-auth-library";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import { createRefreshToken } from "../../config/jwt";
+import { REFRESH_TOKEN_TTL_MS, createRefreshToken } from "../../config/jwt";
 
 import type { IUser } from "../../types";
 
@@ -1098,5 +1100,137 @@ describe("authenticateWithGoogle", () => {
       idToken: tokenFromMobile,
       audience: ["web-client-id", "mobile-client-id"],
     });
+  });
+});
+
+describe("session expiry follows REFRESH_TOKEN_TTL_MS", () => {
+  function expectRefreshTtl(expiresAt: Date, before: number) {
+    expect(expiresAt.getTime()).toBeGreaterThanOrEqual(
+      before + REFRESH_TOKEN_TTL_MS,
+    );
+    expect(expiresAt.getTime()).toBeLessThanOrEqual(
+      Date.now() + REFRESH_TOKEN_TTL_MS,
+    );
+  }
+
+  function createdExpiry(): Date {
+    return vi.mocked(createSession).mock.calls[0][0].expiresAt;
+  }
+
+  it("loginLocalUser", async () => {
+    const passwordHash = await bcrypt.hash("taipei2027", 4);
+    vi.mocked(User.findOne).mockReturnValue({
+      select: vi.fn().mockResolvedValue({ ...makeUser(), passwordHash }),
+    } as any);
+    vi.mocked(Config.findOne).mockResolvedValue(null);
+
+    const before = Date.now();
+    await loginLocalUser({ email: "jane@example.com", password: "taipei2027" });
+
+    expectRefreshTtl(createdExpiry(), before);
+  });
+
+  it("verifyEmail", async () => {
+    vi.mocked(AuthToken.findOneAndDelete).mockResolvedValue({
+      userId: "665f1a2b3c4d5e6f7a8b9c0d",
+    } as any);
+    vi.mocked(User.findById).mockResolvedValue(
+      makeUser({ emailVerified: false }) as any,
+    );
+    vi.mocked(User.findOneAndUpdate).mockReturnValue({
+      select: vi.fn().mockResolvedValue(makeUser()),
+    } as any);
+    vi.mocked(Config.findOne).mockResolvedValue(null);
+
+    const before = Date.now();
+    await verifyEmail("raw-token");
+
+    expectRefreshTtl(createdExpiry(), before);
+  });
+
+  it("resetPassword", async () => {
+    vi.mocked(User.findOneAndUpdate).mockResolvedValue(makeUser() as any);
+    vi.mocked(Config.findOne).mockResolvedValue(null);
+
+    const before = Date.now();
+    await resetPassword({ token: "valid-token", password: "taipei2027" });
+
+    expectRefreshTtl(createdExpiry(), before);
+  });
+
+  it("changePassword", async () => {
+    const passwordHash = await bcrypt.hash("current-pass-123", 4);
+    vi.mocked(User.findById).mockReturnValue({
+      select: vi.fn().mockResolvedValue({ ...makeUser(), passwordHash }),
+    } as any);
+    vi.mocked(User.findOneAndUpdate).mockReturnValue({
+      select: vi.fn().mockResolvedValue(makeUser({ tokenVersion: 1 })),
+    } as any);
+
+    const before = Date.now();
+    await changePassword({
+      userId: "665f1a2b3c4d5e6f7a8b9c0d",
+      currentPassword: "current-pass-123",
+      newPassword: "taipei2028",
+    });
+
+    expectRefreshTtl(createdExpiry(), before);
+  });
+
+  it("authenticateWithGoogle", async () => {
+    process.env.GOOGLE_CLIENT_IDS = "web-client-id";
+    const verifyIdTokenSpy = vi
+      .spyOn(OAuth2Client.prototype, "verifyIdToken")
+      .mockResolvedValue({
+        getPayload: () => ({
+          sub: "google-sub-12345",
+          email: "jane@example.com",
+          email_verified: true,
+          name: "Jane",
+        }),
+      } as any);
+    vi.mocked(User.findOne).mockResolvedValue(
+      makeUser({
+        client_id: "google-sub-12345",
+        authProviders: ["google"],
+      } as any) as any,
+    );
+    vi.mocked(Config.findOne).mockResolvedValue(null);
+
+    try {
+      const before = Date.now();
+      await authenticateWithGoogle("google-id-token");
+
+      expectRefreshTtl(createdExpiry(), before);
+    } finally {
+      verifyIdTokenSpy.mockRestore();
+    }
+  });
+
+  it("refreshSession", async () => {
+    vi.mocked(User.findById).mockResolvedValue(makeUser() as any);
+    vi.mocked(rotateSession).mockResolvedValue({
+      status: "SUCCESS",
+      session: {
+        _id: "665f1a2b3c4d5e6f7a8b9c0e",
+        userId: "665f1a2b3c4d5e6f7a8b9c0d",
+        currentRefreshJti: crypto.randomUUID(),
+        expiresAt: new Date(),
+      },
+    } as any);
+    const token = createRefreshToken(
+      makeUser(),
+      "665f1a2b3c4d5e6f7a8b9c0e",
+      crypto.randomUUID(),
+    );
+
+    const before = Date.now();
+    const result = await refreshSession(token);
+
+    expect(result.ok).toBe(true);
+    expectRefreshTtl(
+      vi.mocked(rotateSession).mock.calls[0][0].newExpiresAt,
+      before,
+    );
   });
 });

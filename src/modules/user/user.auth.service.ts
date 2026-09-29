@@ -41,6 +41,7 @@ import {
   createRefreshToken,
   verifyRefreshToken,
   toPublicUser,
+  REFRESH_TOKEN_TTL_MS,
 } from "../../config/jwt";
 import type { AuthProvider, AuthTokenType, IConfig, IUser } from "../../types";
 import {
@@ -241,7 +242,7 @@ export async function loginLocalUser(input: {
   }
 
   const initialJti = crypto.randomUUID();
-  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_MS);
   const session = await createSession({
     userId: String(user._id),
     currentRefreshJti: initialJti,
@@ -276,7 +277,7 @@ export async function verifyEmail(rawToken: string): Promise<{
     (await updateUserById(claimed._id, { emailVerified: true })) ?? claimed;
 
   const initialJti = crypto.randomUUID();
-  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_MS);
   const session = await createSession({
     userId: String(user._id),
     currentRefreshJti: initialJti,
@@ -440,7 +441,7 @@ export async function resetPassword(input: {
   await revokeAllSessionsByUserId(String(user._id), "password_reset");
 
   const initialJti = crypto.randomUUID();
-  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_MS);
   const session = await createSession({
     userId: String(user._id),
     currentRefreshJti: initialJti,
@@ -505,7 +506,7 @@ export async function changePassword(input: {
   await revokeAllSessionsByUserId(String(user._id), "password_changed");
 
   const initialJti = crypto.randomUUID();
-  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_MS);
   const session = await createSession({
     userId: String(user._id),
     currentRefreshJti: initialJti,
@@ -723,7 +724,7 @@ async function completeOAuthSignIn(
   }
 
   const initialJti = crypto.randomUUID();
-  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_MS);
   const session = await createSession({
     userId: String(user._id),
     currentRefreshJti: initialJti,
@@ -949,7 +950,7 @@ export async function refreshSession(
   }
 
   const newJti = crypto.randomUUID();
-  const newExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const newExpiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_MS);
 
   const rotateResult = await rotateSession({
     sid,
