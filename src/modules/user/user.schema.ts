@@ -297,6 +297,57 @@ export const LineLinkCodeResponseSchema = apiResponse(
   }),
 ).openapi("LineLinkCodeResponse");
 
+const ExpoPushTokenSchema = z
+  .string()
+  .max(200)
+  .regex(/^Expo(nent)?PushToken\[[^\]\s]+\]$/, "無效的 Expo push token")
+  .openapi({
+    description: "Expo push token（`getExpoPushTokenAsync()` 的回傳值）",
+    example: "ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]",
+  });
+
+export const RegisterPushTokenBodySchema = z
+  .object({
+    token: ExpoPushTokenSchema,
+    platform: z.enum(["ios", "android"]).openapi({ example: "ios" }),
+    locale: z
+      .string()
+      .max(35)
+      .regex(/^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/, "無效的語系代碼")
+      .default("zh-TW")
+      .openapi({
+        description:
+          "推播文案語系（BCP 47，如 zh-TW、en）；不支援的語系回退為 zh-TW",
+        example: "zh-TW",
+      }),
+  })
+  .strict()
+  .openapi("RegisterPushTokenBody");
+
+export const UnregisterPushTokenBodySchema = z
+  .object({ token: ExpoPushTokenSchema })
+  .strict()
+  .openapi("UnregisterPushTokenBody");
+
+export const PushTokenResponseSchema = apiResponse(
+  z.object({
+    token: z
+      .string()
+      .openapi({ example: "ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]" }),
+    platform: z.enum(["ios", "android"]).openapi({ example: "ios" }),
+    locale: z.string().openapi({ example: "zh-TW" }),
+  }),
+).openapi("PushTokenResponse");
+
+export const UnregisterPushTokenResponseSchema = apiResponse(
+  z.object({
+    removed: z.boolean().openapi({
+      description: "是否實際刪除；token 不存在或不屬於本帳號時為 false",
+      example: true,
+    }),
+  }),
+).openapi("UnregisterPushTokenResponse");
+
 export const LogoutResponseSchema = apiResponse().openapi("LogoutResponse");
 
 export const ErrorResponseSchema = apiResponse().openapi("ErrorResponse");
@@ -845,5 +896,64 @@ registry.registerPath({
       description: "伺服器錯誤（撤銷失敗時絕不假冒成功）",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/user/push-tokens",
+  tags: ["User"],
+  summary: "註冊推播裝置",
+  description:
+    "登入後註冊本裝置的 Expo push token。token 綁定目前的登入 session：該 session 登出、過期或被撤銷後即不再收到推播。" +
+    "同一個 token 重複註冊會更新平台與語系；若該 token 原屬其他帳號（同一台裝置換帳號登入），會改歸目前帳號。" +
+    "目前推送的事件：SOS 被家人確認、承接、更新處理狀態、由家人解除。",
+  security: [{ bearerAuth: [] }],
+  request: {
+    body: {
+      content: { "application/json": { schema: RegisterPushTokenBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      description: "註冊成功",
+      content: { "application/json": { schema: PushTokenResponseSchema } },
+    },
+    400: errorResponse("參數不合法"),
+    401: errorResponse("未提供或已過期的 token"),
+    403: errorResponse("token 無效"),
+    500: errorResponse("伺服器錯誤"),
+  },
+});
+
+registry.registerPath({
+  method: "delete",
+  path: "/user/push-tokens",
+  tags: ["User"],
+  summary: "註銷推播裝置",
+  description:
+    "登出前呼叫，刪除本帳號的指定 push token。冪等：token 不存在時同樣回 200，`data.removed` 為 false。" +
+    "須在呼叫 /user/logout 之前送出（之後 access token 已失效）；即使漏呼叫，登出後該 session 的 token 也不會再收到推播。",
+  security: [{ bearerAuth: [] }],
+  request: {
+    body: {
+      content: {
+        "application/json": { schema: UnregisterPushTokenBodySchema },
+      },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      description: "已註銷",
+      content: {
+        "application/json": { schema: UnregisterPushTokenResponseSchema },
+      },
+    },
+    400: errorResponse("參數不合法"),
+    401: errorResponse("未提供或已過期的 token"),
+    403: errorResponse("token 無效"),
+    500: errorResponse("伺服器錯誤"),
   },
 });

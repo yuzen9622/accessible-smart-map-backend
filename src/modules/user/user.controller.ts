@@ -3,10 +3,11 @@ import type { ApiResponse } from "../../types/response";
 import { ResponseCode, ResponseMessage } from "../../types/code";
 import { clearAuthCookie, sendResponse } from "../../config/lib";
 import { toPublicUser } from "../../config/jwt";
-import { AUTH_MSG } from "../../constants/messages";
+import { AUTH_MSG, PUSH_MSG } from "../../constants/messages";
 import type { IConfig, IUser } from "../../types";
 import * as userService from "./user.service";
 import * as authService from "./user.auth.service";
+import * as pushService from "./user.push.service";
 
 async function info(
   req: Request,
@@ -408,6 +409,69 @@ async function updateA11yProfile(req: Request, res: Response) {
   }
 }
 
+async function registerPushToken(req: Request, res: Response) {
+  try {
+    const sessionId = req.auth?.sessionId;
+    if (!sessionId) {
+      return sendResponse(
+        res,
+        false,
+        "error",
+        ResponseCode.FORBIDDEN,
+        ResponseMessage.FORBIDDEN,
+      );
+    }
+    const registration = await pushService.registerPushToken({
+      userId: req.auth!.userId,
+      authSessionId: sessionId,
+      ...req.body,
+    });
+    return sendResponse(
+      res,
+      true,
+      "success",
+      ResponseCode.OK,
+      PUSH_MSG.REGISTERED,
+      registration,
+    );
+  } catch (error) {
+    console.error(error);
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      ResponseMessage.INTERNAL_ERROR,
+    );
+  }
+}
+
+async function unregisterPushToken(req: Request, res: Response) {
+  try {
+    const removed = await pushService.unregisterPushToken(
+      req.auth!.userId,
+      req.body.token,
+    );
+    return sendResponse(
+      res,
+      true,
+      "success",
+      ResponseCode.OK,
+      PUSH_MSG.UNREGISTERED,
+      { removed },
+    );
+  } catch (error) {
+    console.error(error);
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      ResponseMessage.INTERNAL_ERROR,
+    );
+  }
+}
+
 export {
   refresh,
   info,
@@ -417,4 +481,6 @@ export {
   logout,
   getA11yProfile,
   updateA11yProfile,
+  registerPushToken,
+  unregisterPushToken,
 };
