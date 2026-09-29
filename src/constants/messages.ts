@@ -230,6 +230,11 @@ export const SOS_MSG = {
   NOT_AUTHORIZED_CONTACT: "你沒有此事件的權限",
 } as const;
 
+export const ACCOUNT_MSG = {
+  DELETED: "帳號已刪除",
+  REAUTH_REQUIRED: "為保護帳號安全，請重新登入後再刪除帳號",
+} as const;
+
 export const PUSH_MSG = {
   REGISTERED: "已註冊推播裝置",
   UNREGISTERED: "已註銷推播裝置",

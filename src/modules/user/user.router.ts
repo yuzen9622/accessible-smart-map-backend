@@ -10,6 +10,7 @@ import {
   updateA11yProfile,
   registerPushToken,
   unregisterPushToken,
+  deleteAccount,
 } from "./user.controller";
 import {
   register,
@@ -152,6 +153,7 @@ export function createUserRouter(): Router {
     validateRequest({ body: UnregisterPushTokenBodySchema }),
     unregisterPushToken,
   );
+  router.delete("/", deleteAccount);
   router.post(
     "/logout",
     logoutLimiter,
