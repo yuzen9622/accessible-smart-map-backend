@@ -350,6 +350,10 @@ export const UnregisterPushTokenResponseSchema = apiResponse(
 
 export const LogoutResponseSchema = apiResponse().openapi("LogoutResponse");
 
+export const DeleteAccountResponseSchema = apiResponse().openapi(
+  "DeleteAccountResponse",
+);
+
 export const ErrorResponseSchema = apiResponse().openapi("ErrorResponse");
 
 const errorResponse = (description: string) => ({
@@ -954,6 +958,33 @@ registry.registerPath({
     400: errorResponse("參數不合法"),
     401: errorResponse("未提供或已過期的 token"),
     403: errorResponse("token 無效"),
+    500: errorResponse("伺服器錯誤"),
+  },
+});
+
+registry.registerPath({
+  method: "delete",
+  path: "/user",
+  tags: ["User"],
+  summary: "刪除帳號",
+  description:
+    "永久刪除目前登入的帳號，無法復原。為防止遺失的裝置被拿去刪帳號，目前的登入 session 必須是 5 分鐘內剛登入（Google／Apple／密碼皆可）；" +
+    "超過時回 403、`data.reason` 為 `REAUTH_REQUIRED`，App 應請使用者重新登入後再呼叫。" +
+    "成功後所有裝置的 access／refresh token 立即失效（Web 會同時清除 refresh cookie）。" +
+    "一併刪除：個人設定與無障礙檔案、緊急聯絡人、SOS 紀錄、AI 記憶、推播 token、評論、LINE 綁定碼、驗證信與重設密碼權杖。" +
+    "危險通報不刪除而是匿名化（回報者、確認／否認紀錄與人工審核者改為匿名代號），讓其他使用者仍看得到該處危險。",
+  security: [{ bearerAuth: [] }],
+  responses: {
+    200: {
+      description: "帳號已刪除",
+      content: { "application/json": { schema: DeleteAccountResponseSchema } },
+    },
+    400: errorResponse("X-Client 標頭不合法"),
+    401: errorResponse("未提供或已過期的 token"),
+    403: errorResponse(
+      "token 無效，或需要重新登入（`data.reason` = `REAUTH_REQUIRED`）",
+    ),
+    404: errorResponse("帳號不存在"),
     500: errorResponse("伺服器錯誤"),
   },
 });

@@ -3,11 +3,12 @@ import type { ApiResponse } from "../../types/response";
 import { ResponseCode, ResponseMessage } from "../../types/code";
 import { clearAuthCookie, sendResponse } from "../../config/lib";
 import { toPublicUser } from "../../config/jwt";
-import { AUTH_MSG, PUSH_MSG } from "../../constants/messages";
+import { ACCOUNT_MSG, AUTH_MSG, PUSH_MSG } from "../../constants/messages";
 import type { IConfig, IUser } from "../../types";
 import * as userService from "./user.service";
 import * as authService from "./user.auth.service";
 import * as pushService from "./user.push.service";
+import * as accountService from "./user.account.service";
 
 async function info(
   req: Request,
@@ -472,6 +473,64 @@ async function unregisterPushToken(req: Request, res: Response) {
   }
 }
 
+async function deleteAccount(req: Request, res: Response) {
+  try {
+    const sessionId = req.auth?.sessionId;
+    if (!sessionId) {
+      return sendResponse(
+        res,
+        false,
+        "error",
+        ResponseCode.FORBIDDEN,
+        ResponseMessage.FORBIDDEN,
+      );
+    }
+
+    const result = await accountService.deleteAccount({
+      userId: req.auth!.userId,
+      sessionId,
+    });
+    if (!result.ok) {
+      if (result.reason === "NOT_FOUND") {
+        return sendResponse(
+          res,
+          false,
+          "error",
+          ResponseCode.NOT_FOUND,
+          ResponseMessage.NOT_FOUND,
+          { reason: result.reason },
+        );
+      }
+      return sendResponse(
+        res,
+        false,
+        "error",
+        ResponseCode.FORBIDDEN,
+        ACCOUNT_MSG.REAUTH_REQUIRED,
+        { reason: result.reason },
+      );
+    }
+
+    if (req.clientMode !== "mobile") clearAuthCookie(res);
+    return sendResponse(
+      res,
+      true,
+      "success",
+      ResponseCode.OK,
+      ACCOUNT_MSG.DELETED,
+    );
+  } catch (error) {
+    console.error("[user] 刪除帳號失敗", error);
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      ResponseMessage.INTERNAL_ERROR,
+    );
+  }
+}
+
 export {
   refresh,
   info,
@@ -483,4 +542,5 @@ export {
   updateA11yProfile,
   registerPushToken,
   unregisterPushToken,
+  deleteAccount,
 };

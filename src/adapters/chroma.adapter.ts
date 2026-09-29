@@ -102,3 +102,14 @@ export async function deleteDocuments(
   if (!ids.length) return;
   await collection.delete({ ids });
 }
+
+/**
+ * @param collection The collection.
+ * @param where Metadata filter selecting the documents to delete.
+ */
+export async function deleteDocumentsWhere(
+  collection: Collection,
+  where: Where,
+): Promise<void> {
+  await collection.delete({ where });
+}
