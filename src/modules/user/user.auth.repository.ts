@@ -251,9 +251,9 @@ export async function findUserByEmailBounded(
 export async function findUserByEmailWithPassword(
   email: string,
 ): Promise<UserWithPasswordHash | null> {
-  // SAFETY: Mongoose query with select("+passwordHash") resolves to a User document including the passwordHash field
+  // SAFETY: Mongoose query with select("+passwordHash +appleUserId") resolves to a User document including the passwordHash and appleUserId fields
   return User.findOne({ email }).select(
-    "+passwordHash",
+    "+passwordHash +appleUserId",
   ) as unknown as Promise<UserWithPasswordHash | null>;
 }
 
@@ -430,4 +430,99 @@ export async function atomicLinkGoogle(params: {
     },
     { returnDocument: "after", maxTimeMS: DB_OPERATION_MAX_MS },
   ).select("+passwordHash") as unknown as Promise<UserWithPasswordHash | null>;
+}
+
+/**
+ * Looks up a user by Apple subject id (appleUserId).
+ *
+ * @param appleUserId The Apple `sub` claim
+ * @returns The user, or null
+ */
+export async function findUserByAppleUserId(
+  appleUserId: string,
+): Promise<IUser | null> {
+  return User.findOne({ appleUserId }).select("+appleUserId");
+}
+
+/**
+ * Atomically performs Apple takeover of an unverified local account:
+ * matches _id, expectedTokenVersion, emailVerified: false, expectedPasswordHash,
+ * and ensures appleUserId is null/absent to prevent overwriting existing Apple identity.
+ * Drops passwordHash, sets appleUserId, emailVerified: true, updates authProviders,
+ * and atomically increments tokenVersion by 1.
+ * If credentials or version changed concurrently, returns null (loser).
+ *
+ * @param params Takeover parameters with CAS preconditions
+ * @returns The updated user with passwordHash, or null on CAS mismatch
+ */
+export async function atomicAppleTakeover(params: {
+  userId: string;
+  expectedTokenVersion: number;
+  expectedPasswordHash: string;
+  appleUserId: string;
+  authProviders: string[];
+}): Promise<UserWithPasswordHash | null> {
+  const filter: Record<string, unknown> = {
+    _id: params.userId,
+    tokenVersion: params.expectedTokenVersion,
+    emailVerified: false,
+    passwordHash: params.expectedPasswordHash,
+    appleUserId: null,
+  };
+
+  const setObj: Record<string, unknown> = {
+    appleUserId: params.appleUserId,
+    emailVerified: true,
+    authProviders: params.authProviders,
+  };
+
+  // SAFETY: Mongoose query with select("+passwordHash +appleUserId") resolves to a User document including the passwordHash and appleUserId fields
+  return User.findOneAndUpdate(
+    filter,
+    {
+      $set: setObj,
+      $unset: { passwordHash: "" },
+      $inc: { tokenVersion: 1 },
+    },
+    { returnDocument: "after", maxTimeMS: DB_OPERATION_MAX_MS },
+  ).select(
+    "+passwordHash +appleUserId",
+  ) as unknown as Promise<UserWithPasswordHash | null>;
+}
+
+/**
+ * Atomically links Apple identity to an existing account without dropping password.
+ * Only allows linking if appleUserId is currently null/absent or already matches
+ * the incoming appleUserId (idempotent), preventing overwriting another Apple identity.
+ *
+ * @param params Linking parameters with CAS preconditions
+ * @returns The updated user with passwordHash, or null on CAS mismatch
+ */
+export async function atomicLinkApple(params: {
+  userId: string;
+  expectedTokenVersion: number;
+  appleUserId: string;
+}): Promise<UserWithPasswordHash | null> {
+  const filter: Record<string, unknown> = {
+    _id: params.userId,
+    tokenVersion: params.expectedTokenVersion,
+    $or: [{ appleUserId: null }, { appleUserId: params.appleUserId }],
+  };
+
+  const setObj: Record<string, unknown> = {
+    appleUserId: params.appleUserId,
+    emailVerified: true,
+  };
+
+  // SAFETY: Mongoose query with select("+passwordHash +appleUserId") resolves to a User document including the passwordHash and appleUserId fields
+  return User.findOneAndUpdate(
+    filter,
+    {
+      $set: setObj,
+      $addToSet: { authProviders: "apple" },
+    },
+    { returnDocument: "after", maxTimeMS: DB_OPERATION_MAX_MS },
+  ).select(
+    "+passwordHash +appleUserId",
+  ) as unknown as Promise<UserWithPasswordHash | null>;
 }

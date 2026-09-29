@@ -5,6 +5,9 @@ import {
   atomicChangePassword,
   atomicGoogleTakeover,
   atomicLinkGoogle,
+  atomicAppleTakeover,
+  atomicLinkApple,
+  findUserByAppleUserId,
   consumeAuthTokenRecord,
   consumePasswordResetToken,
   emailExists,
@@ -20,6 +23,7 @@ import {
   rotatePasswordResetToken,
   updateUserById,
   upsertAuthToken,
+  type UserWithPasswordHash,
 } from "./user.auth.repository";
 import {
   createSession,
@@ -38,7 +42,16 @@ import {
   verifyRefreshToken,
   toPublicUser,
 } from "../../config/jwt";
-import type { AuthTokenType, IConfig, IUser } from "../../types";
+import type { AuthProvider, AuthTokenType, IConfig, IUser } from "../../types";
+import {
+  AppleIdentityTokenError,
+  verifyAppleIdentityToken,
+} from "../../adapters/apple-auth.adapter";
+import {
+  APPLE_FALLBACK_DISPLAY_NAME,
+  APPLE_PRIVATE_RELAY_DOMAIN,
+  getAppleAudiences,
+} from "../../config/apple";
 import {
   enqueuePasswordAssistance,
   getOrSetPasswordResetExpiry,
@@ -539,6 +552,241 @@ export function getGoogleAudiences(): string[] {
   return [legacy];
 }
 
+type OAuthProvider = Extract<AuthProvider, "google" | "apple">;
+
+type OAuthIdentity = {
+  subject: string;
+  email?: string;
+  name: string;
+  avatar?: string;
+};
+
+type OAuthProviderOps = {
+  provider: OAuthProvider;
+  revokeReason: "google_takeover" | "apple_takeover";
+  insertFields: (subject: string) => Record<string, unknown>;
+  findBySubject: (subject: string) => Promise<IUser | null>;
+  takeover: (p: {
+    userId: string;
+    expectedTokenVersion: number;
+    expectedPasswordHash: string;
+    subject: string;
+    authProviders: AuthProvider[];
+    avatar?: string;
+  }) => Promise<UserWithPasswordHash | null>;
+  link: (p: {
+    userId: string;
+    expectedTokenVersion: number;
+    subject: string;
+    avatar?: string;
+  }) => Promise<UserWithPasswordHash | null>;
+  assertLinkable?: (user: IUser, subject: string) => void;
+};
+
+async function completeOAuthSignIn(
+  identity: OAuthIdentity,
+  ops: OAuthProviderOps,
+): Promise<{
+  user: IUser;
+  config: IConfig | null;
+  accessToken: string;
+  refreshToken: string;
+}> {
+  let user = await ops.findBySubject(identity.subject);
+
+  if (!user) {
+    if (!identity.email) {
+      throw new AuthError("INVALID_TOKEN");
+    }
+
+    const byEmail = await findUserByEmailWithPassword(identity.email);
+
+    if (byEmail) {
+      ops.assertLinkable?.(byEmail, identity.subject);
+
+      if (!byEmail.emailVerified && byEmail.passwordHash) {
+        // Unverified local account: OAuth sign-in takes it over.
+        // Conditional CAS on observed tokenVersion, passwordHash, and emailVerified: false.
+        const observedVersion = Number(byEmail.tokenVersion ?? 0);
+        const observedPasswordHash = byEmail.passwordHash;
+        const authProviders = byEmail.authProviders.filter(
+          (p) => p !== "local",
+        );
+        if (!authProviders.includes(ops.provider)) {
+          authProviders.push(ops.provider);
+        }
+
+        const takeover = await ops.takeover({
+          userId: String(byEmail._id),
+          expectedTokenVersion: observedVersion,
+          expectedPasswordHash: observedPasswordHash,
+          subject: identity.subject,
+          authProviders,
+          avatar:
+            identity.avatar && !byEmail.avatar ? identity.avatar : undefined,
+        });
+
+        if (takeover) {
+          // Success: atomic CAS updated user and incremented tokenVersion.
+          // Revoke ALL old sessions BEFORE issuing new session.
+          await revokeAllSessionsByUserId(
+            String(takeover._id),
+            ops.revokeReason,
+          );
+          user = takeover;
+        } else {
+          // CAS lost! Re-read user to inspect concurrent mutation.
+          const recheck = await findUserByEmailWithPassword(identity.email);
+          if (!recheck) {
+            throw new AuthError("INVALID_TOKEN");
+          }
+          if (recheck.emailVerified) {
+            // Account was verified concurrently (e.g. by resetPassword or verifyEmail).
+            // Do NOT drop passwordHash or overwrite reset password/tokenVersion!
+            // Safely link provider as an additional provider:
+            const linked = await ops.link({
+              userId: String(recheck._id),
+              expectedTokenVersion: Number(recheck.tokenVersion ?? 0),
+              subject: identity.subject,
+              avatar:
+                identity.avatar && !recheck.avatar
+                  ? identity.avatar
+                  : undefined,
+            });
+            user =
+              linked ??
+              (await findUserByIdBounded(String(recheck._id))) ??
+              recheck;
+          } else {
+            // Still unverified local account (e.g. tokenVersion bumped concurrently).
+            // Retry takeover once with freshly observed credentials:
+            const retryTakeover = await ops.takeover({
+              userId: String(recheck._id),
+              expectedTokenVersion: Number(recheck.tokenVersion ?? 0),
+              expectedPasswordHash: recheck.passwordHash!,
+              subject: identity.subject,
+              authProviders: recheck.authProviders
+                .filter((p) => p !== "local")
+                .concat(
+                  recheck.authProviders.includes(ops.provider)
+                    ? []
+                    : [ops.provider],
+                ),
+              avatar:
+                identity.avatar && !recheck.avatar
+                  ? identity.avatar
+                  : undefined,
+            });
+            if (retryTakeover) {
+              await revokeAllSessionsByUserId(
+                String(retryTakeover._id),
+                ops.revokeReason,
+              );
+              user = retryTakeover;
+            } else {
+              user =
+                (await findUserByIdBounded(String(recheck._id))) ?? recheck;
+            }
+          }
+        }
+      } else {
+        // Account already verified or has no local password: safe link
+        const linked = await ops.link({
+          userId: String(byEmail._id),
+          expectedTokenVersion: Number(byEmail.tokenVersion ?? 0),
+          subject: identity.subject,
+          avatar:
+            identity.avatar && !byEmail.avatar ? identity.avatar : undefined,
+        });
+        user =
+          linked ?? (await findUserByIdBounded(String(byEmail._id))) ?? byEmail;
+      }
+
+      ops.assertLinkable?.(user, identity.subject);
+    }
+  }
+
+  if (!user) {
+    try {
+      user = await insertUser({
+        name: identity.name,
+        email: identity.email!,
+        avatar: identity.avatar,
+        ...ops.insertFields(identity.subject),
+        authProviders: [ops.provider],
+        emailVerified: true,
+      });
+    } catch (error: any) {
+      if (error?.code === 11000) throw new AuthError("EMAIL_TAKEN");
+      throw error;
+    }
+  }
+
+  const initialJti = crypto.randomUUID();
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const session = await createSession({
+    userId: String(user._id),
+    currentRefreshJti: initialJti,
+    expiresAt,
+  });
+
+  const publicUser = toPublicUser(user);
+  const accessToken = createAccessToken(publicUser, session._id);
+  const refreshToken = createRefreshToken(publicUser, session._id, initialJti);
+
+  const config = await ensureConfig(user._id);
+  return { user: publicUser, config, accessToken, refreshToken };
+}
+
+const GOOGLE_OAUTH_OPS: OAuthProviderOps = {
+  provider: "google",
+  revokeReason: "google_takeover",
+  insertFields: (subject: string) => ({ client_id: subject }),
+  findBySubject: findUserByClientId,
+  takeover: (p) =>
+    atomicGoogleTakeover({
+      userId: p.userId,
+      expectedTokenVersion: p.expectedTokenVersion,
+      expectedPasswordHash: p.expectedPasswordHash,
+      clientId: p.subject,
+      authProviders: p.authProviders,
+      avatar: p.avatar,
+    }),
+  link: (p) =>
+    atomicLinkGoogle({
+      userId: p.userId,
+      expectedTokenVersion: p.expectedTokenVersion,
+      clientId: p.subject,
+      avatar: p.avatar,
+    }),
+};
+
+const APPLE_OAUTH_OPS: OAuthProviderOps = {
+  provider: "apple",
+  revokeReason: "apple_takeover",
+  insertFields: (subject: string) => ({ appleUserId: subject }),
+  findBySubject: findUserByAppleUserId,
+  takeover: (p) =>
+    atomicAppleTakeover({
+      userId: p.userId,
+      expectedTokenVersion: p.expectedTokenVersion,
+      expectedPasswordHash: p.expectedPasswordHash,
+      appleUserId: p.subject,
+      authProviders: p.authProviders,
+    }),
+  link: (p) =>
+    atomicLinkApple({
+      userId: p.userId,
+      expectedTokenVersion: p.expectedTokenVersion,
+      appleUserId: p.subject,
+    }),
+  assertLinkable: (user, subject) => {
+    if (typeof user.appleUserId === "string" && user.appleUserId !== subject) {
+      throw new AuthError("EMAIL_TAKEN");
+    }
+  },
+};
+
 /**
  * Verify a Google ID token server-side and resolve it to an account.
  *
@@ -576,132 +824,71 @@ export async function authenticateWithGoogle(idToken: string): Promise<{
   const name = payload.name?.trim() || email.split("@")[0];
   const avatar = payload.picture;
 
-  let user = await findUserByClientId(payload.sub);
+  return completeOAuthSignIn(
+    { subject: payload.sub, email, name, avatar },
+    GOOGLE_OAUTH_OPS,
+  );
+}
 
-  if (!user) {
-    const byEmail = await findUserByEmailWithPassword(email);
+/**
+ * Verify an Apple identity token server-side and resolve it to an account.
+ *
+ * Identity comes only from the verified token payload. An existing account with
+ * the same address is linked; if that account was an unverified local one its
+ * password is dropped, because a password that was never confirmed by email has
+ * no claim on an address Apple has confirmed.
+ *
+ * @param input.identityToken Apple Sign-In issued identity token (JWT)
+ * @param input.name User name provided by client (only used when creating new user)
+ * @param input.nonce Raw client-side nonce to verify against token nonce claim
+ * @returns The resolved user, config, accessToken, and refreshToken
+ * @throws AuthError INVALID_TOKEN when identity token is invalid or unverified
+ * @throws AuthError EMAIL_TAKEN when the email is already linked to another Apple ID
+ */
+export async function authenticateWithApple(input: {
+  identityToken: string;
+  name?: string | null;
+  nonce?: string;
+}): Promise<{
+  user: IUser;
+  config: IConfig | null;
+  accessToken: string;
+  refreshToken: string;
+}> {
+  const audience = getAppleAudiences();
 
-    if (byEmail) {
-      if (!byEmail.emailVerified && byEmail.passwordHash) {
-        // Unverified local account: Google sign-in takes it over.
-        // Conditional CAS on observed tokenVersion, passwordHash, and emailVerified: false.
-        const observedVersion = Number(byEmail.tokenVersion ?? 0);
-        const observedPasswordHash = byEmail.passwordHash;
-        const authProviders = byEmail.authProviders.filter(
-          (p) => p !== "local",
-        );
-        if (!authProviders.includes("google")) {
-          authProviders.push("google");
-        }
-
-        const takeover = await atomicGoogleTakeover({
-          userId: String(byEmail._id),
-          expectedTokenVersion: observedVersion,
-          expectedPasswordHash: observedPasswordHash,
-          clientId: payload.sub,
-          authProviders,
-          avatar: avatar && !byEmail.avatar ? avatar : undefined,
-        });
-
-        if (takeover) {
-          // Success: atomic CAS updated user and incremented tokenVersion.
-          // Revoke ALL old sessions BEFORE issuing new session.
-          await revokeAllSessionsByUserId(
-            String(takeover._id),
-            "google_takeover",
-          );
-          user = takeover;
-        } else {
-          // CAS lost! Re-read user to inspect concurrent mutation.
-          const recheck = await findUserByEmailWithPassword(email);
-          if (!recheck) {
-            throw new AuthError("INVALID_TOKEN");
-          }
-          if (recheck.emailVerified) {
-            // Account was verified concurrently (e.g. by resetPassword or verifyEmail).
-            // Do NOT drop passwordHash or overwrite reset password/tokenVersion!
-            // Safely link Google as an additional provider:
-            const linked = await atomicLinkGoogle({
-              userId: String(recheck._id),
-              expectedTokenVersion: Number(recheck.tokenVersion ?? 0),
-              clientId: payload.sub,
-              avatar: avatar && !recheck.avatar ? avatar : undefined,
-            });
-            user =
-              linked ??
-              (await findUserByIdBounded(String(recheck._id))) ??
-              recheck;
-          } else {
-            // Still unverified local account (e.g. tokenVersion bumped concurrently).
-            // Retry takeover once with freshly observed credentials:
-            const retryTakeover = await atomicGoogleTakeover({
-              userId: String(recheck._id),
-              expectedTokenVersion: Number(recheck.tokenVersion ?? 0),
-              expectedPasswordHash: recheck.passwordHash!,
-              clientId: payload.sub,
-              authProviders: recheck.authProviders
-                .filter((p) => p !== "local")
-                .concat(
-                  recheck.authProviders.includes("google") ? [] : ["google"],
-                ),
-              avatar: avatar && !recheck.avatar ? avatar : undefined,
-            });
-            if (retryTakeover) {
-              await revokeAllSessionsByUserId(
-                String(retryTakeover._id),
-                "google_takeover",
-              );
-              user = retryTakeover;
-            } else {
-              user =
-                (await findUserByIdBounded(String(recheck._id))) ?? recheck;
-            }
-          }
-        }
-      } else {
-        // Account already verified or has no local password: safe link
-        const linked = await atomicLinkGoogle({
-          userId: String(byEmail._id),
-          expectedTokenVersion: Number(byEmail.tokenVersion ?? 0),
-          clientId: payload.sub,
-          avatar: avatar && !byEmail.avatar ? avatar : undefined,
-        });
-        user =
-          linked ?? (await findUserByIdBounded(String(byEmail._id))) ?? byEmail;
-      }
+  let claims;
+  try {
+    claims = await verifyAppleIdentityToken(input.identityToken, {
+      audience,
+      rawNonce: input.nonce,
+    });
+  } catch (error) {
+    if (error instanceof AppleIdentityTokenError) {
+      console.error("[auth] Apple identity token 驗證失敗: token_rejected");
+      throw new AuthError("INVALID_TOKEN");
     }
+    throw error;
   }
 
-  if (!user) {
-    try {
-      user = await insertUser({
-        name,
-        email,
-        avatar,
-        client_id: payload.sub,
-        authProviders: ["google"],
-        emailVerified: true,
-      });
-    } catch (error: any) {
-      if (error?.code === 11000) throw new AuthError("EMAIL_TAKEN");
-      throw error;
-    }
-  }
+  const email =
+    claims.email && claims.emailVerified
+      ? normalizeEmail(claims.email)
+      : undefined;
 
-  const initialJti = crypto.randomUUID();
-  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-  const session = await createSession({
-    userId: String(user._id),
-    currentRefreshJti: initialJti,
-    expiresAt,
-  });
+  const isRelay =
+    claims.isPrivateEmail ||
+    (email ? email.endsWith("@" + APPLE_PRIVATE_RELAY_DOMAIN) : false);
 
-  const publicUser = toPublicUser(user);
-  const accessToken = createAccessToken(publicUser, session._id);
-  const refreshToken = createRefreshToken(publicUser, session._id, initialJti);
+  const trimmedName = input.name?.trim();
+  const name =
+    trimmedName ||
+    (email && !isRelay ? email.split("@")[0] : APPLE_FALLBACK_DISPLAY_NAME);
 
-  const config = await ensureConfig(user._id);
-  return { user: publicUser, config, accessToken, refreshToken };
+  return completeOAuthSignIn(
+    { subject: claims.sub, email, name },
+    APPLE_OAUTH_OPS,
+  );
 }
 
 export type RefreshResult =

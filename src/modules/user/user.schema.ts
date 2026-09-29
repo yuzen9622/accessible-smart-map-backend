@@ -1,3 +1,4 @@
+// pi-lens-ignore: 2307
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 import { registry } from "../../openapi/registry";
@@ -29,6 +30,23 @@ export const GoogleAuthBodySchema = z
   .object({
     idToken: z.string().min(1).openapi({
       description: "Google Sign-In 發給前端的 ID token，由後端驗證",
+    }),
+  })
+  .strict();
+
+export const AppleAuthBodySchema = z
+  .object({
+    identityToken: z.string().min(1).max(10240).openapi({
+      description:
+        "Sign in with Apple 發給 App 的 identityToken（JWT），由後端以 Apple JWKS 驗證",
+    }),
+    name: z.string().max(60).nullish().openapi({
+      description:
+        "僅首次授權時 Apple 提供的姓名；後續登入可省略、空字串或 null",
+    }),
+    nonce: z.string().min(1).max(256).optional().openapi({
+      description:
+        "App 發起 Apple 授權時產生的原始 nonce（rawNonce）；後端驗證 SHA-256(nonce) 與 token 內 nonce 相符",
     }),
   })
   .strict();
@@ -75,11 +93,9 @@ export const ResetPasswordBodySchema = z
 
 export const ChangePasswordBodySchema = z
   .object({
-    currentPassword: z
-      .string()
-      .min(1)
-      .optional()
-      .openapi({ description: "帳號尚無密碼（純 Google 登入）時可省略" }),
+    currentPassword: z.string().min(1).optional().openapi({
+      description: "帳號尚無密碼（純第三方（Google / Apple）登入）時可省略",
+    }),
     newPassword: PasswordSchema,
   })
   .strict();
@@ -112,7 +128,7 @@ const UserSchema = z
       example: "10293847",
     }),
     authProviders: z
-      .array(z.enum(["google", "local"]))
+      .array(z.enum(["google", "apple", "local"]))
       .openapi({ description: "此帳號可用的登入方式", example: ["local"] }),
     emailVerified: z.boolean().openapi({ example: true }),
     tokenVersion: z
@@ -333,6 +349,48 @@ registry.registerPath({
 
 registry.registerPath({
   method: "post",
+  path: "/user/auth/apple",
+  tags: ["User"],
+  summary: "Apple 登入",
+  description:
+    "後端以 Apple JWKS 驗證 RS256 簽章、iss、aud（APPLE_CLIENT_IDS 逗號分隔 allowlist，未設定時為 App Bundle ID dev.yuzen.accessiblesmartmap）、exp，以及選填的 nonce，身分僅取自驗證後的 payload。" +
+    "同 email 的既有已驗證帳號會自動連結，可與 Google 身分並存；若該帳號原為未驗證的帳密帳號，其密碼會被移除並撤銷既有權杖。" +
+    "Web 模式存取權杖於 body，refresh 權杖寫入 httpOnly cookie（有效期限 1 天 / 1d）；Mobile 模式（X-Client: mobile）於回應 body 同時回傳 accessToken 與 refreshToken，不設定 Set-Cookie。",
+  parameters: [
+    {
+      in: "header",
+      name: "X-Client",
+      schema: { type: "string", enum: ["mobile"] },
+      required: false,
+      description:
+        "選填；若為 'mobile' 啟用行動裝置傳輸模式（refresh token 於 body 回傳，不設定 Set-Cookie），否則預設為 Web 模式（refresh token 寫入 httpOnly cookie，有效期限 1 天）",
+    },
+  ],
+  request: {
+    body: {
+      content: { "application/json": { schema: AppleAuthBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      description:
+        "存取權杖於 body；Web 模式 refresh 權杖寫入 cookie (1d)，Mobile 模式 refresh 權杖於 body",
+      content: { "application/json": { schema: LoginResponseSchema } },
+    },
+    400: errorResponse("缺少 identityToken 或請求格式錯誤"),
+    401: errorResponse("identityToken 無效、過期、audience 不符或 nonce 不符"),
+    403: errorResponse("Web 模式 CSRF Origin / Referer 驗證失敗"),
+    409: errorResponse("此 email 帳號已綁定其他 Apple ID"),
+    429: errorResponse("登入請求過於頻繁"),
+    500: errorResponse(
+      "伺服器錯誤、無法取得 Apple 公鑰或 APPLE_CLIENT_IDS 設定無效",
+    ),
+  },
+});
+
+registry.registerPath({
+  method: "post",
   path: "/user/auth/register",
   tags: ["User"],
   summary: "帳密註冊",
@@ -525,7 +583,7 @@ registry.registerPath({
   summary: "變更密碼",
   description:
     "變更已登入帳號的密碼並撤銷其他既有權杖（回應會附上新的權杖）。" +
-    "帳號尚無密碼（純 Google 登入）時可省略 currentPassword，即為新增密碼登入方式。" +
+    "帳號尚無密碼（純第三方（Google / Apple）登入）時可省略 currentPassword，即為新增密碼登入方式。" +
     "Web 模式存取權杖於 body，refresh 權杖寫入 httpOnly cookie（有效期限 1 天 / 1d）；Mobile 模式（X-Client: mobile）於回應 body 同時回傳 accessToken 與 refreshToken，不設定 Set-Cookie。",
   security: [{ bearerAuth: [] }],
   parameters: [

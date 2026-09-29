@@ -13,6 +13,7 @@ import {
   register,
   login,
   googleAuth,
+  appleAuth,
   verifyEmail,
   resendVerification,
   forgotPassword,
@@ -37,6 +38,7 @@ import {
 } from "./user.middleware";
 import {
   GoogleAuthBodySchema,
+  AppleAuthBodySchema,
   RegisterBodySchema,
   LoginBodySchema,
   EmailBodySchema,
@@ -61,6 +63,13 @@ export function createUserRouter(): Router {
     csrfProtection,
     validateRequest({ body: GoogleAuthBodySchema }),
     googleAuth,
+  );
+  router.post(
+    "/auth/apple",
+    loginLimiter,
+    csrfProtection,
+    validateRequest({ body: AppleAuthBodySchema }),
+    appleAuth,
   );
   router.post(
     "/auth/register",

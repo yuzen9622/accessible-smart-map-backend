@@ -5,6 +5,7 @@ import { authenticateToken } from "../config/auth";
 
 const PUBLIC_ROUTES = [
   "/auth/google",
+  "/auth/apple",
   "/auth/register",
   "/auth/login",
   "/auth/verify-email",

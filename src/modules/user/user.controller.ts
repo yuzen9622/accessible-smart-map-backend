@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import type { ApiResponse } from "../../types/response";
 import { ResponseCode, ResponseMessage } from "../../types/code";
 import { clearAuthCookie, sendResponse } from "../../config/lib";
+import { toPublicUser } from "../../config/jwt";
 import { AUTH_MSG } from "../../constants/messages";
 import type { IConfig, IUser } from "../../types";
 import * as userService from "./user.service";
@@ -40,7 +41,7 @@ async function info(
       "success",
       ResponseCode.OK,
       ResponseMessage.OK,
-      { user, config },
+      { user: toPublicUser(user), config },
     );
   } catch (error) {
     console.error(error);

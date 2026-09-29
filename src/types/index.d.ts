@@ -1,4 +1,4 @@
-export type AuthProvider = "google" | "local";
+export type AuthProvider = "google" | "apple" | "local";
 
 export interface IUser {
   _id: string;
@@ -6,6 +6,7 @@ export interface IUser {
   avatar?: string;
   email: string;
   client_id?: string | null;
+  appleUserId?: string | null;
   passwordHash?: string;
   authProviders: AuthProvider[];
   emailVerified: boolean;

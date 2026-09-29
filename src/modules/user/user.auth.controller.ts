@@ -169,6 +169,32 @@ async function googleAuth(
   }
 }
 
+async function appleAuth(
+  req: Request,
+  res: Response<ApiResponse<SessionData>>,
+) {
+  try {
+    const { identityToken, name, nonce } = req.validated!.body as {
+      identityToken: string;
+      name?: string | null;
+      nonce?: string;
+    };
+    const session = await authService.authenticateWithApple({
+      identityToken,
+      name,
+      nonce,
+    });
+    return sendSession(
+      res,
+      session,
+      ResponseMessage.OK,
+      req.clientMode ?? "web",
+    );
+  } catch (error) {
+    return sendAuthError(res, error);
+  }
+}
+
 async function verifyEmail(
   req: Request,
   res: Response<ApiResponse<SessionData>>,
@@ -301,6 +327,7 @@ export {
   register,
   login,
   googleAuth,
+  appleAuth,
   verifyEmail,
   resendVerification,
   forgotPassword,

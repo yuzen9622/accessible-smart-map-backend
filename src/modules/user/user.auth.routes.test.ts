@@ -33,6 +33,7 @@ vi.mock("./user.auth.service", async (importActual) => {
     registerLocalUser: vi.fn(),
     loginLocalUser: vi.fn(),
     authenticateWithGoogle: vi.fn(),
+    authenticateWithApple: vi.fn(),
     verifyEmail: vi.fn(),
     resendVerificationEmail: vi.fn(),
     requestPasswordReset: vi.fn(),
@@ -279,6 +280,131 @@ describe("POST /user/auth/google", () => {
 
     expect(res.status).toBe(ResponseCode.INVALID_INPUT);
     expect(vi.mocked(service.authenticateWithGoogle)).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /user/auth/apple", () => {
+  it("returns 200 with a session for a valid identity token", async () => {
+    vi.mocked(service.authenticateWithApple).mockResolvedValue(SESSION);
+
+    const res = await request(app)
+      .post(`${BASE}/apple`)
+      .set("Origin", ORIGIN)
+      .send({
+        identityToken: "valid.apple.token",
+        name: "Jane",
+        nonce: "raw",
+      });
+
+    expect(res.status).toBe(ResponseCode.OK);
+    expect(vi.mocked(service.authenticateWithApple)).toHaveBeenCalledWith({
+      identityToken: "valid.apple.token",
+      name: "Jane",
+      nonce: "raw",
+    });
+    expect(res.body.accessToken).toBeTruthy();
+  });
+
+  it("returns 200 in mobile mode without Origin, returns both tokens in body and no set-cookie", async () => {
+    vi.mocked(service.authenticateWithApple).mockResolvedValue(SESSION);
+
+    const res = await request(app)
+      .post(`${BASE}/apple`)
+      .set("X-Client", "mobile")
+      .send({ identityToken: "valid.apple.token" });
+
+    expect(res.status).toBe(ResponseCode.OK);
+    expect(res.body.accessToken).toBe(SESSION.accessToken);
+    expect(res.body.refreshToken).toBe(SESSION.refreshToken);
+    expect(res.headers["set-cookie"]).toBeUndefined();
+  });
+
+  it("returns 401 when authenticateWithApple throws INVALID_TOKEN", async () => {
+    vi.mocked(service.authenticateWithApple).mockRejectedValue(
+      new AuthError("INVALID_TOKEN"),
+    );
+
+    const res = await request(app)
+      .post(`${BASE}/apple`)
+      .set("Origin", ORIGIN)
+      .send({ identityToken: "forged.apple.token" });
+
+    expect(res.status).toBe(ResponseCode.UNAUTHORIZED);
+    expect(res.body.data.reason).toBe("INVALID_TOKEN");
+  });
+
+  it("returns 409 when authenticateWithApple throws EMAIL_TAKEN", async () => {
+    vi.mocked(service.authenticateWithApple).mockRejectedValue(
+      new AuthError("EMAIL_TAKEN"),
+    );
+
+    const res = await request(app)
+      .post(`${BASE}/apple`)
+      .set("Origin", ORIGIN)
+      .send({ identityToken: "valid.apple.token" });
+
+    expect(res.status).toBe(ResponseCode.CONFLICT);
+    expect(res.body.data.reason).toBe("EMAIL_TAKEN");
+  });
+
+  it("returns 400 when missing identityToken without calling service", async () => {
+    const res = await request(app)
+      .post(`${BASE}/apple`)
+      .set("Origin", ORIGIN)
+      .send({ name: "Jane" });
+
+    expect(res.status).toBe(ResponseCode.INVALID_INPUT);
+    expect(vi.mocked(service.authenticateWithApple)).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when extra unknown fields are supplied (strict)", async () => {
+    const res = await request(app)
+      .post(`${BASE}/apple`)
+      .set("Origin", ORIGIN)
+      .send({
+        identityToken: "valid.apple.token",
+        email: "extra@example.com",
+      });
+
+    expect(res.status).toBe(ResponseCode.INVALID_INPUT);
+    expect(vi.mocked(service.authenticateWithApple)).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when name exceeds 60 characters", async () => {
+    const res = await request(app)
+      .post(`${BASE}/apple`)
+      .set("Origin", ORIGIN)
+      .send({
+        identityToken: "valid.apple.token",
+        name: "A".repeat(61),
+      });
+
+    expect(res.status).toBe(ResponseCode.INVALID_INPUT);
+    expect(vi.mocked(service.authenticateWithApple)).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when identityToken exceeds 10240 characters", async () => {
+    const res = await request(app)
+      .post(`${BASE}/apple`)
+      .set("Origin", ORIGIN)
+      .send({
+        identityToken: "A".repeat(10241),
+      });
+
+    expect(res.status).toBe(ResponseCode.INVALID_INPUT);
+    expect(vi.mocked(service.authenticateWithApple)).not.toHaveBeenCalled();
+  });
+
+  it("does not return 403 when unauthenticated (PUBLIC_ROUTES allows it)", async () => {
+    vi.mocked(service.authenticateWithApple).mockResolvedValue(SESSION);
+
+    const res = await request(app)
+      .post(`${BASE}/apple`)
+      .set("Origin", ORIGIN)
+      .send({ identityToken: "valid.apple.token" });
+
+    expect(res.status).not.toBe(ResponseCode.FORBIDDEN);
+    expect(res.status).toBe(ResponseCode.OK);
   });
 });
 

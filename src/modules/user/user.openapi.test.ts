@@ -19,6 +19,12 @@ describe("Generated OpenAPI document for auth issuance and session routes", () =
       expectedResponses: ["200", "400", "401", "403", "429"],
     },
     {
+      path: "/user/auth/apple",
+      method: "post",
+      name: "appleAuth",
+      expectedResponses: ["200", "400", "401", "403", "409", "429"],
+    },
+    {
       path: "/user/auth/verify-email",
       method: "post",
       name: "verifyEmail",

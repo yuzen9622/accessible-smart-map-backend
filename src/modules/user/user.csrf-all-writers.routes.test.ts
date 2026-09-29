@@ -32,6 +32,7 @@ vi.mock("./user.auth.service", async (importActual) => {
     ...actual,
     loginLocalUser: vi.fn(),
     authenticateWithGoogle: vi.fn(),
+    authenticateWithApple: vi.fn(),
     verifyEmail: vi.fn(),
     resetPassword: vi.fn(),
     changePassword: vi.fn(),
@@ -74,6 +75,11 @@ const COOKIE_WRITER_ROUTES: WriterRouteCase[] = [
     name: "googleAuth",
     path: "/api/v1/user/auth/google",
     body: { idToken: "sample.google.idToken" },
+  },
+  {
+    name: "appleAuth",
+    path: "/api/v1/user/auth/apple",
+    body: { identityToken: "sample.apple.identityToken" },
   },
   {
     name: "verifyEmail",

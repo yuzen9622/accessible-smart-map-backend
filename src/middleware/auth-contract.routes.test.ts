@@ -8,6 +8,7 @@ import {
   vi,
 } from "vitest";
 import request from "supertest";
+import type { IUser } from "../types";
 
 /**
  * Auth contract for EVERY route guarded by the production JWT middleware.
@@ -292,9 +293,12 @@ describe("every protected route rejects authentication failures before any servi
     expectNoServiceCalls();
   });
 
-  it("200 GET /api/v1/user/info with a valid token reaches the service (control case)", async () => {
+  it("200 GET /api/v1/user/info with a valid token reaches the service and never leaks appleUserId", async () => {
     vi.mocked(userService.getUserWithConfig).mockResolvedValue({
-      user: buildDbUser(),
+      user: {
+        ...buildDbUser(),
+        appleUserId: "apple-sub-secret-value",
+      } as unknown as IUser,
       config: null,
     } as never);
     const res = await request(app)
@@ -302,6 +306,9 @@ describe("every protected route rejects authentication failures before any servi
       .set("Authorization", bearerFor());
     expect(res.status).toBe(ResponseCode.OK);
     expect(userService.getUserWithConfig).toHaveBeenCalledTimes(1);
+    expect(res.body.data.user).toBeDefined();
+    expect(res.body.data.user).not.toHaveProperty("appleUserId");
+    expect(res.body.data.user.email).toBe("test@example.com");
   });
 });
 

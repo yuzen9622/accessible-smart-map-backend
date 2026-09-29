@@ -1,3 +1,4 @@
+// pi-lens-ignore: 7016
 import { Schema, model } from "mongoose";
 import type { IUser } from "../types";
 const userSchema = new Schema<IUser>(
@@ -9,7 +10,7 @@ const userSchema = new Schema<IUser>(
     passwordHash: { type: String, select: false },
     authProviders: {
       type: [String],
-      enum: ["google", "local"],
+      enum: ["google", "apple", "local"],
       default: [],
     },
     emailVerified: { type: Boolean, default: false },
@@ -31,11 +32,12 @@ const userSchema = new Schema<IUser>(
       default: [],
     },
     lineUserId: { type: String, default: null },
+    appleUserId: { type: String, select: false, default: null },
   },
   { timestamps: true },
 );
 
-// Both of these are partial rather than sparse on purpose. A sparse index only
+// These are partial rather than sparse on purpose. A sparse index only
 // skips documents where the field is absent, so the explicit nulls these fields
 // default to would all be indexed and collide on the second account. Filtering
 // on $type: "string" indexes only accounts that actually have the identifier.
@@ -49,6 +51,13 @@ userSchema.index(
 userSchema.index(
   { client_id: 1 },
   { unique: true, partialFilterExpression: { client_id: { $type: "string" } } },
+);
+userSchema.index(
+  { appleUserId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { appleUserId: { $type: "string" } },
+  },
 );
 
 const User = model<IUser>("User", userSchema);
