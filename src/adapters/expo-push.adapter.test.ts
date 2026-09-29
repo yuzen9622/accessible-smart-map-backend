@@ -64,16 +64,14 @@ describe("sendExpoPushMessages", () => {
   });
 
   it("turns a failed batch into error tickets without losing the other batches", async () => {
-    fetchMock
-      .mockResolvedValueOnce(okResponse(100))
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            errors: [{ code: "PUSH_TOO_MANY_EXPERIENCE_IDS" }],
-          }),
-          { status: 400 },
-        ),
-      );
+    fetchMock.mockResolvedValueOnce(okResponse(100)).mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          errors: [{ code: "PUSH_TOO_MANY_EXPERIENCE_IDS" }],
+        }),
+        { status: 400 },
+      ),
+    );
     const messages = Array.from({ length: 102 }, (_, i) => message(i));
 
     const tickets = await sendExpoPushMessages(messages);
