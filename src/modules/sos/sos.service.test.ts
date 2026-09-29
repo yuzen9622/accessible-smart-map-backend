@@ -25,6 +25,10 @@ vi.mock("../../adapters/line.adapter", () => ({
   sendSosNotification: vi.fn(),
   sendSosResolved: vi.fn(),
 }));
+vi.mock("../user/user.push.service", async (importActual) => ({
+  ...(await importActual<typeof import("../user/user.push.service")>()),
+  sendPushToUser: vi.fn(),
+}));
 vi.mock("./sos-events", () => ({
   emitSosUpdate: vi.fn(),
   buildSosSnapshot: vi.fn(() => ({ snapshot: true })),
@@ -35,6 +39,7 @@ import EmergencyContact from "../../model/emergency-contact.model";
 import User from "../../model/user.model";
 import { sendSosResolved } from "../../adapters/line.adapter";
 import { emitSosUpdate, buildSosSnapshot } from "./sos-events";
+import { sendPushToUser } from "../user/user.push.service";
 import {
   acknowledgeSession,
   claimSession,
@@ -451,5 +456,158 @@ describe("getSessionForOwner", () => {
     expect(res.httpCode).toBe(ResponseCode.OK);
     expect(res.data).toEqual({ snapshot: true });
     expect(buildSosSnapshot).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("owner push notifications", () => {
+  /** Returns the push call's copy builder and payload. */
+  function pushCall(): {
+    build: (locale: string) => { title: string; body: string };
+    data: Record<string, unknown>;
+  } {
+    expect(sendPushToUser).toHaveBeenCalledTimes(1);
+    const [userId, build, data] = vi.mocked(sendPushToUser).mock.calls[0];
+    expect(userId).toBe(OWNER_ID);
+    return { build, data };
+  }
+
+  it("pushes the owner when a contact first acknowledges, localized per device", async () => {
+    setupAuthorized();
+    vi.mocked(SosSession.findById)
+      .mockReturnValueOnce(
+        lean({ _id: SESSION_ID, userId: OWNER_ID, status: "active" }) as never,
+      )
+      .mockReturnValueOnce(
+        lean({
+          _id: SESSION_ID,
+          userId: OWNER_ID,
+          status: "active",
+          handlingStatus: "acknowledged",
+        }) as never,
+      );
+    vi.mocked(SosSession.updateOne)
+      .mockResolvedValueOnce({ modifiedCount: 1 } as never)
+      .mockResolvedValueOnce({} as never);
+
+    await acknowledgeSession({ sessionId: SESSION_ID, lineUserId: FAM_LINE });
+
+    const { build, data } = pushCall();
+    expect(data).toEqual({
+      type: "sos_update",
+      event: "acknowledged",
+      sessionId: SESSION_ID,
+      status: "active",
+      handlingStatus: "acknowledged",
+    });
+    expect(build("zh-TW").body).toBe("媽媽已收到你的求救通知");
+    expect(build("en-US").body).toBe("媽媽 received your SOS alert");
+    expect(build("ja").title).toBe("SOS 求救狀態更新");
+  });
+
+  it("does not push again on a repeated acknowledgement", async () => {
+    setupAuthorized();
+    vi.mocked(SosSession.findById)
+      .mockReturnValueOnce(
+        lean({ _id: SESSION_ID, userId: OWNER_ID, status: "active" }) as never,
+      )
+      .mockReturnValueOnce(
+        lean({ status: "active", handlingStatus: "acknowledged" }) as never,
+      );
+    vi.mocked(SosSession.updateOne).mockResolvedValueOnce({
+      modifiedCount: 0,
+    } as never);
+
+    await acknowledgeSession({ sessionId: SESSION_ID, lineUserId: FAM_LINE });
+
+    expect(sendPushToUser).not.toHaveBeenCalled();
+  });
+
+  it("pushes the owner when a contact wins the claim", async () => {
+    setupAuthorized();
+    vi.mocked(SosSession.findById)
+      .mockReturnValueOnce(
+        lean({ _id: SESSION_ID, userId: OWNER_ID, status: "active" }) as never,
+      )
+      .mockReturnValueOnce(
+        lean({
+          _id: SESSION_ID,
+          userId: OWNER_ID,
+          status: "active",
+          handlingStatus: "claimed",
+        }) as never,
+      );
+    vi.mocked(SosSession.findOneAndUpdate).mockResolvedValueOnce({
+      _id: SESSION_ID,
+    } as never);
+
+    await claimSession({ sessionId: SESSION_ID, lineUserId: FAM_LINE });
+
+    const { build, data } = pushCall();
+    expect(data.event).toBe("claimed");
+    expect(build("zh-TW").body).toBe("媽媽已承接你的求救，正在處理");
+  });
+
+  it("describes the new handling status, or the note when no status is set", async () => {
+    setupAuthorized();
+    vi.mocked(SosSession.findById).mockReturnValue(
+      lean({ _id: SESSION_ID, userId: OWNER_ID, status: "active" }) as never,
+    );
+    vi.mocked(SosSession.findOneAndUpdate)
+      .mockReturnValueOnce(
+        lean({
+          _id: SESSION_ID,
+          userId: OWNER_ID,
+          status: "active",
+          handlingStatus: "en_route",
+        }) as never,
+      )
+      .mockReturnValueOnce(
+        lean({
+          _id: SESSION_ID,
+          userId: OWNER_ID,
+          status: "active",
+          handlingStatus: "en_route",
+        }) as never,
+      );
+
+    await updateHandlingStatus({
+      sessionId: SESSION_ID,
+      lineUserId: FAM_LINE,
+      handlingStatus: "en_route",
+    });
+    await updateHandlingStatus({
+      sessionId: SESSION_ID,
+      lineUserId: FAM_LINE,
+      note: "五分鐘到",
+    });
+
+    const [first, second] = vi.mocked(sendPushToUser).mock.calls;
+    expect(first[2].handlingStatus).toBe("en_route");
+    expect(first[1]("zh-TW").body).toBe("媽媽正在前往你的位置");
+    expect(second[1]("zh-TW").body).toBe("媽媽：五分鐘到");
+  });
+
+  it("pushes the owner when a contact resolves, but not when the owner resolves", async () => {
+    setupAuthorized();
+    vi.mocked(SosSession.findById).mockReturnValue(
+      lean({
+        _id: SESSION_ID,
+        userId: OWNER_ID,
+        status: "resolved",
+        handlingStatus: "resolved",
+      }) as never,
+    );
+    vi.mocked(SosSession.findOneAndUpdate).mockResolvedValue({
+      _id: SESSION_ID,
+    } as never);
+    vi.mocked(sendSosResolved).mockResolvedValue(undefined as never);
+
+    await resolveSession({ sessionId: SESSION_ID, userId: OWNER_ID });
+    expect(sendPushToUser).not.toHaveBeenCalled();
+
+    await resolveSession({ sessionId: SESSION_ID, lineUserId: FAM_LINE });
+    const { build, data } = pushCall();
+    expect(data).toMatchObject({ event: "resolved", status: "resolved" });
+    expect(build("zh-TW").body).toBe("媽媽已解除這次求救");
   });
 });

@@ -21,7 +21,9 @@ import {
   sendSosResolved,
 } from "../../adapters/line.adapter";
 import { ResponseCode } from "../../types/code";
-import { SOS_MSG, SOS_REASON } from "../../constants/messages";
+import { SOS_MSG, SOS_PUSH_MSG, SOS_REASON } from "../../constants/messages";
+import { PUSH_EVENT_TYPE } from "../../constants/push";
+import { pickLocale, sendPushToUser } from "../user/user.push.service";
 import { buildSosSnapshot, emitSosUpdate } from "./sos-events";
 import type { ISosSession } from "../../types";
 import type {
@@ -33,6 +35,7 @@ import type {
   ServiceResult,
   UpdateLocationInput,
   UpdateSosStatusInput,
+  FamilyHandlingStatus,
 } from "./sos.types";
 
 const TRACKING_EXPIRY_MS = 24 * 60 * 60 * 1000;
@@ -62,6 +65,54 @@ async function notifyOthers(
   } catch (err) {
     console.error("[sos.service] notifyOthers failed", err);
   }
+}
+
+type OwnerPushEvent =
+  | { kind: "acknowledged" | "claimed" | "resolved" }
+  | {
+      kind: "status_update";
+      handlingStatus?: FamilyHandlingStatus;
+      note?: string;
+    };
+
+/**
+ * Pushes a contact-driven lifecycle change to the session owner's app so it
+ * learns about it while backgrounded (when the SSE stream is gone). Fire and
+ * forget: delivery never delays or fails the contact's action.
+ *
+ * @param session The updated session.
+ * @param event What the contact did.
+ * @param actorName Display name of the acting contact.
+ */
+function notifyOwnerPush(
+  session: Pick<ISosSession, "_id" | "userId" | "status" | "handlingStatus">,
+  event: OwnerPushEvent,
+  actorName?: string | null,
+): void {
+  const build = (locale: string) => {
+    const copy = pickLocale(SOS_PUSH_MSG, locale);
+    const name = actorName || copy.defaultActor;
+    let body: string;
+    if (event.kind !== "status_update") {
+      body = copy[event.kind](name);
+    } else if (event.handlingStatus === "en_route") {
+      body = copy.enRoute(name);
+    } else if (event.handlingStatus === "arrived") {
+      body = copy.arrived(name);
+    } else if (event.note) {
+      body = copy.note(name, event.note);
+    } else {
+      body = copy.updated(name);
+    }
+    return { title: copy.title, body };
+  };
+  void sendPushToUser(String(session.userId), build, {
+    type: PUSH_EVENT_TYPE.SOS_UPDATE,
+    event: event.kind,
+    sessionId: String(session._id),
+    status: session.status,
+    handlingStatus: session.handlingStatus,
+  });
 }
 
 /**
@@ -346,6 +397,7 @@ export async function acknowledgeSession(
       input.sessionId,
       buildSosSnapshot(updated as unknown as ISosSession),
     );
+    notifyOwnerPush(updated, { kind: "acknowledged" }, acting?.name);
     const others = (await boundLineUserIds(String(updated.userId))).filter(
       (id) => id !== input.lineUserId,
     );
@@ -411,6 +463,7 @@ export async function claimSession(
         input.sessionId,
         buildSosSnapshot(updated as unknown as ISosSession),
       );
+      notifyOwnerPush(updated, { kind: "claimed" }, acting?.name);
       const others = (await boundLineUserIds(String(updated.userId))).filter(
         (id) => id !== input.lineUserId,
       );
@@ -494,6 +547,15 @@ export async function updateHandlingStatus(
   emitSosUpdate(
     input.sessionId,
     buildSosSnapshot(updated as unknown as ISosSession),
+  );
+  notifyOwnerPush(
+    updated,
+    {
+      kind: "status_update",
+      handlingStatus: input.handlingStatus,
+      note: input.note,
+    },
+    acting?.name,
   );
   const others = (await boundLineUserIds(updated.userId)).filter(
     (id) => id !== input.lineUserId,
@@ -590,6 +652,9 @@ export async function resolveSession(
       input.sessionId,
       buildSosSnapshot(updated as unknown as ISosSession),
     );
+    if (input.lineUserId) {
+      notifyOwnerPush(updated, { kind: "resolved" }, actorName);
+    }
   }
 
   return {
