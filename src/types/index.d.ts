@@ -55,6 +55,19 @@ export interface IAuthToken {
   updatedAt: Date;
 }
 
+export type PushPlatform = "ios" | "android";
+
+export interface IPushToken {
+  _id: string;
+  token: string;
+  userId: string;
+  authSessionId: string;
+  platform: PushPlatform;
+  locale: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export type PasswordAssistanceJobStatus = "pending" | "processing" | "failed";
 
 export interface IPasswordAssistanceJob {

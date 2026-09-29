@@ -39,7 +39,11 @@ const middleware = async (req: Request, res: Response, next: NextFunction) => {
     );
   }
 
-  req.auth = { userId: result.userId, user: result.user };
+  req.auth = {
+    userId: result.userId,
+    user: result.user,
+    sessionId: result.sessionId,
+  };
 
   next();
 };

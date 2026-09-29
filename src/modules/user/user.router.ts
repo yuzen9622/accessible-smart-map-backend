@@ -8,6 +8,8 @@ import {
   logout,
   getA11yProfile,
   updateA11yProfile,
+  registerPushToken,
+  unregisterPushToken,
 } from "./user.controller";
 import {
   register,
@@ -48,6 +50,8 @@ import {
   ConfigBodySchema,
   UpdateConfigBodySchema,
   UpdateA11yProfileBodySchema,
+  RegisterPushTokenBodySchema,
+  UnregisterPushTokenBodySchema,
 } from "./user.schema";
 
 export function createUserRouter(): Router {
@@ -137,6 +141,16 @@ export function createUserRouter(): Router {
     "/a11y-profile",
     validateRequest({ body: UpdateA11yProfileBodySchema }),
     updateA11yProfile,
+  );
+  router.post(
+    "/push-tokens",
+    validateRequest({ body: RegisterPushTokenBodySchema }),
+    registerPushToken,
+  );
+  router.delete(
+    "/push-tokens",
+    validateRequest({ body: UnregisterPushTokenBodySchema }),
+    unregisterPushToken,
   );
   router.post(
     "/logout",

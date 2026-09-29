@@ -230,6 +230,50 @@ export const SOS_MSG = {
   NOT_AUTHORIZED_CONTACT: "你沒有此事件的權限",
 } as const;
 
+export const PUSH_MSG = {
+  REGISTERED: "已註冊推播裝置",
+  UNREGISTERED: "已註銷推播裝置",
+} as const;
+
+/** Push copy for SOS lifecycle changes, keyed by locale then event. */
+export const SOS_PUSH_MSG: Record<
+  string,
+  {
+    title: string;
+    acknowledged: (name: string) => string;
+    claimed: (name: string) => string;
+    enRoute: (name: string) => string;
+    arrived: (name: string) => string;
+    note: (name: string, note: string) => string;
+    updated: (name: string) => string;
+    resolved: (name: string) => string;
+    defaultActor: string;
+  }
+> = {
+  "zh-TW": {
+    title: "SOS 求救狀態更新",
+    acknowledged: (name) => `${name}已收到你的求救通知`,
+    claimed: (name) => `${name}已承接你的求救，正在處理`,
+    enRoute: (name) => `${name}正在前往你的位置`,
+    arrived: (name) => `${name}已抵達你的位置`,
+    note: (name, note) => `${name}：${note}`,
+    updated: (name) => `${name}更新了處理狀態`,
+    resolved: (name) => `${name}已解除這次求救`,
+    defaultActor: "家人",
+  },
+  en: {
+    title: "SOS status update",
+    acknowledged: (name) => `${name} received your SOS alert`,
+    claimed: (name) => `${name} is handling your SOS`,
+    enRoute: (name) => `${name} is on the way to you`,
+    arrived: (name) => `${name} has arrived at your location`,
+    note: (name, note) => `${name}: ${note}`,
+    updated: (name) => `${name} updated the status`,
+    resolved: (name) => `${name} closed this SOS`,
+    defaultActor: "Your contact",
+  },
+};
+
 export const SOS_TYPE_LABEL: Record<
   "body" | "trapped" | "share_location",
   string
