@@ -73,7 +73,7 @@ beforeEach(() => {
 
 describe("POST /api/v1/user/refresh", () => {
   describe("Web mode (cookie transport)", () => {
-    it("returns 200, sets 1d httpOnly cookie, and NEVER leaks refreshToken in JSON body", async () => {
+    it("returns 200, sets 7d httpOnly cookie, and NEVER leaks refreshToken in JSON body", async () => {
       vi.mocked(authService.refreshSession).mockResolvedValue({
         ok: true,
         user: MOCK_USER,
@@ -100,7 +100,7 @@ describe("POST /api/v1/user/refresh", () => {
         : String(setCookie);
       expect(cookieStr).toContain("refreshToken=new-refresh-token");
       expect(cookieStr).toContain("HttpOnly");
-      expect(cookieStr).toContain("Max-Age=86400"); // 1d in seconds
+      expect(cookieStr).toContain("Max-Age=604800"); // 7d in seconds
 
       // Verify Cache-Control
       expect(res.headers["cache-control"]).toContain("no-store");

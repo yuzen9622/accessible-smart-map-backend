@@ -74,10 +74,10 @@ describe("Generated OpenAPI document for auth issuance and session routes", () =
         expect(xClientParam?.schema?.enum).toContain("mobile");
       });
 
-      it("documents body vs cookie and 1d cookie lifetime in description", () => {
+      it("documents body vs cookie and 7d cookie lifetime in description", () => {
         const fullText = `${operation?.description ?? ""} ${JSON.stringify(operation?.responses ?? {})}`;
         expect(fullText).toMatch(/cookie/i);
-        expect(fullText).toMatch(/(1d|1 天|1天)/);
+        expect(fullText).toMatch(/(7d|7 天|7天)/);
         expect(fullText).toMatch(/mobile/i);
       });
 
