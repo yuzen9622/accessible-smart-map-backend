@@ -7,7 +7,7 @@ import jwt, {
 import { IUser } from "../types/index";
 
 const ACCESS_TOKEN_TTL = "60m";
-const REFRESH_TOKEN_TTL = "1d";
+export const REFRESH_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Reduce a user document to the fields that are safe to expose in a token or an
@@ -90,7 +90,7 @@ const createRefreshToken = (
     jti,
   };
   return jwt.sign(payload, process.env.JWT_REFRESH_SECRET ?? "", {
-    expiresIn: REFRESH_TOKEN_TTL,
+    expiresIn: Math.floor(REFRESH_TOKEN_TTL_MS / 1000),
   });
 };
 
