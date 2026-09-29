@@ -14,12 +14,23 @@ vi.mock("../../adapters/chroma.adapter", () => ({
   deleteDocumentsWhere: vi.fn(async () => {}),
 }));
 
+vi.mock("../../adapters/apple-auth.adapter", async (importActual) => ({
+  ...(await importActual<typeof import("../../adapters/apple-auth.adapter")>()),
+  exchangeAppleAuthorizationCode: vi.fn(),
+  revokeAppleRefreshToken: vi.fn(),
+}));
+
 import crypto from "crypto";
 import {
   ACCOUNT_DELETION_REAUTH_WINDOW_MS,
   deleteAccount,
 } from "./user.account.service";
 import { deleteDocumentsWhere } from "../../adapters/chroma.adapter";
+import {
+  AppleTokenRequestError,
+  exchangeAppleAuthorizationCode,
+  revokeAppleRefreshToken,
+} from "../../adapters/apple-auth.adapter";
 import { authenticateToken } from "../../config/auth";
 import { createAccessToken, toPublicUser } from "../../config/jwt";
 import User from "../../model/user.model";
@@ -41,8 +52,8 @@ import {
   type MongoTestContext,
 } from "../../../tests/helpers/mongo-test-harness";
 
-async function seedAccount(email: string) {
-  const user = await User.create({ name: email, email });
+async function seedAccount(email: string, extra: Record<string, unknown> = {}) {
+  const user = await User.create({ name: email, email, ...extra });
   const userId = String(user._id);
   const session = await AuthSession.create({
     userId,
@@ -270,5 +281,157 @@ describe("deleteAccount with real MongoDB", () => {
 
     expect(result).toEqual({ ok: false, reason: "REAUTH_REQUIRED" });
     expect(await User.exists({ _id: alice.userId })).not.toBeNull();
+  });
+
+  describe("Sign in with Apple accounts", () => {
+    const exchange = vi.mocked(exchangeAppleAuthorizationCode);
+    const revoke = vi.mocked(revokeAppleRefreshToken);
+    const APPLE_ENV = {
+      APPLE_TEAM_ID: "TEAM123456",
+      APPLE_KEY_ID: "KEY1234567",
+      APPLE_PRIVATE_KEY:
+        "-----BEGIN PRIVATE KEY-----\\nx\\n-----END PRIVATE KEY-----",
+    };
+
+    beforeEach(() => {
+      for (const [k, v] of Object.entries(APPLE_ENV)) vi.stubEnv(k, v);
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    async function seedAppleAccount() {
+      return seedAccount("apple@example.com", {
+        appleUserId: "apple-sub",
+        authProviders: ["apple"],
+      });
+    }
+
+    async function expectUntouched(userId: string) {
+      expect(await User.exists({ _id: userId })).not.toBeNull();
+      expect(
+        await AuthSession.countDocuments({ userId, revokedAt: null }),
+      ).toBe(1);
+      expect(await Review.countDocuments({ userId })).toBe(1);
+    }
+
+    it("revokes the Apple authorization before deleting", async () => {
+      const apple = await seedAppleAccount();
+      exchange.mockResolvedValue({ refreshToken: "rt", sub: "apple-sub" });
+      revoke.mockResolvedValue();
+
+      const result = await deleteAccount({
+        userId: apple.userId,
+        sessionId: apple.sessionId,
+        appleAuthorizationCode: "fresh-code",
+      });
+
+      expect(result).toEqual({ ok: true });
+      expect(exchange).toHaveBeenCalledWith(
+        "fresh-code",
+        expect.objectContaining({ teamId: "TEAM123456" }),
+      );
+      expect(revoke).toHaveBeenCalledWith("rt", expect.anything());
+      expect(await User.exists({ _id: apple.userId })).toBeNull();
+    });
+
+    it("requires an authorization code", async () => {
+      const apple = await seedAppleAccount();
+
+      const result = await deleteAccount({
+        userId: apple.userId,
+        sessionId: apple.sessionId,
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        reason: "APPLE_AUTHORIZATION_REQUIRED",
+      });
+      expect(exchange).not.toHaveBeenCalled();
+      await expectUntouched(apple.userId);
+    });
+
+    it("refuses a code issued for a different Apple ID", async () => {
+      const apple = await seedAppleAccount();
+      exchange.mockResolvedValue({ refreshToken: "rt", sub: "someone-else" });
+
+      const result = await deleteAccount({
+        userId: apple.userId,
+        sessionId: apple.sessionId,
+        appleAuthorizationCode: "their-code",
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        reason: "APPLE_AUTHORIZATION_INVALID",
+      });
+      expect(revoke).not.toHaveBeenCalled();
+      await expectUntouched(apple.userId);
+    });
+
+    it.each([
+      [
+        "a code Apple rejects",
+        "rejected" as const,
+        "APPLE_AUTHORIZATION_INVALID",
+      ],
+      ["an Apple outage", "unavailable" as const, "APPLE_REVOKE_UNAVAILABLE"],
+    ])("deletes nothing on %s", async (_label, kind, reason) => {
+      const apple = await seedAppleAccount();
+      exchange.mockRejectedValue(new AppleTokenRequestError(kind, "x"));
+      vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const result = await deleteAccount({
+        userId: apple.userId,
+        sessionId: apple.sessionId,
+        appleAuthorizationCode: "code",
+      });
+
+      expect(result).toEqual({ ok: false, reason });
+      await expectUntouched(apple.userId);
+    });
+
+    it("deletes nothing when the revoke call fails", async () => {
+      const apple = await seedAppleAccount();
+      exchange.mockResolvedValue({ refreshToken: "rt", sub: "apple-sub" });
+      revoke.mockRejectedValue(new AppleTokenRequestError("unavailable", "x"));
+      vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const result = await deleteAccount({
+        userId: apple.userId,
+        sessionId: apple.sessionId,
+        appleAuthorizationCode: "code",
+      });
+
+      expect(result).toEqual({ ok: false, reason: "APPLE_REVOKE_UNAVAILABLE" });
+      await expectUntouched(apple.userId);
+    });
+
+    it("still deletes when the Apple signing key is not configured", async () => {
+      vi.stubEnv("APPLE_PRIVATE_KEY", "");
+      const apple = await seedAppleAccount();
+      vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const result = await deleteAccount({
+        userId: apple.userId,
+        sessionId: apple.sessionId,
+      });
+
+      expect(result).toEqual({ ok: true });
+      expect(exchange).not.toHaveBeenCalled();
+    });
+
+    it("ignores Apple entirely for accounts without an Apple ID", async () => {
+      const plain = await seedAccount("plain@example.com");
+
+      const result = await deleteAccount({
+        userId: plain.userId,
+        sessionId: plain.sessionId,
+      });
+
+      expect(result).toEqual({ ok: true });
+      expect(exchange).not.toHaveBeenCalled();
+    });
   });
 });

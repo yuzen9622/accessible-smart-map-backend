@@ -233,6 +233,9 @@ export const SOS_MSG = {
 export const ACCOUNT_MSG = {
   DELETED: "帳號已刪除",
   REAUTH_REQUIRED: "為保護帳號安全，請重新登入後再刪除帳號",
+  APPLE_AUTHORIZATION_REQUIRED: "請先以 Apple 重新登入後再刪除帳號",
+  APPLE_AUTHORIZATION_INVALID: "Apple 授權已失效，請以 Apple 重新登入後再試",
+  APPLE_REVOKE_UNAVAILABLE: "暫時無法解除 Apple 授權，請稍後再試",
 } as const;
 
 export const PUSH_MSG = {
