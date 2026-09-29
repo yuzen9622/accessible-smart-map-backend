@@ -365,7 +365,7 @@ registry.registerPath({
   description:
     "後端以 GOOGLE_CLIENT_IDS（逗號分隔；未設定時相容 GOOGLE_CLIENT_ID）作為 audience allowlist 驗證 Google ID token，身分僅取自驗證後的 payload。" +
     "同 email 的既有帳號會自動連結；若該帳號原為未驗證的帳密帳號，其密碼會被移除並撤銷既有權杖。" +
-    "Web 模式存取權杖於 body，refresh 權杖寫入 httpOnly cookie（有效期限 1 天 / 1d）；Mobile 模式（X-Client: mobile）於回應 body 同時回傳 accessToken 與 refreshToken，不設定 Set-Cookie。",
+    "Web 模式存取權杖於 body，refresh 權杖寫入 httpOnly cookie（有效期限 7 天 / 7d）；Mobile 模式（X-Client: mobile）於回應 body 同時回傳 accessToken 與 refreshToken，不設定 Set-Cookie。",
   parameters: [
     {
       in: "header",
@@ -373,7 +373,7 @@ registry.registerPath({
       schema: { type: "string", enum: ["mobile"] },
       required: false,
       description:
-        "選填；若為 'mobile' 啟用行動裝置傳輸模式（refresh token 於 body 回傳，不設定 Set-Cookie），否則預設為 Web 模式（refresh token 寫入 httpOnly cookie，有效期限 1 天）",
+        "選填；若為 'mobile' 啟用行動裝置傳輸模式（refresh token 於 body 回傳，不設定 Set-Cookie），否則預設為 Web 模式（refresh token 寫入 httpOnly cookie，有效期限 7 天）",
     },
   ],
   request: {
@@ -385,7 +385,7 @@ registry.registerPath({
   responses: {
     200: {
       description:
-        "存取權杖於 body；Web 模式 refresh 權杖寫入 cookie (1d)，Mobile 模式 refresh 權杖於 body",
+        "存取權杖於 body；Web 模式 refresh 權杖寫入 cookie (7d)，Mobile 模式 refresh 權杖於 body",
       content: { "application/json": { schema: LoginResponseSchema } },
     },
     400: errorResponse("缺少 idToken 或請求格式錯誤"),
@@ -406,7 +406,7 @@ registry.registerPath({
   description:
     "後端以 Apple JWKS 驗證 RS256 簽章、iss、aud（APPLE_CLIENT_IDS 逗號分隔 allowlist，未設定時為 App Bundle ID dev.yuzen.accessiblesmartmap）、exp，以及選填的 nonce，身分僅取自驗證後的 payload。" +
     "同 email 的既有已驗證帳號會自動連結，可與 Google 身分並存；若該帳號原為未驗證的帳密帳號，其密碼會被移除並撤銷既有權杖。" +
-    "Web 模式存取權杖於 body，refresh 權杖寫入 httpOnly cookie（有效期限 1 天 / 1d）；Mobile 模式（X-Client: mobile）於回應 body 同時回傳 accessToken 與 refreshToken，不設定 Set-Cookie。",
+    "Web 模式存取權杖於 body，refresh 權杖寫入 httpOnly cookie（有效期限 7 天 / 7d）；Mobile 模式（X-Client: mobile）於回應 body 同時回傳 accessToken 與 refreshToken，不設定 Set-Cookie。",
   parameters: [
     {
       in: "header",
@@ -414,7 +414,7 @@ registry.registerPath({
       schema: { type: "string", enum: ["mobile"] },
       required: false,
       description:
-        "選填；若為 'mobile' 啟用行動裝置傳輸模式（refresh token 於 body 回傳，不設定 Set-Cookie），否則預設為 Web 模式（refresh token 寫入 httpOnly cookie，有效期限 1 天）",
+        "選填；若為 'mobile' 啟用行動裝置傳輸模式（refresh token 於 body 回傳，不設定 Set-Cookie），否則預設為 Web 模式（refresh token 寫入 httpOnly cookie，有效期限 7 天）",
     },
   ],
   request: {
@@ -426,7 +426,7 @@ registry.registerPath({
   responses: {
     200: {
       description:
-        "存取權杖於 body；Web 模式 refresh 權杖寫入 cookie (1d)，Mobile 模式 refresh 權杖於 body",
+        "存取權杖於 body；Web 模式 refresh 權杖寫入 cookie (7d)，Mobile 模式 refresh 權杖於 body",
       content: { "application/json": { schema: LoginResponseSchema } },
     },
     400: errorResponse("缺少 identityToken 或請求格式錯誤"),
@@ -472,7 +472,7 @@ registry.registerPath({
   summary: "帳密登入",
   description:
     "以電子郵件與密碼登入。帳號不存在與密碼錯誤回傳完全相同的 401，以避免洩漏哪些信箱已註冊。" +
-    "Web 模式存取權杖於 body，refresh 權杖寫入 httpOnly cookie（有效期限 1 天 / 1d）；Mobile 模式（X-Client: mobile）於回應 body 同時回傳 accessToken 與 refreshToken，不設定 Set-Cookie。",
+    "Web 模式存取權杖於 body，refresh 權杖寫入 httpOnly cookie（有效期限 7 天 / 7d）；Mobile 模式（X-Client: mobile）於回應 body 同時回傳 accessToken 與 refreshToken，不設定 Set-Cookie。",
   parameters: [
     {
       in: "header",
@@ -480,7 +480,7 @@ registry.registerPath({
       schema: { type: "string", enum: ["mobile"] },
       required: false,
       description:
-        "選填；若為 'mobile' 啟用行動裝置傳輸模式（refresh token 於 body 回傳，不設定 Set-Cookie），否則預設為 Web 模式（refresh token 寫入 httpOnly cookie，有效期限 1 天）",
+        "選填；若為 'mobile' 啟用行動裝置傳輸模式（refresh token 於 body 回傳，不設定 Set-Cookie），否則預設為 Web 模式（refresh token 寫入 httpOnly cookie，有效期限 7 天）",
     },
   ],
   request: {
@@ -492,7 +492,7 @@ registry.registerPath({
   responses: {
     200: {
       description:
-        "存取權杖於 body；Web 模式 refresh 權杖寫入 cookie (1d)，Mobile 模式 refresh 權杖於 body",
+        "存取權杖於 body；Web 模式 refresh 權杖寫入 cookie (7d)，Mobile 模式 refresh 權杖於 body",
       content: { "application/json": { schema: LoginResponseSchema } },
     },
     400: errorResponse("欄位格式錯誤"),
@@ -513,7 +513,7 @@ registry.registerPath({
   summary: "驗證電子郵件",
   description:
     "以驗證信中的一次性權杖完成驗證，並直接回傳登入權杖。" +
-    "Web 模式存取權杖於 body，refresh 權杖寫入 httpOnly cookie（有效期限 1 天 / 1d）；Mobile 模式（X-Client: mobile）於回應 body 同時回傳 accessToken 與 refreshToken，不設定 Set-Cookie。",
+    "Web 模式存取權杖於 body，refresh 權杖寫入 httpOnly cookie（有效期限 7 天 / 7d）；Mobile 模式（X-Client: mobile）於回應 body 同時回傳 accessToken 與 refreshToken，不設定 Set-Cookie。",
   parameters: [
     {
       in: "header",
@@ -521,7 +521,7 @@ registry.registerPath({
       schema: { type: "string", enum: ["mobile"] },
       required: false,
       description:
-        "選填；若為 'mobile' 啟用行動裝置傳輸模式（refresh token 於 body 回傳，不設定 Set-Cookie），否則預設為 Web 模式（refresh token 寫入 httpOnly cookie，有效期限 1 天）",
+        "選填；若為 'mobile' 啟用行動裝置傳輸模式（refresh token 於 body 回傳，不設定 Set-Cookie），否則預設為 Web 模式（refresh token 寫入 httpOnly cookie，有效期限 7 天）",
     },
   ],
   request: {
@@ -533,7 +533,7 @@ registry.registerPath({
   responses: {
     200: {
       description:
-        "驗證成功並登入；Web 模式 refresh 權杖寫入 cookie (1d)，Mobile 模式 refresh 權杖於 body",
+        "驗證成功並登入；Web 模式 refresh 權杖寫入 cookie (7d)，Mobile 模式 refresh 權杖於 body",
       content: { "application/json": { schema: LoginResponseSchema } },
     },
     400: errorResponse("缺少 token 或格式錯誤"),
@@ -597,7 +597,7 @@ registry.registerPath({
   description:
     "以本地密碼帳號重設信中的一次性權杖設定新密碼。Google-only 帳號不能透過此流程新增本站密碼。" +
     "成功後信箱一併標記為已驗證，並撤銷所有既有權杖。" +
-    "Web 模式存取權杖於 body，refresh 權杖寫入 httpOnly cookie（有效期限 1 天 / 1d）；Mobile 模式（X-Client: mobile）於回應 body 同時回傳 accessToken 與 refreshToken，不設定 Set-Cookie。",
+    "Web 模式存取權杖於 body，refresh 權杖寫入 httpOnly cookie（有效期限 7 天 / 7d）；Mobile 模式（X-Client: mobile）於回應 body 同時回傳 accessToken 與 refreshToken，不設定 Set-Cookie。",
   parameters: [
     {
       in: "header",
@@ -605,7 +605,7 @@ registry.registerPath({
       schema: { type: "string", enum: ["mobile"] },
       required: false,
       description:
-        "選填；若為 'mobile' 啟用行動裝置傳輸模式（refresh token 於 body 回傳，不設定 Set-Cookie），否則預設為 Web 模式（refresh token 寫入 httpOnly cookie，有效期限 1 天）",
+        "選填；若為 'mobile' 啟用行動裝置傳輸模式（refresh token 於 body 回傳，不設定 Set-Cookie），否則預設為 Web 模式（refresh token 寫入 httpOnly cookie，有效期限 7 天）",
     },
   ],
   request: {
@@ -617,7 +617,7 @@ registry.registerPath({
   responses: {
     200: {
       description:
-        "密碼已重設並登入；Web 模式 refresh 權杖寫入 cookie (1d)，Mobile 模式 refresh 權杖於 body",
+        "密碼已重設並登入；Web 模式 refresh 權杖寫入 cookie (7d)，Mobile 模式 refresh 權杖於 body",
       content: { "application/json": { schema: LoginResponseSchema } },
     },
     400: errorResponse("新密碼不符規則"),
@@ -635,7 +635,7 @@ registry.registerPath({
   description:
     "變更已登入帳號的密碼並撤銷其他既有權杖（回應會附上新的權杖）。" +
     "帳號尚無密碼（純第三方（Google / Apple）登入）時可省略 currentPassword，即為新增密碼登入方式。" +
-    "Web 模式存取權杖於 body，refresh 權杖寫入 httpOnly cookie（有效期限 1 天 / 1d）；Mobile 模式（X-Client: mobile）於回應 body 同時回傳 accessToken 與 refreshToken，不設定 Set-Cookie。",
+    "Web 模式存取權杖於 body，refresh 權杖寫入 httpOnly cookie（有效期限 7 天 / 7d）；Mobile 模式（X-Client: mobile）於回應 body 同時回傳 accessToken 與 refreshToken，不設定 Set-Cookie。",
   security: [{ bearerAuth: [] }],
   parameters: [
     {
@@ -644,7 +644,7 @@ registry.registerPath({
       schema: { type: "string", enum: ["mobile"] },
       required: false,
       description:
-        "選填；若為 'mobile' 啟用行動裝置傳輸模式（refresh token 於 body 回傳，不設定 Set-Cookie），否則預設為 Web 模式（refresh token 寫入 httpOnly cookie，有效期限 1 天）",
+        "選填；若為 'mobile' 啟用行動裝置傳輸模式（refresh token 於 body 回傳，不設定 Set-Cookie），否則預設為 Web 模式（refresh token 寫入 httpOnly cookie，有效期限 7 天）",
     },
   ],
   request: {
@@ -656,7 +656,7 @@ registry.registerPath({
   responses: {
     200: {
       description:
-        "密碼已更新，並回傳新權杖；Web 模式 refresh 權杖寫入 cookie (1d)，Mobile 模式 refresh 權杖於 body",
+        "密碼已更新，並回傳新權杖；Web 模式 refresh 權杖寫入 cookie (7d)，Mobile 模式 refresh 權杖於 body",
       content: { "application/json": { schema: ChangePasswordResponseSchema } },
     },
     400: errorResponse("新密碼不符規則或缺少 currentPassword"),
@@ -672,7 +672,7 @@ registry.registerPath({
   tags: ["User"],
   summary: "換發權杖 (Web cookie / Mobile JSON)",
   description:
-    "Web 模式透過 httpOnly cookie 傳遞 refreshToken（有效期限 1 天 / 1d）；Mobile 模式（X-Client: mobile）須於 JSON body 帶入 refreshToken 並建議存於 Secure Storage（Keychain/Keystore）。" +
+    "Web 模式透過 httpOnly cookie 傳遞 refreshToken（有效期限 7 天 / 7d）；Mobile 模式（X-Client: mobile）須於 JSON body 帶入 refreshToken 並建議存於 Secure Storage（Keychain/Keystore）。" +
     "換發成功會簽發新 JTI 與 sid。注意：升級後舊版無 sid 權杖將失效，需重新登入一次。",
   parameters: [
     {
@@ -681,7 +681,7 @@ registry.registerPath({
       schema: { type: "string", enum: ["mobile"] },
       required: false,
       description:
-        "選填；若為 'mobile' 啟用行動裝置傳輸模式，否則預設為 Web 模式（cookie 有效期限 1 天）",
+        "選填；若為 'mobile' 啟用行動裝置傳輸模式，否則預設為 Web 模式（cookie 有效期限 7 天）",
     },
   ],
   request: {
@@ -693,7 +693,7 @@ registry.registerPath({
   responses: {
     200: {
       description:
-        "新的存取與 refresh 權杖；Web 模式 refresh 權杖寫入 cookie (1d)，Mobile 模式 refresh 權杖於 body",
+        "新的存取與 refresh 權杖；Web 模式 refresh 權杖寫入 cookie (7d)，Mobile 模式 refresh 權杖於 body",
       content: { "application/json": { schema: RefreshResponseSchema } },
     },
     400: errorResponse("請求格式錯誤、混合傳輸來源或重複/未知 X-Client 標頭"),
@@ -865,7 +865,7 @@ registry.registerPath({
   tags: ["User"],
   summary: "使用者登出",
   description:
-    "支援 Web cookie 登出（清除有效期限 1 天的 httpOnly cookie）與 Mobile JSON refreshToken 登出。嚴禁攜帶 Authorization 標頭（若攜帶將以 400 拒絕且不執行任何撤銷）。" +
+    "支援 Web cookie 登出（清除有效期限 7 天的 httpOnly cookie）與 Mobile JSON refreshToken 登出。嚴禁攜帶 Authorization 標頭（若攜帶將以 400 拒絕且不執行任何撤銷）。" +
     "Web 模式清除 refreshToken cookie 並撤銷 session；Mobile 模式由 JSON body 傳入 refreshToken 並撤銷 session。",
   parameters: [
     {
@@ -874,7 +874,7 @@ registry.registerPath({
       schema: { type: "string", enum: ["mobile"] },
       required: false,
       description:
-        "選填；若為 'mobile' 啟用行動裝置傳輸模式，否則預設為 Web 模式（清除 1 天 cookie）",
+        "選填；若為 'mobile' 啟用行動裝置傳輸模式，否則預設為 Web 模式（清除 7 天 cookie）",
     },
   ],
   request: {
