@@ -30,11 +30,10 @@ import {
   queryDocuments,
   upsertDocuments,
 } from "../../adapters/chroma.adapter";
+import { MEMORY_CACHE_PREFIX, MEMORY_COLLECTION } from "../../constants/memory";
 
-const CACHE_PREFIX = "user-mem:";
 const CACHE_TTL_SEC = 300;
 const MAX_MEMORIES_PER_USER = 50;
-const MEMORY_COLLECTION = "user_memories";
 const EMBEDDING_MODEL = "text-embedding-004";
 const VECTOR_DISTANCE_THRESHOLD = 0.72;
 const ENCRYPTED_PREFIX = "enc:v1:";
@@ -62,7 +61,7 @@ export interface MemorySettings {
 }
 
 function cacheKey(userId: string): string {
-  return CACHE_PREFIX + userId;
+  return MEMORY_CACHE_PREFIX + userId;
 }
 
 async function invalidateCache(userId: string): Promise<void> {
