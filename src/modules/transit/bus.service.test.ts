@@ -20,6 +20,8 @@ import {
   getBusRouteDetail,
   getBusRealtimeOnRoute,
   getBusArrivalAtStop,
+  getBusStopArrivals,
+  clearStopArrivalsCache,
   searchBusStops,
   searchBusRoutes,
 } from "./bus.service";
@@ -666,5 +668,221 @@ describe("searchBusRoutes — 關鍵字與座標距離排序", () => {
     if (!result.ok) return;
     expect(result.routes[0].routeName).toBe("台中無座標路線");
     expect(result.routes[1].routeName).toBe("台北無座標路線");
+  });
+});
+
+describe("getBusStopArrivals — 站牌層級到站 + 低底盤 join", () => {
+  const params = {
+    stopName: "臺北車站(忠孝)",
+    city: TaiwanCityEn.Taipei,
+    lat: 25.0461,
+    lng: 121.5177,
+  };
+
+  function stopDoc(stopUid: string, name: string) {
+    return {
+      stopUid,
+      stopName: { Zh_tw: name },
+      city: "Taipei",
+      location: { type: "Point", coordinates: [121.5177, 25.0461] },
+      distance: 20,
+    };
+  }
+
+  beforeEach(() => {
+    clearStopArrivalsCache();
+    tdxFetchMock.mockReset();
+    stopAggregateMock.mockResolvedValue([
+      stopDoc("TPE1", "台北車站(忠孝)"),
+      stopDoc("TPE2", "臺北車站"),
+      stopDoc("TPE3", "公園路口"),
+    ]);
+  });
+
+  it("排序、去重、低底盤 join（未知車牌為 null）、headsign 批次查詢", async () => {
+    mockTdxJson([
+      {
+        StopUID: "TPE1",
+        RouteName: { Zh_tw: "307" },
+        SubRouteUID: "TPE3070",
+        SubRouteName: { Zh_tw: "307" },
+        Direction: 0,
+        EstimateTime: 600,
+        StopStatus: 0,
+        PlateNumb: "AAA-1",
+      },
+      // 同一 (route, subRoute, direction) 另一 StopUID：保留較小 ETA
+      {
+        StopUID: "TPE2",
+        RouteName: { Zh_tw: "307" },
+        SubRouteUID: "TPE3070",
+        SubRouteName: { Zh_tw: "307" },
+        Direction: 0,
+        EstimateTime: 120,
+        StopStatus: 0,
+        PlateNumb: "AAA-1",
+      },
+      {
+        StopUID: "TPE1",
+        RouteName: { Zh_tw: "0東" },
+        SubRouteUID: "TPE0E",
+        SubRouteName: { Zh_tw: "0東" },
+        Direction: 1,
+        EstimateTime: 240,
+        StopStatus: 0,
+        PlateNumb: "BBB-2",
+      },
+      {
+        StopUID: "TPE1",
+        RouteName: { Zh_tw: "262" },
+        SubRouteUID: "TPE262",
+        Direction: 1,
+        StopStatus: 1,
+        PlateNumb: "-1",
+      },
+      {
+        StopUID: "TPE1",
+        RouteName: { Zh_tw: "202" },
+        SubRouteUID: "TPE202",
+        Direction: 0,
+        EstimateTime: -1,
+        StopStatus: 3,
+      },
+    ]);
+    mockVehicles([{ plateNumb: "AAA-1", isLowFloor: 1, hasLiftOrRamp: 0 }]);
+    routeFindMock.mockReturnValue({
+      select: () => ({
+        lean: () =>
+          Promise.resolve([
+            {
+              subRouteUid: "TPE3070",
+              direction: 0,
+              stops: [
+                { seq: 1, stopName: { Zh_tw: "撫遠街" } },
+                { seq: 30, stopName: { Zh_tw: "板橋前站" } },
+                { seq: 12, stopName: { Zh_tw: "中間站" } },
+              ],
+            },
+            {
+              subRouteUid: "TPE0E",
+              direction: 0,
+              stops: [{ seq: 9, stopName: { Zh_tw: "錯誤方向" } }],
+            },
+          ]),
+      }),
+    });
+
+    const result = await getBusStopArrivals(params);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.stopName).toBe("臺北車站(忠孝)");
+    expect(result.city).toBe("Taipei");
+    expect(result.arrivals.map((a) => a.routeName)).toEqual([
+      "307",
+      "0東",
+      "262",
+      "202",
+    ]);
+    const [r307, r0e, r262, r202] = result.arrivals;
+    expect(r307).toMatchObject({
+      estimateMinutes: 2,
+      headsign: "板橋前站",
+      isLowFloor: true,
+      hasLiftOrRamp: false,
+      plateNumb: "AAA-1",
+      direction: 0,
+    });
+    // 車牌未入庫 → null；該 subRoute 只有另一方向的 headsign → null
+    expect(r0e).toMatchObject({
+      estimateMinutes: 4,
+      headsign: null,
+      isLowFloor: null,
+      hasLiftOrRamp: null,
+    });
+    // "-1" 車牌視為無車牌；沒有 EstimateTime → null
+    expect(r262.estimateMinutes).toBeNull();
+    expect(r262.plateNumb).toBeUndefined();
+    expect(r262.isLowFloor).toBeNull();
+    // 負 ETA → null，排在最後
+    expect(r202.estimateMinutes).toBeNull();
+
+    // 只打一次 TDX，且 filter 只含同名站牌的 StopUID（台/臺、括號正規化後相等）
+    expect(tdxFetchMock).toHaveBeenCalledTimes(1);
+    const url = decodeURIComponent(tdxFetchMock.mock.calls[0][0] as string);
+    expect(url).toContain("/EstimatedTimeOfArrival/City/Taipei?");
+    expect(url).toContain("StopUID eq 'TPE1' or StopUID eq 'TPE2'");
+    expect(url).not.toContain("TPE3");
+    // headsign 為單次批次查詢
+    expect(routeFindMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("300 公尺內沒有同名站牌 → 404，且不打 TDX", async () => {
+    stopAggregateMock.mockResolvedValue([stopDoc("TPE3", "公園路口")]);
+
+    const result = await getBusStopArrivals(params);
+
+    expect(result).toMatchObject({ ok: false, status: 404 });
+    expect(tdxFetchMock).not.toHaveBeenCalled();
+  });
+
+  it("InterCity 不支援 → 400，不查 DB 也不打 TDX", async () => {
+    const result = await getBusStopArrivals({ ...params, city: "InterCity" });
+
+    expect(result).toMatchObject({ ok: false, status: 400 });
+    expect(stopAggregateMock).not.toHaveBeenCalled();
+    expect(tdxFetchMock).not.toHaveBeenCalled();
+  });
+
+  it("TTL 內命中快取，不再打 TDX；併發請求共用同一次呼叫", async () => {
+    mockTdxJson([
+      {
+        StopUID: "TPE1",
+        RouteName: { Zh_tw: "307" },
+        SubRouteUID: "TPE3070",
+        Direction: 0,
+        EstimateTime: 60,
+        StopStatus: 0,
+      },
+    ]);
+    mockVehicles([]);
+    mockRouteMap([]);
+
+    const [a, b] = await Promise.all([
+      getBusStopArrivals(params),
+      getBusStopArrivals({ ...params, lat: 25.04612 }),
+    ]);
+    const c = await getBusStopArrivals(params);
+
+    expect(a.ok && b.ok && c.ok).toBe(true);
+    expect(tdxFetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("失敗不快取：TDX 出錯後下一次會重打", async () => {
+    tdxFetchMock.mockResolvedValueOnce({ ok: false, status: 429 });
+    const failed = await getBusStopArrivals(params);
+    expect(failed).toMatchObject({ ok: false, status: 500 });
+
+    mockTdxJson([]);
+    mockVehicles([]);
+    mockRouteMap([]);
+    const retried = await getBusStopArrivals(params);
+    expect(retried.ok).toBe(true);
+    expect(tdxFetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("TTL 過期後重新查詢", async () => {
+    vi.useFakeTimers();
+    try {
+      mockTdxJson([]);
+      mockVehicles([]);
+      mockRouteMap([]);
+      await getBusStopArrivals(params);
+      vi.advanceTimersByTime(21_000);
+      await getBusStopArrivals(params);
+      expect(tdxFetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

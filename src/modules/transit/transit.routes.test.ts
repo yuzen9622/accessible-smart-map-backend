@@ -23,6 +23,7 @@ vi.mock("./bus.service", async (orig) => ({
   searchBusRoutes: vi.fn(),
   searchBusStops: vi.fn(),
   getNearbyStops: vi.fn(),
+  getBusStopArrivals: vi.fn(),
 }));
 
 import {
@@ -661,5 +662,82 @@ describe("GET /api/v1/transit/bus/nearby-stops", () => {
 
     expect(res.status).toBe(ResponseCode.INVALID_INPUT);
     expect(vi.mocked(busService.getNearbyStops)).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/v1/transit/bus/stop-arrivals", () => {
+  const query = {
+    stopName: "臺北車站(忠孝)",
+    city: "Taipei",
+    lat: 25.0461,
+    lng: 121.5177,
+  };
+
+  it("returns 200 with the envelope and the ok flag stripped", async () => {
+    vi.mocked(busService.getBusStopArrivals).mockResolvedValue({
+      ok: true,
+      stopName: query.stopName,
+      city: "Taipei",
+      arrivals: [
+        {
+          routeName: "307",
+          subRouteUid: "TPE3070",
+          subRouteName: "307",
+          direction: 0,
+          headsign: "板橋前站",
+          estimateMinutes: 2,
+          statusLabel: "正常",
+          plateNumb: "AAA-1",
+          isLowFloor: true,
+          hasLiftOrRamp: null,
+        },
+      ],
+    });
+
+    const res = await request(app)
+      .get(`${BASE}/bus/stop-arrivals`)
+      .query(query);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      ok: true,
+      code: 200,
+      data: {
+        stopName: query.stopName,
+        city: "Taipei",
+        arrivals: [{ routeName: "307", isLowFloor: true, hasLiftOrRamp: null }],
+      },
+    });
+    expect(res.body.data.ok).toBeUndefined();
+    expect(vi.mocked(busService.getBusStopArrivals)).toHaveBeenCalledWith({
+      stopName: query.stopName,
+      city: "Taipei",
+      lat: 25.0461,
+      lng: 121.5177,
+    });
+  });
+
+  it("rejects a missing lat with 400", async () => {
+    const res = await request(app)
+      .get(`${BASE}/bus/stop-arrivals`)
+      .query({ stopName: query.stopName, city: "Taipei", lng: query.lng });
+
+    expect(res.status).toBe(ResponseCode.INVALID_INPUT);
+    expect(vi.mocked(busService.getBusStopArrivals)).not.toHaveBeenCalled();
+  });
+
+  it("maps a service 404 onto the envelope", async () => {
+    vi.mocked(busService.getBusStopArrivals).mockResolvedValue({
+      ok: false,
+      error: "找不到符合的站牌",
+      status: 404,
+    });
+
+    const res = await request(app)
+      .get(`${BASE}/bus/stop-arrivals`)
+      .query(query);
+
+    expect(res.status).toBe(404);
+    expect(res.body.ok).toBe(false);
   });
 });
