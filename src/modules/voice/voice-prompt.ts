@@ -4,6 +4,10 @@ import {
   ANSWER_UNCERTAINTY_RULE,
   TOOL_CHAINING_PRINCIPLE,
 } from "../../config/ai/agent-prompt-shared";
+import {
+  formatPriorConversation,
+  type PriorTurn,
+} from "../agent/conversation-context";
 
 const CATEGORY_LABELS: Record<string, string> = {
   preference: "偏好",
@@ -48,6 +52,8 @@ export interface VoicePromptMemoryItem {
 
 export interface BuildVoiceSystemPromptOptions {
   memoryEnabled?: boolean;
+  /** Earlier turns of the shared conversation (the user switched from text). */
+  history?: PriorTurn[];
 }
 
 /**
@@ -65,7 +71,7 @@ export function buildVoiceSystemPrompt(
     longitude: number;
   },
   memories?: VoicePromptMemoryItem[],
-  _options?: BuildVoiceSystemPromptOptions,
+  options?: BuildVoiceSystemPromptOptions,
 ): string {
   let prompt = VOICE_SYSTEM_PROMPT;
   if (userLocation) {
@@ -80,6 +86,9 @@ export function buildVoiceSystemPrompt(
       prompt += `\n- [${label}] ${text}${id ? ` (id:${id})` : ""}`;
     }
     prompt += `\n\n不要主動唸出記憶的 id 或宣告正在讀取記憶；若使用者要求忘記某筆記憶，使用上方 id 呼叫 deleteMemory。`;
+  }
+  if (options?.history?.length) {
+    prompt += formatPriorConversation(options.history);
   }
   return prompt;
 }

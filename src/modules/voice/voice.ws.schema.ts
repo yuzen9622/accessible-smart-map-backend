@@ -40,6 +40,10 @@ export const SessionStartMessageSchema = z.object({
   // Validated separately by UserLocationSchema: a bad location must not fail
   // the handshake, it just leaves the session without a starting position.
   userLocation: z.unknown().optional(),
+  // Earlier turns of the shared text/voice conversation. Validated separately
+  // by PriorHistorySchema for the same reason: bad history must not fail the
+  // handshake, the session just starts without it.
+  history: z.unknown().optional(),
 });
 
 /** Client-initiated teardown. */

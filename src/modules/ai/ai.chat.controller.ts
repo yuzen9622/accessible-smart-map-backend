@@ -10,6 +10,11 @@ import {
 } from "./ai-chat.service";
 import { getMemorySettings, searchMemoriesForPrompt } from "./memory.service";
 import {
+  formatPriorToolContext,
+  summarizeToolResult,
+  type ToolSummary,
+} from "../agent/conversation-context";
+import {
   CHAT_SYSTEM_PROMPT,
   withUserLocation,
   withCurrentDate,
@@ -49,6 +54,21 @@ function latestUserText(messages: OAIMessage[]): string {
     }
   }
   return "";
+}
+
+/**
+ * Tool summaries the client attached to earlier assistant turns (taken from
+ * the `summary` of each `tool_result` event), in chronological order.
+ */
+function priorToolSummaries(messages: OAIMessage[]): ToolSummary[] {
+  const out: ToolSummary[] = [];
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    const summaries = (message as { tool_summaries?: ToolSummary[] })
+      .tool_summaries;
+    if (Array.isArray(summaries)) out.push(...summaries);
+  }
+  return out;
 }
 
 function isExplicitMemoryRequest(text: string): boolean {
@@ -107,6 +127,8 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
     }
   }
 
+  systemPrompt += formatPriorToolContext(priorToolSummaries(rawMessages));
+
   const messages: OAIMessage[] = [{ role: "system", content: systemPrompt }];
   messages.push(...rawMessages.filter((m) => m.role !== "system"));
 
@@ -131,7 +153,11 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
         userLocation,
         onToolCall: (name, args) => sendSse(res, "tool_call", { name, args }),
         onToolResult: (name, result) =>
-          sendSse(res, "tool_result", { name, result }),
+          sendSse(res, "tool_result", {
+            name,
+            result,
+            summary: summarizeToolResult(result),
+          }),
         onTextDelta: (text) => {
           streamedChars += text.length;
           sendSse(res, "token", { text });
