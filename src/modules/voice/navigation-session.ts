@@ -1,4 +1,5 @@
 import type { AccessibleRoute } from "../../types/route";
+import { taipeiSecondsOfDay } from "../../config/taipei-time";
 import type { MatchedAlert, TaiwanCityEn } from "../../types/transit";
 import type { TransitContext } from "../transit/alert.service";
 import type {
@@ -299,9 +300,7 @@ function transitWaitSec(leg: TransitLeg, nowMs: number = Date.now()): number {
   if (depStr) {
     const depMins = clockMinutes(depStr);
     if (depMins !== null) {
-      const now = new Date(nowMs);
-      const nowSecFromMidnight =
-        now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+      const nowSecFromMidnight = taipeiSecondsOfDay(new Date(nowMs));
       const depSecFromMidnight = depMins * 60;
       const waitSec = (depSecFromMidnight - nowSecFromMidnight + 86400) % 86400;
       return waitSec;
