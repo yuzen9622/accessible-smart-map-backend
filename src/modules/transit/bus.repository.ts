@@ -15,7 +15,7 @@ export interface BusRouteDoc {
     stopName?: { Zh_tw?: string };
     lat: number;
     lng: number;
-    stopUid?: string;
+    stopUID?: string;
   }[];
   routeName?: { Zh_tw?: string };
   subRouteName?: { Zh_tw?: string };

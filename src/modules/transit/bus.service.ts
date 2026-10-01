@@ -270,7 +270,7 @@ type NormalizedRoute = {
   subRouteName: string;
   direction: number;
   operators: string[];
-  stops: { seq: number; name: string; lat?: number; lng?: number }[];
+  stops: BusRouteDirection["stops"];
 };
 
 function buildDirections(records: NormalizedRoute[]): BusRouteDirection[] {
@@ -427,6 +427,7 @@ export async function getBusRouteInfo(params: {
         stops: (d.stops ?? []).map((s) => ({
           seq: s.seq,
           name: s.stopName?.Zh_tw ?? "",
+          stopUid: s.stopUID,
           lat: s.lat,
           lng: s.lng,
         })),
@@ -476,6 +477,7 @@ export async function getBusRouteInfo(params: {
       stops: (r.Stops ?? []).map((s: any) => ({
         seq: s.StopSequence,
         name: s.StopName?.Zh_tw ?? "",
+        stopUid: s.StopUID,
         lat: s.StopPosition?.PositionLat,
         lng: s.StopPosition?.PositionLon,
       })),
@@ -696,6 +698,7 @@ export async function getBusRouteDetail(params: {
     // `dir_${dir}`（台北市 ETA 不帶 SubRouteUID，舊寫法會整批丟掉，整條路線
     // 都顯示「尚未發車」）。
     const etaMap = new Map<string, Map<string, StopEta>>();
+    const etaByStopUid = new Map<string, StopEta>();
     const now = new Date();
     for (const r of etaRecords) {
       const subRouteUid = r.SubRouteUID;
@@ -723,6 +726,12 @@ export async function getBusRouteDetail(params: {
       // 同方向同站名可能有多筆（不同子路線或站位共用站名）：保留最快到站的一班。
       const existing = dirMap.get(stopName);
       if (!existing || isSoonerEta(next, existing)) dirMap.set(stopName, next);
+      if (r.StopUID) {
+        const uidKey = `${key}|${r.StopUID}`;
+        const sameStop = etaByStopUid.get(uidKey);
+        if (!sameStop || isSoonerEta(next, sameStop))
+          etaByStopUid.set(uidKey, next);
+      }
     }
 
     const directions: BusRouteDetailDirection[] = routeInfoRes.directions.map(
@@ -743,8 +752,12 @@ export async function getBusRouteDetail(params: {
         const frequencies = dirSchedule?.frequencies || [];
 
         const stops: BusRouteDetailStop[] = d.stops.map((s, index) => {
-          let etaData: StopEta | undefined;
-          if (dirMap) {
+          let etaData: StopEta | undefined = s.stopUid
+            ? (etaByStopUid.get(
+                `${d.subRouteUid}_${d.direction}|${s.stopUid}`,
+              ) ?? etaByStopUid.get(`dir_${d.direction}|${s.stopUid}`))
+            : undefined;
+          if (!etaData && dirMap) {
             const entries = [...dirMap.entries()];
             etaData =
               entries.find(

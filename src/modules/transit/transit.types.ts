@@ -37,7 +37,13 @@ export type BusRouteDirection = {
   from: string;
   to: string;
   stopCount: number;
-  stops: { seq: number; name: string; lat?: number; lng?: number }[];
+  stops: {
+    seq: number;
+    name: string;
+    stopUid?: string;
+    lat?: number;
+    lng?: number;
+  }[];
 };
 
 export type BusRouteInfoResult =

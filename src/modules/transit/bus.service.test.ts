@@ -736,6 +736,55 @@ describe("route-detail 以 RouteUID 查 TDX（不靠路線名猜）", () => {
   });
 });
 
+describe("route-detail 以 StopUID 對應到站", () => {
+  it("同方向同站名兩個站位時，各站拿自己 StopUID 的預估", async () => {
+    mockRouteMap([
+      {
+        routeUid: "CHA0801",
+        subRouteUid: "CHA080101",
+        routeName: { Zh_tw: "13路" },
+        direction: 0,
+        stops: [
+          { seq: 1, stopName: { Zh_tw: "口庄" }, stopUID: "CHA1" },
+          { seq: 2, stopName: { Zh_tw: "中站" }, stopUID: "CHA2" },
+          { seq: 3, stopName: { Zh_tw: "口庄" }, stopUID: "CHA3" },
+        ],
+      },
+    ]);
+    const row = (stopUid: string, name: string, seconds: number) => ({
+      RouteUID: "CHA0801",
+      SubRouteUID: "CHA080101",
+      Direction: 0,
+      StopUID: stopUid,
+      StopName: { Zh_tw: name },
+      EstimateTime: seconds,
+      StopStatus: 0,
+    });
+    tdxFetchMock.mockImplementation(async (url: string) => ({
+      ok: true,
+      json: async () =>
+        url.includes("EstimatedTimeOfArrival")
+          ? [
+              row("CHA1", "口庄", 120),
+              row("CHA2", "中站", 300),
+              row("CHA3", "口庄", 600),
+            ]
+          : [],
+    }));
+
+    const result = await getBusRouteDetail({
+      routeName: "13路",
+      city: TaiwanCityEn.ChanghuaCounty,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.directions[0].stops.map((s) => s.estimateMinutes)).toEqual([
+      2, 5, 10,
+    ]);
+  });
+});
+
 describe("searchBusRoutes — 關鍵字與座標距離排序", () => {
   it("未提供 location 時，按預設順序回傳且不含 distance", async () => {
     (
