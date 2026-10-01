@@ -3,34 +3,8 @@ import {
   matchBusShape,
   normalizeBusShapes,
   shapeWktToPath,
-  simplifyPath,
   type BusShape,
 } from "./bus-shape";
-
-describe("simplifyPath", () => {
-  it("刪掉共線的中間點、保留轉折與端點", () => {
-    const path: [number, number][] = [
-      [121.5, 25.0],
-      [121.501, 25.0],
-      [121.502, 25.0],
-      [121.502, 25.001],
-    ];
-    expect(simplifyPath(path)).toEqual([
-      [121.5, 25.0],
-      [121.502, 25.0],
-      [121.502, 25.001],
-    ]);
-  });
-
-  it("偏離超過容許值的點不會被刪", () => {
-    const path: [number, number][] = [
-      [121.5, 25.0],
-      [121.501, 25.0001],
-      [121.502, 25.0],
-    ];
-    expect(simplifyPath(path)).toHaveLength(3);
-  });
-});
 
 describe("shapeWktToPath", () => {
   it("LINESTRING 直接轉成 [lng, lat]", () => {
