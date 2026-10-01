@@ -14,6 +14,7 @@
 
 import { decode } from "@googlemaps/polyline-codec";
 import axios from "axios";
+import { createHash } from "crypto";
 import http from "http";
 import https from "https";
 import { GtfsTrip } from "../../../model/gtfs-trip.model";
@@ -21,6 +22,7 @@ import MetroStationModel from "../../../model/metro-station.model";
 import TrainStationModel from "../../../model/train-station.model";
 import BusStopModel from "../../../model/bus-stop.model";
 import { haversineCoords } from "../../../utils/geo";
+import { redisClient, redisGet, redisSet } from "../../../config/redis";
 import {
   normalizeAbsoluteDirection,
   normalizeRelativeDirection,
@@ -76,7 +78,18 @@ interface OtpPlanAttempt {
   itineraries: OtpItinerary[];
   routingErrors: OtpRoutingError[];
   anchor: Date;
+  fromCache?: boolean;
 }
+
+interface OtpPlanResponse {
+  itineraries: OtpItinerary[];
+  routingErrors: OtpRoutingError[];
+}
+
+const OTP_PLAN_CACHE_TTL_S = Number(process.env.OTP_PLAN_CACHE_TTL_S ?? 120);
+const OTP_PLAN_CACHE_COORD_SCALE = 1e4;
+const OTP_PLAN_CACHE_TIME_BUCKET_MS = 2 * 60 * 1000;
+const otpPlanInflight = new Map<string, Promise<OtpPlanResponse>>();
 
 const OTP_TERMINAL_ROUTING_ERRORS = new Set([
   "LOCATION_NOT_FOUND",
@@ -305,33 +318,31 @@ query Plan(
   }
 }`;
 
-async function queryOtpPlan(
-  origin: { lat: number; lng: number },
-  destination: { lat: number; lng: number },
-  departure: Date,
-  wheelchair: boolean,
-  walkSpeed: number,
-  numItineraries: number,
-  searchWindowSec: number,
-): Promise<OtpPlanAttempt> {
+function otpPlanCacheEnabled(): boolean {
+  return OTP_PLAN_CACHE_TTL_S > 0 && redisClient !== null;
+}
+
+function roundForCache(point: { lat: number; lng: number }): {
+  lat: number;
+  lng: number;
+} {
+  return {
+    lat:
+      Math.round(point.lat * OTP_PLAN_CACHE_COORD_SCALE) /
+      OTP_PLAN_CACHE_COORD_SCALE,
+    lng:
+      Math.round(point.lng * OTP_PLAN_CACHE_COORD_SCALE) /
+      OTP_PLAN_CACHE_COORD_SCALE,
+  };
+}
+
+async function postOtpPlan(
+  variables: Record<string, unknown>,
+): Promise<OtpPlanResponse> {
   const baseUrl = process.env.OTP_BASE_URL ?? "http://localhost:8080";
   const response = await otpClient.post(
     `${baseUrl}/otp/routers/default/index/graphql`,
-    {
-      query: PLAN_QUERY,
-      variables: {
-        fromLat: origin.lat,
-        fromLon: origin.lng,
-        toLat: destination.lat,
-        toLon: destination.lng,
-        date: ymdDash(departure),
-        time: hhmm(departure.getTime()),
-        wheelchair,
-        walkSpeed,
-        numItineraries,
-        searchWindow: searchWindowSec,
-      },
-    },
+    { query: PLAN_QUERY, variables },
   );
   const json = response.data as {
     data?: {
@@ -348,7 +359,103 @@ async function queryOtpPlan(
   return {
     itineraries: json.data?.plan?.itineraries ?? [],
     routingErrors: json.data?.plan?.routingErrors ?? [],
+  };
+}
+
+/**
+ * Plan query through the Redis result cache and an in-process single-flight.
+ * Only successful responses are cached; timeouts and GraphQL errors propagate
+ * uncached.
+ *
+ * @param variables The GraphQL variables; the cache key is derived from them.
+ * @returns The plan response and whether OTP was skipped.
+ */
+async function cachedOtpPlan(
+  variables: Record<string, unknown>,
+): Promise<{ response: OtpPlanResponse; fromCache: boolean }> {
+  const key = `otp:plan:v1:${createHash("sha1")
+    .update(JSON.stringify(variables))
+    .digest("hex")}`;
+  const hit = await redisGet(key);
+  if (hit) {
+    try {
+      return { response: JSON.parse(hit) as OtpPlanResponse, fromCache: true };
+    } catch {
+      /* corrupt entry: refetch */
+    }
+  }
+  const pending = otpPlanInflight.get(key);
+  if (pending) {
+    return { response: structuredClone(await pending), fromCache: true };
+  }
+
+  const request = postOtpPlan(variables)
+    .then((response) => {
+      void redisSet(key, JSON.stringify(response), OTP_PLAN_CACHE_TTL_S);
+      return response;
+    })
+    .finally(() => otpPlanInflight.delete(key));
+  otpPlanInflight.set(key, request);
+  return { response: structuredClone(await request), fromCache: false };
+}
+
+/**
+ * One OTP plan query. With the result cache enabled the endpoints are rounded
+ * to 4 decimals (~11 m) and the departure floored to a 2-minute bucket, both
+ * for the key and for the query itself, and itineraries starting before the
+ * real departure are dropped.
+ *
+ * @param origin The origin point.
+ * @param destination The destination point.
+ * @param departure The requested departure time.
+ * @param wheelchair Whether to request wheelchair-accessible routing.
+ * @param walkSpeed Walking speed in m/s.
+ * @param numItineraries How many itineraries to request.
+ * @param searchWindowSec The search window in seconds.
+ * @returns The attempt, anchored at the requested departure.
+ */
+async function queryOtpPlan(
+  origin: { lat: number; lng: number },
+  destination: { lat: number; lng: number },
+  departure: Date,
+  wheelchair: boolean,
+  walkSpeed: number,
+  numItineraries: number,
+  searchWindowSec: number,
+): Promise<OtpPlanAttempt> {
+  const cacheOn = otpPlanCacheEnabled();
+  const from = cacheOn ? roundForCache(origin) : origin;
+  const to = cacheOn ? roundForCache(destination) : destination;
+  const queryTime = cacheOn
+    ? new Date(
+        Math.floor(departure.getTime() / OTP_PLAN_CACHE_TIME_BUCKET_MS) *
+          OTP_PLAN_CACHE_TIME_BUCKET_MS,
+      )
+    : departure;
+  const variables = {
+    fromLat: from.lat,
+    fromLon: from.lng,
+    toLat: to.lat,
+    toLon: to.lng,
+    date: ymdDash(queryTime),
+    time: hhmm(queryTime.getTime()),
+    wheelchair,
+    walkSpeed,
+    numItineraries,
+    searchWindow: searchWindowSec,
+  };
+
+  if (!cacheOn) {
+    return { ...(await postOtpPlan(variables)), anchor: departure };
+  }
+  const { response, fromCache } = await cachedOtpPlan(variables);
+  return {
+    itineraries: response.itineraries.filter(
+      (it) => (it.legs[0]?.startTime ?? Infinity) >= departure.getTime(),
+    ),
+    routingErrors: response.routingErrors,
     anchor: departure,
+    fromCache,
   };
 }
 
@@ -1059,7 +1166,8 @@ export async function planOtpRouteDetailed(
       OTP_SEARCH_WINDOW_S,
     );
     primarySucceeded = true;
-    planBreaker.recordSuccess();
+    if (firstAttempt.fromCache) tm.otpCacheHits = 1;
+    else planBreaker.recordSuccess();
   } catch (err) {
     sawUpstreamFailure = true;
     recordPlanFailure();
@@ -1112,6 +1220,7 @@ export async function planOtpRouteDetailed(
 
   const observeAttempt = (attempt: OtpPlanAttempt) => {
     sawTerminalRoutingError ||= hasTerminalRoutingError(attempt);
+    if (attempt.fromCache) tm.otpCacheHits = (tm.otpCacheHits ?? 0) + 1;
   };
 
   const hasBusLeg = (its: OtpItinerary[]) =>
@@ -1154,7 +1263,7 @@ export async function planOtpRouteDetailed(
         }
         effectiveWindowSec = OTP_SEARCH_WINDOW_WIDE_S;
         originalSearchWindowSec = OTP_SEARCH_WINDOW_WIDE_S;
-        planBreaker.recordSuccess();
+        if (!wideAttempt.fromCache) planBreaker.recordSuccess();
         tm.otpWide = Date.now() - tWide;
       } catch (err) {
         sawUpstreamFailure = true;
@@ -1283,7 +1392,7 @@ export async function planOtpRouteDetailed(
       );
       observeAttempt(originalContinuationAttempt);
       rememberOriginalWalkFallback(originalContinuationAttempt);
-      planBreaker.recordSuccess();
+      if (!originalContinuationAttempt.fromCache) planBreaker.recordSuccess();
       if (hasUsableTransit(originalContinuationAttempt.itineraries)) {
         itineraries = originalContinuationAttempt.itineraries;
         selectedAttempt = originalContinuationAttempt;
@@ -1315,7 +1424,7 @@ export async function planOtpRouteDetailed(
           OTP_SEARCH_WINDOW_WIDE_S,
         );
         observeAttempt(snappedContinuationAttempt);
-        planBreaker.recordSuccess();
+        if (!snappedContinuationAttempt.fromCache) planBreaker.recordSuccess();
         if (hasUsableTransit(snappedContinuationAttempt.itineraries)) {
           itineraries = snappedContinuationAttempt.itineraries;
           selectedAttempt = snappedContinuationAttempt;
