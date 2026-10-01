@@ -6,6 +6,7 @@ import { buildFuzzyKeywordRegex } from "../../utils/transit-text";
 
 /** A stored bus route with the stop list the info endpoint reads. */
 export interface BusRouteDoc {
+  routeUid?: string;
   subRouteUid: string;
   direction: number;
   operators?: { name?: string }[];

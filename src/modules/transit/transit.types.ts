@@ -29,6 +29,7 @@ export type BusServiceError = {
 };
 
 export type BusRouteDirection = {
+  routeUid?: string;
   subRouteUid: string;
   subRouteName: string;
   direction: number;
@@ -60,6 +61,7 @@ export type BusRouteDetailStop = {
 };
 
 export type BusRouteDetailDirection = {
+  routeUid?: string;
   subRouteUid: string;
   subRouteName: string;
   direction: number;
@@ -68,6 +70,11 @@ export type BusRouteDetailDirection = {
   to: string;
   stopCount: number;
   stops: BusRouteDetailStop[];
+  /**
+   * Route geometry as [lng, lat] pairs (GeoJSON order), or null when TDX has
+   * no shape that can be attributed to this sub-route direction.
+   */
+  polyline: [number, number][] | null;
 };
 
 export type BusRouteDetailResult =

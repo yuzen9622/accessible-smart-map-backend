@@ -294,6 +294,7 @@ const BusRouteStopSchema = z.object({
 
 const BusRouteDirectionSchema = z
   .object({
+    routeUid: z.string().optional().openapi({ example: "TXG99" }),
     subRouteUid: z.string().openapi({ example: "TXG991" }),
     subRouteName: z.string().openapi({ example: "99延" }),
     direction: DirectionSchema,
@@ -322,6 +323,17 @@ const BusRouteDetailDirectionSchema = BusRouteDirectionSchema.extend({
       statusLabel: z.string().openapi({ example: "正常" }),
     }),
   ),
+  polyline: z
+    .array(z.tuple([z.number(), z.number()]))
+    .nullable()
+    .openapi({
+      description:
+        "路線幾何，[lng, lat]（GeoJSON 順序）；TDX 無可歸屬此子路線方向的線形時為 null，前端改以站序連線繪製",
+      example: [
+        [120.6845, 24.1402],
+        [120.6851, 24.1408],
+      ],
+    }),
 }).openapi("BusRouteDetailDirection");
 
 const BusScheduleSchema = z
