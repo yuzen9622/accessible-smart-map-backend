@@ -222,6 +222,35 @@ describe("planAccessibleRouteFromRequest preflight", () => {
   });
 });
 
+describe("planAccessibleRouteFromRequest departure timezone", () => {
+  it.each([
+    ["2026-10-01T20:30:00", "2026-10-01T12:30:00.000Z"],
+    ["2026-10-01T20:30", "2026-10-01T12:30:00.000Z"],
+    ["2026-10-01T20:30:00.123", "2026-10-01T12:30:00.123Z"],
+    ["2026-10-01T20:30:00+08:00", "2026-10-01T12:30:00.000Z"],
+    ["2026-10-01T20:30:00Z", "2026-10-01T20:30:00.000Z"],
+    ["2026-10-01T20:30:00-04:00", "2026-10-02T00:30:00.000Z"],
+  ])("passes %s to the planner as %s", async (departureTime, expected) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-01T12:17:00Z"));
+    try {
+      await planAccessibleRouteFromRequest({
+        travelMode: "transit",
+        origin: driveRequest.origin,
+        destination: driveRequest.destination,
+        departureTime,
+      });
+      expect(planOtpRouteDetailed).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ departureTime: new Date(expected) }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("planAccessibleRouteFromRequest driving a11y highlights append", () => {
   it("appends the parking highlight without overwriting the walk hint", async () => {
     const walkHint = "起點需步行約 150 公尺至可上車路段";

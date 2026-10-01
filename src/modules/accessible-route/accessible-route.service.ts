@@ -1721,7 +1721,16 @@ export async function planAccessibleRouteFromRequest(
     (await getCity(lat, lng))) as TaiwanCityEn;
   const cityMs = Date.now() - tCity;
 
-  const parsedDeparture = departureTime ? new Date(departureTime) : undefined;
+  // Offset-free ISO datetimes from AI tools are Taipei wall-clock times.
+  // Preserve explicit offsets; never let the host timezone choose the instant.
+  const normalizedDeparture =
+    departureTime &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(departureTime)
+      ? `${departureTime}+08:00`
+      : departureTime;
+  const parsedDeparture = normalizedDeparture
+    ? new Date(normalizedDeparture)
+    : undefined;
   const futureDeparture =
     parsedDeparture &&
     !isNaN(parsedDeparture.getTime()) &&
