@@ -1026,6 +1026,31 @@ export async function getBusTimetable(params: {
  * low-floor / lift-or-ramp status joined from the imported Vehicle table.
  * The user never supplies a plate number — the agent obtains the live plates.
  */
+/**
+ * TDX 依路線名查詢時會一併回傳同號碼的其他路線（查「700」連「700跳蛙公車」都會回來），
+ * 而 `formatRouteName` 又會把「700跳蛙公車」縮成「700」先查——於是跳蛙沒發車時，一般 700
+ * 的車會被當成跳蛙的車回給前端。完整名稱本身就是一條已匯入的路線時，只保留這條路線的紀錄；
+ * 查不到（例如「307公車」這種帶雜訊的輸入）或 DB 失敗時不過濾，維持原本的模糊比對。
+ *
+ * @param routeName 呼叫方給的路線名
+ * @param city 呼叫方指定的城市，或 "InterCity"
+ * @returns 要保留的完整路線名；不需要過濾時為 null
+ */
+async function exactRouteNameToKeep(
+  routeName: string,
+  city: TaiwanCityEn | "InterCity",
+): Promise<string | null> {
+  const fullName = routeName.trim();
+  if (!fullName || fullName === formatRouteName(fullName)) return null;
+  try {
+    const docs = await findRoutesByName(city, [fullName]);
+    return docs.length ? fullName : null;
+  } catch (e) {
+    console.error("Failed to resolve exact route name for bus positions", e);
+    return null;
+  }
+}
+
 export async function getBusRealtimeOnRoute(params: {
   routeName: string;
   city: TaiwanCityEn | "InterCity";
@@ -1044,7 +1069,8 @@ export async function getBusRealtimeOnRoute(params: {
         ? ` and Direction eq ${direction}`
         : "";
 
-    const { records, scope } = await fetchRouteScoped(
+    const keepRouteName = await exactRouteNameToKeep(params.routeName, city);
+    const scoped = await fetchRouteScoped(
       params.routeName,
       city,
       ({ type, routeId: id }) =>
@@ -1052,6 +1078,13 @@ export async function getBusRealtimeOnRoute(params: {
           ? `${busUrl.cityRealtimeByFrequencyUrl}/${city}/${encodeURIComponent(id)}?$format=JSON${dirFilter}`
           : `${busUrl.interCityRealTimeByFrequencyUrl}?$format=JSON&$filter=RouteName/Zh_tw eq '${odataUrlLiteral(id)}'${interCityDirFilter}`,
     );
+    const { scope } = scoped;
+    const records = keepRouteName
+      ? scoped.records.filter(
+          (r: { RouteName?: { Zh_tw?: string } }) =>
+            r.RouteName?.Zh_tw === keepRouteName,
+        )
+      : scoped.records;
     if (!records.length) {
       return {
         ok: false,
@@ -1085,7 +1118,7 @@ export async function getBusRealtimeOnRoute(params: {
 
     return {
       ok: true,
-      routeName: scope?.routeId ?? routeId,
+      routeName: keepRouteName ?? scope?.routeId ?? routeId,
       city,
       count: buses.length,
       lowFloorCount: buses.filter((b) => b.isLowFloor === "是").length,

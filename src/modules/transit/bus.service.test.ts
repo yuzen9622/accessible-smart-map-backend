@@ -122,6 +122,70 @@ describe("getBusRealtimeOnRoute — 低底盤 join（招牌功能）", () => {
   });
 });
 
+describe("getBusRealtimeOnRoute — 同號碼的其他路線不混入", () => {
+  const bus = (plate: string, routeName: string, subRouteUid: string) => ({
+    PlateNumb: plate,
+    RouteName: { Zh_tw: routeName },
+    SubRouteUID: subRouteUid,
+    SubRouteName: { Zh_tw: routeName },
+    Direction: 0,
+    BusPosition: { PositionLat: 24.14, PositionLon: 120.68 },
+    BusStatus: 0,
+  });
+  const jumpFrog = {
+    routeName: { Zh_tw: "700跳蛙公車" },
+    subRouteUid: "TXG7001",
+  };
+
+  beforeEach(() => mockVehicles([]));
+
+  it("完整名稱是已匯入路線時，只回這條路線的車", async () => {
+    mockRouteMap([jumpFrog]);
+    mockTdxJson([
+      bus("EAL-0603", "700", "TXG7000"),
+      bus("EAL-3679", "700跳蛙公車", "TXG7001"),
+    ]);
+
+    const result = await getBusRealtimeOnRoute({
+      routeName: "700跳蛙公車",
+      city: TaiwanCityEn.Taichung,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.routeName).toBe("700跳蛙公車");
+    expect(result.buses.map((b) => b.plateNumb)).toEqual(["EAL-3679"]);
+  });
+
+  it("這條路線沒有車在跑時回 404，不拿一般 700 的車充數", async () => {
+    mockRouteMap([jumpFrog]);
+    mockTdxJson([bus("EAL-0603", "700", "TXG7000")]);
+
+    const result = await getBusRealtimeOnRoute({
+      routeName: "700跳蛙公車",
+      city: TaiwanCityEn.Taichung,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.status).toBe(404);
+  });
+
+  it("完整名稱不是已知路線（帶雜訊的輸入）時維持模糊比對", async () => {
+    mockRouteMap([]);
+    mockTdxJson([bus("AAA-1", "307", "TPE157463")]);
+
+    const result = await getBusRealtimeOnRoute({
+      routeName: "307公車",
+      city: TaiwanCityEn.Taipei,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.buses.map((b) => b.plateNumb)).toEqual(["AAA-1"]);
+  });
+});
+
 describe("getBusArrivalAtStop", () => {
   beforeEach(() => mockRouteMap([]));
 
