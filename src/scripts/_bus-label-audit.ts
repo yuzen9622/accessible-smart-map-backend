@@ -60,12 +60,19 @@ function audit(
   dow: number,
   v: string[],
 ) {
-  const raw = etaRows.filter(
-    (r) =>
-      r.Direction === d.direction &&
-      equalStopName(r.StopName?.Zh_tw, s.name) &&
-      (!r.SubRouteUID || !d.subRouteUid || r.SubRouteUID === d.subRouteUid),
-  );
+  const sameRoute = (r: any) =>
+    r.Direction === d.direction &&
+    (!r.SubRouteUID || !d.subRouteUid || r.SubRouteUID === d.subRouteUid);
+  const byUid = s.stopUid
+    ? etaRows.filter((r) => sameRoute(r) && r.StopUID === s.stopUid)
+    : [];
+  const raw = byUid.length
+    ? byUid
+    : etaRows.filter(
+        (r) =>
+          sameRoute(r) &&
+          equalStopName(r.StopName?.Zh_tw, s.name ?? s.stopName),
+      );
   const rawEst = raw
     .map((r) => r.EstimateTime)
     .filter((x) => typeof x === "number" && x >= 0);
@@ -118,6 +125,70 @@ function audit(
   return s.estimateMinutes != null
     ? "預估分鐘"
     : label.replace(/\d{2}:\d{2}/, "HH:mm").replace(/\d+(–\d+)?/, "N");
+}
+
+function expectedFromRaw(
+  schedRows: any[],
+  d: any,
+  s: any,
+  isFirst: boolean,
+  now: Date,
+): string | null {
+  const exact = schedRows.filter(
+    (x) => x.Direction === d.direction && x.SubRouteUID === d.subRouteUid,
+  );
+  const rows = exact.length
+    ? exact
+    : schedRows.filter((x) => x.Direction === d.direction && !x.SubRouteUID);
+  if (!rows.length) return null;
+  const nowHHmm = taipeiHHmm(now);
+  const today = taipeiWeekday(now);
+  const runs = (sd: any, dow: number) =>
+    !sd ||
+    Object.keys(sd).filter((k) => k !== "ServiceTag").length === 0 ||
+    !!sd[DAYS[dow]];
+  for (const r of rows)
+    for (const f of r.Frequencys ?? []) {
+      if (
+        runs(f.ServiceDay, today) &&
+        f.StartTime <= nowHHmm &&
+        f.EndTime > nowHHmm
+      )
+        return "班距中";
+    }
+  for (let off = 0; off <= 7; off++) {
+    const dow = (today + off) % 7;
+    const deps: { t: string; at: boolean }[] = [];
+    for (const r of rows) {
+      for (const f of r.Frequencys ?? [])
+        if (runs(f.ServiceDay, dow) && f.StartTime)
+          deps.push({ t: f.StartTime, at: false });
+      for (const t of r.Timetables ?? []) {
+        if (!runs(t.ServiceDay, dow)) continue;
+        const sts = (t.StopTimes ?? []).filter(
+          (x: any) => x.ArrivalTime || x.DepartureTime,
+        );
+        if (!sts.length) continue;
+        const here =
+          sts.length > 1
+            ? sts.find((x: any) => equalStopName(x.StopName?.Zh_tw, s.name))
+            : undefined;
+        const st = here ?? sts[0];
+        deps.push({
+          t: st.ArrivalTime || st.DepartureTime,
+          at: !!here || equalStopName(sts[0].StopName?.Zh_tw, s.name),
+        });
+      }
+    }
+    const next = deps
+      .filter((x) => off > 0 || x.t >= nowHHmm)
+      .sort((a, b) => a.t.localeCompare(b.t))[0];
+    if (!next) continue;
+    const pre =
+      off === 0 ? "" : off === 1 ? "明日 " : `週${"日一二三四五六"[dow]} `;
+    return `${pre}${next.t}${next.at || isFirst ? "" : " 起點發車"}`;
+  }
+  return null;
 }
 
 async function main() {
@@ -180,14 +251,45 @@ async function main() {
       const labels: Record<string, number> = {};
       const violations: string[] = [];
       let stops = 0;
+      let schedChecked = 0;
       for (const d of res.directions)
         for (const s of d.stops) {
           stops++;
           const k = audit(d, s, etaRows, schedRows, nowHHmm, dow, violations);
+          const fromSched =
+            s.estimateMinutes == null &&
+            /(\d{2}:\d{2})|分一班/.test(s.statusLabel) &&
+            !etaRows.some(
+              (r) =>
+                r.NextBusTime &&
+                r.Direction === d.direction &&
+                (r.StopUID === s.stopUid ||
+                  (!s.stopUid && equalStopName(r.StopName?.Zh_tw, s.name))) &&
+                new Date(r.NextBusTime).getTime() >= now.getTime() - 60000,
+            );
+          if (fromSched) {
+            schedChecked++;
+            const exp = expectedFromRaw(
+              schedRows,
+              d,
+              s,
+              d.stops.indexOf(s) === 0,
+              now,
+            );
+            const ok =
+              exp === "班距中"
+                ? /分一班|班距/.test(s.statusLabel)
+                : exp === s.statusLabel;
+            if (!ok)
+              violations.push(
+                `班表推算不符 [dir${d.direction}/${d.subRouteUid}] ${s.seq}.${s.name}: out="${s.statusLabel}" 獨立推算="${exp}"`,
+              );
+          }
           labels[k] = (labels[k] ?? 0) + 1;
         }
       Object.assign(entry, {
         stops,
+        schedChecked,
         labels,
         etaRows: etaRows.length,
         schedRows: schedRows.length,
