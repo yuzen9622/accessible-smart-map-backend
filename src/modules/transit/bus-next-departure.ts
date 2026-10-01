@@ -128,11 +128,12 @@ export function nextDepartureText(
 }
 
 /**
- * Formats TDX N1 NextBusTime, marking departures that fall on a later Taipei date.
+ * Formats TDX N1 NextBusTime, marking departures that fall on a later Taipei
+ * date; a time already in the past is stale and dropped so the timetable wins.
  *
  * @param iso NextBusTime as published by TDX.
  * @param now The reference instant.
- * @returns "HH:mm" or "明日 HH:mm"; null when absent or unparseable.
+ * @returns "HH:mm" or "明日 HH:mm"; null when absent, unparseable or past.
  */
 export function formatNextBusTime(
   iso: string | undefined,
@@ -140,7 +141,7 @@ export function formatNextBusTime(
 ): string | null {
   if (!iso) return null;
   const d = new Date(iso);
-  if (isNaN(d.getTime())) return null;
+  if (isNaN(d.getTime()) || d.getTime() < now.getTime() - 60_000) return null;
   const hhmm = taipeiHHmm(d);
   if (taipeiYmd(d) === taipeiYmd(now)) return hhmm;
   if (taipeiYmd(d) === taipeiYmd(addTaipeiDays(now, 1))) return `明日 ${hhmm}`;

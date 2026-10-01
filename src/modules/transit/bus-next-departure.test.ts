@@ -126,6 +126,7 @@ describe("formatNextBusTime", () => {
     );
     expect(formatNextBusTime(undefined, now)).toBeNull();
     expect(formatNextBusTime("garbage", now)).toBeNull();
+    expect(formatNextBusTime("2026-10-01T22:50:00+08:00", now)).toBeNull();
   });
 });
 
