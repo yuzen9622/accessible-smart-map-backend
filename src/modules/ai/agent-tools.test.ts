@@ -35,6 +35,9 @@ vi.mock("../campus/campus.service", () => ({
 vi.mock("../hazard-report/hazard-report.service", () => ({
   findNearby: vi.fn(),
 }));
+vi.mock("../traffic/road-incident.service", () => ({
+  getActiveRoadIncidents: vi.fn(async () => []),
+}));
 vi.mock("../environment/environment.service", () => ({
   getEnvironmentInfo: vi.fn(),
 }));
@@ -130,6 +133,7 @@ import {
 import * as metroService from "../transit/metro.service";
 import * as alertService from "../transit/alert.service";
 import * as busService from "../transit/bus.service";
+import { getActiveRoadIncidents } from "../traffic/road-incident.service";
 
 const mockGetCoordinates = getCoordinates as unknown as ReturnType<
   typeof vi.fn
@@ -494,6 +498,67 @@ describe("getNearbyHazards", () => {
     message: "找到 2 筆附近路況回報",
     data: { reports: [{ id: "a" }, { id: "b" }], total: 2 },
   };
+
+  it("同時回傳附近的政府道路施工事件，最近的在前且標 source", async () => {
+    mockHazardFindNearby.mockResolvedValue(hazardResult);
+    vi.mocked(getActiveRoadIncidents).mockResolvedValueOnce([
+      {
+        incidentId: "far",
+        title: "道路施工",
+        severity: "advisory",
+        location: { lat: 25.053, lng: 121.51 },
+      },
+      {
+        incidentId: "near",
+        title: "道路施工",
+        description: "道路維護",
+        severity: "closure",
+        roadClosed: true,
+        endTime: "2026-12-31T23:59:59+08:00",
+        location: { lat: 25.06, lng: 121.51 },
+        points: [
+          { lat: 25.06, lng: 121.51 },
+          { lat: 25.0501, lng: 121.51 },
+        ],
+      },
+      {
+        incidentId: "out",
+        title: "道路施工",
+        severity: "advisory",
+        location: { lat: 25.2, lng: 121.51 },
+      },
+    ]);
+
+    const result = JSON.parse(
+      await getNearbyHazards({ latitude: 25.05, longitude: 121.51 }),
+    );
+
+    expect(result.data.total).toBe(2);
+    expect(result.data.roadEvents).toEqual([
+      expect.objectContaining({
+        source: "government",
+        hazardType: "construction",
+        severity: "closure",
+        roadClosed: true,
+        location: { lat: 25.0501, lng: 121.51 },
+        distanceM: 11,
+      }),
+      expect.objectContaining({ title: "道路施工", distanceM: 334 }),
+    ]);
+  });
+
+  it("篩選非施工類型時不回傳政府施工事件", async () => {
+    mockHazardFindNearby.mockResolvedValue(hazardResult);
+    const result = JSON.parse(
+      await getNearbyHazards({
+        latitude: 25.05,
+        longitude: 121.51,
+        hazardType: "data_error",
+      }),
+    );
+    expect(result.data.roadEvents).toEqual([]);
+    expect(getActiveRoadIncidents).not.toHaveBeenCalledWith(expect.anything());
+  });
 
   it("用經緯度查詢成功", async () => {
     mockHazardFindNearby.mockResolvedValue(hazardResult);

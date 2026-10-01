@@ -176,6 +176,12 @@ export interface RoadIncident {
   severity: RoadIncidentSeverity;
   roadName?: string;
   location: { lat: number; lng: number };
+  /** TDX's free-text location, e.g. 「中正路613號至重慶北路四段177號人行道更新」. */
+  locationDescription?: string;
+  /** Positions along the event's extent: distinct TDX points, or for Taipei the permit work area. */
+  points?: { lat: number; lng: number }[];
+  /** Set when the Taipei road-work permit marks the case as a road closure. */
+  roadClosed?: boolean;
   startTime?: string;
   /** Absent means the event has no published end and is treated as active. */
   endTime?: string;

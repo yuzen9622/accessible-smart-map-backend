@@ -311,3 +311,64 @@ describe("confirmed hazard candidate planning", () => {
     );
   });
 });
+
+describe("government multi-point hazards", () => {
+  const route = walkRoute("street", [
+    [121, 25],
+    [121.002, 25],
+  ]);
+  const metresNorth = (m: number) => 25 + m / 111_195;
+
+  it("matches the nearest of several sampled points and reports it", () => {
+    const [match] = matchConfirmedHazardsToRoute(route, [
+      {
+        id: "tdx:1",
+        hazardType: "construction",
+        severity: "difficult",
+        source: "government",
+        coordinates: [121.001, metresNorth(300)],
+        points: [
+          [121.001, metresNorth(300)],
+          [121.001, metresNorth(20)],
+        ],
+      },
+    ]);
+
+    expect(match).toMatchObject({ id: "tdx:1", source: "government" });
+    expect(match.location.lat).toBeCloseTo(metresNorth(20), 6);
+    expect(match.distanceM).toBeLessThan(HAZARD_ROUTE_CORRIDOR_M);
+  });
+
+  it("does not match when every sampled point is outside the corridor", () => {
+    expect(
+      matchConfirmedHazardsToRoute(route, [
+        {
+          id: "tdx:2",
+          hazardType: "construction",
+          severity: "difficult",
+          source: "government",
+          coordinates: [121.001, metresNorth(40)],
+          points: [
+            [121.001, metresNorth(40)],
+            [121.0015, metresNorth(60)],
+          ],
+        },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("labels hazards without a source as community", () => {
+    const [match] = matchConfirmedHazardsToRoute(route, [
+      hazard("c1", [121.001, 25]),
+    ]);
+    expect(match.source).toBe("community");
+  });
+
+  it("rejects an invalid source", () => {
+    expect(() =>
+      matchConfirmedHazardsToRoute(route, [
+        { ...hazard("bad", [121.001, 25]), source: "other" as never },
+      ]),
+    ).toThrow(/source/);
+  });
+});

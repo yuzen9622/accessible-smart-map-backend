@@ -36,11 +36,15 @@ export interface SlimA11y {
   tags?: Record<string, string>;
 }
 
-/** One verified, community-confirmed hazard positioned relative to a planned route. */
+/** Who verified a hazard: community reports or a government road-event feed. */
+export type RouteHazardSource = "community" | "government";
+
+/** One verified hazard positioned relative to a planned route. */
 export interface RouteHazard {
   id: string;
   hazardType: HazardType;
   severity: HazardSeverity;
+  source: RouteHazardSource;
   description?: string;
   location: { lat: number; lng: number };
   /** Shortest distance from the route's ground-level polyline to the hazard, in metres. */
@@ -146,16 +150,19 @@ export interface WalkA11ySegment {
 }
 
 /**
- * A curb-ramp facility recorded near a CSR walking leg's path.
+ * A point facility recorded near a walking leg's path: a curb ramp (CSR legs)
+ * or an audible pedestrian signal (any WALK leg, visual_impaired mode).
  *
  * `location` is the facility's own surveyed coordinate, not a projection onto
- * the leg's `polyline`: a ramp point is a point, and snapping it onto the
+ * the leg's `polyline`: a facility point is a point, and snapping it onto the
  * path would misreport where it actually is.
  */
 export interface WalkA11yPoint {
-  type: "curb_ramp";
+  type: "curb_ramp" | "audio_signal";
   /** WGS84 [longitude, latitude] of the recorded facility itself. */
   location: [number, number];
+  /** Intersection name; audible signals only, when the source provides one. */
+  name?: string;
 }
 
 export type WalkAbsoluteDirection =

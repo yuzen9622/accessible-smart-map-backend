@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Mock tdxFetch to prevent real network calls during transit route enrichment
+vi.mock("../../adapters/taipei-metro-notice.adapter", () => ({
+  fetchTaipeiMetroNotices: vi.fn(async () => []),
+}));
 vi.mock("../../config/fetch", () => ({
   tdxFetch: vi.fn().mockResolvedValue({ ok: true, json: async () => [] }),
 }));

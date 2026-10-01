@@ -315,10 +315,16 @@ const WalkLegSchema = z
       .array(
         z
           .object({
-            type: z.literal("curb_ramp").openapi({ example: "curb_ramp" }),
+            type: z
+              .enum(["curb_ramp", "audio_signal"])
+              .openapi({ example: "curb_ramp" }),
             location: z.tuple([z.number(), z.number()]).openapi({
               example: [121.567, 25.041],
               description: "設施本身的 WGS84 [經度, 緯度]，非路徑上的投影點。",
+            }),
+            name: z.string().optional().openapi({
+              example: "八德路三段 光復北路",
+              description: "路口名稱；僅 audio_signal 且來源有提供時存在。",
             }),
           })
           .strict()
@@ -327,10 +333,12 @@ const WalkLegSchema = z
       .optional()
       .openapi({
         description:
-          "只有 engine=pedestrian-a11y 會有此欄位。座標是無障礙斜坡道設施本身的位置，" +
-          "不是路徑上的投影點。來源為臺北市新工處人行道無障礙斜坡道點位（已排除汽車斜坡道），" +
-          "以 8 公尺內最近人行道邊吸附。欄位為空或不存在不代表沿途沒有坡道" +
-          "（約 35% 點位因該處圖上無人行道線而未吸附）。",
+          "沿途的點狀設施，座標是設施本身的位置，不是路徑上的投影點。" +
+          "curb_ramp：只有 engine=pedestrian-a11y 會有。來源為臺北市新工處人行道無障礙斜坡道點位（已排除汽車斜坡道），" +
+          "以 8 公尺內最近人行道邊吸附；約 35% 點位因該處圖上無人行道線而未吸附。" +
+          "audio_signal：只有 mode=visual_impaired 會有，任何步行引擎皆可能出現。" +
+          "來源為臺北市交工處有聲號誌設置資料與 OSM，取路線 20 公尺內的路口，15 公尺內視為同一路口。" +
+          "欄位為空或不存在都不代表沿途沒有該類設施。",
       }),
     steps: z
       .array(
@@ -452,6 +460,21 @@ const RoadIncidentSchema = z
     roadName: z.string().optional().openapi({ example: "大度路" }),
     location: CoordSchema.openapi({
       example: { lat: 25.12333, lng: 121.463906 },
+    }),
+    locationDescription: z.string().optional().openapi({
+      example: "中正路613號至重慶北路四段177號人行道更新",
+      description: "TDX 提供的文字位置描述",
+    }),
+    points: z
+      .array(z.object({ lat: z.number(), lng: z.number() }))
+      .optional()
+      .openapi({
+        description:
+          "事件範圍上的點：同一事件的不同點，或台北以道管中心施工範圍每 20 公尺取樣（最多 200 點）；沒有範圍資料時省略",
+      }),
+    roadClosed: z.boolean().optional().openapi({
+      description:
+        "台北道管中心今日施工資料標示為道路封閉時為 true，此時 severity 一律為 closure；其他縣市不提供此欄位",
     }),
     startTime: z.string().optional(),
     endTime: z
@@ -864,10 +887,15 @@ const RouteHazardSchema = z
     severity: z
       .enum(["blocking", "difficult", "minor"])
       .openapi({ example: "blocking" }),
+    source: z.enum(["community", "government"]).openapi({
+      example: "government",
+      description:
+        "community＝使用者回報且經社群確認；government＝TDX 即時路況事件的道路施工封閉（台北另以道管中心今日施工資料補判是否封閉）。",
+    }),
     description: z.string().optional().openapi({ example: "人行道施工中" }),
     location: CoordSchema.openapi({
       example: { lat: 25.0411, lng: 121.5674 },
-      description: "已確認回報的位置。",
+      description: "障礙位置；延伸型的政府施工為離路線最近的那一點。",
     }),
     distanceM: z.number().nonnegative().openapi({
       example: 8.4,

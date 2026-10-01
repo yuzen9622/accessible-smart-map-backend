@@ -1,3 +1,9 @@
+import { fetchTaipeiMetroNotices } from "../../adapters/taipei-metro-notice.adapter";
+import {
+  activeElevatorNotices,
+  outageNoticeForMetroFacility,
+  type ActiveMetroNotice,
+} from "../../utils/metro-notice";
 import * as campusService from "../campus/campus.service";
 import type { CampusFacilityPlace } from "../campus/campus.service";
 import { findNearby as findNearbyReports } from "../hazard-report/hazard-report.service";
@@ -77,6 +83,37 @@ function campusToFacility(f: CampusFacilityPlace): A11yFacility {
   };
 }
 
+async function loadMetroNotices(): Promise<Map<string, ActiveMetroNotice>> {
+  return activeElevatorNotices(await fetchTaipeiMetroNotices());
+}
+
+function withFacilityNotices(
+  facilities: A11yFacility[],
+  notices: ReadonlyMap<string, ActiveMetroNotice>,
+): A11yFacility[] {
+  if (!notices.size) return facilities;
+  return facilities.map((f) => {
+    if (f.source !== "metro") return f;
+    const outageNotice = outageNoticeForMetroFacility(notices, f.name);
+    return outageNotice ? { ...f, outageNotice } : f;
+  });
+}
+
+function withPlaceNotices(
+  places: A11yPlace[],
+  notices: ReadonlyMap<string, ActiveMetroNotice>,
+): A11yPlace[] {
+  if (!notices.size) return places;
+  return places.map((p) => {
+    if (p.source !== "metro") return p;
+    const outageNotice = outageNoticeForMetroFacility(
+      notices,
+      p["出入口電梯/無障礙坡道名稱"],
+    );
+    return outageNotice ? { ...p, outageNotice } : p;
+  });
+}
+
 /**
  * Every accessibility facility across metro, OSM, campus, bathrooms and
  * parking, optionally narrowed to a set of categories.
@@ -88,12 +125,13 @@ export async function findAllFacilities(
   categories?: A11yCategory[],
 ): Promise<A11yFacility[]> {
   const want = categories && categories.length > 0 ? new Set(categories) : null;
-  const [own, campus] = await Promise.all([
+  const [own, campus, notices] = await Promise.all([
     findOwnFacilityGroups(categories),
     campusService.findAllFacilities(),
+    loadMetroNotices(),
   ]);
   const facilities = [
-    ...own.metro,
+    ...withFacilityNotices(own.metro, notices),
     ...own.osm,
     ...campus.slice(0, A11Y_MAX_RESULTS).map(campusToFacility),
     ...own.bathroom,
@@ -107,12 +145,13 @@ export async function findAllFacilities(
  * campus facilities whose resolved type code is `elevator`.
  */
 export async function findElevatorFacilities(): Promise<A11yFacility[]> {
-  const [own, campus] = await Promise.all([
+  const [own, campus, notices] = await Promise.all([
     findOwnElevatorFacilities(),
     campusService.findAllFacilities(),
+    loadMetroNotices(),
   ]);
   return [
-    ...own,
+    ...withFacilityNotices(own, notices),
     ...campus
       .filter((f) => f.type === "elevator")
       .slice(0, A11Y_MAX_RESULTS)
@@ -166,15 +205,19 @@ export async function findBathroomFacilities(): Promise<A11yFacility[]> {
  * @returns The nearby place groups
  */
 export async function findNearby(lat: number, lng: number, radiusM = 150) {
-  const [rows, nearbyCampus] = await Promise.all([
+  const [rows, nearbyCampus, notices] = await Promise.all([
     findOwnNearby(lat, lng, radiusM),
     campusService.findFacilitiesNearby(lat, lng, radiusM),
+    loadMetroNotices(),
   ]);
   return {
-    nearbyMetroA11y: mergeA11yPlaces(
-      rows.metro,
-      rows.osm as IOsmA11y[],
-      nearbyCampus.map(campusToA11yPlace),
+    nearbyMetroA11y: withPlaceNotices(
+      mergeA11yPlaces(
+        rows.metro,
+        rows.osm as IOsmA11y[],
+        nearbyCampus.map(campusToA11yPlace),
+      ),
+      notices,
     ),
     nearbyBathroom: rows.bathroom,
     nearbyOsm: rows.osm,
@@ -195,15 +238,19 @@ export async function findNearbyLimited(
   lng: number,
   radiusM = 300,
 ) {
-  const [rows, nearbyCampus] = await Promise.all([
+  const [rows, nearbyCampus, notices] = await Promise.all([
     findOwnNearbyLimited(lat, lng, radiusM),
     campusService.findFacilitiesNearby(lat, lng, radiusM),
+    loadMetroNotices(),
   ]);
   return {
-    nearbyMetroA11y: mergeA11yPlaces(
-      rows.metro,
-      rows.osm as IOsmA11y[],
-      nearbyCampus.slice(0, 15).map(campusToA11yPlace),
+    nearbyMetroA11y: withPlaceNotices(
+      mergeA11yPlaces(
+        rows.metro,
+        rows.osm as IOsmA11y[],
+        nearbyCampus.slice(0, 15).map(campusToA11yPlace),
+      ),
+      notices,
     ),
     nearbyBathroom: rows.bathroom,
     nearbyOsm: rows.osm,

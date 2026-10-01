@@ -45,9 +45,9 @@ export const ROUTE_WARNING = {
   CSR_SLOPE_LIMIT_NOT_ENFORCED:
     "台北 CSR 無障礙行人圖目前不會依您設定的任意坡度上限篩選路徑；回傳的坡度僅為已選路段的觀測值，您的坡度上限未被實際執行",
   HAZARD_ON_ROUTE:
-    "此路線經過社群已確認的路況障礙（hazardAdvisory.onRoute），請留意或改採其他候選路線",
+    "此路線經過已確認的路況障礙或道路施工封閉（hazardAdvisory.onRoute），請留意或改採其他候選路線",
   HAZARD_ALL_ROUTES_BLOCKED:
-    "所有候選路線都經過社群已確認的路況障礙，已為您保留受影響最小的路線，出發前請務必確認現場狀況",
+    "所有候選路線都經過已確認的路況障礙或道路施工封閉，已為您保留受影響最小的路線，出發前請務必確認現場狀況",
   CSR_WALK_APPROXIMATE_INDOOR_GEOMETRY:
     "路線包含車站室內段落，該段僅有出入口代理座標、無實測室內線形，地圖上以直線近似呈現，實際步行路徑會不同",
 } as const;

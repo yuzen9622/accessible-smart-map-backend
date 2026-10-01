@@ -35,7 +35,10 @@ export type {
 import type { IOsmA11y } from "../../types";
 import type { TaiwanCityEn } from "../../types/transit";
 import { slimRoutes, compactRoutes } from "./facility-slim";
+import { slimRouteGeometry } from "./geometry-slim";
 import { rerankByLowFloor } from "./low-floor-rerank";
+import { demoteElevatorNoticeRoutes } from "./elevator-notice-rerank";
+import { matchAudioSignals, paddedBbox } from "./planners/audio-signals";
 import {
   scoreRoute,
   routeCost,
@@ -66,6 +69,7 @@ import {
 } from "./route-schedule";
 import {
   buildHazardQueryArea,
+  pointToSegmentDistanceM,
   planConfirmedHazardRoutes,
   type ConfirmedHazardInput,
   type HazardRoutePlan,
@@ -125,9 +129,23 @@ function createLimiter(limit: number) {
   };
 }
 
+function audioSignalNodes(leg: WalkLeg): IOsmA11y[] {
+  return (leg.a11yPoints ?? [])
+    .filter((p) => p.type === "audio_signal")
+    .map((p) => ({
+      osmId: `audio_signal:${p.location[0]},${p.location[1]}`,
+      ...(p.name ? { name: p.name } : {}),
+      category: "wheelchair_accessible",
+      tags: { "traffic_signals:sound": "yes" },
+      location: { type: "Point", coordinates: p.location },
+      importedAt: new Date(0),
+    }));
+}
+
 function collectRouteFacilities(r: AccessibleRoute): IOsmA11y[] {
   return r.legs.flatMap((leg) => {
-    if (leg.type === "WALK") return leg.a11yFacilities;
+    if (leg.type === "WALK")
+      return [...leg.a11yFacilities, ...audioSignalNodes(leg)];
     if (leg.type === "BUS")
       return [...leg.departureStopA11y, ...leg.arrivalStopA11y];
     if (leg.type === "METRO")
@@ -897,6 +915,153 @@ async function loadConfirmedHazards(
   }
 }
 
+/**
+ * Attach audible pedestrian signals to WALK legs as `a11yPoints`, so scoring
+ * and the accessibility summary see them. Fail-soft: a lookup failure leaves
+ * the legs untouched. Exported for focused tests.
+ *
+ * @param routes The routes to annotate in place.
+ */
+export async function attachAudioSignals(
+  routes: AccessibleRoute[],
+): Promise<void> {
+  const walkLegs = routes.flatMap((r) =>
+    r.legs.filter(
+      (l): l is WalkLeg => l.type === "WALK" && l.polyline.length >= 2,
+    ),
+  );
+  const bbox = paddedBbox(walkLegs.map((l) => l.polyline));
+  if (!bbox) return;
+  try {
+    const { findAudioSignalsWithin } =
+      await import("../visual-a11y/visual-a11y.service");
+    const signals = (await findAudioSignalsWithin(bbox)).map((d) => ({
+      source: d.source ?? "osm",
+      location: d.location.coordinates,
+      name: d.properties?.name,
+    }));
+    if (!signals.length) return;
+    for (const leg of walkLegs) {
+      const matched = matchAudioSignals(leg.polyline, signals);
+      if (matched.length)
+        leg.a11yPoints = [...(leg.a11yPoints ?? []), ...matched];
+    }
+  } catch (err) {
+    console.warn("[accessible-route] audio signal lookup failed", err);
+  }
+}
+
+const GOVERNMENT_HAZARD_PREFILTER_M = 100;
+const PEDESTRIAN_WORK_RE = /人行道|騎樓|行人/;
+
+function roundedEndDate(endTime: string | undefined): string | undefined {
+  return endTime ? /^\d{4}-\d{2}-\d{2}/.exec(endTime)?.[0] : undefined;
+}
+
+/**
+ * Government road events (TDX LiveEvent; Taipei enriched with permit closure
+ * flags and work-area points) near the candidates, as hazard inputs. Only
+ * road closures and works on the footway (人行道／騎樓／行人) are used: other
+ * advisories, such as routine maintenance on the carriageway, say nothing about
+ * walking. Fail-soft: any failure yields no government hazards.
+ * Exported for focused tests.
+ *
+ * @param routes The candidate routes.
+ * @returns Government hazards whose points lie near some candidate.
+ */
+export async function loadGovernmentHazards(
+  routes: AccessibleRoute[],
+): Promise<ConfirmedHazardInput[]> {
+  try {
+    const area = buildHazardQueryArea(routes);
+    if (!area) return [];
+    const { getActiveRoadIncidents } =
+      await import("../traffic/road-incident.service");
+    const { TRAFFIC_ROUTE_HOOK_TIMEOUT_MS } =
+      await import("../../config/traffic");
+    const dLat = area.radiusM / 111_320;
+    const dLng = dLat / Math.cos((area.center.lat * Math.PI) / 180);
+    const incidents = await withTimeoutBudget(
+      getActiveRoadIncidents({
+        bbox: [
+          area.center.lng - dLng,
+          area.center.lat - dLat,
+          area.center.lng + dLng,
+          area.center.lat + dLat,
+        ],
+      }),
+      TRAFFIC_ROUTE_HOOK_TIMEOUT_MS,
+      "Government hazard fetch timeout",
+    );
+
+    const segments = routes.flatMap((r) =>
+      r.legs
+        .filter(
+          (l) =>
+            l.type === "WALK" || l.type === "DRIVE" || l.type === "MOTORCYCLE",
+        )
+        .flatMap((l) =>
+          l.polyline.slice(1).map((end, k) => [l.polyline[k], end] as const),
+        ),
+    );
+    const near = (lat: number, lng: number) =>
+      segments.some(
+        ([a, b]) =>
+          pointToSegmentDistanceM([lng, lat], a, b) <=
+          GOVERNMENT_HAZARD_PREFILTER_M,
+      );
+
+    return incidents
+      .filter(
+        (i) =>
+          i.severity === "closure" ||
+          PEDESTRIAN_WORK_RE.test(
+            `${i.title} ${i.description ?? ""} ${i.locationDescription ?? ""}`,
+          ),
+      )
+      .filter((i) => (i.points ?? [i.location]).some((p) => near(p.lat, p.lng)))
+      .map((i) => {
+        const endDate = roundedEndDate(i.endTime);
+        const detail = i.locationDescription ?? i.description ?? i.roadName;
+        return {
+          id: `tdx:${i.incidentId}`,
+          hazardType: i.title.includes("施工") ? "construction" : "obstacle",
+          severity: "difficult",
+          source: "government",
+          description: `${i.title}${detail ? `｜${detail}` : ""}${
+            endDate ? `（預計至 ${endDate}）` : ""
+          }`,
+          coordinates: [i.location.lng, i.location.lat],
+          ...(i.points
+            ? {
+                points: i.points.map((p) => [p.lng, p.lat] as [number, number]),
+              }
+            : {}),
+        } satisfies ConfirmedHazardInput;
+      });
+  } catch (err) {
+    console.warn("[accessible-route] government hazard lookup failed", err);
+    return [];
+  }
+}
+
+/**
+ * Community hazards plus government closures. An unsafe community lookup stays
+ * unknown unless government evidence alone exists.
+ *
+ * @param community The community hazards, or undefined when unsafe.
+ * @param government The government hazards.
+ * @returns The combined list, or undefined when nothing is known.
+ */
+function combineHazards(
+  community: ConfirmedHazardInput[] | undefined,
+  government: ConfirmedHazardInput[],
+): ConfirmedHazardInput[] | undefined {
+  if (community === undefined)
+    return government.length ? government : undefined;
+  return [...community, ...government];
+}
+
 function planWithConfirmedHazards(
   routes: AccessibleRoute[],
   hazards: ConfirmedHazardInput[],
@@ -969,10 +1134,11 @@ async function finalizeRoutes(
   const proxyEligible = constraints.avoidStairs
     ? prioritizeStepFreeRoutes(proxyRanked)
     : proxyRanked;
-  const confirmedHazards = await loadConfirmedHazards(
-    proxyEligible,
-    defaultConfirmedHazardLookup,
-  );
+  const [communityHazards, governmentHazards] = await Promise.all([
+    loadConfirmedHazards(proxyEligible, defaultConfirmedHazardLookup),
+    loadGovernmentHazards(proxyEligible),
+  ]);
+  const confirmedHazards = combineHazards(communityHazards, governmentHazards);
   const proxyHazardPlan =
     confirmedHazards === undefined
       ? unappliedHazardPlan(proxyEligible)
@@ -993,6 +1159,7 @@ async function finalizeRoutes(
   } catch (err) {
     console.warn("[accessible-route] top-N a11y enrichment failed", err);
   }
+  if (mode === "visual_impaired") await attachAudioSignals(topN);
   t.enrich = Date.now() - t0;
   t0 = Date.now();
   // One weather/air lookup per request (cached, CCTV-free); an environment
@@ -1032,10 +1199,11 @@ async function finalizeRoutes(
     : retainEarliestFutureRoute(hazardPlan.routes, hazardPlan.routes, 3);
   t.hazard = Date.now() - t0;
   t0 = Date.now();
+  let elevatorNoticeRoutes = new Set<AccessibleRoute>();
   try {
     const { overlayFacilityStatus } =
       await import("./planners/facility-status");
-    await overlayFacilityStatus(top, mode);
+    elevatorNoticeRoutes = await overlayFacilityStatus(top, mode);
   } catch (err) {
     console.warn("[accessible-route] facility status overlay failed", err);
   }
@@ -1057,12 +1225,19 @@ async function finalizeRoutes(
   } catch (err) {
     console.warn("[accessible-route] low-floor rerank failed", err);
   }
+  demoteElevatorNoticeRoutes(
+    top,
+    elevatorNoticeRoutes,
+    mode,
+    constraints.requireElevator,
+  );
   t.lowFloorRerank = Date.now() - t0;
   // Derive B12 details while full facility tags are still attached. slimRoutes
   // and compactRoutes only project/move facility arrays, so these direct WALK
   // fields remain stable in either response format.
   attachWalkA11yDetails(top);
   slimRoutes(top);
+  slimRouteGeometry(top);
   if (format === "compact") compactRoutes(top);
   console.log("[route-timing] finalize", JSON.stringify(t));
   return top;

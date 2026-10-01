@@ -313,18 +313,22 @@ export function pickExcludeLocations(
   const origCoord: [number, number] = [origin.lng, origin.lat];
   const destCoord: [number, number] = [destination.lng, destination.lat];
 
-  const sorted = [...closures].sort((a, b) => {
-    const ptA: [number, number] = [a.location.lng, a.location.lat];
-    const ptB: [number, number] = [b.location.lng, b.location.lat];
-    const distA = pointToSegmentMeters(ptA, origCoord, destCoord);
-    const distB = pointToSegmentMeters(ptB, origCoord, destCoord);
-    return distA - distB;
-  });
-
-  return sorted.slice(0, max).map((c) => ({
-    lat: c.location.lat,
-    lng: c.location.lng,
-  }));
+  const distance = (p: LatLng) =>
+    pointToSegmentMeters([p.lng, p.lat], origCoord, destCoord);
+  const perClosure = Math.max(
+    1,
+    Math.floor(max / Math.max(1, closures.length)),
+  );
+  const points = closures.flatMap((c) =>
+    (c.points ?? [c.location])
+      .map((p) => ({ p, d: distance(p) }))
+      .sort((a, b) => a.d - b.d)
+      .slice(0, perClosure),
+  );
+  return points
+    .sort((a, b) => a.d - b.d)
+    .slice(0, max)
+    .map(({ p }) => ({ lat: p.lat, lng: p.lng }));
 }
 
 export function applyIncidentAdvisories(
@@ -354,18 +358,19 @@ export function applyIncidentAdvisories(
       let bestLeg: DriveLeg | null = null;
       let minDistance = Infinity;
 
-      const pt: [number, number] = [inc.location.lng, inc.location.lat];
-
-      for (const leg of routeDriveLegs) {
-        for (let i = 0; i < leg.polyline.length - 1; i++) {
-          const d = pointToSegmentMeters(
-            pt,
-            leg.polyline[i],
-            leg.polyline[i + 1],
-          );
-          if (d < minDistance) {
-            minDistance = d;
-            bestLeg = leg;
+      for (const { lat, lng } of inc.points ?? [inc.location]) {
+        const pt: [number, number] = [lng, lat];
+        for (const leg of routeDriveLegs) {
+          for (let i = 0; i < leg.polyline.length - 1; i++) {
+            const d = pointToSegmentMeters(
+              pt,
+              leg.polyline[i],
+              leg.polyline[i + 1],
+            );
+            if (d < minDistance) {
+              minDistance = d;
+              bestLeg = leg;
+            }
           }
         }
       }

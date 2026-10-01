@@ -368,6 +368,34 @@ describe("traffic-overlay", () => {
       expect(picked[0]).toHaveProperty("lat");
       expect(picked[0]).toHaveProperty("lng");
     });
+
+    it("never lets one long closure take every slot", () => {
+      const long: RoadIncident = {
+        incidentId: "long",
+        title: "道路封閉",
+        severity: "closure",
+        location: { lat: 25.05, lng: 121.52 },
+        points: Array.from({ length: 200 }, (_, i) => ({
+          lat: 25.05 + i * 0.0001,
+          lng: 121.52,
+        })),
+      };
+      const short: RoadIncident = {
+        incidentId: "short",
+        title: "道路封閉",
+        severity: "closure",
+        location: { lat: 25.07, lng: 121.53 },
+      };
+
+      const picked = pickExcludeLocations(
+        [long, short],
+        { lat: 25.04, lng: 121.52 },
+        { lat: 25.1, lng: 121.52 },
+      );
+
+      expect(picked).toContainEqual({ lat: 25.07, lng: 121.53 });
+      expect(picked.length).toBeLessThanOrEqual(50);
+    });
   });
 
   describe("applyIncidentAdvisories", () => {

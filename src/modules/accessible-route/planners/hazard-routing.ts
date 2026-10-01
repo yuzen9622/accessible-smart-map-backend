@@ -4,6 +4,7 @@ import type {
   AccessibleRoute,
   RouteHazard,
   RouteHazardAdvisory,
+  RouteHazardSource,
 } from "../../../types/route";
 
 /**
@@ -41,13 +42,20 @@ const SEVERITY_ORDER: Record<HazardSeverity, number> = {
 
 type LngLat = readonly [number, number];
 
-/** The DB projection consumed by this pure planner. Coordinates are [lng, lat]. */
+/**
+ * A verified hazard consumed by this pure planner. Coordinates are [lng, lat].
+ * `points` lists every sampled position of an extended hazard (e.g. a
+ * government construction case); the nearest one is matched. `source` defaults
+ * to "community".
+ */
 export interface ConfirmedHazardInput {
   id: string;
   hazardType: HazardType;
   severity: HazardSeverity;
   description?: string;
   coordinates: [number, number];
+  points?: [number, number][];
+  source?: RouteHazardSource;
 }
 
 /** A bounded circle that contains every matchable candidate ground polyline. */
@@ -268,6 +276,16 @@ function normalizeHazards(
       hazard.coordinates,
       `confirmed hazard coordinates for ${hazard.id}`,
     );
+    for (const point of hazard.points ?? []) {
+      assertLngLat(point, `confirmed hazard point for ${hazard.id}`);
+    }
+    if (
+      hazard.source !== undefined &&
+      hazard.source !== "community" &&
+      hazard.source !== "government"
+    ) {
+      throw new Error(`Invalid confirmed hazard source: ${hazard.id}`);
+    }
     return hazard;
   });
 }
@@ -275,13 +293,15 @@ function normalizeHazards(
 function toRouteHazard(
   hazard: ConfirmedHazardInput,
   distanceM: number,
+  location: LngLat,
 ): RouteHazard {
   return {
     id: hazard.id,
     hazardType: hazard.hazardType,
     severity: hazard.severity,
+    source: hazard.source ?? "community",
     ...(hazard.description ? { description: hazard.description } : {}),
-    location: { lat: hazard.coordinates[1], lng: hazard.coordinates[0] },
+    location: { lat: location[1], lng: location[0] },
     distanceM: Math.round(distanceM * 10) / 10,
   };
 }
@@ -303,20 +323,27 @@ function matchRouteHazards(
   const matches: RouteHazard[] = [];
   for (const hazard of hazards) {
     let nearestDistanceM = Infinity;
-    for (const polyline of polylines) {
-      for (let index = 1; index < polyline.length; index++) {
-        nearestDistanceM = Math.min(
-          nearestDistanceM,
-          pointToSegmentDistanceM(
-            hazard.coordinates,
+    let nearestPoint: LngLat = hazard.coordinates;
+    const positions = hazard.points?.length
+      ? hazard.points
+      : [hazard.coordinates];
+    for (const position of positions) {
+      for (const polyline of polylines) {
+        for (let index = 1; index < polyline.length; index++) {
+          const distanceM = pointToSegmentDistanceM(
+            position,
             polyline[index - 1],
             polyline[index],
-          ),
-        );
+          );
+          if (distanceM < nearestDistanceM) {
+            nearestDistanceM = distanceM;
+            nearestPoint = position;
+          }
+        }
       }
     }
     if (nearestDistanceM <= HAZARD_ROUTE_CORRIDOR_M) {
-      matches.push(toRouteHazard(hazard, nearestDistanceM));
+      matches.push(toRouteHazard(hazard, nearestDistanceM, nearestPoint));
     }
   }
   return sortRouteHazards(matches);
