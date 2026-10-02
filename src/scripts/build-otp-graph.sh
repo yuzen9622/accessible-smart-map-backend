@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
 #
 # Phase 16 OTP2 graph build pipeline (spec §5) — cron-driven, weekly:
+#   0. preflight: checkout, disk, Mongo, Docker, Python deps (otp-preflight.sh)
 #   1. fetch the TDX GTFS static feed(s)        (every run)
 #   2. refresh + clip the Taiwan OSM extract    (only when older than 30 days)
 #   3. gate on gtfs-validator errors            (abort keeps the old graph)
 #   4. stop serving briefly; otp --build --save offline in a temp dir
-#   5. atomic swap of graph.obj + container restart + healthcheck
+#   5. load the candidate on a side port, verify its quality, and only then
+#      swap it in + restart + healthcheck (promote-otp-graph.sh)
 #
 # Required env:
 #   TDX_CLIENT_ID / TDX_CLIENT_SECRET   TDX OAuth2 client credentials
 #   OTP_GTFS_URLS                       space-separated GTFS zip URLs (TDX)
 # Optional env:
 #   OTP_DATA_DIR     (default /var/otp)
+#   OTP_WORK_ROOT    where the build's temp dirs go (default /tmp); point it at
+#                    another disk when the data disk lacks ~5 GiB of headroom
 #   OTP_OSM_PBF_URL  (default Geofabrik Taiwan)
 #   OTP_OSM_BBOX     osmium extract bbox "minLng,minLat,maxLng,maxLat".
 #                    UNSET (default) = no clipping, full Taiwan coverage.
@@ -37,15 +41,16 @@ OTP_JAVA_XMX="${OTP_JAVA_XMX:-12g}"
 OTP_IMAGE="opentripplanner/opentripplanner:2.9.0"
 OSM_MAX_AGE_DAYS=30
 
-WORK_DIR="$(mktemp -d /tmp/otp-build.XXXXXX)"
-VALIDATION_DIR="$(mktemp -d /tmp/otp-validation.XXXXXX)"
+OTP_WORK_ROOT="${OTP_WORK_ROOT:-/tmp}"
+WORK_DIR="$(mktemp -d "$OTP_WORK_ROOT/otp-build.XXXXXX")"
+VALIDATION_DIR="$(mktemp -d "$OTP_WORK_ROOT/otp-validation.XXXXXX")"
 # Injection *inputs* (raw upstream bundles that are read, grafted into feed-1 and
 # then thrown away) MUST live outside WORK_DIR: OTP scans its data directory and
 # ingests every *.zip it finds there as a transit feed of its own. A raw bundle
 # left beside feed-1 therefore loads as a full duplicate network — and since those
 # bundles carry no shapes.txt, whichever trip the planner picks from the duplicate
 # renders as station-to-station straight lines.
-AUX_DIR="$(mktemp -d /tmp/otp-aux.XXXXXX)"
+AUX_DIR="$(mktemp -d "$OTP_WORK_ROOT/otp-aux.XXXXXX")"
 log() { echo "[build-otp-graph] $(date '+%F %T') $*"; }
 die() {
   log "FATAL: $*"
@@ -74,10 +79,11 @@ trap cleanup EXIT
 trap 'on_signal 130' INT
 trap 'on_signal 143' TERM
 
-[ -n "${TDX_CLIENT_ID:-}" ] || die "TDX_CLIENT_ID not set"
-[ -n "${TDX_CLIENT_SECRET:-}" ] || die "TDX_CLIENT_SECRET not set"
-[ -n "${OTP_GTFS_URLS:-}" ] || die "OTP_GTFS_URLS not set"
-[ -d "$OTP_DATA_DIR" ] || die "OTP_DATA_DIR $OTP_DATA_DIR does not exist"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# ── 0. Preflight — fail in seconds, not after a 25–50 minute build ──
+OTP_DATA_DIR="$OTP_DATA_DIR" OTP_WORK_ROOT="$OTP_WORK_ROOT" OTP_JAVA_XMX="$OTP_JAVA_XMX" \
+  bash "$SCRIPT_DIR/otp-preflight.sh" || die "preflight failed — nothing was built"
 
 # ── 1. GTFS feeds (TDX OAuth2 client_credentials, same flow as TdxTokenManger) ──
 log "fetching TDX access token"
@@ -88,7 +94,6 @@ TOKEN=$(curl -fsS -X POST \
   python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])") ||
   die "TDX token acquisition failed"
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 i=0
 for url in $OTP_GTFS_URLS; do
   i=$((i + 1))
@@ -320,6 +325,12 @@ cp "$OTP_DATA_DIR"/otp-config.json "$OTP_DATA_DIR"/build-config.json \
   die "OTP config files missing in $OTP_DATA_DIR"
 mv "$OSM_CLIPPED" "$WORK_DIR/taiwan-otp.osm.pbf"
 
+# On FAT/exFAT work roots (OTP_WORK_ROOT on a USB disk) macOS writes AppleDouble
+# "._<name>" companions for any file carrying extended attributes, so a
+# "._feed-1.gtfs.zip" appears beside the feed. They hold only metadata; drop
+# them before the scan assertion below (and OTP) sees them as zips.
+find "$WORK_DIR" -name '._*' -type f -delete
+
 # Nothing but the feeds we validated may be visible to the scanner: OTP loads
 # every *.zip in the data directory as its own transit feed, so a stray bundle
 # silently duplicates a whole network (and duplicates without shapes.txt draw
@@ -364,32 +375,10 @@ docker run --rm \
   die "otp --build failed — keeping old graph"
 [ -f "$WORK_DIR/graph.obj" ] || die "build produced no graph.obj — keeping old graph"
 
-# ── 5. Atomic swap + restart + healthcheck before declaring success ──
-log "swapping graph.obj into $OTP_DATA_DIR"
-cp "$WORK_DIR"/feed-*.gtfs.zip "$OTP_DATA_DIR/" 2>/dev/null || true
-cp "$WORK_DIR/taiwan-otp.osm.pbf" "$OTP_DATA_DIR/" 2>/dev/null || true
-[ -f "$OTP_DATA_DIR/graph.obj" ] && cp "$OTP_DATA_DIR/graph.obj" "$OTP_DATA_DIR/graph.obj.prev"
-mv "$WORK_DIR/graph.obj" "$OTP_DATA_DIR/graph.obj.new"
-mv "$OTP_DATA_DIR/graph.obj.new" "$OTP_DATA_DIR/graph.obj"
-
-log "restarting otp container"
-docker compose restart otp || docker restart otp || die "container restart failed"
+# ── 5. Verify the candidate on a side port; promote only if it passes ──
+# The healthcheck alone only proves OTP started — every graph that broke
+# production started fine. See promote-otp-graph.sh / verify-otp-graph.py.
+OTP_DATA_DIR="$OTP_DATA_DIR" bash "$SCRIPT_DIR/promote-otp-graph.sh" "$WORK_DIR" ||
+  die "candidate graph was not promoted — the old graph keeps serving"
 OTP_RESTART_HANDLED=1
-
-log "waiting for healthcheck"
-for attempt in $(seq 1 30); do
-  if curl -fsS "http://localhost:18080/otp/actuators/health" >/dev/null 2>&1; then
-    log "OTP healthy — build complete"
-    rm -f "$OTP_DATA_DIR/graph.obj.prev"
-    exit 0
-  fi
-  sleep 10
-done
-
-# Health never came up: roll back to the previous graph.
-log "healthcheck failed after restart — rolling back to previous graph"
-if [ -f "$OTP_DATA_DIR/graph.obj.prev" ]; then
-  mv "$OTP_DATA_DIR/graph.obj.prev" "$OTP_DATA_DIR/graph.obj"
-  docker compose restart otp || docker restart otp || true
-fi
-die "new graph failed healthcheck (rolled back)"
+log "build complete"
