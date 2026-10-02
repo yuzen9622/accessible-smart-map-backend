@@ -1122,7 +1122,6 @@ export async function applyConfirmedHazardPlanning(
  * @param mode Accessibility mode for scoring.
  * @param constraints Resolved hard accessibility constraints for exclusion.
  * @param format Response shape; "compact" dedupes facilities route-level.
- * @param departureTime Departure time used by the realtime transit overlay.
  * @param envPromise Environment lookup started alongside route planning.
  * @returns The top-3 finalized routes.
  */
@@ -1133,7 +1132,6 @@ async function finalizeRoutes(
   mode: AccessibilityMode,
   constraints: A11yConstraints,
   format: "standard" | "compact" = "standard",
-  departureTime?: Date,
   envPromise?: Promise<EnvConditions | undefined>,
 ): Promise<AccessibleRoute[]> {
   const PRERANK_N = 8;
@@ -1227,7 +1225,7 @@ async function finalizeRoutes(
       await import("./planners/realtime-transit");
     annotateBusTdxCity(top);
     await recoverRailTrainNos(top).catch(() => undefined);
-    await overlayRealtimeTransit(top, { departureTime });
+    await overlayRealtimeTransit(top);
   } catch (err) {
     console.warn("[accessible-route] realtime transit overlay failed", err);
   }
@@ -3064,7 +3062,6 @@ export async function findAccessibleRoutesDetailed(
       mode,
       constraints,
       opts.format,
-      opts.departureTime,
       envPromise,
     );
     return routes.length
@@ -3120,7 +3117,6 @@ export async function findAccessibleRoutesDetailed(
     mode,
     constraints,
     opts.format,
-    opts.departureTime,
     envPromise,
   );
   return routes.length

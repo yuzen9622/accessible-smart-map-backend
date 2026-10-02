@@ -37,8 +37,9 @@
  * runs even outside the realtime window.
  *
  * Realtime only makes sense for "departing now": the overlay is skipped when
- * the route's absolute scheduled departure is more than 15 minutes after the
- * requested departureTime (or now when omitted). Entirely
+ * the route's absolute scheduled departure is more than 15 minutes from now,
+ * whatever departureTime was requested — live ETAs describe today's vehicles,
+ * never a future service day. Entirely
  * fail-soft: responses are cached 30 s, every error is swallowed — a TDX
  * outage never degrades routing.
  */
@@ -1048,17 +1049,15 @@ export async function recoverRailTrainNos(
  * Runs in finalizeRoutes() after the facility overlay and before slimming.
  *
  * @param routes The routes to overlay in place.
- * @param opts Overlay options (departure time).
  */
 export async function overlayRealtimeTransit(
   routes: AccessibleRoute[],
-  opts: { departureTime?: Date } = {},
 ): Promise<void> {
-  const referenceTime = opts.departureTime?.getTime() ?? Date.now();
+  const now = Date.now();
   const live = routes.filter(
     (route) =>
       typeof route._scheduledDepartureTime !== "number" ||
-      route._scheduledDepartureTime <= referenceTime + MAX_DEPARTURE_SKEW_MS,
+      route._scheduledDepartureTime <= now + MAX_DEPARTURE_SKEW_MS,
   );
   if (!live.length) return;
 
