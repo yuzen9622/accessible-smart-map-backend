@@ -1109,6 +1109,41 @@ function itineraryUsable(it: OtpItinerary, maxTransfers?: number): boolean {
   return true;
 }
 
+const OTP_OUTAGE_ERROR_CODES = new Set([
+  "ECONNABORTED",
+  "ETIMEDOUT",
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "EPIPE",
+  "ERR_NETWORK",
+]);
+
+/**
+ * Whether a failed plan query means OTP itself is unreachable or broken, as
+ * opposed to OTP answering this one query with an error. Only outages may
+ * trip the shared breaker: one pathological query (OTP abandons it at its own
+ * apiProcessingTimeout) must not black out transit planning for every user.
+ *
+ * @param err The error thrown by the plan query.
+ * @returns True for network failures, client timeouts and HTTP 5xx.
+ */
+function isOtpOutage(err: unknown): boolean {
+  const candidate = err as {
+    code?: unknown;
+    response?: { status?: unknown };
+  } | null;
+  if (
+    typeof candidate?.code === "string" &&
+    OTP_OUTAGE_ERROR_CODES.has(candidate.code)
+  ) {
+    return true;
+  }
+  const status = candidate?.response?.status;
+  return typeof status === "number" && status >= 500;
+}
+
 function isTimeout(err: unknown): boolean {
   const code = (err as { code?: string } | null)?.code;
   return code === "ECONNABORTED" || code === "ETIMEDOUT";
@@ -1197,7 +1232,7 @@ export async function planOtpRouteDetailed(
     else planBreaker.recordSuccess();
   } catch (err) {
     sawUpstreamFailure = true;
-    recordPlanFailure();
+    if (isOtpOutage(err)) recordPlanFailure();
     primaryTimedOut = isTimeout(err);
     if (primaryTimedOut) {
       tm.primaryTimedOut = 1;
@@ -1306,7 +1341,7 @@ export async function planOtpRouteDetailed(
         sawUpstreamFailure = true;
         tm.otpWide = Date.now() - tWide;
         if (isTimeout(err)) {
-          recordPlanFailure();
+          if (isOtpOutage(err)) recordPlanFailure();
           tm.primaryTimedOut = 1;
           console.warn("[otp-routing] wide query timed out", err);
         } else {
@@ -1390,7 +1425,7 @@ export async function planOtpRouteDetailed(
         }
       } catch (err) {
         sawUpstreamFailure = true;
-        recordPlanFailure();
+        if (isOtpOutage(err)) recordPlanFailure();
         continuationAllowed = false;
         if (isTimeout(err)) {
           tm.primaryTimedOut = 1;
@@ -1442,7 +1477,7 @@ export async function planOtpRouteDetailed(
     } catch (err) {
       sawUpstreamFailure = true;
       if (isTimeout(err)) {
-        recordPlanFailure();
+        if (isOtpOutage(err)) recordPlanFailure();
         console.warn("[otp-routing] continuation query timed out", err);
       } else {
         console.warn("[otp-routing] continuation query failed", err);
@@ -1474,7 +1509,7 @@ export async function planOtpRouteDetailed(
       } catch (err) {
         sawUpstreamFailure = true;
         if (isTimeout(err)) {
-          recordPlanFailure();
+          if (isOtpOutage(err)) recordPlanFailure();
           console.warn("[otp-routing] continuation snap query timed out", err);
         } else {
           console.warn("[otp-routing] continuation snap query failed", err);

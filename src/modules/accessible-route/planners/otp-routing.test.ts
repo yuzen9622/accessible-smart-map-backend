@@ -914,4 +914,50 @@ describe("planOtpRoute search windows and timeouts", () => {
     vi.doUnmock("axios");
     vi.resetModules();
   });
+
+  it("does not open the breaker when OTP answers queries with errors", async () => {
+    vi.resetModules();
+    const isolatedPost = vi.fn().mockResolvedValue({
+      data: { errors: [{ message: "Processing timeout" }] },
+    });
+    vi.doMock("axios", () => ({
+      default: {
+        create: () => ({ post: isolatedPost }),
+        isAxiosError: () => false,
+      },
+    }));
+
+    const isolatedOtpRouting = await import("./otp-routing");
+    for (let i = 0; i < 4; i += 1) {
+      await isolatedOtpRouting.planOtpRouteDetailed(origin, destination);
+    }
+
+    expect(isolatedOtpRouting.isOtpCircuitOpen()).toBe(false);
+
+    vi.doUnmock("axios");
+    vi.resetModules();
+  });
+
+  it("opens the breaker after consecutive HTTP 5xx answers", async () => {
+    vi.resetModules();
+    const isolatedPost = vi
+      .fn()
+      .mockRejectedValue({ response: { status: 503 } });
+    vi.doMock("axios", () => ({
+      default: {
+        create: () => ({ post: isolatedPost }),
+        isAxiosError: () => false,
+      },
+    }));
+
+    const isolatedOtpRouting = await import("./otp-routing");
+    for (let i = 0; i < 3; i += 1) {
+      await isolatedOtpRouting.planOtpRouteDetailed(origin, destination);
+    }
+
+    expect(isolatedOtpRouting.isOtpCircuitOpen()).toBe(true);
+
+    vi.doUnmock("axios");
+    vi.resetModules();
+  });
 });
