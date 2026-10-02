@@ -650,6 +650,57 @@ describe("planOtpRoute search windows and timeouts", () => {
     expect(post.mock.calls[1][1].variables.searchWindow).toBe(28800);
   });
 
+  it("settles on the walk itinerary when OTP reports walking is better", async () => {
+    busLean.mockResolvedValue([
+      {
+        location: { coordinates: [121.565, 25.041] },
+        stopName: { Zh_tw: "公車站" },
+      },
+    ]);
+    post.mockResolvedValue(
+      okResp([walkOnlyItinerary()], [{ code: "WALKING_BETTER_THAN_TRANSIT" }]),
+    );
+
+    const result = await planOtpRouteDetailed(origin, destination, {
+      mode: "wheelchair",
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.routes.map((route) => route.routeName)).toEqual(["步行路線"]);
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips the wide and continuation searches but keeps the snap retry when asked", async () => {
+    busLean.mockResolvedValue([
+      {
+        location: { coordinates: [121.565, 25.041] },
+        stopName: { Zh_tw: "公車站" },
+      },
+    ]);
+    post.mockResolvedValue(okResp([]));
+
+    const result = await planOtpRouteDetailed(origin, destination, {
+      skipLaterService: true,
+    });
+
+    expect(result).toEqual({ status: "no_route", routes: [] });
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(
+      post.mock.calls.map((call) => call[1].variables.searchWindow),
+    ).toEqual([3600, 3600]);
+  });
+
+  it("keeps searching when walking is better but no walk itinerary is usable", async () => {
+    post.mockResolvedValue(
+      okResp([], [{ code: "WALKING_BETTER_THAN_TRANSIT" }]),
+    );
+
+    await planOtpRouteDetailed(origin, destination);
+
+    expect(post.mock.calls.length).toBeGreaterThan(1);
+  });
+
   it("returns a WALK-only itinerary when no transit result replaces it", async () => {
     post
       .mockResolvedValueOnce(okResp([walkOnlyItinerary()]))

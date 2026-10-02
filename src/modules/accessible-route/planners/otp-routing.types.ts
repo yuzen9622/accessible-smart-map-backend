@@ -60,6 +60,8 @@ export interface PlanOtpRouteOptions {
   limit?: number;
   /** Request step-free routing from OTP. Defaults to `mode === "wheelchair"`. */
   avoidStairs?: boolean;
+  /** Skip the wide-window and later-service searches (walkable short trips). */
+  skipLaterService?: boolean;
 }
 
 export interface SnapStop {

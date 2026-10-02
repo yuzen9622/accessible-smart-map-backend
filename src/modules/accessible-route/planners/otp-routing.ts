@@ -95,6 +95,7 @@ const OTP_TERMINAL_ROUTING_ERRORS = new Set([
   "LOCATION_NOT_FOUND",
   "OUTSIDE_BOUNDS",
 ]);
+const OTP_WALKING_BETTER_ERROR = "WALKING_BETTER_THAN_TRANSIT";
 const otpAgent = new http.Agent({ keepAlive: true });
 const otpAgentHttps = new https.Agent({ keepAlive: true });
 
@@ -1116,8 +1117,11 @@ export async function planOtpRoute(
  * Plan transit routes via the OTP2 sidecar with an explicit terminal outcome.
  * Output routes remain AccessibleRoute-compatible and un-enriched —
  * finalizeRoutes() handles scoring, enrichment and overlays downstream. The
- * existing query ladder, schedule semantics, and route ordering are retained.
- * Upstream request failures are reported as unavailable only when no usable
+ * existing query ladder, schedule semantics, and route ordering are retained,
+ * except that a primary answer flagged WALKING_BETTER_THAN_TRANSIT with a
+ * usable walk-only itinerary settles the search without widening, snapping or
+ * continuing; `skipLaterService` likewise drops the wide-window and
+ * continuation searches but keeps the stop-snap retry. Upstream request failures are reported as unavailable only when no usable
  * route survives; a continuation failure may therefore preserve an existing
  * transit or walk-fallback route.
  *
@@ -1228,7 +1232,17 @@ export async function planOtpRouteDetailed(
 
   if (primarySucceeded) rememberOriginalWalkFallback(firstAttempt);
 
-  if (primarySucceeded && !sawTerminalRoutingError) {
+  const walkSettled =
+    primarySucceeded &&
+    walkFallbackItineraries.length > 0 &&
+    firstAttempt.routingErrors.some(
+      (error) => error.code === OTP_WALKING_BETTER_ERROR,
+    );
+  if (walkSettled) tm.walkSettled = 1;
+
+  const laterServiceAllowed = !walkSettled && !opts?.skipLaterService;
+
+  if (primarySucceeded && !sawTerminalRoutingError && laterServiceAllowed) {
     const distinctRouteSignatures = new Set(
       itineraries
         .filter((it) => itineraryUsable(it, maxTransfers))
@@ -1288,13 +1302,14 @@ export async function planOtpRouteDetailed(
   );
   const needBusSnap =
     !sawTerminalRoutingError &&
+    !walkSettled &&
     (!hasUsableTransit(itineraries) ||
       (straightDistM <= 3500 && !hasBusLeg(itineraries)));
   let snappedOrigin: { lat: number; lng: number } | null = null;
   let snappedDestination: { lat: number; lng: number } | null = null;
   let pendingSnapPre: WalkLeg | null = null;
   let pendingSnapPost: WalkLeg | null = null;
-  let continuationAllowed = true;
+  let continuationAllowed = laterServiceAllowed;
 
   if (needBusSnap) {
     const tSnap = Date.now();
