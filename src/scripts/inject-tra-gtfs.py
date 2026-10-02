@@ -1,6 +1,20 @@
 #!/usr/bin/env python3
 """Inject the TRA timetable into the TDX national GTFS zip (Phase 16.5).
 
+Two modes, chosen per run:
+
+  native   (2026-10 onward) the TDX national feed itself carries a dated TRA
+           timetable: one trip per train per service date (calendar_dates),
+           ~59 days ahead, with track shapes. When it covers at least
+           NATIVE_MIN_DAYS ahead it is KEPT as-is — it is strictly more
+           accurate than a weekly pattern (holidays, one-off changes) — and
+           only enriched with what it lacks: route_long_name gets the train
+           type (區間/自強/…, which the backend shows as trainTypeName) and
+           trips of WheelChairFlag=1 trains get wheelchair_accessible=1.
+           Only rows written by an earlier injection are removed.
+  inject   fallback when the feed has no usable TRA timetable (the original
+           behaviour documented below).
+
 TDX ships TRA stops/agency in the national feed but no timetable (routes/
 trips/calendar are absent), and its rail GTFS endpoint only serves TRTC —
 so OTP could never plan a TRA leg and every 台鐵 itinerary depended on the
@@ -47,13 +61,18 @@ import csv
 import io
 import json
 import math
+import re
 import os
 import sys
 import tempfile
 import zipfile
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 CALENDAR_DAYS = 45
+NATIVE_MIN_DAYS = 14
+TAIPEI = timezone(timedelta(hours=8))
+INJECTED_SERVICE_PREFIX = "TRA_SVC_"
+INJECTED_ROUTE = re.compile(r"^TRA_[^_]+$")
 DAY_KEYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
             "Saturday", "Sunday")
 
@@ -247,6 +266,121 @@ def load_tra_shapes(shape_path: str):
     return shapes
 
 
+def is_injected_trip(row) -> bool:
+    return row["service_id"].startswith(INJECTED_SERVICE_PREFIX)
+
+
+def native_tra_window(zf: zipfile.ZipFile, trips, calendar):
+    """Service-date range of the feed's own TRA timetable, when it is usable.
+
+    Returns (first, last) "YYYYMMDD" when TDX's native TRA trips run at least
+    NATIVE_MIN_DAYS ahead of today (Asia/Taipei), otherwise None.
+    """
+    services = {r["service_id"] for r in trips
+                if r["trip_id"].startswith("TRA_") and not is_injected_trip(r)}
+    if not services:
+        return None
+    dates = set()
+    for r in calendar:
+        if r["service_id"] in services:
+            dates.update((r["start_date"], r["end_date"]))
+    if "calendar_dates.txt" in zf.namelist():
+        for r in read_rows(zf, "calendar_dates.txt")[1]:
+            if r["service_id"] in services and r.get("exception_type") == "1":
+                dates.add(r["date"])
+    if not dates:
+        return None
+    today = datetime.now(TAIPEI).date()
+    horizon = (today + timedelta(days=NATIVE_MIN_DAYS)).strftime("%Y%m%d")
+    first, last = min(dates), max(dates)
+    return (first, last) if last >= horizon else None
+
+
+def enrich_native(zf, zip_path, log, routes_fields, routes, trips_fields,
+                  trips, cal_fields, calendar, timetables, first, last):
+    """Keep the native TRA timetable; add train types and wheelchair flags."""
+    info_by_train = {tt["TrainInfo"]["TrainNo"]: tt["TrainInfo"] for tt in timetables}
+    type_by_id = {tt["TrainInfo"]["TrainTypeID"]: tt["TrainInfo"]["TrainTypeName"]["Zh_tw"]
+                  for tt in timetables}
+
+    stale_routes = {r["route_id"] for r in routes if INJECTED_ROUTE.match(r["route_id"])}
+    stale_trips = {r["trip_id"] for r in trips if is_injected_trip(r)}
+    routes = [r for r in routes if r["route_id"] not in stale_routes]
+    trips = [r for r in trips if r["trip_id"] not in stale_trips]
+    calendar = [r for r in calendar
+                if not r["service_id"].startswith(INJECTED_SERVICE_PREFIX)]
+    if "wheelchair_accessible" not in trips_fields:
+        trips_fields = list(trips_fields) + ["wheelchair_accessible"]
+
+    named = 0
+    for r in routes:
+        rid = r["route_id"]
+        if not rid.startswith("TRA_"):
+            continue
+        parts = rid.split("_")
+        info = info_by_train.get(parts[1]) if len(parts) > 1 else None
+        name = (info["TrainTypeName"]["Zh_tw"] if info
+                else type_by_id.get(parts[-1]))
+        if name:
+            r["route_long_name"] = name
+            named += 1
+    flagged = 0
+    native_trips = 0
+    for r in trips:
+        if not r["trip_id"].startswith("TRA_"):
+            continue
+        native_trips += 1
+        info = info_by_train.get(r["trip_id"].split("_")[1])
+        if info and info.get("WheelChairFlag") == 1:
+            r["wheelchair_accessible"] = "1"
+            flagged += 1
+    log(f"native TRA timetable kept: trips={native_trips} service dates "
+        f"{first}–{last}; train types set on {named} routes, "
+        f"wheelchair_accessible=1 on {flagged} trips"
+        + (f"; removed earlier injection routes={len(stale_routes)} "
+           f"trips={len(stale_trips)}" if stale_routes or stale_trips else ""))
+
+    rewritten = {
+        "routes.txt": (routes_fields, routes),
+        "trips.txt": (trips_fields, trips),
+        "calendar.txt": (cal_fields, calendar),
+    }
+    with tempfile.NamedTemporaryFile(dir=".", suffix=".zip", delete=False) as tmp:
+        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as out:
+            for name in zf.namelist():
+                if name in rewritten:
+                    fields, rows = rewritten[name]
+                    buf = io.StringIO()
+                    w = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
+                    w.writeheader()
+                    w.writerows(rows)
+                    out.writestr(name, buf.getvalue())
+                elif name == "stop_times.txt" and stale_trips:
+                    with out.open(name, "w") as f, zf.open(name) as in_f:
+                        dst = io.TextIOWrapper(f, encoding="utf-8")
+                        src = csv.DictReader(io.TextIOWrapper(in_f, encoding="utf-8-sig"))
+                        w = csv.DictWriter(dst, fieldnames=src.fieldnames)
+                        w.writeheader()
+                        for row in src:
+                            if row["trip_id"] not in stale_trips:
+                                w.writerow(row)
+                        dst.flush()
+                elif name == "shapes.txt":
+                    with out.open(name, "w") as f, zf.open(name) as in_f:
+                        dst = io.TextIOWrapper(f, encoding="utf-8")
+                        src = io.TextIOWrapper(in_f, encoding="utf-8-sig")
+                        dst.write(src.readline())
+                        for line in src:
+                            if not line.startswith(SHAPE_PREFIX):
+                                dst.write(line)
+                        dst.flush()
+                else:
+                    out.writestr(name, zf.read(name))
+        tmp_path = tmp.name
+    os.replace(tmp_path, zip_path)
+    log(f"rewrote {zip_path}")
+
+
 def main(zip_path: str, json_path: str, shape_path: str = None) -> None:
     log = lambda *a: print("[inject-tra-gtfs]", *a)
     data = json.load(open(json_path, encoding="utf-8"))
@@ -264,6 +398,15 @@ def main(zip_path: str, json_path: str, shape_path: str = None) -> None:
         routes_fields, routes = read_rows(zf, "routes.txt")
         trips_fields, trips = read_rows(zf, "trips.txt")
         cal_fields, calendar = read_rows(zf, "calendar.txt")
+
+        native = native_tra_window(zf, trips, calendar)
+        if native:
+            first, last = native
+            enrich_native(zf, zip_path, log, routes_fields, routes,
+                          trips_fields, trips, cal_fields, calendar,
+                          timetables, first, last)
+            return
+
         st_fields, stop_times = read_rows(zf, "stop_times.txt")
         stops_rows = read_rows(zf, "stops.txt")[1]
         stop_ids = {r["stop_id"] for r in stops_rows}
