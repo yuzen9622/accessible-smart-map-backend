@@ -5,6 +5,7 @@ import {
   ROUTE_MSG,
   ROUTE_REASON,
   ROUTE_WARNING,
+  TRANSIT_FALLBACK_REASON,
 } from "../../constants/messages";
 import { RouteIntentSchema } from "../../schemas/route-intent.schema";
 import {
@@ -1087,6 +1088,20 @@ export const AccessibleRouteDataSchema = z
       .openapi({
         description:
           "僅當請求或 profile 帶有 maxSlopePercent 時出現；誠實回報該限制是否真的被執行，避免前端誤以為坡度篩選已生效。",
+      }),
+    fallback: z
+      .object({
+        travelMode: z.literal("walk"),
+        reason: z.enum([
+          TRANSIT_FALLBACK_REASON.WALKING_BETTER,
+          TRANSIT_FALLBACK_REASON.NO_TRANSIT_ROUTE,
+        ]),
+      })
+      .optional()
+      .openapi({
+        description:
+          "僅當 travelMode=transit 卻以步行路線回應時出現（routes 全為 WALK leg）。WALKING_BETTER：規劃引擎判定步行優於任何大眾運輸；NO_TRANSIT_ROUTE：查無大眾運輸，且起訖點直線距離（含中途點）在 1500 公尺內，改以步行規劃（輪椅模式同樣套用無階梯限制）。",
+        example: { travelMode: "walk", reason: "WALKING_BETTER" },
       }),
     metroAlerts: z.array(MetroAlertResultSchema).optional().openapi({
       description:

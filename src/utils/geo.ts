@@ -30,6 +30,27 @@ export function haversineMeters(
   return EARTH_RADIUS_M * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+/**
+ * Sum of great-circle distances along an ordered list of points.
+ *
+ * @param points Ordered coordinates.
+ * @returns Total straight-line path length in metres (0 for fewer than two points).
+ */
+export function pathLengthMeters(points: readonly Coordinates[]): number {
+  let total = 0;
+  for (let index = 1; index < points.length; index++) {
+    const previous = points[index - 1];
+    const current = points[index];
+    total += haversineMeters(
+      previous.lat,
+      previous.lng,
+      current.lat,
+      current.lng,
+    );
+  }
+  return total;
+}
+
 export function haversineCoords(
   a: [number, number],
   b: [number, number],

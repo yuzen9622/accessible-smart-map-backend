@@ -72,6 +72,15 @@ export const ROUTE_MSG = {
   UPSTREAM_TIMEOUT: "路線規劃服務逾時，請稍後再試",
 } as const satisfies Record<keyof typeof ROUTE_REASON, string>;
 
+/**
+ * Why a transit request was answered with a walking route, carried in
+ * `data.fallback.reason`.
+ */
+export const TRANSIT_FALLBACK_REASON = {
+  WALKING_BETTER: "WALKING_BETTER",
+  NO_TRANSIT_ROUTE: "NO_TRANSIT_ROUTE",
+} as const;
+
 /** User-facing strings for the TDX Road/Traffic integration. */
 export const TRAFFIC_MSG = {
   OK: "即時路況查詢成功",

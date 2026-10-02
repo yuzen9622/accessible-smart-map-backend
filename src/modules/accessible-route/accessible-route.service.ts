@@ -13,6 +13,7 @@ import {
   ERROR_MESSAGE,
   ROUTE_REASON,
   ROUTE_WARNING,
+  TRANSIT_FALLBACK_REASON,
 } from "../../constants/messages";
 import type {
   A11yConstraints,
@@ -24,6 +25,7 @@ import type {
   PlanRouteRequest,
   PlanRouteResult,
   RoadTravelMode,
+  TransitFallback,
 } from "./accessible-route.types";
 export type {
   FindAccessibleRoutesOptions,
@@ -60,7 +62,7 @@ import type {
   MetroAlert,
   MetroAlertResult,
 } from "../../types/transit";
-import { haversineMeters } from "../../utils/geo";
+import { haversineMeters, pathLengthMeters } from "../../utils/geo";
 import { attachRouteTokens } from "./route-token.service";
 import { normalizeWalkLegSteps } from "../../utils/nav-instructions-engine";
 import {
@@ -104,6 +106,8 @@ export type {
 /** Search radius for the destination disabled-parking arrival anchor. */
 const PARKING_ARRIVAL_RADIUS_M = 200;
 const MAX_WALK_SEGMENT_CONCURRENCY = 4;
+/** Straight-line ceiling under which a transit request may be answered by walking. */
+const TRANSIT_WALK_FALLBACK_MAX_M = 1_500;
 
 /**
  * Limit concurrent tasks without changing their result order.
@@ -1564,6 +1568,142 @@ export async function attachMetroAlerts(
   return result.metroAlerts;
 }
 
+type WalkPlanOutcome =
+  | {
+      ok: true;
+      routes: AccessibleRoute[];
+      trafficMs: number;
+      routedByEngineWithNoElevationData: boolean;
+    }
+  | { ok: false; failure: Extract<PlanRouteResult, { ok: false }> };
+
+/**
+ * Plan a pure walking route through CSR, then OTP walk, then Valhalla — the
+ * single walk pipeline shared by `travelMode=walk` and the short-trip transit
+ * fallback.
+ *
+ * @param walkPoints Origin, waypoints and destination in order.
+ * @param roadMode Accessibility mode driving walk speed and scoring.
+ * @param avoidStairs Resolved step-free constraint sent to the engines.
+ * @param departureTime Optional future departure forwarded to Valhalla.
+ * @returns Finalized walk routes, or the failure envelope to return.
+ */
+async function planWalkRoutes(
+  walkPoints: LatLng[],
+  roadMode: AccessibilityMode,
+  avoidStairs: boolean,
+  departureTime?: Date,
+): Promise<WalkPlanOutcome> {
+  const origin = walkPoints[0];
+  const dest = walkPoints[walkPoints.length - 1];
+  const waypoints = walkPoints.slice(1, -1);
+
+  const csrWalk = await planCsrWalkForRequest(
+    walkPoints,
+    roadMode,
+    avoidStairs,
+  );
+  logCsrWalkOutcome(csrWalk, walkPoints.length - 1, roadMode);
+  if (csrWalk.status === "ok") {
+    return {
+      ok: true,
+      routes: await finalizeDrivingRoutes(
+        [buildCsrWalkRoute(csrWalk.plans)],
+        "walk",
+        dest,
+      ),
+      trafficMs: 0,
+      routedByEngineWithNoElevationData: false,
+    };
+  }
+
+  const csrFallbackIsDegraded = csrWalk.status !== "outside_coverage";
+  const markFallback = (routes: AccessibleRoute[]) =>
+    routes.map((route) => ({
+      ...route,
+      engine: "otp-fallback" as const,
+      ...(csrFallbackIsDegraded ? { degraded: true } : {}),
+    }));
+
+  const otpWalk = await planOtpWalkSegments(walkPoints, roadMode, avoidStairs);
+  if (otpWalk.status === "no_route") {
+    if (avoidStairs) {
+      const relaxed = await planOtpWalkSegments(walkPoints, roadMode, false);
+      if (relaxed.status === "unavailable") {
+        return {
+          ok: false,
+          failure: routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT),
+        };
+      }
+      if (relaxed.status === "ok" && relaxed.routes.length) {
+        return {
+          ok: false,
+          failure: routeFailure(ROUTE_REASON.NO_ACCESSIBLE_ROUTE),
+        };
+      }
+    }
+    return { ok: false, failure: routeFailure(ROUTE_REASON.NO_ROUTE) };
+  }
+  if (otpWalk.status === "ok") {
+    return {
+      ok: true,
+      routes: markFallback(
+        await finalizeDrivingRoutes(otpWalk.routes, "walk", dest),
+      ),
+      trafficMs: 0,
+      routedByEngineWithNoElevationData: false,
+    };
+  }
+
+  console.warn(
+    "[accessible-route] OTP walk unavailable; falling back to Valhalla for the full route",
+    JSON.stringify({ segments: waypoints.length + 1 }),
+  );
+  const outcome = await findDrivingRoutes(origin, dest, {
+    travelMode: "walk",
+    waypoints: waypoints.length ? waypoints : undefined,
+    departureTime,
+    mode: roadMode,
+    avoidStairs,
+  });
+  if (outcome.kind === "unavailable") {
+    return { ok: false, failure: routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT) };
+  }
+  if (outcome.kind === "error") {
+    return {
+      ok: false,
+      failure: {
+        ok: false,
+        status: ResponseCode.INTERNAL_ERROR,
+        error: "路線規劃失敗，請稍後再試",
+      },
+    };
+  }
+  if (outcome.kind === "empty") {
+    return { ok: false, failure: routeFailure(ROUTE_REASON.NO_ROUTE) };
+  }
+  return {
+    ok: true,
+    routes: markFallback(outcome.routes),
+    trafficMs: outcome.trafficMs ?? 0,
+    routedByEngineWithNoElevationData: true,
+  };
+}
+
+/**
+ * Whether every route is walk-only, i.e. a transit request was answered by
+ * walking.
+ *
+ * @param routes Routes returned for a transit request.
+ * @returns True when at least one route exists and none rides transit.
+ */
+function isWalkOnlyAnswer(routes: AccessibleRoute[]): boolean {
+  return (
+    routes.length > 0 &&
+    routes.every((route) => route.legs.every((leg) => leg.type === "WALK"))
+  );
+}
+
 export async function planAccessibleRouteFromRequest(
   body: PlanRouteRequest,
 ): Promise<PlanRouteResult> {
@@ -1747,6 +1887,8 @@ export async function planAccessibleRouteFromRequest(
   // elevation data) instead of OTP, so slopeConstraint reporting isn't fooled
   // by the request's travelMode into claiming the OTP 8.3% default applied.
   let routedByEngineWithNoElevationData = false;
+  let transitFallback: TransitFallback | undefined;
+  const walkPoints = [originLatLng, ...waypoints, dest];
   const logRequestTiming = () => {
     const planTotal = Date.now() - tPlan;
     console.log(
@@ -1767,6 +1909,8 @@ export async function planAccessibleRouteFromRequest(
       avoidStairs,
       requireElevator,
     });
+    const walkableTrip =
+      pathLengthMeters(walkPoints) <= TRANSIT_WALK_FALLBACK_MAX_M;
     const transitOptions: FindAccessibleRoutesOptions = {
       mode: transitMode,
       maxTransfers: (maxTransfers ?? 2) as 0 | 1 | 2,
@@ -1776,74 +1920,52 @@ export async function planAccessibleRouteFromRequest(
       avoidStairs: constraints.avoidStairs,
       requireElevator: constraints.requireElevator,
     };
-    const transit = await findAccessibleRoutesDetailed(
-      originLatLng,
-      dest,
-      city,
-      transitOptions,
-    );
-    if (transit.status === "unavailable") {
-      logRequestTiming();
-      return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT);
-    }
-    if (transit.status === "no_route") {
-      if (constraints.avoidStairs) {
-        const relaxed = await findAccessibleRoutesDetailed(
+    let transit = await findAccessibleRoutesDetailed(originLatLng, dest, city, {
+      ...transitOptions,
+      skipLaterService: walkableTrip,
+    });
+    const walkFallback =
+      transit.status !== "ok" && walkableTrip
+        ? await planWalkRoutes(
+            walkPoints,
+            transitMode,
+            constraints.avoidStairs,
+            futureDeparture,
+          )
+        : undefined;
+    if (walkFallback?.ok) {
+      routes = walkFallback.routes;
+      trafficHookMs += walkFallback.trafficMs;
+      routedByEngineWithNoElevationData =
+        walkFallback.routedByEngineWithNoElevationData;
+      transitFallback = {
+        travelMode: "walk",
+        reason: TRANSIT_FALLBACK_REASON.NO_TRANSIT_ROUTE,
+      };
+    } else {
+      if (transit.status === "no_route" && walkableTrip) {
+        transit = await findAccessibleRoutesDetailed(
           originLatLng,
           dest,
           city,
-          {
-            ...transitOptions,
-            avoidStairs: false,
-            requireElevator: false,
-          },
+          transitOptions,
         );
-        logRequestTiming();
-        if (relaxed.status === "unavailable") {
-          return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT);
-        }
-        if (relaxed.status === "ok" && relaxed.routes.length) {
-          return routeFailure(ROUTE_REASON.NO_ACCESSIBLE_ROUTE);
-        }
-        return routeFailure(ROUTE_REASON.NO_ROUTE);
       }
-      logRequestTiming();
-      return routeFailure(ROUTE_REASON.NO_ROUTE);
-    }
-    routes = transit.routes;
-    logRequestTiming();
-  } else if (travelMode === "walk") {
-    const roadMode = mode ?? "normal";
-    const constraints = resolveA11yConstraints(roadMode, { avoidStairs });
-    const walkPoints = [originLatLng, ...waypoints, dest];
-
-    const csrWalk = await planCsrWalkForRequest(
-      walkPoints,
-      roadMode,
-      constraints.avoidStairs,
-    );
-    logCsrWalkOutcome(csrWalk, walkPoints.length - 1, roadMode);
-
-    if (csrWalk.status === "ok") {
-      routes = await finalizeDrivingRoutes(
-        [buildCsrWalkRoute(csrWalk.plans)],
-        "walk",
-        dest,
-      );
-      logRequestTiming();
-    } else {
-      const csrFallbackIsDegraded = csrWalk.status !== "outside_coverage";
-      const otpWalk = await planOtpWalkSegments(
-        walkPoints,
-        roadMode,
-        constraints.avoidStairs,
-      );
-      if (otpWalk.status === "no_route") {
+      if (transit.status === "unavailable") {
+        logRequestTiming();
+        return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT);
+      }
+      if (transit.status === "no_route") {
         if (constraints.avoidStairs) {
-          const relaxed = await planOtpWalkSegments(
-            walkPoints,
-            roadMode,
-            false,
+          const relaxed = await findAccessibleRoutesDetailed(
+            originLatLng,
+            dest,
+            city,
+            {
+              ...transitOptions,
+              avoidStairs: false,
+              requireElevator: false,
+            },
           );
           logRequestTiming();
           if (relaxed.status === "unavailable") {
@@ -1857,50 +1979,29 @@ export async function planAccessibleRouteFromRequest(
         logRequestTiming();
         return routeFailure(ROUTE_REASON.NO_ROUTE);
       }
-      if (otpWalk.status === "ok") {
-        routes = await finalizeDrivingRoutes(otpWalk.routes, "walk", dest);
-      } else {
-        console.warn(
-          "[accessible-route] OTP walk unavailable; falling back to Valhalla for the full route",
-          JSON.stringify({ segments: waypoints.length + 1 }),
-        );
-        const outcome = await findDrivingRoutes(originLatLng, dest, {
-          travelMode,
-          waypoints: waypointsOpt,
-          departureTime: futureDeparture,
-          mode: roadMode,
-          avoidStairs: constraints.avoidStairs,
-        });
-        if (outcome.kind === "ok") {
-          trafficHookMs += outcome.trafficMs ?? 0;
-        }
-        if (outcome.kind === "unavailable") {
-          logRequestTiming();
-          return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT);
-        }
-        if (outcome.kind === "error") {
-          logRequestTiming();
-          return {
-            ok: false,
-            status: ResponseCode.INTERNAL_ERROR,
-            error: "路線規劃失敗，請稍後再試",
-          };
-        }
-        if (outcome.kind === "empty") {
-          logRequestTiming();
-          return routeFailure(ROUTE_REASON.NO_ROUTE);
-        }
-        routes = outcome.routes;
-        routedByEngineWithNoElevationData = true;
+      routes = transit.routes;
+      if (isWalkOnlyAnswer(routes)) {
+        transitFallback = {
+          travelMode: "walk",
+          reason: TRANSIT_FALLBACK_REASON.WALKING_BETTER,
+        };
       }
-      routes = routes.map((route) => ({
-        ...route,
-        // `otp-fallback` means CSR did not select this pure-walk route.
-        engine: "otp-fallback",
-        ...(csrFallbackIsDegraded ? { degraded: true } : {}),
-      }));
-      logRequestTiming();
     }
+    logRequestTiming();
+  } else if (travelMode === "walk") {
+    const roadMode = mode ?? "normal";
+    const constraints = resolveA11yConstraints(roadMode, { avoidStairs });
+    const walk = await planWalkRoutes(
+      walkPoints,
+      roadMode,
+      constraints.avoidStairs,
+      futureDeparture,
+    );
+    logRequestTiming();
+    if (!walk.ok) return walk.failure;
+    routes = walk.routes;
+    trafficHookMs += walk.trafficMs;
+    routedByEngineWithNoElevationData = walk.routedByEngineWithNoElevationData;
   } else {
     const roadMode = mode ?? "normal";
     const constraints = resolveA11yConstraints(roadMode, { avoidStairs });
@@ -1983,7 +2084,7 @@ export async function planAccessibleRouteFromRequest(
   const { slopeConstraint } = await applyExtraA11yAnnotations(
     routes,
     dest,
-    travelMode,
+    transitFallback ? transitFallback.travelMode : travelMode,
     mode,
     avoidStairs,
     {
@@ -2051,6 +2152,7 @@ export async function planAccessibleRouteFromRequest(
     routes: normalizedRoutes,
     ...(intent ? { intent } : {}),
     ...(slopeConstraint ? { slopeConstraint } : {}),
+    ...(transitFallback ? { fallback: transitFallback } : {}),
     ...(metroAlerts.length ? { metroAlerts } : {}),
     ...(transitAlerts.length ? { transitAlerts } : {}),
   };
@@ -2868,6 +2970,7 @@ export async function findAccessibleRoutesDetailed(
       mode,
       avoidStairs: constraints.avoidStairs,
       departureTime: opts.departureTime,
+      skipLaterService: opts.skipLaterService,
     });
     console.log(
       "[route-timing] planners",
@@ -2909,6 +3012,7 @@ export async function findAccessibleRoutesDetailed(
       avoidStairs: constraints.avoidStairs,
       departureTime: cursor,
       limit: 1,
+      skipLaterService: opts.skipLaterService,
     });
     if (result.status !== "ok") return result;
     const best = result.routes[0];
