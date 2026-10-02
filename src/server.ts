@@ -7,7 +7,10 @@ import { attachAlertWebSocket } from "./modules/transit/alert.gateway";
 import { startPasswordAssistanceWorker } from "./modules/user/user.password-assistance.worker";
 import { startAlertIngestion } from "./modules/transit/alert.ingest";
 import type { TdxMqttHandle } from "./adapters/tdx-mqtt.adapter";
-import { closePedGraphRuntime } from "./modules/accessible-route/planners/pedestrian-a11y/graph-runtime";
+import {
+  closePedGraphRuntime,
+  getPedGraphRuntime,
+} from "./modules/accessible-route/planners/pedestrian-a11y/graph-runtime";
 import {
   warmTrafficGeometryRuntime,
   startTrafficGeometryRefreshJob,
@@ -38,6 +41,18 @@ startAlertIngestion()
     console.error("TDX MQTT failed", err);
   });
 const uri = process.env.DATABASE_URL ?? "";
+
+const pedGraphWarmStart = Date.now();
+void getPedGraphRuntime().then((runtime) => {
+  console.log(
+    "[ped-graph] warm-up",
+    JSON.stringify({
+      status: runtime.status,
+      ms: Date.now() - pedGraphWarmStart,
+      ...(runtime.status === "ready" ? {} : { reason: runtime.reason }),
+    }),
+  );
+});
 
 // Live traffic refresher is SWR + Redis only (no Mongo dependency); start unconditionally.
 const trafficLiveTimer = startTrafficLiveRefreshJob();
