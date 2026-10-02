@@ -65,10 +65,25 @@ const OTP_NUM_ITINERARIES = 8;
 const OTP_NUM_ITINERARIES_WIDE = 15;
 const OTP_SEARCH_WINDOW_S = Number(process.env.OTP_SEARCH_WINDOW_S ?? 3600);
 const OTP_SEARCH_WINDOW_WIDE_S = Number(
-  process.env.OTP_SEARCH_WINDOW_WIDE_S ?? 28800,
+  process.env.OTP_SEARCH_WINDOW_WIDE_S ?? 7200,
+);
+/** Positive whole seconds keep the time-based continuation loop advancing. */
+function positiveSeconds(value: string | undefined, fallback: number): number {
+  const seconds = Math.floor(Number(value));
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : fallback;
+}
+const OTP_CONTINUATION_WINDOW_S = positiveSeconds(
+  process.env.OTP_CONTINUATION_WINDOW_S,
+  28800,
+);
+const OTP_SEARCH_HORIZON_S = positiveSeconds(
+  process.env.OTP_SEARCH_HORIZON_S,
+  86400,
 );
 const OTP_MIN_DISTINCT_ROUTES = 3;
-const OTP_CONTINUATION_MAX_HOPS = 2;
+const OTP_WIDEN_SKIP_AFTER_MS = Number(
+  process.env.OTP_WIDEN_SKIP_AFTER_MS ?? 6_000,
+);
 
 interface OtpRoutingError {
   code: string;
@@ -273,7 +288,7 @@ query Plan(
   $toLat: Float!, $toLon: Float!,
   $date: String!, $time: String!,
   $wheelchair: Boolean!, $numItineraries: Int!, $walkSpeed: Float,
-  $searchWindow: Long
+  $searchWindow: Long, $maxTransfers: Int
 ) {
   plan(
     from: { lat: $fromLat, lon: $fromLon }
@@ -284,6 +299,7 @@ query Plan(
     walkSpeed: $walkSpeed
     numItineraries: $numItineraries
     searchWindow: $searchWindow
+    maxTransfers: $maxTransfers
     transportModes: [${PLAN_TRANSPORT_MODES}]
     locale: "zh-TW"
   ) {
@@ -337,6 +353,25 @@ function roundForCache(point: { lat: number; lng: number }): {
   };
 }
 
+const OTP_PROCESSING_TIMEOUT = "OTP_PROCESSING_TIMEOUT";
+
+/**
+ * Error for a GraphQL error answer. OTP abandons a query at its
+ * server.apiProcessingTimeout with HTTP 200 and a "TIMEOUT!" message; that
+ * one carries a code so the search ladder stops escalating to wider, even
+ * heavier queries.
+ *
+ * @param message The first GraphQL error message.
+ * @returns The error to throw.
+ */
+function otpGraphqlError(message: string | undefined): Error {
+  const err = new Error(`OTP GraphQL: ${message ?? "unknown"}`);
+  if (message?.includes("TIMEOUT!")) {
+    Object.assign(err, { code: OTP_PROCESSING_TIMEOUT });
+  }
+  return err;
+}
+
 async function postOtpPlan(
   variables: Record<string, unknown>,
 ): Promise<OtpPlanResponse> {
@@ -354,9 +389,7 @@ async function postOtpPlan(
     };
     errors?: { message?: string }[];
   };
-  if (json.errors?.length) {
-    throw new Error(`OTP GraphQL: ${json.errors[0]?.message ?? "unknown"}`);
-  }
+  if (json.errors?.length) throw otpGraphqlError(json.errors[0]?.message);
   return {
     itineraries: json.data?.plan?.itineraries ?? [],
     routingErrors: json.data?.plan?.routingErrors ?? [],
@@ -432,6 +465,10 @@ async function cachedOtpPlan(
  * @param walkSpeed Walking speed in m/s.
  * @param numItineraries How many itineraries to request.
  * @param searchWindowSec The search window in seconds.
+ * @param maxTransfers The transfer cap OTP searches up to, or undefined for
+ *   OTP's own default. OTP's `maxTransfers` argument bounds the number of
+ *   rides (measured: 2 admits bus+rail but never bus+rail+bus), so the cap is
+ *   sent as transfers + 1.
  * @returns The attempt, anchored at the requested departure.
  */
 async function queryOtpPlan(
@@ -442,6 +479,7 @@ async function queryOtpPlan(
   walkSpeed: number,
   numItineraries: number,
   searchWindowSec: number,
+  maxTransfers?: number,
 ): Promise<OtpPlanAttempt> {
   const cacheOn = otpPlanCacheEnabled();
   const from = cacheOn ? roundForCache(origin) : origin;
@@ -463,6 +501,7 @@ async function queryOtpPlan(
     walkSpeed,
     numItineraries,
     searchWindow: searchWindowSec,
+    maxTransfers: maxTransfers === undefined ? undefined : maxTransfers + 1,
   };
 
   if (!cacheOn) {
@@ -558,9 +597,7 @@ async function queryOtpWalk(
     data?: { plan?: { itineraries?: OtpItinerary[] } };
     errors?: { message?: string }[];
   };
-  if (json.errors?.length) {
-    throw new Error(`OTP GraphQL: ${json.errors[0]?.message ?? "unknown"}`);
-  }
+  if (json.errors?.length) throw otpGraphqlError(json.errors[0]?.message);
   return json.data?.plan?.itineraries ?? [];
 }
 
@@ -1109,6 +1146,21 @@ function itineraryUsable(it: OtpItinerary, maxTransfers?: number): boolean {
   return true;
 }
 
+/** Match the WALK mapper's confirmed-stairs feature without treating missing data as stairs. */
+function itineraryMeetsStairsConstraint(
+  itinerary: OtpItinerary,
+  avoidStairs: boolean,
+): boolean {
+  return (
+    !avoidStairs ||
+    !itinerary.legs.some(
+      (leg) =>
+        leg.mode === "WALK" &&
+        leg.steps?.some((step) => step.feature?.__typename === "StairsUse"),
+    )
+  );
+}
+
 const OTP_OUTAGE_ERROR_CODES = new Set([
   "ECONNABORTED",
   "ETIMEDOUT",
@@ -1149,6 +1201,10 @@ function isTimeout(err: unknown): boolean {
   return code === "ECONNABORTED" || code === "ETIMEDOUT";
 }
 
+function isOtpProcessingTimeout(err: unknown): boolean {
+  return (err as { code?: string } | null)?.code === OTP_PROCESSING_TIMEOUT;
+}
+
 function hasTerminalRoutingError(attempt: OtpPlanAttempt): boolean {
   return attempt.routingErrors.some((error) =>
     OTP_TERMINAL_ROUTING_ERRORS.has(error.code),
@@ -1178,10 +1234,18 @@ export async function planOtpRoute(
  * existing query ladder, schedule semantics, and route ordering are retained,
  * except that a primary answer flagged WALKING_BETTER_THAN_TRANSIT with a
  * usable walk-only itinerary settles the search without widening, snapping or
- * continuing; `skipLaterService` likewise drops the wide-window and
- * continuation searches but keeps the stop-snap retry. Upstream request failures are reported as unavailable only when no usable
+ * continuing; a primary that already holds a transit route satisfying the
+ * known stairs constraint but took
+ * OTP_WIDEN_SKIP_AFTER_MS or longer skips the diversity widening, which costs
+ * about twice the primary; `skipLaterService` drops the wide-window and
+ * continuation searches but keeps the stop-snap retry, and so does OTP
+ * abandoning any query at its processing timeout — a wider window would only
+ * cost more, while snapped endpoints can still link a badly placed point.
+ * Upstream request failures are reported as unavailable only when no usable
  * route survives; a continuation failure may therefore preserve an existing
- * transit or walk-fallback route.
+ * transit or walk-fallback route. Later searches cover an absolute departure
+ * horizon, independent of the quick-search window sizes. A stairs-only answer
+ * remains a fallback, but cannot stop the search for a step-free alternative.
  *
  * @param origin The [lat, lng] origin.
  * @param destination The [lat, lng] destination.
@@ -1199,6 +1263,13 @@ export async function planOtpRouteDetailed(
   const mode = opts?.mode ?? "normal";
   const wheelchair = opts?.avoidStairs ?? mode === "wheelchair";
   const walkSpeed = walkSpeedMps(mode);
+  const maxTransfers = opts?.maxTransfers;
+  const initialWindowSec = Math.min(OTP_SEARCH_WINDOW_S, OTP_SEARCH_HORIZON_S);
+  const wideWindowSec = Math.min(
+    OTP_SEARCH_WINDOW_WIDE_S,
+    OTP_SEARCH_HORIZON_S,
+  );
+  const searchEndMs = departure.getTime() + OTP_SEARCH_HORIZON_S * 1000;
 
   const tm: Record<string, number> = {};
   const t0 = Date.now();
@@ -1217,6 +1288,7 @@ export async function planOtpRouteDetailed(
   };
   let primarySucceeded = false;
   let primaryTimedOut = false;
+  let otpGaveUp = false;
   try {
     firstAttempt = await queryOtpPlan(
       origin,
@@ -1225,7 +1297,8 @@ export async function planOtpRouteDetailed(
       wheelchair,
       walkSpeed,
       OTP_NUM_ITINERARIES,
-      OTP_SEARCH_WINDOW_S,
+      initialWindowSec,
+      maxTransfers,
     );
     primarySucceeded = true;
     if (firstAttempt.fromCache) tm.otpCacheHits = 1;
@@ -1234,6 +1307,7 @@ export async function planOtpRouteDetailed(
     sawUpstreamFailure = true;
     if (isOtpOutage(err)) recordPlanFailure();
     primaryTimedOut = isTimeout(err);
+    otpGaveUp = isOtpProcessingTimeout(err);
     if (primaryTimedOut) {
       tm.primaryTimedOut = 1;
       console.warn("[otp-routing] primary query timed out", err);
@@ -1254,12 +1328,11 @@ export async function planOtpRouteDetailed(
   }
   let itineraries = firstAttempt.itineraries;
   let selectedAttempt = firstAttempt;
-  let effectiveWindowSec = OTP_SEARCH_WINDOW_S;
-  let originalSearchWindowSec = primarySucceeded ? OTP_SEARCH_WINDOW_S : 0;
+  let effectiveWindowSec = initialWindowSec;
+  let originalSearchWindowSec = primarySucceeded ? initialWindowSec : 0;
   let sawTerminalRoutingError =
     primarySucceeded && hasTerminalRoutingError(firstAttempt);
 
-  const maxTransfers = opts?.maxTransfers;
   let snapPre: WalkLeg | null = null;
   let snapPost: WalkLeg | null = null;
   let walkFallbackAttempt: OtpPlanAttempt | null = null;
@@ -1269,13 +1342,54 @@ export async function planOtpRouteDetailed(
     its.some(
       (it) => it.legs.some(isTransitLeg) && itineraryUsable(it, maxTransfers),
     );
+  const hasSearchEligibleTransit = (its: OtpItinerary[]) =>
+    its.some(
+      (it) =>
+        it.legs.some(isTransitLeg) &&
+        itineraryUsable(it, maxTransfers) &&
+        itineraryMeetsStairsConstraint(it, wheelchair),
+    );
+
+  // Keep a usable but stairs-only result for the existing degraded response
+  // when no step-free answer exists anywhere in the covered horizon.
+  const retainContinuation = (
+    attempt: OtpPlanAttempt,
+    pre: WalkLeg | null,
+    post: WalkLeg | null,
+  ): boolean => {
+    const eligible = hasSearchEligibleTransit(attempt.itineraries);
+    if (
+      eligible ||
+      (!hasUsableTransit(itineraries) && hasUsableTransit(attempt.itineraries))
+    ) {
+      itineraries = attempt.itineraries;
+      selectedAttempt = attempt;
+      snapPre = pre;
+      snapPost = post;
+    }
+    return eligible;
+  };
 
   const rememberOriginalWalkFallback = (attempt: OtpPlanAttempt) => {
-    if (walkFallbackItineraries.length) return;
+    // Preserve the earliest fallback unless the stairs constraint requires
+    // replacing an entirely stairs-only answer with a step-free one.
+    if (
+      walkFallbackItineraries.length &&
+      (!wheelchair ||
+        walkFallbackItineraries.some((it) =>
+          itineraryMeetsStairsConstraint(it, wheelchair),
+        ))
+    )
+      return;
     const walkOnly = attempt.itineraries.filter(
       (it) => !it.legs.some(isTransitLeg) && itineraryUsable(it, maxTransfers),
     );
     if (!walkOnly.length) return;
+    if (
+      walkFallbackItineraries.length &&
+      !walkOnly.some((it) => itineraryMeetsStairsConstraint(it, wheelchair))
+    )
+      return;
     walkFallbackAttempt = attempt;
     walkFallbackItineraries = walkOnly;
   };
@@ -1292,7 +1406,9 @@ export async function planOtpRouteDetailed(
 
   const walkSettled =
     primarySucceeded &&
-    walkFallbackItineraries.length > 0 &&
+    walkFallbackItineraries.some((it) =>
+      itineraryMeetsStairsConstraint(it, wheelchair),
+    ) &&
     firstAttempt.routingErrors.some(
       (error) => error.code === OTP_WALKING_BETTER_ERROR,
     );
@@ -1303,7 +1419,11 @@ export async function planOtpRouteDetailed(
   if (primarySucceeded && !sawTerminalRoutingError && laterServiceAllowed) {
     const distinctRouteSignatures = new Set(
       itineraries
-        .filter((it) => itineraryUsable(it, maxTransfers))
+        .filter(
+          (it) =>
+            itineraryUsable(it, maxTransfers) &&
+            itineraryMeetsStairsConstraint(it, wheelchair),
+        )
         .map((it) =>
           it.legs
             .filter(isTransitLeg)
@@ -1312,7 +1432,13 @@ export async function planOtpRouteDetailed(
         )
         .filter(Boolean),
     ).size;
-    if (distinctRouteSignatures < OTP_MIN_DISTINCT_ROUTES) {
+    const slowWithAnswer =
+      tm.otpFirst >= OTP_WIDEN_SKIP_AFTER_MS &&
+      hasSearchEligibleTransit(itineraries);
+    if (slowWithAnswer && distinctRouteSignatures < OTP_MIN_DISTINCT_ROUTES) {
+      tm.wideSkipped = 1;
+    }
+    if (distinctRouteSignatures < OTP_MIN_DISTINCT_ROUTES && !slowWithAnswer) {
       const tWide = Date.now();
       try {
         const wideAttempt = await queryOtpPlan(
@@ -1322,24 +1448,31 @@ export async function planOtpRouteDetailed(
           wheelchair,
           walkSpeed,
           OTP_NUM_ITINERARIES_WIDE,
-          OTP_SEARCH_WINDOW_WIDE_S,
+          wideWindowSec,
+          maxTransfers,
         );
         observeAttempt(wideAttempt);
         rememberOriginalWalkFallback(wideAttempt);
         if (
-          hasUsableTransit(wideAttempt.itineraries) ||
-          !hasUsableTransit(itineraries)
+          hasSearchEligibleTransit(wideAttempt.itineraries) ||
+          !hasUsableTransit(itineraries) ||
+          (!hasSearchEligibleTransit(itineraries) &&
+            hasUsableTransit(wideAttempt.itineraries))
         ) {
           itineraries = wideAttempt.itineraries;
           selectedAttempt = wideAttempt;
         }
-        effectiveWindowSec = OTP_SEARCH_WINDOW_WIDE_S;
-        originalSearchWindowSec = OTP_SEARCH_WINDOW_WIDE_S;
+        effectiveWindowSec = wideWindowSec;
+        originalSearchWindowSec = Math.max(
+          originalSearchWindowSec,
+          wideWindowSec,
+        );
         if (!wideAttempt.fromCache) planBreaker.recordSuccess();
         tm.otpWide = Date.now() - tWide;
       } catch (err) {
         sawUpstreamFailure = true;
         tm.otpWide = Date.now() - tWide;
+        otpGaveUp ||= isOtpProcessingTimeout(err);
         if (isTimeout(err)) {
           if (isOtpOutage(err)) recordPlanFailure();
           tm.primaryTimedOut = 1;
@@ -1361,17 +1494,18 @@ export async function planOtpRouteDetailed(
   const needBusSnap =
     !sawTerminalRoutingError &&
     !walkSettled &&
-    (!hasUsableTransit(itineraries) ||
+    (!hasSearchEligibleTransit(itineraries) ||
       (straightDistM <= 3500 && !hasBusLeg(itineraries)));
   let snappedOrigin: { lat: number; lng: number } | null = null;
   let snappedDestination: { lat: number; lng: number } | null = null;
   let pendingSnapPre: WalkLeg | null = null;
   let pendingSnapPost: WalkLeg | null = null;
-  let continuationAllowed = laterServiceAllowed;
+  let continuationAllowed = laterServiceAllowed && !otpGaveUp;
 
   if (needBusSnap) {
     const tSnap = Date.now();
-    const preferBus = straightDistM <= 3500 || !hasUsableTransit(itineraries);
+    const preferBus =
+      straightDistM <= 3500 || !hasSearchEligibleTransit(itineraries);
     const [originSnap, destSnap] = await Promise.all([
       findSnapStop(origin, preferBus),
       findSnapStop(destination, preferBus),
@@ -1404,11 +1538,26 @@ export async function planOtpRouteDetailed(
           walkSpeed,
           OTP_NUM_ITINERARIES,
           effectiveWindowSec,
+          maxTransfers,
         );
         observeAttempt(retryAttempt);
         tm.otpRetry = Date.now() - tRetry;
-        if (hasUsableTransit(retryAttempt.itineraries)) {
-          if (!hasUsableTransit(itineraries)) {
+        // A second stairs-only answer cannot improve the original fallback.
+        // Retain its own geometry/anchor rather than appending snap connectors
+        // to an itinerary that was planned from the original coordinates.
+        const retainOriginalStairs =
+          hasUsableTransit(itineraries) &&
+          !hasSearchEligibleTransit(itineraries) &&
+          !hasSearchEligibleTransit(retryAttempt.itineraries);
+        if (
+          hasUsableTransit(retryAttempt.itineraries) &&
+          !retainOriginalStairs
+        ) {
+          if (
+            !hasUsableTransit(itineraries) ||
+            (!hasSearchEligibleTransit(itineraries) &&
+              hasSearchEligibleTransit(retryAttempt.itineraries))
+          ) {
             itineraries = retryAttempt.itineraries;
             selectedAttempt = retryAttempt;
           } else {
@@ -1440,18 +1589,20 @@ export async function planOtpRouteDetailed(
     }
   }
 
-  let continuationHops = 0;
   let nextContinuationAnchor = new Date(
     departure.getTime() + originalSearchWindowSec * 1000,
   );
   while (
     continuationAllowed &&
-    !hasUsableTransit(itineraries) &&
+    !hasSearchEligibleTransit(itineraries) &&
     !sawTerminalRoutingError &&
-    continuationHops < OTP_CONTINUATION_MAX_HOPS
+    nextContinuationAnchor.getTime() < searchEndMs
   ) {
-    continuationHops++;
     const nextAnchor = nextContinuationAnchor;
+    const continuationWindowSec = Math.min(
+      OTP_CONTINUATION_WINDOW_S,
+      (searchEndMs - nextAnchor.getTime()) / 1000,
+    );
     let originalContinuationAttempt: OtpPlanAttempt;
     try {
       originalContinuationAttempt = await queryOtpPlan(
@@ -1461,18 +1612,13 @@ export async function planOtpRouteDetailed(
         wheelchair,
         walkSpeed,
         OTP_NUM_ITINERARIES_WIDE,
-        OTP_SEARCH_WINDOW_WIDE_S,
+        continuationWindowSec,
+        maxTransfers,
       );
       observeAttempt(originalContinuationAttempt);
       rememberOriginalWalkFallback(originalContinuationAttempt);
       if (!originalContinuationAttempt.fromCache) planBreaker.recordSuccess();
-      if (hasUsableTransit(originalContinuationAttempt.itineraries)) {
-        itineraries = originalContinuationAttempt.itineraries;
-        selectedAttempt = originalContinuationAttempt;
-        snapPre = null;
-        snapPost = null;
-        break;
-      }
+      if (retainContinuation(originalContinuationAttempt, null, null)) break;
       if (sawTerminalRoutingError) break;
     } catch (err) {
       sawUpstreamFailure = true;
@@ -1494,17 +1640,19 @@ export async function planOtpRouteDetailed(
           wheelchair,
           walkSpeed,
           OTP_NUM_ITINERARIES_WIDE,
-          OTP_SEARCH_WINDOW_WIDE_S,
+          continuationWindowSec,
+          maxTransfers,
         );
         observeAttempt(snappedContinuationAttempt);
         if (!snappedContinuationAttempt.fromCache) planBreaker.recordSuccess();
-        if (hasUsableTransit(snappedContinuationAttempt.itineraries)) {
-          itineraries = snappedContinuationAttempt.itineraries;
-          selectedAttempt = snappedContinuationAttempt;
-          snapPre = pendingSnapPre;
-          snapPost = pendingSnapPost;
+        if (
+          retainContinuation(
+            snappedContinuationAttempt,
+            pendingSnapPre,
+            pendingSnapPost,
+          )
+        )
           break;
-        }
         if (sawTerminalRoutingError) break;
       } catch (err) {
         sawUpstreamFailure = true;
@@ -1519,7 +1667,7 @@ export async function planOtpRouteDetailed(
     }
 
     nextContinuationAnchor = new Date(
-      nextAnchor.getTime() + OTP_SEARCH_WINDOW_WIDE_S * 1000,
+      nextAnchor.getTime() + continuationWindowSec * 1000,
     );
   }
 

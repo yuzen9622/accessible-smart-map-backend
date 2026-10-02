@@ -1,0 +1,661 @@
+{
+  "provenance": "Captured from local OTP on 2026-10-02 for elderly cases 26/66. Same graph returned these three-bus itineraries for 2026-10-06 06:30 + 6h with maxTransfers=3. Intermediate stops omitted; route fields retained.",
+  "cases": [
+    {
+      "id": 26,
+      "departure": "2026-10-05T12:30:00+08:00",
+      "origin": {
+        "lat": 23.091119,
+        "lng": 120.08977
+      },
+      "destination": {
+        "lat": 23.233431,
+        "lng": 120.097114
+      },
+      "snaps": [
+        {
+          "stopUid": "TNN6178",
+          "city": "Tainan",
+          "location": {
+            "type": "Point",
+            "coordinates": [120.08942, 23.09114]
+          },
+          "stopName": {
+            "Zh_tw": "九塊厝",
+            "En": "Jioukuaicuo"
+          }
+        },
+        {
+          "stopUid": "TNN21094",
+          "city": "Tainan",
+          "location": {
+            "type": "Point",
+            "coordinates": [120.09702, 23.23377]
+          },
+          "stopName": {
+            "Zh_tw": "蘆竹溝",
+            "En": "Lujhugou"
+          }
+        }
+      ],
+      "response": {
+        "data": {
+          "plan": {
+            "itineraries": [
+              {
+                "duration": 8962,
+                "walkDistance": 83.71000000000001,
+                "legs": [
+                  {
+                    "mode": "WALK",
+                    "startTime": 1791239992000,
+                    "endTime": 1791240000000,
+                    "duration": 8.0,
+                    "distance": 6.76,
+                    "from": {
+                      "name": "Origin",
+                      "stop": null
+                    },
+                    "to": {
+                      "name": "九塊厝",
+                      "stop": {
+                        "gtfsId": "1:TNN6179",
+                        "code": null,
+                        "lat": 23.09107,
+                        "lon": 120.08933
+                      }
+                    },
+                    "route": null,
+                    "trip": null,
+                    "legGeometry": {
+                      "points": "y}|kCs}}{U?JKA"
+                    },
+                    "steps": [
+                      {
+                        "distance": 6.76,
+                        "lon": 120.0893895,
+                        "lat": 23.0910105,
+                        "relativeDirection": "DEPART",
+                        "absoluteDirection": "WEST",
+                        "streetName": "road",
+                        "area": false,
+                        "bogusName": false,
+                        "feature": null
+                      }
+                    ]
+                  },
+                  {
+                    "mode": "BUS",
+                    "startTime": 1791240000000,
+                    "endTime": 1791242760000,
+                    "duration": 2760.0,
+                    "distance": 17418.77,
+                    "from": {
+                      "name": "九塊厝",
+                      "stop": {
+                        "gtfsId": "1:TNN6179",
+                        "code": null,
+                        "lat": 23.09107,
+                        "lon": 120.08933
+                      }
+                    },
+                    "to": {
+                      "name": "佳里站",
+                      "stop": {
+                        "gtfsId": "1:TNN6205",
+                        "code": null,
+                        "lat": 23.16312,
+                        "lon": 120.17735
+                      }
+                    },
+                    "route": {
+                      "gtfsId": "1:TNN122102_1",
+                      "shortName": "藍21 九塊厝→義合→佳里",
+                      "longName": "藍21 九塊厝→義合→佳里",
+                      "type": 3,
+                      "agency": {
+                        "gtfsId": "1:TNN_10160"
+                      }
+                    },
+                    "trip": {
+                      "gtfsId": "1:patched_TNN122102_1_TNN122102_1601_unknown",
+                      "wheelchairAccessible": "NO_INFORMATION"
+                    },
+                    "legGeometry": {
+                      "points": "g~|kCi}}{Ul@gN??bAkQv@_N\\gJ??JqCl@u@CwDn@kMGkLmLy@_V{A??AAoCOf@iDiAmLc@iIm@wBaAS??[IeNgEpDoKImJCoD??CoCjBSbBm@~CiFzBgERaBn@oBxBsF??`AmBlGoLpA{FpAmHDQ??`@wBScBeDmYuLww@sEwAmCk@y@E??qDUgLs@oDWSG??CAOF{DUoLcJwJeLaB_EmBaD??AAy@gAwFeLeEgIwE_IyByD??AAe@k@iMoZ}AC??aOFME??cc@yR_Bk@oAISA??sBKgFmAeRcFdBsMtAuK??vBwMx@uPDuG??ZcRuDI??aBHuN|@_AE??_Hc@iP?sOk@mPk@sOw@mN_@yLjCqJfD??gGtBqBd@oDR_DRsA^KB??oIxA{Cp@sEZaAF??a@B}Ir@jArLeBEgCF??E?iKQFeNE?"
+                    },
+                    "steps": []
+                  },
+                  {
+                    "mode": "BUS",
+                    "startTime": 1791244800000,
+                    "endTime": 1791247680000,
+                    "duration": 2880.0,
+                    "distance": 15027.36,
+                    "from": {
+                      "name": "佳里站",
+                      "stop": {
+                        "gtfsId": "1:TNN5852",
+                        "code": null,
+                        "lat": 23.16312,
+                        "lon": 120.17735
+                      }
+                    },
+                    "to": {
+                      "name": "北門綜合長照機構",
+                      "stop": {
+                        "gtfsId": "1:TNN27266",
+                        "code": null,
+                        "lat": 23.25033,
+                        "lon": 120.13021
+                      }
+                    },
+                    "route": {
+                      "gtfsId": "1:TNN120201_0",
+                      "shortName": "藍2 佳里→溪底寮→南鯤鯓",
+                      "longName": "藍2 佳里→溪底寮→南鯤鯓",
+                      "type": 3,
+                      "agency": {
+                        "gtfsId": "1:TNN_10160"
+                      }
+                    },
+                    "trip": {
+                      "gtfsId": "1:patched_TNN120201_0_TNN120201_1601_unknown",
+                      "wheelchairAccessible": "NO_INFORMATION"
+                    },
+                    "legGeometry": {
+                      "points": "i`klCmco|UCuDsMFkDYcL{A??s@KyKsAiEc@??yGs@aE{@uMsG??wDkBeFoCmGwB_DeAYW??Y@mDgA{JsDsMiFeM{FkGmC??sD_BiBa@_D]??k@IyN_BaDEyNrBwD^??qAJaJb@}Cn@wD~@_LrDuA\\??yHfBoHn@A@??yGr@}Gj@??A?yN~@wRvAgIn@??cF^CZwDR{\\zC??kHn@uT|B??g@DaJz@y@BeC_@mDg@y@nG??ADOlB~@z@\\J??~A`@|BT_@pB??A?cA`K}@jAcCLsCi@OjAB\\M\\?@??OjB}OfVqBdE??A?aDzHuK|XeApCiAnC??_AxByBbGyAdGgC|KOhAKdB??GbAH`I~@bIpA`Tv@fM??nBd\\rBzYGRNxB??fCva@???LDzAiu@tQ"
+                    },
+                    "steps": []
+                  },
+                  {
+                    "mode": "WALK",
+                    "startTime": 1791247680000,
+                    "endTime": 1791247767000,
+                    "duration": 87.0,
+                    "distance": 69.13,
+                    "from": {
+                      "name": "北門綜合長照機構",
+                      "stop": {
+                        "gtfsId": "1:TNN27266",
+                        "code": null,
+                        "lat": 23.25033,
+                        "lon": 120.13021
+                      }
+                    },
+                    "to": {
+                      "name": "北門綜合長照機構",
+                      "stop": {
+                        "gtfsId": "1:TNN27267",
+                        "code": null,
+                        "lat": 23.25022,
+                        "lon": 120.12995
+                      }
+                    },
+                    "route": null,
+                    "trip": null,
+                    "legGeometry": {
+                      "points": "qa|lCy|e|UFXo@LDRt@Q@H"
+                    },
+                    "steps": [
+                      {
+                        "distance": 27.48,
+                        "lon": 120.1300861,
+                        "lat": 23.2502973,
+                        "relativeDirection": "DEPART",
+                        "absoluteDirection": "NORTH",
+                        "streetName": "西部濱海公路",
+                        "area": false,
+                        "bogusName": false,
+                        "feature": null
+                      },
+                      {
+                        "distance": 41.65,
+                        "lon": 120.129917,
+                        "lat": 23.2505073,
+                        "relativeDirection": "UTURN_LEFT",
+                        "absoluteDirection": "SOUTH",
+                        "streetName": "西部濱海公路",
+                        "area": false,
+                        "bogusName": false,
+                        "feature": null
+                      }
+                    ]
+                  },
+                  {
+                    "mode": "BUS",
+                    "startTime": 1791248460000,
+                    "endTime": 1791248940000,
+                    "duration": 480.0,
+                    "distance": 4841.77,
+                    "from": {
+                      "name": "北門綜合長照機構",
+                      "stop": {
+                        "gtfsId": "1:TNN27267",
+                        "code": null,
+                        "lat": 23.25022,
+                        "lon": 120.12995
+                      }
+                    },
+                    "to": {
+                      "name": "蘆竹溝",
+                      "stop": {
+                        "gtfsId": "1:TNN21094",
+                        "code": null,
+                        "lat": 23.23377,
+                        "lon": 120.09702
+                      }
+                    },
+                    "route": {
+                      "gtfsId": "1:TNN120242_1",
+                      "shortName": "藍2 南鯤鯓→溪底寮→佳里(經蘆竹溝)",
+                      "longName": "藍2 南鯤鯓→溪底寮→佳里(經蘆竹溝)",
+                      "type": 3,
+                      "agency": {
+                        "gtfsId": "1:TNN_10160"
+                      }
+                    },
+                    "trip": {
+                      "gtfsId": "1:patched_TNN120242_1_TNN120242_1601_unknown",
+                      "wheelchairAccessible": "NO_INFORMATION"
+                    },
+                    "legGeometry": {
+                      "points": "}`|lCm{e|UfQ{Dvb@gLjArVFf@??dFbk@fCdZ??p@hIjCnZNjA??BRSnA{@j@d]fsA"
+                    },
+                    "steps": []
+                  },
+                  {
+                    "mode": "WALK",
+                    "startTime": 1791248940000,
+                    "endTime": 1791248954000,
+                    "duration": 14.0,
+                    "distance": 7.82,
+                    "from": {
+                      "name": "蘆竹溝",
+                      "stop": {
+                        "gtfsId": "1:TNN21094",
+                        "code": null,
+                        "lat": 23.23377,
+                        "lon": 120.09702
+                      }
+                    },
+                    "to": {
+                      "name": "Destination",
+                      "stop": null
+                    },
+                    "route": null,
+                    "trip": null,
+                    "legGeometry": {
+                      "points": "azxlCkm_|UAEGDBD"
+                    },
+                    "steps": [
+                      {
+                        "distance": 4.27,
+                        "lon": 120.0970514,
+                        "lat": 23.2337887,
+                        "relativeDirection": "DEPART",
+                        "absoluteDirection": "NORTHWEST",
+                        "streetName": "service road",
+                        "area": false,
+                        "bogusName": true,
+                        "feature": null
+                      },
+                      {
+                        "distance": 3.55,
+                        "lon": 120.0970286,
+                        "lat": 23.2338209,
+                        "relativeDirection": "LEFT",
+                        "absoluteDirection": "WEST",
+                        "streetName": "市道174號 (逆樁), 市道174號 (順樁)",
+                        "area": false,
+                        "bogusName": false,
+                        "feature": null
+                      }
+                    ]
+                  }
+                ]
+              }
+            ],
+            "routingErrors": [],
+            "debugOutput": {
+              "precalculationTime": 0,
+              "pathCalculationTime": 1660,
+              "renderingTime": 0,
+              "totalTime": 1674,
+              "timedOut": false
+            },
+            "searchWindowUsed": 21600
+          }
+        }
+      }
+    },
+    {
+      "id": 66,
+      "departure": "2026-10-05T12:30:00+08:00",
+      "origin": {
+        "lat": 23.152294,
+        "lng": 120.106988
+      },
+      "destination": {
+        "lat": 23.233809,
+        "lng": 120.097158
+      },
+      "snaps": [
+        {
+          "stopUid": "TNN6115",
+          "city": "Tainan",
+          "location": {
+            "type": "Point",
+            "coordinates": [120.10693, 23.15248]
+          },
+          "stopName": {
+            "Zh_tw": "中寮子",
+            "En": "Jhongliaozih"
+          }
+        },
+        {
+          "stopUid": "TNN21094",
+          "city": "Tainan",
+          "location": {
+            "type": "Point",
+            "coordinates": [120.09702, 23.23377]
+          },
+          "stopName": {
+            "Zh_tw": "蘆竹溝",
+            "En": "Lujhugou"
+          }
+        }
+      ],
+      "response": {
+        "data": {
+          "plan": {
+            "itineraries": [
+              {
+                "duration": 9152,
+                "walkDistance": 92.82,
+                "legs": [
+                  {
+                    "mode": "WALK",
+                    "startTime": 1791239802000,
+                    "endTime": 1791239820000,
+                    "duration": 18.0,
+                    "distance": 15.87,
+                    "from": {
+                      "name": "Origin",
+                      "stop": null
+                    },
+                    "to": {
+                      "name": "中寮子",
+                      "stop": {
+                        "gtfsId": "1:TNN6136",
+                        "code": null,
+                        "lat": 23.15258,
+                        "lon": 120.10671
+                      }
+                    },
+                    "route": null,
+                    "trip": null,
+                    "legGeometry": {
+                      "points": "{}hlCoja|UIBOF@D"
+                    },
+                    "steps": [
+                      {
+                        "distance": 15.87,
+                        "lon": 120.1068063,
+                        "lat": 23.1524637,
+                        "relativeDirection": "DEPART",
+                        "absoluteDirection": "NORTHWEST",
+                        "streetName": "市道176號 (逆樁), 市道176號 (順樁)",
+                        "area": false,
+                        "bogusName": false,
+                        "feature": null
+                      }
+                    ]
+                  },
+                  {
+                    "mode": "BUS",
+                    "startTime": 1791239820000,
+                    "endTime": 1791241860000,
+                    "duration": 2040.0,
+                    "distance": 9744.91,
+                    "from": {
+                      "name": "中寮子",
+                      "stop": {
+                        "gtfsId": "1:TNN6136",
+                        "code": null,
+                        "lat": 23.15258,
+                        "lon": 120.10671
+                      }
+                    },
+                    "to": {
+                      "name": "佳里站",
+                      "stop": {
+                        "gtfsId": "1:TNN6151",
+                        "code": null,
+                        "lat": 23.16312,
+                        "lon": 120.17735
+                      }
+                    },
+                    "route": {
+                      "gtfsId": "1:TNN122002_1",
+                      "shortName": "藍20 馬沙溝遊憩區→青鯤鯓→台區→佳里",
+                      "longName": "藍20 馬沙溝遊憩區→青鯤鯓→台區→佳里",
+                      "type": 3,
+                      "agency": {
+                        "gtfsId": "1:TNN_10160"
+                      }
+                    },
+                    "trip": {
+                      "gtfsId": "1:patched_TNN122002_1_TNN122002_1601_unknown",
+                      "wheelchairAccessible": "NO_INFORMATION"
+                    },
+                    "legGeometry": {
+                      "points": "w~hlCcja|UPMpJmCd@M??rMyDbGaB@???hI}DbJcEjVcL~EiB~@a@@???~@c@JSTaBJ}AtAiM??nBkSlCkUrCgU??nB}N??h@uFfBaG@???b@qBoJsDcDkA??QGaAi@mEuCwA{AiA}A??}GeJ??eFaHkJaM??yC}DaMmP??SY_HqJwBuDkCqF??_DqGmMcZkHyOeYcj@??o@_BwAwUYkC_@kBCG??gC_GqBeQkFGA???oKE@{N"
+                    },
+                    "steps": []
+                  },
+                  {
+                    "mode": "BUS",
+                    "startTime": 1791244800000,
+                    "endTime": 1791247680000,
+                    "duration": 2880.0,
+                    "distance": 15027.36,
+                    "from": {
+                      "name": "佳里站",
+                      "stop": {
+                        "gtfsId": "1:TNN5852",
+                        "code": null,
+                        "lat": 23.16312,
+                        "lon": 120.17735
+                      }
+                    },
+                    "to": {
+                      "name": "北門綜合長照機構",
+                      "stop": {
+                        "gtfsId": "1:TNN27266",
+                        "code": null,
+                        "lat": 23.25033,
+                        "lon": 120.13021
+                      }
+                    },
+                    "route": {
+                      "gtfsId": "1:TNN120201_0",
+                      "shortName": "藍2 佳里→溪底寮→南鯤鯓",
+                      "longName": "藍2 佳里→溪底寮→南鯤鯓",
+                      "type": 3,
+                      "agency": {
+                        "gtfsId": "1:TNN_10160"
+                      }
+                    },
+                    "trip": {
+                      "gtfsId": "1:patched_TNN120201_0_TNN120201_1601_unknown",
+                      "wheelchairAccessible": "NO_INFORMATION"
+                    },
+                    "legGeometry": {
+                      "points": "i`klCmco|UCuDsMFkDYcL{A??s@KyKsAiEc@??yGs@aE{@uMsG??wDkBeFoCmGwB_DeAYW??Y@mDgA{JsDsMiFeM{FkGmC??sD_BiBa@_D]??k@IyN_BaDEyNrBwD^??qAJaJb@}Cn@wD~@_LrDuA\\??yHfBoHn@A@??yGr@}Gj@??A?yN~@wRvAgIn@??cF^CZwDR{\\zC??kHn@uT|B??g@DaJz@y@BeC_@mDg@y@nG??ADOlB~@z@\\J??~A`@|BT_@pB??A?cA`K}@jAcCLsCi@OjAB\\M\\?@??OjB}OfVqBdE??A?aDzHuK|XeApCiAnC??_AxByBbGyAdGgC|KOhAKdB??GbAH`I~@bIpA`Tv@fM??nBd\\rBzYGRNxB??fCva@???LDzAiu@tQ"
+                    },
+                    "steps": []
+                  },
+                  {
+                    "mode": "WALK",
+                    "startTime": 1791247680000,
+                    "endTime": 1791247767000,
+                    "duration": 87.0,
+                    "distance": 69.13,
+                    "from": {
+                      "name": "北門綜合長照機構",
+                      "stop": {
+                        "gtfsId": "1:TNN27266",
+                        "code": null,
+                        "lat": 23.25033,
+                        "lon": 120.13021
+                      }
+                    },
+                    "to": {
+                      "name": "北門綜合長照機構",
+                      "stop": {
+                        "gtfsId": "1:TNN27267",
+                        "code": null,
+                        "lat": 23.25022,
+                        "lon": 120.12995
+                      }
+                    },
+                    "route": null,
+                    "trip": null,
+                    "legGeometry": {
+                      "points": "qa|lCy|e|UFXo@LDRt@Q@H"
+                    },
+                    "steps": [
+                      {
+                        "distance": 27.48,
+                        "lon": 120.1300861,
+                        "lat": 23.2502973,
+                        "relativeDirection": "DEPART",
+                        "absoluteDirection": "NORTH",
+                        "streetName": "西部濱海公路",
+                        "area": false,
+                        "bogusName": false,
+                        "feature": null
+                      },
+                      {
+                        "distance": 41.65,
+                        "lon": 120.129917,
+                        "lat": 23.2505073,
+                        "relativeDirection": "UTURN_LEFT",
+                        "absoluteDirection": "SOUTH",
+                        "streetName": "西部濱海公路",
+                        "area": false,
+                        "bogusName": false,
+                        "feature": null
+                      }
+                    ]
+                  },
+                  {
+                    "mode": "BUS",
+                    "startTime": 1791248460000,
+                    "endTime": 1791248940000,
+                    "duration": 480.0,
+                    "distance": 4841.77,
+                    "from": {
+                      "name": "北門綜合長照機構",
+                      "stop": {
+                        "gtfsId": "1:TNN27267",
+                        "code": null,
+                        "lat": 23.25022,
+                        "lon": 120.12995
+                      }
+                    },
+                    "to": {
+                      "name": "蘆竹溝",
+                      "stop": {
+                        "gtfsId": "1:TNN21094",
+                        "code": null,
+                        "lat": 23.23377,
+                        "lon": 120.09702
+                      }
+                    },
+                    "route": {
+                      "gtfsId": "1:TNN120242_1",
+                      "shortName": "藍2 南鯤鯓→溪底寮→佳里(經蘆竹溝)",
+                      "longName": "藍2 南鯤鯓→溪底寮→佳里(經蘆竹溝)",
+                      "type": 3,
+                      "agency": {
+                        "gtfsId": "1:TNN_10160"
+                      }
+                    },
+                    "trip": {
+                      "gtfsId": "1:patched_TNN120242_1_TNN120242_1601_unknown",
+                      "wheelchairAccessible": "NO_INFORMATION"
+                    },
+                    "legGeometry": {
+                      "points": "}`|lCm{e|UfQ{Dvb@gLjArVFf@??dFbk@fCdZ??p@hIjCnZNjA??BRSnA{@j@d]fsA"
+                    },
+                    "steps": []
+                  },
+                  {
+                    "mode": "WALK",
+                    "startTime": 1791248940000,
+                    "endTime": 1791248954000,
+                    "duration": 14.0,
+                    "distance": 7.82,
+                    "from": {
+                      "name": "蘆竹溝",
+                      "stop": {
+                        "gtfsId": "1:TNN21094",
+                        "code": null,
+                        "lat": 23.23377,
+                        "lon": 120.09702
+                      }
+                    },
+                    "to": {
+                      "name": "Destination",
+                      "stop": null
+                    },
+                    "route": null,
+                    "trip": null,
+                    "legGeometry": {
+                      "points": "azxlCkm_|UAEGDBD"
+                    },
+                    "steps": [
+                      {
+                        "distance": 4.27,
+                        "lon": 120.0970514,
+                        "lat": 23.2337887,
+                        "relativeDirection": "DEPART",
+                        "absoluteDirection": "NORTHWEST",
+                        "streetName": "service road",
+                        "area": false,
+                        "bogusName": true,
+                        "feature": null
+                      },
+                      {
+                        "distance": 3.55,
+                        "lon": 120.0970286,
+                        "lat": 23.2338209,
+                        "relativeDirection": "LEFT",
+                        "absoluteDirection": "WEST",
+                        "streetName": "市道174號 (逆樁), 市道174號 (順樁)",
+                        "area": false,
+                        "bogusName": false,
+                        "feature": null
+                      }
+                    ]
+                  }
+                ]
+              }
+            ],
+            "routingErrors": [],
+            "debugOutput": {
+              "precalculationTime": 0,
+              "pathCalculationTime": 1784,
+              "renderingTime": 0,
+              "totalTime": 1981,
+              "timedOut": false
+            },
+            "searchWindowUsed": 21600
+          }
+        }
+      }
+    }
+  ]
+}

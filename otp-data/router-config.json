@@ -29,6 +29,7 @@
     "streetRoutingTimeout": "2s"
   },
   "transit": {
+    "iterationDepartureStepInSeconds": 120,
     "transferCacheRequests": [
       { "modes": "WALK" },
       { "modes": "WALK", "walk": { "speed": 1.3 } },
