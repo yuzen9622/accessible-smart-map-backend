@@ -226,7 +226,7 @@ export OTP_GTFS_URLS="<全國 GTFS zip 下載 URL>"   # 見 OTP_OPERATIONS.md §
 bash src/scripts/build-otp-graph.sh
 ```
 
-> `build-otp-graph.sh` 會自動：抓 feed → 清理 → 注入 TRA → **注入捷運(本次新增)** → 建圖 → 原子換檔 → 重啟 → healthcheck。
+> `build-otp-graph.sh` 會自動：preflight（checkout／磁碟／Mongo／依賴，失敗就不建）→ 抓 feed → 清理 → 注入 TRA → **注入捷運(本次新增)** → 建圖 → 候選圖驗收（`verify-otp-graph.py`，不過就不換）→ 原子換檔 → 重啟 → healthcheck。
 > 驗證碼可選裝 `gtfs-validator`、`osmium-tool`（`sudo apt install osmium-tool`）；沒裝腳本會跳過驗證 gate。
 
 ---
