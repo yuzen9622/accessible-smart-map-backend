@@ -186,6 +186,35 @@ describe("confirmed hazard candidate planning", () => {
     });
   });
 
+  it.each(["difficult", "minor"] as const)(
+    "keeps the base rank when only a %s hazard is on route",
+    (severity) => {
+      const best = walkRoute("best-with-construction", [
+        [121, 25],
+        [121.001, 25],
+      ]);
+      const worse = walkRoute("worse-but-clear", [
+        [121, 25.002],
+        [121.001, 25.002],
+      ]);
+      const plan = planConfirmedHazardRoutes(
+        [best, worse],
+        [hazard("work-1", [121.0005, 25.00005], severity)],
+      );
+
+      expect(plan.selectionApplied).toBe(false);
+      expect(plan.routes.map((route) => route.routeId)).toEqual([
+        "best-with-construction",
+        "worse-but-clear",
+      ]);
+      expect(plan.routes[0].hazardAdvisory).toMatchObject({
+        onRoute: [{ id: "work-1", severity }],
+      });
+      expect(plan.routes[0].warnings).toContain(ROUTE_WARNING.HAZARD_ON_ROUTE);
+      expect(plan.routes[1].hazardAdvisory?.avoided).toBeUndefined();
+    },
+  );
+
   it("preserves non-enumerable schedule metadata through advisory decoration", () => {
     const affected = attachInternalSchedule(
       walkRoute("blocked-scheduled", [

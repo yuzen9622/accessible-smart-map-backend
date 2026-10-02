@@ -409,7 +409,9 @@ function appendWarning(
 }
 
 /**
- * Decorate and rank an already base-ranked candidate list. This function is
+ * Decorate and rank an already base-ranked candidate list. Only blocking
+ * hazards reorder candidates (least harmful first among blocked ones);
+ * difficult/minor hazards are advisory and keep the base rank. This function is
  * intentionally pure: it never mutates a route, and callers can discard the
  * entire result if a hazard query or geometry operation failed.
  */
@@ -448,14 +450,23 @@ export function planConfirmedHazardRoutes(
   const allCandidatesAffected =
     routes.length > 1 &&
     candidates.every((candidate) => candidate.advisory.onRoute.length > 0);
-  const ranked = [...candidates].sort(
-    (a, b) =>
-      a.advisory.penaltyPoints - b.advisory.penaltyPoints || a.index - b.index,
-  );
+  const selectionApplied =
+    routes.length > 1 &&
+    candidates.some((candidate) => candidate.advisory.blockingOnRoute > 0);
+  const ranked = selectionApplied
+    ? [...candidates].sort(
+        (a, b) =>
+          a.advisory.blockingOnRoute - b.advisory.blockingOnRoute ||
+          (a.advisory.blockingOnRoute > 0
+            ? a.advisory.penaltyPoints - b.advisory.penaltyPoints
+            : 0) ||
+          a.index - b.index,
+      )
+    : candidates;
 
   // `avoided` is a comparative assertion, so only the selected candidate may
   // expose it, and only for hazards proven to intersect an alternative but not it.
-  if (routes.length > 1) {
+  if (selectionApplied) {
     const selected = ranked[0];
     const selectedHazardIds = new Set(
       selected.advisory.onRoute.map((hazard) => hazard.id),
@@ -480,7 +491,7 @@ export function planConfirmedHazardRoutes(
     }
   }
 
-  if (allCandidatesAffected) {
+  if (allCandidatesAffected && selectionApplied) {
     const selected = ranked[0];
     selected.route = appendWarning(
       selected.route,
@@ -491,7 +502,7 @@ export function planConfirmedHazardRoutes(
 
   return {
     routes: ranked.map((candidate) => candidate.route),
-    selectionApplied: routes.length > 1,
+    selectionApplied,
     allCandidatesAffected,
   };
 }
