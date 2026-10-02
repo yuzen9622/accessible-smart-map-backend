@@ -11,6 +11,7 @@ import {
   closePedGraphRuntime,
   getPedGraphRuntime,
 } from "./modules/accessible-route/planners/pedestrian-a11y/graph-runtime";
+import { startTransitFreshnessJob } from "./modules/accessible-route/planners/otp-freshness";
 import {
   warmTrafficGeometryRuntime,
   startTrafficGeometryRefreshJob,
@@ -54,6 +55,8 @@ void getPedGraphRuntime().then((runtime) => {
   );
 });
 
+const stopTransitFreshnessJob = startTransitFreshnessJob();
+
 // Live traffic refresher is SWR + Redis only (no Mongo dependency); start unconditionally.
 const trafficLiveTimer = startTrafficLiveRefreshJob();
 const valhallaTrafficTarTimer = startValhallaTrafficTarWorker();
@@ -80,6 +83,7 @@ function shutdown(signalLog: string): void {
   if (trafficGeometryTimer) clearInterval(trafficGeometryTimer);
   if (trafficLiveTimer) clearInterval(trafficLiveTimer);
   if (valhallaTrafficTarTimer) clearInterval(valhallaTrafficTarTimer);
+  stopTransitFreshnessJob();
   void (async () => {
     await Promise.allSettled([
       mqttHandle ? mqttHandle.stop() : Promise.resolve(),

@@ -38,6 +38,7 @@ import { createSosRouter } from "./modules/sos";
 import { createLineRouter } from "./modules/line";
 import { createVoiceRouter } from "./modules/voice";
 import { generateOpenAPIDocument } from "./openapi/document";
+import { getTransitDataFreshness } from "./modules/accessible-route/planners/otp-freshness";
 
 // Composition root: the planner declares a route-intent port and the `ai`
 // module supplies the implementation, so the dependency stays one-way
@@ -96,10 +97,26 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 app.get("/health", (_req: Request, res: Response) => {
+  const freshness = getTransitDataFreshness();
   res.status(ResponseCode.OK).json({
     status: "OK",
     message: "Server is running",
     timestamp: new Date().toISOString(),
+    ...(freshness
+      ? {
+          transitData: {
+            checkedAt: freshness.checkedAt,
+            stale: freshness.stale,
+            serviceEnd: freshness.serviceEnd,
+            expired: freshness.agencies
+              .filter((agency) => agency.status === "expired")
+              .map((agency) => agency.agency),
+            expiring: freshness.agencies
+              .filter((agency) => agency.status === "expiring")
+              .map((agency) => agency.agency),
+          },
+        }
+      : {}),
   });
 });
 
