@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { haversineMeters } from "../../../../utils/geo";
-import { NODE_FLAG, type PedGraph } from "./graph.types";
-import { buildEdgeIndex, snapToGraph } from "./spatial-index";
+import { EDGE_TYPE, NODE_FLAG, type PedGraph } from "./graph.types";
+import {
+  buildEdgeIndex,
+  nearestOutdoorPoint,
+  snapToGraph,
+} from "./spatial-index";
 
 function graphFromAdjacency(input: {
   nodeLon: number[];
@@ -176,5 +180,46 @@ describe("snapToGraph", () => {
     // The request lies exactly on the edge's geometric midpoint, but each
     // endpoint is over 200 m away. Routing from either endpoint would teleport.
     expect(snapToGraph(index, 25, 121.002, 50)).toBeNull();
+  });
+});
+
+describe("nearestOutdoorPoint", () => {
+  const corridorAboveStreet = () => {
+    const graph = graphFromAdjacency({
+      nodeLon: [121, 121.001, 121, 121.001],
+      nodeLat: [25, 25, 25.000135, 25.000135],
+      nodeFlags: Array(4).fill(NODE_FLAG.HAS_REAL_GEOM),
+      adjOffset: [0, 1, 2, 3, 4],
+      adjTarget: [1, 0, 3, 2],
+      adjAttr: [0, 1, 2, 3],
+    });
+    graph.edgeType.set([
+      EDGE_TYPE.INDOOR_WALKWAY,
+      EDGE_TYPE.INDOOR_WALKWAY,
+      EDGE_TYPE.SIDEWALK,
+      EDGE_TYPE.SIDEWALK,
+    ]);
+    return buildEdgeIndex(graph);
+  };
+
+  it("skips a closer indoor corridor and projects onto the street-level walkway", () => {
+    const point = nearestOutdoorPoint(
+      corridorAboveStreet(),
+      25.00001,
+      121.0005,
+      30,
+    );
+
+    expect(point).not.toBeNull();
+    expect(point!.lat).toBeCloseTo(25.000135, 6);
+    expect(point!.lng).toBeCloseTo(121.0005, 6);
+    expect(point!.distanceM).toBeGreaterThan(13);
+    expect(point!.distanceM).toBeLessThan(15);
+  });
+
+  it("returns null when no outdoor walkway is within tolerance", () => {
+    expect(
+      nearestOutdoorPoint(corridorAboveStreet(), 25.00001, 121.0005, 10),
+    ).toBeNull();
   });
 });
