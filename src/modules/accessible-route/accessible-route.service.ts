@@ -9,6 +9,9 @@ import type {
 } from "./planners/pedestrian-a11y/csr-walk.types";
 import { ResponseCode } from "../../types/code";
 import { getServiceCoverageConfig } from "../../config/coverage";
+import { isWithinPedGraphCoverage } from "../../config/ped-graph";
+import { peekPedGraphSnapshot } from "./planners/pedestrian-a11y/graph-runtime";
+import { nearestOutdoorPoint } from "./planners/pedestrian-a11y/spatial-index";
 import {
   ERROR_MESSAGE,
   ROUTE_REASON,
@@ -108,6 +111,12 @@ const PARKING_ARRIVAL_RADIUS_M = 200;
 const MAX_WALK_SEGMENT_CONCURRENCY = 4;
 /** Straight-line ceiling under which a transit request may be answered by walking. */
 const TRANSIT_WALK_FALLBACK_MAX_M = 1_500;
+/** How far a transit endpoint may move to reach a street-level walkway. */
+const STREET_ANCHOR_TOLERANCE_M = 30;
+/** How long a walkable trip waits for transit before answering with walking. */
+const WALKABLE_TRANSIT_BUDGET_MS = Number(
+  process.env.WALKABLE_TRANSIT_BUDGET_MS ?? 5_000,
+);
 
 /**
  * Limit concurrent tasks without changing their result order.
@@ -1568,6 +1577,56 @@ export async function attachMetroAlerts(
   return result.metroAlerts;
 }
 
+/**
+ * Move a transit endpoint onto the nearest outdoor, step-free walkway when the
+ * in-memory Taipei pedestrian graph is loaded. OTP links a raw coordinate to
+ * its nearest walkable edge on any level, so a point in the middle of a
+ * no-walking road above an underground concourse links into the concourse;
+ * wheelchair searches from there ran for over a minute and returned nothing.
+ *
+ * @param point The requested endpoint.
+ * @returns The street-level point, or the original when none is in range or
+ *   the graph is not loaded yet.
+ */
+function anchorToStreetLevel(point: LatLng): LatLng {
+  if (!isWithinPedGraphCoverage(point)) return point;
+  const snapshot = peekPedGraphSnapshot();
+  if (!snapshot) return point;
+  const anchor = nearestOutdoorPoint(
+    snapshot.index,
+    point.lat,
+    point.lng,
+    STREET_ANCHOR_TOLERANCE_M,
+  );
+  return anchor ? { lat: anchor.lat, lng: anchor.lng } : point;
+}
+
+/**
+ * Wait for a promise up to a time budget without cancelling it.
+ *
+ * @param work The promise to wait on; a later rejection is swallowed.
+ * @param budgetMs Maximum wait in milliseconds.
+ * @returns The settled value, or undefined when the budget elapsed first.
+ */
+async function settleWithin<T>(
+  work: Promise<T>,
+  budgetMs: number,
+): Promise<T | undefined> {
+  work.catch(() => undefined);
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), budgetMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 type WalkPlanOutcome =
   | {
       ok: true;
@@ -1920,20 +1979,35 @@ export async function planAccessibleRouteFromRequest(
       avoidStairs: constraints.avoidStairs,
       requireElevator: constraints.requireElevator,
     };
-    let transit = await findAccessibleRoutesDetailed(originLatLng, dest, city, {
-      ...transitOptions,
-      skipLaterService: walkableTrip,
-    });
+    const transitPromise = findAccessibleRoutesDetailed(
+      originLatLng,
+      dest,
+      city,
+      { ...transitOptions, skipLaterService: walkableTrip },
+    );
+    const walkPromise = walkableTrip
+      ? planWalkRoutes(
+          walkPoints,
+          transitMode,
+          constraints.avoidStairs,
+          futureDeparture,
+        ).catch((err: unknown) => {
+          console.warn("[accessible-route] walk fallback planning failed", err);
+          return undefined;
+        })
+      : undefined;
+    let transit = walkableTrip
+      ? await settleWithin(transitPromise, WALKABLE_TRANSIT_BUDGET_MS)
+      : await transitPromise;
     const walkFallback =
-      transit.status !== "ok" && walkableTrip
-        ? await planWalkRoutes(
-            walkPoints,
-            transitMode,
-            constraints.avoidStairs,
-            futureDeparture,
-          )
-        : undefined;
+      walkPromise && transit?.status !== "ok" ? await walkPromise : undefined;
     if (walkFallback?.ok) {
+      if (!transit) {
+        console.warn(
+          "[accessible-route] transit planning exceeded the walkable-trip budget; answering with walking",
+          JSON.stringify({ budgetMs: WALKABLE_TRANSIT_BUDGET_MS }),
+        );
+      }
       routes = walkFallback.routes;
       trafficHookMs += walkFallback.trafficMs;
       routedByEngineWithNoElevationData =
@@ -1943,6 +2017,7 @@ export async function planAccessibleRouteFromRequest(
         reason: TRANSIT_FALLBACK_REASON.NO_TRANSIT_ROUTE,
       };
     } else {
+      transit ??= await transitPromise;
       if (transit.status === "no_route" && walkableTrip) {
         transit = await findAccessibleRoutesDetailed(
           originLatLng,
@@ -2965,13 +3040,17 @@ export async function findAccessibleRoutesDetailed(
   ).catch(() => undefined);
 
   if (!waypoints.length) {
-    const otp = await runOtpSegment(origin, destination, {
-      maxTransfers,
-      mode,
-      avoidStairs: constraints.avoidStairs,
-      departureTime: opts.departureTime,
-      skipLaterService: opts.skipLaterService,
-    });
+    const otp = await runOtpSegment(
+      anchorToStreetLevel(origin),
+      anchorToStreetLevel(destination),
+      {
+        maxTransfers,
+        mode,
+        avoidStairs: constraints.avoidStairs,
+        departureTime: opts.departureTime,
+        skipLaterService: opts.skipLaterService,
+      },
+    );
     console.log(
       "[route-timing] planners",
       JSON.stringify({ otp: Date.now() - t0 }),
@@ -2998,7 +3077,9 @@ export async function findAccessibleRoutesDetailed(
   // later-segment transit schedules line up with the traveller's real arrival.
   // Remaining accepted limitations: double WALK seams at each waypoint, and no
   // cross-segment global optimization (each segment takes its own best).
-  const points: LatLng[] = [origin, ...waypoints, destination];
+  const points: LatLng[] = [origin, ...waypoints, destination].map(
+    anchorToStreetLevel,
+  );
   const segmentPairs: [LatLng, LatLng][] = [];
   for (let i = 0; i < points.length - 1; i++) {
     segmentPairs.push([points[i], points[i + 1]]);

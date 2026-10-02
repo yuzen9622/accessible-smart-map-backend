@@ -1932,7 +1932,36 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
         travelMode: "walk",
         reason: TRANSIT_FALLBACK_REASON.WALKING_BETTER,
       });
-      expect(vi.mocked(planCsrWalkRoute)).not.toHaveBeenCalled();
+      expect(okData(res).routes[0].routeName).toBe("步行路線");
+    });
+
+    it("answers with walking when transit outlasts the walkable-trip budget", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        vi.mocked(planOtpRouteDetailed).mockReturnValue(new Promise(() => {}));
+        vi.mocked(planCsrWalkRoute).mockResolvedValue({
+          status: "ok",
+          plans: [csrWalkPlan([121.515, 25.0428], [121.5175, 25.0462])],
+        });
+
+        const pending = planAccessibleRouteFromRequest({
+          travelMode: "transit",
+          mode: "wheelchair",
+          origin: { latitude: 25.0427647, longitude: 121.5150029 },
+          destination: { latitude: 25.0462432, longitude: 121.5174745 },
+        });
+        await vi.advanceTimersByTimeAsync(5_000);
+        const res = await pending;
+
+        expect(res.ok).toBe(true);
+        expect(okData(res).fallback).toEqual({
+          travelMode: "walk",
+          reason: TRANSIT_FALLBACK_REASON.NO_TRANSIT_ROUTE,
+        });
+        expect(vi.mocked(planOtpRouteDetailed)).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("does not walk-fallback beyond the straight-line ceiling", async () => {

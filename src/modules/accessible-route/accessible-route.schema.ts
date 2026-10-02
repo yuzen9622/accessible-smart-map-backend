@@ -1100,7 +1100,7 @@ export const AccessibleRouteDataSchema = z
       .optional()
       .openapi({
         description:
-          "僅當 travelMode=transit 卻以步行路線回應時出現（routes 全為 WALK leg）。WALKING_BETTER：規劃引擎判定步行優於任何大眾運輸；NO_TRANSIT_ROUTE：查無大眾運輸，且起訖點直線距離（含中途點）在 1500 公尺內，改以步行規劃（輪椅模式同樣套用無階梯限制）。",
+          "僅當 travelMode=transit 卻以步行路線回應時出現（routes 全為 WALK leg）。WALKING_BETTER：規劃引擎判定步行優於任何大眾運輸；NO_TRANSIT_ROUTE：起訖點直線距離（含中途點）在 1500 公尺內，且查無大眾運輸、規劃服務無法使用，或 5 秒內未完成大眾運輸規劃，改以步行規劃（輪椅模式同樣套用無階梯限制）。",
         example: { travelMode: "walk", reason: "WALKING_BETTER" },
       }),
     metroAlerts: z.array(MetroAlertResultSchema).optional().openapi({
