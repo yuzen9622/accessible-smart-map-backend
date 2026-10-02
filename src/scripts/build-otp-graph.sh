@@ -303,6 +303,17 @@ else
   log "WARN: gtfs-validator not installed — skipping validation gate"
 fi
 
+# Rail/metro calendars only cover the window TDX publishes and the injection
+# steps above are fail-soft, so a feed can validate cleanly yet carry no TRA at
+# all, or end within days. Promoting it would silently decay routing to
+# bus-only; keep the old graph instead (the backend's freshness check alerts).
+for zip in "$WORK_DIR"/feed-*.gtfs.zip; do
+  log "checking rail/metro service window of $(basename "$zip")"
+  python3 "$SCRIPT_DIR/check-feed-service-window.py" "$zip" \
+    --min-days "${OTP_MIN_RAIL_DAYS:-14}" ||
+    die "rail/metro timetables in $(basename "$zip") are missing or end within ${OTP_MIN_RAIL_DAYS:-14} days — keeping old graph"
+done
+
 # ── 4. Brief service interruption: stop OTP for the offline temp-dir build ──
 cp "$OTP_DATA_DIR"/otp-config.json "$OTP_DATA_DIR"/build-config.json \
   "$OTP_DATA_DIR"/router-config.json "$WORK_DIR/" 2>/dev/null ||
@@ -326,8 +337,17 @@ done < <(find "$WORK_DIR" -type f -name '*.zip')
 # directory — mount there and pass flags only, never a path.
 log "building graph (this takes a while; heap ${OTP_JAVA_XMX})"
 # An absent container (fresh machine, or after `docker compose down`) is not an
-# error — there is simply no serving heap to reclaim before the build.
-OTP_WAS_RUNNING="$(docker inspect -f '{{.State.Running}}' otp 2>/dev/null || echo absent)"
+# error — there is simply no serving heap to reclaim before the build. An
+# unresponsive daemon is: treating "no answer" as "absent" once started a 12g
+# build next to a running 12g serve container and took the whole machine down.
+docker info >/dev/null 2>&1 ||
+  die "docker daemon is not responding — refusing to build next to a possibly running otp"
+if docker container inspect otp >/dev/null 2>&1; then
+  OTP_WAS_RUNNING="$(docker container inspect -f '{{.State.Running}}' otp)" ||
+    die "cannot read otp container state — refusing to build"
+else
+  OTP_WAS_RUNNING=absent
+fi
 if [ "$OTP_WAS_RUNNING" = "true" ]; then
   log "stopping otp container for graph build"
   # Claim responsibility BEFORE stopping: `docker stop` takes seconds (graceful

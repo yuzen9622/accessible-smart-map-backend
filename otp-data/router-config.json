@@ -1,4 +1,7 @@
 {
+  "server": {
+    "apiProcessingTimeout": "25s"
+  },
   "routingDefaults": {
     "walk": {
       "reluctance": 2.0
