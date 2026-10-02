@@ -301,15 +301,16 @@ curl -s -X POST http://localhost:8000/api/v1/a11y/accessible-route \
 | 更新程式碼     | `git pull && pnpm install --frozen-lockfile && sudo systemctl restart accessible-backend` |
 | OTP 啟停       | `docker compose up -d otp` / `docker stop otp`                                            |
 | OTP log        | `docker logs otp --tail 30`                                                               |
-| 每週重建 graph | cron：`0 4 * * 0`，見下                                                                   |
+| 每週重建 graph | **必裝**：`scheduled-otp-rebuild.sh`（cron 或 systemd timer），見下                         |
 
-每週日 04:00 自動重建 OTP graph（含捷運/台鐵班表更新）：
+每週日 04:00 自動重建 OTP graph（含捷運/台鐵/高鐵班表更新）。**這不是選配**：軌道班表只涵蓋 4–8 週，沒排程圖資約一個月後就只剩公車。
 
 ```bash
 crontab -e
-# 加入（OTP_GTFS_URLS 確認後再啟用整段；先用「沿用現有 feed」版本見 OTP_OPERATIONS.md §2.2）
-0 4 * * 0 cd /opt/accessible-smart-map-backend && OTP_DATA_DIR=$PWD/otp-data OTP_GTFS_URLS="<url>" bash src/scripts/build-otp-graph.sh >> /var/log/otp-build.log 2>&1
+0 4 * * 0 /opt/accessible-smart-map-backend/src/scripts/scheduled-otp-rebuild.sh
 ```
+
+systemd timer 寫法、建圖門檻與 `/health` 的 `transitData` 偵測見 `OTP_OPERATIONS.md` §7。
 
 ## 疑難排解
 

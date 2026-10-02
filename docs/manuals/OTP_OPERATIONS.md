@@ -388,16 +388,43 @@ Node 端固定使用 OTP 作為唯一路徑規劃引擎；設定 `OTP_BASE_URL` 
 
 ---
 
-## 7. 例行排程建議
+## 7. 例行排程（必裝，不是建議）
+
+軌道班表只涵蓋 TDX 發布的 4–8 週（TRA `CALENDAR_DAYS=45`、捷運 60 天、高鐵與北捷官方依 TDX 區間），**不每週重建，圖資約一個月後就會靜默腐爛成只剩公車**（2026-10 實際發生：dev 捷運/鐵路全數過期、正式機高鐵過期）。
+
+用 `src/scripts/scheduled-otp-rebuild.sh`，不要直接把 `build-otp-graph.sh` 塞進 cron：wrapper 會上鎖防重疊、先 `git pull --ff-only`（建圖吃的是主機 checkout）、讀 `.env`、每次一個 log（`logs/otp-rebuild/`，保留 8 份）、只跑一輪、失敗回非 0。
+
+cron（每週日 04:00）：
 
 ```cron
-# 每週日 04:00 全量更新（feed + TRA + 月度 OSM + 建圖 + 換檔）
-0 4 * * 0  cd /path/to/accessible-smart-map-backend && \
-           OTP_DATA_DIR=$PWD/otp-data OTP_GTFS_URLS="<url>" \
-           src/scripts/build-otp-graph.sh >> /var/log/otp-build.log 2>&1
+0 4 * * 0  /path/to/repo/src/scripts/scheduled-otp-rebuild.sh
 ```
 
-每週滾動即可同時滿足：TRA calendar 的 45 天效期、TDX 班表改點、OSM 月度更新（腳本內建 30 天判斷）。
+systemd timer（Ubuntu 建議，失敗可接 `OnFailure=` 通知）：
+
+```ini
+# /etc/systemd/system/otp-rebuild.service
+[Service]
+Type=oneshot
+User=<部署帳號>
+ExecStart=/path/to/repo/src/scripts/scheduled-otp-rebuild.sh
+
+# /etc/systemd/system/otp-rebuild.timer
+[Timer]
+OnCalendar=Sun 04:00 Asia/Taipei
+Persistent=true
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl enable --now otp-rebuild.timer
+```
+
+兩道防線確認排程真的有效：
+
+- **建圖門檻**：`check-feed-service-window.py` 要求 THSR/TRA/TRTC/KRTC/NTMC/TYMC 在「今天+14 天起的 7 天」內都有班次，否則不換圖（注入步驟是 fail-soft，沒有這道門檻，TDX 掛掉時會靜默換上沒有台鐵的圖）。
+- **執行期偵測**：後端每 30 分鐘問 OTP 各軌道業者今天與 7 天後的班次數；過期會 `console.error("[otp-freshness] ... expired")`，`GET /health` 的 `transitData.expired` / `expiring` 會列出業者。看到非空就代表排程沒在跑或建圖失敗。
 
 ---
 
