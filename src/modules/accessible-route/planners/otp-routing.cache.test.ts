@@ -70,8 +70,11 @@ function busItinerary(routeName: string, startTime: number) {
 }
 
 const later = departure.getTime() + 5 * 60_000;
-const okResp = (itineraries: unknown[]) => ({
-  data: { data: { plan: { itineraries, routingErrors: [] } } },
+const okResp = (
+  itineraries: unknown[],
+  routingErrors: { code: string }[] = [],
+) => ({
+  data: { data: { plan: { itineraries, routingErrors } } },
 });
 
 beforeEach(() => {
@@ -147,6 +150,45 @@ describe("OTP plan result cache", () => {
     });
 
     expect(JSON.stringify(result.routes)).not.toContain("EARLY");
+  });
+
+  it("keeps a walk-only itinerary that starts at the bucket start, shifted to the real departure", async () => {
+    const bucketStart = new Date("2026-10-01T09:00:00+08:00").getTime();
+    post.mockResolvedValue(
+      okResp(
+        [
+          {
+            duration: 600,
+            walkDistance: 700,
+            legs: [
+              {
+                mode: "WALK",
+                startTime: bucketStart,
+                endTime: bucketStart + 600_000,
+                duration: 600,
+                distance: 700,
+                from: { name: "Origin" },
+                to: { name: "Destination" },
+                legGeometry: { points: "" },
+                steps: [],
+              },
+            ],
+          },
+        ],
+        [{ code: "WALKING_BETTER_THAN_TRANSIT" }],
+      ),
+    );
+
+    const result = await planOtpRouteDetailed(origin, destination, {
+      departureTime: departure,
+      mode: "wheelchair",
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.routes.map((route) => route.routeName)).toEqual(["步行路線"]);
+    expect(result.routes[0]._scheduledDepartureTime).toBe(departure.getTime());
+    expect(post).toHaveBeenCalledTimes(1);
   });
 
   it("does not cache a failed query", async () => {

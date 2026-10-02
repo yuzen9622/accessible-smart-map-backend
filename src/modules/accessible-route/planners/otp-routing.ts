@@ -364,6 +364,24 @@ async function postOtpPlan(
 }
 
 /**
+ * Copy an itinerary with every leg moved later by a fixed offset.
+ *
+ * @param it The itinerary to shift.
+ * @param offsetMs Milliseconds to add to each leg's start and end.
+ * @returns The shifted itinerary.
+ */
+function shiftItinerary(it: OtpItinerary, offsetMs: number): OtpItinerary {
+  return {
+    ...it,
+    legs: it.legs.map((leg) => ({
+      ...leg,
+      startTime: leg.startTime + offsetMs,
+      endTime: leg.endTime + offsetMs,
+    })),
+  };
+}
+
+/**
  * Plan query through the Redis result cache and an in-process single-flight.
  * Only successful responses are cached; timeouts and GraphQL errors propagate
  * uncached.
@@ -403,8 +421,9 @@ async function cachedOtpPlan(
 /**
  * One OTP plan query. With the result cache enabled the endpoints are rounded
  * to 4 decimals (~11 m) and the departure floored to a 2-minute bucket, both
- * for the key and for the query itself, and itineraries starting before the
- * real departure are dropped.
+ * for the key and for the query itself. Transit itineraries starting before the
+ * real departure are dropped; walk-only itineraries carry no timetable, so they
+ * are shifted to start at the real departure instead.
  *
  * @param origin The origin point.
  * @param destination The destination point.
@@ -450,10 +469,14 @@ async function queryOtpPlan(
     return { ...(await postOtpPlan(variables)), anchor: departure };
   }
   const { response, fromCache } = await cachedOtpPlan(variables);
+  const departureMs = departure.getTime();
   return {
-    itineraries: response.itineraries.filter(
-      (it) => (it.legs[0]?.startTime ?? Infinity) >= departure.getTime(),
-    ),
+    itineraries: response.itineraries.flatMap((it) => {
+      const startTime = it.legs[0]?.startTime ?? Infinity;
+      if (startTime >= departureMs) return [it];
+      if (it.legs.some(isTransitLeg)) return [];
+      return [shiftItinerary(it, departureMs - startTime)];
+    }),
     routingErrors: response.routingErrors,
     anchor: departure,
     fromCache,
