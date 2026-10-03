@@ -26,3 +26,7 @@ export const ANSWER_FACT_RULE =
 /** Uncertainty rule that closes both prompts. */
 export const ANSWER_UNCERTAINTY_RULE =
   "不確定就說不確定，寧可少說也不要給錯誤資訊。";
+
+/** Transit preferences shared by text and voice tool selection. */
+export const TRANSIT_PREFERENCE_RULE =
+  "呼叫 planAccessibleRoute 或 getNavInstructions 時，依使用者需求傳入 transitPreference：偏好公車／想搭公車→bus；偏好火車／想搭台鐵或高鐵→rail（包含台鐵及高鐵，不含捷運）；未指定或取消偏好→none。僅提到目的地「火車站／公車站」不代表乘車偏好。這是軟性偏好，仍可搭其他運具接駁；若要求「只能搭／完全不搭」特定運具，不能宣稱已套用硬性限制，須說明目前僅支援偏好。延續同一趟行程時保留已確認的偏好；使用者改口或取消時以最新指示為準。偏好不得覆蓋輪椅、避開樓梯或電梯需求。";

@@ -1,5 +1,7 @@
 import { findNearestStopCity } from "./accessible-route.repository";
 import { getCity, getCoordinates } from "../../adapters/google.adapter";
+import { transitPreferencePenalty } from "./planners/transit-preference";
+import type { TransitPreference } from "../../types/route";
 import { parseRouteIntent } from "./route-intent.port";
 import { getA11yProfile } from "../user/user.service";
 import type { RouteIntent } from "../../types/ai";
@@ -282,6 +284,7 @@ export function scoreAndRank(
   routes: AccessibleRoute[],
   mode: AccessibilityMode = "normal",
   env?: EnvConditions,
+  transitPreference?: TransitPreference,
 ): AccessibleRoute[] {
   const maxTime = Math.max(...routes.map((r) => r.totalMinutes), 1);
   const minTime = Math.min(...routes.map((r) => r.totalMinutes), maxTime);
@@ -318,13 +321,14 @@ export function scoreAndRank(
       });
       return {
         route: r,
-        cost: routeCost(
-          r.totalMinutes,
-          r.transferCount,
-          result.totalScore,
-          mode,
-          walkDistanceM,
-        ),
+        cost:
+          routeCost(
+            r.totalMinutes,
+            r.transferCount,
+            result.totalScore,
+            mode,
+            walkDistanceM,
+          ) + transitPreferencePenalty(r, transitPreference),
       };
     })
     .sort((a, b) => a.cost - b.cost)
@@ -345,16 +349,18 @@ export function scoreAndRank(
 function prerankByProxy(
   routes: AccessibleRoute[],
   mode: AccessibilityMode,
+  transitPreference?: TransitPreference,
 ): AccessibleRoute[] {
   return routes
     .map((r) => ({
       route: r,
-      cost: prerankCost(
-        r.totalMinutes,
-        r.transferCount,
-        totalWalkDistanceM(r),
-        mode,
-      ),
+      cost:
+        prerankCost(
+          r.totalMinutes,
+          r.transferCount,
+          totalWalkDistanceM(r),
+          mode,
+        ) + transitPreferencePenalty(r, transitPreference),
     }))
     .sort((a, b) => a.cost - b.cost)
     .map((s) => s.route);
@@ -1133,6 +1139,7 @@ async function finalizeRoutes(
   constraints: A11yConstraints,
   format: "standard" | "compact" = "standard",
   envPromise?: Promise<EnvConditions | undefined>,
+  transitPreference?: TransitPreference,
 ): Promise<AccessibleRoute[]> {
   const PRERANK_N = 8;
   const t: Record<string, number> = {};
@@ -1141,7 +1148,7 @@ async function finalizeRoutes(
   // compare every fully-matchable candidate to confirmed hazards BEFORE top-N.
   // Otherwise a clear ninth route can never be selected over eight blocked ones.
   const candidates = collapseLogicalDuplicates(deduplicateRoutes(routes));
-  const proxyRanked = prerankByProxy(candidates, mode);
+  const proxyRanked = prerankByProxy(candidates, mode, transitPreference);
   const proxyEligible = constraints.avoidStairs
     ? prioritizeStepFreeRoutes(proxyRanked)
     : proxyRanked;
@@ -1195,7 +1202,7 @@ async function finalizeRoutes(
   t0 = Date.now();
   // Stage 4: score with the enriched facility data, then compare confirmed
   // street-level hazards BEFORE selecting/slimming the final routes.
-  const baseRanked = scoreAndRank(eligible, mode, env);
+  const baseRanked = scoreAndRank(eligible, mode, env, transitPreference);
   t.rank = Date.now() - t0;
   t0 = Date.now();
   const hazardPlan =
@@ -1232,7 +1239,7 @@ async function finalizeRoutes(
   t.realtimeOverlay = Date.now() - t0;
   t0 = Date.now();
   try {
-    rerankByLowFloor(top, mode);
+    rerankByLowFloor(top, mode, transitPreference);
   } catch (err) {
     console.warn("[accessible-route] low-floor rerank failed", err);
   }
@@ -1769,6 +1776,7 @@ export async function planAccessibleRouteFromRequest(
   const travelMode = body.travelMode ?? "transit";
   const rawWaypoints = body.waypoints ?? [];
   let mode = body.mode;
+  let transitPreference = body.transitPreference;
   let requireElevator = body.requireElevator;
   let avoidStairs = body.avoidStairs;
   let needsAccessibleToilet = body.needsAccessibleToilet;
@@ -1776,7 +1784,12 @@ export async function planAccessibleRouteFromRequest(
   let maxSlopePercent = body.maxSlopePercent;
 
   let intent: RouteIntent | null = null;
-  if (query && (!origin || !destination)) {
+  if (
+    query &&
+    (!origin ||
+      !destination ||
+      (travelMode === "transit" && transitPreference === undefined))
+  ) {
     try {
       intent = await parseRouteIntent(query);
     } catch (err) {
@@ -1796,11 +1809,14 @@ export async function planAccessibleRouteFromRequest(
       };
     }
     origin =
-      intent.from === "current_location"
+      origin ??
+      (intent.from === "current_location"
         ? (userLocation ?? undefined)
-        : intent.from;
-    destination = intent.to;
+        : intent.from);
+    destination = destination ?? intent.to;
     mode = mode ?? intent.mode;
+    transitPreference =
+      transitPreference ?? intent.preferences?.transitPreference;
     requireElevator = requireElevator ?? intent.preferences?.preferElevator;
     if (!origin) {
       return {
@@ -1970,6 +1986,7 @@ export async function planAccessibleRouteFromRequest(
       pathLengthMeters(walkPoints) <= TRANSIT_WALK_FALLBACK_MAX_M;
     const transitOptions: FindAccessibleRoutesOptions = {
       mode: transitMode,
+      transitPreference,
       maxTransfers: (maxTransfers ?? 2) as 0 | 1 | 2,
       departureTime: futureDeparture,
       format: format === "compact" ? "compact" : "standard",
@@ -2201,6 +2218,7 @@ export async function planAccessibleRouteFromRequest(
     },
     travelMode,
     mode: effectiveMode,
+    transitPreference: transitPreference ?? "none",
     maxTransfers: maxTransfers ?? 2,
     format: format === "compact" ? "compact" : "standard",
     waypoints: waypoints.map((waypoint) => ({
@@ -2221,6 +2239,9 @@ export async function planAccessibleRouteFromRequest(
     destination: dest,
     city,
     travelMode,
+    ...(travelMode === "transit"
+      ? { transitPreference: transitPreference ?? "none" }
+      : {}),
     ...(waypoints.length ? { waypoints } : {}),
     routes: normalizedRoutes,
     ...(intent ? { intent } : {}),
@@ -3042,6 +3063,7 @@ export async function findAccessibleRoutesDetailed(
       anchorToStreetLevel(origin),
       anchorToStreetLevel(destination),
       {
+        transitPreference: opts.transitPreference,
         maxTransfers,
         mode,
         avoidStairs: constraints.avoidStairs,
@@ -3063,6 +3085,7 @@ export async function findAccessibleRoutesDetailed(
       constraints,
       opts.format,
       envPromise,
+      opts.transitPreference,
     );
     return routes.length
       ? { status: "ok", routes }
@@ -3085,6 +3108,7 @@ export async function findAccessibleRoutesDetailed(
   const segments: AccessibleRoute[] = [];
   for (const [from, to] of segmentPairs) {
     const result = await runOtpSegment(from, to, {
+      transitPreference: opts.transitPreference,
       maxTransfers,
       mode,
       avoidStairs: constraints.avoidStairs,
@@ -3118,6 +3142,7 @@ export async function findAccessibleRoutesDetailed(
     constraints,
     opts.format,
     envPromise,
+    opts.transitPreference,
   );
   return routes.length
     ? { status: "ok", routes }

@@ -38,6 +38,8 @@ import type {
   ThsrLeg,
   TraLeg,
 } from "../accessible-route/accessible-route.service";
+import { ERROR_MESSAGE } from "../../constants/messages";
+import { TransitPreferenceSchema } from "../../schemas/transit-preference.schema";
 import type { DriveLeg } from "../../types/route";
 import type { TaiwanCityEn } from "../../types/transit";
 
@@ -358,6 +360,7 @@ function summarizeLeg(
   if (leg.type === "BUS") {
     return {
       type: "BUS",
+      rideMinutes: leg.rideMinutes,
       routeName: leg.routeName,
       departureStop: leg.departureStop,
       arrivalStop: leg.arrivalStop,
@@ -428,11 +431,21 @@ export async function planAccessibleRoute(args: {
   origin: string;
   destination: string;
   mode?: string;
+  transitPreference?: string;
   departureTime?: string;
   userLocation?: { latitude: number; longitude: number };
 }): Promise<string> {
   const { origin, destination, mode, departureTime } = args;
 
+  const preference = TransitPreferenceSchema.optional().safeParse(
+    args.transitPreference,
+  );
+  if (!preference.success) {
+    return JSON.stringify({
+      ok: false,
+      error: ERROR_MESSAGE.INVALID_TRANSIT_PREFERENCE,
+    });
+  }
   try {
     const validMode = [
       "wheelchair",
@@ -464,6 +477,7 @@ export async function planAccessibleRoute(args: {
       userLocation: args.userLocation,
       mode: validMode,
       maxTransfers: 2,
+      transitPreference: preference.data,
       departureTime,
     });
 
@@ -485,6 +499,8 @@ export async function planAccessibleRoute(args: {
       },
       city: result.data.city,
       mode: validMode,
+      transitPreference:
+        result.data.transitPreference ?? preference.data ?? "none",
       routes: result.data.routes.slice(0, 3).map(summarizeRoute),
       metroAlerts: result.data.metroAlerts ?? [],
       transitAlerts: result.data.transitAlerts ?? [],
@@ -1107,11 +1123,21 @@ export async function getNavInstructions(args: {
   origin: string;
   destination: string;
   mode?: string;
+  transitPreference?: string;
   departureTime?: string;
   routeIndex?: number;
   userHeading?: number;
   userLocation?: { latitude: number; longitude: number };
 }): Promise<string> {
+  const preference = TransitPreferenceSchema.optional().safeParse(
+    args.transitPreference,
+  );
+  if (!preference.success) {
+    return JSON.stringify({
+      ok: false,
+      error: ERROR_MESSAGE.INVALID_TRANSIT_PREFERENCE,
+    });
+  }
   try {
     if (args.origin === "current_location" && !args.userLocation) {
       return JSON.stringify({
@@ -1136,6 +1162,7 @@ export async function getNavInstructions(args: {
       userLocation: args.userLocation,
       mode: validMode,
       maxTransfers: 2,
+      transitPreference: preference.data,
       departureTime: args.departureTime,
     });
     if (!result.ok) {
@@ -1991,6 +2018,7 @@ export async function executeLocalTool(
         origin: args.origin,
         destination: args.destination,
         mode: args.mode,
+        transitPreference: args.transitPreference,
         departureTime: args.departureTime,
         userLocation,
       });
@@ -2121,6 +2149,7 @@ export async function executeLocalTool(
         origin: args.origin as string,
         destination: args.destination as string,
         mode: args.mode as string | undefined,
+        transitPreference: args.transitPreference,
         departureTime: args.departureTime as string | undefined,
         routeIndex: args.routeIndex as number | undefined,
         userHeading: args.userHeading as number | undefined,

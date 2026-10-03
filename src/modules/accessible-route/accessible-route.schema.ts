@@ -1,5 +1,6 @@
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
+import { TransitPreferenceSchema } from "../../schemas/transit-preference.schema";
 import { registry } from "../../openapi/registry";
 import {
   ROUTE_MSG,
@@ -104,6 +105,11 @@ export const AccessibleRouteBodySchema = z
       description:
         "回應格式。standard（預設）每段內嵌精簡設施物件；compact 另將設施去重為路線層級 facilities 字典，各段改帶 a11yRefs（osmId 參照）且設施陣列為空。",
       example: "standard",
+    }),
+    transitPreference: TransitPreferenceSchema.optional().openapi({
+      description:
+        "大眾運輸軟性偏好：none 不指定、bus 偏好公車、rail 偏好鐵路（台鐵／高鐵，不含捷運）。保留其他運具接駁，不保證一定搭到偏好運具；僅 transit 適用。明確值優先於 query 解析，none 可清除偏好。",
+      example: "rail",
     }),
     travelMode: z
       .enum(["transit", "drive", "motorcycle", "walk"])
@@ -504,6 +510,10 @@ const LowFloorAlternativeSchema = z
 const BusLegSchema = z
   .object({
     type: z.literal("BUS").openapi({ example: "BUS" }),
+    rideMinutes: z.number().nonnegative().optional().openapi({
+      description: "公車預定乘車分鐘，不含候車與步行",
+      example: 20,
+    }),
     a11yRefs: A11yRefsSchema,
     routeName: z.string().openapi({ example: "信義幹線" }),
     subRouteUid: z.string().openapi({
@@ -1061,6 +1071,11 @@ export const AccessibleRouteDataSchema = z
       example: { lat: 25.034, lng: 121.564 },
     }),
     city: z.string().openapi({ example: "Taipei" }),
+    transitPreference: TransitPreferenceSchema.optional().openapi({
+      description:
+        "本次 transit 查詢採用的軟性運具偏好；不代表回傳路線保證包含該運具。",
+      example: "rail",
+    }),
     travelMode: z
       .enum(["transit", "drive", "motorcycle", "walk"])
       .optional()

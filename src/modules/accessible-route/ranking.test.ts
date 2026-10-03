@@ -133,3 +133,54 @@ describe("政大 → 台北車站 ranking flip (wheelchair, real scoreAndRank)",
     }
   });
 });
+
+describe("soft transit preference ranking", () => {
+  const candidates = () => [
+    {
+      ...route1,
+      routeId: "bus",
+      totalMinutes: 30,
+      legs: [{ ...bus("307"), rideMinutes: 20 }],
+    },
+    {
+      ...route1,
+      routeId: "rail",
+      totalMinutes: 30,
+      legs: [{ ...tra(), rideMinutes: 20 }],
+    },
+  ];
+  it.each(["normal", "wheelchair", "elderly"] as const)(
+    "honors bus/rail preference for %s without altering duration or score",
+    (mode) => {
+      const neutral = scoreAndRank(candidates(), mode);
+      const busFirst = scoreAndRank(candidates(), mode, undefined, "bus");
+      const railFirst = scoreAndRank(candidates(), mode, undefined, "rail");
+      expect(busFirst[0].routeId).toBe("bus");
+      expect(railFirst[0].routeId).toBe("rail");
+      for (const route of railFirst) {
+        expect(route.totalMinutes).toBe(30);
+        expect(route.accessibilityScore).toBe(
+          neutral.find((r) => r.routeId === route.routeId)?.accessibilityScore,
+        );
+      }
+      expect(scoreAndRank(candidates(), mode, undefined, "none")).toEqual(
+        neutral,
+      );
+    },
+  );
+  it("still allows a much faster nonpreferred route and bus-to-rail connections", () => {
+    const routes = candidates();
+    routes[1].totalMinutes = 120;
+    expect(scoreAndRank(routes, "normal", undefined, "rail")[0].routeId).toBe(
+      "bus",
+    );
+    const mixed = {
+      ...route3,
+      legs: [
+        { ...bus("66"), rideMinutes: 5 },
+        { ...tra(), rideMinutes: 20 },
+      ],
+    };
+    expect(scoreAndRank([mixed], "normal", undefined, "rail")).toHaveLength(1);
+  });
+});

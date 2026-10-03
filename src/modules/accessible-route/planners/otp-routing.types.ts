@@ -2,7 +2,10 @@
  * Type declarations for the OTP2 transit planner client (otp-routing.ts).
  */
 
-import type { AccessibilityMode } from "../../../types/route";
+import type {
+  AccessibilityMode,
+  TransitPreference,
+} from "../../../types/route";
 
 export interface OtpStop {
   gtfsId: string;
@@ -54,6 +57,7 @@ export interface OtpItinerary {
 }
 
 export interface PlanOtpRouteOptions {
+  transitPreference?: TransitPreference;
   departureTime?: Date;
   maxTransfers?: 0 | 1 | 2;
   mode?: AccessibilityMode;

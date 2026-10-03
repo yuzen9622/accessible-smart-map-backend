@@ -18,6 +18,9 @@ export type AccessibilityMode =
  * Transport mode requested by the client — orthogonal to AccessibilityMode.
  * "transit" plans via OTP (bus/metro/rail); the rest plan via the road router.
  */
+/** Soft transit preference; rail includes TRA/THSR, not metro. */
+export type TransitPreference = "none" | "bus" | "rail";
+
 export type TravelMode = "transit" | "drive" | "motorcycle" | "walk";
 
 /**
@@ -238,6 +241,8 @@ export interface WalkLeg extends WalkA11yDetails {
 }
 
 export interface BusLeg {
+  /** Scheduled on-board time from OTP, excluding waiting and walking. */
+  rideMinutes?: number;
   type: "BUS";
   a11yRefs?: string[];
   routeName: string;

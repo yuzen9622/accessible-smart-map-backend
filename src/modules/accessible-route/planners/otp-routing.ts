@@ -30,6 +30,7 @@ import {
 import { taipeiHHmm, taipeiYmdDash } from "../../../config/taipei-time";
 import { metroLineCode } from "../../../config/transit";
 import { ROUTE_WARNING } from "../../../constants/messages";
+import { transitModeWeights } from "./transit-preference";
 import { walkSpeedMps } from "../scoring";
 import {
   attachInternalSchedule,
@@ -42,6 +43,7 @@ import type {
 } from "../../../types";
 import type {
   AccessibilityMode,
+  TransitPreference,
   AccessibleRoute,
   WalkLeg,
   WalkStep,
@@ -288,7 +290,7 @@ query Plan(
   $toLat: Float!, $toLon: Float!,
   $date: String!, $time: String!,
   $wheelchair: Boolean!, $numItineraries: Int!, $walkSpeed: Float,
-  $searchWindow: Long, $maxTransfers: Int
+  $searchWindow: Long, $maxTransfers: Int, $modeWeight: InputModeWeight
 ) {
   plan(
     from: { lat: $fromLat, lon: $fromLon }
@@ -300,6 +302,7 @@ query Plan(
     numItineraries: $numItineraries
     searchWindow: $searchWindow
     maxTransfers: $maxTransfers
+    modeWeight: $modeWeight
     transportModes: [${PLAN_TRANSPORT_MODES}]
     locale: "zh-TW"
   ) {
@@ -480,6 +483,7 @@ async function queryOtpPlan(
   numItineraries: number,
   searchWindowSec: number,
   maxTransfers?: number,
+  transitPreference?: TransitPreference,
 ): Promise<OtpPlanAttempt> {
   const cacheOn = otpPlanCacheEnabled();
   const from = cacheOn ? roundForCache(origin) : origin;
@@ -502,6 +506,7 @@ async function queryOtpPlan(
     numItineraries,
     searchWindow: searchWindowSec,
     maxTransfers: maxTransfers === undefined ? undefined : maxTransfers + 1,
+    modeWeight: transitModeWeights(transitPreference),
   };
 
   if (!cacheOn) {
@@ -1105,6 +1110,7 @@ function transitLegFrom(
 
   return {
     type: "BUS",
+    rideMinutes,
     routeName,
     subRouteUid: busSubRouteUid(routeId),
     subRouteName: leg.route?.longName || routeName,
@@ -1299,6 +1305,7 @@ export async function planOtpRouteDetailed(
       OTP_NUM_ITINERARIES,
       initialWindowSec,
       maxTransfers,
+      opts?.transitPreference,
     );
     primarySucceeded = true;
     if (firstAttempt.fromCache) tm.otpCacheHits = 1;
@@ -1450,6 +1457,7 @@ export async function planOtpRouteDetailed(
           OTP_NUM_ITINERARIES_WIDE,
           wideWindowSec,
           maxTransfers,
+          opts?.transitPreference,
         );
         observeAttempt(wideAttempt);
         rememberOriginalWalkFallback(wideAttempt);
@@ -1539,6 +1547,7 @@ export async function planOtpRouteDetailed(
           OTP_NUM_ITINERARIES,
           effectiveWindowSec,
           maxTransfers,
+          opts?.transitPreference,
         );
         observeAttempt(retryAttempt);
         tm.otpRetry = Date.now() - tRetry;
@@ -1614,6 +1623,7 @@ export async function planOtpRouteDetailed(
         OTP_NUM_ITINERARIES_WIDE,
         continuationWindowSec,
         maxTransfers,
+        opts?.transitPreference,
       );
       observeAttempt(originalContinuationAttempt);
       rememberOriginalWalkFallback(originalContinuationAttempt);
@@ -1642,6 +1652,7 @@ export async function planOtpRouteDetailed(
           OTP_NUM_ITINERARIES_WIDE,
           continuationWindowSec,
           maxTransfers,
+          opts?.transitPreference,
         );
         observeAttempt(snappedContinuationAttempt);
         if (!snappedContinuationAttempt.fromCache) planBreaker.recordSuccess();

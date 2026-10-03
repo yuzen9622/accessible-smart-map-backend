@@ -102,6 +102,7 @@ import {
   planAccessibleRouteForHttp,
   planAccessibleRouteFromRequest,
 } from "./accessible-route.service";
+import { registerRouteIntentParser } from "./route-intent.port";
 import { normalizeWalkLegSteps } from "../../utils/nav-instructions-engine";
 import { attachInternalSchedule } from "./route-schedule";
 import {
@@ -2727,6 +2728,7 @@ describe("requireElevator sees enrichment output, not raw planner output", () =>
       destination,
       mode: "elderly",
       requireElevator: true,
+      transitPreference: "bus",
     });
 
     expect(res.ok).toBe(true);
@@ -3314,4 +3316,178 @@ describe("attachTransitAlerts", () => {
       "metro-alert-1",
     ]);
   });
+});
+
+describe("request and AI transit preference propagation", () => {
+  const origin = { latitude: 25.04, longitude: 121.56 };
+  const destination = { latitude: 24.15, longitude: 120.68 };
+  const parser = vi.fn();
+  beforeEach(() => {
+    registerRouteIntentParser(parser);
+    parser.mockResolvedValue({
+      from: "current_location",
+      to: "台中車站",
+      mode: "wheelchair",
+      departureTime: "now",
+      preferences: {
+        transitPreference: "rail",
+        preferElevator: true,
+        minimizeTransfers: false,
+      },
+    });
+  });
+  it.each([undefined, "none", "bus", "rail"] as const)(
+    "uses explicit %s before AI preference, retaining explicit endpoints",
+    async (transitPreference) => {
+      await planAccessibleRouteFromRequest({
+        origin,
+        destination,
+        query: "我想搭火車",
+        transitPreference,
+      });
+      expect(planOtpRouteDetailed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lat: origin.latitude,
+          lng: origin.longitude,
+        }),
+        expect.objectContaining({
+          lat: destination.latitude,
+          lng: destination.longitude,
+        }),
+        expect.objectContaining({
+          transitPreference: transitPreference ?? "rail",
+        }),
+      );
+    },
+  );
+  it("uses AI preference when resolving missing endpoints", async () => {
+    parser.mockResolvedValue({
+      from: "current_location",
+      to: "台中車站",
+      mode: "wheelchair",
+      departureTime: "now",
+      preferences: {
+        transitPreference: "bus",
+        preferElevator: true,
+        minimizeTransfers: false,
+      },
+    });
+    await planAccessibleRouteFromRequest({
+      destination,
+      userLocation: origin,
+      query: "從這裡去台中，想搭公車，我坐輪椅",
+    });
+    expect(planOtpRouteDetailed).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        transitPreference: "bus",
+        mode: "wheelchair",
+        avoidStairs: true,
+      }),
+    );
+  });
+  it("retains resolved preference for navigation and rerouting", async () => {
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue(
+      otpTransitOk([
+        {
+          routeId: "bus",
+          routeName: "307",
+          totalMinutes: 30,
+          transferCount: 0,
+          accessibilityHighlights: [],
+          legs: [
+            {
+              type: "BUS",
+              routeName: "307",
+              subRouteUid: "307",
+              subRouteName: "307",
+              departureStop: "A",
+              arrivalStop: "B",
+              direction: 0,
+              rideMinutes: 20,
+              polyline: [],
+              departureStopA11y: [],
+              arrivalStopA11y: [],
+              waitInfo: { time: null, source: "unavailable" },
+            },
+          ],
+        },
+      ]),
+    );
+    const result = await planAccessibleRouteFromRequest({
+      origin,
+      destination,
+      transitPreference: "rail",
+    });
+    expect(result.ok).toBe(true);
+    expect(okData(result).transitPreference).toBe("rail");
+    expect(okData(result)._canonicalRequest?.transitPreference).toBe("rail");
+  });
+});
+
+it("retains a preferred ninth candidate through enrichment and final ranking", async () => {
+  vi.mocked(getTransitAlerts).mockResolvedValue({ ok: true, alerts: [] });
+  const buses = Array.from({ length: 8 }, (_, i) => ({
+    routeId: `bus-${i}`,
+    routeName: `bus-${i}`,
+    totalMinutes: 30,
+    transferCount: 0,
+    accessibilityHighlights: [],
+    legs: [
+      {
+        type: "BUS",
+        routeName: `bus-${i}`,
+        subRouteUid: `bus-${i}`,
+        subRouteName: `bus-${i}`,
+        departureStop: "A",
+        arrivalStop: "B",
+        direction: 0,
+        rideMinutes: 20,
+        polyline: [],
+        departureStopA11y: [],
+        arrivalStopA11y: [],
+        waitInfo: { time: null, source: "unavailable" },
+      },
+    ],
+  }));
+  const rail = {
+    routeId: "rail",
+    routeName: "台鐵",
+    totalMinutes: 30,
+    transferCount: 0,
+    accessibilityHighlights: [],
+    legs: [
+      {
+        type: "TRA",
+        trainNo: "123",
+        trainTypeName: "區間",
+        departureStation: "A",
+        arrivalStation: "B",
+        departureStationUID: "A",
+        arrivalStationUID: "B",
+        departureTime: "09:00",
+        arrivalTime: "09:20",
+        rideMinutes: 20,
+        polyline: [],
+        departureStationA11y: [],
+        arrivalStationA11y: [],
+        facilityHighlights: [],
+        waitInfo: { time: null, source: "unavailable" },
+      },
+    ],
+  };
+  vi.mocked(planOtpRouteDetailed).mockResolvedValue(
+    otpTransitOk([...buses, rail]),
+  );
+  const result = await planAccessibleRouteFromRequest({
+    origin: { latitude: 25.04, longitude: 121.56 },
+    destination: { latitude: 24.15, longitude: 120.68 },
+    transitPreference: "rail",
+  });
+  expect(result.ok).toBe(true);
+  expect(okData(result).routes[0].routeId).toBe("rail");
+  expect(okData(result).routes.some((r) => r.routeId.startsWith("bus-"))).toBe(
+    true,
+  );
 });

@@ -199,3 +199,62 @@ describe("OTP plan result cache", () => {
     expect([...store.keys()].length).toBe(0);
   });
 });
+
+describe("OTP transit preferences", () => {
+  it("isolates bus and rail cache entries while none shares the default entry", async () => {
+    for (const transitPreference of [
+      undefined,
+      "none",
+      "bus",
+      "rail",
+      "bus",
+      "rail",
+    ] as const) {
+      const result = await planOtpRouteDetailed(origin, destination, {
+        departureTime: departure,
+        transitPreference,
+      });
+      expect(result.status).toBe("ok");
+      expect(result.routes[0].legs[0]).toMatchObject({
+        type: "BUS",
+        rideMinutes: 10,
+      });
+    }
+    expect(post).toHaveBeenCalledTimes(3);
+    const variables = post.mock.calls.map((call) => call[1].variables);
+    expect(variables[0].modeWeight).toBeUndefined();
+    expect(variables[1].modeWeight).toMatchObject({
+      BUS: 1,
+      TROLLEYBUS: 1,
+      RAIL: 1.5,
+      SUBWAY: 1.5,
+    });
+    expect(variables[2].modeWeight).toMatchObject({
+      BUS: 1.5,
+      RAIL: 1,
+      SUBWAY: 1.5,
+    });
+    expect(post.mock.calls[1][1].query).toContain("modeWeight: $modeWeight");
+    expect(post.mock.calls[1][1].query).toContain("{ mode: BUS }");
+    expect(post.mock.calls[1][1].query).toContain("{ mode: RAIL }");
+  });
+
+  it("keeps the preference and wheelchair constraint across later search attempts", async () => {
+    post.mockResolvedValue(okResp([]));
+    await planOtpRouteDetailed(origin, destination, {
+      departureTime: departure,
+      transitPreference: "rail",
+      mode: "wheelchair",
+    });
+    const plans = post.mock.calls.filter((call) =>
+      call[1].query.includes("query Plan("),
+    );
+    expect(plans.length).toBeGreaterThan(2);
+    for (const call of plans) {
+      expect(call[1].variables).toMatchObject({
+        wheelchair: true,
+        modeWeight: { BUS: 1.5, RAIL: 1 },
+      });
+    }
+  });
+});

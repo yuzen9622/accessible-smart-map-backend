@@ -1798,3 +1798,45 @@ describe("bindLineAccountCode agent tool", () => {
     expect(result.error).toContain("找不到可用的 LINE 帳號綁定碼");
   });
 });
+
+describe("agent transit preference dispatch", () => {
+  it.each(["planAccessibleRoute", "getNavInstructions"])(
+    "forwards preferences through %s",
+    async (tool) => {
+      mockPlanRoute.mockResolvedValue({
+        ok: false,
+        error: "no route in fixture",
+      });
+      for (const transitPreference of ["bus", "rail", "none"]) {
+        await executeLocalTool(
+          tool,
+          {
+            origin: "台北車站",
+            destination: "板橋車站",
+            mode: "wheelchair",
+            transitPreference,
+          },
+          undefined,
+        );
+        expect(mockPlanRoute).toHaveBeenLastCalledWith(
+          expect.objectContaining({ transitPreference, mode: "wheelchair" }),
+        );
+      }
+    },
+  );
+  it.each(["planAccessibleRoute", "getNavInstructions"])(
+    "rejects unsupported model output in %s before planning",
+    async (tool) => {
+      mockPlanRoute.mockClear();
+      const result = JSON.parse(
+        await executeLocalTool(
+          tool,
+          { origin: "A", destination: "B", transitPreference: "subway" },
+          undefined,
+        ),
+      );
+      expect(result.ok).toBe(false);
+      expect(mockPlanRoute).not.toHaveBeenCalled();
+    },
+  );
+});

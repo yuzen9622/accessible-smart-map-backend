@@ -196,3 +196,31 @@ describe("rerouteAccessibleRoute", () => {
     expect(finalizeReroute).not.toHaveBeenCalled();
   });
 });
+
+it("keeps transit preference when replanning from the current location", async () => {
+  readNavigationTokenStrict.mockResolvedValue({
+    status: "ok",
+    value: {
+      ...envelope,
+      canonicalRequest: {
+        ...canonicalRequest,
+        travelMode: "transit",
+        transitPreference: "rail",
+      },
+    },
+  });
+  beginReroute.mockResolvedValue({ status: "acquired" });
+  planAccessibleRouteFromRequest.mockResolvedValue({
+    ok: false,
+    status: 503,
+    error: "fixture unavailable",
+  });
+  await rerouteAccessibleRoute(request);
+  expect(planAccessibleRouteFromRequest).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      travelMode: "transit",
+      transitPreference: "rail",
+      origin: { latitude: 25.02, longitude: 121.02 },
+    }),
+  );
+});

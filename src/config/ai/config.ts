@@ -71,11 +71,16 @@ const intentConfig: GenerateContentConfig = {
       preferences: {
         type: "object",
         properties: {
+          transitPreference: { type: "string", enum: ["none", "bus", "rail"] },
           minimizeTransfers: { type: "boolean" },
           preferElevator: { type: "boolean" },
         },
-        propertyOrdering: ["minimizeTransfers", "preferElevator"],
-        required: ["minimizeTransfers", "preferElevator"],
+        propertyOrdering: [
+          "minimizeTransfers",
+          "preferElevator",
+          "transitPreference",
+        ],
+        required: ["minimizeTransfers", "preferElevator", "transitPreference"],
       },
     },
     propertyOrdering: ["from", "to", "mode", "departureTime", "preferences"],

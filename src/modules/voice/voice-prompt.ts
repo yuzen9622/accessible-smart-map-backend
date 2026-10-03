@@ -1,5 +1,6 @@
 import {
   AGENT_IDENTITY,
+  TRANSIT_PREFERENCE_RULE,
   ANSWER_FACT_RULE,
   ANSWER_UNCERTAINTY_RULE,
   TOOL_CHAINING_PRINCIPLE,
@@ -29,6 +30,8 @@ const VOICE_SYSTEM_PROMPT = `${AGENT_IDENTITY}，現在正透過「語音」與�
 - 導航途中遇到「那班／這班公車」「目前這段」「下一段」「目的地」等指涉時，先呼叫 getActiveNavigationContext，使用回傳的可信導航資料補足後續工具參數；只有 active=false 或必要欄位確實不存在時才追問，不要要求使用者重講已在導航路線中的資料。
 - 問「那班公車多久來」時：先查 getActiveNavigationContext；若 transit.mode=BUS，使用 transit.routeName、transit.from、transit.direction 呼叫 getBusArrival。導航沒有 BUS段時如實說明，不得把其他運具冒充公車即時資料。
 - 問「這裡／目前位置」的天氣或環境時，直接呼叫 getEnvironmentInfo 且可省略座標，後端會使用導航最新位置；問「目的地」天氣時，先查 getActiveNavigationContext，再以 destination 作為 getEnvironmentInfo.query。使用者明示其他地點時以明示地點優先。
+
+${TRANSIT_PREFERENCE_RULE}
 
 # 如何選工具
 1. ${TOOL_CHAINING_PRINCIPLE}

@@ -209,6 +209,12 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
             enum: ["wheelchair", "elderly", "visual_impaired", "normal"],
             description: "無障礙需求模式，預設 'normal'",
           },
+          transitPreference: {
+            type: "string",
+            enum: ["none", "bus", "rail"],
+            description:
+              "大眾運輸軟性偏好：bus 偏好公車；rail 偏好鐵路（台鐵／高鐵，不含捷運）；none 不指定或取消偏好。保留其他運具接駁，不能當作只搭某運具的保證。目的地是車站不代表偏好。",
+          },
           departureTime: {
             type: "string",
             description: "出發時間，ISO8601 字串或 HH:mm；不指定表示現在",
@@ -662,6 +668,12 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
             type: "string",
             enum: ["wheelchair", "elderly", "visual_impaired", "normal"],
             description: "無障礙需求模式，預設 'normal'",
+          },
+          transitPreference: {
+            type: "string",
+            enum: ["none", "bus", "rail"],
+            description:
+              "大眾運輸軟性偏好：bus 偏好公車；rail 偏好鐵路（台鐵／高鐵，不含捷運）；none 不指定或取消偏好。保留其他運具接駁，不能當作只搭某運具的保證。目的地是車站不代表偏好。",
           },
           departureTime: {
             type: "string",

@@ -5,7 +5,7 @@
  * accessible-route orchestrator can both depend on them DOWNWARD.
  */
 
-import type { AccessibilityMode } from "./route";
+import type { AccessibilityMode, TransitPreference } from "./route";
 
 export interface RouteIntent {
   from: string;
@@ -13,6 +13,7 @@ export interface RouteIntent {
   mode: AccessibilityMode;
   departureTime: string;
   preferences: {
+    transitPreference?: TransitPreference;
     minimizeTransfers: boolean;
     preferElevator: boolean;
   };

@@ -10,6 +10,7 @@ import type {
   AccessibilityMode,
   AccessibleRoute,
   TravelMode,
+  TransitPreference,
   WalkLeg,
   BusLeg,
   MetroLeg,
@@ -88,6 +89,7 @@ export type LatLng = { lat: number; lng: number };
 export type RoadTravelMode = Exclude<TravelMode, "transit">;
 
 export interface FindAccessibleRoutesOptions {
+  transitPreference?: TransitPreference;
   mode?: AccessibilityMode;
   maxTransfers?: 0 | 1 | 2;
   departureTime?: Date;
@@ -129,6 +131,7 @@ export interface FindDrivingRoutesOptions {
 }
 
 export interface PlanRouteRequest {
+  transitPreference?: TransitPreference;
   origin?: unknown;
   destination?: unknown;
   query?: string;
@@ -238,6 +241,7 @@ export type PlanRouteResult =
         destination: { lat: number; lng: number };
         city: TaiwanCityEn;
         travelMode: TravelMode;
+        transitPreference?: TransitPreference;
         waypoints?: LatLng[];
         routes: AccessibleRoute[];
         intent?: RouteIntent;

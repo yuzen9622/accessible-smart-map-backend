@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AccessibleRouteDataSchema,
+  AccessibleRouteBodySchema,
   AccessibleRouteRerouteBodySchema,
   AccessibleRouteRerouteDataSchema,
   AccessibleRouteSchema,
@@ -731,5 +732,26 @@ describe("AccessibleRouteSchema BusLeg low-floor enrichment", () => {
       },
     });
     expect(AccessibleRouteSchema.safeParse(invalid).success).toBe(false);
+  });
+});
+
+describe("transit preference HTTP contract", () => {
+  const request = { origin: "台北車站", destination: "板橋車站" };
+  it.each(["none", "bus", "rail"])("accepts %s", (transitPreference) => {
+    expect(
+      AccessibleRouteBodySchema.parse({ ...request, transitPreference })
+        .transitPreference,
+    ).toBe(transitPreference);
+  });
+  it("preserves omission for AI fallback and rejects unsupported values", () => {
+    expect(
+      AccessibleRouteBodySchema.parse(request).transitPreference,
+    ).toBeUndefined();
+    for (const transitPreference of ["train", "metro", null, ["bus"], 1]) {
+      expect(
+        AccessibleRouteBodySchema.safeParse({ ...request, transitPreference })
+          .success,
+      ).toBe(false);
+    }
   });
 });
