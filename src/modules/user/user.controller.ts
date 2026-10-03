@@ -473,6 +473,26 @@ async function unregisterPushToken(req: Request, res: Response) {
   }
 }
 
+const DELETE_ACCOUNT_FAILURES: Record<
+  accountService.DeleteAccountFailure,
+  [ResponseCode, string]
+> = {
+  REAUTH_REQUIRED: [ResponseCode.FORBIDDEN, ACCOUNT_MSG.REAUTH_REQUIRED],
+  NOT_FOUND: [ResponseCode.NOT_FOUND, ResponseMessage.NOT_FOUND],
+  APPLE_AUTHORIZATION_REQUIRED: [
+    ResponseCode.FORBIDDEN,
+    ACCOUNT_MSG.APPLE_AUTHORIZATION_REQUIRED,
+  ],
+  APPLE_AUTHORIZATION_INVALID: [
+    ResponseCode.FORBIDDEN,
+    ACCOUNT_MSG.APPLE_AUTHORIZATION_INVALID,
+  ],
+  APPLE_REVOKE_UNAVAILABLE: [
+    ResponseCode.SERVICE_UNAVAILABLE,
+    ACCOUNT_MSG.APPLE_REVOKE_UNAVAILABLE,
+  ],
+};
+
 async function deleteAccount(req: Request, res: Response) {
   try {
     const sessionId = req.auth?.sessionId;
@@ -486,29 +506,19 @@ async function deleteAccount(req: Request, res: Response) {
       );
     }
 
+    const { appleAuthorizationCode } = req.validated!.body as {
+      appleAuthorizationCode?: string;
+    };
     const result = await accountService.deleteAccount({
       userId: req.auth!.userId,
       sessionId,
+      appleAuthorizationCode,
     });
     if (!result.ok) {
-      if (result.reason === "NOT_FOUND") {
-        return sendResponse(
-          res,
-          false,
-          "error",
-          ResponseCode.NOT_FOUND,
-          ResponseMessage.NOT_FOUND,
-          { reason: result.reason },
-        );
-      }
-      return sendResponse(
-        res,
-        false,
-        "error",
-        ResponseCode.FORBIDDEN,
-        ACCOUNT_MSG.REAUTH_REQUIRED,
-        { reason: result.reason },
-      );
+      const [code, message] = DELETE_ACCOUNT_FAILURES[result.reason];
+      return sendResponse(res, false, "error", code, message, {
+        reason: result.reason,
+      });
     }
 
     if (req.clientMode !== "mobile") clearAuthCookie(res);

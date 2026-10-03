@@ -53,6 +53,7 @@ import {
   UpdateA11yProfileBodySchema,
   RegisterPushTokenBodySchema,
   UnregisterPushTokenBodySchema,
+  DeleteAccountBodySchema,
 } from "./user.schema";
 
 export function createUserRouter(): Router {
@@ -153,7 +154,11 @@ export function createUserRouter(): Router {
     validateRequest({ body: UnregisterPushTokenBodySchema }),
     unregisterPushToken,
   );
-  router.delete("/", deleteAccount);
+  router.delete(
+    "/",
+    validateRequest({ body: DeleteAccountBodySchema }),
+    deleteAccount,
+  );
   router.post(
     "/logout",
     logoutLimiter,

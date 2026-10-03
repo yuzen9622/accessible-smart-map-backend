@@ -4,7 +4,13 @@ App Store 要求提供註冊的 App 必須能在 App 內刪除帳號（issue #24
 
 ## 一、新增 API：`DELETE /api/v1/user`
 
-需登入（`Authorization: Bearer <accessToken>`），不需 request body。Mobile 請帶 `X-Client: mobile`。
+需登入（`Authorization: Bearer <accessToken>`）。Mobile 請帶 `X-Client: mobile`。
+
+Request body 只有 **Sign in with Apple 帳號**需要，其他帳號可以不送：
+
+```jsonc
+{ "appleAuthorizationCode": "c1a2b3..." } // 重新以 Apple 登入時拿到的 authorizationCode
+```
 
 ```jsonc
 // response 200
@@ -21,13 +27,31 @@ App Store 要求提供註冊的 App 必須能在 App 內刪除帳號（issue #24
 | 403 + `data.reason: "REAUTH_REQUIRED"` | 目前的 session 超過 5 分鐘前登入 | 請使用者重新登入（Google／Apple／密碼皆可），拿到新 token 後**立刻**再呼叫一次 |
 | 403（沒有 `data.reason`） | token 無效 | 照一般未登入處理 |
 | 404 | 帳號已不存在 | 當作已刪除 |
+| 403 + `APPLE_AUTHORIZATION_REQUIRED` | Apple 帳號但沒帶 `appleAuthorizationCode` | 請使用者以 Apple 重新登入，把 `authorizationCode` 帶上再呼叫 |
+| 403 + `APPLE_AUTHORIZATION_INVALID` | 授權碼無效、過期、已用過，或屬於另一個 Apple ID | 請使用者以**這個帳號綁定的** Apple ID 重新登入後再試 |
+| 503 + `APPLE_REVOKE_UNAVAILABLE` | Apple 暫時連不上 | 稍後再試（需要重新拿一次 `authorizationCode`） |
 | 500 | 刪到一半失敗 | 此時所有 session 已登出；請使用者重新登入後再試一次即可完成 |
+
+所有 4xx／503 都**沒有刪除任何資料**。
 
 ### 重新驗證規則
 
 「剛登入」指的是**這個 session 的登入時間**在 5 分鐘內。用 refresh token 換新 access token **不算**重新登入（refresh 不會重設登入時間），所以收到 `REAUTH_REQUIRED` 時不要用 refresh 重試，必須走完整登入流程。
 
 建議流程：確認對話框 → 呼叫 `DELETE /user` → 若回 `REAUTH_REQUIRED`，彈出登入 → 登入成功後自動再呼叫一次。
+
+### Sign in with Apple 帳號
+
+App Store 規定刪除帳號時必須撤銷 Sign in with Apple 授權。後端會拿 `authorizationCode` 向 Apple 換 token，確認它屬於這個帳號綁定的 Apple ID 後撤銷授權，**成功後才開始刪資料**。
+
+`authorizationCode` 單次有效、5 分鐘內過期，所以要在刪除前**當場**重新以 Apple 登入取得。這次登入同時滿足上面的「5 分鐘內登入」規則：
+
+1. 使用者按「刪除帳號」並確認。
+2. 呼叫 `AppleAuthentication.signInAsync()`，取得 `identityToken` 和 `authorizationCode`。
+3. 用 `identityToken` 呼叫 `POST /user/auth/apple`，換到新的 access token（新 session）。
+4. 用新 access token 呼叫 `DELETE /user`，body 帶 `{ "appleAuthorizationCode": authorizationCode }`。
+
+`/user/auth/apple` 不會用掉 `authorizationCode`，所以同一次登入的授權碼可以留到第 4 步使用。帳號同時綁了 Google 和 Apple 時，仍然要走 Apple 這條流程。
 
 ## 二、刪除範圍
 
@@ -47,5 +71,5 @@ App Store 要求提供註冊的 App 必須能在 App 內刪除帳號（issue #24
 
 ## 三、已知限制
 
-- **Sign in with Apple token 撤銷**：Apple 要求刪除帳號時呼叫其 REST API 撤銷使用者 token。後端目前只驗證 identity token，沒有保存 Apple 的 refresh token，也沒有設定 Apple client secret（.p8 金鑰），所以這一步**尚未實作**。要補的話，App 需要在刪除前送一次 Sign in with Apple 的 `authorizationCode`，後端換成 token 後再撤銷。
+- 後端必須設定 `APPLE_TEAM_ID`、`APPLE_KEY_ID`、`APPLE_PRIVATE_KEY`（Sign in with Apple 的 .p8 金鑰）才會撤銷 Apple 授權；沒設定時刪除照常完成，只是略過撤銷並記錄錯誤 log。
 - 危險通報的照片隨匿名化後的通報一起保留。

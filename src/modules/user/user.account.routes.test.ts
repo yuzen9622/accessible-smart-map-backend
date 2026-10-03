@@ -103,6 +103,62 @@ describe("DELETE /user", () => {
     expect(res.status).toBe(ResponseCode.INTERNAL_ERROR);
   });
 
+  it("passes the Apple authorization code through", async () => {
+    deleteAccount.mockResolvedValue({ ok: true });
+
+    const res = await request(app)
+      .delete(URL)
+      .set("Authorization", auth)
+      .send({ appleAuthorizationCode: "c0de" });
+
+    expect(res.status).toBe(ResponseCode.OK);
+    expect(deleteAccount).toHaveBeenCalledWith({
+      userId: "test-user-id",
+      sessionId: DEFAULT_AUTH_SESSION_ID,
+      appleAuthorizationCode: "c0de",
+    });
+  });
+
+  it.each([
+    ["an unknown field", { userId: "someone-else" }],
+    ["an empty Apple code", { appleAuthorizationCode: "" }],
+  ])("rejects %s", async (_label, body) => {
+    const res = await request(app)
+      .delete(URL)
+      .set("Authorization", auth)
+      .send(body);
+
+    expect(res.status).toBe(ResponseCode.INVALID_INPUT);
+    expect(deleteAccount).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "APPLE_AUTHORIZATION_REQUIRED",
+      ResponseCode.FORBIDDEN,
+      ACCOUNT_MSG.APPLE_AUTHORIZATION_REQUIRED,
+    ],
+    [
+      "APPLE_AUTHORIZATION_INVALID",
+      ResponseCode.FORBIDDEN,
+      ACCOUNT_MSG.APPLE_AUTHORIZATION_INVALID,
+    ],
+    [
+      "APPLE_REVOKE_UNAVAILABLE",
+      ResponseCode.SERVICE_UNAVAILABLE,
+      ACCOUNT_MSG.APPLE_REVOKE_UNAVAILABLE,
+    ],
+  ] as const)("maps %s", async (reason, status, message) => {
+    deleteAccount.mockResolvedValue({ ok: false, reason });
+
+    const res = await request(app).delete(URL).set("Authorization", auth);
+
+    expect(res.status).toBe(status);
+    expect(res.body.message).toBe(message);
+    expect(res.body.data).toEqual({ reason });
+    expect(res.headers["set-cookie"]).toBeUndefined();
+  });
+
   it("requires authentication", async () => {
     const res = await request(app).delete(URL);
 
