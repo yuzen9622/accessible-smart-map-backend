@@ -10,12 +10,15 @@ so build-otp-graph.sh keeps the old graph serving instead of promoting.
 
   verify-otp-graph.py --otp http://127.0.0.1:18081 [--expect-feeds 1]
                       [--feed NEW.zip --baseline OLD.zip]
+  verify-otp-graph.py --feed NEW.zip --feed-only
 
 Checks:
   feeds      exactly --expect-feeds GTFS feeds are loaded (a second one is a
              stray zip ingested as a duplicate network)
   geometry   share of patterns per mode whose geometry has no more points
              than stops (drawn stop-to-stop) stays under the mode's limit
+  tra-shape  every TRA stop sequence fits its assigned shape within 500 m
+             (requires --feed; independent of the service audit)
   coverage   buses exist in at least --min-bus-cities route_id prefixes
   freshness  every --require rail/metro operator runs trips today
   trips      fixed trips that only make sense by a given mode use it, with
@@ -35,6 +38,13 @@ import subprocess
 import sys
 import time
 import urllib.request
+import zipfile
+
+from tra_shape_geometry import (
+    MAX_STOP_SHAPE_DISTANCE_M,
+    find_misaligned_patterns,
+    load_tra_geometry,
+)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -97,6 +107,31 @@ class Gate:
         print(f"{'ok  ' if ok else 'FAIL'} {name}: {detail}")
         if not ok:
             self.failures.append(f"{name}: {detail}")
+
+
+def check_tra_shapes(gate, feed):
+    """Reject wrong-branch or missing TRA geometry, even without a baseline."""
+    try:
+        with zipfile.ZipFile(feed) as zf:
+            coord, patterns, shapes = load_tra_geometry(zf)
+        failures = find_misaligned_patterns(coord, patterns, shapes)
+    except (OSError, zipfile.BadZipFile, KeyError, ValueError) as exc:
+        gate.check(False, "tra-shape", f"cannot validate {feed}: {exc}")
+        return
+    gate.check(not failures, "tra-shape",
+               f"{len(failures)}/{len(patterns)} TRA patterns exceed "
+               f"{MAX_STOP_SHAPE_DISTANCE_M:g} m or have missing geometry/stops")
+    for key, stop, distance in failures:
+        print(f"  shape={key[0] or '(missing)'} trip={patterns[key][0]} "
+              f"stop={stop or '(missing)'} distance={distance:.0f} m "
+              f"({len(patterns[key])} trips)")
+
+
+def report_result(gate):
+    print(f"RESULT {'PASS' if not gate.failures else 'FAIL'} ({len(gate.failures)} failures)")
+    for failure in gate.failures:
+        print(f"  - {failure}")
+    return 1 if gate.failures else 0
 
 
 def check_geometry(gate, probe, otp, limits, timeout):
@@ -195,12 +230,23 @@ def main():
     ap.add_argument("--require", default="THSR,TRA,TRTC,KRTC,NTMC,TYMC")
     ap.add_argument("--geometry-limit", action="append", default=[], metavar="MODE=PCT",
                     help="override a mode's stop-to-stop limit, e.g. BUS=8")
-    ap.add_argument("--feed", help="new feed zip, for the audit check")
+    ap.add_argument("--feed", help="new feed zip, for TRA shape validation and the service audit")
+    ap.add_argument("--feed-only", action="store_true", help="validate --feed TRA shapes without contacting OTP")
     ap.add_argument("--baseline", help="deployed feed zip or audit json, for the audit check")
     ap.add_argument("--time", default="10:00")
     ap.add_argument("--wait", type=int, default=0, help="seconds to wait for OTP to finish loading")
     ap.add_argument("--timeout", type=int, default=120)
     a = ap.parse_args()
+    if a.feed_only and not a.feed:
+        ap.error("--feed-only requires --feed")
+
+    gate = Gate()
+    if a.feed:
+        check_tra_shapes(gate, a.feed)
+    else:
+        print("info tra-shape: no --feed supplied — TRA stop-to-shape alignment not checked")
+    if a.feed_only:
+        return report_result(gate)
 
     limits = dict(DEFAULT_GEOMETRY_LIMITS)
     for item in a.geometry_limit:
@@ -208,12 +254,10 @@ def main():
         limits[mode.upper()] = float(pct)
 
     probe = load_probe()
-    gate = Gate()
     feeds = wait_ready(probe, a.otp, a.wait)
     if feeds is None:
         gate.check(False, "ready", f"OTP at {a.otp} did not answer within {a.wait}s")
-        print("RESULT FAIL (1 failures)")
-        return 1
+        return report_result(gate)
     gate.check(len(feeds) == a.expect_feeds, "feeds", f"loaded {feeds}, expected {a.expect_feeds}")
 
     now = probe.datetime.now(probe.TAIPEI)
@@ -229,10 +273,7 @@ def main():
     else:
         print("info audit: no baseline feed (first build on this machine) — not gated")
 
-    print(f"RESULT {'PASS' if not gate.failures else 'FAIL'} ({len(gate.failures)} failures)")
-    for f in gate.failures:
-        print(f"  - {f}")
-    return 1 if gate.failures else 0
+    return report_result(gate)
 
 
 if __name__ == "__main__":

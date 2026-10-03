@@ -84,9 +84,10 @@ docker run -d --name "$CANDIDATE_NAME" \
   die "could not start the candidate container"
 
 feeds="$(find "$CANDIDATE_DIR" -maxdepth 1 -name 'feed-*.gtfs.zip' | wc -l | tr -d ' ')"
-verify_args=(--otp "http://127.0.0.1:$OTP_CANDIDATE_PORT" --wait 900 --expect-feeds "$feeds")
-if [ -f "$OTP_DATA_DIR/feed-1.gtfs.zip" ] && [ -f "$CANDIDATE_DIR/feed-1.gtfs.zip" ]; then
-  verify_args+=(--feed "$CANDIDATE_DIR/feed-1.gtfs.zip" --baseline "$OTP_DATA_DIR/feed-1.gtfs.zip")
+verify_args=(--otp "http://127.0.0.1:$OTP_CANDIDATE_PORT" --wait 900 --expect-feeds "$feeds"
+  --feed "$CANDIDATE_DIR/feed-1.gtfs.zip")
+if [ -f "$OTP_DATA_DIR/feed-1.gtfs.zip" ]; then
+  verify_args+=(--baseline "$OTP_DATA_DIR/feed-1.gtfs.zip")
 fi
 log "verifying candidate graph"
 if ! python3 "$SCRIPT_DIR/verify-otp-graph.py" "${verify_args[@]}"; then

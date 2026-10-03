@@ -12,6 +12,8 @@ TEST_FILES = (
     "src/scripts/test_inject_trtc_official_gtfs.py",
     "src/scripts/test_patch_gtfs.py",
     "src/scripts/test_inject_metro_gtfs.py",
+    "src/scripts/test_inject_tra_gtfs.py",
+    "src/scripts/test_verify_otp_graph.py",
     "src/scripts/build-ped-graph.test.py",
     "src/scripts/backfill-osm-way-names.test.py",
     "src/scripts/inject-ped-indoor-graph.test.py",

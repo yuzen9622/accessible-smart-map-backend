@@ -141,6 +141,13 @@ else
   log "WARN: TRA timetable download failed — continuing without TRA legs"
 fi
 
+# Fail before OSM processing / graph build, including when the fail-soft TRA
+# enrichment above could not repair the native feed. Promotion repeats this
+# check against the actual candidate feed and does not rely on a baseline.
+log "checking TRA stop-to-shape alignment"
+python3 "$SCRIPT_DIR/verify-otp-graph.py" --feed-only --feed "$WORK_DIR/feed-1.gtfs.zip" ||
+  die "TRA shape alignment failed — keeping the old graph"
+
 # ── 1b-bis. Official TRTC (Taipei Metro) GTFS injection — must run BEFORE the
 # metro block (1c). TDX's V3 GTFS-static rail endpoint serves an official per-trip
 # feed ONLY for TRTC (every other operator 400s), including 文湖線(Brown), which the
