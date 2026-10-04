@@ -10,7 +10,7 @@ import { RouteIntentSchema } from "../../schemas/route-intent.schema";
 
 beforeEach(() => generateContent.mockReset());
 describe("route intent transit preference boundary", () => {
-  it.each(["bus", "rail", "none", undefined, "subway", { bus: true }])(
+  it.each(["bus", "rail", "metro", "none", undefined, "subway", { bus: true }])(
     "normalizes the structured model preference %j",
     async (value) => {
       generateContent.mockResolvedValue({
@@ -34,7 +34,9 @@ describe("route intent transit preference boundary", () => {
       const intent =
         await parseRouteIntent("我坐輪椅，從台北到板橋，偏好搭火車");
       expect(intent?.preferences.transitPreference).toBe(
-        value === "bus" || value === "rail" ? value : "none",
+        value === "bus" || value === "rail" || value === "metro"
+          ? value
+          : "none",
       );
       expect(intent?.mode).toBe("wheelchair");
       expect(intent?.preferences.preferElevator).toBe(true);

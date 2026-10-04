@@ -197,30 +197,33 @@ describe("rerouteAccessibleRoute", () => {
   });
 });
 
-it("keeps transit preference when replanning from the current location", async () => {
-  readNavigationTokenStrict.mockResolvedValue({
-    status: "ok",
-    value: {
-      ...envelope,
-      canonicalRequest: {
-        ...canonicalRequest,
-        travelMode: "transit",
-        transitPreference: "rail",
+it.each(["rail", "metro"] as const)(
+  "keeps %s transit preference when replanning from the current location",
+  async (transitPreference) => {
+    readNavigationTokenStrict.mockResolvedValue({
+      status: "ok",
+      value: {
+        ...envelope,
+        canonicalRequest: {
+          ...canonicalRequest,
+          travelMode: "transit",
+          transitPreference,
+        },
       },
-    },
-  });
-  beginReroute.mockResolvedValue({ status: "acquired" });
-  planAccessibleRouteFromRequest.mockResolvedValue({
-    ok: false,
-    status: 503,
-    error: "fixture unavailable",
-  });
-  await rerouteAccessibleRoute(request);
-  expect(planAccessibleRouteFromRequest).toHaveBeenLastCalledWith(
-    expect.objectContaining({
-      travelMode: "transit",
-      transitPreference: "rail",
-      origin: { latitude: 25.02, longitude: 121.02 },
-    }),
-  );
-});
+    });
+    beginReroute.mockResolvedValue({ status: "acquired" });
+    planAccessibleRouteFromRequest.mockResolvedValue({
+      ok: false,
+      status: 503,
+      error: "fixture unavailable",
+    });
+    await rerouteAccessibleRoute(request);
+    expect(planAccessibleRouteFromRequest).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        travelMode: "transit",
+        transitPreference,
+        origin: { latitude: 25.02, longitude: 121.02 },
+      }),
+    );
+  },
+);

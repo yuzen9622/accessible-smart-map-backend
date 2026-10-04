@@ -48,6 +48,12 @@ export const agentCases: AgentCase[] = [
         "rail",
       ],
       [
+        "metro",
+        "從台北車站到板橋車站怎麼去？我比較想搭捷運，也可以公車接駁。",
+        "planAccessibleRoute",
+        "metro",
+      ],
+      [
         "clear",
         "從台北車站到板橋車站怎麼去？取消之前的火車偏好，公車火車都可以。",
         "planAccessibleRoute",

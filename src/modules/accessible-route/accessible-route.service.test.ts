@@ -96,6 +96,21 @@ vi.mock("../transit/alert.service", () => ({
   getTransitAlerts: vi.fn().mockResolvedValue({ ok: true, alerts: [] }),
 }));
 
+// Keep reroute orchestration and the request planner real; fake only Redis I/O.
+vi.mock("./navigation-state.repository", async (importActual) => {
+  const actual =
+    await importActual<typeof import("./navigation-state.repository")>();
+  return {
+    ...actual,
+    readNavigationTokenStrict: vi.fn(),
+    beginReroute: vi.fn(),
+    finalizeReroute: vi.fn(),
+    releaseReroute: vi.fn(),
+  };
+});
+
+import { rerouteAccessibleRoute } from "./reroute.service";
+import * as navigationStateRepo from "./navigation-state.repository";
 import {
   attachMetroAlerts,
   attachTransitAlerts,
@@ -3336,7 +3351,7 @@ describe("request and AI transit preference propagation", () => {
       },
     });
   });
-  it.each([undefined, "none", "bus", "rail"] as const)(
+  it.each([undefined, "none", "bus", "rail", "metro"] as const)(
     "uses explicit %s before AI preference, retaining explicit endpoints",
     async (transitPreference) => {
       await planAccessibleRouteFromRequest({
@@ -3360,6 +3375,29 @@ describe("request and AI transit preference propagation", () => {
       );
     },
   );
+  it("uses an AI metro preference", async () => {
+    parser.mockResolvedValue({
+      from: "current_location",
+      to: "台中車站",
+      mode: "wheelchair",
+      departureTime: "now",
+      preferences: {
+        transitPreference: "metro",
+        preferElevator: true,
+        minimizeTransfers: false,
+      },
+    });
+    await planAccessibleRouteFromRequest({
+      destination,
+      userLocation: origin,
+      query: "從這裡去台中，想搭捷運，我坐輪椅",
+    });
+    expect(planOtpRouteDetailed).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ transitPreference: "metro" }),
+    );
+  });
   it("uses AI preference when resolving missing endpoints", async () => {
     parser.mockResolvedValue({
       from: "current_location",
@@ -3387,12 +3425,55 @@ describe("request and AI transit preference propagation", () => {
       }),
     );
   });
-  it("retains resolved preference for navigation and rerouting", async () => {
-    vi.mocked(planOtpRouteDetailed).mockResolvedValue(
+  it.each(["rail", "metro"] as const)(
+    "retains resolved %s preference for navigation and rerouting",
+    async (transitPreference) => {
+      vi.mocked(planOtpRouteDetailed).mockResolvedValue(
+        otpTransitOk([
+          {
+            routeId: "bus",
+            routeName: "307",
+            totalMinutes: 30,
+            transferCount: 0,
+            accessibilityHighlights: [],
+            legs: [
+              {
+                type: "BUS",
+                routeName: "307",
+                subRouteUid: "307",
+                subRouteName: "307",
+                departureStop: "A",
+                arrivalStop: "B",
+                direction: 0,
+                rideMinutes: 20,
+                polyline: [],
+                departureStopA11y: [],
+                arrivalStopA11y: [],
+                waitInfo: { time: null, source: "unavailable" },
+              },
+            ],
+          },
+        ]),
+      );
+      const result = await planAccessibleRouteFromRequest({
+        origin,
+        destination,
+        transitPreference,
+      });
+      expect(result.ok).toBe(true);
+      expect(okData(result).transitPreference).toBe(transitPreference);
+      expect(okData(result)._canonicalRequest?.transitPreference).toBe(
+        transitPreference,
+      );
+    },
+  );
+
+  it("carries metro through the real canonical reroute planner and persists version 2", async () => {
+    vi.mocked(planOtpRouteDetailed).mockImplementation(async () =>
       otpTransitOk([
         {
-          routeId: "bus",
-          routeName: "307",
+          routeId: "reroute-metro-preference",
+          routeName: "307 接駁",
           totalMinutes: 30,
           transferCount: 0,
           accessibilityHighlights: [],
@@ -3406,7 +3487,10 @@ describe("request and AI transit preference propagation", () => {
               arrivalStop: "B",
               direction: 0,
               rideMinutes: 20,
-              polyline: [],
+              polyline: [
+                [121.56, 25.04],
+                [120.68, 24.15],
+              ],
               departureStopA11y: [],
               arrivalStopA11y: [],
               waitInfo: { time: null, source: "unavailable" },
@@ -3415,14 +3499,68 @@ describe("request and AI transit preference propagation", () => {
         },
       ]),
     );
-    const result = await planAccessibleRouteFromRequest({
+    const initial = await planAccessibleRouteFromRequest({
       origin,
       destination,
-      transitPreference: "rail",
+      travelMode: "transit",
+      mode: "normal",
+      transitPreference: "metro",
     });
-    expect(result.ok).toBe(true);
-    expect(okData(result).transitPreference).toBe("rail");
-    expect(okData(result)._canonicalRequest?.transitPreference).toBe("rail");
+    expect(initial.ok).toBe(true);
+    const initialData = okData(initial);
+    const canonical = initialData._canonicalRequest;
+    expect(canonical?.transitPreference).toBe("metro");
+    if (!canonical)
+      throw new Error("Initial plan omitted its canonical request");
+
+    const navigationId = "22222222-2222-4222-8222-222222222222";
+    const currentPosition = { latitude: 25.041, longitude: 121.561 };
+    vi.mocked(navigationStateRepo.readNavigationTokenStrict).mockResolvedValue({
+      status: "ok",
+      value: {
+        schemaVersion: 1,
+        navigationId,
+        routeVersion: 1,
+        route: { ...initialData.routes[0], navigationId, routeVersion: 1 },
+        canonicalRequest: canonical,
+      },
+    });
+    vi.mocked(navigationStateRepo.beginReroute).mockResolvedValue({
+      status: "acquired",
+    });
+    vi.mocked(navigationStateRepo.finalizeReroute).mockResolvedValue("ok");
+    vi.mocked(planOtpRouteDetailed).mockClear();
+
+    const rerouted = await rerouteAccessibleRoute({
+      routeToken: "initial-metro-token",
+      currentPosition,
+      previousRouteVersion: 1,
+      reason: "MANUAL",
+      clientRequestId: "33333333-3333-4333-8333-333333333333",
+    });
+    expect(rerouted.ok).toBe(true);
+    if (!rerouted.ok) throw new Error(rerouted.error);
+    expect(rerouted.data.routeVersion).toBe(2);
+    expect(rerouted.data.navigationId).toBe(navigationId);
+    expect(rerouted.data.instructions.length).toBeGreaterThan(0);
+    expect(rerouted.data.steps.length).toBeGreaterThan(0);
+    expect(planOtpRouteDetailed).toHaveBeenCalledWith(
+      { lat: currentPosition.latitude, lng: currentPosition.longitude },
+      { lat: destination.latitude, lng: destination.longitude },
+      expect.objectContaining({ transitPreference: "metro", mode: "normal" }),
+    );
+    const committedEnvelope = vi.mocked(navigationStateRepo.finalizeReroute)
+      .mock.calls[0]?.[3];
+    expect(committedEnvelope).toMatchObject({
+      routeVersion: 2,
+      canonicalRequest: {
+        transitPreference: "metro",
+        origin: currentPosition,
+        userLocation: currentPosition,
+        destination,
+      },
+    });
+    expect(navigationStateRepo.releaseReroute).not.toHaveBeenCalled();
   });
 });
 

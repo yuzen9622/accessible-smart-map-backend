@@ -1799,6 +1799,25 @@ describe("bindLineAccountCode agent tool", () => {
   });
 });
 
+describe("agent transit preference declarations", () => {
+  it.each(["planAccessibleRoute", "getNavInstructions"])(
+    "%s declares the metro preference enum",
+    async (name) => {
+      const { openAiChatTools } = await import("../../config/ai/tool");
+      const tool = openAiChatTools.find(
+        (t) => t.type === "function" && t.function.name === name,
+      );
+      const props = (tool as any).function.parameters.properties;
+      expect(props.transitPreference.enum).toEqual([
+        "none",
+        "bus",
+        "rail",
+        "metro",
+      ]);
+    },
+  );
+});
+
 describe("agent transit preference dispatch", () => {
   it.each(["planAccessibleRoute", "getNavInstructions"])(
     "forwards preferences through %s",
@@ -1807,7 +1826,7 @@ describe("agent transit preference dispatch", () => {
         ok: false,
         error: "no route in fixture",
       });
-      for (const transitPreference of ["bus", "rail", "none"]) {
+      for (const transitPreference of ["bus", "rail", "metro", "none"]) {
         await executeLocalTool(
           tool,
           {

@@ -108,7 +108,7 @@ export const AccessibleRouteBodySchema = z
     }),
     transitPreference: TransitPreferenceSchema.optional().openapi({
       description:
-        "大眾運輸軟性偏好：none 不指定、bus 偏好公車、rail 偏好鐵路（台鐵／高鐵，不含捷運）。保留其他運具接駁，不保證一定搭到偏好運具；僅 transit 適用。明確值優先於 query 解析，none 可清除偏好。",
+        "大眾運輸軟性偏好：none 不指定、bus 偏好公車、rail 偏好鐵路（台鐵／高鐵，不含捷運）、metro 偏好捷運／輕軌。保留其他運具接駁，不保證一定搭到偏好運具；僅 transit 適用。明確值優先於 query 解析，none 可清除偏好。",
       example: "rail",
     }),
     travelMode: z

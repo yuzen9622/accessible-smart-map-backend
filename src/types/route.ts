@@ -18,8 +18,8 @@ export type AccessibilityMode =
  * Transport mode requested by the client — orthogonal to AccessibilityMode.
  * "transit" plans via OTP (bus/metro/rail); the rest plan via the road router.
  */
-/** Soft transit preference; rail includes TRA/THSR, not metro. */
-export type TransitPreference = "none" | "bus" | "rail";
+/** Soft transit preference; rail is TRA/THSR, metro is metro/light rail. */
+export type TransitPreference = "none" | "bus" | "rail" | "metro";
 
 export type TravelMode = "transit" | "drive" | "motorcycle" | "walk";
 

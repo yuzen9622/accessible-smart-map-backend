@@ -737,17 +737,27 @@ describe("AccessibleRouteSchema BusLeg low-floor enrichment", () => {
 
 describe("transit preference HTTP contract", () => {
   const request = { origin: "台北車站", destination: "板橋車站" };
-  it.each(["none", "bus", "rail"])("accepts %s", (transitPreference) => {
-    expect(
-      AccessibleRouteBodySchema.parse({ ...request, transitPreference })
-        .transitPreference,
-    ).toBe(transitPreference);
-  });
+  it.each(["none", "bus", "rail", "metro"])(
+    "accepts %s",
+    (transitPreference) => {
+      expect(
+        AccessibleRouteBodySchema.parse({ ...request, transitPreference })
+          .transitPreference,
+      ).toBe(transitPreference);
+    },
+  );
   it("preserves omission for AI fallback and rejects unsupported values", () => {
     expect(
       AccessibleRouteBodySchema.parse(request).transitPreference,
     ).toBeUndefined();
-    for (const transitPreference of ["train", "metro", null, ["bus"], 1]) {
+    for (const transitPreference of [
+      "train",
+      "subway",
+      "Metro",
+      null,
+      ["bus"],
+      1,
+    ]) {
       expect(
         AccessibleRouteBodySchema.safeParse({ ...request, transitPreference })
           .success,

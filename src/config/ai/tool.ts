@@ -211,9 +211,9 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           },
           transitPreference: {
             type: "string",
-            enum: ["none", "bus", "rail"],
+            enum: ["none", "bus", "rail", "metro"],
             description:
-              "大眾運輸軟性偏好：bus 偏好公車；rail 偏好鐵路（台鐵／高鐵，不含捷運）；none 不指定或取消偏好。保留其他運具接駁，不能當作只搭某運具的保證。目的地是車站不代表偏好。",
+              "大眾運輸軟性偏好：bus 偏好公車；rail 偏好鐵路（台鐵／高鐵，不含捷運）；metro 偏好捷運／地鐵／輕軌；none 不指定或取消偏好。保留其他運具接駁，不能當作只搭某運具的保證。目的地是車站不代表偏好。",
           },
           departureTime: {
             type: "string",
@@ -671,9 +671,9 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           },
           transitPreference: {
             type: "string",
-            enum: ["none", "bus", "rail"],
+            enum: ["none", "bus", "rail", "metro"],
             description:
-              "大眾運輸軟性偏好：bus 偏好公車；rail 偏好鐵路（台鐵／高鐵，不含捷運）；none 不指定或取消偏好。保留其他運具接駁，不能當作只搭某運具的保證。目的地是車站不代表偏好。",
+              "大眾運輸軟性偏好：bus 偏好公車；rail 偏好鐵路（台鐵／高鐵，不含捷運）；metro 偏好捷運／地鐵／輕軌；none 不指定或取消偏好。保留其他運具接駁，不能當作只搭某運具的保證。目的地是車站不代表偏好。",
           },
           departureTime: {
             type: "string",

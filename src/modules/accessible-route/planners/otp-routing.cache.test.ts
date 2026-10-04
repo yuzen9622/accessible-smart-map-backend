@@ -28,7 +28,7 @@ vi.mock("../../../model/gtfs-trip.model", () => ({
   GtfsTrip: { find: () => ({ select: () => ({ lean: async () => [] }) }) },
 }));
 
-import { planOtpRouteDetailed } from "./otp-routing";
+import { PLAN_QUERY, planOtpRouteDetailed } from "./otp-routing";
 
 const origin = { lat: 25.04123, lng: 121.56512 };
 const destination = { lat: 25.03321, lng: 121.56433 };
@@ -201,6 +201,61 @@ describe("OTP plan result cache", () => {
 });
 
 describe("OTP transit preferences", () => {
+  it("sends the metro weight matrix, isolates its cache entry and shares none with omitted", async () => {
+    for (const transitPreference of [
+      undefined,
+      "none",
+      "metro",
+      "metro",
+      "rail",
+    ] as const) {
+      const result = await planOtpRouteDetailed(origin, destination, {
+        departureTime: departure,
+        transitPreference,
+      });
+      expect(result.status).toBe("ok");
+    }
+    const mainCalls = post.mock.calls.filter(
+      (call) => call[1].query === PLAN_QUERY,
+    );
+    expect(mainCalls).toHaveLength(3);
+    // Bus-only answers lack metro and rail: each preference adds one cached
+    // preferred-only search.
+    expect(post).toHaveBeenCalledTimes(5);
+    const variables = mainCalls.map((call) => call[1].variables);
+    expect(variables[0].modeWeight).toBeUndefined();
+    expect(variables[1].modeWeight).toEqual({
+      BUS: 1.5,
+      TROLLEYBUS: 1.5,
+      RAIL: 1.5,
+      SUBWAY: 1,
+      TRAM: 1,
+      MONORAIL: 1,
+    });
+    expect(variables[2].modeWeight).toMatchObject({ RAIL: 1, SUBWAY: 1.5 });
+    const query = mainCalls[1][1].query;
+    for (const mode of ["BUS", "RAIL", "SUBWAY", "TRAM", "MONORAIL"])
+      expect(query).toContain(`{ mode: ${mode} }`);
+  });
+
+  it.each(["SUBWAY", "TRAM", "MONORAIL"])(
+    "maps OTP %s legs to METRO, not BUS",
+    async (otpMode) => {
+      const itinerary = busItinerary("MR", later);
+      itinerary.legs[0].mode = otpMode;
+      post.mockResolvedValue(okResp([itinerary]));
+      const result = await planOtpRouteDetailed(origin, destination, {
+        departureTime: departure,
+        transitPreference: "metro",
+      });
+      expect(result.status).toBe("ok");
+      expect(result.routes[0].legs[0]).toMatchObject({
+        type: "METRO",
+        rideMinutes: 10,
+      });
+    },
+  );
+
   it("isolates bus and rail cache entries while none shares the default entry", async () => {
     for (const transitPreference of [
       undefined,
@@ -220,8 +275,13 @@ describe("OTP transit preferences", () => {
         rideMinutes: 10,
       });
     }
-    expect(post).toHaveBeenCalledTimes(3);
-    const variables = post.mock.calls.map((call) => call[1].variables);
+    const mainCalls = post.mock.calls.filter(
+      (call) => call[1].query === PLAN_QUERY,
+    );
+    expect(mainCalls).toHaveLength(3);
+    // Only rail lacks its mode in the bus answer, once thanks to the cache.
+    expect(post).toHaveBeenCalledTimes(4);
+    const variables = mainCalls.map((call) => call[1].variables);
     expect(variables[0].modeWeight).toBeUndefined();
     expect(variables[1].modeWeight).toMatchObject({
       BUS: 1,
@@ -234,9 +294,7 @@ describe("OTP transit preferences", () => {
       RAIL: 1,
       SUBWAY: 1.5,
     });
-    expect(post.mock.calls[1][1].query).toContain("modeWeight: $modeWeight");
-    expect(post.mock.calls[1][1].query).toContain("{ mode: BUS }");
-    expect(post.mock.calls[1][1].query).toContain("{ mode: RAIL }");
+    expect(mainCalls[1][1].query).toContain("modeWeight: $modeWeight");
   });
 
   it("keeps the preference and wheelchair constraint across later search attempts", async () => {
@@ -246,15 +304,124 @@ describe("OTP transit preferences", () => {
       transitPreference: "rail",
       mode: "wheelchair",
     });
-    const plans = post.mock.calls.filter((call) =>
-      call[1].query.includes("query Plan("),
+    const plans = post.mock.calls.filter(
+      (call) => call[1].query === PLAN_QUERY,
     );
     expect(plans.length).toBeGreaterThan(2);
+    const preferred = post.mock.calls.filter(
+      (call) =>
+        call[1].query.includes("query Plan(") && call[1].query !== PLAN_QUERY,
+    );
+    expect(preferred).toHaveLength(1);
+    expect(preferred[0][1].variables).toMatchObject({ wheelchair: true });
     for (const call of plans) {
       expect(call[1].variables).toMatchObject({
         wheelchair: true,
         modeWeight: { BUS: 1.5, RAIL: 1 },
       });
+    }
+  });
+});
+
+describe("OTP preferred-mode candidate search", () => {
+  const metroItinerary = () => {
+    const itinerary = busItinerary("BL", later + 60_000);
+    itinerary.legs[0].mode = "SUBWAY";
+    return itinerary;
+  };
+  const isPreferredQuery = (call: unknown[]) =>
+    (call[1] as { query: string }).query !== PLAN_QUERY;
+
+  it("restricts the extra query to WALK plus the preferred modes", async () => {
+    await planOtpRouteDetailed(origin, destination, {
+      departureTime: departure,
+      transitPreference: "metro",
+    });
+    const preferred = post.mock.calls.filter(isPreferredQuery);
+    expect(preferred).toHaveLength(1);
+    const modes = [...preferred[0][1].query.matchAll(/\{ mode: (\w+) \}/g)].map(
+      (m) => m[1],
+    );
+    expect(modes).toEqual(["WALK", "SUBWAY", "TRAM", "MONORAIL"]);
+    expect(preferred[0][1].variables.modeWeight).toBeUndefined();
+    expect(preferred[0][1].variables.numItineraries).toBe(3);
+  });
+
+  it("keeps a preferred route even when the main answer fills the limit", async () => {
+    const buses = Array.from({ length: 15 }, (_, i) =>
+      busItinerary(`R${i}`, later),
+    );
+    post.mockImplementation(async (_url, body: { query: string }) =>
+      body.query === PLAN_QUERY
+        ? okResp(buses)
+        : okResp([metroItinerary(), busItinerary("WALKISH", later)]),
+    );
+    const result = await planOtpRouteDetailed(origin, destination, {
+      departureTime: departure,
+      transitPreference: "metro",
+    });
+    expect(result.status).toBe("ok");
+    expect(result.routes).toHaveLength(15);
+    expect(result.routes[14].legs.map((leg) => leg.type)).toEqual(["METRO"]);
+    expect(result.routes[14]._isFutureScheduled).toBe(false);
+    expect(result.routes.some((r) => r.routeName === "WALKISH")).toBe(false);
+  });
+
+  it("skips the extra query when the main answer already rides the mode", async () => {
+    await planOtpRouteDetailed(origin, destination, {
+      departureTime: departure,
+      transitPreference: "bus",
+    });
+    expect(post.mock.calls.filter(isPreferredQuery)).toHaveLength(0);
+  });
+
+  it("skips the extra query for single-route waypoint segments", async () => {
+    await planOtpRouteDetailed(origin, destination, {
+      departureTime: departure,
+      transitPreference: "metro",
+      limit: 1,
+    });
+    expect(post.mock.calls.filter(isPreferredQuery)).toHaveLength(0);
+  });
+
+  it("fails soft when the extra query errors", async () => {
+    post.mockImplementation(async (_url, body: { query: string }) => {
+      if (body.query !== PLAN_QUERY) throw new Error("boom");
+      return okResp([busItinerary("R1", later)]);
+    });
+    const result = await planOtpRouteDetailed(origin, destination, {
+      departureTime: departure,
+      transitPreference: "metro",
+    });
+    expect(result.status).toBe("ok");
+    expect(result.routes.map((r) => r.routeName)).toEqual(["R1"]);
+  });
+
+  it("answers without the extra query once its budget elapses", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      vi.setSystemTime(departure);
+      post.mockImplementation((_url, body: { query: string }) =>
+        body.query === PLAN_QUERY
+          ? Promise.resolve(
+              okResp([
+                busItinerary("R1", later),
+                busItinerary("R2", later),
+                busItinerary("R3", later),
+              ]),
+            )
+          : new Promise(() => undefined),
+      );
+      const pending = planOtpRouteDetailed(origin, destination, {
+        departureTime: departure,
+        transitPreference: "metro",
+      });
+      await vi.advanceTimersByTimeAsync(4_000);
+      const result = await pending;
+      expect(result.status).toBe("ok");
+      expect(result.routes.map((r) => r.routeName)).toEqual(["R1", "R2", "R3"]);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });
