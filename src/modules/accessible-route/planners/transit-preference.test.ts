@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { AccessibleRoute, TransitPreference } from "../../../types/route";
 import {
+  preferredOtpModes,
+  reservePreferredRoute,
+  routeUsesPreferredMode,
   transitModeWeights,
   transitPreferencePenalty,
 } from "./transit-preference";
@@ -69,5 +72,63 @@ describe("transitPreferencePenalty", () => {
       leg("BUS", 4),
     );
     expect(transitPreferencePenalty(bad, "metro")).toBe(2);
+  });
+});
+
+describe("preferredOtpModes", () => {
+  it("maps each preference to the OTP modes it rides", () => {
+    expect(preferredOtpModes("bus")).toEqual(["BUS", "TROLLEYBUS"]);
+    expect(preferredOtpModes("rail")).toEqual(["RAIL"]);
+    expect(preferredOtpModes("metro")).toEqual(["SUBWAY", "TRAM", "MONORAIL"]);
+  });
+  it.each([undefined, "none"] as const)("is undefined for %s", (p) => {
+    expect(preferredOtpModes(p)).toBeUndefined();
+  });
+});
+
+describe("routeUsesPreferredMode", () => {
+  it("treats TRA and THSR as rail and leaves metro separate", () => {
+    expect(routeUsesPreferredMode(route(leg("THSR")), "rail")).toBe(true);
+    expect(routeUsesPreferredMode(route(leg("TRA")), "rail")).toBe(true);
+    expect(routeUsesPreferredMode(route(leg("METRO")), "rail")).toBe(false);
+    expect(routeUsesPreferredMode(route(leg("METRO")), "metro")).toBe(true);
+    expect(routeUsesPreferredMode(route(leg("BUS")), "none")).toBe(false);
+  });
+});
+
+describe("reservePreferredRoute", () => {
+  const metro = () => route(leg("WALK"), leg("METRO", 39));
+  const bus = () => route(leg("WALK"), leg("BUS", 67));
+
+  it("puts the best eligible preferred route in the last slot", () => {
+    const [m1, m2, m3, b1, b2] = [metro(), metro(), metro(), bus(), bus()];
+    const pool = [m1, m2, m3, b1, b2];
+    expect(reservePreferredRoute(pool.slice(0, 3), pool, 3, "bus")).toEqual([
+      m1,
+      m2,
+      b1,
+    ]);
+    expect(
+      reservePreferredRoute(pool.slice(0, 3), pool, 3, "bus", (r) => r !== b1),
+    ).toEqual([m1, m2, b2]);
+  });
+
+  it("appends instead of replacing when the list is below the limit", () => {
+    const [m1, b1] = [metro(), bus()];
+    expect(reservePreferredRoute([m1], [m1, b1], 3, "bus")).toEqual([m1, b1]);
+  });
+
+  it("leaves the list unchanged when it already rides the mode or nothing qualifies", () => {
+    const [m1, b1, m2] = [metro(), bus(), metro()];
+    const hasBus = [m1, b1];
+    expect(reservePreferredRoute(hasBus, [...hasBus, m2], 2, "bus")).toBe(
+      hasBus,
+    );
+    const noBus = [m1, m2];
+    expect(
+      reservePreferredRoute(noBus, [...noBus, b1], 2, "bus", () => false),
+    ).toBe(noBus);
+    expect(reservePreferredRoute(noBus, [...noBus, b1], 2, "none")).toBe(noBus);
+    expect(reservePreferredRoute([m1], [m1, b1], 1, "bus")).toEqual([m1]);
   });
 });
