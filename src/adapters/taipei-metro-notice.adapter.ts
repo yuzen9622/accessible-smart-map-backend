@@ -2,8 +2,8 @@
  * Taipei Metro accessibility-facility anomaly announcements (data.taipei,
  * 臺北捷運車站無障礙設施異常公告). The resource is a Big5 CSV; it is decoded
  * here and parsed into rows. Cached in-process for 5 minutes, deduplicated
- * across concurrent callers, and fail-soft: any failure keeps the last good
- * rows (or none).
+ * across concurrent callers, and fail-soft: a failed refresh returns no rows
+ * rather than renewing an expired snapshot of elevator outages.
  */
 import {
   parseMetroNoticeCsv,
@@ -30,7 +30,7 @@ async function download(): Promise<MetroNoticeRow[]> {
 /**
  * Fetch the current announcement rows.
  *
- * @returns The parsed rows; the last good rows (or an empty list) on failure.
+ * @returns The fresh parsed rows, or an empty list on refresh failure.
  */
 export async function fetchTaipeiMetroNotices(): Promise<MetroNoticeRow[]> {
   if (cache && Date.now() < cache.expiresAt) return cache.rows;
@@ -42,7 +42,7 @@ export async function fetchTaipeiMetroNotices(): Promise<MetroNoticeRow[]> {
     })
     .catch((err) => {
       console.warn("[metro-notice] fetch failed", err);
-      const rows = cache?.rows ?? [];
+      const rows: MetroNoticeRow[] = [];
       cache = { rows, expiresAt: Date.now() + NOTICE_CACHE_TTL_MS };
       return rows;
     })

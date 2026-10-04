@@ -4,7 +4,7 @@
  * this feed only adds what TDX lacks: whether the case closes the road, its
  * planned end date, and points sampled along the work area. Contractor names
  * and phone numbers in the feed are never read. Cached in-process for 10 minutes and fail-soft: a failed download keeps
- * the last good index (or none).
+ * no expired index. Failed refreshes are retried after the same cache interval.
  */
 
 import { sampleTwd97Lines } from "../utils/twd97";
@@ -162,7 +162,8 @@ async function download(): Promise<Map<string, TaipeiPermitInfo>> {
 /**
  * Current Taipei permit info keyed by base case number.
  *
- * @returns The index; the last good index (or an empty one) on failure.
+ * @returns The fresh index, or an empty one when a refresh fails. A failure
+ * never renews an expired permit snapshot and its old road-closure flags.
  */
 export async function fetchTaipeiPermitIndex(): Promise<
   Map<string, TaipeiPermitInfo>
@@ -176,7 +177,7 @@ export async function fetchTaipeiPermitIndex(): Promise<
     })
     .catch((err) => {
       console.warn("[taipei-construction] fetch failed", err);
-      const index = cache?.index ?? new Map<string, TaipeiPermitInfo>();
+      const index = new Map<string, TaipeiPermitInfo>();
       cache = { index, expiresAt: Date.now() + TODAYWORK_CACHE_TTL_MS };
       return index;
     })
