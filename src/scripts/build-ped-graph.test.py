@@ -3,6 +3,7 @@
 
 import importlib.util
 import json
+import subprocess
 import sys
 import tempfile
 import types
@@ -185,6 +186,113 @@ class GeometryAndDirectionTests(unittest.TestCase):
 
 
 class DemAndSidewalkTests(unittest.TestCase):
+    def test_dem_injection_cli_preserves_tags_and_only_enriches_supported_ground_spans(self):
+        import numpy as np
+        import rasterio
+        import osmium
+        from rasterio.transform import from_origin
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with rasterio.open(root / "terrain.tif", "w", driver="GTiff", height=10, width=20,
+                               count=1, dtype="float32", crs="EPSG:4326",
+                               transform=from_origin(121.55, 25.051, 0.0002, 0.00018)) as dataset:
+                dataset.write(np.tile(np.arange(20, dtype="float32"), (10, 1)), 1)
+            source = root / "test.osm"
+            ways = [(1, 2, '<tag k="incline" v="8%"/>'),
+                    (2, 3, '<tag k="bridge" v="yes"/>'), (3, 2, ''), (4, 3, '')]
+            source.write_text('<osm version="0.6">' +
+                '<node id="1" lat="25.05" lon="121.55005"/>' +
+                '<node id="2" lat="25.05" lon="121.55015"/>' +
+                '<node id="3" lat="25.05" lon="121.55105"/>' + ''.join(
+                    f'<way id="{way_id}"><nd ref="1"/><nd ref="{end}"/>'
+                    f'<tag k="highway" v="footway"/>{tags}</way>' for way_id, end, tags in ways) + '</osm>')
+            output = root / "enriched.osm.pbf"
+            run = subprocess.run([sys.executable, str(SCRIPT.with_name("inject-osm-dem-slopes.py")),
+                                  str(source), str(output), str(root)], capture_output=True, text=True)
+            self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+            class Capture(osmium.SimpleHandler):
+                def __init__(self):
+                    super().__init__()
+                    self.tags = {}
+                def way(self, way):
+                    self.tags[way.id] = dict(way.tags)
+            capture = Capture()
+            capture.apply_file(str(output))
+            self.assertEqual(capture.tags[1]["incline"], "8%")
+            self.assertNotIn("incline", capture.tags[2])
+            self.assertNotIn("incline", capture.tags[3])
+            self.assertGreater(float(capture.tags[4]["incline"].strip('%')), 0)
+            self.assertEqual(capture.tags[4]["source:incline"], "dem")
+
+    def test_projected_dem_samples_in_its_crs_and_rejects_short_spans(self):
+        import numpy as np
+        import rasterio
+        from rasterio.transform import from_origin
+        from rasterio.warp import transform
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "terrain.tif"
+            pixels = np.arange(16, dtype="float32").reshape((4, 4))
+            pixels[0, 1] = -9999
+            pixels[1, 0] = np.nan
+            with rasterio.open(path, "w", driver="GTiff", height=4, width=4,
+                               count=1, dtype="float32", crs="EPSG:3826",
+                               transform=from_origin(300000, 2770000, 20, 20), nodata=-9999) as dataset:
+                dataset.write(pixels, 1)
+            reader = MODULE.DEM_HELPER.DemReader(str(path))
+            try:
+                xs, ys = transform("EPSG:3826", "EPSG:4326", [300010, 300030, 300010, 300070],
+                                   [2769990, 2769990, 2769970, 2769990])
+                points = tuple(zip(xs, ys))
+                self.assertEqual(reader.get_elevation(*points[0]), 0)
+                self.assertIsNone(reader.get_elevation(*points[1]))
+                self.assertIsNone(reader.get_elevation(*points[2]))
+                self.assertAlmostEqual(reader.minimum_slope_span_m(*points[0]), 40, delta=0.3)
+                self.assertIsNone(MODULE.slope_for_coordinates(points[:2], 20, reader))
+                self.assertAlmostEqual(MODULE.slope_for_coordinates((points[0], points[3]), 60, reader), 0.05)
+            finally:
+                reader.close()
+
+    def test_dem_does_not_assign_ground_slope_to_bridges_or_tunnels(self):
+        class Reader:
+            def get_elevation(self, lon, lat):
+                return 100 if lon < 121.5505 else 110
+        for tags in ({"bridge": "yes"}, {"tunnel": "yes"}, {"layer": "1"}):
+            edges = MODULE.build_directed_edges([segment(tags)], dem_reader=Reader(), dem_updated_at="2026-10-04")
+            self.assertTrue(all(e.slope_longitudinal is None for e in edges))
+
+    def test_numeric_osm_incline_survives_without_dem_and_reverses_direction(self):
+        edges = MODULE.build_directed_edges([segment({"bridge": "yes", "incline": "8 %"})])
+        self.assertEqual([e.slope_longitudinal for e in edges], [0.08, -0.08])
+        self.assertTrue(all(e.attr_meta["slope_longitudinal"]["source"] == "osm" for e in edges))
+        self.assertAlmostEqual(MODULE.osm_incline_ratio("45°"), 1)
+        for raw in (None, "up", "down", "NaN%", "90°", "5%;20%"):
+            self.assertIsNone(MODULE.osm_incline_ratio(raw))
+
+    def test_injected_dem_maximum_is_not_treated_as_surveyed_directed_incline(self):
+        edges = MODULE.build_directed_edges([
+            segment({"incline": "12%", "source:incline": "dem"})
+        ])
+        self.assertTrue(all(e.slope_longitudinal is None for e in edges))
+
+    def test_sidewalk_rejects_twd97_and_does_not_promote_contradictory_net_width(self):
+        feature = {"type": "Feature", "properties": {"SW_WTH": 1, "SWW_WTH": 2, "SW_RAMP": "N"},
+                   "geometry": {"type": "Polygon", "coordinates": [[[121.55, 25.05], [121.551, 25.05],
+                                   [121.551, 25.051], [121.55, 25.05]]]}}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sidewalk.geojson"
+            path.write_text(json.dumps({"features": [feature]}))
+            record = MODULE.build_sidewalk_index(path).records[0]
+            self.assertEqual(record.width_m, 1)
+            self.assertIsNone(record.effective_width_m)
+            self.assertIsNone(record.ramp_count)
+            feature["geometry"]["coordinates"] = [[[300000, 2770000], [300020, 2770000],
+                                                      [300020, 2770020], [300000, 2770000]]]
+            path.write_text(json.dumps({"features": [feature]}))
+            with self.assertRaisesRegex(SystemExit, "WGS84"):
+                MODULE.build_sidewalk_index(path)
+
     def test_dem_slope_is_directed_and_uses_endpoint_elevations(self):
         class FakeDemReader:
             def get_elevation(self, lon, lat):
@@ -215,8 +323,8 @@ class DemAndSidewalkTests(unittest.TestCase):
                         [
                             [121.5499, 25.0499],
                             [121.5511, 25.0499],
-                            [121.5511, 25.0501],
-                            [121.5499, 25.0501],
+                            [121.5511, 25.0505],
+                            [121.5499, 25.0505],
                             [121.5499, 25.0499],
                         ]
                     ]
@@ -242,6 +350,17 @@ class DemAndSidewalkTests(unittest.TestCase):
         self.assertEqual(attributes["effective_width_m"], 1.5)
         self.assertEqual(attributes["attr_meta"]["width_m"]["source"], "gov_sidewalk")
         self.assertEqual(attributes["attr_meta"]["sidewalk_direction"]["value"], "2")
+
+    def test_nearby_or_partially_overlapping_sidewalk_does_not_claim_usable_width(self):
+        for ratio in (0.0, 0.1, 0.79):
+            match = MODULE.SidewalkMatch("nearby", 2.0, 1.8, "2", 3,
+                                         "202606", ratio * 100, 5.0, ratio)
+            attrs = MODULE.make_edge_attributes({"highway": "footway", "width": "0.8"},
+                                                 "2026-10-04", match)
+            self.assertEqual(attrs["width_m"], 0.8)
+            self.assertIsNone(attrs["effective_width_m"])
+            self.assertNotIn("sidewalk_ramp_count", attrs["attr_meta"])
+            self.assertFalse(attrs["attr_meta"]["gov_sidewalk_source_id"]["attributes_applied"])
 
     def test_sidewalk_index_repairs_self_intersecting_government_polygons(self):
         feature = {
