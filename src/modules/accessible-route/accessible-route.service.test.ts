@@ -3625,6 +3625,81 @@ it("retains a preferred ninth candidate through enrichment and final ranking", a
   });
   expect(result.ok).toBe(true);
   expect(okData(result).routes[0].routeId).toBe("rail");
+
+  describe("confirmed blocking hazard CSR alternatives", () => {
+    const hazard = {
+      id: "confirmed-block",
+      hazardType: "obstacle" as const,
+      severity: "blocking" as const,
+      coordinates: [121.555, 25.035] as [number, number],
+    };
+    it("requests an alternative and ranks a clear detour ahead of the affected route", async () => {
+      const base = csrWalkPlan();
+      const detour = {
+        ...csrWalkPlan(),
+        polyline: [
+          [121.56, 25.04],
+          [121.56, 25.03],
+          [121.55, 25.03],
+        ] as [number, number][],
+        distanceM: 800,
+        durationS: 600,
+        a11ySegments: [],
+        a11yPoints: [],
+        steps: [],
+      };
+      vi.mocked(findConfirmedHazardsWithin).mockResolvedValue([hazard]);
+      vi.mocked(planCsrWalkRoute)
+        .mockResolvedValueOnce({ status: "ok", plans: [base] })
+        .mockResolvedValueOnce({ status: "ok", plans: [detour] });
+      const res = await planAccessibleRouteFromRequest(walkRequest);
+      expect(res.ok).toBe(true);
+      expect(vi.mocked(planCsrWalkRoute)).toHaveBeenNthCalledWith(
+        2,
+        expect.anything(),
+        {
+          mode: "normal",
+          avoidStairs: false,
+          avoidPoints: [hazard.coordinates],
+        },
+      );
+      expect(okData(res).routes[0].legs[0].polyline).toEqual(detour.polyline);
+      expect(vi.mocked(planOtpWalkDetailed)).not.toHaveBeenCalled();
+    });
+    it("retains the original route and advisory if the alternative cannot be routed", async () => {
+      vi.mocked(findConfirmedHazardsWithin).mockResolvedValue([hazard]);
+      vi.mocked(planCsrWalkRoute)
+        .mockResolvedValueOnce({ status: "ok", plans: [csrWalkPlan()] })
+        .mockResolvedValueOnce({ status: "accessibility_blocked" });
+      const res = await planAccessibleRouteFromRequest(walkRequest);
+      expect(res.ok).toBe(true);
+      expect(okData(res).routes[0].legs[0].polyline).toEqual(
+        csrWalkPlan().polyline,
+      );
+      expect(vi.mocked(planOtpWalkDetailed)).not.toHaveBeenCalled();
+    });
+  });
+
+  it("preserves a known blocking advisory when the expanded-area refresh fails", async () => {
+    const hazard = {
+      id: "known-before-refresh",
+      hazardType: "obstacle" as const,
+      severity: "blocking" as const,
+      coordinates: [121.555, 25.035] as [number, number],
+    };
+    vi.mocked(findConfirmedHazardsWithin)
+      .mockResolvedValueOnce([hazard])
+      .mockRejectedValueOnce(new Error("source unavailable"));
+    vi.mocked(planCsrWalkRoute)
+      .mockResolvedValueOnce({ status: "ok", plans: [csrWalkPlan()] })
+      .mockResolvedValueOnce({ status: "accessibility_blocked" });
+    const result = await planAccessibleRouteFromRequest(walkRequest);
+    expect(result.ok).toBe(true);
+    const route = okData(result).routes[0];
+    expect(route.hazardAdvisory?.onRoute.map((h) => h.id)).toContain(hazard.id);
+    expect(route.hazardAdvisory?.avoided ?? []).toEqual([]);
+    expect(route.degraded).toBe(true);
+  });
   expect(okData(result).routes.some((r) => r.routeId.startsWith("bus-"))).toBe(
     true,
   );

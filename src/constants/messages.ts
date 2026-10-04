@@ -46,6 +46,7 @@ export const ROUTE_WARNING = {
     "大眾運輸/步行路線引擎目前固定以 8.3% 作為輪椅模式上限，無法套用您要求的更嚴格數值；且受限於 OSM 坡度標記稀疏，實際執行範圍有限",
   CSR_SLOPE_LIMIT_NOT_ENFORCED:
     "台北 CSR 無障礙行人圖目前不會依您設定的任意坡度上限篩選路徑；回傳的坡度僅為已選路段的觀測值，您的坡度上限未被實際執行",
+  HAZARD_DATA_UNAVAILABLE: "部分路段的障礙資料暫時無法更新，請留意現場狀況。",
   HAZARD_ON_ROUTE:
     "此路線經過已確認的路況障礙或道路施工封閉（hazardAdvisory.onRoute），請留意或改採其他候選路線",
   HAZARD_ALL_ROUTES_BLOCKED:

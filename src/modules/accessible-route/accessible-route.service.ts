@@ -1095,9 +1095,9 @@ function planWithConfirmedHazards(
 
 /**
  * Query confirmed hazards only for a bounded, fully-matchable candidate area,
- * then apply the pure geometry planner. Any lookup, saturation, or geometry
- * failure returns the original rank untouched: an unavailable check must never
- * manufacture a "clear" or "avoided" route claim.
+ * then apply the pure geometry planner. If a refresh fails, retain previously
+ * observed on-route hazards when supplied; otherwise preserve the base order.
+ * An unavailable check never manufactures a "clear" or "avoided" claim.
  *
  * Exported for focused failure-path tests; production callers use the default
  * hazard-report lookup.
@@ -1105,11 +1105,38 @@ function planWithConfirmedHazards(
 export async function applyConfirmedHazardPlanning(
   routes: AccessibleRoute[],
   lookup: ConfirmedHazardLookup = defaultConfirmedHazardLookup,
+  knownHazards?: ConfirmedHazardInput[],
 ): Promise<HazardRoutePlan> {
   const hazards = await loadConfirmedHazards(routes, lookup);
-  return hazards === undefined
-    ? unappliedHazardPlan(routes)
-    : planWithConfirmedHazards(routes, hazards);
+  if (hazards !== undefined) return planWithConfirmedHazards(routes, hazards);
+  if (knownHazards === undefined) return unappliedHazardPlan(routes);
+  // The expanded-area lookup failed. Keep previously observed on-route risks,
+  // but do not issue a comparative "avoided" claim for an incomplete check.
+  const decorated = routes
+    .map((route) => {
+      const observed = planWithConfirmedHazards([route], knownHazards)
+        .routes[0];
+      return {
+        ...observed,
+        degraded: true,
+        warnings: [
+          ...new Set([
+            ...(observed.warnings ?? []),
+            ROUTE_WARNING.HAZARD_DATA_UNAVAILABLE,
+          ]),
+        ],
+      };
+    })
+    .sort(
+      (a, b) =>
+        (a.hazardAdvisory?.blockingOnRoute ?? 0) -
+        (b.hazardAdvisory?.blockingOnRoute ?? 0),
+    );
+  return {
+    routes: decorated,
+    selectionApplied: false,
+    allCandidatesAffected: false,
+  };
 }
 
 /**
@@ -1669,12 +1696,40 @@ async function planWalkRoutes(
   );
   logCsrWalkOutcome(csrWalk, walkPoints.length - 1, roadMode);
   if (csrWalk.status === "ok") {
+    const candidates = [buildCsrWalkRoute(csrWalk.plans)];
+    let knownHazards: ConfirmedHazardInput[] | undefined;
+    // Generate an alternative before hazard ranking; never mutate the shared
+    // graph or assert that a point observation proves a physical road closure.
+    // Current reports cannot establish conditions for a future departure.
+    if (!departureTime || departureTime.getTime() <= Date.now()) {
+      knownHazards = await loadConfirmedHazards(
+        candidates,
+        defaultConfirmedHazardLookup,
+      );
+      const blocking = knownHazards?.filter(
+        (hazard) =>
+          hazard.severity === "blocking" &&
+          (!hazard.source || hazard.source === "community"),
+      );
+      if (blocking?.length) {
+        const alternative = await planCsrWalkForRequest(
+          walkPoints,
+          roadMode,
+          avoidStairs,
+          blocking.map((hazard) => hazard.coordinates),
+        );
+        if (alternative.status === "ok")
+          candidates.push(buildCsrWalkRoute(alternative.plans));
+      }
+    }
     return {
       ok: true,
       routes: await finalizeDrivingRoutes(
-        [buildCsrWalkRoute(csrWalk.plans)],
+        candidates,
         "walk",
         dest,
+        false,
+        knownHazards,
       ),
       trafficMs: 0,
       routedByEngineWithNoElevationData: false,
@@ -2326,9 +2381,13 @@ function dedupeDrivingRoutes(routes: AccessibleRoute[]): AccessibleRoute[] {
   const seen = new Set<string>();
   const out: AccessibleRoute[] = [];
   for (const r of routes) {
+    // Equal time/distance does not mean equal exposure to a blocking hazard.
+    const walkGeometry = r.legs.every((leg) => leg.type === "WALK")
+      ? JSON.stringify(r.legs.map((leg) => leg.polyline))
+      : "";
     const key = `${Math.round(r.totalMinutes)}|${Math.round(
       driveTotalDistanceM(r) / 50,
-    )}`;
+    )}|${walkGeometry}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(r);
@@ -2397,6 +2456,7 @@ async function finalizeDrivingRoutes(
   travelMode: RoadTravelMode,
   destination: LatLng,
   skipParkingHighlight = false,
+  knownHazards?: ConfirmedHazardInput[],
 ): Promise<AccessibleRoute[]> {
   const baseRanked = dedupeDrivingRoutes(routes).sort(
     (a, b) =>
@@ -2405,10 +2465,13 @@ async function finalizeDrivingRoutes(
   );
   // Road/walk routes bypass the transit finalizer, so run the same confirmed
   // hazard ranking before this pipeline takes its top-three projection.
-  const ranked = (await applyConfirmedHazardPlanning(baseRanked)).routes.slice(
-    0,
-    3,
-  );
+  const ranked = (
+    await applyConfirmedHazardPlanning(
+      baseRanked,
+      defaultConfirmedHazardLookup,
+      knownHazards,
+    )
+  ).routes.slice(0, 3);
   attachWalkA11yDetails(ranked);
   try {
     await attachDrivingA11yHighlights(
@@ -2820,11 +2883,16 @@ async function planCsrWalkForRequest(
   points: LatLng[],
   mode: AccessibilityMode,
   avoidStairs: boolean,
+  avoidPoints?: [number, number][],
 ): Promise<CsrWalkResult> {
   try {
     const { planCsrWalkRoute } =
       await import("./planners/pedestrian-a11y/csr-walk-planner");
-    return await planCsrWalkRoute(points, { mode, avoidStairs });
+    return await planCsrWalkRoute(points, {
+      mode,
+      avoidStairs,
+      ...(avoidPoints?.length ? { avoidPoints } : {}),
+    });
   } catch (error: unknown) {
     return {
       status: "unavailable",

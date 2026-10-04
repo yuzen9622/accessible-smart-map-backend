@@ -55,14 +55,31 @@ const RAMP_EDGE_TABLE_EXISTS_QUERY = `
   SELECT to_regclass('ped_ramp_edge') IS NOT NULL AS table_exists
 `;
 
-const RAMP_POINTS_QUERY = `
+export const RAMP_POINTS_QUERY = `
+  WITH mapped AS NOT MATERIALIZED (
+    SELECT edge_id, objectid
+    FROM ped_ramp_edge
+    WHERE version_id = $1
+  ), physical_edges AS (
+    SELECT edge_id, objectid FROM mapped
+    UNION
+    SELECT reverse.edge_id, mapped.objectid
+    FROM mapped
+    JOIN ped_edge AS forward ON forward.edge_id = mapped.edge_id
+      AND forward.version_id = $1
+    JOIN ped_edge AS reverse ON reverse.version_id = forward.version_id
+      AND reverse.from_node = forward.to_node
+      AND reverse.to_node = forward.from_node
+      AND reverse.source_ref = forward.source_ref
+      AND reverse.edge_type = forward.edge_type
+      AND ST_Equals(reverse.geom, forward.geom)
+  )
   SELECT
     ramp_edge.edge_id::text AS edge_id,
     ST_X(ramp_point.geom) AS lon,
     ST_Y(ramp_point.geom) AS lat
-  FROM ped_ramp_edge AS ramp_edge
+  FROM physical_edges AS ramp_edge
   JOIN ped_ramp_point AS ramp_point ON ramp_point.objectid = ramp_edge.objectid
-  WHERE ramp_edge.version_id = $1
 `;
 
 /**
@@ -117,6 +134,7 @@ const EDGE_PAGE_QUERY = `
     has_ramp,
     source_ref,
     attr_meta->'gov_sidewalk_source_id'->>'value' AS sidewalk_source_id,
+    attr_meta->'gov_sidewalk_source_id'->>'attributes_applied' AS sidewalk_attributes_applied,
     attr_meta->'sidewalk_ramp_count'->>'value' AS sidewalk_ramp_count
   FROM ped_edge
   WHERE version_id = $1 AND edge_id > $2
@@ -154,6 +172,7 @@ const EDGE_PAGE_QUERY_WITH_STREET_NAME = `
     has_ramp,
     source_ref,
     attr_meta->'gov_sidewalk_source_id'->>'value' AS sidewalk_source_id,
+    attr_meta->'gov_sidewalk_source_id'->>'attributes_applied' AS sidewalk_attributes_applied,
     attr_meta->'sidewalk_ramp_count'->>'value' AS sidewalk_ramp_count,
     way_name.name AS street_name
   FROM ped_edge
@@ -207,6 +226,7 @@ interface EdgeRow extends EdgeCountRow {
   has_ramp: unknown;
   source_ref: unknown;
   sidewalk_source_id: unknown;
+  sidewalk_attributes_applied?: unknown;
   sidewalk_ramp_count: unknown;
   street_name?: unknown;
 }
@@ -951,7 +971,10 @@ async function fillEdges(
       }
       storage.edgeFlags[edgeIndex] = flags;
       const sidewalkSourceId = nullableText(
-        row.sidewalk_source_id,
+        row.sidewalk_attributes_applied === "false" ||
+          row.sidewalk_attributes_applied === false
+          ? null
+          : row.sidewalk_source_id,
         "sidewalk_source_id",
       );
       if (sidewalkSourceId === null) {

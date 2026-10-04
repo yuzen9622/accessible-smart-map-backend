@@ -511,3 +511,32 @@ describe("aStar", () => {
     }
   });
 });
+
+describe("request-local hazard exclusions", () => {
+  it("finds a detour without leaking excluded edges into later requests", () => {
+    const graph = graphFromEdges({
+      nodeLon: [121.5, 121.501, 121.502],
+      nodeLat: [25, 25, 25],
+      edges: [
+        { from: 0, to: 2, lengthM: 10 },
+        { from: 0, to: 1, lengthM: 20 },
+        { from: 1, to: 2, lengthM: 20 },
+      ],
+    });
+    expect(
+      Array.from(aStar(graph, 0, 2, wheelchairProfile())!.edgeAttrPath),
+    ).toEqual([0]);
+    expect(
+      Array.from(
+        aStar(graph, 0, 2, wheelchairProfile(), undefined, new Set([0]))!
+          .edgeAttrPath,
+      ),
+    ).toEqual([1, 2]);
+    expect(
+      aStar(graph, 0, 2, wheelchairProfile(), undefined, new Set([0, 1])),
+    ).toBeNull();
+    expect(
+      Array.from(aStar(graph, 0, 2, wheelchairProfile())!.edgeAttrPath),
+    ).toEqual([0]);
+  });
+});
