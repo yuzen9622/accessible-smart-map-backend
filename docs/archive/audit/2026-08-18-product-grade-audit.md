@@ -56,7 +56,7 @@
 | 程式碼規模       | `src/` 非測試 `.ts` 檔 325 個；最大原始檔 2,298 行（`accessible-route.service.ts`）                                          | `find src -name '*.ts' ! -name '*.test.ts'`                        |
 | **typecheck**    | **exit=0**，0 errors（型別檢查全數通過）                                                                                     | `pnpm run typecheck` (`tsc -p tsconfig.typecheck.json --noEmit`)   |
 | **lint**         | **exit=0**，0 errors / **610 warnings**（`no-explicit-any`: 458, `no-non-null-assertion`: 152）                              | `pnpm run lint` (`eslint .`)                                       |
-| **format:check** | **exit=1**，1 個檔案未排版（`docs/specs/AI_AGENT_INTERACTIONS_UPGRADE.md`）                                                  | `pnpm run format:check` (`prettier --check .`)                     |
+| **format:check** | **exit=1**，1 個檔案未排版（`docs/archive/specs/AI_AGENT_INTERACTIONS_UPGRADE.md`）                                                  | `pnpm run format:check` (`prettier --check .`)                     |
 | **lint:arch**    | **exit=0**，`Architecture boundary check passed.`                                                                            | `pnpm run lint:arch` (`node src/scripts/check-architecture.mjs`)   |
 | **Node.js 測試** | **exit=0**，128 個測試檔 / **1,450 passed** / 0 failed / 0 skipped（耗時 12.68s）                                            | `pnpm test` (`vitest run`)                                         |
 | **Python 測試**  | **exit=0**，5 個測試檔 / **123 passed** / 0 failed（耗時 0.35s）                                                             | `pnpm run test:python` (`python3 src/scripts/run-python-tests.py`) |
@@ -262,7 +262,7 @@
 
 | ID       | 發現項目                                                                           | 證據位置                                                                 | 實測指令與結果                               | 修復建議                                               |
 | -------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------ | -------------------------------------------- | ------------------------------------------------------ |
-| **P3-1** | `docs/specs/AI_AGENT_INTERACTIONS_UPGRADE.md` 格式不符 Prettier 規範               | `docs/specs/AI_AGENT_INTERACTIONS_UPGRADE.md:1`                          | `pnpm run format:check` 報告 exit=1          | 執行 `pnpm run format` 重新排版該檔案                  |
+| **P3-1** | `docs/archive/specs/AI_AGENT_INTERACTIONS_UPGRADE.md` 格式不符 Prettier 規範               | `docs/archive/specs/AI_AGENT_INTERACTIONS_UPGRADE.md:1`                          | `pnpm run format:check` 報告 exit=1          | 執行 `pnpm run format` 重新排版該檔案                  |
 | **P3-2** | ESLint 存在 610 處 warnings（458 處 `any`，152 處 `!`），未設定 `--max-warnings=0` | `src/modules/accessible-route/accessible-route.service.ts:530` 等 610 處 | `pnpm run lint` 輸出 610 warnings / 0 errors | 逐一重構型別，並於 CI 加入 `--max-warnings=0` 避免惡化 |
 
 ---
@@ -396,4 +396,4 @@
 
 - `findings.json`（候選發現定義檔）
 - `findings.verified.json`（通過 verify_findings.py 驗證之發現清單，14/14 PASS）
-- `docs/audit/2026-08-18-product-grade-audit.md`（本稽核報告）
+- `docs/archive/audit/2026-08-18-product-grade-audit.md`（本稽核報告）

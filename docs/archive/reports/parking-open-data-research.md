@@ -67,7 +67,7 @@
 
 ### 2.3 TDX「停車資訊」OpenAPI 完整定義（2026-08-13 使用者提供 swagger 後補測）
 
-使用者提供的 swagger：`https://tdx.transportdata.tw/webapi/File/Swagger/V3/945f57da-f29d-4dfd-94ec-c35d9f62be7d`（已存檔為 `docs/reports/tdx-parking-swagger-v1.json`，451KB OpenAPI 3.0）。
+使用者提供的 swagger：`https://tdx.transportdata.tw/webapi/File/Swagger/V3/945f57da-f29d-4dfd-94ec-c35d9f62be7d`（451KB OpenAPI 3.0；本地快照已移除，需要時從該網址重新下載）。
 
 - **server**：`https://tdx.transportdata.tw/api/basic`；版本 **v1-only**（v2 全 404）；City 參數 enum 為英文代碼（Taipei / NewTaipei / …）。
 - **共 74 個端點**，三大家族：

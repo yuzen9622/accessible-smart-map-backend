@@ -3,7 +3,7 @@
 量測日期：2026-08-25
 範圍：**台北市**。離線驗證，未接線到任何 API。
 上位文件：`docs/specs/FUNCTIONAL_SPEC_PEDESTRIAN_A11Y_ROUTER.md` v0.5.0 §12
-實作規格：`docs/specs/IMPL_PEDESTRIAN_A11Y_ROUTER_PHASE0.md` v1.3.0 §7
+實作規格：`docs/archive/specs/IMPL_PEDESTRIAN_A11Y_ROUTER_PHASE0.md` v1.3.0 §7
 
 **可重現指令**：
 
@@ -26,7 +26,7 @@ pnpm bench:ped-router -- --db-url <postgis uri> --out /tmp/ped-phase0-bench.json
 | 0-3 出入口對位     | **通過，§9 成立**              | 台北 375/375（100%，50 m）；`R_station` p95 138.834 m                                              |
 | 0-4 吸附與延遲     | **歷史量測，需重跑**           | 舊投影吸附失敗 1/200（0.5%）；舊 proxy-A\* core p50 1.055 ms／p95 4.278 ms，非目前 production 數字 |
 | 0-5 判定可量測性   | **通過**                       | §11.3 四項條件皆 `measurable=true` 且已量到實際值                                                  |
-| 0-6 政府圖資與 DEM | **已完成**                     | 見 `docs/reports/PED_ROUTER_DATA_SOURCES.md`                                                       |
+| 0-6 政府圖資與 DEM | **已完成**                     | 見 `docs/archive/reports/PED_ROUTER_DATA_SOURCES.md`                                                       |
 
 **Phase 0 整體判定：通過。** 沒有任何一項的實測結果構成收手或縮範圍的理由。
 
@@ -302,7 +302,7 @@ Phase 0 **沒有 API 層**，因此沒有回應契約中的 `degraded` 欄位可
 
 ## 0-6 政府開放圖資與 DEM
 
-已於 2026-08-19 完成，見 **`docs/reports/PED_ROUTER_DATA_SOURCES.md`**。結論已回填至上位規格 §3.7、§3.8、§3.6b。本報告不重做。
+已於 2026-08-19 完成，見 **`docs/archive/reports/PED_ROUTER_DATA_SOURCES.md`**。結論已回填至上位規格 §3.7、§3.8、§3.6b。本報告不重做。
 
 ---
 

@@ -1,6 +1,6 @@
 # 對比實驗報告：行人無障礙引擎 vs OTP
 
-執行日期 2026-08-26 · 方法規格 `docs/specs/IMPL_PED_ROUTER_OTP_COMPARISON.md` v1.1.0（執行前凍結）
+執行日期 2026-08-26 · 方法規格 `docs/archive/specs/IMPL_PED_ROUTER_OTP_COMPARISON.md` v1.1.0（執行前凍結）
 · 原始證據 `/tmp/ped-otp-comparison.json` · 重現指令見 §9
 
 ---

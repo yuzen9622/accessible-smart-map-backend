@@ -1,7 +1,7 @@
 # 資安強化計畫（回應 2026-08-17 產品級稽核 §5）
 
 - 撰寫日期：2026-08-18
-- 依據：`docs/audit/2026-08-17-product-grade-audit.md` §5「資安與隱私」
+- 依據：`docs/archive/audit/2026-08-17-product-grade-audit.md` §5「資安與隱私」
 - 基準 commit：`7c11886`（main）
 - 本計畫的每一條事實都經過**直接探測核實**（4 個唯讀 subagent），與稽核報告不一致處已標註
 

@@ -44,7 +44,7 @@ TDX 資料由各縣市政府／主管機關供數，**交通部只做彙整轉�
 | `v2/Bus/*`、`v2/Metro/*` 等（本專案現役來源）                                                                                             | 正常供數                                                              |
 | OSM Overpass（非 TDX）身障停車格                                                                                                          | nodes 0 / ways 1（近乎為零，非 TDX 問題但同屬「資料不存在」陷阱）     |
 
-> ⚠️ 2026-08-13 修正：初版曾誤判「停車資料全台停供」——實際是 **basic 層縣市端點空、advanced 層 NearBy 空間查詢有資料**（不同 server 供數不同）。教訓：**同一資源在 basic/advanced 層可能供數不同，驗證時兩層都要試**。詳細盤點：`docs/reports/parking-open-data-research.md` §2.0；停車 API 完整欄位定義：`docs/reports/tdx-parking-swagger-v1.json`。
+> ⚠️ 2026-08-13 修正：初版曾誤判「停車資料全台停供」——實際是 **basic 層縣市端點空、advanced 層 NearBy 空間查詢有資料**（不同 server 供數不同）。教訓：**同一資源在 basic/advanced 層可能供數不同，驗證時兩層都要試**。詳細盤點：`docs/archive/reports/parking-open-data-research.md` §2.0。
 
 ### 因應原則
 

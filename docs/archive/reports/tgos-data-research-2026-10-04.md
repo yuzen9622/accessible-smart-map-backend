@@ -17,7 +17,7 @@ TGOS 最有價值的新增用途是門牌／路口定位、既有設施地址校
 | 無障礙廁所 CSV 匯入 | `src/scripts/import-bathrooms.ts` | 新增 POI 時須去重，不能把一般公廁當成無障礙廁所 |
 | 臺北市路緣坡道點匯入 | `src/scripts/import-taipei-ramps.ts`、`taipei-ramps-parse.ts` | 已分辨無障礙斜坡道與汽車斜坡道，並轉換 TWD97；不是全新來源 |
 | 政府人行道面疊合、寬度／淨寬、坡道數與 DEM 輸入 | `src/scripts/build-ped-graph.py` | 已有整合程式，應查實際建圖輸入、覆蓋和品質，不能僅憑程式存在宣稱上線覆蓋完整 |
-| 政府圖資與 20m DTM 既有評估 | `docs/reports/PED_ROUTER_DATA_SOURCES.md` | 2026-08-19 報告已評估 202606 人行道、坡道點與 DTM；舊樣本結果未在本次重跑 |
+| 政府圖資與 20m DTM 既有評估 | `docs/archive/reports/PED_ROUTER_DATA_SOURCES.md` | 2026-08-19 報告已評估 202606 人行道、坡道點與 DTM；舊樣本結果未在本次重跑 |
 
 ## 優先資料與用途
 

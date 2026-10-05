@@ -18,7 +18,7 @@
 
 ## 實際資料驗證
 
-讀取既有 PostGIS，使用 READ ONLY transaction；未修改圖資料。原始彙總見 [baseline](a11y-data-feasibility-baseline-2026-10-04.json)。可重跑 [audit-accessibility-data.sql](../../src/scripts/audit-accessibility-data.sql)（從 repo root 的實際路徑為 `src/scripts/audit-accessibility-data.sql`；需要坡道匯入表）。
+讀取既有 PostGIS，使用 READ ONLY transaction；未修改圖資料。原始彙總見 [baseline](a11y-data-feasibility-baseline-2026-10-04.json)。可重跑 [audit-accessibility-data.sql](../../../src/scripts/audit-accessibility-data.sql)（從 repo root 的實際路徑為 `src/scripts/audit-accessibility-data.sql`；需要坡道匯入表）。
 
 官方來源以 HTTP 實際取得並使用現有 parser 驗證，記錄見 [feeds](a11y-data-feasibility-feeds-2026-10-04.json)：
 
@@ -64,4 +64,4 @@ API 未新增或變更 mount；既有 `POST /api/v1/a11y/accessible-route` 契�
 - [20 公尺 DTM](https://data.gov.tw/dataset/35430)、[新版高程資源](https://data.gov.tw/dataset/178729)
 - [OSM incline 定義](https://wiki.openstreetmap.org/wiki/Key:incline)
 
-TGOS 本身的服務／資料使用範圍另見 [前一份研究](tgos-data-research-2026-10-04.md)。本輪主要使用原資料機關來源，沒有把 TGOS 圖磚誤當成可路由路網。
+TGOS 本身的服務／資料使用範圍另見 [前一份研究](./tgos-data-research-2026-10-04.md)。本輪主要使用原資料機關來源，沒有把 TGOS 圖磚誤當成可路由路網。

@@ -2,7 +2,7 @@
 
 > 日期：2026-06-16 ｜ 量測對象：`otp-data/feed-1.gtfs.zip`（進 graph 的 feed）、`otp-data/taiwan-gtfs.zip`（原始 TDX feed）、MongoDB `accessible_map`
 > 目的：判斷 OTP 引擎層的無障礙旋鈕「有沒有資料可分」，並排定 E5 資料補齊的優先序
-> 關聯：`docs/specs/A11Y_SCORING_REWORK.md`（E4/E5）
+> 關聯：`docs/archive/specs/A11Y_SCORING_REWORK.md`（E4/E5）
 
 ---
 

@@ -3,7 +3,7 @@
 ## Implementation Spec — Pedestrian Accessibility Routing Engine, Phase 0
 
 **版本**：v1.5.0
-**狀態**：**Phase 0 完成（WP-1～WP-7 全部實作並實測）**。驗收報告 `docs/reports/PED_ROUTER_PHASE0.md`
+**狀態**：**Phase 0 完成（WP-1～WP-7 全部實作並實測）**。驗收報告 `docs/archive/reports/PED_ROUTER_PHASE0.md`
 **日期**：2026-08-27
 
 > **2026-08-27 production correctness correction**：室內 proxy coordinate 與 `traversalTime` 成本之間沒有已證明的全圖 lower bound。production search 使用 `h ≡ 0`（Dijkstra-equivalent）；過去 proxy-A\*／投影吸附的 Phase 0 latency 和 snap 數字是歷史資料，**不得當成目前 production algorithm 的效能主張**，必須重跑。
@@ -65,8 +65,8 @@ WP-1 (PostGIS + DDL)
 | ~~WP-3~~ | ~~PostGIS → CSR 記憶體圖 + 空間索引~~       | TypeScript | ✅ **已完成 2026-08-24**（18.13 MB，吸附 0/100 失敗）                                    |
 | ~~WP-4~~ | ~~cost function + A\* + Dijkstra 參考實作~~ | TypeScript | ✅ **已完成 2026-08-24**（A\* vs Dijkstra 50/50 相符，相對誤差 ≤ 1e-9）                  |
 | ~~WP-5~~ | ~~GTFS 室內子圖與 654 出入口對位~~          | Python     | ✅ **已完成 2026-08-25**（台北 375/375 對位，`R_station` p95 138.8 m，§9 成立）          |
-| ~~WP-6~~ | ~~Phase 0 量測與驗收報告~~                  | TypeScript | ✅ **已完成 2026-08-25**，報告 `docs/reports/PED_ROUTER_PHASE0.md`（Phase 0 判定：通過） |
-| ~~WP-7~~ | ~~政府開放圖資與 DEM 評估（驗收項 0-6）~~   | —          | ✅ **已完成 2026-08-19**，報告 `docs/reports/PED_ROUTER_DATA_SOURCES.md`                 |
+| ~~WP-6~~ | ~~Phase 0 量測與驗收報告~~                  | TypeScript | ✅ **已完成 2026-08-25**，報告 `docs/archive/reports/PED_ROUTER_PHASE0.md`（Phase 0 判定：通過） |
+| ~~WP-7~~ | ~~政府開放圖資與 DEM 評估（驗收項 0-6）~~   | —          | ✅ **已完成 2026-08-19**，報告 `docs/archive/reports/PED_ROUTER_DATA_SOURCES.md`                 |
 
 ---
 
@@ -258,7 +258,7 @@ CREATE UNIQUE INDEX ped_graph_version_one_active_idx
 
 ### 3.4b 政府人行道資料的貼附（v1.2.0 新增）
 
-來源：`docs/reports/PED_ROUTER_DATA_SOURCES.md` 已驗證可用。台北市 18,304 筆 **MultiPolygon**（WGS84 / CRS84），`SW_WTH`／`SWW_WTH`／`SW_RAMP` 填答率皆 100%。
+來源：`docs/archive/reports/PED_ROUTER_DATA_SOURCES.md` 已驗證可用。台北市 18,304 筆 **MultiPolygon**（WGS84 / CRS84），`SW_WTH`／`SWW_WTH`／`SW_RAMP` 填答率皆 100%。
 
 **貼附方式必須是 polygon-to-edge overlay，不得用文字對位。**
 
@@ -525,7 +525,7 @@ export function aStar(
 | 檔案                                     | 內容                                     |
 | ---------------------------------------- | ---------------------------------------- |
 | `src/scripts/ped-router-phase0-bench.ts` | 量測腳本                                 |
-| `docs/reports/PED_ROUTER_PHASE0.md`      | 驗收報告（由腳本產生數據、人工撰寫結論） |
+| `docs/archive/reports/PED_ROUTER_PHASE0.md`      | 驗收報告（由腳本產生數據、人工撰寫結論） |
 | `package.json`（修改）                   | 新增 `bench:ped-router`                  |
 
 ### 7.2 必須產出的數字（對應上位規格 §12 的 0-1～0-5）
@@ -561,7 +561,7 @@ export function aStar(
 
 | 檔案                                      | 內容                                                       |
 | ----------------------------------------- | ---------------------------------------------------------- |
-| `docs/reports/PED_ROUTER_DATA_SOURCES.md` | 評估報告                                                   |
+| `docs/archive/reports/PED_ROUTER_DATA_SOURCES.md` | 評估報告                                                   |
 | `src/scripts/eval-gov-sidewalk-data.py`   | 一次性評估腳本（分析用，可留在 scripts 但不接入 pipeline） |
 
 ### 7b.2 要評估的三個來源

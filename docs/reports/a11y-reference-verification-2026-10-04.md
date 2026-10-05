@@ -8,7 +8,7 @@
 
 例如和平東路一段的一筆：Wheelroute width 4.8、官方總寬 4.8、淨寬 2.25。這是欄位內容的交叉證據，不是現地測量。正式[資料平台](https://data.taipei/dataset/detail?id=2b58f15a-dec6-4b9d-91be-4eaccfda5ae7)仍標公分；官網含 m 字串的程式均在註解內，不能據此宣稱主管機關已確認公尺。
 
-**處理決策：保留原始 width、單位 unresolved，不能當作輪椅最小淨寬；也不能把人行道類別的數值推論套用到入口類別。** 詳見[寬度專項報告](a11y-width-verification-2026-10-04.md)及[數值證據](a11y-width-comparison-2026-10-04.json)。
+**處理決策：保留原始 width、單位 unresolved，不能當作輪椅最小淨寬；也不能把人行道類別的數值推論套用到入口類別。** 詳見[寬度專項報告](../archive/reports/a11y-width-verification-2026-10-04.md)及[數值證據](a11y-width-comparison-2026-10-04.json)。
 
 ## 2. 入口：取得官方身分與無障礙標示，並找出圖資料矛盾
 

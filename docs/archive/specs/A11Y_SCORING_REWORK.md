@@ -273,7 +273,7 @@ GraphQL `plan`/`planConnection` 皆無對應 per-request 欄位 ⇒ **無法做 
 
 ### E5 GTFS / OSM 無障礙資料補齊（前置，決定引擎層上限）
 
-**覆蓋率已量測 → 見 `docs/reports/A11Y_DATA_COVERAGE.md`（2026-06-16）。** 重點：
+**覆蓋率已量測 → 見 `docs/archive/reports/A11Y_DATA_COVERAGE.md`（2026-06-16）。** 重點：
 
 - `stops.txt` **整欄無 `wheelchair_boarding`**（連原始 TDX feed 也沒）→ OTP 每站皆 unknown，
   `stop.inaccessibleCost` 永不觸發。

@@ -171,7 +171,7 @@ Todaywork 的承包商聯絡人與手機（`Tc_Ma`、`Tc_Tl`、`Tc_Ma3`、`Tc_Tl
 
 ### 資料源（實測）
 
-- 舊規格書 `FUNCTIONAL_SPEC_AUDIBLE_SIGNAL_ROUTING.md` 寫的 TDX `Accessible/City/{City}/APS`：**v1、v2 用真實 token 打都回 `Resource Not Found`，這個端點不存在**。該規格書的資料源與整合方式（寫於 6 月、還提到已移除的 ORS）一併作廢，以本節為準
+- 舊規格書 `FUNCTIONAL_SPEC_AUDIBLE_SIGNAL_ROUTING.md`（已於 2026-10-05 刪除）寫的 TDX `Accessible/City/{City}/APS`：**v1、v2 用真實 token 打都回 `Resource Not Found`，這個端點不存在**。該規格書的資料源與整合方式（寫於 6 月、還提到已移除的 ORS）一併作廢，以本節為準
 - 改用：臺北市交工處有聲號誌設置位置（data.gov.tw `121423`）
   - 下載：`https://data.taipei/api/dataset/baf32b58-b194-448d-96a0-ba04013d164f/resource/1c18341c-9f6f-4b6b-b17f-8c66b94e39a0/download`
   - **Big5** CSV（原記為 UTF-8，有誤），**191 筆**，欄位：`項次,路口,行政區,號誌編號,WGS84經度座標,WGS84緯度座標`

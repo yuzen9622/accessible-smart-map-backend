@@ -22,24 +22,11 @@
 >
 > **全部 7 片完成。六大不變式現況：1🟢 2🟢 3🟢 4🟢 5🟢 6🟢。**
 
-## 與既有 `docs/reports/ARCHITECTURE.md` 的關係
+## 與舊版 `ARCHITECTURE.md` 的關係
 
-`ARCHITECTURE.md`（v1.1）記錄的是 **歷史重構（Phase 1–8）** 與「路由型別倒置依賴」的深度分析。
-本報告 **不取代** 它，而是補上它未涵蓋的面向（回應契約、魔術常數、邊界驗證、跨層 import），
-並用一套**與技術棧無關的不變式**重新打分。
-
-先做一個重要校正 —— `ARCHITECTURE.md` §4/§6/§7 描述的多數問題**其實已經修好了**，
-但該文件未把這些項目勾掉，容易誤導讀者以為仍待辦：
-
-| ARCHITECTURE.md 提到的待辦                                         | 目前程式碼的實際狀態                                  |
-| ------------------------------------------------------------------ | ----------------------------------------------------- |
-| `config/map.ts`（getCity 呼叫 Google）                             | ✅ 已不存在；併入 `adapters/google.adapter.ts`        |
-| `config/ors.ts`（ORS HTTP client）                                 | ✅ 已移至 `service/ors.service.ts`                    |
-| `config/lib.ts::getCoordinates()`                                  | ✅ 已移除；`lib.ts` 現僅剩純工具函式 + `sendResponse` |
-| `a11y.service.ts` / `transit.service.ts` / `air.service.ts` 不存在 | ✅ 三者皆已建立                                       |
-| 路由領域型別倒置依賴（§9）                                         | ✅ Phase 8 已下沉至 `src/types/route.ts`              |
-
-換句話說：**§7 路線圖的 Phase 1–8 已實質落地**。本報告聚焦於**之後仍未處理、或當時未列入**的結構問題。
+舊的 `docs/reports/ARCHITECTURE.md`（v1.1，記錄 Phase 1–8 歷史重構與路由型別倒置分析）已於 2026-10-05 移除：
+其目錄樹與待辦早已過時，所列問題（`config/map.ts`、`config/ors.ts`、`getCoordinates()`、型別倒置）皆已修掉。
+需要歷史脈絡時請查 git 歷史。本報告是目前唯一的架構現況文件。
 
 ---
 
@@ -77,7 +64,7 @@
 | 證據                                                                  | 問題                                                                                                                                                  |
 | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/config/a11y-scoring.ts:241-712`                                  | 735 行的**無障礙評分引擎**（`scoreRoute`、`routeCost`、`scoreOsmNode`…）是核心領域邏輯，卻放在 `config/`。config 應只有常數與 client 初始化           |
-| `src/modules/accessible-route/accessible-route.service.ts`（1995 行） | 同時是「領域協調器」與超大 god-file；`ARCHITECTURE.md §9` 已修掉型別倒置，但檔案體積與職責仍過載                                                      |
+| `src/modules/accessible-route/accessible-route.service.ts`（1995 行） | 同時是「領域協調器」與超大 god-file；舊 ARCHITECTURE.md §9 已修掉型別倒置，但檔案體積與職責仍過載                                                      |
 | `src/config/lib.ts:34-196`                                            | `normalizeStopName`、`detectBusApiType`、`getRouteDirectionImproved` 等是 transit 領域工具，混在 `lib.ts`（同檔還有 transport 相關的 `sendResponse`） |
 
 ### 不變式 2 — 單向依賴 🟠
@@ -160,7 +147,7 @@ src/service/（11 個檔案 = accessible-route 專屬叢集 + 1 個真．跨切�
 
 **結論**：`src/service/` 名義上是「跨模組共用層」，**實際上只有 `TdxTokenManger` 是跨切面**。其餘 11 個是 `accessible-route` 的領域 planner，住錯地方了。
 
-> 這與 `ARCHITECTURE.md §6`「service/ 其餘不動」的決定**有意見分歧**。當時把 `service/` 當共用層保留；
+> 這與舊 ARCHITECTURE.md §6「service/ 其餘不動」的決定**有意見分歧**。當時把 `service/` 當共用層保留；
 > 但按「模組私有服務應住在模組內」的不變式，且這些檔案只被一個模組使用 —— 把它們收進模組才是乾淨解。
 > 由於型別已於 Phase 8 下沉到 `src/types/route.ts`，搬移**不會**重新產生循環依賴。
 

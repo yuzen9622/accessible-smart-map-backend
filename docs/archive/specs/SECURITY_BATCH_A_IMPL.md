@@ -1,6 +1,6 @@
 # 實作派工：A 批 — AI／LLM 端點分層限流（P0）
 
-**上游計畫**：`docs/specs/SECURITY_HARDENING_PLAN.md` §3（已經過使用者核准與一輪 BLOCKING 審核）。
+**上游計畫**：`docs/archive/specs/SECURITY_HARDENING_PLAN.md` §3（已經過使用者核准與一輪 BLOCKING 審核）。
 本檔是該計畫 **A 批**的實作交辦，範圍只有 §3，其他批次不在本次工作內。
 
 ---
