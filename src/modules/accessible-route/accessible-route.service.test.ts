@@ -3751,7 +3751,12 @@ describe("request and AI transit preference propagation", () => {
 });
 
 it("retains a preferred ninth candidate through enrichment and final ranking", async () => {
-  vi.mocked(getTransitAlerts).mockResolvedValue({ ok: true, alerts: [] });
+  vi.mocked(getTransitAlerts).mockResolvedValue({
+    ok: true,
+    mode: "bus",
+    matchedAt: "2026-08-15T10:00:00Z",
+    alerts: [],
+  });
   const buses = Array.from({ length: 8 }, (_, i) => ({
     routeId: `bus-${i}`,
     routeName: `bus-${i}`,

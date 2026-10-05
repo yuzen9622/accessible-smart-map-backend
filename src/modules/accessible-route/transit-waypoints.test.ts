@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { AccessibleRoute } from "../../types/route";
+import { TaiwanCityEn } from "../../types/transit";
 
 // Mock the OTP planner so we exercise the segment fan-out + concatenation
 // logic in findAccessibleRoutes without a live OTP sidecar.
@@ -346,7 +347,7 @@ it("passes transit preference to every waypoint segment", async () => {
   mockPlan.mockResolvedValue(
     otpTransitOk([walkOnlySegment("segment", 5, Date.now())]),
   );
-  await findAccessibleRoutes(origin, destination, "Taipei", {
+  await findAccessibleRoutes(origin, destination, TaiwanCityEn.Taipei, {
     waypoints: [waypoint],
     transitPreference: "rail",
   });
