@@ -32,6 +32,22 @@ export async function findSessionSignedInAt(
 }
 
 /**
+ * Reads the account fields deletion needs, including the hidden Apple subject.
+ *
+ * @param userId Owner's user id
+ * @returns Email and Apple subject, or null when the user does not exist
+ */
+export async function findAccountForDeletion(
+  userId: string,
+): Promise<{ email: string; appleUserId: string | null } | null> {
+  const user = await User.findById(userId)
+    .select("email +appleUserId")
+    .lean<{ email: string; appleUserId?: string | null }>();
+  if (!user) return null;
+  return { email: user.email, appleUserId: user.appleUserId ?? null };
+}
+
+/**
  * Hard-deletes every record that belongs only to the user: config, auth and
  * password-assistance tokens, LINE link code, emergency contacts, SOS history,
  * push tokens, AI memories and reviews.

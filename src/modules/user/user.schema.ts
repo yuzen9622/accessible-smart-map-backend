@@ -350,6 +350,17 @@ export const UnregisterPushTokenResponseSchema = apiResponse(
 
 export const LogoutResponseSchema = apiResponse().openapi("LogoutResponse");
 
+export const DeleteAccountBodySchema = z
+  .object({
+    appleAuthorizationCode: z.string().min(1).max(4096).optional().openapi({
+      description:
+        "Sign in with Apple 帳號必填：刪除前重新以 Apple 登入時取得的 authorizationCode（單次使用、5 分鐘內有效），後端用它向 Apple 撤銷授權。其他帳號可省略。",
+    }),
+  })
+  .strict()
+  .default({})
+  .openapi("DeleteAccountBody");
+
 export const DeleteAccountResponseSchema = apiResponse().openapi(
   "DeleteAccountResponse",
 );
@@ -972,19 +983,30 @@ registry.registerPath({
     "超過時回 403、`data.reason` 為 `REAUTH_REQUIRED`，App 應請使用者重新登入後再呼叫。" +
     "成功後所有裝置的 access／refresh token 立即失效（Web 會同時清除 refresh cookie）。" +
     "一併刪除：個人設定與無障礙檔案、緊急聯絡人、SOS 紀錄、AI 記憶、推播 token、評論、LINE 綁定碼、驗證信與重設密碼權杖。" +
-    "危險通報不刪除而是匿名化（回報者、確認／否認紀錄與人工審核者改為匿名代號），讓其他使用者仍看得到該處危險。",
+    "危險通報不刪除而是匿名化（回報者、確認／否認紀錄與人工審核者改為匿名代號），讓其他使用者仍看得到該處危險。" +
+    "綁定 Sign in with Apple 的帳號必須帶 `appleAuthorizationCode`，後端會先向 Apple 撤銷授權，成功後才刪除任何資料；" +
+    "缺少時回 403 `APPLE_AUTHORIZATION_REQUIRED`，授權碼無效、過期、已使用或不屬於此帳號回 403 `APPLE_AUTHORIZATION_INVALID`，Apple 暫時無法連線回 503 `APPLE_REVOKE_UNAVAILABLE`（皆未刪除任何資料）。",
   security: [{ bearerAuth: [] }],
+  request: {
+    body: {
+      content: { "application/json": { schema: DeleteAccountBodySchema } },
+      required: false,
+    },
+  },
   responses: {
     200: {
       description: "帳號已刪除",
       content: { "application/json": { schema: DeleteAccountResponseSchema } },
     },
-    400: errorResponse("X-Client 標頭不合法"),
+    400: errorResponse("參數不合法或 X-Client 標頭不合法"),
     401: errorResponse("未提供或已過期的 token"),
     403: errorResponse(
-      "token 無效，或需要重新登入（`data.reason` = `REAUTH_REQUIRED`）",
+      "token 無效，或 `data.reason` 為 `REAUTH_REQUIRED`、`APPLE_AUTHORIZATION_REQUIRED`、`APPLE_AUTHORIZATION_INVALID`",
     ),
     404: errorResponse("帳號不存在"),
     500: errorResponse("伺服器錯誤"),
+    503: errorResponse(
+      "Apple 暫時無法撤銷授權（`data.reason` = `APPLE_REVOKE_UNAVAILABLE`）",
+    ),
   },
 });

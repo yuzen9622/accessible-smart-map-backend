@@ -1,6 +1,20 @@
 import crypto from "crypto";
-import { createRemoteJWKSet, jwtVerify, errors } from "jose";
-import { APPLE_ISSUER, APPLE_JWKS_URL } from "../config/apple";
+import {
+  createRemoteJWKSet,
+  decodeJwt,
+  errors,
+  importPKCS8,
+  jwtVerify,
+  SignJWT,
+} from "jose";
+import {
+  APPLE_CLIENT_SECRET_TTL_SEC,
+  APPLE_ISSUER,
+  APPLE_JWKS_URL,
+  APPLE_REVOKE_URL,
+  APPLE_TOKEN_URL,
+  type AppleSigningConfig,
+} from "../config/apple";
 
 export type AppleIdentity = {
   sub: string;
@@ -129,4 +143,168 @@ export async function verifyAppleIdentityToken(
     emailVerified: toFlag(payload.email_verified),
     isPrivateEmail: toFlag(payload.is_private_email),
   };
+}
+
+/**
+ * Apple REST API 請求失敗。kind 為 "rejected" 表示授權碼無效、過期或已使用（使用者可重試），
+ * "unavailable" 表示網路、Apple 端或本機設定（client secret）問題。
+ */
+export class AppleTokenRequestError extends Error {
+  constructor(
+    public kind: "rejected" | "unavailable",
+    message: string,
+  ) {
+    super(message);
+    this.name = "AppleTokenRequestError";
+  }
+}
+
+const APPLE_REQUEST_TIMEOUT_MS = 10_000;
+
+/**
+ * 以 .p8 私鑰簽出呼叫 Apple REST API 用的 client_secret（ES256 JWT）。
+ *
+ * @param config Apple 簽章設定
+ * @returns 簽好的 client_secret
+ */
+export async function createAppleClientSecret(
+  config: AppleSigningConfig,
+): Promise<string> {
+  const key = await importPKCS8(config.privateKey, "ES256");
+  const now = Math.floor(Date.now() / 1000);
+  return new SignJWT({})
+    .setProtectedHeader({ alg: "ES256", kid: config.keyId })
+    .setIssuer(config.teamId)
+    .setIssuedAt(now)
+    .setExpirationTime(now + APPLE_CLIENT_SECRET_TTL_SEC)
+    .setAudience(APPLE_ISSUER)
+    .setSubject(config.clientId)
+    .sign(key);
+}
+
+async function signClientSecret(config: AppleSigningConfig): Promise<string> {
+  try {
+    return await createAppleClientSecret(config);
+  } catch {
+    throw new AppleTokenRequestError(
+      "unavailable",
+      "Failed to sign Apple client_secret; check APPLE_PRIVATE_KEY",
+    );
+  }
+}
+
+async function postAppleForm(
+  url: string,
+  form: Record<string, string>,
+): Promise<Response> {
+  try {
+    return await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(form),
+      signal: AbortSignal.timeout(APPLE_REQUEST_TIMEOUT_MS),
+    });
+  } catch (error) {
+    throw new AppleTokenRequestError(
+      "unavailable",
+      `Apple request failed: ${error instanceof Error ? error.message : "unknown"}`,
+    );
+  }
+}
+
+async function appleErrorCode(res: Response): Promise<string> {
+  try {
+    const body = (await res.json()) as { error?: unknown };
+    return typeof body.error === "string" ? body.error : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+/**
+ * 以 Sign in with Apple 授權碼向 Apple 換取 token。
+ *
+ * @param code App 端 Sign in with Apple 回傳的 authorizationCode（單次使用、5 分鐘內有效）
+ * @param config Apple 簽章設定
+ * @returns refresh token 與 id_token 內的使用者 sub
+ * @throws {AppleTokenRequestError} rejected：授權碼被 Apple 拒絕；unavailable：其他失敗
+ */
+export async function exchangeAppleAuthorizationCode(
+  code: string,
+  config: AppleSigningConfig,
+): Promise<{ refreshToken: string; sub: string }> {
+  const res = await postAppleForm(APPLE_TOKEN_URL, {
+    client_id: config.clientId,
+    client_secret: await signClientSecret(config),
+    code,
+    grant_type: "authorization_code",
+  });
+
+  if (!res.ok) {
+    const error = await appleErrorCode(res);
+    throw new AppleTokenRequestError(
+      error === "invalid_grant" ? "rejected" : "unavailable",
+      `Apple token exchange failed: ${res.status} ${error}`,
+    );
+  }
+
+  let body: { refresh_token?: unknown; id_token?: unknown };
+  try {
+    body = (await res.json()) as typeof body;
+  } catch {
+    throw new AppleTokenRequestError(
+      "unavailable",
+      "Apple token response is not JSON",
+    );
+  }
+  if (
+    typeof body.refresh_token !== "string" ||
+    typeof body.id_token !== "string"
+  ) {
+    throw new AppleTokenRequestError(
+      "unavailable",
+      "Apple token response is missing refresh_token or id_token",
+    );
+  }
+
+  // The id_token comes straight from Apple's token endpoint over TLS, so its
+  // claims can be read without re-verifying the signature (OIDC Core 3.1.3.7).
+  let sub: unknown;
+  try {
+    sub = decodeJwt(body.id_token).sub;
+  } catch {
+    sub = undefined;
+  }
+  if (typeof sub !== "string" || !sub) {
+    throw new AppleTokenRequestError(
+      "unavailable",
+      "Apple id_token has no sub",
+    );
+  }
+  return { refreshToken: body.refresh_token, sub };
+}
+
+/**
+ * 撤銷使用者的 Apple refresh token，解除 App 與該 Apple 帳號的授權。
+ *
+ * @param refreshToken 要撤銷的 refresh token
+ * @param config Apple 簽章設定
+ * @throws {AppleTokenRequestError} unavailable：Apple 未回 200
+ */
+export async function revokeAppleRefreshToken(
+  refreshToken: string,
+  config: AppleSigningConfig,
+): Promise<void> {
+  const res = await postAppleForm(APPLE_REVOKE_URL, {
+    client_id: config.clientId,
+    client_secret: await signClientSecret(config),
+    token: refreshToken,
+    token_type_hint: "refresh_token",
+  });
+  if (!res.ok) {
+    throw new AppleTokenRequestError(
+      "unavailable",
+      `Apple token revoke failed: ${res.status} ${await appleErrorCode(res)}`,
+    );
+  }
 }
