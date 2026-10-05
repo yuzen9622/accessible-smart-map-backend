@@ -88,6 +88,40 @@ describe("parseStationBody (M3 row validation)", () => {
 });
 
 describe("parseOdBody (M4)", () => {
+  const od = (train: number, origin = 0, destination = 0) => ({
+    DailyTrainInfo: { TrainNo: "123", SuspendedFlag: train },
+    OriginStopTime: { DepartureTime: "08:00", SuspendedFlag: origin },
+    DestinationStopTime: { ArrivalTime: "09:00", SuspendedFlag: destination },
+  });
+
+  it("excludes wholly suspended trains and cancelled boarding/alighting stops", () => {
+    expect(parseOdBody([od(1), od(2, 1, 0), od(2, 0, 1)])).toEqual({
+      ok: true,
+      items: [],
+    });
+  });
+
+  it("keeps partial suspensions when both queried stops operate", () => {
+    const out = parseOdBody([od(2), od(0)]);
+    expect(out.ok && out.items).toHaveLength(2);
+  });
+
+  it("does not guess the usable segment of a partial suspension without stop flags", () => {
+    const row = od(2);
+    delete (row.OriginStopTime as { SuspendedFlag?: number }).SuspendedFlag;
+    expect(parseOdBody([row])).toEqual({ ok: true, items: [] });
+  });
+
+  it("excludes suspended station departures while preserving operating stops", () => {
+    const rows = [
+      { TrainNo: "1", DepartureTime: "08:00", SuspendedFlag: 1 },
+      { TrainNo: "2", DepartureTime: "08:00", SuspendedFlag: 0 },
+    ];
+    const out = parseStationBody(rows);
+    expect(out.ok && out.items.map((t) => t.trainNo)).toEqual(["2"]);
+    expect(parseStationBody(rows.slice(0, 1))).toEqual({ ok: true, items: [] });
+  });
+
   it("marks cross-midnight trains and computes duration (synthetic fixture)", () => {
     const out = parseOdBody(odCrossMidnight as any);
     expect(out.ok).toBe(true);
