@@ -1,4 +1,5 @@
 import { getServiceCoverageConfig } from "../../config/coverage";
+import type { MetroOutageNotice } from "../../utils/metro-notice";
 import type {
   ServiceCoverageBbox,
   ServiceCoverageConfig,
@@ -45,6 +46,7 @@ export function getServiceCoverage(): ServiceCoverageConfig {
 export type A11yPlace = Omit<IA11y, "_id"> & {
   _id?: unknown;
   source: "metro" | "osm" | "campus";
+  outageNotice?: MetroOutageNotice;
   osmId?: string;
   wheelchair?: IOsmA11y["wheelchair"];
   category?: "elevator" | "ramp";
@@ -130,7 +132,11 @@ interface A11yFacilityBase {
  * `schoolName`; bathroom and parking add nothing beyond the base.
  */
 export type A11yFacility =
-  | (A11yFacilityBase & { source: "metro"; exitName: string | null })
+  | (A11yFacilityBase & {
+      source: "metro";
+      exitName: string | null;
+      outageNotice?: MetroOutageNotice;
+    })
   | (A11yFacilityBase & {
       source: "osm";
       osmId: string;

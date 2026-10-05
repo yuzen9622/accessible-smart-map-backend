@@ -207,6 +207,21 @@ export const RoadIncidentItemSchema = z
       lat: z.number().openapi({ example: 25.041 }),
       lng: z.number().openapi({ example: 121.567 }),
     }),
+    locationDescription: z.string().optional().openapi({
+      example: "中正路613號至重慶北路四段177號人行道更新",
+      description: "TDX 提供的文字位置描述",
+    }),
+    points: z
+      .array(z.object({ lat: z.number(), lng: z.number() }))
+      .optional()
+      .openapi({
+        description:
+          "事件範圍上的點：同一事件的不同點，或台北以道管中心施工範圍每 20 公尺取樣（最多 200 點）；沒有範圍資料時省略",
+      }),
+    roadClosed: z.boolean().optional().openapi({
+      description:
+        "台北道管中心今日施工資料標示為道路封閉時為 true，此時 severity 一律為 closure；其他縣市不提供此欄位",
+    }),
     startTime: z.string().optional(),
     endTime: z.string().optional(),
   })

@@ -248,6 +248,7 @@ export function aStar(
   to: number,
   profile: CostProfile,
   fareAccess: FareAccessPolicy = FORBID_FARE_ACCESS,
+  excludedEdges: ReadonlySet<number> = new Set(),
 ): RouteResult | null {
   const normalizedFareAccess = normalizeFareAccessPolicy(fareAccess);
   if (!isValidNode(graph, from) || !isValidNode(graph, to)) {
@@ -310,6 +311,7 @@ export function aStar(
       ) {
         continue;
       }
+      if (excludedEdges.has(attrIdx)) continue;
       const edgeCostM = edgeCost(graph, attrIdx, profile, node, target);
       if (!Number.isFinite(edgeCostM)) {
         continue;

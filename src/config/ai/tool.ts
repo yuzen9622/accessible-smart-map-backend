@@ -1,80 +1,4 @@
-import { type FunctionDeclaration, Type } from "@google/genai";
 import type OpenAI from "openai";
-
-const findGooglePlacesDeclaration: FunctionDeclaration = {
-  name: "findGooglePlaces",
-  description:
-    "使用 Google Maps 搜尋地點。可以用於搜尋附近的設施，也可以搜尋特定地標（如『台北101』、『台南車站』），不受距離限制。",
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      query: {
-        type: Type.STRING,
-        description: "搜尋關鍵字，例如：'附近的咖啡廳' 或 '台中歌劇院'。",
-      },
-      latitude: {
-        type: Type.NUMBER,
-        description: "使用者當前緯度 (選填，用於優化搜尋結果)",
-      },
-      longitude: {
-        type: Type.NUMBER,
-        description: "使用者當前經度 (選填，用於優化搜尋結果)",
-      },
-    },
-    required: ["query"],
-  },
-};
-const findA11yPlacesDeclaration: FunctionDeclaration = {
-  name: "findA11yPlaces",
-  description:
-    "查詢無障礙設施的專用資料庫。當用戶提到「無障礙」、「電梯」、「坡道」等關鍵字時，**務必優先**使用此工具。此工具可以接受經緯度，**也可以直接接受地點名稱**。",
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      query: {
-        type: Type.STRING,
-        description: "地點名稱，例如：'台北車站'、'淡水捷運站'。",
-      },
-      latitude: { type: Type.NUMBER, description: "如果有經緯度則填入" },
-      longitude: { type: Type.NUMBER, description: "如果有經緯度則填入" },
-      range: { type: Type.NUMBER, description: "搜尋範圍，預設200，單位公尺" },
-    },
-    required: ["query"],
-  },
-};
-
-const planRouteDeclaration: FunctionDeclaration = {
-  name: "planRoute",
-  description:
-    "【導航專用】規劃從起點(Origin)到終點(Destination)的交通路線。當用戶的語句結構為「從 A 到 B」、「A 去 B 怎麼走」或包含「導航」、「路線規劃」時，**必須**使用此工具。",
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      origin: {
-        type: Type.STRING,
-        description:
-          "起點。若用戶說「台中車站到...」，則起點為「台中車站」。若說「從這裡」、「目前位置」，填入 'current_location'。",
-      },
-      destination: {
-        type: Type.STRING,
-        description:
-          "終點。若用戶說「...到台中高鐵站」，則終點為「台中高鐵站」。",
-      },
-      travelMode: {
-        type: Type.STRING,
-        enum: ["TRANSIT", "WALKING"],
-        description: "交通方式。預設 'TRANSIT'。",
-      },
-    },
-    required: ["origin", "destination"],
-  },
-};
-
-export {
-  findGooglePlacesDeclaration,
-  findA11yPlacesDeclaration,
-  planRouteDeclaration,
-};
 
 export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
@@ -209,6 +133,12 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
             enum: ["wheelchair", "elderly", "visual_impaired", "normal"],
             description: "無障礙需求模式，預設 'normal'",
           },
+          transitPreference: {
+            type: "string",
+            enum: ["none", "bus", "rail", "metro"],
+            description:
+              "大眾運輸軟性偏好：bus 偏好公車；rail 偏好鐵路（台鐵／高鐵，不含捷運）；metro 偏好捷運／地鐵／輕軌；none 不指定或取消偏好。保留其他運具接駁，不能當作只搭某運具的保證。目的地是車站不代表偏好。",
+          },
           departureTime: {
             type: "string",
             description: "出發時間，ISO8601 字串或 HH:mm；不指定表示現在",
@@ -288,7 +218,9 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           },
           direction: {
             type: "number",
-            description: "行駛方向（0=去程，1=返程）。不確定可省略。",
+            enum: [0, 1, 2, 10, 255],
+            description:
+              "公車方向（0=去程，1=返程，2=迴圈，10=循環線，255=未知）。不確定可省略。",
           },
         },
         required: ["routeName", "stopName"],
@@ -423,7 +355,9 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           },
           direction: {
             type: "number",
-            description: "行駛方向（0=去程，1=返程）。不確定可省略。",
+            enum: [0, 1, 2, 10, 255],
+            description:
+              "公車方向（0=去程，1=返程，2=迴圈，10=循環線，255=未知）。不確定可省略。",
           },
         },
         required: ["routeName"],
@@ -632,8 +566,9 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           },
           direction: {
             type: "number",
-            enum: [0, 1],
-            description: "行駛方向（0=去程，1=返程）",
+            enum: [0, 1, 2, 10, 255],
+            description:
+              "公車方向（0=去程，1=返程，2=迴圈，10=循環線，255=未知）；雙鐵僅適用0/1",
           },
         },
         required: ["mode"],
@@ -662,6 +597,12 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
             type: "string",
             enum: ["wheelchair", "elderly", "visual_impaired", "normal"],
             description: "無障礙需求模式，預設 'normal'",
+          },
+          transitPreference: {
+            type: "string",
+            enum: ["none", "bus", "rail", "metro"],
+            description:
+              "大眾運輸軟性偏好：bus 偏好公車；rail 偏好鐵路（台鐵／高鐵，不含捷運）；metro 偏好捷運／地鐵／輕軌；none 不指定或取消偏好。保留其他運具接駁，不能當作只搭某運具的保證。目的地是車站不代表偏好。",
           },
           departureTime: {
             type: "string",

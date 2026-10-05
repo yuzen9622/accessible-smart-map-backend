@@ -1,18 +1,24 @@
 #!/usr/bin/env bash
 #
 # Phase 16 OTP2 graph build pipeline (spec §5) — cron-driven, weekly:
+#   0. preflight: checkout, disk, Mongo, Docker, Python deps (otp-preflight.sh)
 #   1. fetch the TDX GTFS static feed(s)        (every run)
 #   2. refresh + clip the Taiwan OSM extract    (only when older than 30 days)
+#      + the MOI national 20 m DTM for slopes   (only when upstream changed)
 #   3. gate on gtfs-validator errors            (abort keeps the old graph)
 #   4. stop serving briefly; otp --build --save offline in a temp dir
-#   5. atomic swap of graph.obj + container restart + healthcheck
+#   5. load the candidate on a side port, verify its quality, and only then
+#      swap it in + restart + healthcheck (promote-otp-graph.sh)
 #
 # Required env:
 #   TDX_CLIENT_ID / TDX_CLIENT_SECRET   TDX OAuth2 client credentials
 #   OTP_GTFS_URLS                       space-separated GTFS zip URLs (TDX)
 # Optional env:
 #   OTP_DATA_DIR     (default /var/otp)
+#   OTP_WORK_ROOT    where the build's temp dirs go (default /tmp); point it at
+#                    another disk when the data disk lacks ~5 GiB of headroom
 #   OTP_OSM_PBF_URL  (default Geofabrik Taiwan)
+#   OTP_DEM_DIR      DTM cache (default $OTP_DATA_DIR/dem; ~250 MiB GeoTIFF)
 #   OTP_OSM_BBOX     osmium extract bbox "minLng,minLat,maxLng,maxLat".
 #                    UNSET (default) = no clipping, full Taiwan coverage.
 #                    Taichung-only example: 120.40,23.95,121.05,24.45
@@ -37,15 +43,16 @@ OTP_JAVA_XMX="${OTP_JAVA_XMX:-12g}"
 OTP_IMAGE="opentripplanner/opentripplanner:2.9.0"
 OSM_MAX_AGE_DAYS=30
 
-WORK_DIR="$(mktemp -d /tmp/otp-build.XXXXXX)"
-VALIDATION_DIR="$(mktemp -d /tmp/otp-validation.XXXXXX)"
+OTP_WORK_ROOT="${OTP_WORK_ROOT:-/tmp}"
+WORK_DIR="$(mktemp -d "$OTP_WORK_ROOT/otp-build.XXXXXX")"
+VALIDATION_DIR="$(mktemp -d "$OTP_WORK_ROOT/otp-validation.XXXXXX")"
 # Injection *inputs* (raw upstream bundles that are read, grafted into feed-1 and
 # then thrown away) MUST live outside WORK_DIR: OTP scans its data directory and
 # ingests every *.zip it finds there as a transit feed of its own. A raw bundle
 # left beside feed-1 therefore loads as a full duplicate network — and since those
 # bundles carry no shapes.txt, whichever trip the planner picks from the duplicate
 # renders as station-to-station straight lines.
-AUX_DIR="$(mktemp -d /tmp/otp-aux.XXXXXX)"
+AUX_DIR="$(mktemp -d "$OTP_WORK_ROOT/otp-aux.XXXXXX")"
 log() { echo "[build-otp-graph] $(date '+%F %T') $*"; }
 die() {
   log "FATAL: $*"
@@ -74,10 +81,11 @@ trap cleanup EXIT
 trap 'on_signal 130' INT
 trap 'on_signal 143' TERM
 
-[ -n "${TDX_CLIENT_ID:-}" ] || die "TDX_CLIENT_ID not set"
-[ -n "${TDX_CLIENT_SECRET:-}" ] || die "TDX_CLIENT_SECRET not set"
-[ -n "${OTP_GTFS_URLS:-}" ] || die "OTP_GTFS_URLS not set"
-[ -d "$OTP_DATA_DIR" ] || die "OTP_DATA_DIR $OTP_DATA_DIR does not exist"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# ── 0. Preflight — fail in seconds, not after a 25–50 minute build ──
+OTP_DATA_DIR="$OTP_DATA_DIR" OTP_WORK_ROOT="$OTP_WORK_ROOT" OTP_JAVA_XMX="$OTP_JAVA_XMX" \
+  bash "$SCRIPT_DIR/otp-preflight.sh" || die "preflight failed — nothing was built"
 
 # ── 1. GTFS feeds (TDX OAuth2 client_credentials, same flow as TdxTokenManger) ──
 log "fetching TDX access token"
@@ -88,7 +96,6 @@ TOKEN=$(curl -fsS -X POST \
   python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])") ||
   die "TDX token acquisition failed"
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 i=0
 for url in $OTP_GTFS_URLS; do
   i=$((i + 1))
@@ -135,6 +142,13 @@ if curl -fsSL --compressed -H "Authorization: Bearer $TOKEN" \
 else
   log "WARN: TRA timetable download failed — continuing without TRA legs"
 fi
+
+# Fail before OSM processing / graph build, including when the fail-soft TRA
+# enrichment above could not repair the native feed. Promotion repeats this
+# check against the actual candidate feed and does not rely on a baseline.
+log "checking TRA stop-to-shape alignment"
+python3 "$SCRIPT_DIR/verify-otp-graph.py" --feed-only --feed "$WORK_DIR/feed-1.gtfs.zip" ||
+  die "TRA shape alignment failed — keeping the old graph"
 
 # ── 1b-bis. Official TRTC (Taipei Metro) GTFS injection — must run BEFORE the
 # metro block (1c). TDX's V3 GTFS-static rail endpoint serves an official per-trip
@@ -250,7 +264,6 @@ npx dotenvx run -- ts-node "$SCRIPT_DIR/generate-gtfs-parents.ts" "$WORK_DIR/fee
 # ── 2. OSM extract (monthly refresh, spec §5) ──
 OSM_CACHE="$OTP_DATA_DIR/taiwan-latest.osm.pbf"
 OSM_CLIPPED="$WORK_DIR/taiwan-clipped.osm.pbf"
-OSM_ENRICHED="${OSM_CLIPPED%.osm.pbf}.enriched.osm.pbf"
 OSM_WALK_SAFE="${OSM_CLIPPED%.osm.pbf}.walk-safe.osm.pbf"
 if [ ! -f "$OSM_CACHE" ] || [ -n "$(find "$OSM_CACHE" -mtime +$OSM_MAX_AGE_DAYS 2>/dev/null)" ]; then
   log "refreshing OSM pbf from Geofabrik"
@@ -271,14 +284,14 @@ else
   cp "$OSM_CACHE" "$OSM_CLIPPED"
 fi
 
-# ── 2b. Inject road slopes from DEM GeoTIFFs ──
-log "injecting road slopes from DEM GeoTIFFs..."
-python3 "$SCRIPT_DIR/inject-osm-dem-slopes.py" \
-  "$OSM_CLIPPED" "$OSM_ENRICHED" "${OTP_DEM_DIR:-$OTP_DATA_DIR/dem}" ||
-  log "WARN: DEM slope injection failed — continuing"
-if [ -f "$OSM_ENRICHED" ]; then
-  mv "$OSM_ENRICHED" "$OSM_CLIPPED"
-fi
+# ── 2b. National 20 m DTM for OTP's own elevation module ──
+# OTP derives street slopes only from GeoTIFFs in its build directory (OSM
+# `incline` tags are ignored), and without them wheelchair maxSlope and the
+# slope-aware walk time are inert. The copy into WORK_DIR happens in step 4.
+DEM_DIR="${OTP_DEM_DIR:-$OTP_DATA_DIR/dem}"
+log "refreshing the national 20 m DTM in $DEM_DIR"
+python3 "$SCRIPT_DIR/fetch-otp-dem.py" "$DEM_DIR" ||
+  log "WARN: DTM refresh failed — building with whatever DEM is already in $DEM_DIR"
 
 log "hardening pedestrian access tags for expressways and stairs"
 python3 "$SCRIPT_DIR/deny-foot-on-expressways.py" \
@@ -303,11 +316,36 @@ else
   log "WARN: gtfs-validator not installed — skipping validation gate"
 fi
 
+# Rail/metro calendars only cover the window TDX publishes and the injection
+# steps above are fail-soft, so a feed can validate cleanly yet carry no TRA at
+# all, or end within days. Promoting it would silently decay routing to
+# bus-only; keep the old graph instead (the backend's freshness check alerts).
+for zip in "$WORK_DIR"/feed-*.gtfs.zip; do
+  log "checking rail/metro service window of $(basename "$zip")"
+  python3 "$SCRIPT_DIR/check-feed-service-window.py" "$zip" \
+    --min-days "${OTP_MIN_RAIL_DAYS:-14}" ||
+    die "rail/metro timetables in $(basename "$zip") are missing or end within ${OTP_MIN_RAIL_DAYS:-14} days — keeping old graph"
+done
+
 # ── 4. Brief service interruption: stop OTP for the offline temp-dir build ──
 cp "$OTP_DATA_DIR"/otp-config.json "$OTP_DATA_DIR"/build-config.json \
   "$OTP_DATA_DIR"/router-config.json "$WORK_DIR/" 2>/dev/null ||
   die "OTP config files missing in $OTP_DATA_DIR"
 mv "$OSM_CLIPPED" "$WORK_DIR/taiwan-otp.osm.pbf"
+# Only the staged national DTM: OTP treats every *.tif as elevation, so a stray
+# tile in another CRS left in DEM_DIR would silently corrupt slopes.
+if [ -f "$DEM_DIR/taiwan-dtm-20m.tif" ]; then
+  cp "$DEM_DIR/taiwan-dtm-20m.tif" "$WORK_DIR/"
+  log "staged DEM for elevation: $DEM_DIR/taiwan-dtm-20m.tif"
+else
+  log "WARN: no taiwan-dtm-20m.tif in $DEM_DIR — the graph will carry no elevation, so wheelchair slope limits stay inert"
+fi
+
+# On FAT/exFAT work roots (OTP_WORK_ROOT on a USB disk) macOS writes AppleDouble
+# "._<name>" companions for any file carrying extended attributes, so a
+# "._feed-1.gtfs.zip" appears beside the feed. They hold only metadata; drop
+# them before the scan assertion below (and OTP) sees them as zips.
+find "$WORK_DIR" -name '._*' -type f -delete
 
 # Nothing but the feeds we validated may be visible to the scanner: OTP loads
 # every *.zip in the data directory as its own transit feed, so a stray bundle
@@ -326,8 +364,17 @@ done < <(find "$WORK_DIR" -type f -name '*.zip')
 # directory — mount there and pass flags only, never a path.
 log "building graph (this takes a while; heap ${OTP_JAVA_XMX})"
 # An absent container (fresh machine, or after `docker compose down`) is not an
-# error — there is simply no serving heap to reclaim before the build.
-OTP_WAS_RUNNING="$(docker inspect -f '{{.State.Running}}' otp 2>/dev/null || echo absent)"
+# error — there is simply no serving heap to reclaim before the build. An
+# unresponsive daemon is: treating "no answer" as "absent" once started a 12g
+# build next to a running 12g serve container and took the whole machine down.
+docker info >/dev/null 2>&1 ||
+  die "docker daemon is not responding — refusing to build next to a possibly running otp"
+if docker container inspect otp >/dev/null 2>&1; then
+  OTP_WAS_RUNNING="$(docker container inspect -f '{{.State.Running}}' otp)" ||
+    die "cannot read otp container state — refusing to build"
+else
+  OTP_WAS_RUNNING=absent
+fi
 if [ "$OTP_WAS_RUNNING" = "true" ]; then
   log "stopping otp container for graph build"
   # Claim responsibility BEFORE stopping: `docker stop` takes seconds (graceful
@@ -344,32 +391,10 @@ docker run --rm \
   die "otp --build failed — keeping old graph"
 [ -f "$WORK_DIR/graph.obj" ] || die "build produced no graph.obj — keeping old graph"
 
-# ── 5. Atomic swap + restart + healthcheck before declaring success ──
-log "swapping graph.obj into $OTP_DATA_DIR"
-cp "$WORK_DIR"/feed-*.gtfs.zip "$OTP_DATA_DIR/" 2>/dev/null || true
-cp "$WORK_DIR/taiwan-otp.osm.pbf" "$OTP_DATA_DIR/" 2>/dev/null || true
-[ -f "$OTP_DATA_DIR/graph.obj" ] && cp "$OTP_DATA_DIR/graph.obj" "$OTP_DATA_DIR/graph.obj.prev"
-mv "$WORK_DIR/graph.obj" "$OTP_DATA_DIR/graph.obj.new"
-mv "$OTP_DATA_DIR/graph.obj.new" "$OTP_DATA_DIR/graph.obj"
-
-log "restarting otp container"
-docker compose restart otp || docker restart otp || die "container restart failed"
+# ── 5. Verify the candidate on a side port; promote only if it passes ──
+# The healthcheck alone only proves OTP started — every graph that broke
+# production started fine. See promote-otp-graph.sh / verify-otp-graph.py.
+OTP_DATA_DIR="$OTP_DATA_DIR" bash "$SCRIPT_DIR/promote-otp-graph.sh" "$WORK_DIR" ||
+  die "candidate graph was not promoted — the old graph keeps serving"
 OTP_RESTART_HANDLED=1
-
-log "waiting for healthcheck"
-for attempt in $(seq 1 30); do
-  if curl -fsS "http://localhost:18080/otp/actuators/health" >/dev/null 2>&1; then
-    log "OTP healthy — build complete"
-    rm -f "$OTP_DATA_DIR/graph.obj.prev"
-    exit 0
-  fi
-  sleep 10
-done
-
-# Health never came up: roll back to the previous graph.
-log "healthcheck failed after restart — rolling back to previous graph"
-if [ -f "$OTP_DATA_DIR/graph.obj.prev" ]; then
-  mv "$OTP_DATA_DIR/graph.obj.prev" "$OTP_DATA_DIR/graph.obj"
-  docker compose restart otp || docker restart otp || true
-fi
-die "new graph failed healthcheck (rolled back)"
+log "build complete"

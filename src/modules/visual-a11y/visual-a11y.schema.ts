@@ -40,7 +40,19 @@ const VisualA11yPropertiesSchema = z.object({
 export const VisualA11yItemSchema = z
   .object({
     _id: z.string().openapi({ example: "66a1f2c3e4b5a6d7c8e9f0d4" }),
-    osmNodeId: z.number().openapi({ example: 656416266 }),
+    source: z.enum(["osm", "taipei_tce"]).openapi({
+      example: "taipei_tce",
+      description:
+        "osm＝OpenStreetMap 節點；taipei_tce＝臺北市交通管制工程處有聲號誌設置資料",
+    }),
+    sourceId: z.string().openapi({
+      example: "SKWPX10",
+      description: "來源內的識別碼：OSM 節點 id 或交工處號誌編號",
+    }),
+    osmNodeId: z
+      .number()
+      .optional()
+      .openapi({ example: 656416266, description: "僅 source 為 osm 時存在" }),
     type: z.enum(["audio_signal", "tactile_paving"]),
     location: GeoPointSchema,
     properties: VisualA11yPropertiesSchema,
@@ -78,7 +90,7 @@ registry.registerPath({
   tags: ["VisualA11y"],
   summary: "鄰近視障輔助設施",
   description:
-    "回傳指定座標附近的有聲號誌（audio_signal）與導盲磚（tactile_paving）。",
+    "回傳指定座標附近的有聲號誌（audio_signal）與導盲磚（tactile_paving）。來源含 OSM 與臺北市交工處有聲號誌設置資料（source 欄位區分）。",
   request: { query: VisualA11yNearbyQuerySchema },
   responses: {
     200: {

@@ -4,6 +4,8 @@ import { intentContents, explainContents } from "../../config/ai/contents";
 import type { AccessibilityMode } from "../../types/route";
 import type { RouteIntent, RouteExplanation } from "../../types/ai";
 
+import { TransitPreferenceSchema } from "../../schemas/transit-preference.schema";
+
 const VALID_MODES: AccessibilityMode[] = [
   "wheelchair",
   "elderly",
@@ -55,6 +57,9 @@ export async function parseRouteIntent(
     mode,
     departureTime: parsed.departureTime || "now",
     preferences: {
+      transitPreference:
+        TransitPreferenceSchema.safeParse(parsed.preferences?.transitPreference)
+          .data ?? "none",
       minimizeTransfers: parsed.preferences?.minimizeTransfers ?? false,
       preferElevator:
         parsed.preferences?.preferElevator ?? mode === "wheelchair",

@@ -121,4 +121,6 @@ export interface CsrWalkOptions {
   mode: AccessibilityMode;
   /** Resolved request constraint; omitted callers retain the mode default. */
   avoidStairs?: boolean;
+  /** Confirmed blocking observations for a request-local alternative search. */
+  avoidPoints?: readonly LngLat[];
 }

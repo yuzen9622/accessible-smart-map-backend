@@ -10,6 +10,7 @@ import type {
   AccessibilityMode,
   AccessibleRoute,
   TravelMode,
+  TransitPreference,
   WalkLeg,
   BusLeg,
   MetroLeg,
@@ -26,6 +27,7 @@ import type {
   TaiwanCityEn,
 } from "../../types/transit";
 import type { RouteFailureData } from "./accessible-route.failure";
+import type { TRANSIT_FALLBACK_REASON } from "../../constants/messages";
 
 export type TagWeightMap = Record<string, Record<string, number>>;
 
@@ -87,6 +89,7 @@ export type LatLng = { lat: number; lng: number };
 export type RoadTravelMode = Exclude<TravelMode, "transit">;
 
 export interface FindAccessibleRoutesOptions {
+  transitPreference?: TransitPreference;
   mode?: AccessibilityMode;
   maxTransfers?: 0 | 1 | 2;
   departureTime?: Date;
@@ -94,6 +97,8 @@ export interface FindAccessibleRoutesOptions {
   waypoints?: LatLng[];
   avoidStairs?: boolean;
   requireElevator?: boolean;
+  /** Skip the wide-window and later-service searches (walkable short trips). */
+  skipLaterService?: boolean;
 }
 
 /** Detailed transit planner outcome for callers that must distinguish no route from an unavailable upstream. */
@@ -126,6 +131,7 @@ export interface FindDrivingRoutesOptions {
 }
 
 export interface PlanRouteRequest {
+  transitPreference?: TransitPreference;
   origin?: unknown;
   destination?: unknown;
   query?: string;
@@ -222,14 +228,20 @@ export interface RerouteData {
   replayed: boolean;
 }
 
+export interface TransitFallback {
+  travelMode: "walk";
+  reason: (typeof TRANSIT_FALLBACK_REASON)[keyof typeof TRANSIT_FALLBACK_REASON];
+}
+
 export type PlanRouteResult =
   | {
       ok: true;
       data: {
         origin: { lat: number; lng: number };
         destination: { lat: number; lng: number };
-        city: TaiwanCityEn;
+        city: TaiwanCityEn | null;
         travelMode: TravelMode;
+        transitPreference?: TransitPreference;
         waypoints?: LatLng[];
         routes: AccessibleRoute[];
         intent?: RouteIntent;
@@ -239,6 +251,8 @@ export type PlanRouteResult =
           enforced: boolean;
           note: string;
         };
+        /** Present only when a transit request was answered with walking routes. */
+        fallback?: TransitFallback;
         /** Present only when a ridden metro system currently has alerts; per-leg copies sit on the METRO legs. */
         metroAlerts?: MetroAlertResult[];
         /** Present only when ridden transit legs (bus/metro/tra/thsr) have active alerts. */

@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 
+vi.mock("../../adapters/taipei-metro-notice.adapter", () => ({
+  fetchTaipeiMetroNotices: vi.fn(async () => []),
+}));
 vi.mock("../../config/fetch", () => ({
   tdxFetch: vi.fn().mockResolvedValue({ ok: true, json: async () => [] }),
 }));
@@ -51,6 +54,10 @@ vi.mock("../../model/bus-stop.model", () => ({
       select: () => ({ lean: () => Promise.resolve({ city: "Taipei" }) }),
     }),
   },
+}));
+
+vi.mock("../../adapters/nlsc.adapter", () => ({
+  getNlscAdministrativeArea: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock("../../adapters/google.adapter", async (importActual) => {

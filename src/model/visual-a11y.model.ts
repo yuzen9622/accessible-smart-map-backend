@@ -2,7 +2,14 @@ import { model, Schema } from "mongoose";
 import { IVisualA11y } from "../types";
 
 const visualA11ySchema = new Schema<IVisualA11y>({
-  osmNodeId: { type: Number, required: true },
+  source: {
+    type: String,
+    enum: ["osm", "taipei_tce"],
+    required: true,
+    default: "osm",
+  },
+  sourceId: { type: String, required: true },
+  osmNodeId: { type: Number },
   type: {
     type: String,
     enum: ["audio_signal", "tactile_paving"],
@@ -25,7 +32,7 @@ const visualA11ySchema = new Schema<IVisualA11y>({
 });
 
 visualA11ySchema.index({ location: "2dsphere" });
-visualA11ySchema.index({ osmNodeId: 1, type: 1 }, { unique: true });
+visualA11ySchema.index({ source: 1, sourceId: 1, type: 1 }, { unique: true });
 
 const VisualA11yModel = model<IVisualA11y>("VisualA11y", visualA11ySchema);
 

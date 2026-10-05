@@ -255,6 +255,7 @@ export async function enrichLegIndoor(
       { name: alightName, coords: alightCoords },
       destCoords,
       mode,
+      "egress",
     ),
   ]);
 

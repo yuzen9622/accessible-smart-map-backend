@@ -2,7 +2,8 @@
   "transitServiceStart": "-P1D",
   "transitServiceEnd": "P90D",
   "osmDefaults": {
-    "osmTagMapping": "default"
+    "osmTagMapping": "default",
+    "timeZone": "Asia/Taipei"
   },
   "subwayAccessTime": 2.0,
   "multiThreadElevationCalculations": true

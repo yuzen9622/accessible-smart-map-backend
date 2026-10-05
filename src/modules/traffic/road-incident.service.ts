@@ -1,3 +1,8 @@
+import {
+  fetchTaipeiPermitIndex,
+  permitCaseKey,
+  type TaipeiPermitInfo,
+} from "../../adapters/taipei-construction.adapter";
 import { tdxFetch } from "../../config/fetch";
 import {
   TRAFFIC_FETCH_TIMEOUT_MS,
@@ -116,6 +121,7 @@ export async function getCityRoadIncidents(
           title: r.EventTitle || "即時路況事件",
           description: r.Description,
           roadName: r.Location?.RoadName,
+          locationDescription: r.Location?.Other,
           location: loc,
           startTime: r.EffectiveTime,
           endTime: r.ExpireTime,
@@ -130,6 +136,88 @@ export async function getCityRoadIncidents(
       return [];
     }
   });
+}
+
+const PERMIT_ENRICHED_CITY = "Taipei";
+
+/**
+ * Merge TDX rows that share an EventID — TDX repeats one event once per point
+ * sampled along its extent — into one incident whose `points` keeps them all.
+ * Rows without a real EventID are kept as-is.
+ *
+ * @param rows The normalized rows of one city.
+ * @returns One incident per event, in first-seen order.
+ */
+export function mergeIncidentRows(
+  rows: readonly RawRoadIncident[],
+): RawRoadIncident[] {
+  const merged = new Map<string, RawRoadIncident>();
+  const out: RawRoadIncident[] = [];
+  for (const row of rows) {
+    const prev = merged.get(row.incidentId);
+    if (!prev) {
+      const copy = { ...row };
+      merged.set(row.incidentId, copy);
+      out.push(copy);
+      continue;
+    }
+    const points = prev.points ?? [prev.location];
+    if (
+      !points.some(
+        (p) => p.lat === row.location.lat && p.lng === row.location.lng,
+      )
+    ) {
+      points.push(row.location);
+    }
+    prev.points = points;
+  }
+  for (const incident of out) {
+    if (incident.points && incident.points.length < 2) delete incident.points;
+  }
+  return out;
+}
+
+/**
+ * Apply the Taipei permit feed to TDX events: closure flag, and when TDX has
+ * none, the planned end of the case (end of that day, Taipei time) and points
+ * sampled along the work area.
+ *
+ * @param rows The merged Taipei rows.
+ * @param permits Permit info keyed by base case number.
+ * @returns The rows with permit fields applied.
+ */
+export function applyTaipeiPermits(
+  rows: readonly RawRoadIncident[],
+  permits: ReadonlyMap<string, TaipeiPermitInfo>,
+): RawRoadIncident[] {
+  if (!permits.size) return [...rows];
+  return rows.map((row) => {
+    const caseNo = row.incidentId.split("-")[2];
+    const permit = caseNo ? permits.get(permitCaseKey(caseNo)) : undefined;
+    if (!permit) return row;
+    return {
+      ...row,
+      ...(permit.roadClosed ? { roadClosed: true } : {}),
+      ...(!row.points && permit.points ? { points: permit.points } : {}),
+      ...(!row.endTime && permit.endDate
+        ? { endTime: `${permit.endDate}T23:59:59+08:00` }
+        : {}),
+    };
+  });
+}
+
+function incidentInBbox(raw: RawRoadIncident, bbox: Bbox): boolean {
+  const [minLng, minLat, maxLng, maxLat] = bbox;
+  return (raw.points ?? [raw.location]).some(
+    ({ lat, lng }) =>
+      lng >= minLng && lng <= maxLng && lat >= minLat && lat <= maxLat,
+  );
+}
+
+async function cityIncidents(city: string): Promise<RawRoadIncident[]> {
+  const rows = mergeIncidentRows(await getCityRoadIncidents(city));
+  if (city !== PERMIT_ENRICHED_CITY || !rows.length) return rows;
+  return applyTaipeiPermits(rows, await fetchTaipeiPermitIndex());
 }
 
 export interface ActiveIncidentsOptions {
@@ -155,7 +243,7 @@ export async function getActiveRoadIncidents(
   }
 
   const rawArrays = await Promise.all(
-    targetCities.map((c) => getCityRoadIncidents(c)),
+    targetCities.map((c) => cityIncidents(c)),
   );
 
   const allRaw = rawArrays.flat();
@@ -177,15 +265,9 @@ export async function getActiveRoadIncidents(
       }
     }
 
-    if (bbox) {
-      const [minLng, minLat, maxLng, maxLat] = bbox;
-      const { lat, lng } = raw.location;
-      if (lng < minLng || lng > maxLng || lat < minLat || lat > maxLat) {
-        continue;
-      }
-    }
+    if (bbox && !incidentInBbox(raw, bbox)) continue;
 
-    const severity = classifyIncident(raw);
+    const severity = raw.roadClosed ? "closure" : classifyIncident(raw);
 
     active.push({
       ...raw,

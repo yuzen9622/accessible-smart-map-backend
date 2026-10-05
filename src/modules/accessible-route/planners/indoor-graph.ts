@@ -363,16 +363,24 @@ export function selectNearestEntrance(
  * @returns True when the station has at least one elevator pathway.
  */
 export async function stationHasElevator(stationId: string): Promise<boolean> {
+  return (await getStationElevatorSnapshot(stationId)).hasElevator;
+}
+
+/** Reuse a successful node lookup only within one station-access resolution. */
+async function getStationElevatorSnapshot(
+  stationId: string,
+): Promise<{ hasElevator: boolean; nodeIds?: Set<string> }> {
   try {
-    const nodeIds = [...(await getStationNodeIds(stationId))];
-    if (!nodeIds.length) return false;
+    const nodeIds = await getStationNodeIds(stationId);
+    if (!nodeIds.size) return { hasElevator: false, nodeIds };
     const count = await GtfsPathway.countDocuments({
-      fromStopId: { $in: nodeIds },
+      fromStopId: { $in: [...nodeIds] },
       pathwayMode: 5,
     });
-    return count > 0;
+    return { hasElevator: count > 0, nodeIds };
   } catch {
-    return false;
+    // Do not retain failed lookups: path resolution still gets its original retry.
+    return { hasElevator: false };
   }
 }
 
@@ -388,26 +396,28 @@ function parseExitNumber(name: string): string {
 /**
  * Resolve indoor access for a station from the routing node's name + coords.
  * Picks the entrance nearest the user, then the shortest mode-appropriate path
- * to any platform. Never throws — any failure degrades to null.
+ * to/from any platform in the requested direction. Never throws — any failure degrades to null.
  *
  * @param station The routing station with name and [lng, lat] coords.
  * @param userCoords The user's [lng, lat] coordinates.
  * @param mode The accessibility mode for traversal constraints.
+ * @param direction Whether the traveller is entering or leaving the station.
  * @returns The resolved station access, or null when the feed has no indoor graph for the station (caller should fall back to the TRTC A11y collection / station-centroid walk).
  */
 export async function getStationAccess(
   station: { name: string; coords: [number, number] },
   userCoords: [number, number],
   mode: AccessibilityMode = "wheelchair",
+  direction: "ingress" | "egress" = "ingress",
 ): Promise<StationAccess | null> {
   try {
     const indoor = await findIndoorStation(station.name, station.coords);
     if (!indoor) return null;
 
-    const [entrances, platforms, hasElevator] = await Promise.all([
+    const [entrances, platforms, elevator] = await Promise.all([
       getStationEntrances(indoor.stationId),
       getStationPlatforms(indoor.stationId),
-      stationHasElevator(indoor.stationId),
+      getStationElevatorSnapshot(indoor.stationId),
     ]);
 
     const toEntrance = (e: IGtfsStop) => ({
@@ -422,24 +432,28 @@ export async function getStationAccess(
       stationId: indoor.stationId,
       stationName: indoor.stopName,
       entrance: nearest ? toEntrance(nearest) : null,
-      hasElevator,
+      hasElevator: elevator.hasElevator,
       stepFree: null,
       usesElevator: false,
     };
 
     if (!nearest || !platforms.length) return base;
 
-    const allowed = await getStationNodeIds(indoor.stationId);
+    const allowed =
+      elevator.nodeIds ?? (await getStationNodeIds(indoor.stationId));
     const adj = await buildAdjacency(allowed, {
       mode,
       excludePathwayModes: mode === "wheelchair" ? [2] : [],
       preferPathwayModes: mode === "wheelchair" ? [5] : [],
     });
 
-    const bestPathFrom = (entranceId: string): IndoorPath | null => {
+    const bestAccessPath = (entranceId: string): IndoorPath | null => {
       let best: IndoorPath | null = null;
       for (const plat of platforms) {
-        const path = dijkstraPath(adj, entranceId, plat.stopId);
+        const path =
+          direction === "egress"
+            ? dijkstraPath(adj, plat.stopId, entranceId)
+            : dijkstraPath(adj, entranceId, plat.stopId);
         if (path && (!best || path.totalSeconds < best.totalSeconds))
           best = path;
       }
@@ -458,7 +472,7 @@ export async function getStationAccess(
     let chosen: IGtfsStop | null = null;
     let chosenPath: IndoorPath | null = null;
     for (const e of entrancesByDistance) {
-      const path = bestPathFrom(e.stopId);
+      const path = bestAccessPath(e.stopId);
       if (path) {
         chosen = e;
         chosenPath = path;

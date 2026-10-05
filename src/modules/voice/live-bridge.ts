@@ -28,6 +28,10 @@ import {
   storeNavigationSnapshot,
 } from "../accessible-route/navigation-state.repository";
 import { getMemorySettings, loadMemories } from "../ai/memory.service";
+import {
+  summarizeToolResult,
+  type PriorTurn,
+} from "../agent/conversation-context";
 import { getTransitAlerts } from "../transit/alert.service";
 import { onAlertSnapshotUpdate } from "../transit/alert.store";
 import { keyRelevantToContext } from "../transit/alert.gateway";
@@ -158,6 +162,8 @@ export interface LiveBridgeOptions {
   ws: WebSocket;
   userId: string;
   userLocation?: { latitude: number; longitude: number };
+  /** Earlier turns of the shared conversation (text → voice switch). */
+  history?: PriorTurn[];
 }
 
 export interface LiveBridge {
@@ -203,7 +209,7 @@ function summarizeError(message?: string): string {
 export async function createLiveBridge(
   options: LiveBridgeOptions,
 ): Promise<LiveBridge> {
-  const { ws, userId, userLocation } = options;
+  const { ws, userId, userLocation, history } = options;
   let session: Session | null = null;
   let voiceState: VoiceState = "connecting";
   let memoryEnabled = false;
@@ -910,6 +916,7 @@ export async function createLiveBridge(
         durationMs,
         result: toolResult,
         args: call.args ?? {},
+        summary: ok ? summarizeToolResult(toolResult) : "",
       });
       functionResponses.push({ id: call.id, name, response });
     }
@@ -1069,7 +1076,10 @@ export async function createLiveBridge(
         inputAudioTranscription: {},
         outputAudioTranscription: {},
         systemInstruction: withCurrentDate(
-          buildVoiceSystemPrompt(userLocation, memories, { memoryEnabled }),
+          buildVoiceSystemPrompt(userLocation, memories, {
+            memoryEnabled,
+            history,
+          }),
         ),
         tools: [
           ...buildGeminiTools(userId, memoryEnabled),

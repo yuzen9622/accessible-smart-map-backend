@@ -1,5 +1,10 @@
-import { findNearestStopCity } from "./accessible-route.repository";
-import { getCity, getCoordinates } from "../../adapters/google.adapter";
+import { getCoordinates } from "../../adapters/google.adapter";
+import { resolveCity } from "../geography/city.service";
+import {
+  reservePreferredRoute,
+  transitPreferencePenalty,
+} from "./planners/transit-preference";
+import type { TransitPreference } from "../../types/route";
 import { parseRouteIntent } from "./route-intent.port";
 import { getA11yProfile } from "../user/user.service";
 import type { RouteIntent } from "../../types/ai";
@@ -9,10 +14,14 @@ import type {
 } from "./planners/pedestrian-a11y/csr-walk.types";
 import { ResponseCode } from "../../types/code";
 import { getServiceCoverageConfig } from "../../config/coverage";
+import { isWithinPedGraphCoverage } from "../../config/ped-graph";
+import { peekPedGraphSnapshot } from "./planners/pedestrian-a11y/graph-runtime";
+import { nearestOutdoorPoint } from "./planners/pedestrian-a11y/spatial-index";
 import {
   ERROR_MESSAGE,
   ROUTE_REASON,
   ROUTE_WARNING,
+  TRANSIT_FALLBACK_REASON,
 } from "../../constants/messages";
 import type {
   A11yConstraints,
@@ -24,6 +33,7 @@ import type {
   PlanRouteRequest,
   PlanRouteResult,
   RoadTravelMode,
+  TransitFallback,
 } from "./accessible-route.types";
 export type {
   FindAccessibleRoutesOptions,
@@ -35,7 +45,10 @@ export type {
 import type { IOsmA11y } from "../../types";
 import type { TaiwanCityEn } from "../../types/transit";
 import { slimRoutes, compactRoutes } from "./facility-slim";
+import { slimRouteGeometry } from "./geometry-slim";
 import { rerankByLowFloor } from "./low-floor-rerank";
+import { demoteElevatorNoticeRoutes } from "./elevator-notice-rerank";
+import { matchAudioSignals, paddedBbox } from "./planners/audio-signals";
 import {
   scoreRoute,
   routeCost,
@@ -57,7 +70,7 @@ import type {
   MetroAlert,
   MetroAlertResult,
 } from "../../types/transit";
-import { haversineMeters } from "../../utils/geo";
+import { haversineMeters, pathLengthMeters } from "../../utils/geo";
 import { attachRouteTokens } from "./route-token.service";
 import { normalizeWalkLegSteps } from "../../utils/nav-instructions-engine";
 import {
@@ -66,6 +79,7 @@ import {
 } from "./route-schedule";
 import {
   buildHazardQueryArea,
+  pointToSegmentDistanceM,
   planConfirmedHazardRoutes,
   type ConfirmedHazardInput,
   type HazardRoutePlan,
@@ -100,6 +114,14 @@ export type {
 /** Search radius for the destination disabled-parking arrival anchor. */
 const PARKING_ARRIVAL_RADIUS_M = 200;
 const MAX_WALK_SEGMENT_CONCURRENCY = 4;
+/** Straight-line ceiling under which a transit request may be answered by walking. */
+const TRANSIT_WALK_FALLBACK_MAX_M = 1_500;
+/** How far a transit endpoint may move to reach a street-level walkway. */
+const STREET_ANCHOR_TOLERANCE_M = 30;
+/** How long a walkable trip waits for transit before answering with walking. */
+const WALKABLE_TRANSIT_BUDGET_MS = Number(
+  process.env.WALKABLE_TRANSIT_BUDGET_MS ?? 5_000,
+);
 
 /**
  * Limit concurrent tasks without changing their result order.
@@ -125,9 +147,23 @@ function createLimiter(limit: number) {
   };
 }
 
+function audioSignalNodes(leg: WalkLeg): IOsmA11y[] {
+  return (leg.a11yPoints ?? [])
+    .filter((p) => p.type === "audio_signal")
+    .map((p) => ({
+      osmId: `audio_signal:${p.location[0]},${p.location[1]}`,
+      ...(p.name ? { name: p.name } : {}),
+      category: "wheelchair_accessible",
+      tags: { "traffic_signals:sound": "yes" },
+      location: { type: "Point", coordinates: p.location },
+      importedAt: new Date(0),
+    }));
+}
+
 function collectRouteFacilities(r: AccessibleRoute): IOsmA11y[] {
   return r.legs.flatMap((leg) => {
-    if (leg.type === "WALK") return leg.a11yFacilities;
+    if (leg.type === "WALK")
+      return [...leg.a11yFacilities, ...audioSignalNodes(leg)];
     if (leg.type === "BUS")
       return [...leg.departureStopA11y, ...leg.arrivalStopA11y];
     if (leg.type === "METRO")
@@ -251,6 +287,7 @@ export function scoreAndRank(
   routes: AccessibleRoute[],
   mode: AccessibilityMode = "normal",
   env?: EnvConditions,
+  transitPreference?: TransitPreference,
 ): AccessibleRoute[] {
   const maxTime = Math.max(...routes.map((r) => r.totalMinutes), 1);
   const minTime = Math.min(...routes.map((r) => r.totalMinutes), maxTime);
@@ -287,13 +324,14 @@ export function scoreAndRank(
       });
       return {
         route: r,
-        cost: routeCost(
-          r.totalMinutes,
-          r.transferCount,
-          result.totalScore,
-          mode,
-          walkDistanceM,
-        ),
+        cost:
+          routeCost(
+            r.totalMinutes,
+            r.transferCount,
+            result.totalScore,
+            mode,
+            walkDistanceM,
+          ) + transitPreferencePenalty(r, transitPreference),
       };
     })
     .sort((a, b) => a.cost - b.cost)
@@ -314,16 +352,18 @@ export function scoreAndRank(
 function prerankByProxy(
   routes: AccessibleRoute[],
   mode: AccessibilityMode,
+  transitPreference?: TransitPreference,
 ): AccessibleRoute[] {
   return routes
     .map((r) => ({
       route: r,
-      cost: prerankCost(
-        r.totalMinutes,
-        r.transferCount,
-        totalWalkDistanceM(r),
-        mode,
-      ),
+      cost:
+        prerankCost(
+          r.totalMinutes,
+          r.transferCount,
+          totalWalkDistanceM(r),
+          mode,
+        ) + transitPreferencePenalty(r, transitPreference),
     }))
     .sort((a, b) => a.cost - b.cost)
     .map((s) => s.route);
@@ -897,6 +937,153 @@ async function loadConfirmedHazards(
   }
 }
 
+/**
+ * Attach audible pedestrian signals to WALK legs as `a11yPoints`, so scoring
+ * and the accessibility summary see them. Fail-soft: a lookup failure leaves
+ * the legs untouched. Exported for focused tests.
+ *
+ * @param routes The routes to annotate in place.
+ */
+export async function attachAudioSignals(
+  routes: AccessibleRoute[],
+): Promise<void> {
+  const walkLegs = routes.flatMap((r) =>
+    r.legs.filter(
+      (l): l is WalkLeg => l.type === "WALK" && l.polyline.length >= 2,
+    ),
+  );
+  const bbox = paddedBbox(walkLegs.map((l) => l.polyline));
+  if (!bbox) return;
+  try {
+    const { findAudioSignalsWithin } =
+      await import("../visual-a11y/visual-a11y.service");
+    const signals = (await findAudioSignalsWithin(bbox)).map((d) => ({
+      source: d.source ?? "osm",
+      location: d.location.coordinates,
+      name: d.properties?.name,
+    }));
+    if (!signals.length) return;
+    for (const leg of walkLegs) {
+      const matched = matchAudioSignals(leg.polyline, signals);
+      if (matched.length)
+        leg.a11yPoints = [...(leg.a11yPoints ?? []), ...matched];
+    }
+  } catch (err) {
+    console.warn("[accessible-route] audio signal lookup failed", err);
+  }
+}
+
+const GOVERNMENT_HAZARD_PREFILTER_M = 100;
+const PEDESTRIAN_WORK_RE = /人行道|騎樓|行人/;
+
+function roundedEndDate(endTime: string | undefined): string | undefined {
+  return endTime ? /^\d{4}-\d{2}-\d{2}/.exec(endTime)?.[0] : undefined;
+}
+
+/**
+ * Government road events (TDX LiveEvent; Taipei enriched with permit closure
+ * flags and work-area points) near the candidates, as hazard inputs. Only
+ * road closures and works on the footway (人行道／騎樓／行人) are used: other
+ * advisories, such as routine maintenance on the carriageway, say nothing about
+ * walking. Fail-soft: any failure yields no government hazards.
+ * Exported for focused tests.
+ *
+ * @param routes The candidate routes.
+ * @returns Government hazards whose points lie near some candidate.
+ */
+export async function loadGovernmentHazards(
+  routes: AccessibleRoute[],
+): Promise<ConfirmedHazardInput[]> {
+  try {
+    const area = buildHazardQueryArea(routes);
+    if (!area) return [];
+    const { getActiveRoadIncidents } =
+      await import("../traffic/road-incident.service");
+    const { TRAFFIC_ROUTE_HOOK_TIMEOUT_MS } =
+      await import("../../config/traffic");
+    const dLat = area.radiusM / 111_320;
+    const dLng = dLat / Math.cos((area.center.lat * Math.PI) / 180);
+    const incidents = await withTimeoutBudget(
+      getActiveRoadIncidents({
+        bbox: [
+          area.center.lng - dLng,
+          area.center.lat - dLat,
+          area.center.lng + dLng,
+          area.center.lat + dLat,
+        ],
+      }),
+      TRAFFIC_ROUTE_HOOK_TIMEOUT_MS,
+      "Government hazard fetch timeout",
+    );
+
+    const segments = routes.flatMap((r) =>
+      r.legs
+        .filter(
+          (l) =>
+            l.type === "WALK" || l.type === "DRIVE" || l.type === "MOTORCYCLE",
+        )
+        .flatMap((l) =>
+          l.polyline.slice(1).map((end, k) => [l.polyline[k], end] as const),
+        ),
+    );
+    const near = (lat: number, lng: number) =>
+      segments.some(
+        ([a, b]) =>
+          pointToSegmentDistanceM([lng, lat], a, b) <=
+          GOVERNMENT_HAZARD_PREFILTER_M,
+      );
+
+    return incidents
+      .filter(
+        (i) =>
+          i.severity === "closure" ||
+          PEDESTRIAN_WORK_RE.test(
+            `${i.title} ${i.description ?? ""} ${i.locationDescription ?? ""}`,
+          ),
+      )
+      .filter((i) => (i.points ?? [i.location]).some((p) => near(p.lat, p.lng)))
+      .map((i) => {
+        const endDate = roundedEndDate(i.endTime);
+        const detail = i.locationDescription ?? i.description ?? i.roadName;
+        return {
+          id: `tdx:${i.incidentId}`,
+          hazardType: i.title.includes("施工") ? "construction" : "obstacle",
+          severity: "difficult",
+          source: "government",
+          description: `${i.title}${detail ? `｜${detail}` : ""}${
+            endDate ? `（預計至 ${endDate}）` : ""
+          }`,
+          coordinates: [i.location.lng, i.location.lat],
+          ...(i.points
+            ? {
+                points: i.points.map((p) => [p.lng, p.lat] as [number, number]),
+              }
+            : {}),
+        } satisfies ConfirmedHazardInput;
+      });
+  } catch (err) {
+    console.warn("[accessible-route] government hazard lookup failed", err);
+    return [];
+  }
+}
+
+/**
+ * Community hazards plus government closures. An unsafe community lookup stays
+ * unknown unless government evidence alone exists.
+ *
+ * @param community The community hazards, or undefined when unsafe.
+ * @param government The government hazards.
+ * @returns The combined list, or undefined when nothing is known.
+ */
+function combineHazards(
+  community: ConfirmedHazardInput[] | undefined,
+  government: ConfirmedHazardInput[],
+): ConfirmedHazardInput[] | undefined {
+  if (community === undefined)
+    return government.length ? government : undefined;
+  return [...community, ...government];
+}
+
 function planWithConfirmedHazards(
   routes: AccessibleRoute[],
   hazards: ConfirmedHazardInput[],
@@ -911,9 +1098,9 @@ function planWithConfirmedHazards(
 
 /**
  * Query confirmed hazards only for a bounded, fully-matchable candidate area,
- * then apply the pure geometry planner. Any lookup, saturation, or geometry
- * failure returns the original rank untouched: an unavailable check must never
- * manufacture a "clear" or "avoided" route claim.
+ * then apply the pure geometry planner. If a refresh fails, retain previously
+ * observed on-route hazards when supplied; otherwise preserve the base order.
+ * An unavailable check never manufactures a "clear" or "avoided" claim.
  *
  * Exported for focused failure-path tests; production callers use the default
  * hazard-report lookup.
@@ -921,11 +1108,38 @@ function planWithConfirmedHazards(
 export async function applyConfirmedHazardPlanning(
   routes: AccessibleRoute[],
   lookup: ConfirmedHazardLookup = defaultConfirmedHazardLookup,
+  knownHazards?: ConfirmedHazardInput[],
 ): Promise<HazardRoutePlan> {
   const hazards = await loadConfirmedHazards(routes, lookup);
-  return hazards === undefined
-    ? unappliedHazardPlan(routes)
-    : planWithConfirmedHazards(routes, hazards);
+  if (hazards !== undefined) return planWithConfirmedHazards(routes, hazards);
+  if (knownHazards === undefined) return unappliedHazardPlan(routes);
+  // The expanded-area lookup failed. Keep previously observed on-route risks,
+  // but do not issue a comparative "avoided" claim for an incomplete check.
+  const decorated = routes
+    .map((route) => {
+      const observed = planWithConfirmedHazards([route], knownHazards)
+        .routes[0];
+      return {
+        ...observed,
+        degraded: true,
+        warnings: [
+          ...new Set([
+            ...(observed.warnings ?? []),
+            ROUTE_WARNING.HAZARD_DATA_UNAVAILABLE,
+          ]),
+        ],
+      };
+    })
+    .sort(
+      (a, b) =>
+        (a.hazardAdvisory?.blockingOnRoute ?? 0) -
+        (b.hazardAdvisory?.blockingOnRoute ?? 0),
+    );
+  return {
+    routes: decorated,
+    selectionApplied: false,
+    allCandidatesAffected: false,
+  };
 }
 
 /**
@@ -944,7 +1158,6 @@ export async function applyConfirmedHazardPlanning(
  * @param mode Accessibility mode for scoring.
  * @param constraints Resolved hard accessibility constraints for exclusion.
  * @param format Response shape; "compact" dedupes facilities route-level.
- * @param departureTime Departure time used by the realtime transit overlay.
  * @param envPromise Environment lookup started alongside route planning.
  * @returns The top-3 finalized routes.
  */
@@ -955,8 +1168,8 @@ async function finalizeRoutes(
   mode: AccessibilityMode,
   constraints: A11yConstraints,
   format: "standard" | "compact" = "standard",
-  departureTime?: Date,
   envPromise?: Promise<EnvConditions | undefined>,
+  transitPreference?: TransitPreference,
 ): Promise<AccessibleRoute[]> {
   const PRERANK_N = 8;
   const t: Record<string, number> = {};
@@ -965,25 +1178,36 @@ async function finalizeRoutes(
   // compare every fully-matchable candidate to confirmed hazards BEFORE top-N.
   // Otherwise a clear ninth route can never be selected over eight blocked ones.
   const candidates = collapseLogicalDuplicates(deduplicateRoutes(routes));
-  const proxyRanked = prerankByProxy(candidates, mode);
+  const proxyRanked = prerankByProxy(candidates, mode, transitPreference);
   const proxyEligible = constraints.avoidStairs
     ? prioritizeStepFreeRoutes(proxyRanked)
     : proxyRanked;
-  const confirmedHazards = await loadConfirmedHazards(
-    proxyEligible,
-    defaultConfirmedHazardLookup,
-  );
+  const [communityHazards, governmentHazards] = await Promise.all([
+    loadConfirmedHazards(proxyEligible, defaultConfirmedHazardLookup),
+    loadGovernmentHazards(proxyEligible),
+  ]);
+  const confirmedHazards = combineHazards(communityHazards, governmentHazards);
   const proxyHazardPlan =
     confirmedHazards === undefined
       ? unappliedHazardPlan(proxyEligible)
       : planWithConfirmedHazards(proxyEligible, confirmedHazards);
-  const topN = proxyHazardPlan.selectionApplied
-    ? proxyHazardPlan.routes.slice(0, PRERANK_N)
-    : retainEarliestFutureRoute(
-        proxyHazardPlan.routes,
-        proxyHazardPlan.routes,
-        PRERANK_N,
-      );
+  // A preferred-mode route ranked below the cut keeps one slot, but only when
+  // it is clear of known blocking hazards and, for step-free requests, stairs.
+  const topN = reservePreferredRoute(
+    proxyHazardPlan.selectionApplied
+      ? proxyHazardPlan.routes.slice(0, PRERANK_N)
+      : retainEarliestFutureRoute(
+          proxyHazardPlan.routes,
+          proxyHazardPlan.routes,
+          PRERANK_N,
+        ),
+    proxyHazardPlan.routes,
+    PRERANK_N,
+    transitPreference,
+    (route) =>
+      !route.hazardAdvisory?.blockingOnRoute &&
+      (!constraints.avoidStairs || routeStairsCount(route) === 0),
+  );
   t.prerank = Date.now() - t0;
   t0 = Date.now();
   // Stage 2: a11y enrichment (Mongo) BEFORE scoring, so facility data is real
@@ -993,6 +1217,7 @@ async function finalizeRoutes(
   } catch (err) {
     console.warn("[accessible-route] top-N a11y enrichment failed", err);
   }
+  if (mode === "visual_impaired") await attachAudioSignals(topN);
   t.enrich = Date.now() - t0;
   t0 = Date.now();
   // One weather/air lookup per request (cached, CCTV-free); an environment
@@ -1017,7 +1242,7 @@ async function finalizeRoutes(
   t0 = Date.now();
   // Stage 4: score with the enriched facility data, then compare confirmed
   // street-level hazards BEFORE selecting/slimming the final routes.
-  const baseRanked = scoreAndRank(eligible, mode, env);
+  const baseRanked = scoreAndRank(eligible, mode, env, transitPreference);
   t.rank = Date.now() - t0;
   t0 = Date.now();
   const hazardPlan =
@@ -1027,15 +1252,22 @@ async function finalizeRoutes(
   // Keep the legacy earliest-future-service guarantee only when hazard evidence
   // did not select between alternatives. A known blocking hazard must not be
   // reintroduced at index zero by that schedule-only override.
-  const top = hazardPlan.selectionApplied
-    ? hazardPlan.routes.slice(0, 3)
-    : retainEarliestFutureRoute(hazardPlan.routes, hazardPlan.routes, 3);
+  const top = reservePreferredRoute(
+    hazardPlan.selectionApplied
+      ? hazardPlan.routes.slice(0, 3)
+      : retainEarliestFutureRoute(hazardPlan.routes, hazardPlan.routes, 3),
+    hazardPlan.routes,
+    3,
+    transitPreference,
+    (route) => !route.hazardAdvisory?.blockingOnRoute && !route.degraded,
+  );
   t.hazard = Date.now() - t0;
   t0 = Date.now();
+  let elevatorNoticeRoutes = new Set<AccessibleRoute>();
   try {
     const { overlayFacilityStatus } =
       await import("./planners/facility-status");
-    await overlayFacilityStatus(top, mode);
+    elevatorNoticeRoutes = await overlayFacilityStatus(top, mode);
   } catch (err) {
     console.warn("[accessible-route] facility status overlay failed", err);
   }
@@ -1046,46 +1278,33 @@ async function finalizeRoutes(
       await import("./planners/realtime-transit");
     annotateBusTdxCity(top);
     await recoverRailTrainNos(top).catch(() => undefined);
-    await overlayRealtimeTransit(top, { departureTime });
+    await overlayRealtimeTransit(top);
   } catch (err) {
     console.warn("[accessible-route] realtime transit overlay failed", err);
   }
   t.realtimeOverlay = Date.now() - t0;
   t0 = Date.now();
   try {
-    rerankByLowFloor(top, mode);
+    rerankByLowFloor(top, mode, transitPreference);
   } catch (err) {
     console.warn("[accessible-route] low-floor rerank failed", err);
   }
+  demoteElevatorNoticeRoutes(
+    top,
+    elevatorNoticeRoutes,
+    mode,
+    constraints.requireElevator,
+  );
   t.lowFloorRerank = Date.now() - t0;
   // Derive B12 details while full facility tags are still attached. slimRoutes
   // and compactRoutes only project/move facility arrays, so these direct WALK
   // fields remain stable in either response format.
   attachWalkA11yDetails(top);
   slimRoutes(top);
+  slimRouteGeometry(top);
   if (format === "compact") compactRoutes(top);
   console.log("[route-timing] finalize", JSON.stringify(t));
   return top;
-}
-
-/**
- * City of a coordinate from the nearest imported bus stop (~10ms local Mongo
- * lookup) instead of Google reverse geocoding (~200–800ms external call).
- *
- * @param lat Latitude.
- * @param lng Longitude.
- * @returns The city name, or null when the DB has no stops (caller falls back
- *   to Google).
- */
-export async function resolveCityFromStops(
-  lat: number,
-  lng: number,
-): Promise<string | null> {
-  try {
-    return await findNearestStopCity(lat, lng, 50_000);
-  } catch {
-    return null;
-  }
 }
 
 /** Every METRO leg across the planned routes, in route order. */
@@ -1389,6 +1608,220 @@ export async function attachMetroAlerts(
   return result.metroAlerts;
 }
 
+/**
+ * Move a transit endpoint onto the nearest outdoor, step-free walkway when the
+ * in-memory Taipei pedestrian graph is loaded. OTP links a raw coordinate to
+ * its nearest walkable edge on any level, so a point in the middle of a
+ * no-walking road above an underground concourse links into the concourse;
+ * wheelchair searches from there ran for over a minute and returned nothing.
+ *
+ * @param point The requested endpoint.
+ * @returns The street-level point, or the original when none is in range or
+ *   the graph is not loaded yet.
+ */
+function anchorToStreetLevel(point: LatLng): LatLng {
+  if (!isWithinPedGraphCoverage(point)) return point;
+  const snapshot = peekPedGraphSnapshot();
+  if (!snapshot) return point;
+  const anchor = nearestOutdoorPoint(
+    snapshot.index,
+    point.lat,
+    point.lng,
+    STREET_ANCHOR_TOLERANCE_M,
+  );
+  return anchor ? { lat: anchor.lat, lng: anchor.lng } : point;
+}
+
+/**
+ * Wait for a promise up to a time budget without cancelling it.
+ *
+ * @param work The promise to wait on; a later rejection is swallowed.
+ * @param budgetMs Maximum wait in milliseconds.
+ * @returns The settled value, or undefined when the budget elapsed first.
+ */
+async function settleWithin<T>(
+  work: Promise<T>,
+  budgetMs: number,
+): Promise<T | undefined> {
+  work.catch(() => undefined);
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), budgetMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+type WalkPlanOutcome =
+  | {
+      ok: true;
+      routes: AccessibleRoute[];
+      trafficMs: number;
+      routedByEngineWithNoElevationData: boolean;
+    }
+  | { ok: false; failure: Extract<PlanRouteResult, { ok: false }> };
+
+/**
+ * Plan a pure walking route through CSR, then OTP walk, then Valhalla — the
+ * single walk pipeline shared by `travelMode=walk` and the short-trip transit
+ * fallback.
+ *
+ * @param walkPoints Origin, waypoints and destination in order.
+ * @param roadMode Accessibility mode driving walk speed and scoring.
+ * @param avoidStairs Resolved step-free constraint sent to the engines.
+ * @param departureTime Optional future departure forwarded to Valhalla.
+ * @returns Finalized walk routes, or the failure envelope to return.
+ */
+async function planWalkRoutes(
+  walkPoints: LatLng[],
+  roadMode: AccessibilityMode,
+  avoidStairs: boolean,
+  departureTime?: Date,
+): Promise<WalkPlanOutcome> {
+  const origin = walkPoints[0];
+  const dest = walkPoints[walkPoints.length - 1];
+  const waypoints = walkPoints.slice(1, -1);
+
+  const csrWalk = await planCsrWalkForRequest(
+    walkPoints,
+    roadMode,
+    avoidStairs,
+  );
+  logCsrWalkOutcome(csrWalk, walkPoints.length - 1, roadMode);
+  if (csrWalk.status === "ok") {
+    const candidates = [buildCsrWalkRoute(csrWalk.plans)];
+    let knownHazards: ConfirmedHazardInput[] | undefined;
+    // Generate an alternative before hazard ranking; never mutate the shared
+    // graph or assert that a point observation proves a physical road closure.
+    // Current reports cannot establish conditions for a future departure.
+    if (!departureTime || departureTime.getTime() <= Date.now()) {
+      knownHazards = await loadConfirmedHazards(
+        candidates,
+        defaultConfirmedHazardLookup,
+      );
+      const blocking = knownHazards?.filter(
+        (hazard) =>
+          hazard.severity === "blocking" &&
+          (!hazard.source || hazard.source === "community"),
+      );
+      if (blocking?.length) {
+        const alternative = await planCsrWalkForRequest(
+          walkPoints,
+          roadMode,
+          avoidStairs,
+          blocking.map((hazard) => hazard.coordinates),
+        );
+        if (alternative.status === "ok")
+          candidates.push(buildCsrWalkRoute(alternative.plans));
+      }
+    }
+    return {
+      ok: true,
+      routes: await finalizeDrivingRoutes(
+        candidates,
+        "walk",
+        dest,
+        false,
+        knownHazards,
+      ),
+      trafficMs: 0,
+      routedByEngineWithNoElevationData: false,
+    };
+  }
+
+  const csrFallbackIsDegraded = csrWalk.status !== "outside_coverage";
+  const markFallback = (routes: AccessibleRoute[]) =>
+    routes.map((route) => ({
+      ...route,
+      engine: "otp-fallback" as const,
+      ...(csrFallbackIsDegraded ? { degraded: true } : {}),
+    }));
+
+  const otpWalk = await planOtpWalkSegments(walkPoints, roadMode, avoidStairs);
+  if (otpWalk.status === "no_route") {
+    if (avoidStairs) {
+      const relaxed = await planOtpWalkSegments(walkPoints, roadMode, false);
+      if (relaxed.status === "unavailable") {
+        return {
+          ok: false,
+          failure: routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT),
+        };
+      }
+      if (relaxed.status === "ok" && relaxed.routes.length) {
+        return {
+          ok: false,
+          failure: routeFailure(ROUTE_REASON.NO_ACCESSIBLE_ROUTE),
+        };
+      }
+    }
+    return { ok: false, failure: routeFailure(ROUTE_REASON.NO_ROUTE) };
+  }
+  if (otpWalk.status === "ok") {
+    return {
+      ok: true,
+      routes: markFallback(
+        await finalizeDrivingRoutes(otpWalk.routes, "walk", dest),
+      ),
+      trafficMs: 0,
+      routedByEngineWithNoElevationData: false,
+    };
+  }
+
+  console.warn(
+    "[accessible-route] OTP walk unavailable; falling back to Valhalla for the full route",
+    JSON.stringify({ segments: waypoints.length + 1 }),
+  );
+  const outcome = await findDrivingRoutes(origin, dest, {
+    travelMode: "walk",
+    waypoints: waypoints.length ? waypoints : undefined,
+    departureTime,
+    mode: roadMode,
+    avoidStairs,
+  });
+  if (outcome.kind === "unavailable") {
+    return { ok: false, failure: routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT) };
+  }
+  if (outcome.kind === "error") {
+    return {
+      ok: false,
+      failure: {
+        ok: false,
+        status: ResponseCode.INTERNAL_ERROR,
+        error: "路線規劃失敗，請稍後再試",
+      },
+    };
+  }
+  if (outcome.kind === "empty") {
+    return { ok: false, failure: routeFailure(ROUTE_REASON.NO_ROUTE) };
+  }
+  return {
+    ok: true,
+    routes: markFallback(outcome.routes),
+    trafficMs: outcome.trafficMs ?? 0,
+    routedByEngineWithNoElevationData: true,
+  };
+}
+
+/**
+ * Whether every route is walk-only, i.e. a transit request was answered by
+ * walking.
+ *
+ * @param routes Routes returned for a transit request.
+ * @returns True when at least one route exists and none rides transit.
+ */
+function isWalkOnlyAnswer(routes: AccessibleRoute[]): boolean {
+  return (
+    routes.length > 0 &&
+    routes.every((route) => route.legs.every((leg) => leg.type === "WALK"))
+  );
+}
+
 export async function planAccessibleRouteFromRequest(
   body: PlanRouteRequest,
 ): Promise<PlanRouteResult> {
@@ -1397,6 +1830,7 @@ export async function planAccessibleRouteFromRequest(
   const travelMode = body.travelMode ?? "transit";
   const rawWaypoints = body.waypoints ?? [];
   let mode = body.mode;
+  let transitPreference = body.transitPreference;
   let requireElevator = body.requireElevator;
   let avoidStairs = body.avoidStairs;
   let needsAccessibleToilet = body.needsAccessibleToilet;
@@ -1404,7 +1838,12 @@ export async function planAccessibleRouteFromRequest(
   let maxSlopePercent = body.maxSlopePercent;
 
   let intent: RouteIntent | null = null;
-  if (query && (!origin || !destination)) {
+  if (
+    query &&
+    (!origin ||
+      !destination ||
+      (travelMode === "transit" && transitPreference === undefined))
+  ) {
     try {
       intent = await parseRouteIntent(query);
     } catch (err) {
@@ -1424,11 +1863,14 @@ export async function planAccessibleRouteFromRequest(
       };
     }
     origin =
-      intent.from === "current_location"
+      origin ??
+      (intent.from === "current_location"
         ? (userLocation ?? undefined)
-        : intent.from;
-    destination = intent.to;
+        : intent.from);
+    destination = destination ?? intent.to;
     mode = mode ?? intent.mode;
+    transitPreference =
+      transitPreference ?? intent.preferences?.transitPreference;
     requireElevator = requireElevator ?? intent.preferences?.preferElevator;
     if (!origin) {
       return {
@@ -1542,11 +1984,19 @@ export async function planAccessibleRouteFromRequest(
   if (!preflight.ok) return preflight;
 
   const tCity = Date.now();
-  const city = ((await resolveCityFromStops(lat, lng)) ??
-    (await getCity(lat, lng))) as TaiwanCityEn;
+  const city = await resolveCity(lat, lng);
   const cityMs = Date.now() - tCity;
 
-  const parsedDeparture = departureTime ? new Date(departureTime) : undefined;
+  // Offset-free ISO datetimes from AI tools are Taipei wall-clock times.
+  // Preserve explicit offsets; never let the host timezone choose the instant.
+  const normalizedDeparture =
+    departureTime &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(departureTime)
+      ? `${departureTime}+08:00`
+      : departureTime;
+  const parsedDeparture = normalizedDeparture
+    ? new Date(normalizedDeparture)
+    : undefined;
   const futureDeparture =
     parsedDeparture &&
     !isNaN(parsedDeparture.getTime()) &&
@@ -1563,6 +2013,8 @@ export async function planAccessibleRouteFromRequest(
   // elevation data) instead of OTP, so slopeConstraint reporting isn't fooled
   // by the request's travelMode into claiming the OTP 8.3% default applied.
   let routedByEngineWithNoElevationData = false;
+  let transitFallback: TransitFallback | undefined;
+  const walkPoints = [originLatLng, ...waypoints, dest];
   const logRequestTiming = () => {
     const planTotal = Date.now() - tPlan;
     console.log(
@@ -1583,8 +2035,11 @@ export async function planAccessibleRouteFromRequest(
       avoidStairs,
       requireElevator,
     });
+    const walkableTrip =
+      pathLengthMeters(walkPoints) <= TRANSIT_WALK_FALLBACK_MAX_M;
     const transitOptions: FindAccessibleRoutesOptions = {
       mode: transitMode,
+      transitPreference,
       maxTransfers: (maxTransfers ?? 2) as 0 | 1 | 2,
       departureTime: futureDeparture,
       format: format === "compact" ? "compact" : "standard",
@@ -1592,74 +2047,68 @@ export async function planAccessibleRouteFromRequest(
       avoidStairs: constraints.avoidStairs,
       requireElevator: constraints.requireElevator,
     };
-    const transit = await findAccessibleRoutesDetailed(
+    const transitPromise = findAccessibleRoutesDetailed(
       originLatLng,
       dest,
       city,
-      transitOptions,
+      { ...transitOptions, skipLaterService: walkableTrip },
     );
-    if (transit.status === "unavailable") {
-      logRequestTiming();
-      return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT);
-    }
-    if (transit.status === "no_route") {
-      if (constraints.avoidStairs) {
-        const relaxed = await findAccessibleRoutesDetailed(
+    const walkPromise = walkableTrip
+      ? planWalkRoutes(
+          walkPoints,
+          transitMode,
+          constraints.avoidStairs,
+          futureDeparture,
+        ).catch((err: unknown) => {
+          console.warn("[accessible-route] walk fallback planning failed", err);
+          return undefined;
+        })
+      : undefined;
+    let transit = walkableTrip
+      ? await settleWithin(transitPromise, WALKABLE_TRANSIT_BUDGET_MS)
+      : await transitPromise;
+    const walkFallback =
+      walkPromise && transit?.status !== "ok" ? await walkPromise : undefined;
+    if (walkFallback?.ok) {
+      if (!transit) {
+        console.warn(
+          "[accessible-route] transit planning exceeded the walkable-trip budget; answering with walking",
+          JSON.stringify({ budgetMs: WALKABLE_TRANSIT_BUDGET_MS }),
+        );
+      }
+      routes = walkFallback.routes;
+      trafficHookMs += walkFallback.trafficMs;
+      routedByEngineWithNoElevationData =
+        walkFallback.routedByEngineWithNoElevationData;
+      transitFallback = {
+        travelMode: "walk",
+        reason: TRANSIT_FALLBACK_REASON.NO_TRANSIT_ROUTE,
+      };
+    } else {
+      transit ??= await transitPromise;
+      if (transit.status === "no_route" && walkableTrip) {
+        transit = await findAccessibleRoutesDetailed(
           originLatLng,
           dest,
           city,
-          {
-            ...transitOptions,
-            avoidStairs: false,
-            requireElevator: false,
-          },
+          transitOptions,
         );
-        logRequestTiming();
-        if (relaxed.status === "unavailable") {
-          return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT);
-        }
-        if (relaxed.status === "ok" && relaxed.routes.length) {
-          return routeFailure(ROUTE_REASON.NO_ACCESSIBLE_ROUTE);
-        }
-        return routeFailure(ROUTE_REASON.NO_ROUTE);
       }
-      logRequestTiming();
-      return routeFailure(ROUTE_REASON.NO_ROUTE);
-    }
-    routes = transit.routes;
-    logRequestTiming();
-  } else if (travelMode === "walk") {
-    const roadMode = mode ?? "normal";
-    const constraints = resolveA11yConstraints(roadMode, { avoidStairs });
-    const walkPoints = [originLatLng, ...waypoints, dest];
-
-    const csrWalk = await planCsrWalkForRequest(
-      walkPoints,
-      roadMode,
-      constraints.avoidStairs,
-    );
-    logCsrWalkOutcome(csrWalk, walkPoints.length - 1, roadMode);
-
-    if (csrWalk.status === "ok") {
-      routes = await finalizeDrivingRoutes(
-        [buildCsrWalkRoute(csrWalk.plans)],
-        "walk",
-        dest,
-      );
-      logRequestTiming();
-    } else {
-      const csrFallbackIsDegraded = csrWalk.status !== "outside_coverage";
-      const otpWalk = await planOtpWalkSegments(
-        walkPoints,
-        roadMode,
-        constraints.avoidStairs,
-      );
-      if (otpWalk.status === "no_route") {
+      if (transit.status === "unavailable") {
+        logRequestTiming();
+        return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT);
+      }
+      if (transit.status === "no_route") {
         if (constraints.avoidStairs) {
-          const relaxed = await planOtpWalkSegments(
-            walkPoints,
-            roadMode,
-            false,
+          const relaxed = await findAccessibleRoutesDetailed(
+            originLatLng,
+            dest,
+            city,
+            {
+              ...transitOptions,
+              avoidStairs: false,
+              requireElevator: false,
+            },
           );
           logRequestTiming();
           if (relaxed.status === "unavailable") {
@@ -1673,50 +2122,29 @@ export async function planAccessibleRouteFromRequest(
         logRequestTiming();
         return routeFailure(ROUTE_REASON.NO_ROUTE);
       }
-      if (otpWalk.status === "ok") {
-        routes = await finalizeDrivingRoutes(otpWalk.routes, "walk", dest);
-      } else {
-        console.warn(
-          "[accessible-route] OTP walk unavailable; falling back to Valhalla for the full route",
-          JSON.stringify({ segments: waypoints.length + 1 }),
-        );
-        const outcome = await findDrivingRoutes(originLatLng, dest, {
-          travelMode,
-          waypoints: waypointsOpt,
-          departureTime: futureDeparture,
-          mode: roadMode,
-          avoidStairs: constraints.avoidStairs,
-        });
-        if (outcome.kind === "ok") {
-          trafficHookMs += outcome.trafficMs ?? 0;
-        }
-        if (outcome.kind === "unavailable") {
-          logRequestTiming();
-          return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT);
-        }
-        if (outcome.kind === "error") {
-          logRequestTiming();
-          return {
-            ok: false,
-            status: ResponseCode.INTERNAL_ERROR,
-            error: "路線規劃失敗，請稍後再試",
-          };
-        }
-        if (outcome.kind === "empty") {
-          logRequestTiming();
-          return routeFailure(ROUTE_REASON.NO_ROUTE);
-        }
-        routes = outcome.routes;
-        routedByEngineWithNoElevationData = true;
+      routes = transit.routes;
+      if (isWalkOnlyAnswer(routes)) {
+        transitFallback = {
+          travelMode: "walk",
+          reason: TRANSIT_FALLBACK_REASON.WALKING_BETTER,
+        };
       }
-      routes = routes.map((route) => ({
-        ...route,
-        // `otp-fallback` means CSR did not select this pure-walk route.
-        engine: "otp-fallback",
-        ...(csrFallbackIsDegraded ? { degraded: true } : {}),
-      }));
-      logRequestTiming();
     }
+    logRequestTiming();
+  } else if (travelMode === "walk") {
+    const roadMode = mode ?? "normal";
+    const constraints = resolveA11yConstraints(roadMode, { avoidStairs });
+    const walk = await planWalkRoutes(
+      walkPoints,
+      roadMode,
+      constraints.avoidStairs,
+      futureDeparture,
+    );
+    logRequestTiming();
+    if (!walk.ok) return walk.failure;
+    routes = walk.routes;
+    trafficHookMs += walk.trafficMs;
+    routedByEngineWithNoElevationData = walk.routedByEngineWithNoElevationData;
   } else {
     const roadMode = mode ?? "normal";
     const constraints = resolveA11yConstraints(roadMode, { avoidStairs });
@@ -1799,7 +2227,7 @@ export async function planAccessibleRouteFromRequest(
   const { slopeConstraint } = await applyExtraA11yAnnotations(
     routes,
     dest,
-    travelMode,
+    transitFallback ? transitFallback.travelMode : travelMode,
     mode,
     avoidStairs,
     {
@@ -1843,6 +2271,7 @@ export async function planAccessibleRouteFromRequest(
     },
     travelMode,
     mode: effectiveMode,
+    transitPreference: transitPreference ?? "none",
     maxTransfers: maxTransfers ?? 2,
     format: format === "compact" ? "compact" : "standard",
     waypoints: waypoints.map((waypoint) => ({
@@ -1863,10 +2292,14 @@ export async function planAccessibleRouteFromRequest(
     destination: dest,
     city,
     travelMode,
+    ...(travelMode === "transit"
+      ? { transitPreference: transitPreference ?? "none" }
+      : {}),
     ...(waypoints.length ? { waypoints } : {}),
     routes: normalizedRoutes,
     ...(intent ? { intent } : {}),
     ...(slopeConstraint ? { slopeConstraint } : {}),
+    ...(transitFallback ? { fallback: transitFallback } : {}),
     ...(metroAlerts.length ? { metroAlerts } : {}),
     ...(transitAlerts.length ? { transitAlerts } : {}),
   };
@@ -1946,9 +2379,13 @@ function dedupeDrivingRoutes(routes: AccessibleRoute[]): AccessibleRoute[] {
   const seen = new Set<string>();
   const out: AccessibleRoute[] = [];
   for (const r of routes) {
+    // Equal time/distance does not mean equal exposure to a blocking hazard.
+    const walkGeometry = r.legs.every((leg) => leg.type === "WALK")
+      ? JSON.stringify(r.legs.map((leg) => leg.polyline))
+      : "";
     const key = `${Math.round(r.totalMinutes)}|${Math.round(
       driveTotalDistanceM(r) / 50,
-    )}`;
+    )}|${walkGeometry}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(r);
@@ -2017,6 +2454,7 @@ async function finalizeDrivingRoutes(
   travelMode: RoadTravelMode,
   destination: LatLng,
   skipParkingHighlight = false,
+  knownHazards?: ConfirmedHazardInput[],
 ): Promise<AccessibleRoute[]> {
   const baseRanked = dedupeDrivingRoutes(routes).sort(
     (a, b) =>
@@ -2025,10 +2463,13 @@ async function finalizeDrivingRoutes(
   );
   // Road/walk routes bypass the transit finalizer, so run the same confirmed
   // hazard ranking before this pipeline takes its top-three projection.
-  const ranked = (await applyConfirmedHazardPlanning(baseRanked)).routes.slice(
-    0,
-    3,
-  );
+  const ranked = (
+    await applyConfirmedHazardPlanning(
+      baseRanked,
+      defaultConfirmedHazardLookup,
+      knownHazards,
+    )
+  ).routes.slice(0, 3);
   attachWalkA11yDetails(ranked);
   try {
     await attachDrivingA11yHighlights(
@@ -2440,11 +2881,16 @@ async function planCsrWalkForRequest(
   points: LatLng[],
   mode: AccessibilityMode,
   avoidStairs: boolean,
+  avoidPoints?: [number, number][],
 ): Promise<CsrWalkResult> {
   try {
     const { planCsrWalkRoute } =
       await import("./planners/pedestrian-a11y/csr-walk-planner");
-    return await planCsrWalkRoute(points, { mode, avoidStairs });
+    return await planCsrWalkRoute(points, {
+      mode,
+      avoidStairs,
+      ...(avoidPoints?.length ? { avoidPoints } : {}),
+    });
   } catch (error: unknown) {
     return {
       status: "unavailable",
@@ -2631,7 +3077,7 @@ function isOtpPlannerTransportFailure(error: unknown): boolean {
 export async function findAccessibleRoutes(
   origin: LatLng,
   destination: LatLng,
-  city: TaiwanCityEn,
+  city: TaiwanCityEn | null,
   opts: FindAccessibleRoutesOptions = {},
 ): Promise<AccessibleRoute[]> {
   return (await findAccessibleRoutesDetailed(origin, destination, city, opts))
@@ -2645,7 +3091,7 @@ export async function findAccessibleRoutes(
 export async function findAccessibleRoutesDetailed(
   origin: LatLng,
   destination: LatLng,
-  _city: TaiwanCityEn,
+  _city: TaiwanCityEn | null,
   opts: FindAccessibleRoutesOptions = {},
 ): Promise<FindAccessibleRoutesResult> {
   const mode = opts.mode ?? "normal";
@@ -2679,12 +3125,18 @@ export async function findAccessibleRoutesDetailed(
   ).catch(() => undefined);
 
   if (!waypoints.length) {
-    const otp = await runOtpSegment(origin, destination, {
-      maxTransfers,
-      mode,
-      avoidStairs: constraints.avoidStairs,
-      departureTime: opts.departureTime,
-    });
+    const otp = await runOtpSegment(
+      anchorToStreetLevel(origin),
+      anchorToStreetLevel(destination),
+      {
+        transitPreference: opts.transitPreference,
+        maxTransfers,
+        mode,
+        avoidStairs: constraints.avoidStairs,
+        departureTime: opts.departureTime,
+        skipLaterService: opts.skipLaterService,
+      },
+    );
     console.log(
       "[route-timing] planners",
       JSON.stringify({ otp: Date.now() - t0 }),
@@ -2698,8 +3150,8 @@ export async function findAccessibleRoutesDetailed(
       mode,
       constraints,
       opts.format,
-      opts.departureTime,
       envPromise,
+      opts.transitPreference,
     );
     return routes.length
       ? { status: "ok", routes }
@@ -2711,7 +3163,9 @@ export async function findAccessibleRoutesDetailed(
   // later-segment transit schedules line up with the traveller's real arrival.
   // Remaining accepted limitations: double WALK seams at each waypoint, and no
   // cross-segment global optimization (each segment takes its own best).
-  const points: LatLng[] = [origin, ...waypoints, destination];
+  const points: LatLng[] = [origin, ...waypoints, destination].map(
+    anchorToStreetLevel,
+  );
   const segmentPairs: [LatLng, LatLng][] = [];
   for (let i = 0; i < points.length - 1; i++) {
     segmentPairs.push([points[i], points[i + 1]]);
@@ -2720,11 +3174,13 @@ export async function findAccessibleRoutesDetailed(
   const segments: AccessibleRoute[] = [];
   for (const [from, to] of segmentPairs) {
     const result = await runOtpSegment(from, to, {
+      transitPreference: opts.transitPreference,
       maxTransfers,
       mode,
       avoidStairs: constraints.avoidStairs,
       departureTime: cursor,
       limit: 1,
+      skipLaterService: opts.skipLaterService,
     });
     if (result.status !== "ok") return result;
     const best = result.routes[0];
@@ -2751,8 +3207,8 @@ export async function findAccessibleRoutesDetailed(
     mode,
     constraints,
     opts.format,
-    opts.departureTime,
     envPromise,
+    opts.transitPreference,
   );
   return routes.length
     ? { status: "ok", routes }

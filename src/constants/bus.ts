@@ -135,11 +135,17 @@ export const VEHICLE_CLASS_LABEL: Record<number, string> = {
   99: "其他",
 };
 
-/** TDX A1/N1 Direction：[0:去程,1:返程,2:迴圈,255:未知]. */
+/** Maximum source age accepted for a live bus prediction (five minutes). */
+export const BUS_ETA_MAX_AGE_MS = 5 * 60 * 1000;
+export const BUS_ETA_CLOCK_SKEW_MS = 30 * 1000;
+
+/** TDX A1/N1 Direction：[0:去程,1:返程,2:迴圈,10:循環線,255:未知]. */
+export const BUS_DIRECTIONS = [0, 1, 2, 10, 255] as const;
 export const DIRECTION_LABEL: Record<number, string> = {
   0: "去程",
   1: "返程",
   2: "迴圈",
+  10: "循環線",
   255: "未知",
 };
 

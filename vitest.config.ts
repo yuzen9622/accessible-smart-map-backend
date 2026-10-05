@@ -1,8 +1,6 @@
 import { defineConfig } from "vitest/config";
 
-// Minimal unit-test setup. Scoped to src/**/*.test.ts so the pure-function
-// scoring tests run in isolation; the live-server integration script under
-// tests/ (axios → a running API) is intentionally excluded.
+// Scoped to src/**/*.test.ts; tests/ only holds shared helpers.
 export default defineConfig({
   test: {
     include: ["src/**/*.test.ts"],

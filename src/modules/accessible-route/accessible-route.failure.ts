@@ -5,7 +5,7 @@ import {
 } from "../../config/coverage";
 import { ROUTE_MSG, ROUTE_REASON } from "../../constants/messages";
 import { ResponseCode } from "../../types/code";
-import { haversineMeters } from "../../utils/geo";
+import { pathLengthMeters } from "../../utils/geo";
 
 export type RouteFailureReason =
   (typeof ROUTE_REASON)[keyof typeof ROUTE_REASON];
@@ -72,14 +72,7 @@ export function preflightAccessibleRoute(
     return routeFailure(ROUTE_REASON.OUT_OF_COVERAGE);
   }
 
-  let distanceKm = 0;
-  for (let index = 1; index < points.length; index++) {
-    const previous = points[index - 1];
-    const current = points[index];
-    distanceKm +=
-      haversineMeters(previous.lat, previous.lng, current.lat, current.lng) /
-      1_000;
-  }
+  const distanceKm = pathLengthMeters(points) / 1_000;
 
   if (distanceKm > coverage.maxRouteDistanceKm) {
     return routeFailure(ROUTE_REASON.OUT_OF_RANGE, {

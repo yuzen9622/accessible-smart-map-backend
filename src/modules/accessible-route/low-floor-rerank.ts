@@ -8,9 +8,11 @@
  * not a re-scoring.
  */
 
+import { transitPreferencePenalty } from "./planners/transit-preference";
 import { routeCost } from "./scoring";
 import type {
   AccessibilityMode,
+  TransitPreference,
   AccessibleRoute,
   BusLeg,
   MetroLeg,
@@ -65,6 +67,7 @@ function busBoardingEvidence(route: AccessibleRoute): boolean {
 export function rerankByLowFloor(
   routes: AccessibleRoute[],
   mode: AccessibilityMode,
+  transitPreference?: TransitPreference,
 ): void {
   if (routes.length < 2) return;
   if (routes.some((r) => r._isFutureScheduled === true)) return;
@@ -81,7 +84,9 @@ export function rerankByLowFloor(
         route.accessibilityScore as number,
         mode,
         route.totalWalkDistanceM ?? 0,
-      ) - boardingCredit(route),
+      ) +
+      transitPreferencePenalty(route, transitPreference) -
+      boardingCredit(route),
   }));
 
   scored.sort((a, b) => a.adjusted - b.adjusted || a.index - b.index);

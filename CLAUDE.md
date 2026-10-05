@@ -41,7 +41,6 @@ Copy `.env.example` to `.env`. Required variables:
 | `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | JWT signing                                                                             |
 | `DATABASE_URL`                             | MongoDB connection URI                                                                  |
 | `TDX_CLIENT_ID` / `TDX_CLIENT_SECRET`      | Taiwan transport data API credentials                                                   |
-| `USE_OTP_ROUTER`                           | OTP2 planner rollout: `false` \| `shadow` (log diff only) \| `true` (merge)             |
 | `OTP_BASE_URL`                             | OTP2 sidecar GraphQL server (default `http://localhost:8080`, internal only)            |
 | `GEMINI_API_URL`                           | OpenAI-compatible base URL for the AI API (default: Gemini's `/v1beta/openai` endpoint) |
 | `GEMINI_MODEL`                             | Model name used by all AI features (default: `gemini-3.7-flash`)                        |

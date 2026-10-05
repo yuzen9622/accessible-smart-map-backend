@@ -1,4 +1,8 @@
 import { normalizeStationName } from "../utils/station-name";
+import {
+  railOdIsBoardable,
+  railStationIsBoardable,
+} from "../utils/rail-suspension";
 import type {
   NormalizedTrain,
   NormalizedStationTrain,
@@ -62,6 +66,7 @@ export function parseOdBody(body: unknown): OdFetchOutcome {
   if (body.length === 0) return { ok: true, items: [] };
 
   const items: NormalizedTrain[] = [];
+  let validRows = 0;
   for (const raw of body) {
     const row = asRecord(raw);
     if (!row) continue;
@@ -73,6 +78,8 @@ export function parseOdBody(body: unknown): OdFetchOutcome {
     const depMin = hhmmToMinutes(dep);
     const arrMinRaw = hhmmToMinutes(arr);
     if (depMin === null || arrMinRaw === null) continue;
+    validRows++;
+    if (!railOdIsBoardable(row)) continue;
 
     const crossesMidnight = arrMinRaw < depMin;
     const arrMin = crossesMidnight ? arrMinRaw + 1440 : arrMinRaw;
@@ -90,7 +97,7 @@ export function parseOdBody(body: unknown): OdFetchOutcome {
     items.push(train);
   }
 
-  if (items.length === 0) return { ok: false, errorCode: "BAD_PAYLOAD" };
+  if (validRows === 0) return { ok: false, errorCode: "BAD_PAYLOAD" };
   return { ok: true, items };
 }
 
@@ -131,6 +138,7 @@ export function parseStationBody(body: unknown): StationFetchOutcome {
   if (rows.length === 0) return { ok: true, items: [] };
 
   const items: NormalizedStationTrain[] = [];
+  let validRows = 0;
   for (const raw of rows) {
     const row = asRecord(raw);
     if (!row) continue;
@@ -141,6 +149,8 @@ export function parseStationBody(body: unknown): StationFetchOutcome {
     if (typeof trainNo !== "string" || !trainNo) continue;
     const depMin = hhmmToMinutes(dep);
     if (depMin === null) continue;
+    validRows++;
+    if (!railStationIsBoardable(row)) continue;
 
     const train: NormalizedStationTrain = {
       trainNo,
@@ -163,7 +173,7 @@ export function parseStationBody(body: unknown): StationFetchOutcome {
     items.push(train);
   }
 
-  if (items.length === 0) return { ok: false, errorCode: "BAD_PAYLOAD" };
+  if (validRows === 0) return { ok: false, errorCode: "BAD_PAYLOAD" };
   return { ok: true, items };
 }
 

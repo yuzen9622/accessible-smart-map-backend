@@ -11,5 +11,3 @@ export const FACILITY_LABELS: Record<number, string> = {
   4: "有無障礙停車位",
   5: "有導盲磚",
 };
-
-export const WHEELCHAIR_SPEED_M_PER_MIN = 60;

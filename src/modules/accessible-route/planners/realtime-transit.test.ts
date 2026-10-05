@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AccessibleRoute } from "../../../types/route";
 
 const { tdxFetch } = vi.hoisted(() => ({
@@ -56,26 +56,34 @@ describe("BUS tdxCity annotation", () => {
 });
 
 describe("future scheduled realtime handling", () => {
-  it("skips a same-day continuation by its absolute departure instant", async () => {
-    const queryTime = new Date("2030-01-01T02:00:00+08:00");
-    const route: AccessibleRoute = {
-      routeId: "future-bus",
-      routeName: "NEXT",
+  /** Each test needs a unique route name: the ETA cache is keyed by URL. */
+  function scheduledBus(routeName: string, departs: string): AccessibleRoute {
+    const departure = new Date(departs);
+    const hhmm = (d: Date) =>
+      d.toLocaleTimeString("en-GB", {
+        timeZone: "Asia/Taipei",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    const arrival = new Date(departure.getTime() + 60 * 60 * 1000);
+    return {
+      routeId: `future-${routeName}`,
+      routeName,
       totalMinutes: 500,
       transferCount: 0,
       legs: [
         {
           type: "BUS",
-          routeName: "NEXT",
-          subRouteUid: "NEXT01",
-          subRouteName: "NEXT",
+          routeName,
+          subRouteUid: `${routeName}01`,
+          subRouteName: routeName,
           departureStop: "起站",
           arrivalStop: "終站",
           departureStopId: "TPE-A",
           arrivalStopId: "TPE-B",
-          departureTime: "14:00",
-          arrivalTime: "15:00",
-          waitInfo: { time: "14:00", source: "schedule" },
+          departureTime: hhmm(departure),
+          arrivalTime: hhmm(arrival),
+          waitInfo: { time: hhmm(departure), source: "schedule" },
           direction: 0,
           polyline: [],
           departureStopA11y: [],
@@ -83,10 +91,14 @@ describe("future scheduled realtime handling", () => {
         },
       ],
       accessibilityHighlights: [],
-      _scheduledDepartureTime: new Date("2030-01-01T14:00:00+08:00").getTime(),
-      _scheduledEndTime: new Date("2030-01-01T15:00:00+08:00").getTime(),
+      _scheduledDepartureTime: departure.getTime(),
+      _scheduledEndTime: arrival.getTime(),
       _isFutureScheduled: true,
     };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
     tdxFetch.mockResolvedValue({
       ok: true,
       json: async () => [
@@ -98,8 +110,17 @@ describe("future scheduled realtime handling", () => {
         },
       ],
     });
+  });
 
-    await overlayRealtimeTransit([route], { departureTime: queryTime });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("skips a same-day continuation by its absolute departure instant", async () => {
+    vi.setSystemTime(new Date("2030-01-01T02:00:00+08:00"));
+    const route = scheduledBus("NEXT", "2030-01-01T14:00:00+08:00");
+
+    await overlayRealtimeTransit([route]);
 
     expect(tdxFetch).not.toHaveBeenCalled();
     expect(route.totalMinutes).toBe(500);
@@ -108,6 +129,31 @@ describe("future scheduled realtime handling", () => {
       waitInfo: { time: "14:00", source: "schedule" },
     });
     expect(route.legs[0]).not.toHaveProperty("estimatedWaitMinutes");
+  });
+
+  it("keeps the timetable for a route planned on a later day", async () => {
+    vi.setSystemTime(new Date("2030-01-01T15:13:00+08:00"));
+    const route = scheduledBus("MONDAY", "2030-01-04T07:49:00+08:00");
+
+    await overlayRealtimeTransit([route]);
+
+    expect(tdxFetch).not.toHaveBeenCalled();
+    expect(route.legs[0]).toMatchObject({
+      departureTime: "07:49",
+      waitInfo: { time: "07:49", source: "schedule" },
+    });
+  });
+
+  it("overlays a route that leaves within the next few minutes", async () => {
+    vi.setSystemTime(new Date("2030-01-01T15:13:00+08:00"));
+    const route = scheduledBus("SOON", "2030-01-01T15:18:00+08:00");
+
+    await overlayRealtimeTransit([route]);
+
+    expect(tdxFetch).toHaveBeenCalled();
+    expect(route.legs[0]).toMatchObject({
+      waitInfo: { time: 1, source: "realtime" },
+    });
   });
 
   it("uses the absolute scheduled date for TRA timetable recovery", async () => {

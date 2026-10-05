@@ -1,11 +1,34 @@
 import { describe, expect, it } from "vitest";
 import {
   AccessibleRouteDataSchema,
+  AccessibleRouteBodySchema,
   AccessibleRouteRerouteBodySchema,
   AccessibleRouteRerouteDataSchema,
   AccessibleRouteSchema,
 } from "./accessible-route.schema";
 import { ROUTE_WARNING } from "../../constants/messages";
+import { TaiwanCityEn } from "../../types/transit";
+
+describe("AccessibleRouteDataSchema administrative city", () => {
+  const base = {
+    origin: { lat: 25.04, lng: 121.56 },
+    destination: { lat: 25.03, lng: 121.55 },
+    routes: [],
+  };
+
+  it.each([...Object.values(TaiwanCityEn), null])("accepts city %s", (city) => {
+    expect(AccessibleRouteDataSchema.parse({ ...base, city }).city).toBe(city);
+  });
+
+  it.each(["InterCity", "NewTaipei ", "Unknown", undefined, ""])(
+    "rejects invalid or missing city %s",
+    (city) => {
+      expect(
+        AccessibleRouteDataSchema.safeParse({ ...base, city }).success,
+      ).toBe(false);
+    },
+  );
+});
 
 const walkLeg = {
   type: "WALK" as const,
@@ -731,5 +754,36 @@ describe("AccessibleRouteSchema BusLeg low-floor enrichment", () => {
       },
     });
     expect(AccessibleRouteSchema.safeParse(invalid).success).toBe(false);
+  });
+});
+
+describe("transit preference HTTP contract", () => {
+  const request = { origin: "台北車站", destination: "板橋車站" };
+  it.each(["none", "bus", "rail", "metro"])(
+    "accepts %s",
+    (transitPreference) => {
+      expect(
+        AccessibleRouteBodySchema.parse({ ...request, transitPreference })
+          .transitPreference,
+      ).toBe(transitPreference);
+    },
+  );
+  it("preserves omission for AI fallback and rejects unsupported values", () => {
+    expect(
+      AccessibleRouteBodySchema.parse(request).transitPreference,
+    ).toBeUndefined();
+    for (const transitPreference of [
+      "train",
+      "subway",
+      "Metro",
+      null,
+      ["bus"],
+      1,
+    ]) {
+      expect(
+        AccessibleRouteBodySchema.safeParse({ ...request, transitPreference })
+          .success,
+      ).toBe(false);
+    }
   });
 });

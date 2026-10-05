@@ -23,6 +23,7 @@ import {
 } from "./fare-access";
 import type { PedGraphQueryable } from "./graph-loader";
 import { getPedGraphClient, getPedGraphRuntime } from "./graph-runtime";
+import { findHazardEdgeIndexes } from "./hazard-edges.repository";
 import {
   EDGE_FLAG,
   EDGE_TYPE,
@@ -493,6 +494,7 @@ function planSegment(
   from: CsrWalkPoint,
   to: CsrWalkPoint,
   profile: CostProfile,
+  excludedEdges: ReadonlySet<number>,
 ): SegmentOutcome {
   const origin = snapToGraph(
     index,
@@ -525,6 +527,7 @@ function planSegment(
     destination.nodeId,
     profile,
     FORBID_FARE_ACCESS,
+    excludedEdges,
   );
   if (constrained !== null) {
     return { status: "ok", route: constrained, origin, destination, from, to };
@@ -542,6 +545,7 @@ function planSegment(
     destination.nodeId,
     profile,
     DIAGNOSTIC_ALLOW_ALL_FARE_ACCESS,
+    excludedEdges,
   );
   if (gateProbe !== null) return { status: "fare_policy_blocked" };
 
@@ -616,11 +620,34 @@ export async function planCsrWalkRoute(
 
   const { graph, index } = runtime.snapshot;
   const profile = profileFor(options.mode);
+  let excludedEdges: ReadonlySet<number> = new Set();
+  if (options.avoidPoints?.length) {
+    try {
+      excludedEdges = await findHazardEdgeIndexes(
+        await getPedGraphClient(),
+        graph,
+        options.avoidPoints,
+      );
+    } catch (error) {
+      return {
+        status: "unavailable",
+        reason:
+          error instanceof Error ? error.message : "hazard edge lookup failed",
+      };
+    }
+  }
 
   const outcomes = points
     .slice(0, -1)
     .map((from, segmentIndex) =>
-      planSegment(graph, index, from, points[segmentIndex + 1], profile),
+      planSegment(
+        graph,
+        index,
+        from,
+        points[segmentIndex + 1],
+        profile,
+        excludedEdges,
+      ),
     );
 
   const blocks = outcomes.filter(

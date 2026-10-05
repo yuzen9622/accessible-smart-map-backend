@@ -1,7 +1,7 @@
 # 前端遷移說明：統一地點搜尋（2026-07-27）
 
 後端 `/api/v1/a11y/search/*` 已從「只有 Google」改為 **Nominatim（OSM）+ Google 兩路合併**。
-本文列出前端要改的每一處。後端規格見 `docs/specs/FUNCTIONAL_SPEC_PLACE_SEARCH_UNIFIED.md`。
+本文列出前端要改的每一處。後端規格見 `docs/archive/specs/FUNCTIONAL_SPEC_PLACE_SEARCH_UNIFIED.md`。
 
 ---
 

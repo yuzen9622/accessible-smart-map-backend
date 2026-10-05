@@ -247,6 +247,7 @@ const intentContents = [
   - 提到「視障 / 看不見 / 導盲 / 盲人」→ "visual_impaired"
   - 未提到任何無障礙需求 → "normal"
 - departureTime：若用戶指定時間（如「下午三點」「8:30」）轉成 "HH:mm"；說「現在 / 馬上 / 等一下」或未指定 → "now"。
+- preferences.transitPreference：偏好公車／想搭公車→bus；偏好火車／想搭台鐵或高鐵→rail（包含台鐵及高鐵，不含捷運）；想搭捷運／地鐵／輕軌→metro；未指定或取消偏好→none。僅提到目的地「火車站／公車站／捷運站」不代表乘車偏好。這是軟性偏好，仍可搭其他運具接駁；若要求「只能搭／完全不搭」特定運具，不能宣稱已套用硬性限制，須說明目前僅支援偏好。
 - preferences.minimizeTransfers：用戶若表達「不想轉乘 / 越少轉乘越好 / 直達」→ true，否則 false。
 - preferences.preferElevator：mode 為 wheelchair 時預設 true；用戶明確提到「要有電梯 / 走電梯」→ true；視障/年長未特別要求 → 視語意，預設 false（wheelchair 例外為 true）。
 

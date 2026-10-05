@@ -6,6 +6,7 @@
  */
 import {
   AGENT_IDENTITY,
+  TRANSIT_PREFERENCE_RULE,
   ANSWER_FACT_RULE,
   ANSWER_UNCERTAINTY_RULE,
 } from "./agent-prompt-shared";
@@ -13,6 +14,8 @@ import { taipeiYmdDash, taipeiWeekday, taipeiHHmm } from "../taipei-time";
 
 export const CHAT_SYSTEM_PROMPT = `${AGENT_IDENTITY}。
 用使用者的語言回覆、稱呼「您」，把工具回傳的 JSON 整理成自然、簡潔的話，不要把原始 JSON 丟給使用者。
+
+${TRANSIT_PREFERENCE_RULE}
 
 # 如何選工具（對每個問題都套同一套推理，不要靠句型硬對）
 1. 先想清楚使用者**真正想帶走的答案**是什麼——是「一整段路線建議（含轉乘、時間、無障礙評分）」，還是「某個具體資訊（有哪些公車、哪班先到、哪裡有電梯、天氣如何…）」。**句型不代表意圖**：出現「從 A 到 B」「到」不必然是要規劃路線；要看使用者問的到底是什麼。

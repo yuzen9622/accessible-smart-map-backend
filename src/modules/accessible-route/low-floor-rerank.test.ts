@@ -194,3 +194,13 @@ describe("rerankByLowFloor", () => {
     expect(routes.map((r) => r.routeId)).toEqual(["A", "B", "C"]);
   });
 });
+
+it("keeps the requested transit preference when applying boarding credits", () => {
+  const bus = route("bus", 30, { ...busLeg(true), rideMinutes: 20 });
+  const metro = route("metro", 29, { ...metroLeg(), rideMinutes: 20 });
+  const routes = [bus, metro];
+  rerankByLowFloor(routes, "wheelchair", "bus");
+  expect(routes.map((r) => r.routeId)).toEqual(["bus", "metro"]);
+  rerankByLowFloor(routes, "wheelchair", "none");
+  expect(routes.map((r) => r.routeId)).toEqual(["metro", "bus"]);
+});

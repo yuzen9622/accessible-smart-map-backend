@@ -5,6 +5,7 @@ import {
   createTransitAuthorizedFareAccess,
 } from "./fare-access";
 import { loadPedGraph, type PedGraphQueryable } from "./graph-loader";
+import { sumSidewalkRampCount } from "./sidewalk-ramp-count";
 
 type FakeRow = Record<string, unknown>;
 
@@ -805,4 +806,19 @@ describe("loadPedGraph", () => {
       "fewer nodes",
     );
   });
+});
+
+it("does not let an unqualified sidewalk match hide a qualified count in either direction", async () => {
+  const fixture = coreFixture();
+  fixture.edges[0].sidewalk_source_id = "same-polygon";
+  fixture.edges[0].sidewalk_attributes_applied = "false";
+  fixture.edges[0].sidewalk_ramp_count = undefined;
+  fixture.edges[1].sidewalk_source_id = "same-polygon";
+  fixture.edges[1].sidewalk_attributes_applied = "true";
+  fixture.edges[1].sidewalk_ramp_count = "3";
+  const { client } = createQueryable(fixture);
+  const graph = await loadPedGraph(client);
+  expect(graph.edgeSidewalkId[0]).toBe(-1);
+  expect(sumSidewalkRampCount(graph, Int32Array.from([0, 1]))).toBe(3);
+  expect(sumSidewalkRampCount(graph, Int32Array.from([1, 0]))).toBe(3);
 });

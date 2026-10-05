@@ -327,9 +327,11 @@ OTP planner 不感知。
 | Healthcheck | `GET /otp/actuators/health`，失敗 → Node 端 circuit-break 直接走 fallback                |
 | 監控        | planner 層記錄：OTP 命中率、p95 latency、fail-soft 次數（先 console，後接現有 log 方案） |
 | Graph 重建  | cron 每週日 04:00（§5），build 失敗保留舊 graph ＋告警                                   |
-| 環境變數    | `OTP_BASE_URL`（如 `http://localhost:8080`）、`USE_OTP_ROUTER`                           |
+| 環境變數    | `OTP_BASE_URL`（如 `http://localhost:8080`）；`USE_OTP_ROUTER` rollout 旗標已移除，OTP2 現為唯一主引擎 |
 
 ## 10. 漸進式切換（Rollout）
+
+> 2026-10-05 註：rollout 已完成，`USE_OTP_ROUTER` 旗標已從程式碼移除；本節保留為歷史紀錄。
 
 | 階段         | 設定                                         | 行為                                                                                                                                                                                        | 退出條件                           |
 | ------------ | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |

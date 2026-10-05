@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { tdxFetch } from "../../config/fetch";
+import { fetchTaipeiPermitIndex } from "../../adapters/taipei-construction.adapter";
 import {
+  applyTaipeiPermits,
   classifyIncident,
   getActiveRoadIncidents,
   getCityRoadIncidents,
+  mergeIncidentRows,
 } from "./road-incident.service";
 import * as cacheRepo from "./traffic-cache.repository";
 import * as sectionRepo from "./traffic-section.repository";
@@ -11,6 +14,17 @@ import * as sectionRepo from "./traffic-section.repository";
 vi.mock("../../config/fetch", () => ({
   tdxFetch: vi.fn(),
 }));
+
+vi.mock(
+  "../../adapters/taipei-construction.adapter",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("../../adapters/taipei-construction.adapter")
+      >();
+    return { ...actual, fetchTaipeiPermitIndex: vi.fn(async () => new Map()) };
+  },
+);
 
 vi.mock("./traffic-cache.repository", async (importOriginal) => {
   const actual =
@@ -209,5 +223,141 @@ describe("road-incident.service", () => {
         active.find((a) => a.incidentId === "ev-no-endtime")?.severity,
       ).toBe("advisory");
     });
+  });
+});
+
+describe("mergeIncidentRows", () => {
+  const row = (incidentId: string, lat: number, lng = 121.5) => ({
+    incidentId,
+    title: "道路施工",
+    description: "道路維護",
+    location: { lat, lng },
+  });
+
+  it("merges rows sharing an EventID and keeps every point", () => {
+    const merged = mergeIncidentRows([
+      row("A", 25.01),
+      row("B", 25.5),
+      row("A", 25.02),
+      row("A", 25.03),
+    ]);
+
+    expect(merged.map((m) => m.incidentId)).toEqual(["A", "B"]);
+    expect(merged[0].location).toEqual({ lat: 25.01, lng: 121.5 });
+    expect(merged[0].points?.map((p) => p.lat)).toEqual([25.01, 25.02, 25.03]);
+    expect(merged[1].points).toBeUndefined();
+  });
+
+  it("drops an exact duplicate point instead of repeating it", () => {
+    const [merged] = mergeIncidentRows([row("A", 25.01), row("A", 25.01)]);
+    expect(merged.points).toBeUndefined();
+  });
+});
+
+describe("applyTaipeiPermits", () => {
+  const tdxRow = {
+    incidentId: "379530000H_001-01-11501977-1",
+    title: "道路施工",
+    description: "道路維護",
+    location: { lat: 25.1, lng: 121.4 },
+  };
+
+  it("marks a permit closure and fills the missing end time", () => {
+    const [row] = applyTaipeiPermits(
+      [tdxRow],
+      new Map([["11501977", { roadClosed: true, endDate: "2026-12-31" }]]),
+    );
+    expect(row).toMatchObject({
+      roadClosed: true,
+      endTime: "2026-12-31T23:59:59+08:00",
+    });
+  });
+
+  it("never overrides an end time TDX already published", () => {
+    const [row] = applyTaipeiPermits(
+      [{ ...tdxRow, endTime: "2026-10-05T18:00:00+08:00" }],
+      new Map([["11501977", { roadClosed: false, endDate: "2026-12-31" }]]),
+    );
+    expect(row.endTime).toBe("2026-10-05T18:00:00+08:00");
+    expect(row.roadClosed).toBeUndefined();
+  });
+
+  it("adds work-area points when TDX has only one point", () => {
+    const points = [
+      { lat: 25.1, lng: 121.4 },
+      { lat: 25.1002, lng: 121.4 },
+    ];
+    const [row] = applyTaipeiPermits(
+      [tdxRow],
+      new Map([["11501977", { roadClosed: false, points }]]),
+    );
+    expect(row.points).toEqual(points);
+  });
+
+  it("leaves unmatched events untouched", () => {
+    const [row] = applyTaipeiPermits(
+      [tdxRow],
+      new Map([["99999999", { roadClosed: true }]]),
+    );
+    expect(row).toEqual(tdxRow);
+  });
+});
+
+describe("getActiveRoadIncidents — Taipei permits", () => {
+  beforeEach(() => {
+    vi.mocked(cacheRepo.getLiveEvents).mockReset();
+    vi.mocked(fetchTaipeiPermitIndex).mockReset();
+  });
+
+  it("turns a Taipei advisory into a closure when the permit says so", async () => {
+    vi.mocked(cacheRepo.getLiveEvents).mockResolvedValue([
+      {
+        incidentId: "379530000H_001-01-11501977-1",
+        title: "道路施工",
+        description: "道路維護",
+        location: { lat: 25.1, lng: 121.4 },
+      },
+      {
+        incidentId: "379530000H_001-01-11501977-1",
+        title: "道路施工",
+        description: "道路維護",
+        location: { lat: 25.11, lng: 121.41 },
+      },
+    ]);
+    vi.mocked(fetchTaipeiPermitIndex).mockResolvedValue(
+      new Map([["11501977", { roadClosed: true }]]),
+    );
+
+    const incidents = await getActiveRoadIncidents({ city: "Taipei" });
+
+    expect(incidents).toHaveLength(1);
+    expect(incidents[0]).toMatchObject({
+      severity: "closure",
+      roadClosed: true,
+    });
+    expect(incidents[0].points).toHaveLength(2);
+  });
+
+  it("keeps an event whose later point falls inside the bbox", async () => {
+    vi.mocked(cacheRepo.getLiveEvents).mockResolvedValue([
+      {
+        incidentId: "E1",
+        title: "道路施工",
+        location: { lat: 24.0, lng: 120.0 },
+      },
+      {
+        incidentId: "E1",
+        title: "道路施工",
+        location: { lat: 25.05, lng: 121.55 },
+      },
+    ]);
+    vi.mocked(fetchTaipeiPermitIndex).mockResolvedValue(new Map());
+
+    const incidents = await getActiveRoadIncidents({
+      city: "Taipei",
+      bbox: [121.5, 25.0, 121.6, 25.1],
+    });
+
+    expect(incidents.map((i) => i.incidentId)).toEqual(["E1"]);
   });
 });

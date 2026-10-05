@@ -46,6 +46,17 @@ import {
 const origin = { lat: 25.041, lng: 121.565 };
 const destination = { lat: 25.033, lng: 121.564 };
 
+const otpGaveUp = {
+  data: {
+    errors: [
+      {
+        message:
+          "Exception while fetching data (/plan) : TIMEOUT! The request is too resource intensive.",
+      },
+    ],
+  },
+};
+
 const okResp = (
   itineraries: unknown[],
   routingErrors: { code: string }[] = [],
@@ -178,6 +189,11 @@ describe("OTP PLAN_QUERY searchWindow", () => {
     expect(PLAN_QUERY).toContain("searchWindow: $searchWindow");
   });
 
+  it("declares and passes maxTransfers", () => {
+    expect(PLAN_QUERY).toContain("$maxTransfers: Int");
+    expect(PLAN_QUERY).toContain("maxTransfers: $maxTransfers");
+  });
+
   it("requests routing error codes used by the continuation ladder", () => {
     expect(PLAN_QUERY).toContain("routingErrors { code }");
   });
@@ -300,6 +316,30 @@ describe("planOtpRoute search windows and timeouts", () => {
     });
   });
 
+  it("caps OTP's own search at the requested transfers, counted as rides", async () => {
+    post
+      .mockResolvedValueOnce(okResp([]))
+      .mockResolvedValueOnce(okResp(threeDistinctTransitItineraries()));
+
+    await planOtpRoute(origin, destination, { maxTransfers: 1 });
+
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(
+      post.mock.calls.map((call) => call[1].variables.maxTransfers),
+    ).toEqual([2, 2]);
+  });
+
+  it("leaves OTP's transfer default alone without a cap", async () => {
+    post.mockResolvedValueOnce(okResp(threeDistinctTransitItineraries()));
+
+    await planOtpRoute(origin, destination);
+
+    expect(post.mock.calls[0][1].variables).not.toHaveProperty(
+      "maxTransfers",
+      expect.anything(),
+    );
+  });
+
   it("retries an empty narrow result with the wide window", async () => {
     post
       .mockResolvedValueOnce(okResp([]))
@@ -310,8 +350,37 @@ describe("planOtpRoute search windows and timeouts", () => {
     expect(post).toHaveBeenCalledTimes(2);
     expect(post.mock.calls[1][1].variables).toMatchObject({
       numItineraries: 15,
-      searchWindow: 28800,
+      searchWindow: 7200,
     });
+  });
+
+  it("skips the diversity widening after a slow primary that already has a route", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    post.mockImplementationOnce(async () => {
+      vi.setSystemTime(new Date(Date.now() + 7_000));
+      return okResp([transitItinerary("R1")]);
+    });
+
+    const routes = await planOtpRoute(origin, destination);
+    vi.useRealTimers();
+
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(routes.map((route) => route.routeName)).toEqual(["R1"]);
+  });
+
+  it("still widens after a slow primary without a usable route", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    post
+      .mockImplementationOnce(async () => {
+        vi.setSystemTime(new Date(Date.now() + 7_000));
+        return okResp([]);
+      })
+      .mockResolvedValueOnce(okResp(threeDistinctTransitItineraries()));
+
+    await planOtpRoute(origin, destination);
+    vi.useRealTimers();
+
+    expect(post.mock.calls[1][1].variables.searchWindow).toBe(7200);
   });
 
   it("keeps a usable narrow route when the wide result is empty", async () => {
@@ -353,8 +422,8 @@ describe("planOtpRoute search windows and timeouts", () => {
 
     expect(post).toHaveBeenCalledTimes(3);
     expect(post.mock.calls[2][1].variables).toMatchObject({
-      date: "2030-01-02",
-      time: "05:51",
+      date: "2030-01-01",
+      time: "23:51",
       searchWindow: 28800,
     });
     expect(routes[0].departureDate).toBe("2030-01-02");
@@ -385,7 +454,7 @@ describe("planOtpRoute search windows and timeouts", () => {
 
     expect(post.mock.calls[2][1].variables).toMatchObject({
       date: "2030-01-01",
-      time: "10:00",
+      time: "04:00",
     });
     expect(routes[0].departureDate).toBeUndefined();
     expect(routes[0]._scheduledDepartureTime).toBe(scheduledDeparture);
@@ -519,8 +588,8 @@ describe("planOtpRoute search windows and timeouts", () => {
       fromLon: origin.lng,
       toLat: destination.lat,
       toLon: destination.lng,
-      date: "2030-01-02",
-      time: "05:51",
+      date: "2030-01-01",
+      time: "23:51",
     });
     expect(routes[0].routeName).toBe("ORIGINAL");
     expect(routes[0].legs[0]).toMatchObject({ type: "BUS" });
@@ -559,16 +628,16 @@ describe("planOtpRoute search windows and timeouts", () => {
       fromLon: origin.lng,
       toLat: destination.lat,
       toLon: destination.lng,
-      date: "2030-01-02",
-      time: "05:51",
+      date: "2030-01-01",
+      time: "23:51",
     });
     expect(post.mock.calls[4][1].variables).toMatchObject({
       fromLat: 25.042,
       fromLon: 121.566,
       toLat: 25.042,
       toLon: 121.566,
-      date: "2030-01-02",
-      time: "05:51",
+      date: "2030-01-01",
+      time: "23:51",
     });
     expect(routes[0].legs[0]).toMatchObject({ type: "WALK", from: "出發地" });
     expect(routes[0].legs.at(-1)).toMatchObject({ type: "WALK", to: "目的地" });
@@ -627,13 +696,16 @@ describe("planOtpRoute search windows and timeouts", () => {
     );
   });
 
-  it("caps the continuation ladder at two hops", async () => {
+  it("stops the continuation ladder at the absolute 24-hour horizon", async () => {
     const noTransit = [{ code: "NO_TRANSIT_CONNECTION_IN_SEARCH_WINDOW" }];
     post.mockResolvedValue(okResp([], noTransit));
 
     await expect(planOtpRoute(origin, destination)).resolves.toEqual([]);
 
-    expect(post).toHaveBeenCalledTimes(4);
+    expect(post).toHaveBeenCalledTimes(5);
+    expect(
+      post.mock.calls.map((call) => call[1].variables.searchWindow),
+    ).toEqual([3600, 7200, 28800, 28800, 21600]);
     expect(post.mock.calls[2][1].variables.time).not.toBe(
       post.mock.calls[3][1].variables.time,
     );
@@ -647,7 +719,58 @@ describe("planOtpRoute search windows and timeouts", () => {
     await planOtpRoute(origin, destination);
 
     expect(post).toHaveBeenCalledTimes(2);
-    expect(post.mock.calls[1][1].variables.searchWindow).toBe(28800);
+    expect(post.mock.calls[1][1].variables.searchWindow).toBe(7200);
+  });
+
+  it("settles on the walk itinerary when OTP reports walking is better", async () => {
+    busLean.mockResolvedValue([
+      {
+        location: { coordinates: [121.565, 25.041] },
+        stopName: { Zh_tw: "公車站" },
+      },
+    ]);
+    post.mockResolvedValue(
+      okResp([walkOnlyItinerary()], [{ code: "WALKING_BETTER_THAN_TRANSIT" }]),
+    );
+
+    const result = await planOtpRouteDetailed(origin, destination, {
+      mode: "wheelchair",
+    });
+
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.routes.map((route) => route.routeName)).toEqual(["步行路線"]);
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips the wide and continuation searches but keeps the snap retry when asked", async () => {
+    busLean.mockResolvedValue([
+      {
+        location: { coordinates: [121.565, 25.041] },
+        stopName: { Zh_tw: "公車站" },
+      },
+    ]);
+    post.mockResolvedValue(okResp([]));
+
+    const result = await planOtpRouteDetailed(origin, destination, {
+      skipLaterService: true,
+    });
+
+    expect(result).toEqual({ status: "no_route", routes: [] });
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(
+      post.mock.calls.map((call) => call[1].variables.searchWindow),
+    ).toEqual([3600, 3600]);
+  });
+
+  it("keeps searching when walking is better but no walk itinerary is usable", async () => {
+    post.mockResolvedValue(
+      okResp([], [{ code: "WALKING_BETTER_THAN_TRANSIT" }]),
+    );
+
+    await planOtpRouteDetailed(origin, destination);
+
+    expect(post.mock.calls.length).toBeGreaterThan(1);
   });
 
   it("returns a WALK-only itinerary when no transit result replaces it", async () => {
@@ -668,6 +791,16 @@ describe("planOtpRoute search windows and timeouts", () => {
 
   it("reports unavailable immediately after a primary timeout", async () => {
     post.mockRejectedValueOnce({ code: "ECONNABORTED" });
+
+    await expect(planOtpRouteDetailed(origin, destination)).resolves.toEqual({
+      status: "unavailable",
+      routes: [],
+    });
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not escalate after OTP abandons the primary query at its processing timeout", async () => {
+    post.mockResolvedValueOnce(otpGaveUp);
 
     await expect(planOtpRouteDetailed(origin, destination)).resolves.toEqual({
       status: "unavailable",
@@ -783,6 +916,36 @@ describe("planOtpRoute search windows and timeouts", () => {
     expect(post).toHaveBeenCalledTimes(3);
   });
 
+  it("still tries snapped endpoints after OTP abandons the primary query", async () => {
+    busLean.mockResolvedValue([
+      {
+        location: { coordinates: [121.565, 25.041] },
+        stopName: { Zh_tw: "公車站" },
+      },
+    ]);
+    post
+      .mockResolvedValueOnce(otpGaveUp)
+      .mockResolvedValueOnce(okResp(threeDistinctTransitItineraries()));
+
+    await expect(planOtpRoute(origin, destination)).resolves.toHaveLength(3);
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(post.mock.calls[1][1].variables.searchWindow).toBe(3600);
+  });
+
+  it("does not continue to later service after OTP abandons the wide query", async () => {
+    const noTransit = [{ code: "NO_TRANSIT_CONNECTION_IN_SEARCH_WINDOW" }];
+    post
+      .mockResolvedValueOnce(okResp([], noTransit))
+      .mockResolvedValueOnce(otpGaveUp)
+      .mockResolvedValue(okResp([], noTransit));
+
+    await expect(planOtpRouteDetailed(origin, destination)).resolves.toEqual({
+      status: "unavailable",
+      routes: [],
+    });
+    expect(post).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps the narrow window for snap after a non-timeout wide-query error", async () => {
     busLean.mockResolvedValue([
       {
@@ -859,6 +1022,58 @@ describe("planOtpRoute search windows and timeouts", () => {
       isolatedOtpRouting.planOtpRouteDetailed(origin, destination),
     ).resolves.toEqual({ status: "unavailable", routes: [] });
     expect(isolatedPost).toHaveBeenCalledTimes(6);
+
+    vi.doUnmock("axios");
+    vi.resetModules();
+  });
+
+  it.each([
+    "Processing timeout",
+    "Exception while fetching data (/plan) : TIMEOUT! The request is too resource intensive.",
+  ])(
+    "does not open the breaker when OTP answers queries with %s",
+    async (message) => {
+      vi.resetModules();
+      const isolatedPost = vi.fn().mockResolvedValue({
+        data: { errors: [{ message }] },
+      });
+      vi.doMock("axios", () => ({
+        default: {
+          create: () => ({ post: isolatedPost }),
+          isAxiosError: () => false,
+        },
+      }));
+
+      const isolatedOtpRouting = await import("./otp-routing");
+      for (let i = 0; i < 4; i += 1) {
+        await isolatedOtpRouting.planOtpRouteDetailed(origin, destination);
+      }
+
+      expect(isolatedOtpRouting.isOtpCircuitOpen()).toBe(false);
+
+      vi.doUnmock("axios");
+      vi.resetModules();
+    },
+  );
+
+  it("opens the breaker after consecutive HTTP 5xx answers", async () => {
+    vi.resetModules();
+    const isolatedPost = vi
+      .fn()
+      .mockRejectedValue({ response: { status: 503 } });
+    vi.doMock("axios", () => ({
+      default: {
+        create: () => ({ post: isolatedPost }),
+        isAxiosError: () => false,
+      },
+    }));
+
+    const isolatedOtpRouting = await import("./otp-routing");
+    for (let i = 0; i < 3; i += 1) {
+      await isolatedOtpRouting.planOtpRouteDetailed(origin, destination);
+    }
+
+    expect(isolatedOtpRouting.isOtpCircuitOpen()).toBe(true);
 
     vi.doUnmock("axios");
     vi.resetModules();

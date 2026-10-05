@@ -3,6 +3,10 @@ import { WebSocketServer, WebSocket, type RawData } from "ws";
 import { registerWsRoute } from "../../config/ws-upgrade";
 import { authenticateToken, verifyActiveSession } from "../../config/auth";
 import { createLiveBridge, type LiveBridge } from "./live-bridge";
+import {
+  PriorHistorySchema,
+  type PriorTurn,
+} from "../agent/conversation-context";
 import { type NavPosition } from "./navigation.schema";
 import {
   NavCancelMessageSchema,
@@ -108,6 +112,20 @@ function parseUserLocation(
 ): { latitude: number; longitude: number } | undefined {
   const result = UserLocationSchema.safeParse(value);
   return result.success ? result.data : undefined;
+}
+
+/**
+ * Reads the optional prior conversation off a `session.start` frame (the user
+ * was typing and switched to voice). Malformed history is dropped, never
+ * rejected, so it can't block the handshake.
+ *
+ * @param value The raw `history` field
+ * @returns The validated turns, or undefined
+ */
+function parsePriorHistory(value: unknown): PriorTurn[] | undefined {
+  if (value === undefined) return undefined;
+  const result = PriorHistorySchema.safeParse(value);
+  return result.success && result.data.length > 0 ? result.data : undefined;
 }
 
 /**
@@ -269,6 +287,7 @@ function handleConnection(
     }
     userId = id;
     const userLocation = parseUserLocation(handshake.data.userLocation);
+    const history = parsePriorHistory(handshake.data.history);
     const existing = connections.get(id);
     if (existing) existing.ws.close(4409, "superseded");
     const connection: VoiceConnection = { ws, bridge: null };
@@ -289,7 +308,7 @@ function handleConnection(
     // Deliberately not awaited: the session is authenticated from here on, so
     // control frames that arrive while the Live bridge is still connecting must
     // reach handleControlMessage and be buffered rather than queue behind it.
-    void startBridge(id, generation, connection, userLocation);
+    void startBridge(id, generation, connection, userLocation, history);
   };
 
   /**
@@ -313,12 +332,14 @@ function handleConnection(
     generation: number,
     connection: VoiceConnection,
     userLocation: ReturnType<typeof parseUserLocation>,
+    history: PriorTurn[] | undefined,
   ): Promise<void> => {
     try {
       const createdBridge = await createLiveBridge({
         ws,
         userId: id,
         userLocation,
+        history,
       });
       if (
         disposed ||

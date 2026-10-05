@@ -1,10 +1,13 @@
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
+import { TaiwanCityEn } from "../../types/transit";
+import { TransitPreferenceSchema } from "../../schemas/transit-preference.schema";
 import { registry } from "../../openapi/registry";
 import {
   ROUTE_MSG,
   ROUTE_REASON,
   ROUTE_WARNING,
+  TRANSIT_FALLBACK_REASON,
 } from "../../constants/messages";
 import { RouteIntentSchema } from "../../schemas/route-intent.schema";
 import {
@@ -103,6 +106,11 @@ export const AccessibleRouteBodySchema = z
       description:
         "回應格式。standard（預設）每段內嵌精簡設施物件；compact 另將設施去重為路線層級 facilities 字典，各段改帶 a11yRefs（osmId 參照）且設施陣列為空。",
       example: "standard",
+    }),
+    transitPreference: TransitPreferenceSchema.optional().openapi({
+      description:
+        "大眾運輸軟性偏好：none 不指定、bus 偏好公車、rail 偏好鐵路（台鐵／高鐵，不含捷運）、metro 偏好捷運／輕軌。保留其他運具接駁，不保證一定搭到偏好運具；僅 transit 適用。明確值優先於 query 解析，none 可清除偏好。",
+      example: "rail",
     }),
     travelMode: z
       .enum(["transit", "drive", "motorcycle", "walk"])
@@ -315,10 +323,16 @@ const WalkLegSchema = z
       .array(
         z
           .object({
-            type: z.literal("curb_ramp").openapi({ example: "curb_ramp" }),
+            type: z
+              .enum(["curb_ramp", "audio_signal"])
+              .openapi({ example: "curb_ramp" }),
             location: z.tuple([z.number(), z.number()]).openapi({
               example: [121.567, 25.041],
               description: "設施本身的 WGS84 [經度, 緯度]，非路徑上的投影點。",
+            }),
+            name: z.string().optional().openapi({
+              example: "八德路三段 光復北路",
+              description: "路口名稱；僅 audio_signal 且來源有提供時存在。",
             }),
           })
           .strict()
@@ -327,10 +341,12 @@ const WalkLegSchema = z
       .optional()
       .openapi({
         description:
-          "只有 engine=pedestrian-a11y 會有此欄位。座標是無障礙斜坡道設施本身的位置，" +
-          "不是路徑上的投影點。來源為臺北市新工處人行道無障礙斜坡道點位（已排除汽車斜坡道），" +
-          "以 8 公尺內最近人行道邊吸附。欄位為空或不存在不代表沿途沒有坡道" +
-          "（約 35% 點位因該處圖上無人行道線而未吸附）。",
+          "沿途的點狀設施，座標是設施本身的位置，不是路徑上的投影點。" +
+          "curb_ramp：只有 engine=pedestrian-a11y 會有。來源為臺北市新工處人行道無障礙斜坡道點位（已排除汽車斜坡道），" +
+          "以 8 公尺內最近人行道邊吸附；約 35% 點位因該處圖上無人行道線而未吸附。" +
+          "audio_signal：只有 mode=visual_impaired 會有，任何步行引擎皆可能出現。" +
+          "來源為臺北市交工處有聲號誌設置資料與 OSM，取路線 20 公尺內的路口，15 公尺內視為同一路口。" +
+          "欄位為空或不存在都不代表沿途沒有該類設施。",
       }),
     steps: z
       .array(
@@ -453,6 +469,21 @@ const RoadIncidentSchema = z
     location: CoordSchema.openapi({
       example: { lat: 25.12333, lng: 121.463906 },
     }),
+    locationDescription: z.string().optional().openapi({
+      example: "中正路613號至重慶北路四段177號人行道更新",
+      description: "TDX 提供的文字位置描述",
+    }),
+    points: z
+      .array(z.object({ lat: z.number(), lng: z.number() }))
+      .optional()
+      .openapi({
+        description:
+          "事件範圍上的點：同一事件的不同點，或台北以道管中心施工範圍每 20 公尺取樣（最多 200 點）；沒有範圍資料時省略",
+      }),
+    roadClosed: z.boolean().optional().openapi({
+      description:
+        "台北道管中心今日施工資料標示為道路封閉時為 true，此時 severity 一律為 closure；其他縣市不提供此欄位",
+    }),
     startTime: z.string().optional(),
     endTime: z
       .string()
@@ -480,6 +511,10 @@ const LowFloorAlternativeSchema = z
 const BusLegSchema = z
   .object({
     type: z.literal("BUS").openapi({ example: "BUS" }),
+    rideMinutes: z.number().nonnegative().optional().openapi({
+      description: "公車預定乘車分鐘，不含候車與步行",
+      example: 20,
+    }),
     a11yRefs: A11yRefsSchema,
     routeName: z.string().openapi({ example: "信義幹線" }),
     subRouteUid: z.string().openapi({
@@ -864,10 +899,15 @@ const RouteHazardSchema = z
     severity: z
       .enum(["blocking", "difficult", "minor"])
       .openapi({ example: "blocking" }),
+    source: z.enum(["community", "government"]).openapi({
+      example: "government",
+      description:
+        "community＝使用者回報且經社群確認；government＝TDX 即時路況事件的道路施工封閉（台北另以道管中心今日施工資料補判是否封閉）。",
+    }),
     description: z.string().optional().openapi({ example: "人行道施工中" }),
     location: CoordSchema.openapi({
       example: { lat: 25.0411, lng: 121.5674 },
-      description: "已確認回報的位置。",
+      description: "障礙位置；延伸型的政府施工為離路線最近的那一點。",
     }),
     distanceM: z.number().nonnegative().openapi({
       example: 8.4,
@@ -1031,7 +1071,16 @@ export const AccessibleRouteDataSchema = z
     destination: CoordSchema.openapi({
       example: { lat: 25.034, lng: 121.564 },
     }),
-    city: z.string().openapi({ example: "Taipei" }),
+    city: z.enum(TaiwanCityEn).nullable().openapi({
+      example: "NewTaipei",
+      description:
+        "起點的行政縣市代碼，非公車資料集範圍；無法判定時為 null，不影響路線規劃。",
+    }),
+    transitPreference: TransitPreferenceSchema.optional().openapi({
+      description:
+        "本次 transit 查詢採用的軟性運具偏好；不代表回傳路線保證包含該運具。",
+      example: "rail",
+    }),
     travelMode: z
       .enum(["transit", "drive", "motorcycle", "walk"])
       .optional()
@@ -1059,6 +1108,20 @@ export const AccessibleRouteDataSchema = z
       .openapi({
         description:
           "僅當請求或 profile 帶有 maxSlopePercent 時出現；誠實回報該限制是否真的被執行，避免前端誤以為坡度篩選已生效。",
+      }),
+    fallback: z
+      .object({
+        travelMode: z.literal("walk"),
+        reason: z.enum([
+          TRANSIT_FALLBACK_REASON.WALKING_BETTER,
+          TRANSIT_FALLBACK_REASON.NO_TRANSIT_ROUTE,
+        ]),
+      })
+      .optional()
+      .openapi({
+        description:
+          "僅當 travelMode=transit 卻以步行路線回應時出現（routes 全為 WALK leg）。WALKING_BETTER：規劃引擎判定步行優於任何大眾運輸；NO_TRANSIT_ROUTE：起訖點直線距離（含中途點）在 1500 公尺內，且查無大眾運輸、規劃服務無法使用，或 5 秒內未完成大眾運輸規劃，改以步行規劃（輪椅模式同樣套用無階梯限制）。",
+        example: { travelMode: "walk", reason: "WALKING_BETTER" },
       }),
     metroAlerts: z.array(MetroAlertResultSchema).optional().openapi({
       description:

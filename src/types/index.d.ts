@@ -383,9 +383,15 @@ export interface IGtfsTrip {
   bikesAllowed?: 0 | 1 | 2;
 }
 
+export type VisualA11ySource = "osm" | "taipei_tce";
+
 export interface IVisualA11y {
   _id: string;
-  osmNodeId: number;
+  /** "osm" for Overpass nodes; "taipei_tce" for 臺北市交通管制工程處 audible signals. */
+  source: VisualA11ySource;
+  /** The id within its source: the OSM node id, or the TCE 號誌編號. */
+  sourceId: string;
+  osmNodeId?: number;
   type: "audio_signal" | "tactile_paving";
   location: { type: "Point"; coordinates: [number, number] };
   properties: {
