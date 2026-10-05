@@ -21,7 +21,7 @@ import {
 } from "../../utils/transit-text";
 import { busUrl } from "../../config/transit";
 import { tdxFetch } from "../../config/fetch";
-import { getCity } from "../../adapters/google.adapter";
+import { resolveCity } from "../geography/city.service";
 import {
   formatNextBusTime,
   nextDepartureText,
@@ -88,11 +88,7 @@ export async function resolveBusCity(
   const direct = cityFromAlias(cityInput);
   if (direct) return direct;
   if (userLoc) {
-    try {
-      return cityFromAlias(await getCity(userLoc.latitude, userLoc.longitude));
-    } catch {
-      return null;
-    }
+    return resolveCity(userLoc.latitude, userLoc.longitude);
   }
   return null;
 }
