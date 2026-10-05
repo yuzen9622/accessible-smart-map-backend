@@ -4,7 +4,9 @@
  * realtime tool joins live A1 plate numbers against this table to tell the
  * user whether the approaching bus is low-floor / wheelchair-accessible —
  * without ever needing a plate number from the user.
- * Defaults to 六都; pass --city=Taipei for a single city.
+ * Taichung is skipped: its TDX table holds 96 plates all flagged non-low-floor
+ * that match no live bus, so bus-fleet-sync.worker fills it from the city's
+ * own system instead. Pass --city=Taipei for a single city.
  *
  * Run: npm run import:tdx-bus-vehicles
  * Or:  npm run import:tdx-bus-vehicles -- --city=Taipei
@@ -17,7 +19,10 @@ import { busUrl } from "../config/transit";
 import { tdxFetch } from "../config/fetch";
 import { TaiwanCityEn } from "../types/transit";
 
-const ALL_CITIES = [...Object.values(TaiwanCityEn), "InterCity"];
+const ALL_CITIES = [
+  ...Object.values(TaiwanCityEn).filter((c) => c !== TaiwanCityEn.Taichung),
+  "InterCity",
+];
 
 const CITY_DELAY_MS = 1000;
 const PAGE_DELAY_MS = 1500;
@@ -80,6 +85,7 @@ async function importCity(city: string): Promise<number> {
             isElectric: v.IsElectric,
             isHybrid: v.IsHybrid,
             hasWifi: v.HasWifi,
+            source: "tdx" as const,
             importedAt: new Date(),
           },
         },
