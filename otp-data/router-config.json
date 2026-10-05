@@ -18,7 +18,8 @@
       "elevator": {
         "onlyConsiderAccessible": false
       },
-      "maxSlope": 0.083
+      "maxSlope": 0.083,
+      "slopeExceededReluctance": 0.1
     },
     "searchWindow": "1h",
     "numItineraries": 5,
