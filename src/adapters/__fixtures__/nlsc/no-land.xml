@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<townVillageItem>
+    <error>
+        <error>NO_LAND</error>
+        <message>查無地號</message>
+    </error>
+</townVillageItem>
