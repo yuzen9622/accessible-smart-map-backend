@@ -7,6 +7,28 @@ import {
   AccessibleRouteSchema,
 } from "./accessible-route.schema";
 import { ROUTE_WARNING } from "../../constants/messages";
+import { TaiwanCityEn } from "../../types/transit";
+
+describe("AccessibleRouteDataSchema administrative city", () => {
+  const base = {
+    origin: { lat: 25.04, lng: 121.56 },
+    destination: { lat: 25.03, lng: 121.55 },
+    routes: [],
+  };
+
+  it.each([...Object.values(TaiwanCityEn), null])("accepts city %s", (city) => {
+    expect(AccessibleRouteDataSchema.parse({ ...base, city }).city).toBe(city);
+  });
+
+  it.each(["InterCity", "NewTaipei ", "Unknown", undefined, ""])(
+    "rejects invalid or missing city %s",
+    (city) => {
+      expect(
+        AccessibleRouteDataSchema.safeParse({ ...base, city }).success,
+      ).toBe(false);
+    },
+  );
+});
 
 const walkLeg = {
   type: "WALK" as const,

@@ -239,7 +239,7 @@ export type PlanRouteResult =
       data: {
         origin: { lat: number; lng: number };
         destination: { lat: number; lng: number };
-        city: TaiwanCityEn;
+        city: TaiwanCityEn | null;
         travelMode: TravelMode;
         transitPreference?: TransitPreference;
         waypoints?: LatLng[];

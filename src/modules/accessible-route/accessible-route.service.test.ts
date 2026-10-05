@@ -76,14 +76,16 @@ vi.mock("../hazard-report/hazard-report.service", () => ({
   findConfirmedHazardsWithin: vi.fn(),
 }));
 
-// DB isolation: resolveCityFromStops does findOne().select().lean().
 vi.mock("../../model/bus-stop.model", () => ({
   default: {
     findOne: vi.fn(),
   },
 }));
 
-// Spread-actual google adapter; getCity is a fallback (city resolves via stops).
+vi.mock("../../adapters/nlsc.adapter", () => ({
+  getNlscAdministrativeArea: vi.fn(),
+}));
+
 vi.mock("../../adapters/google.adapter", async (importActual) => {
   const actual =
     await importActual<typeof import("../../adapters/google.adapter")>();
@@ -135,6 +137,7 @@ import { getA11yProfile } from "../user/user.service";
 import { findConfirmedHazardsWithin } from "../hazard-report/hazard-report.service";
 import { enrichLegIndoor } from "./planners/route-a11y";
 import { getCity } from "../../adapters/google.adapter";
+import { getNlscAdministrativeArea } from "../../adapters/nlsc.adapter";
 import BusStopModel from "../../model/bus-stop.model";
 import {
   ROUTE_MSG,
@@ -143,6 +146,7 @@ import {
   TRANSIT_FALLBACK_REASON,
 } from "../../constants/messages";
 import { ResponseCode } from "../../types/code";
+import { TaiwanCityEn } from "../../types/transit";
 import { getWeatherAndAirQuality } from "../environment/environment.service";
 import { getMetroAlerts } from "../transit/metro.service";
 import { getTransitAlerts } from "../transit/alert.service";
@@ -203,7 +207,8 @@ beforeEach(() => {
   vi.mocked(BusStopModel.findOne).mockReturnValue({
     select: () => ({ lean: () => Promise.resolve({ city: "Taipei" }) }),
   } as any);
-  vi.mocked(getCity).mockResolvedValue("Taipei");
+  vi.mocked(getNlscAdministrativeArea).mockResolvedValue(null);
+  vi.mocked(getCity).mockResolvedValue(TaiwanCityEn.Taipei);
   vi.mocked(findNearby).mockResolvedValue({ nearbyOsm: [] } as any);
   vi.mocked(planOtpRouteDetailed).mockResolvedValue(otpTransitNoRoute());
   vi.mocked(planOtpWalkDetailed).mockResolvedValue({
@@ -216,6 +221,93 @@ beforeEach(() => {
   vi.mocked(getWeatherAndAirQuality).mockResolvedValue({});
   vi.mocked(findConfirmedHazardsWithin).mockResolvedValue([]);
   vi.mocked(getMetroAlerts).mockResolvedValue([]);
+});
+
+describe("planAccessibleRouteFromRequest administrative city", () => {
+  it("returns NLSC Kinmen instead of Google's missing administrative area", async () => {
+    vi.mocked(getNlscAdministrativeArea).mockResolvedValue({
+      city: TaiwanCityEn.KinmenCounty,
+    });
+    vi.mocked(getCity).mockResolvedValue(null);
+    vi.mocked(planValhallaRoute).mockResolvedValue([driveRoute([])] as any);
+    vi.mocked(findNearbyParking).mockResolvedValue([] as any);
+    const result = await planAccessibleRouteFromRequest({
+      ...driveRequest,
+      origin: { latitude: 24.4325, longitude: 118.3186 },
+      destination: { latitude: 24.435, longitude: 118.32 },
+    });
+    expect(result.ok).toBe(true);
+    expect(okData(result).city).toBe(TaiwanCityEn.KinmenCounty);
+    expect(getNlscAdministrativeArea).toHaveBeenCalledWith(24.4325, 118.3186);
+    expect(getCity).not.toHaveBeenCalled();
+  });
+
+  it.each(["network failure", "empty results", "missing administrative area"])(
+    "keeps planning through the real Google adapter on %s",
+    async (failure) => {
+      const actual = await vi.importActual<
+        typeof import("../../adapters/google.adapter")
+      >("../../adapters/google.adapter");
+      vi.mocked(getCity).mockImplementation(actual.getCity);
+      const fetchMock = vi.fn();
+      if (failure === "network failure") {
+        fetchMock.mockRejectedValue(new Error("network unavailable"));
+      } else {
+        fetchMock.mockResolvedValue({
+          ok: true,
+          json: async () =>
+            failure === "empty results"
+              ? { status: "ZERO_RESULTS", results: [] }
+              : { status: "OK", results: [{ address_components: [] }] },
+        });
+      }
+      vi.stubGlobal("fetch", fetchMock);
+      vi.mocked(planValhallaRoute).mockResolvedValue([driveRoute([])] as any);
+      vi.mocked(findNearbyParking).mockResolvedValue([] as any);
+
+      try {
+        const result = await planAccessibleRouteFromRequest(driveRequest);
+        expect(result.ok).toBe(true);
+        expect(okData(result).city).toBeNull();
+        expect(JSON.parse(JSON.stringify(result)).data).toHaveProperty(
+          "city",
+          null,
+        );
+        expect(okData(result).routes).toHaveLength(1);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
+  it.each([
+    ["InterCity", TaiwanCityEn.NewTaipei],
+    ["NewTaipei", TaiwanCityEn.Keelung],
+    ["Taipei", null],
+  ])(
+    "ignores the nearest stop dataset %s and returns geocoded city %s",
+    async (datasetCity, city) => {
+      vi.mocked(BusStopModel.findOne).mockReturnValue({
+        select: () => ({ lean: async () => ({ city: datasetCity }) }),
+      } as any);
+      vi.mocked(getCity).mockResolvedValue(city);
+      vi.mocked(planValhallaRoute).mockResolvedValue([driveRoute([])] as any);
+      vi.mocked(findNearbyParking).mockResolvedValue([] as any);
+
+      const result = await planAccessibleRouteFromRequest(driveRequest);
+
+      expect(result.ok).toBe(true);
+      expect(okData(result).city).toBe(city);
+      expect(JSON.parse(JSON.stringify(result)).data).toHaveProperty(
+        "city",
+        city,
+      );
+      expect(okData(result).routes).toHaveLength(1);
+      expect(getCity).toHaveBeenCalledWith(25.04, 121.56);
+      expect(BusStopModel.findOne).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("planAccessibleRouteFromRequest preflight", () => {
@@ -234,6 +326,7 @@ describe("planAccessibleRouteFromRequest preflight", () => {
       data: { reason: ROUTE_REASON.OUT_OF_COVERAGE },
     });
     expect(vi.mocked(BusStopModel.findOne)).not.toHaveBeenCalled();
+    expect(vi.mocked(getNlscAdministrativeArea)).not.toHaveBeenCalled();
     expect(vi.mocked(getCity)).not.toHaveBeenCalled();
     expect(vi.mocked(planOtpRouteDetailed)).not.toHaveBeenCalled();
   });

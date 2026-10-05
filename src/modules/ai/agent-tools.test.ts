@@ -1818,6 +1818,30 @@ describe("agent transit preference declarations", () => {
   );
 });
 
+describe("agent route administrative city", () => {
+  it("preserves explicit null city without failing or inventing an administrative area", async () => {
+    mockPlanRoute.mockResolvedValue({
+      ok: true,
+      data: {
+        origin: { lat: 25.04, lng: 121.56 },
+        destination: { lat: 25.03, lng: 121.55 },
+        city: null,
+        routes: [],
+      },
+    });
+
+    const result = JSON.parse(
+      await executeLocalTool("planAccessibleRoute", {
+        origin: "起點",
+        destination: "終點",
+      }),
+    );
+
+    expect(result).toMatchObject({ ok: true, city: null, routes: [] });
+    expect(result).toHaveProperty("city");
+  });
+});
+
 describe("agent transit preference dispatch", () => {
   it.each(["planAccessibleRoute", "getNavInstructions"])(
     "forwards preferences through %s",

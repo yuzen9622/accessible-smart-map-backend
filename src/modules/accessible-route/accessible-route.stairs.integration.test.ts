@@ -56,6 +56,10 @@ vi.mock("../../model/bus-stop.model", () => ({
   },
 }));
 
+vi.mock("../../adapters/nlsc.adapter", () => ({
+  getNlscAdministrativeArea: vi.fn().mockResolvedValue(null),
+}));
+
 vi.mock("../../adapters/google.adapter", async (importActual) => {
   const actual =
     await importActual<typeof import("../../adapters/google.adapter")>();

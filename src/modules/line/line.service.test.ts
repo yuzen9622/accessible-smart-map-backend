@@ -643,59 +643,75 @@ describe("line.service — unfollow", () => {
 describe("line.service — route preview", () => {
   const previewToken = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6";
 
-  it("plans a route from the latest bound contact location to an active SOS session", async () => {
-    sosSessionModel.findOne.mockReturnValue({
-      lean: () =>
-        Promise.resolve({
-          _id: "68ef6e5b7f7f3a3b78f51291",
-          userId: "u1",
-          status: "active",
-          shareToken: previewToken,
-          lat: 25.0478,
-          lng: 121.5171,
-          address: "台北車站",
+  it.each(["Taipei", null])(
+    "plans an SOS preview preserving administrative city %s",
+    async (city) => {
+      vi.mocked(planAccessibleRouteFromRequest).mockResolvedValue({
+        ok: true,
+        data: {
+          origin: { lat: 25.03, lng: 121.56 },
+          destination: { lat: 25.0478, lng: 121.5171 },
+          city,
+          travelMode: "drive",
+          routes: [
+            { routeName: "route1", totalMinutes: 12, legs: [{ type: "WALK" }] },
+          ],
+        } as any,
+      });
+      sosSessionModel.findOne.mockReturnValue({
+        lean: () =>
+          Promise.resolve({
+            _id: "68ef6e5b7f7f3a3b78f51291",
+            userId: "u1",
+            status: "active",
+            shareToken: previewToken,
+            lat: 25.0478,
+            lng: 121.5171,
+            address: "台北車站",
+          }),
+      });
+      contactModel.findOne.mockReturnValue({
+        sort: () => ({
+          select: () => ({
+            lean: () =>
+              Promise.resolve({
+                lastLineLat: 25.03,
+                lastLineLng: 121.56,
+              }),
+          }),
         }),
-    });
-    contactModel.findOne.mockReturnValue({
-      sort: () => ({
-        select: () => ({
-          lean: () =>
-            Promise.resolve({
-              lastLineLat: 25.03,
-              lastLineLng: 121.56,
-            }),
-        }),
-      }),
-    });
-    userModel.findById.mockReturnValue({
-      select: () => ({ lean: () => Promise.resolve({ name: "王小明" }) }),
-    });
+      });
+      userModel.findById.mockReturnValue({
+        select: () => ({ lean: () => Promise.resolve({ name: "王小明" }) }),
+      });
 
-    const result = await getRoutePreview(previewToken);
+      const result = await getRoutePreview(previewToken);
 
-    expect(result.ok).toBe(true);
-    expect(sosSessionModel.findOne).toHaveBeenCalledWith({
-      shareToken: previewToken,
-      status: "active",
-    });
-    expect(vi.mocked(planAccessibleRouteFromRequest)).toHaveBeenCalledWith({
-      origin: { latitude: 25.03, longitude: 121.56 },
-      destination: { latitude: 25.0478, longitude: 121.5171 },
-      mode: "normal",
-      travelMode: "drive",
-      maxTransfers: 2,
-      departureTime: undefined,
-    });
-    expect(result.data).toMatchObject({
-      sessionId: "68ef6e5b7f7f3a3b78f51291",
-      ownerName: "王小明",
-      origin: { lat: 25.03, lng: 121.56 },
-      destination: { lat: 25.0478, lng: 121.5171 },
-      originLabel: "你分享的位置",
-      destinationLabel: "台北車站",
-      routes: [{ routeName: "route1" }],
-    });
-  });
+      expect(result.ok).toBe(true);
+      expect(sosSessionModel.findOne).toHaveBeenCalledWith({
+        shareToken: previewToken,
+        status: "active",
+      });
+      expect(vi.mocked(planAccessibleRouteFromRequest)).toHaveBeenCalledWith({
+        origin: { latitude: 25.03, longitude: 121.56 },
+        destination: { latitude: 25.0478, longitude: 121.5171 },
+        mode: "normal",
+        travelMode: "drive",
+        maxTransfers: 2,
+        departureTime: undefined,
+      });
+      expect(result.data).toMatchObject({
+        sessionId: "68ef6e5b7f7f3a3b78f51291",
+        ownerName: "王小明",
+        city,
+        origin: { lat: 25.03, lng: 121.56 },
+        destination: { lat: 25.0478, lng: 121.5171 },
+        originLabel: "你分享的位置",
+        destinationLabel: "台北車站",
+        routes: [{ routeName: "route1" }],
+      });
+    },
+  );
 
   it("returns 404 when the session is not active", async () => {
     sosSessionModel.findOne.mockReturnValue({

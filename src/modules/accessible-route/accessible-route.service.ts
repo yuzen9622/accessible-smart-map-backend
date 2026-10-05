@@ -1,5 +1,5 @@
-import { findNearestStopCity } from "./accessible-route.repository";
-import { getCity, getCoordinates } from "../../adapters/google.adapter";
+import { getCoordinates } from "../../adapters/google.adapter";
+import { resolveCity } from "../geography/city.service";
 import {
   reservePreferredRoute,
   transitPreferencePenalty,
@@ -1307,26 +1307,6 @@ async function finalizeRoutes(
   return top;
 }
 
-/**
- * City of a coordinate from the nearest imported bus stop (~10ms local Mongo
- * lookup) instead of Google reverse geocoding (~200–800ms external call).
- *
- * @param lat Latitude.
- * @param lng Longitude.
- * @returns The city name, or null when the DB has no stops (caller falls back
- *   to Google).
- */
-export async function resolveCityFromStops(
-  lat: number,
-  lng: number,
-): Promise<string | null> {
-  try {
-    return await findNearestStopCity(lat, lng, 50_000);
-  } catch {
-    return null;
-  }
-}
-
 /** Every METRO leg across the planned routes, in route order. */
 function metroLegsOf(routes: AccessibleRoute[]): MetroLeg[] {
   const legs: MetroLeg[] = [];
@@ -2004,8 +1984,7 @@ export async function planAccessibleRouteFromRequest(
   if (!preflight.ok) return preflight;
 
   const tCity = Date.now();
-  const city = ((await resolveCityFromStops(lat, lng)) ??
-    (await getCity(lat, lng))) as TaiwanCityEn;
+  const city = await resolveCity(lat, lng);
   const cityMs = Date.now() - tCity;
 
   // Offset-free ISO datetimes from AI tools are Taipei wall-clock times.
@@ -3098,7 +3077,7 @@ function isOtpPlannerTransportFailure(error: unknown): boolean {
 export async function findAccessibleRoutes(
   origin: LatLng,
   destination: LatLng,
-  city: TaiwanCityEn,
+  city: TaiwanCityEn | null,
   opts: FindAccessibleRoutesOptions = {},
 ): Promise<AccessibleRoute[]> {
   return (await findAccessibleRoutesDetailed(origin, destination, city, opts))
@@ -3112,7 +3091,7 @@ export async function findAccessibleRoutes(
 export async function findAccessibleRoutesDetailed(
   origin: LatLng,
   destination: LatLng,
-  _city: TaiwanCityEn,
+  _city: TaiwanCityEn | null,
   opts: FindAccessibleRoutesOptions = {},
 ): Promise<FindAccessibleRoutesResult> {
   const mode = opts.mode ?? "normal";

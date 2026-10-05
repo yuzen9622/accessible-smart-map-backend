@@ -1,5 +1,6 @@
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
+import { TaiwanCityEn } from "../../types/transit";
 import { TransitPreferenceSchema } from "../../schemas/transit-preference.schema";
 import { registry } from "../../openapi/registry";
 import {
@@ -1070,7 +1071,11 @@ export const AccessibleRouteDataSchema = z
     destination: CoordSchema.openapi({
       example: { lat: 25.034, lng: 121.564 },
     }),
-    city: z.string().openapi({ example: "Taipei" }),
+    city: z.enum(TaiwanCityEn).nullable().openapi({
+      example: "NewTaipei",
+      description:
+        "起點的行政縣市代碼，非公車資料集範圍；無法判定時為 null，不影響路線規劃。",
+    }),
     transitPreference: TransitPreferenceSchema.optional().openapi({
       description:
         "本次 transit 查詢採用的軟性運具偏好；不代表回傳路線保證包含該運具。",
