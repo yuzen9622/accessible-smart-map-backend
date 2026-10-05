@@ -2424,7 +2424,7 @@ async function main(): Promise<void> {
             },
           },
         },
-        "0-6": "see docs/reports/PED_ROUTER_DATA_SOURCES.md",
+        "0-6": "see docs/archive/reports/PED_ROUTER_DATA_SOURCES.md",
       },
       manualRoutes,
     };

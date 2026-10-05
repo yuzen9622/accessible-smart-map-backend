@@ -1,6 +1,6 @@
 import type { IDisabledParking, IParkingLot, IParkingSpace } from "../types";
 
-/** TDX 官方 SpaceType 編碼（見 docs/reports/tdx-parking-swagger-v1.json）。 */
+/** TDX 官方 SpaceType 編碼（定義於 TDX Parking V3 swagger）。 */
 export const SPACE_TYPE = {
   ALL: 0,
   CAR: 1,

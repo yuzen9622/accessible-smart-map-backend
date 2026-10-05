@@ -3,7 +3,7 @@
  *
  * TDX hosts all-Taiwan parking data behind the *advanced* NearBy endpoints
  * (basic-layer city endpoints return empty; see
- * docs/reports/parking-open-data-research.md §2.0). This script scans urban
+ * docs/archive/reports/parking-open-data-research.md §2.0). This script scans urban
  * areas with a hexagonal-ish grid (step ~1.4 km, radius 1000 m, the API's max)
  * and upserts three collections:
  *   - DisabledParking: roadside disabled spots (SpaceType 9/10) — powers the
