@@ -5,6 +5,6 @@
     "outDir": null,
     "rootDir": null
   },
-  "include": ["src/**/*", "tests/**/*", "config/lib.ts"],
+  "include": ["src/**/*", "tests/**/*"],
   "exclude": ["node_modules", "dist"]
 }
