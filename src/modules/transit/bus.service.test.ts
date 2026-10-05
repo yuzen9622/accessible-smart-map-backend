@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("../../config/fetch", () => ({ tdxFetch: vi.fn() }));
 vi.mock("../../model/bus-vehicle.model", () => ({
@@ -1039,5 +1039,114 @@ describe("route-detail 路線線形 polyline", () => {
     if (!result.ok) return;
     expect(result.directions[0].stops).toHaveLength(2);
     expect(result.directions[0].polyline).toBeNull();
+  });
+});
+
+describe("TDX ETA source time and circular direction integration", () => {
+  const now = new Date("2026-10-05T12:00:00+08:00");
+  const source = (seconds: number) =>
+    new Date(now.getTime() - seconds * 1000).toISOString();
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(now);
+    mockRouteMap([]);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("corrects streaming ETA and sends a Direction=10 filter", async () => {
+    mockTdxJson([
+      {
+        StopName: { Zh_tw: "起站" },
+        Direction: 10,
+        EstimateTime: 300,
+        StopStatus: 0,
+        SrcTransTime: source(120),
+      },
+    ]);
+    const result = await getBusArrivalAtStop({
+      routeName: "100",
+      stopName: "起站",
+      city: "InterCity",
+      direction: 10,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.arrivals[0]).toMatchObject({
+      estimateMinutes: 3,
+      direction: 10,
+      directionLabel: "循環線",
+    });
+    expect(
+      tdxFetchMock.mock.calls.some(([url]) => url.includes("Direction eq 10")),
+    ).toBe(true);
+  });
+
+  it("does not expose a retained old ETA or an old terminal status as current", async () => {
+    mockTdxJson([
+      {
+        StopName: { Zh_tw: "起站" },
+        Direction: 0,
+        EstimateTime: 3600,
+        StopStatus: 4,
+        SrcTransTime: source(7200),
+        UpdateTime: source(0),
+      },
+    ]);
+    const result = await getBusArrivalAtStop({
+      routeName: "100",
+      stopName: "起站",
+      city: "InterCity",
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.arrivals[0].estimateMinutes).toBeNull();
+    expect(result.arrivals[0].statusLabel).not.toBe("今日未營運");
+  });
+
+  it("applies identical correction to route-detail stops", async () => {
+    mockRouteMap([
+      {
+        routeUid: "THB100",
+        subRouteUid: "THB1000",
+        direction: 10,
+        stops: [
+          {
+            seq: 1,
+            stopUID: "THB1",
+            stopName: { Zh_tw: "起站" },
+            lat: 25,
+            lng: 121,
+          },
+        ],
+      },
+    ]);
+    tdxFetchMock.mockImplementation(async (url: string) => ({
+      ok: true,
+      json: async () =>
+        url.includes("EstimatedTimeOfArrival")
+          ? [
+              {
+                SubRouteUID: "THB1000",
+                StopUID: "THB1",
+                StopName: { Zh_tw: "起站" },
+                Direction: 10,
+                EstimateTime: 300,
+                StopStatus: 0,
+                SrcTransTime: source(120),
+              },
+            ]
+          : [],
+    }));
+    const result = await getBusRouteDetail({
+      routeName: "100",
+      city: "InterCity",
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.directions[0]).toMatchObject({
+      direction: 10,
+      directionLabel: "循環線",
+      stops: [{ estimateMinutes: 3 }],
+    });
   });
 });

@@ -45,6 +45,13 @@
  */
 
 import { tdxFetch } from "../../../config/fetch";
+import { BUS_DIRECTIONS } from "../../../constants/bus";
+import {
+  busEtaIsFresh,
+  busEtaSeconds,
+  rememberBusEtaReceipt,
+} from "../../../utils/tdx-bus-eta";
+import { railOdIsBoardable } from "../../../utils/rail-suspension";
 import { busUrl, trainUrl, traUrl, thsrUrl } from "../../../config/transit";
 import { odataUrlLiteral } from "../../../utils/transit-text";
 import { fetchRailLegGeometry } from "./otp-routing";
@@ -232,7 +239,10 @@ async function fetchEtaRecords(url: string): Promise<TdxEtaRecord[]> {
       const resp = await tdxFetch(url);
       if (resp.ok) {
         const data = (await resp.json()) as TdxEtaRecord[];
-        if (Array.isArray(data)) records = data;
+        if (Array.isArray(data)) {
+          records = data;
+          rememberBusEtaReceipt(records);
+        }
       }
     } catch {
       // Fail-soft: TDX network/parse failure falls back to empty ETA records.
@@ -273,10 +283,11 @@ function recordForStop(
   direction: number,
 ): TdxEtaRecord | undefined {
   const inDir = records.filter((r) => r.Direction === direction);
-  return (
-    inDir.find((r) => r.StopName?.Zh_tw === name) ??
-    inDir.find((r) => r.StopName?.Zh_tw?.includes(name))
-  );
+  const exact = inDir.filter((r) => r.StopName?.Zh_tw === name);
+  const matched = exact.length
+    ? exact
+    : inDir.filter((r) => r.StopName?.Zh_tw?.includes(name));
+  return matched.find((r) => estimateSeconds(r) !== null) ?? matched[0];
 }
 
 /**
@@ -287,9 +298,10 @@ function recordForStop(
  * @returns The wait in seconds, or null when the record carries neither.
  */
 function estimateSeconds(record: TdxEtaRecord): number | null {
-  if (record.EstimateTime != null && record.EstimateTime >= 0) {
-    return record.EstimateTime;
-  }
+  if (!busEtaIsFresh(record)) return null;
+  const estimate = busEtaSeconds(record);
+  if (estimate !== null) return estimate;
+  if ((record.StopStatus ?? 0) >= 2 || record.PlateNumb === "-1") return null;
   if (record.NextBusTime) {
     const parsedMs = Date.parse(record.NextBusTime);
     if (!Number.isNaN(parsedMs)) {
@@ -327,7 +339,7 @@ async function overlayBusEta(route: AccessibleRoute): Promise<void> {
   const url = etaUrl(leg);
   if (!url) return;
 
-  const records = await fetchEtaRecords(url);
+  const records = (await fetchEtaRecords(url)).filter((r) => busEtaIsFresh(r));
   if (!records.length) return;
 
   const candidates: {
@@ -337,28 +349,23 @@ async function overlayBusEta(route: AccessibleRoute): Promise<void> {
     board: TdxEtaRecord;
   }[] = [];
   const boards: TdxEtaRecord[] = [];
-  for (const dir of [0, 1]) {
+  for (const dir of BUS_DIRECTIONS.filter((d) => d !== 255)) {
     const board = recordForStop(records, leg.departureStop, dir);
     if (!board) continue;
     boards.push(board);
 
     const estSeconds = estimateSeconds(board);
-    const live =
-      board.EstimateTime != null &&
-      board.EstimateTime >= 0 &&
-      (board.StopStatus ?? 0) === 0;
+    const live = busEtaSeconds(board) !== null && (board.StopStatus ?? 0) === 0;
     if (estSeconds == null) continue;
 
     const alight = recordForStop(records, leg.arrivalStop, dir);
     if (alight) {
+      const alightSeconds = busEtaSeconds(alight);
       if (alight.StopSequence != null && board.StopSequence != null) {
         if (alight.StopSequence <= board.StopSequence) {
           continue;
         }
-      } else if (
-        alight.EstimateTime != null &&
-        alight.EstimateTime <= (board.EstimateTime ?? estSeconds)
-      ) {
+      } else if (alightSeconds !== null && alightSeconds <= estSeconds) {
         continue;
       }
     }
@@ -570,7 +577,9 @@ async function annotateBusVehicle(
   direction: number,
   board: TdxEtaRecord,
 ): Promise<void> {
-  const sameStop = recordsForStop(records, leg.departureStop, direction);
+  const sameStop = recordsForStop(records, leg.departureStop, direction).filter(
+    (r) => estimateSeconds(r) !== null,
+  );
   const vehicles = await vehiclesByPlate([
     board.PlateNumb,
     ...sameStop.map((r) => r.PlateNumb),
@@ -622,7 +631,8 @@ async function annotateBusVehicle(
 }
 
 const STATION_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
-const OD_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+// Daily suspension flags can change during the day; match the rail adapter TTL.
+const OD_CACHE_TTL_MS = 10 * 60 * 1000;
 const FAILURE_CACHE_TTL_MS = 60 * 1000;
 
 let traStationCache: CacheEntry<Map<string, string>> | null = null;
@@ -691,7 +701,7 @@ async function fetchOdTimetable(
       );
       if (resp.ok) {
         const data = (await resp.json()) as TdxTraOdItem[];
-        if (Array.isArray(data)) items = data;
+        if (Array.isArray(data)) items = data.filter(railOdIsBoardable);
       }
     } catch {
       // Fail-soft: TRA OD timetable fetch failure falls back to empty timetable.
@@ -920,6 +930,7 @@ function snapToTrain(rows: RailOdRow[], wantHHmm: string): RailMatch | null {
   const want = clockMinutes(wantHHmm);
   let best: { row: RailOdRow; diff: number } | null = null;
   for (const row of rows) {
+    if (!railOdIsBoardable(row)) continue;
     const dep = (row.OriginStopTime?.DepartureTime ?? "").slice(0, 5);
     if (!/^\d\d:\d\d$/.test(dep) || !row.DailyTrainInfo?.TrainNo) continue;
     const diff = clockMinutes(dep) - want;

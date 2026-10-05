@@ -218,7 +218,9 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           },
           direction: {
             type: "number",
-            description: "行駛方向（0=去程，1=返程）。不確定可省略。",
+            enum: [0, 1, 2, 10, 255],
+            description:
+              "公車方向（0=去程，1=返程，2=迴圈，10=循環線，255=未知）。不確定可省略。",
           },
         },
         required: ["routeName", "stopName"],
@@ -353,7 +355,9 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           },
           direction: {
             type: "number",
-            description: "行駛方向（0=去程，1=返程）。不確定可省略。",
+            enum: [0, 1, 2, 10, 255],
+            description:
+              "公車方向（0=去程，1=返程，2=迴圈，10=循環線，255=未知）。不確定可省略。",
           },
         },
         required: ["routeName"],
@@ -562,8 +566,9 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           },
           direction: {
             type: "number",
-            enum: [0, 1],
-            description: "行駛方向（0=去程，1=返程）",
+            enum: [0, 1, 2, 10, 255],
+            description:
+              "公車方向（0=去程，1=返程，2=迴圈，10=循環線，255=未知）；雙鐵僅適用0/1",
           },
         },
         required: ["mode"],

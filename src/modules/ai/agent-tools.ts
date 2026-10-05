@@ -9,6 +9,7 @@ import * as campusService from "../campus/campus.service";
 import * as hazardService from "../hazard-report/hazard-report.service";
 import { getActiveRoadIncidents } from "../traffic/road-incident.service";
 import { haversineMeters } from "../../utils/geo";
+import { isBusDirection } from "../../utils/transit-text";
 import { getEnvironmentInfo as fetchEnvironment } from "../environment/environment.service";
 import type { GroundingChunk } from "@google/genai";
 import { googleGenAi, model } from "../../config/ai";
@@ -1049,10 +1050,7 @@ export async function getTransitAlerts(args: {
         mode: "bus",
         city: cityResult as TaiwanCityEn,
         routeName,
-        direction:
-          args.direction === 0 || args.direction === 1
-            ? args.direction
-            : undefined,
+        direction: isBusDirection(args.direction) ? args.direction : undefined,
         stopName: args.stopName?.trim() || undefined,
       };
     } else if (mode === "metro") {

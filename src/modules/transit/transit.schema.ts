@@ -9,13 +9,31 @@ const CityQuery = z.string().min(1).optional().openapi({
   description: "公車所在縣市（中文或英文），未提供則無法定位",
 });
 
+const DirectionSchema = z
+  .union([
+    z.literal(0),
+    z.literal(1),
+    z.literal(2),
+    z.literal(10),
+    z.literal(255),
+  ])
+  .openapi({
+    example: 0,
+    description: "行駛方向（0=去程，1=返程，2=迴圈，10=循環線，255=未知）",
+  });
+
 const DirectionQuery = z.coerce
   .number()
   .int()
-  .min(0)
-  .max(1)
+  .pipe(DirectionSchema)
   .optional()
-  .openapi({ example: 0, description: "行駛方向（0=去程，1=返程），可省略" });
+  .openapi({
+    type: "integer",
+    enum: [0, 1, 2, 10, 255],
+    example: 0,
+    description:
+      "行駛方向（0=去程，1=返程，2=迴圈，10=循環線，255=未知），可省略",
+  });
 
 export const BusRouteQuerySchema = z
   .object({
@@ -223,10 +241,6 @@ const BilingualNameSchema = z
     En: z.string().openapi({ example: "Taipei Main Station" }),
   })
   .openapi("BilingualName");
-
-const DirectionSchema = z
-  .union([z.literal(0), z.literal(1)])
-  .openapi({ example: 0, description: "行駛方向（0 = 去程，1 = 返程）" });
 
 export const EstimatedTimeOfArrivalSchema = z
   .object({

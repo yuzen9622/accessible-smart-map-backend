@@ -18,7 +18,13 @@ import {
   normalizeStopName,
   odataUrlLiteral,
   formatRouteName,
+  isBusDirection,
 } from "../../utils/transit-text";
+import {
+  busEtaIsFresh,
+  busEtaSeconds,
+  rememberBusEtaReceipt,
+} from "../../utils/tdx-bus-eta";
 import { busUrl } from "../../config/transit";
 import { tdxFetch } from "../../config/fetch";
 import { resolveCity } from "../geography/city.service";
@@ -109,6 +115,7 @@ async function fetchTdxArray(url: string): Promise<any[]> {
   const res = await tdxFetch(url);
   if (!res.ok) throw new Error(`TDX ${res.status}`);
   const json = await res.json();
+  if (Array.isArray(json)) rememberBusEtaReceipt(json);
   return Array.isArray(json) ? json : [];
 }
 
@@ -497,7 +504,7 @@ export async function getBusRouteInfo(params: {
 
 /**
  * Predicted arrival of the next bus of a route at a named stop (TDX N1).
- * V2 N1 does not carry a plate number, so low-floor is reported separately via
+ * Some V2 N1 sources omit a plate number, so low-floor is reported separately via
  * getBusRealtimeOnRoute / trackBuses.
  */
 export async function getBusArrivalAtStop(params: {
@@ -512,18 +519,16 @@ export async function getBusArrivalAtStop(params: {
   try {
     // No server-side StopName filter: TDX stores 臺/台 variants and bracketed
     // suffixes, so match client-side with equalStopName (which normalizes both).
-    const dirFilter =
-      direction === 0 || direction === 1
-        ? `&$filter=Direction eq ${direction}`
-        : "";
+    const dirFilter = isBusDirection(direction)
+      ? `&$filter=Direction eq ${direction}`
+      : "";
     const hasStop = (records: any[]) =>
       records.some((r: any) => equalStopName(r.StopName?.Zh_tw, stopName));
 
     const routeUids = await resolveRouteUids(params.routeName, city);
-    const uidDirFilter =
-      direction === 0 || direction === 1
-        ? ` and Direction eq ${direction}`
-        : "";
+    const uidDirFilter = isBusDirection(direction)
+      ? ` and Direction eq ${direction}`
+      : "";
     const { records, scope } = await fetchRouteRows(
       params.routeName,
       city,
@@ -547,15 +552,18 @@ export async function getBusArrivalAtStop(params: {
     }
 
     const now = new Date();
-    const raw = matched.map((r: any) => ({
-      r,
-      estimateMinutes:
-        typeof r.EstimateTime === "number" && r.EstimateTime >= 0
-          ? Math.round(r.EstimateTime / 60)
-          : null,
-      stopStatus: typeof r.StopStatus === "number" ? r.StopStatus : undefined,
-      nextBusTime: formatNextBusTime(r.NextBusTime, now),
-    }));
+    const raw = matched.map((r: any) => {
+      const seconds = busEtaSeconds(r, now.getTime());
+      const fresh = busEtaIsFresh(r, now.getTime());
+      return {
+        r,
+        fresh,
+        estimateMinutes: seconds === null ? null : Math.round(seconds / 60),
+        stopStatus:
+          fresh && typeof r.StopStatus === "number" ? r.StopStatus : undefined,
+        nextBusTime: fresh ? formatNextBusTime(r.NextBusTime, now) : null,
+      };
+    });
 
     let schedules: BusScheduleByDirection[] | null = null;
     const needsSchedule = raw.some(
@@ -579,7 +587,7 @@ export async function getBusArrivalAtStop(params: {
       ) ?? schedules?.find((s) => s.direction === dir);
 
     const arrivals: BusArrival[] = raw
-      .map(({ r, estimateMinutes, stopStatus, nextBusTime }) => ({
+      .map(({ r, fresh, estimateMinutes, stopStatus, nextBusTime }) => ({
         subRouteUid: r.SubRouteUID,
         subRouteName: r.SubRouteName?.Zh_tw,
         stopName: r.StopName?.Zh_tw ?? stopName,
@@ -599,7 +607,9 @@ export async function getBusArrivalAtStop(params: {
             ),
         }),
         plateNumb:
-          r.PlateNumb && r.PlateNumb !== "-1" ? r.PlateNumb : undefined,
+          fresh && r.PlateNumb && r.PlateNumb !== "-1"
+            ? r.PlateNumb
+            : undefined,
       }))
       .sort((a, b) => {
         if (a.estimateMinutes == null) return 1;
@@ -709,15 +719,15 @@ export async function getBusRouteDetail(params: {
         etaMap.set(key, dirMap);
       }
 
-      const est: number | null =
-        typeof r.EstimateTime === "number" && r.EstimateTime >= 0
-          ? Math.round(r.EstimateTime / 60)
-          : null;
+      const seconds = busEtaSeconds(r, now.getTime());
+      const est = seconds === null ? null : Math.round(seconds / 60);
+      const fresh = busEtaIsFresh(r, now.getTime());
 
       const next: StopEta = {
         estimateMinutes: est,
-        stopStatus: typeof r.StopStatus === "number" ? r.StopStatus : undefined,
-        nextBusTime: formatNextBusTime(r.NextBusTime, now),
+        stopStatus:
+          fresh && typeof r.StopStatus === "number" ? r.StopStatus : undefined,
+        nextBusTime: fresh ? formatNextBusTime(r.NextBusTime, now) : null,
       };
       // 同方向同站名可能有多筆（不同子路線或站位共用站名）：保留最快到站的一班。
       const existing = dirMap.get(stopName);
@@ -1056,14 +1066,12 @@ export async function getBusRealtimeOnRoute(params: {
   const routeId = formatRouteName(params.routeName);
 
   try {
-    const dirFilter =
-      direction === 0 || direction === 1
-        ? `&$filter=Direction eq ${direction}`
-        : "";
-    const interCityDirFilter =
-      direction === 0 || direction === 1
-        ? ` and Direction eq ${direction}`
-        : "";
+    const dirFilter = isBusDirection(direction)
+      ? `&$filter=Direction eq ${direction}`
+      : "";
+    const interCityDirFilter = isBusDirection(direction)
+      ? ` and Direction eq ${direction}`
+      : "";
 
     const keepRouteName = await exactRouteNameToKeep(params.routeName, city);
     const scoped = await fetchRouteScoped(

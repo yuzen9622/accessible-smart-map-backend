@@ -79,9 +79,22 @@ export type BusRoute = {
   Stops: BusStop[];
 };
 
+export type BusDirection = 0 | 1 | 2 | 10 | 255;
+
+/** N1 source timestamps differ between streaming and batch feeds. */
+export interface BusEtaTiming {
+  EstimateTime?: number | null;
+  StopStatus?: number;
+  PlateNumb?: string;
+  SrcTransTime?: string;
+  SrcUpdateTime?: string;
+  DataTime?: string;
+  UpdateTime?: string;
+}
+
 export type BusRealTimeByFrequency = {
   PlateNumb: string;
-  Direction: 0 | 1;
+  Direction: BusDirection;
   BusPosition: {
     PositionLon: number;
     PositionLat: number;
@@ -108,7 +121,7 @@ export type BusRealtimeNearbyStop = {
     Zh_tw: string;
     En: string;
   };
-  Direction: 0 | 1;
+  Direction: BusDirection;
   StopUID: string;
   StopID: string;
   StopName: {
