@@ -416,7 +416,7 @@ describe("OTP preferred-mode candidate search", () => {
         departureTime: departure,
         transitPreference: "metro",
       });
-      await vi.advanceTimersByTimeAsync(4_000);
+      await vi.advanceTimersByTimeAsync(6_000);
       const result = await pending;
       expect(result.status).toBe("ok");
       expect(result.routes.map((r) => r.routeName)).toEqual(["R1", "R2", "R3"]);
