@@ -135,7 +135,7 @@ describe("station access through directed pathways", () => {
 
 function nodeLookupCount(): number {
   return vi.mocked(GtfsStop.find).mock.calls.filter(([query]) => {
-    const filter = query as Record<string, unknown>;
+    const filter = query as unknown as Record<string, unknown>;
     return filter.parentStation === "S" && !("locationType" in filter);
   }).length;
 }

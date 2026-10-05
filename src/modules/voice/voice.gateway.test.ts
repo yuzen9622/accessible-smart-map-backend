@@ -662,18 +662,23 @@ describe("voice gateway", () => {
     sendSessionStart(ws, "voice-user-position-flood");
     await ready;
     const bridge = await mockCreateLiveBridge.mock.results.at(-1)!.value;
-    for (let i = 0; i < 50; i++) {
-      ws.send(
-        JSON.stringify({
-          type: "nav.position",
-          latitude: 25,
-          longitude: 121 + i / 100_000,
-        }),
-      );
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    try {
+      for (let i = 0; i < 50; i++) {
+        ws.send(
+          JSON.stringify({
+            type: "nav.position",
+            latitude: 25,
+            longitude: 121 + i / 100_000,
+          }),
+        );
+      }
+      await vi.waitFor(() => expect(bridge.updatePosition).toHaveBeenCalled());
+      expect(bridge.updatePosition.mock.calls.length).toBeLessThanOrEqual(30);
+      expect(ws.readyState).toBe(WebSocket.OPEN);
+    } finally {
+      clock.mockRestore();
     }
-    await vi.waitFor(() => expect(bridge.updatePosition).toHaveBeenCalled());
-    expect(bridge.updatePosition.mock.calls.length).toBeLessThanOrEqual(30);
-    expect(ws.readyState).toBe(WebSocket.OPEN);
   });
 
   it("closes the connection when the pre-parse per-connection frame budget is exhausted", async () => {
@@ -683,11 +688,18 @@ describe("voice gateway", () => {
     sendSessionStart(ws, "voice-user-frame-flood");
     await ready;
     const closed = waitForClose(ws);
-    for (let i = 0; i < 90; i++)
-      ws.send(JSON.stringify({ type: `unknown.${i}`, pad: "x".repeat(1100) }));
-    const result = await closed;
-    expect(result.code).toBe(4408);
-    expect(result.reason).toBe("control-rate-limit");
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    try {
+      for (let i = 0; i < 90; i++)
+        ws.send(
+          JSON.stringify({ type: `unknown.${i}`, pad: "x".repeat(1100) }),
+        );
+      const result = await closed;
+      expect(result.code).toBe(4408);
+      expect(result.reason).toBe("control-rate-limit");
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("uses WebSocket close as the session.end termination path", async () => {

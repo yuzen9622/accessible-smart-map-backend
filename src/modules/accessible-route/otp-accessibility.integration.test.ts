@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import captured from "./planners/fixtures/otp-next-day-elderly.json";
+import { TaiwanCityEn } from "../../types/transit";
 
 const { post, busLean } = vi.hoisted(() => ({
   post: vi.fn(),
@@ -54,7 +55,9 @@ function response(stairs: boolean) {
   if (stairs) {
     // OTP can return a least-stairs candidate even with wheelchair enabled;
     // use the same feature union consumed by the production WALK mapper.
-    data.data.plan.itineraries[0].legs[0].steps[0].feature = {
+    const step: { feature: unknown } =
+      data.data.plan.itineraries[0].legs[0].steps[0];
+    step.feature = {
       __typename: "StairsUse",
     };
   }
@@ -96,7 +99,7 @@ describe("OTP candidates satisfy stairs constraints before stopping search", () 
       const result = await findAccessibleRoutesDetailed(
         fixture.origin,
         fixture.destination,
-        "Tainan",
+        TaiwanCityEn.Tainan,
         {
           mode: "wheelchair",
           departureTime: new Date(fixture.departure),
@@ -129,7 +132,7 @@ describe("OTP candidates satisfy stairs constraints before stopping search", () 
       const result = await findAccessibleRoutesDetailed(
         fixture.origin,
         fixture.destination,
-        "Tainan",
+        TaiwanCityEn.Tainan,
         {
           mode: "normal",
           avoidStairs,
@@ -156,7 +159,7 @@ describe("OTP candidates satisfy stairs constraints before stopping search", () 
       const result = await findAccessibleRoutesDetailed(
         fixture.origin,
         fixture.destination,
-        "Tainan",
+        TaiwanCityEn.Tainan,
         {
           mode,
           avoidStairs: true,
@@ -183,7 +186,7 @@ describe("OTP candidates satisfy stairs constraints before stopping search", () 
     const result = await findAccessibleRoutesDetailed(
       fixture.origin,
       fixture.destination,
-      "Tainan",
+      TaiwanCityEn.Tainan,
       {
         mode: "wheelchair",
         departureTime: new Date(fixture.departure),
@@ -208,7 +211,7 @@ describe("OTP candidates satisfy stairs constraints before stopping search", () 
     const result = await findAccessibleRoutesDetailed(
       fixture.origin,
       fixture.destination,
-      "Tainan",
+      TaiwanCityEn.Tainan,
       {
         mode: "wheelchair",
         departureTime: new Date(fixture.departure),
@@ -233,7 +236,7 @@ describe("OTP candidates satisfy stairs constraints before stopping search", () 
     const result = await findAccessibleRoutesDetailed(
       fixture.origin,
       fixture.destination,
-      "Tainan",
+      TaiwanCityEn.Tainan,
       {
         mode: "wheelchair",
         departureTime: new Date(fixture.departure),
@@ -253,7 +256,7 @@ describe("OTP candidates satisfy stairs constraints before stopping search", () 
     const result = await findAccessibleRoutesDetailed(
       fixture.origin,
       fixture.destination,
-      "Tainan",
+      TaiwanCityEn.Tainan,
       {
         mode: "wheelchair",
         avoidStairs: false,
@@ -281,7 +284,7 @@ describe("OTP candidates satisfy stairs constraints before stopping search", () 
     const result = await findAccessibleRoutesDetailed(
       fixture.origin,
       fixture.destination,
-      "Tainan",
+      TaiwanCityEn.Tainan,
       {
         mode: "wheelchair",
         departureTime: new Date(fixture.departure),
