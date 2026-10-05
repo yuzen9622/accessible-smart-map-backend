@@ -12,6 +12,7 @@ const busVehicleSchema = new Schema<ITdxBusVehicle>({
   isElectric: { type: Number },
   isHybrid: { type: Number },
   hasWifi: { type: Number },
+  source: { type: String },
   importedAt: { type: Date, default: Date.now },
 });
 

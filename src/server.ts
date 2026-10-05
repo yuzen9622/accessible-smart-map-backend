@@ -2,6 +2,7 @@ import http from "http";
 import app from "./app";
 import mongoose from "mongoose";
 import { startHazardExpiryJob } from "./modules/hazard-report/hazard-report.expire";
+import { startBusFleetSyncJob } from "./modules/transit/bus-fleet-sync.worker";
 import { attachVoiceWebSocket } from "./modules/voice";
 import { attachAlertWebSocket } from "./modules/transit/alert.gateway";
 import { startPasswordAssistanceWorker } from "./modules/user/user.password-assistance.worker";
@@ -21,6 +22,7 @@ import { startValhallaTrafficTarWorker } from "./modules/traffic/valhalla-traffi
 const PORT = process.env.PORT || 3000;
 let passwordAssistanceTimer: NodeJS.Timeout | undefined;
 let trafficGeometryTimer: NodeJS.Timeout | undefined;
+let busFleetSyncTimer: NodeJS.Timeout | undefined;
 let mqttHandle: TdxMqttHandle | undefined;
 let shutdownStarted = false;
 
@@ -67,6 +69,7 @@ mongoose
     console.log("Connected to MongoDB");
     startHazardExpiryJob();
     passwordAssistanceTimer = startPasswordAssistanceWorker();
+    busFleetSyncTimer = startBusFleetSyncJob();
     void warmTrafficGeometryRuntime().then(() => {
       trafficGeometryTimer = startTrafficGeometryRefreshJob();
     });
@@ -81,6 +84,7 @@ function shutdown(signalLog: string): void {
   shutdownStarted = true;
   if (passwordAssistanceTimer) clearInterval(passwordAssistanceTimer);
   if (trafficGeometryTimer) clearInterval(trafficGeometryTimer);
+  if (busFleetSyncTimer) clearInterval(busFleetSyncTimer);
   if (trafficLiveTimer) clearInterval(trafficLiveTimer);
   if (valhallaTrafficTarTimer) clearInterval(valhallaTrafficTarTimer);
   stopTransitFreshnessJob();

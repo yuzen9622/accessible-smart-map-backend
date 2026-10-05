@@ -1,7 +1,7 @@
 import BusRouteModel from "../../model/bus-route.model";
 import BusVehicleModel from "../../model/bus-vehicle.model";
 import BusStopModel from "../../model/bus-stop.model";
-import type { ITdxBusVehicle } from "../../types";
+import type { BusFleetObservation, ITdxBusVehicle } from "../../types";
 import { buildFuzzyKeywordRegex } from "../../utils/transit-text";
 
 /** A stored bus route with the stop list the info endpoint reads. */
@@ -65,6 +65,41 @@ export async function findVehiclesByPlate(
   return BusVehicleModel.find({
     plateNumb: { $in: plateNumbers },
   }).lean() as unknown as Promise<ITdxBusVehicle[]>;
+}
+
+/**
+ * Upsert plate-level low-floor observations from a city's own bus system.
+ * `hasLiftOrRamp` is cleared so a stale TDX value cannot contradict the city
+ * source; its absence means the same as `isLowFloor`.
+ *
+ * @param observations Per-plate observations from one source
+ * @returns The number of vehicle records inserted or changed
+ */
+export async function upsertVehicleObservations(
+  observations: BusFleetObservation[],
+): Promise<number> {
+  if (!observations.length) return 0;
+  const now = new Date();
+  const result = await BusVehicleModel.bulkWrite(
+    observations.map((obs) => ({
+      updateOne: {
+        filter: { plateNumb: obs.plateNumb },
+        update: {
+          $set: {
+            plateNumb: obs.plateNumb,
+            city: obs.city,
+            isLowFloor: obs.isLowFloor,
+            source: obs.source,
+            importedAt: now,
+          },
+          $unset: { hasLiftOrRamp: "" },
+        },
+        upsert: true,
+      },
+    })),
+    { ordered: false },
+  );
+  return result.upsertedCount + result.modifiedCount;
 }
 
 /**

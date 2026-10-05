@@ -293,7 +293,19 @@ export interface ITdxBusVehicle {
   isElectric?: number;
   isHybrid?: number;
   hasWifi?: number;
+  source?: BusFleetSource;
   importedAt: Date;
+}
+
+export type BusFleetSource =
+  "tdx" | "taichung-ebus" | "keelung-ebus" | "hsinchu-ibus";
+
+/** One plate's low-floor status as reported by a city's own bus system. */
+export interface BusFleetObservation {
+  plateNumb: string;
+  city: string;
+  isLowFloor: 0 | 1;
+  source: BusFleetSource;
 }
 
 export type OsmWheelchairValue = "yes" | "designated" | "limited" | "no";

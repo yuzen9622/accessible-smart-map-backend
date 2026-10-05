@@ -28,6 +28,7 @@
     "import:bathrooms": "npx dotenvx run -- ts-node src/scripts/import-bathrooms.ts",
     "import:campus-a11y": "npx dotenvx run -- ts-node src/scripts/import-campus-a11y.ts",
     "import:campus-facility-detail": "npx dotenvx run -- ts-node src/scripts/import-campus-facility-detail.ts",
+    "import:city-bus-vehicles": "npx dotenvx run -- ts-node src/scripts/import-city-bus-vehicles.ts",
     "import:gtfs-all": "npx dotenvx run -- node --max-old-space-size=2048 -r ts-node/register src/scripts/import-gtfs-all.ts",
     "inject:ped-indoor": "npx dotenvx run -- python3 src/scripts/inject-ped-indoor-graph.py",
     "import:osm": "npx dotenvx run -- ts-node src/scripts/import-osm-a11y.ts",

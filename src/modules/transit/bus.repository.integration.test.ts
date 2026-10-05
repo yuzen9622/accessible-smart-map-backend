@@ -9,6 +9,7 @@ import {
   findVehiclesByPlate,
   searchRoutesByKeyword,
   searchStopsByKeyword,
+  upsertVehicleObservations,
 } from "./bus.repository";
 import {
   clearMongoTestDatabase,
@@ -176,5 +177,49 @@ describe("transit bus repository with real MongoDB", () => {
         routeName: { Zh_tw: "Blue Line" },
       }),
     ]);
+  });
+
+  it("upserts city-source observations over stale TDX vehicle rows", async () => {
+    await BusVehicleModel.create({
+      plateNumb: "KKA-6319",
+      city: "Taichung",
+      isLowFloor: 0,
+      hasLiftOrRamp: 0,
+      vehicleClass: 1,
+      source: "tdx",
+    });
+
+    const written = await upsertVehicleObservations([
+      {
+        plateNumb: "KKA-6319",
+        city: "Taichung",
+        isLowFloor: 1,
+        source: "taichung-ebus",
+      },
+      {
+        plateNumb: "FAC-157",
+        city: "Keelung",
+        isLowFloor: 1,
+        source: "keelung-ebus",
+      },
+    ]);
+
+    expect(written).toBe(2);
+    const rows = await BusVehicleModel.find({}).sort({ plateNumb: 1 }).lean();
+    expect(rows).toHaveLength(2);
+    const [keelung, taichung] = rows;
+    expect(keelung).toMatchObject({
+      plateNumb: "FAC-157",
+      isLowFloor: 1,
+      source: "keelung-ebus",
+    });
+    expect(taichung).toMatchObject({
+      plateNumb: "KKA-6319",
+      isLowFloor: 1,
+      vehicleClass: 1,
+      source: "taichung-ebus",
+    });
+    expect(taichung).not.toHaveProperty("hasLiftOrRamp");
+    expect(await upsertVehicleObservations([])).toBe(0);
   });
 });
