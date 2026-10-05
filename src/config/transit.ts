@@ -1,5 +1,3 @@
-export const TDX_API_KEY = process.env.TDX_API_KEY || "";
-
 export const busUrl = {
   cityRouteSearchUrl:
     "https://tdx.transportdata.tw/api/basic/v2/Bus/Route/City",
