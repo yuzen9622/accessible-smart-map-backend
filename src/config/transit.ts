@@ -44,6 +44,19 @@ export const trainUrl = {
 
 const METRO_BASE = "https://tdx.transportdata.tw/api/basic/v2/Rail/Metro";
 
+/** Station/StationOfLine coverage; Alert has a different supported-system list. */
+export const METRO_STATION_SYSTEMS = [
+  "TRTC",
+  "KRTC",
+  "TYMC",
+  "TMRT",
+  "NTMC",
+  "KLRT",
+  "NTDLRT",
+  "NTALRT",
+  "TRTCMG",
+] as const;
+
 export const metroUrl = {
   stationUrl: (s: string) => `${METRO_BASE}/Station/${s}`,
   stationOfLineUrl: (s: string) => `${METRO_BASE}/StationOfLine/${s}`,
