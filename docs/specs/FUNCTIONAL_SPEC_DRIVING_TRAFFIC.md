@@ -3,7 +3,7 @@
 ## Functional Specification — Driving Traffic & Parking for Family Caregivers
 
 **版本**：v1.1.0  
-**狀態**：Implemented — 已實作完成  
+**狀態**：Partially implemented — 僅 `/traffic/flow` 與 `/traffic/incidents` 上線（2026-10-05 校正）  
 **日期**：2026-09-03  
 **作者**：yuzen9622
 
@@ -422,6 +422,8 @@ npx ts-node src/scripts/import-speed-cameras.ts
 ## 5. API 規格
 
 ### 5.1 端點總覽
+
+> **2026-10-05 現況校正**：`src/modules/traffic/traffic.router.ts` 只掛 `GET /api/v1/traffic/flow` 與 `GET /api/v1/traffic/incidents`（道路事件，`road-incident.service.ts`；本文未描述）。下表的 `/parking`、`/speed-cameras`、`/freeway`、`/driving` **皆未實作**，§5.3–§5.6 與相關快取、匯入腳本段落屬未落地設計；身障停車格查詢另見 `GET /api/v1/a11y/parking/nearby`。
 
 | Method | Path                            | 功能                                                                        | 資料來源                        |
 | ------ | ------------------------------- | --------------------------------------------------------------------------- | ------------------------------- |

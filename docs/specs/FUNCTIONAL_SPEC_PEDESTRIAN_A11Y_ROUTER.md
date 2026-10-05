@@ -3,7 +3,7 @@
 ## Functional Specification — Pedestrian Accessibility Routing Engine
 
 **版本**：v0.5.1
-**狀態**：Phase 0 進行中（WP-1～WP-3、WP-7 已實作並實測）
+**狀態**：已上線——台北 bbox 內純步行以 CSR 為 primary，OTP2 為 fallback（`planners/pedestrian-a11y/`；2026-10-05 校正，原文「Phase 0 進行中」）
 **日期**：2026-08-27
 **作者**：yuzen9622
 
@@ -15,7 +15,7 @@
 > ③ **新增 §6.4**：`width_m` 與 `effective_width_m` 語意不同，**不得互為 fallback**；CSR 只取淨寬。
 > ④ **新增 §6.5**：台北圖含 165 個 self-loop 閉環段，無向邊數不得以 `from_node <= to_node` 收斂。
 >
-> **v0.4.0 修訂（2026-08-19，Phase 0-6 實測回填）**：WP-7 已完成，報告見 `docs/reports/PED_ROUTER_DATA_SOURCES.md`。
+> **v0.4.0 修訂（2026-08-19，Phase 0-6 實測回填）**：WP-7 已完成，報告見 `docs/archive/reports/PED_ROUTER_DATA_SOURCES.md`。
 > ① **撤回 v0.3.0 §3.7 的錯誤風險判斷**——人行道資料集**帶 MultiPolygon 面幾何**（18,304/18,304），不是「路名＋起訖點的線性參考」。空間貼附成功率 100/100。
 > ② §3.6b 的判斷經實測**支持**，並補上更精確的界線：<1% 應視為平地基線。
 > ③ **新增 §3.8：有資料 ≠ 有鑑別力**。寬度硬門檻 0.9 m 只命中 0.60%、緣石斜坡 96.4% 的路段都有——兩者作為**硬限制或二元判斷幾乎沒有鑑別力**，鑑別力必須來自淨寬的分級成本。§7.3 據此修訂。
@@ -74,7 +74,7 @@
 
 > 個人化無障礙路由需要 per-profile 的成本函數。OTP 2.9 的 per-request 無障礙控制面**只有一個布林值**（`WheelchairPreferencesInput { enabled: Boolean }`），且 schema 註明 wheelchair 是唯一的 accessibility mode；`maxSlope`、`inaccessibleCost`、`slopeExceededReluctance`、`accessEgress.maxDuration` 全屬 `router-config.json` 全域設定，無法 per-request 調整。因此「wheelchair / elderly / visual 各有一組成本函數、跑在同一張圖上」這件事，在 OTP 架構下**不是調參問題，是結構上做不到**。
 >
-> （來源：`docs/specs/A11Y_SCORING_REWORK.md` §2.5，2026-06-16 查 OTP 2.9 `schema.graphqls` 定論。）
+> （來源：`docs/archive/specs/A11Y_SCORING_REWORK.md` §2.5，2026-06-16 查 OTP 2.9 `schema.graphqls` 定論。）
 
 `src/modules/accessible-route/scoring.ts:305` 定義的四個 `MODE_PROFILES`（wheelchair / elderly / visual_impaired / normal）目前完全依賴 post 層排序支撐，而 post 層只能排序 OTP 以同一組全域參數產出的候選。
 
@@ -276,7 +276,7 @@ OTP 之所以能達到此數字，是因其將預建圖常駐於自身進程記�
 
 ### 3.7 政府開放圖資（Phase 0-6 實測完成，2026-08-19）
 
-實測報告：`docs/reports/PED_ROUTER_DATA_SOURCES.md`。原始檔下載於 repo 外。
+實測報告：`docs/archive/reports/PED_ROUTER_DATA_SOURCES.md`。原始檔下載於 repo 外。
 
 > **v0.3.0 的風險判斷已撤回**：原文稱「人行道資料的定位是路名＋起點＋迄點的線性參考，不是 polyline，對位可能致命」。**實測推翻此判斷**——202606 版 WGS84 匯出物 18,304 筆**全部是 `MultiPolygon`**，CRS 為 `CRS84`。對位不需要解析 `PSTART`／`PEND` 文字。
 
@@ -426,7 +426,7 @@ gtfspathways ─┘                     ├ 節點表
 
 台北圖 version 1 有 **1,557 個弱連通元件**，最大元件涵蓋 **97.21%** 的節點；其餘 2.79%
 （4,613 節點、1,556 個 1–72 節點的孤島）**本引擎不可達**。OTP 對比實驗中 200 組 OD 有
-11 組因此無法路由。逐案證據與分類見 `docs/reports/PED_GRAPH_CONNECTIVITY_DIAGNOSIS.md`。
+11 組因此無法路由。逐案證據與分類見 `docs/archive/reports/PED_GRAPH_CONNECTIVITY_DIAGNOSIS.md`。
 
 四件事必須同時記住：
 
@@ -996,14 +996,14 @@ v0.1.0 僅沿用既有樓梯 fixture，該資料集**只能支撐樓梯這一項
 | ------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 0-1     | 建圖 pipeline（PBF → 節點／有向邊，路口切段、類型分類、行人 oneway 處理） | ✅ **已完成**：戶外 161,368 節點／441,456 有向邊（2026-08-22）；併入 WP-5 室內子圖後 **165,432 節點／453,144 有向邊／226,842 無向段**（2026-08-25）。連通性抽驗 94/100                                                              |
 | 0-2     | 記憶體圖與 CSR 表示法                                                     | ✅ **已完成（2026-08-25）**：**18.604 MB TypedArray footprint**、43.049 B/有向邊（**不得用 `heapUsed`**，同次量得 heapUsed 僅 0.548 MB、`arrayBuffers` 18.661 MB，見 §5.8）；六都外推 76.274 MB 常駐／**152.549 MB 峰值**，判定通過 |
-| 0-3     | 654 個出入口接上街道圖的對位率                                            | ✅ **已完成（2026-08-25）**：台北範圍 **375/375（100%，50 m）**，距離 p95 17.415 m；`R_station` p95 138.834 m／max 239.300 m，**落在 §9.1b 假設的 100–300 m 內**。§9 成立。報告 `docs/reports/PED_ROUTER_PHASE0.md`                 |
+| 0-3     | 654 個出入口接上街道圖的對位率                                            | ✅ **已完成（2026-08-25）**：台北範圍 **375/375（100%，50 m）**，距離 p95 17.415 m；`R_station` p95 138.834 m／max 239.300 m，**落在 §9.1b 假設的 100–300 m 內**。§9 成立。報告 `docs/archive/reports/PED_ROUTER_PHASE0.md`                 |
 | 0-4     | 記憶體空間索引的吸附品質與延遲                                            | ⚠️ **歷史量測（2026-08-25）**：投影吸附與 proxy-A\* 核心曾量得 1/200（0.5%）與 p50 1.055 ms／p95 4.278 ms；目前 production 改為端點吸附與 `h≡0`，這些數字**不得套用**，須重跑。                                                     |
 | 0-5     | §11.3 判定門檻可量測性                                                    | ✅ **已完成（2026-08-25）**：四項皆 `measurable=true` 且已量到實際值（靜默違反 **0%**、標記後違反 26.957%、繞路中位 **1.05699**、延遲 p95 4.278 ms）。條件 2／4 的 OTP 對比需成對量測，屬 Phase 6                                   |
-| **0-6** | **§3.7 政府開放圖資評估**                                                 | ✅ **已完成（2026-08-19）**，報告 `docs/reports/PED_ROUTER_DATA_SOURCES.md`。結論回填於 §3.7、§3.8、§3.6b                                                                                                                           |
+| **0-6** | **§3.7 政府開放圖資評估**                                                 | ✅ **已完成（2026-08-19）**，報告 `docs/archive/reports/PED_ROUTER_DATA_SOURCES.md`。結論回填於 §3.7、§3.8、§3.6b                                                                                                                           |
 
 **Phase 0 未通過即在此收手。**
 
-> **Phase 0 判定結果（2026-08-25）：通過。** 六個驗收項全部有實測數字，無一構成收手或縮範圍的理由。完整量測與已知缺陷見 `docs/reports/PED_ROUTER_PHASE0.md`。進入 Phase 1 前應先處理：為 `pathwayMode` 6/7（付費／出口閘門）定義成本語意——目前閘門為中性成本，引擎會把捷運付費區當行人捷徑（人工目視檢查發現）。（`ped_graph_version.notes` 未隨室內注入更新 `undirected_segment_count` 與 `edge_type_distribution` 一事，腳本已於 2026-08-26 修復，待下次注入執行寫回資料庫。）
+> **Phase 0 判定結果（2026-08-25）：通過。** 六個驗收項全部有實測數字，無一構成收手或縮範圍的理由。完整量測與已知缺陷見 `docs/archive/reports/PED_ROUTER_PHASE0.md`。進入 Phase 1 前應先處理：為 `pathwayMode` 6/7（付費／出口閘門）定義成本語意——目前閘門為中性成本，引擎會把捷運付費區當行人捷徑（人工目視檢查發現）。（`ped_graph_version.notes` 未隨室內注入更新 `undirected_segment_count` 與 `edge_type_distribution` 一事，腳本已於 2026-08-26 修復，待下次注入執行寫回資料庫。）
 
 ### Phase 1 — 基礎引擎（wheelchair profile）
 
@@ -1107,5 +1107,5 @@ elderly / visual_impaired / normal 三個 profile。定位為**能力展示**，
 | OTP 步行延遲（§3.6）               | 本機 `otp` 容器 GraphQL 直打，三次取值                           | 2026-08-19 |
 | DEM 取得性與解析度限制（§3.6b）    | 政府資料開放平臺與內政部地政司衛星測量中心公開說明               | 2026-08-19 |
 | 政府人行道圖資欄位（§3.7）         | 政府資料開放平臺資料集頁面（**僅讀 metadata，未下載檔案**）      | 2026-08-19 |
-| OTP 2.9 控制面限制（§1.1）         | `docs/specs/A11Y_SCORING_REWORK.md` §2.5（查 `schema.graphqls`） | 2026-06-16 |
-| 步行品質實測（§2.2、§2.3）         | `docs/specs/WALK_MODE_QUALITY_FIX.md` 與後續 14 組樓梯 OD 實測   | 2026-08-03 |
+| OTP 2.9 控制面限制（§1.1）         | `docs/archive/specs/A11Y_SCORING_REWORK.md` §2.5（查 `schema.graphqls`） | 2026-06-16 |
+| 步行品質實測（§2.2、§2.3）         | `docs/archive/specs/WALK_MODE_QUALITY_FIX.md` 與後續 14 組樓梯 OD 實測   | 2026-08-03 |

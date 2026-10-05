@@ -1,5 +1,16 @@
 export type RailSystem = "TRA" | "THSR";
 
+export interface RailOdSuspension {
+  DailyTrainInfo?: { SuspendedFlag?: number };
+  OriginStopTime?: { SuspendedFlag?: number };
+  DestinationStopTime?: { SuspendedFlag?: number };
+}
+
+export interface RailStationSuspension {
+  SuspendedFlag?: number;
+  DailyTrainInfo?: { SuspendedFlag?: number };
+}
+
 export type RailFetchErrorCode =
   "HTTP_ERROR" | "BAD_PAYLOAD" | "NETWORK" | "BUSY";
 

@@ -7,6 +7,9 @@ import * as alertService from "../transit/alert.service";
 import * as airService from "../air/air.service";
 import * as campusService from "../campus/campus.service";
 import * as hazardService from "../hazard-report/hazard-report.service";
+import { getActiveRoadIncidents } from "../traffic/road-incident.service";
+import { haversineMeters } from "../../utils/geo";
+import { isBusDirection } from "../../utils/transit-text";
 import { getEnvironmentInfo as fetchEnvironment } from "../environment/environment.service";
 import type { GroundingChunk } from "@google/genai";
 import { googleGenAi, model } from "../../config/ai";
@@ -36,6 +39,8 @@ import type {
   ThsrLeg,
   TraLeg,
 } from "../accessible-route/accessible-route.service";
+import { ERROR_MESSAGE } from "../../constants/messages";
+import { TransitPreferenceSchema } from "../../schemas/transit-preference.schema";
 import type { DriveLeg } from "../../types/route";
 import type { TaiwanCityEn } from "../../types/transit";
 
@@ -356,6 +361,7 @@ function summarizeLeg(
   if (leg.type === "BUS") {
     return {
       type: "BUS",
+      rideMinutes: leg.rideMinutes,
       routeName: leg.routeName,
       departureStop: leg.departureStop,
       arrivalStop: leg.arrivalStop,
@@ -426,11 +432,21 @@ export async function planAccessibleRoute(args: {
   origin: string;
   destination: string;
   mode?: string;
+  transitPreference?: string;
   departureTime?: string;
   userLocation?: { latitude: number; longitude: number };
 }): Promise<string> {
   const { origin, destination, mode, departureTime } = args;
 
+  const preference = TransitPreferenceSchema.optional().safeParse(
+    args.transitPreference,
+  );
+  if (!preference.success) {
+    return JSON.stringify({
+      ok: false,
+      error: ERROR_MESSAGE.INVALID_TRANSIT_PREFERENCE,
+    });
+  }
   try {
     const validMode = [
       "wheelchair",
@@ -462,6 +478,7 @@ export async function planAccessibleRoute(args: {
       userLocation: args.userLocation,
       mode: validMode,
       maxTransfers: 2,
+      transitPreference: preference.data,
       departureTime,
     });
 
@@ -483,6 +500,8 @@ export async function planAccessibleRoute(args: {
       },
       city: result.data.city,
       mode: validMode,
+      transitPreference:
+        result.data.transitPreference ?? preference.data ?? "none",
       routes: result.data.routes.slice(0, 3).map(summarizeRoute),
       metroAlerts: result.data.metroAlerts ?? [],
       transitAlerts: result.data.transitAlerts ?? [],
@@ -801,6 +820,72 @@ export async function getEnvironmentInfo(args: {
   }
 }
 
+const ROAD_EVENT_DEFAULT_RADIUS_M = 500;
+const ROAD_EVENT_MAX_RADIUS_M = 5000;
+const ROAD_EVENT_LIMIT = 15;
+
+/**
+ * Government road events (TDX LiveEvent; Taipei enriched with permit closure
+ * flags) within a radius, nearest first. Fail-soft: an empty list on error.
+ *
+ * @param lat Search centre latitude.
+ * @param lng Search centre longitude.
+ * @param radiusM Search radius in metres.
+ * @param hazardType Optional hazard type filter.
+ * @returns The nearest events, each tagged `source: "government"`.
+ */
+async function nearbyRoadEvents(
+  lat: number,
+  lng: number,
+  radiusM: number | undefined,
+  hazardType: string | undefined,
+) {
+  if (hazardType && hazardType !== "construction" && hazardType !== "obstacle")
+    return [];
+  const radius = Math.min(
+    radiusM ?? ROAD_EVENT_DEFAULT_RADIUS_M,
+    ROAD_EVENT_MAX_RADIUS_M,
+  );
+  try {
+    const dLat = radius / 111_320;
+    const dLng = dLat / Math.cos((lat * Math.PI) / 180);
+    const incidents = await getActiveRoadIncidents({
+      bbox: [lng - dLng, lat - dLat, lng + dLng, lat + dLat],
+    });
+    return incidents
+      .map((i) => {
+        const nearest = (i.points ?? [i.location]).reduce(
+          (best, p) => {
+            const d = haversineMeters(lat, lng, p.lat, p.lng);
+            return d < best.d ? { p, d } : best;
+          },
+          { p: i.location, d: Infinity },
+        );
+        return {
+          source: "government" as const,
+          hazardType: i.title.includes("施工") ? "construction" : "obstacle",
+          title: i.title,
+          description: i.description ?? null,
+          locationDescription: i.locationDescription ?? null,
+          severity: i.severity,
+          roadClosed: i.roadClosed ?? false,
+          endTime: i.endTime ?? null,
+          location: nearest.p,
+          distanceM: Math.round(nearest.d),
+        };
+      })
+      .filter(
+        (e) =>
+          e.distanceM <= radius && (!hazardType || e.hazardType === hazardType),
+      )
+      .sort((a, b) => a.distanceM - b.distanceM)
+      .slice(0, ROAD_EVENT_LIMIT);
+  } catch (error) {
+    console.warn("[agent-tool:getNearbyHazards] road events failed", error);
+    return [];
+  }
+}
+
 export async function getNearbyHazards(args: {
   latitude?: number;
   longitude?: number;
@@ -832,13 +917,19 @@ export async function getNearbyHazards(args: {
         error: "缺少位置資訊（query 或 lat/lng 必填）",
       });
     }
-    const result = await hazardService.findNearby({
-      lat: latitude,
-      lng: longitude,
-      radius: args.radiusM,
-      hazardType: args.hazardType as any,
+    const [result, roadEvents] = await Promise.all([
+      hazardService.findNearby({
+        lat: latitude,
+        lng: longitude,
+        radius: args.radiusM,
+        hazardType: args.hazardType as any,
+      }),
+      nearbyRoadEvents(latitude, longitude, args.radiusM, args.hazardType),
+    ]);
+    return JSON.stringify({
+      ok: result.ok,
+      data: { ...(result.data as object), roadEvents },
     });
-    return JSON.stringify({ ok: result.ok, data: result.data });
   } catch (error: any) {
     console.error("[agent-tool:getNearbyHazards]", error);
     return JSON.stringify({ ok: false, error: "附近路況查詢失敗" });
@@ -959,10 +1050,7 @@ export async function getTransitAlerts(args: {
         mode: "bus",
         city: cityResult as TaiwanCityEn,
         routeName,
-        direction:
-          args.direction === 0 || args.direction === 1
-            ? args.direction
-            : undefined,
+        direction: isBusDirection(args.direction) ? args.direction : undefined,
         stopName: args.stopName?.trim() || undefined,
       };
     } else if (mode === "metro") {
@@ -1033,11 +1121,21 @@ export async function getNavInstructions(args: {
   origin: string;
   destination: string;
   mode?: string;
+  transitPreference?: string;
   departureTime?: string;
   routeIndex?: number;
   userHeading?: number;
   userLocation?: { latitude: number; longitude: number };
 }): Promise<string> {
+  const preference = TransitPreferenceSchema.optional().safeParse(
+    args.transitPreference,
+  );
+  if (!preference.success) {
+    return JSON.stringify({
+      ok: false,
+      error: ERROR_MESSAGE.INVALID_TRANSIT_PREFERENCE,
+    });
+  }
   try {
     if (args.origin === "current_location" && !args.userLocation) {
       return JSON.stringify({
@@ -1062,6 +1160,7 @@ export async function getNavInstructions(args: {
       userLocation: args.userLocation,
       mode: validMode,
       maxTransfers: 2,
+      transitPreference: preference.data,
       departureTime: args.departureTime,
     });
     if (!result.ok) {
@@ -1917,6 +2016,7 @@ export async function executeLocalTool(
         origin: args.origin,
         destination: args.destination,
         mode: args.mode,
+        transitPreference: args.transitPreference,
         departureTime: args.departureTime,
         userLocation,
       });
@@ -2047,6 +2147,7 @@ export async function executeLocalTool(
         origin: args.origin as string,
         destination: args.destination as string,
         mode: args.mode as string | undefined,
+        transitPreference: args.transitPreference,
         departureTime: args.departureTime as string | undefined,
         routeIndex: args.routeIndex as number | undefined,
         userHeading: args.userHeading as number | undefined,

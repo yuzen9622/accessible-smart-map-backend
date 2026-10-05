@@ -20,7 +20,11 @@ worse — builds a graph that crashes on load (self-loop pathways):
                       self-loop pathways from_stop == to_stop (drop — these
                       serialize into duplicate vertex labels that NPE on load),
                       duplicate (from, to, mode) tuples (keep first)
-  7. fare_*.txt       removed entirely — the TDX feed carries 3.8M fare rows
+  7. calendar.txt     duplicate service_id rows (keep the widest date range;
+                      OTP aborts the whole build with
+                      MultipleCalendarsForServiceIdException — seen 2026-10-02
+                      on a TDX AirLine service listed twice)
+  8. fare_*.txt       removed entirely — the TDX feed carries 3.8M fare rows
                       and OTP's per-itinerary fare scan costs ~20s per query;
                       this backend never consumes OTP fares
 
@@ -55,7 +59,8 @@ def main(zip_path: str) -> None:
         names = set(zf.namelist())
         tables = {}
         for name in ("trips.txt", "stop_times.txt", "levels.txt", "stops.txt",
-                     "pathways.txt", "routes.txt", "frequencies.txt"):
+                     "pathways.txt", "routes.txt", "frequencies.txt",
+                     "calendar.txt"):
             if name in names:
                 tables[name] = read_rows(zf, name)
 
@@ -159,6 +164,22 @@ def main(zip_path: str) -> None:
                 clean_pathways.append(r)
             log(f"pathways: kept={len(clean_pathways)} dropped={len(pathways) - len(clean_pathways)}")
 
+        # 7. calendar: one row per service_id. When TDX lists a service twice
+        #    the rows usually nest (a one-day row inside a multi-week one), so
+        #    the widest range keeps every date the operator published.
+        clean_calendar, calendar_fields = [], None
+        if "calendar.txt" in tables:
+            calendar_fields, calendar = tables["calendar.txt"]
+            by_service = {}
+            for r in calendar:
+                sid = r["service_id"]
+                best = by_service.get(sid)
+                span = (r.get("end_date", ""), "-" + r.get("start_date", ""))
+                if best is None or span > (best.get("end_date", ""), "-" + best.get("start_date", "")):
+                    by_service[sid] = r
+            clean_calendar = list(by_service.values())
+            log(f"calendar: kept={len(clean_calendar)} dropped_duplicates={len(calendar) - len(clean_calendar)}")
+
         # Rewrite the zip: copy untouched entries, replace cleaned ones.
         cleaned = {
             "trips.txt": (trips_fields, clean_trips),
@@ -171,6 +192,8 @@ def main(zip_path: str) -> None:
             cleaned["pathways.txt"] = (pathways_fields, clean_pathways)
         if freq_fields:
             cleaned["frequencies.txt"] = (freq_fields, clean_freq)
+        if calendar_fields:
+            cleaned["calendar.txt"] = (calendar_fields, clean_calendar)
 
         dropped_files = [n for n in zf.namelist() if n.startswith("fare_")]
         if dropped_files:

@@ -164,6 +164,7 @@ describe("POST /api/v1/a11y/accessible-route travel modes + waypoints", () => {
             id: "confirmed-1",
             hazardType: "construction",
             severity: "blocking",
+            source: "community",
             description: "人行道施工中",
             location: { lat: 25.041, lng: 121.567 },
             distanceM: 7.5,

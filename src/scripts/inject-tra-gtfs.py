@@ -1,6 +1,22 @@
 #!/usr/bin/env python3
 """Inject the TRA timetable into the TDX national GTFS zip (Phase 16.5).
 
+Two modes, chosen per run:
+
+  native   (2026-10 onward) the TDX national feed itself carries a dated TRA
+           timetable: one trip per train per service date (calendar_dates),
+           ~59 days ahead, with track shapes. When it covers at least
+           NATIVE_MIN_DAYS ahead it is KEPT as-is — it is strictly more
+           accurate than a weekly pattern (holidays, one-off changes) — and
+           enriched with what it lacks: route_long_name gets the train
+           type (區間/自強/…, which the backend shows as trainTypeName) and
+           trips of WheelChairFlag=1 trains get wheelchair_accessible=1.
+           Stop sequences farther than 500 m from their assigned shape are
+           rebuilt from TRA track geometry. Unrepairable patterns abort without
+           replacing the input zip. Only stale injected rows are removed.
+  inject   fallback when the feed has no usable TRA timetable (the original
+           behaviour documented below).
+
 TDX ships TRA stops/agency in the national feed but no timetable (routes/
 trips/calendar are absent), and its rail GTFS endpoint only serves TRTC —
 so OTP could never plan a TRA leg and every 台鐵 itinerary depended on the
@@ -46,23 +62,33 @@ Usage: inject-tra-gtfs.py <feed.zip> <general-train-timetable.json> [<tra-shape.
 import csv
 import io
 import json
-import math
+import hashlib
+import heapq
+import re
 import os
 import sys
 import tempfile
 import zipfile
-from datetime import datetime, timedelta
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+
+from tra_shape_geometry import (
+    MY, Shape, coordinates, find_misaligned_patterns, load_tra_geometry,
+)
 
 CALENDAR_DAYS = 45
+NATIVE_MIN_DAYS = 14
+TAIPEI = timezone(timedelta(hours=8))
+INJECTED_SERVICE_PREFIX = "TRA_SVC_"
+INJECTED_ROUTE = re.compile(r"^TRA_[^_]+$")
 DAY_KEYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
             "Saturday", "Sunday")
 
 # Shape generation ----------------------------------------------------------
 SHAPE_PREFIX = "TRA_SHP_"
+REPAIRED_SHAPE_PREFIX = "TRA_REPAIRED_"
 SHAPE_PERP_MAX = 600.0  # m — reject a line whose track sits farther from a stop
-LAT0 = 23.7             # Taiwan mid-latitude for the local planar projection
-MX = math.cos(math.radians(LAT0)) * 111320.0  # metres per degree longitude
-MY = 110540.0                                  # metres per degree latitude
+SHAPE_JOIN_MAX = 10.0   # m — only join separate parts where their tracks meet
 
 
 def read_rows(zf: zipfile.ZipFile, name: str):
@@ -94,84 +120,6 @@ def parse_wkt(geom: str):
     return [(float(n[i]), float(n[i + 1])) for i in range(0, len(n) - 1, 2)]
 
 
-class Shape:
-    """One TRA line's track geometry, prepared for projection + slicing.
-
-    Distances are computed in a local equirectangular projection (metres),
-    accurate enough across Taiwan for nearest-line selection and slicing.
-    """
-    __slots__ = ("lon", "lat", "xs", "ys", "cd", "bbox")
-
-    def __init__(self, pts):
-        self.lon = [p[0] for p in pts]
-        self.lat = [p[1] for p in pts]
-        self.xs = [p[0] * MX for p in pts]
-        self.ys = [p[1] * MY for p in pts]
-        cd = [0.0]
-        for i in range(1, len(pts)):
-            cd.append(cd[-1] + math.hypot(self.xs[i] - self.xs[i - 1],
-                                          self.ys[i] - self.ys[i - 1]))
-        self.cd = cd
-        self.bbox = (min(self.lon), min(self.lat), max(self.lon), max(self.lat))
-
-    def project(self, lon: float, lat: float):
-        """Nearest point on the line. Returns (along_m, perp_m, lon, lat)."""
-        px, py = lon * MX, lat * MY
-        xs, ys, cd = self.xs, self.ys, self.cd
-        best_perp = 1e18
-        best_along = 0.0
-        best_lon, best_lat = lon, lat
-        for i in range(len(xs) - 1):
-            ax, ay = xs[i], ys[i]
-            dx, dy = xs[i + 1] - ax, ys[i + 1] - ay
-            seg2 = dx * dx + dy * dy
-            t = 0.0 if seg2 == 0 else ((px - ax) * dx + (py - ay) * dy) / seg2
-            if t < 0.0:
-                t = 0.0
-            elif t > 1.0:
-                t = 1.0
-            cx, cy = ax + t * dx, ay + t * dy
-            perp = (px - cx) ** 2 + (py - cy) ** 2
-            if perp < best_perp:
-                best_perp = perp
-                best_along = cd[i] + t * math.sqrt(seg2)
-                best_lon = self.lon[i] + t * (self.lon[i + 1] - self.lon[i])
-                best_lat = self.lat[i] + t * (self.lat[i + 1] - self.lat[i])
-        return best_along, math.sqrt(best_perp), best_lon, best_lat
-
-    def at(self, d: float):
-        """Point at along-distance d (clamped), via binary search."""
-        cd = self.cd
-        if d <= cd[0]:
-            return (self.lon[0], self.lat[0])
-        if d >= cd[-1]:
-            return (self.lon[-1], self.lat[-1])
-        lo, hi = 0, len(cd) - 1
-        while lo < hi:
-            m = (lo + hi) // 2
-            if cd[m] < d:
-                lo = m + 1
-            else:
-                hi = m
-        i = lo
-        seg = cd[i] - cd[i - 1]
-        t = 0.0 if seg == 0 else (d - cd[i - 1]) / seg
-        return (self.lon[i - 1] + t * (self.lon[i] - self.lon[i - 1]),
-                self.lat[i - 1] + t * (self.lat[i] - self.lat[i - 1]))
-
-    def slice(self, d0: float, d1: float):
-        """Sub-polyline between along-distances d0..d1, in travel order."""
-        rev = d0 > d1
-        lo, hi = (d1, d0) if rev else (d0, d1)
-        cd = self.cd
-        out = [self.at(lo)]
-        for i in range(len(cd)):
-            if lo < cd[i] < hi:
-                out.append((self.lon[i], self.lat[i]))
-        out.append(self.at(hi))
-        if rev:
-            out.reverse()
-        return out
 
 
 class TraShaper:
@@ -183,9 +131,12 @@ class TraShaper:
     trip.
     """
 
-    def __init__(self, shapes, coord):
+    def __init__(self, shapes, coord, connect_lines=False):
         self.shapes = shapes
         self.coord = coord
+        self.connect_lines = connect_lines
+        self._line_graph = None
+        self._line_coord = None
         self.bbox_pad = SHAPE_PERP_MAX / MY + 0.005  # deg envelope around a line
         self._hop = {}
 
@@ -217,10 +168,66 @@ class TraShaper:
         if best and best[0] <= SHAPE_PERP_MAX:
             _, sh, pa, pb = best
             geom = [a] + sh.slice(pa[0], pb[0]) + [b]
+        elif self.connect_lines:
+            geom = self._connected_hop_geom(a_id, b_id)
         else:
             geom = [a, b]  # no fitting line: straight segment for this hop only
         self._hop[key] = geom
         return geom
+
+    def _connected_hop_geom(self, start, end):
+        """Connect line slices at shared stations or matching track endpoints.
+
+        Used for native repairs, which may not fall back to a straight hop.
+        Edges follow actual track geometry; distance is along the track plus
+        station connectors. Parts may end between stations (e.g. Taoyuan);
+        their endpoints must lie within 10 m of another track to join it.
+        """
+        if self._line_graph is None:
+            graph = {}
+            nodes = dict(self.coord)
+            junctions = set()
+            for index, shape in enumerate(self.shapes):
+                for end_index in (0, -1):
+                    sid = f"@track_{index}_{end_index}"
+                    nodes[sid] = (shape.lon[end_index], shape.lat[end_index])
+                    junctions.add(sid)
+            for shape in self.shapes:
+                projected = []
+                for sid, (lon, lat) in nodes.items():
+                    if self._fits(shape.bbox, lon, lat):
+                        along, perp, _, _ = shape.project(lon, lat)
+                        limit = SHAPE_JOIN_MAX if sid in junctions else SHAPE_PERP_MAX
+                        if perp <= limit:
+                            projected.append((along, sid, perp))
+                projected.sort()
+                for (da, a, pa), (db, b, pb) in zip(projected, projected[1:]):
+                    cost = db - da + pa + pb
+                    graph.setdefault(a, []).append((b, cost, shape, da, db))
+                    graph.setdefault(b, []).append((a, cost, shape, db, da))
+            self._line_graph = graph
+            self._line_coord = nodes
+        queue, distances, previous = [(0.0, start)], {start: 0.0}, {}
+        while queue:
+            distance, sid = heapq.heappop(queue)
+            if distance != distances[sid]:
+                continue
+            if sid == end:
+                break
+            for to, cost, shape, da, db in self._line_graph.get(sid, []):
+                candidate = distance + cost
+                if candidate < distances.get(to, float("inf")):
+                    distances[to] = candidate
+                    previous[to] = (sid, shape, da, db)
+                    heapq.heappush(queue, (candidate, to))
+        if end not in distances:
+            return []
+        slices, sid = [], end
+        while sid != start:
+            before, shape, da, db = previous[sid]
+            slices.append([self._line_coord[before]] + shape.slice(da, db) + [self._line_coord[sid]])
+            sid = before
+        return [point for segment in reversed(slices) for point in segment]
 
     def build(self, stop_ids):
         """Return the trip's stitched shape as [(lon, lat), …] (dups dropped)."""
@@ -232,7 +239,7 @@ class TraShaper:
         return out
 
 
-def load_tra_shapes(shape_path: str):
+def load_tra_shapes(shape_path: str, split_parts=False):
     """Load TDX Rail/TRA/Shape JSON into a list of Shape (or [] on any issue)."""
     try:
         data = json.load(open(shape_path, encoding="utf-8"))
@@ -241,10 +248,220 @@ def load_tra_shapes(shape_path: str):
     records = data.get("Shapes") if isinstance(data, dict) else data
     shapes = []
     for rec in records or []:
-        pts = parse_wkt(rec.get("Geometry") or "")
-        if len(pts) >= 2:
-            shapes.append(Shape(pts))
+        geom = rec.get("Geometry") or ""
+        # MULTILINESTRING components are not consecutive track segments. Native
+        # repairs connect them via real shared stations, never by flattening WKT.
+        parts = re.findall(r"\(([^()]*)\)", geom) if split_parts else [geom]
+        for part in parts:
+            pts = [coordinates(*p) for p in parse_wkt(part)]
+            if len(pts) >= 2:
+                shapes.append(Shape(pts))
     return shapes
+
+
+def is_injected_trip(row) -> bool:
+    return row["service_id"].startswith(INJECTED_SERVICE_PREFIX)
+
+
+def native_tra_window(zf: zipfile.ZipFile, trips, calendar):
+    """Service-date range of the feed's own TRA timetable, when it is usable.
+
+    Returns (first, last) "YYYYMMDD" when TDX's native TRA trips run at least
+    NATIVE_MIN_DAYS ahead of today (Asia/Taipei), otherwise None.
+    """
+    services = {r["service_id"] for r in trips
+                if r["trip_id"].startswith("TRA_") and not is_injected_trip(r)}
+    if not services:
+        return None
+    dates = set()
+    for r in calendar:
+        if r["service_id"] in services:
+            dates.update((r["start_date"], r["end_date"]))
+    if "calendar_dates.txt" in zf.namelist():
+        for r in read_rows(zf, "calendar_dates.txt")[1]:
+            if r["service_id"] in services and r.get("exception_type") == "1":
+                dates.add(r["date"])
+    if not dates:
+        return None
+    today = datetime.now(TAIPEI).date()
+    horizon = (today + timedelta(days=NATIVE_MIN_DAYS)).strftime("%Y%m%d")
+    first, last = min(dates), max(dates)
+    return (first, last) if last >= horizon else None
+
+
+def repair_native_shapes(zf, trips, tra_shapes, log):
+    """Repair only misassigned native shapes; abort before writing on failure."""
+    coord, patterns, shapes = load_tra_geometry(zf, trips)
+    failures = find_misaligned_patterns(coord, patterns, shapes)
+    log(f"native TRA shape check: {len(failures)}/{len(patterns)} patterns misaligned")
+    if not failures:
+        return {}, set()
+    if not tra_shapes:
+        raise ValueError("native TRA shapes are misaligned; usable TRA Shape JSON is required")
+    shaper = TraShaper(tra_shapes, coord, connect_lines=True)
+    replacements, repaired_trips, new_shapes = {}, set(), {}
+    for key, stop, distance in failures:
+        old_shape, seq = key
+        if len(seq) < 2 or any(s not in coord for s in seq):
+            raise ValueError(f"cannot repair TRA pattern {old_shape}: missing stops/coordinates")
+        shape_id = REPAIRED_SHAPE_PREFIX + hashlib.sha256(
+            json.dumps(seq, separators=(",", ":")).encode("utf-8")).hexdigest()[:20]
+        if shape_id not in new_shapes:
+            points = shaper.build(seq)
+            # TraShaper's legacy fallback includes the stations and would pass
+            # a distance check even if the entire hop were a straight line.
+            unsupported = [(a, b) for a, b in zip(seq, seq[1:])
+                           if len(shaper._hop[(a, b)]) <= 2]
+            if unsupported or len(points) < 2:
+                raise ValueError(f"cannot repair TRA pattern {old_shape}: "
+                                 f"no track geometry for hops {unsupported}")
+            shape = Shape(points)
+            if find_misaligned_patterns(coord, {(shape_id, seq): []}, {shape_id: shape}):
+                raise ValueError(f"rebuilt TRA shape {shape_id} failed alignment")
+            new_shapes[shape_id] = shape
+        for tid in patterns[key]:
+            replacements[tid] = shape_id
+            repaired_trips.add(tid)
+        log(f"repaired {old_shape} -> {shape_id}: trips={len(patterns[key])}, "
+            f"worst_stop={stop}, distance={distance:.0f}m")
+    for trip in trips:
+        if trip["trip_id"] in replacements:
+            trip["shape_id"] = replacements[trip["trip_id"]]
+    log(f"native TRA shapes repaired: {len(new_shapes)} shapes, {len(repaired_trips)} trips")
+    return new_shapes, repaired_trips
+
+
+def write_native_shapes(zf, out, new_shapes, referenced_shapes):
+    """Stream original columns/rows unchanged; append only repaired shapes."""
+    has_shapes = "shapes.txt" in zf.namelist()
+    with out.open("shapes.txt", "w") as raw:
+        dst = io.TextIOWrapper(raw, encoding="utf-8")
+        fields = ["shape_id", "shape_pt_lat", "shape_pt_lon", "shape_pt_sequence"]
+        needs_newline = False
+        if has_shapes:
+            with zf.open("shapes.txt") as in_f:
+                src = io.TextIOWrapper(in_f, encoding="utf-8-sig", newline="")
+                header = src.readline()
+                fields = next(csv.reader([header]))
+                id_index = fields.index("shape_id")
+                dst.write(header)
+                needs_newline = not header.endswith(("\n", "\r"))
+                for line in src:
+                    sid = next(csv.reader([line]))[id_index]
+                    if sid in new_shapes:
+                        continue
+                    if sid.startswith((SHAPE_PREFIX, REPAIRED_SHAPE_PREFIX)) and sid not in referenced_shapes:
+                        continue
+                    dst.write(line)
+                    needs_newline = not line.endswith(("\n", "\r"))
+        else:
+            csv.writer(dst).writerow(fields)
+        if new_shapes and needs_newline:
+            dst.write("\n")
+        writer = csv.DictWriter(dst, fieldnames=fields, extrasaction="ignore")
+        for sid, shape in new_shapes.items():
+            for seq, (lon, lat, distance) in enumerate(zip(shape.lon, shape.lat, shape.cd), 1):
+                writer.writerow({"shape_id": sid, "shape_pt_lat": lat, "shape_pt_lon": lon,
+                                 "shape_pt_sequence": seq, "shape_dist_traveled": distance})
+        dst.flush()
+
+
+@contextmanager
+def native_feed_output(zip_path):
+    """Same-filesystem atomic replacement; failed writes leave no stray ZIP."""
+    with tempfile.NamedTemporaryFile(dir=os.path.dirname(os.path.abspath(zip_path)),
+                                     suffix=".zip", delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        yield tmp_path
+        os.replace(tmp_path, zip_path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
+def enrich_native(zf, zip_path, log, routes_fields, routes, trips_fields,
+                  trips, cal_fields, calendar, timetables, first, last, tra_shapes):
+    """Keep the native TRA timetable; add train types and wheelchair flags."""
+    info_by_train = {tt["TrainInfo"]["TrainNo"]: tt["TrainInfo"] for tt in timetables}
+    type_by_id = {tt["TrainInfo"]["TrainTypeID"]: tt["TrainInfo"]["TrainTypeName"]["Zh_tw"]
+                  for tt in timetables}
+
+    stale_routes = {r["route_id"] for r in routes if INJECTED_ROUTE.match(r["route_id"])}
+    stale_trips = {r["trip_id"] for r in trips if is_injected_trip(r)}
+    routes = [r for r in routes if r["route_id"] not in stale_routes]
+    trips = [r for r in trips if r["trip_id"] not in stale_trips]
+    calendar = [r for r in calendar
+                if not r["service_id"].startswith(INJECTED_SERVICE_PREFIX)]
+    new_shapes, repaired_trips = repair_native_shapes(zf, trips, tra_shapes, log)
+    referenced_shapes = {r.get("shape_id", "") for r in trips}
+    if new_shapes and "shape_id" not in trips_fields:
+        trips_fields = list(trips_fields) + ["shape_id"]
+    if "wheelchair_accessible" not in trips_fields:
+        trips_fields = list(trips_fields) + ["wheelchair_accessible"]
+
+    named = 0
+    for r in routes:
+        rid = r["route_id"]
+        if not rid.startswith("TRA_"):
+            continue
+        parts = rid.split("_")
+        info = info_by_train.get(parts[1]) if len(parts) > 1 else None
+        name = (info["TrainTypeName"]["Zh_tw"] if info
+                else type_by_id.get(parts[-1]))
+        if name:
+            r["route_long_name"] = name
+            named += 1
+    flagged = 0
+    native_trips = 0
+    for r in trips:
+        if not r["trip_id"].startswith("TRA_"):
+            continue
+        native_trips += 1
+        info = info_by_train.get(r["trip_id"].split("_")[1])
+        if info and info.get("WheelChairFlag") == 1:
+            r["wheelchair_accessible"] = "1"
+            flagged += 1
+    log(f"native TRA timetable kept: trips={native_trips} service dates "
+        f"{first}–{last}; train types set on {named} routes, "
+        f"wheelchair_accessible=1 on {flagged} trips"
+        + (f"; removed earlier injection routes={len(stale_routes)} "
+           f"trips={len(stale_trips)}" if stale_routes or stale_trips else ""))
+
+    rewritten = {
+        "routes.txt": (routes_fields, routes),
+        "trips.txt": (trips_fields, trips),
+        "calendar.txt": (cal_fields, calendar),
+    }
+    with native_feed_output(zip_path) as tmp_path:
+        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as out:
+            for name in zf.namelist():
+                if name in rewritten:
+                    fields, rows = rewritten[name]
+                    buf = io.StringIO()
+                    w = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
+                    w.writeheader()
+                    w.writerows(rows)
+                    out.writestr(name, buf.getvalue())
+                elif name == "stop_times.txt" and (stale_trips or repaired_trips):
+                    with out.open(name, "w") as f, zf.open(name) as in_f:
+                        dst = io.TextIOWrapper(f, encoding="utf-8")
+                        src = csv.DictReader(io.TextIOWrapper(in_f, encoding="utf-8-sig"))
+                        w = csv.DictWriter(dst, fieldnames=src.fieldnames)
+                        w.writeheader()
+                        for row in src:
+                            if row["trip_id"] not in stale_trips:
+                                if row["trip_id"] in repaired_trips and "shape_dist_traveled" in row:
+                                    row["shape_dist_traveled"] = ""
+                                w.writerow(row)
+                        dst.flush()
+                elif name == "shapes.txt":
+                    write_native_shapes(zf, out, new_shapes, referenced_shapes)
+                else:
+                    out.writestr(name, zf.read(name))
+            if "shapes.txt" not in zf.namelist() and new_shapes:
+                write_native_shapes(zf, out, new_shapes, referenced_shapes)
+    log(f"rewrote {zip_path}")
 
 
 def main(zip_path: str, json_path: str, shape_path: str = None) -> None:
@@ -264,6 +481,16 @@ def main(zip_path: str, json_path: str, shape_path: str = None) -> None:
         routes_fields, routes = read_rows(zf, "routes.txt")
         trips_fields, trips = read_rows(zf, "trips.txt")
         cal_fields, calendar = read_rows(zf, "calendar.txt")
+
+        native = native_tra_window(zf, trips, calendar)
+        if native:
+            first, last = native
+            tra_shapes = load_tra_shapes(shape_path, split_parts=True) if shape_path else []
+            enrich_native(zf, zip_path, log, routes_fields, routes,
+                          trips_fields, trips, cal_fields, calendar,
+                          timetables, first, last, tra_shapes)
+            return
+
         st_fields, stop_times = read_rows(zf, "stop_times.txt")
         stops_rows = read_rows(zf, "stops.txt")[1]
         stop_ids = {r["stop_id"] for r in stops_rows}

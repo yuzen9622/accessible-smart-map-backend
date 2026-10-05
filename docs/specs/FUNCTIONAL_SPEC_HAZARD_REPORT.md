@@ -376,11 +376,15 @@ export const HazardReport = model<IHazardReport>(
 
 | Method | Path                               | 功能               | 認證             |
 | ------ | ---------------------------------- | ------------------ | ---------------- |
-| `POST` | `/api/v1/a11y/reports`             | 提交路況回報       | **JWT 必要**     |
+| `POST` | `/api/v1/a11y/reports`             | 提交路況回報       | 公開（選用 JWT） |
 | `GET`  | `/api/v1/a11y/reports/mine`        | 查詢自己的回報紀錄 | **JWT 必要**     |
 | `GET`  | `/api/v1/a11y/reports`             | 查詢附近回報       | 公開             |
 | `GET`  | `/api/v1/a11y/reports/:id`         | 取得單一回報       | 公開             |
 | `POST` | `/api/v1/a11y/reports/:id/confirm` | 社群二次確認／否認 | 公開（選用 JWT） |
+| `GET`  | `/api/v1/a11y/reports/review-queue` | admin 審核佇列    | **JWT + admin**  |
+| `PATCH`| `/api/v1/a11y/reports/:id/review`  | admin 審核決定     | **JWT + admin**  |
+
+> **2026-10-05 現況校正**：`POST /reports` 已改為允許匿名（帶 JWT 記 `userId`，未帶以 `"ip:" + sha256(ip)` 識別，皆計入去重），下段「強制 JWT」的描述只剩 `GET /reports/mine` 成立。另新增兩支 admin 審核端點（`requireAdmin`，非 admin 回 403），本文未詳述，以 `hazard-report.router.ts` 與 OpenAPI 為準。
 
 > **回報（`POST /reports`）與「我的回報」（`GET /reports/mine`）強制 JWT**，`reporterId` 取自 `req.auth.userId`（由共用 auth middleware 注入，見 §3.4）。token 過期→401、缺少/無效→403，皆由 middleware 直接回應（不進 controller）。  
 > 附近查詢與單筆查詢為公開路由。社群確認（`/confirm`）維持公開：帶 JWT 以 `req.auth.userId` 記入 `confirmedBy` / `deniedBy`，未帶則以 IP hash 作匿名識別（避免重複投票）。  

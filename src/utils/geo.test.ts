@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { degToCompassToken, haversineMeters, parseLocation } from "./geo";
+import {
+  degToCompassToken,
+  haversineMeters,
+  parseLocation,
+  roundCoordinate,
+  simplifyPath,
+} from "./geo";
 
 describe("haversineMeters", () => {
   it("is zero for identical points", () => {
@@ -98,5 +104,38 @@ describe("parseLocation", () => {
     expect(parseLocation("invalid,input")).toBeUndefined();
     expect(parseLocation({})).toBeUndefined();
     expect(parseLocation([999, 999])).toBeUndefined();
+  });
+});
+
+describe("simplifyPath", () => {
+  it("刪掉共線的中間點、保留轉折與端點", () => {
+    const path: [number, number][] = [
+      [121.5, 25.0],
+      [121.501, 25.0],
+      [121.502, 25.0],
+      [121.502, 25.001],
+    ];
+    expect(simplifyPath(path, 5)).toEqual([
+      [121.5, 25.0],
+      [121.502, 25.0],
+      [121.502, 25.001],
+    ]);
+  });
+
+  it("偏離超過容許值的點不會被刪", () => {
+    const path: [number, number][] = [
+      [121.5, 25.0],
+      [121.501, 25.0001],
+      [121.502, 25.0],
+    ];
+    expect(simplifyPath(path, 5)).toHaveLength(3);
+  });
+});
+
+describe("roundCoordinate", () => {
+  it("rounds both axes to 6 decimals", () => {
+    expect(roundCoordinate([121.12345678, 25.98765432])).toEqual([
+      121.123457, 25.987654,
+    ]);
   });
 });

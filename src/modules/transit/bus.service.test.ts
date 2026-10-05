@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("../../config/fetch", () => ({ tdxFetch: vi.fn() }));
 vi.mock("../../model/bus-vehicle.model", () => ({
@@ -11,6 +11,10 @@ vi.mock("../../model/bus-stop.model", () => ({
   default: { aggregate: vi.fn() },
 }));
 vi.mock("../../adapters/google.adapter", () => ({ getCity: vi.fn() }));
+vi.mock("../../config/redis", () => ({
+  redisGet: vi.fn(async () => null),
+  redisSet: vi.fn(async () => undefined),
+}));
 
 import { tdxFetch } from "../../config/fetch";
 import BusVehicleModel from "../../model/bus-vehicle.model";
@@ -120,7 +124,73 @@ describe("getBusRealtimeOnRoute — 低底盤 join（招牌功能）", () => {
   });
 });
 
+describe("getBusRealtimeOnRoute — 同號碼的其他路線不混入", () => {
+  const bus = (plate: string, routeName: string, subRouteUid: string) => ({
+    PlateNumb: plate,
+    RouteName: { Zh_tw: routeName },
+    SubRouteUID: subRouteUid,
+    SubRouteName: { Zh_tw: routeName },
+    Direction: 0,
+    BusPosition: { PositionLat: 24.14, PositionLon: 120.68 },
+    BusStatus: 0,
+  });
+  const jumpFrog = {
+    routeName: { Zh_tw: "700跳蛙公車" },
+    subRouteUid: "TXG7001",
+  };
+
+  beforeEach(() => mockVehicles([]));
+
+  it("完整名稱是已匯入路線時，只回這條路線的車", async () => {
+    mockRouteMap([jumpFrog]);
+    mockTdxJson([
+      bus("EAL-0603", "700", "TXG7000"),
+      bus("EAL-3679", "700跳蛙公車", "TXG7001"),
+    ]);
+
+    const result = await getBusRealtimeOnRoute({
+      routeName: "700跳蛙公車",
+      city: TaiwanCityEn.Taichung,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.routeName).toBe("700跳蛙公車");
+    expect(result.buses.map((b) => b.plateNumb)).toEqual(["EAL-3679"]);
+  });
+
+  it("這條路線沒有車在跑時回 404，不拿一般 700 的車充數", async () => {
+    mockRouteMap([jumpFrog]);
+    mockTdxJson([bus("EAL-0603", "700", "TXG7000")]);
+
+    const result = await getBusRealtimeOnRoute({
+      routeName: "700跳蛙公車",
+      city: TaiwanCityEn.Taichung,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.status).toBe(404);
+  });
+
+  it("完整名稱不是已知路線（帶雜訊的輸入）時維持模糊比對", async () => {
+    mockRouteMap([]);
+    mockTdxJson([bus("AAA-1", "307", "TPE157463")]);
+
+    const result = await getBusRealtimeOnRoute({
+      routeName: "307公車",
+      city: TaiwanCityEn.Taipei,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.buses.map((b) => b.plateNumb)).toEqual(["AAA-1"]);
+  });
+});
+
 describe("getBusArrivalAtStop", () => {
+  beforeEach(() => mockRouteMap([]));
+
   it("換算秒→分鐘並帶出站名/狀態（V2 N1）", async () => {
     mockTdxJson([
       {
@@ -162,6 +232,52 @@ describe("getBusArrivalAtStop", () => {
     if (!result.ok) return;
     expect(result.arrivals[0].estimateMinutes).toBeNull();
     expect(result.arrivals[0].statusLabel).toBe("尚未發車");
+  });
+
+  it("末班車已過且無 NextBusTime 時，改從班表給明日首班", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-01T23:30:00+08:00"));
+    try {
+      tdxFetchMock.mockImplementation(async (url: string) => ({
+        ok: true,
+        json: async () =>
+          url.includes("Schedule")
+            ? [
+                {
+                  RouteName: { Zh_tw: "307" },
+                  SubRouteUID: "TPE3070",
+                  Direction: 0,
+                  Frequencys: [
+                    {
+                      StartTime: "05:00",
+                      EndTime: "22:10",
+                      MinHeadwayMins: 7,
+                      MaxHeadwayMins: 10,
+                      ServiceDay: { Friday: 1 },
+                    },
+                  ],
+                },
+              ]
+            : [
+                {
+                  StopName: { Zh_tw: "台北車站" },
+                  SubRouteUID: "TPE3070",
+                  Direction: 0,
+                  StopStatus: 3,
+                },
+              ],
+      }));
+      const result = await getBusArrivalAtStop({
+        routeName: "307",
+        stopName: "台北車站",
+        city: TaiwanCityEn.Taipei,
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.arrivals[0].statusLabel).toBe("明日 05:00 起點發車");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -551,6 +667,188 @@ describe("route-detail 子路線識別", () => {
       },
     ]);
   });
+
+  describe("ETA 紀錄不帶 SubRouteUID（台北市 TDX 實際回應）", () => {
+    const taipeiRoutes = [
+      {
+        subRouteUid: "TPE157463",
+        subRouteName: { Zh_tw: "307莒光往撫遠街" },
+        routeName: { Zh_tw: "307" },
+        direction: 0,
+        stops: stops("去", 3),
+      },
+      {
+        subRouteUid: "TPE157462",
+        subRouteName: { Zh_tw: "307莒光往板橋前站" },
+        routeName: { Zh_tw: "307" },
+        direction: 1,
+        stops: stops("返", 2),
+      },
+    ];
+    const mockEta = (rows: unknown[]) =>
+      tdxFetchMock.mockImplementation(async (url: string) => ({
+        ok: true,
+        json: async () => (url.includes("Schedule") ? [] : rows),
+      }));
+    const eta = (direction: number, stop: string, seconds?: number) => ({
+      RouteUID: "TPE16111",
+      RouteName: { Zh_tw: "307" },
+      Direction: direction,
+      StopName: { Zh_tw: stop },
+      ...(seconds === undefined ? {} : { EstimateTime: seconds }),
+      StopStatus: seconds === undefined ? 1 : 0,
+    });
+
+    it("改以方向對應 ETA，不再整條路線顯示尚未發車", async () => {
+      mockRouteMap(taipeiRoutes);
+      mockEta([eta(0, "去1", 240), eta(0, "去2", 420), eta(1, "返1", 60)]);
+
+      const result = await getBusRouteDetail({
+        routeName: "307",
+        city: TaiwanCityEn.Taipei,
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const [go, back] = result.directions;
+      expect(go.stops.map((s) => s.estimateMinutes)).toEqual([4, 7, null]);
+      expect(go.stops[0].statusLabel).toBe("正常");
+      // 方向不可混用：返程只拿到返程的 ETA
+      expect(back.stops.map((s) => s.estimateMinutes)).toEqual([1, null]);
+    });
+
+    it("同方向同站名有多筆時取最快到站的一班", async () => {
+      mockRouteMap(taipeiRoutes);
+      mockEta([eta(0, "去1", 900), eta(0, "去1"), eta(0, "去1", 180)]);
+
+      const result = await getBusRouteDetail({
+        routeName: "307",
+        city: TaiwanCityEn.Taipei,
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.directions[0].stops[0]).toMatchObject({
+        estimateMinutes: 3,
+        statusLabel: "正常",
+      });
+    });
+
+    it("指定 subRouteUid 時仍保留沒有 SubRouteUID 的 ETA", async () => {
+      mockRouteMap(taipeiRoutes);
+      mockEta([eta(0, "去1", 120)]);
+
+      const result = await getBusRouteDetail({
+        routeName: "307",
+        city: TaiwanCityEn.Taipei,
+        subRouteUid: "TPE157463",
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.directions).toHaveLength(1);
+      expect(result.directions[0].stops[0].estimateMinutes).toBe(2);
+    });
+  });
+});
+
+describe("route-detail 以 RouteUID 查 TDX（不靠路線名猜）", () => {
+  const route = (name: string, routeUid: string, subRouteUid: string) => ({
+    routeUid,
+    subRouteUid,
+    routeName: { Zh_tw: name },
+    subRouteName: { Zh_tw: name },
+    direction: 0,
+    stops: [{ seq: 1, stopName: { Zh_tw: "火車站" } }],
+  });
+
+  it("11甲 只取 11甲 本身，ETA/班表都用 RouteUID 過濾", async () => {
+    mockRouteMap([
+      route("11", "HSZ0011", "HSZ001101"),
+      route("11甲", "HSZ0113", "HSZ011301"),
+    ]);
+    tdxFetchMock.mockImplementation(async (url: string) => ({
+      ok: true,
+      json: async () =>
+        url.includes("Schedule")
+          ? []
+          : [
+              {
+                RouteUID: "HSZ0113",
+                SubRouteUID: "HSZ011301",
+                Direction: 0,
+                StopName: { Zh_tw: "火車站" },
+                EstimateTime: 300,
+                StopStatus: 0,
+              },
+            ],
+    }));
+
+    const result = await getBusRouteDetail({
+      routeName: "11甲",
+      city: TaiwanCityEn.Hsinchu,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.directions.map((d) => d.subRouteUid)).toEqual(["HSZ011301"]);
+    expect(result.directions[0].stops[0].estimateMinutes).toBe(5);
+    const urls = tdxFetchMock.mock.calls
+      .map((c) => decodeURIComponent(c[0]))
+      .filter((u) => /Schedule|EstimatedTimeOfArrival/.test(u));
+    expect(urls).toHaveLength(2);
+    for (const u of urls) expect(u).toContain("RouteUID eq 'HSZ0113'");
+    for (const u of urls) expect(u).not.toContain("HSZ0011'");
+  });
+});
+
+describe("route-detail 以 StopUID 對應到站", () => {
+  it("同方向同站名兩個站位時，各站拿自己 StopUID 的預估", async () => {
+    mockRouteMap([
+      {
+        routeUid: "CHA0801",
+        subRouteUid: "CHA080101",
+        routeName: { Zh_tw: "13路" },
+        direction: 0,
+        stops: [
+          { seq: 1, stopName: { Zh_tw: "口庄" }, stopUID: "CHA1" },
+          { seq: 2, stopName: { Zh_tw: "中站" }, stopUID: "CHA2" },
+          { seq: 3, stopName: { Zh_tw: "口庄" }, stopUID: "CHA3" },
+        ],
+      },
+    ]);
+    const row = (stopUid: string, name: string, seconds: number) => ({
+      RouteUID: "CHA0801",
+      SubRouteUID: "CHA080101",
+      Direction: 0,
+      StopUID: stopUid,
+      StopName: { Zh_tw: name },
+      EstimateTime: seconds,
+      StopStatus: 0,
+    });
+    tdxFetchMock.mockImplementation(async (url: string) => ({
+      ok: true,
+      json: async () =>
+        url.includes("EstimatedTimeOfArrival")
+          ? [
+              row("CHA1", "口庄", 120),
+              row("CHA2", "中站", 300),
+              row("CHA3", "口庄", 600),
+            ]
+          : [],
+    }));
+
+    const result = await getBusRouteDetail({
+      routeName: "13路",
+      city: TaiwanCityEn.ChanghuaCounty,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.directions[0].stops.map((s) => s.estimateMinutes)).toEqual([
+      2, 5, 10,
+    ]);
+  });
 });
 
 describe("searchBusRoutes — 關鍵字與座標距離排序", () => {
@@ -884,5 +1182,189 @@ describe("getBusStopArrivals — 站牌層級到站 + 低底盤 join", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("route-detail 路線線形 polyline", () => {
+  const taipeiRoute = (subRouteUid: string, direction: number) => ({
+    routeUid: "TPE16111",
+    subRouteUid,
+    subRouteName: { Zh_tw: "307莒光" },
+    routeName: { Zh_tw: "307" },
+    direction,
+    stops: [
+      { seq: 1, stopName: { Zh_tw: "板橋前站" }, lat: 25.02, lng: 121.45 },
+      { seq: 2, stopName: { Zh_tw: "撫遠街" }, lat: 25.06, lng: 121.56 },
+    ],
+  });
+
+  it("台北線形只帶 RouteUID 時，依 RouteUID + 方向掛到對應子路線，座標為 [lng, lat]", async () => {
+    mockRouteMap([taipeiRoute("TPE157463", 0), taipeiRoute("TPE157462", 1)]);
+    tdxFetchMock.mockImplementation(async (url: string) => ({
+      ok: true,
+      json: async () =>
+        url.includes("/Bus/Shape/")
+          ? [
+              {
+                RouteUID: "TPE16111",
+                Direction: 0,
+                Geometry: "LINESTRING (121.45 25.02, 121.56 25.06)",
+              },
+              {
+                RouteUID: "TPE19108",
+                Direction: 1,
+                Geometry: "LINESTRING (121.1 25.1, 121.2 25.2)",
+              },
+            ]
+          : [],
+    }));
+
+    const result = await getBusRouteDetail({
+      routeName: "307",
+      city: TaiwanCityEn.Taipei,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const byDir = Object.fromEntries(
+      result.directions.map((d) => [d.direction, d.polyline]),
+    );
+    expect(byDir[0]).toEqual([
+      [121.45, 25.02],
+      [121.56, 25.06],
+    ]);
+    expect(byDir[1]).toBeNull();
+    expect(
+      tdxFetchMock.mock.calls.some(([url]) =>
+        String(url).includes("/Bus/Shape/City/Taipei/307"),
+      ),
+    ).toBe(true);
+  });
+
+  it("線形查詢失敗時路線詳情照常回傳、polyline 為 null", async () => {
+    mockRouteMap([taipeiRoute("TPE157463", 0)]);
+    tdxFetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("/Bus/Shape/")) throw new Error("TDX 429");
+      return { ok: true, json: async () => [] };
+    });
+
+    const result = await getBusRouteDetail({
+      routeName: "307",
+      city: TaiwanCityEn.Taipei,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.directions[0].stops).toHaveLength(2);
+    expect(result.directions[0].polyline).toBeNull();
+  });
+});
+
+describe("TDX ETA source time and circular direction integration", () => {
+  const now = new Date("2026-10-05T12:00:00+08:00");
+  const source = (seconds: number) =>
+    new Date(now.getTime() - seconds * 1000).toISOString();
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(now);
+    mockRouteMap([]);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("corrects streaming ETA and sends a Direction=10 filter", async () => {
+    mockTdxJson([
+      {
+        StopName: { Zh_tw: "起站" },
+        Direction: 10,
+        EstimateTime: 300,
+        StopStatus: 0,
+        SrcTransTime: source(120),
+      },
+    ]);
+    const result = await getBusArrivalAtStop({
+      routeName: "100",
+      stopName: "起站",
+      city: "InterCity",
+      direction: 10,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.arrivals[0]).toMatchObject({
+      estimateMinutes: 3,
+      direction: 10,
+      directionLabel: "循環線",
+    });
+    expect(
+      tdxFetchMock.mock.calls.some(([url]) => url.includes("Direction eq 10")),
+    ).toBe(true);
+  });
+
+  it("does not expose a retained old ETA or an old terminal status as current", async () => {
+    mockTdxJson([
+      {
+        StopName: { Zh_tw: "起站" },
+        Direction: 0,
+        EstimateTime: 3600,
+        StopStatus: 4,
+        SrcTransTime: source(7200),
+        UpdateTime: source(0),
+      },
+    ]);
+    const result = await getBusArrivalAtStop({
+      routeName: "100",
+      stopName: "起站",
+      city: "InterCity",
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.arrivals[0].estimateMinutes).toBeNull();
+    expect(result.arrivals[0].statusLabel).not.toBe("今日未營運");
+  });
+
+  it("applies identical correction to route-detail stops", async () => {
+    mockRouteMap([
+      {
+        routeUid: "THB100",
+        subRouteUid: "THB1000",
+        direction: 10,
+        stops: [
+          {
+            seq: 1,
+            stopUID: "THB1",
+            stopName: { Zh_tw: "起站" },
+            lat: 25,
+            lng: 121,
+          },
+        ],
+      },
+    ]);
+    tdxFetchMock.mockImplementation(async (url: string) => ({
+      ok: true,
+      json: async () =>
+        url.includes("EstimatedTimeOfArrival")
+          ? [
+              {
+                SubRouteUID: "THB1000",
+                StopUID: "THB1",
+                StopName: { Zh_tw: "起站" },
+                Direction: 10,
+                EstimateTime: 300,
+                StopStatus: 0,
+                SrcTransTime: source(120),
+              },
+            ]
+          : [],
+    }));
+    const result = await getBusRouteDetail({
+      routeName: "100",
+      city: "InterCity",
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.directions[0]).toMatchObject({
+      direction: 10,
+      directionLabel: "循環線",
+      stops: [{ estimateMinutes: 3 }],
+    });
   });
 });

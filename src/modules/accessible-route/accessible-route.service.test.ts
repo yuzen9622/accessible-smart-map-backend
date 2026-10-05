@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Mock tdxFetch to prevent real network calls during transit route enrichment
+vi.mock("../../adapters/taipei-metro-notice.adapter", () => ({
+  fetchTaipeiMetroNotices: vi.fn(async () => []),
+}));
 vi.mock("../../config/fetch", () => ({
   tdxFetch: vi.fn().mockResolvedValue({ ok: true, json: async () => [] }),
 }));
@@ -73,14 +76,16 @@ vi.mock("../hazard-report/hazard-report.service", () => ({
   findConfirmedHazardsWithin: vi.fn(),
 }));
 
-// DB isolation: resolveCityFromStops does findOne().select().lean().
 vi.mock("../../model/bus-stop.model", () => ({
   default: {
     findOne: vi.fn(),
   },
 }));
 
-// Spread-actual google adapter; getCity is a fallback (city resolves via stops).
+vi.mock("../../adapters/nlsc.adapter", () => ({
+  getNlscAdministrativeArea: vi.fn(),
+}));
+
 vi.mock("../../adapters/google.adapter", async (importActual) => {
   const actual =
     await importActual<typeof import("../../adapters/google.adapter")>();
@@ -93,12 +98,28 @@ vi.mock("../transit/alert.service", () => ({
   getTransitAlerts: vi.fn().mockResolvedValue({ ok: true, alerts: [] }),
 }));
 
+// Keep reroute orchestration and the request planner real; fake only Redis I/O.
+vi.mock("./navigation-state.repository", async (importActual) => {
+  const actual =
+    await importActual<typeof import("./navigation-state.repository")>();
+  return {
+    ...actual,
+    readNavigationTokenStrict: vi.fn(),
+    beginReroute: vi.fn(),
+    finalizeReroute: vi.fn(),
+    releaseReroute: vi.fn(),
+  };
+});
+
+import { rerouteAccessibleRoute } from "./reroute.service";
+import * as navigationStateRepo from "./navigation-state.repository";
 import {
   attachMetroAlerts,
   attachTransitAlerts,
   planAccessibleRouteForHttp,
   planAccessibleRouteFromRequest,
 } from "./accessible-route.service";
+import { registerRouteIntentParser } from "./route-intent.port";
 import { normalizeWalkLegSteps } from "../../utils/nav-instructions-engine";
 import { attachInternalSchedule } from "./route-schedule";
 import {
@@ -116,13 +137,16 @@ import { getA11yProfile } from "../user/user.service";
 import { findConfirmedHazardsWithin } from "../hazard-report/hazard-report.service";
 import { enrichLegIndoor } from "./planners/route-a11y";
 import { getCity } from "../../adapters/google.adapter";
+import { getNlscAdministrativeArea } from "../../adapters/nlsc.adapter";
 import BusStopModel from "../../model/bus-stop.model";
 import {
   ROUTE_MSG,
   ROUTE_REASON,
   ROUTE_WARNING,
+  TRANSIT_FALLBACK_REASON,
 } from "../../constants/messages";
 import { ResponseCode } from "../../types/code";
+import { TaiwanCityEn } from "../../types/transit";
 import { getWeatherAndAirQuality } from "../environment/environment.service";
 import { getMetroAlerts } from "../transit/metro.service";
 import { getTransitAlerts } from "../transit/alert.service";
@@ -183,7 +207,8 @@ beforeEach(() => {
   vi.mocked(BusStopModel.findOne).mockReturnValue({
     select: () => ({ lean: () => Promise.resolve({ city: "Taipei" }) }),
   } as any);
-  vi.mocked(getCity).mockResolvedValue("Taipei");
+  vi.mocked(getNlscAdministrativeArea).mockResolvedValue(null);
+  vi.mocked(getCity).mockResolvedValue(TaiwanCityEn.Taipei);
   vi.mocked(findNearby).mockResolvedValue({ nearbyOsm: [] } as any);
   vi.mocked(planOtpRouteDetailed).mockResolvedValue(otpTransitNoRoute());
   vi.mocked(planOtpWalkDetailed).mockResolvedValue({
@@ -196,6 +221,93 @@ beforeEach(() => {
   vi.mocked(getWeatherAndAirQuality).mockResolvedValue({});
   vi.mocked(findConfirmedHazardsWithin).mockResolvedValue([]);
   vi.mocked(getMetroAlerts).mockResolvedValue([]);
+});
+
+describe("planAccessibleRouteFromRequest administrative city", () => {
+  it("returns NLSC Kinmen instead of Google's missing administrative area", async () => {
+    vi.mocked(getNlscAdministrativeArea).mockResolvedValue({
+      city: TaiwanCityEn.KinmenCounty,
+    });
+    vi.mocked(getCity).mockResolvedValue(null);
+    vi.mocked(planValhallaRoute).mockResolvedValue([driveRoute([])] as any);
+    vi.mocked(findNearbyParking).mockResolvedValue([] as any);
+    const result = await planAccessibleRouteFromRequest({
+      ...driveRequest,
+      origin: { latitude: 24.4325, longitude: 118.3186 },
+      destination: { latitude: 24.435, longitude: 118.32 },
+    });
+    expect(result.ok).toBe(true);
+    expect(okData(result).city).toBe(TaiwanCityEn.KinmenCounty);
+    expect(getNlscAdministrativeArea).toHaveBeenCalledWith(24.4325, 118.3186);
+    expect(getCity).not.toHaveBeenCalled();
+  });
+
+  it.each(["network failure", "empty results", "missing administrative area"])(
+    "keeps planning through the real Google adapter on %s",
+    async (failure) => {
+      const actual = await vi.importActual<
+        typeof import("../../adapters/google.adapter")
+      >("../../adapters/google.adapter");
+      vi.mocked(getCity).mockImplementation(actual.getCity);
+      const fetchMock = vi.fn();
+      if (failure === "network failure") {
+        fetchMock.mockRejectedValue(new Error("network unavailable"));
+      } else {
+        fetchMock.mockResolvedValue({
+          ok: true,
+          json: async () =>
+            failure === "empty results"
+              ? { status: "ZERO_RESULTS", results: [] }
+              : { status: "OK", results: [{ address_components: [] }] },
+        });
+      }
+      vi.stubGlobal("fetch", fetchMock);
+      vi.mocked(planValhallaRoute).mockResolvedValue([driveRoute([])] as any);
+      vi.mocked(findNearbyParking).mockResolvedValue([] as any);
+
+      try {
+        const result = await planAccessibleRouteFromRequest(driveRequest);
+        expect(result.ok).toBe(true);
+        expect(okData(result).city).toBeNull();
+        expect(JSON.parse(JSON.stringify(result)).data).toHaveProperty(
+          "city",
+          null,
+        );
+        expect(okData(result).routes).toHaveLength(1);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
+  it.each([
+    ["InterCity", TaiwanCityEn.NewTaipei],
+    ["NewTaipei", TaiwanCityEn.Keelung],
+    ["Taipei", null],
+  ])(
+    "ignores the nearest stop dataset %s and returns geocoded city %s",
+    async (datasetCity, city) => {
+      vi.mocked(BusStopModel.findOne).mockReturnValue({
+        select: () => ({ lean: async () => ({ city: datasetCity }) }),
+      } as any);
+      vi.mocked(getCity).mockResolvedValue(city);
+      vi.mocked(planValhallaRoute).mockResolvedValue([driveRoute([])] as any);
+      vi.mocked(findNearbyParking).mockResolvedValue([] as any);
+
+      const result = await planAccessibleRouteFromRequest(driveRequest);
+
+      expect(result.ok).toBe(true);
+      expect(okData(result).city).toBe(city);
+      expect(JSON.parse(JSON.stringify(result)).data).toHaveProperty(
+        "city",
+        city,
+      );
+      expect(okData(result).routes).toHaveLength(1);
+      expect(getCity).toHaveBeenCalledWith(25.04, 121.56);
+      expect(BusStopModel.findOne).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("planAccessibleRouteFromRequest preflight", () => {
@@ -214,8 +326,38 @@ describe("planAccessibleRouteFromRequest preflight", () => {
       data: { reason: ROUTE_REASON.OUT_OF_COVERAGE },
     });
     expect(vi.mocked(BusStopModel.findOne)).not.toHaveBeenCalled();
+    expect(vi.mocked(getNlscAdministrativeArea)).not.toHaveBeenCalled();
     expect(vi.mocked(getCity)).not.toHaveBeenCalled();
     expect(vi.mocked(planOtpRouteDetailed)).not.toHaveBeenCalled();
+  });
+});
+
+describe("planAccessibleRouteFromRequest departure timezone", () => {
+  it.each([
+    ["2026-10-01T20:30:00", "2026-10-01T12:30:00.000Z"],
+    ["2026-10-01T20:30", "2026-10-01T12:30:00.000Z"],
+    ["2026-10-01T20:30:00.123", "2026-10-01T12:30:00.123Z"],
+    ["2026-10-01T20:30:00+08:00", "2026-10-01T12:30:00.000Z"],
+    ["2026-10-01T20:30:00Z", "2026-10-01T20:30:00.000Z"],
+    ["2026-10-01T20:30:00-04:00", "2026-10-02T00:30:00.000Z"],
+  ])("passes %s to the planner as %s", async (departureTime, expected) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-01T12:17:00Z"));
+    try {
+      await planAccessibleRouteFromRequest({
+        travelMode: "transit",
+        origin: driveRequest.origin,
+        destination: driveRequest.destination,
+        departureTime,
+      });
+      expect(planOtpRouteDetailed).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ departureTime: new Date(expected) }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -1828,6 +1970,204 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
     });
   });
 
+  describe("short-trip walk fallback", () => {
+    const taipeiStation = { latitude: 25.0478, longitude: 121.517 };
+    const nationalMuseum = { latitude: 25.0429, longitude: 121.515 };
+
+    it("answers a wheelchair transit no-route with a step-free walk without the relaxed retry", async () => {
+      vi.mocked(planOtpRouteDetailed).mockResolvedValue(otpTransitNoRoute());
+      vi.mocked(planCsrWalkRoute).mockResolvedValue({
+        status: "ok",
+        plans: [csrWalkPlan([121.517, 25.0478], [121.515, 25.0429])],
+      });
+
+      const res = await planAccessibleRouteFromRequest({
+        travelMode: "transit",
+        mode: "wheelchair",
+        origin: taipeiStation,
+        destination: nationalMuseum,
+      });
+
+      expect(res.ok).toBe(true);
+      expect(okData(res).travelMode).toBe("transit");
+      expect(okData(res).fallback).toEqual({
+        travelMode: "walk",
+        reason: TRANSIT_FALLBACK_REASON.NO_TRANSIT_ROUTE,
+      });
+      expect(okData(res).routes[0].legs.every((l) => l.type === "WALK")).toBe(
+        true,
+      );
+      expect(vi.mocked(planCsrWalkRoute)).toHaveBeenCalledWith(
+        [
+          { lat: 25.0478, lng: 121.517 },
+          { lat: 25.0429, lng: 121.515 },
+        ],
+        { mode: "wheelchair", avoidStairs: true },
+      );
+      expect(vi.mocked(planOtpRouteDetailed)).toHaveBeenCalledTimes(1);
+    });
+
+    it("marks a transit answer made only of walking routes", async () => {
+      vi.mocked(planOtpRouteDetailed).mockResolvedValue(
+        otpTransitOk([
+          {
+            routeId: "otp-0-walk",
+            routeName: "步行路線",
+            totalMinutes: 12,
+            transferCount: 0,
+            legs: [
+              {
+                type: "WALK",
+                from: "出發地",
+                to: "目的地",
+                distanceM: 990,
+                minutesEst: 12,
+                polyline: [],
+                a11yFacilities: [],
+              },
+            ],
+            accessibilityHighlights: [],
+          },
+        ] as any),
+      );
+
+      const res = await planAccessibleRouteFromRequest({
+        travelMode: "transit",
+        origin: taipeiStation,
+        destination: nationalMuseum,
+      });
+
+      expect(okData(res).fallback).toEqual({
+        travelMode: "walk",
+        reason: TRANSIT_FALLBACK_REASON.WALKING_BETTER,
+      });
+      expect(okData(res).routes[0].routeName).toBe("步行路線");
+    });
+
+    it("answers with walking when transit outlasts the walkable-trip budget", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        vi.mocked(planOtpRouteDetailed).mockReturnValue(new Promise(() => {}));
+        vi.mocked(planCsrWalkRoute).mockResolvedValue({
+          status: "ok",
+          plans: [csrWalkPlan([121.515, 25.0428], [121.5175, 25.0462])],
+        });
+
+        const pending = planAccessibleRouteFromRequest({
+          travelMode: "transit",
+          mode: "wheelchair",
+          origin: { latitude: 25.0427647, longitude: 121.5150029 },
+          destination: { latitude: 25.0462432, longitude: 121.5174745 },
+        });
+        await vi.advanceTimersByTimeAsync(5_000);
+        const res = await pending;
+
+        expect(res.ok).toBe(true);
+        expect(okData(res).fallback).toEqual({
+          travelMode: "walk",
+          reason: TRANSIT_FALLBACK_REASON.NO_TRANSIT_ROUTE,
+        });
+        expect(vi.mocked(planOtpRouteDetailed)).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not walk-fallback beyond the straight-line ceiling", async () => {
+      vi.mocked(planOtpRouteDetailed).mockResolvedValue(otpTransitNoRoute());
+
+      const res = await planAccessibleRouteFromRequest({
+        travelMode: "transit",
+        origin: { latitude: 25.0478, longitude: 121.517 },
+        destination: { latitude: 25.0478, longitude: 121.534 },
+      });
+
+      expect(res).toMatchObject({
+        ok: false,
+        data: { reason: ROUTE_REASON.NO_ROUTE },
+      });
+      expect(vi.mocked(planCsrWalkRoute)).not.toHaveBeenCalled();
+    });
+
+    it("keeps the accessibility diagnosis when the walk fallback also fails", async () => {
+      vi.mocked(planOtpRouteDetailed)
+        .mockResolvedValueOnce(otpTransitNoRoute())
+        .mockResolvedValueOnce(otpTransitNoRoute())
+        .mockResolvedValueOnce(otpTransitOk([rooseveltBusRoute] as any));
+
+      const res = await planAccessibleRouteFromRequest({
+        travelMode: "transit",
+        mode: "wheelchair",
+        origin: taipeiStation,
+        destination: nationalMuseum,
+      });
+
+      expect(res).toMatchObject({
+        ok: false,
+        data: { reason: ROUTE_REASON.NO_ACCESSIBLE_ROUTE },
+      });
+    });
+
+    it("skips later-service searches first, then reruns the full search when walking also fails", async () => {
+      vi.mocked(planOtpRouteDetailed)
+        .mockResolvedValueOnce(otpTransitNoRoute())
+        .mockResolvedValueOnce(otpTransitOk([rooseveltBusRoute] as any));
+
+      const res = await planAccessibleRouteFromRequest({
+        travelMode: "transit",
+        origin: taipeiStation,
+        destination: nationalMuseum,
+      });
+
+      expect(res.ok).toBe(true);
+      expect(okData(res).fallback).toBeUndefined();
+      expect(okData(res).routes[0].routeName).toContain("羅斯福路幹線");
+      const calls = vi.mocked(planOtpRouteDetailed).mock.calls;
+      expect(calls).toHaveLength(2);
+      expect(calls[0][2]).toMatchObject({ skipLaterService: true });
+      expect(calls[1][2]?.skipLaterService).toBeFalsy();
+    });
+
+    it("walks a short trip instead of failing when the transit planner is unavailable", async () => {
+      vi.mocked(planOtpRouteDetailed).mockResolvedValue({
+        status: "unavailable",
+        routes: [],
+      });
+      vi.mocked(planCsrWalkRoute).mockResolvedValue({
+        status: "ok",
+        plans: [csrWalkPlan([121.517, 25.0478], [121.515, 25.0429])],
+      });
+
+      const res = await planAccessibleRouteFromRequest({
+        travelMode: "transit",
+        origin: taipeiStation,
+        destination: nationalMuseum,
+      });
+
+      expect(res.ok).toBe(true);
+      expect(okData(res).fallback).toEqual({
+        travelMode: "walk",
+        reason: TRANSIT_FALLBACK_REASON.NO_TRANSIT_ROUTE,
+      });
+    });
+
+    it("does not limit the search for trips beyond walking range", async () => {
+      vi.mocked(planOtpRouteDetailed).mockResolvedValue(
+        otpTransitOk([rooseveltBusRoute] as any),
+      );
+
+      await planAccessibleRouteFromRequest({
+        travelMode: "transit",
+        origin: { latitude: 25.0478, longitude: 121.517 },
+        destination: { latitude: 25.0339, longitude: 121.5645 },
+      });
+
+      expect(
+        vi.mocked(planOtpRouteDetailed).mock.calls[0][2]?.skipLaterService,
+      ).toBeFalsy();
+    });
+  });
+
   it("returns 503 UPSTREAM_TIMEOUT when transit detailed planning is unavailable", async () => {
     vi.mocked(planOtpRouteDetailed).mockResolvedValue({
       status: "unavailable",
@@ -2496,6 +2836,7 @@ describe("requireElevator sees enrichment output, not raw planner output", () =>
       destination,
       mode: "elderly",
       requireElevator: true,
+      transitPreference: "bus",
     });
 
     expect(res.ok).toBe(true);
@@ -2530,6 +2871,99 @@ describe("requireElevator sees enrichment output, not raw planner output", () =>
     expect(res.data.routes.map((r) => r.routeName).sort()).toEqual(
       ["有電梯線", "無電梯線"].sort(),
     );
+  });
+});
+
+describe("transit preference reserves a top-three slot", () => {
+  const origin = { latitude: 25.04, longitude: 121.56 };
+  const destination = { latitude: 25.03, longitude: 121.55 };
+
+  const metroRoute = (routeName: string) => ({
+    routeId: `otp-${routeName}`,
+    routeName,
+    totalMinutes: 48,
+    transferCount: 0,
+    totalWalkDistanceM: 500,
+    legs: [
+      {
+        type: "METRO",
+        railSystem: "TRTC",
+        lineName: routeName,
+        departureStation: `${routeName} A`,
+        arrivalStation: `${routeName} B`,
+        departureStationUid: `TRTC-${routeName}-A`,
+        arrivalStationUid: `TRTC-${routeName}-B`,
+        rideMinutes: 39,
+        polyline: [
+          [121.56, 25.04],
+          [121.55, 25.03],
+        ],
+        facilityHighlights: [],
+        departureStationA11y: [],
+        arrivalStationA11y: [],
+      },
+    ],
+    accessibilityHighlights: [],
+  });
+  const busRoute = () => ({
+    routeId: "otp-1819",
+    routeName: "1819",
+    totalMinutes: 78,
+    transferCount: 0,
+    totalWalkDistanceM: 500,
+    legs: [
+      {
+        type: "BUS",
+        routeName: "1819",
+        subRouteUid: "SUB_1819",
+        subRouteName: "1819",
+        departureStop: "台北車站",
+        arrivalStop: "淡水",
+        rideMinutes: 67,
+        waitInfo: { time: null, source: "unavailable" },
+        direction: 0,
+        polyline: [
+          [121.56, 25.04],
+          [121.55, 25.03],
+        ],
+        departureStopA11y: [],
+        arrivalStopA11y: [],
+      },
+    ],
+    accessibilityHighlights: [],
+  });
+  const candidates = () =>
+    otpTransitOk([
+      metroRoute("M1"),
+      metroRoute("M2"),
+      metroRoute("M3"),
+      metroRoute("M4"),
+      busRoute(),
+    ] as any);
+
+  it("returns a much slower bus route when bus is preferred", async () => {
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue(candidates());
+    const res = await planAccessibleRouteFromRequest({
+      travelMode: "transit",
+      origin,
+      destination,
+      mode: "normal",
+      transitPreference: "bus",
+    });
+    const routes = okData(res).routes;
+    expect(routes).toHaveLength(3);
+    expect(routes.find((r) => r.routeName === "1819")?.totalMinutes).toBe(78);
+  });
+
+  it("keeps the plain ranking without a preference", async () => {
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue(candidates());
+    const res = await planAccessibleRouteFromRequest({
+      travelMode: "transit",
+      origin,
+      destination,
+      mode: "normal",
+    });
+    expect(okData(res).routes.map((r) => r.routeName)).not.toContain("1819");
   });
 });
 
@@ -3082,5 +3516,377 @@ describe("attachTransitAlerts", () => {
       "bus-alert-1",
       "metro-alert-1",
     ]);
+  });
+});
+
+describe("request and AI transit preference propagation", () => {
+  const origin = { latitude: 25.04, longitude: 121.56 };
+  const destination = { latitude: 24.15, longitude: 120.68 };
+  const parser = vi.fn();
+  beforeEach(() => {
+    registerRouteIntentParser(parser);
+    parser.mockResolvedValue({
+      from: "current_location",
+      to: "台中車站",
+      mode: "wheelchair",
+      departureTime: "now",
+      preferences: {
+        transitPreference: "rail",
+        preferElevator: true,
+        minimizeTransfers: false,
+      },
+    });
+  });
+  it.each([undefined, "none", "bus", "rail", "metro"] as const)(
+    "uses explicit %s before AI preference, retaining explicit endpoints",
+    async (transitPreference) => {
+      await planAccessibleRouteFromRequest({
+        origin,
+        destination,
+        query: "我想搭火車",
+        transitPreference,
+      });
+      expect(planOtpRouteDetailed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lat: origin.latitude,
+          lng: origin.longitude,
+        }),
+        expect.objectContaining({
+          lat: destination.latitude,
+          lng: destination.longitude,
+        }),
+        expect.objectContaining({
+          transitPreference: transitPreference ?? "rail",
+        }),
+      );
+    },
+  );
+  it("uses an AI metro preference", async () => {
+    parser.mockResolvedValue({
+      from: "current_location",
+      to: "台中車站",
+      mode: "wheelchair",
+      departureTime: "now",
+      preferences: {
+        transitPreference: "metro",
+        preferElevator: true,
+        minimizeTransfers: false,
+      },
+    });
+    await planAccessibleRouteFromRequest({
+      destination,
+      userLocation: origin,
+      query: "從這裡去台中，想搭捷運，我坐輪椅",
+    });
+    expect(planOtpRouteDetailed).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ transitPreference: "metro" }),
+    );
+  });
+  it("uses AI preference when resolving missing endpoints", async () => {
+    parser.mockResolvedValue({
+      from: "current_location",
+      to: "台中車站",
+      mode: "wheelchair",
+      departureTime: "now",
+      preferences: {
+        transitPreference: "bus",
+        preferElevator: true,
+        minimizeTransfers: false,
+      },
+    });
+    await planAccessibleRouteFromRequest({
+      destination,
+      userLocation: origin,
+      query: "從這裡去台中，想搭公車，我坐輪椅",
+    });
+    expect(planOtpRouteDetailed).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        transitPreference: "bus",
+        mode: "wheelchair",
+        avoidStairs: true,
+      }),
+    );
+  });
+  it.each(["rail", "metro"] as const)(
+    "retains resolved %s preference for navigation and rerouting",
+    async (transitPreference) => {
+      vi.mocked(planOtpRouteDetailed).mockResolvedValue(
+        otpTransitOk([
+          {
+            routeId: "bus",
+            routeName: "307",
+            totalMinutes: 30,
+            transferCount: 0,
+            accessibilityHighlights: [],
+            legs: [
+              {
+                type: "BUS",
+                routeName: "307",
+                subRouteUid: "307",
+                subRouteName: "307",
+                departureStop: "A",
+                arrivalStop: "B",
+                direction: 0,
+                rideMinutes: 20,
+                polyline: [],
+                departureStopA11y: [],
+                arrivalStopA11y: [],
+                waitInfo: { time: null, source: "unavailable" },
+              },
+            ],
+          },
+        ]),
+      );
+      const result = await planAccessibleRouteFromRequest({
+        origin,
+        destination,
+        transitPreference,
+      });
+      expect(result.ok).toBe(true);
+      expect(okData(result).transitPreference).toBe(transitPreference);
+      expect(okData(result)._canonicalRequest?.transitPreference).toBe(
+        transitPreference,
+      );
+    },
+  );
+
+  it("carries metro through the real canonical reroute planner and persists version 2", async () => {
+    vi.mocked(planOtpRouteDetailed).mockImplementation(async () =>
+      otpTransitOk([
+        {
+          routeId: "reroute-metro-preference",
+          routeName: "307 接駁",
+          totalMinutes: 30,
+          transferCount: 0,
+          accessibilityHighlights: [],
+          legs: [
+            {
+              type: "BUS",
+              routeName: "307",
+              subRouteUid: "307",
+              subRouteName: "307",
+              departureStop: "A",
+              arrivalStop: "B",
+              direction: 0,
+              rideMinutes: 20,
+              polyline: [
+                [121.56, 25.04],
+                [120.68, 24.15],
+              ],
+              departureStopA11y: [],
+              arrivalStopA11y: [],
+              waitInfo: { time: null, source: "unavailable" },
+            },
+          ],
+        },
+      ]),
+    );
+    const initial = await planAccessibleRouteFromRequest({
+      origin,
+      destination,
+      travelMode: "transit",
+      mode: "normal",
+      transitPreference: "metro",
+    });
+    expect(initial.ok).toBe(true);
+    const initialData = okData(initial);
+    const canonical = initialData._canonicalRequest;
+    expect(canonical?.transitPreference).toBe("metro");
+    if (!canonical)
+      throw new Error("Initial plan omitted its canonical request");
+
+    const navigationId = "22222222-2222-4222-8222-222222222222";
+    const currentPosition = { latitude: 25.041, longitude: 121.561 };
+    vi.mocked(navigationStateRepo.readNavigationTokenStrict).mockResolvedValue({
+      status: "ok",
+      value: {
+        schemaVersion: 1,
+        navigationId,
+        routeVersion: 1,
+        route: { ...initialData.routes[0], navigationId, routeVersion: 1 },
+        canonicalRequest: canonical,
+      },
+    });
+    vi.mocked(navigationStateRepo.beginReroute).mockResolvedValue({
+      status: "acquired",
+    });
+    vi.mocked(navigationStateRepo.finalizeReroute).mockResolvedValue("ok");
+    vi.mocked(planOtpRouteDetailed).mockClear();
+
+    const rerouted = await rerouteAccessibleRoute({
+      routeToken: "initial-metro-token",
+      currentPosition,
+      previousRouteVersion: 1,
+      reason: "MANUAL",
+      clientRequestId: "33333333-3333-4333-8333-333333333333",
+    });
+    expect(rerouted.ok).toBe(true);
+    if (!rerouted.ok) throw new Error(rerouted.error);
+    expect(rerouted.data.routeVersion).toBe(2);
+    expect(rerouted.data.navigationId).toBe(navigationId);
+    expect(rerouted.data.instructions.length).toBeGreaterThan(0);
+    expect(rerouted.data.steps.length).toBeGreaterThan(0);
+    expect(planOtpRouteDetailed).toHaveBeenCalledWith(
+      { lat: currentPosition.latitude, lng: currentPosition.longitude },
+      { lat: destination.latitude, lng: destination.longitude },
+      expect.objectContaining({ transitPreference: "metro", mode: "normal" }),
+    );
+    const committedEnvelope = vi.mocked(navigationStateRepo.finalizeReroute)
+      .mock.calls[0]?.[3];
+    expect(committedEnvelope).toMatchObject({
+      routeVersion: 2,
+      canonicalRequest: {
+        transitPreference: "metro",
+        origin: currentPosition,
+        userLocation: currentPosition,
+        destination,
+      },
+    });
+    expect(navigationStateRepo.releaseReroute).not.toHaveBeenCalled();
+  });
+});
+
+it("retains a preferred ninth candidate through enrichment and final ranking", async () => {
+  vi.mocked(getTransitAlerts).mockResolvedValue({ ok: true, alerts: [] });
+  const buses = Array.from({ length: 8 }, (_, i) => ({
+    routeId: `bus-${i}`,
+    routeName: `bus-${i}`,
+    totalMinutes: 30,
+    transferCount: 0,
+    accessibilityHighlights: [],
+    legs: [
+      {
+        type: "BUS",
+        routeName: `bus-${i}`,
+        subRouteUid: `bus-${i}`,
+        subRouteName: `bus-${i}`,
+        departureStop: "A",
+        arrivalStop: "B",
+        direction: 0,
+        rideMinutes: 20,
+        polyline: [],
+        departureStopA11y: [],
+        arrivalStopA11y: [],
+        waitInfo: { time: null, source: "unavailable" },
+      },
+    ],
+  }));
+  const rail = {
+    routeId: "rail",
+    routeName: "台鐵",
+    totalMinutes: 30,
+    transferCount: 0,
+    accessibilityHighlights: [],
+    legs: [
+      {
+        type: "TRA",
+        trainNo: "123",
+        trainTypeName: "區間",
+        departureStation: "A",
+        arrivalStation: "B",
+        departureStationUID: "A",
+        arrivalStationUID: "B",
+        departureTime: "09:00",
+        arrivalTime: "09:20",
+        rideMinutes: 20,
+        polyline: [],
+        departureStationA11y: [],
+        arrivalStationA11y: [],
+        facilityHighlights: [],
+        waitInfo: { time: null, source: "unavailable" },
+      },
+    ],
+  };
+  vi.mocked(planOtpRouteDetailed).mockResolvedValue(
+    otpTransitOk([...buses, rail]),
+  );
+  const result = await planAccessibleRouteFromRequest({
+    origin: { latitude: 25.04, longitude: 121.56 },
+    destination: { latitude: 24.15, longitude: 120.68 },
+    transitPreference: "rail",
+  });
+  expect(result.ok).toBe(true);
+  expect(okData(result).routes[0].routeId).toBe("rail");
+  expect(okData(result).routes.some((r) => r.routeId.startsWith("bus-"))).toBe(
+    true,
+  );
+});
+
+describe("confirmed blocking hazard CSR alternatives", () => {
+  const hazard = {
+    id: "confirmed-block",
+    hazardType: "obstacle" as const,
+    severity: "blocking" as const,
+    coordinates: [121.555, 25.035] as [number, number],
+  };
+  it("requests an alternative and ranks a clear detour ahead of the affected route", async () => {
+    const base = csrWalkPlan();
+    const detour = {
+      ...csrWalkPlan(),
+      polyline: [
+        [121.56, 25.04],
+        [121.56, 25.03],
+        [121.55, 25.03],
+      ] as [number, number][],
+      distanceM: 800,
+      durationS: 600,
+      a11ySegments: [],
+      a11yPoints: [],
+      steps: [],
+    };
+    vi.mocked(findConfirmedHazardsWithin).mockResolvedValue([hazard]);
+    vi.mocked(planCsrWalkRoute)
+      .mockResolvedValueOnce({ status: "ok", plans: [base] })
+      .mockResolvedValueOnce({ status: "ok", plans: [detour] });
+    const res = await planAccessibleRouteFromRequest(walkRequest);
+    expect(res.ok).toBe(true);
+    expect(vi.mocked(planCsrWalkRoute)).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      {
+        mode: "normal",
+        avoidStairs: false,
+        avoidPoints: [hazard.coordinates],
+      },
+    );
+    expect(okData(res).routes[0].legs[0].polyline).toEqual(detour.polyline);
+    expect(vi.mocked(planOtpWalkDetailed)).not.toHaveBeenCalled();
+  });
+  it("retains the original route and advisory if the alternative cannot be routed", async () => {
+    vi.mocked(findConfirmedHazardsWithin).mockResolvedValue([hazard]);
+    vi.mocked(planCsrWalkRoute)
+      .mockResolvedValueOnce({ status: "ok", plans: [csrWalkPlan()] })
+      .mockResolvedValueOnce({ status: "accessibility_blocked" });
+    const res = await planAccessibleRouteFromRequest(walkRequest);
+    expect(res.ok).toBe(true);
+    expect(okData(res).routes[0].legs[0].polyline).toEqual(
+      csrWalkPlan().polyline,
+    );
+    expect(vi.mocked(planOtpWalkDetailed)).not.toHaveBeenCalled();
+  });
+
+  it("preserves a known blocking advisory when the expanded-area refresh fails", async () => {
+    const hazard = {
+      id: "known-before-refresh",
+      hazardType: "obstacle" as const,
+      severity: "blocking" as const,
+      coordinates: [121.555, 25.035] as [number, number],
+    };
+    vi.mocked(findConfirmedHazardsWithin)
+      .mockResolvedValueOnce([hazard])
+      .mockRejectedValueOnce(new Error("source unavailable"));
+    vi.mocked(planCsrWalkRoute)
+      .mockResolvedValueOnce({ status: "ok", plans: [csrWalkPlan()] })
+      .mockResolvedValueOnce({ status: "accessibility_blocked" });
+    const result = await planAccessibleRouteFromRequest(walkRequest);
+    expect(result.ok).toBe(true);
+    const route = okData(result).routes[0];
+    expect(route.hazardAdvisory?.onRoute.map((h) => h.id)).toContain(hazard.id);
+    expect(route.hazardAdvisory?.avoided ?? []).toEqual([]);
+    expect(route.degraded).toBe(true);
   });
 });

@@ -2,18 +2,18 @@
 
 **端點**：`POST /api/v1/ai/chat`
 **狀態**：Active — 反映 repo 現行實作
-**日期**：2026-06-30
-**SDK**：原生 `@google/genai`（非 OpenAI SDK；工具仍以 OpenAI function schema 定義並原樣轉給 Gemini）
+**日期**：2026-06-30（2026-10-05 校正工具目錄與 tool loop）
+**SDK**：原生 `@google/genai` Interactions API（stateful）；工具仍以 OpenAI function schema 定義，由 `tool-catalog.ts` 轉成 Gemini 宣告
 
-> 本文件描述「目前程式碼實際掛載的工具與回傳形狀」。歷史設計文件見
-> [`AI_AGENT_STREAMING_SPEC.md`](./AI_AGENT_STREAMING_SPEC.md)（v1.1，6-tool 舊設計，已過時）。
+> 本文件描述「目前程式碼實際掛載的工具與回傳形狀」。
 
 **來源檔**：
 
-- `src/config/ai/tool.ts` — `openAiChatTools`(15) + `memoryTools`(2) 宣告
+- `src/config/ai/tool.ts` — `openAiChatTools`(23) + `memoryTools`(2) + `lineFamilyTools`(12) 宣告
+- `src/modules/agent/tool-catalog.ts` — `buildInteractionTools`（文字）／`buildGeminiTools`（語音 Live）組裝工具目錄
 - `src/modules/ai/agent-tools.ts` — 各工具實作與回傳 JSON、`executeLocalTool`
-- `src/modules/ai/ai-chat.service.ts` — `runToolLoop` / `isSuccessResult` / `toGeminiHistory` / 結果包裝
-- `src/modules/ai/ai.chat.controller.ts` — SSE 事件 `sendSse`、`SYSTEM_PROMPT`、非串流回應
+- `src/modules/agent/agent-manager.service.ts` — `runToolLoop` / `isSuccessResult` / `stableCacheKey` / 結果包裝
+- `src/modules/ai/ai.chat.controller.ts` — SSE 事件 `sendSse`、`CHAT_SYSTEM_PROMPT`、非串流回應
 - `src/modules/ai/ai.schema.ts` — `AgentChatRequestSchema`
 - 底層 service 回傳形狀：各模組 `*.types.ts` 與 `src/types/index.d.ts`
 
@@ -21,9 +21,8 @@
 
 ## 0. 概覽
 
-- **工具目錄**：`buildGeminiTools()` = `openAiChatTools`（15 個）＋（**僅登入時**）`memoryTools`（2 個）。共 **17 個**。
+- **工具目錄**：`/ai/chat` 與語音 = `openAiChatTools`（23 個）＋（**僅登入且允許記憶時**）`memoryTools`（2 個），最多 **25 個**。LINE 家人 agent 另加 `lineFamilyTools`（12 個，見 §8），共 35 個。
 - **回傳**：每個工具一律回傳 **JSON 字串**（`executeLocalTool` → `JSON.stringify(...)`）。tool loop 會 `JSON.parse` 後包成 Gemini 的 `functionResponse: { name, response }`；若解析非物件則包成 `{ result: <值> }`。
-- ⚠️ **死碼提醒**：`tool.ts` 的 `findGooglePlacesDeclaration / findA11yPlacesDeclaration / planRouteDeclaration`（舊版 `planRoute`、range 預設 200、travelMode）只被 `config.ts` 的 `agentConfig` 引用，而 `agentConfig` 全專案無人 import → 已是死碼。`contents.ts` 內提到 `planRoute` 的 prompt 同屬此舊路徑，**不在本文件範圍**。
 
 ### 回傳信封慣例
 
@@ -103,11 +102,11 @@
 
 | 面向     | 行為                                                                                                        |
 | -------- | ----------------------------------------------------------------------------------------------------------- |
-| 最大輪數 | `MAX_ROUNDS = 5`；某輪無 functionCall 即跳出                                                                |
-| 呼叫模式 | `FunctionCallingConfigMode.AUTO`，`temperature: 0`                                                          |
-| 歷程保留 | 每輪把模型的 `functionCall` 與我方 `functionResponse` 原樣 push 回 `contents`（保留 thought signature）     |
+| 最大輪數 | `MAX_ROUNDS = 18`；某輪無 function call 且有文字即直接回傳                                                  |
+| 呼叫模式 | `tool_choice: "auto"`（首輪可用 `allowedFunctionNames` 強制 `any`）；Interactions API **沒有 temperature**  |
+| 歷程保留 | stateful：每輪以 `previous_interaction_id` 串接，只送新的 function result，不重送整段歷程                  |
 | 結果包裝 | 工具回傳 JSON 字串 → `JSON.parse` → `functionResponse: { name, response }`；非物件則包成 `{ result: <值> }` |
-| 收尾     | 迴圈結束後再做一次「無工具」completion 產生最終文字                                                         |
+| 收尾     | 用完輪數或某輪回空時，再以 `tool_choice: "none"` 做一次 final round 產生最終文字                            |
 
 ---
 
@@ -660,7 +659,43 @@ TRA   = { type:"TRA",  trainNo; trainTypeName; departureStation;
 
 ---
 
-## 8. 速查表
+## 8. 其他工具（摘要）
+
+以下工具只列用途與必填參數；回傳形狀以 `src/modules/ai/agent-tools.ts`、`src/modules/line/` 的實作為準。
+
+### 8.1 `openAiChatTools` 中未於上文詳述者
+
+| 工具                            | 必填參數                             | 用途                                                    |
+| ------------------------------- | ------------------------------------ | ------------------------------------------------------- |
+| `findCampusAccessibility`       | —（校名、城市、設施類型或座標擇一）  | 教育部校園無障礙資料庫，回校區摘要與 `campusId`         |
+| `getCampusAccessibilityDetails` | `campusId`                           | 單一校區完整無障礙設施清單                              |
+| `getTrainTimetable`             | `originStation, destinationStation`  | 台鐵／高鐵兩站間直達班次（`departAfter` / `arriveBy`）  |
+| `getStationTimetable`           | `station`                            | 單站接下來的發車看板                                    |
+| `findNearbyBusStops`            | —（座標或目前位置）                  | 附近站牌與經過的真實路線，再接 `getBusArrival`          |
+| `getMetroAlerts`                | —                                    | 捷運營運異常與電梯故障公告                              |
+| `getTransitAlerts`              | `mode`                               | 公車／捷運／台鐵／高鐵通阻、改道、停駛警報              |
+| `webSearch`                     | `query`                              | 公開網路搜尋，回 `answer` 與 `sources`                  |
+
+### 8.2 `lineFamilyTools`（僅 LINE 家人 agent，`LINE_TOOL_ALLOWLIST`）
+
+| 工具                       | 必填參數            | 用途                                          |
+| -------------------------- | ------------------- | --------------------------------------------- |
+| `bindEmergencyContactCode` | `code`              | 以 6 碼綁定碼完成緊急聯絡人綁定               |
+| `bindLineAccountCode`      | `code`              | 以 6 碼綁定碼完成 app 帳號與 LINE 對應        |
+| `getActiveSosContext`      | —                   | 所有綁定對象的進行中 SOS 與最近摘要           |
+| `getSosLiveLocation`       | `sessionId`         | SOS 即時位置、地址、追蹤頁連結                |
+| `planRouteToSosVictim`     | `sessionId`         | 從家人最近分享的位置規劃前往受困者的路線      |
+| `findSosNearbyPlaces`      | `sessionId, query`  | 受困者附近一般地點                            |
+| `findSosNearbyA11yPlaces`  | `sessionId, query`  | 受困者附近無障礙設施                          |
+| `getSosEnvironmentInfo`    | `sessionId`         | 受困者位置的天氣、空品、周邊環境              |
+| `confirmSosReceived`       | —                   | 確認已收到 SOS 通知                           |
+| `claimSosEvent`            | —                   | 承接 SOS 事件                                 |
+| `updateSosHandlingStatus`  | —（`status`）       | 更新處理進度（前往中／已抵達）                |
+| `resolveSosEvent`          | —                   | 標記 SOS 已解除                               |
+
+---
+
+## 9. 速查表
 
 🔒 = 僅登入掛載。`*` = required 參數。
 
@@ -684,12 +719,14 @@ TRA   = { type:"TRA",  trainNo; trainTypeName; departureStation;
 | 16  | `saveMemory` 🔒            | `content, category`   | `ok`, `memory`                              |
 | 17  | `deleteMemory` 🔒          | `memoryId`            | `ok`, `deleted`                             |
 
+其餘 8 個 `openAiChatTools` 與 12 個 `lineFamilyTools` 見 §8。
+
 ---
 
 ## 維護指引
 
 新增 / 刪改工具時，需同步更新三處：
 
-1. `src/config/ai/tool.ts` — `openAiChatTools` / `memoryTools` 宣告
+1. `src/config/ai/tool.ts` — `openAiChatTools` / `memoryTools` / `lineFamilyTools` 宣告
 2. `src/modules/ai/agent-tools.ts` — 實作與 `executeLocalTool` 的 `switch`
 3. 本文件（`docs/specs/AI_AGENT_TOOLS_REFERENCE.md`）

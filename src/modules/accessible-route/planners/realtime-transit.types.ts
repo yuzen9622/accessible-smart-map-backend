@@ -3,9 +3,10 @@
  * Minimal shapes scoped to this planner — not the canonical src/types/transit.
  */
 
-export interface TdxEtaRecord {
-  EstimateTime?: number | null;
-  StopStatus?: number;
+import type { BusEtaTiming } from "../../../types/transit";
+import type { RailOdSuspension } from "../../../types/rail";
+
+export interface TdxEtaRecord extends BusEtaTiming {
   StopName?: { Zh_tw?: string };
   Direction?: number;
   StopSequence?: number;
@@ -36,11 +37,7 @@ export interface TdxTraStation {
   StationID: string;
   StationName?: { Zh_tw?: string };
 }
-export interface TdxTraOdItem {
-  DailyTrainInfo?: { TrainNo?: string; TrainTypeName?: { Zh_tw?: string } };
-  OriginStopTime?: { DepartureTime?: string };
-  DestinationStopTime?: { ArrivalTime?: string };
-}
+export type TdxTraOdItem = RailOdRow;
 
 export interface TdxThsrStation {
   StationID: string;
@@ -52,10 +49,14 @@ export interface TdxThsrOdItem {
   DestinationStopTime?: { ArrivalTime?: string };
 }
 
-export interface RailOdRow {
-  DailyTrainInfo?: { TrainNo?: string; TrainTypeName?: { Zh_tw?: string } };
-  OriginStopTime?: { DepartureTime?: string };
-  DestinationStopTime?: { ArrivalTime?: string };
+export interface RailOdRow extends RailOdSuspension {
+  DailyTrainInfo?: {
+    TrainNo?: string;
+    TrainTypeName?: { Zh_tw?: string };
+    SuspendedFlag?: number;
+  };
+  OriginStopTime?: { DepartureTime?: string; SuspendedFlag?: number };
+  DestinationStopTime?: { ArrivalTime?: string; SuspendedFlag?: number };
 }
 export interface RailMatch {
   trainNo: string;

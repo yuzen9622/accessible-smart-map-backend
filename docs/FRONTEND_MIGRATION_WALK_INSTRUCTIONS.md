@@ -6,15 +6,16 @@
 
 ## 路線引擎分工
 
-- 所有正常 WALK legs 均由 OTP 產生，包括純步行、walk + waypoints，以及汽／機車的頭尾與中途點步行銜接。
-- Valhalla 只負責汽車與機車主體；僅在 OTP 步行規劃不可用時作為 pedestrian 停機備援。
-- 發生備援時，該 route 會新增 `warnings[]`：
-  `OTP 步行規劃暫時不可用，已降級使用 Valhalla 步行路線，指引品質可能不同`。
+> 2026-10-05 校正：本節原寫「所有正常 WALK legs 均由 OTP 產生」，已不符現況。
+
+- 純步行（`travelMode: "walk"`）：起訖點在台北 CSR bbox 內且功能啟用時，由自建 CSR 無障礙行人圖選路（`routingSource: "pedestrian-a11y"`）；CSR 無法選路、bbox 外或停用時改走 OTP2。
+- 大眾運輸 itinerary 內的 WALK legs，以及汽／機車的頭尾與中途點步行銜接，仍由 OTP2 產生。
+- Valhalla 負責汽車與機車主體；只在 OTP2 步行規劃不可用時作為 pedestrian 停機備援。備援不再附固定的 `warnings[]` 文字，前端不要依賴特定字串判斷。
 - walk + waypoints 會回傳一條 route、數個依序排列的 WALK legs；任一 OTP segment 真正無解時整條回 404，不會混搭 OTP／Valhalla segments。
 
 ## `/route/instructions` 請求
 
-請提供 `routeToken` 或 `route` 其中之一。兩者同時提供時，後端優先讀取 `routeToken` 對應的伺服器端路線；原本傳完整 `route` 的流程仍可用。
+**只接受 `routeToken`**（必填）。後端已不再接受前端回傳完整 `route`；request body 為 strict schema，多帶 `route` 欄位會回 400。
 
 ```json
 {

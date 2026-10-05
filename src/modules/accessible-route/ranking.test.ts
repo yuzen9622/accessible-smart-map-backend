@@ -5,6 +5,7 @@ import type {
   WalkLeg,
   BusLeg,
   TraLeg,
+  MetroLeg,
 } from "../../types/route";
 
 // Reproduces the original 政大 → 台北車站 complaint with the REAL ranking
@@ -55,6 +56,27 @@ const tra = (): TraLeg => ({
   arrivalStationUID: "",
   departureTime: "",
   arrivalTime: "",
+  rideMinutes: 8,
+  waitInfo: { time: null, source: "unavailable" },
+  estimatedWaitMinutes: 0,
+  polyline: [],
+  departureStationA11y: [],
+  arrivalStationA11y: [],
+  facilityHighlights: [],
+});
+
+const metro = (): MetroLeg => ({
+  type: "METRO",
+  railSystem: "TRTC",
+  lineId: "BL",
+  lineName: "板南線",
+  lineUid: "TRTC_BL",
+  departureStation: "忠孝復興",
+  arrivalStation: "市政府",
+  departureStationUid: "",
+  arrivalStationUid: "",
+  direction: 0,
+  stopsCount: 3,
   rideMinutes: 8,
   waitInfo: { time: null, source: "unavailable" },
   estimatedWaitMinutes: 0,
@@ -131,5 +153,119 @@ describe("政大 → 台北車站 ranking flip (wheelchair, real scoreAndRank)",
       // P3: empty facilities now score the neutral baseline, not 0.
       expect(r.scoreComponents!.facilityScore).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("soft transit preference ranking", () => {
+  const candidates = () => [
+    {
+      ...route1,
+      routeId: "bus",
+      totalMinutes: 30,
+      legs: [{ ...bus("307"), rideMinutes: 20 }],
+    },
+    {
+      ...route1,
+      routeId: "rail",
+      totalMinutes: 30,
+      legs: [{ ...tra(), rideMinutes: 20 }],
+    },
+  ];
+  it.each(["normal", "wheelchair", "elderly"] as const)(
+    "honors bus/rail preference for %s without altering duration or score",
+    (mode) => {
+      const neutral = scoreAndRank(candidates(), mode);
+      const busFirst = scoreAndRank(candidates(), mode, undefined, "bus");
+      const railFirst = scoreAndRank(candidates(), mode, undefined, "rail");
+      expect(busFirst[0].routeId).toBe("bus");
+      expect(railFirst[0].routeId).toBe("rail");
+      for (const route of railFirst) {
+        expect(route.totalMinutes).toBe(30);
+        expect(route.accessibilityScore).toBe(
+          neutral.find((r) => r.routeId === route.routeId)?.accessibilityScore,
+        );
+      }
+      expect(scoreAndRank(candidates(), mode, undefined, "none")).toEqual(
+        neutral,
+      );
+    },
+  );
+  it("still allows a much faster nonpreferred route and bus-to-rail connections", () => {
+    const routes = candidates();
+    routes[1].totalMinutes = 120;
+    expect(scoreAndRank(routes, "normal", undefined, "rail")[0].routeId).toBe(
+      "bus",
+    );
+    const mixed = {
+      ...route3,
+      legs: [
+        { ...bus("66"), rideMinutes: 5 },
+        { ...tra(), rideMinutes: 20 },
+      ],
+    };
+    expect(scoreAndRank([mixed], "normal", undefined, "rail")).toHaveLength(1);
+  });
+});
+
+describe("soft metro preference ranking", () => {
+  const candidates = () => [
+    {
+      ...route1,
+      routeId: "bus",
+      totalMinutes: 30,
+      legs: [{ ...bus("307"), rideMinutes: 20 }],
+    },
+    {
+      ...route1,
+      routeId: "rail",
+      totalMinutes: 30,
+      legs: [{ ...tra(), rideMinutes: 20 }],
+    },
+    {
+      ...route1,
+      routeId: "metro",
+      totalMinutes: 30,
+      legs: [{ ...metro(), rideMinutes: 20 }],
+    },
+  ];
+  it.each(["normal", "wheelchair", "elderly"] as const)(
+    "honors metro preference for %s without altering duration or score",
+    (mode) => {
+      const neutral = scoreAndRank(candidates(), mode);
+      const metroFirst = scoreAndRank(candidates(), mode, undefined, "metro");
+      expect(metroFirst[0].routeId).toBe("metro");
+      expect(metroFirst).toHaveLength(3);
+      for (const route of metroFirst) {
+        expect(route.totalMinutes).toBe(30);
+        expect(route.accessibilityScore).toBe(
+          neutral.find((r) => r.routeId === route.routeId)?.accessibilityScore,
+        );
+      }
+      expect(scoreAndRank(candidates(), mode, undefined, "none")).toEqual(
+        neutral,
+      );
+      expect(
+        scoreAndRank(candidates(), mode, undefined, "bus")[0].routeId,
+      ).toBe("bus");
+      expect(
+        scoreAndRank(candidates(), mode, undefined, "rail")[0].routeId,
+      ).toBe("rail");
+    },
+  );
+  it("still allows a much faster nonpreferred route and keeps metro-to-other connections", () => {
+    const routes = candidates();
+    routes[2].totalMinutes = 120;
+    expect(
+      scoreAndRank(routes, "normal", undefined, "metro")[0].routeId,
+    ).not.toBe("metro");
+    const mixed = {
+      ...route3,
+      legs: [
+        { ...metro(), rideMinutes: 10 },
+        { ...bus("66"), rideMinutes: 5 },
+        { ...tra(), rideMinutes: 20 },
+      ],
+    };
+    expect(scoreAndRank([mixed], "normal", undefined, "metro")).toHaveLength(1);
   });
 });

@@ -1,5 +1,3 @@
-export const TDX_API_KEY = process.env.TDX_API_KEY || "";
-
 export const busUrl = {
   cityRouteSearchUrl:
     "https://tdx.transportdata.tw/api/basic/v2/Bus/Route/City",
@@ -14,6 +12,9 @@ export const busUrl = {
   cityScheduleUrl:
     "https://tdx.transportdata.tw/api/basic/v2/Bus/Schedule/City",
   cityVehicleUrl: "https://tdx.transportdata.tw/api/basic/v2/Bus/Vehicle/City",
+  cityShapeUrl: "https://tdx.transportdata.tw/api/basic/v2/Bus/Shape/City",
+  interCityShapeUrl:
+    "https://tdx.transportdata.tw/api/basic/v2/Bus/Shape/InterCity",
   interCityScheduleUrl:
     "https://tdx.transportdata.tw/api/basic/v2/Bus/Schedule/InterCity",
   interCityStopOfRouteUrl:
@@ -42,6 +43,19 @@ export const trainUrl = {
 };
 
 const METRO_BASE = "https://tdx.transportdata.tw/api/basic/v2/Rail/Metro";
+
+/** Station/StationOfLine coverage; Alert has a different supported-system list. */
+export const METRO_STATION_SYSTEMS = [
+  "TRTC",
+  "KRTC",
+  "TYMC",
+  "TMRT",
+  "NTMC",
+  "KLRT",
+  "NTDLRT",
+  "NTALRT",
+  "TRTCMG",
+] as const;
 
 export const metroUrl = {
   stationUrl: (s: string) => `${METRO_BASE}/Station/${s}`,

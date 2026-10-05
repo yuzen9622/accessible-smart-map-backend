@@ -1,10 +1,14 @@
 import {
+  findAudioSignalsInBbox,
   findNearbyVisualA11y,
+  upsertSourcedVisualA11yBatch,
   upsertVisualA11yBatch,
+  type SourcedVisualA11yUpsert,
   type VisualA11yUpsert,
 } from "./visual-a11y.repository";
 import { IVisualA11y } from "../../types";
 import { fetchOverpassElements } from "../../adapters/overpass.adapter";
+import { parseCsvLine } from "../../utils/csv";
 
 const BBOX = "24.95,121.45,25.12,121.62";
 
@@ -117,4 +121,76 @@ export async function syncFromOverpass(): Promise<{
   }
 
   return { inserted: totalInserted, updated: totalUpdated };
+}
+
+/**
+ * Parse the Taipei TCE audible-signal CSV into upserts. Rows without a signal
+ * number or with coordinates outside Taiwan are skipped.
+ *
+ * @param text The CSV text.
+ * @returns One upsert per signal number.
+ */
+export function parseTaipeiApsCsv(text: string): SourcedVisualA11yUpsert[] {
+  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
+  const header = parseCsvLine(lines[0] ?? "").map((h) => h.trim());
+  const col = (name: string) => header.indexOf(name);
+  const [iName, iDistrict, iId, iLng, iLat] = [
+    col("路口"),
+    col("行政區"),
+    col("號誌編號"),
+    col("WGS84經度座標"),
+    col("WGS84緯度座標"),
+  ];
+  if ([iName, iId, iLng, iLat].some((i) => i < 0)) return [];
+
+  const seen = new Set<string>();
+  const out: SourcedVisualA11yUpsert[] = [];
+  for (const raw of lines.slice(1)) {
+    if (!raw.trim()) continue;
+    const f = parseCsvLine(raw);
+    const sourceId = (f[iId] ?? "").trim();
+    const lng = Number(f[iLng]);
+    const lat = Number(f[iLat]);
+    if (!sourceId || seen.has(sourceId)) continue;
+    if (!(lng > 118 && lng < 123 && lat > 21 && lat < 27)) continue;
+    seen.add(sourceId);
+    out.push({
+      source: "taipei_tce",
+      sourceId,
+      type: "audio_signal",
+      location: { type: "Point", coordinates: [lng, lat] },
+      properties: {
+        name: (f[iName] ?? "").replace(/\s+/g, " ").trim() || null,
+        roadName: iDistrict >= 0 ? (f[iDistrict] ?? "").trim() || null : null,
+      },
+      updatedAt: new Date(),
+    });
+  }
+  return out;
+}
+
+/**
+ * Upsert the Taipei TCE audible signals.
+ *
+ * @param text The CSV text.
+ * @returns How many were parsed, inserted and updated.
+ */
+export async function syncTaipeiAps(
+  text: string,
+): Promise<{ parsed: number; inserted: number; updated: number }> {
+  const docs = parseTaipeiApsCsv(text);
+  const { inserted, updated } = await upsertSourcedVisualA11yBatch(docs);
+  return { parsed: docs.length, inserted, updated };
+}
+
+/**
+ * Audible signals from every source inside a bounding box.
+ *
+ * @param bbox `[minLng, minLat, maxLng, maxLat]`
+ * @returns The matching features
+ */
+export async function findAudioSignalsWithin(
+  bbox: [number, number, number, number],
+): Promise<IVisualA11y[]> {
+  return findAudioSignalsInBbox(bbox);
 }

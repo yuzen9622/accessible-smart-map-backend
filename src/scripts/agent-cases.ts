@@ -33,6 +33,64 @@ function ymdPlusDays(today: string, n: number): string {
 const TAIPEI_STATION = { latitude: 25.0478, longitude: 121.517 };
 
 export const agentCases: AgentCase[] = [
+  ...(
+    [
+      [
+        "bus",
+        "從台北車站到板橋車站怎麼去？我比較想搭公車。",
+        "planAccessibleRoute",
+        "bus",
+      ],
+      [
+        "rail",
+        "從台北車站到板橋車站怎麼去？我比較想搭火車，也可以公車接駁。",
+        "planAccessibleRoute",
+        "rail",
+      ],
+      [
+        "metro",
+        "從台北車站到板橋車站怎麼去？我比較想搭捷運，也可以公車接駁。",
+        "planAccessibleRoute",
+        "metro",
+      ],
+      [
+        "clear",
+        "從台北車站到板橋車站怎麼去？取消之前的火車偏好，公車火車都可以。",
+        "planAccessibleRoute",
+        "none",
+      ],
+      [
+        "station",
+        "從台北101到台北火車站怎麼去？",
+        "planAccessibleRoute",
+        "none",
+      ],
+      [
+        "wheelchair",
+        "我坐輪椅，從台北車站到板橋車站，偏好搭火車，請規劃路線。",
+        "planAccessibleRoute",
+        "rail",
+      ],
+      [
+        "nav",
+        "從台北車站到板橋車站，偏好公車，請給我每一步的導航指引。",
+        "getNavInstructions",
+        "bus",
+      ],
+    ] as const
+  ).map(([id, query, expectTool, preference]): AgentCase => ({
+    id: `transit-preference-${id}`,
+    query,
+    expectTool,
+    expectArgs: (args) => {
+      if ((args.transitPreference ?? "none") !== preference)
+        return `Expected transitPreference=${preference}`;
+      if (id === "wheelchair" && args.mode !== "wheelchair")
+        return "Lost wheelchair mode";
+      return null;
+    },
+  })),
+
   // A. parking vs findA11yPlaces (the 停車 trap)
   {
     id: "park-1",

@@ -7,6 +7,9 @@
  *  • Metro Alert（營運通阻）— the actual REALTIME signal. Service alerts
  *    mentioning elevators/escalators at the leg's stations (or system-wide)
  *    become ⚠️ warnings on the leg and the route.
+ *  • 臺北捷運無障礙設施異常公告 (data.taipei) — station-level elevator anomaly
+ *    notices for TRTC. Only a station whose latest notice is still an active
+ *    outage is flagged; a later 「已完成／開放使用」 notice clears it.
  *  • StationFacility — facility inventory per station. Verified against live
  *    TDX data (2026-06): the schema is keyed by StationID with Elevators[] /
  *    Toilets[] arrays, and for TRTC every array is EMPTY — so absence of data
@@ -19,8 +22,14 @@
  * never degrades routing.
  */
 
+import { fetchTaipeiMetroNotices } from "../../../adapters/taipei-metro-notice.adapter";
 import { tdxFetch } from "../../../config/fetch";
 import { metroUrl } from "../../../config/transit";
+import {
+  activeElevatorNotices,
+  type ActiveMetroNotice,
+} from "../../../utils/metro-notice";
+import { normalizeStationName } from "../../../utils/station-name";
 import type {
   AccessibilityMode,
   AccessibleRoute,
@@ -36,6 +45,7 @@ import type {
 const OUTAGE_RE = /維修|故障|暫停|停用/;
 const ALERT_CACHE_TTL_MS = 5 * 60 * 1000;
 const FACILITY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const NOTICE_RAIL_SYSTEM = "TRTC";
 
 const facilityCache = new Map<
   string,
@@ -107,6 +117,22 @@ async function fetchMetroAlerts(
   return alerts;
 }
 
+async function fetchActiveNotices(
+  railSystems: readonly string[],
+): Promise<Map<string, ActiveMetroNotice>> {
+  if (!railSystems.includes(NOTICE_RAIL_SYSTEM)) return new Map();
+  return activeElevatorNotices(await fetchTaipeiMetroNotices());
+}
+
+function noticeFor(
+  notices: Map<string, ActiveMetroNotice>,
+  railSystem: string,
+  stationName: string,
+): ActiveMetroNotice | undefined {
+  if (railSystem !== NOTICE_RAIL_SYSTEM) return undefined;
+  return notices.get(normalizeStationName(stationName));
+}
+
 /**
  * Bare TDX StationID from either UID convention:
  * GTFS-built legs carry "TRTC_O12", legacy TDX legs carry "TRTC-O12" → "O12".
@@ -162,6 +188,34 @@ function applyStationFacility(
 }
 
 /**
+ * Elevator anomaly notice for one station of a metro leg.
+ *
+ * @param leg The metro leg to annotate.
+ * @param route The route the leg belongs to.
+ * @param notice The active notice for the station, if any.
+ * @param prefix Whether this is the boarding or alighting station.
+ * @param stationName The station name for warning messages.
+ * @returns Whether a notice was applied.
+ */
+function applyNotice(
+  leg: MetroLeg,
+  route: AccessibleRoute,
+  notice: ActiveMetroNotice | undefined,
+  prefix: "乘車站" | "下車站",
+  stationName: string,
+): boolean {
+  if (!notice) return false;
+  const warning =
+    `⚠️ ${prefix}「${stationName}」電梯${notice.keyword}中：${notice.description}`.slice(
+      0,
+      120,
+    );
+  pushUnique(leg.facilityHighlights, warning);
+  pushUnique(route.accessibilityHighlights, warning);
+  return true;
+}
+
+/**
  * Alert overlay: elevator-related service alerts touching this leg's stations.
  *
  * @param leg The metro leg to annotate.
@@ -209,22 +263,26 @@ function applyAlerts(
 /**
  * Overlay realtime TDX facility/alert status onto the final routes (top-3),
  * in place. METRO legs only — THSR/TRA facility status is out of scope. At
- * most two TDX calls per rail system involved (both cached).
+ * most two TDX calls per rail system involved (both cached), plus one cached
+ * Taipei Metro notice download when a TRTC leg is present.
  *
  * @param routes The final candidate routes to annotate in place.
  * @param _mode The accessibility mode (unused).
+ * @returns The routes that board or alight at a station with an active
+ *   elevator anomaly notice.
  */
 export async function overlayFacilityStatus(
   routes: AccessibleRoute[],
   _mode: AccessibilityMode = "normal",
-): Promise<void> {
+): Promise<Set<AccessibleRoute>> {
+  const affected = new Set<AccessibleRoute>();
   const metroLegs: { route: AccessibleRoute; leg: MetroLeg }[] = [];
   for (const route of routes) {
     for (const leg of route.legs) {
       if (leg.type === "METRO") metroLegs.push({ route, leg });
     }
   }
-  if (!metroLegs.length) return;
+  if (!metroLegs.length) return affected;
 
   const systems = [...new Set(metroLegs.map(({ leg }) => leg.railSystem))];
   const bySystem = new Map<
@@ -234,15 +292,16 @@ export async function overlayFacilityStatus(
       alerts: TdxMetroAlertItem[];
     }
   >();
-  await Promise.all(
-    systems.map(async (sys) => {
+  const [notices] = await Promise.all([
+    fetchActiveNotices(systems),
+    ...systems.map(async (sys) => {
       const [facilities, alerts] = await Promise.all([
         fetchFacilityIndex(sys),
         fetchMetroAlerts(sys),
       ]);
       return bySystem.set(sys, { facilities, alerts });
     }),
-  );
+  ]);
 
   for (const { route, leg } of metroLegs) {
     const data = bySystem.get(leg.railSystem);
@@ -264,7 +323,23 @@ export async function overlayFacilityStatus(
       leg.arrivalStation,
     );
     applyAlerts(leg, route, data.alerts);
+    const departureHit = applyNotice(
+      leg,
+      route,
+      noticeFor(notices, leg.railSystem, leg.departureStation),
+      "乘車站",
+      leg.departureStation,
+    );
+    const arrivalHit = applyNotice(
+      leg,
+      route,
+      noticeFor(notices, leg.railSystem, leg.arrivalStation),
+      "下車站",
+      leg.arrivalStation,
+    );
+    if (departureHit || arrivalHit) affected.add(route);
   }
+  return affected;
 }
 
 /** One elevator outage fact for a station still ahead on the corridor. */
@@ -310,7 +385,8 @@ function alertTouchesStation(
 
 /**
  * Reports elevator 維修/故障/暫停/停用 for the metro stations still ahead on the
- * corridor. Shares the overlay's caches, so it adds no TDX call volume.
+ * corridor, from TDX and the Taipei Metro anomaly notices. Shares the overlay's
+ * caches, so it adds no upstream call volume.
  * Entirely fail-soft: any error yields an empty array.
  *
  * @param stations The stations to probe, from the remaining corridor.
@@ -330,15 +406,16 @@ export async function probeMetroElevatorOutages(
         alerts: TdxMetroAlertItem[];
       }
     >();
-    await Promise.all(
-      systems.map(async (sys) => {
+    const [notices] = await Promise.all([
+      fetchActiveNotices(systems),
+      ...systems.map(async (sys) => {
         const [facilities, alerts] = await Promise.all([
           fetchFacilityIndex(sys),
           fetchMetroAlerts(sys),
         ]);
         return bySystem.set(sys, { facilities, alerts });
       }),
-    );
+    ]);
 
     const outages: MetroElevatorOutage[] = [];
     const seen = new Set<string>();
@@ -382,6 +459,22 @@ export async function probeMetroElevatorOutages(
           elevatorKey: `alert:${alert.AlertID ?? alert.Title ?? ""}`,
           keyword: text.match(OUTAGE_RE)?.[0] ?? "異常",
           description: text.trim().slice(0, 120),
+        });
+      }
+
+      const notice = noticeFor(
+        notices,
+        station.railSystem,
+        station.stationName,
+      );
+      if (notice) {
+        push({
+          railSystem: station.railSystem,
+          stationId,
+          stationName: station.stationName,
+          elevatorKey: `notice:${notice.postedAt.toISOString()}`,
+          keyword: notice.keyword,
+          description: notice.description,
         });
       }
     }

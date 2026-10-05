@@ -1,4 +1,9 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { metroStationOperations } from "../../scripts/tdx-metro-parse";
+import type {
+  TdxMetroStation,
+  TdxMetroStationOfLine,
+} from "../../types/transit";
 import MetroStationModel from "../../model/metro-station.model";
 import {
   clearMongoTestDatabase,
@@ -48,5 +53,46 @@ describe("transit metro repository with real MongoDB", () => {
       }),
     ]);
     await expect(findMetroStationsByUids([])).resolves.toEqual([]);
+  });
+
+  it("persists and reimports light-rail station operations without duplicate stations", async () => {
+    for (const [railSystem, stationUid] of [
+      ["NTDLRT", "NTDLRT-01"],
+      ["NTALRT", "NTALRT-01"],
+      ["NTMC", "NTMCC-01"],
+      ["KLRT", "KLRT-NETWORK-01"],
+      ["TRTCMG", "MG-01"],
+    ]) {
+      const stations = [
+        {
+          StationUID: stationUid,
+          StationID: "01",
+          StationName: { Zh_tw: "測試站", En: "Test" },
+          StationPosition: { PositionLon: 121.5, PositionLat: 25.1 },
+        },
+      ] as TdxMetroStation[];
+      const lines = [
+        { LineID: "L1", Stations: [{ StationID: "01" }] },
+        { LineID: "L2", Stations: [{ StationID: "01" }] },
+      ] as TdxMetroStationOfLine[];
+      await MetroStationModel.bulkWrite(
+        metroStationOperations(stations, lines, railSystem),
+      );
+      stations[0].StationPosition.PositionLon = 121.6;
+      await MetroStationModel.bulkWrite(
+        metroStationOperations(stations, lines, railSystem),
+      );
+      const docs = await findMetroStationsByUids([stationUid]);
+      expect(docs).toHaveLength(1);
+      const stored = await MetroStationModel.findOne({
+        stationUid: stationUid,
+      }).lean();
+      expect(stored).toMatchObject({
+        railSystem,
+        lineIds: [`${railSystem}-L1`, `${railSystem}-L2`],
+        location: { coordinates: [121.6, 25.1] },
+      });
+    }
+    expect(await MetroStationModel.countDocuments()).toBe(5);
   });
 });

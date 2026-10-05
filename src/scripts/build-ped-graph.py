@@ -54,6 +54,10 @@ RAMP_VALUES = frozenset({"yes", "designated"})
 TRUE_VALUES = frozenset({"yes", "true", "1", "designated"})
 FALSE_VALUES = frozenset({"no", "false", "0"})
 SIDEWALK_TOLERANCE_M = 10.0
+# A nearby road centreline is not evidence for a sidewalk's usable width.
+# Require most of the segment to lie within the source polygon before using
+# its attributes; keep weaker matches as provenance for review only.
+SIDEWALK_MIN_ATTRIBUTE_OVERLAP_RATIO = 0.8
 CONNECTIVITY_SAMPLE_SIZE = 100
 CONNECTIVITY_MIN_DISTANCE_M = 300.0
 CONNECTIVITY_MAX_DISTANCE_M = 3000.0
@@ -225,6 +229,7 @@ class SidewalkMatch:
     updated_at: str
     overlap_m: float
     distance_m: float
+    overlap_ratio: float = 1.0
 
 
 @dataclass
@@ -631,7 +636,15 @@ def build_sidewalk_index(path: Path) -> SidewalkIndex:
         if not geometry:
             continue
         try:
-            metric_geometry = transform(transformer, shape(geometry))
+            geographic_geometry = shape(geometry)
+            if geographic_geometry.is_empty:
+                continue
+            min_lon, min_lat, max_lon, max_lat = geographic_geometry.bounds
+            if not (-180 <= min_lon <= max_lon <= 180 and -90 <= min_lat <= max_lat <= 90):
+                raise SystemExit("Sidewalk GeoJSON must use WGS84 longitude/latitude; reproject TWD97 before building")
+            if geographic_geometry.geom_type not in ("Polygon", "MultiPolygon"):
+                raise SystemExit("Sidewalk geometry must be Polygon or MultiPolygon")
+            metric_geometry = transform(transformer, geographic_geometry)
         except (TypeError, ValueError) as error:
             print(
                 f"[build-ped-graph] skipping invalid sidewalk geometry {index}: {error}"
@@ -652,11 +665,17 @@ def build_sidewalk_index(path: Path) -> SidewalkIndex:
         source_id = str(
             feature.get("id") or properties.get("OBJECTID") or f"sidewalk:{index}"
         )
+        width_m = parse_nonnegative_number(properties.get("SW_WTH"))
+        effective_width_m = parse_nonnegative_number(properties.get("SWW_WTH"))
+        # A contradictory record cannot establish usable clearance. Keep the
+        # geometry and total width, but do not turn malformed net width into 0.
+        if width_m is not None and effective_width_m is not None and effective_width_m > width_m:
+            effective_width_m = None
         records.append(
             SidewalkRecord(
                 source_id=source_id,
-                width_m=parse_nonnegative_number(properties.get("SW_WTH")),
-                effective_width_m=parse_nonnegative_number(properties.get("SWW_WTH")),
+                width_m=width_m,
+                effective_width_m=effective_width_m,
                 direction=(
                     str(properties["SW_DIRECT"])
                     if properties.get("SW_DIRECT") not in (None, "")
@@ -735,6 +754,7 @@ def match_sidewalk_to_coordinates(
             updated_at=record.updated_at,
             overlap_m=overlap_m,
             distance_m=distance_m,
+            overlap_ratio=min(1.0, overlap_m / line.length),
         )
         score = (
             1 if overlap_m > 0.0 else 0,
@@ -795,7 +815,8 @@ def make_edge_attributes(
             ramp_wheelchair=tags.get("ramp:wheelchair"),
         )
     if sidewalk_match is not None:
-        if sidewalk_match.width_m is not None:
+        qualified = sidewalk_match.overlap_ratio >= SIDEWALK_MIN_ATTRIBUTE_OVERLAP_RATIO
+        if qualified and sidewalk_match.width_m is not None:
             width_m = sidewalk_match.width_m
             meta["width_m"] = attribute_meta(
                 width_m,
@@ -803,7 +824,7 @@ def make_edge_attributes(
                 sidewalk_match.updated_at,
                 source_id=sidewalk_match.source_id,
             )
-        if sidewalk_match.effective_width_m is not None:
+        if qualified and sidewalk_match.effective_width_m is not None:
             effective_width_m = sidewalk_match.effective_width_m
             meta["effective_width_m"] = attribute_meta(
                 effective_width_m,
@@ -817,15 +838,17 @@ def make_edge_attributes(
             sidewalk_match.updated_at,
             overlap_m=round(sidewalk_match.overlap_m, 3),
             distance_m=round(sidewalk_match.distance_m, 3),
+            overlap_ratio=round(sidewalk_match.overlap_ratio, 4),
+            attributes_applied=qualified,
         )
-        if sidewalk_match.direction is not None:
+        if qualified and sidewalk_match.direction is not None:
             meta["sidewalk_direction"] = attribute_meta(
                 sidewalk_match.direction,
                 "gov_sidewalk",
                 sidewalk_match.updated_at,
                 source_id=sidewalk_match.source_id,
             )
-        if sidewalk_match.ramp_count is not None:
+        if qualified and sidewalk_match.ramp_count is not None:
             meta["sidewalk_ramp_count"] = attribute_meta(
                 sidewalk_match.ramp_count,
                 "gov_sidewalk",
@@ -854,6 +877,11 @@ def slope_for_coordinates(
     start_lon, start_lat = coordinates[0]
     end_lon, end_lat = coordinates[-1]
     try:
+        minimum_span = getattr(dem_reader, "minimum_slope_span_m", None)
+        if minimum_span is not None:
+            required_span = minimum_span(start_lon, start_lat)
+            if required_span is None or haversine_m(coordinates[0], coordinates[-1]) < required_span:
+                return None
         start_elevation = dem_reader.get_elevation(start_lon, start_lat)
         end_elevation = dem_reader.get_elevation(end_lon, end_lat)
     except Exception:
@@ -865,6 +893,19 @@ def slope_for_coordinates(
     if start_value is None or end_value is None:
         return None
     return (end_value - start_value) / length_m
+
+
+def osm_incline_ratio(raw: Any) -> float | None:
+    """Read numeric OSM percent/degree incline; up/down is qualitative, not zero."""
+    match = re.fullmatch(r"([+-]?\d+(?:\.\d+)?)\s*(%|°)", str(raw).strip())
+    if match is None:
+        return None
+    value = finite_float(match.group(1))
+    if value is None:
+        return None
+    if match.group(2) == "°":
+        return math.tan(math.radians(value)) if abs(value) < 90 else None
+    return value / 100
 
 
 def edge_record_for_direction(
@@ -881,10 +922,31 @@ def edge_record_for_direction(
         coordinates = tuple(reversed(coordinates))
     length_m = polyline_length_m(coordinates)
     attr_meta = copy.deepcopy(attributes["attr_meta"])
-    slope_longitudinal = slope_for_coordinates(coordinates, length_m, dem_reader)
-    if slope_longitudinal is not None and dem_updated_at is not None:
+    # Ground elevation cannot describe a bridge deck or an underground way.
+    # Unknown is retained rather than assigning a confident terrain slope.
+    grade_separated = (
+        normalized_tag(segment.tags.get("bridge")) not in (None, "no")
+        or normalized_tag(segment.tags.get("tunnel")) not in (None, "no")
+        or normalized_tag(segment.tags.get("layer")) not in (None, "0")
+    )
+    # Injected DEM maxima do not encode a reliable direction for this segment.
+    slope_longitudinal = (
+        osm_incline_ratio(segment.tags.get("incline"))
+        if segment.tags.get("source:incline") != "dem" else None
+    )
+    if slope_longitudinal is not None:
+        if reverse:
+            slope_longitudinal = -slope_longitudinal
         attr_meta["slope_longitudinal"] = attribute_meta(
-            slope_longitudinal, "dem", dem_updated_at
+            slope_longitudinal, "osm",
+            attributes["attr_meta"]["edge_type"]["updated_at"],
+            raw_value=segment.tags.get("incline"),
+        )
+    elif not grade_separated:
+        slope_longitudinal = slope_for_coordinates(coordinates, length_m, dem_reader)
+    if slope_longitudinal is not None and "slope_longitudinal" not in attr_meta and dem_updated_at is not None:
+        attr_meta["slope_longitudinal"] = attribute_meta(
+            slope_longitudinal, "dem", dem_updated_at, method="terrain_endpoint_estimate"
         )
     return EdgeRecord(
         from_osm_node=segment.to_osm_node if reverse else segment.from_osm_node,
@@ -1241,10 +1303,12 @@ def build_graph(
         for segment in segments
         for endpoint in (segment.from_osm_node, segment.to_osm_node)
     }
+    print(f"[build-ped-graph] segments={len(segments)}; collecting node tags", flush=True)
     node_tags = collect_node_tags(pbf_path, endpoint_ids)
     sidewalk_matches: list[SidewalkMatch | None] = [None] * len(segments)
     if sidewalk_geojson is not None:
         if sidewalk_geojson.is_file():
+            print("[build-ped-graph] matching sidewalk polygons", flush=True)
             sidewalk_index = build_sidewalk_index(sidewalk_geojson)
             sidewalk_matches = [
                 match_sidewalk_to_coordinates(segment.coordinates, sidewalk_index)
@@ -1255,6 +1319,7 @@ def build_graph(
                 f"[build-ped-graph] sidewalk GeoJSON not found at {sidewalk_geojson}; "
                 "width overlay will be skipped"
             )
+    print("[build-ped-graph] building directed attributes and terrain estimates", flush=True)
     osm_updated_at = source_updated_at(pbf_path)
     dem_reader, dem_updated_at = open_dem_reader(dem_file)
     try:
@@ -1646,7 +1711,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--dem-file",
         type=Path,
-        help="Optional EPSG:4326 DEM GeoTIFF; missing files are handled fail-soft",
+        help="Optional georeferenced DEM GeoTIFF; missing files are handled fail-soft",
     )
     parser.add_argument(
         "--sidewalk-geojson",
@@ -1678,12 +1743,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         dem_file=args.dem_file,
         sidewalk_geojson=args.sidewalk_geojson,
     )
+    print("[build-ped-graph] checking connectivity", flush=True)
     connectivity = connectivity_sample(graph.nodes, graph.edges)
     if connectivity["sampled"] != CONNECTIVITY_SAMPLE_SIZE:
         raise SystemExit(
             "Unable to obtain 100 node pairs within 300 m–3 km for connectivity sampling"
         )
     report = graph_report(graph, connectivity)
+    report["input_manifest"] = {
+        key: {"filename": path.name, "sha256": sha256_file(path)}
+        for key, path in (("osm", args.pbf), ("dem", args.dem_file), ("sidewalk", args.sidewalk_geojson))
+        if path is not None and path.is_file()
+    }
     source_hash = sha256_file(args.pbf)
     version_id = write_graph_to_postgis(graph, source_hash, bbox, report, args.db_url)
     print_report(version_id, source_hash, report)

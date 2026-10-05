@@ -726,6 +726,32 @@ describe("generateNavInstructions", () => {
     expect(board?.text).toContain("09:00");
   });
 
+  it.each(["THSR", "TRA"] as const)(
+    "%s ISO timetable displays Taipei time",
+    (type) => {
+      const result = generateNavInstructions({
+        legs: [
+          {
+            type,
+            trainNo: "0823",
+            departureStation: "台北",
+            arrivalStation: "台中",
+            departureTime: "2026-10-01T12:30:00Z",
+            arrivalTime: "2026-10-01T13:18:00Z",
+            rideMinutes: 48,
+          },
+        ],
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const board = result.data.instructions.find(
+        (i) => i.type === "transit_board",
+      );
+      expect(board?.text).toContain("20:30");
+      expect(board?.text).toContain("21:18");
+    },
+  );
+
   it("legs 為空回傳 INVALID_ROUTE_INPUT", () => {
     const result = generateNavInstructions({ legs: [] });
     expect(result.ok).toBe(false);

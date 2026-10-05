@@ -1,5 +1,6 @@
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
+import { TransitPreferenceSchema } from "./transit-preference.schema";
 import { registry } from "../openapi/registry";
 
 extendZodWithOpenApi(z);
@@ -25,6 +26,7 @@ export const RouteIntentSchema = z
       description: "'now' 或 HH:mm／ISO8601",
     }),
     preferences: z.object({
+      transitPreference: TransitPreferenceSchema.optional(),
       minimizeTransfers: z.boolean().openapi({ example: false }),
       preferElevator: z.boolean().openapi({ example: true }),
     }),

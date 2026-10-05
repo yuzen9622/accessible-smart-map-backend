@@ -59,6 +59,17 @@ export function setPedGraphClientProvider(
 }
 
 /**
+ * The graph snapshot already in memory, without loading or re-verifying it.
+ * Callers that must never wait on a cold load (e.g. transit endpoint
+ * anchoring) use this instead of {@link getPedGraphRuntime}.
+ *
+ * @returns The cached snapshot, or null while none has loaded.
+ */
+export function peekPedGraphSnapshot(): PedGraphSnapshot | null {
+  return state.snapshot;
+}
+
+/**
  * Drop the cached graph, index, and single-flight state.
  *
  * @returns Nothing.

@@ -35,6 +35,9 @@ vi.mock("../campus/campus.service", () => ({
 vi.mock("../hazard-report/hazard-report.service", () => ({
   findNearby: vi.fn(),
 }));
+vi.mock("../traffic/road-incident.service", () => ({
+  getActiveRoadIncidents: vi.fn(async () => []),
+}));
 vi.mock("../environment/environment.service", () => ({
   getEnvironmentInfo: vi.fn(),
 }));
@@ -130,6 +133,7 @@ import {
 import * as metroService from "../transit/metro.service";
 import * as alertService from "../transit/alert.service";
 import * as busService from "../transit/bus.service";
+import { getActiveRoadIncidents } from "../traffic/road-incident.service";
 
 const mockGetCoordinates = getCoordinates as unknown as ReturnType<
   typeof vi.fn
@@ -494,6 +498,67 @@ describe("getNearbyHazards", () => {
     message: "找到 2 筆附近路況回報",
     data: { reports: [{ id: "a" }, { id: "b" }], total: 2 },
   };
+
+  it("同時回傳附近的政府道路施工事件，最近的在前且標 source", async () => {
+    mockHazardFindNearby.mockResolvedValue(hazardResult);
+    vi.mocked(getActiveRoadIncidents).mockResolvedValueOnce([
+      {
+        incidentId: "far",
+        title: "道路施工",
+        severity: "advisory",
+        location: { lat: 25.053, lng: 121.51 },
+      },
+      {
+        incidentId: "near",
+        title: "道路施工",
+        description: "道路維護",
+        severity: "closure",
+        roadClosed: true,
+        endTime: "2026-12-31T23:59:59+08:00",
+        location: { lat: 25.06, lng: 121.51 },
+        points: [
+          { lat: 25.06, lng: 121.51 },
+          { lat: 25.0501, lng: 121.51 },
+        ],
+      },
+      {
+        incidentId: "out",
+        title: "道路施工",
+        severity: "advisory",
+        location: { lat: 25.2, lng: 121.51 },
+      },
+    ]);
+
+    const result = JSON.parse(
+      await getNearbyHazards({ latitude: 25.05, longitude: 121.51 }),
+    );
+
+    expect(result.data.total).toBe(2);
+    expect(result.data.roadEvents).toEqual([
+      expect.objectContaining({
+        source: "government",
+        hazardType: "construction",
+        severity: "closure",
+        roadClosed: true,
+        location: { lat: 25.0501, lng: 121.51 },
+        distanceM: 11,
+      }),
+      expect.objectContaining({ title: "道路施工", distanceM: 334 }),
+    ]);
+  });
+
+  it("篩選非施工類型時不回傳政府施工事件", async () => {
+    mockHazardFindNearby.mockResolvedValue(hazardResult);
+    const result = JSON.parse(
+      await getNearbyHazards({
+        latitude: 25.05,
+        longitude: 121.51,
+        hazardType: "data_error",
+      }),
+    );
+    expect(result.data.roadEvents).toEqual([]);
+    expect(getActiveRoadIncidents).not.toHaveBeenCalledWith(expect.anything());
+  });
 
   it("用經緯度查詢成功", async () => {
     mockHazardFindNearby.mockResolvedValue(hazardResult);
@@ -1732,4 +1797,89 @@ describe("bindLineAccountCode agent tool", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toContain("找不到可用的 LINE 帳號綁定碼");
   });
+});
+
+describe("agent transit preference declarations", () => {
+  it.each(["planAccessibleRoute", "getNavInstructions"])(
+    "%s declares the metro preference enum",
+    async (name) => {
+      const { openAiChatTools } = await import("../../config/ai/tool");
+      const tool = openAiChatTools.find(
+        (t) => t.type === "function" && t.function.name === name,
+      );
+      const props = (tool as any).function.parameters.properties;
+      expect(props.transitPreference.enum).toEqual([
+        "none",
+        "bus",
+        "rail",
+        "metro",
+      ]);
+    },
+  );
+});
+
+describe("agent route administrative city", () => {
+  it("preserves explicit null city without failing or inventing an administrative area", async () => {
+    mockPlanRoute.mockResolvedValue({
+      ok: true,
+      data: {
+        origin: { lat: 25.04, lng: 121.56 },
+        destination: { lat: 25.03, lng: 121.55 },
+        city: null,
+        routes: [],
+      },
+    });
+
+    const result = JSON.parse(
+      await executeLocalTool("planAccessibleRoute", {
+        origin: "起點",
+        destination: "終點",
+      }),
+    );
+
+    expect(result).toMatchObject({ ok: true, city: null, routes: [] });
+    expect(result).toHaveProperty("city");
+  });
+});
+
+describe("agent transit preference dispatch", () => {
+  it.each(["planAccessibleRoute", "getNavInstructions"])(
+    "forwards preferences through %s",
+    async (tool) => {
+      mockPlanRoute.mockResolvedValue({
+        ok: false,
+        error: "no route in fixture",
+      });
+      for (const transitPreference of ["bus", "rail", "metro", "none"]) {
+        await executeLocalTool(
+          tool,
+          {
+            origin: "台北車站",
+            destination: "板橋車站",
+            mode: "wheelchair",
+            transitPreference,
+          },
+          undefined,
+        );
+        expect(mockPlanRoute).toHaveBeenLastCalledWith(
+          expect.objectContaining({ transitPreference, mode: "wheelchair" }),
+        );
+      }
+    },
+  );
+  it.each(["planAccessibleRoute", "getNavInstructions"])(
+    "rejects unsupported model output in %s before planning",
+    async (tool) => {
+      mockPlanRoute.mockClear();
+      const result = JSON.parse(
+        await executeLocalTool(
+          tool,
+          { origin: "A", destination: "B", transitPreference: "subway" },
+          undefined,
+        ),
+      );
+      expect(result.ok).toBe(false);
+      expect(mockPlanRoute).not.toHaveBeenCalled();
+    },
+  );
 });

@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "regression-elderly-26",
+      "county": "TNN",
+      "band": "5-20km",
+      "need": "elderly",
+      "mode": "elderly",
+      "avoidStairs": null,
+      "travel": "transit",
+      "slot": "weekday-12:30",
+      "departure": "2026-10-05T12:30:00+08:00",
+      "origin": [23.091119, 120.08977],
+      "destination": [23.233431, 120.097114],
+      "straight_km": 15.84,
+      "repeat": 1,
+      "known_feasible": true,
+      "evidence": {
+        "observed_on": "2026-10-02",
+        "baseline_case_id": 26,
+        "baseline_http": 200,
+        "baseline_usable_routes": 1,
+        "next_service_departure": "2026-10-06T06:40:00+08:00",
+        "note": "Exact historical request; baseline returned a usable route and the next-day service was independently observed. Unknown walk accessibility is not a traversability guarantee. Do not rebase the date while retaining this evidence."
+      }
+    },
+    {
+      "id": "regression-elderly-66",
+      "county": "TNN",
+      "band": "5-20km",
+      "need": "elderly",
+      "mode": "elderly",
+      "avoidStairs": null,
+      "travel": "transit",
+      "slot": "weekday-12:30",
+      "departure": "2026-10-05T12:30:00+08:00",
+      "origin": [23.152294, 120.106988],
+      "destination": [23.233809, 120.097158],
+      "straight_km": 9.12,
+      "repeat": 1,
+      "known_feasible": true,
+      "evidence": {
+        "observed_on": "2026-10-02",
+        "baseline_case_id": 66,
+        "baseline_http": 200,
+        "baseline_usable_routes": 1,
+        "next_service_departure": "2026-10-06T06:37:00+08:00",
+        "note": "Exact historical request; baseline returned a usable route and the next-day service was independently observed. Unknown walk accessibility is not a traversability guarantee. Do not rebase the date while retaining this evidence."
+      }
+    }
+  ]
+}

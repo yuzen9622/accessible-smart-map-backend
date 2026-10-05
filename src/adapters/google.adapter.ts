@@ -1,5 +1,6 @@
 import axios from "axios";
 import { DEFAULT_LANG, type SupportedLang } from "../types/lang";
+import { TaiwanCityEn } from "../types/transit";
 
 const MAPS_KEY = () => process.env.GOOGLE_MAPS_API_KEY ?? "";
 
@@ -44,7 +45,10 @@ class TtlLruCache<V> {
 const GEOCODE_CACHE_MAX = 5000;
 const GEOCODE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
-const cityCache = new TtlLruCache<string>(
+const CITY_GEOCODE_TIMEOUT_MS = 5_000;
+const TAIWAN_CITIES = Object.values(TaiwanCityEn);
+
+const cityCache = new TtlLruCache<TaiwanCityEn>(
   GEOCODE_CACHE_MAX,
   GEOCODE_CACHE_TTL_MS,
 );
@@ -63,29 +67,66 @@ const coordsCache = new TtlLruCache<{
  *
  * @param lat Latitude
  * @param lng Longitude
- * @returns The TDX-style city name
+ * @returns A valid administrative city code, or null on missing/invalid data or failure.
  */
-export async function getCity(lat: number, lng: number): Promise<string> {
+export async function getCity(
+  lat: number,
+  lng: number,
+): Promise<TaiwanCityEn | null> {
   const key = `${lat.toFixed(4)},${lng.toFixed(4)}`;
   const hit = cityCache.get(key);
   if (hit) return hit;
 
-  const geocode = await fetch(
-    `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${MAPS_KEY()}`,
-  );
-  const data = (await geocode.json()) as any;
-  if (!data.results || data.results.length === 0) {
-    throw new Error(`Geocoding failed: ${data.status ?? "NO_RESULTS"}`);
+  try {
+    const geocode = await fetch(
+      `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${MAPS_KEY()}&language=en`,
+      { signal: AbortSignal.timeout(CITY_GEOCODE_TIMEOUT_MS) },
+    );
+    if (!geocode.ok) {
+      console.warn("[google:getCity] geocoding HTTP failure", {
+        status: geocode.status,
+      });
+      return null;
+    }
+    const data = (await geocode.json()) as {
+      status?: unknown;
+      results?: Array<{
+        address_components?: Array<{ types?: unknown; long_name?: unknown }>;
+      }>;
+    } | null;
+    if (
+      data?.status !== "OK" ||
+      !Array.isArray(data.results) ||
+      !data.results.length
+    ) {
+      console.warn("[google:getCity] geocoding returned no usable results");
+      return null;
+    }
+    const components = data.results[0]?.address_components;
+    const name: unknown = Array.isArray(components)
+      ? components.find(
+          (component) =>
+            Array.isArray(component?.types) &&
+            component.types.includes("administrative_area_level_1"),
+        )?.long_name
+      : undefined;
+    const normalized =
+      typeof name === "string"
+        ? name.replace(/\s+/g, "").replace(/City$/, "")
+        : undefined;
+    const city = TAIWAN_CITIES.find((candidate) => candidate === normalized);
+    if (!city) {
+      console.warn(
+        "[google:getCity] missing or unrecognized administrative area",
+      );
+      return null;
+    }
+    cityCache.set(key, city);
+    return city;
+  } catch {
+    console.warn("[google:getCity] geocoding request failed");
+    return null;
   }
-  const result = data.results[0].address_components
-    .find((c: any) => c.types.includes("administrative_area_level_1"))
-    ?.long_name.replace("City", "")
-    .replace(" ", "") as string;
-
-  if (result) {
-    cityCache.set(key, result);
-  }
-  return result;
 }
 
 /**

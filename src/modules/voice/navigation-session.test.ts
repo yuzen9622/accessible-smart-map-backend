@@ -872,7 +872,7 @@ describe("NavigationSession progress and ETA pushes", () => {
     vi.useFakeTimers();
     try {
       // Fix current time at 10:00:00
-      const baseTime = new Date(2026, 8, 2, 10, 0, 0);
+      const baseTime = new Date("2026-09-02T10:00:00+08:00");
       vi.setSystemTime(baseTime);
 
       const p1 = coord(121);
@@ -900,6 +900,45 @@ describe("NavigationSession progress and ETA pushes", () => {
       expect(after5Min).toBeDefined();
       // Remaining duration should decrease by ~300 seconds
       expect(after5Min?.remainingDurationSec).toBe(initialWaitAndRide - 300);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ["2026-10-01T12:17:00Z", "20:40", 23 * 60],
+    ["2026-10-01T15:55:30Z", "00:10", 14 * 60 + 30],
+  ])("uses Taipei timetable waits at %s for %s", (now, departure, waitSec) => {
+    const nowMs = Date.parse(now);
+    vi.useFakeTimers();
+    vi.setSystemTime(nowMs);
+    try {
+      const p1 = coord(121);
+      const p2 = coord(121.001);
+      const progressFor = (time: string | number) => {
+        const nav = new NavigationSession();
+        nav.armRoute(
+          identified(
+            route([
+              walkLeg([p1, p2]),
+              {
+                ...metro([p2, coord(121.01)]),
+                waitInfo: { time, source: "schedule" as const },
+                estimatedWaitMinutes: undefined,
+              },
+            ]),
+          ),
+        );
+        return progressOf(nav.start(pos(p1)))!;
+      };
+      const travelOnly = progressFor(0);
+      const scheduled = progressFor(departure);
+      expect(scheduled.remainingDurationSec).toBe(
+        travelOnly.remainingDurationSec + waitSec,
+      );
+      expect(scheduled.estimatedArrivalAt).toBe(
+        new Date(nowMs + scheduled.remainingDurationSec * 1000).toISOString(),
+      );
     } finally {
       vi.useRealTimers();
     }

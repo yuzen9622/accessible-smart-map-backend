@@ -1,6 +1,6 @@
 import Flatbush from "flatbush";
 import { haversineMeters } from "../../../../utils/geo";
-import { NODE_FLAG, type PedGraph } from "./graph.types";
+import { EDGE_TYPE, NODE_FLAG, type PedGraph } from "./graph.types";
 
 const METERS_PER_DEGREE = 110_000;
 const MIN_LONGITUDE_COSINE = 0.000_001;
@@ -248,4 +248,89 @@ export function snapToGraph(
   }
 
   return result;
+}
+
+export interface OutdoorPoint {
+  lat: number;
+  lng: number;
+  /** Request-point distance to the projected point, in metres. */
+  distanceM: number;
+}
+
+const NON_OUTDOOR_EDGE_TYPES: ReadonlySet<number> = new Set([
+  EDGE_TYPE.STEPS,
+  EDGE_TYPE.OSM_ELEVATOR,
+  EDGE_TYPE.INDOOR_WALKWAY,
+  EDGE_TYPE.INDOOR_STAIRS,
+  EDGE_TYPE.INDOOR_MOVING_WALKWAY,
+  EDGE_TYPE.INDOOR_ESCALATOR,
+  EDGE_TYPE.INDOOR_ELEVATOR,
+]);
+
+/**
+ * Closest point on an outdoor, step-free walkway segment — the street-level
+ * spot a router should start or end at. Indoor, stair and elevator edges are
+ * skipped so a coordinate above an underground concourse resolves to the
+ * street, not the concourse.
+ *
+ * @param index Flatbush-backed physical edge index.
+ * @param lat Query latitude in degrees.
+ * @param lon Query longitude in degrees.
+ * @param toleranceM Maximum distance in metres.
+ * @returns The projected point, or null when no outdoor walkway is in range.
+ */
+export function nearestOutdoorPoint(
+  index: EdgeIndex,
+  lat: number,
+  lon: number,
+  toleranceM: number,
+): OutdoorPoint | null {
+  if (
+    index.flatbush === null ||
+    !Number.isFinite(lat) ||
+    !Number.isFinite(lon) ||
+    !Number.isFinite(toleranceM) ||
+    toleranceM < 0
+  ) {
+    return null;
+  }
+  const { graph } = index;
+  const cosLat = Math.max(
+    Math.cos((lat * Math.PI) / 180),
+    MIN_LONGITUDE_COSINE,
+  );
+  let best: OutdoorPoint | null = null;
+  for (const candidate of index.flatbush.search(
+    ...queryBounds(lat, lon, toleranceM),
+  )) {
+    const fromNode = index.edgeFromNode[candidate];
+    const toNode = index.edgeToNode[candidate];
+    if (
+      ((graph.nodeFlags[fromNode] | graph.nodeFlags[toNode]) &
+        NODE_FLAG.INDOOR) !==
+        0 ||
+      NON_OUTDOOR_EDGE_TYPES.has(graph.edgeType[index.edgeAttrIdx[candidate]])
+    ) {
+      continue;
+    }
+    const ax = (graph.nodeLon[fromNode] - lon) * cosLat;
+    const ay = graph.nodeLat[fromNode] - lat;
+    const bx = (graph.nodeLon[toNode] - lon) * cosLat;
+    const by = graph.nodeLat[toNode] - lat;
+    const dx = bx - ax;
+    const dy = by - ay;
+    const lengthSq = dx * dx + dy * dy;
+    const t =
+      lengthSq === 0
+        ? 0
+        : Math.min(1, Math.max(0, -(ax * dx + ay * dy) / lengthSq));
+    const pointLat = lat + ay + t * dy;
+    const pointLng = lon + (ax + t * dx) / cosLat;
+    const distanceM = haversineMeters(lat, lon, pointLat, pointLng);
+    if (distanceM > toleranceM || (best && distanceM >= best.distanceM)) {
+      continue;
+    }
+    best = { lat: pointLat, lng: pointLng, distanceM };
+  }
+  return best;
 }

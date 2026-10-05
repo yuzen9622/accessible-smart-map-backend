@@ -1,4 +1,7 @@
 {
+  "server": {
+    "apiProcessingTimeout": "25s"
+  },
   "routingDefaults": {
     "walk": {
       "reluctance": 2.0
@@ -15,7 +18,8 @@
       "elevator": {
         "onlyConsiderAccessible": false
       },
-      "maxSlope": 0.083
+      "maxSlope": 0.083,
+      "slopeExceededReluctance": 0.1
     },
     "searchWindow": "1h",
     "numItineraries": 5,
@@ -26,6 +30,7 @@
     "streetRoutingTimeout": "2s"
   },
   "transit": {
+    "iterationDepartureStepInSeconds": 120,
     "transferCacheRequests": [
       { "modes": "WALK" },
       { "modes": "WALK", "walk": { "speed": 1.3 } },

@@ -741,3 +741,49 @@ describe("GET /api/v1/transit/bus/stop-arrivals", () => {
     expect(res.body.ok).toBe(false);
   });
 });
+
+describe("TDX extended bus directions", () => {
+  it.each([2, 10, 255])(
+    "forwards direction %i on arrival and position endpoints",
+    async (direction) => {
+      vi.mocked(busService.getBusArrivalAtStop).mockResolvedValue({
+        ok: true,
+        arrivals: [],
+      } as any);
+      vi.mocked(busService.getBusRealtimeOnRoute).mockResolvedValue({
+        ok: true,
+        buses: [],
+      } as any);
+      for (const path of ["arrival", "positions"]) {
+        const res = await request(app)
+          .get(`${BASE}/bus/${path}`)
+          .query({
+            routeName: "循環",
+            city: "台北",
+            direction: String(direction),
+            ...(path === "arrival" ? { stopName: "起站" } : {}),
+          });
+        expect(res.status).toBe(200);
+        expect(res.body.ok).toBe(true);
+      }
+      expect(busService.getBusArrivalAtStop).toHaveBeenCalledWith(
+        expect.objectContaining({ direction }),
+      );
+      expect(busService.getBusRealtimeOnRoute).toHaveBeenCalledWith(
+        expect.objectContaining({ direction }),
+      );
+    },
+  );
+
+  it("publishes the expanded direction values in generated OpenAPI", async () => {
+    const res = await request(app).get("/api/v1/openapi.json");
+    expect(res.status).toBe(200);
+    const param = res.body.paths["/transit/bus/arrival"].get.parameters.find(
+      (p: any) => p.name === "direction",
+    );
+    const values =
+      param.schema.anyOf?.flatMap((s: any) => s.enum ?? []) ??
+      param.schema.enum;
+    expect(values).toEqual([0, 1, 2, 10, 255]);
+  });
+});

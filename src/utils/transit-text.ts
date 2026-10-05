@@ -1,10 +1,16 @@
 import { NAV_MSG } from "../constants/messages";
+import { BUS_DIRECTIONS } from "../constants/bus";
 import type {
   BusApiType,
+  BusDirection,
   BusRealtimeNearbyStop,
   BusRoute,
   BusRouteQueryScope,
 } from "../types/transit";
+
+export function isBusDirection(value: unknown): value is BusDirection {
+  return BUS_DIRECTIONS.some((direction) => direction === value);
+}
 
 /**
  * Pure transit text / route helpers — stop-name normalization, route-name

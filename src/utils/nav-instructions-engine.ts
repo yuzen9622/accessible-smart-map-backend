@@ -1,4 +1,5 @@
 import { ResponseCode } from "../types/code";
+import { taipeiHHmm } from "../config/taipei-time";
 import { calcBearing, degToCompassWord, haversineCoords } from "./geo";
 import type {
   BusLeg,
@@ -621,9 +622,7 @@ function displayTime(value?: string): string {
   if (hhmm) return hhmm[0];
   const date = new Date(value);
   if (!Number.isNaN(date.getTime())) {
-    const h = String(date.getHours()).padStart(2, "0");
-    const m = String(date.getMinutes()).padStart(2, "0");
-    return `${h}:${m}`;
+    return taipeiHHmm(date);
   }
   return value;
 }

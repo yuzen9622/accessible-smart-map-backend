@@ -14,6 +14,7 @@
 
 import { decode } from "@googlemaps/polyline-codec";
 import axios from "axios";
+import { createHash } from "crypto";
 import http from "http";
 import https from "https";
 import { GtfsTrip } from "../../../model/gtfs-trip.model";
@@ -21,6 +22,7 @@ import MetroStationModel from "../../../model/metro-station.model";
 import TrainStationModel from "../../../model/train-station.model";
 import BusStopModel from "../../../model/bus-stop.model";
 import { haversineCoords } from "../../../utils/geo";
+import { redisClient, redisGet, redisSet } from "../../../config/redis";
 import {
   normalizeAbsoluteDirection,
   normalizeRelativeDirection,
@@ -28,6 +30,11 @@ import {
 import { taipeiHHmm, taipeiYmdDash } from "../../../config/taipei-time";
 import { metroLineCode } from "../../../config/transit";
 import { ROUTE_WARNING } from "../../../constants/messages";
+import {
+  preferredOtpModes,
+  reservePreferredRoute,
+  transitModeWeights,
+} from "./transit-preference";
 import { walkSpeedMps } from "../scoring";
 import {
   attachInternalSchedule,
@@ -40,6 +47,7 @@ import type {
 } from "../../../types";
 import type {
   AccessibilityMode,
+  TransitPreference,
   AccessibleRoute,
   WalkLeg,
   WalkStep,
@@ -63,10 +71,28 @@ const OTP_NUM_ITINERARIES = 8;
 const OTP_NUM_ITINERARIES_WIDE = 15;
 const OTP_SEARCH_WINDOW_S = Number(process.env.OTP_SEARCH_WINDOW_S ?? 3600);
 const OTP_SEARCH_WINDOW_WIDE_S = Number(
-  process.env.OTP_SEARCH_WINDOW_WIDE_S ?? 28800,
+  process.env.OTP_SEARCH_WINDOW_WIDE_S ?? 7200,
+);
+/** Positive whole seconds keep the time-based continuation loop advancing. */
+function positiveSeconds(value: string | undefined, fallback: number): number {
+  const seconds = Math.floor(Number(value));
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : fallback;
+}
+const OTP_CONTINUATION_WINDOW_S = positiveSeconds(
+  process.env.OTP_CONTINUATION_WINDOW_S,
+  28800,
+);
+const OTP_SEARCH_HORIZON_S = positiveSeconds(
+  process.env.OTP_SEARCH_HORIZON_S,
+  86400,
 );
 const OTP_MIN_DISTINCT_ROUTES = 3;
-const OTP_CONTINUATION_MAX_HOPS = 2;
+const OTP_PREFERRED_NUM_ITINERARIES = 3;
+const OTP_PREFERRED_SEARCH_WINDOW_S = 1200;
+const OTP_PREFERRED_BUDGET_MS = 6000;
+const OTP_WIDEN_SKIP_AFTER_MS = Number(
+  process.env.OTP_WIDEN_SKIP_AFTER_MS ?? 6_000,
+);
 
 interface OtpRoutingError {
   code: string;
@@ -76,12 +102,24 @@ interface OtpPlanAttempt {
   itineraries: OtpItinerary[];
   routingErrors: OtpRoutingError[];
   anchor: Date;
+  fromCache?: boolean;
 }
+
+interface OtpPlanResponse {
+  itineraries: OtpItinerary[];
+  routingErrors: OtpRoutingError[];
+}
+
+const OTP_PLAN_CACHE_TTL_S = Number(process.env.OTP_PLAN_CACHE_TTL_S ?? 120);
+const OTP_PLAN_CACHE_COORD_SCALE = 1e4;
+const OTP_PLAN_CACHE_TIME_BUCKET_MS = 2 * 60 * 1000;
+const otpPlanInflight = new Map<string, Promise<OtpPlanResponse>>();
 
 const OTP_TERMINAL_ROUTING_ERRORS = new Set([
   "LOCATION_NOT_FOUND",
   "OUTSIDE_BOUNDS",
 ]);
+const OTP_WALKING_BETTER_ERROR = "WALKING_BETTER_THAN_TRANSIT";
 const otpAgent = new http.Agent({ keepAlive: true });
 const otpAgentHttps = new https.Agent({ keepAlive: true });
 
@@ -244,22 +282,26 @@ function trainNoFromTripId(tripId: string): string | null {
 }
 
 /**
- * Explicit transport-mode allowlist for the OTP plan query, derived from
- * SUPPORTED_TRANSIT_MODES so the query and the downstream filter share one
- * source of truth. Requesting these instead of the broad `TRANSIT` composite
- * stops OTP from ever returning AIRPLANE/FERRY (e.g. offshore-island) legs.
+ * OTP plan query with an explicit transport-mode allowlist. The default query
+ * derives it from SUPPORTED_TRANSIT_MODES so the query and the downstream
+ * filter share one source of truth. Requesting these instead of the broad
+ * `TRANSIT` composite stops OTP from ever returning AIRPLANE/FERRY (e.g.
+ * offshore-island) legs.
+ *
+ * @param transitModes Transit modes requested alongside WALK.
+ * @returns The GraphQL plan query.
  */
-const PLAN_TRANSPORT_MODES = ["WALK", ...SUPPORTED_TRANSIT_MODES]
-  .map((mode) => `{ mode: ${mode} }`)
-  .join(", ");
-
-export const PLAN_QUERY = `
+function planQuery(transitModes: Iterable<string>): string {
+  const transportModes = ["WALK", ...transitModes]
+    .map((mode) => `{ mode: ${mode} }`)
+    .join(", ");
+  return `
 query Plan(
   $fromLat: Float!, $fromLon: Float!,
   $toLat: Float!, $toLon: Float!,
   $date: String!, $time: String!,
   $wheelchair: Boolean!, $numItineraries: Int!, $walkSpeed: Float,
-  $searchWindow: Long
+  $searchWindow: Long, $maxTransfers: Int, $modeWeight: InputModeWeight
 ) {
   plan(
     from: { lat: $fromLat, lon: $fromLon }
@@ -270,7 +312,9 @@ query Plan(
     walkSpeed: $walkSpeed
     numItineraries: $numItineraries
     searchWindow: $searchWindow
-    transportModes: [${PLAN_TRANSPORT_MODES}]
+    maxTransfers: $maxTransfers
+    modeWeight: $modeWeight
+    transportModes: [${transportModes}]
     locale: "zh-TW"
   ) {
     itineraries {
@@ -304,34 +348,55 @@ query Plan(
     routingErrors { code }
   }
 }`;
+}
 
-async function queryOtpPlan(
-  origin: { lat: number; lng: number },
-  destination: { lat: number; lng: number },
-  departure: Date,
-  wheelchair: boolean,
-  walkSpeed: number,
-  numItineraries: number,
-  searchWindowSec: number,
-): Promise<OtpPlanAttempt> {
+export const PLAN_QUERY = planQuery(SUPPORTED_TRANSIT_MODES);
+
+function otpPlanCacheEnabled(): boolean {
+  return OTP_PLAN_CACHE_TTL_S > 0 && redisClient !== null;
+}
+
+function roundForCache(point: { lat: number; lng: number }): {
+  lat: number;
+  lng: number;
+} {
+  return {
+    lat:
+      Math.round(point.lat * OTP_PLAN_CACHE_COORD_SCALE) /
+      OTP_PLAN_CACHE_COORD_SCALE,
+    lng:
+      Math.round(point.lng * OTP_PLAN_CACHE_COORD_SCALE) /
+      OTP_PLAN_CACHE_COORD_SCALE,
+  };
+}
+
+const OTP_PROCESSING_TIMEOUT = "OTP_PROCESSING_TIMEOUT";
+
+/**
+ * Error for a GraphQL error answer. OTP abandons a query at its
+ * server.apiProcessingTimeout with HTTP 200 and a "TIMEOUT!" message; that
+ * one carries a code so the search ladder stops escalating to wider, even
+ * heavier queries.
+ *
+ * @param message The first GraphQL error message.
+ * @returns The error to throw.
+ */
+function otpGraphqlError(message: string | undefined): Error {
+  const err = new Error(`OTP GraphQL: ${message ?? "unknown"}`);
+  if (message?.includes("TIMEOUT!")) {
+    Object.assign(err, { code: OTP_PROCESSING_TIMEOUT });
+  }
+  return err;
+}
+
+async function postOtpPlan(
+  variables: Record<string, unknown>,
+  query = PLAN_QUERY,
+): Promise<OtpPlanResponse> {
   const baseUrl = process.env.OTP_BASE_URL ?? "http://localhost:8080";
   const response = await otpClient.post(
     `${baseUrl}/otp/routers/default/index/graphql`,
-    {
-      query: PLAN_QUERY,
-      variables: {
-        fromLat: origin.lat,
-        fromLon: origin.lng,
-        toLat: destination.lat,
-        toLon: destination.lng,
-        date: ymdDash(departure),
-        time: hhmm(departure.getTime()),
-        wheelchair,
-        walkSpeed,
-        numItineraries,
-        searchWindow: searchWindowSec,
-      },
-    },
+    { query, variables },
   );
   const json = response.data as {
     data?: {
@@ -342,13 +407,156 @@ async function queryOtpPlan(
     };
     errors?: { message?: string }[];
   };
-  if (json.errors?.length) {
-    throw new Error(`OTP GraphQL: ${json.errors[0]?.message ?? "unknown"}`);
-  }
+  if (json.errors?.length) throw otpGraphqlError(json.errors[0]?.message);
   return {
     itineraries: json.data?.plan?.itineraries ?? [],
     routingErrors: json.data?.plan?.routingErrors ?? [],
+  };
+}
+
+/**
+ * Copy an itinerary with every leg moved later by a fixed offset.
+ *
+ * @param it The itinerary to shift.
+ * @param offsetMs Milliseconds to add to each leg's start and end.
+ * @returns The shifted itinerary.
+ */
+function shiftItinerary(it: OtpItinerary, offsetMs: number): OtpItinerary {
+  return {
+    ...it,
+    legs: it.legs.map((leg) => ({
+      ...leg,
+      startTime: leg.startTime + offsetMs,
+      endTime: leg.endTime + offsetMs,
+    })),
+  };
+}
+
+/**
+ * Plan query through the Redis result cache and an in-process single-flight.
+ * Only successful responses are cached; timeouts and GraphQL errors propagate
+ * uncached.
+ *
+ * @param variables The GraphQL variables; the cache key is derived from them.
+ * @param transitModes Restricted transit modes, or undefined for the default
+ *   allowlist; part of the cache key when present.
+ * @returns The plan response and whether OTP was skipped.
+ */
+async function cachedOtpPlan(
+  variables: Record<string, unknown>,
+  transitModes?: string[],
+): Promise<{ response: OtpPlanResponse; fromCache: boolean }> {
+  const key = `otp:plan:v1:${createHash("sha1")
+    .update(
+      JSON.stringify(transitModes ? { ...variables, transitModes } : variables),
+    )
+    .digest("hex")}`;
+  const hit = await redisGet(key);
+  if (hit) {
+    try {
+      return { response: JSON.parse(hit) as OtpPlanResponse, fromCache: true };
+    } catch {
+      /* corrupt entry: refetch */
+    }
+  }
+  const pending = otpPlanInflight.get(key);
+  if (pending) {
+    return { response: structuredClone(await pending), fromCache: true };
+  }
+
+  const request = postOtpPlan(
+    variables,
+    transitModes ? planQuery(transitModes) : PLAN_QUERY,
+  )
+    .then((response) => {
+      void redisSet(key, JSON.stringify(response), OTP_PLAN_CACHE_TTL_S);
+      return response;
+    })
+    .finally(() => otpPlanInflight.delete(key));
+  otpPlanInflight.set(key, request);
+  return { response: structuredClone(await request), fromCache: false };
+}
+
+/**
+ * One OTP plan query. With the result cache enabled the endpoints are rounded
+ * to 4 decimals (~11 m) and the departure floored to a 2-minute bucket, both
+ * for the key and for the query itself. Transit itineraries starting before the
+ * real departure are dropped; walk-only itineraries carry no timetable, so they
+ * are shifted to start at the real departure instead.
+ *
+ * @param origin The origin point.
+ * @param destination The destination point.
+ * @param departure The requested departure time.
+ * @param wheelchair Whether to request wheelchair-accessible routing.
+ * @param walkSpeed Walking speed in m/s.
+ * @param numItineraries How many itineraries to request.
+ * @param searchWindowSec The search window in seconds.
+ * @param maxTransfers The transfer cap OTP searches up to, or undefined for
+ *   OTP's own default. OTP's `maxTransfers` argument bounds the number of
+ *   rides (measured: 2 admits bus+rail but never bus+rail+bus), so the cap is
+ *   sent as transfers + 1.
+ * @param transitPreference Soft preference sent as OTP mode weights.
+ * @param transitModes Restricts the transit modes searched, or undefined for
+ *   every supported mode.
+ * @returns The attempt, anchored at the requested departure.
+ */
+async function queryOtpPlan(
+  origin: { lat: number; lng: number },
+  destination: { lat: number; lng: number },
+  departure: Date,
+  wheelchair: boolean,
+  walkSpeed: number,
+  numItineraries: number,
+  searchWindowSec: number,
+  maxTransfers?: number,
+  transitPreference?: TransitPreference,
+  transitModes?: string[],
+): Promise<OtpPlanAttempt> {
+  const cacheOn = otpPlanCacheEnabled();
+  const from = cacheOn ? roundForCache(origin) : origin;
+  const to = cacheOn ? roundForCache(destination) : destination;
+  const queryTime = cacheOn
+    ? new Date(
+        Math.floor(departure.getTime() / OTP_PLAN_CACHE_TIME_BUCKET_MS) *
+          OTP_PLAN_CACHE_TIME_BUCKET_MS,
+      )
+    : departure;
+  const variables = {
+    fromLat: from.lat,
+    fromLon: from.lng,
+    toLat: to.lat,
+    toLon: to.lng,
+    date: ymdDash(queryTime),
+    time: hhmm(queryTime.getTime()),
+    wheelchair,
+    walkSpeed,
+    numItineraries,
+    searchWindow: searchWindowSec,
+    maxTransfers: maxTransfers === undefined ? undefined : maxTransfers + 1,
+    modeWeight: transitModeWeights(transitPreference),
+  };
+
+  if (!cacheOn) {
+    return {
+      ...(await postOtpPlan(
+        variables,
+        transitModes ? planQuery(transitModes) : PLAN_QUERY,
+      )),
+      anchor: departure,
+    };
+  }
+  const { response, fromCache } = await cachedOtpPlan(variables, transitModes);
+  const departureMs = departure.getTime();
+  return {
+    itineraries: response.itineraries.flatMap((it) => {
+      const startTime = it.legs[0]?.startTime ?? Infinity;
+      if (startTime >= departureMs) return [it];
+      if (it.legs.some(isTransitLeg)) return [];
+      return [shiftItinerary(it, departureMs - startTime)];
+    }),
+    routingErrors: response.routingErrors,
     anchor: departure,
+    fromCache,
   };
 }
 
@@ -427,9 +635,7 @@ async function queryOtpWalk(
     data?: { plan?: { itineraries?: OtpItinerary[] } };
     errors?: { message?: string }[];
   };
-  if (json.errors?.length) {
-    throw new Error(`OTP GraphQL: ${json.errors[0]?.message ?? "unknown"}`);
-  }
+  if (json.errors?.length) throw otpGraphqlError(json.errors[0]?.message);
   return json.data?.plan?.itineraries ?? [];
 }
 
@@ -851,7 +1057,10 @@ function transitLegFrom(
 
   const system = systemFromId(routeId);
   const isMetro =
-    leg.mode === "SUBWAY" || leg.mode === "TRAM" || METRO_SYSTEMS.has(system);
+    leg.mode === "SUBWAY" ||
+    leg.mode === "TRAM" ||
+    leg.mode === "MONORAIL" ||
+    METRO_SYSTEMS.has(system);
   const isThsr =
     agencyId === "THSR" || system === "THSR" || tripId.startsWith("THSR");
   const isRail = leg.mode === "RAIL" || isThsr || system === "TRA";
@@ -937,6 +1146,7 @@ function transitLegFrom(
 
   return {
     type: "BUS",
+    rideMinutes,
     routeName,
     subRouteUid: busSubRouteUid(routeId),
     subRouteName: leg.route?.longName || routeName,
@@ -978,15 +1188,93 @@ function itineraryUsable(it: OtpItinerary, maxTransfers?: number): boolean {
   return true;
 }
 
+/** Match the WALK mapper's confirmed-stairs feature without treating missing data as stairs. */
+function itineraryMeetsStairsConstraint(
+  itinerary: OtpItinerary,
+  avoidStairs: boolean,
+): boolean {
+  return (
+    !avoidStairs ||
+    !itinerary.legs.some(
+      (leg) =>
+        leg.mode === "WALK" &&
+        leg.steps?.some((step) => step.feature?.__typename === "StairsUse"),
+    )
+  );
+}
+
+const OTP_OUTAGE_ERROR_CODES = new Set([
+  "ECONNABORTED",
+  "ETIMEDOUT",
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "EPIPE",
+  "ERR_NETWORK",
+]);
+
+/**
+ * Whether a failed plan query means OTP itself is unreachable or broken, as
+ * opposed to OTP answering this one query with an error. Only outages may
+ * trip the shared breaker: one pathological query (OTP abandons it at its own
+ * apiProcessingTimeout) must not black out transit planning for every user.
+ *
+ * @param err The error thrown by the plan query.
+ * @returns True for network failures, client timeouts and HTTP 5xx.
+ */
+function isOtpOutage(err: unknown): boolean {
+  const candidate = err as {
+    code?: unknown;
+    response?: { status?: unknown };
+  } | null;
+  if (
+    typeof candidate?.code === "string" &&
+    OTP_OUTAGE_ERROR_CODES.has(candidate.code)
+  ) {
+    return true;
+  }
+  const status = candidate?.response?.status;
+  return typeof status === "number" && status >= 500;
+}
+
 function isTimeout(err: unknown): boolean {
   const code = (err as { code?: string } | null)?.code;
   return code === "ECONNABORTED" || code === "ETIMEDOUT";
+}
+
+function isOtpProcessingTimeout(err: unknown): boolean {
+  return (err as { code?: string } | null)?.code === OTP_PROCESSING_TIMEOUT;
 }
 
 function hasTerminalRoutingError(attempt: OtpPlanAttempt): boolean {
   return attempt.routingErrors.some((error) =>
     OTP_TERMINAL_ROUTING_ERRORS.has(error.code),
   );
+}
+
+/**
+ * Wait for a promise up to a time budget without cancelling it.
+ *
+ * @param promise The promise to wait for; it must not reject.
+ * @param budgetMs Maximum wait in milliseconds.
+ * @returns The settled value, or undefined when the budget elapsed first.
+ */
+async function settleWithin<T>(
+  promise: Promise<T>,
+  budgetMs: number,
+): Promise<T | undefined> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), budgetMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export type OtpRoutePlanResult =
@@ -1009,10 +1297,21 @@ export async function planOtpRoute(
  * Plan transit routes via the OTP2 sidecar with an explicit terminal outcome.
  * Output routes remain AccessibleRoute-compatible and un-enriched —
  * finalizeRoutes() handles scoring, enrichment and overlays downstream. The
- * existing query ladder, schedule semantics, and route ordering are retained.
+ * existing query ladder, schedule semantics, and route ordering are retained,
+ * except that a primary answer flagged WALKING_BETTER_THAN_TRANSIT with a
+ * usable walk-only itinerary settles the search without widening, snapping or
+ * continuing; a primary that already holds a transit route satisfying the
+ * known stairs constraint but took
+ * OTP_WIDEN_SKIP_AFTER_MS or longer skips the diversity widening, which costs
+ * about twice the primary; `skipLaterService` drops the wide-window and
+ * continuation searches but keeps the stop-snap retry, and so does OTP
+ * abandoning any query at its processing timeout — a wider window would only
+ * cost more, while snapped endpoints can still link a badly placed point.
  * Upstream request failures are reported as unavailable only when no usable
  * route survives; a continuation failure may therefore preserve an existing
- * transit or walk-fallback route.
+ * transit or walk-fallback route. Later searches cover an absolute departure
+ * horizon, independent of the quick-search window sizes. A stairs-only answer
+ * remains a fallback, but cannot stop the search for a step-free alternative.
  *
  * @param origin The [lat, lng] origin.
  * @param destination The [lat, lng] destination.
@@ -1030,6 +1329,13 @@ export async function planOtpRouteDetailed(
   const mode = opts?.mode ?? "normal";
   const wheelchair = opts?.avoidStairs ?? mode === "wheelchair";
   const walkSpeed = walkSpeedMps(mode);
+  const maxTransfers = opts?.maxTransfers;
+  const initialWindowSec = Math.min(OTP_SEARCH_WINDOW_S, OTP_SEARCH_HORIZON_S);
+  const wideWindowSec = Math.min(
+    OTP_SEARCH_WINDOW_WIDE_S,
+    OTP_SEARCH_HORIZON_S,
+  );
+  const searchEndMs = departure.getTime() + OTP_SEARCH_HORIZON_S * 1000;
 
   const tm: Record<string, number> = {};
   const t0 = Date.now();
@@ -1048,6 +1354,7 @@ export async function planOtpRouteDetailed(
   };
   let primarySucceeded = false;
   let primaryTimedOut = false;
+  let otpGaveUp = false;
   try {
     firstAttempt = await queryOtpPlan(
       origin,
@@ -1056,14 +1363,18 @@ export async function planOtpRouteDetailed(
       wheelchair,
       walkSpeed,
       OTP_NUM_ITINERARIES,
-      OTP_SEARCH_WINDOW_S,
+      initialWindowSec,
+      maxTransfers,
+      opts?.transitPreference,
     );
     primarySucceeded = true;
-    planBreaker.recordSuccess();
+    if (firstAttempt.fromCache) tm.otpCacheHits = 1;
+    else planBreaker.recordSuccess();
   } catch (err) {
     sawUpstreamFailure = true;
-    recordPlanFailure();
+    if (isOtpOutage(err)) recordPlanFailure();
     primaryTimedOut = isTimeout(err);
+    otpGaveUp = isOtpProcessingTimeout(err);
     if (primaryTimedOut) {
       tm.primaryTimedOut = 1;
       console.warn("[otp-routing] primary query timed out", err);
@@ -1084,12 +1395,11 @@ export async function planOtpRouteDetailed(
   }
   let itineraries = firstAttempt.itineraries;
   let selectedAttempt = firstAttempt;
-  let effectiveWindowSec = OTP_SEARCH_WINDOW_S;
-  let originalSearchWindowSec = primarySucceeded ? OTP_SEARCH_WINDOW_S : 0;
+  let effectiveWindowSec = initialWindowSec;
+  let originalSearchWindowSec = primarySucceeded ? initialWindowSec : 0;
   let sawTerminalRoutingError =
     primarySucceeded && hasTerminalRoutingError(firstAttempt);
 
-  const maxTransfers = opts?.maxTransfers;
   let snapPre: WalkLeg | null = null;
   let snapPost: WalkLeg | null = null;
   let walkFallbackAttempt: OtpPlanAttempt | null = null;
@@ -1099,19 +1409,61 @@ export async function planOtpRouteDetailed(
     its.some(
       (it) => it.legs.some(isTransitLeg) && itineraryUsable(it, maxTransfers),
     );
+  const hasSearchEligibleTransit = (its: OtpItinerary[]) =>
+    its.some(
+      (it) =>
+        it.legs.some(isTransitLeg) &&
+        itineraryUsable(it, maxTransfers) &&
+        itineraryMeetsStairsConstraint(it, wheelchair),
+    );
+
+  // Keep a usable but stairs-only result for the existing degraded response
+  // when no step-free answer exists anywhere in the covered horizon.
+  const retainContinuation = (
+    attempt: OtpPlanAttempt,
+    pre: WalkLeg | null,
+    post: WalkLeg | null,
+  ): boolean => {
+    const eligible = hasSearchEligibleTransit(attempt.itineraries);
+    if (
+      eligible ||
+      (!hasUsableTransit(itineraries) && hasUsableTransit(attempt.itineraries))
+    ) {
+      itineraries = attempt.itineraries;
+      selectedAttempt = attempt;
+      snapPre = pre;
+      snapPost = post;
+    }
+    return eligible;
+  };
 
   const rememberOriginalWalkFallback = (attempt: OtpPlanAttempt) => {
-    if (walkFallbackItineraries.length) return;
+    // Preserve the earliest fallback unless the stairs constraint requires
+    // replacing an entirely stairs-only answer with a step-free one.
+    if (
+      walkFallbackItineraries.length &&
+      (!wheelchair ||
+        walkFallbackItineraries.some((it) =>
+          itineraryMeetsStairsConstraint(it, wheelchair),
+        ))
+    )
+      return;
     const walkOnly = attempt.itineraries.filter(
       (it) => !it.legs.some(isTransitLeg) && itineraryUsable(it, maxTransfers),
     );
     if (!walkOnly.length) return;
+    if (
+      walkFallbackItineraries.length &&
+      !walkOnly.some((it) => itineraryMeetsStairsConstraint(it, wheelchair))
+    )
+      return;
     walkFallbackAttempt = attempt;
     walkFallbackItineraries = walkOnly;
   };
 
   const observeAttempt = (attempt: OtpPlanAttempt) => {
     sawTerminalRoutingError ||= hasTerminalRoutingError(attempt);
+    if (attempt.fromCache) tm.otpCacheHits = (tm.otpCacheHits ?? 0) + 1;
   };
 
   const hasBusLeg = (its: OtpItinerary[]) =>
@@ -1119,10 +1471,70 @@ export async function planOtpRouteDetailed(
 
   if (primarySucceeded) rememberOriginalWalkFallback(firstAttempt);
 
-  if (primarySucceeded && !sawTerminalRoutingError) {
+  const walkSettled =
+    primarySucceeded &&
+    walkFallbackItineraries.some((it) =>
+      itineraryMeetsStairsConstraint(it, wheelchair),
+    ) &&
+    firstAttempt.routingErrors.some(
+      (error) => error.code === OTP_WALKING_BETTER_ERROR,
+    );
+  if (walkSettled) tm.walkSettled = 1;
+
+  const laterServiceAllowed = !walkSettled && !opts?.skipLaterService;
+
+  // A soft preference cannot surface a mode OTP never returned, so a primary
+  // answer without it starts one small preferred-only search that runs
+  // alongside the ladder below and is awaited only within a fixed budget.
+  const preferredModes = preferredOtpModes(opts?.transitPreference);
+  const ridesPreferred = (it: OtpItinerary) =>
+    !!preferredModes &&
+    it.legs.some((leg) => preferredModes.includes(leg.mode)) &&
+    itineraryUsable(it, maxTransfers) &&
+    itineraryMeetsStairsConstraint(it, wheelchair);
+  let preferredSearch: Promise<OtpItinerary[]> | undefined;
+  if (
+    preferredModes &&
+    primarySucceeded &&
+    !walkSettled &&
+    !sawTerminalRoutingError &&
+    (opts?.limit ?? OTP_NUM_ITINERARIES_WIDE) > 1 &&
+    !firstAttempt.itineraries.some(ridesPreferred)
+  ) {
+    const tPreferred = Date.now();
+    preferredSearch = queryOtpPlan(
+      origin,
+      destination,
+      departure,
+      wheelchair,
+      walkSpeed,
+      OTP_PREFERRED_NUM_ITINERARIES,
+      OTP_PREFERRED_SEARCH_WINDOW_S,
+      maxTransfers,
+      undefined,
+      preferredModes,
+    )
+      .then((attempt) => {
+        tm.otpPreferred = Date.now() - tPreferred;
+        return attempt.itineraries.filter(ridesPreferred);
+      })
+      .catch((err) => {
+        console.warn(
+          "[otp-routing] preferred-mode query failed (fail-soft)",
+          err,
+        );
+        return [];
+      });
+  }
+
+  if (primarySucceeded && !sawTerminalRoutingError && laterServiceAllowed) {
     const distinctRouteSignatures = new Set(
       itineraries
-        .filter((it) => itineraryUsable(it, maxTransfers))
+        .filter(
+          (it) =>
+            itineraryUsable(it, maxTransfers) &&
+            itineraryMeetsStairsConstraint(it, wheelchair),
+        )
         .map((it) =>
           it.legs
             .filter(isTransitLeg)
@@ -1131,7 +1543,13 @@ export async function planOtpRouteDetailed(
         )
         .filter(Boolean),
     ).size;
-    if (distinctRouteSignatures < OTP_MIN_DISTINCT_ROUTES) {
+    const slowWithAnswer =
+      tm.otpFirst >= OTP_WIDEN_SKIP_AFTER_MS &&
+      hasSearchEligibleTransit(itineraries);
+    if (slowWithAnswer && distinctRouteSignatures < OTP_MIN_DISTINCT_ROUTES) {
+      tm.wideSkipped = 1;
+    }
+    if (distinctRouteSignatures < OTP_MIN_DISTINCT_ROUTES && !slowWithAnswer) {
       const tWide = Date.now();
       try {
         const wideAttempt = await queryOtpPlan(
@@ -1141,26 +1559,34 @@ export async function planOtpRouteDetailed(
           wheelchair,
           walkSpeed,
           OTP_NUM_ITINERARIES_WIDE,
-          OTP_SEARCH_WINDOW_WIDE_S,
+          wideWindowSec,
+          maxTransfers,
+          opts?.transitPreference,
         );
         observeAttempt(wideAttempt);
         rememberOriginalWalkFallback(wideAttempt);
         if (
-          hasUsableTransit(wideAttempt.itineraries) ||
-          !hasUsableTransit(itineraries)
+          hasSearchEligibleTransit(wideAttempt.itineraries) ||
+          !hasUsableTransit(itineraries) ||
+          (!hasSearchEligibleTransit(itineraries) &&
+            hasUsableTransit(wideAttempt.itineraries))
         ) {
           itineraries = wideAttempt.itineraries;
           selectedAttempt = wideAttempt;
         }
-        effectiveWindowSec = OTP_SEARCH_WINDOW_WIDE_S;
-        originalSearchWindowSec = OTP_SEARCH_WINDOW_WIDE_S;
-        planBreaker.recordSuccess();
+        effectiveWindowSec = wideWindowSec;
+        originalSearchWindowSec = Math.max(
+          originalSearchWindowSec,
+          wideWindowSec,
+        );
+        if (!wideAttempt.fromCache) planBreaker.recordSuccess();
         tm.otpWide = Date.now() - tWide;
       } catch (err) {
         sawUpstreamFailure = true;
         tm.otpWide = Date.now() - tWide;
+        otpGaveUp ||= isOtpProcessingTimeout(err);
         if (isTimeout(err)) {
-          recordPlanFailure();
+          if (isOtpOutage(err)) recordPlanFailure();
           tm.primaryTimedOut = 1;
           console.warn("[otp-routing] wide query timed out", err);
         } else {
@@ -1179,17 +1605,19 @@ export async function planOtpRouteDetailed(
   );
   const needBusSnap =
     !sawTerminalRoutingError &&
-    (!hasUsableTransit(itineraries) ||
+    !walkSettled &&
+    (!hasSearchEligibleTransit(itineraries) ||
       (straightDistM <= 3500 && !hasBusLeg(itineraries)));
   let snappedOrigin: { lat: number; lng: number } | null = null;
   let snappedDestination: { lat: number; lng: number } | null = null;
   let pendingSnapPre: WalkLeg | null = null;
   let pendingSnapPost: WalkLeg | null = null;
-  let continuationAllowed = true;
+  let continuationAllowed = laterServiceAllowed && !otpGaveUp;
 
   if (needBusSnap) {
     const tSnap = Date.now();
-    const preferBus = straightDistM <= 3500 || !hasUsableTransit(itineraries);
+    const preferBus =
+      straightDistM <= 3500 || !hasSearchEligibleTransit(itineraries);
     const [originSnap, destSnap] = await Promise.all([
       findSnapStop(origin, preferBus),
       findSnapStop(destination, preferBus),
@@ -1222,11 +1650,27 @@ export async function planOtpRouteDetailed(
           walkSpeed,
           OTP_NUM_ITINERARIES,
           effectiveWindowSec,
+          maxTransfers,
+          opts?.transitPreference,
         );
         observeAttempt(retryAttempt);
         tm.otpRetry = Date.now() - tRetry;
-        if (hasUsableTransit(retryAttempt.itineraries)) {
-          if (!hasUsableTransit(itineraries)) {
+        // A second stairs-only answer cannot improve the original fallback.
+        // Retain its own geometry/anchor rather than appending snap connectors
+        // to an itinerary that was planned from the original coordinates.
+        const retainOriginalStairs =
+          hasUsableTransit(itineraries) &&
+          !hasSearchEligibleTransit(itineraries) &&
+          !hasSearchEligibleTransit(retryAttempt.itineraries);
+        if (
+          hasUsableTransit(retryAttempt.itineraries) &&
+          !retainOriginalStairs
+        ) {
+          if (
+            !hasUsableTransit(itineraries) ||
+            (!hasSearchEligibleTransit(itineraries) &&
+              hasSearchEligibleTransit(retryAttempt.itineraries))
+          ) {
             itineraries = retryAttempt.itineraries;
             selectedAttempt = retryAttempt;
           } else {
@@ -1243,7 +1687,7 @@ export async function planOtpRouteDetailed(
         }
       } catch (err) {
         sawUpstreamFailure = true;
-        recordPlanFailure();
+        if (isOtpOutage(err)) recordPlanFailure();
         continuationAllowed = false;
         if (isTimeout(err)) {
           tm.primaryTimedOut = 1;
@@ -1258,18 +1702,20 @@ export async function planOtpRouteDetailed(
     }
   }
 
-  let continuationHops = 0;
   let nextContinuationAnchor = new Date(
     departure.getTime() + originalSearchWindowSec * 1000,
   );
   while (
     continuationAllowed &&
-    !hasUsableTransit(itineraries) &&
+    !hasSearchEligibleTransit(itineraries) &&
     !sawTerminalRoutingError &&
-    continuationHops < OTP_CONTINUATION_MAX_HOPS
+    nextContinuationAnchor.getTime() < searchEndMs
   ) {
-    continuationHops++;
     const nextAnchor = nextContinuationAnchor;
+    const continuationWindowSec = Math.min(
+      OTP_CONTINUATION_WINDOW_S,
+      (searchEndMs - nextAnchor.getTime()) / 1000,
+    );
     let originalContinuationAttempt: OtpPlanAttempt;
     try {
       originalContinuationAttempt = await queryOtpPlan(
@@ -1279,23 +1725,19 @@ export async function planOtpRouteDetailed(
         wheelchair,
         walkSpeed,
         OTP_NUM_ITINERARIES_WIDE,
-        OTP_SEARCH_WINDOW_WIDE_S,
+        continuationWindowSec,
+        maxTransfers,
+        opts?.transitPreference,
       );
       observeAttempt(originalContinuationAttempt);
       rememberOriginalWalkFallback(originalContinuationAttempt);
-      planBreaker.recordSuccess();
-      if (hasUsableTransit(originalContinuationAttempt.itineraries)) {
-        itineraries = originalContinuationAttempt.itineraries;
-        selectedAttempt = originalContinuationAttempt;
-        snapPre = null;
-        snapPost = null;
-        break;
-      }
+      if (!originalContinuationAttempt.fromCache) planBreaker.recordSuccess();
+      if (retainContinuation(originalContinuationAttempt, null, null)) break;
       if (sawTerminalRoutingError) break;
     } catch (err) {
       sawUpstreamFailure = true;
       if (isTimeout(err)) {
-        recordPlanFailure();
+        if (isOtpOutage(err)) recordPlanFailure();
         console.warn("[otp-routing] continuation query timed out", err);
       } else {
         console.warn("[otp-routing] continuation query failed", err);
@@ -1312,22 +1754,25 @@ export async function planOtpRouteDetailed(
           wheelchair,
           walkSpeed,
           OTP_NUM_ITINERARIES_WIDE,
-          OTP_SEARCH_WINDOW_WIDE_S,
+          continuationWindowSec,
+          maxTransfers,
+          opts?.transitPreference,
         );
         observeAttempt(snappedContinuationAttempt);
-        planBreaker.recordSuccess();
-        if (hasUsableTransit(snappedContinuationAttempt.itineraries)) {
-          itineraries = snappedContinuationAttempt.itineraries;
-          selectedAttempt = snappedContinuationAttempt;
-          snapPre = pendingSnapPre;
-          snapPost = pendingSnapPost;
+        if (!snappedContinuationAttempt.fromCache) planBreaker.recordSuccess();
+        if (
+          retainContinuation(
+            snappedContinuationAttempt,
+            pendingSnapPre,
+            pendingSnapPost,
+          )
+        )
           break;
-        }
         if (sawTerminalRoutingError) break;
       } catch (err) {
         sawUpstreamFailure = true;
         if (isTimeout(err)) {
-          recordPlanFailure();
+          if (isOtpOutage(err)) recordPlanFailure();
           console.warn("[otp-routing] continuation snap query timed out", err);
         } else {
           console.warn("[otp-routing] continuation snap query failed", err);
@@ -1337,7 +1782,7 @@ export async function planOtpRouteDetailed(
     }
 
     nextContinuationAnchor = new Date(
-      nextAnchor.getTime() + OTP_SEARCH_WINDOW_WIDE_S * 1000,
+      nextAnchor.getTime() + continuationWindowSec * 1000,
     );
   }
 
@@ -1346,6 +1791,20 @@ export async function planOtpRouteDetailed(
     selectedAttempt = walkFallbackAttempt;
     snapPre = null;
     snapPost = null;
+  }
+
+  // Preferred-only itineraries were planned from the original endpoints at
+  // the requested departure, so they take neither snap connectors nor the
+  // selected attempt's future-schedule anchor.
+  const preferredExtras = new Set<OtpItinerary>();
+  if (preferredSearch) {
+    const found = await settleWithin(
+      preferredSearch,
+      Math.max(0, OTP_PREFERRED_BUDGET_MS - (Date.now() - t0)),
+    );
+    if (found === undefined) tm.preferredSkipped = 1;
+    for (const it of found ?? []) preferredExtras.add(it);
+    itineraries = [...itineraries, ...preferredExtras];
   }
 
   const allTripIds = [
@@ -1368,6 +1827,10 @@ export async function planOtpRouteDetailed(
   for (const [i, it] of itineraries.entries()) {
     if (!itineraryUsable(it, maxTransfers)) continue;
     const transitOtpLegs = it.legs.filter(isTransitLeg);
+    const preferredExtra = preferredExtras.has(it);
+    const pre = preferredExtra ? null : snapPre;
+    const post = preferredExtra ? null : snapPost;
+    const futureScheduled = isFutureScheduled && !preferredExtra;
 
     const legs: (WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg)[] = [];
     const transitLegs: (BusLeg | MetroLeg | ThsrLeg | TraLeg)[] = [];
@@ -1377,8 +1840,8 @@ export async function planOtpRouteDetailed(
       if (!isTransitLeg(leg)) {
         if ((leg.distance ?? 0) > 0) {
           const wl = walkLegFrom(leg, j === 0, j === it.legs.length - 1);
-          if (j === 0 && snapPre) wl.from = snapPre.to;
-          if (j === it.legs.length - 1 && snapPost) wl.to = snapPost.from;
+          if (j === 0 && pre) wl.from = pre.to;
+          if (j === it.legs.length - 1 && post) wl.to = post.from;
           legs.push(wl);
         }
         clockMs = leg.endTime;
@@ -1390,7 +1853,7 @@ export async function planOtpRouteDetailed(
       );
       const mapped = transitLegFrom(
         leg,
-        isFutureScheduled && transitLegIndex === 0 ? undefined : waitMinutes,
+        futureScheduled && transitLegIndex === 0 ? undefined : waitMinutes,
         directions,
       );
       transitLegIndex++;
@@ -1418,10 +1881,9 @@ export async function planOtpRouteDetailed(
         ? ymdDash(new Date(transitOtpLegs[0].startTime))
         : queryDate;
 
-    if (snapPre) legs.unshift({ ...snapPre });
-    if (snapPost) legs.push({ ...snapPost });
-    const snapMinutes =
-      (snapPre?.minutesEst ?? 0) + (snapPost?.minutesEst ?? 0);
+    if (pre) legs.unshift({ ...pre });
+    if (post) legs.push({ ...post });
+    const snapMinutes = (pre?.minutesEst ?? 0) + (post?.minutesEst ?? 0);
 
     const tripIdToken =
       transitOtpLegs.length > 0
@@ -1434,7 +1896,7 @@ export async function planOtpRouteDetailed(
       selectedAttempt.anchor.getTime();
     const scheduledEndTime =
       (it.legs[it.legs.length - 1]?.endTime ?? scheduledDepartureTime) +
-      (snapPost?.minutesEst ?? 0) * 60_000;
+      (post?.minutesEst ?? 0) * 60_000;
     const route = {
       routeId: `otp-${i}-${tripIdToken}`,
       routeName,
@@ -1449,7 +1911,7 @@ export async function planOtpRouteDetailed(
         route,
         scheduledDepartureTime,
         scheduledEndTime,
-        isFutureScheduled,
+        futureScheduled,
       ),
     );
   }
@@ -1463,10 +1925,13 @@ export async function planOtpRouteDetailed(
     }),
   );
   const ordered = wheelchair ? rankByStairs(out) : out;
-  const routes = retainEarliestFutureRoute(
+  const limit = opts?.limit ?? OTP_NUM_ITINERARIES_WIDE;
+  const routes = reservePreferredRoute(
+    retainEarliestFutureRoute(ordered, out, limit),
     ordered,
-    out,
-    opts?.limit ?? OTP_NUM_ITINERARIES_WIDE,
+    limit,
+    opts?.transitPreference,
+    (route) => !wheelchair || routeStairsCount(route) === 0,
   );
   if (routes.length) return { status: "ok", routes };
   if (sawTerminalRoutingError) return { status: "no_route", routes: [] };

@@ -9,9 +9,6 @@ vi.mock("../../config/ai", () => ({
 vi.mock("../../config/ai/tool", () => ({
   openAiChatTools: [],
   memoryTools: [],
-  findA11yPlacesDeclaration: {},
-  findGooglePlacesDeclaration: {},
-  planRouteDeclaration: {},
 }));
 vi.mock("../ai/agent-tools", () => ({
   executeLocalTool: vi.fn(),

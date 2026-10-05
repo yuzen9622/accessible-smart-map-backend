@@ -341,3 +341,16 @@ describe("findAccessibleRoutes transit waypoint chaining", () => {
     expect(routes[0].totalMinutes).toBe(22);
   });
 });
+
+it("passes transit preference to every waypoint segment", async () => {
+  mockPlan.mockResolvedValue(
+    otpTransitOk([walkOnlySegment("segment", 5, Date.now())]),
+  );
+  await findAccessibleRoutes(origin, destination, "Taipei", {
+    waypoints: [waypoint],
+    transitPreference: "rail",
+  });
+  expect(mockPlan).toHaveBeenCalledTimes(2);
+  for (const call of mockPlan.mock.calls)
+    expect(call[2]?.transitPreference).toBe("rail");
+});

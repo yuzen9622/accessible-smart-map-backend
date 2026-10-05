@@ -1,7 +1,7 @@
 /**
  * Paired comparison bench: pedestrian a11y engine vs the production OTP walk planner.
  *
- * Implements docs/specs/IMPL_PED_ROUTER_OTP_COMPARISON.md v1.0.0, which was frozen
+ * Implements docs/archive/specs/IMPL_PED_ROUTER_OTP_COMPARISON.md v1.0.0, which was frozen
  * before this script produced any result. Both engines receive identical OD
  * coordinates and both routes are judged by ONE cost model (this engine's), because
  * letting each engine self-assess produces incomparable numbers.

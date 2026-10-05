@@ -96,6 +96,18 @@ const GeoPointSchema = z
   })
   .openapi("GeoPoint");
 
+export const MetroOutageNoticeSchema = z
+  .object({
+    description: z.string().openapi({
+      example: "捷運板南線【頂埔站】月台電梯暫停使用，進行檢修作業",
+    }),
+    postedAt: z.string().openapi({ example: "2026-10-01T08:33:00.000Z" }),
+  })
+  .openapi("MetroOutageNotice", {
+    description:
+      "北捷無障礙設施異常公告。公告只到「站」層級，不代表這一部電梯一定故障；僅 source 為 metro 且名稱含「電梯」的項目會帶此欄位",
+  });
+
 export const A11ySchema = z
   .object({
     _id: z.string().optional().openapi({ example: "66a1f2c3e4b5a6d7c8e9f0a1" }),
@@ -120,6 +132,7 @@ export const A11ySchema = z
       example: "elevator",
       description: "source 為 osm 時的設施類別",
     }),
+    outageNotice: MetroOutageNoticeSchema.optional(),
   })
   .openapi("A11y");
 
@@ -156,6 +169,7 @@ export const A11yFacilitySchema = z
           example: "M8",
           description: "出口代號，無法解析時為 null",
         }),
+        outageNotice: MetroOutageNoticeSchema.optional(),
       })
       .strict(),
     z

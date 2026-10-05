@@ -81,7 +81,7 @@ Project specifics:
 ## 5) Enforcement (kept honest by tooling, not memory)
 
 - **Import-boundary check:** `pnpm lint:arch`
-  (`scripts/check-architecture.mjs`) — fails the build when a layer boundary is
+  (`src/scripts/check-architecture.mjs`) — fails the build when a layer boundary is
   crossed. Grandfather a not-yet-migrated file via its `ALLOWLIST`, and delete
   the entry in the same change that migrates it.
 - **Schema-as-contract:** OpenAPI docs are generated from the request schemas.

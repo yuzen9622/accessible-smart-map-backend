@@ -186,6 +186,35 @@ describe("confirmed hazard candidate planning", () => {
     });
   });
 
+  it.each(["difficult", "minor"] as const)(
+    "keeps the base rank when only a %s hazard is on route",
+    (severity) => {
+      const best = walkRoute("best-with-construction", [
+        [121, 25],
+        [121.001, 25],
+      ]);
+      const worse = walkRoute("worse-but-clear", [
+        [121, 25.002],
+        [121.001, 25.002],
+      ]);
+      const plan = planConfirmedHazardRoutes(
+        [best, worse],
+        [hazard("work-1", [121.0005, 25.00005], severity)],
+      );
+
+      expect(plan.selectionApplied).toBe(false);
+      expect(plan.routes.map((route) => route.routeId)).toEqual([
+        "best-with-construction",
+        "worse-but-clear",
+      ]);
+      expect(plan.routes[0].hazardAdvisory).toMatchObject({
+        onRoute: [{ id: "work-1", severity }],
+      });
+      expect(plan.routes[0].warnings).toContain(ROUTE_WARNING.HAZARD_ON_ROUTE);
+      expect(plan.routes[1].hazardAdvisory?.avoided).toBeUndefined();
+    },
+  );
+
   it("preserves non-enumerable schedule metadata through advisory decoration", () => {
     const affected = attachInternalSchedule(
       walkRoute("blocked-scheduled", [
@@ -309,5 +338,66 @@ describe("confirmed hazard candidate planning", () => {
     expect(noMatchPlan.routes.some((route) => route.hazardAdvisory)).toBe(
       false,
     );
+  });
+});
+
+describe("government multi-point hazards", () => {
+  const route = walkRoute("street", [
+    [121, 25],
+    [121.002, 25],
+  ]);
+  const metresNorth = (m: number) => 25 + m / 111_195;
+
+  it("matches the nearest of several sampled points and reports it", () => {
+    const [match] = matchConfirmedHazardsToRoute(route, [
+      {
+        id: "tdx:1",
+        hazardType: "construction",
+        severity: "difficult",
+        source: "government",
+        coordinates: [121.001, metresNorth(300)],
+        points: [
+          [121.001, metresNorth(300)],
+          [121.001, metresNorth(20)],
+        ],
+      },
+    ]);
+
+    expect(match).toMatchObject({ id: "tdx:1", source: "government" });
+    expect(match.location.lat).toBeCloseTo(metresNorth(20), 6);
+    expect(match.distanceM).toBeLessThan(HAZARD_ROUTE_CORRIDOR_M);
+  });
+
+  it("does not match when every sampled point is outside the corridor", () => {
+    expect(
+      matchConfirmedHazardsToRoute(route, [
+        {
+          id: "tdx:2",
+          hazardType: "construction",
+          severity: "difficult",
+          source: "government",
+          coordinates: [121.001, metresNorth(40)],
+          points: [
+            [121.001, metresNorth(40)],
+            [121.0015, metresNorth(60)],
+          ],
+        },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("labels hazards without a source as community", () => {
+    const [match] = matchConfirmedHazardsToRoute(route, [
+      hazard("c1", [121.001, 25]),
+    ]);
+    expect(match.source).toBe("community");
+  });
+
+  it("rejects an invalid source", () => {
+    expect(() =>
+      matchConfirmedHazardsToRoute(route, [
+        { ...hazard("bad", [121.001, 25]), source: "other" as never },
+      ]),
+    ).toThrow(/source/);
   });
 });

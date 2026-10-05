@@ -2,6 +2,7 @@ import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 import { registry } from "../../openapi/registry";
 import { RouteIntentSchema } from "../../schemas/route-intent.schema";
+import { ToolSummarySchema } from "../agent/conversation-context";
 
 extendZodWithOpenApi(z);
 
@@ -136,6 +137,10 @@ export const ChatMessageSchema = z
       .string()
       .optional()
       .openapi({ description: "role 為 tool 時必填" }),
+    tool_summaries: z.array(ToolSummarySchema).max(8).optional().openapi({
+      description:
+        "assistant 訊息這一輪工具結果的摘要（取自 tool_result 事件的 summary），切換文字／語音時讓模型接得上「剛剛那個」",
+    }),
   })
   .openapi("ChatMessage");
 
