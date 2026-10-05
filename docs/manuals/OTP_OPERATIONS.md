@@ -61,7 +61,9 @@ pnpm otp:preflight
 | MongoDB（`DATABASE_URL`）連得上 | 1e 只印 WARN，**北捷車站的輪椅旗標會靜默消失** |
 | `patch_gtfs.py` 的 `CITIES` = 22、`CALENDAR_VALID_DAYS` ≥ 180 | patch 會先刪光全部公車，再依 CITIES 重建；名單少一個縣市，那個縣市的公車就沒了 |
 
-WARN 不會擋（例如沒有 DEM 就不注入坡度、沒裝 gtfs-validator 就跳過驗證）。
+WARN 不會擋（例如沒裝 gtfs-validator 就跳過驗證）。
+
+**高程（DEM）**：建圖會用 `fetch-otp-dem.py` 把內政部全台 20 m DTM 下載、轉成 EPSG:4326 的 `taiwan-dtm-20m.tif`，快取在 `OTP_DEM_DIR`（預設 `$OTP_DATA_DIR/dem`，約 250 MiB；上游 ETag 沒變就不重下），再複製進建圖目錄給 OTP 原生讀取。需要 `rasterio`。下載失敗只會 WARN 並沿用快取；**沒有 DEM 時圖照樣建成，但完全沒有高程**，輪椅 `maxSlope` 與坡度修正的步行時間都失效。驗證方式：查一段山坡步行路線的 `elevationGained`，應大於 0。高程那一步全台約 5 分鐘；graph 大小約 +18%。`router-config.json` 的 `slopeExceededReluctance: 0.1` 不可拿掉：有 DEM 後，預設值 1 會讓山區輪椅查詢整數溢位（GraphQL 回 `Negative value not expected`）。實驗依據見 `docs/reports/otp-graph-data-experiment-2026-10-05.md`。
 
 **內建碟空間不夠時**，把暫存區放到別顆碟：`OTP_WORK_ROOT=/Volumes/<外接碟>/otp-work`。
 
