@@ -18,6 +18,7 @@ TEST_FILES = (
     "src/scripts/backfill-osm-way-names.test.py",
     "src/scripts/inject-ped-indoor-graph.test.py",
     "src/scripts/diagnose-ped-graph-connectivity.test.py",
+    "src/scripts/fetch-otp-dem.test.py",
 )
 
 

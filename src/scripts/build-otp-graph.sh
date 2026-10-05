@@ -4,6 +4,7 @@
 #   0. preflight: checkout, disk, Mongo, Docker, Python deps (otp-preflight.sh)
 #   1. fetch the TDX GTFS static feed(s)        (every run)
 #   2. refresh + clip the Taiwan OSM extract    (only when older than 30 days)
+#      + the MOI national 20 m DTM for slopes   (only when upstream changed)
 #   3. gate on gtfs-validator errors            (abort keeps the old graph)
 #   4. stop serving briefly; otp --build --save offline in a temp dir
 #   5. load the candidate on a side port, verify its quality, and only then
@@ -17,6 +18,7 @@
 #   OTP_WORK_ROOT    where the build's temp dirs go (default /tmp); point it at
 #                    another disk when the data disk lacks ~5 GiB of headroom
 #   OTP_OSM_PBF_URL  (default Geofabrik Taiwan)
+#   OTP_DEM_DIR      DTM cache (default $OTP_DATA_DIR/dem; ~250 MiB GeoTIFF)
 #   OTP_OSM_BBOX     osmium extract bbox "minLng,minLat,maxLng,maxLat".
 #                    UNSET (default) = no clipping, full Taiwan coverage.
 #                    Taichung-only example: 120.40,23.95,121.05,24.45
@@ -262,7 +264,6 @@ npx dotenvx run -- ts-node "$SCRIPT_DIR/generate-gtfs-parents.ts" "$WORK_DIR/fee
 # ── 2. OSM extract (monthly refresh, spec §5) ──
 OSM_CACHE="$OTP_DATA_DIR/taiwan-latest.osm.pbf"
 OSM_CLIPPED="$WORK_DIR/taiwan-clipped.osm.pbf"
-OSM_ENRICHED="${OSM_CLIPPED%.osm.pbf}.enriched.osm.pbf"
 OSM_WALK_SAFE="${OSM_CLIPPED%.osm.pbf}.walk-safe.osm.pbf"
 if [ ! -f "$OSM_CACHE" ] || [ -n "$(find "$OSM_CACHE" -mtime +$OSM_MAX_AGE_DAYS 2>/dev/null)" ]; then
   log "refreshing OSM pbf from Geofabrik"
@@ -283,14 +284,14 @@ else
   cp "$OSM_CACHE" "$OSM_CLIPPED"
 fi
 
-# ── 2b. Inject road slopes from DEM GeoTIFFs ──
-log "injecting road slopes from DEM GeoTIFFs..."
-python3 "$SCRIPT_DIR/inject-osm-dem-slopes.py" \
-  "$OSM_CLIPPED" "$OSM_ENRICHED" "${OTP_DEM_DIR:-$OTP_DATA_DIR/dem}" ||
-  log "WARN: DEM slope injection failed — continuing"
-if [ -f "$OSM_ENRICHED" ]; then
-  mv "$OSM_ENRICHED" "$OSM_CLIPPED"
-fi
+# ── 2b. National 20 m DTM for OTP's own elevation module ──
+# OTP derives street slopes only from GeoTIFFs in its build directory (OSM
+# `incline` tags are ignored), and without them wheelchair maxSlope and the
+# slope-aware walk time are inert. The copy into WORK_DIR happens in step 4.
+DEM_DIR="${OTP_DEM_DIR:-$OTP_DATA_DIR/dem}"
+log "refreshing the national 20 m DTM in $DEM_DIR"
+python3 "$SCRIPT_DIR/fetch-otp-dem.py" "$DEM_DIR" ||
+  log "WARN: DTM refresh failed — building with whatever DEM is already in $DEM_DIR"
 
 log "hardening pedestrian access tags for expressways and stairs"
 python3 "$SCRIPT_DIR/deny-foot-on-expressways.py" \
@@ -331,6 +332,14 @@ cp "$OTP_DATA_DIR"/otp-config.json "$OTP_DATA_DIR"/build-config.json \
   "$OTP_DATA_DIR"/router-config.json "$WORK_DIR/" 2>/dev/null ||
   die "OTP config files missing in $OTP_DATA_DIR"
 mv "$OSM_CLIPPED" "$WORK_DIR/taiwan-otp.osm.pbf"
+# Only the staged national DTM: OTP treats every *.tif as elevation, so a stray
+# tile in another CRS left in DEM_DIR would silently corrupt slopes.
+if [ -f "$DEM_DIR/taiwan-dtm-20m.tif" ]; then
+  cp "$DEM_DIR/taiwan-dtm-20m.tif" "$WORK_DIR/"
+  log "staged DEM for elevation: $DEM_DIR/taiwan-dtm-20m.tif"
+else
+  log "WARN: no taiwan-dtm-20m.tif in $DEM_DIR — the graph will carry no elevation, so wheelchair slope limits stay inert"
+fi
 
 # On FAT/exFAT work roots (OTP_WORK_ROOT on a USB disk) macOS writes AppleDouble
 # "._<name>" companions for any file carrying extended attributes, so a

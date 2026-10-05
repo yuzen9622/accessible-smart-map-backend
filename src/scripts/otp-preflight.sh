@@ -137,10 +137,12 @@ else
   fail "python3 cannot import osmium — pedestrian access hardening (fatal step) would fail; pip install osmium"
 fi
 
-if [ -d "$OTP_DEM_DIR" ] && ls "$OTP_DEM_DIR"/*.tif* >/dev/null 2>&1; then
-  ok "DEM GeoTIFFs found in $OTP_DEM_DIR"
+if python3 -c 'import rasterio' 2>/dev/null; then
+  ok "rasterio is importable (national DTM reprojection)"
+elif ls "$OTP_DEM_DIR"/*.tif >/dev/null 2>&1; then
+  warn "python3 cannot import rasterio — the DTM cannot be refreshed; building with the cached $OTP_DEM_DIR"
 else
-  warn "no DEM GeoTIFFs in $OTP_DEM_DIR — road slopes will not be injected"
+  warn "python3 cannot import rasterio and $OTP_DEM_DIR has no DEM — the graph will carry no elevation (wheelchair slope limits inert); pip install rasterio"
 fi
 
 if command -v gtfs-validator >/dev/null 2>&1; then ok "gtfs-validator is installed"; else warn "gtfs-validator not installed — the validation gate will be skipped"; fi
