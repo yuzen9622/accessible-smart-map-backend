@@ -2781,6 +2781,99 @@ describe("requireElevator sees enrichment output, not raw planner output", () =>
   });
 });
 
+describe("transit preference reserves a top-three slot", () => {
+  const origin = { latitude: 25.04, longitude: 121.56 };
+  const destination = { latitude: 25.03, longitude: 121.55 };
+
+  const metroRoute = (routeName: string) => ({
+    routeId: `otp-${routeName}`,
+    routeName,
+    totalMinutes: 48,
+    transferCount: 0,
+    totalWalkDistanceM: 500,
+    legs: [
+      {
+        type: "METRO",
+        railSystem: "TRTC",
+        lineName: routeName,
+        departureStation: `${routeName} A`,
+        arrivalStation: `${routeName} B`,
+        departureStationUid: `TRTC-${routeName}-A`,
+        arrivalStationUid: `TRTC-${routeName}-B`,
+        rideMinutes: 39,
+        polyline: [
+          [121.56, 25.04],
+          [121.55, 25.03],
+        ],
+        facilityHighlights: [],
+        departureStationA11y: [],
+        arrivalStationA11y: [],
+      },
+    ],
+    accessibilityHighlights: [],
+  });
+  const busRoute = () => ({
+    routeId: "otp-1819",
+    routeName: "1819",
+    totalMinutes: 78,
+    transferCount: 0,
+    totalWalkDistanceM: 500,
+    legs: [
+      {
+        type: "BUS",
+        routeName: "1819",
+        subRouteUid: "SUB_1819",
+        subRouteName: "1819",
+        departureStop: "台北車站",
+        arrivalStop: "淡水",
+        rideMinutes: 67,
+        waitInfo: { time: null, source: "unavailable" },
+        direction: 0,
+        polyline: [
+          [121.56, 25.04],
+          [121.55, 25.03],
+        ],
+        departureStopA11y: [],
+        arrivalStopA11y: [],
+      },
+    ],
+    accessibilityHighlights: [],
+  });
+  const candidates = () =>
+    otpTransitOk([
+      metroRoute("M1"),
+      metroRoute("M2"),
+      metroRoute("M3"),
+      metroRoute("M4"),
+      busRoute(),
+    ] as any);
+
+  it("returns a much slower bus route when bus is preferred", async () => {
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue(candidates());
+    const res = await planAccessibleRouteFromRequest({
+      travelMode: "transit",
+      origin,
+      destination,
+      mode: "normal",
+      transitPreference: "bus",
+    });
+    const routes = okData(res).routes;
+    expect(routes).toHaveLength(3);
+    expect(routes.find((r) => r.routeName === "1819")?.totalMinutes).toBe(78);
+  });
+
+  it("keeps the plain ranking without a preference", async () => {
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue(candidates());
+    const res = await planAccessibleRouteFromRequest({
+      travelMode: "transit",
+      origin,
+      destination,
+      mode: "normal",
+    });
+    expect(okData(res).routes.map((r) => r.routeName)).not.toContain("1819");
+  });
+});
+
 describe("confirmed hazard finalization", () => {
   const confirmedHazard = {
     id: "confirmed-blocking-1",

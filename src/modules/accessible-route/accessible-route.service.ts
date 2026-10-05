@@ -1,6 +1,9 @@
 import { findNearestStopCity } from "./accessible-route.repository";
 import { getCity, getCoordinates } from "../../adapters/google.adapter";
-import { transitPreferencePenalty } from "./planners/transit-preference";
+import {
+  reservePreferredRoute,
+  transitPreferencePenalty,
+} from "./planners/transit-preference";
 import type { TransitPreference } from "../../types/route";
 import { parseRouteIntent } from "./route-intent.port";
 import { getA11yProfile } from "../user/user.service";
@@ -1188,13 +1191,23 @@ async function finalizeRoutes(
     confirmedHazards === undefined
       ? unappliedHazardPlan(proxyEligible)
       : planWithConfirmedHazards(proxyEligible, confirmedHazards);
-  const topN = proxyHazardPlan.selectionApplied
-    ? proxyHazardPlan.routes.slice(0, PRERANK_N)
-    : retainEarliestFutureRoute(
-        proxyHazardPlan.routes,
-        proxyHazardPlan.routes,
-        PRERANK_N,
-      );
+  // A preferred-mode route ranked below the cut keeps one slot, but only when
+  // it is clear of known blocking hazards and, for step-free requests, stairs.
+  const topN = reservePreferredRoute(
+    proxyHazardPlan.selectionApplied
+      ? proxyHazardPlan.routes.slice(0, PRERANK_N)
+      : retainEarliestFutureRoute(
+          proxyHazardPlan.routes,
+          proxyHazardPlan.routes,
+          PRERANK_N,
+        ),
+    proxyHazardPlan.routes,
+    PRERANK_N,
+    transitPreference,
+    (route) =>
+      !route.hazardAdvisory?.blockingOnRoute &&
+      (!constraints.avoidStairs || routeStairsCount(route) === 0),
+  );
   t.prerank = Date.now() - t0;
   t0 = Date.now();
   // Stage 2: a11y enrichment (Mongo) BEFORE scoring, so facility data is real
@@ -1239,9 +1252,15 @@ async function finalizeRoutes(
   // Keep the legacy earliest-future-service guarantee only when hazard evidence
   // did not select between alternatives. A known blocking hazard must not be
   // reintroduced at index zero by that schedule-only override.
-  const top = hazardPlan.selectionApplied
-    ? hazardPlan.routes.slice(0, 3)
-    : retainEarliestFutureRoute(hazardPlan.routes, hazardPlan.routes, 3);
+  const top = reservePreferredRoute(
+    hazardPlan.selectionApplied
+      ? hazardPlan.routes.slice(0, 3)
+      : retainEarliestFutureRoute(hazardPlan.routes, hazardPlan.routes, 3),
+    hazardPlan.routes,
+    3,
+    transitPreference,
+    (route) => !route.hazardAdvisory?.blockingOnRoute && !route.degraded,
+  );
   t.hazard = Date.now() - t0;
   t0 = Date.now();
   let elevatorNoticeRoutes = new Set<AccessibleRoute>();
