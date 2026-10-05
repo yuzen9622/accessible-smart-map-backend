@@ -5,6 +5,7 @@ import type { ApiResponse } from "../../types/response";
 import type { Response, Request } from "express";
 import type { TaiwanCityEn } from "../../types/transit";
 import { parseLocation } from "../../utils/geo";
+import type { BusStopArrivalsData } from "./transit.types";
 import * as busService from "./bus.service";
 import * as alertService from "./alert.service";
 
@@ -371,6 +372,40 @@ async function getNearbyStopsHandler(
   }
 }
 
+async function getBusStopArrivalsHandler(
+  req: Request,
+  res: Response<ApiResponse<BusStopArrivalsData>>,
+) {
+  try {
+    const { stopName, city, lat, lng } = req.validated?.query as {
+      stopName: string;
+      city: string;
+      lat: number;
+      lng: number;
+    };
+    const resolved = await resolveCityOr400(city, res);
+    if (!resolved) return;
+    const result = await busService.getBusStopArrivals({
+      stopName,
+      city: resolved,
+      lat,
+      lng,
+    });
+    if (!result.ok)
+      return sendResponse(res, false, "error", result.status, result.error);
+    const { ok, ...data } = result;
+    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
+  } catch (error) {
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      error instanceof Error ? error.message : TRANSIT_MSG.STOP_ARRIVALS_FAILED,
+    );
+  }
+}
+
 export {
   getTrainData,
   getHighSpeedTrainData,
@@ -382,5 +417,6 @@ export {
   searchBusRoutesHandler,
   searchBusStopsHandler,
   getNearbyStopsHandler,
+  getBusStopArrivalsHandler,
   getTransitAlertsHandler,
 };

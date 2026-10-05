@@ -228,6 +228,30 @@ export type BusNearbyStopsResult =
     }
   | BusServiceError;
 
+export type BusStopArrival = {
+  routeName: string;
+  subRouteUid?: string;
+  subRouteName?: string;
+  direction: 0 | 1;
+  /** Last stop of the sub-route in this direction; null when not stored. */
+  headsign: string | null;
+  estimateMinutes: number | null;
+  statusLabel: string;
+  plateNumb?: string;
+  /** null = plate unknown or vehicle not in the imported Vehicle table. */
+  isLowFloor: boolean | null;
+  hasLiftOrRamp: boolean | null;
+};
+
+export type BusStopArrivalsData = {
+  stopName: string;
+  city: string;
+  arrivals: BusStopArrival[];
+};
+
+export type BusStopArrivalsResult =
+  ({ ok: true } & BusStopArrivalsData) | BusServiceError;
+
 export type BusStopSearchResult = {
   stopUid: string;
   stopName: string;

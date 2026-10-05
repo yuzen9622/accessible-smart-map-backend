@@ -208,3 +208,52 @@ export async function findRouteNamesBySubRoute(
     .select("subRouteName.Zh_tw routeName.Zh_tw")
     .lean() as unknown as Promise<SubRouteNameRow[]>;
 }
+
+/**
+ * Stops of one city within a radius of a point, nearest first. Unlike
+ * {@link findStopsNearby} the city filter runs inside `$geoNear`, so stops of
+ * another city that happen to sit inside the radius never consume the limit.
+ *
+ * @param city TDX city code the stops must belong to (e.g. "Taipei")
+ * @param lat Latitude of the search centre
+ * @param lng Longitude of the search centre
+ * @param radiusM Search radius in metres
+ * @param limit Maximum rows
+ * @returns Matching stops with a `distance` field
+ */
+export async function findCityStopsNearby(
+  city: string,
+  lat: number,
+  lng: number,
+  radiusM: number,
+  limit: number,
+): Promise<BusStopDoc[]> {
+  return BusStopModel.aggregate([
+    {
+      $geoNear: {
+        near: { type: "Point", coordinates: [lng, lat] },
+        distanceField: "distance",
+        maxDistance: radiusM,
+        spherical: true,
+        query: { city },
+      },
+    },
+    { $limit: limit },
+  ]);
+}
+
+/**
+ * Stored routes (both directions) for a set of sub-route UIDs, carrying only
+ * what a headsign lookup needs. One batched query for any number of UIDs.
+ *
+ * @param subRouteUids TDX SubRouteUIDs
+ * @returns The matching route documents
+ */
+export async function findRoutesBySubRouteUids(
+  subRouteUids: string[],
+): Promise<BusRouteDoc[]> {
+  if (!subRouteUids.length) return [];
+  return BusRouteModel.find({ subRouteUid: { $in: subRouteUids } })
+    .select("subRouteUid direction stops.seq stops.stopName.Zh_tw")
+    .lean() as unknown as Promise<BusRouteDoc[]>;
+}

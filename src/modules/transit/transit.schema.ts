@@ -186,38 +186,42 @@ export const BusStopSearchQuerySchema = z
   })
   .strict();
 
+const LatQuery = z
+  .preprocess(
+    (val) => {
+      if (val === undefined || val === null || val === "") return undefined;
+      const num = Number(val);
+      return isNaN(num) ? undefined : num;
+    },
+    z
+      .number({
+        message: "緯度為必填且必須為有效數字",
+      })
+      .min(-90, "緯度必須大於或等於 -90")
+      .max(90, "緯度必須小於或等於 90"),
+  )
+  .openapi({ example: 25.0478, description: "使用者緯度" });
+
+const LngQuery = z
+  .preprocess(
+    (val) => {
+      if (val === undefined || val === null || val === "") return undefined;
+      const num = Number(val);
+      return isNaN(num) ? undefined : num;
+    },
+    z
+      .number({
+        message: "經度為必填且必須為有效數字",
+      })
+      .min(-180, "經度必須大於或等於 -180")
+      .max(180, "經度必須小於或等於 180"),
+  )
+  .openapi({ example: 121.5171, description: "使用者經度" });
+
 export const BusNearbyQuerySchema = z
   .object({
-    lat: z
-      .preprocess(
-        (val) => {
-          if (val === undefined || val === null || val === "") return undefined;
-          const num = Number(val);
-          return isNaN(num) ? undefined : num;
-        },
-        z
-          .number({
-            message: "緯度為必填且必須為有效數字",
-          })
-          .min(-90, "緯度必須大於或等於 -90")
-          .max(90, "緯度必須小於或等於 90"),
-      )
-      .openapi({ example: 25.0478, description: "使用者緯度" }),
-    lng: z
-      .preprocess(
-        (val) => {
-          if (val === undefined || val === null || val === "") return undefined;
-          const num = Number(val);
-          return isNaN(num) ? undefined : num;
-        },
-        z
-          .number({
-            message: "經度為必填且必須為有效數字",
-          })
-          .min(-180, "經度必須大於或等於 -180")
-          .max(180, "經度必須小於或等於 180"),
-      )
-      .openapi({ example: 121.5171, description: "使用者經度" }),
+    lat: LatQuery,
+    lng: LngQuery,
     radius: z.coerce
       .number()
       .int()
@@ -232,6 +236,25 @@ export const BusNearbyQuerySchema = z
       .max(50)
       .default(10)
       .openapi({ example: 10, description: "限制筆數 (預設 10)" }),
+  })
+  .strict();
+
+export const BusStopArrivalsQuerySchema = z
+  .object({
+    stopName: z
+      .string()
+      .min(1)
+      .openapi({ example: "臺北車站(忠孝)", description: "站牌中文名稱" }),
+    city: z.string().min(1).openapi({
+      example: "Taipei",
+      description: "站牌所在縣市（中文或英文）；不支援 InterCity",
+    }),
+    lat: LatQuery.openapi({
+      description: "站牌（或使用者附近）緯度，用於區分同名站牌",
+    }),
+    lng: LngQuery.openapi({
+      description: "站牌（或使用者附近）經度，用於區分同名站牌",
+    }),
   })
   .strict();
 
@@ -525,6 +548,39 @@ export const BusNearbyResponseSchema = ApiResponseSchema(
     stops: z.array(BusNearbyStopSchema),
   }),
 ).openapi("BusNearbyResponse");
+
+const BusStopArrivalSchema = z
+  .object({
+    routeName: z.string().openapi({ example: "307" }),
+    subRouteUid: z.string().optional().openapi({ example: "TPE3070" }),
+    subRouteName: z.string().optional().openapi({ example: "307 往撫遠街" }),
+    direction: DirectionSchema,
+    headsign: z.string().nullable().openapi({
+      example: "撫遠街",
+      description: "該子路線同方向的末站名稱；查無時為 null",
+    }),
+    estimateMinutes: z.number().nullable().openapi({
+      example: 3,
+      description: "預估到站分鐘數；無資料或未發車為 null",
+    }),
+    statusLabel: z.string().openapi({ example: "正常" }),
+    plateNumb: z.string().optional().openapi({ example: "KKA-1234" }),
+    isLowFloor: z.boolean().nullable().openapi({
+      description: "下一班是否低底盤；null = 車牌未知或車輛不在資料庫",
+    }),
+    hasLiftOrRamp: z.boolean().nullable().openapi({
+      description: "下一班是否有升降台／斜坡板；null 同上",
+    }),
+  })
+  .openapi("BusStopArrival");
+
+export const BusStopArrivalsResponseSchema = ApiResponseSchema(
+  z.object({
+    stopName: z.string().openapi({ example: "臺北車站(忠孝)" }),
+    city: z.string().openapi({ example: "Taipei" }),
+    arrivals: z.array(BusStopArrivalSchema),
+  }),
+).openapi("BusStopArrivalsResponse");
 
 const AlertDirectionQuery = z.coerce.number().optional();
 const CommaSeparatedStationIdsQuery = z.string().transform((value) =>
@@ -848,6 +904,27 @@ registry.registerPath({
     },
     400: { description: "缺少必要參數" },
     500: { description: "DB 錯誤" },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/transit/bus/stop-arrivals",
+  tags: ["Transit"],
+  summary: "站牌層級的公車到站（含低底盤）",
+  description:
+    "以站名 + 座標解析實體站牌，單次 TDX 查詢回傳行經該站所有路線的下一班預估到站分鐘數，並標註該班是否低底盤／有升降台。同站牌結果於伺服器快取 20 秒。不支援 InterCity。",
+  request: { query: BusStopArrivalsQuerySchema },
+  responses: {
+    200: {
+      description: "各路線下一班到站資訊，依預估分鐘遞增（無資料者置後）",
+      content: {
+        "application/json": { schema: BusStopArrivalsResponseSchema },
+      },
+    },
+    400: { description: "缺少必要參數、縣市無效或為 InterCity" },
+    404: { description: "300 公尺內找不到符合站名的站牌" },
+    500: { description: "TDX 或 DB 錯誤" },
   },
 });
 

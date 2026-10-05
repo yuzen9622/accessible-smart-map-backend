@@ -21,6 +21,10 @@ export const MSG = {
 export const TRANSIT_MSG = {
   INVALID_PLATE: "無效的車牌號碼",
   INVALID_CITY: "請提供有效的縣市 (city)，例如 台北、台中",
+  STOP_NOT_FOUND: "找不到符合的站牌，請確認站名與座標",
+  STOP_ARRIVALS_INTERCITY_UNSUPPORTED:
+    "公路客運 (InterCity) 不支援站牌層級的到站查詢",
+  STOP_ARRIVALS_FAILED: "站牌到站查詢失敗",
 } as const;
 
 export const ERROR_MESSAGE = {

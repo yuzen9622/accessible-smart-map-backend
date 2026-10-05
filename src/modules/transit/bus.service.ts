@@ -15,6 +15,7 @@
 import {
   busRouteQueryCandidates,
   equalStopName,
+  escapeODataLiteral,
   normalizeStopName,
   odataUrlLiteral,
   formatRouteName,
@@ -26,6 +27,7 @@ import {
   rememberBusEtaReceipt,
 } from "../../utils/tdx-bus-eta";
 import { busUrl } from "../../config/transit";
+import { TRANSIT_MSG } from "../../constants/messages";
 import { tdxFetch } from "../../config/fetch";
 import { resolveCity } from "../geography/city.service";
 import {
@@ -34,8 +36,11 @@ import {
   resolveStopStatusLabel,
 } from "./bus-next-departure";
 import {
+  type BusRouteDoc,
+  findCityStopsNearby,
   findRouteNamesBySubRoute,
   findRoutesByName,
+  findRoutesBySubRouteUids,
   findStopsNearby,
   findVehiclesByPlate,
   searchRoutesByKeyword,
@@ -73,6 +78,9 @@ import type {
   BusStopSearchResult,
   BusNearbyStopsResult,
   BusNearbyStop,
+  BusStopArrival,
+  BusStopArrivalsData,
+  BusStopArrivalsResult,
   BusRouteDetailResult,
   BusRouteDetailDirection,
   BusRouteDetailStop,
@@ -1448,5 +1456,245 @@ export async function getNearbyStops(params: {
       error: (err as Error).message || "尋找附近站牌失敗",
       status: 500,
     };
+  }
+}
+
+/** Radius (m) around the caller's coordinates in which the stop is resolved. */
+const STOP_ARRIVALS_RADIUS_M = 300;
+const STOP_ARRIVALS_STOP_LIMIT = 50;
+const STOP_ARRIVALS_TTL_MS = 20_000;
+const STOP_ARRIVALS_MAX_ENTRIES = 500;
+
+const stopArrivalsCache = new Map<
+  string,
+  { data: BusStopArrivalsData; expiresAt: number }
+>();
+const stopArrivalsInFlight = new Map<string, Promise<BusStopArrivalsResult>>();
+
+/** Drop the stop-arrivals cache and in-flight registry (test isolation). */
+export function clearStopArrivalsCache(): void {
+  stopArrivalsCache.clear();
+  stopArrivalsInFlight.clear();
+}
+
+function stopArrivalsKey(
+  city: string,
+  stopName: string,
+  lat: number,
+  lng: number,
+): string {
+  return `${city}|${normalizeStopName(stopName)}|${lat.toFixed(4)}|${lng.toFixed(4)}`;
+}
+
+function compareEstimate(a: number | null, b: number | null): number {
+  if (a == null && b == null) return 0;
+  if (a == null) return 1;
+  if (b == null) return -1;
+  return a - b;
+}
+
+/** Last stop name per `subRouteUid|direction`, from one batched lookup. */
+async function headsignMap(
+  subRouteUids: string[],
+): Promise<Map<string, string>> {
+  const docs = await findRoutesBySubRouteUids(subRouteUids);
+  const map = new Map<string, string>();
+  for (const doc of docs) {
+    const last = (doc.stops ?? []).reduce<
+      NonNullable<BusRouteDoc["stops"]>[number] | null
+    >((acc, stop) => (!acc || stop.seq > acc.seq ? stop : acc), null);
+    const name = last?.stopName?.Zh_tw;
+    if (name) map.set(`${doc.subRouteUid}|${doc.direction}`, name);
+  }
+  return map;
+}
+
+async function loadStopArrivals(params: {
+  stopName: string;
+  city: TaiwanCityEn;
+  lat: number;
+  lng: number;
+}): Promise<BusStopArrivalsResult> {
+  const { stopName, city, lat, lng } = params;
+  try {
+    const wanted = normalizeStopName(stopName);
+    const nearby = await findCityStopsNearby(
+      city,
+      lat,
+      lng,
+      STOP_ARRIVALS_RADIUS_M,
+      STOP_ARRIVALS_STOP_LIMIT,
+    );
+    const stopUids = [
+      ...new Set(
+        nearby
+          .filter((s) => normalizeStopName(s.stopName.Zh_tw) === wanted)
+          .map((s) => s.stopUid),
+      ),
+    ];
+    if (!stopUids.length) {
+      return { ok: false, error: TRANSIT_MSG.STOP_NOT_FOUND, status: 404 };
+    }
+
+    // ONE TDX call for every route serving the physical stop.
+    const filter = stopUids
+      .map((uid) => `StopUID eq '${escapeODataLiteral(uid)}'`)
+      .join(" or ");
+    const records = await fetchTdxArray(
+      `${busUrl.cityEstimatedTimeOfArrivalUrl}/${city}?$filter=${encodeURIComponent(filter)}&$format=JSON`,
+    );
+
+    const nowMs = Date.now();
+    const rows: (BusStopArrival & { key: string })[] = [];
+    for (const r of records) {
+      const routeName: string | undefined = r.RouteName?.Zh_tw;
+      if (!routeName || (r.Direction !== 0 && r.Direction !== 1)) continue;
+      const seconds = busEtaSeconds(r, nowMs);
+      const fresh = busEtaIsFresh(r, nowMs);
+      const estimateMinutes =
+        seconds === null ? null : Math.round(seconds / 60);
+      rows.push({
+        key: `${routeName}|${r.SubRouteUID ?? ""}|${r.Direction}`,
+        routeName,
+        subRouteUid: r.SubRouteUID,
+        subRouteName: r.SubRouteName?.Zh_tw,
+        direction: r.Direction,
+        headsign: null,
+        estimateMinutes,
+        statusLabel: resolveStopStatusLabel({
+          estimateMinutes,
+          stopStatus:
+            fresh && typeof r.StopStatus === "number"
+              ? r.StopStatus
+              : undefined,
+          nextBusTime: fresh
+            ? formatNextBusTime(r.NextBusTime, new Date(nowMs))
+            : null,
+          scheduled: () => null,
+        }),
+        plateNumb:
+          fresh && r.PlateNumb && r.PlateNumb !== "-1"
+            ? r.PlateNumb
+            : undefined,
+        isLowFloor: null,
+        hasLiftOrRamp: null,
+      });
+    }
+
+    // One row per (route, subRoute, direction): keep the smallest ETA.
+    const best = new Map<string, (typeof rows)[number]>();
+    for (const row of rows) {
+      const cur = best.get(row.key);
+      if (!cur || compareEstimate(row.estimateMinutes, cur.estimateMinutes) < 0)
+        best.set(row.key, row);
+    }
+    const deduped = [...best.values()];
+
+    const [vehicles, headsigns] = await Promise.all([
+      lowFloorMap(deduped.map((a) => a.plateNumb)),
+      headsignMap([
+        ...new Set(
+          deduped.map((a) => a.subRouteUid).filter((u): u is string => !!u),
+        ),
+      ]),
+    ]);
+
+    const arrivals: BusStopArrival[] = deduped
+      .map(({ key: _key, ...a }) => {
+        const veh = a.plateNumb ? vehicles.get(a.plateNumb) : undefined;
+        return {
+          ...a,
+          headsign: a.subRouteUid
+            ? (headsigns.get(`${a.subRouteUid}|${a.direction}`) ?? null)
+            : null,
+          isLowFloor: flagOrNull(veh?.isLowFloor),
+          hasLiftOrRamp: flagOrNull(veh?.hasLiftOrRamp),
+        };
+      })
+      .sort((a, b) => compareEstimate(a.estimateMinutes, b.estimateMinutes));
+
+    return { ok: true, stopName, city, arrivals };
+  } catch (err) {
+    return {
+      ok: false,
+      error: (err as Error).message || TRANSIT_MSG.STOP_ARRIVALS_FAILED,
+      status: 500,
+    };
+  }
+}
+
+function flagOrNull(code?: number): boolean | null {
+  if (code === 1) return true;
+  if (code === 0) return false;
+  return null;
+}
+
+/**
+ * Next-bus ETA of every route at ONE physical stop, plus whether that next bus
+ * is low-floor / has a lift. Replaces the per-route fan-out of
+ * route-detail + positions + arrival with a single TDX ETA call, cached for
+ * 20 s and shared by concurrent callers of the same stop.
+ *
+ * InterCity is unsupported: its ETA endpoint is the per-route
+ * `Streaming/InterCity/{RouteName}` form with no city-wide StopUID listing.
+ */
+export async function getBusStopArrivals(params: {
+  stopName: string;
+  city: TaiwanCityEn | "InterCity";
+  lat: number;
+  lng: number;
+}): Promise<BusStopArrivalsResult> {
+  const { stopName, city, lat, lng } = params;
+  if (city === "InterCity") {
+    return {
+      ok: false,
+      error: TRANSIT_MSG.STOP_ARRIVALS_INTERCITY_UNSUPPORTED,
+      status: 400,
+    };
+  }
+
+  const key = stopArrivalsKey(city, stopName, lat, lng);
+  const now = Date.now();
+  const cached = stopArrivalsCache.get(key);
+  if (cached && cached.expiresAt > now) {
+    return { ok: true, ...cached.data };
+  }
+
+  const pending = stopArrivalsInFlight.get(key);
+  if (pending) return pending;
+
+  const request = loadAndCacheStopArrivals(key, {
+    stopName,
+    city,
+    lat,
+    lng,
+  });
+  stopArrivalsInFlight.set(key, request);
+  return request;
+}
+
+async function loadAndCacheStopArrivals(
+  key: string,
+  params: { stopName: string; city: TaiwanCityEn; lat: number; lng: number },
+): Promise<BusStopArrivalsResult> {
+  try {
+    const result = await loadStopArrivals(params);
+    if (result.ok) {
+      const { ok: _ok, ...data } = result;
+      if (stopArrivalsCache.size >= STOP_ARRIVALS_MAX_ENTRIES) {
+        const t = Date.now();
+        for (const [k, v] of stopArrivalsCache)
+          if (v.expiresAt <= t) stopArrivalsCache.delete(k);
+        if (stopArrivalsCache.size >= STOP_ARRIVALS_MAX_ENTRIES)
+          stopArrivalsCache.clear();
+      }
+      stopArrivalsCache.set(key, {
+        data,
+        expiresAt: Date.now() + STOP_ARRIVALS_TTL_MS,
+      });
+    }
+    return result;
+  } finally {
+    stopArrivalsInFlight.delete(key);
   }
 }
