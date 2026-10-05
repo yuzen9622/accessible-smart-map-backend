@@ -268,7 +268,7 @@ mv otp-data/graph.obj.prev otp-data/graph.obj && OTP_DATA_DIR=$PWD/otp-data dock
 TDX 全國 GTFS feed ──┐
                      ├─ clean-gtfs-feed.py（去髒資料、移除票價）
 TRA 班表 JSON ───────┤
-                     ├─ inject-tra-gtfs.py（注入台鐵 943 車次）
+                     ├─ inject-tra-gtfs.py（台鐵：保留原生班表或注入）
 Geofabrik 台灣 OSM ──┤
                      └─► otp --build --save ──► graph.obj
                                                   │
@@ -357,7 +357,14 @@ OTP_DATA_DIR=$PWD/otp-data docker compose up -d otp
 
 ## 3. 台鐵（TRA）班表注入
 
-**背景**：TDX 全國 feed 只有 TRA 的站點與 agency，**沒有班表**（routes/trips/calendar 為 0），官方也沒有 TRA 的 GTFS 端點。沒有注入的 graph 永遠排不出台鐵腿，台鐵覆蓋將完全依賴有 429 限流的 TDX MaaS API。
+> **2026-10 起現況**：TDX 全國 feed 已自帶逐日台鐵班表（每車次每服務日一個 trip，約 59 天，含軌道 shape）。`inject-tra-gtfs.py` 會先判斷原生班表是否涵蓋至少 `NATIVE_MIN_DAYS`（14）天：
+>
+> - **native 模式**（有）：原樣保留，只補 `route_long_name` 車種名、`WheelChairFlag=1` 車次的 `wheelchair_accessible=1`，並以台鐵軌道幾何修復離 shape 超過 500 m 的站序；修不好就中止且不覆寫輸入 zip。下方「下載 GeneralTrainTimetable」步驟與 45 天效期限制都不適用。
+> - **inject 模式**（沒有）：退回下述舊流程。
+>
+> 以下為 inject 模式的原始說明。
+
+**背景（inject 模式）**：舊版 TDX 全國 feed 只有 TRA 的站點與 agency，**沒有班表**（routes/trips/calendar 為 0），官方也沒有 TRA 的 GTFS 端點。沒有注入的 graph 永遠排不出台鐵腿，台鐵覆蓋將完全依賴有 429 限流的 TDX MaaS API。
 
 `inject-tra-gtfs.py` 把 TDX v3 `GeneralTrainTimetable` JSON 轉成 GTFS 列注入主 feed，引用 feed 既有的 `TRA_<StationID>` 站點（239 站全對齊、零新增）。路徑 A 已自動包含；手動執行：
 
@@ -375,12 +382,12 @@ curl -fsSL --compressed -H "Authorization: Bearer $TOKEN" \
 
 # 2. 注入（冪等：重跑會先剝掉舊注入）
 python3 src/scripts/inject-tra-gtfs.py otp-data/taiwan-gtfs.zip /tmp/tra-timetable.json
-# 預期輸出：injecting: routes=7 trips=943 services=15 stop_times=21622 ...
+# inject 模式預期輸出類似：injecting: routes=7 trips=943 services=15 stop_times=21622 ...（數字隨 TDX 快照變動）
 
 # 3. 注入只改 zip，必須重建 graph 才生效 → 回 §2.2 步驟 3
 ```
 
-### 已知限制（設計取捨，非 bug）
+### 已知限制（inject 模式；設計取捨，非 bug）
 
 - **班表效期**：TDX 以「快照」發布（EffectiveDate == ExpireDate），注入時 calendar 設為生效日 +45 天，靠每週 rebuild 滾動。超過 45 天不更新，台鐵班次會從 OTP 消失。
 - **假日班表**：`NationalHolidays`／`DayBeforeHoliday` 等旗標 GTFS calendar 無法表達，國定假日的加開/停駛不會反映——與 MaaS 班表漂移同級別誤差，誤點由 realtime overlay 修正。

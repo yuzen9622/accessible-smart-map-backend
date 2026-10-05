@@ -8,6 +8,8 @@
 **作者**：yuzen9622
 
 > v1.2.0 修訂（as-built）：正常情況下所有 WALK legs 均由 OTP 產生；Valhalla pedestrian 僅在 OTP 步行規劃不可用時作為有 `warnings` 的停機備援。`stepBearing()` 改以 maneuver 在 leg polyline 上的位置向前取樣約 20 公尺，取不到幾何才退回 `absoluteDirection`。公開指引新增 `legIndex`、`cumulativeDistanceM`；`distanceM` 明定為「完成本 maneuver 後到下一步前的距離」。文字加入友善距離、無名路段下一個具名目標、長於 300 公尺的中間提示，且後續 WALK leg 的 `DEPART` 不再外洩。端點可傳 `routeToken` 或 `route`，兩者並存時以 `routeToken` 為準。
+>
+> **2026-10-05 校正（現況）**：端點已改為**只收 `routeToken`**（`nav-instructions.schema.ts`，strict schema），不再接受前端傳入完整 `route`；下方 §request schema 中的 `route` 欄位與 `.refine(route || routeToken)` 已移除。純步行在台北 CSR bbox 內改由 CSR 無障礙行人圖產生 steps，OTP2 為 fallback，詳見 `FUNCTIONAL_SPEC_PEDESTRIAN_A11Y_ROUTER.md`。
 
 > v1.1.0 修訂（as-built，已實作）：端點 `POST /api/v1/a11y/route/instructions` 已上線（`src/modules/nav-instructions/`，獨立 `createNavInstructionsRouter()` 直接掛在 `app.ts` 的 `/api/v1/a11y`）。`tsc --noEmit` 乾淨、`nav-instructions.service.test.ts` vitest 23 passed。實作相對本文初稿的調整：
 > ① **service 為純函數而非 class**——`generateNavInstructions(route, userHeading?)` 加上 `calcBearing` / `calcRelativeDirection` / `degToCompassWord` 直接 export（無 `NavInstructionsService` 物件）；常數 `WARN_STEPS_UNAVAILABLE = "ORS_STEPS_UNAVAILABLE"`。
@@ -593,19 +595,8 @@ interface NavInstructionsResponse {
 ```typescript
 const NavInstructionsRequest = z
   .object({
-    /**
-     * 完整的 AccessibleRoute 物件（由 /accessible-route 回傳）。
-     * 前端收到路線後直接 passthrough。
-     */
-    route: z
-      .object({
-        routeId: z.string().optional(), // as-built：選用；服務只讀 legs
-        legs: z.array(z.any()), // 詳細型別由 AccessibleRoute 定義
-      })
-      .optional(),
-
-    /** /accessible-route 回傳、30 分鐘內有效的 capability；有值時優先。 */
-    routeToken: z.string().trim().min(1).max(256).optional(),
+    /** /accessible-route 回傳、30 分鐘內有效的 capability（必填）。 */
+    routeToken: z.string().trim().min(1).max(256),
 
     /**
      * 使用者當前朝向（度，正北 = 0，順時針），由陀螺儀取得。
@@ -619,38 +610,14 @@ const NavInstructionsRequest = z
      */
     language: z.enum(["zh-TW"]).default("zh-TW"),
   })
-  .refine((body) => body.route || body.routeToken);
+  .strict();
 ```
 
 **請求範例**
 
 ```json
 {
-  "route": {
-    "routeId": "route_0",
-    "legs": [
-      {
-        "type": "WALK",
-        "from": "台北車站",
-        "to": "捷運台北車站",
-        "distanceM": 340,
-        "minutesEst": 5,
-        "polyline": "...encoded...",
-        "a11yFacilities": [],
-        "exitInfo": { "type": "elevator", "exitNumber": "M6" }
-      },
-      {
-        "type": "METRO",
-        "railSystem": "TRTC",
-        "lineName": "板南線",
-        "departureStation": "台北車站",
-        "arrivalStation": "忠孝復興",
-        "rideMinutes": 8,
-        "waitInfo": { "minutes": 3, "source": "schedule" },
-        "facilityHighlights": ["電梯", "無障礙廁所"]
-      }
-    ]
-  },
+  "routeToken": "由 /accessible-route 回傳的 30 分鐘 capability",
   "userHeading": 45
 }
 ```

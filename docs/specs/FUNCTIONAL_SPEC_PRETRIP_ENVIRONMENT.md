@@ -3,7 +3,7 @@
 ## Functional Specification — Pre-Trip Environment Aggregation
 
 **版本**：v1.0.5  
-**狀態**：Implemented（Phase E-1 ~ E-3 已實作並通過真實 API 煙霧測試）· Phase E-4（AI Agent Tool）選配未實作  
+**狀態**：Implemented（Phase E-1 ~ E-3 已實作並通過真實 API 煙霧測試）· Phase E-4（AI Agent Tool）已實作為 `getEnvironmentInfo`（`src/config/ai/tool.ts`）  
 **日期**：2026-06-17（最後更新：2026-06-20）  
 **作者**：yuzen9622
 
@@ -620,7 +620,7 @@ interface EnvironmentData {
 | **Phase E-1**         | 聚合骨架 + 空品整合                | Critical | 現有 `air.service.ts` | ✅ 已實作         |
 | **Phase E-2**         | CWA 天氣整合 + Redis 快取          | High     | `CWA_API_KEY`、Redis  | ✅ 已實作         |
 | **Phase E-3**         | twipcam CCTV 整合                  | Medium   | twipcam API 確認      | ✅ 已實作         |
-| **Phase E-4（選配）** | `getEnvironmentInfo` AI Agent Tool | Low      | Phase E-1 完成        | ⬜ 未實作（選配） |
+| **Phase E-4（選配）** | `getEnvironmentInfo` AI Agent Tool | Low      | Phase E-1 完成        | ✅ 已實作         |
 
 ---
 

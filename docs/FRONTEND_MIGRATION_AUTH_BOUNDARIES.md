@@ -26,6 +26,7 @@
 | Method              | Path                        | 登入需求                    |
 | ------------------- | --------------------------- | --------------------------- |
 | POST                | `/auth/google`              | PUBLIC                      |
+| POST                | `/auth/apple`               | PUBLIC                      |
 | POST                | `/auth/register`            | PUBLIC                      |
 | POST                | `/auth/login`               | PUBLIC                      |
 | POST                | `/auth/verify-email`        | PUBLIC                      |
@@ -33,12 +34,14 @@
 | POST                | `/auth/password/forgot`     | PUBLIC                      |
 | POST                | `/auth/password/reset`      | PUBLIC                      |
 | POST                | `/auth/password`（改密碼）  | **PROTECTED**               |
-| POST                | `/refresh`                  | PUBLIC（走 refresh cookie） |
+| POST                | `/refresh`                  | PUBLIC（web 走 refresh cookie；`X-Client: mobile` 走 body） |
 | POST                | `/logout`                   | PUBLIC                      |
 | GET                 | `/info`                     | **PROTECTED**               |
 | POST                | `/line-link-code`           | **PROTECTED**               |
 | POST                | `/config`、`/config/update` | **PROTECTED**               |
 | GET / PUT           | `/a11y-profile`             | **PROTECTED**               |
+| POST / DELETE       | `/push-tokens`              | **PROTECTED**               |
+| DELETE              | `/`（刪除帳號）             | **PROTECTED**               |
 | GET / POST / DELETE | `/emergency-contacts...`    | **PROTECTED**（全部三支）   |
 
 ### `/api/v1/sos`
@@ -64,6 +67,8 @@
 | POST                  | `/reports`                                                                                                                                     | PUBLIC_OPTIONAL_AUTH                                                                                                |
 | GET                   | `/reports`、`/reports/:id`                                                                                                                     | PUBLIC                                                                                                              |
 | GET                   | `/reports/mine`                                                                                                                                | **PROTECTED**                                                                                                       |
+| GET                   | `/reports/review-queue`                                                                                                                        | **PROTECTED + admin**（非 admin 回 403）                                                                            |
+| PATCH                 | `/reports/:id/review`                                                                                                                          | **PROTECTED + admin**（非 admin 回 403）                                                                            |
 | POST                  | `/reports/:id/confirm`                                                                                                                         | PUBLIC_OPTIONAL_AUTH                                                                                                |
 | GET                   | `/environment`                                                                                                                                 | PUBLIC                                                                                                              |
 | GET                   | `/welfare`、`/welfare/nearby`、`/welfare/:id`                                                                                                  | PUBLIC                                                                                                              |
@@ -78,12 +83,15 @@
 
 | Method                      | Path                                       | 登入需求                                                                |
 | --------------------------- | ------------------------------------------ | ----------------------------------------------------------------------- |
-| GET                         | `/api/v1/transit/bus/...`（8 支）          | PUBLIC                                                                  |
+| GET                         | `/api/v1/transit/bus/...`（10 支）、`/api/v1/transit/alerts` | PUBLIC                                                  |
+| GET                         | `/api/v1/traffic/flow`、`/api/v1/traffic/incidents` | PUBLIC                                                         |
 | GET                         | `/api/v1/air/air-quality`                  | PUBLIC                                                                  |
 | GET                         | `/api/v1/line/route-preview`               | PUBLIC                                                                  |
 | POST                        | `/api/v1/line/webhook`                     | 非 JWT——改用 LINE HMAC 簽章驗證（給 LINE 平台呼叫，前端不會呼叫此路徑） |
 | POST                        | `/api/v1/ai/intent`、`/api/v1/ai/explain`  | PUBLIC                                                                  |
 | GET / PATCH / POST / DELETE | `/api/v1/ai/memories...`                   | **PROTECTED**                                                           |
+| WebSocket                   | `/api/v1/voice/ws`                         | **PROTECTED**——不走 header，連線後第一個 `session.start` frame 帶 token；逾時、無效或被撤銷以 `4401 unauthorized` 關閉 |
+| GET                         | `/api/v1/voice/poc`                        | PUBLIC（開發用 POC 頁面）                                               |
 | GET                         | `/health`、`/api/v1/openapi.json`、`/docs` | PUBLIC                                                                  |
 
 ## 給前端的建議

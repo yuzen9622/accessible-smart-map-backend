@@ -11,7 +11,7 @@
 | 舊端點                                                               | 狀態       | 改用                                                         |
 | -------------------------------------------------------------------- | ---------- | ------------------------------------------------------------ |
 | `POST /api/v1/user/login`（body `{name, email, avatar, client_id}`） | **已移除** | `POST /api/v1/user/auth/google`，body 改成 `{ idToken }`     |
-| `POST /api/v1/user/token`（body `{token}`）                          | **已移除** | `POST /api/v1/user/refresh`（讀 httpOnly cookie，不需 body） |
+| `POST /api/v1/user/token`（body `{token}`）                          | **已移除** | `POST /api/v1/user/refresh`（Web 讀 httpOnly cookie；mobile 見 §五） |
 
 `POST /user/login` 之所以要移除，是因為它直接相信前端傳來的 `email` 與 `client_id`，任何人都能用別人的 email 換到該帳號的 access token。現在身分只取自後端驗證過的 Google ID token payload。
 
@@ -181,7 +181,23 @@ TTL 1 小時、一次性。密碼規則同註冊。無效 → 401 `INVALID_TOKEN
 
 ---
 
-## 五、後端部署前置（不是前端的事，但會影響你能不能測）
+## 五、Web 與 Mobile 兩種 token 傳輸模式（2026-09 新增）
+
+`/api/v1/user/*` 會依 `X-Client` header 決定 refresh token 怎麼傳：
+
+| `X-Client` header | 模式     | refresh token 位置                                               |
+| ----------------- | -------- | ---------------------------------------------------------------- |
+| 不帶              | `web`    | 只放 httpOnly cookie，回應 body 不含 `refreshToken`              |
+| `mobile`          | `mobile` | 不設 cookie；回應 body 帶 `refreshToken`，由 App 自行安全保存    |
+| 其他值或重複      | —        | `400`                                                            |
+
+- **Mobile**：`/refresh` 與 `/logout` 都要在 body 傳 `{ "refreshToken": "..." }`。
+- **兩種來源不可混用**：web 在 body 放 `refreshToken`、或 mobile 同時帶 refresh cookie，都會回 `400`。
+- **Web 的 CSRF 檢查**：所有會寫 cookie 的端點（`/auth/google`、`/auth/apple`、`/auth/login`、`/auth/verify-email`、`/auth/password/reset`、`/auth/password`、`/refresh`、`/logout`）都要求 `Origin` 在 `CORS_ORIGINS` 白名單內；沒有 `Origin` 時改看 `Referer`。兩者都缺或都不在白名單就回 `403`，且不會做任何變更。瀏覽器同源或 CORS 請求會自動帶 `Origin`；伺服器端代理或測試工具要自己補。Mobile 模式不檢查。
+
+---
+
+## 六、後端部署前置（不是前端的事，但會影響你能不能測）
 
 1. **必須先跑 `pnpm migrate:auth`，再重建 image。** 除了替換舊的 user indexes，migration 會刪除舊 `AuthToken(password_reset)`（舊連結需重新申請）、移除其餘重複 auth token，並建立 `(userId, type)` 唯一索引。新的 password-reset token entries 直接存在 User document；每個 queue job 的連結彼此獨立，兌換時會在同一個原子操作內更新密碼，並只把實際命中的 entry 標為 consumed。
 2. Google audience 設定可使用新環境變數 `GOOGLE_CLIENT_IDS`（逗號分隔、只列出實際 backend token audiences）；它設定時具有優先權且不與舊值合併。未設定時相容單一 `GOOGLE_CLIENT_ID`。其他新環境變數：`RESEND_API_KEY`、`RESEND_FROM`、`APP_WEB_BASE_URL`、`PASSWORD_RESET_TOKEN_SECRET`、`TRUST_PROXY_HOPS`。`PASSWORD_RESET_TOKEN_SECRET` 至少 32 bytes，且跨部署必須保持不變，讓同一 queue job 的重試使用相同 reset token。
