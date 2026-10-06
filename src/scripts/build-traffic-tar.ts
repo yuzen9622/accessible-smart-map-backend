@@ -6,7 +6,11 @@ async function main(): Promise<void> {
   console.log("[build:traffic-tar] Result:", result);
 }
 
-main().catch((err) => {
-  console.error("[build:traffic-tar] Failed:", err);
-  process.exit(1);
-});
+// Exit explicitly: config/redis connects at import time when REDIS_URL is set,
+// and that open socket would otherwise keep the process alive forever.
+main()
+  .then(() => process.exit(0))
+  .catch((err) => {
+    console.error("[build:traffic-tar] Failed:", err);
+    process.exit(1);
+  });
