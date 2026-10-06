@@ -146,6 +146,13 @@ External calls to the OTP planner (for routing and rail geometry) are wrapped in
 - **Breakers**: `planBreaker` and `railGeomBreaker`.
 - **Threshold**: Trips after 3 (`BREAKER_THRESHOLD`) consecutive failures, staying open for 60,000ms (`BREAKER_COOLDOWN_MS`).
 - **Behavior**: When the main planner circuit is open (`isOtpCircuitOpen()`), the routing service returns `ResponseCode.SERVICE_UNAVAILABLE` (503) with a localized error message (`路線規劃服務暫時忙線，請稍後再試`) so callers can distinguish temporary service outages from a genuine `404 Not Found` (no route exists).
+- **Request budget**: every OTP stage of one transit request shares `ROUTE_PLAN_BUDGET_MS` (`src/config/routing.ts`). The primary query keeps the client timeout; optional stages get only what remains and a stage cut short by the budget is not counted as an outage.
+
+### Routing tunables and OTP coupling
+
+Routing thresholds live in `src/config/routing.ts` (`getRoutingConfig()`: defaults + validated env overrides, invalid values throw), not as module constants. `WALK_SPEED_MPS` is deliberately not env-tunable: every (walk speed × wheelchair flag) the backend can send must be pre-warmed in `otp-data/router-config.json` `transit.transferCacheRequests`, otherwise OTP blocks 40 s+ building a transfer cache on first use — `src/config/routing.test.ts` enforces this. Short transit trips have no walking race: OTP's direct-walk itinerary competes in ranking, `WALKING_BETTER` is set only from OTP's own `WALKING_BETTER_THAN_TRANSIT`.
+
+Bus low-floor evidence: plate flags come from Mongo `busvehicles` (city syncs; never call TDX for this). Plate-on-route sightings (`busfleetsightings`: Taichung/Hsinchu fleet sync + realtime ETA plates) give a route's low-floor history, used only as a ranking credit in `low-floor-rerank.ts` — never written as GTFS `trips.wheelchair_accessible`. The OTP build merges co-located duplicate bus stops (step 1g); `restoreRouteStopIds` maps OTP's merged stop ids back to each route's own StopUID via Mongo `gtfsstopaliases`.
 
 ## Agent Gating & Tool Usage Guidelines
 

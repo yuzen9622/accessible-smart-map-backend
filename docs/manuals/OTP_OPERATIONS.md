@@ -16,7 +16,35 @@
 | `OTP_CONTINUATION_WINDOW_S` | 28800 | 每輪後續搜尋窗口上限 |
 | `OTP_SEARCH_HORIZON_S` | 86400 | 從請求出發時間起算的總搜尋截止範圍 |
 
-這些窗口針對可搜尋的出發班次，不是行程可花費的時間。變更分段大小不得暗中縮小總範圍：例如 12:30 的請求，`2h + 8h + 8h` 只到隔天 06:30，會漏掉 06:37／06:40 的早班。預設總範圍保留既有 24 小時行為，追加至隔天 12:30。`skipLaterService` 的短途流程與上游錯誤處理仍各自適用。
+這些窗口針對可搜尋的出發班次，不是行程可花費的時間。變更分段大小不得暗中縮小總範圍：例如 12:30 的請求，`2h + 8h + 8h` 只到隔天 06:30，會漏掉 06:37／06:40 的早班。預設總範圍保留既有 24 小時行為，追加至隔天 12:30。
+
+### 請求時限（`ROUTE_PLAN_BUDGET_MS`，預設 45000）
+
+一次大眾運輸規劃的所有 OTP 階段共用同一個時限。主查詢保留用戶端原本的逾時（OTP 自己在 `apiProcessingTimeout` 25 秒放棄），所以 OTP 卡住仍會觸發斷路器；之後的擴大窗口、改從站牌重查、偏好運具、延伸時段，以及「區分沒有無障礙路線與沒有路線」的放寬重試，只能用剩下的時間，用完就略過。被時限截斷的查詢不算 OTP 故障。短程不再有「公車算太久就改回步行」：步行候選直接取 OTP 主查詢裡的直走行程，與公車一起排名；只有 OTP 回 `WALKING_BETTER_THAN_TRANSIT` 才標 `WALKING_BETTER`，其他只剩步行的情況標 `NO_TRANSIT_ROUTE`，OTP 不可用一律回 503。
+
+### 轉乘快取必須涵蓋後端送出的每一組參數
+
+OTP 依「步速＋輪椅旗標（＋其他步行偏好）」快取站間轉乘。請求的組合不在 `router-config.json` 的 `transit.transferCacheRequests` 裡時，OTP 會在請求當下重建一份快取，實測卡住 40 秒以上，而且每次重啟後都會再發生。後端的步速表在 `src/config/routing.ts`（`WALK_SPEED_MPS`，不可用環境變數改），每個步速都可能以輪椅旗標開或關送出（勾選避梯、輪椅模式放寬），`src/config/routing.test.ts` 會檢查兩邊一致。新增步速或改步行偏好時，兩邊一起改。
+
+`build-config.json` 的 `transferRequests` 另含輪椅一筆：OTP 預設只替一般行人預算轉乘，沒有這筆時輪椅使用者的站間轉乘沒有保證無階梯的路徑（改動要重建圖）。
+
+### 重複站牌合併（建圖步驟 1g）
+
+TDX 每條路線各有一個站牌，同一根站牌被多條路線停靠時會出現多筆座標相同的站牌。`merge-gtfs-duplicate-stops.py` 只合併「座標（小數 7 位）、站名、城市代碼都相同，只有公車停靠、無 parent station，且不會讓同一條路線的兩個站牌合在一起」的站牌，並重寫 `stop_times`、`pathways`、`stop_areas`、站名翻譯。合併後每條路線原本的站牌 ID 由 `import-gtfs-stop-aliases.ts` 寫入 Mongo `gtfsstopaliases`，後端在 OTP 回傳後換回，所以 API 的 `departureStopId`／`arrivalStopId` 與警示比對不變。合併失敗時建圖照常（未合併）；合併成功但對照表寫入失敗時中止建圖、保留舊圖。
+
+### 公車班次的無障礙旗標與路線低底盤歷史
+
+步驟 1f 不會推論 `wheelchair_accessible=2`，但保留上游 feed 自己發布的 2。路線的低底盤比例（台中、新竹的城市派車資料，以及即時到站資料中看到的車牌）存在 Mongo `busfleetsightings`，只當作後端排序訊號，不寫成 GTFS 班次旗標：GTFS 的旗標是「這一班」的事實，路線比例只說明這條路線多常派低底盤車。
+
+### 基準與比較
+
+```bash
+python3 src/scripts/bench-otp-routing.py otp --label before --out logs/bench/before-otp.jsonl
+python3 src/scripts/bench-otp-routing.py api --label before --out logs/bench/before-api.jsonl
+python3 src/scripts/bench-otp-routing.py compare logs/bench/before-otp.jsonl logs/bench/after-otp.jsonl
+```
+
+`otp` 以 OTP 自己的 `debugOutput` 逐筆計時（不受其他人的查詢干擾），`compare` 報告 p50／p95、錯誤數，以及基準中的好方案（到達時間、步行、轉乘的 Pareto）改動後消失的比例。服務日用固定日期（`--date`），新舊圖都要涵蓋該日。
 
 避樓梯模式下，OTP 已明示含樓梯的候選不算搜尋已滿足，必須繼續尋找無樓梯候選。這項判定不能代替後續設施、電梯與步行無障礙資料檢查；資料未知也不能推論為已確認無障礙。
 
