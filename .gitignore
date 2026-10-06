@@ -145,3 +145,6 @@ __pycache__/
 .claude/
 .pi/
 memory/
+
+# pnpm data:sync run lock
+.data-sync.lock/

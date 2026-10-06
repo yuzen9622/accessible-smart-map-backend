@@ -20,6 +20,8 @@
     "capture:rail-fixtures": "npx dotenvx run -- ts-node src/scripts/capture-rail-station-fixtures.ts",
     "clean": "rimraf dist",
     "dev": "dotenvx run -- nodemon",
+    "data:sync": "npx dotenvx run -- ts-node src/scripts/sync-all-data.ts",
+    "data:sync:all": "npx dotenvx run -- ts-node src/scripts/sync-all-data.ts --all",
     "diagnose:ped-connectivity": "npx dotenvx run -- python3 src/scripts/diagnose-ped-graph-connectivity.py",
     "eval:routing": "npx dotenvx run -- ts-node src/scripts/eval-tool-routing.ts",
     "generate:gtfs-parents": "npx dotenvx run -- ts-node src/scripts/generate-gtfs-parents.ts",
