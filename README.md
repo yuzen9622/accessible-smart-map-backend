@@ -246,7 +246,19 @@ CHROMA_URL=http://localhost:8100
 
 ### 4. 匯入空間與大眾運輸數據
 
-系統依賴 MongoDB 內的基礎設施數據。資料來源包含本地預存檔案（`data/`）與第三方 API。所有匯入腳本自動讀取 `.env`：
+系統依賴 MongoDB、PostGIS、Chroma 與 Valhalla 地磚內的數據。資料來源包含本地預存檔案（`data/`，不在 git 內，需另外複製）與第三方 API。所有匯入腳本自動讀取 `.env`。
+
+**一鍵同步（建議）**：`pnpm data:sync` 依相依順序執行下列所有匯入，執行前會先檢查 env、`data/` 檔案與各服務連線，不符就整批中止：
+
+```bash
+pnpm data:sync --all --plan   # 只列出步驟並做前置檢查，不執行
+pnpm data:sync:all            # 新環境完整灌一次（含 Valhalla 地磚、RAG）
+pnpm data:sync                # 日常更新：只跑 upsert 類步驟
+```
+
+預設只跑不清空集合、不重啟 Valhalla、不花錢的步驟；其餘用 `--with-snapshot`／`--with-valhalla`／`--with-slow`／`--with-paid` 加選，`--skip=`／`--only=` 排除或挑選。細節見 [部署手冊](docs/manuals/DEPLOY_UBUNTU.md)。
+
+以下為個別指令，需要單獨重跑某一項時使用。
 
 **核心必要數據**：
 
@@ -292,6 +304,19 @@ pnpm import:a11y-metro
 
 # RAG 知識庫文本向量化
 pnpm import:rag
+
+# 台北市公園無障礙出入口、交工處有聲號誌、TDX 路段
+pnpm import:taipei-park-entrances
+pnpm import:taipei-aps
+pnpm import:traffic-sections
+
+# 新工處緣石坡道 → PostGIS（需已建 ped graph）
+pnpm import:taipei-ramps
+
+# Valhalla 地磚（需 OSM PBF），換地磚後重建 TDX 路況對應
+pnpm build:valhalla-tiles
+pnpm build:traffic-map
+pnpm build:traffic-tar
 ```
 
 ### 5. 啟動本機服務

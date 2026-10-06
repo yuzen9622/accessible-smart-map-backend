@@ -189,6 +189,24 @@ pnpm import:gtfs-all     # GTFS stops/trips/pathways/levels（OTP 方向反查 +
 
 > ⚠️ TDX 連續呼叫會 429（burst 4–6 次就觸發），腳本間隔已內建；若 429 就等幾分鐘重跑該支。所以推薦走路徑 A。
 
+#### 一鍵版：`pnpm data:sync`
+
+上面的步驟（加上 PostGIS 坡道、Valhalla 地磚、RAG 等）已整合成一個指令，依相依順序執行，TDX 步驟之間自動間隔：
+
+```bash
+pnpm data:sync --all --plan   # 先看會跑哪些步驟，並檢查 env／data 檔／Mongo、PostGIS、Chroma、docker 連線
+pnpm data:sync:all            # 新環境完整灌一次
+pnpm data:sync                # 日常更新：只跑 upsert 類步驟（不清空集合、不重啟 Valhalla、不花錢）
+```
+
+- 加選群組：`--with-snapshot`（a11y-metro／bathrooms，先清空再灌）、`--with-valhalla`（缺 PBF 才下載 → 建地磚並重啟 Valhalla → 重建 traffic map／tar）、`--with-slow`（停車場全台掃描、校園爬蟲，校園會先清空）、`--with-paid`（welfare Geocoding 會先清空、RAG embedding）。
+- `--skip=<id,...>` 排除步驟；`--only=<id,...>` 只跑指定步驟（忽略群組旗標）；前置步驟沒選到會直接報錯。另有 `--fail-fast`（第一個失敗就停）、`--tdx-gap=<秒>`（TDX 步驟間隔，預設 10）。
+- `data/` 不在 git 裡：預設範圍只需要 `data/gtfs`；加選群組另外需要 `data/metro-a11y`、`data/bathrooms`（snapshot）、`data/welfare`、`data/rag`（paid）。缺檔時 preflight 會擋下，什麼都不執行。
+- Valhalla 的 PBF 只在檔案不存在時下載；要更新 OSM 就先刪掉舊的 PBF 再跑。
+- `traffic-tar` 和 `traffic-map` 即使沒產出也可能 exit 0，結束時摘要會列出提醒，請看該步驟的 Result 行。
+- `import:taipei-ramps` 需要 PostGIS 已有 ped graph（`ped_graph_version` 表）；還沒建就加 `--skip=taipei-ramps`。
+- 在 host 上跑時，`.env` 的 `DATABASE_URL`／`PED_GRAPH_DATABASE_URL` 要指向 compose 對外的埠（Mongo `27018`、PostGIS `5434`）。
+
 ---
 
 ## Phase 5 — OTP sidecar
