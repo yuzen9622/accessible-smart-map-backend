@@ -53,19 +53,36 @@ describe("parseTaichungTimetables", () => {
         city: "Taichung",
         isLowFloor: 1,
         source: "taichung-ebus",
+        cityRouteIds: ["54"],
       },
       {
         plateNumb: "552-U8",
         city: "Taichung",
         isLowFloor: 1,
         source: "taichung-ebus",
+        cityRouteIds: ["54"],
       },
       {
         plateNumb: "KKA-5851",
         city: "Taichung",
         isLowFloor: 0,
         source: "taichung-ebus",
+        cityRouteIds: ["70"],
       },
+    ]);
+  });
+
+  it("keeps every route a plate ran that day", () => {
+    const obs = parseTaichungTimetables({
+      r54: { edges: [{ node: { carId: "KKA-6319", carType: "dsby" } }] },
+      r70: { edges: [{ node: { carId: "kka-6319", carType: "dsby" } }] },
+    });
+
+    expect(obs).toEqual([
+      expect.objectContaining({
+        plateNumb: "KKA-6319",
+        cityRouteIds: ["54", "70"],
+      }),
     ]);
   });
 });

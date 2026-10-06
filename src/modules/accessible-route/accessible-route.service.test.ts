@@ -2142,66 +2142,35 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
     });
   });
 
-  describe("short-trip walk fallback", () => {
+  describe("short trips: walking competes inside the transit answer", () => {
     const taipeiStation = { latitude: 25.0478, longitude: 121.517 };
     const nationalMuseum = { latitude: 25.0429, longitude: 121.515 };
-
-    it("answers a wheelchair transit no-route with a step-free walk without the relaxed retry", async () => {
-      vi.mocked(planOtpRouteDetailed).mockResolvedValue(otpTransitNoRoute());
-      vi.mocked(planCsrWalkRoute).mockResolvedValue({
-        status: "ok",
-        plans: [csrWalkPlan([121.517, 25.0478], [121.515, 25.0429])],
-      });
-
-      const res = await planAccessibleRouteFromRequest({
-        travelMode: "transit",
-        mode: "wheelchair",
-        origin: taipeiStation,
-        destination: nationalMuseum,
-      });
-
-      expect(res.ok).toBe(true);
-      expect(okData(res).travelMode).toBe("transit");
-      expect(okData(res).fallback).toEqual({
-        travelMode: "walk",
-        reason: TRANSIT_FALLBACK_REASON.NO_TRANSIT_ROUTE,
-      });
-      expect(okData(res).routes[0].legs.every((l) => l.type === "WALK")).toBe(
-        true,
-      );
-      expect(vi.mocked(planCsrWalkRoute)).toHaveBeenCalledWith(
-        [
-          { lat: 25.0478, lng: 121.517 },
-          { lat: 25.0429, lng: 121.515 },
-        ],
-        { mode: "wheelchair", avoidStairs: true },
-      );
-      expect(vi.mocked(planOtpRouteDetailed)).toHaveBeenCalledTimes(1);
-    });
-
-    it("marks a transit answer made only of walking routes", async () => {
-      vi.mocked(planOtpRouteDetailed).mockResolvedValue(
-        otpTransitOk([
+    const otpWalkOnly = (minutes = 12) =>
+      ({
+        routeId: "otp-0-walk",
+        routeName: "步行路線",
+        totalMinutes: minutes,
+        transferCount: 0,
+        legs: [
           {
-            routeId: "otp-0-walk",
-            routeName: "步行路線",
-            totalMinutes: 12,
-            transferCount: 0,
-            legs: [
-              {
-                type: "WALK",
-                from: "出發地",
-                to: "目的地",
-                distanceM: 990,
-                minutesEst: 12,
-                polyline: [],
-                a11yFacilities: [],
-              },
-            ],
-            accessibilityHighlights: [],
+            type: "WALK",
+            from: "出發地",
+            to: "目的地",
+            distanceM: 990,
+            minutesEst: minutes,
+            polyline: [],
+            a11yFacilities: [],
           },
-        ] as any),
-      );
+        ],
+        accessibilityHighlights: [],
+      }) as any;
+
+    it("labels a walk-only answer WALKING_BETTER only when OTP said so", async () => {
+      vi.mocked(planOtpRouteDetailed).mockResolvedValue({
+        status: "ok",
+        routes: [otpWalkOnly()],
+        walkingBetter: true,
+      });
 
       const res = await planAccessibleRouteFromRequest({
         travelMode: "transit",
@@ -2213,94 +2182,74 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
         travelMode: "walk",
         reason: TRANSIT_FALLBACK_REASON.WALKING_BETTER,
       });
-      expect(okData(res).routes[0].routeName).toBe("步行路線");
     });
 
-    it("answers with walking when transit outlasts the walkable-trip budget", async () => {
+    it("labels a walk-only answer NO_TRANSIT_ROUTE when OTP found no transit", async () => {
+      vi.mocked(planOtpRouteDetailed).mockResolvedValue(
+        otpTransitOk([otpWalkOnly()]),
+      );
+
+      const res = await planAccessibleRouteFromRequest({
+        travelMode: "transit",
+        origin: taipeiStation,
+        destination: nationalMuseum,
+      });
+
+      expect(okData(res).fallback).toEqual({
+        travelMode: "walk",
+        reason: TRANSIT_FALLBACK_REASON.NO_TRANSIT_ROUTE,
+      });
+    });
+
+    it("waits for a slow transit answer instead of switching to walking", async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
       try {
-        vi.mocked(planOtpRouteDetailed).mockReturnValue(new Promise(() => {}));
-        vi.mocked(planCsrWalkRoute).mockResolvedValue({
-          status: "ok",
-          plans: [csrWalkPlan([121.515, 25.0428], [121.5175, 25.0462])],
-        });
+        vi.mocked(planOtpRouteDetailed).mockReturnValue(
+          new Promise((resolve) =>
+            setTimeout(
+              () => resolve(otpTransitOk([rooseveltBusRoute] as any)),
+              8_000,
+            ),
+          ),
+        );
 
         const pending = planAccessibleRouteFromRequest({
           travelMode: "transit",
           mode: "wheelchair",
-          origin: { latitude: 25.0427647, longitude: 121.5150029 },
-          destination: { latitude: 25.0462432, longitude: 121.5174745 },
+          origin: taipeiStation,
+          destination: nationalMuseum,
         });
-        await vi.advanceTimersByTimeAsync(5_000);
+        await vi.advanceTimersByTimeAsync(8_000);
         const res = await pending;
 
         expect(res.ok).toBe(true);
-        expect(okData(res).fallback).toEqual({
-          travelMode: "walk",
-          reason: TRANSIT_FALLBACK_REASON.NO_TRANSIT_ROUTE,
-        });
-        expect(vi.mocked(planOtpRouteDetailed)).toHaveBeenCalledTimes(1);
+        expect(okData(res).fallback).toBeUndefined();
+        expect(okData(res).routes[0].routeName).toContain("羅斯福路幹線");
+        expect(vi.mocked(planCsrWalkRoute)).not.toHaveBeenCalled();
       } finally {
         vi.useRealTimers();
       }
     });
 
-    it("does not walk-fallback beyond the straight-line ceiling", async () => {
-      vi.mocked(planOtpRouteDetailed).mockResolvedValue(otpTransitNoRoute());
+    it("plans every trip with one full search that carries the request deadline", async () => {
+      vi.mocked(planOtpRouteDetailed).mockResolvedValue(
+        otpTransitOk([rooseveltBusRoute] as any),
+      );
+      const before = Date.now();
 
-      const res = await planAccessibleRouteFromRequest({
-        travelMode: "transit",
-        origin: { latitude: 25.0478, longitude: 121.517 },
-        destination: { latitude: 25.0478, longitude: 121.534 },
-      });
-
-      expect(res).toMatchObject({
-        ok: false,
-        data: { reason: ROUTE_REASON.NO_ROUTE },
-      });
-      expect(vi.mocked(planCsrWalkRoute)).not.toHaveBeenCalled();
-    });
-
-    it("keeps the accessibility diagnosis when the walk fallback also fails", async () => {
-      vi.mocked(planOtpRouteDetailed)
-        .mockResolvedValueOnce(otpTransitNoRoute())
-        .mockResolvedValueOnce(otpTransitNoRoute())
-        .mockResolvedValueOnce(otpTransitOk([rooseveltBusRoute] as any));
-
-      const res = await planAccessibleRouteFromRequest({
-        travelMode: "transit",
-        mode: "wheelchair",
-        origin: taipeiStation,
-        destination: nationalMuseum,
-      });
-
-      expect(res).toMatchObject({
-        ok: false,
-        data: { reason: ROUTE_REASON.NO_ACCESSIBLE_ROUTE },
-      });
-    });
-
-    it("skips later-service searches first, then reruns the full search when walking also fails", async () => {
-      vi.mocked(planOtpRouteDetailed)
-        .mockResolvedValueOnce(otpTransitNoRoute())
-        .mockResolvedValueOnce(otpTransitOk([rooseveltBusRoute] as any));
-
-      const res = await planAccessibleRouteFromRequest({
+      await planAccessibleRouteFromRequest({
         travelMode: "transit",
         origin: taipeiStation,
         destination: nationalMuseum,
       });
 
-      expect(res.ok).toBe(true);
-      expect(okData(res).fallback).toBeUndefined();
-      expect(okData(res).routes[0].routeName).toContain("羅斯福路幹線");
       const calls = vi.mocked(planOtpRouteDetailed).mock.calls;
-      expect(calls).toHaveLength(2);
-      expect(calls[0][2]).toMatchObject({ skipLaterService: true });
-      expect(calls[1][2]?.skipLaterService).toBeFalsy();
+      expect(calls).toHaveLength(1);
+      expect(calls[0][2]).not.toHaveProperty("skipLaterService");
+      expect(calls[0][2]?.deadline).toBeGreaterThan(before);
     });
 
-    it("walks a short trip instead of failing when the transit planner is unavailable", async () => {
+    it("returns 503 instead of walking when the transit planner is unavailable", async () => {
       vi.mocked(planOtpRouteDetailed).mockResolvedValue({
         status: "unavailable",
         routes: [],
@@ -2316,27 +2265,100 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
         destination: nationalMuseum,
       });
 
-      expect(res.ok).toBe(true);
-      expect(okData(res).fallback).toEqual({
-        travelMode: "walk",
-        reason: TRANSIT_FALLBACK_REASON.NO_TRANSIT_ROUTE,
+      expect(res).toMatchObject({
+        ok: false,
+        status: 503,
+        data: { reason: ROUTE_REASON.UPSTREAM_TIMEOUT },
       });
+      expect(vi.mocked(planCsrWalkRoute)).not.toHaveBeenCalled();
     });
 
-    it("does not limit the search for trips beyond walking range", async () => {
-      vi.mocked(planOtpRouteDetailed).mockResolvedValue(
-        otpTransitOk([rooseveltBusRoute] as any),
-      );
+    it("keeps the accessibility diagnosis for a short wheelchair no-route", async () => {
+      vi.mocked(planOtpRouteDetailed)
+        .mockResolvedValueOnce(otpTransitNoRoute())
+        .mockResolvedValueOnce(otpTransitOk([rooseveltBusRoute] as any));
 
-      await planAccessibleRouteFromRequest({
+      const res = await planAccessibleRouteFromRequest({
         travelMode: "transit",
-        origin: { latitude: 25.0478, longitude: 121.517 },
-        destination: { latitude: 25.0339, longitude: 121.5645 },
+        mode: "wheelchair",
+        origin: taipeiStation,
+        destination: nationalMuseum,
       });
 
-      expect(
-        vi.mocked(planOtpRouteDetailed).mock.calls[0][2]?.skipLaterService,
-      ).toBeFalsy();
+      expect(res).toMatchObject({
+        ok: false,
+        data: { reason: ROUTE_REASON.NO_ACCESSIBLE_ROUTE },
+      });
+      expect(vi.mocked(planOtpRouteDetailed)).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(planCsrWalkRoute)).not.toHaveBeenCalled();
+    });
+
+    it("skips the diagnostic retry once the request budget is spent", async () => {
+      vi.stubEnv("ROUTE_PLAN_BUDGET_MS", "1");
+      try {
+        vi.mocked(planOtpRouteDetailed).mockImplementation(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          return otpTransitNoRoute();
+        });
+
+        const res = await planAccessibleRouteFromRequest({
+          travelMode: "transit",
+          mode: "wheelchair",
+          origin: taipeiStation,
+          destination: nationalMuseum,
+        });
+
+        expect(res).toMatchObject({
+          ok: false,
+          data: { reason: ROUTE_REASON.NO_ROUTE },
+        });
+        expect(vi.mocked(planOtpRouteDetailed)).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it("re-plans the Taipei walk option with CSR and ranks it by the same cost", async () => {
+      vi.mocked(planOtpRouteDetailed).mockResolvedValue(
+        otpTransitOk([rooseveltBusRoute, otpWalkOnly(30)] as any),
+      );
+      vi.mocked(planCsrWalkRoute).mockResolvedValue({
+        status: "ok",
+        plans: [csrWalkPlan([121.517, 25.0478], [121.515, 25.0429])],
+      });
+
+      const res = await planAccessibleRouteFromRequest({
+        travelMode: "transit",
+        mode: "wheelchair",
+        origin: taipeiStation,
+        destination: nationalMuseum,
+      });
+
+      const routes = okData(res).routes;
+      expect(vi.mocked(planCsrWalkRoute)).toHaveBeenCalledTimes(1);
+      expect(routes.some((r) => r.routeName === "步行路線")).toBe(false);
+      const walk = routes.find((r) => r.legs.every((l) => l.type === "WALK"));
+      expect(walk).toMatchObject({ engine: "pedestrian-a11y" });
+      expect(typeof walk?.accessibilityScore).toBe("number");
+      expect(okData(res).fallback).toBeUndefined();
+    });
+
+    it("keeps OTP's walk option when CSR has no route", async () => {
+      vi.mocked(planOtpRouteDetailed).mockResolvedValue(
+        otpTransitOk([rooseveltBusRoute, otpWalkOnly(30)] as any),
+      );
+
+      const res = await planAccessibleRouteFromRequest({
+        travelMode: "transit",
+        mode: "wheelchair",
+        origin: taipeiStation,
+        destination: nationalMuseum,
+      });
+
+      expect(vi.mocked(planCsrWalkRoute)).toHaveBeenCalledTimes(1);
+      expect(okData(res).routes.some((r) => r.routeName === "步行路線")).toBe(
+        true,
+      );
     });
   });
 

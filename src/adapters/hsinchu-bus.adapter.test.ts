@@ -46,12 +46,14 @@ describe("parseHsinchuRouteDetails", () => {
         city: "Hsinchu",
         isLowFloor: 1,
         source: "hsinchu-ibus",
+        cityRouteIds: ["HSZ011001_1"],
       },
       {
         plateNumb: "KKA-3036",
         city: "Hsinchu",
         isLowFloor: 0,
         source: "hsinchu-ibus",
+        cityRouteIds: ["HSZ011002_2"],
       },
     ]);
   });

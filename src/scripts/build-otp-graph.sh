@@ -249,17 +249,31 @@ npx dotenvx run -- ts-node "$SCRIPT_DIR/inject-db-a11y-stops.ts" "$WORK_DIR/feed
 # ── 1f. Trip wheelchair accessibility injection ──
 # route_type==1 (metro/light rail/gondola) gets wheelchair_accessible=1;
 # route_type==3 (bus) stays 0 (unknown); an existing 1 (TRA WheelChairFlag,
-# official TRTC feed) is preserved. Never writes 2 (inaccessible) — router-config
-# sets trip.inaccessibleCost=3600, which would push wheelchair journeys off an
-# entire city's bus network. Pure CSV transform; no MongoDB needed.
+# official TRTC feed) and a 2 the source feed published are preserved. Never
+# infers 2 (inaccessible) — router-config sets trip.inaccessibleCost=3600, which
+# would push wheelchair journeys off an entire city's bus network. Bus route
+# low-floor history is a ranking signal in the backend, not a trip flag here.
+# Pure CSV transform; no MongoDB needed.
 log "injecting trip wheelchair accessibility flags (route_type based)"
 npx dotenvx run -- ts-node "$SCRIPT_DIR/inject-tdx-bus-trips-a11y.ts" "$WORK_DIR/feed-1.gtfs.zip" ||
   log "WARN: trip accessibility injection failed — continuing"
 
-# ── 1g. Bus stop logical clustering (parent_station) ──
-log "generating logical parent stations for nearby bus stops"
-npx dotenvx run -- ts-node "$SCRIPT_DIR/generate-gtfs-parents.ts" "$WORK_DIR/feed-1.gtfs.zip" ||
-  log "WARN: parent station generation failed — continuing"
+# ── 1g. Merge co-located duplicate bus stops ──
+# TDX ships one stop per route at a shared pole (~156k boarding stops at ~66k
+# places), which saturates OTP's access/egress stop cap and multiplies transfer
+# work. The merge is all-or-nothing (atomic zip replace): if it fails the feed
+# is unchanged and the build continues unmerged. Once merged, the aliases that
+# map each route back to its own TDX StopUID MUST be stored, or the backend
+# would return merged ids — so an alias import failure aborts the build and
+# keeps the old graph. See merge-gtfs-duplicate-stops.py.
+STOP_ALIASES="$WORK_DIR/stop-aliases.json"
+log "merging co-located duplicate bus stops"
+if python3 "$SCRIPT_DIR/merge-gtfs-duplicate-stops.py" "$WORK_DIR/feed-1.gtfs.zip" "$STOP_ALIASES"; then
+  npx dotenvx run -- ts-node "$SCRIPT_DIR/import-gtfs-stop-aliases.ts" "$STOP_ALIASES" ||
+    die "stop alias import failed — a merged graph without aliases would return wrong stop ids; keeping the old graph"
+else
+  log "WARN: duplicate stop merge failed — continuing with the unmerged feed"
+fi
 
 # ── 2. OSM extract (monthly refresh, spec §5) ──
 OSM_CACHE="$OTP_DATA_DIR/taiwan-latest.osm.pbf"

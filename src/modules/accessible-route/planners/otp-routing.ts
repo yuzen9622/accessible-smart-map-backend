@@ -36,6 +36,7 @@ import {
   transitModeWeights,
 } from "./transit-preference";
 import { walkSpeedMps } from "../scoring";
+import { getRoutingConfig } from "../../../config/routing";
 import {
   attachInternalSchedule,
   retainEarliestFutureRoute,
@@ -67,8 +68,8 @@ import { unknownWalkA11yDetails } from "./walk-a11y";
 export type { PlanOtpRouteOptions };
 
 const OTP_TIMEOUT_MS = Number(process.env.OTP_TIMEOUT_MS ?? 30_000);
-const OTP_NUM_ITINERARIES = 8;
-const OTP_NUM_ITINERARIES_WIDE = 15;
+const OTP_NUM_ITINERARIES = getRoutingConfig().otpNumItineraries;
+const OTP_NUM_ITINERARIES_WIDE = getRoutingConfig().otpNumItinerariesWide;
 const OTP_SEARCH_WINDOW_S = Number(process.env.OTP_SEARCH_WINDOW_S ?? 3600);
 const OTP_SEARCH_WINDOW_WIDE_S = Number(
   process.env.OTP_SEARCH_WINDOW_WIDE_S ?? 7200,
@@ -371,6 +372,10 @@ function roundForCache(point: { lat: number; lng: number }): {
 }
 
 const OTP_PROCESSING_TIMEOUT = "OTP_PROCESSING_TIMEOUT";
+/** A stage cut short by the request's time budget, not by an OTP fault. */
+const OTP_BUDGET_EXHAUSTED = "OTP_BUDGET_EXHAUSTED";
+/** Timer jitter tolerated when deciding that the budget cap is what fired. */
+const BUDGET_TIMER_SLACK_MS = 50;
 
 /**
  * Error for a GraphQL error answer. OTP abandons a query at its
@@ -392,12 +397,33 @@ function otpGraphqlError(message: string | undefined): Error {
 async function postOtpPlan(
   variables: Record<string, unknown>,
   query = PLAN_QUERY,
+  timeoutMs?: number,
 ): Promise<OtpPlanResponse> {
   const baseUrl = process.env.OTP_BASE_URL ?? "http://localhost:8080";
-  const response = await otpClient.post(
-    `${baseUrl}/otp/routers/default/index/graphql`,
-    { query, variables },
-  );
+  const capped = timeoutMs !== undefined && timeoutMs < OTP_TIMEOUT_MS;
+  const startedAt = Date.now();
+  let response;
+  try {
+    response = await otpClient.post(
+      `${baseUrl}/otp/routers/default/index/graphql`,
+      { query, variables },
+      capped ? { timeout: Math.max(1, Math.floor(timeoutMs)) } : undefined,
+    );
+  } catch (err) {
+    // Running out of the request budget says nothing about OTP's health, so
+    // it must not feed the outage breaker. A timeout well before the cap ran
+    // out is a real network failure and still counts.
+    if (
+      capped &&
+      isTimeout(err) &&
+      Date.now() - startedAt >= (timeoutMs as number) - BUDGET_TIMER_SLACK_MS
+    ) {
+      throw Object.assign(new Error("OTP stage exceeded the request budget"), {
+        code: OTP_BUDGET_EXHAUSTED,
+      });
+    }
+    throw err;
+  }
   const json = response.data as {
     data?: {
       plan?: {
@@ -445,6 +471,7 @@ function shiftItinerary(it: OtpItinerary, offsetMs: number): OtpItinerary {
 async function cachedOtpPlan(
   variables: Record<string, unknown>,
   transitModes?: string[],
+  timeoutMs?: number,
 ): Promise<{ response: OtpPlanResponse; fromCache: boolean }> {
   const key = `otp:plan:v1:${createHash("sha1")
     .update(
@@ -467,6 +494,7 @@ async function cachedOtpPlan(
   const request = postOtpPlan(
     variables,
     transitModes ? planQuery(transitModes) : PLAN_QUERY,
+    timeoutMs,
   )
     .then((response) => {
       void redisSet(key, JSON.stringify(response), OTP_PLAN_CACHE_TTL_S);
@@ -498,6 +526,8 @@ async function cachedOtpPlan(
  * @param transitPreference Soft preference sent as OTP mode weights.
  * @param transitModes Restricts the transit modes searched, or undefined for
  *   every supported mode.
+ * @param timeoutMs Time this query may take, when the request budget leaves
+ *   less than the client's default timeout.
  * @returns The attempt, anchored at the requested departure.
  */
 async function queryOtpPlan(
@@ -511,6 +541,7 @@ async function queryOtpPlan(
   maxTransfers?: number,
   transitPreference?: TransitPreference,
   transitModes?: string[],
+  timeoutMs?: number,
 ): Promise<OtpPlanAttempt> {
   const cacheOn = otpPlanCacheEnabled();
   const from = cacheOn ? roundForCache(origin) : origin;
@@ -541,11 +572,16 @@ async function queryOtpPlan(
       ...(await postOtpPlan(
         variables,
         transitModes ? planQuery(transitModes) : PLAN_QUERY,
+        timeoutMs,
       )),
       anchor: departure,
     };
   }
-  const { response, fromCache } = await cachedOtpPlan(variables, transitModes);
+  const { response, fromCache } = await cachedOtpPlan(
+    variables,
+    transitModes,
+    timeoutMs,
+  );
   const departureMs = departure.getTime();
   return {
     itineraries: response.itineraries.flatMap((it) => {
@@ -1240,7 +1276,11 @@ function isOtpOutage(err: unknown): boolean {
 
 function isTimeout(err: unknown): boolean {
   const code = (err as { code?: string } | null)?.code;
-  return code === "ECONNABORTED" || code === "ETIMEDOUT";
+  return (
+    code === "ECONNABORTED" ||
+    code === "ETIMEDOUT" ||
+    code === OTP_BUDGET_EXHAUSTED
+  );
 }
 
 function isOtpProcessingTimeout(err: unknown): boolean {
@@ -1278,7 +1318,7 @@ async function settleWithin<T>(
 }
 
 export type OtpRoutePlanResult =
-  | { status: "ok"; routes: AccessibleRoute[] }
+  | { status: "ok"; routes: AccessibleRoute[]; walkingBetter?: boolean }
   | { status: "no_route" | "unavailable"; routes: [] };
 
 /**
@@ -1303,10 +1343,11 @@ export async function planOtpRoute(
  * continuing; a primary that already holds a transit route satisfying the
  * known stairs constraint but took
  * OTP_WIDEN_SKIP_AFTER_MS or longer skips the diversity widening, which costs
- * about twice the primary; `skipLaterService` drops the wide-window and
- * continuation searches but keeps the stop-snap retry, and so does OTP
- * abandoning any query at its processing timeout — a wider window would only
- * cost more, while snapped endpoints can still link a badly placed point.
+ * about twice the primary; OTP abandoning any query at its processing timeout
+ * drops the continuation searches but keeps the stop-snap retry — a wider
+ * window would only cost more, while snapped endpoints can still link a badly
+ * placed point. Every stage after the primary only gets what remains of the
+ * request deadline (`opts.deadline`) and is skipped once it is spent.
  * Upstream request failures are reported as unavailable only when no usable
  * route survives; a continuation failure may therefore preserve an existing
  * transit or walk-fallback route. Later searches cover an absolute departure
@@ -1339,6 +1380,15 @@ export async function planOtpRouteDetailed(
 
   const tm: Record<string, number> = {};
   const t0 = Date.now();
+  // One budget for every OTP stage of this request. The primary query keeps
+  // the client's own timeout (OTP abandons it at apiProcessingTimeout anyway)
+  // so a hung OTP still trips the outage breaker; every later, optional stage
+  // only gets what remains and is skipped once the budget is spent.
+  const deadline = opts?.deadline ?? t0 + getRoutingConfig().planBudgetMs;
+  const remainingMs = () => deadline - Date.now();
+  const budgetLeft = () => remainingMs() > 0;
+  const stageTimeout = () => Math.max(1, remainingMs());
+  if (!budgetLeft()) return { status: "unavailable", routes: [] };
   let failureRecorded = false;
   let sawUpstreamFailure = false;
   const recordPlanFailure = () => {
@@ -1481,7 +1531,7 @@ export async function planOtpRouteDetailed(
     );
   if (walkSettled) tm.walkSettled = 1;
 
-  const laterServiceAllowed = !walkSettled && !opts?.skipLaterService;
+  const laterServiceAllowed = !walkSettled;
 
   // A soft preference cannot surface a mode OTP never returned, so a primary
   // answer without it starts one small preferred-only search that runs
@@ -1513,6 +1563,7 @@ export async function planOtpRouteDetailed(
       maxTransfers,
       undefined,
       preferredModes,
+      stageTimeout(),
     )
       .then((attempt) => {
         tm.otpPreferred = Date.now() - tPreferred;
@@ -1527,7 +1578,12 @@ export async function planOtpRouteDetailed(
       });
   }
 
-  if (primarySucceeded && !sawTerminalRoutingError && laterServiceAllowed) {
+  if (
+    primarySucceeded &&
+    !sawTerminalRoutingError &&
+    laterServiceAllowed &&
+    budgetLeft()
+  ) {
     const distinctRouteSignatures = new Set(
       itineraries
         .filter(
@@ -1562,6 +1618,8 @@ export async function planOtpRouteDetailed(
           wideWindowSec,
           maxTransfers,
           opts?.transitPreference,
+          undefined,
+          stageTimeout(),
         );
         observeAttempt(wideAttempt);
         rememberOriginalWalkFallback(wideAttempt);
@@ -1614,7 +1672,7 @@ export async function planOtpRouteDetailed(
   let pendingSnapPost: WalkLeg | null = null;
   let continuationAllowed = laterServiceAllowed && !otpGaveUp;
 
-  if (needBusSnap) {
+  if (needBusSnap && budgetLeft()) {
     const tSnap = Date.now();
     const preferBus =
       straightDistM <= 3500 || !hasSearchEligibleTransit(itineraries);
@@ -1652,6 +1710,8 @@ export async function planOtpRouteDetailed(
           effectiveWindowSec,
           maxTransfers,
           opts?.transitPreference,
+          undefined,
+          stageTimeout(),
         );
         observeAttempt(retryAttempt);
         tm.otpRetry = Date.now() - tRetry;
@@ -1707,6 +1767,7 @@ export async function planOtpRouteDetailed(
   );
   while (
     continuationAllowed &&
+    budgetLeft() &&
     !hasSearchEligibleTransit(itineraries) &&
     !sawTerminalRoutingError &&
     nextContinuationAnchor.getTime() < searchEndMs
@@ -1728,6 +1789,8 @@ export async function planOtpRouteDetailed(
         continuationWindowSec,
         maxTransfers,
         opts?.transitPreference,
+        undefined,
+        stageTimeout(),
       );
       observeAttempt(originalContinuationAttempt);
       rememberOriginalWalkFallback(originalContinuationAttempt);
@@ -1757,6 +1820,8 @@ export async function planOtpRouteDetailed(
           continuationWindowSec,
           maxTransfers,
           opts?.transitPreference,
+          undefined,
+          stageTimeout(),
         );
         observeAttempt(snappedContinuationAttempt);
         if (!snappedContinuationAttempt.fromCache) planBreaker.recordSuccess();
@@ -1800,7 +1865,10 @@ export async function planOtpRouteDetailed(
   if (preferredSearch) {
     const found = await settleWithin(
       preferredSearch,
-      Math.max(0, OTP_PREFERRED_BUDGET_MS - (Date.now() - t0)),
+      Math.max(
+        0,
+        Math.min(OTP_PREFERRED_BUDGET_MS - (Date.now() - t0), remainingMs()),
+      ),
     );
     if (found === undefined) tm.preferredSkipped = 1;
     for (const it of found ?? []) preferredExtras.add(it);
@@ -1933,7 +2001,21 @@ export async function planOtpRouteDetailed(
     opts?.transitPreference,
     (route) => !wheelchair || routeStairsCount(route) === 0,
   );
-  if (routes.length) return { status: "ok", routes };
+  if (routes.length) {
+    // Only OTP's own verdict means "walking is better"; a walk-only answer
+    // after finding no transit at all is not.
+    const walkOnly = routes.every((r) =>
+      r.legs.every((l) => l.type === "WALK"),
+    );
+    const walkingBetter =
+      walkOnly &&
+      !!(walkFallbackAttempt as OtpPlanAttempt | null)?.routingErrors.some(
+        (error) => error.code === OTP_WALKING_BETTER_ERROR,
+      );
+    return walkingBetter
+      ? { status: "ok", routes, walkingBetter }
+      : { status: "ok", routes };
+  }
   if (sawTerminalRoutingError) return { status: "no_route", routes: [] };
   return sawUpstreamFailure
     ? { status: "unavailable", routes: [] }

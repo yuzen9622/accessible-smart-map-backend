@@ -46,7 +46,12 @@ import type { IOsmA11y } from "../../types";
 import type { TaiwanCityEn } from "../../types/transit";
 import { slimRoutes, compactRoutes } from "./facility-slim";
 import { slimRouteGeometry } from "./geometry-slim";
-import { rerankByLowFloor } from "./low-floor-rerank";
+import { getRoutingConfig } from "../../config/routing";
+import { restoreRouteStopIds } from "./stop-aliases";
+import {
+  rerankByLowFloor,
+  type RouteLowFloorHistory,
+} from "./low-floor-rerank";
 import { demoteElevatorNoticeRoutes } from "./elevator-notice-rerank";
 import { matchAudioSignals, paddedBbox } from "./planners/audio-signals";
 import {
@@ -70,7 +75,7 @@ import type {
   MetroAlert,
   MetroAlertResult,
 } from "../../types/transit";
-import { haversineMeters, pathLengthMeters } from "../../utils/geo";
+import { haversineMeters } from "../../utils/geo";
 import {
   arrivalEntranceHighlight,
   resolveParkArrival,
@@ -125,14 +130,8 @@ const PARKING_ARRIVAL_RADIUS_M = 200;
  */
 const PARK_ARRIVAL_BUDGET_MS = 800;
 const MAX_WALK_SEGMENT_CONCURRENCY = 4;
-/** Straight-line ceiling under which a transit request may be answered by walking. */
-const TRANSIT_WALK_FALLBACK_MAX_M = 1_500;
 /** How far a transit endpoint may move to reach a street-level walkway. */
 const STREET_ANCHOR_TOLERANCE_M = 30;
-/** How long a walkable trip waits for transit before answering with walking. */
-const WALKABLE_TRANSIT_BUDGET_MS = Number(
-  process.env.WALKABLE_TRANSIT_BUDGET_MS ?? 5_000,
-);
 
 /**
  * Limit concurrent tasks without changing their result order.
@@ -286,6 +285,79 @@ function legDataCoverageRatio(r: AccessibleRoute): number {
 }
 
 /**
+ * Score one route with the evidence-based scoring engine, attaching the score
+ * metadata to it.
+ *
+ * @param r The route, updated in place.
+ * @param maxTime Slowest total minutes among the routes compared.
+ * @param minTime Fastest total minutes among the routes compared.
+ * @param mode Accessibility mode driving the weights.
+ * @param env Weather / air conditions, when known.
+ * @returns The route's total accessibility score.
+ */
+function scoreRouteInPlace(
+  r: AccessibleRoute,
+  maxTime: number,
+  minTime: number,
+  mode: AccessibilityMode,
+  env?: EnvConditions,
+): number {
+  const facilities = collectRouteFacilities(r);
+  const walkDistanceM = totalWalkDistanceM(r);
+  const result = scoreRoute(
+    facilities,
+    r.totalMinutes,
+    maxTime,
+    minTime,
+    r.accessibilityHighlights?.length ?? 0,
+    mode,
+    walkDistanceM,
+    legDataCoverageRatio(r),
+    env,
+    r.transferCount,
+  );
+  r.accessibilityScore = result.totalScore;
+  r.accessibilityLabel = result.label;
+  r.scoreComponents = result.components;
+  r.factors = result.factors;
+  r.dataConfidence = result.dataConfidence;
+  r.scoreWarnings = result.warnings;
+  r.totalWalkDistanceM = walkDistanceM;
+  r.accessibilitySummary = buildAccessibilitySummary({
+    mode,
+    walkDistanceM,
+    transferCount: r.transferCount,
+    facilities,
+    label: result.label,
+  });
+  return result.totalScore;
+}
+
+/**
+ * Mode-aware ranking cost of an already scored route.
+ *
+ * @param r A route with its accessibility score attached.
+ * @param mode Accessibility mode driving the cost weights.
+ * @param transitPreference Soft transit-mode preference.
+ * @returns The cost; lower ranks first.
+ */
+function scoredRouteCost(
+  r: AccessibleRoute,
+  mode: AccessibilityMode,
+  transitPreference?: TransitPreference,
+): number {
+  return (
+    routeCost(
+      r.totalMinutes,
+      r.transferCount,
+      r.accessibilityScore ?? 0,
+      mode,
+      r.totalWalkDistanceM ?? totalWalkDistanceM(r),
+    ) + transitPreferencePenalty(r, transitPreference)
+  );
+}
+
+/**
  * Score every candidate route with the evidence-based scoring engine
  * (accessibility 65% / travel time 35%) and rank them by mode-aware route cost.
  *
@@ -305,45 +377,8 @@ export function scoreAndRank(
 
   return routes
     .map((r) => {
-      const facilities = collectRouteFacilities(r);
-      const walkDistanceM = totalWalkDistanceM(r);
-      const result = scoreRoute(
-        facilities,
-        r.totalMinutes,
-        maxTime,
-        minTime,
-        r.accessibilityHighlights?.length ?? 0,
-        mode,
-        walkDistanceM,
-        legDataCoverageRatio(r),
-        env,
-        r.transferCount,
-      );
-      r.accessibilityScore = result.totalScore;
-      r.accessibilityLabel = result.label;
-      r.scoreComponents = result.components;
-      r.factors = result.factors;
-      r.dataConfidence = result.dataConfidence;
-      r.scoreWarnings = result.warnings;
-      r.totalWalkDistanceM = walkDistanceM;
-      r.accessibilitySummary = buildAccessibilitySummary({
-        mode,
-        walkDistanceM,
-        transferCount: r.transferCount,
-        facilities,
-        label: result.label,
-      });
-      return {
-        route: r,
-        cost:
-          routeCost(
-            r.totalMinutes,
-            r.transferCount,
-            result.totalScore,
-            mode,
-            walkDistanceM,
-          ) + transitPreferencePenalty(r, transitPreference),
-      };
+      scoreRouteInPlace(r, maxTime, minTime, mode, env);
+      return { route: r, cost: scoredRouteCost(r, mode, transitPreference) };
     })
     .sort((a, b) => a.cost - b.cost)
     .map((s) => s.route);
@@ -1172,6 +1207,31 @@ export async function applyConfirmedHazardPlanning(
  * @param envPromise Environment lookup started alongside route planning.
  * @returns The top-3 finalized routes.
  */
+/**
+ * Low-floor history for the first bus leg of each route. Fail-soft: an empty
+ * map when the lookup fails, so ranking falls back to live plates only.
+ *
+ * @param routes Routes about to be reranked.
+ * @returns History keyed by TDX sub-route uid.
+ */
+async function loadLowFloorHistory(
+  routes: AccessibleRoute[],
+): Promise<RouteLowFloorHistory> {
+  const subRoutes = routes.flatMap((route) => {
+    const leg = route.legs.find((l) => l.type !== "WALK");
+    return leg?.type === "BUS" && leg.subRouteUid ? [leg.subRouteUid] : [];
+  });
+  if (!subRoutes.length) return new Map();
+  try {
+    const { findRouteLowFloorEvidence } =
+      await import("../transit/bus-fleet.repository");
+    return await findRouteLowFloorEvidence(subRoutes);
+  } catch (err) {
+    console.warn("[accessible-route] low-floor history lookup failed", err);
+    return new Map();
+  }
+}
+
 async function finalizeRoutes(
   routes: AccessibleRoute[],
   origin: { lat: number; lng: number },
@@ -1284,6 +1344,8 @@ async function finalizeRoutes(
   }
   t.facilityOverlay = Date.now() - t0;
   t0 = Date.now();
+  // Route low-floor history is advisory; it loads alongside the live overlay.
+  const lowFloorHistory = loadLowFloorHistory(top);
   try {
     const { overlayRealtimeTransit, recoverRailTrainNos, annotateBusTdxCity } =
       await import("./planners/realtime-transit");
@@ -1296,7 +1358,7 @@ async function finalizeRoutes(
   t.realtimeOverlay = Date.now() - t0;
   t0 = Date.now();
   try {
-    rerankByLowFloor(top, mode, transitPreference);
+    rerankByLowFloor(top, mode, transitPreference, await lowFloorHistory);
   } catch (err) {
     console.warn("[accessible-route] low-floor rerank failed", err);
   }
@@ -1834,6 +1896,52 @@ function isWalkOnlyAnswer(routes: AccessibleRoute[]): boolean {
 }
 
 /**
+ * Re-plan the walk-only option with the Taipei pedestrian network (CSR) when
+ * the trip lies inside its coverage, so the walking option shown next to
+ * transit keeps CSR's accessibility-aware path. At most one CSR call per
+ * request; the refined option is scored by the same engine and re-inserted by
+ * the same cost as the routes around it. Any CSR miss keeps OTP's walk.
+ *
+ * @param routes Final transit answer, updated in place.
+ * @param walkPoints Origin, waypoints and destination.
+ * @param mode Accessibility mode.
+ * @param avoidStairs Whether the walk must be step-free.
+ * @param transitPreference Soft transit-mode preference for the cost.
+ */
+async function refineWalkOptionWithCsr(
+  routes: AccessibleRoute[],
+  walkPoints: LatLng[],
+  mode: AccessibilityMode,
+  avoidStairs: boolean,
+  transitPreference?: TransitPreference,
+): Promise<void> {
+  const index = routes.findIndex((r) => r.legs.every((l) => l.type === "WALK"));
+  if (index === -1) return;
+  const csr = await planCsrWalkForRequest(walkPoints, mode, avoidStairs);
+  logCsrWalkOutcome(csr, walkPoints.length - 1, mode);
+  if (csr.status !== "ok") return;
+  const [refined] = await finalizeDrivingRoutes(
+    [buildCsrWalkRoute(csr.plans)],
+    "walk",
+    walkPoints[walkPoints.length - 1],
+  );
+  if (!refined) return;
+  const others = routes.filter((_, i) => i !== index);
+  const times = [...others, refined].map((r) => r.totalMinutes);
+  const maxTime = Math.max(...times, 1);
+  scoreRouteInPlace(refined, maxTime, Math.min(...times, maxTime), mode);
+  const cost = scoredRouteCost(refined, mode, transitPreference);
+  const at = others.findIndex(
+    (r) => cost < scoredRouteCost(r, mode, transitPreference),
+  );
+  const reordered =
+    at === -1
+      ? [...others, refined]
+      : [...others.slice(0, at), refined, ...others.slice(at)];
+  routes.splice(0, routes.length, ...reordered);
+}
+
+/**
  * Resolve a park destination to an accessible entrance. Advisory: a failed
  * lookup, or one exceeding {@link PARK_ARRIVAL_BUDGET_MS}, keeps the
  * destination the caller asked for.
@@ -2131,8 +2239,9 @@ export async function planAccessibleRouteFromRequest(
       avoidStairs,
       requireElevator,
     });
-    const walkableTrip =
-      pathLengthMeters(walkPoints) <= TRANSIT_WALK_FALLBACK_MAX_M;
+    // Every OTP stage of this request, including the diagnostic retry below,
+    // shares one budget instead of each getting a fresh client timeout.
+    const deadline = Date.now() + getRoutingConfig().planBudgetMs;
     const transitOptions: FindAccessibleRoutesOptions = {
       mode: transitMode,
       transitPreference,
@@ -2142,89 +2251,60 @@ export async function planAccessibleRouteFromRequest(
       waypoints: waypointsOpt,
       avoidStairs: constraints.avoidStairs,
       requireElevator: constraints.requireElevator,
+      deadline,
     };
-    const transitPromise = findAccessibleRoutesDetailed(
+    const transit = await findAccessibleRoutesDetailed(
       originLatLng,
       dest,
       city,
-      { ...transitOptions, skipLaterService: walkableTrip },
+      transitOptions,
     );
-    const walkPromise = walkableTrip
-      ? planWalkRoutes(
-          walkPoints,
-          transitMode,
-          constraints.avoidStairs,
-          futureDeparture,
-        ).catch((err: unknown) => {
-          console.warn("[accessible-route] walk fallback planning failed", err);
-          return undefined;
-        })
-      : undefined;
-    let transit = walkableTrip
-      ? await settleWithin(transitPromise, WALKABLE_TRANSIT_BUDGET_MS)
-      : await transitPromise;
-    const walkFallback =
-      walkPromise && transit?.status !== "ok" ? await walkPromise : undefined;
-    if (walkFallback?.ok) {
-      if (!transit) {
-        console.warn(
-          "[accessible-route] transit planning exceeded the walkable-trip budget; answering with walking",
-          JSON.stringify({ budgetMs: WALKABLE_TRANSIT_BUDGET_MS }),
-        );
-      }
-      routes = walkFallback.routes;
-      trafficHookMs += walkFallback.trafficMs;
-      routedByEngineWithNoElevationData =
-        walkFallback.routedByEngineWithNoElevationData;
-      transitFallback = {
-        travelMode: "walk",
-        reason: TRANSIT_FALLBACK_REASON.NO_TRANSIT_ROUTE,
-      };
-    } else {
-      transit ??= await transitPromise;
-      if (transit.status === "no_route" && walkableTrip) {
-        transit = await findAccessibleRoutesDetailed(
+    if (transit.status === "unavailable") {
+      logRequestTiming();
+      return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT);
+    }
+    if (transit.status === "no_route") {
+      // The relaxed search only tells NO_ACCESSIBLE_ROUTE from NO_ROUTE; its
+      // routes are never shown, so it is skipped once the budget is spent.
+      if (constraints.avoidStairs && Date.now() < deadline) {
+        const relaxed = await findAccessibleRoutesDetailed(
           originLatLng,
           dest,
           city,
-          transitOptions,
+          {
+            ...transitOptions,
+            avoidStairs: false,
+            requireElevator: false,
+          },
         );
-      }
-      if (transit.status === "unavailable") {
         logRequestTiming();
-        return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT);
-      }
-      if (transit.status === "no_route") {
-        if (constraints.avoidStairs) {
-          const relaxed = await findAccessibleRoutesDetailed(
-            originLatLng,
-            dest,
-            city,
-            {
-              ...transitOptions,
-              avoidStairs: false,
-              requireElevator: false,
-            },
-          );
-          logRequestTiming();
-          if (relaxed.status === "unavailable") {
-            return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT);
-          }
-          if (relaxed.status === "ok" && relaxed.routes.length) {
-            return routeFailure(ROUTE_REASON.NO_ACCESSIBLE_ROUTE);
-          }
-          return routeFailure(ROUTE_REASON.NO_ROUTE);
+        if (relaxed.status === "unavailable") {
+          return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT);
         }
-        logRequestTiming();
+        if (relaxed.status === "ok" && relaxed.routes.length) {
+          return routeFailure(ROUTE_REASON.NO_ACCESSIBLE_ROUTE);
+        }
         return routeFailure(ROUTE_REASON.NO_ROUTE);
       }
-      routes = transit.routes;
-      if (isWalkOnlyAnswer(routes)) {
-        transitFallback = {
-          travelMode: "walk",
-          reason: TRANSIT_FALLBACK_REASON.WALKING_BETTER,
-        };
-      }
+      logRequestTiming();
+      return routeFailure(ROUTE_REASON.NO_ROUTE);
+    }
+    routes = transit.routes;
+    await refineWalkOptionWithCsr(
+      routes,
+      walkPoints,
+      transitMode,
+      constraints.avoidStairs,
+      transitPreference,
+    );
+    if (isWalkOnlyAnswer(routes)) {
+      transitFallback = {
+        travelMode: "walk",
+        reason:
+          transit.status === "ok" && transit.walkingBetter
+            ? TRANSIT_FALLBACK_REASON.WALKING_BETTER
+            : TRANSIT_FALLBACK_REASON.NO_TRANSIT_ROUTE,
+      };
     }
     logRequestTiming();
   } else if (travelMode === "walk") {
@@ -3234,7 +3314,7 @@ export async function findAccessibleRoutesDetailed(
         mode,
         avoidStairs: constraints.avoidStairs,
         departureTime: opts.departureTime,
-        skipLaterService: opts.skipLaterService,
+        deadline: opts.deadline,
       },
     );
     console.log(
@@ -3243,6 +3323,7 @@ export async function findAccessibleRoutesDetailed(
     );
     if (otp.status !== "ok") return otp;
     if (!otp.routes.length) return { status: "no_route", routes: [] };
+    await restoreRouteStopIds(otp.routes);
     const routes = await finalizeRoutes(
       otp.routes,
       origin,
@@ -3253,9 +3334,10 @@ export async function findAccessibleRoutesDetailed(
       envPromise,
       opts.transitPreference,
     );
-    return routes.length
-      ? { status: "ok", routes }
-      : { status: "no_route", routes: [] };
+    if (!routes.length) return { status: "no_route", routes: [] };
+    return otp.walkingBetter
+      ? { status: "ok", routes, walkingBetter: true }
+      : { status: "ok", routes };
   }
 
   // Multi-waypoint transit: plan each origin→wp→…→dest segment sequentially,
@@ -3272,6 +3354,7 @@ export async function findAccessibleRoutesDetailed(
   }
   let cursor = opts.departureTime ?? new Date();
   const segments: AccessibleRoute[] = [];
+  let everySegmentWalkingBetter = true;
   for (const [from, to] of segmentPairs) {
     const result = await runOtpSegment(from, to, {
       transitPreference: opts.transitPreference,
@@ -3280,9 +3363,10 @@ export async function findAccessibleRoutesDetailed(
       avoidStairs: constraints.avoidStairs,
       departureTime: cursor,
       limit: 1,
-      skipLaterService: opts.skipLaterService,
+      deadline: opts.deadline,
     });
     if (result.status !== "ok") return result;
+    everySegmentWalkingBetter &&= result.walkingBetter === true;
     const best = result.routes[0];
     if (!best) return { status: "no_route", routes: [] };
     segments.push(best);
@@ -3300,6 +3384,7 @@ export async function findAccessibleRoutesDetailed(
     }),
   );
   const combined = combineSegments(segments);
+  await restoreRouteStopIds([combined]);
   const routes = await finalizeRoutes(
     [combined],
     origin,
@@ -3310,7 +3395,8 @@ export async function findAccessibleRoutesDetailed(
     envPromise,
     opts.transitPreference,
   );
-  return routes.length
-    ? { status: "ok", routes }
-    : { status: "no_route", routes: [] };
+  if (!routes.length) return { status: "no_route", routes: [] };
+  return everySegmentWalkingBetter
+    ? { status: "ok", routes, walkingBetter: true }
+    : { status: "ok", routes };
 }

@@ -97,13 +97,18 @@ export interface FindAccessibleRoutesOptions {
   waypoints?: LatLng[];
   avoidStairs?: boolean;
   requireElevator?: boolean;
-  /** Skip the wide-window and later-service searches (walkable short trips). */
-  skipLaterService?: boolean;
+  /** Epoch ms shared by every OTP stage of one request (see PlanOtpRouteOptions). */
+  deadline?: number;
 }
 
-/** Detailed transit planner outcome for callers that must distinguish no route from an unavailable upstream. */
+/**
+ * Detailed transit planner outcome for callers that must distinguish no route
+ * from an unavailable upstream. `walkingBetter` is set when OTP itself
+ * reported walking beats transit (WALKING_BETTER_THAN_TRANSIT), as opposed to
+ * finding no transit at all.
+ */
 export type FindAccessibleRoutesResult =
-  | { status: "ok"; routes: AccessibleRoute[] }
+  | { status: "ok"; routes: AccessibleRoute[]; walkingBetter?: boolean }
   | { status: "no_route" | "unavailable"; routes: [] };
 
 export interface PlanRoadRouteOptions {

@@ -8,6 +8,7 @@
  * derived from peer-reviewed accessibility literature and Taiwan/ADA standards.
  */
 
+import { WALK_SPEED_MPS } from "../../config/routing";
 import type { IOsmA11y } from "../../types";
 import type { AccessibilityMode } from "../../types/route";
 import type {
@@ -438,21 +439,10 @@ export function walkPenaltyScore(
 }
 
 /**
- * Mode-specific walking speed (m/s) for converting walk DISTANCE to duration.
- * Wheelchair self-propulsion is ~0.8 m/s; OTP's foot-walking default (~1.33 m/s)
- * badly underestimates wheelchair/elderly walk times (the "685 m = 8 min"
- * symptom). Consumed by the ORS client and passed to OTP as the `walkSpeed`
- * request parameter.
- */
-const WALK_SPEED_MPS: Record<AccessibilityMode, number> = {
-  wheelchair: 0.8,
-  elderly: 0.9,
-  visual_impaired: 1.0,
-  normal: 1.3,
-};
-
-/**
- * Walking speed in metres/second for a mode.
+ * Walking speed in metres/second for a mode. Wheelchair self-propulsion is
+ * ~0.8 m/s; OTP's foot-walking default (~1.33 m/s) badly underestimates
+ * wheelchair/elderly walk times. The table lives in config/routing.ts because
+ * it must match OTP's transfer cache.
  *
  * @param mode Accessibility mode. Default "wheelchair" — the conservative choice
  *   for an accessibility-first planner when the caller has no mode.

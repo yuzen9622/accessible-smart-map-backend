@@ -743,7 +743,37 @@ describe("planOtpRoute search windows and timeouts", () => {
     expect(post).toHaveBeenCalledTimes(1);
   });
 
-  it("skips the wide and continuation searches but keeps the snap retry when asked", async () => {
+  it("skips every optional stage once the request budget is spent", async () => {
+    busLean.mockResolvedValue([
+      {
+        location: { coordinates: [121.565, 25.041] },
+        stopName: { Zh_tw: "公車站" },
+      },
+    ]);
+    post.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      return okResp([]);
+    });
+
+    const result = await planOtpRouteDetailed(origin, destination, {
+      deadline: Date.now() + 10,
+    });
+
+    // Only the primary query ran: no widening, stop snap or later service.
+    expect(result).toEqual({ status: "no_route", routes: [] });
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not plan at all when the request budget is already spent", async () => {
+    const result = await planOtpRouteDetailed(origin, destination, {
+      deadline: Date.now() - 1,
+    });
+
+    expect(result).toEqual({ status: "unavailable", routes: [] });
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("caps optional stages at the remaining budget", async () => {
     busLean.mockResolvedValue([
       {
         location: { coordinates: [121.565, 25.041] },
@@ -752,15 +782,40 @@ describe("planOtpRoute search windows and timeouts", () => {
     ]);
     post.mockResolvedValue(okResp([]));
 
-    const result = await planOtpRouteDetailed(origin, destination, {
-      skipLaterService: true,
+    await planOtpRouteDetailed(origin, destination, {
+      deadline: Date.now() + 5_000,
     });
 
-    expect(result).toEqual({ status: "no_route", routes: [] });
-    expect(post).toHaveBeenCalledTimes(2);
-    expect(
-      post.mock.calls.map((call) => call[1].variables.searchWindow),
-    ).toEqual([3600, 3600]);
+    // The primary keeps the client default; later stages get at most 5 s.
+    expect(post.mock.calls[0][2]).toBeUndefined();
+    const later = post.mock.calls.slice(1);
+    expect(later.length).toBeGreaterThan(0);
+    for (const call of later) {
+      expect(call[2]?.timeout).toBeGreaterThan(0);
+      expect(call[2]?.timeout).toBeLessThanOrEqual(5_000);
+    }
+  });
+
+  it("reports OTP's own walking-is-better verdict", async () => {
+    post.mockResolvedValue(
+      okResp([walkOnlyItinerary()], [{ code: "WALKING_BETTER_THAN_TRANSIT" }]),
+    );
+
+    const result = await planOtpRouteDetailed(origin, destination, {
+      mode: "wheelchair",
+    });
+
+    expect(result).toMatchObject({ status: "ok", walkingBetter: true });
+  });
+
+  it("does not call a walk-only answer better when OTP found no transit", async () => {
+    busLean.mockResolvedValue([]);
+    post.mockResolvedValue(okResp([walkOnlyItinerary()]));
+
+    const result = await planOtpRouteDetailed(origin, destination);
+
+    expect(result.status).toBe("ok");
+    expect(result).not.toHaveProperty("walkingBetter");
   });
 
   it("keeps searching when walking is better but no walk itinerary is usable", async () => {
@@ -982,6 +1037,46 @@ describe("planOtpRoute search windows and timeouts", () => {
       time: "22:51",
       searchWindow: 28800,
     });
+  });
+
+  it("never counts a stage cut short by the request budget as an OTP outage", async () => {
+    vi.resetModules();
+    const isolatedPost = vi.fn(
+      async (_url: string, _body: unknown, config?: { timeout?: number }) => {
+        if (config?.timeout) {
+          await new Promise((resolve) => setTimeout(resolve, config.timeout));
+          throw { code: "ECONNABORTED" };
+        }
+        return okResp([]);
+      },
+    );
+    vi.doMock("axios", () => ({
+      default: {
+        create: () => ({ post: isolatedPost }),
+        isAxiosError: () => false,
+      },
+    }));
+    busLean.mockResolvedValue([
+      {
+        location: { coordinates: [121.565, 25.041] },
+        stopName: { Zh_tw: "公車站" },
+      },
+    ]);
+
+    const isolatedOtpRouting = await import("./otp-routing");
+    for (let i = 0; i < 4; i += 1) {
+      // Wide enough that the instant primary never spends it under load,
+      // short enough that the capped stages are what times out.
+      await isolatedOtpRouting.planOtpRouteDetailed(origin, destination, {
+        deadline: Date.now() + 400,
+      });
+    }
+
+    expect(isolatedPost.mock.calls.some((call) => call[2]?.timeout)).toBe(true);
+    expect(isolatedOtpRouting.isOtpCircuitOpen()).toBe(false);
+
+    vi.doUnmock("axios");
+    vi.resetModules();
   });
 
   it("records at most one breaker failure per plan call", async () => {

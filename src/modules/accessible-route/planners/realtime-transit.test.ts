@@ -4,12 +4,16 @@ import type { AccessibleRoute } from "../../../types/route";
 const { tdxFetch } = vi.hoisted(() => ({
   tdxFetch: vi.fn(),
 }));
-const { findVehiclesByPlate } = vi.hoisted(() => ({
+const { findVehiclesByPlate, recordRealtimeSightings } = vi.hoisted(() => ({
   findVehiclesByPlate: vi.fn(),
+  recordRealtimeSightings: vi.fn(),
 }));
 
 vi.mock("../../../config/fetch", () => ({ tdxFetch }));
 vi.mock("../../transit/bus.repository", () => ({ findVehiclesByPlate }));
+vi.mock("../../transit/bus-fleet.repository", () => ({
+  recordRealtimeSightings,
+}));
 
 import {
   annotateBusTdxCity,
@@ -20,6 +24,7 @@ import {
 beforeEach(() => {
   vi.clearAllMocks();
   findVehiclesByPlate.mockResolvedValue([]);
+  recordRealtimeSightings.mockResolvedValue(0);
 });
 
 describe("BUS tdxCity annotation", () => {
@@ -275,6 +280,39 @@ describe("bus low-floor enrichment", () => {
     });
     expect(leg).not.toHaveProperty("lowFloorAlternative");
     expect(route.accessibilityHighlights).toEqual([]);
+    expect(recordRealtimeSightings).toHaveBeenCalledWith(
+      "SUB_LF1",
+      expect.arrayContaining(["KEA-1234"]),
+    );
+  });
+
+  it("keeps the overlay when recording sightings fails", async () => {
+    const route = busRoute("LF1b", "紀錄失敗站");
+    tdxFetch.mockResolvedValue({
+      ok: true,
+      json: async () => [
+        {
+          StopName: { Zh_tw: "紀錄失敗站" },
+          Direction: 0,
+          EstimateTime: 180,
+          StopStatus: 0,
+          StopSequence: 5,
+          PlateNumb: "KEA-9999",
+        },
+        alight,
+      ],
+    });
+    findVehiclesByPlate.mockResolvedValue([
+      { plateNumb: "KEA-9999", isLowFloor: 1 },
+    ]);
+    recordRealtimeSightings.mockRejectedValue(new Error("mongo down"));
+
+    await overlayRealtimeTransit([route]);
+
+    expect(route.legs[0]).toMatchObject({
+      plateNumb: "KEA-9999",
+      isLowFloor: true,
+    });
   });
 
   it("leaves isLowFloor absent when the plate has no vehicle record", async () => {

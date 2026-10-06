@@ -58,6 +58,7 @@ import { fetchRailLegGeometry } from "./otp-routing";
 import { gtfsTimeToSeconds, secondsToHHmm } from "./gtfs-time";
 import { taipeiSecondsOfDay, taipeiYmdDash } from "../../../config/taipei-time";
 import { findVehiclesByPlate } from "../../transit/bus.repository";
+import { recordRealtimeSightings } from "../../transit/bus-fleet.repository";
 import type { ITdxBusVehicle } from "../../../types";
 import type {
   AccessibleRoute,
@@ -423,6 +424,28 @@ function tdxFlag(code: number | undefined): boolean | undefined {
 }
 
 /**
+ * Remember which plates the ETA feed showed on this route, building the
+ * route's low-floor history from calls already made. Advisory and detached:
+ * it never delays or fails the overlay.
+ *
+ * @param subRouteUid The leg's TDX sub-route uid.
+ * @param plates Plates the feed reported for the picked direction.
+ */
+function recordPlatesOnRoute(
+  subRouteUid: string | undefined,
+  plates: (string | undefined)[],
+): void {
+  if (!subRouteUid) return;
+  try {
+    void recordRealtimeSightings(subRouteUid, plates).catch((err) =>
+      console.warn("[realtime] recording bus sightings failed", err),
+    );
+  } catch (err) {
+    console.warn("[realtime] recording bus sightings failed", err);
+  }
+}
+
+/**
  * Plate to vehicle record lookup. Fail-soft: an empty Map on any failure.
  *
  * @param plates Candidate plate numbers (may contain blanks/duplicates).
@@ -580,10 +603,9 @@ async function annotateBusVehicle(
   const sameStop = recordsForStop(records, leg.departureStop, direction).filter(
     (r) => estimateSeconds(r) !== null,
   );
-  const vehicles = await vehiclesByPlate([
-    board.PlateNumb,
-    ...sameStop.map((r) => r.PlateNumb),
-  ]);
+  const plates = [board.PlateNumb, ...sameStop.map((r) => r.PlateNumb)];
+  const vehicles = await vehiclesByPlate(plates);
+  recordPlatesOnRoute(leg.subRouteUid, plates);
 
   if (board.PlateNumb) leg.plateNumb = board.PlateNumb;
   const veh = board.PlateNumb ? vehicles.get(board.PlateNumb) : undefined;

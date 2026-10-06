@@ -74,15 +74,15 @@ describe("applyTripA11y decision table", () => {
     expect(counts.preserved).toBe(0);
   });
 
-  it("normalises a leftover 2 down to unknown", () => {
-    const data = rows({
-      trip_id: "t1",
-      route_id: "BUS_299",
-      wheelchair_accessible: "2",
-    });
-    applyTripA11y(["trip_id", "route_id"], data, ROUTE_TYPES);
+  it("keeps a 2 the source feed published", () => {
+    const data = rows(
+      { trip_id: "t1", route_id: "BUS_299", wheelchair_accessible: "2" },
+      { trip_id: "t2", route_id: "METRO_R", wheelchair_accessible: "2" },
+    );
+    const counts = applyTripA11y(["trip_id", "route_id"], data, ROUTE_TYPES);
 
-    expect(data[0].wheelchair_accessible).toBe("0");
+    expect(data.map((r) => r.wheelchair_accessible)).toEqual(["2", "2"]);
+    expect(counts.preservedInaccessible).toBe(2);
   });
 
   it("treats an unindexed route_id as unknown", () => {
@@ -115,14 +115,14 @@ describe("applyTripA11y decision table", () => {
     expect(counts.railAccessible).toBe(0);
   });
 
-  it("never writes 2 for any combination of inputs", () => {
+  it("never infers 2 for a trip the source did not mark inaccessible", () => {
     const data = rows(
       { trip_id: "t1", route_id: "METRO_R" },
       { trip_id: "t2", route_id: "BUS_299" },
       { trip_id: "t3", route_id: "TRA_WEST", wheelchair_accessible: "1" },
       { trip_id: "t4", route_id: "TRA_WEST" },
-      { trip_id: "t5", route_id: "FERRY_1", wheelchair_accessible: "2" },
-      { trip_id: "t6", route_id: "MISSING", wheelchair_accessible: "2" },
+      { trip_id: "t5", route_id: "FERRY_1", wheelchair_accessible: "0" },
+      { trip_id: "t6", route_id: "MISSING" },
       { trip_id: "t7", route_id: "BUS_299", wheelchair_accessible: "0" },
     );
     applyTripA11y(["trip_id", "route_id"], data, ROUTE_TYPES);

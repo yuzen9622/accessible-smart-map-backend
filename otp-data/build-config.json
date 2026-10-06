@@ -6,5 +6,9 @@
     "timeZone": "Asia/Taipei"
   },
   "subwayAccessTime": 2.0,
-  "multiThreadElevationCalculations": true
+  "multiThreadElevationCalculations": true,
+  "transferRequests": [
+    { "modes": "WALK" },
+    { "modes": "WALK", "wheelchairAccessibility": { "enabled": true } }
+  ]
 }

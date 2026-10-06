@@ -5,6 +5,7 @@
  * visible, so callers accumulate plates across polls.
  */
 import type { BusFleetObservation } from "../types";
+import { mergeFleetObservation } from "../utils/bus-fleet";
 
 const HSINCHU_API_BASE = "https://ibus.hsinchu.gov.tw/ibusWeb/ibus_gis";
 const HSINCHU_TIMEOUT_MS = 20_000;
@@ -65,11 +66,12 @@ export function parseHsinchuRouteDetails(
     const plate = stop.car_no?.trim().toUpperCase();
     const flag = hsinchuLowFloorFlag(stop.car_accessibility);
     if (!plate || flag === undefined) continue;
-    byPlate.set(plate, {
+    mergeFleetObservation(byPlate, {
       plateNumb: plate,
       city: hsinchuCityOf(stop.routeId),
       isLowFloor: flag,
       source: "hsinchu-ibus",
+      ...(stop.routeId ? { cityRouteIds: [stop.routeId] } : {}),
     });
   }
   return [...byPlate.values()];
@@ -121,7 +123,7 @@ export async function fetchHsinchuFleet(): Promise<BusFleetObservation[]> {
         { routeIds },
       );
       for (const obs of parseHsinchuRouteDetails(details)) {
-        byPlate.set(obs.plateNumb, obs);
+        mergeFleetObservation(byPlate, obs);
       }
     } catch (err) {
       console.warn(

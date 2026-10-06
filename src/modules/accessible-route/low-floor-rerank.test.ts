@@ -204,3 +204,109 @@ it("keeps the requested transit preference when applying boarding credits", () =
   rerankByLowFloor(routes, "wheelchair", "none");
   expect(routes.map((r) => r.routeId)).toEqual(["metro", "bus"]);
 });
+
+describe("rerankByLowFloor with route low-floor history", () => {
+  function onRoute(subRouteUid: string, isLowFloor?: boolean): BusLeg {
+    return { ...busLeg(isLowFloor), subRouteUid };
+  }
+  const history = (
+    entries: [string, number, number, number][],
+  ): Map<string, import("../../types").RouteLowFloorEvidence> =>
+    new Map(
+      entries.map(([sub, distinctPlates, knownTypePlates, lowFloorPlates]) => [
+        sub,
+        {
+          distinctPlates,
+          knownTypePlates,
+          lowFloorPlates,
+          lastSeenAt: new Date(),
+          sources: ["tdx-realtime"],
+        },
+      ]),
+    );
+
+  it("prefers the route with a mostly low-floor history when live plates are unknown", () => {
+    const routes = [
+      route("mostly-high", 20, onRoute("A")),
+      route("mostly-low", 20, onRoute("B")),
+    ];
+    rerankByLowFloor(
+      routes,
+      "wheelchair",
+      undefined,
+      history([
+        ["A", 10, 10, 1],
+        ["B", 10, 10, 9],
+      ]),
+    );
+    expect(routes.map((r) => r.routeId)).toEqual(["mostly-low", "mostly-high"]);
+  });
+
+  it("never lets history outrank a confirmed live plate", () => {
+    const routes = [
+      route("history-all-low", 20, onRoute("A")),
+      route("live-low", 20, onRoute("B", true)),
+    ];
+    rerankByLowFloor(
+      routes,
+      "wheelchair",
+      undefined,
+      history([["A", 20, 20, 20]]),
+    );
+    expect(routes[0].routeId).toBe("live-low");
+
+    const highRoutes = [
+      route("live-high", 20, onRoute("C", false)),
+      route("history-all-high", 20, onRoute("D")),
+    ];
+    rerankByLowFloor(
+      highRoutes,
+      "wheelchair",
+      undefined,
+      history([["D", 20, 20, 0]]),
+    );
+    expect(highRoutes[0].routeId).toBe("history-all-high");
+  });
+
+  it("ignores a history with too few plates or too many unknown car types", () => {
+    const thin = [
+      route("thin-high", 20, onRoute("A")),
+      route("other", 20, onRoute("B")),
+    ];
+    rerankByLowFloor(thin, "wheelchair", undefined, history([["A", 2, 2, 0]]));
+    expect(thin.map((r) => r.routeId)).toEqual(["thin-high", "other"]);
+
+    const unknownTypes = [
+      route("unknown-high", 20, onRoute("A")),
+      route("other", 20, onRoute("B")),
+    ];
+    // 10 plates seen, only 5 with a known car type: coverage 0.5 < 0.8.
+    rerankByLowFloor(
+      unknownTypes,
+      "wheelchair",
+      undefined,
+      history([["A", 10, 5, 0]]),
+    );
+    expect(unknownTypes.map((r) => r.routeId)).toEqual([
+      "unknown-high",
+      "other",
+    ]);
+  });
+
+  it("keeps history a tie-breaker, not a re-scoring", () => {
+    const routes = [
+      route("fast-high-history", 20, onRoute("A")),
+      route("slow-low-history", 40, onRoute("B")),
+    ];
+    rerankByLowFloor(
+      routes,
+      "wheelchair",
+      undefined,
+      history([
+        ["A", 10, 10, 0],
+        ["B", 10, 10, 10],
+      ]),
+    );
+    expect(routes[0].routeId).toBe("fast-high-history");
+  });
+});

@@ -306,6 +306,35 @@ export interface BusFleetObservation {
   city: string;
   isLowFloor: 0 | 1;
   source: BusFleetSource;
+  /** The city system's own ids of the routes this plate was seen running. */
+  cityRouteIds?: string[];
+}
+
+/** Where a plate-on-route sighting came from. */
+export type BusFleetSightingSource =
+  "taichung-ebus" | "hsinchu-ibus" | "tdx-realtime";
+
+/** A plate seen running a TDX route on one Taipei service day. */
+export interface IBusFleetSighting {
+  plateNumb: string;
+  routeUid: string;
+  source: BusFleetSightingSource;
+  /** Taipei service date, YYYY-MM-DD; one record per plate, route and day. */
+  seenOn: string;
+  seenAt: Date;
+  expiresAt: Date;
+}
+
+/**
+ * A route's low-floor history from distinct plates seen on it. Plates whose
+ * car type is unknown count toward `distinctPlates` but not the share.
+ */
+export interface RouteLowFloorEvidence {
+  distinctPlates: number;
+  knownTypePlates: number;
+  lowFloorPlates: number;
+  lastSeenAt: Date;
+  sources: BusFleetSightingSource[];
 }
 
 export type OsmWheelchairValue = "yes" | "designated" | "limited" | "no";

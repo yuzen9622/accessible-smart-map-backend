@@ -2,16 +2,20 @@
  * Injects trip-level `wheelchair_accessible` into a GTFS feed, keyed solely on
  * `route_type` from routes.txt. Pure CSV transform — no database, no network.
  *
- * Decision table (top-down, and it NEVER writes "2"):
- *   existing "1"      → keep  (TRA WheelChairFlag / official TRTC feed measured)
+ * Decision table (top-down; it never INFERS "2"):
+ *   existing "2"      → keep  (the source feed's own inaccessible statement)
  *   route_type "1"    → "1"   (metro / light rail / gondola are step-free)
  *   route_type "3"    → "0"   (bus: unknown, per-vehicle and unknowable here)
- *   anything else     → "0"   (unknown; also normalises stray "2" downward)
+ *   existing "1"      → keep  (TRA WheelChairFlag / official TRTC feed measured)
+ *   anything else     → "0"   (unknown)
  *
- * Writing "2" (inaccessible) is what this script exists to avoid: OTP's
+ * Inferring "2" (inaccessible) is what this script exists to avoid: OTP's
  * router-config sets `wheelchairAccessibility.trip.inaccessibleCost = 3600`,
  * so a guessed "2" adds an hour of penalty per trip and pushes wheelchair
- * journeys off an entire city's bus network. Unknown ≠ inaccessible.
+ * journeys off an entire city's bus network. Unknown ≠ inaccessible — but a
+ * "2" the source feed itself published is evidence and is kept. A route's
+ * low-floor history never becomes a trip flag here: GTFS defines the flag per
+ * trip, and history only says how often a route ran low-floor buses.
  */
 import "dotenv/config";
 import fs from "fs";
@@ -83,6 +87,7 @@ function stringifyCSV(
 
 export interface TripA11yCounts {
   preserved: number;
+  preservedInaccessible: number;
   railAccessible: number;
   busUnknown: number;
   otherUnknown: number;
@@ -107,6 +112,7 @@ export function applyTripA11y(
 
   const counts: TripA11yCounts = {
     preserved: 0,
+    preservedInaccessible: 0,
     railAccessible: 0,
     busUnknown: 0,
     otherUnknown: 0,
@@ -116,12 +122,14 @@ export function applyTripA11y(
     if (!r.trip_id) continue;
 
     const rt = routeType.get(r.route_id) ?? "";
-    if (rt === "1") {
+    if (r.wheelchair_accessible === "2") {
+      counts.preservedInaccessible++;
+    } else if (rt === "1") {
       r.wheelchair_accessible = "1";
       counts.railAccessible++;
     } else if (rt === "3") {
-      // Buses are uniformly reset to "0" (unknown) — even if an upstream feed
-      // or prior heuristic set "1" or "2", the bus domain stays strictly unknown.
+      // Buses without a published "2" are reset to "0" (unknown) — an upstream
+      // or heuristic "1" is not a per-trip vehicle assignment.
       r.wheelchair_accessible = "0";
       counts.busUnknown++;
     } else if (r.wheelchair_accessible === "1") {
@@ -179,10 +187,10 @@ async function main() {
   const counts = applyTripA11y(headers, rows, routeType);
 
   console.log(
-    `wheelchair_accessible: preserved=1 on ${counts.preserved} trips, ` +
+    `wheelchair_accessible: preserved=1 on ${counts.preserved} trips, preserved=2 on ${counts.preservedInaccessible} trips, ` +
       `set 1 on ${counts.railAccessible} rail (route_type=1) trips, ` +
       `set 0 (unknown) on ${counts.busUnknown} bus + ${counts.otherUnknown} other trips. ` +
-      `Never writes 2 (inaccessible).`,
+      `Never infers 2 (inaccessible).`,
   );
 
   // 3. Write updated trips.txt back to ZIP

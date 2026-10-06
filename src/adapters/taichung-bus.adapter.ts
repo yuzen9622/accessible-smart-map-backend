@@ -5,6 +5,7 @@
  * source of truth for which plate is accessible.
  */
 import type { BusFleetObservation } from "../types";
+import { mergeFleetObservation } from "../utils/bus-fleet";
 
 const TAICHUNG_GRAPHQL_URL = "https://citybus.taichung.gov.tw/ebus/graphql";
 const TAICHUNG_TIMEOUT_MS = 30_000;
@@ -58,16 +59,19 @@ export function parseTaichungTimetables(
   data: TimetableResponse,
 ): BusFleetObservation[] {
   const byPlate = new Map<string, BusFleetObservation>();
-  for (const table of Object.values(data)) {
+  for (const [alias, table] of Object.entries(data)) {
+    // Each alias is `r<xno>`; the city's xno is also TDX's Taichung RouteID.
+    const routeId = alias.replace(/^r/, "");
     for (const edge of table?.edges ?? []) {
       const plate = edge.node?.carId?.trim().toUpperCase();
       const flag = taichungLowFloorFlag(edge.node?.carType);
       if (!plate || flag === undefined) continue;
-      byPlate.set(plate, {
+      mergeFleetObservation(byPlate, {
         plateNumb: plate,
         city: "Taichung",
         isLowFloor: flag,
         source: "taichung-ebus",
+        cityRouteIds: [routeId],
       });
     }
   }
@@ -124,7 +128,7 @@ export async function fetchTaichungFleet(
       .join(" ");
     const data = await queryTaichung<TimetableResponse>(`{ ${aliases} }`);
     for (const obs of parseTaichungTimetables(data)) {
-      byPlate.set(obs.plateNumb, obs);
+      mergeFleetObservation(byPlate, obs);
     }
     await new Promise((r) => setTimeout(r, TAICHUNG_BATCH_GAP_MS));
   }

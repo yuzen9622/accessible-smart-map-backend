@@ -112,10 +112,16 @@ def measure(path, on_date):
                 active_services += 1
 
     stops = wheelchair_stops = 0
+    places = set()
     for r in read_rows(zf, "stops.txt"):
         stops += 1
         if r.get("wheelchair_boarding") == "1":
             wheelchair_stops += 1
+        try:
+            places.add((round(float(r["stop_lat"]), 7), round(float(r["stop_lon"]), 7),
+                        r.get("stop_name", "")))
+        except (KeyError, ValueError):
+            pass
 
     def row_count(name):
         if name not in names:
@@ -128,6 +134,9 @@ def measure(path, on_date):
         "total_trips": total_trips,
         "active_services": active_services,
         "stops": stops,
+        # Distinct (position, name) places: the duplicate-stop merge collapses
+        # stops that share both, so only real data loss lowers this count.
+        "stop_places": len(places),
         "wheelchair_stops": wheelchair_stops,
         "pathways": row_count("pathways.txt"),
         "levels": row_count("levels.txt"),
@@ -149,7 +158,8 @@ def report(m):
     total = sum(m["bus_routes_total"].values())
     thr = m["usable_threshold"]
     print(f"trips={m['total_trips']:,}  services_active_on_{m['date']}={m['active_services']:,}")
-    print(f"stops={m['stops']:,} (wheelchair_boarding=1: {m['wheelchair_stops']:,})")
+    print(f"stops={m['stops']:,} at {m.get('stop_places', 0):,} places"
+          f" (wheelchair_boarding=1: {m['wheelchair_stops']:,})")
     print(f"pathways={m['pathways']:,}  levels={m['levels']:,}  frequencies={m['frequencies']:,}")
     print(f"backfill channels: {m['backfill']}")
     print(f"bus routes={total:,}  with service={live:,} ({live * 100 // max(total, 1)}%)"
@@ -181,7 +191,10 @@ def compare(new, old, tolerance):
 
     check("total trips", old["total_trips"], new["total_trips"])
     check("services active today", old["active_services"], new["active_services"])
-    check("stops", old["stops"], new["stops"])
+    if "stop_places" in old and "stop_places" in new:
+        check("stop places", old["stop_places"], new["stop_places"])
+    else:
+        check("stops", old["stops"], new["stops"])
     check("pathways", old["pathways"], new["pathways"])
     check("levels", old["levels"], new["levels"])
 
