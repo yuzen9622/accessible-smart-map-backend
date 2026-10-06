@@ -149,6 +149,11 @@ export interface PlanRouteRequest {
   maxSlopePercent?: number;
   /** Authenticated caller's id, set by the controller from an optional Bearer token; never client-supplied. */
   userId?: string;
+  /**
+   * Internal, never client-supplied: the destination is a live person's
+   * position (an SOS victim), so it must not be redirected to a park entrance.
+   */
+  keepExactDestination?: boolean;
 }
 
 export interface CanonicalPlanRouteRequest extends PlanRouteRequest {
@@ -228,6 +233,19 @@ export interface RerouteData {
   replayed: boolean;
 }
 
+/** The accessible park entrance a park-bound route was led to. */
+export interface ArrivalEntrance {
+  parkName: string;
+  entranceName: string;
+  location: LatLng;
+  /** Surveyed minimum clear width, metres. */
+  minClearWidthM: number | null;
+  /** Surveyed entrance slope, percent. */
+  slopePercent: number | null;
+  /** Straight-line distance from the destination the caller asked for. */
+  distanceFromRequestedM: number;
+}
+
 export interface TransitFallback {
   travelMode: "walk";
   reason: (typeof TRANSIT_FALLBACK_REASON)[keyof typeof TRANSIT_FALLBACK_REASON];
@@ -243,6 +261,8 @@ export type PlanRouteResult =
         travelMode: TravelMode;
         transitPreference?: TransitPreference;
         waypoints?: LatLng[];
+        /** Present only when the destination is a park and the route was led to one of its accessible entrances; `destination` is then that entrance. */
+        arrivalEntrance?: ArrivalEntrance;
         routes: AccessibleRoute[];
         intent?: RouteIntent;
         /** Present only when the caller (or their profile) requested a maxSlopePercent; tells them whether it could actually be enforced. */

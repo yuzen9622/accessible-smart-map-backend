@@ -1089,6 +1089,32 @@ export const AccessibleRouteDataSchema = z
       .array(CoordSchema)
       .optional()
       .openapi({ description: "解析後的中途點座標（依序）" }),
+    arrivalEntrance: z
+      .object({
+        parkName: z.string().openapi({ example: "青年公園" }),
+        entranceName: z.string().openapi({ example: "2號出入口" }),
+        location: CoordSchema.openapi({
+          example: { lat: 25.0254, lng: 121.5085 },
+        }),
+        minClearWidthM: z.number().nullable().openapi({
+          example: 19.6,
+          description: "臺北市公園處實測之最小淨寬（公尺）；未測得為 null",
+        }),
+        slopePercent: z.number().nullable().openapi({
+          example: 3,
+          description: "臺北市公園處實測之出入口坡度（%）；未測得為 null",
+        }),
+        distanceFromRequestedM: z.number().openapi({
+          example: 180,
+          description: "與使用者原指定目的地的直線距離（公尺）",
+        }),
+      })
+      .strict()
+      .optional()
+      .openapi({
+        description:
+          "僅當目的地判定為臺北市公園時出現：路線終點已改為該公園中符合使用者淨寬／坡度條件、且離起點直線最近的無障礙出入口，此時 destination 即為此出入口座標。文字目的地需與公園名稱相符且地理編碼落在公園範圍內；座標目的地需落在公園範圍內。若該公園沒有符合條件的出入口，則不出現此欄位，終點維持原指定位置並於 routes[].warnings 提示。",
+      }),
     routes: z.array(AccessibleRouteSchema),
     intent: RouteIntentSchema.optional().openapi({
       description:

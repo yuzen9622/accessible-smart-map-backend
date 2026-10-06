@@ -671,6 +671,7 @@ export async function getRoutePreview(
       latitude: session.lat,
       longitude: session.lng,
     },
+    keepExactDestination: true,
     mode: mode ?? "normal",
     travelMode: travelMode ?? "drive",
     maxTransfers: 2,

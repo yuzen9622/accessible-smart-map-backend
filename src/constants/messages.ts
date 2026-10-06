@@ -57,6 +57,8 @@ export const ROUTE_WARNING = {
     "所有候選路線都經過已確認的路況障礙或道路施工封閉，已為您保留受影響最小的路線，出發前請務必確認現場狀況",
   CSR_WALK_APPROXIMATE_INDOOR_GEOMETRY:
     "路線包含車站室內段落，該段僅有出入口代理座標、無實測室內線形，地圖上以直線近似呈現，實際步行路徑會不同",
+  PARK_NO_QUALIFYING_ENTRANCE:
+    "目的地公園的登記無障礙出入口都不符合您的淨寬或坡度條件，終點維持您指定的位置，請到場前自行確認可進入的出入口",
 } as const;
 
 /**

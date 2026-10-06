@@ -418,6 +418,39 @@ export interface IVisualA11y {
   updatedAt: Date;
 }
 
+/** 臺北市公園處「公園無障礙出入口點位」: one surveyed accessible park entrance. */
+export interface IParkEntrance {
+  _id: string;
+  /** The dataset's row `ID`; a release-local row number, not a durable id. */
+  sourceId: string;
+  district: string | null;
+  parkName: string;
+  entranceName: string;
+  location: { type: "Point"; coordinates: [number, number] };
+  /** Minimum clear sidewalk width at the entrance, in metres; null when unparseable. */
+  minClearWidthM: number | null;
+  /** Entrance slope in percent; null when unparseable. */
+  slopePercent: number | null;
+  importedAt: Date;
+}
+
+/**
+ * Where a park lies, used to tell whether a destination is inside it.
+ * `osm` is the OpenStreetMap `leisure=park` outline whose edge carries most of
+ * the park's surveyed entrances; `entrance_hull` is the convex hull of the
+ * entrances themselves, used only when no OSM outline matches.
+ */
+export interface IParkArea {
+  _id: string;
+  /** Matches {@link IParkEntrance.parkName}. */
+  parkName: string;
+  source: "osm" | "entrance_hull";
+  /** `way/123` or `relation/456` when `source` is `osm`. */
+  osmId: string | null;
+  geometry: { type: "Polygon"; coordinates: [number, number][][] };
+  importedAt: Date;
+}
+
 export type HazardType = "obstacle" | "construction" | "data_error";
 export type HazardSeverity = "blocking" | "difficult" | "minor";
 export type AiVerdict = "verified" | "suspicious" | "rejected" | "skipped";

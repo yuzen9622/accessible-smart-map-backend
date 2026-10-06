@@ -1254,6 +1254,8 @@ describe("LINE SOS tools", () => {
         origin: { latitude: 25.03, longitude: 121.56 },
         destination: { latitude: 25.0478, longitude: 121.5171 },
         maxTransfers: 2,
+        // The victim's live position must not be moved to a park entrance.
+        keepExactDestination: true,
       }),
     );
   });

@@ -695,6 +695,8 @@ describe("line.service — route preview", () => {
       expect(vi.mocked(planAccessibleRouteFromRequest)).toHaveBeenCalledWith({
         origin: { latitude: 25.03, longitude: 121.56 },
         destination: { latitude: 25.0478, longitude: 121.5171 },
+        // The victim's live position must not be moved to a park entrance.
+        keepExactDestination: true,
         mode: "normal",
         travelMode: "drive",
         maxTransfers: 2,
@@ -797,6 +799,7 @@ describe("line.service — route preview", () => {
     expect(vi.mocked(planAccessibleRouteFromRequest)).toHaveBeenCalledWith({
       origin: { latitude: 25.03, longitude: 121.56 },
       destination: { latitude: 25.0478, longitude: 121.5171 },
+      keepExactDestination: true,
       mode: "wheelchair",
       travelMode: "drive",
       maxTransfers: 2,

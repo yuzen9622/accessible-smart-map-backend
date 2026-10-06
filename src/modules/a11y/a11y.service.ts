@@ -16,6 +16,10 @@ import {
   findOsmByCategory,
   findOsmByIds,
   findOsmFeatures,
+  findParkEntrancesNear,
+  findParkEntrancesOfParks,
+  findParkNamesContaining,
+  findParkNamesWithArea,
   findParkingLotsNear,
   findParkingSpacesNear,
   findQuickAssessRows,
@@ -26,6 +30,7 @@ import type {
   IOsmA11y,
   IBathroom,
   IDisabledParking,
+  IParkEntrance,
   IParkingLot,
   IParkingSpace,
   OsmWheelchairValue,
@@ -705,4 +710,49 @@ export async function countOwnQuickAssess(
     : null;
 
   return { counts, wheelchairTagRatio };
+}
+
+/** What is known about park entrances around a destination point. */
+export interface ParkArrivalCandidates {
+  /** Parks whose stored area contains the point. */
+  containingParks: string[];
+  /** Entrances within the search radius, nearest first. */
+  nearbyEntrances: IParkEntrance[];
+  /** Parks among `nearbyEntrances` that have a stored area. */
+  parksWithArea: string[];
+}
+
+/**
+ * Parks containing a destination point and the park entrances around it.
+ *
+ * @param lat Latitude of the destination
+ * @param lng Longitude of the destination
+ * @param radiusM Entrance search radius in metres
+ * @returns Containing parks and nearby entrances
+ */
+export async function findParkArrivalCandidates(
+  lat: number,
+  lng: number,
+  radiusM: number,
+): Promise<ParkArrivalCandidates> {
+  const [containingParks, nearbyEntrances] = await Promise.all([
+    findParkNamesContaining(lat, lng),
+    findParkEntrancesNear(lat, lng, radiusM),
+  ]);
+  const parksWithArea = await findParkNamesWithArea([
+    ...new Set(nearbyEntrances.map((entrance) => entrance.parkName)),
+  ]);
+  return { containingParks, nearbyEntrances, parksWithArea };
+}
+
+/**
+ * Every accessible entrance of the named parks.
+ *
+ * @param parkNames Park names to match exactly
+ * @returns Their entrances
+ */
+export async function findEntrancesOfParks(
+  parkNames: string[],
+): Promise<IParkEntrance[]> {
+  return findParkEntrancesOfParks(parkNames);
 }

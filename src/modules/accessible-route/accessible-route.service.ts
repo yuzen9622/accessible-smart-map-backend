@@ -71,6 +71,12 @@ import type {
   MetroAlertResult,
 } from "../../types/transit";
 import { haversineMeters, pathLengthMeters } from "../../utils/geo";
+import {
+  arrivalEntranceHighlight,
+  resolveParkArrival,
+  type ParkArrival,
+  type ParkArrivalInput,
+} from "./park-arrival";
 import { attachRouteTokens } from "./route-token.service";
 import { normalizeWalkLegSteps } from "../../utils/nav-instructions-engine";
 import {
@@ -113,6 +119,11 @@ export type {
 
 /** Search radius for the destination disabled-parking arrival anchor. */
 const PARKING_ARRIVAL_RADIUS_M = 200;
+/**
+ * Budget for the park-entrance lookup. It is an advisory refinement of the
+ * destination, so a slow or unreachable database must not hold up planning.
+ */
+const PARK_ARRIVAL_BUDGET_MS = 800;
 const MAX_WALK_SEGMENT_CONCURRENCY = 4;
 /** Straight-line ceiling under which a transit request may be answered by walking. */
 const TRANSIT_WALK_FALLBACK_MAX_M = 1_500;
@@ -1822,6 +1833,74 @@ function isWalkOnlyAnswer(routes: AccessibleRoute[]): boolean {
   );
 }
 
+/**
+ * Resolve a park destination to an accessible entrance. Advisory: a failed
+ * lookup, or one exceeding {@link PARK_ARRIVAL_BUDGET_MS}, keeps the
+ * destination the caller asked for.
+ *
+ * @param input Destination, origin and the user's limits.
+ * @returns The park arrival, or null when not a park or the lookup failed.
+ */
+async function lookupParkArrival(
+  input: ParkArrivalInput,
+): Promise<ParkArrival | null> {
+  try {
+    const { findParkArrivalCandidates, findEntrancesOfParks } =
+      await import("../a11y/a11y.service");
+    const arrival = await settleWithin(
+      resolveParkArrival(input, {
+        findCandidates: (point, radiusM) =>
+          findParkArrivalCandidates(point.lat, point.lng, radiusM),
+        findEntrancesOfParks,
+      }),
+      PARK_ARRIVAL_BUDGET_MS,
+    );
+    if (arrival === undefined) {
+      console.warn(
+        "[accessible-route] park entrance lookup exceeded its budget; using requested destination",
+        JSON.stringify({ budgetMs: PARK_ARRIVAL_BUDGET_MS }),
+      );
+      return null;
+    }
+    return arrival;
+  } catch (err) {
+    console.warn(
+      "[accessible-route] park entrance lookup failed; using requested destination",
+      err,
+    );
+    return null;
+  }
+}
+
+/**
+ * Tell the user where a park route ends: the entrance it was led to, or that
+ * none of the park's entrances meets their limits.
+ *
+ * @param routes Planned routes, annotated in place.
+ * @param parkArrival The park resolution, if the destination is a park.
+ */
+function annotateParkArrival(
+  routes: AccessibleRoute[],
+  parkArrival: ParkArrival | null,
+): void {
+  if (!parkArrival) return;
+  for (const route of routes) {
+    if (parkArrival.kind === "entrance") {
+      route.accessibilityHighlights = [
+        ...route.accessibilityHighlights,
+        arrivalEntranceHighlight(parkArrival.entrance),
+      ];
+    } else {
+      route.warnings = [
+        ...new Set([
+          ...(route.warnings ?? []),
+          ROUTE_WARNING.PARK_NO_QUALIFYING_ENTRANCE,
+        ]),
+      ];
+    }
+  }
+}
+
 export async function planAccessibleRouteFromRequest(
   body: PlanRouteRequest,
 ): Promise<PlanRouteResult> {
@@ -1975,7 +2054,24 @@ export async function planAccessibleRouteFromRequest(
   const lat = originCoords.latitude;
   const lng = originCoords.longitude;
   const originLatLng: LatLng = { lat, lng };
-  const dest: LatLng = { lat: destCoords.latitude, lng: destCoords.longitude };
+  const requestedDest: LatLng = {
+    lat: destCoords.latitude,
+    lng: destCoords.longitude,
+  };
+  const parkArrival = body.keepExactDestination
+    ? null
+    : await lookupParkArrival({
+        ...(typeof destination === "string"
+          ? { destinationText: destination }
+          : {}),
+        requested: requestedDest,
+        origin: originLatLng,
+        mode: mode ?? "normal",
+        ...(maxSlopePercent === undefined ? {} : { maxSlopePercent }),
+      });
+  const arrivalEntrance =
+    parkArrival?.kind === "entrance" ? parkArrival.entrance : undefined;
+  const dest: LatLng = arrivalEntrance?.location ?? requestedDest;
 
   const preflight = preflightAccessibleRoute(
     [originLatLng, ...waypoints, dest],
@@ -2224,6 +2320,8 @@ export async function planAccessibleRouteFromRequest(
     routes = outcome.routes;
   }
 
+  annotateParkArrival(routes, parkArrival);
+
   const { slopeConstraint } = await applyExtraA11yAnnotations(
     routes,
     dest,
@@ -2283,6 +2381,7 @@ export async function planAccessibleRouteFromRequest(
     needsAccessibleToilet: needsAccessibleToilet ?? false,
     needsHandrail: needsHandrail ?? false,
     ...(maxSlopePercent === undefined ? {} : { maxSlopePercent }),
+    ...(body.keepExactDestination ? { keepExactDestination: true } : {}),
     ...(futureDeparture
       ? { departureTime: futureDeparture.toISOString() }
       : {}),
@@ -2296,6 +2395,7 @@ export async function planAccessibleRouteFromRequest(
       ? { transitPreference: transitPreference ?? "none" }
       : {}),
     ...(waypoints.length ? { waypoints } : {}),
+    ...(arrivalEntrance ? { arrivalEntrance } : {}),
     routes: normalizedRoutes,
     ...(intent ? { intent } : {}),
     ...(slopeConstraint ? { slopeConstraint } : {}),

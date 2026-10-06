@@ -22,7 +22,12 @@ vi.mock("./planners/valhalla-routing", () => ({
 // Spread-actual: only override the a11y hooks the driving path calls.
 vi.mock("../a11y/a11y.service", async (importActual) => {
   const actual = await importActual<typeof import("../a11y/a11y.service")>();
-  return { ...actual, findNearbyParking: vi.fn() };
+  return {
+    ...actual,
+    findNearbyParking: vi.fn(),
+    findParkArrivalCandidates: vi.fn(),
+    findEntrancesOfParks: vi.fn(),
+  };
 });
 
 vi.mock("../a11y/a11y.orchestration", async (importActual) => {
@@ -126,7 +131,11 @@ import {
   planValhallaRoute,
   ValhallaRoutingError,
 } from "./planners/valhalla-routing";
-import { findNearbyParking } from "../a11y/a11y.service";
+import {
+  findEntrancesOfParks,
+  findNearbyParking,
+  findParkArrivalCandidates,
+} from "../a11y/a11y.service";
 import { findNearby } from "../a11y/a11y.orchestration";
 import {
   planOtpRouteDetailed,
@@ -136,7 +145,7 @@ import { planCsrWalkRoute } from "./planners/pedestrian-a11y/csr-walk-planner";
 import { getA11yProfile } from "../user/user.service";
 import { findConfirmedHazardsWithin } from "../hazard-report/hazard-report.service";
 import { enrichLegIndoor } from "./planners/route-a11y";
-import { getCity } from "../../adapters/google.adapter";
+import { getCity, getCoordinates } from "../../adapters/google.adapter";
 import { getNlscAdministrativeArea } from "../../adapters/nlsc.adapter";
 import BusStopModel from "../../model/bus-stop.model";
 import {
@@ -221,6 +230,12 @@ beforeEach(() => {
   vi.mocked(getWeatherAndAirQuality).mockResolvedValue({});
   vi.mocked(findConfirmedHazardsWithin).mockResolvedValue([]);
   vi.mocked(getMetroAlerts).mockResolvedValue([]);
+  vi.mocked(findParkArrivalCandidates).mockResolvedValue({
+    containingParks: [],
+    nearbyEntrances: [],
+    parksWithArea: [],
+  });
+  vi.mocked(findEntrancesOfParks).mockResolvedValue([]);
 });
 
 describe("planAccessibleRouteFromRequest administrative city", () => {
@@ -392,6 +407,163 @@ describe("planAccessibleRouteFromRequest driving a11y highlights append", () => 
     const highlights = okData(res).routes[0].accessibilityHighlights;
     expect(highlights).toContain(warning);
     expect(highlights.some((h) => h.includes("身障停車格"))).toBe(true);
+  });
+});
+
+describe("planAccessibleRouteFromRequest park entrance arrival", () => {
+  const parkEntrance = (
+    sourceId: string,
+    lat: number,
+    lng: number,
+    slopePercent = 3,
+  ) => ({
+    _id: sourceId,
+    sourceId,
+    district: "萬華區",
+    parkName: "青年公園",
+    entranceName: `${sourceId}號出入口`,
+    location: {
+      type: "Point" as const,
+      coordinates: [lng, lat] as [number, number],
+    },
+    minClearWidthM: 2.4,
+    slopePercent,
+    importedAt: new Date(),
+  });
+  // Origin is 25.04,121.56: entrance 1 is the nearer one in a straight line.
+  const nearOrigin = parkEntrance("1", 25.032, 121.552);
+  const farFromOrigin = parkEntrance("2", 25.028, 121.548);
+
+  const routedDest = () => vi.mocked(planValhallaRoute).mock.calls[0][1];
+
+  beforeEach(() => {
+    vi.mocked(findNearbyParking).mockResolvedValue([] as any);
+    vi.mocked(planValhallaRoute).mockResolvedValue([driveRoute([])] as any);
+    vi.mocked(findEntrancesOfParks).mockResolvedValue([
+      farFromOrigin,
+      nearOrigin,
+    ]);
+  });
+
+  it("routes a park named in text to its entrance nearest the origin", async () => {
+    vi.mocked(getCoordinates).mockResolvedValue({
+      latitude: 25.03,
+      longitude: 121.55,
+    });
+    vi.mocked(findParkArrivalCandidates).mockResolvedValue({
+      containingParks: ["青年公園"],
+      nearbyEntrances: [farFromOrigin, nearOrigin],
+      parksWithArea: ["青年公園"],
+    });
+
+    const res = await planAccessibleRouteFromRequest({
+      ...driveRequest,
+      destination: "臺北市青年公園",
+    });
+
+    expect(routedDest()).toEqual({ lat: 25.032, lng: 121.552 });
+    const data = okData(res);
+    expect(data.destination).toEqual({ lat: 25.032, lng: 121.552 });
+    expect(data.arrivalEntrance).toMatchObject({
+      parkName: "青年公園",
+      entranceName: "1號出入口",
+      minClearWidthM: 2.4,
+      slopePercent: 3,
+    });
+    expect(data.routes[0].accessibilityHighlights).toContain(
+      "已為您導引至「青年公園」1號出入口（無障礙出入口，淨寬 2.4 公尺、坡度 3%）",
+    );
+    // Reroutes resend the chosen entrance, not the park centre.
+    expect(data._canonicalRequest?.destination).toEqual({
+      latitude: 25.032,
+      longitude: 121.552,
+    });
+  });
+
+  it("routes tapped coordinates inside a park area to an entrance", async () => {
+    vi.mocked(findParkArrivalCandidates).mockResolvedValue({
+      containingParks: ["青年公園"],
+      nearbyEntrances: [],
+      parksWithArea: [],
+    });
+
+    const res = await planAccessibleRouteFromRequest(driveRequest);
+
+    expect(routedDest()).toEqual({ lat: 25.032, lng: 121.552 });
+    expect(okData(res).arrivalEntrance?.entranceName).toBe("1號出入口");
+  });
+
+  it("never moves an exact destination (SOS victim) to a park entrance", async () => {
+    vi.mocked(findParkArrivalCandidates).mockResolvedValue({
+      containingParks: ["青年公園"],
+      nearbyEntrances: [],
+      parksWithArea: ["青年公園"],
+    });
+
+    const res = await planAccessibleRouteFromRequest({
+      ...driveRequest,
+      keepExactDestination: true,
+    });
+
+    expect(findParkArrivalCandidates).not.toHaveBeenCalled();
+    expect(routedDest()).toEqual({ lat: 25.03, lng: 121.55 });
+    const data = okData(res);
+    expect(data.arrivalEntrance).toBeUndefined();
+    // A reroute of this navigation must keep the exact destination too.
+    expect(data._canonicalRequest?.keepExactDestination).toBe(true);
+  });
+
+  it("keeps a destination that is not in a park", async () => {
+    const res = await planAccessibleRouteFromRequest(driveRequest);
+
+    expect(routedDest()).toEqual({ lat: 25.03, lng: 121.55 });
+    expect(okData(res).arrivalEntrance).toBeUndefined();
+    expect(findEntrancesOfParks).not.toHaveBeenCalled();
+  });
+
+  it("keeps the requested destination when the park lookup rejects", async () => {
+    vi.mocked(findParkArrivalCandidates).mockRejectedValue(
+      new Error("mongo down"),
+    );
+
+    const res = await planAccessibleRouteFromRequest(driveRequest);
+
+    expect(res.ok).toBe(true);
+    expect(routedDest()).toEqual({ lat: 25.03, lng: 121.55 });
+    expect(okData(res).arrivalEntrance).toBeUndefined();
+  });
+
+  it("keeps the requested destination when the park lookup never answers", async () => {
+    vi.mocked(findParkArrivalCandidates).mockReturnValue(
+      new Promise(() => undefined),
+    );
+
+    const res = await planAccessibleRouteFromRequest(driveRequest);
+
+    expect(res.ok).toBe(true);
+    expect(routedDest()).toEqual({ lat: 25.03, lng: 121.55 });
+    expect(okData(res).arrivalEntrance).toBeUndefined();
+  });
+
+  it("keeps the destination and warns when no entrance meets the user's limits", async () => {
+    vi.mocked(findParkArrivalCandidates).mockResolvedValue({
+      containingParks: ["青年公園"],
+      nearbyEntrances: [],
+      parksWithArea: ["青年公園"],
+    });
+
+    const res = await planAccessibleRouteFromRequest({
+      ...driveRequest,
+      mode: "wheelchair",
+      maxSlopePercent: 2,
+    });
+
+    expect(routedDest()).toEqual({ lat: 25.03, lng: 121.55 });
+    const data = okData(res);
+    expect(data.arrivalEntrance).toBeUndefined();
+    expect(data.routes[0].warnings).toContain(
+      ROUTE_WARNING.PARK_NO_QUALIFYING_ENTRANCE,
+    );
   });
 });
 

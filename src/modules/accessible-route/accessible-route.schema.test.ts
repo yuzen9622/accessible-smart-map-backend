@@ -90,6 +90,17 @@ const metroRoute = {
   accessibilityHighlights: [],
 };
 
+describe("AccessibleRouteBodySchema internal-only fields", () => {
+  it("rejects keepExactDestination from clients", () => {
+    const parsed = AccessibleRouteBodySchema.safeParse({
+      origin: { latitude: 25.04, longitude: 121.56 },
+      destination: { latitude: 25.03, longitude: 121.55 },
+      keepExactDestination: true,
+    });
+    expect(parsed.success).toBe(false);
+  });
+});
+
 describe("AccessibleRouteRerouteBodySchema", () => {
   const valid = {
     routeToken: "capability",

@@ -4,11 +4,14 @@ import OsmA11y from "../../model/osm-a11y.model";
 import DisabledParkingModel from "../../model/disabled-parking.model";
 import ParkingLotModel from "../../model/parking-lot.model";
 import ParkingSpaceModel from "../../model/parking-space.model";
+import ParkAreaModel from "../../model/park-area.model";
+import ParkEntranceModel from "../../model/park-entrance.model";
 import type {
   IA11y,
   IBathroom,
   IDisabledParking,
   IOsmA11y,
+  IParkEntrance,
   IParkingLot,
   IParkingSpace,
 } from "../../types";
@@ -330,4 +333,74 @@ export async function findQuickAssessRows(
     bathroom: bathroom as unknown as IBathroom[],
     parking: parking as unknown as IDisabledParking[],
   };
+}
+
+/**
+ * Names of the parks whose stored area contains a point.
+ *
+ * @param lat Latitude of the point
+ * @param lng Longitude of the point
+ * @returns Park names; usually zero or one
+ */
+export async function findParkNamesContaining(
+  lat: number,
+  lng: number,
+): Promise<string[]> {
+  const areas = await ParkAreaModel.find({
+    geometry: {
+      $geoIntersects: { $geometry: { type: "Point", coordinates: [lng, lat] } },
+    },
+  })
+    .select("parkName")
+    .lean();
+  return areas.map((area) => area.parkName);
+}
+
+/**
+ * Accessible park entrances near a point.
+ *
+ * @param lat Latitude of the search centre
+ * @param lng Longitude of the search centre
+ * @param radiusM Search radius in metres
+ * @returns Entrances, nearest first
+ */
+export async function findParkEntrancesNear(
+  lat: number,
+  lng: number,
+  radiusM: number,
+): Promise<IParkEntrance[]> {
+  return ParkEntranceModel.find({
+    location: makeGeoQuery(lng, lat, radiusM),
+  }).lean() as unknown as Promise<IParkEntrance[]>;
+}
+
+/**
+ * Every accessible entrance of the named parks.
+ *
+ * @param parkNames Park names to match exactly
+ * @returns Entrances, source-id ordered
+ */
+export async function findParkEntrancesOfParks(
+  parkNames: string[],
+): Promise<IParkEntrance[]> {
+  if (parkNames.length === 0) return [];
+  return ParkEntranceModel.find({ parkName: { $in: parkNames } })
+    .sort({ sourceId: 1 })
+    .lean() as unknown as Promise<IParkEntrance[]>;
+}
+
+/**
+ * Which of the named parks have a stored area.
+ *
+ * @param parkNames Park names to check
+ * @returns The subset that has an area
+ */
+export async function findParkNamesWithArea(
+  parkNames: string[],
+): Promise<string[]> {
+  if (parkNames.length === 0) return [];
+  const areas = await ParkAreaModel.find({ parkName: { $in: parkNames } })
+    .select("parkName")
+    .lean();
+  return areas.map((area) => area.parkName);
 }

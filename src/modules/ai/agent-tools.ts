@@ -498,6 +498,9 @@ export async function planAccessibleRoute(args: {
         lat: result.data.destination.lat,
         lng: result.data.destination.lng,
       },
+      ...(result.data.arrivalEntrance
+        ? { arrivalEntrance: result.data.arrivalEntrance }
+        : {}),
       city: result.data.city,
       mode: validMode,
       transitPreference:
@@ -1519,6 +1522,7 @@ export async function planRouteToSosVictim(
         latitude: sessionResult.session.lat,
         longitude: sessionResult.session.lng,
       },
+      keepExactDestination: true,
       mode: validMode,
       maxTransfers: 2,
       departureTime: args.departureTime,
