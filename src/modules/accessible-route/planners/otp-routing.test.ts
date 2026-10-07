@@ -514,7 +514,7 @@ describe("planOtpRoute search windows and timeouts", () => {
     expect(routes[0].routeName).toBe("EARLY");
   });
 
-  it("orders continuation routes by the first OTP leg instead of first transit", async () => {
+  it("pins the continuation route that arrives first and keeps first-leg departure semantics", async () => {
     const departureTime = new Date("2030-01-01T13:51:00.000Z");
     const routeStart = new Date("2030-01-01T22:20:00.000Z").getTime();
     const noTransit = [{ code: "NO_TRANSIT_CONNECTION_IN_SEARCH_WINDOW" }];
@@ -545,9 +545,12 @@ describe("planOtpRoute search windows and timeouts", () => {
 
     const routes = await planOtpRoute(origin, destination, { departureTime });
 
-    expect(routes[0].routeName).toBe("EARLY_START");
-    expect(routes[0]._scheduledDepartureTime).toBe(routeStart);
-    expect(routes[0].legs.find((leg) => leg.type === "BUS")).toMatchObject({
+    // EARLY_START leaves first (walk at 06:20) but its bus arrives at 06:47;
+    // EARLIER_BUS arrives at 06:35, so it takes the pinned slot.
+    expect(routes[0].routeName).toBe("EARLIER_BUS");
+    const earlyStart = routes.find((r) => r.routeName === "EARLY_START");
+    expect(earlyStart?._scheduledDepartureTime).toBe(routeStart);
+    expect(earlyStart?.legs.find((leg) => leg.type === "BUS")).toMatchObject({
       departureTime: "06:37",
     });
   });

@@ -24,15 +24,19 @@ export function attachInternalSchedule(
 }
 
 /**
- * Put the earliest future-scheduled route first and retain it within a limit ONLY
- * when there are no currently-departing valid transit routes (e.g. late night service
- * closed, only long-walk options available). If there are valid current transit
- * routes available in the window, keep the original ranked order.
+ * Put the earliest-arriving future-scheduled route first and retain it within a
+ * limit ONLY when there are no currently-departing valid transit routes (e.g.
+ * late night service closed, only long-walk options available). If there are
+ * valid current transit routes available in the window, keep the original
+ * ranked order.
+ *
+ * Arrival, not departure, picks the route: leaving a few minutes earlier is no
+ * reason to pin a route that gets the traveller there later.
  *
  * @param ranked Ranked routes before limiting.
- * @param candidates Eligible routes from which to select the earliest future departure.
+ * @param candidates Eligible routes from which to select the earliest future arrival.
  * @param limit Maximum routes to retain.
- * @returns A limited route list, with earliest future departure at index 0 only if no immediate transit is available.
+ * @returns A limited route list, with the earliest future arrival at index 0 only if no immediate transit is available.
  */
 export function retainEarliestFutureRoute(
   ranked: AccessibleRoute[],
@@ -57,13 +61,11 @@ export function retainEarliestFutureRoute(
   const earliest = candidates
     .filter(
       (route) =>
-        route._isFutureScheduled &&
-        typeof route._scheduledDepartureTime === "number",
+        route._isFutureScheduled && typeof route._scheduledEndTime === "number",
     )
     .sort(
       (a, b) =>
-        (a._scheduledDepartureTime as number) -
-        (b._scheduledDepartureTime as number),
+        (a._scheduledEndTime as number) - (b._scheduledEndTime as number),
     )[0];
   if (!earliest) return limited;
   const withoutEarliest = limited.filter((route) => route !== earliest);

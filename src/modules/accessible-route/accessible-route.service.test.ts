@@ -2481,7 +2481,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
     expect(vi.mocked(planOtpRouteDetailed)).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps the earliest continued departure through findAccessibleRoutes and finalizeRoutes", async () => {
+  it("keeps the earliest continued arrival through findAccessibleRoutes and finalizeRoutes", async () => {
     const firstDeparture = new Date("2030-01-01T22:20:00.000Z").getTime();
     const route = (
       index: number,
@@ -2532,7 +2532,9 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
       _scheduledEndTime: scheduledDepartureTime + totalMinutes * 60_000,
       _isFutureScheduled: true,
     });
-    const earliestRoute = route(0, firstDeparture, 300, 10_000);
+    // Arrives first (+9 min) yet scores worst (10 km walk), so only the
+    // earliest-arrival pin can keep it on top.
+    const earliestRoute = route(0, firstDeparture, 9, 10_000);
     const logicalDuplicate = route(99, firstDeparture + 30 * 60_000, 5, 0);
     logicalDuplicate.routeName = "F0";
     const duplicateBusLeg = logicalDuplicate.legs.find(

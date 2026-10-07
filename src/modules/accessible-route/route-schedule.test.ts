@@ -185,6 +185,36 @@ describe("retainEarliestFutureRoute", () => {
     expect(result[0].routeId).toBe("f1");
   });
 
+  it("pins the earliest arrival, not the earliest departure", () => {
+    // Leaves 2 min earlier but rides 30 min longer (e.g. slow rail vs bus + THSR).
+    const leavesFirst = makeRoute("leaves-first", {
+      isFuture: true,
+      departureTime: 0,
+      totalMinutes: 165,
+    });
+    const arrivesFirst = makeRoute("arrives-first", {
+      isFuture: true,
+      departureTime: 2 * 60_000,
+      totalMinutes: 135,
+    });
+    const bestScored = makeRoute("best-scored", {
+      isFuture: true,
+      departureTime: 60 * 60_000,
+      totalMinutes: 92,
+    });
+
+    const result = retainEarliestFutureRoute(
+      [bestScored, leavesFirst, arrivesFirst],
+      [bestScored, leavesFirst, arrivesFirst],
+      2,
+    );
+
+    expect(result.map((r) => r.routeId)).toEqual([
+      "arrives-first",
+      "best-scored",
+    ]);
+  });
+
   it("respects limit parameter", () => {
     const lateNightWalk = makeRoute("walk-only", { isTransit: false });
     const tomorrowBus6am = makeRoute("bus-6am", {
