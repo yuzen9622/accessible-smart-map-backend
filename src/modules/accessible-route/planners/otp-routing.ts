@@ -121,6 +121,8 @@ const OTP_TERMINAL_ROUTING_ERRORS = new Set([
   "OUTSIDE_BOUNDS",
 ]);
 const OTP_WALKING_BETTER_ERROR = "WALKING_BETTER_THAN_TRANSIT";
+/** OTP found a connection, only not departing inside the search window. */
+const OTP_OUTSIDE_WINDOW_ERROR = "NO_TRANSIT_CONNECTION_IN_SEARCH_WINDOW";
 const otpAgent = new http.Agent({ keepAlive: true });
 const otpAgentHttps = new https.Agent({ keepAlive: true });
 
@@ -1519,6 +1521,17 @@ export async function planOtpRouteDetailed(
   const hasBusLeg = (its: OtpItinerary[]) =>
     its.some((it) => it.legs.some((l) => l.mode === "BUS"));
 
+  // OTP reports that transit connects these endpoints but nothing departs in
+  // the window (typically late at night). Snapping to a nearby stop cannot
+  // help then; the continuation search below finds the later service.
+  const servedOutsideWindow = (attempt: OtpPlanAttempt) =>
+    !hasUsableTransit(attempt.itineraries) &&
+    attempt.routingErrors.some(
+      (error) => error.code === OTP_OUTSIDE_WINDOW_ERROR,
+    );
+  let transitOutsideWindow =
+    primarySucceeded && servedOutsideWindow(firstAttempt);
+
   if (primarySucceeded) rememberOriginalWalkFallback(firstAttempt);
 
   const walkSettled =
@@ -1623,6 +1636,7 @@ export async function planOtpRouteDetailed(
         );
         observeAttempt(wideAttempt);
         rememberOriginalWalkFallback(wideAttempt);
+        transitOutsideWindow ||= servedOutsideWindow(wideAttempt);
         if (
           hasSearchEligibleTransit(wideAttempt.itineraries) ||
           !hasUsableTransit(itineraries) ||
@@ -1664,6 +1678,7 @@ export async function planOtpRouteDetailed(
   const needBusSnap =
     !sawTerminalRoutingError &&
     !walkSettled &&
+    !transitOutsideWindow &&
     (!hasSearchEligibleTransit(itineraries) ||
       (straightDistM <= 3500 && !hasBusLeg(itineraries)));
   let snappedOrigin: { lat: number; lng: number } | null = null;
@@ -1671,6 +1686,19 @@ export async function planOtpRouteDetailed(
   let pendingSnapPre: WalkLeg | null = null;
   let pendingSnapPost: WalkLeg | null = null;
   let continuationAllowed = laterServiceAllowed && !otpGaveUp;
+  if (transitOutsideWindow && !hasSearchEligibleTransit(itineraries))
+    tm.snapSkipped = 1;
+  // Continuation queries are the slow part of a late-night request (wide
+  // windows), so their total time is logged on its own.
+  const timedContinuation = async <T>(query: () => Promise<T>): Promise<T> => {
+    const tCont = Date.now();
+    try {
+      return await query();
+    } finally {
+      tm.otpContinuation = (tm.otpContinuation ?? 0) + (Date.now() - tCont);
+      tm.continuationQueries = (tm.continuationQueries ?? 0) + 1;
+    }
+  };
 
   if (needBusSnap && budgetLeft()) {
     const tSnap = Date.now();
@@ -1779,18 +1807,20 @@ export async function planOtpRouteDetailed(
     );
     let originalContinuationAttempt: OtpPlanAttempt;
     try {
-      originalContinuationAttempt = await queryOtpPlan(
-        origin,
-        destination,
-        nextAnchor,
-        wheelchair,
-        walkSpeed,
-        OTP_NUM_ITINERARIES_WIDE,
-        continuationWindowSec,
-        maxTransfers,
-        opts?.transitPreference,
-        undefined,
-        stageTimeout(),
+      originalContinuationAttempt = await timedContinuation(() =>
+        queryOtpPlan(
+          origin,
+          destination,
+          nextAnchor,
+          wheelchair,
+          walkSpeed,
+          OTP_NUM_ITINERARIES_WIDE,
+          continuationWindowSec,
+          maxTransfers,
+          opts?.transitPreference,
+          undefined,
+          stageTimeout(),
+        ),
       );
       observeAttempt(originalContinuationAttempt);
       rememberOriginalWalkFallback(originalContinuationAttempt);
@@ -1810,18 +1840,20 @@ export async function planOtpRouteDetailed(
 
     if (snappedOrigin && snappedDestination) {
       try {
-        const snappedContinuationAttempt = await queryOtpPlan(
-          snappedOrigin,
-          snappedDestination,
-          nextAnchor,
-          wheelchair,
-          walkSpeed,
-          OTP_NUM_ITINERARIES_WIDE,
-          continuationWindowSec,
-          maxTransfers,
-          opts?.transitPreference,
-          undefined,
-          stageTimeout(),
+        const snappedContinuationAttempt = await timedContinuation(() =>
+          queryOtpPlan(
+            snappedOrigin,
+            snappedDestination,
+            nextAnchor,
+            wheelchair,
+            walkSpeed,
+            OTP_NUM_ITINERARIES_WIDE,
+            continuationWindowSec,
+            maxTransfers,
+            opts?.transitPreference,
+            undefined,
+            stageTimeout(),
+          ),
         );
         observeAttempt(snappedContinuationAttempt);
         if (!snappedContinuationAttempt.fromCache) planBreaker.recordSuccess();

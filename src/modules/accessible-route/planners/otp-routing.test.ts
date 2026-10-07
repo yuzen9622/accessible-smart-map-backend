@@ -609,9 +609,11 @@ describe("planOtpRoute search windows and timeouts", () => {
         stopName: { Zh_tw: "接駁站" },
       },
     ]);
+    // No routing error from the first two queries: OTP did not say transit
+    // connects these endpoints, so the snapped endpoints stay in play.
     post
-      .mockResolvedValueOnce(okResp([], noTransit))
-      .mockResolvedValueOnce(okResp([], noTransit))
+      .mockResolvedValueOnce(okResp([]))
+      .mockResolvedValueOnce(okResp([]))
       .mockResolvedValueOnce(
         okResp([overTransferItinerary(scheduledDeparture)], []),
       )
@@ -647,6 +649,45 @@ describe("planOtpRoute search windows and timeouts", () => {
     expect(routes[0]._scheduledEndTime).toBeGreaterThan(
       scheduledDeparture + 2_400_000,
     );
+  });
+
+  it("skips the stop snap when OTP reports service only outside the window", async () => {
+    const departureTime = new Date("2030-01-01T17:00:00.000Z");
+    const scheduledDeparture = new Date("2030-01-01T20:50:00.000Z").getTime();
+    const outsideWindow = [{ code: "NO_TRANSIT_CONNECTION_IN_SEARCH_WINDOW" }];
+    busLean.mockResolvedValue([
+      {
+        location: { coordinates: [121.566, 25.042] },
+        stopName: { Zh_tw: "接駁站" },
+      },
+    ]);
+    post
+      .mockResolvedValueOnce(okResp([], outsideWindow))
+      .mockResolvedValueOnce(okResp([], outsideWindow))
+      .mockResolvedValueOnce(
+        okResp([transitItinerary("FIRST", scheduledDeparture, 2_400)]),
+      );
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const routes = await planOtpRoute(origin, destination, { departureTime });
+
+    expect(busLean).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledTimes(3);
+    expect(post.mock.calls[2][1].variables).toMatchObject({
+      fromLat: origin.lat,
+      fromLon: origin.lng,
+      searchWindow: 28800,
+    });
+    expect(routes[0].routeName).toBe("FIRST");
+    const timing = log.mock.calls.find(
+      (call) => call[0] === "[route-timing] otp",
+    );
+    expect(JSON.parse(timing?.[1] as string)).toMatchObject({
+      snapSkipped: 1,
+      continuationQueries: 1,
+      otpContinuation: expect.any(Number),
+    });
+    log.mockRestore();
   });
 
   it("reports unavailable when a continuation timeout leaves no usable route", async () => {
