@@ -25,6 +25,8 @@ The package manager is **pnpm** (pinned by `packageManager` in `package.json`; `
 
 Data-import scripts run via dotenvx + ts-node and populate MongoDB from TDX / GTFS / OSM sources — e.g. `pnpm import:gtfs-all`, `pnpm import:tdx-tra`, `pnpm import:osm`. See `package.json` for the full list (`src/scripts/*`).
 
+Privacy retention: an in-process job (`src/modules/retention/`, started in `server.ts`) enforces the published retention policy — SOS auto-resolve + 30-day deletion, contact LINE location clearing, AI memory tombstones/12-month purge/vector reconciliation, hazard report de-identification 90 days after closure, deleted-account sweep. Tunables in `src/config/retention.ts` (env may only shorten policy deadlines; validated before `listen`). `pnpm retention:run [--dry-run]` runs it once; `pnpm retention:fix-photo-cache` rewrites existing hazard photo Cache-Control. See `docs/PRIVACY_DATA_RETENTION.md`, incl. the infra items code cannot enforce.
+
 `pnpm data:sync` runs every import in dependency order (`src/scripts/sync-all-data.ts`, registry in `sync-all-data-plan.ts`). Default = upsert-only base steps (TDX/OSM/北市/GTFS + PostGIS `import:taipei-ramps`); opt-in groups `--with-snapshot` (a11y-metro/bathrooms, wipe + reinsert), `--with-valhalla` (PBF → tiles → traffic map/tar, restarts Valhalla), `--with-slow` (parking scan, campus crawl — also wipes), `--with-paid` (welfare geocoding — also wipes; Chroma `import:rag`); `pnpm data:sync:all` enables all. `--only=` overrides groups, `--skip=` removes steps, `--plan` preflights only, plus `--fail-fast` / `--tdx-gap=<s>`. Any unmet env/file/service of a selected step aborts before anything runs. When adding an import script, register it there.
 
 ## Environment Variables
