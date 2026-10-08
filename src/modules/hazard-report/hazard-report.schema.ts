@@ -145,8 +145,10 @@ const HazardReportSchema = z
       .string()
       .optional()
       .openapi({ example: "人行道上有施工鐵板未固定" }),
-    photoUrl: z.string().openapi({
+    photoUrl: z.string().optional().openapi({
       example: "https://storage.googleapis.com/bucket/reports/6670abc.jpg",
+      description:
+        "回報照片。回報過期或被拒絕滿 90 天後照片依隱私政策刪除，此欄位即不再出現。",
     }),
     status: z.enum(STATUSES).openapi({ example: "pending" }),
     exifValidation: z
@@ -177,6 +179,11 @@ const HazardReportSchema = z
       .optional(),
     createdAt: z.string().openapi({ example: "2026-06-17T08:30:00.000Z" }),
     expiredAt: z.string().openapi({ example: "2026-06-17T14:30:00.000Z" }),
+    deidentifiedAt: z.string().optional().openapi({
+      example: "2026-09-16T00:00:00.000Z",
+      description:
+        "已依隱私政策去識別化的時間（照片、描述、回報者與投票者身分皆已移除）；未去識別化時不出現。",
+    }),
   })
   .openapi("HazardReport");
 
@@ -307,7 +314,7 @@ registry.registerPath({
   tags: ["Hazard Report"],
   summary: "查詢我的回報紀錄",
   description:
-    "回傳目前登入使用者的回報（依 reporterId，預設含 expired），以 createdAt 由新到舊游標分頁。",
+    "回傳目前登入使用者的回報（依 reporterId，預設含 expired），以 createdAt 由新到舊游標分頁。過期或被拒絕滿 90 天的回報會依隱私政策去識別化（回報者身分移除），之後不再出現在此清單。",
   security: [{ bearerAuth: [] }],
   request: { query: MyReportsQuerySchema },
   responses: {
@@ -355,7 +362,7 @@ registry.registerPath({
     },
     400: { description: "無效 ID 或重複投票" },
     404: { description: "找不到對應的回報" },
-    410: { description: "回報已過期，無法投票" },
+    410: { description: "回報已過期或已依隱私政策去識別化，無法投票" },
   },
 });
 
@@ -399,5 +406,6 @@ registry.registerPath({
     401: { description: "未登入或 token 過期" },
     403: { description: "非管理員" },
     404: { description: "找不到對應的回報" },
+    410: { description: "回報已依隱私政策去識別化，無法再審核" },
   },
 });

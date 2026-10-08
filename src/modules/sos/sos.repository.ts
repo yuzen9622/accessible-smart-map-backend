@@ -261,3 +261,208 @@ export async function resolveActiveSession(
   );
   return Boolean(prev);
 }
+
+/**
+ * Auto-resolves the stalest active session whose location has not moved
+ * since `staleCutoff`. The stale condition sits inside the atomic update, so a
+ * location upload that lands first keeps the session open.
+ *
+ * @param staleCutoff Sessions last located at or before this are stale
+ * @param now Resolution time
+ * @param retryKey Stable LINE retry key for the contact notice
+ * @returns The resolved session, or null when none is stale
+ */
+export async function autoResolveStalestSession(
+  staleCutoff: Date,
+  now: Date,
+  retryKey: string,
+): Promise<SosSessionRecord | null> {
+  return SosSession.findOneAndUpdate(
+    { status: "active", locationUpdatedAt: { $lte: staleCutoff } },
+    {
+      $set: {
+        status: "resolved",
+        resolvedAt: now,
+        handlingStatus: "resolved",
+        autoResolved: true,
+        resolvedNotice: {
+          status: "pending",
+          attempts: 0,
+          nextAttemptAt: now,
+          claimId: null,
+          retryKey,
+          lastError: null,
+        },
+      },
+      $push: {
+        timeline: {
+          type: "resolved",
+          actorType: "system",
+          actorLineUserId: null,
+          actorName: null,
+          note: "auto_resolved_stale",
+          at: now,
+        },
+      },
+    },
+    { sort: { locationUpdatedAt: 1 }, new: true },
+  ).lean<SosSessionRecord>();
+}
+
+/**
+ * Claims one due auto-resolve notice for delivery. The claim id fences the
+ * result write, so a worker whose lease ran out cannot overwrite the outcome
+ * of the worker that took over.
+ *
+ * @param now Current time
+ * @param leaseMs How long the claim holds before another worker may retry
+ * @param maxAttempts Notices at this many attempts are not claimed again
+ * @param claimId Fresh unguessable id for this claim
+ * @returns The claimed session, or null when nothing is due
+ */
+export async function claimDueResolvedNotice(
+  now: Date,
+  leaseMs: number,
+  maxAttempts: number,
+  claimId: string,
+): Promise<SosSessionRecord | null> {
+  return SosSession.findOneAndUpdate(
+    {
+      "resolvedNotice.status": "pending",
+      "resolvedNotice.nextAttemptAt": { $lte: now },
+      "resolvedNotice.attempts": { $lt: maxAttempts },
+    },
+    {
+      $set: {
+        "resolvedNotice.claimId": claimId,
+        "resolvedNotice.nextAttemptAt": new Date(now.getTime() + leaseMs),
+      },
+      $inc: { "resolvedNotice.attempts": 1 },
+    },
+    { sort: { "resolvedNotice.nextAttemptAt": 1 }, new: true },
+  ).lean<SosSessionRecord>();
+}
+
+/**
+ * Records a claimed notice as delivered.
+ *
+ * @param sessionId Session id
+ * @param claimId The claim this worker holds
+ * @returns True when the claim was still ours
+ */
+export async function markResolvedNoticeSent(
+  sessionId: string,
+  claimId: string,
+): Promise<boolean> {
+  const result = await SosSession.updateOne(
+    {
+      _id: sessionId,
+      "resolvedNotice.claimId": claimId,
+      "resolvedNotice.status": "pending",
+    },
+    {
+      $set: {
+        "resolvedNotice.status": "sent",
+        "resolvedNotice.lastError": null,
+      },
+    },
+  );
+  return result.modifiedCount > 0;
+}
+
+/**
+ * Records a failed attempt; the notice stays pending and becomes due again
+ * when the lease set at claim time expires.
+ *
+ * @param sessionId Session id
+ * @param claimId The claim this worker holds
+ * @param error Failure description
+ * @returns True when the claim was still ours
+ */
+export async function markResolvedNoticeAttemptFailed(
+  sessionId: string,
+  claimId: string,
+  error: string,
+): Promise<boolean> {
+  const result = await SosSession.updateOne(
+    {
+      _id: sessionId,
+      "resolvedNotice.claimId": claimId,
+      "resolvedNotice.status": "pending",
+    },
+    { $set: { "resolvedNotice.lastError": error.slice(0, 500) } },
+  );
+  return result.modifiedCount > 0;
+}
+
+/**
+ * Gives up on notices that used every attempt and whose last lease expired.
+ *
+ * @param now Current time
+ * @param maxAttempts Attempt limit
+ * @param limit Batch size
+ * @returns Ids of the sessions marked failed
+ */
+export async function failExhaustedResolvedNotices(
+  now: Date,
+  maxAttempts: number,
+  limit: number,
+): Promise<string[]> {
+  const filter: Record<string, unknown> = {
+    "resolvedNotice.status": "pending",
+    "resolvedNotice.attempts": { $gte: maxAttempts },
+    "resolvedNotice.nextAttemptAt": { $lte: now },
+  };
+  const docs = await SosSession.find(filter)
+    .select("_id")
+    .limit(limit)
+    .lean<{ _id: unknown }[]>();
+  const ids = docs.map((d) => String(d._id));
+  if (!ids.length) return [];
+  await SosSession.updateMany(
+    { _id: { $in: ids }, ...filter } as Record<string, unknown>,
+    { $set: { "resolvedNotice.status": "failed" } },
+  );
+  return ids;
+}
+
+/**
+ * Deletes one batch of sessions resolved at or before the cutoff.
+ *
+ * @param cutoff Resolution time limit
+ * @param limit Batch size
+ * @returns Number of sessions deleted
+ */
+export async function deleteResolvedSessionsBefore(
+  cutoff: Date,
+  limit: number,
+): Promise<number> {
+  const filter: Record<string, unknown> = {
+    status: "resolved",
+    resolvedAt: { $lte: cutoff },
+  };
+  const docs = await SosSession.find(filter)
+    .select("_id")
+    .sort({ resolvedAt: 1 })
+    .limit(limit)
+    .lean<{ _id: unknown }[]>();
+  if (!docs.length) return 0;
+  const result = await SosSession.deleteMany({
+    _id: { $in: docs.map((d) => d._id) },
+    ...filter,
+  } as Record<string, unknown>);
+  return result.deletedCount ?? 0;
+}
+
+/**
+ * Oldest resolution time still present, for overdue monitoring.
+ *
+ * @returns The oldest `resolvedAt`, or null
+ */
+export async function findOldestResolvedAt(): Promise<Date | null> {
+  const doc = await SosSession.findOne({ status: "resolved" })
+    .sort({ resolvedAt: 1 })
+    .select("resolvedAt")
+    .lean<{ resolvedAt?: Date | null }>();
+  return doc?.resolvedAt ?? null;
+}

@@ -493,8 +493,9 @@ export interface IHazardReport {
   severity: HazardSeverity;
   expectedUntil: Date | null;
   description?: string;
-  photoUrl: string;
-  photoStoragePath: string;
+  /** Absent once the report is de-identified (photo deleted). */
+  photoUrl?: string;
+  photoStoragePath?: string;
   exifValidation: {
     timestampFresh: boolean;
     gpsPresent: boolean;
@@ -528,6 +529,13 @@ export interface IHazardReport {
   createdAt: Date;
   updatedAt: Date;
   expiredAt: Date;
+  /** When the report was rejected or expired; cleared if it is reopened. */
+  closedAt?: Date | null;
+  /** When identity and free-text content were removed (retention phase A). */
+  contentScrubbedAt?: Date;
+  /** When the photo was deleted too (retention phase B); fully de-identified. */
+  deidentifiedAt?: Date;
+  photoDelete?: { attempts: number; nextAttemptAt?: Date };
 }
 
 export interface IEmergencyContact {
@@ -600,8 +608,21 @@ export interface ISosSession {
   acknowledgements: ISosAcknowledgement[];
   timeline: ISosTimelineEntry[];
   staleAlertSent: boolean;
+  /** True when the system closed the session after it went stale. */
+  autoResolved?: boolean;
+  resolvedNotice?: ISosResolvedNotice;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/** Delivery state of the auto-resolve notice to bound contacts. */
+export interface ISosResolvedNotice {
+  status: "pending" | "sent" | "failed";
+  attempts: number;
+  nextAttemptAt: Date;
+  claimId?: string | null;
+  retryKey: string;
+  lastError?: string | null;
 }
 
 export interface ITrafficSection {

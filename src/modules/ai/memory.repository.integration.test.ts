@@ -47,7 +47,7 @@ describe("memory repository with real MongoDB", () => {
     await expect(setMemoryEnabled(userId, true)).resolves.toBe(true);
     await expect(findMemoryEnabled(userId)).resolves.toBe(true);
 
-    const memoryId = await insertMemory({
+    const inserted = await insertMemory({
       userId,
       content: "wheelchair route preference",
       promptText: "The user prefers a step-free route.",
@@ -56,6 +56,7 @@ describe("memory repository with real MongoDB", () => {
       sensitivity: "low",
       source: "explicit_user",
     });
+    const memoryId = String(inserted._id);
 
     const active = await findActiveMemories(userId, 10);
     expect(active).toHaveLength(1);
@@ -68,11 +69,15 @@ describe("memory repository with real MongoDB", () => {
     );
     await expect(countActiveMemories(userId)).resolves.toBe(1);
 
-    await expect(softDeleteActiveMemory(userId, memoryId)).resolves.toBe(true);
+    await expect(
+      softDeleteActiveMemory(userId, memoryId),
+    ).resolves.toMatchObject({ memoryId, userId, vectorId: memoryId });
     await expect(findActiveMemoryById(userId, memoryId)).resolves.toBeNull();
     await expect(countActiveMemories(userId)).resolves.toBe(0);
 
     const persisted = await UserMemory.findById(memoryId).lean();
     expect(persisted?.deletedAt).toBeInstanceOf(Date);
+    expect(persisted?.content).toBeUndefined();
+    expect(persisted?.retrievalText).toBeUndefined();
   });
 });

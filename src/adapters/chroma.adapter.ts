@@ -7,16 +7,19 @@ import {
 
 let client: ChromaClient | null = null;
 
+function newClient(fetchOptions?: RequestInit): ChromaClient {
+  const url = process.env.CHROMA_URL || "http://localhost:8100";
+  const parsed = new URL(url);
+  return new ChromaClient({
+    host: parsed.hostname,
+    port: Number(parsed.port) || 8000,
+    ssl: parsed.protocol === "https:",
+    ...(fetchOptions ? { fetchOptions } : {}),
+  });
+}
+
 function getClient(): ChromaClient {
-  if (!client) {
-    const url = process.env.CHROMA_URL || "http://localhost:8100";
-    const parsed = new URL(url);
-    client = new ChromaClient({
-      host: parsed.hostname,
-      port: Number(parsed.port) || 8000,
-      ssl: parsed.protocol === "https:",
-    });
-  }
+  if (!client) client = newClient();
   return client;
 }
 
@@ -50,6 +53,33 @@ export async function upsertDocuments(
     embeddings: docs.map((d) => d.embedding),
     metadatas: docs.map((d) => d.metadata),
   });
+}
+
+/**
+ * Upserts with a hard deadline: the HTTP requests are aborted when it passes,
+ * so a slow write cannot land long after the caller gave up on it. Uses a
+ * short-lived client because the signal is fixed per client.
+ *
+ * @param collectionName Collection name.
+ * @param docs Documents to upsert.
+ * @param timeoutMs Abort after this long.
+ */
+export async function upsertDocumentsWithin(
+  collectionName: string,
+  docs: Array<{
+    id: string;
+    content: string;
+    embedding: number[];
+    metadata: Metadata;
+  }>,
+  timeoutMs: number,
+): Promise<void> {
+  const scoped = newClient({ signal: AbortSignal.timeout(timeoutMs) });
+  const collection = await scoped.getOrCreateCollection({
+    name: collectionName,
+    embeddingFunction: null,
+  });
+  await upsertDocuments(collection, docs);
 }
 
 export interface ChromaQueryResult {
@@ -112,4 +142,24 @@ export async function deleteDocumentsWhere(
   where: Where,
 ): Promise<void> {
   await collection.delete({ where });
+}
+
+/**
+ * Every document matching a metadata filter, ids and metadata only. One
+ * request with no offset, so concurrent deletes cannot shift a page boundary;
+ * callers keep the filter narrow (one user's documents).
+ *
+ * @param collection The collection.
+ * @param where Metadata filter.
+ * @returns Matching ids with their metadata.
+ */
+export async function getDocumentsWhere(
+  collection: Collection,
+  where: Where,
+): Promise<Array<{ id: string; metadata: Metadata }>> {
+  const result = await collection.get({ where, include: ["metadatas"] });
+  return result.ids.map((id, i) => ({
+    id,
+    metadata: (result.metadatas[i] as Metadata | null) ?? {},
+  }));
 }

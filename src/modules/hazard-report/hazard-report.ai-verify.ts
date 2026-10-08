@@ -5,6 +5,29 @@ import { parseAiVerifyResult } from "./hazard-report.parse";
 import type { AiVerdict, HazardStatus } from "../../types";
 import type { AiVerifyResult } from "./hazard-report.types";
 
+/**
+ * Targets the report only while retention has not scrubbed it, so a late
+ * verification result cannot write the AI reason and labels back.
+ */
+function unscrubbed(reportId: string): Record<string, unknown> {
+  return { _id: reportId, contentScrubbedAt: { $exists: false } };
+}
+
+/**
+ * Pipeline expression for `closedAt`: stamped (once) when this update moves a
+ * pending report to `rejected`, otherwise left as is.
+ */
+function closeIfPending(nextStatus: HazardStatus): unknown {
+  if (nextStatus !== "rejected") return "$closedAt";
+  return {
+    $cond: [
+      { $eq: ["$status", "pending"] },
+      { $ifNull: ["$closedAt", "$$NOW"] },
+      "$closedAt",
+    ],
+  };
+}
+
 function statusForVerdict(verdict: AiVerdict): HazardStatus | null {
   if (verdict === "verified") return "verified";
   if (verdict === "rejected") return "rejected";
@@ -45,22 +68,27 @@ export async function verifyHazardReport(
       safeSearchBlocked: r.safeSearchBlocked,
     };
     if (r.safeSearchBlocked) {
-      await HazardReport.updateOne({ _id: reportId }, [
-        {
-          $set: {
-            aiVerification: {
-              verdict: "rejected",
-              confidence: 1,
-              reason: "影像未通過安全檢測",
-              prefilter,
-              attemptedAt: new Date(),
-            },
-            status: {
-              $cond: [{ $eq: ["$status", "pending"] }, "rejected", "$status"],
+      await HazardReport.updateOne(
+        unscrubbed(reportId),
+        [
+          {
+            $set: {
+              aiVerification: {
+                verdict: "rejected",
+                confidence: 1,
+                reason: "影像未通過安全檢測",
+                prefilter,
+                attemptedAt: new Date(),
+              },
+              closedAt: closeIfPending("rejected"),
+              status: {
+                $cond: [{ $eq: ["$status", "pending"] }, "rejected", "$status"],
+              },
             },
           },
-        },
-      ]);
+        ],
+        { updatePipeline: true },
+      );
       return;
     }
   } catch {
@@ -82,24 +110,33 @@ export async function verifyHazardReport(
   }
 
   const nextStatus = statusForVerdict(result.verdict);
-  await HazardReport.updateOne({ _id: reportId }, [
-    {
-      $set: {
-        aiVerification: {
-          verdict: result.verdict,
-          confidence: result.confidence,
-          reason: result.reason,
-          prefilter,
-          attemptedAt: new Date(),
+  await HazardReport.updateOne(
+    unscrubbed(reportId),
+    [
+      {
+        $set: {
+          aiVerification: {
+            verdict: result.verdict,
+            confidence: result.confidence,
+            reason: result.reason,
+            prefilter,
+            attemptedAt: new Date(),
+          },
+          ...(nextStatus
+            ? {
+                closedAt: closeIfPending(nextStatus),
+                status: {
+                  $cond: [
+                    { $eq: ["$status", "pending"] },
+                    nextStatus,
+                    "$status",
+                  ],
+                },
+              }
+            : {}),
         },
-        ...(nextStatus
-          ? {
-              status: {
-                $cond: [{ $eq: ["$status", "pending"] }, nextStatus, "$status"],
-              },
-            }
-          : {}),
       },
-    },
-  ]);
+    ],
+    { updatePipeline: true },
+  );
 }

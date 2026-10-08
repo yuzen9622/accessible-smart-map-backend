@@ -151,6 +151,7 @@ describe("hazard report confirmations", () => {
         _id: REPORT_ID,
         confirmedBy: { $ne: "confirmer-2" },
         deniedBy: { $ne: "confirmer-2" },
+        contentScrubbedAt: { $exists: false },
       },
       { $inc: { confirmCount: 1 }, $push: { confirmedBy: "confirmer-2" } },
       { returnDocument: "after" },
@@ -317,13 +318,13 @@ describe("manual review queue and decisions", () => {
       httpCode: ResponseCode.NOT_FOUND,
       data: { reason: HAZARD_REASON.REPORT_NOT_FOUND },
     });
-    expect(hazardReportModel.findByIdAndUpdate).not.toHaveBeenCalled();
+    expect(hazardReportModel.findOneAndUpdate).not.toHaveBeenCalled();
   });
 
   it("persists the manual review and moves the status straight to the decision", async () => {
     const report = duplicateReport("reporter-1");
     hazardReportModel.findById.mockReturnValue(leanChain(report));
-    hazardReportModel.findByIdAndUpdate.mockReturnValue(
+    hazardReportModel.findOneAndUpdate.mockReturnValue(
       leanChain({ ...report, status: "rejected" }),
     );
 
@@ -338,8 +339,8 @@ describe("manual review queue and decisions", () => {
       ok: true,
       data: { report: { status: "rejected" } },
     });
-    expect(hazardReportModel.findByIdAndUpdate).toHaveBeenCalledWith(
-      REPORT_ID,
+    expect(hazardReportModel.findOneAndUpdate).toHaveBeenCalledWith(
+      { _id: REPORT_ID, contentScrubbedAt: { $exists: false } },
       {
         $set: {
           manualReview: {
@@ -350,8 +351,30 @@ describe("manual review queue and decisions", () => {
           },
           status: "rejected",
         },
+        $min: { closedAt: expect.any(Date) },
       },
       { returnDocument: "after" },
     );
+  });
+
+  it("refuses to review a report retention already scrubbed", async () => {
+    const report = {
+      ...duplicateReport("deidentified:x"),
+      contentScrubbedAt: new Date(),
+    };
+    hazardReportModel.findById.mockReturnValue(leanChain(report));
+
+    const result = await submitManualReview({
+      reportId: REPORT_ID,
+      reviewerId: "admin-1",
+      decision: "verified",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      httpCode: ResponseCode.GONE,
+      data: { reason: HAZARD_REASON.REPORT_EXPIRED },
+    });
+    expect(hazardReportModel.findOneAndUpdate).not.toHaveBeenCalled();
   });
 });

@@ -18,7 +18,8 @@ export async function expireStaleReports(): Promise<number> {
       expiredAt: { $lte: new Date() },
       status: { $in: ["pending", "verified"] },
     },
-    { $set: { status: "expired" } },
+    // closedAt starts the retention clock; $min keeps an earlier rejection time.
+    { $set: { status: "expired" }, $min: { closedAt: new Date() } },
   );
   return result.modifiedCount ?? 0;
 }

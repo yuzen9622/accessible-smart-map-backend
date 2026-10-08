@@ -103,6 +103,9 @@ function toView(
   delete obj.photoStoragePath;
   delete obj.confirmedBy;
   delete obj.deniedBy;
+  delete obj.closedAt;
+  delete obj.contentScrubbedAt;
+  delete obj.photoDelete;
   delete obj.__v;
   if (!includeReporter) delete obj.reporterId;
   return obj;
@@ -363,7 +366,7 @@ export async function confirmReport(
   if (!report) {
     return fail(ResponseCode.NOT_FOUND, "REPORT_NOT_FOUND");
   }
-  if (report.status === "expired") {
+  if (report.status === "expired" || report.contentScrubbedAt) {
     return fail(ResponseCode.GONE, "REPORT_EXPIRED");
   }
   if (input.action === "confirm" && report.reporterId === input.voterId) {
@@ -380,6 +383,9 @@ export async function confirmReport(
     input.action === "confirm"
       ? await addConfirmation(input.reportId, input.voterId)
       : await addDenial(input.reportId, input.voterId);
+  if (!updated && (await findReportById(input.reportId))?.contentScrubbedAt) {
+    return fail(ResponseCode.GONE, "REPORT_EXPIRED");
+  }
   const counts = updated ?? report;
 
   return {
@@ -442,6 +448,9 @@ export async function submitManualReview(
   if (!report) {
     return fail(ResponseCode.NOT_FOUND, "REPORT_NOT_FOUND");
   }
+  if (report.contentScrubbedAt) {
+    return fail(ResponseCode.GONE, "REPORT_EXPIRED");
+  }
 
   const updated = await setManualReview(input.reportId, {
     reviewerId: input.reviewerId,
@@ -449,6 +458,10 @@ export async function submitManualReview(
     note: input.note,
     reviewedAt: new Date(),
   });
+  if (!updated) {
+    // Scrubbed (or deleted) between the read and the guarded write.
+    return fail(ResponseCode.GONE, "REPORT_EXPIRED");
+  }
 
   return {
     ok: true,

@@ -29,8 +29,10 @@ const hazardReportSchema = new Schema<IHazardReport>(
     },
     expectedUntil: { type: Date, default: null },
     description: { type: String, maxlength: 500, default: null },
-    photoUrl: { type: String, required: true },
-    photoStoragePath: { type: String, required: true },
+    // Not `required` at the DB layer: retention removes both once the photo is
+    // deleted. Every new report supplies them.
+    photoUrl: { type: String },
+    photoStoragePath: { type: String },
 
     exifValidation: {
       timestampFresh: { type: Boolean, required: true },
@@ -76,6 +78,19 @@ const hazardReportSchema = new Schema<IHazardReport>(
     },
 
     expiredAt: { type: Date, required: true },
+
+    // Retention (docs/PRIVACY_DATA_RETENTION.md). closedAt is set when the
+    // report becomes rejected or expired and cleared if a review reopens it.
+    closedAt: { type: Date, default: undefined },
+    contentScrubbedAt: { type: Date, default: undefined },
+    deidentifiedAt: { type: Date, default: undefined },
+    photoDelete: {
+      type: new Schema(
+        { attempts: { type: Number, default: 0 }, nextAttemptAt: Date },
+        { _id: false },
+      ),
+      default: undefined,
+    },
   },
   { timestamps: true },
 );
@@ -85,6 +100,15 @@ hazardReportSchema.index({ status: 1, createdAt: -1 });
 hazardReportSchema.index({ hazardType: 1, status: 1 });
 hazardReportSchema.index({ reporterId: 1, createdAt: -1 });
 hazardReportSchema.index({ expiredAt: 1, status: 1 });
+// Retention phase A (content scrub) candidates by either clock, and phase B
+// (photo delete) candidates by backoff time.
+hazardReportSchema.index({ contentScrubbedAt: 1, expiredAt: 1 });
+hazardReportSchema.index({ contentScrubbedAt: 1, closedAt: 1 });
+hazardReportSchema.index({
+  contentScrubbedAt: 1,
+  deidentifiedAt: 1,
+  "photoDelete.nextAttemptAt": 1,
+});
 
 const HazardReport = model<IHazardReport>("HazardReport", hazardReportSchema);
 

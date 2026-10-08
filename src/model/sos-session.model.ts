@@ -42,6 +42,25 @@ const timelineEntrySchema = new Schema(
   { _id: false },
 );
 
+// Delivery state of the "SOS ended" notice for system auto-resolves, which
+// must reach contacts even when LINE is briefly down. Manual resolves notify
+// best-effort inline and never set this.
+const resolvedNoticeSchema = new Schema(
+  {
+    status: {
+      type: String,
+      enum: ["pending", "sent", "failed"],
+      required: true,
+    },
+    attempts: { type: Number, default: 0 },
+    nextAttemptAt: { type: Date, required: true },
+    claimId: { type: String, default: null },
+    retryKey: { type: String, required: true },
+    lastError: { type: String, default: null },
+  },
+  { _id: false },
+);
+
 const sosSessionSchema = new Schema<ISosSession>(
   {
     userId: { type: String, required: true },
@@ -84,6 +103,8 @@ const sosSessionSchema = new Schema<ISosSession>(
     acknowledgements: { type: [acknowledgementSchema], default: [] },
     timeline: { type: [timelineEntrySchema], default: [] },
     staleAlertSent: { type: Boolean, default: false },
+    autoResolved: { type: Boolean, default: false },
+    resolvedNotice: { type: resolvedNoticeSchema, default: undefined },
   },
   { timestamps: true },
 );
@@ -96,6 +117,12 @@ sosSessionSchema.index({ shareToken: 1 }, { unique: true });
 sosSessionSchema.index({ status: 1, createdAt: 1 });
 sosSessionSchema.index({ userId: 1, createdAt: -1 });
 sosSessionSchema.index({ status: 1, locationUpdatedAt: 1 });
+// Retention: resolved sessions are deleted after the policy deadline.
+sosSessionSchema.index({ status: 1, resolvedAt: 1 });
+sosSessionSchema.index(
+  { "resolvedNotice.status": 1, "resolvedNotice.nextAttemptAt": 1 },
+  { partialFilterExpression: { "resolvedNotice.status": "pending" } },
+);
 
 const SosSession = model<ISosSession>("SosSession", sosSessionSchema);
 

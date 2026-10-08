@@ -43,6 +43,7 @@ import EmergencyContact from "../../model/emergency-contact.model";
 import SosSession from "../../model/sos-session.model";
 import PushToken from "../../model/push-token.model";
 import UserMemory from "../../model/user-memory.model";
+import DeletedAccount from "../../model/deleted-account.model";
 import Review from "../../model/review.model";
 import HazardReport from "../../model/hazard-report.model";
 import {
@@ -146,7 +147,6 @@ const OWNED_MODELS = [
   EmergencyContact,
   SosSession,
   PushToken,
-  UserMemory,
   Review,
   AuthSession,
 ] as const;
@@ -222,6 +222,19 @@ describe("deleteAccount with real MongoDB", () => {
     expect(deleteDocumentsWhere).toHaveBeenCalledWith(expect.anything(), {
       userId: alice.userId,
     });
+    // Memories become content-free tombstones (kept for vector reconciliation).
+    const memories = await UserMemory.find({ userId: alice.userId }).lean();
+    expect(memories.length).toBeGreaterThan(0);
+    for (const memory of memories) {
+      expect(memory.deletedAt).toBeInstanceOf(Date);
+      expect(memory.content).toBeUndefined();
+      expect(memory.promptText).toBeUndefined();
+      expect(memory.retrievalText).toBeUndefined();
+    }
+    // The deletion is registered so the retention sweep can catch late writes.
+    expect(
+      await DeletedAccount.findOne({ userId: alice.userId }).lean(),
+    ).toMatchObject({ state: "user_deleted" });
 
     const [a, b, d] = await Promise.all(
       [aliceReport, bobReport, deniedReport].map((r) =>

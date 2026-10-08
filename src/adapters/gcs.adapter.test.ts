@@ -77,7 +77,7 @@ describe("uploadHazardPhoto", () => {
       expect(mockSave).toHaveBeenCalledWith(buffer, {
         contentType: mime,
         resumable: false,
-        metadata: { cacheControl: "public, max-age=31536000" },
+        metadata: { cacheControl: "public, max-age=3600" },
       });
       expect(res).toEqual({
         url: `https://storage.googleapis.com/test-hazard-bucket/reports/report-123.${expectedExt}`,

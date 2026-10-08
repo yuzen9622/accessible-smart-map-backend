@@ -7,12 +7,12 @@ import express, {
 import compression from "compression";
 import cors from "cors";
 import helmet from "helmet";
-import morgan from "morgan";
 import cookieParser from "cookie-parser";
 import { apiReference } from "@scalar/express-api-reference";
 import type { ApiResponse } from "./types/response";
 import { ResponseCode } from "./types/code";
 import { sendResponse } from "./config/lib";
+import { createAccessLogger } from "./middleware/access-log.middleware";
 import { ERROR_MESSAGE } from "./constants/messages";
 import middleware from "./middleware/middleware";
 import { createA11yRouter } from "./modules/a11y";
@@ -84,7 +84,7 @@ const corsOrigins = process.env.CORS_ORIGINS?.split(",")
 app.use(cors({ origin: corsOrigins, credentials: true }));
 
 if (process.env.NODE_ENV !== "test") {
-  app.use(morgan("common"));
+  app.use(createAccessLogger());
 }
 app.use(cookieParser());
 

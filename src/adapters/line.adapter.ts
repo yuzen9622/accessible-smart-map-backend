@@ -1,4 +1,4 @@
-import { messagingApi } from "@line/bot-sdk";
+import { HTTPFetchError, messagingApi } from "@line/bot-sdk";
 import { LINE_MSG, SOS_TYPE_LABEL } from "../constants/messages";
 import { taipeiHHmm, taipeiYmdDash } from "../config/taipei-time";
 import type { SosType } from "../modules/sos/sos.types";
@@ -688,6 +688,48 @@ export async function sendSosResolved(
     console.error("[line.adapter] sendSosResolved failed", err);
   }
   return lineUserIds.length;
+}
+
+/**
+ * Multicasts the SOS resolved notice and reports failure, for callers that
+ * must retry until contacts are told (the system auto-resolve). The retry key
+ * makes repeated attempts idempotent on LINE's side: a 409 means an earlier
+ * attempt with the same key was already accepted, so it counts as delivered.
+ *
+ * @param lineUserIds Bound contacts' LINE user ids.
+ * @param retryKey Stable UUID for every attempt of this one notice.
+ * @param timeoutMs Give up waiting after this long (the attempt is retried).
+ * @param userName Optional name of the person who was in distress.
+ * @throws When LINE rejects the request or the timeout elapses.
+ */
+export async function pushSosResolved(
+  lineUserIds: string[],
+  retryKey: string,
+  timeoutMs: number,
+  userName?: string,
+): Promise<void> {
+  if (lineUserIds.length === 0) return;
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`LINE multicast timed out after ${timeoutMs} ms`)),
+      timeoutMs,
+    );
+  });
+  try {
+    await Promise.race([
+      getClient().multicast(
+        { to: lineUserIds, messages: [buildSosResolvedFlex(userName)] },
+        retryKey,
+      ),
+      timeout,
+    ]);
+  } catch (err) {
+    if (err instanceof HTTPFetchError && err.status === 409) return;
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**

@@ -23,6 +23,8 @@ const emergencyContactSchema = new Schema<IEmergencyContact>(
 emergencyContactSchema.index({ userId: 1, createdAt: -1 });
 emergencyContactSchema.index({ bindCode: 1 }, { unique: true, sparse: true });
 emergencyContactSchema.index({ lineUserId: 1 }, { sparse: true });
+// Retention: LINE-shared locations are cleared after the policy deadline.
+emergencyContactSchema.index({ lastLineLocationUpdatedAt: 1 });
 
 const EmergencyContact = model<IEmergencyContact>(
   "EmergencyContact",

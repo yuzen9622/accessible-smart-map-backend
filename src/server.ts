@@ -19,12 +19,19 @@ import {
 } from "./modules/traffic/traffic-geometry.runtime";
 import { startTrafficLiveRefreshJob } from "./modules/traffic/traffic-live.worker";
 import { startValhallaTrafficTarWorker } from "./modules/traffic/valhalla-traffic.worker";
+import { getRetentionConfig } from "./config/retention";
+import { startRetentionJob } from "./modules/retention/retention.job";
 const PORT = process.env.PORT || 3000;
+
+// Validated before listening: a bad retention value must stop the deploy, not
+// leave the server up with the privacy retention job silently off.
+const retentionConfig = getRetentionConfig();
 let passwordAssistanceTimer: NodeJS.Timeout | undefined;
 let trafficGeometryTimer: NodeJS.Timeout | undefined;
 let busFleetSyncTimer: NodeJS.Timeout | undefined;
 let mqttHandle: TdxMqttHandle | undefined;
 let shutdownStarted = false;
+let stopRetentionJob: (() => void) | undefined;
 
 const server = http.createServer(app);
 attachVoiceWebSocket(server);
@@ -68,6 +75,7 @@ mongoose
   .then(() => {
     console.log("Connected to MongoDB");
     startHazardExpiryJob();
+    stopRetentionJob = startRetentionJob(retentionConfig);
     passwordAssistanceTimer = startPasswordAssistanceWorker();
     busFleetSyncTimer = startBusFleetSyncJob();
     void warmTrafficGeometryRuntime().then(() => {
@@ -88,6 +96,7 @@ function shutdown(signalLog: string): void {
   if (trafficLiveTimer) clearInterval(trafficLiveTimer);
   if (valhallaTrafficTarTimer) clearInterval(valhallaTrafficTarTimer);
   stopTransitFreshnessJob();
+  stopRetentionJob?.();
   void (async () => {
     await Promise.allSettled([
       mqttHandle ? mqttHandle.stop() : Promise.resolve(),

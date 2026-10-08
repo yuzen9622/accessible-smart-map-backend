@@ -4,16 +4,19 @@ import {
   createHash,
   randomBytes,
 } from "crypto";
+import { Types } from "mongoose";
 import {
   countActiveMemories,
   findActiveMemories,
   findActiveMemoriesByIds,
   findActiveMemoryById,
   findAllActiveMemoryIds,
+  findLiveMemoryIds,
   findMemoryByRetrievalText,
   findMemoryEnabled,
   findOldestMemoryIds,
   insertMemory,
+  isMemoryLive,
   markMemoriesUsed,
   setMemoryEnabled,
   softDeleteActiveMemory,
@@ -21,14 +24,16 @@ import {
   updateMemoryById,
   updateOwnedMemory,
   type IUserMemory,
+  type MemoryVectorRef,
 } from "./memory.repository";
+import { getRetentionConfig } from "../../config/retention";
 import { redisGet, redisSet, redisDel } from "../../config/redis";
 import { embedText } from "../../adapters/embedding.adapter";
 import {
   deleteDocuments,
   getOrCreateCollection,
   queryDocuments,
-  upsertDocuments,
+  upsertDocumentsWithin,
 } from "../../adapters/chroma.adapter";
 import { MEMORY_CACHE_PREFIX, MEMORY_COLLECTION } from "../../constants/memory";
 
@@ -157,40 +162,80 @@ function decryptMemory(memory: IUserMemory): IUserMemory {
   return { ...memory, content: decryptMemoryContent(memory.content) };
 }
 
-async function getMemoryCollection() {
+export async function getMemoryCollection() {
   return getOrCreateCollection(MEMORY_COLLECTION);
 }
 
+/**
+ * Embeds and upserts a memory's vector. Embedding may take long (rate-limit
+ * backoff), so liveness is re-checked right before the write, and the write
+ * itself is aborted after MEMORY_INDEX_TIMEOUT_MS so it cannot land later
+ * than that. If the memory was deleted meanwhile, the vector just written is
+ * removed again; should that fail, the retention job's per-user vector
+ * reconciliation removes it (`indexedAt` tells it the grace window passed).
+ */
 async function indexMemory(memory: IUserMemory): Promise<void> {
+  const memoryId = String(memory._id);
+  const vectorId = memory.embeddingId ?? memoryId;
   try {
     const embedding = await embedText(memory.retrievalText);
-    const collection = await getMemoryCollection();
-    await upsertDocuments(collection, [
-      {
-        id: memory.embeddingId ?? String(memory._id),
-        content: memory.retrievalText,
-        embedding,
-        metadata: {
-          userId: memory.userId,
-          memoryId: String(memory._id),
-          category: memory.category,
-          sensitivity: memory.sensitivity,
-          deleted: false,
+    if (!(await isMemoryLive(memoryId))) return;
+    await upsertDocumentsWithin(
+      MEMORY_COLLECTION,
+      [
+        {
+          id: vectorId,
+          content: memory.retrievalText,
+          embedding,
+          metadata: {
+            userId: memory.userId,
+            memoryId,
+            category: memory.category,
+            sensitivity: memory.sensitivity,
+            deleted: false,
+            indexedAt: Date.now(),
+          },
         },
-      },
-    ]);
+      ],
+      getRetentionConfig().memoryIndexTimeoutMs,
+    );
   } catch (error) {
     console.warn("[memory] vector index unavailable:", error);
   }
+  if (!(await isMemoryLive(memoryId))) {
+    await deleteMemoryIndex([vectorId]);
+  }
 }
 
-async function deleteMemoryIndex(memoryIds: string[]): Promise<void> {
+/**
+ * Deletes vectors by id. Failures are logged and left to the retention job,
+ * which keeps the tombstones that address them.
+ *
+ * @param vectorIds Vector ids (`embeddingId ?? _id`)
+ * @returns True when Chroma confirmed the delete
+ */
+export async function deleteMemoryIndex(vectorIds: string[]): Promise<boolean> {
+  if (!vectorIds.length) return true;
   try {
     const collection = await getMemoryCollection();
-    await deleteDocuments(collection, memoryIds);
+    await deleteDocuments(collection, vectorIds);
+    return true;
   } catch (error) {
     console.warn("[memory] vector delete unavailable:", error);
+    return false;
   }
+}
+
+/**
+ * Drops cached prompts and vectors of memories just tombstoned.
+ *
+ * @param refs Tombstoned memories' vector addresses
+ * @returns True when every vector delete was confirmed
+ */
+export async function retireVectors(refs: MemoryVectorRef[]): Promise<boolean> {
+  const userIds = new Set(refs.map((ref) => ref.userId));
+  for (const userId of userIds) await invalidateCache(userId);
+  return deleteMemoryIndex(refs.map((ref) => ref.vectorId));
 }
 
 async function assertMemoryEnabled(userId: string): Promise<void> {
@@ -224,17 +269,44 @@ export async function loadMemories(
   limit = 20,
 ): Promise<IUserMemory[]> {
   const cached = await redisGet(cacheKey(userId));
+  let memories: IUserMemory[];
   if (cached) {
-    const parsed = JSON.parse(cached) as IUserMemory[];
-    return parsed.slice(0, limit).map(decryptMemory);
+    // A cached row may have expired or been deleted since it was cached (a
+    // failed cache invalidation must not resurrect a deleted memory), so
+    // only rows Mongo still holds as live are used.
+    const rows = (JSON.parse(cached) as IUserMemory[]).slice(0, limit);
+    const live = await findLiveMemoryIds(
+      userId,
+      rows.map((m) => String(m._id)),
+    );
+    memories = rows.filter((m) => live.has(String(m._id)));
+  } else {
+    memories = await findActiveMemories(userId, limit);
+    if (memories.length) {
+      await redisSet(cacheKey(userId), JSON.stringify(memories), CACHE_TTL_SEC);
+    }
   }
-
-  const memories = await findActiveMemories(userId, limit);
-
-  if (memories.length) {
-    await redisSet(cacheKey(userId), JSON.stringify(memories), CACHE_TTL_SEC);
-  }
+  await markUsed(userId, memories);
   return memories.map(decryptMemory);
+}
+
+/**
+ * Stamps `lastUsedAt` on memories about to enter a prompt, so the 12-month
+ * unused-memory retention measures real use. Best-effort.
+ */
+async function markUsed(
+  userId: string,
+  memories: IUserMemory[],
+): Promise<void> {
+  if (!memories.length) return;
+  try {
+    await markMemoriesUsed(
+      memories.map((memory) => memory._id),
+      userId,
+    );
+  } catch (error) {
+    console.warn("[memory] mark used failed:", error);
+  }
 }
 
 export async function listMemories(
@@ -275,25 +347,34 @@ export async function saveMemory(
     retrievalText,
   );
 
-  if (existing) {
-    const updated = await updateMemoryById(String(existing._id), {
-      content: encryptMemoryContent(normalizedContent),
-      promptText,
-      retrievalText,
-      sensitivity,
-      source,
-      embeddingId: String(existing._id),
-      embeddingModel: EMBEDDING_MODEL,
-      expiresAt: options.expiresAt,
-      updatedAt: new Date(),
-    });
+  // A duplicate that was deleted or expired since it was read no longer
+  // matches the guarded update; fall through and store a fresh memory.
+  const updated = existing
+    ? await updateMemoryById(String(existing._id), {
+        content: encryptMemoryContent(normalizedContent),
+        promptText,
+        retrievalText,
+        sensitivity,
+        source,
+        embeddingId: String(existing._id),
+        embeddingModel: EMBEDDING_MODEL,
+        expiresAt: options.expiresAt,
+        updatedAt: new Date(),
+      })
+    : null;
+  if (updated) {
     await invalidateCache(userId);
-    const memory = decryptMemory(updated as IUserMemory);
+    const memory = decryptMemory(updated);
     await indexMemory(memory);
     return memory;
   }
 
-  const memoryId = await insertMemory({
+  // The vector id is the document id, assigned up front so the stored memory
+  // never exists without one.
+  const memoryId = new Types.ObjectId().toString();
+  const inserted = await insertMemory({
+    _id: memoryId,
+    embeddingId: memoryId,
     userId,
     content: encryptMemoryContent(normalizedContent),
     promptText,
@@ -305,22 +386,17 @@ export async function saveMemory(
     expiresAt: options.expiresAt,
   });
 
-  const memoryWithEmbeddingId = await updateMemoryById(memoryId, {
-    embeddingId: memoryId,
-  });
-
   const count = await countActiveMemories(userId);
   if (count > MAX_MEMORIES_PER_USER) {
     const oldestIds = await findOldestMemoryIds(
       userId,
       count - MAX_MEMORIES_PER_USER,
     );
-    await softDeleteMemories(oldestIds, userId);
-    await deleteMemoryIndex(oldestIds);
+    await retireVectors(await softDeleteMemories(oldestIds, userId));
   }
 
   await invalidateCache(userId);
-  const memory = decryptMemory(memoryWithEmbeddingId as IUserMemory);
+  const memory = decryptMemory(inserted);
   await indexMemory(memory);
   return memory;
 }
@@ -374,22 +450,19 @@ export async function deleteMemory(
   userId: string,
   memoryId: string,
 ): Promise<boolean> {
-  if (await softDeleteActiveMemory(userId, memoryId)) {
-    await invalidateCache(userId);
-    await deleteMemoryIndex([memoryId]);
-    return true;
-  }
-  return false;
+  const ref = await softDeleteActiveMemory(userId, memoryId);
+  if (!ref) return false;
+  await retireVectors([ref]);
+  return true;
 }
 
 export async function clearMemories(userId: string): Promise<number> {
   const ids = await findAllActiveMemoryIds(userId);
   if (!ids.length) return 0;
 
-  const modifiedCount = await softDeleteMemories(ids, userId);
-  await invalidateCache(userId);
-  await deleteMemoryIndex(ids);
-  return modifiedCount;
+  const refs = await softDeleteMemories(ids, userId);
+  await retireVectors(refs);
+  return refs.length;
 }
 
 export async function searchMemoriesForPrompt(
@@ -426,12 +499,7 @@ export async function searchMemoriesForPrompt(
       if (ranked.length >= limit) break;
     }
 
-    if (ranked.length) {
-      await markMemoriesUsed(
-        ranked.map((memory) => memory._id),
-        userId,
-      );
-    }
+    await markUsed(userId, ranked);
 
     return ranked.map(decryptMemory);
   } catch (error) {

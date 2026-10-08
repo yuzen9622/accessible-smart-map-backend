@@ -3,9 +3,13 @@ import { revokeAllSessionsByUserId } from "./user.auth-session.repository";
 import {
   anonymizeHazardReports,
   deleteOwnedRecords,
+  deletePasswordAssistanceJobs,
   deleteUserAndSessions,
   findAccountForDeletion,
   findSessionSignedInAt,
+  markAccountDeleted,
+  registerAccountDeletion,
+  tombstoneUserMemories,
 } from "./user.account.repository";
 import {
   deleteDocumentsWhere,
@@ -32,12 +36,22 @@ export type DeleteAccountFailure =
 export type DeleteAccountResult =
   { ok: true } | { ok: false; reason: DeleteAccountFailure };
 
-async function deleteMemoryVectors(userId: string): Promise<void> {
+/**
+ * Deletes every vector carrying the user's id. A failure is only logged: the
+ * memories' tombstones and the deleted-account entry let the retention job
+ * finish it.
+ *
+ * @param userId Owner's user id
+ * @returns True when Chroma confirmed the delete
+ */
+export async function deleteMemoryVectors(userId: string): Promise<boolean> {
   try {
     const collection = await getOrCreateCollection(MEMORY_COLLECTION);
     await deleteDocumentsWhere(collection, { userId });
+    return true;
   } catch (error) {
     console.warn("[account] memory vector delete unavailable:", error);
+    return false;
   }
 }
 
@@ -92,7 +106,8 @@ async function revokeAppleAuthorization(
  * deleted. All sessions are then revoked, so a failure part-way leaves the
  * account signed out everywhere but still present: signing in again and
  * retrying finishes it. Owned records are deleted; hazard reports stay public
- * under a pseudonym.
+ * under a pseudonym. The deletion is registered first, so the retention job
+ * also removes anything a concurrent request writes for this user afterwards.
  *
  * @param input.userId The authenticated user's id
  * @param input.sessionId The session the request was authenticated with
@@ -125,13 +140,17 @@ export async function deleteAccount(input: {
     if (failure) return { ok: false, reason: failure };
   }
 
+  await registerAccountDeletion(userId);
   await revokeAllSessionsByUserId(userId, "account_deleted");
 
-  await deleteOwnedRecords(userId, account.email);
+  await deleteOwnedRecords(userId);
+  await deletePasswordAssistanceJobs(account.email);
+  await tombstoneUserMemories(userId);
   await anonymizeHazardReports(userId, `deleted:${crypto.randomUUID()}`);
   await deleteMemoryVectors(userId);
   await redisDel(MEMORY_CACHE_PREFIX + userId);
 
   await deleteUserAndSessions(userId);
+  await markAccountDeleted(userId);
   return { ok: true };
 }

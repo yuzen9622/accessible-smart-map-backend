@@ -1,3 +1,4 @@
+import { getRetentionConfig } from "../config/retention";
 import { Storage } from "@google-cloud/storage";
 
 let storage: Storage | null = null;
@@ -57,13 +58,61 @@ export async function uploadHazardPhoto(
     .save(buffer, {
       contentType: mimeType,
       resumable: false,
-      metadata: { cacheControl: "public, max-age=31536000" },
+      metadata: { cacheControl: hazardPhotoCacheControl() },
     });
 
   return {
     url: `https://storage.googleapis.com/${bucketName}/${storagePath}`,
     storagePath,
   };
+}
+
+/**
+ * Cache-Control for hazard photos. Kept short (≤ the retention safety margin)
+ * because a public object served with a long max-age can outlive its deletion
+ * in browser and intermediary caches.
+ *
+ * @returns The header value
+ */
+export function hazardPhotoCacheControl(): string {
+  return `public, max-age=${getRetentionConfig().hazardPhotoCacheMaxAgeSec}`;
+}
+
+/**
+ * Lists hazard photo object names, one page at a time.
+ *
+ * @param pageToken Token from the previous page, if any
+ * @returns Object names and the next page token
+ */
+export async function listHazardPhotoPage(
+  pageToken?: string,
+): Promise<{ names: string[]; nextPageToken?: string }> {
+  const bucketName = process.env.GCS_BUCKET_NAME ?? "";
+  const [files, nextQuery] = await client().bucket(bucketName).getFiles({
+    prefix: "reports/",
+    maxResults: 500,
+    pageToken,
+    autoPaginate: false,
+  });
+  return {
+    names: files.map((file) => file.name),
+    nextPageToken: (nextQuery as { pageToken?: string } | null)?.pageToken,
+  };
+}
+
+/**
+ * Rewrites one hazard photo's Cache-Control to the current policy value.
+ *
+ * @param storagePath The bucket-internal path
+ */
+export async function setHazardPhotoCacheControl(
+  storagePath: string,
+): Promise<void> {
+  const bucketName = process.env.GCS_BUCKET_NAME ?? "";
+  await client()
+    .bucket(bucketName)
+    .file(storagePath)
+    .setMetadata({ cacheControl: hazardPhotoCacheControl() });
 }
 
 /**
