@@ -1,8 +1,8 @@
 # 步行 `leg.steps` 對外契約與英文詞彙表（供前端 i18n）
 
 適用於 `POST /api/v1/a11y/accessible-route` 所有 `type: "WALK"` leg 的
-`steps`。`POST /api/v1/a11y/route/instructions` 是另一個導航端點，仍回傳
-繁體中文的 `instructions[].text`，不會改變其回應形狀或文案責任。
+`steps`。`POST /api/v1/a11y/route/instructions` 是另一個導航端點，可透過 `language: "en"` 回傳
+英文的 `instructions[].text`，省略時維持繁體中文，不會改變其回應形狀或文案責任。
 
 ---
 
@@ -23,7 +23,7 @@ merge/split 正規化流程，因此輸出的 key 集合與值域一致。正規
 畫面上的 `CONTINUE 文心南七路 · 260 m` 曾是前端讀取缺失欄位後，自行 fallback
 印出的 `${relativeDirection} ${streetName}`；它不是 OTP 的英文文案。
 
-現在 WALK step 不再有文案欄位。若前端需要完整的繁中逐步導航文字，應呼叫
+現在 WALK step 不再有文案欄位。若前端需要完整的繁中或英文逐步導航文字，應呼叫
 `POST /api/v1/a11y/route/instructions`；該端點在內部根據下列機器欄位產生
 `instructions[].text`。設施類方向的中文文字由 `NAV_MSG` 提供，並保留既有措辭。
 
@@ -89,7 +89,7 @@ CSR 的角度門檻為：`|Δ| < 20°` → `CONTINUE`；`< 45°` → `SLIGHTLY_*
 
 前端可依 `relativeDirection`、可信的 `streetName`、`distanceM`、`stairs` 與
 `steepSlope` 組成符合產品語言的提示。不得假設後端另有 `text` 或 `type` 可用。
-需要後端既有繁中導航文案時，使用 `/route/instructions` 的 `instructions[]`，其中的
+需要後端繁中或英文導航文案時，使用 `/route/instructions` 的 `instructions[]`，其中的
 `type` 是 `NavInstructionType`，並非 WALK step 欄位。
 
 ---
@@ -102,7 +102,7 @@ CSR 的角度門檻為：`|Δ| < 20°` → `CONTINUE`；`< 45°` → `SLIGHTLY_*
 4. `relativeDirection` 僅可為 §4.1 token；例如 OTP `FOLLOW_SIGNS` 必須正規化成 `CONTINUE`。
 5. 所有 step 必有布林 `steepSlope`，且 merge/split 後仍符合九欄契約。
 6. 同一成功路線的 AI agent 路徑與 HTTP 路徑之 WALK `steps` 必須逐字相同。
-7. `/route/instructions` 必須接受新的無文案 WALK steps，並維持既有中文 `instructions[].text`；道路、交通與語音行為不變。
+7. `/route/instructions` 必須接受新的無文案 WALK steps，省略 language 時維持既有中文 `instructions[].text`，指定 `en` 時產生英文。語言切換不得改變 WALK steps 的機器欄位。
 
 ---
 

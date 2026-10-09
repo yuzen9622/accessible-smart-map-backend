@@ -7,6 +7,8 @@
 **日期**：2026-08-03
 **作者**：yuzen9622
 
+> **2026-10-09 英文支援**：`/route/instructions` 接受 `language: "zh-TW" | "en"`，預設繁中；英文涵蓋指引句、相對方向與端點訊息。`/accessible-route/reroute` 也接受相同參數。路名／站名等專有名稱保留來源文字。對接方式與限制見 [前端遷移說明](../FRONTEND_MIGRATION_WALK_INSTRUCTIONS.md#2026-10-09英文導航)。本節為目前契約，下方早期設計的中文限定描述不再適用。
+
 > v1.2.0 修訂（as-built）：正常情況下所有 WALK legs 均由 OTP 產生；Valhalla pedestrian 僅在 OTP 步行規劃不可用時作為有 `warnings` 的停機備援。`stepBearing()` 改以 maneuver 在 leg polyline 上的位置向前取樣約 20 公尺，取不到幾何才退回 `absoluteDirection`。公開指引新增 `legIndex`、`cumulativeDistanceM`；`distanceM` 明定為「完成本 maneuver 後到下一步前的距離」。文字加入友善距離、無名路段下一個具名目標、長於 300 公尺的中間提示，且後續 WALK leg 的 `DEPART` 不再外洩。端點可傳 `routeToken` 或 `route`，兩者並存時以 `routeToken` 為準。
 >
 > **2026-10-05 校正（現況）**：端點已改為**只收 `routeToken`**（`nav-instructions.schema.ts`，strict schema），不再接受前端傳入完整 `route`；下方 §request schema 中的 `route` 欄位與 `.refine(route || routeToken)` 已移除。純步行在台北 CSR bbox 內改由 CSR 無障礙行人圖產生 steps，OTP2 為 fallback，詳見 `FUNCTIONAL_SPEC_PEDESTRIAN_A11Y_ROUTER.md`。
@@ -606,9 +608,9 @@ const NavInstructionsRequest = z
     userHeading: z.number().min(0).max(359).optional(),
 
     /**
-     * 輸出語言（預留，目前僅支援 zh-TW）。
+     * 輸出語言，支援 zh-TW 與 en，預設 zh-TW。
      */
-    language: z.enum(["zh-TW"]).default("zh-TW"),
+    language: z.enum(["zh-TW", "en"]).default("zh-TW"),
   })
   .strict();
 ```

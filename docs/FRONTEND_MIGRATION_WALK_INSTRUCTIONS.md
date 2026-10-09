@@ -20,11 +20,34 @@
 ```json
 {
   "routeToken": "由 /accessible-route 回傳的 30 分鐘 capability",
-  "userHeading": 45
+  "userHeading": 45,
+  "language": "en"
 }
 ```
 
 token 過期或無效時回 400，`data.reason` 為 `INVALID_ROUTE_TOKEN`。
+
+### 2026-10-09：英文導航
+
+`language` 接受 `"zh-TW"` 或 `"en"`；省略時維持繁體中文，其他值回 400。
+英文請求會產生英文 `message`、`instructions[].text` 與 `relativeDirection`，涵蓋步行、
+汽機車、大眾運輸、設施、樓梯／陡坡提醒及抵達提示。前端 TTS 應選擇相同語言。
+
+提供 `userHeading` 時，英文相對方向值為 `ahead`、`ahead-right`、`right`、
+`behind-right`、`behind`、`behind-left`、`left`、`ahead-left`；未提供 heading
+或該步驟無 bearing 時仍為 `null`。不要將這些值與 WALK `leg.steps[].relativeDirection`
+的 `DEPART`／`LEFT` 等機器 token 混用。語言切換不改變步數、距離、索引與 bearing；警告代碼維持原有值域。
+英文車行若缺少可辨識的 maneuver，會提供概略指引並附上 `ROAD_STEPS_UNAVAILABLE`。
+
+`POST /api/v1/a11y/accessible-route/reroute` 也接受 `language: "en"`，會產生英文
+`instructions[].text`、`steps[].instruction` 與回應訊息。每次重新規劃請傳入目前語言；
+同一個 `clientRequestId` 重送仍回放第一次完成的結果，不會因變更語言而重新產生文案。
+需要切換既有路線語言時，以目前 `routeToken` 再呼叫 `/route/instructions`。
+
+路名、站名、路線名及列車車種名稱保留路線資料原文，不呼叫翻譯服務，也不保證這些專有名稱
+都有英文。後端產生的「起點／終點／中途點」通用標籤會改為英文。
+`accessible-route` 的路線摘要、評分與原始 leg 資料不屬於此文案契約；WebSocket 語音會話
+仍沿用原有語言設定。本次更新未新增 `lang` 別名或 `Accept-Language` 自動選擇。
 
 ## 新增指引欄位
 
