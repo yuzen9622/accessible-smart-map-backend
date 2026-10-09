@@ -1,3 +1,6 @@
+import { ROUTE_CONSISTENCY_RULE } from "../../config/ai/agent-prompt-shared";
+import type { AgentLanguage } from "../../types/agent";
+import { withResponseLanguage } from "../../utils/agent-language";
 import {
   AGENT_IDENTITY,
   TRANSIT_PREFERENCE_RULE,
@@ -26,12 +29,15 @@ const VOICE_SYSTEM_PROMPT = `${AGENT_IDENTITY}，現在正透過「語音」與�
 - 路線規劃結果只唸摘要：總時間、轉乘次數、無障礙重點。不要逐步唸出每一段指示；使用者追問細節時再補充。
 - 不要唸出網址、座標、代碼等不適合用聽的內容。
 - 收到「請逐字唸出以下導航指引」開頭的內容時，只逐字朗讀其後文字，不得增減方向、站名或距離，也不得呼叫其他工具。
+- 收到「請依介面語言播報以下導航指引」開頭的內容時，依指定語言忠實翻譯並播報，不得增減方向、站名、路線號碼、距離或時間，也不得呼叫其他工具或加上說明。
 - 使用者說「開始導航」時呼叫 startNavigation；說「停止導航／結束導航」時呼叫 stopNavigation；說「再說一次」時呼叫 repeatNavStep。
 - 導航途中遇到「那班／這班公車」「目前這段」「下一段」「目的地」等指涉時，先呼叫 getActiveNavigationContext，使用回傳的可信導航資料補足後續工具參數；只有 active=false 或必要欄位確實不存在時才追問，不要要求使用者重講已在導航路線中的資料。
 - 問「那班公車多久來」時：先查 getActiveNavigationContext；若 transit.mode=BUS，使用 transit.routeName、transit.from、transit.direction 呼叫 getBusArrival。導航沒有 BUS段時如實說明，不得把其他運具冒充公車即時資料。
 - 問「這裡／目前位置」的天氣或環境時，直接呼叫 getEnvironmentInfo 且可省略座標，後端會使用導航最新位置；問「目的地」天氣時，先查 getActiveNavigationContext，再以 destination 作為 getEnvironmentInfo.query。使用者明示其他地點時以明示地點優先。
 
 ${TRANSIT_PREFERENCE_RULE}
+
+${ROUTE_CONSISTENCY_RULE}
 
 # 如何選工具
 1. ${TOOL_CHAINING_PRINCIPLE}
@@ -54,6 +60,7 @@ export interface VoicePromptMemoryItem {
 }
 
 export interface BuildVoiceSystemPromptOptions {
+  language?: AgentLanguage;
   memoryEnabled?: boolean;
   /** Earlier turns of the shared conversation (the user switched from text). */
   history?: PriorTurn[];
@@ -93,5 +100,15 @@ export function buildVoiceSystemPrompt(
   if (options?.history?.length) {
     prompt += formatPriorConversation(options.history);
   }
-  return prompt;
+  return withResponseLanguage(prompt, options?.language);
+}
+
+/** Keep legacy/Chinese navigation verbatim; translate English narration without changing route facts. */
+export function buildNavigationSpeechPrompt(
+  text: string,
+  language?: AgentLanguage,
+): string {
+  return language === "en"
+    ? `請依介面語言播報以下導航指引：使用英文，忠實保留方向、站名、路線號碼、距離與時間，不得增減資訊或呼叫工具。指引：${text}`
+    : `請逐字唸出以下導航指引，不得增減內容：${text}`;
 }

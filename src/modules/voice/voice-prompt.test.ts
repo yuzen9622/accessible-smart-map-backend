@@ -1,5 +1,39 @@
 import { describe, expect, it } from "vitest";
-import { buildVoiceSystemPrompt } from "./voice-prompt";
+import {
+  buildVoiceSystemPrompt,
+  buildNavigationSpeechPrompt,
+} from "./voice-prompt";
+
+describe("voice language preference", () => {
+  it("places the current preference after earlier history and memories", () => {
+    const prompt = buildVoiceSystemPrompt(
+      undefined,
+      [{ category: "preference", content: "以前偏好中文" }],
+      { language: "en", history: [{ role: "assistant", text: "您好" }] },
+    );
+    expect(prompt).toContain("Respond in English");
+    expect(prompt.indexOf("【目前介面語言偏好：en】")).toBeGreaterThan(
+      prompt.indexOf("您好"),
+    );
+    expect(prompt).toContain("只有使用者本輪明確要求另一種語言或翻譯時");
+    expect(
+      buildVoiceSystemPrompt(undefined, [], { language: "zh-TW" }),
+    ).toContain("請使用臺灣繁體中文回覆");
+    expect(buildVoiceSystemPrompt()).not.toContain("目前介面語言偏好");
+  });
+
+  it("translates English navigation while keeping all source facts and legacy verbatim speech", () => {
+    const text = "向右轉，沿中山路走 50 公尺，搭乘 307 公車";
+    const english = buildNavigationSpeechPrompt(text, "en");
+    expect(english).toContain("使用英文");
+    expect(english).toContain("不得增減資訊或呼叫工具");
+    expect(english).toContain(text);
+    expect(english).not.toContain("逐字唸出");
+    expect(buildNavigationSpeechPrompt(text, "zh-TW")).toBe(
+      buildNavigationSpeechPrompt(text),
+    );
+  });
+});
 
 describe("buildVoiceSystemPrompt nearest-place policy", () => {
   it("directs the model to search and route without asking for a station when GPS exists", () => {

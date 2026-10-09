@@ -1,9 +1,12 @@
+import { randomUUID } from "crypto";
+import { projectToolResult } from "../../utils/agent-route-projection";
 import type OpenAI from "openai";
 import { googleGenAi, model } from "../../config/ai";
 import { AGENT_THINKING_LEVEL } from "../../config/ai/config";
 import { buildInteractionTools } from "./tool-catalog";
 import type {
   AgentInput,
+  AgentLanguage,
   AgentResult,
   AgentToolExecutor,
   InteractionInputStep,
@@ -197,6 +200,9 @@ async function collectStream(
 export const EMPTY_ANSWER_FALLBACK =
   "抱歉，我這次沒能整理出回答。請再說一次，或換個問法試試。";
 
+const EMPTY_ANSWER_FALLBACK_EN =
+  "Sorry, I couldn't put together an answer this time. Please try again or rephrase your question.";
+
 const RETRYABLE_STATUS = [429, 500, 502, 503, 504];
 const MAX_TRANSIENT_RETRIES = 2;
 
@@ -376,22 +382,26 @@ export async function runToolLoop(
   useModel: string,
   userLocation: { latitude: number; longitude: number } | undefined,
   onToolCall:
-    ((name: string, args: Record<string, unknown>) => void) | undefined,
-  onToolResult: ((name: string, result: unknown) => void) | undefined,
+    | ((name: string, args: Record<string, unknown>, callId?: string) => void)
+    | undefined,
+  onToolResult:
+    ((name: string, result: unknown, callId?: string) => void) | undefined,
   userId: string | undefined,
   memoryToolsEnabled: boolean,
   allowMemoryWrite: boolean,
   explicitMemoryRequest: boolean,
   execTool: AgentToolExecutor,
   options: {
+    language?: AgentLanguage;
     extraTools?: OpenAI.Chat.Completions.ChatCompletionTool[];
     toolAllowList?: string[];
     allowedFunctionNames?: string[];
     seedParts?: string[];
     onTextDelta?: (text: string) => void;
+    signal?: AbortSignal;
   } = {},
 ): Promise<RunToolLoopResult> {
-  const toolCache = new Map<string, string>();
+  const toolCache = new Map<string, Awaited<ReturnType<AgentToolExecutor>>>();
   // Failed calls get ONE genuine retry (upstream 429/timeouts are transient),
   // then the failure is served from cache: without this a model that keeps
   // retrying the same broken call burns the entire round budget.
@@ -412,6 +422,8 @@ export async function runToolLoop(
   let previousInteractionId: string | undefined;
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
+    options.signal?.throwIfAborted();
+    const roundText: string[] = [];
     const interaction = await createInteraction(
       {
         model: useModel,
@@ -429,22 +441,29 @@ export async function runToolLoop(
         ),
       },
       `route-${round}`,
-      options.onTextDelta,
+      options.onTextDelta ? (text) => roundText.push(text) : undefined,
     );
 
+    options.signal?.throwIfAborted();
     previousInteractionId = interaction.id;
 
     const calls = functionCallsOf(interaction);
     if (!calls.length) {
       const text = outputTextOf(interaction);
-      if (text) return { text, toolResults };
+      if (text) {
+        // Tool rounds may contain speculative prose before the tool request.
+        // Publish only completed answer rounds, after their route result exists.
+        for (const chunk of roundText) options.onTextDelta?.(chunk);
+        return { text, toolResults };
+      }
       break;
     }
 
     for (const call of calls) {
+      options.signal?.throwIfAborted();
       const { name, arguments: args } = call;
-
-      onToolCall?.(name, args);
+      const callId = call.id || randomUUID();
+      onToolCall?.(name, args, callId);
 
       // Execution-layer authorization boundary. `undefined` declares every tool
       // (no interception); any array (including `[]` = deny-all) is a
@@ -455,7 +474,7 @@ export async function runToolLoop(
       ) {
         console.warn(`[agent-manager] blocked unauthorized tool: ${name}`);
         const blocked = { error: "tool_not_allowed" };
-        onToolResult?.(name, blocked);
+        onToolResult?.(name, blocked, callId);
         toolResults.push({ name, args, result: blocked });
         pending.push({
           type: "function_result",
@@ -468,15 +487,34 @@ export async function runToolLoop(
       }
 
       const cacheKey = stableCacheKey(name, args);
-      let resultStr: string;
+      let resultStr: Awaited<ReturnType<AgentToolExecutor>>;
       if (toolCache.has(cacheKey)) {
         resultStr = toolCache.get(cacheKey)!;
       } else {
         resultStr = await execTool(name, args, userLocation, userId, {
           allowMemoryWrite,
           explicitMemoryRequest,
+          ...(options.signal
+            ? { isCurrent: () => !options.signal!.aborted }
+            : {}),
         });
-        if (isSuccessResult(resultStr)) {
+        if (
+          isSuccessResult(
+            typeof resultStr === "string"
+              ? resultStr
+              : JSON.stringify(resultStr.clientResult),
+          )
+        ) {
+          // A different plan invalidates cached instructions and older plans.
+          if (name === "planAccessibleRoute") {
+            for (const key of toolCache.keys()) {
+              if (
+                key.startsWith("planAccessibleRoute\0") ||
+                key.startsWith("getNavInstructions\0")
+              )
+                toolCache.delete(key);
+            }
+          }
           toolCache.set(cacheKey, resultStr);
           failureCounts.delete(cacheKey);
         } else {
@@ -490,12 +528,20 @@ export async function runToolLoop(
 
       let parsedResult: unknown;
       try {
-        parsedResult = JSON.parse(resultStr);
+        parsedResult =
+          typeof resultStr === "string"
+            ? JSON.parse(resultStr)
+            : resultStr.clientResult;
       } catch {
         parsedResult = { result: resultStr };
       }
 
-      onToolResult?.(name, parsedResult);
+      options.signal?.throwIfAborted();
+      const modelResult =
+        typeof resultStr === "string"
+          ? projectToolResult(parsedResult).modelResult
+          : resultStr.modelResult;
+      onToolResult?.(name, parsedResult, callId);
       toolResults.push({ name, args, result: parsedResult });
 
       pending.push({
@@ -503,10 +549,14 @@ export async function runToolLoop(
         call_id: call.id,
         name,
         result:
-          parsedResult && typeof parsedResult === "object"
-            ? parsedResult
-            : { result: parsedResult },
-        is_error: !isSuccessResult(resultStr),
+          modelResult && typeof modelResult === "object"
+            ? modelResult
+            : { result: modelResult },
+        is_error: !isSuccessResult(
+          typeof resultStr === "string"
+            ? resultStr
+            : JSON.stringify(resultStr.clientResult),
+        ),
       });
     }
   }
@@ -522,6 +572,7 @@ export async function runToolLoop(
         ),
       ];
 
+  options.signal?.throwIfAborted();
   const finalInteraction = await createInteraction(
     {
       model: useModel,
@@ -537,6 +588,7 @@ export async function runToolLoop(
     options.onTextDelta,
   );
 
+  options.signal?.throwIfAborted();
   const finalText = outputTextOf(finalInteraction);
   if (finalText) return { text: finalText, toolResults };
 
@@ -549,9 +601,9 @@ export async function runToolLoop(
       input: [
         userInputStep(
           [
-            "請用繁體中文回答使用者的問題。",
+            "請依系統指示中的語言偏好回答使用者的問題；未指定偏好時沿用使用者的語言。",
             toolResults.length
-              ? `已取得的工具結果（JSON）：\n${JSON.stringify(toolResults).slice(0, 12000)}`
+              ? `已取得的工具結果（JSON）：\n${JSON.stringify(toolResults.map((item) => ({ ...item, result: projectToolResult(item.result).modelResult }))).slice(0, 12000)}`
               : "目前沒有可用的工具結果。",
           ].join("\n\n"),
         ),
@@ -563,6 +615,7 @@ export async function runToolLoop(
     options.onTextDelta,
   );
 
+  options.signal?.throwIfAborted();
   const retryText = outputTextOf(retry);
   if (retryText) return { text: retryText, toolResults };
 
@@ -574,7 +627,13 @@ export async function runToolLoop(
       toolResultCount: toolResults.length,
     }),
   );
-  return { text: EMPTY_ANSWER_FALLBACK, toolResults };
+  return {
+    text:
+      options.language === "en"
+        ? EMPTY_ANSWER_FALLBACK_EN
+        : EMPTY_ANSWER_FALLBACK,
+    toolResults,
+  };
 }
 
 /**
@@ -630,11 +689,13 @@ export async function runAgent(input: AgentInput): Promise<AgentResult> {
     input.explicitMemoryRequest ?? false,
     input.execTool,
     {
+      language: input.language,
       extraTools: input.extraTools,
       toolAllowList: input.toolAllowList,
       allowedFunctionNames: input.allowedFunctionNames,
       seedParts: input.seedParts,
       onTextDelta: input.onTextDelta,
+      signal: input.signal,
     },
   );
 }

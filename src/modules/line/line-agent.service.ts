@@ -1,6 +1,10 @@
 import { runToolLoop } from "../agent/agent-manager.service";
 import { toInteractionInput } from "../agent/history-adapter";
 import { executeLocalTool } from "../ai/agent-tools";
+import {
+  RouteConversationContext,
+  createRouteAwareExecutor,
+} from "../ai/route-context.service";
 import { LINE_FAMILY_SYSTEM_PROMPT } from "../../config/ai/line-family-prompt";
 import { withCurrentDate, withUserLocation } from "../../config/ai/chat-prompt";
 import { lineFamilyTools, openAiChatTools } from "../../config/ai/tool";
@@ -65,7 +69,7 @@ export function runLineAgent(params: RunLineAgentParams): Promise<AgentResult> {
     false,
     false,
     false,
-    execTool,
+    createRouteAwareExecutor(new RouteConversationContext(), execTool),
     { extraTools: lineFamilyTools, toolAllowList: LINE_TOOL_ALLOWLIST },
   );
 }

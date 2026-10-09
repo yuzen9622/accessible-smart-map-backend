@@ -521,6 +521,27 @@ describe("runAgent façade", () => {
 });
 
 describe("最終回答永不為空（M2-1，原本沒被測到的洞）", () => {
+  it("keeps the language instruction on every retry and uses an English empty-answer fallback", async () => {
+    mockCreate.mockResolvedValue(emptyStopResponse());
+    const result = await runAgent({
+      input: userInput("台北車站"),
+      systemInstruction: "Respond in English.",
+      language: "en",
+      model: "test-model",
+      execTool: executeLocalTool,
+    });
+    expect(mockCreate).toHaveBeenCalledTimes(3);
+    for (const [params] of mockCreate.mock.calls) {
+      expect(params.system_instruction).toBe("Respond in English.");
+    }
+    expect(JSON.stringify(mockCreate.mock.calls[2][0].input)).not.toContain(
+      "請用繁體中文",
+    );
+    expect(result.text).toBe(
+      "Sorry, I couldn't put together an answer this time. Please try again or rephrase your question.",
+    );
+  });
+
   it("final 輪也回空 → 重試一次，取得文字就用它", async () => {
     mockCreate
       .mockResolvedValueOnce(emptyStopResponse()) // round 0: no calls, no text
@@ -843,4 +864,127 @@ describe("streaming（M1-6：最終答案逐字送）", () => {
     expect(mockExec.mock.calls[0][1]).toEqual({});
     expect(result.text).toBe("ok");
   });
+});
+
+describe("route result projection", () => {
+  const full = {
+    ok: true,
+    routeContractVersion: 1,
+    planId: "p",
+    selectedRouteId: "bus",
+    routes: [
+      {
+        routeId: "bus",
+        routeToken: "secret-capability",
+        legs: [
+          {
+            type: "BUS",
+            routeName: "99",
+            polyline: [
+              [120, 24],
+              [121, 25],
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  it("correlates UI events and strips geometry/tokens from provider tool results and the final retry", async () => {
+    mockCreate
+      .mockResolvedValueOnce(
+        functionCallResponse([{ name: "planAccessibleRoute", args: {} }]),
+      )
+      .mockResolvedValueOnce(emptyStopResponse())
+      .mockResolvedValueOnce(emptyStopResponse())
+      .mockResolvedValueOnce(textResponse("搭公車"));
+    mockExec.mockResolvedValue(JSON.stringify(full));
+    const onToolCall = vi.fn();
+    const onToolResult = vi.fn();
+    const answer = await runAgent({
+      input: userInput("去台中火車站"),
+      systemInstruction: undefined,
+      model: "test-model",
+      execTool: executeLocalTool,
+      onToolCall,
+      onToolResult,
+    });
+    expect(answer.toolResults[0].result).toEqual(full);
+    expect(onToolResult).toHaveBeenCalledWith(
+      "planAccessibleRoute",
+      full,
+      onToolCall.mock.calls[0][2],
+    );
+    for (const [params] of mockCreate.mock.calls.slice(1)) {
+      expect(JSON.stringify(params.input)).not.toMatch(
+        /polyline|secret-capability|routeToken/,
+      );
+    }
+    expect(JSON.stringify(mockCreate.mock.calls[1][0].input)).toContain("BUS");
+    expect(JSON.stringify(mockCreate.mock.calls.at(-1)![0].input)).toContain(
+      "BUS",
+    );
+  });
+
+  it("drops late tool results and never generates a reply after HTTP cancellation", async () => {
+    mockCreate.mockResolvedValueOnce(
+      functionCallResponse([{ name: "planAccessibleRoute", args: {} }]),
+    );
+    let finish!: (result: string) => void;
+    mockExec.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const cancellation = new AbortController();
+    const onToolResult = vi.fn();
+    const running = runAgent({
+      input: userInput("去車站"),
+      systemInstruction: undefined,
+      model: "test-model",
+      execTool: executeLocalTool,
+      onToolResult,
+      signal: cancellation.signal,
+    });
+    await vi.waitFor(() => expect(mockExec).toHaveBeenCalledTimes(1));
+    cancellation.abort();
+    finish(JSON.stringify(full));
+    await expect(running).rejects.toThrow();
+    expect(onToolResult).not.toHaveBeenCalled();
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+  });
+});
+
+it("does not publish speculative text emitted in the same round as a route tool call", async () => {
+  const mixed = streamedCallEvents("mixed", {
+    id: "c",
+    name: "planAccessibleRoute",
+    argChunks: ["{}"],
+  });
+  mixed.unshift({
+    event_type: "step.delta",
+    index: 5,
+    delta: { type: "text", text: "猜測搭火車" },
+  } as any);
+  mockCreate
+    .mockResolvedValueOnce(eventStream(mixed))
+    .mockResolvedValueOnce(
+      eventStream(streamedTextEvents("answer", ["搭公車"])),
+    );
+  mockExec.mockResolvedValue(
+    JSON.stringify({
+      ok: true,
+      routes: [{ routeId: "bus", legs: [{ type: "BUS" }] }],
+    }),
+  );
+  const output: string[] = [];
+  await runAgent({
+    input: userInput("去台中車站"),
+    systemInstruction: undefined,
+    model: "test-model",
+    execTool: executeLocalTool,
+    onToolResult: () => output.push("route-result"),
+    onTextDelta: (text) => output.push(text),
+  });
+  expect(output).toEqual(["route-result", "搭公車"]);
 });

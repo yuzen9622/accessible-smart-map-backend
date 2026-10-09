@@ -1,3 +1,14 @@
+import {
+  AgentNavOptionsSchema,
+  AgentAccessibilityOptionsSchema,
+} from "../../schemas/agent-route.schema";
+import { randomUUID } from "crypto";
+import { attachRouteTokens } from "../accessible-route/route-token.service";
+import {
+  AGENT_ROUTE_CONTRACT_VERSION,
+  AGENT_ROUTE_ERRORS,
+} from "../../constants/agent-route";
+import type { CanonicalPlanRouteRequest } from "../accessible-route/accessible-route.types";
 import * as a11yService from "../a11y/a11y.service";
 import * as a11yOrchestration from "../a11y/a11y.orchestration";
 import * as busService from "../transit/bus.service";
@@ -16,7 +27,7 @@ import { googleGenAi, model } from "../../config/ai";
 import { getCoordinates, searchPlaces } from "../../adapters/google.adapter";
 import { buildBindUrl } from "../../adapters/line.adapter";
 import { planAccessibleRouteFromRequest } from "../accessible-route/accessible-route.service";
-import { generateNavInstructions } from "../nav-instructions/nav-instructions.service";
+import { generateNavInstructionsFromInput } from "../nav-instructions/nav-instructions.service";
 import {
   getAuthorizedSessionForLineUser,
   acknowledgeSession,
@@ -428,6 +439,34 @@ function summarizeRoute(route: AccessibleRoute): Record<string, unknown> {
   };
 }
 
+/** Only public effective conditions; never includes account identity or capability tokens. */
+function agentEffectivePreferences(request: CanonicalPlanRouteRequest) {
+  const {
+    mode,
+    travelMode,
+    transitPreference,
+    maxTransfers,
+    avoidStairs,
+    requireElevator,
+    departureTime,
+    needsAccessibleToilet,
+    needsHandrail,
+    maxSlopePercent,
+  } = request;
+  return {
+    mode,
+    travelMode,
+    transitPreference: transitPreference ?? "none",
+    maxTransfers,
+    avoidStairs,
+    requireElevator,
+    ...(departureTime ? { departureTime } : {}),
+    needsAccessibleToilet,
+    needsHandrail,
+    ...(maxSlopePercent === undefined ? {} : { maxSlopePercent }),
+  };
+}
+
 export async function planAccessibleRoute(args: {
   origin: string;
   destination: string;
@@ -435,6 +474,9 @@ export async function planAccessibleRoute(args: {
   transitPreference?: string;
   departureTime?: string;
   userLocation?: { latitude: number; longitude: number };
+  userId?: string;
+  avoidStairs?: boolean;
+  requireElevator?: boolean;
 }): Promise<string> {
   const { origin, destination, mode, departureTime } = args;
 
@@ -455,7 +497,7 @@ export async function planAccessibleRoute(args: {
       "normal",
     ].includes(mode ?? "")
       ? (mode as "wheelchair" | "elderly" | "visual_impaired" | "normal")
-      : "normal";
+      : undefined;
 
     // "current_location" only resolves via the caller-injected GPS fix; every
     // other origin and the destination are passed through verbatim so the SHARED
@@ -477,6 +519,9 @@ export async function planAccessibleRoute(args: {
       destination,
       userLocation: args.userLocation,
       mode: validMode,
+      userId: args.userId,
+      avoidStairs: args.avoidStairs,
+      requireElevator: args.requireElevator,
       maxTransfers: 2,
       transitPreference: preference.data,
       departureTime,
@@ -486,26 +531,35 @@ export async function planAccessibleRoute(args: {
       return JSON.stringify({ ok: false, error: result.error });
     }
 
+    const { _canonicalRequest: canonical, ...publicData } = result.data;
+    if (!result.data.routes.length)
+      return JSON.stringify({
+        ok: false,
+        error: AGENT_ROUTE_ERRORS.EMPTY_ROUTES,
+      });
+    if (!canonical)
+      return JSON.stringify({
+        ok: false,
+        reason: "ROUTE_CONTEXT_UNAVAILABLE",
+        error: AGENT_ROUTE_ERRORS.ROUTE_CONTEXT_UNAVAILABLE,
+      });
+    const routes = await attachRouteTokens(result.data.routes, canonical);
+    const effectivePreferences = agentEffectivePreferences(canonical);
     return JSON.stringify({
+      ...publicData,
       ok: true,
+      routeContractVersion: AGENT_ROUTE_CONTRACT_VERSION,
+      planId: randomUUID(),
+      selectedRouteId: routes[0].routeId,
       origin: {
+        ...result.data.origin,
         name: origin === "current_location" ? "目前位置" : origin,
-        lat: result.data.origin.lat,
-        lng: result.data.origin.lng,
       },
-      destination: {
-        name: destination,
-        lat: result.data.destination.lat,
-        lng: result.data.destination.lng,
-      },
-      ...(result.data.arrivalEntrance
-        ? { arrivalEntrance: result.data.arrivalEntrance }
-        : {}),
-      city: result.data.city,
-      mode: validMode,
-      transitPreference:
-        result.data.transitPreference ?? preference.data ?? "none",
-      routes: result.data.routes.slice(0, 3).map(summarizeRoute),
+      destination: { ...result.data.destination, name: destination },
+      mode: effectivePreferences.mode,
+      transitPreference: effectivePreferences.transitPreference,
+      effectivePreferences,
+      routes,
       metroAlerts: result.data.metroAlerts ?? [],
       transitAlerts: result.data.transitAlerts ?? [],
     });
@@ -1122,81 +1176,40 @@ export async function getTransitAlerts(args: {
 }
 
 export async function getNavInstructions(args: {
-  origin: string;
-  destination: string;
+  routeToken?: string;
+  userHeading?: number;
+  language?: "zh-TW" | "en";
+  // Legacy callers may still pass these; they never trigger another plan.
+  origin?: string;
+  destination?: string;
   mode?: string;
   transitPreference?: string;
   departureTime?: string;
   routeIndex?: number;
-  userHeading?: number;
   userLocation?: { latitude: number; longitude: number };
 }): Promise<string> {
-  const preference = TransitPreferenceSchema.optional().safeParse(
-    args.transitPreference,
-  );
-  if (!preference.success) {
+  if (!args.routeToken)
     return JSON.stringify({
       ok: false,
-      error: ERROR_MESSAGE.INVALID_TRANSIT_PREFERENCE,
+      reason: "ROUTE_CONTEXT_REQUIRED",
+      error: AGENT_ROUTE_ERRORS.ROUTE_CONTEXT_REQUIRED,
     });
-  }
   try {
-    if (args.origin === "current_location" && !args.userLocation) {
-      return JSON.stringify({
-        ok: false,
-        error: "需要使用者位置以使用「目前位置」作為起點",
-      });
-    }
-    const originInput =
-      args.origin === "current_location" ? args.userLocation : args.origin;
-    const validMode = [
-      "wheelchair",
-      "elderly",
-      "visual_impaired",
-      "normal",
-    ].includes(args.mode ?? "")
-      ? (args.mode as "wheelchair" | "elderly" | "visual_impaired" | "normal")
-      : "normal";
-
-    const result = await planAccessibleRouteFromRequest({
-      origin: originInput,
-      destination: args.destination,
-      userLocation: args.userLocation,
-      mode: validMode,
-      maxTransfers: 2,
-      transitPreference: preference.data,
-      departureTime: args.departureTime,
+    const result = await generateNavInstructionsFromInput({
+      routeToken: args.routeToken,
+      userHeading: args.userHeading,
+      language: args.language,
     });
-    if (!result.ok) {
-      return JSON.stringify({ ok: false, error: result.error });
-    }
-
-    const routes = result.data.routes;
-    const idx = Math.min(Math.max(args.routeIndex ?? 0, 0), routes.length - 1);
-    const route = routes[idx];
-
-    const navResult = generateNavInstructions(
-      { legs: route.legs as any },
-      args.userHeading,
+    return JSON.stringify(
+      result.ok
+        ? { ok: true, ...result.data }
+        : { ok: false, reason: result.reason, error: result.message },
     );
-    if (!navResult.ok) {
-      return JSON.stringify({ ok: false, error: navResult.message });
-    }
-
-    return JSON.stringify({
-      ok: true,
-      routeName: route.routeName,
-      totalMinutes: route.totalMinutes,
-      instructions: navResult.data.instructions,
-      totalSteps: navResult.data.totalSteps,
-      initialBearing: navResult.data.initialBearing,
-      warnings: navResult.data.warnings,
-    });
-  } catch (error: any) {
-    console.error("[agent-tool:getNavInstructions]", error);
+  } catch {
     return JSON.stringify({
       ok: false,
-      error: error?.message ?? "導航指引產生失敗",
+      reason: "ROUTE_CONTEXT_UNAVAILABLE",
+      error: AGENT_ROUTE_ERRORS.ROUTE_CONTEXT_UNAVAILABLE,
     });
   }
 }
@@ -1978,6 +1991,7 @@ export async function executeLocalTool(
     allowMemoryWrite?: boolean;
     explicitMemoryRequest?: boolean;
     lineUserId?: string;
+    routeToken?: string;
   } = {},
 ): Promise<string> {
   switch (name) {
@@ -2016,7 +2030,17 @@ export async function executeLocalTool(
         limit: args.limit,
       });
 
-    case "planAccessibleRoute":
+    case "planAccessibleRoute": {
+      const accessibility = AgentAccessibilityOptionsSchema.safeParse({
+        avoidStairs: args.avoidStairs,
+        requireElevator: args.requireElevator,
+      });
+      if (!accessibility.success)
+        return JSON.stringify({
+          ok: false,
+          reason: "INVALID_ROUTE_ARGUMENTS",
+          error: AGENT_ROUTE_ERRORS.INVALID_ROUTE_ARGUMENTS,
+        });
       return planAccessibleRoute({
         origin: args.origin,
         destination: args.destination,
@@ -2024,7 +2048,11 @@ export async function executeLocalTool(
         transitPreference: args.transitPreference,
         departureTime: args.departureTime,
         userLocation,
+        userId,
+        avoidStairs: args.avoidStairs,
+        requireElevator: args.requireElevator,
       });
+    }
 
     case "getBusRoute":
       return getBusRoute({
@@ -2147,17 +2175,22 @@ export async function executeLocalTool(
         userLocation,
       });
 
-    case "getNavInstructions":
-      return getNavInstructions({
-        origin: args.origin as string,
-        destination: args.destination as string,
-        mode: args.mode as string | undefined,
-        transitPreference: args.transitPreference,
-        departureTime: args.departureTime as string | undefined,
-        routeIndex: args.routeIndex as number | undefined,
-        userHeading: args.userHeading as number | undefined,
-        userLocation,
+    case "getNavInstructions": {
+      const navOptions = AgentNavOptionsSchema.safeParse({
+        userHeading: args.userHeading,
+        language: args.language,
       });
+      if (!navOptions.success)
+        return JSON.stringify({
+          ok: false,
+          reason: "INVALID_ROUTE_ARGUMENTS",
+          error: AGENT_ROUTE_ERRORS.INVALID_ROUTE_ARGUMENTS,
+        });
+      return getNavInstructions({
+        routeToken: options.routeToken,
+        ...navOptions.data,
+      });
+    }
 
     case "saveMemory":
       return saveMemory({

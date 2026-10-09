@@ -1,8 +1,17 @@
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 import { registry } from "../../openapi/registry";
+import { AgentLanguageSchema } from "../../schemas/agent-language.schema";
 import { RouteIntentSchema } from "../../schemas/route-intent.schema";
 import { ToolSummarySchema } from "../agent/conversation-context";
+import {
+  AccessibleRouteDataSchema,
+  AccessibleRouteSchema,
+} from "../accessible-route/accessible-route.schema";
+import {
+  RouteConversationFields,
+  RoutingPreferencesSchema,
+} from "../../schemas/agent-route.schema";
 
 extendZodWithOpenApi(z);
 
@@ -146,6 +155,22 @@ export const ChatMessageSchema = z
 
 export const AgentChatRequestSchema = z
   .object({
+    language: AgentLanguageSchema.optional().openapi({
+      description:
+        "前端目前的介面語言：zh-TW（臺灣繁體中文）或 en（英文）。每次請求重新傳入；省略時沿用依對話判斷語言的行為。",
+      example: "en",
+    }),
+    routeContractVersion: RouteConversationFields.routeContractVersion.openapi({
+      description: "AI 路線契約版本，目前為 1；成功工具結果回傳相同版本。",
+    }),
+    routeContext: RouteConversationFields.routeContext.openapi({
+      description:
+        "目前查看的伺服器路線 token；null 明確清除，省略相容舊客戶端。無效 token 不會觸發重新規劃。",
+    }),
+    routingPreferences: RouteConversationFields.routingPreferences.openapi({
+      description:
+        "表單與個人設定預設；已選路線的 canonical 條件優先，本輪明示修改才建立新規劃。",
+    }),
     messages: z
       .array(ChatMessageSchema)
       .min(1)
@@ -368,6 +393,38 @@ registry.registerPath({
   },
 });
 
+/** Shape of successful planAccessibleRoute results carried by SSE and WS. */
+export const AiRoutePlanToolResultSchema = registry.register(
+  "AiRoutePlanToolResult",
+  AccessibleRouteDataSchema.extend({
+    ok: z.literal(true),
+    routeContractVersion: z.literal(1),
+    planId: z.string().uuid(),
+    selectedRouteId: z.string().min(1),
+    origin: AccessibleRouteDataSchema.shape.origin.extend({ name: z.string() }),
+    destination: AccessibleRouteDataSchema.shape.destination.extend({
+      name: z.string(),
+    }),
+    mode: RoutingPreferencesSchema.shape.mode.unwrap(),
+    routes: z.array(AccessibleRouteSchema).min(1),
+    effectivePreferences: z
+      .object({
+        mode: RoutingPreferencesSchema.shape.mode.unwrap(),
+        travelMode: z.enum(["transit", "walk", "drive", "motorcycle"]),
+        transitPreference:
+          RoutingPreferencesSchema.shape.transitPreference.unwrap(),
+        maxTransfers: z.number().int().nonnegative(),
+        avoidStairs: z.boolean(),
+        requireElevator: z.boolean(),
+        departureTime: RoutingPreferencesSchema.shape.departureTime,
+        needsAccessibleToilet: z.boolean(),
+        needsHandrail: z.boolean(),
+        maxSlopePercent: z.number().optional(),
+      })
+      .strict(),
+  }),
+);
+
 const AgentChatResponseSchema = z
   .object({
     ok: z.boolean().openapi({ example: true }),
@@ -393,17 +450,15 @@ registry.registerPath({
   tags: ["AI"],
   summary: "AI 對話代理（SSE 串流）",
   description:
-    `無障礙導航 AI 對話代理。後端擔任 **Agent Orchestrator**，負責工具呼叫迴圈：\n\n` +
-    `1. 收到使用者訊息後，後端以 OpenAI SDK 呼叫 LLM\n` +
-    `2. 若模型要求呼叫工具（planAccessibleRoute、findA11yPlaces 等），後端在本地執行工具並將結果送回模型\n` +
-    `3. 重複直到模型生成最終文字回答\n\n` +
-    `**stream: true** — 回應為 \`text/event-stream\` SSE 流，包含四種事件類型：\n` +
-    `- \`event: tool_call\` — 工具開始執行通知 \`{ name, arguments }\`\n` +
-    `- \`event: tool_result\` — 工具執行結果 \`{ name, result }\`\n` +
-    `- \`data: {...}\` (message 事件) — OpenAI 格式文字 delta chunks\n` +
-    `- \`data: [DONE]\` — 串流結束\n` +
-    `- \`event: error\` — 串流過程中發生錯誤 \`{ code: 500, message: string }\`；之後仍會發送 \`data: [DONE]\`\n\n` +
-    `**stream: false** — 回應為標準 JSON（ApiResponse 格式）`,
+    `無障礙導航 AI 對話代理，以 Gemini Interactions API 執行工具迴圈。路線工具只規劃一次：前端取得完整候選，模型取得同一份路線的摘要。\n\n` +
+    `routeContext 以伺服器 routeToken 同步目前選擇；getNavInstructions 讀取此路線，不重新規劃。成功路線結果見 AiRoutePlanToolResult schema；無 token 時仍可顯示，不能自動再規劃以補 token。\n\n` +
+    `**stream: true** — text/event-stream，包含五種事件：\n` +
+    `- event: tool_call — { name, args, callId }\n` +
+    `- event: tool_result — { name, result, summary, callId }；callId 對應同次 tool_call，result 是完整前端資料\n` +
+    `- event: token — { text }；工具回合的暫時文字不輸出，回答回合完成後按 chunk 送出\n` +
+    `- event: done — data 是字串 done（不是 JSON 或 [DONE]）\n` +
+    `- event: error — { code, message }；連線仍有效時補 done\n\n` +
+    `**stream: false** — 標準 ApiResponse 包文字 chat.completion，不含工具結果。`,
   request: {
     body: {
       content: { "application/json": { schema: AgentChatRequestSchema } },
@@ -418,7 +473,7 @@ registry.registerPath({
         "text/event-stream": {
           schema: z.string().openapi({
             description:
-              "SSE 串流。每筆 data 為 OpenAI ChatCompletionChunk JSON；工具事件另以 event: tool_call / tool_result 發送",
+              "SSE named events: token、tool_call、tool_result、error 的 data 為 JSON；done 的 data 為字串 done。",
           }),
         },
       },

@@ -1,4 +1,10 @@
 import type OpenAI from "openai";
+import type { ProjectedToolResult } from "./agent-route";
+import type { RouteContextInput, RoutingPreferences } from "./agent-route";
+import type { z } from "zod";
+import type { AgentLanguageSchema } from "../schemas/agent-language.schema";
+
+export type AgentLanguage = z.infer<typeof AgentLanguageSchema>;
 
 /**
  * One `{ type: "function" }` entry of the Interactions API `tools` array. Kept
@@ -42,8 +48,10 @@ export type AgentToolExecutor = (
   memoryOptions?: {
     allowMemoryWrite?: boolean;
     explicitMemoryRequest?: boolean;
+    routeToken?: string;
+    isCurrent?: () => boolean;
   },
-) => Promise<string>;
+) => Promise<string | ProjectedToolResult>;
 
 export interface RunToolLoopResult {
   text?: string;
@@ -67,13 +75,22 @@ export interface RouteOnceResult {
  * making the Input layer explicit and shared across the ai/agent/line surfaces.
  */
 export interface AgentInput {
+  /** Current frontend language preference; omission preserves language inference. */
+  language?: AgentLanguage;
   input: InteractionInputStep[];
   systemInstruction: string | undefined;
   model: string;
   execTool: AgentToolExecutor;
   userLocation?: { latitude: number; longitude: number };
-  onToolCall?: (name: string, args: Record<string, unknown>) => void;
-  onToolResult?: (name: string, result: unknown) => void;
+  onToolCall?: (
+    name: string,
+    args: Record<string, unknown>,
+    callId?: string,
+  ) => void;
+  onToolResult?: (name: string, result: unknown, callId?: string) => void;
+  routeContext?: RouteContextInput;
+  routingPreferences?: RoutingPreferences;
+  signal?: AbortSignal;
   userId?: string;
   memoryToolsEnabled?: boolean;
   allowMemoryWrite?: boolean;

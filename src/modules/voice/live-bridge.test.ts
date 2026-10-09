@@ -342,6 +342,29 @@ describe("createLiveBridge Live config", () => {
     connect.mockResolvedValue(makeSession());
   });
 
+  it.each(["en", "zh-TW"] as const)(
+    "sends UI language %s via system instructions despite a server language override",
+    async (language) => {
+      vi.stubEnv("GEMINI_LIVE_LANGUAGE_CODE", "cmn-TW");
+      const bridge = await createLiveBridge({
+        ws: makeWs(),
+        userId: "u",
+        language,
+      });
+      try {
+        await bridge.voiceReady;
+        const config = connect.mock.calls[0][0].config;
+        expect(config.systemInstruction).toContain(
+          `【目前介面語言偏好：${language}】`,
+        );
+        expect(config.speechConfig).toBeUndefined();
+      } finally {
+        bridge.close();
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
   it("defaults temperature to 0 (aligned with the text agent)", async () => {
     await (
       await createLiveBridge({ ws: makeWs(), userId: "u" })
@@ -1107,40 +1130,46 @@ describe("createLiveBridge navigation turn arbiter", () => {
     });
   });
 
-  it("sends a navigation tool response before the queued verbatim speech turn", async () => {
-    let onmessage: ((message: unknown) => void) | undefined;
-    const session = makeSession();
-    connect.mockImplementation(async ({ callbacks }) => {
-      onmessage = callbacks.onmessage;
-      return session;
-    });
-    const bridge = await createLiveBridge({
-      ws: makeWs(),
-      userId: "u",
-      userLocation: { latitude: 25, longitude: 121 },
-    });
-    await bridge.voiceReady;
-    await bridge.armRouteToken("cap");
-    onmessage?.({
-      toolCall: {
-        functionCalls: [{ id: "nav-1", name: "startNavigation", args: {} }],
-      },
-    });
-    await vi.waitFor(() =>
-      expect(session.sendToolResponse).toHaveBeenCalledOnce(),
-    );
-    expect(session.sendClientContent).not.toHaveBeenCalled();
-    onmessage?.({ serverContent: { turnComplete: true } });
-    await vi.waitFor(() =>
-      expect(session.sendClientContent).toHaveBeenCalledOnce(),
-    );
-    expect(session.sendToolResponse.mock.invocationCallOrder[0]).toBeLessThan(
-      session.sendClientContent.mock.invocationCallOrder[0],
-    );
-    expect(session.sendClientContent.mock.calls[0][0].turns).toContain(
-      "請逐字唸出以下導航指引",
-    );
-  });
+  it.each([undefined, "zh-TW", "en"] as const)(
+    "sends the navigation tool response before speech in language %s",
+    async (language) => {
+      let onmessage: ((message: unknown) => void) | undefined;
+      const session = makeSession();
+      connect.mockImplementation(async ({ callbacks }) => {
+        onmessage = callbacks.onmessage;
+        return session;
+      });
+      const bridge = await createLiveBridge({
+        ws: makeWs(),
+        userId: "u",
+        userLocation: { latitude: 25, longitude: 121 },
+        language,
+      });
+      await bridge.voiceReady;
+      await bridge.armRouteToken("cap");
+      onmessage?.({
+        toolCall: {
+          functionCalls: [{ id: "nav-1", name: "startNavigation", args: {} }],
+        },
+      });
+      await vi.waitFor(() =>
+        expect(session.sendToolResponse).toHaveBeenCalledOnce(),
+      );
+      expect(session.sendClientContent).not.toHaveBeenCalled();
+      onmessage?.({ serverContent: { turnComplete: true } });
+      await vi.waitFor(() =>
+        expect(session.sendClientContent).toHaveBeenCalledOnce(),
+      );
+      expect(session.sendToolResponse.mock.invocationCallOrder[0]).toBeLessThan(
+        session.sendClientContent.mock.invocationCallOrder[0],
+      );
+      expect(session.sendClientContent.mock.calls[0][0].turns).toContain(
+        language === "en"
+          ? "請依介面語言播報以下導航指引：使用英文"
+          : "請逐字唸出以下導航指引",
+      );
+    },
+  );
 
   it("waits for a real idle boundary while ordinary model output is active", async () => {
     let onmessage: ((message: unknown) => void) | undefined;
@@ -1299,7 +1328,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
         {},
         { latitude: 25, longitude: 121 },
         "u",
-        { allowMemoryWrite: false },
+        expect.objectContaining({ allowMemoryWrite: false }),
       ),
     );
     expect(session.sendClientContent).not.toHaveBeenCalled();
@@ -1501,7 +1530,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
         {},
         { latitude: 25.05, longitude: 121.55, accuracy: 8 },
         "u",
-        { allowMemoryWrite: false },
+        expect.objectContaining({ allowMemoryWrite: false }),
       ),
     );
     await vi.waitFor(() =>
@@ -1760,7 +1789,7 @@ describe("createLiveBridge user memory integration", () => {
         { content: "習慣搭乘307公車", category: "habit" },
         undefined,
         "mem-user",
-        { allowMemoryWrite: true },
+        expect.objectContaining({ allowMemoryWrite: true }),
       ),
     );
   });
@@ -2409,15 +2438,357 @@ describe("createLiveBridge navigation independence from the voice session", () =
       connect.mockReturnValue(pendingConnect.promise);
 
       const bridge = await createLiveBridge({ ws, userId: "u" });
-      expect(vi.getTimerCount()).toBe(0);
+      expect(vi.getTimerCount()).toBe(1); // Bounded background bootstrap; navigation is already usable.
 
       await bridge.armRouteToken("cap");
       bridge.startNavigation();
 
       expect(framesOf(ws).some((f) => f.type === "nav.start")).toBe(true);
       bridge.close();
+      await bridge.voiceReady;
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }
   });
+});
+
+describe("AI selected-route synchronization", () => {
+  const busRoute = {
+    ...walkRoute,
+    routeId: "bus-view",
+    routeName: "公車方案",
+    routeToken: "bus-token",
+    navigationId: "nav-bus",
+    routeVersion: 1,
+    legs: [
+      {
+        type: "BUS",
+        routeName: "99",
+        departureStop: "起站",
+        arrivalStop: "台中火車站",
+        polyline: [start, end],
+      },
+    ],
+  };
+  const plan = {
+    ok: true,
+    routeContractVersion: 1,
+    planId: "p1",
+    selectedRouteId: busRoute.routeId,
+    routes: [busRoute],
+    effectivePreferences: { mode: "wheelchair", transitPreference: "bus" },
+  };
+  const envelope = (route = busRoute) => ({
+    schemaVersion: 1,
+    route,
+    navigationId: route.navigationId,
+    routeVersion: 1,
+    canonicalRequest: { mode: "wheelchair", transitPreference: "bus" },
+  });
+  const frames = (ws: WebSocket) =>
+    vi
+      .mocked(ws.send)
+      .mock.calls.filter(([v]) => typeof v === "string")
+      .map(([v]) => JSON.parse(v as string));
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getMemorySettings.mockResolvedValue({ memoryEnabled: false });
+    getNavigationEnvelopeByToken.mockResolvedValue(envelope());
+  });
+
+  it("retains the frontend language when rebuilding Live after a route selection", async () => {
+    connect.mockImplementation(async () => makeSession());
+    const bridge = await createLiveBridge({
+      ws: makeWs(),
+      userId: "language-reconnect",
+      language: "en",
+    });
+    try {
+      await bridge.voiceReady;
+      expect(
+        await bridge.setRouteContext({ routeToken: "bus-token" }),
+      ).toMatchObject({ ok: true });
+      expect(connect).toHaveBeenCalledTimes(2);
+      for (const [params] of connect.mock.calls) {
+        expect(params.config.systemInstruction).toContain("Respond in English");
+        expect(params.config.speechConfig).toBeUndefined();
+      }
+    } finally {
+      bridge.close();
+    }
+  });
+
+  it("emits full BUS geometry to UI before the matching token-free Live tool response", async () => {
+    let callbacks: any;
+    const session = makeSession();
+    connect.mockImplementation(async (options) => {
+      callbacks = options.callbacks;
+      return session;
+    });
+    vi.mocked(executeLocalTool).mockResolvedValue(JSON.stringify(plan));
+    const ws = makeWs();
+    const bridge = await createLiveBridge({ ws, userId: "route-user" });
+    await bridge.voiceReady;
+    callbacks.onmessage({
+      toolCall: {
+        functionCalls: [
+          {
+            id: "provider-call",
+            name: "planAccessibleRoute",
+            args: { destination: "台中火車站" },
+          },
+        ],
+      },
+    });
+    await vi.waitFor(() =>
+      expect(session.sendToolResponse).toHaveBeenCalledTimes(1),
+    );
+    const events = frames(ws);
+    const call = events.find((e) => e.type === "tool_call");
+    const result = events.find((e) => e.type === "tool_result");
+    expect(result).toMatchObject({
+      callId: call.callId,
+      turnId: call.turnId,
+      result: plan,
+    });
+    const model = JSON.parse(
+      session.sendToolResponse.mock.calls[0][0].functionResponses[0].response
+        .output,
+    );
+    expect(model.routes[0].legs[0]).toMatchObject({
+      type: "BUS",
+      arrivalStop: "台中火車站",
+    });
+    expect(JSON.stringify(model)).not.toMatch(/polyline|routeToken|bus-token/);
+    expect(vi.mocked(ws.send).mock.invocationCallOrder.at(-1)).toBeLessThan(
+      session.sendToolResponse.mock.invocationCallOrder[0],
+    );
+    expect(
+      await bridge.setRouteContext({ routeToken: "bus-token" }),
+    ).toMatchObject({ ok: true, routeId: "bus-view" });
+    expect(connect).toHaveBeenCalledTimes(1); // Default-selection echo keeps the explanation playing.
+    bridge.close();
+  });
+
+  it("stops old audio/tools immediately and confirms only after the new session is ready, without changing navigation", async () => {
+    const callbacks: any[] = [];
+    const sessions = [makeSession(), makeSession()];
+    const connecting = deferred<any>();
+    connect.mockImplementation((options) => {
+      callbacks.push(options.callbacks);
+      return callbacks.length === 1
+        ? Promise.resolve(sessions[0])
+        : connecting.promise;
+    });
+    const pendingPlan = deferred<string>();
+    vi.mocked(executeLocalTool).mockReturnValue(pendingPlan.promise);
+    getRouteByToken.mockResolvedValue(walkRoute);
+    const ws = makeWs();
+    const bridge = await createLiveBridge({ ws, userId: "route-user" });
+    await bridge.voiceReady;
+    await bridge.armRouteToken("active-navigation-token");
+    callbacks[0].onmessage({
+      toolCall: {
+        functionCalls: [{ id: "old-call", name: "planAccessibleRoute" }],
+      },
+    });
+    await vi.waitFor(() => expect(executeLocalTool).toHaveBeenCalledTimes(1));
+    const changed = bridge.setRouteContext({ routeToken: "bus-token" });
+    let acknowledged = false;
+    void changed.then(() => {
+      acknowledged = true;
+    });
+    await vi.waitFor(() => expect(connect).toHaveBeenCalledTimes(2));
+    expect(sessions[0].close).toHaveBeenCalledTimes(1);
+    expect(acknowledged).toBe(false);
+    pendingPlan.resolve(
+      JSON.stringify({
+        ...plan,
+        selectedRouteId: "old",
+        routes: [{ ...busRoute, routeId: "old" }],
+      }),
+    );
+    callbacks[0].onmessage({
+      serverContent: {
+        modelTurn: {
+          parts: [
+            { inlineData: { data: Buffer.from("old").toString("base64") } },
+          ],
+        },
+        outputTranscription: { text: "舊火車路線" },
+      },
+    });
+    callbacks[0].onclose();
+    connecting.resolve(sessions[1]);
+    expect(await changed).toMatchObject({ ok: true, routeId: "bus-view" });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(
+      frames(ws).some(
+        (e) =>
+          e.type === "tool_result" ||
+          e.text === "舊火車路線" ||
+          e.type === "nav.stop" ||
+          e.type === "error",
+      ),
+    ).toBe(false);
+    expect(
+      vi.mocked(ws.send).mock.calls.some(([v]) => Buffer.isBuffer(v)),
+    ).toBe(false);
+    expect(String(connect.mock.calls[1][0].config.systemInstruction)).toContain(
+      '"type":"BUS"',
+    );
+    expect(
+      String(connect.mock.calls[1][0].config.systemInstruction),
+    ).not.toContain("bus-token");
+    bridge.startNavigation(); // The separately armed route survives selection changes.
+    expect(frames(ws).some((e) => e.type === "nav.start")).toBe(true);
+    bridge.close();
+  });
+
+  it("latest selection wins across overlapping token lookups and clear never replans", async () => {
+    connect.mockResolvedValue(makeSession());
+    const ws = makeWs();
+    const bridge = await createLiveBridge({ ws, userId: "route-user" });
+    await bridge.voiceReady;
+    const slow = deferred<any>();
+    getNavigationEnvelopeByToken.mockReturnValueOnce(slow.promise);
+    const first = bridge.setRouteContext({ routeToken: "slow" });
+    expect(await bridge.setRouteContext(null)).toEqual({
+      ok: true,
+      routeId: null,
+      navigationId: null,
+      routeVersion: null,
+    });
+    slow.resolve(envelope());
+    expect(await first).toEqual({ ok: false, reason: "STALE_SELECTION" });
+    expect(executeLocalTool).not.toHaveBeenCalled();
+    bridge.close();
+  });
+
+  it("does not adopt a plan cancelled by provider interruption", async () => {
+    let callbacks: any;
+    const session = makeSession();
+    connect.mockImplementation(async (options) => {
+      callbacks = options.callbacks;
+      return session;
+    });
+    const pending = deferred<string>();
+    vi.mocked(executeLocalTool).mockReturnValueOnce(pending.promise);
+    const ws = makeWs();
+    const bridge = await createLiveBridge({ ws, userId: "route-user" });
+    await bridge.voiceReady;
+    callbacks.onmessage({
+      toolCall: {
+        functionCalls: [{ id: "cancelled", name: "planAccessibleRoute" }],
+      },
+    });
+    await vi.waitFor(() => expect(executeLocalTool).toHaveBeenCalledTimes(1));
+    callbacks.onmessage({
+      serverContent: { interrupted: true },
+      toolCallCancellation: { ids: ["cancelled"] },
+    });
+    pending.resolve(JSON.stringify(plan));
+    await vi.waitFor(() =>
+      expect(frames(ws).some((e) => e.type === "interrupted")).toBe(true),
+    );
+    callbacks.onmessage({
+      toolCall: {
+        functionCalls: [{ id: "follow-up", name: "getNavInstructions" }],
+      },
+    });
+    await vi.waitFor(() =>
+      expect(session.sendToolResponse).toHaveBeenCalledTimes(1),
+    );
+    expect(
+      session.sendToolResponse.mock.calls[0][0].functionResponses[0].response
+        .output,
+    ).toContain("ROUTE_CONTEXT_REQUIRED");
+    expect(
+      frames(ws)
+        .filter((e) => e.type === "tool_result")
+        .map((e) => e.name),
+    ).toEqual(["getNavInstructions"]);
+    bridge.close();
+  });
+
+  it("fails the synchronization when reconnection fails, keeping the client socket open", async () => {
+    connect
+      .mockResolvedValueOnce(makeSession())
+      .mockRejectedValueOnce(new Error("provider offline"));
+    const ws = makeWs();
+    const bridge = await createLiveBridge({ ws, userId: "route-user" });
+    await bridge.voiceReady;
+    expect(await bridge.setRouteContext({ routeToken: "bus-token" })).toEqual({
+      ok: false,
+      reason: "ROUTE_CONTEXT_UNAVAILABLE",
+    });
+    expect(ws.close).not.toHaveBeenCalled();
+    bridge.close();
+  });
+});
+
+it("bounds selection bootstrap including memory lookup and closes a provider session resolving after timeout", async () => {
+  vi.clearAllMocks();
+  vi.useFakeTimers();
+  getMemorySettings.mockResolvedValue({ memoryEnabled: false });
+  const lateConnect = deferred<any>();
+  connect
+    .mockResolvedValueOnce(makeSession())
+    .mockReturnValueOnce(lateConnect.promise);
+  const ws = makeWs();
+  const bridge = await createLiveBridge({ ws, userId: "bounded-route" });
+  try {
+    await bridge.voiceReady;
+    const selecting = bridge.setRouteContext(null);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(await selecting).toEqual({
+      ok: false,
+      reason: "ROUTE_CONTEXT_UNAVAILABLE",
+    });
+    const lateSession = makeSession();
+    lateConnect.resolve(lateSession);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(lateSession.close).toHaveBeenCalledTimes(1);
+    expect(ws.close).not.toHaveBeenCalled();
+  } finally {
+    bridge.close();
+    vi.useRealTimers();
+  }
+});
+
+it("a superseded bootstrap cannot overwrite the new session's memory permission", async () => {
+  vi.clearAllMocks();
+  const oldSettings = deferred<any>();
+  getMemorySettings
+    .mockReturnValueOnce(oldSettings.promise)
+    .mockResolvedValueOnce({ memoryEnabled: false });
+  let callbacks: any;
+  const session = makeSession();
+  connect.mockImplementation(async (options) => {
+    callbacks = options.callbacks;
+    return session;
+  });
+  const bridge = await createLiveBridge({
+    ws: makeWs(),
+    userId: "memory-race",
+  });
+  await vi.waitFor(() => expect(getMemorySettings).toHaveBeenCalledTimes(1));
+  expect(await bridge.setRouteContext(null)).toMatchObject({ ok: true });
+  oldSettings.resolve({ memoryEnabled: true });
+  await bridge.voiceReady;
+  vi.mocked(executeLocalTool).mockResolvedValue('{"ok":false}');
+  callbacks.onmessage({
+    toolCall: {
+      functionCalls: [
+        { id: "new-session", name: "saveMemory", args: { content: "example" } },
+      ],
+    },
+  });
+  await vi.waitFor(() => expect(executeLocalTool).toHaveBeenCalled());
+  expect(vi.mocked(executeLocalTool).mock.calls[0][4]).toMatchObject({
+    allowMemoryWrite: false,
+  });
+  expect(loadMemories).not.toHaveBeenCalled();
+  bridge.close();
 });

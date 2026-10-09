@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { summarizeRouteResult } from "../../utils/agent-route-projection";
 
 /**
  * Cross-surface conversation context (text chat ⇄ voice).
@@ -89,6 +90,8 @@ function compact(value: unknown, depth: number): unknown {
  * @returns The digest, or an empty string when nothing useful remains.
  */
 export function summarizeToolResult(result: unknown): string {
+  const routeSummary = summarizeRouteResult(result, TOOL_SUMMARY_MAX_CHARS);
+  if (routeSummary !== null) return routeSummary;
   let text: string;
   try {
     text = JSON.stringify(compact(result, 0)) ?? "";

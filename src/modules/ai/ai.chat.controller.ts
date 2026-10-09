@@ -1,3 +1,7 @@
+import type {
+  RouteContextInput,
+  RoutingPreferences,
+} from "../../types/agent-route";
 import type { Request, Response } from "express";
 import { model } from "../../config/ai";
 import { sendResponse } from "../../config/lib";
@@ -20,9 +24,11 @@ import {
   withCurrentDate,
 } from "../../config/ai/chat-prompt";
 import type { IUser } from "../../types";
+import type { AgentLanguage } from "../../types/agent";
 import { AgentRateLimitError } from "../agent/agent-manager.service";
 
 function sendSse(res: Response, event: string, data: unknown): void {
+  if (res.destroyed || res.writableEnded) return;
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
@@ -85,16 +91,24 @@ function isMemoryDeletionRequest(text: string): boolean {
 export async function aiChat(req: Request, res: Response): Promise<void> {
   const {
     messages: rawMessages,
+    language,
     stream,
     userLocation,
+    routeContext,
+    routingPreferences,
   } = req.body as {
     model?: string;
     messages: OAIMessage[];
+    language?: AgentLanguage;
     stream?: boolean;
     temperature?: number;
     userLocation?: { latitude: number; longitude: number };
+    routeContext?: RouteContextInput;
+    routingPreferences?: RoutingPreferences;
   };
 
+  const cancellation = new AbortController();
+  res.once("close", () => cancellation.abort());
   const authUser = resolveAuthUser(req);
   const userId = authUser ? String(authUser._id) : undefined;
   const latestText = latestUserText(rawMessages);
@@ -147,14 +161,20 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
       // re-send text the client already has.
       let streamedChars = 0;
       const loopResult = await runChatAgent({
+        language,
         input,
         systemInstruction,
         model,
         userLocation,
-        onToolCall: (name, args) => sendSse(res, "tool_call", { name, args }),
-        onToolResult: (name, result) =>
+        routeContext,
+        routingPreferences,
+        signal: cancellation.signal,
+        onToolCall: (name, args, callId) =>
+          sendSse(res, "tool_call", { name, args, callId }),
+        onToolResult: (name, result, callId) =>
           sendSse(res, "tool_result", {
             name,
+            callId,
             result,
             summary: summarizeToolResult(result),
           }),
@@ -184,9 +204,11 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
           message: ERROR_MESSAGE.INTERNAL,
         });
       }
+      if (cancellation.signal.aborted) return;
       res.write("event: done\ndata: done\n\n");
       res.end();
     } catch (error: any) {
+      if (cancellation.signal.aborted) return;
       console.error("[ai/chat stream]", error);
       sendSse(res, "error", {
         code:
@@ -195,6 +217,7 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
             : ResponseCode.INTERNAL_ERROR,
         message: error?.message ?? ERROR_MESSAGE.INTERNAL,
       });
+      if (cancellation.signal.aborted) return;
       res.write("event: done\ndata: done\n\n");
       res.end();
     }
@@ -203,16 +226,21 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
 
   try {
     const loopResult = await runChatAgent({
+      language,
       input,
       systemInstruction,
       model,
       userLocation,
+      routeContext,
+      routingPreferences,
+      signal: cancellation.signal,
       userId,
       memoryToolsEnabled,
       allowMemoryWrite,
       explicitMemoryRequest,
     });
 
+    if (cancellation.signal.aborted) return;
     const text = loopResult.text ?? "";
     if (!text) {
       console.error("[ai/chat] empty answer from agent");
@@ -244,6 +272,7 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
       },
     });
   } catch (error: any) {
+    if (cancellation.signal.aborted) return;
     console.error("[ai/chat]", error);
     sendResponse(
       res,

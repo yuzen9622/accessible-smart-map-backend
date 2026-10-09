@@ -131,13 +131,21 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           mode: {
             type: "string",
             enum: ["wheelchair", "elderly", "visual_impaired", "normal"],
-            description: "無障礙需求模式，預設 'normal'",
+            description: "只有使用者明示或已確認時才傳；省略沿用行程或個人設定",
           },
           transitPreference: {
             type: "string",
             enum: ["none", "bus", "rail", "metro"],
             description:
-              "大眾運輸軟性偏好：bus 偏好公車；rail 偏好鐵路（台鐵／高鐵，不含捷運）；metro 偏好捷運／地鐵／輕軌；none 不指定或取消偏好。保留其他運具接駁，不能當作只搭某運具的保證。目的地是車站不代表偏好。",
+              "大眾運輸軟性偏好：bus 偏好公車；rail 偏好鐵路（台鐵／高鐵，不含捷運）；metro 偏好捷運／地鐵／輕軌；none 明確取消偏好；未提及時省略參數，沿用已確認行程。保留其他運具接駁，不能當作只搭某運具的保證。目的地是車站不代表偏好。",
+          },
+          avoidStairs: {
+            type: "boolean",
+            description: "使用者明示是否避開樓梯；省略沿用設定",
+          },
+          requireElevator: {
+            type: "boolean",
+            description: "使用者明示是否需要電梯；省略沿用設定",
           },
           departureTime: {
             type: "string",
@@ -580,45 +588,24 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "getNavInstructions",
       description:
-        "回傳從起點到終點的**逐步**導航指引（「沿中山路直行 120 公尺」「請向右轉」「請在台北車站搭乘板南線」）。用於要「詳細步驟/每一步怎麼走/帶我走」時；不需先呼叫 planAccessibleRoute。與 planAccessibleRoute 差別＝逐步 vs 摘要。",
+        "依目前已選路線回傳逐步導航指引；不會重新規劃。直接呼叫即可，後端注入可信路線，不要傳起終點、routeIndex 或 token。尚未規劃時先呼叫 planAccessibleRoute；若路線過期須告知使用者。",
       parameters: {
         type: "object",
         properties: {
-          origin: {
-            type: "string",
-            description:
-              "起點名稱，請完整照抄使用者說的地名；若說「這裡/目前位置」請填 'current_location'",
-          },
-          destination: {
-            type: "string",
-            description: "終點名稱，請完整照抄使用者說的地名",
-          },
-          mode: {
-            type: "string",
-            enum: ["wheelchair", "elderly", "visual_impaired", "normal"],
-            description: "無障礙需求模式，預設 'normal'",
-          },
-          transitPreference: {
-            type: "string",
-            enum: ["none", "bus", "rail", "metro"],
-            description:
-              "大眾運輸軟性偏好：bus 偏好公車；rail 偏好鐵路（台鐵／高鐵，不含捷運）；metro 偏好捷運／地鐵／輕軌；none 不指定或取消偏好。保留其他運具接駁，不能當作只搭某運具的保證。目的地是車站不代表偏好。",
-          },
-          departureTime: {
-            type: "string",
-            description: "出發時間，ISO8601 或 HH:mm；不指定表示現在",
-          },
-          routeIndex: {
-            type: "number",
-            description: "選擇第幾條路線（0-based），預設 0（最佳路線）",
-          },
           userHeading: {
             type: "number",
-            description:
-              "使用者當前朝向（度，正北=0，順時針），有此值時會產生相對方向（左前方/右側等）",
+            minimum: 0,
+            maximum: 359,
+            description: "目前朝向，正北為 0 度",
+          },
+          language: {
+            type: "string",
+            enum: ["zh-TW", "en"],
+            description: "指引語言，預設繁體中文",
           },
         },
-        required: ["origin", "destination"],
+        additionalProperties: false,
+        required: [],
       },
     },
   },

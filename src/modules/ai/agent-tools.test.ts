@@ -49,7 +49,17 @@ vi.mock("../accessible-route/accessible-route.service", () => ({
   planAccessibleRouteFromRequest: vi.fn(),
 }));
 vi.mock("../nav-instructions/nav-instructions.service", () => ({
-  generateNavInstructions: vi.fn(),
+  generateNavInstructionsFromInput: vi.fn(),
+}));
+vi.mock("../accessible-route/route-token.service", () => ({
+  attachRouteTokens: vi.fn(async (routes) =>
+    routes.map((route: any) => ({
+      ...route,
+      routeToken: `token-${route.routeId}`,
+      navigationId: `nav-${route.routeId}`,
+      routeVersion: 1,
+    })),
+  ),
 }));
 vi.mock("../accessible-route/facility-slim", () => ({
   slimFacility: vi.fn((f: any) => ({ osmId: f.osmId, category: f.category })),
@@ -102,7 +112,8 @@ import * as hazardService from "../hazard-report/hazard-report.service";
 import { getEnvironmentInfo as fetchEnvironment } from "../environment/environment.service";
 import { getCoordinates, searchPlaces } from "../../adapters/google.adapter";
 import { planAccessibleRouteFromRequest } from "../accessible-route/accessible-route.service";
-import { generateNavInstructions } from "../nav-instructions/nav-instructions.service";
+import { generateNavInstructionsFromInput } from "../nav-instructions/nav-instructions.service";
+import { attachRouteTokens } from "../accessible-route/route-token.service";
 import { googleGenAi } from "../../config/ai";
 import EmergencyContact from "../../model/emergency-contact.model";
 import LineLinkCode from "../../model/line-link-code.model";
@@ -168,7 +179,7 @@ const mockResolveBusCity = busService.resolveBusCity as unknown as ReturnType<
 const mockPlanRoute = planAccessibleRouteFromRequest as unknown as ReturnType<
   typeof vi.fn
 >;
-const mockGenNav = generateNavInstructions as unknown as ReturnType<
+const mockGenNav = generateNavInstructionsFromInput as unknown as ReturnType<
   typeof vi.fn
 >;
 const mockGenerateContent = googleGenAi.models
@@ -921,205 +932,72 @@ describe("getTransitAlerts", () => {
 // getNavInstructions
 // ---------------------------------------------------------------------------
 describe("getNavInstructions", () => {
-  const fakeRoute = {
-    routeName: "307 → 板南線",
-    totalMinutes: 25,
-    transferCount: 1,
-    legs: [
-      {
-        type: "WALK",
-        from: "起點",
-        to: "台北車站",
-        distanceM: 200,
-        minutesEst: 3,
-      },
-      {
-        type: "METRO",
-        lineName: "板南線",
-        departureStation: "台北車站",
-        arrivalStation: "忠孝復興",
-      },
-    ],
-  };
-
-  const planOk = {
+  const navOk = {
     ok: true,
     data: {
-      origin: { lat: 25.05, lng: 121.51 },
-      destination: { lat: 25.04, lng: 121.54 },
-      city: "Taipei",
-      routes: [fakeRoute],
-    },
-  };
-
-  const navOk = {
-    ok: true as const,
-    data: {
-      instructions: [
-        { text: "請朝東方向出發", type: "depart", legType: "WALK" },
-        { text: "請搭乘板南線", type: "transit_board", legType: "METRO" },
-        { text: "您已抵達目的地", type: "arrive", legType: "METRO" },
-      ],
-      initialBearing: 90,
-      totalSteps: 3,
+      instructions: [{ text: "搭乘 99 公車", legType: "BUS" }],
+      totalSteps: 1,
       warnings: [],
     },
   };
-
-  it("規劃路線 + 產出導航指引", async () => {
-    mockPlanRoute.mockResolvedValue(planOk);
-    mockGenNav.mockReturnValue(navOk);
-    const raw = await getNavInstructions({
-      origin: "台北車站",
-      destination: "忠孝復興",
+  it("reads the selected token and never calls the planner", async () => {
+    mockGenNav.mockResolvedValue(navOk);
+    const result = JSON.parse(
+      await getNavInstructions({
+        routeToken: "selected-bus",
+        userHeading: 45,
+        language: "en",
+      }),
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      totalSteps: 1,
+      instructions: navOk.data.instructions,
     });
-    const result = JSON.parse(raw);
-    expect(result.ok).toBe(true);
-    expect(result.routeName).toBe("307 → 板南線");
-    expect(result.totalSteps).toBe(3);
-    expect(result.instructions).toHaveLength(3);
-    expect(result.instructions[0].text).toContain("東");
-  });
-
-  it("planRoute 失敗時回錯誤", async () => {
-    mockPlanRoute.mockResolvedValue({ ok: false, error: "找不到路線" });
-    const raw = await getNavInstructions({
-      origin: "A",
-      destination: "B",
+    expect(mockGenNav).toHaveBeenCalledWith({
+      routeToken: "selected-bus",
+      userHeading: 45,
+      language: "en",
     });
-    const result = JSON.parse(raw);
-    expect(result.ok).toBe(false);
-    expect(result.error).toBe("找不到路線");
+    expect(mockPlanRoute).not.toHaveBeenCalled();
   });
-
-  it("generateNavInstructions 失敗時回錯誤", async () => {
-    mockPlanRoute.mockResolvedValue(planOk);
-    mockGenNav.mockReturnValue({
+  it("refuses legacy origin/destination/index without a trusted token", async () => {
+    const result = JSON.parse(
+      await getNavInstructions({
+        origin: "A",
+        destination: "B",
+        routeIndex: 1,
+      }),
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "ROUTE_CONTEXT_REQUIRED",
+    });
+    expect(mockPlanRoute).not.toHaveBeenCalled();
+    expect(mockGenNav).not.toHaveBeenCalled();
+  });
+  it("does not replan when the selected token expires", async () => {
+    mockGenNav.mockResolvedValue({
       ok: false,
       status: 400,
-      reason: "INVALID_ROUTE_INPUT",
-      message: "route 欄位格式錯誤",
+      reason: "INVALID_ROUTE_TOKEN",
+      message: "路線已過期",
     });
-    const raw = await getNavInstructions({
-      origin: "A",
-      destination: "B",
+    expect(
+      JSON.parse(await getNavInstructions({ routeToken: "expired" })),
+    ).toMatchObject({
+      ok: false,
+      reason: "INVALID_ROUTE_TOKEN",
+      error: "路線已過期",
     });
-    const result = JSON.parse(raw);
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain("格式錯誤");
+    expect(mockPlanRoute).not.toHaveBeenCalled();
   });
-
-  it("current_location 無 userLocation 回錯誤", async () => {
-    const raw = await getNavInstructions({
-      origin: "current_location",
-      destination: "B",
-    });
-    const result = JSON.parse(raw);
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain("使用者位置");
-  });
-
-  it("current_location + userLocation 正常規劃", async () => {
-    mockPlanRoute.mockResolvedValue(planOk);
-    mockGenNav.mockReturnValue(navOk);
-    const raw = await getNavInstructions({
-      origin: "current_location",
-      destination: "B",
-      userLocation: { latitude: 25.05, longitude: 121.51 },
-    });
-    const result = JSON.parse(raw);
-    expect(result.ok).toBe(true);
-    expect(mockPlanRoute).toHaveBeenCalledWith(
-      expect.objectContaining({
-        origin: { latitude: 25.05, longitude: 121.51 },
-      }),
-    );
-  });
-
-  it("routeIndex 選擇第二條路線", async () => {
-    const secondRoute = { ...fakeRoute, routeName: "紅線直達" };
-    mockPlanRoute.mockResolvedValue({
-      ...planOk,
-      data: { ...planOk.data, routes: [fakeRoute, secondRoute] },
-    });
-    mockGenNav.mockReturnValue(navOk);
-    const raw = await getNavInstructions({
-      origin: "A",
-      destination: "B",
-      routeIndex: 1,
-    });
-    const result = JSON.parse(raw);
-    expect(result.ok).toBe(true);
-    expect(mockGenNav).toHaveBeenCalledWith(
-      { legs: secondRoute.legs },
-      undefined,
-    );
-  });
-
-  it("routeIndex 超出範圍時 clamp 到最後一條", async () => {
-    mockPlanRoute.mockResolvedValue(planOk);
-    mockGenNav.mockReturnValue(navOk);
-    await getNavInstructions({
-      origin: "A",
-      destination: "B",
-      routeIndex: 99,
-    });
-    expect(mockGenNav).toHaveBeenCalledWith(
-      { legs: fakeRoute.legs },
-      undefined,
-    );
-  });
-
-  it("傳遞 userHeading 給 generateNavInstructions", async () => {
-    mockPlanRoute.mockResolvedValue(planOk);
-    mockGenNav.mockReturnValue(navOk);
-    await getNavInstructions({
-      origin: "A",
-      destination: "B",
-      userHeading: 45,
-    });
-    expect(mockGenNav).toHaveBeenCalledWith(expect.anything(), 45);
-  });
-
-  it("傳遞 mode 和 departureTime", async () => {
-    mockPlanRoute.mockResolvedValue(planOk);
-    mockGenNav.mockReturnValue(navOk);
-    await getNavInstructions({
-      origin: "A",
-      destination: "B",
-      mode: "wheelchair",
-      departureTime: "14:00",
-    });
-    expect(mockPlanRoute).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mode: "wheelchair",
-        departureTime: "14:00",
-      }),
-    );
-  });
-
-  it("無效 mode 降級為 normal", async () => {
-    mockPlanRoute.mockResolvedValue(planOk);
-    mockGenNav.mockReturnValue(navOk);
-    await getNavInstructions({
-      origin: "A",
-      destination: "B",
-      mode: "flying_carpet",
-    });
-    expect(mockPlanRoute).toHaveBeenCalledWith(
-      expect.objectContaining({ mode: "normal" }),
-    );
-  });
-
-  it("planRoute 拋例外時回 fallback", async () => {
-    mockPlanRoute.mockRejectedValue(new Error("timeout"));
-    const raw = await getNavInstructions({
-      origin: "A",
-      destination: "B",
-    });
-    const result = JSON.parse(raw);
-    expect(result.ok).toBe(false);
-    expect(result.error).toBe("timeout");
+  it("fails closed on token storage failures", async () => {
+    mockGenNav.mockRejectedValue(new Error("cache timeout"));
+    expect(
+      JSON.parse(await getNavInstructions({ routeToken: "selected" })),
+    ).toMatchObject({ ok: false, reason: "ROUTE_CONTEXT_UNAVAILABLE" });
+    expect(mockPlanRoute).not.toHaveBeenCalled();
   });
 });
 
@@ -1336,31 +1214,23 @@ describe("executeLocalTool dispatches new tools", () => {
     expect(JSON.parse(raw).ok).toBe(true);
   });
 
-  it("getNavInstructions 走到正確函式", async () => {
-    mockPlanRoute.mockResolvedValue({
+  it("getNavInstructions only trusts executor context, ignoring model tokens and legacy planning args", async () => {
+    mockGenNav.mockResolvedValue({
       ok: true,
-      data: {
-        origin: { lat: 25, lng: 121 },
-        destination: { lat: 25, lng: 121 },
-        city: "Taipei",
-        routes: [{ routeName: "x", totalMinutes: 5, legs: [{ type: "WALK" }] }],
-      },
-    });
-    mockGenNav.mockReturnValue({
-      ok: true,
-      data: {
-        instructions: [],
-        initialBearing: 0,
-        totalSteps: 0,
-        warnings: [],
-      },
+      data: { instructions: [], totalSteps: 0, warnings: [] },
     });
     const raw = await executeLocalTool(
       "getNavInstructions",
-      { origin: "A", destination: "B" },
+      { routeToken: "invented", origin: "A", destination: "B", routeIndex: 9 },
       undefined,
+      undefined,
+      { routeToken: "trusted" },
     );
     expect(JSON.parse(raw).ok).toBe(true);
+    expect(mockGenNav).toHaveBeenCalledWith(
+      expect.objectContaining({ routeToken: "trusted" }),
+    );
+    expect(mockPlanRoute).not.toHaveBeenCalled();
   });
 
   it("planRouteToSosVictim 走到正確函式", async () => {
@@ -1801,7 +1671,7 @@ describe("bindLineAccountCode agent tool", () => {
 });
 
 describe("agent transit preference declarations", () => {
-  it.each(["planAccessibleRoute", "getNavInstructions"])(
+  it.each(["planAccessibleRoute"])(
     "%s declares the metro preference enum",
     async (name) => {
       const { openAiChatTools } = await import("../../config/ai/tool");
@@ -1827,7 +1697,15 @@ describe("agent route administrative city", () => {
         origin: { lat: 25.04, lng: 121.56 },
         destination: { lat: 25.03, lng: 121.55 },
         city: null,
-        routes: [],
+        routes: [{ routeId: "r1", legs: [] }],
+        _canonicalRequest: {
+          mode: "normal",
+          travelMode: "transit",
+          transitPreference: "none",
+          maxTransfers: 2,
+          avoidStairs: false,
+          requireElevator: false,
+        },
       },
     });
 
@@ -1838,13 +1716,17 @@ describe("agent route administrative city", () => {
       }),
     );
 
-    expect(result).toMatchObject({ ok: true, city: null, routes: [] });
+    expect(result).toMatchObject({
+      ok: true,
+      city: null,
+      selectedRouteId: "r1",
+    });
     expect(result).toHaveProperty("city");
   });
 });
 
 describe("agent transit preference dispatch", () => {
-  it.each(["planAccessibleRoute", "getNavInstructions"])(
+  it.each(["planAccessibleRoute"])(
     "forwards preferences through %s",
     async (tool) => {
       mockPlanRoute.mockResolvedValue({
@@ -1868,7 +1750,7 @@ describe("agent transit preference dispatch", () => {
       }
     },
   );
-  it.each(["planAccessibleRoute", "getNavInstructions"])(
+  it.each(["planAccessibleRoute"])(
     "rejects unsupported model output in %s before planning",
     async (tool) => {
       mockPlanRoute.mockClear();
@@ -1883,4 +1765,119 @@ describe("agent transit preference dispatch", () => {
       expect(mockPlanRoute).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("AI plan full route contract", () => {
+  it("plans once, preserves geometry and candidate order, and exposes only public canonical preferences", async () => {
+    const routes = ["bus", "rail"].map((id, i) => ({
+      routeId: id,
+      routeName: id,
+      legs: [
+        {
+          type: i ? "TRA" : "BUS",
+          polyline: [
+            [120, 24],
+            [120.1, 24.1],
+          ],
+          routeName: "99",
+          steps: [{ instruction: "保留指引" }],
+        },
+      ],
+    }));
+    const canonical = {
+      mode: "wheelchair",
+      travelMode: "transit",
+      transitPreference: "bus",
+      maxTransfers: 2,
+      avoidStairs: true,
+      requireElevator: true,
+      departureTime: "2026-10-10T08:00:00+08:00",
+      userId: "private-user",
+    };
+    const data = {
+      origin: { lat: 24, lng: 120 },
+      destination: { lat: 24.1, lng: 120.1 },
+      city: null,
+      routes,
+    };
+    Object.defineProperty(data, "_canonicalRequest", {
+      value: canonical,
+      enumerable: false,
+    });
+    mockPlanRoute.mockResolvedValue({ ok: true, data });
+    const result = JSON.parse(
+      await executeLocalTool(
+        "planAccessibleRoute",
+        { origin: "current_location", destination: "台中火車站" },
+        { latitude: 24, longitude: 120 },
+        "private-user",
+      ),
+    );
+    expect(mockPlanRoute).toHaveBeenCalledTimes(1);
+    expect(mockPlanRoute).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "private-user", mode: undefined }),
+    );
+    expect(attachRouteTokens).toHaveBeenCalledWith(routes, canonical);
+    expect(result).toMatchObject({
+      routeContractVersion: 1,
+      selectedRouteId: "bus",
+      planId: expect.any(String),
+      effectivePreferences: {
+        mode: "wheelchair",
+        transitPreference: "bus",
+        departureTime: canonical.departureTime,
+      },
+    });
+    expect(result.routes.map((r: any) => r.routeId)).toEqual(["bus", "rail"]);
+    expect(result.routes[0]).toMatchObject({
+      ...routes[0],
+      routeToken: "token-bus",
+    });
+    expect(JSON.stringify(result)).not.toMatch(
+      /private-user|_canonicalRequest/,
+    );
+  });
+  it("returns no successful selection for an empty plan", async () => {
+    mockPlanRoute.mockResolvedValue({ ok: true, data: { routes: [] } });
+    const result = JSON.parse(
+      await executeLocalTool("planAccessibleRoute", {
+        origin: "A",
+        destination: "B",
+      }),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.selectedRouteId).toBeUndefined();
+  });
+  it("keeps full geometry when token storage is unavailable", async () => {
+    const routes = [
+      {
+        routeId: "bus",
+        legs: [
+          {
+            type: "BUS",
+            polyline: [
+              [120, 24],
+              [120.1, 24.1],
+            ],
+          },
+        ],
+      },
+    ];
+    vi.mocked(attachRouteTokens).mockResolvedValueOnce(routes as never);
+    mockPlanRoute.mockResolvedValue({
+      ok: true,
+      data: {
+        routes,
+        _canonicalRequest: { mode: "normal", transitPreference: "bus" },
+      },
+    });
+    const result = JSON.parse(
+      await executeLocalTool("planAccessibleRoute", {
+        origin: "A",
+        destination: "B",
+      }),
+    );
+    expect(result).toMatchObject({ ok: true, selectedRouteId: "bus", routes });
+    expect(result.routes[0].routeToken).toBeUndefined();
+  });
 });

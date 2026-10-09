@@ -1,3 +1,13 @@
+import {
+  RouteConversationContext,
+  createRouteAwareExecutor,
+} from "../ai/route-context.service";
+import type {
+  RouteContextInput,
+  RouteContextResult,
+  RoutingPreferences,
+} from "../../types/agent-route";
+import { projectToolResult } from "../../utils/agent-route-projection";
 import { WebSocket } from "ws";
 import { randomUUID } from "crypto";
 import {
@@ -13,7 +23,11 @@ import { googleGenAi } from "../../config/ai";
 import { AGENT_TEMPERATURE } from "../../config/ai/config";
 import { buildGeminiTools } from "../agent/tool-catalog";
 import { executeLocalTool } from "../ai/agent-tools";
-import { buildVoiceSystemPrompt } from "./voice-prompt";
+import {
+  buildVoiceSystemPrompt,
+  buildNavigationSpeechPrompt,
+} from "./voice-prompt";
+import type { AgentLanguage } from "../../types/agent";
 import { normalizeVoiceTranscript } from "./transcript-normalizer";
 import { correctUserTranscript } from "./transcript-corrector";
 import { withCurrentDate } from "../../config/ai/chat-prompt";
@@ -57,6 +71,7 @@ const REROUTE_COOLDOWN_MS = 30_000;
 const CORRIDOR_SCAN_MIN_INTERVAL_MS = 20_000;
 const SNAPSHOT_MIN_INTERVAL_MS = 5_000;
 const TURN_TIMEOUT_MS = 15_000;
+const LIVE_CONNECT_TIMEOUT_MS = 15_000;
 const TURN_TIMEOUT_STRIKES = 2;
 
 type ActiveNavigation = {
@@ -159,14 +174,18 @@ function parseLiveLanguageCode(): string | undefined {
 }
 
 export interface LiveBridgeOptions {
+  language?: AgentLanguage;
   ws: WebSocket;
   userId: string;
   userLocation?: { latitude: number; longitude: number };
   /** Earlier turns of the shared conversation (text → voice switch). */
   history?: PriorTurn[];
+  routeContext?: RouteContextInput;
+  routingPreferences?: RoutingPreferences;
 }
 
 export interface LiveBridge {
+  setRouteContext(input: RouteContextInput): Promise<RouteContextResult>;
   sendAudio(data: Buffer): void;
   /** Resolves true only when the route is armed and ready to start. */
   armRouteToken(routeToken: string): Promise<boolean>;
@@ -210,6 +229,21 @@ export async function createLiveBridge(
   options: LiveBridgeOptions,
 ): Promise<LiveBridge> {
   const { ws, userId, userLocation, history } = options;
+  const routeContext = new RouteConversationContext(options.routingPreferences);
+  const contextReady =
+    options.routeContext !== undefined
+      ? routeContext.set(options.routeContext)
+      : Promise.resolve();
+  const executeVoiceTool = createRouteAwareExecutor(
+    routeContext,
+    executeLocalTool,
+  );
+  const conversationHistory: PriorTurn[] = [...(history ?? [])];
+  let modelTranscriptBuffer = "";
+  let liveTurnId = randomUUID();
+  let toolGeneration = 0;
+  const cancelledCalls = new Set<string>();
+  const pendingBootstraps = new Set<() => void>();
   let session: Session | null = null;
   let voiceState: VoiceState = "connecting";
   let memoryEnabled = false;
@@ -308,6 +342,7 @@ export async function createLiveBridge(
     if (disposed || voiceState === "unavailable") return;
     voiceState = "unavailable";
     voiceEpoch++;
+    for (const cancel of pendingBootstraps) cancel();
     const ending = session;
     session = null;
     navSpeaking = false;
@@ -531,7 +566,7 @@ export async function createLiveBridge(
     if (!text) return;
     try {
       session.sendClientContent({
-        turns: `請逐字唸出以下導航指引，不得增減內容：${text}`,
+        turns: buildNavigationSpeechPrompt(text, options.language),
         turnComplete: true,
       });
     } catch (err) {
@@ -830,15 +865,23 @@ export async function createLiveBridge(
   const handleToolCalls = async (
     functionCalls: FunctionCall[],
     msgEpoch: number,
+    toolGen: number,
   ): Promise<void> => {
     // Re-read through a call: voice can degrade across any await below, and a
     // tool from a dead session must not reach startNavigation/stopNavigation.
     const voiceCurrent = (): boolean =>
-      !disposed && voiceState === "ready" && msgEpoch === voiceEpoch;
+      !disposed &&
+      voiceState === "ready" &&
+      msgEpoch === voiceEpoch &&
+      toolGen === toolGeneration;
     const functionResponses: FunctionResponse[] = [];
     for (const call of functionCalls) {
       if (!voiceCurrent()) return;
       const name = call.name ?? "";
+      const callId = randomUUID();
+      const turnId = liveTurnId;
+      const cancelled = () => Boolean(call.id && cancelledCalls.has(call.id));
+      if (cancelled()) continue;
       if (navSpeaking) {
         functionResponses.push({
           id: call.id,
@@ -847,13 +890,13 @@ export async function createLiveBridge(
         });
         continue;
       }
-      sendJson({ type: "tool_call", name });
+      sendJson({ type: "tool_call", name, callId, turnId });
       const startedAt = Date.now();
       let ok = true;
       let response: Record<string, unknown>;
       let toolResult: unknown;
       try {
-        let result: string;
+        let result: Awaited<ReturnType<typeof executeVoiceTool>>;
         if (name === "startNavigation") {
           const { ok: started } = startNavigation();
           result = JSON.stringify({
@@ -874,22 +917,30 @@ export async function createLiveBridge(
         } else if (name === "getActiveNavigationContext") {
           result = JSON.stringify(navSession.getConversationContext());
         } else {
-          result = await executeLocalTool(
+          result = await executeVoiceTool(
             name,
             (call.args ?? {}) as Record<string, unknown>,
             latestPosition ?? userLocation,
             userId,
             {
               allowMemoryWrite: memoryEnabled,
+              isCurrent: () => voiceCurrent() && !cancelled(),
             },
           );
         }
-        response = { output: result };
-        try {
-          toolResult = JSON.parse(result);
-        } catch {
-          toolResult = { result };
+        let modelResult: unknown;
+        if (typeof result === "string") {
+          try {
+            toolResult = JSON.parse(result);
+          } catch {
+            toolResult = { result };
+          }
+          modelResult = projectToolResult(toolResult).modelResult;
+        } else {
+          toolResult = result.clientResult;
+          modelResult = result.modelResult;
         }
+        response = { output: JSON.stringify(modelResult) };
       } catch (err) {
         ok = false;
         response = {
@@ -899,6 +950,7 @@ export async function createLiveBridge(
         };
       }
       if (!voiceCurrent()) return;
+      if (cancelled()) continue;
       const durationMs = Date.now() - startedAt;
       console.log(
         "[voice] tool",
@@ -912,6 +964,8 @@ export async function createLiveBridge(
       sendJson({
         type: "tool_result",
         name,
+        callId,
+        turnId,
         ok,
         durationMs,
         result: toolResult,
@@ -938,6 +992,8 @@ export async function createLiveBridge(
     userTranscriptBuffer = "";
     currentUtteranceId = null;
     if (!raw || !utteranceId) return;
+    conversationHistory.push({ role: "user", text: raw });
+    if (conversationHistory.length > 20) conversationHistory.shift();
     sendJson({
       type: "transcript",
       role: "user",
@@ -968,10 +1024,17 @@ export async function createLiveBridge(
   const handleServerMessage = async (
     message: LiveServerMessage,
     msgEpoch: number,
+    msgToolGeneration: number,
   ): Promise<void> => {
     // The queue can hold this message across a degradation; replaying it would
     // drive navigation from a session that no longer exists.
-    if (disposed || voiceState !== "ready" || msgEpoch !== voiceEpoch) return;
+    if (
+      disposed ||
+      voiceState !== "ready" ||
+      msgEpoch !== voiceEpoch ||
+      msgToolGeneration !== toolGeneration
+    )
+      return;
     const content = message.serverContent;
     if (content) {
       if (content.modelTurn?.parts?.length) {
@@ -987,7 +1050,10 @@ export async function createLiveBridge(
           const piece = normalizeVoiceTranscript(
             content.inputTranscription.text,
           );
-          if (!currentUtteranceId) currentUtteranceId = `u${++utteranceSeq}`;
+          if (!currentUtteranceId) {
+            currentUtteranceId = `u${++utteranceSeq}`;
+            liveTurnId = randomUUID();
+          }
           userTranscriptBuffer += piece;
           sendJson({
             type: "transcript",
@@ -1000,6 +1066,7 @@ export async function createLiveBridge(
         if (content.inputTranscription.finished) finalizeUserTranscript();
       }
       if (content.outputTranscription?.text) {
+        modelTranscriptBuffer += content.outputTranscription.text;
         sendJson({
           type: "transcript",
           role: "model",
@@ -1007,6 +1074,7 @@ export async function createLiveBridge(
         });
       }
       if (content.interrupted) {
+        modelTranscriptBuffer = "";
         if (userTranscriptBuffer.trim()) finalizeUserTranscript();
         navSession.onInterrupted();
         navSpeaking = false;
@@ -1018,10 +1086,22 @@ export async function createLiveBridge(
     if (message.toolCall?.functionCalls?.length) {
       if (content?.interrupted) return;
       liveState = "TOOL_PENDING";
-      await handleToolCalls(message.toolCall.functionCalls, msgEpoch);
+      await handleToolCalls(
+        message.toolCall.functionCalls,
+        msgEpoch,
+        msgToolGeneration,
+      );
       if (!disposed && voiceState === "ready" && msgEpoch === voiceEpoch)
         liveState = "AWAIT_MODEL";
     } else if (content?.turnComplete && !content.interrupted) {
+      if (modelTranscriptBuffer.trim()) {
+        conversationHistory.push({
+          role: "assistant",
+          text: modelTranscriptBuffer,
+        });
+        if (conversationHistory.length > 20) conversationHistory.shift();
+      }
+      modelTranscriptBuffer = "";
       if (userTranscriptBuffer.trim()) finalizeUserTranscript();
       if (navSpeaking) navSession.onTurnComplete();
       navSpeaking = false;
@@ -1047,115 +1127,212 @@ export async function createLiveBridge(
    * throwing during bootstrap lands on a settled `unavailable` state, ensuring
    * voiceReady never rejects unhandled and voiceState transitions to "unavailable".
    */
-  const bootstrapVoice = async (): Promise<void> => {
+  const bootstrapVoice = async (expectedEpoch = voiceEpoch): Promise<void> => {
+    let bootstrapTimeout: ReturnType<typeof setTimeout> | undefined;
+    let cancel!: () => void;
+    const cancelled = new Promise<void>((resolve) => {
+      cancel = resolve;
+    });
+    pendingBootstraps.add(cancel);
     try {
-      let memories: Array<{
-        _id?: unknown;
-        category: string;
-        promptText?: string;
-        content: string;
-      }> = [];
-      if (userId) {
-        try {
-          const settings = await getMemorySettings(userId);
-          memoryEnabled = settings.memoryEnabled;
-          if (memoryEnabled) {
-            memories = await loadMemories(userId, 20);
+      await Promise.race([
+        cancelled,
+        (async () => {
+          if (expectedEpoch === 0) await contextReady;
+          if (disposed || expectedEpoch !== voiceEpoch) return;
+          let sessionMemoryEnabled = false;
+          let memories: Array<{
+            _id?: unknown;
+            category: string;
+            promptText?: string;
+            content: string;
+          }> = [];
+          if (userId) {
+            try {
+              const settings = await getMemorySettings(userId);
+              sessionMemoryEnabled = settings.memoryEnabled;
+              if (disposed || expectedEpoch !== voiceEpoch) return;
+              if (sessionMemoryEnabled) {
+                memories = await loadMemories(userId, 20);
+              }
+            } catch (err) {
+              console.error(
+                "[voice] loadMemories failed:",
+                summarizeError(
+                  err instanceof Error ? err.message : String(err),
+                ),
+              );
+            }
           }
-        } catch (err) {
-          console.error(
-            "[voice] loadMemories failed:",
-            summarizeError(err instanceof Error ? err.message : String(err)),
-          );
-        }
-      }
-      if (disposed || voiceUnavailable()) return;
+          if (disposed || voiceUnavailable() || expectedEpoch !== voiceEpoch)
+            return;
 
-      const liveConfig: LiveConnectConfig = {
-        responseModalities: [Modality.AUDIO],
-        inputAudioTranscription: {},
-        outputAudioTranscription: {},
-        systemInstruction: withCurrentDate(
-          buildVoiceSystemPrompt(userLocation, memories, {
-            memoryEnabled,
-            history,
-          }),
-        ),
-        tools: [
-          ...buildGeminiTools(userId, memoryEnabled),
-          { functionDeclarations: NAV_FUNCTIONS },
-        ],
-        temperature: parseLiveTemperature(),
-      };
-      const languageCode = parseLiveLanguageCode();
-      if (languageCode) liveConfig.speechConfig = { languageCode };
+          memoryEnabled = sessionMemoryEnabled;
+          const liveConfig: LiveConnectConfig = {
+            responseModalities: [Modality.AUDIO],
+            inputAudioTranscription: {},
+            outputAudioTranscription: {},
+            systemInstruction: withCurrentDate(
+              buildVoiceSystemPrompt(userLocation, memories, {
+                language: options.language,
+                memoryEnabled,
+                history: conversationHistory,
+              }) + routeContext.prompt,
+            ),
+            tools: [
+              ...buildGeminiTools(userId, memoryEnabled),
+              { functionDeclarations: NAV_FUNCTIONS },
+            ],
+            temperature: parseLiveTemperature(),
+          };
+          // Native audio follows system instructions, not speechConfig.languageCode.
+          // Retain the legacy env setting only when no frontend preference is given.
+          const languageCode = options.language
+            ? undefined
+            : parseLiveLanguageCode();
+          if (languageCode) liveConfig.speechConfig = { languageCode };
 
-      const connected = await googleGenAi.live.connect({
-        model: process.env.GEMINI_LIVE_MODEL ?? "gemini-3.1-flash-live-preview",
-        config: liveConfig,
-        callbacks: {
-          onmessage: (message: LiveServerMessage) => {
-            const hasToolCalls = Boolean(
-              message.toolCall?.functionCalls?.length,
-            );
-            if (hasToolCalls) pendingToolMessages++;
-            const msgEpoch = voiceEpoch;
-            messageQueue = messageQueue
-              .then(() => handleServerMessage(message, msgEpoch))
-              .catch((err) => {
-                console.error(
-                  "[voice] server message handling failed:",
-                  summarizeError(
-                    err instanceof Error ? err.message : String(err),
-                  ),
+          const connected = await googleGenAi.live.connect({
+            model:
+              process.env.GEMINI_LIVE_MODEL ?? "gemini-3.1-flash-live-preview",
+            config: liveConfig,
+            callbacks: {
+              onmessage: (message: LiveServerMessage) => {
+                if (disposed || expectedEpoch !== voiceEpoch) return;
+                if (message.serverContent?.interrupted) toolGeneration++;
+                for (const id of message.toolCallCancellation?.ids ?? [])
+                  cancelledCalls.add(id);
+                const hasToolCalls = Boolean(
+                  message.toolCall?.functionCalls?.length,
                 );
-              })
-              .finally(() => {
-                if (hasToolCalls)
-                  pendingToolMessages = Math.max(0, pendingToolMessages - 1);
-              });
-          },
-          onerror: (e) => {
-            console.error(
-              "[voice] live session error:",
-              summarizeError(e?.message),
-            );
-            // Errors on the Live socket are terminal for playback but harmless
-            // to navigation. Degrade rather than let a later send throw.
-            if (!closedByGateway) markVoiceUnavailable("LIVE_SESSION_ENDED");
-          },
-          onclose: () => {
-            // Gemini hanging up must never hang up on the client: navigation
-            // and alerts keep running on this same socket.
-            if (closedByGateway) return;
-            markVoiceUnavailable("LIVE_SESSION_ENDED");
-          },
-        },
-      });
+                if (hasToolCalls) pendingToolMessages++;
+                const msgEpoch = expectedEpoch;
+                const msgToolGeneration = toolGeneration;
+                messageQueue = messageQueue
+                  .then(() =>
+                    handleServerMessage(message, msgEpoch, msgToolGeneration),
+                  )
+                  .catch((err) => {
+                    console.error(
+                      "[voice] server message handling failed:",
+                      summarizeError(
+                        err instanceof Error ? err.message : String(err),
+                      ),
+                    );
+                  })
+                  .finally(() => {
+                    if (hasToolCalls && expectedEpoch === voiceEpoch)
+                      pendingToolMessages = Math.max(
+                        0,
+                        pendingToolMessages - 1,
+                      );
+                  });
+              },
+              onerror: (e) => {
+                if (expectedEpoch !== voiceEpoch || disposed) return;
+                console.error(
+                  "[voice] live session error:",
+                  summarizeError(e?.message),
+                );
+                // Errors on the Live socket are terminal for playback but harmless
+                // to navigation. Degrade rather than let a later send throw.
+                if (!closedByGateway)
+                  markVoiceUnavailable("LIVE_SESSION_ENDED");
+              },
+              onclose: () => {
+                if (expectedEpoch !== voiceEpoch || disposed) return;
+                // Gemini hanging up must never hang up on the client: navigation
+                // and alerts keep running on this same socket.
+                if (closedByGateway) return;
+                markVoiceUnavailable("LIVE_SESSION_ENDED");
+              },
+            },
+          });
 
-      if (disposed || voiceUnavailable()) {
-        try {
-          connected.close();
-        } catch {
-          /* already gone */
-        }
-        return;
-      }
-      session = connected;
-      voiceState = "ready";
-      driveNavigationSpeech();
+          // A timed-out or superseded handshake can still complete. Close its
+          // session before it can write anything into the current voice state.
+          if (disposed || voiceUnavailable() || expectedEpoch !== voiceEpoch) {
+            try {
+              connected.close();
+            } catch {
+              /* already gone */
+            }
+            return;
+          }
+          session = connected;
+          voiceState = "ready";
+          driveNavigationSpeech();
+        })(),
+        new Promise<never>((_, reject) => {
+          bootstrapTimeout = setTimeout(
+            () => reject(new Error("Live bootstrap timed out")),
+            LIVE_CONNECT_TIMEOUT_MS,
+          );
+        }),
+      ]);
     } catch (err) {
+      if (expectedEpoch !== voiceEpoch || disposed) return;
       console.error(
         "[voice] live connect failed:",
         summarizeError(err instanceof Error ? err.message : String(err)),
       );
       markVoiceUnavailable("LIVE_CONNECT_FAILED");
+    } finally {
+      clearTimeout(bootstrapTimeout);
+      pendingBootstraps.delete(cancel);
     }
   };
 
   const voiceReady = bootstrapVoice();
 
   return {
+    async setRouteContext(
+      input: RouteContextInput,
+    ): Promise<RouteContextResult> {
+      if (disposed || voiceUnavailable())
+        return { ok: false, reason: "ROUTE_CONTEXT_UNAVAILABLE" };
+      // The UI echoes the default selection after receiving a plan. Do not cut
+      // off that plan's explanation when it already refers to the same route.
+      if (
+        voiceState === "ready" &&
+        input?.routeToken &&
+        input.routeToken === routeContext.token
+      )
+        return routeContext.identity;
+      const epoch = ++voiceEpoch;
+      for (const cancel of pendingBootstraps) cancel();
+      const ending = session;
+      session = null;
+      voiceState = "connecting";
+      messageQueue = Promise.resolve();
+      pendingToolMessages = 0;
+      toolGeneration++;
+      cancelledCalls.clear();
+      modelTranscriptBuffer = "";
+      userTranscriptBuffer = "";
+      currentUtteranceId = null;
+      liveTurnId = randomUUID();
+      navSession.onInterrupted();
+      navSpeaking = false;
+      liveState = "IDLE";
+      turnTimeoutStrikes = 0;
+      clearTurnTimeout();
+      sendJson({ type: "interrupted" });
+      try {
+        ending?.close();
+      } catch {
+        /* obsolete connection */
+      }
+      const selected = await routeContext.set(input);
+      if (disposed || epoch !== voiceEpoch)
+        return { ok: false, reason: "STALE_SELECTION" };
+      await bootstrapVoice(epoch);
+      if (disposed) return { ok: false, reason: "STALE_SELECTION" };
+      if (voiceUnavailable())
+        return { ok: false, reason: "ROUTE_CONTEXT_UNAVAILABLE" };
+      if (epoch !== voiceEpoch) return { ok: false, reason: "STALE_SELECTION" };
+      return selected;
+    },
     sendAudio(data: Buffer): void {
       if (disposed || !session) return;
       liveState = "USER_INPUT";
@@ -1429,6 +1606,7 @@ export async function createLiveBridge(
     if (disposed) return;
     closedByGateway = true;
     disposed = true;
+    for (const cancel of pendingBootstraps) cancel();
     unsubscribeAlerts();
     pendingToolMessages = 0;
     armGen++;

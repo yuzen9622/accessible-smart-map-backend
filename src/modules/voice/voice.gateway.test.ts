@@ -14,6 +14,12 @@ import {
 
 vi.mock("./live-bridge", () => ({
   createLiveBridge: vi.fn(async () => ({
+    setRouteContext: vi.fn(async () => ({
+      ok: true,
+      routeId: null,
+      navigationId: null,
+      routeVersion: null,
+    })),
     sendAudio: vi.fn(),
     armRouteToken: vi.fn(async () => true),
     resumeNavigation: vi.fn(async () => {}),
@@ -228,8 +234,46 @@ describe("voice gateway", () => {
     const ready = waitForJson(ws);
     sendSessionStart(ws, "voice-user-valid");
     const message = await ready;
-    expect(message).toEqual({ type: "session.ready" });
+    expect(message).toEqual({
+      type: "session.ready",
+      capabilities: { aiRouteContractVersion: 1, routeContextSync: true },
+    });
     expect(ws.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it.each(["en", "zh-TW"])(
+    "forwards language %s to the Live bridge",
+    async (language) => {
+      const ws = connect();
+      await waitForOpen(ws);
+      const ready = waitForJson(ws);
+      ws.send(
+        JSON.stringify({
+          type: "session.start",
+          token: signToken(`voice-${language}`),
+          language,
+        }),
+      );
+      await ready;
+      expect(mockCreateLiveBridge).toHaveBeenCalledWith(
+        expect.objectContaining({ language }),
+      );
+    },
+  );
+
+  it("rejects an invalid language before creating the Live bridge", async () => {
+    const ws = connect();
+    await waitForOpen(ws);
+    const closed = waitForClose(ws);
+    ws.send(
+      JSON.stringify({
+        type: "session.start",
+        token: signToken("bad-language"),
+        language: "ja",
+      }),
+    );
+    expect((await closed).code).toBe(4401);
+    expect(mockCreateLiveBridge).not.toHaveBeenCalled();
   });
 
   it("forwards a valid GPS pair to the Live bridge", async () => {
@@ -325,6 +369,12 @@ describe("voice gateway", () => {
       releaseArm = resolve;
     });
     const bridge = {
+      setRouteContext: vi.fn(async () => ({
+        ok: true,
+        routeId: null,
+        navigationId: null,
+        routeVersion: null,
+      })),
       sendAudio: vi.fn(),
       armRouteToken: vi.fn(async () => {
         await armGate;
@@ -341,7 +391,10 @@ describe("voice gateway", () => {
     };
     const ready = waitForJson(ws);
     resolveBridge(bridge);
-    await expect(ready).resolves.toEqual({ type: "session.ready" });
+    await expect(ready).resolves.toEqual({
+      type: "session.ready",
+      capabilities: { aiRouteContractVersion: 1, routeContextSync: true },
+    });
     await vi.waitFor(() => expect(bridge.armRouteToken).toHaveBeenCalled());
     expect(bridge.startNavigation).not.toHaveBeenCalled();
 
@@ -357,6 +410,12 @@ describe("voice gateway", () => {
       releaseArm = resolve;
     });
     const bridge = {
+      setRouteContext: vi.fn(async () => ({
+        ok: true,
+        routeId: null,
+        navigationId: null,
+        routeVersion: null,
+      })),
       sendAudio: vi.fn(),
       armRouteToken: vi.fn(async () => {
         await armGate;
@@ -396,6 +455,12 @@ describe("voice gateway", () => {
       releaseArm = resolve;
     });
     const bridge = {
+      setRouteContext: vi.fn(async () => ({
+        ok: true,
+        routeId: null,
+        navigationId: null,
+        routeVersion: null,
+      })),
       sendAudio: vi.fn(),
       armRouteToken: vi.fn(async () => {
         await armGate;
@@ -439,6 +504,12 @@ describe("voice gateway", () => {
       releaseB = resolve;
     });
     const bridge = {
+      setRouteContext: vi.fn(async () => ({
+        ok: true,
+        routeId: null,
+        navigationId: null,
+        routeVersion: null,
+      })),
       sendAudio: vi.fn(),
       armRouteToken: vi.fn(async (token: string) => {
         if (token === "routeA") {
@@ -513,6 +584,12 @@ describe("voice gateway", () => {
     ws.send(JSON.stringify({ type: "nav.cancel" }));
 
     const bridge = {
+      setRouteContext: vi.fn(async () => ({
+        ok: true,
+        routeId: null,
+        navigationId: null,
+        routeVersion: null,
+      })),
       sendAudio: vi.fn(),
       armRouteToken: vi.fn(async () => true),
       startNavigation: vi.fn(),
@@ -523,7 +600,10 @@ describe("voice gateway", () => {
     };
     const ready = waitForJson(ws);
     resolveBridge(bridge);
-    await expect(ready).resolves.toEqual({ type: "session.ready" });
+    await expect(ready).resolves.toEqual({
+      type: "session.ready",
+      capabilities: { aiRouteContractVersion: 1, routeContextSync: true },
+    });
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(bridge.startNavigation).not.toHaveBeenCalled();
   });
@@ -534,6 +614,12 @@ describe("voice gateway", () => {
       releaseArm = resolve;
     });
     const bridge = {
+      setRouteContext: vi.fn(async () => ({
+        ok: true,
+        routeId: null,
+        navigationId: null,
+        routeVersion: null,
+      })),
       sendAudio: vi.fn(),
       armRouteToken: vi.fn(async () => {
         await armGate;
@@ -608,6 +694,12 @@ describe("voice gateway", () => {
       JSON.stringify({ type: "nav.position", latitude: 25, longitude: 121 }),
     );
     const bridge = {
+      setRouteContext: vi.fn(async () => ({
+        ok: true,
+        routeId: null,
+        navigationId: null,
+        routeVersion: null,
+      })),
       sendAudio: vi.fn(),
       armRouteToken: vi.fn(async () => true),
       startNavigation: vi.fn(),
@@ -618,7 +710,10 @@ describe("voice gateway", () => {
     };
     const ready = waitForJson(ws);
     resolveBridge(bridge);
-    await expect(ready).resolves.toEqual({ type: "session.ready" });
+    await expect(ready).resolves.toEqual({
+      type: "session.ready",
+      capabilities: { aiRouteContractVersion: 1, routeContextSync: true },
+    });
     await vi.waitFor(() =>
       expect(bridge.armRouteToken).toHaveBeenCalledWith("latest"),
     );
@@ -642,6 +737,12 @@ describe("voice gateway", () => {
     ws.close(1000, "test-close");
     await closed;
     const bridge = {
+      setRouteContext: vi.fn(async () => ({
+        ok: true,
+        routeId: null,
+        navigationId: null,
+        routeVersion: null,
+      })),
       sendAudio: vi.fn(),
       armRouteToken: vi.fn(async () => true),
       startNavigation: vi.fn(),
@@ -946,6 +1047,12 @@ describe("voice gateway", () => {
     await closed;
 
     const bridge = {
+      setRouteContext: vi.fn(async () => ({
+        ok: true,
+        routeId: null,
+        navigationId: null,
+        routeVersion: null,
+      })),
       sendAudio: vi.fn(),
       armRouteToken: vi.fn(async () => true),
       startNavigation: vi.fn(),
@@ -990,5 +1097,125 @@ describe("voice gateway", () => {
 
     await vi.waitFor(() => expect(executionOrder).toHaveLength(3));
     expect(executionOrder).toEqual(["audio", "position", "audio"]);
+  });
+});
+
+describe("route context gateway contract", () => {
+  it("forwards initial context and correlates selection acknowledgements without arming navigation", async () => {
+    const ws = connect();
+    await waitForOpen(ws);
+    const ready = waitForJson(ws);
+    ws.send(
+      JSON.stringify({
+        type: "session.start",
+        token: signToken("route-sync"),
+        routeContractVersion: 1,
+        routeContext: { routeToken: "initial" },
+        routingPreferences: { transitPreference: "bus", avoidStairs: true },
+      }),
+    );
+    expect(await ready).toMatchObject({
+      capabilities: { routeContextSync: true },
+    });
+    expect(mockCreateLiveBridge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        routeContext: { routeToken: "initial" },
+        routingPreferences: { transitPreference: "bus", avoidStairs: true },
+      }),
+    );
+    const bridge = await mockCreateLiveBridge.mock.results.at(-1)!.value;
+    const selected = {
+      ok: true,
+      routeId: "bus",
+      navigationId: "nav",
+      routeVersion: 1,
+    };
+    bridge.setRouteContext.mockResolvedValueOnce(selected);
+    const ack = waitForJson(ws);
+    ws.send(
+      JSON.stringify({
+        type: "route.context.set",
+        requestId: "select-1",
+        selectionVersion: 1,
+        routeContext: { routeToken: "bus-token" },
+      }),
+    );
+    expect(await ack).toEqual({
+      type: "route.context.ack",
+      requestId: "select-1",
+      selectionVersion: 1,
+      ...selected,
+    });
+    const stale = waitForJson(ws);
+    ws.send(
+      JSON.stringify({
+        type: "route.context.set",
+        requestId: "old",
+        selectionVersion: 0,
+        routeContext: null,
+      }),
+    );
+    expect(await stale).toMatchObject({
+      ok: false,
+      reason: "STALE_SELECTION",
+      requestId: "old",
+    });
+    expect(bridge.setRouteContext).toHaveBeenCalledTimes(1);
+    expect(bridge.armRouteToken).not.toHaveBeenCalled();
+    expect(bridge.startNavigation).not.toHaveBeenCalled();
+  });
+
+  it("marks late acknowledgements stale when a newer clear has already succeeded", async () => {
+    const ws = connect();
+    await waitForOpen(ws);
+    const ready = waitForJson(ws);
+    sendSessionStart(ws, "route-sync-race");
+    await ready;
+    const bridge = await mockCreateLiveBridge.mock.results.at(-1)!.value;
+    let finish!: (value: unknown) => void;
+    bridge.setRouteContext.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    ws.send(
+      JSON.stringify({
+        type: "route.context.set",
+        requestId: "slow",
+        selectionVersion: 1,
+        routeContext: { routeToken: "slow" },
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(bridge.setRouteContext).toHaveBeenCalledTimes(1),
+    );
+    const cleared = waitForJson(ws);
+    ws.send(
+      JSON.stringify({
+        type: "route.context.set",
+        requestId: "clear",
+        selectionVersion: 2,
+        routeContext: null,
+      }),
+    );
+    expect(await cleared).toMatchObject({
+      ok: true,
+      requestId: "clear",
+      routeId: null,
+    });
+    const stale = waitForJson(ws);
+    finish({
+      ok: true,
+      routeId: "old",
+      navigationId: "old-nav",
+      routeVersion: 1,
+    });
+    expect(await stale).toEqual({
+      type: "route.context.ack",
+      requestId: "slow",
+      selectionVersion: 1,
+      ok: false,
+      reason: "STALE_SELECTION",
+    });
   });
 });

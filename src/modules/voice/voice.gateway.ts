@@ -1,4 +1,5 @@
 import type http from "http";
+import type { AgentLanguage } from "../../types/agent";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
 import { registerWsRoute } from "../../config/ws-upgrade";
 import { authenticateToken, verifyActiveSession } from "../../config/auth";
@@ -16,11 +17,18 @@ import {
   NavStartMessageSchema,
   SessionEndMessageSchema,
   SessionStartMessageSchema,
+  RouteContextSetMessageSchema,
   UserLocationSchema,
   describeIssues,
   type NavResumeMessage,
 } from "./voice.ws.schema";
 import { deleteNavigationSnapshot } from "../accessible-route/navigation-state.repository";
+import type {
+  RouteContextInput,
+  RouteContextUpdate,
+  RoutingPreferences,
+} from "../../types/agent-route";
+import { AGENT_ROUTE_CONTRACT_VERSION } from "../../constants/agent-route";
 
 const VOICE_WS_PATH = "/api/v1/voice/ws";
 const DEFAULT_AUTH_TIMEOUT_MS = 5000;
@@ -154,6 +162,8 @@ function handleConnection(
   let pendingPosition: NavPosition | null = null;
   let pendingResume: NavResumeMessage | null = null;
   let pendingNavStart = false;
+  let pendingRouteContext: RouteContextUpdate | null = null;
+  let selectionVersion = -1;
   let messageChain: Promise<void> = Promise.resolve();
   /**
    * Always the latest arm-class operation, already caught. Resolves false when
@@ -308,7 +318,16 @@ function handleConnection(
     // Deliberately not awaited: the session is authenticated from here on, so
     // control frames that arrive while the Live bridge is still connecting must
     // reach handleControlMessage and be buffered rather than queue behind it.
-    void startBridge(id, generation, connection, userLocation, history);
+    void startBridge(
+      id,
+      generation,
+      connection,
+      userLocation,
+      history,
+      handshake.data.routeContext,
+      handshake.data.routingPreferences,
+      handshake.data.language,
+    );
   };
 
   /**
@@ -333,6 +352,9 @@ function handleConnection(
     connection: VoiceConnection,
     userLocation: ReturnType<typeof parseUserLocation>,
     history: PriorTurn[] | undefined,
+    routeContext: RouteContextInput | undefined,
+    routingPreferences: RoutingPreferences | undefined,
+    language: AgentLanguage | undefined,
   ): Promise<void> => {
     try {
       const createdBridge = await createLiveBridge({
@@ -340,6 +362,9 @@ function handleConnection(
         userId: id,
         userLocation,
         history,
+        routeContext,
+        routingPreferences,
+        language,
       });
       if (
         disposed ||
@@ -366,8 +391,18 @@ function handleConnection(
       sendJson({ type: "error", code: "LIVE_CONNECT_FAILED" });
       return;
     }
-    sendJson({ type: "session.ready" });
+    sendJson({
+      type: "session.ready",
+      capabilities: {
+        aiRouteContractVersion: AGENT_ROUTE_CONTRACT_VERSION,
+        routeContextSync: true,
+      },
+    });
     const readyBridge = bridge;
+    if (pendingRouteContext) {
+      applyRouteContext(readyBridge, pendingRouteContext);
+      pendingRouteContext = null;
+    }
     armChain = pendingRouteToken
       ? readyBridge.armRouteToken(pendingRouteToken).catch(() => false)
       : Promise.resolve(true);
@@ -383,6 +418,29 @@ function handleConnection(
     pendingResume = null;
     pendingPosition = null;
     pendingNavStart = false;
+  };
+
+  const applyRouteContext = (
+    target: LiveBridge,
+    update: RouteContextUpdate,
+  ): void => {
+    void target
+      .setRouteContext(update.routeContext)
+      .catch(() => ({
+        ok: false as const,
+        reason: "ROUTE_CONTEXT_UNAVAILABLE" as const,
+      }))
+      .then((result) => {
+        if (disposed || bridge !== target) return;
+        sendJson({
+          type: "route.context.ack",
+          requestId: update.requestId,
+          selectionVersion: update.selectionVersion,
+          ...(selectionVersion === update.selectionVersion
+            ? result
+            : { ok: false, reason: "STALE_SELECTION" }),
+        });
+      });
   };
 
   const handleControlMessage = (data: RawData): void => {
@@ -429,6 +487,41 @@ function handleConnection(
     }
     if (!frameAllowed || !bytesAllowed) {
       ws.close(CONTROL_RATE_CLOSE_CODE, "control-rate-limit");
+      return;
+    }
+    if (parsed?.type === "route.context.set") {
+      if (!controlBucket.take()) return;
+      const result = RouteContextSetMessageSchema.safeParse(parsed);
+      if (!result.success) {
+        console.warn(
+          `[voice] rejecting route.context.set: ${describeIssues(result.error)}`,
+        );
+        return;
+      }
+      const update = result.data;
+      if (update.selectionVersion <= selectionVersion) {
+        sendJson({
+          type: "route.context.ack",
+          requestId: update.requestId,
+          selectionVersion: update.selectionVersion,
+          ok: false,
+          reason: "STALE_SELECTION",
+        });
+        return;
+      }
+      selectionVersion = update.selectionVersion;
+      if (bridge) applyRouteContext(bridge, update);
+      else {
+        if (pendingRouteContext)
+          sendJson({
+            type: "route.context.ack",
+            requestId: pendingRouteContext.requestId,
+            selectionVersion: pendingRouteContext.selectionVersion,
+            ok: false,
+            reason: "STALE_SELECTION",
+          });
+        pendingRouteContext = update;
+      }
       return;
     }
     if (parsed?.type === "nav.setRoute") {

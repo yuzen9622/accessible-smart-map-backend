@@ -1,10 +1,19 @@
 import { z } from "zod";
+import { AgentLanguageSchema } from "../../schemas/agent-language.schema";
 import {
   NavPositionSchema,
   NavSetRouteSchema,
   ROUTE_TOKEN_MAX_LENGTH,
 } from "./navigation.schema";
 import type { AccessibleRoute } from "../../types/route";
+import {
+  RouteConversationFields,
+  RouteContextInputSchema,
+} from "../../schemas/agent-route.schema";
+import type {
+  RouteContextResult,
+  RouteContextUpdate,
+} from "../../types/agent-route";
 
 /**
  * Machine-checkable contract for the voice WebSocket.
@@ -37,6 +46,7 @@ export type UserLocation = z.infer<typeof UserLocationSchema>;
 export const SessionStartMessageSchema = z.object({
   type: z.literal("session.start"),
   token: z.string(),
+  language: AgentLanguageSchema.optional(),
   // Validated separately by UserLocationSchema: a bad location must not fail
   // the handshake, it just leaves the session without a starting position.
   userLocation: z.unknown().optional(),
@@ -44,7 +54,27 @@ export const SessionStartMessageSchema = z.object({
   // by PriorHistorySchema for the same reason: bad history must not fail the
   // handshake, the session just starts without it.
   history: z.unknown().optional(),
+  ...RouteConversationFields,
 });
+
+/** Selection changes are independent of navigation arming and progress. */
+export const RouteContextSetMessageSchema = z
+  .object({
+    type: z.literal("route.context.set"),
+    requestId: z.string().trim().min(1).max(128),
+    selectionVersion: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(Number.MAX_SAFE_INTEGER),
+    routeContext: RouteContextInputSchema,
+  })
+  .strict();
+
+export type RouteContextAckMessage = {
+  type: "route.context.ack";
+} & Pick<RouteContextUpdate, "requestId" | "selectionVersion"> &
+  RouteContextResult;
 
 /** Client-initiated teardown. */
 export const SessionEndMessageSchema = z.object({
@@ -104,6 +134,7 @@ export const VoiceControlMessageSchema = z.discriminatedUnion("type", [
   NavStartMessageSchema,
   NavCancelMessageSchema,
   NavResumeMessageSchema,
+  RouteContextSetMessageSchema,
 ]);
 
 export type VoiceControlMessage = z.infer<typeof VoiceControlMessageSchema>;
@@ -302,7 +333,11 @@ export type NavResumeFailedMessage = z.infer<
 export type NavResumeOkEvent = z.infer<typeof NavResumeOkMessageSchema>;
 
 export type VoiceOutboundMessage =
-  | { type: "session.ready" }
+  | {
+      type: "session.ready";
+      capabilities: { aiRouteContractVersion: 1; routeContextSync: true };
+    }
+  | RouteContextAckMessage
   | { type: "error"; code: "LIVE_CONNECT_FAILED" }
   | { type: "nav.error"; code: "NAV_ROUTE_INVALID"; message: string }
   | NavProgressEvent
