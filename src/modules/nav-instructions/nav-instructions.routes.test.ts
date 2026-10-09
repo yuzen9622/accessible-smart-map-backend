@@ -79,6 +79,47 @@ const driveRoute = {
 };
 
 describe("POST /api/v1/a11y/route/instructions", () => {
+  it("serves English guidance and envelope text from the real instruction engine", async () => {
+    const routeToken = tokenFor(driveRoute);
+    const english = await request(app)
+      .post(URL)
+      .send({ routeToken, language: "en", userHeading: 0 });
+    expect(english.status).toBe(200);
+    expect(english.body.message).toBe(
+      "Navigation instructions generated: 2 steps",
+    );
+    expect(english.body.data.instructions[0].text).toContain(
+      "Head along the road",
+    );
+    expect(english.body.data.instructions[0].relativeDirection).toBe(
+      "behind-left",
+    );
+    expect(JSON.stringify(english.body)).not.toMatch(/\p{Script=Han}/u);
+    const chinese = await request(app).post(URL).send({ routeToken });
+    expect(chinese.body.data.instructions[0].text).toBe("沿信義路出發");
+    expect(chinese.body.message).toBe("逐步指引產生完成，共 2 步");
+  });
+
+  it("returns an English expired-token error", async () => {
+    getRouteByToken.mockResolvedValue(null);
+    const res = await request(app)
+      .post(URL)
+      .send({ routeToken: "expired", language: "en" });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      message: "The route token is invalid or has expired",
+      data: { reason: "INVALID_ROUTE_TOKEN" },
+    });
+  });
+
+  it("rejects unsupported languages before token lookup", async () => {
+    const res = await request(app)
+      .post(URL)
+      .send({ routeToken: "token", language: "fr" });
+    expect(res.status).toBe(400);
+    expect(getRouteByToken).not.toHaveBeenCalled();
+  });
+
   it("returns the full success envelope for DRIVE guidance", async () => {
     const res = await request(app)
       .post(URL)
@@ -162,6 +203,12 @@ describe("POST /api/v1/a11y/route/instructions", () => {
     const res = await request(app).get("/api/v1/openapi.json");
 
     expect(res.status).toBe(200);
+    expect(
+      res.body.components.schemas.NavInstructionsRequest.properties.language,
+    ).toMatchObject({ enum: ["zh-TW", "en"], default: "zh-TW" });
+    expect(res.body.components.schemas.RelativeDirection.enum).toContain(
+      "ahead-right",
+    );
     const operation = res.body.paths["/a11y/route/instructions"].post;
     expect(operation.description).toContain("台北 CSR-primary");
     expect(operation.description).toContain("OTP2");

@@ -55,6 +55,7 @@ describe("POST /api/v1/a11y/route/instructions route contracts", () => {
     expect(generate).toHaveBeenCalledWith({
       routeToken: "fixture-capability",
       userHeading: 45,
+      language: "zh-TW",
     });
   });
 

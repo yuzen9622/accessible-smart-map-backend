@@ -1,3 +1,5 @@
+import { DEFAULT_LANG, SUPPORTED_LANGS } from "../../types/lang";
+import { RelativeDirectionSchema } from "../../schemas/nav-instructions-data.schema";
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 import { TaiwanCityEn } from "../../types/transit";
@@ -137,6 +139,10 @@ export const AccessibleRouteBodySchema = z
 
 export const AccessibleRouteRerouteBodySchema = z
   .object({
+    language: z.enum(SUPPORTED_LANGS).default(DEFAULT_LANG).openapi({
+      description:
+        "導航指引語言，英文用戶重新規劃時應傳 en；省略則為 zh-TW。相同 clientRequestId 重送會回放首次結果。",
+    }),
     routeToken: z.string().trim().min(1).max(256),
     currentPosition: z
       .object({
@@ -1255,18 +1261,7 @@ const RerouteInstructionSchema = z
       "arrive",
     ]),
     bearing: z.number().nullable(),
-    relativeDirection: z
-      .enum([
-        "正前方",
-        "左前方",
-        "右前方",
-        "左側",
-        "右側",
-        "左後方",
-        "右後方",
-        "正後方",
-      ])
-      .nullable(),
+    relativeDirection: RelativeDirectionSchema.nullable(),
     distanceM: z.number().nullable(),
     streetName: z.string().nullable(),
     legType: z.enum([

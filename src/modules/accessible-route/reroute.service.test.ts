@@ -24,25 +24,6 @@ vi.mock("./navigation-state.repository", () => ({
 vi.mock("./accessible-route.service", () => ({
   planAccessibleRouteFromRequest,
 }));
-vi.mock("../../utils/nav-instructions-engine", () => ({
-  generateNavInstructions: vi.fn(() => ({
-    ok: true,
-    data: { instructions: [{ text: "向前走" }], warnings: [] },
-  })),
-  generateNavStepsWithLegIndex: vi.fn(() => ({
-    ok: true,
-    steps: [
-      {
-        instruction: {
-          text: "向前走",
-          legType: "WALK",
-          distanceM: 10,
-        },
-      },
-    ],
-    warnings: [],
-  })),
-}));
 
 import { rerouteAccessibleRoute } from "./reroute.service";
 
@@ -52,7 +33,18 @@ const route = (routeId: string) => ({
   totalMinutes: 2,
   transferCount: 0,
   accessibilityHighlights: [],
-  legs: [],
+  legs: [
+    {
+      type: "WALK",
+      from: "起點",
+      to: "終點",
+      distanceM: 10,
+      polyline: [
+        [121, 25],
+        [121.001, 25],
+      ],
+    },
+  ],
 });
 
 const canonicalRequest = {
@@ -123,6 +115,37 @@ describe("rerouteAccessibleRoute", () => {
         currentStepIndex: 0,
         replayed: false,
       },
+    });
+  });
+
+  it("generates both instruction arrays in English without changing canonical planning intent", async () => {
+    const result = await rerouteAccessibleRoute({ ...request, language: "en" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.instructions[0].text).toBe(
+      "Head east toward your destination",
+    );
+    expect(result.data.steps.map((step) => step.instruction)).toEqual(
+      result.data.instructions.map((step) => step.text),
+    );
+    expect(result.data.instructions.at(-1)?.text).toBe(
+      "You have arrived at your destination",
+    );
+    expect(planAccessibleRouteFromRequest).toHaveBeenCalledWith({
+      ...canonicalRequest,
+      origin: { latitude: 25.02, longitude: 121.02 },
+      userLocation: { latitude: 25.02, longitude: 121.02 },
+    });
+  });
+
+  it("localizes English reroute errors", async () => {
+    readNavigationTokenStrict.mockResolvedValue({ status: "missing" });
+    await expect(
+      rerouteAccessibleRoute({ ...request, language: "en" }),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 410,
+      error: "The route token has expired or does not support rerouting",
     });
   });
 

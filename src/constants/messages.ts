@@ -111,6 +111,18 @@ export const REROUTE_MSG = {
   GONE: "routeToken 已過期或不支援重新規劃",
   CONFLICT: "路線版本或重新規劃狀態衝突",
   UNAVAILABLE: "導航狀態服務暫時無法使用",
+  NO_STEPS: "替代路線無法產生導航步驟",
+} as const;
+
+export const REROUTE_MSG_EN = {
+  OK: "The route has been replanned",
+  GONE: "The route token has expired or does not support rerouting",
+  CONFLICT: "The route version or rerouting state conflicts with this request",
+  UNAVAILABLE: "The navigation state service is temporarily unavailable",
+  NO_STEPS:
+    "Unable to generate navigation instructions for the replacement route",
+  NO_ROUTE: "No viable route was found",
+  PLAN_FAILED: "Unable to replan the route. Please try again later",
 } as const;
 
 export const MEMORY_MSG = {
@@ -173,6 +185,28 @@ export const NAV_MSG = {
   FARE_GATE: "請通過閘門",
   ENTER_STATION: "請進入車站",
   EXIT_STATION: "請離開車站",
+} as const;
+
+export const NAV_API_MSG = {
+  "zh-TW": {
+    OK: (steps: number) => `逐步指引產生完成，共 ${steps} 步`,
+    INVALID_TOKEN: "routeToken 無效或已過期",
+    INVALID_ROUTE: "route 欄位格式錯誤或 legs 為空",
+    UNSUPPORTED_LEG: (type?: string) =>
+      `legs 含未支援的型別：${type ?? "(未知)"}`,
+    ARRIVE: "您已抵達目的地",
+    INTERNAL: "無法產生導航指引，請稍後再試",
+  },
+  en: {
+    OK: (steps: number) => `Navigation instructions generated: ${steps} steps`,
+    INVALID_TOKEN: "The route token is invalid or has expired",
+    INVALID_ROUTE: "The route is invalid or has no legs",
+    UNSUPPORTED_LEG: (type?: string) =>
+      `Unsupported route leg type: ${type ?? "(unknown)"}`,
+    ARRIVE: "You have arrived at your destination",
+    INTERNAL:
+      "Unable to generate navigation instructions. Please try again later",
+  },
 } as const;
 
 export const CAMPUS_MSG = {

@@ -1,6 +1,10 @@
 import { randomBytes } from "crypto";
 import { ResponseCode } from "../../types/code";
-import { REROUTE_MSG, ROUTE_MSG } from "../../constants/messages";
+import {
+  REROUTE_MSG,
+  REROUTE_MSG_EN,
+  ROUTE_MSG,
+} from "../../constants/messages";
 import {
   generateNavInstructions,
   generateNavStepsWithLegIndex,
@@ -33,12 +37,13 @@ const conflict = (message: string): RerouteResult => ({
 export async function rerouteAccessibleRoute(
   request: RerouteRequest,
 ): Promise<RerouteResult> {
+  const messages = request.language === "en" ? REROUTE_MSG_EN : REROUTE_MSG;
   const tokenRead = await readNavigationTokenStrict(request.routeToken);
   if (tokenRead.status === "unavailable") {
     return {
       ok: false,
       status: ResponseCode.SERVICE_UNAVAILABLE,
-      error: REROUTE_MSG.UNAVAILABLE,
+      error: messages.UNAVAILABLE,
     };
   }
   if (
@@ -48,12 +53,12 @@ export async function rerouteAccessibleRoute(
     return {
       ok: false,
       status: ResponseCode.GONE,
-      error: REROUTE_MSG.GONE,
+      error: messages.GONE,
     };
   }
   const previous = tokenRead.value;
   if (previous.routeVersion !== request.previousRouteVersion) {
-    return conflict(REROUTE_MSG.CONFLICT);
+    return conflict(messages.CONFLICT);
   }
   const begun = await beginReroute(
     previous.navigationId,
@@ -64,12 +69,12 @@ export async function rerouteAccessibleRoute(
     return {
       ok: false,
       status: ResponseCode.SERVICE_UNAVAILABLE,
-      error: REROUTE_MSG.UNAVAILABLE,
+      error: messages.UNAVAILABLE,
     };
   }
   if (begun.status === "replay") return { ok: true, data: begun.data };
-  if (begun.status === "stale") return conflict(REROUTE_MSG.CONFLICT);
-  if (begun.status === "conflict") return conflict(REROUTE_MSG.CONFLICT);
+  if (begun.status === "stale") return conflict(messages.CONFLICT);
+  if (begun.status === "conflict") return conflict(messages.CONFLICT);
 
   const release = () =>
     releaseReroute(
@@ -89,7 +94,9 @@ export async function rerouteAccessibleRoute(
     });
     if (!planned.ok) {
       await release();
-      return planned;
+      return request.language === "en"
+        ? { ...planned, error: REROUTE_MSG_EN.PLAN_FAILED }
+        : planned;
     }
     const selected = planned.data.routes[0];
     if (!selected) {
@@ -97,7 +104,10 @@ export async function rerouteAccessibleRoute(
       return {
         ok: false,
         status: ResponseCode.UNPROCESSABLE_ENTITY,
-        error: ROUTE_MSG.NO_ROUTE,
+        error:
+          request.language === "en"
+            ? REROUTE_MSG_EN.NO_ROUTE
+            : ROUTE_MSG.NO_ROUTE,
       };
     }
     const routeVersion = request.previousRouteVersion + 1;
@@ -106,14 +116,18 @@ export async function rerouteAccessibleRoute(
       navigationId: previous.navigationId,
       routeVersion,
     };
-    const instructionsResult = generateNavInstructions(route);
-    const stepsResult = generateNavStepsWithLegIndex(route);
+    const instructionsResult = generateNavInstructions(
+      route,
+      undefined,
+      request.language,
+    );
+    const stepsResult = generateNavStepsWithLegIndex(route, request.language);
     if (!instructionsResult.ok || !stepsResult.ok) {
       await release();
       return {
         ok: false,
         status: ResponseCode.UNPROCESSABLE_ENTITY,
-        error: "替代路線無法產生導航步驟",
+        error: messages.NO_STEPS,
       };
     }
     const routeToken = randomBytes(32).toString("base64url");
@@ -164,11 +178,11 @@ export async function rerouteAccessibleRoute(
       return {
         ok: false,
         status: ResponseCode.SERVICE_UNAVAILABLE,
-        error: REROUTE_MSG.UNAVAILABLE,
+        error: messages.UNAVAILABLE,
       };
     }
-    if (finalized === "stale") return conflict(REROUTE_MSG.CONFLICT);
-    if (finalized === "conflict") return conflict(REROUTE_MSG.CONFLICT);
+    if (finalized === "stale") return conflict(messages.CONFLICT);
+    if (finalized === "conflict") return conflict(messages.CONFLICT);
     return { ok: true, data };
   } catch (error) {
     await release();

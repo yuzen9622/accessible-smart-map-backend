@@ -23,7 +23,16 @@ import type {
 } from "../modules/nav-instructions/nav-instructions.types";
 
 import { formatWalkStepInstruction } from "./transit-text";
-import { NAV_MSG } from "../constants/messages";
+import { DEFAULT_LANG, type SupportedLang } from "../types/lang";
+import {
+  englishPlaceLabel,
+  englishCompass,
+  englishWalkInstruction,
+  englishRoadInstruction,
+  hasEnglishRoadManeuver,
+  ENGLISH_RAIL_SYSTEMS,
+} from "./nav-instructions-english";
+import { NAV_API_MSG, NAV_MSG } from "../constants/messages";
 
 /**
  * Pure route-step normalization and route-to-instructions engine shared by
@@ -149,13 +158,27 @@ const RAIL_SYSTEM_NAMES: Record<string, string> = {
  * 以使用者當前朝向（heading）與目標方位角（bearing）計算八方位相對方向。
  * @param heading 使用者當前朝向（度，正北 = 0，順時針）
  * @param bearing 目標方位角（度，正北 = 0，順時針）
- * @returns 八方位中文字串
+ * @returns 八方位文字，預設繁體中文，英文由 language 選擇
  */
 export function calcRelativeDirection(
   heading: number,
   bearing: number,
+  language: SupportedLang = DEFAULT_LANG,
 ): RelativeDirection {
   const diff = (bearing - heading + 360) % 360;
+  if (language === "en") {
+    const directions: RelativeDirection[] = [
+      "ahead",
+      "ahead-right",
+      "right",
+      "behind-right",
+      "behind",
+      "behind-left",
+      "left",
+      "ahead-left",
+    ];
+    return directions[Math.round(diff / 45) % 8];
+  }
   if (diff < 22.5 || diff >= 337.5) return "正前方";
   if (diff < 67.5) return "右前方";
   if (diff < 112.5) return "右側";
@@ -391,7 +414,10 @@ function walkStepText(
   step: WalkStep,
   bearing: number | null,
   targetStreetName: string | null,
+  language: SupportedLang,
 ): string {
+  if (language === "en")
+    return englishWalkInstruction(step, bearing, targetStreetName);
   const compass =
     bearing !== null &&
     (step.relativeDirection ?? "").toUpperCase() === "DEPART"
@@ -423,6 +449,7 @@ function roadLegToInstructions(
   leg: DriveLeg,
   isFirstLeg: boolean,
   warnings: NavWarningCode[],
+  language: SupportedLang,
 ): PendingNavInstruction[] {
   const steps = leg.steps ?? [];
   if (!steps.length) {
@@ -433,9 +460,14 @@ function roadLegToInstructions(
         : null;
     return [
       {
-        text: isFirstLeg
-          ? "請沿道路出發，前往目的地"
-          : "請沿道路繼續前往目的地",
+        text:
+          language === "en"
+            ? isFirstLeg
+              ? "Head along the road toward your destination"
+              : "Continue along the road toward your destination"
+            : isFirstLeg
+              ? "請沿道路出發，前往目的地"
+              : "請沿道路繼續前往目的地",
         type: isFirstLeg ? "depart" : "turn",
         bearing,
         relativeDirection: null,
@@ -449,7 +481,14 @@ function roadLegToInstructions(
   }
 
   let searchIndex = 0;
-  return steps.map((step) => {
+  // The road planner builds steps from this same list, excluding arrival maneuvers.
+  const maneuvers = leg.maneuvers?.filter(
+    (maneuver) => ![4, 5, 6].includes(maneuver.type),
+  );
+  return steps.map((step, index) => {
+    if (language === "en" && !hasEnglishRoadManeuver(step)) {
+      pushWarning(warnings, WARN_ROAD_STEPS_UNAVAILABLE);
+    }
     const bearing =
       step.polyline.length >= 2
         ? Math.round(calcBearing(step.polyline[0], step.polyline[1]))
@@ -460,7 +499,13 @@ function roadLegToInstructions(
         : null;
     if (polylineIndex !== null) searchIndex = polylineIndex;
     return {
-      text: step.instruction.trim() || "請沿道路繼續前行",
+      text:
+        language === "en"
+          ? englishRoadInstruction(
+              step,
+              maneuvers?.[index]?.streetNames?.[0]?.trim(),
+            )
+          : step.instruction.trim() || "請沿道路繼續前行",
       type: roadStepType(step.maneuver),
       bearing,
       relativeDirection: null,
@@ -475,12 +520,20 @@ function roadLegToInstructions(
 
 function exitInfoInstruction(
   exitInfo: NonNullable<WalkLeg["exitInfo"]>,
+  language: SupportedLang,
 ): PendingNavInstruction {
   const label = exitInfo.exitNumber ? `${exitInfo.exitNumber} 出口` : "出口";
+  const englishLabel = exitInfo.exitNumber
+    ? `exit ${exitInfo.exitNumber}`
+    : "the exit";
   const text =
-    exitInfo.type === "elevator"
-      ? `前方為 ${label}電梯，請進入電梯`
-      : `前方為 ${label}坡道，請沿坡道前進`;
+    language === "en"
+      ? exitInfo.type === "elevator"
+        ? `The elevator for ${englishLabel} is ahead. Enter the elevator`
+        : `The ramp for ${englishLabel} is ahead. Follow the ramp`
+      : exitInfo.type === "elevator"
+        ? `前方為 ${label}電梯，請進入電梯`
+        : `前方為 ${label}坡道，請沿坡道前進`;
   return {
     text,
     type: "facility",
@@ -513,6 +566,7 @@ interface BuiltWalkStep {
 function buildWalkInstructionSteps(
   leg: WalkLeg,
   isFirstLeg: boolean,
+  language: SupportedLang,
 ): BuiltWalkStep[] {
   const polyline = leg.polyline ?? [];
   const steps = normalizeWalkLegSteps(leg, isFirstLeg);
@@ -534,7 +588,7 @@ function buildWalkInstructionSteps(
         ?.streetName.trim() ?? null;
     return {
       step,
-      text: walkStepText(step, bearing, nextNamed),
+      text: walkStepText(step, bearing, nextNamed, language),
       type,
       bearing,
       polylineIndex,
@@ -546,10 +600,11 @@ function walkLegToInstructions(
   leg: WalkLeg,
   isFirstLeg: boolean,
   warnings: NavWarningCode[],
+  language: SupportedLang,
 ): PendingNavInstruction[] {
   const out: PendingNavInstruction[] = [];
   const polyline = leg.polyline ?? [];
-  const built = buildWalkInstructionSteps(leg, isFirstLeg);
+  const built = buildWalkInstructionSteps(leg, isFirstLeg, language);
 
   if (built.length > 0) {
     built.forEach(({ step, text, type, bearing, polylineIndex }) => {
@@ -572,9 +627,14 @@ function walkLegToInstructions(
         : null;
     const heading = bearing !== null ? degToCompassWord(bearing) : "前";
     out.push({
-      text: isFirstLeg
-        ? `請朝${heading}方向出發，沿路前往「${leg.to}」`
-        : `請沿路前往「${leg.to}」`,
+      text:
+        language === "en"
+          ? isFirstLeg
+            ? `Head ${bearing !== null ? englishCompass(bearing) : "forward"} toward ${englishPlaceLabel(leg.to)}`
+            : `Continue toward ${englishPlaceLabel(leg.to)}`
+          : isFirstLeg
+            ? `請朝${heading}方向出發，沿路前往「${leg.to}」`
+            : `請沿路前往「${leg.to}」`,
       type: isFirstLeg ? "depart" : "turn",
       bearing,
       relativeDirection: null,
@@ -589,7 +649,7 @@ function walkLegToInstructions(
   }
 
   if (leg.exitInfo) {
-    out.push(exitInfoInstruction(leg.exitInfo));
+    out.push(exitInfoInstruction(leg.exitInfo, language));
   }
   return out;
 }
@@ -627,7 +687,29 @@ function displayTime(value?: string): string {
   return value;
 }
 
-function busInstructions(leg: BusLeg): PendingNavInstruction[] {
+function busInstructions(
+  leg: BusLeg,
+  language: SupportedLang,
+): PendingNavInstruction[] {
+  if (language === "en") {
+    const wait =
+      typeof leg.estimatedWaitMinutes === "number" &&
+      leg.estimatedWaitMinutes > 0
+        ? ` Estimated wait: about ${leg.estimatedWaitMinutes} minutes.`
+        : "";
+    return [
+      transitInstruction(
+        `Wait at ${leg.departureStop} and board bus ${leg.routeName}.${wait}`,
+        "transit_board",
+        "BUS",
+      ),
+      transitInstruction(
+        `Get off at ${leg.arrivalStop}.`,
+        "transit_alight",
+        "BUS",
+      ),
+    ];
+  }
   const waitText =
     typeof leg.estimatedWaitMinutes === "number" && leg.estimatedWaitMinutes > 0
       ? `，預估等候約 ${leg.estimatedWaitMinutes} 分鐘`
@@ -640,7 +722,36 @@ function busInstructions(leg: BusLeg): PendingNavInstruction[] {
   ];
 }
 
-function metroInstructions(leg: MetroLeg): PendingNavInstruction[] {
+function metroInstructions(
+  leg: MetroLeg,
+  language: SupportedLang,
+): PendingNavInstruction[] {
+  if (language === "en") {
+    const system =
+      ENGLISH_RAIL_SYSTEMS[leg.railSystem?.toUpperCase()] ??
+      leg.railSystem ??
+      "Metro";
+    const ride = leg.rideMinutes
+      ? ` The ride takes about ${leg.rideMinutes} minutes.`
+      : "";
+    const facility = leg.facilityHighlights?.some((f) =>
+      /電梯|elevator/i.test(f),
+    )
+      ? " Use the elevator to enter the station."
+      : " Check the station's accessible facilities before entering.";
+    return [
+      transitInstruction(
+        `Take ${system} ${leg.lineName} from ${leg.departureStation} toward ${leg.arrivalStation}.${ride}${facility}`,
+        "transit_board",
+        "METRO",
+      ),
+      transitInstruction(
+        `Get off at ${leg.arrivalStation}.`,
+        "transit_alight",
+        "METRO",
+      ),
+    ];
+  }
   const system = railSystemName(leg.railSystem);
   const ride = leg.rideMinutes ? `，行駛約 ${leg.rideMinutes} 分鐘` : "";
   const facility = leg.facilityHighlights?.some((f) => f.includes("電梯"))
@@ -654,9 +765,26 @@ function metroInstructions(leg: MetroLeg): PendingNavInstruction[] {
   ];
 }
 
-function thsrInstructions(leg: ThsrLeg): PendingNavInstruction[] {
+function thsrInstructions(
+  leg: ThsrLeg,
+  language: SupportedLang,
+): PendingNavInstruction[] {
   const dep = displayTime(leg.departureTime);
   const arr = displayTime(leg.arrivalTime);
+  if (language === "en") {
+    return [
+      transitInstruction(
+        `Take Taiwan High Speed Rail train ${leg.trainNo} from ${leg.departureStation}${dep ? ` at ${dep}` : ""} to ${leg.arrivalStation}${arr ? `, arriving at ${arr}` : ""}.`,
+        "transit_board",
+        "THSR",
+      ),
+      transitInstruction(
+        `Get off at ${leg.arrivalStation}.`,
+        "transit_alight",
+        "THSR",
+      ),
+    ];
+  }
   const depText = dep ? `預計 ${dep} ` : "";
   const arrText = arr ? `，${arr} 抵達` : "，抵達";
   const board = `請搭乘高鐵 ${leg.trainNo} 次列車，${depText}由「${leg.departureStation}」出發${arrText}「${leg.arrivalStation}」。`;
@@ -667,9 +795,26 @@ function thsrInstructions(leg: ThsrLeg): PendingNavInstruction[] {
   ];
 }
 
-function traInstructions(leg: TraLeg): PendingNavInstruction[] {
+function traInstructions(
+  leg: TraLeg,
+  language: SupportedLang,
+): PendingNavInstruction[] {
   const dep = displayTime(leg.departureTime);
   const arr = displayTime(leg.arrivalTime);
+  if (language === "en") {
+    return [
+      transitInstruction(
+        `Take Taiwan Railways ${leg.trainTypeName ? `${leg.trainTypeName} ` : ""}train ${leg.trainNo} from ${leg.departureStation}${dep ? ` at ${dep}` : ""} to ${leg.arrivalStation}${arr ? `, arriving at ${arr}` : ""}.`,
+        "transit_board",
+        "TRA",
+      ),
+      transitInstruction(
+        `Get off at ${leg.arrivalStation}.`,
+        "transit_alight",
+        "TRA",
+      ),
+    ];
+  }
   const depText = dep ? `預計 ${dep} ` : "";
   const arrText = arr ? `，${arr} 抵達` : "，抵達";
   const trainType = leg.trainTypeName ? `${leg.trainTypeName} ` : "";
@@ -687,13 +832,15 @@ function traInstructions(leg: TraLeg): PendingNavInstruction[] {
  * 提供 `userHeading` 時，為每個含 bearing 的步驟填入八方位相對方向。
  * @param route 含 legs 的路線物件（由 /accessible-route passthrough）
  * @param userHeading 使用者當前朝向（度，正北 = 0，順時針），選用
+ * @param language 指引文字語言，預設 zh-TW
  * @returns 成功時回傳指引結果，失敗時回傳錯誤碼與訊息
  */
 export function generateNavInstructions(
   route: NavRouteInput,
   userHeading?: number,
+  language: SupportedLang = DEFAULT_LANG,
 ): GenerateNavResult {
-  const voiceResult = generateNavStepsWithLegIndex(route);
+  const voiceResult = generateNavStepsWithLegIndex(route, language);
   if (!voiceResult.ok) return voiceResult;
   const instructions = voiceResult.steps.map(({ instruction }) => ({
     ...instruction,
@@ -705,6 +852,7 @@ export function generateNavInstructions(
         instruction.relativeDirection = calcRelativeDirection(
           userHeading,
           instruction.bearing,
+          language,
         );
       }
     }
@@ -739,6 +887,7 @@ export type GenerateVoiceNavStepsResult =
  */
 export function generateNavStepsWithLegIndex(
   route: NavRouteInput,
+  language: SupportedLang = DEFAULT_LANG,
 ): GenerateVoiceNavStepsResult {
   const legs = route?.legs;
   if (!Array.isArray(legs) || legs.length === 0) {
@@ -746,7 +895,7 @@ export function generateNavStepsWithLegIndex(
       ok: false,
       status: ResponseCode.INVALID_INPUT,
       reason: "INVALID_ROUTE_INPUT",
-      message: "route 欄位格式錯誤或 legs 為空",
+      message: NAV_API_MSG[language].INVALID_ROUTE,
     };
   }
 
@@ -757,7 +906,7 @@ export function generateNavStepsWithLegIndex(
         ok: false,
         status: ResponseCode.INVALID_INPUT,
         reason: "UNSUPPORTED_LEG_TYPE",
-        message: `legs 含未支援的型別：${type ?? "(未知)"}`,
+        message: NAV_API_MSG[language].UNSUPPORTED_LEG(type),
       };
     }
   }
@@ -778,6 +927,7 @@ export function generateNavStepsWithLegIndex(
             leg,
             pendingSteps.length === 0,
             warnings,
+            language,
           ).map((instruction) => ({ instruction, legIndex })),
         );
         break;
@@ -788,12 +938,13 @@ export function generateNavStepsWithLegIndex(
             leg,
             pendingSteps.length === 0,
             warnings,
+            language,
           ).map((instruction) => ({ instruction, legIndex })),
         );
         break;
       case "BUS":
         pendingSteps.push(
-          ...busInstructions(leg).map((instruction) => ({
+          ...busInstructions(leg, language).map((instruction) => ({
             instruction,
             legIndex,
           })),
@@ -801,7 +952,7 @@ export function generateNavStepsWithLegIndex(
         break;
       case "METRO":
         pendingSteps.push(
-          ...metroInstructions(leg).map((instruction) => ({
+          ...metroInstructions(leg, language).map((instruction) => ({
             instruction,
             legIndex,
           })),
@@ -809,7 +960,7 @@ export function generateNavStepsWithLegIndex(
         break;
       case "THSR":
         pendingSteps.push(
-          ...thsrInstructions(leg).map((instruction) => ({
+          ...thsrInstructions(leg, language).map((instruction) => ({
             instruction,
             legIndex,
           })),
@@ -817,7 +968,7 @@ export function generateNavStepsWithLegIndex(
         break;
       case "TRA":
         pendingSteps.push(
-          ...traInstructions(leg).map((instruction) => ({
+          ...traInstructions(leg, language).map((instruction) => ({
             instruction,
             legIndex,
           })),
@@ -829,7 +980,7 @@ export function generateNavStepsWithLegIndex(
   pendingSteps.push({
     legIndex: legs.length - 1,
     instruction: {
-      text: "您已抵達目的地",
+      text: NAV_API_MSG[language].ARRIVE,
       type: "arrive",
       bearing: null,
       relativeDirection: null,

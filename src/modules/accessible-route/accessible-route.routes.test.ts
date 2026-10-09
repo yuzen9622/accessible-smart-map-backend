@@ -84,6 +84,20 @@ describe("POST /api/v1/a11y/accessible-route/reroute", () => {
     expect(mockReroute).not.toHaveBeenCalled();
   });
 
+  it("forwards the selected navigation language and localizes the success message", async () => {
+    mockReroute.mockResolvedValue({ ok: true, data: {} } as any);
+    const res = await request(app)
+      .post(`${URL}/reroute`)
+      .send({ ...body, language: "en" });
+    expect(res.status).toBe(200);
+    expect(mockReroute).toHaveBeenCalledWith({ ...body, language: "en" });
+    expect(res.body.message).toBe("The route has been replanned");
+    const invalid = await request(app)
+      .post(`${URL}/reroute`)
+      .send({ ...body, language: "fr" });
+    expect(invalid.status).toBe(400);
+  });
+
   it("uses the shared response envelope", async () => {
     mockReroute.mockResolvedValue({
       ok: true,

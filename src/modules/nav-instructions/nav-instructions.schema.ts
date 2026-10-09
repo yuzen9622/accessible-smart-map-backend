@@ -1,5 +1,6 @@
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
+import { DEFAULT_LANG, SUPPORTED_LANGS } from "../../types/lang";
 import { registry } from "../../openapi/registry";
 import { NavInstructionsDataSchema } from "../../schemas/nav-instructions-data.schema";
 
@@ -17,8 +18,9 @@ export const NavInstructionsRequestSchema = z
         "使用者當前朝向（度，正北 = 0，順時針），由陀螺儀取得。提供時後端填入 relativeDirection；省略則為 null。",
       example: 45,
     }),
-    language: z.enum(["zh-TW"]).default("zh-TW").openapi({
-      description: "輸出語言（預留，目前僅支援 zh-TW）。",
+    language: z.enum(SUPPORTED_LANGS).default(DEFAULT_LANG).openapi({
+      description:
+        "指引文字與相對方向的語言：zh-TW 或 en，預設 zh-TW。路名、站名等專有名稱保留路線資料原文。",
     }),
   })
   .strict()

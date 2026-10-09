@@ -2,21 +2,25 @@ import type { Request, Response } from "express";
 import { sendResponse } from "../../config/lib";
 import { ApiResponse } from "../../types/response";
 import { ResponseCode } from "../../types/code";
-import { ERROR_MESSAGE } from "../../constants/messages";
+import { DEFAULT_LANG } from "../../types/lang";
+import type { NavInstructionsInput } from "./nav-instructions.types";
+import { NAV_API_MSG } from "../../constants/messages";
 import { generateNavInstructionsFromInput } from "./nav-instructions.service";
 
 export async function navInstructions(
   req: Request,
   res: Response<ApiResponse<any>>,
 ) {
+  const {
+    routeToken,
+    userHeading,
+    language = DEFAULT_LANG,
+  } = req.validated?.body as NavInstructionsInput;
   try {
-    const { routeToken, userHeading } = req.validated?.body as {
-      routeToken: string;
-      userHeading?: number;
-    };
     const result = await generateNavInstructionsFromInput({
       routeToken,
       userHeading,
+      language,
     });
 
     if (!result.ok) {
@@ -30,7 +34,7 @@ export async function navInstructions(
       true,
       "success",
       ResponseCode.OK,
-      `逐步指引產生完成，共 ${result.data.totalSteps} 步`,
+      NAV_API_MSG[language].OK(result.data.totalSteps),
       result.data,
     );
   } catch (error: any) {
@@ -40,7 +44,7 @@ export async function navInstructions(
       false,
       "error",
       ResponseCode.INTERNAL_ERROR,
-      error?.message ?? ERROR_MESSAGE.INTERNAL,
+      NAV_API_MSG[language].INTERNAL,
     );
   }
 }

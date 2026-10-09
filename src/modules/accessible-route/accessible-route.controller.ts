@@ -4,7 +4,12 @@ import { authenticateToken } from "../../config/auth";
 import { planAccessibleRouteForHttp } from "./accessible-route.service";
 import { ApiResponse } from "../../types/response";
 import { ResponseCode, ResponseMessage } from "../../types/code";
-import { MSG, ERROR_MESSAGE, REROUTE_MSG } from "../../constants/messages";
+import {
+  MSG,
+  ERROR_MESSAGE,
+  REROUTE_MSG,
+  REROUTE_MSG_EN,
+} from "../../constants/messages";
 import { rerouteAccessibleRoute } from "./reroute.service";
 import type { RerouteRequest } from "./accessible-route.types";
 
@@ -128,7 +133,9 @@ export async function rerouteAccessibleRouteHttp(
       true,
       "success",
       ResponseCode.OK,
-      REROUTE_MSG.OK,
+      (req.body as RerouteRequest).language === "en"
+        ? REROUTE_MSG_EN.OK
+        : REROUTE_MSG.OK,
       result.data,
     );
   } catch (error: any) {
@@ -138,7 +145,9 @@ export async function rerouteAccessibleRouteHttp(
       false,
       "error",
       ResponseCode.INTERNAL_ERROR,
-      error?.message ?? ERROR_MESSAGE.INTERNAL,
+      (req.body as RerouteRequest).language === "en"
+        ? REROUTE_MSG_EN.PLAN_FAILED
+        : (error?.message ?? ERROR_MESSAGE.INTERNAL),
     );
   }
 }

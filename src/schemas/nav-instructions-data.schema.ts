@@ -11,7 +11,7 @@ extendZodWithOpenApi(z);
  * producer is `POST /a11y/route/instructions`.
  */
 
-const RelativeDirectionEnum = z
+export const RelativeDirectionSchema = z
   .enum([
     "正前方",
     "左前方",
@@ -21,6 +21,14 @@ const RelativeDirectionEnum = z
     "左後方",
     "右後方",
     "正後方",
+    "ahead",
+    "ahead-right",
+    "right",
+    "behind-right",
+    "behind",
+    "behind-left",
+    "left",
+    "ahead-left",
   ])
   .openapi("RelativeDirection");
 
@@ -36,7 +44,7 @@ const NavInstructionSchema = z
       "arrive",
     ]),
     bearing: z.number().nullable(),
-    relativeDirection: RelativeDirectionEnum.nullable(),
+    relativeDirection: RelativeDirectionSchema.nullable(),
     distanceM: z.number().nullable().openapi({
       description: "完成本步 maneuver 後、到下一步之前要行進的距離（公尺）",
     }),

@@ -1,3 +1,4 @@
+import type { SupportedLang } from "../../types/lang";
 /**
  * accessible-route module type declarations — the shapes used across the
  * module's own files (the orchestrator service, scoring engine, OTP planner
@@ -192,6 +193,7 @@ export interface NavigationRouteEnvelope {
 }
 
 export interface RerouteRequest {
+  language?: SupportedLang;
   routeToken: string;
   currentPosition: {
     latitude: number;

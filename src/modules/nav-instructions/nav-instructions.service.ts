@@ -1,3 +1,5 @@
+import { DEFAULT_LANG } from "../../types/lang";
+import { NAV_API_MSG } from "../../constants/messages";
 import { ResponseCode } from "../../types/code";
 import type {
   RelativeDirection,
@@ -27,7 +29,7 @@ export type {
  * The pure route-to-instructions engine lives in
  * `src/utils/nav-instructions-engine.ts` — a neutral layer outside
  * `src/modules/` — because `accessible-route` uses its WALK-step normalizer
- * while this module uses its Chinese instruction generator. This module also
+ * while this module uses its localized instruction generator. This module also
  * depends on `accessible-route`'s `route-token.service` below, so owning the
  * engine in either feature module would close a module dependency cycle.
  */
@@ -65,8 +67,8 @@ export async function generateNavInstructionsFromInput(
       ok: false,
       status: ResponseCode.INVALID_INPUT,
       reason: "INVALID_ROUTE_TOKEN",
-      message: "routeToken 無效或已過期",
+      message: NAV_API_MSG[input.language ?? DEFAULT_LANG].INVALID_TOKEN,
     };
   }
-  return generateNavInstructions(route, input.userHeading);
+  return generateNavInstructions(route, input.userHeading, input.language);
 }

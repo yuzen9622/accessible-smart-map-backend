@@ -3,6 +3,7 @@
  * shapes the service produces and the result envelope it returns.
  */
 
+import type { SupportedLang } from "../../types/lang";
 import type { ResponseCode } from "../../types/code";
 
 export type RelativeDirection =
@@ -13,7 +14,15 @@ export type RelativeDirection =
   | "右側"
   | "左後方"
   | "右後方"
-  | "正後方";
+  | "正後方"
+  | "ahead"
+  | "ahead-right"
+  | "right"
+  | "behind-right"
+  | "behind"
+  | "behind-left"
+  | "left"
+  | "ahead-left";
 
 export type NavInstructionType =
   | "turn"
@@ -58,6 +67,7 @@ export interface NavRouteInput {
 export interface NavInstructionsInput {
   routeToken: string;
   userHeading?: number;
+  language?: SupportedLang;
 }
 
 export type GenerateNavResult =
