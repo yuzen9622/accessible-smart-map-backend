@@ -2,6 +2,11 @@ import http from "http";
 import app from "./app";
 import mongoose from "mongoose";
 import { startHazardExpiryJob } from "./modules/hazard-report/hazard-report.expire";
+import {
+  startHazardAiWorker,
+  type HazardAiWorkerHandle,
+} from "./modules/hazard-report/hazard-report.ai-worker";
+import { startHazardAiMonitor } from "./modules/hazard-report/hazard-report.monitor.service";
 import { startBusFleetSyncJob } from "./modules/transit/bus-fleet-sync.worker";
 import { attachVoiceWebSocket } from "./modules/voice";
 import { attachAlertWebSocket } from "./modules/transit/alert.gateway";
@@ -32,6 +37,8 @@ let busFleetSyncTimer: NodeJS.Timeout | undefined;
 let mqttHandle: TdxMqttHandle | undefined;
 let shutdownStarted = false;
 let stopRetentionJob: (() => void) | undefined;
+let hazardAiWorker: HazardAiWorkerHandle | undefined;
+let stopHazardAiMonitor: (() => void) | undefined;
 
 const server = http.createServer(app);
 attachVoiceWebSocket(server);
@@ -75,6 +82,16 @@ mongoose
   .then(() => {
     console.log("Connected to MongoDB");
     startHazardExpiryJob();
+    // HAZARD_AI_WORKER_ENABLED=false only stops AI claims; intake cleanup and
+    // deadline convergence of queued reviews keep running.
+    hazardAiWorker = startHazardAiWorker(undefined, {
+      enabled: process.env.HAZARD_AI_WORKER_ENABLED !== "false",
+    });
+    stopHazardAiMonitor = startHazardAiMonitor(hazardAiWorker);
+    console.log(
+      "[hazard-ai] worker started",
+      JSON.stringify({ paused: hazardAiWorker.getHealth().paused }),
+    );
     stopRetentionJob = startRetentionJob(retentionConfig);
     passwordAssistanceTimer = startPasswordAssistanceWorker();
     busFleetSyncTimer = startBusFleetSyncJob();
@@ -97,8 +114,19 @@ function shutdown(signalLog: string): void {
   if (valhallaTrafficTarTimer) clearInterval(valhallaTrafficTarTimer);
   stopTransitFreshnessJob();
   stopRetentionJob?.();
+  stopHazardAiMonitor?.();
   void (async () => {
     await Promise.allSettled([
+      hazardAiWorker
+        ? hazardAiWorker
+            .stop()
+            .then(() =>
+              console.log(
+                "[hazard-ai] worker stopped",
+                JSON.stringify(hazardAiWorker?.getHealth().counters),
+              ),
+            )
+        : Promise.resolve(),
       mqttHandle ? mqttHandle.stop() : Promise.resolve(),
       closePedGraphRuntime(),
     ]);

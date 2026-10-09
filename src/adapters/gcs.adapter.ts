@@ -1,13 +1,78 @@
-import { getRetentionConfig } from "../config/retention";
 import { Storage } from "@google-cloud/storage";
+import { HAZARD_AI } from "../config/hazard-ai";
+import type { Readable, Writable } from "node:stream";
+
+export class HazardPhotoStorageError extends Error {
+  constructor(
+    public readonly code: string,
+    public readonly retryable = false,
+    public readonly circuitBreak = false,
+  ) {
+    super(code);
+    this.name = "HazardPhotoStorageError";
+  }
+}
+
+function storageFailure(error: unknown): HazardPhotoStorageError {
+  if (error instanceof HazardPhotoStorageError) return error;
+  const code = Number((error as { code?: unknown })?.code);
+  if (code === 404) return new HazardPhotoStorageError("GCS_OBJECT_MISSING");
+  if (code === 401 || code === 403)
+    return new HazardPhotoStorageError("GCS_PERMISSION_DENIED", false, true);
+  if (code === 400) return new HazardPhotoStorageError("GCS_INVALID_RESPONSE");
+  return new HazardPhotoStorageError("GCS_TEMPORARILY_UNAVAILABLE", true);
+}
+
+interface PhotoIoOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  maxBytes?: number;
+}
+
+/** Complete or destroy a stream, bounded locally even during SDK failures. */
+function streamDone<T>(
+  stream: Readable | Writable,
+  event: "end" | "finish",
+  options: PhotoIoOptions,
+  value: () => T,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abort);
+    };
+    const abort = () =>
+      stream.destroy(new HazardPhotoStorageError("GCS_ABORTED", true));
+    const timer = setTimeout(() => {
+      stream.destroy(new HazardPhotoStorageError("GCS_TIMEOUT", true));
+    }, options.timeoutMs ?? HAZARD_AI.providerTimeoutMs);
+    options.signal?.addEventListener("abort", abort, { once: true });
+    stream.once("error", (error) => {
+      cleanup();
+      reject(storageFailure(error));
+    });
+    stream.once(event, () => {
+      cleanup();
+      resolve(value());
+    });
+    stream.once("close", () => {
+      cleanup();
+      reject(new HazardPhotoStorageError("GCS_STREAM_CLOSED", true));
+    });
+    if (options.signal?.aborted) abort();
+  });
+}
 
 let storage: Storage | null = null;
 
 function client(): Storage {
   if (!storage) {
-    storage = new Storage(
-      process.env.GCS_KEY_FILE ? { keyFilename: process.env.GCS_KEY_FILE } : {},
-    );
+    storage = new Storage({
+      ...(process.env.GCS_KEY_FILE
+        ? { keyFilename: process.env.GCS_KEY_FILE }
+        : {}),
+      retryOptions: { autoRetry: false, maxRetries: 0 },
+    });
   }
   return storage;
 }
@@ -43,39 +108,89 @@ export function mimeToPhotoExt(mimeType: string): string {
  * @param mimeType The photo MIME type (`image/jpeg`, `image/png`, `image/webp`, `image/heic`, `image/heif`).
  * @returns The public URL and the bucket-internal storage path.
  */
+export function getHazardPhotoStoragePath(
+  reportId: string,
+  mimeType: string,
+): string {
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(reportId))
+    throw new HazardPhotoStorageError("GCS_INVALID_PATH");
+  return `reports/${reportId}.${mimeToPhotoExt(mimeType)}`;
+}
+
 export async function uploadHazardPhoto(
   buffer: Buffer,
   reportId: string,
   mimeType: string,
+  options: PhotoIoOptions = {},
 ): Promise<{ url: string; storagePath: string }> {
   const bucketName = process.env.GCS_BUCKET_NAME ?? "";
-  const ext = mimeToPhotoExt(mimeType);
-  const storagePath = `reports/${reportId}.${ext}`;
-
-  await client()
+  const storagePath = getHazardPhotoStoragePath(reportId, mimeType);
+  if (buffer.length > HAZARD_AI.imageMaxBytes)
+    throw new HazardPhotoStorageError("GCS_IMAGE_TOO_LARGE");
+  options.signal?.throwIfAborted();
+  const stream = client()
     .bucket(bucketName)
     .file(storagePath)
-    .save(buffer, {
+    .createWriteStream({
       contentType: mimeType,
       resumable: false,
+      timeout: options.timeoutMs ?? HAZARD_AI.uploadTimeoutMs,
       metadata: { cacheControl: hazardPhotoCacheControl() },
     });
-
+  const completion = streamDone(
+    stream,
+    "finish",
+    {
+      ...options,
+      timeoutMs: options.timeoutMs ?? HAZARD_AI.uploadTimeoutMs,
+    },
+    () => undefined,
+  );
+  stream.end(buffer);
+  await completion;
   return {
     url: `https://storage.googleapis.com/${bucketName}/${storagePath}`,
     storagePath,
   };
 }
 
+/** Read DB-owned canonical keys only; never fetch arbitrary public URLs. */
+export async function readHazardPhoto(
+  storagePath: string,
+  options: PhotoIoOptions = {},
+): Promise<Buffer> {
+  if (!/^reports\/[0-9a-f]{24}\.(jpg|png|webp|heic|heif)$/.test(storagePath))
+    throw new HazardPhotoStorageError("GCS_INVALID_PATH");
+  options.signal?.throwIfAborted();
+  const maxBytes = Math.min(
+    options.maxBytes ?? HAZARD_AI.imageMaxBytes,
+    HAZARD_AI.imageMaxBytes,
+  );
+  const stream = client()
+    .bucket(process.env.GCS_BUCKET_NAME ?? "")
+    .file(storagePath)
+    .createReadStream({ decompress: false, validation: "crc32c" });
+  let length = 0;
+  const chunks: Buffer[] = [];
+  const result = streamDone(stream, "end", options, () =>
+    Buffer.concat(chunks, length),
+  );
+  stream.on("data", (chunk: Buffer) => {
+    length += chunk.length;
+    if (length > maxBytes)
+      stream.destroy(new HazardPhotoStorageError("GCS_IMAGE_TOO_LARGE"));
+    else chunks.push(chunk);
+  });
+  return result;
+}
+
 /**
- * Cache-Control for hazard photos. Kept short (≤ the retention safety margin)
- * because a public object served with a long max-age can outlive its deletion
- * in browser and intermediary caches.
+ * Private photos must not persist in browser or intermediary caches.
  *
  * @returns The header value
  */
 export function hazardPhotoCacheControl(): string {
-  return `public, max-age=${getRetentionConfig().hazardPhotoCacheMaxAgeSec}`;
+  return "private, no-store";
 }
 
 /**
@@ -122,8 +237,23 @@ export async function setHazardPhotoCacheControl(
  */
 export async function deleteHazardPhoto(storagePath: string): Promise<void> {
   const bucketName = process.env.GCS_BUCKET_NAME ?? "";
-  await client()
-    .bucket(bucketName)
-    .file(storagePath)
-    .delete({ ignoreNotFound: true });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      client()
+        .bucket(bucketName)
+        .file(storagePath)
+        .delete({ ignoreNotFound: true }),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new HazardPhotoStorageError("GCS_TIMEOUT", true)),
+          HAZARD_AI.providerTimeoutMs,
+        );
+      }),
+    ]);
+  } catch (error) {
+    throw storageFailure(error);
+  } finally {
+    clearTimeout(timer);
+  }
 }

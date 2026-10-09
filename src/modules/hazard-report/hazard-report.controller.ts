@@ -1,3 +1,4 @@
+import { getPrivateReportPhoto } from "./hazard-report.photo-access.service";
 import crypto from "crypto";
 import type { Request, Response } from "express";
 import { sendResponse } from "../../config/lib";
@@ -5,6 +6,7 @@ import { ResponseCode } from "../../types/code";
 import { HAZARD_MSG, HAZARD_REASON } from "../../constants/messages";
 import { authenticateToken } from "../../config/auth";
 import * as service from "./hazard-report.service";
+import { getHazardAiDiagnostics } from "./hazard-report.monitor.service";
 import type {
   ConfirmAction,
   PhotoMimeType,
@@ -160,7 +162,22 @@ async function reviewReport(req: Request, res: Response) {
   return send(res, result);
 }
 
+async function getAiMetrics(_req: Request, res: Response) {
+  res.setHeader("Cache-Control", "no-store");
+  const metrics = await getHazardAiDiagnostics();
+  const available = metrics.mongoAvailable && metrics.health?.running === true;
+  return sendResponse(
+    res,
+    available,
+    available ? "success" : "error",
+    available ? ResponseCode.OK : ResponseCode.SERVICE_UNAVAILABLE,
+    available ? HAZARD_MSG.AI_METRICS_OK : HAZARD_MSG.AI_METRICS_UNAVAILABLE,
+    metrics,
+  );
+}
+
 export {
+  getAiMetrics,
   createReport,
   getNearbyReports,
   getReport,
@@ -169,3 +186,25 @@ export {
   getReviewQueue,
   reviewReport,
 };
+
+/** Binary success deliberately bypasses the JSON envelope; errors retain it. */
+export async function getReportPhoto(req: Request, res: Response) {
+  const abort = new AbortController();
+  const onClose = () => abort.abort();
+  res.once("close", onClose);
+  try {
+    const result = await getPrivateReportPhoto(
+      req.params.id as string,
+      { userId: req.auth!.userId, admin: req.auth!.user.role === "admin" },
+      abort.signal,
+    );
+    if (abort.signal.aborted) return;
+    if (!result.ok) return send(res, result);
+    res.status(ResponseCode.OK).setHeader("Content-Type", result.mimeType);
+    res.setHeader("Content-Length", result.buffer.length);
+    // end avoids Express's automatic ETag/conditional 304 handling for private bytes.
+    return res.end(result.buffer);
+  } finally {
+    res.off("close", onClose);
+  }
+}

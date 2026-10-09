@@ -1,3 +1,15 @@
+import type {
+  HazardAiReview,
+  HazardAiReviewJob,
+  HazardPhotoIntake,
+} from "./hazard-ai-review";
+
+export type {
+  HazardAiReview,
+  HazardAiReviewJob,
+  HazardPhotoIntake,
+} from "./hazard-ai-review";
+
 export type AuthProvider = "google" | "apple" | "local";
 
 export interface IUser {
@@ -536,6 +548,12 @@ export interface IHazardReport {
   /** When the photo was deleted too (retention phase B); fully de-identified. */
   deidentifiedAt?: Date;
   photoDelete?: { attempts: number; nextAttemptAt?: Date };
+  /** v2 AI review; absent on legacy reports. */
+  aiReview?: HazardAiReview;
+  /** Internal work metadata (select:false); never part of a view. */
+  aiReviewJob?: HazardAiReviewJob;
+  /** Private intake/cleanup state (select:false); absent on legacy reports. */
+  photoIntake?: HazardPhotoIntake;
 }
 
 export interface IEmergencyContact {

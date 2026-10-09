@@ -15,7 +15,9 @@ export interface MongoTestContext {
  * a unique database. Repository modules use the default connection, so the
  * harness deliberately exercises the same model instances as production.
  */
-export async function startMongoTest(): Promise<MongoTestContext> {
+export async function startMongoTest(
+  options: { enableTestCommands?: boolean } = {},
+): Promise<MongoTestContext> {
   if (mongoose.connection.readyState !== 0) {
     await mongoose.disconnect();
   }
@@ -24,7 +26,15 @@ export async function startMongoTest(): Promise<MongoTestContext> {
     tmpdir(),
     "accessible-smart-map-mongodb-binaries",
   );
-  const server = await MongoMemoryServer.create();
+  const server = await MongoMemoryServer.create({
+    instance: {
+      // Opt-in only, for failCommand fault injection against our owned test
+      // process. Production connections and other suites are untouched.
+      args: options.enableTestCommands
+        ? ["--setParameter", "enableTestCommands=1"]
+        : [],
+    },
+  });
   const dbName = `repository_integration_${randomUUID().replace(/-/g, "")}`;
 
   try {

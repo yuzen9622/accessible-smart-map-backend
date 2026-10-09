@@ -3,7 +3,8 @@ import multer from "multer";
 import { rateLimit } from "express-rate-limit";
 import { RedisStore } from "rate-limit-redis";
 import { sendResponse } from "../../config/lib";
-import { ResponseCode } from "../../types/code";
+import { authenticateToken } from "../../config/auth";
+import { ResponseCode, ResponseMessage } from "../../types/code";
 import { HAZARD_MSG, HAZARD_REASON } from "../../constants/messages";
 import { redisClient, redisReady } from "../../config/redis";
 
@@ -134,3 +135,52 @@ function makeLimiter(limit: number, windowMs: number) {
 export const postReportsLimiter = makeLimiter(10, 10 * 60 * 1000);
 export const confirmLimiter = makeLimiter(10, 60 * 1000);
 export const nearbyLimiter = makeLimiter(30, 60 * 1000);
+
+/** Apply even to auth/validation/rate-limit failures. */
+export function privatePhotoHeaders(
+  _req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  res.setHeader("Cache-Control", "private, no-store");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.vary("Authorization");
+  next();
+}
+
+/** Verify the same live session as protected JSON routes, preserving private headers. */
+export async function requirePhotoLogin(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  const match = /^Bearer (\S+)$/i.exec(req.headers.authorization ?? "");
+  if (!match) {
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.UNAUTHORIZED,
+      ResponseMessage.UNAUTHORIZED,
+    );
+  }
+  const result = await authenticateToken(match[1]);
+  if (!result.ok) {
+    const code = result.expired
+      ? ResponseCode.UNAUTHORIZED
+      : ResponseCode.FORBIDDEN;
+    return sendResponse(
+      res,
+      false,
+      "error",
+      code,
+      result.expired ? ResponseMessage.UNAUTHORIZED : ResponseMessage.FORBIDDEN,
+    );
+  }
+  req.auth = {
+    userId: result.userId,
+    user: result.user,
+    sessionId: result.sessionId,
+  };
+  next();
+}

@@ -1,4 +1,7 @@
 import exifr from "exifr";
+import { hazardObservationSchema } from "../../config/ai/hazard-observation";
+import { HAZARD_AI } from "../../config/hazard-ai";
+import type { HazardImageObservation } from "../../types/hazard-ai-review";
 import { haversineMeters } from "../../utils/geo";
 import type {
   AiVerifyResult,
@@ -134,6 +137,28 @@ export async function parsePhotoExif(
   };
 }
 
+export class ModelObservationError extends Error {
+  constructor() {
+    super("MODEL_OUTPUT_INVALID");
+    this.name = "ModelObservationError";
+  }
+}
+
+/** No prose extraction, coercion, missing defaults or confidence clamping. */
+export function parseHazardObservation(text: string): HazardImageObservation {
+  if (Buffer.byteLength(text, "utf8") > HAZARD_AI.modelOutputMaxBytes)
+    throw new ModelObservationError();
+  const json = text
+    .trim()
+    .replace(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/, "$1");
+  try {
+    return hazardObservationSchema.parse(JSON.parse(json));
+  } catch {
+    throw new ModelObservationError();
+  }
+}
+
+/** Legacy parser kept only for the historical v1 harness. */
 function skipped(reason = "AI 服務暫時不可用"): AiVerifyResult {
   return { verdict: "skipped", confidence: 0, reason };
 }

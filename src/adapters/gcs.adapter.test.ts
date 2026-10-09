@@ -1,98 +1,211 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Readable, Writable } from "node:stream";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const mockSave = vi.fn().mockResolvedValue(undefined);
-const mockDelete = vi.fn().mockResolvedValue(undefined);
-const mockFile = vi.fn().mockReturnValue({
-  save: mockSave,
-  delete: mockDelete,
-});
-const mockBucket = vi.fn().mockReturnValue({
-  file: mockFile,
-});
-
+const mocks = vi.hoisted(() => ({
+  write: vi.fn(),
+  read: vi.fn(),
+  delete: vi.fn(),
+  file: vi.fn(),
+  bucket: vi.fn(),
+  constructor: vi.fn(),
+}));
 vi.mock("@google-cloud/storage", () => ({
   Storage: class {
-    bucket = mockBucket;
+    constructor(options: unknown) {
+      mocks.constructor(options);
+    }
+    bucket = mocks.bucket;
   },
 }));
-
 import {
   deleteHazardPhoto,
+  getHazardPhotoStoragePath,
   mimeToPhotoExt,
+  readHazardPhoto,
   uploadHazardPhoto,
 } from "./gcs.adapter";
 
+let written: Buffer[];
+const path = "reports/000000000000000000000001.jpg";
 beforeEach(() => {
   vi.clearAllMocks();
-  process.env.GCS_BUCKET_NAME = "test-hazard-bucket";
+  vi.stubEnv("GCS_BUCKET_NAME", "test-hazard-bucket");
+  written = [];
+  mocks.write.mockImplementation(
+    () =>
+      new Writable({
+        write(chunk, _enc, cb) {
+          written.push(Buffer.from(chunk));
+          cb();
+        },
+      }),
+  );
+  mocks.read.mockImplementation(() =>
+    Readable.from([Buffer.from("photo-bytes")]),
+  );
+  mocks.delete.mockResolvedValue(undefined);
+  mocks.file.mockReturnValue({
+    createWriteStream: mocks.write,
+    createReadStream: mocks.read,
+    delete: mocks.delete,
+  });
+  mocks.bucket.mockReturnValue({ file: mocks.file });
+});
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
 });
 
-describe("mimeToPhotoExt", () => {
-  it("maps image/jpeg to jpg", () => {
-    expect(mimeToPhotoExt("image/jpeg")).toBe("jpg");
-  });
-
-  it("maps image/png to png", () => {
-    expect(mimeToPhotoExt("image/png")).toBe("png");
-  });
-
-  it("maps image/webp to webp", () => {
-    expect(mimeToPhotoExt("image/webp")).toBe("webp");
-  });
-
-  it("maps image/heic to heic", () => {
-    expect(mimeToPhotoExt("image/heic")).toBe("heic");
-  });
-
-  it("maps image/heif to heif", () => {
-    expect(mimeToPhotoExt("image/heif")).toBe("heif");
-  });
-
-  it("defaults unknown MIME type to jpg", () => {
+describe("photo extensions and guarded object paths", () => {
+  for (const [mime, ext] of [
+    ["jpeg", "jpg"],
+    ["png", "png"],
+    ["webp", "webp"],
+    ["heic", "heic"],
+    ["heif", "heif"],
+  ]) {
+    it(`maps ${mime}`, () => expect(mimeToPhotoExt(`image/${mime}`)).toBe(ext));
+  }
+  it("retains unknown MIME fallback", () => {
     expect(mimeToPhotoExt("application/octet-stream")).toBe("jpg");
     expect(mimeToPhotoExt("")).toBe("jpg");
   });
+  it("rejects traversal and URLs before contacting storage", () => {
+    for (const id of ["../secret", "https://example.com", "", "a/b"])
+      expect(() => getHazardPhotoStoragePath(id, "image/jpeg")).toThrow(
+        "GCS_INVALID_PATH",
+      );
+    expect(mocks.bucket).not.toHaveBeenCalled();
+  });
 });
 
-describe("uploadHazardPhoto", () => {
-  const formats = [
-    { mime: "image/jpeg", expectedExt: "jpg" },
-    { mime: "image/png", expectedExt: "png" },
-    { mime: "image/webp", expectedExt: "webp" },
-    { mime: "image/heic", expectedExt: "heic" },
-    { mime: "image/heif", expectedExt: "heif" },
-  ];
-
-  for (const { mime, expectedExt } of formats) {
-    it(`uploads ${mime} with .${expectedExt} extension to bucket`, async () => {
+describe("bounded uploads", () => {
+  for (const [mime, ext] of [
+    ["jpeg", "jpg"],
+    ["png", "png"],
+    ["webp", "webp"],
+    ["heic", "heic"],
+    ["heif", "heif"],
+  ]) {
+    it(`streams ${mime} bytes with correct path and cache policy`, async () => {
       const buffer = Buffer.from("photo-bytes");
-      const reportId = "report-123";
-
-      const res = await uploadHazardPhoto(buffer, reportId, mime);
-
-      expect(mockBucket).toHaveBeenCalledWith("test-hazard-bucket");
-      expect(mockFile).toHaveBeenCalledWith(
-        `reports/report-123.${expectedExt}`,
+      const res = await uploadHazardPhoto(
+        buffer,
+        "report-123",
+        `image/${mime}`,
       );
-      expect(mockSave).toHaveBeenCalledWith(buffer, {
-        contentType: mime,
+      expect(mocks.bucket).toHaveBeenCalledWith("test-hazard-bucket");
+      expect(mocks.file).toHaveBeenCalledWith(`reports/report-123.${ext}`);
+      expect(mocks.write).toHaveBeenCalledWith({
+        contentType: `image/${mime}`,
         resumable: false,
-        metadata: { cacheControl: "public, max-age=3600" },
+        timeout: 40000,
+        metadata: { cacheControl: "private, no-store" },
       });
+      expect(Buffer.concat(written)).toEqual(buffer);
       expect(res).toEqual({
-        url: `https://storage.googleapis.com/test-hazard-bucket/reports/report-123.${expectedExt}`,
-        storagePath: `reports/report-123.${expectedExt}`,
+        url: `https://storage.googleapis.com/test-hazard-bucket/reports/report-123.${ext}`,
+        storagePath: `reports/report-123.${ext}`,
       });
     });
   }
+  it("does not return success on a stream permission error", async () => {
+    mocks.write.mockImplementation(
+      () =>
+        new Writable({
+          write(_chunk, _enc, cb) {
+            cb(
+              Object.assign(new Error("private provider detail"), {
+                code: 403,
+              }),
+            );
+          },
+        }),
+    );
+    await expect(
+      uploadHazardPhoto(Buffer.from("x"), "id", "image/jpeg"),
+    ).rejects.toMatchObject({
+      code: "GCS_PERMISSION_DENIED",
+      retryable: false,
+      circuitBreak: true,
+    });
+  });
+  it("destroys a stalled upload at its local deadline", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    mocks.write.mockImplementation(() => new Writable({ write() {} }));
+    const promise = uploadHazardPhoto(Buffer.from("x"), "id", "image/jpeg", {
+      timeoutMs: 5,
+    });
+    const assertion = expect(promise).rejects.toMatchObject({
+      code: "GCS_TIMEOUT",
+    });
+    await vi.advanceTimersByTimeAsync(5);
+    await assertion;
+  });
 });
 
-describe("deleteHazardPhoto", () => {
-  it("deletes file ignoring not-found errors", async () => {
-    await deleteHazardPhoto("reports/report-123.webp");
+describe("bounded canonical reads", () => {
+  it("reads only the stored canonical key with CRC validation", async () => {
+    expect(await readHazardPhoto(path)).toEqual(Buffer.from("photo-bytes"));
+    expect(mocks.read).toHaveBeenCalledWith({
+      decompress: false,
+      validation: "crc32c",
+    });
+  });
+  it("does not fetch arbitrary URLs, alternate formats or traversal", async () => {
+    for (const key of [
+      "https://example.com/image.jpg",
+      "reports/../secret",
+      "reports/report-123.jpg",
+      path.replace(".jpg", ".svg"),
+    ])
+      await expect(readHazardPhoto(key)).rejects.toMatchObject({
+        code: "GCS_INVALID_PATH",
+      });
+    expect(mocks.bucket).not.toHaveBeenCalled();
+  });
+  it("destroys oversized responses instead of buffering unlimited content", async () => {
+    await expect(readHazardPhoto(path, { maxBytes: 3 })).rejects.toMatchObject({
+      code: "GCS_IMAGE_TOO_LARGE",
+    });
+  });
+  it("maps a missing object to terminal failure without provider detail", async () => {
+    mocks.read.mockImplementation(
+      () =>
+        new Readable({
+          read() {
+            this.destroy(
+              Object.assign(new Error("private path"), { code: 404 }),
+            );
+          },
+        }),
+    );
+    await expect(readHazardPhoto(path)).rejects.toMatchObject({
+      code: "GCS_OBJECT_MISSING",
+      retryable: false,
+    });
+  });
+  it("destroys an aborted response", async () => {
+    mocks.read.mockImplementation(() => new Readable({ read() {} }));
+    const controller = new AbortController();
+    const promise = readHazardPhoto(path, { signal: controller.signal });
+    controller.abort();
+    await expect(promise).rejects.toMatchObject({ code: "GCS_ABORTED" });
+  });
+});
 
-    expect(mockBucket).toHaveBeenCalledWith("test-hazard-bucket");
-    expect(mockFile).toHaveBeenCalledWith("reports/report-123.webp");
-    expect(mockDelete).toHaveBeenCalledWith({ ignoreNotFound: true });
+describe("bounded idempotent deletion", () => {
+  it("ignores object absence", async () => {
+    await deleteHazardPhoto(path);
+    expect(mocks.delete).toHaveBeenCalledWith({ ignoreNotFound: true });
+  });
+  it("propagates safe cleanup failures for tombstone retry", async () => {
+    mocks.delete.mockRejectedValue(
+      Object.assign(new Error("credentials"), { code: 403 }),
+    );
+    await expect(deleteHazardPhoto(path)).rejects.toMatchObject({
+      code: "GCS_PERMISSION_DENIED",
+      circuitBreak: true,
+    });
   });
 });

@@ -1,4 +1,8 @@
 import HazardReport from "../../model/hazard-report.model";
+import {
+  INTAKE_COMPLETE,
+  cancelAiReviewStages,
+} from "./hazard-report.predicates";
 
 const EXPIRY_SCAN_INTERVAL_MS = Number(
   process.env.HAZARD_EXPIRY_SCAN_INTERVAL_MS ?? 5 * 60 * 1000,
@@ -13,13 +17,28 @@ const EXPIRY_SCAN_INTERVAL_MS = Number(
  * @returns The number of reports transitioned to `expired`.
  */
 export async function expireStaleReports(): Promise<number> {
+  // One pipeline update expires the report and cancels any queued/processing
+  // AI job (bumping its generation), so a late worker result cannot resurrect
+  // it. Completed/failed reviews keep their history; the expired status and
+  // the unexpired-only queries make them non-actionable.
+  const filter: Record<string, unknown> = {
+    expiredAt: { $lte: new Date() },
+    status: { $in: ["pending", "verified"] },
+    ...INTAKE_COMPLETE,
+  };
   const result = await HazardReport.updateMany(
-    {
-      expiredAt: { $lte: new Date() },
-      status: { $in: ["pending", "verified"] },
-    },
-    // closedAt starts the retention clock; $min keeps an earlier rejection time.
-    { $set: { status: "expired" }, $min: { closedAt: new Date() } },
+    filter,
+    [
+      ...cancelAiReviewStages(),
+      // closedAt starts the retention clock; $min keeps an earlier rejection time.
+      {
+        $set: {
+          status: "expired",
+          closedAt: { $min: ["$closedAt", "$$NOW"] },
+        },
+      },
+    ],
+    { updatePipeline: true },
   );
   return result.modifiedCount ?? 0;
 }

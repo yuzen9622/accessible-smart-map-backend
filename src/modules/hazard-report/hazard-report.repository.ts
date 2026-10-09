@@ -1,16 +1,41 @@
 import { Types } from "mongoose";
+import { DB_OPTIONS } from "./hazard-report.db";
 import HazardReport from "../../model/hazard-report.model";
+import { HAZARD_AI } from "../../config/hazard-ai";
 import type { HazardStatus, HazardType, IHazardReport } from "../../types";
+import {
+  ACTIVE_VERIFIED_CLAUSE,
+  INTAKE_COMPLETE,
+  cancelAiReviewStages,
+  activeDuplicateClause,
+} from "./hazard-report.predicates";
 
 const EARTH_RADIUS_M = 6_371_000;
 
-// Retention bookkeeping (closedAt, contentScrubbedAt, photoDelete) is internal.
-const INTERNAL_SELECT = "-closedAt -contentScrubbedAt -photoDelete";
-const PUBLIC_SELECT = `-reporterId -photoStoragePath -confirmedBy -deniedBy ${INTERNAL_SELECT}`;
-const MINE_SELECT = `-photoStoragePath -confirmedBy -deniedBy ${INTERNAL_SELECT}`;
+// Storage fields and contentScrubbedAt are retained internally to derive hasPhoto;
+// only the whitelist transport view may leave the service.
+const INTERNAL_SELECT = "-closedAt -photoDelete";
+// `+aiReviewJob` is selected only so the view can derive `aiReview.delayed`;
+// the whitelist view in hazard-report.view.ts never copies it out.
+const PUBLIC_SELECT = `-reporterId -confirmedBy -deniedBy ${INTERNAL_SELECT} +aiReviewJob`;
+const MINE_SELECT = `-confirmedBy -deniedBy ${INTERNAL_SELECT} +aiReviewJob`;
+
+function activeVerifiedFilter(now: Date): Record<string, unknown> {
+  return {
+    $and: [
+      INTAKE_COMPLETE,
+      ACTIVE_VERIFIED_CLAUSE,
+      {
+        status: "verified",
+        expiredAt: { $gt: now },
+        contentScrubbedAt: { $exists: false },
+      },
+    ],
+  };
+}
 
 const GEO_SELECT =
-  "hazardType severity description reportedLocation reporterId confirmedBy status expiredAt";
+  "hazardType severity description reportedLocation reporterId confirmedBy status expiredAt aiReview.state aiReview.decision manualReview.decision";
 
 /**
  * Matches reports carrying at least one confirmation from somebody other than
@@ -48,6 +73,8 @@ export type HazardGeoProjection = Pick<
   | "confirmedBy"
   | "status"
   | "expiredAt"
+  | "aiReview"
+  | "manualReview"
 >;
 
 /** The fields a report is created with. */
@@ -65,6 +92,8 @@ export interface HazardReportInsert {
   aiVerification: IHazardReport["aiVerification"];
   status: HazardStatus;
   expiredAt: Date;
+  aiReview?: IHazardReport["aiReview"];
+  aiReviewJob?: IHazardReport["aiReviewJob"];
 }
 
 function nearQuery(lng: number, lat: number, maxDistanceM: number) {
@@ -79,11 +108,18 @@ function nearQuery(lng: number, lat: number, maxDistanceM: number) {
 /**
  * Finds a still-active report of the same type at effectively the same place.
  *
+ * Mergeable: verified, or pending with a queued/processing v2 job whose
+ * deadline is still ahead, or a fresh legacy pending. Settled
+ * needs_evidence / failed / cancelled v2 records and legacy skipped records
+ * older than `staleLegacyBefore` are excluded so a re-shot photo starts a new
+ * review instead of being swallowed as a vote.
+ *
  * @param lat Reported latitude
  * @param lng Reported longitude
  * @param radiusM Dedup radius in metres
  * @param hazardType The hazard type being reported
  * @param now Current time, used to exclude already-expired reports
+ * @param staleLegacyBefore Legacy skipped reports created before this are stalled
  * @returns The duplicate to merge into, or null
  */
 export async function findActiveDuplicate(
@@ -92,13 +128,78 @@ export async function findActiveDuplicate(
   radiusM: number,
   hazardType: HazardType,
   now: Date,
+  staleLegacyBefore: Date,
 ): Promise<HazardReportRecord | null> {
   return HazardReport.findOne({
     reportedLocation: nearQuery(lng, lat, radiusM),
     hazardType,
-    status: { $in: ["pending", "verified"] },
     expiredAt: { $gt: now },
-  }).lean<HazardReportRecord | null>();
+    $and: [
+      INTAKE_COMPLETE,
+      { contentScrubbedAt: { $exists: false } },
+      activeDuplicateClause(now, staleLegacyBefore),
+    ],
+  })
+    .maxTimeMS(HAZARD_AI.dbTimeoutMs)
+    .setOptions(DB_OPTIONS)
+    .lean<HazardReportRecord | null>();
+}
+
+/** Atomically rechecks dedup eligibility even when the caller owns/already voted
+ * the candidate. A failed CAS must create a new intake, never reuse a snapshot. */
+export async function mergeActiveDuplicate(
+  reportId: string,
+  voterId: string,
+  hazardType: HazardType,
+  now: Date,
+  staleLegacyBefore: Date,
+): Promise<HazardReportRecord | null> {
+  const voter = { $literal: voterId };
+  const confirmed = { $ifNull: ["$confirmedBy", []] };
+  const denied = { $ifNull: ["$deniedBy", []] };
+  const addVote = {
+    $and: [
+      { $ne: ["$reporterId", voter] },
+      { $eq: [{ $in: [voter, confirmed] }, false] },
+      { $eq: [{ $in: [voter, denied] }, false] },
+    ],
+  };
+  return HazardReport.findOneAndUpdate(
+    {
+      _id: reportId,
+      hazardType,
+      expiredAt: { $gt: now },
+      $and: [
+        INTAKE_COMPLETE,
+        { contentScrubbedAt: { $exists: false } },
+        activeDuplicateClause(now, staleLegacyBefore),
+      ],
+    },
+    [
+      {
+        $set: {
+          confirmedBy: {
+            $cond: [
+              addVote,
+              { $concatArrays: [confirmed, [voter]] },
+              confirmed,
+            ],
+          },
+          confirmCount: {
+            $cond: [
+              addVote,
+              { $add: [{ $ifNull: ["$confirmCount", 0] }, 1] },
+              { $ifNull: ["$confirmCount", 0] },
+            ],
+          },
+        },
+      },
+    ],
+    { returnDocument: "after", updatePipeline: true },
+  )
+    .maxTimeMS(HAZARD_AI.dbTimeoutMs)
+    .setOptions(DB_OPTIONS)
+    .lean<HazardReportRecord | null>();
 }
 
 /**
@@ -123,6 +224,7 @@ export async function addConfirmation(
       deniedBy: { $ne: voterId },
       // A de-identified report must not collect voter identities again.
       contentScrubbedAt: { $exists: false },
+      ...INTAKE_COMPLETE,
     },
     { $inc: { confirmCount: 1 }, $push: { confirmedBy: voterId } },
     { returnDocument: "after" },
@@ -147,6 +249,7 @@ export async function addDenial(
       confirmedBy: { $ne: voterId },
       deniedBy: { $ne: voterId },
       contentScrubbedAt: { $exists: false },
+      ...INTAKE_COMPLETE,
     },
     { $inc: { denyCount: 1 }, $push: { deniedBy: voterId } },
     { returnDocument: "after" },
@@ -169,7 +272,10 @@ export async function insertReport(
 }
 
 /**
- * Non-expired reports near a point, nearest first.
+ * Reports near a point, nearest first. The default is the active-verified set;
+ * an explicit status list is honoured, but `verified` still means active-
+ * verified and `pending`/`verified` rows must be unexpired. Private intakes
+ * are always excluded.
  *
  * @param lat Latitude of the search centre
  * @param lng Longitude of the search centre
@@ -177,6 +283,7 @@ export async function insertReport(
  * @param statuses Statuses to include
  * @param hazardType Optional hazard-type filter
  * @param limit Maximum rows
+ * @param now Current time
  * @returns Public-projected reports
  */
 export async function findNearbyReports(
@@ -186,15 +293,85 @@ export async function findNearbyReports(
   statuses: HazardStatus[],
   hazardType: HazardType | undefined,
   limit: number,
+  now: Date,
 ): Promise<Record<string, unknown>[]> {
+  const perStatus = statuses.map((status) => {
+    if (status === "verified") return activeVerifiedFilter(now);
+    if (status === "pending") {
+      return {
+        status,
+        expiredAt: { $gt: now },
+        contentScrubbedAt: { $exists: false },
+      };
+    }
+    return { status };
+  });
   return HazardReport.find({
     reportedLocation: nearQuery(lng, lat, radiusM),
-    status: { $in: statuses },
     ...(hazardType ? { hazardType } : {}),
+    $and: [INTAKE_COMPLETE, { $or: perStatus }],
   })
     .select(PUBLIC_SELECT)
     .limit(limit)
+    .maxTimeMS(HAZARD_AI.dbTimeoutMs)
+    .setOptions(DB_OPTIONS)
     .lean<Record<string, unknown>[]>();
+}
+
+/**
+ * Active verified hazards (intake complete, unexpired, unscrubbed, supported or
+ * human-verified) inside a circle, for summaries that need machine-safe data.
+ *
+ * @param center Circle centre
+ * @param radiusM Circle radius in metres
+ * @param limit Hard cap
+ * @param hazardType Optional type filter
+ * @param now Current time
+ */
+export async function findActiveVerifiedWithin(
+  center: { lat: number; lng: number },
+  radiusM: number,
+  limit: number,
+  hazardType: HazardType | undefined,
+  now: Date,
+): Promise<Record<string, unknown>[]> {
+  return HazardReport.find({
+    // $near orders by distance before limit, so busy areas don't hide the nearest.
+    reportedLocation: nearQuery(center.lng, center.lat, radiusM),
+    ...(hazardType ? { hazardType } : {}),
+    ...activeVerifiedFilter(now),
+  })
+    .select(
+      "hazardType severity reportedLocation expiredAt aiReview manualReview.decision",
+    )
+    .limit(limit)
+    .maxTimeMS(HAZARD_AI.dbTimeoutMs)
+    .setOptions(DB_OPTIONS)
+    .lean<Record<string, unknown>[]>();
+}
+
+/**
+ * Number of active verified hazards inside a circle.
+ *
+ * @param center Circle centre
+ * @param radiusM Circle radius in metres
+ * @param now Current time
+ */
+export async function countActiveVerifiedWithin(
+  center: { lat: number; lng: number },
+  radiusM: number,
+  now: Date,
+): Promise<number> {
+  return HazardReport.countDocuments({
+    reportedLocation: {
+      $geoWithin: {
+        $centerSphere: [[center.lng, center.lat], radiusM / EARTH_RADIUS_M],
+      },
+    },
+    ...activeVerifiedFilter(now),
+  })
+    .maxTimeMS(HAZARD_AI.dbTimeoutMs)
+    .setOptions(DB_OPTIONS);
 }
 
 /**
@@ -221,8 +398,7 @@ export async function findConfirmedWithin(
         $centerSphere: [[center.lng, center.lat], radiusM / EARTH_RADIUS_M],
       },
     },
-    status: "verified",
-    expiredAt: { $gt: now },
+    ...activeVerifiedFilter(now),
     $expr: INDEPENDENT_CONFIRMATION_EXPR,
   })
     .select(GEO_SELECT)
@@ -240,7 +416,7 @@ export async function findPublicReportById(
   id: string,
 ): Promise<Record<string, unknown> | null> {
   if (!Types.ObjectId.isValid(id)) return null;
-  return HazardReport.findById(id)
+  return HazardReport.findOne({ _id: id, ...INTAKE_COMPLETE })
     .select(PUBLIC_SELECT)
     .lean<Record<string, unknown> | null>();
 }
@@ -262,7 +438,7 @@ export async function findReportsByReporter(
   },
   limit: number,
 ): Promise<(Record<string, unknown> & { _id: unknown })[]> {
-  const query: Record<string, unknown> = { reporterId };
+  const query: Record<string, unknown> = { reporterId, ...INTAKE_COMPLETE };
   if (filter.statuses?.length) query.status = { $in: filter.statuses };
   if (filter.hazardType) query.hazardType = filter.hazardType;
   if (filter.cursor && Types.ObjectId.isValid(filter.cursor)) {
@@ -286,7 +462,13 @@ export async function findReportById(
   id: string,
 ): Promise<HazardReportRecord | null> {
   if (!Types.ObjectId.isValid(id)) return null;
-  return HazardReport.findById(id).lean<HazardReportRecord | null>();
+  return HazardReport.findOne({
+    _id: id,
+    ...INTAKE_COMPLETE,
+  })
+    .maxTimeMS(HAZARD_AI.dbTimeoutMs)
+    .setOptions(DB_OPTIONS)
+    .lean<HazardReportRecord | null>();
 }
 
 /**
@@ -308,8 +490,12 @@ export async function findReviewQueueReports(
   cursor: string | undefined,
   limit: number,
 ): Promise<(Record<string, unknown> & { _id: unknown })[]> {
+  // v2 failed / needs_evidence / queued records never enter the routine human
+  // queue (AI-first); an admin can still act on them by id.
   const query: Record<string, unknown> = {
     status: "pending",
+    aiReview: { $exists: false },
+    ...INTAKE_COMPLETE,
     $or: [
       { "aiVerification.verdict": "suspicious" },
       {
@@ -347,15 +533,31 @@ export async function setManualReview(
   },
 ): Promise<HazardReportRecord | null> {
   // Rejecting closes the report (keeping an earlier close time); verifying
-  // reopens it, so its retention clock restarts at the next close.
-  const closure =
-    manualReview.decision === "rejected"
-      ? { $min: { closedAt: manualReview.reviewedAt } }
-      : { $unset: { closedAt: "" } };
+  // reopens it, so its retention clock restarts at the next close. One
+  // pipeline update also cancels any active AI job and bumps its generation so
+  // a late worker result cannot overwrite the human decision.
+  const rejected = manualReview.decision === "rejected";
   return HazardReport.findOneAndUpdate(
-    { _id: reportId, contentScrubbedAt: { $exists: false } },
-    { $set: { manualReview, status: manualReview.decision }, ...closure },
-    { returnDocument: "after" },
+    {
+      _id: reportId,
+      contentScrubbedAt: { $exists: false },
+      ...INTAKE_COMPLETE,
+    },
+    [
+      ...cancelAiReviewStages(),
+      {
+        $set: {
+          // $literal keeps a note starting with "$" from being parsed as an
+          // aggregation expression.
+          manualReview: { $literal: manualReview },
+          status: manualReview.decision,
+          closedAt: rejected
+            ? { $min: ["$closedAt", manualReview.reviewedAt] }
+            : "$$REMOVE",
+        },
+      },
+    ],
+    { returnDocument: "after", updatePipeline: true },
   ).lean<HazardReportRecord | null>();
 }
 
@@ -404,8 +606,17 @@ export async function scrubReportContent(
   const result = await HazardReport.updateOne(
     { _id: reportId, ...scrubDueFilter(cutoff) },
     [
+      // Cancel any active AI job first so no late result can restore content.
+      ...cancelAiReviewStages(),
       {
         $set: {
+          aiReview: {
+            $cond: [
+              { $eq: [{ $type: "$aiReview" }, "object"] },
+              { $mergeObjects: ["$aiReview", { reason: "[redacted]" }] },
+              "$$REMOVE",
+            ],
+          },
           reporterId: pseudonym,
           confirmedBy: [],
           deniedBy: [],
@@ -419,6 +630,16 @@ export async function scrubReportContent(
               "$$REMOVE",
             ],
           },
+          // A ready intake is only commit bookkeeping; the photo deletion
+          // phase already owns photoStoragePath. Keep cleanup/uploading
+          // tombstones, whose known key is still needed for late-upload cleanup.
+          photoIntake: {
+            $cond: [
+              { $eq: ["$photoIntake.state", "ready"] },
+              "$$REMOVE",
+              "$photoIntake",
+            ],
+          },
           contentScrubbedAt: "$$NOW",
         },
       },
@@ -430,6 +651,9 @@ export async function scrubReportContent(
           "exifValidation.rawExifLng",
           "aiVerification.prefilter.detectedLabels",
           "manualReview.note",
+          "aiReview.observations",
+          "aiReview.limitations",
+          "aiReviewJob",
         ],
       },
     ],

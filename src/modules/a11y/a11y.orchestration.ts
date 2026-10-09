@@ -6,7 +6,7 @@ import {
 } from "../../utils/metro-notice";
 import * as campusService from "../campus/campus.service";
 import type { CampusFacilityPlace } from "../campus/campus.service";
-import { findNearby as findNearbyReports } from "../hazard-report/hazard-report.service";
+import { countActiveHazardsNear } from "../hazard-report/hazard-report.service";
 import {
   bumpCategory,
   computeVerdict,
@@ -288,16 +288,15 @@ export async function assessQuickAccess(input: {
   const [own, campus, hazard] = await Promise.all([
     countOwnQuickAssess(lat, lng, radiusM),
     campusService.findFacilitiesNearby(lat, lng, radiusM),
-    findNearbyReports({ lat, lng, radius: radiusM }).catch(() => null),
+    countActiveHazardsNear({ lat, lng }, radiusM).catch(() => 0),
   ]);
 
   const counts = own.counts;
   for (const f of campus) bumpCategory(counts, mapCampusCategory(f.type));
 
-  const activeHazardReports =
-    hazard && hazard.ok && hazard.data
-      ? ((hazard.data as { total?: number }).total ?? 0)
-      : 0;
+  // Active verified hazards only: queued, unproven, failed and duplicate
+  // re-shot reports must not inflate the pre-trip verdict.
+  const activeHazardReports = hazard;
 
   const verdict = computeVerdict(counts, activeHazardReports, mode);
   const summary = buildQuickAssessSummary(

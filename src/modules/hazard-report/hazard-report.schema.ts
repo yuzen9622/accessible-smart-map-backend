@@ -1,6 +1,7 @@
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 import { registry } from "../../openapi/registry";
+import { HAZARD_AI_ALERT_CODES } from "../../config/hazard-ai";
 
 extendZodWithOpenApi(z);
 
@@ -91,6 +92,12 @@ export const ReportIdParamSchema = z
   })
   .strict();
 
+export const PhotoReportIdParamSchema = z
+  .object({
+    id: z.string().regex(/^[0-9a-fA-F]{24}$/),
+  })
+  .strict();
+
 export const ConfirmSchema = z
   .object({
     action: z.enum(["confirm", "deny"]).openapi({ example: "confirm" }),
@@ -118,6 +125,8 @@ export const ReviewDecisionSchema = z
   })
   .strict();
 
+export const AiMetricsQuerySchema = z.object({}).strict();
+
 const GeoPointSchema = z
   .object({
     type: z.literal("Point").openapi({ example: "Point" }),
@@ -126,6 +135,56 @@ const GeoPointSchema = z
       .openapi({ example: [121.5654, 25.033] }),
   })
   .openapi("HazardGeoPoint");
+
+const AI_STATES = [
+  "queued",
+  "processing",
+  "completed",
+  "failed",
+  "cancelled",
+] as const;
+const AI_DECISIONS = ["supported", "needs_evidence", "unsupported"] as const;
+const REQUIRED_EVIDENCE = [
+  "wider_view",
+  "clearer_image",
+  "matching_hazard",
+  "map_reference",
+] as const;
+const VISIBLE_HAZARDS = [
+  "vehicle",
+  "construction",
+  "steps",
+  "debris",
+  "blocked_path",
+  "other_obstacle",
+] as const;
+
+const AiReviewSchema = z
+  .object({
+    version: z.literal(2),
+    state: z.enum(AI_STATES).openapi({ example: "queued" }),
+    decision: z.enum(AI_DECISIONS).optional().openapi({
+      description:
+        "僅 completed 才有。supported 代表照片支持回報，不等同現地已獨立核實。",
+    }),
+    reasonCode: z.string().openapi({ example: "QUEUED" }),
+    reason: z.string().openapi({ example: "影像辨識排隊中" }),
+    observations: z.array(z.string()).optional(),
+    limitations: z.array(z.string()).optional(),
+    requiredEvidence: z.array(z.enum(REQUIRED_EVIDENCE)).optional(),
+    visibleHazards: z.array(z.enum(VISIBLE_HAZARDS)).optional(),
+    queuedAt: z.string().optional(),
+    startedAt: z.string().optional(),
+    completedAt: z.string().optional(),
+    delayed: z.boolean().optional().openapi({
+      description:
+        "queued/processing 已超過工作期限（worker 或資料庫不可用）；請手動刷新或重新提交。",
+    }),
+  })
+  .openapi("HazardAiReview", {
+    description:
+      "v2 AI 審核狀態（舊回報沒有此欄位）。以純文字顯示 reason／observations。",
+  });
 
 const HazardReportSchema = z
   .object({
@@ -145,10 +204,9 @@ const HazardReportSchema = z
       .string()
       .optional()
       .openapi({ example: "人行道上有施工鐵板未固定" }),
-    photoUrl: z.string().optional().openapi({
-      example: "https://storage.googleapis.com/bucket/reports/6670abc.jpg",
-      description:
-        "回報照片。回報過期或被拒絕滿 90 天後照片依隱私政策刪除，此欄位即不再出現。",
+    hasPhoto: z.boolean().openapi({
+      example: true,
+      description: "照片是否仍保留；讀取照片仍須本人或管理員授權。",
     }),
     status: z.enum(STATUSES).openapi({ example: "pending" }),
     exifValidation: z
@@ -167,6 +225,7 @@ const HazardReportSchema = z
         reason: z.string().openapi({ example: "影像辨識進行中" }),
       })
       .optional(),
+    aiReview: AiReviewSchema.optional(),
     confirmCount: z.number().openapi({ example: 0 }),
     denyCount: z.number().openapi({ example: 0 }),
     manualReview: z
@@ -252,6 +311,95 @@ export const ReviewDecisionResponseSchema = ApiResponseSchema(
   "HazardReviewDecisionResponse",
 );
 
+export const HazardAiMetricsDataSchema = z
+  .object({
+    checkedAt: z.string().datetime(),
+    mongoAvailable: z.boolean(),
+    health: z
+      .object({
+        running: z.boolean(),
+        paused: z.boolean(),
+        active: z.number().int().nonnegative(),
+        circuitOpen: z.boolean(),
+        lastPollAt: z.string().datetime().nullable(),
+        lastMaintenanceAt: z.string().datetime().nullable(),
+        lastCleanupAt: z.string().datetime().nullable(),
+        lastConvergenceAt: z.string().datetime().nullable(),
+        counters: z
+          .object({
+            claimed: z.number().int().nonnegative(),
+            completed: z.number().int().nonnegative(),
+            retried: z.number().int().nonnegative(),
+            failed: z.number().int().nonnegative(),
+            dropped: z.number().int().nonnegative(),
+            aborted: z.number().int().nonnegative(),
+          })
+          .strict(),
+      })
+      .strict()
+      .nullable(),
+    queue: z
+      .object({
+        queued: z.number().int().nonnegative(),
+        processing: z.number().int().nonnegative(),
+        expiredLease: z.number().int().nonnegative(),
+        oldestQueuedAgeMs: z.number().nonnegative().nullable(),
+      })
+      .strict()
+      .nullable(),
+    intake: z
+      .object({
+        uploading: z.number().int().nonnegative(),
+        cleanupPending: z.number().int().nonnegative(),
+        cleanupOverdue: z.number().int().nonnegative(),
+      })
+      .strict()
+      .nullable(),
+    alerts: z.array(z.enum(HAZARD_AI_ALERT_CODES)),
+  })
+  .strict()
+  .openapi("HazardAiMetrics");
+
+registry.registerPath({
+  method: "get",
+  path: "/a11y/reports/ops/metrics",
+  tags: ["Hazard Report"],
+  summary: "影像審核維運指標（管理員）",
+  description:
+    "僅 role=admin；no-store、single-flight、五秒硬期限。回傳本 process worker 的健康狀態及共享 Mongo 佇列／intake 聚合計數，不含照片、個資、ID、路徑或原始錯誤。AI_PAUSED 為明確設定資訊；其他 alerts 應送維運告警。公開 /health 保留 HTTP 200 liveness，只顯示粗粒度狀態，不提供詳細指標。",
+  security: [{ bearerAuth: [] }],
+  request: { query: AiMetricsQuerySchema },
+  responses: {
+    200: {
+      description: "監測可用（可能有 paused／aging 等 alerts）",
+      content: {
+        "application/json": {
+          schema: ApiResponseSchema(
+            HazardAiMetricsDataSchema,
+            "HazardAiMetricsResponse",
+          ),
+        },
+      },
+    },
+    400: { description: "不接受額外查詢參數" },
+    401: { description: "token 過期" },
+    403: { description: "未提供 token、token 無效或非管理員" },
+    429: { description: "查詢過於頻繁（與 nearby 共用 30/min 配額）" },
+    503: {
+      description:
+        "Mongo 不可用／逾時或 worker 尚未啟動／已停止；data 仍含受控 alerts，queue／intake 在 Mongo 失敗時為 null",
+      content: {
+        "application/json": {
+          schema: ApiResponseSchema(
+            HazardAiMetricsDataSchema,
+            "HazardAiMetricsUnavailableResponse",
+          ),
+        },
+      },
+    },
+  },
+});
+
 registry.registerPath({
   method: "post",
   path: "/a11y/reports",
@@ -285,9 +433,21 @@ registry.registerPath({
       description: "回報已建立（pending），含 _id 供輪詢",
       content: { "application/json": { schema: CreateReportResponseSchema } },
     },
-    400: { description: "驗證失敗（EXIF/照片）" },
+    200: {
+      description:
+        "已合併至附近既有回報（data.merged=true，data.photoReviewed=false）",
+      content: { "application/json": { schema: CreateReportResponseSchema } },
+    },
+    400: {
+      description:
+        "驗證失敗：EXIF_TOO_OLD、EXIF_GPS_MISMATCH、IMAGE_INVALID、IMAGE_UNSUPPORTED、IMAGE_TOO_LARGE 等",
+    },
     429: { description: "回報過於頻繁" },
-    500: { description: "照片上傳或伺服器錯誤" },
+    500: { description: "照片上傳失敗（UPLOAD_FAILED）" },
+    503: {
+      description:
+        "PHOTO_PROCESSING_UNAVAILABLE（照片處理忙碌）或 REPORT_COMMIT_UNCERTAIN（儲存結果未確認，data.reportId 可供稍後查詢；GET 在就緒前回 404）",
+    },
   },
 });
 
@@ -297,7 +457,7 @@ registry.registerPath({
   tags: ["Hazard Report"],
   summary: "查詢附近路況回報",
   description:
-    "以 $near 回傳指定座標半徑內的回報（預設排除 expired/rejected），依距離排序。",
+    "以 $near 回傳指定座標半徑內的回報，依距離排序。預設只回傳「有效且已核可」的回報（AI 判定 supported 或人工核可、未過期；舊版 verified 維持原行為）；排隊中、辨識中、證據不足、失敗或已取消的待審回報不在預設清單內，請改用 GET /a11y/reports/{id}、/a11y/reports/mine，或明確指定 status=pending（回傳未核實資料，請依 aiReview 呈現）。行為變更：先前預設含 pending。",
   request: { query: NearbyReportsQuerySchema },
   responses: {
     200: {
@@ -332,7 +492,8 @@ registry.registerPath({
   path: "/a11y/reports/{id}",
   tags: ["Hazard Report"],
   summary: "取得單一回報",
-  description: "依 ID 回傳單筆回報，供前端輪詢最新 status 與 aiVerification。",
+  description:
+    "依 ID 回傳單筆回報，供前端輪詢最新 status、aiVerification 與 aiReview（queued/processing 才需輪詢）。尚未完成照片接收的私有回報回 404。",
   request: { params: ReportIdParamSchema },
   responses: {
     200: {
@@ -372,7 +533,7 @@ registry.registerPath({
   tags: ["Hazard Report"],
   summary: "待人工審核回報清單（管理員）",
   description:
-    "回傳需要人工審核的回報：AI 判定 suspicious，或 AI 判定 skipped 且建立時間已超過設定的逾時門檻（預設 10 分鐘，代表 AI 服務失敗而非處理中），以建立時間由舊到新排序。僅限 role=admin。",
+    "回傳需要人工審核的舊版（無 aiReview）回報：AI 判定 suspicious，或 AI 判定 skipped 且建立時間已超過設定的逾時門檻（預設 10 分鐘），以建立時間由舊到新排序。v2 的 failed／needs_evidence 不進例行佇列，管理員仍可依 ID 審核。僅限 role=admin。",
   security: [{ bearerAuth: [] }],
   request: { query: ReviewQueueQuerySchema },
   responses: {
@@ -407,5 +568,32 @@ registry.registerPath({
     403: { description: "非管理員" },
     404: { description: "找不到對應的回報" },
     410: { description: "回報已依隱私政策去識別化，無法再審核" },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/a11y/reports/{id}/photo",
+  tags: ["Hazard Report"],
+  summary: "取得私人回報照片（本人或管理員）",
+  description:
+    "先驗證授權再讀私人 bucket；含過期回報。回傳 JPEG bytes，不重新導向。Cache-Control: private, no-store。",
+  security: [{ bearerAuth: [] }],
+  request: { params: PhotoReportIdParamSchema },
+  responses: {
+    200: {
+      description: "可解碼圖片",
+      content: {
+        "image/jpeg": {
+          schema: z.string().openapi({ type: "string", format: "binary" }),
+        },
+      },
+    },
+    400: { description: "無效的回報 ID" },
+    401: { description: "未登入或 token 過期" },
+    403: { description: "token 無效" },
+    404: { description: "無存取權、回報或照片不存在、已清除" },
+    429: { description: "請求過於頻繁" },
+    503: { description: "儲存或照片處理暫時不可用，可重試" },
   },
 });

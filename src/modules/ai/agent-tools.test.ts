@@ -33,7 +33,7 @@ vi.mock("../campus/campus.service", () => ({
   listSchools: vi.fn(),
 }));
 vi.mock("../hazard-report/hazard-report.service", () => ({
-  findNearby: vi.fn(),
+  findActiveHazardsForAgent: vi.fn(),
 }));
 vi.mock("../traffic/road-incident.service", () => ({
   getActiveRoadIncidents: vi.fn(async () => []),
@@ -150,9 +150,10 @@ const mockCampusFindAll = campusService.findAll as unknown as ReturnType<
 >;
 const mockCampusFindByCampusId =
   campusService.findByCampusId as unknown as ReturnType<typeof vi.fn>;
-const mockHazardFindNearby = hazardService.findNearby as unknown as ReturnType<
-  typeof vi.fn
->;
+const mockHazardFindNearby =
+  hazardService.findActiveHazardsForAgent as unknown as ReturnType<
+    typeof vi.fn
+  >;
 const mockA11yParking = a11yService.findNearbyParking as unknown as ReturnType<
   typeof vi.fn
 >;
@@ -492,12 +493,11 @@ describe("campus accessibility agent tools", () => {
 // getNearbyHazards
 // ---------------------------------------------------------------------------
 describe("getNearbyHazards", () => {
-  const hazardResult = {
-    ok: true,
-    httpCode: 200,
-    message: "找到 2 筆附近路況回報",
-    data: { reports: [{ id: "a" }, { id: "b" }], total: 2 },
-  };
+  // The machine-safe projection: no description, photo or identity fields.
+  const hazardResult = [
+    { id: "a", hazardType: "obstacle", verification: "photo_supported" },
+    { id: "b", hazardType: "obstacle", verification: "legacy" },
+  ];
 
   it("同時回傳附近的政府道路施工事件，最近的在前且標 source", async () => {
     mockHazardFindNearby.mockResolvedValue(hazardResult);
@@ -569,9 +569,11 @@ describe("getNearbyHazards", () => {
     expect(mockHazardFindNearby).toHaveBeenCalledWith({
       lat: 25.05,
       lng: 121.51,
-      radius: undefined,
+      radiusM: undefined,
       hazardType: undefined,
     });
+    // Only the projected reports reach the LLM; no raw service envelope.
+    expect(result.data.reports).toEqual(hazardResult);
   });
 
   it("用地名 geocode 後查詢", async () => {
@@ -612,7 +614,7 @@ describe("getNearbyHazards", () => {
     mockHazardFindNearby.mockResolvedValue(hazardResult);
     await getNearbyHazards({ latitude: 25, longitude: 121, radiusM: 1000 });
     expect(mockHazardFindNearby).toHaveBeenCalledWith(
-      expect.objectContaining({ radius: 1000 }),
+      expect.objectContaining({ radiusM: 1000 }),
     );
   });
 
@@ -1281,10 +1283,7 @@ describe("executeLocalTool dispatches new tools", () => {
   });
 
   it("getNearbyHazards 走到正確函式", async () => {
-    mockHazardFindNearby.mockResolvedValue({
-      ok: true,
-      data: { reports: [], total: 0 },
-    });
+    mockHazardFindNearby.mockResolvedValue([]);
     const raw = await executeLocalTool(
       "getNearbyHazards",
       { latitude: 25, longitude: 121 },

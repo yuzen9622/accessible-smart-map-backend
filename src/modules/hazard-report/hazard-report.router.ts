@@ -6,22 +6,28 @@ import {
   createReport,
   getNearbyReports,
   getReport,
+  getReportPhoto,
   getMyReports,
   confirmReport,
   getReviewQueue,
   reviewReport,
+  getAiMetrics,
 } from "./hazard-report.controller";
 import {
   CreateHazardReportSchema,
   NearbyReportsQuerySchema,
   MyReportsQuerySchema,
   ReportIdParamSchema,
+  PhotoReportIdParamSchema,
   ConfirmSchema,
   ReviewQueueQuerySchema,
   ReviewDecisionSchema,
+  AiMetricsQuerySchema,
 } from "./hazard-report.schema";
 import {
   uploadPhoto,
+  privatePhotoHeaders,
+  requirePhotoLogin,
   postReportsLimiter,
   confirmLimiter,
   nearbyLimiter,
@@ -65,9 +71,28 @@ export function createHazardReportRouter(): Router {
   );
 
   router.get(
+    "/reports/ops/metrics",
+    middleware,
+    requireAdmin,
+    nearbyLimiter,
+    validateRequest({ query: AiMetricsQuerySchema }),
+    getAiMetrics,
+  );
+
+  router.get(
+    "/reports/:id/photo",
+    privatePhotoHeaders,
+    requirePhotoLogin,
+    nearbyLimiter,
+    validateRequest({ params: PhotoReportIdParamSchema }),
+    getReportPhoto,
+  );
+
+  router.get(
     "/reports/:id",
     validateRequest({ params: ReportIdParamSchema }),
     getReport,
+    getReportPhoto,
   );
 
   router.post(

@@ -920,18 +920,19 @@ export async function getNearbyHazards(args: {
         error: "缺少位置資訊（query 或 lat/lng 必填）",
       });
     }
-    const [result, roadEvents] = await Promise.all([
-      hazardService.findNearby({
+    const [reports, roadEvents] = await Promise.all([
+      hazardService.findActiveHazardsForAgent({
         lat: latitude,
         lng: longitude,
-        radius: args.radiusM,
+        radiusM: args.radiusM,
         hazardType: args.hazardType as any,
       }),
       nearbyRoadEvents(latitude, longitude, args.radiusM, args.hazardType),
     ]);
+    // Machine-safe projection: controlled enums only, never user free text.
     return JSON.stringify({
-      ok: result.ok,
-      data: { ...(result.data as object), roadEvents },
+      ok: true,
+      data: { reports, total: reports.length, roadEvents },
     });
   } catch (error: any) {
     console.error("[agent-tool:getNearbyHazards]", error);

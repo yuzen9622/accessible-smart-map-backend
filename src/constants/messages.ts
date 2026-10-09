@@ -154,6 +154,11 @@ export const HAZARD_REASON = {
   ALREADY_VOTED: "ALREADY_VOTED",
   SELF_CONFIRMATION: "SELF_CONFIRMATION",
   REPORT_EXPIRED: "REPORT_EXPIRED",
+  IMAGE_INVALID: "IMAGE_INVALID",
+  IMAGE_UNSUPPORTED: "IMAGE_UNSUPPORTED",
+  IMAGE_TOO_LARGE: "IMAGE_TOO_LARGE",
+  PHOTO_PROCESSING_UNAVAILABLE: "PHOTO_PROCESSING_UNAVAILABLE",
+  REPORT_COMMIT_UNCERTAIN: "REPORT_COMMIT_UNCERTAIN",
 } as const;
 
 /**
@@ -198,6 +203,15 @@ export const HAZARD_MSG = {
   ALREADY_VOTED: "您已對此回報投過票",
   SELF_CONFIRMATION: "無法確認自己提交的回報",
   REPORT_EXPIRED: "此回報已過期，無法投票",
+  IMAGE_INVALID: "照片損毀或內容與格式不符，請重新拍攝或選擇其他照片",
+  IMAGE_UNSUPPORTED: "不支援此照片格式，請改用 JPEG、PNG、WebP、HEIC 或 HEIF",
+  IMAGE_TOO_LARGE: "照片解析度或檔案過大，請縮小後重試",
+  PHOTO_PROCESSING_UNAVAILABLE: "照片處理服務忙碌中，請稍後重試",
+  REPORT_COMMIT_UNCERTAIN: "回報儲存結果尚未確認，請稍後查詢，或重新提交",
+  AI_QUEUED: "影像辨識排隊中",
+  AI_FAILED: "影像審核暫時無法完成，請稍後重新提交",
+  AI_METRICS_OK: "影像審核維運狀態",
+  AI_METRICS_UNAVAILABLE: "影像審核維運監測暫時不可用",
   CREATED: "回報已提交，正在進行影像驗證",
   MERGED: "已合併至附近的既有回報",
   CONFIRMED: "已確認此回報",

@@ -6,6 +6,7 @@ import express, {
 } from "express";
 import compression from "compression";
 import cors from "cors";
+import { getCorsOptions } from "./config/cors";
 import helmet from "helmet";
 import cookieParser from "cookie-parser";
 import { apiReference } from "@scalar/express-api-reference";
@@ -27,7 +28,10 @@ import { authCacheControl, createUserRouter } from "./modules/user";
 import { createAirRouter } from "./modules/air";
 import { createTrafficRouter } from "./modules/traffic";
 import { createAiRouter, parseRouteIntent } from "./modules/ai";
-import { createHazardReportRouter } from "./modules/hazard-report";
+import {
+  createHazardReportRouter,
+  getHazardAiPublicHealth,
+} from "./modules/hazard-report";
 import { createEnvironmentRouter } from "./modules/environment";
 import { createWelfareRouter } from "./modules/welfare";
 import { createVisualA11yRouter } from "./modules/visual-a11y";
@@ -78,10 +82,7 @@ app.use(
   }),
 );
 
-const corsOrigins = process.env.CORS_ORIGINS?.split(",")
-  .map((o) => o.trim())
-  .filter(Boolean) ?? ["http://localhost:3000"];
-app.use(cors({ origin: corsOrigins, credentials: true }));
+app.use(cors(getCorsOptions()));
 
 if (process.env.NODE_ENV !== "test") {
   app.use(createAccessLogger());
@@ -98,8 +99,12 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 app.get("/health", (_req: Request, res: Response) => {
   const freshness = getTransitDataFreshness();
+  const hazardReview = getHazardAiPublicHealth();
+  // Preserve this endpoint's HTTP-200 liveness contract. Detailed readiness
+  // and aggregate alerts belong to the authenticated operations endpoint.
   res.status(ResponseCode.OK).json({
-    status: "OK",
+    status: hazardReview.degraded ? "DEGRADED" : "OK",
+    hazardReview,
     message: "Server is running",
     timestamp: new Date().toISOString(),
     ...(freshness
