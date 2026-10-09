@@ -2,7 +2,7 @@
 
 **端點**：`POST /api/v1/ai/chat`
 **狀態**：Active — 反映 repo 現行實作
-**日期**：2026-06-30（2026-10-05 校正工具目錄與 tool loop）
+**日期**：2026-06-30（2026-10-09 更新 AI 路線一致性契約）
 **SDK**：原生 `@google/genai` Interactions API（stateful）；工具仍以 OpenAI function schema 定義，由 `tool-catalog.ts` 轉成 Gemini 宣告
 
 > 本文件描述「目前程式碼實際掛載的工具與回傳形狀」。
@@ -22,7 +22,7 @@
 ## 0. 概覽
 
 - **工具目錄**：`/ai/chat` 與語音 = `openAiChatTools`（23 個）＋（**僅登入且允許記憶時**）`memoryTools`（2 個），最多 **25 個**。LINE 家人 agent 另加 `lineFamilyTools`（12 個，見 §8），共 35 個。
-- **回傳**：每個工具一律回傳 **JSON 字串**（`executeLocalTool` → `JSON.stringify(...)`）。tool loop 會 `JSON.parse` 後包成 Gemini 的 `functionResponse: { name, response }`；若解析非物件則包成 `{ result: <值> }`。
+- **回傳**：底層 `executeLocalTool` 回傳 JSON 字串；AI／語音／LINE 的路線 executor 轉成 `{ clientResult, modelResult }`。前端收到完整路線，Interactions function_result／Live function response 收到相同資料的模型投影，不含 polyline、routeToken 或設施大陣列。
 
 ### 回傳信封慣例
 
@@ -34,7 +34,7 @@
 | 公車失敗     | `{ ok: false, error, status: 400\|404\|500 }`（透傳 service）   | 5 個公車工具                 |
 
 - **成功/失敗判定**（`isSuccessResult`）：解析後只要 `parsed.error` 為真 **或** `parsed.ok === false` 視為失敗。
-- **快取**（`stableCacheKey`）：同名同參只快取「成功」結果。注意 `findGooglePlaces` 的 `ZERO_RESULTS`（無 `error`、無 `ok:false`）會被當成功而快取。
+- **快取**（`stableCacheKey`）：成功結果按同名同參快取；失敗允許一次重試後也快取，以免耗盡回合。新路線成功時清除舊規劃與指引快取。注意 `findGooglePlaces` 的 `ZERO_RESULTS`（無 `error`、無 `ok:false`）會被當成功而快取。
 
 ---
 
@@ -56,6 +56,9 @@
   "stream": "boolean", // 預設 false
   "temperature": "number", // 0~2，預設 0.2（工具迴圈內固定 0）
   "userLocation": { "latitude": "number", "longitude": "number" }, // 選填
+  "routeContractVersion": 1, // 選填；新前端應送
+  "routeContext": { "routeToken": "伺服器發出的短效 token" }, // 或 null 清除
+  "routingPreferences": { "mode": "wheelchair", "transitPreference": "bus" }, // 選填預設
 }
 ```
 
@@ -63,13 +66,13 @@
 
 | event         | data                     | 時機                                  |
 | ------------- | ------------------------ | ------------------------------------- |
-| `tool_call`   | `{ name, args }`         | 某工具開始執行                        |
-| `tool_result` | `{ name, result }`       | 該工具解析後結果（＝本文件各 result） |
+| `tool_call`   | `{ name, args, callId }`         | 某工具開始執行                        |
+| `tool_result` | `{ name, result, summary, callId }`       | 該工具解析後結果（＝本文件各 result） |
 | `token`       | `{ text }`               | 最終回答逐塊串流                      |
 | `done`        | `done`                   | 結束                                  |
 | `error`       | `{ code: 500, message }` | 例外（其後仍補 `done`）               |
 
-> 工具事件（`tool_call` / `tool_result`）會在「最終回答串流」**之前**全部送完：tool-loop 跑完才開始 stream 文字。
+> 工具事件（`tool_call` / `tool_result`）會在「最終回答串流」**之前**全部送完：含工具的回合若混有文字會先捨棄，無工具的回答回合完成後依原 chunks 輸出。最終強制回答仍支援逐塊串流。
 
 ### stream: false — 標準 ApiResponse 包 OpenAI chat.completion
 
@@ -127,7 +130,8 @@ IBathroom  = { _id; county; village; name; address; administration;
 IDisabledParking = { _id; city; district; quantity; placeName;
                chargeType; spaceLabel; isMarked; latitude; longitude; location }
 
-// planAccessibleRoute 的 leg union（summarizeLeg 精簡後）
+// 常用 leg 事實欄位示意。前端 planAccessibleRoute 回傳完整 AccessibleRoute，
+// 另含 routeId、polyline、steps、設施與 warnings；以 src/types/route.ts / OpenAPI 為準。
 WALK  = { type:"WALK",  from; to; distanceM; minutesEst }
 BUS   = { type:"BUS",   routeName; departureStop; arrivalStop; direction;
           waitMinutes; departureTime|null; arrivalTime|null }
@@ -193,80 +197,53 @@ TRA   = { type:"TRA",  trainNo; trainTypeName; departureStation;
 { "error": "資料庫查詢失敗" }
 ```
 
-### 4.3 `planAccessibleRoute` — 無障礙混合交通「路線摘要」
+### 4.3 `planAccessibleRoute` — 一次規劃的完整候選路線
 
-要逐步指引改用 `getNavInstructions`。內部走 `planAccessibleRouteFromRequest`（與 HTTP 端點同源），`maxTransfers: 2`，結果經 `summarizeRoute` 精簡並只取前 3 條。
+內部呼叫 `planAccessibleRouteFromRequest` 一次，沿用 `maxTransfers: 2` 與既有共用規劃器，再呼叫 `attachRouteTokens` 保存結果。保留完整候選與原排序，前端直接顯示，不得自動再呼叫 HTTP 路線規劃。
 
-| 參數            | 型別   | 說明                                                          |
-| --------------- | ------ | ------------------------------------------------------------- |
-| `origin` *      | string | 完整照抄地名；目前位置填 `current_location`                   |
-| `destination` * | string | 完整照抄地名                                                  |
-| `mode`          | enum   | `wheelchair\|elderly\|visual_impaired\|normal`，預設 `normal` |
-| `departureTime` | string | ISO8601 或 HH:mm，省略=現在                                   |
+| 參數 | 型別 | 說明 |
+| --- | --- | --- |
+| `origin` * | string | 完整地名；目前位置填 `current_location` |
+| `destination` * | string | 完整地名 |
+| `mode` | enum | wheelchair／elderly／visual_impaired／normal；未明示時省略，沿用行程或使用者設定 |
+| `transitPreference` | enum | bus／rail／metro；none 明確取消偏好，省略沿用目前行程；均為軟性偏好 |
+| `departureTime` | string | 工具仍相容 ISO8601 或 HH:mm；HTTP／WS routingPreferences 只接受帶時區 ISO 日期 |
+| `avoidStairs`、`requireElevator` | boolean | 明示條件；省略沿用目前行程與共用規劃器預設 |
 
-**成功**：
+成功 `result` 的正式結構為 OpenAPI `AiRoutePlanToolResult`：
 
-```jsonc
+```ts
 {
-  "ok": true,
-  "origin": { "name": "…", "lat": 0, "lng": 0 },
-  "destination": { "name": "…", "lat": 0, "lng": 0 },
-  "city": "…",
-  "mode": "…",
-  "routes": [
-    {
-      // 最多 3 條
-      "routeName": "…",
-      "totalMinutes": 0,
-      "transferCount": 0,
-      "accessibilityScore": "number|null",
-      "accessibilityLabel": "string|null",
-      "departureDate": "string|null",
-      "accessibilityHighlights": "string[]",
-      "legs": "Leg[]", // WALK | BUS | METRO | THSR | TRA（見型別字典）
-    },
-  ],
+  ok: true;
+  routeContractVersion: 1;
+  planId: string;
+  selectedRouteId: string; // routes[0].routeId
+  origin: { name: string; lat: number; lng: number };
+  destination: { name: string; lat: number; lng: number };
+  city: string | null;
+  mode: string;
+  transitPreference: "none" | "bus" | "rail" | "metro";
+  effectivePreferences: { mode; travelMode; transitPreference; maxTransfers;
+    avoidStairs; requireElevator; departureTime?; needsAccessibleToilet;
+    needsHandrail; maxSlopePercent? };
+  routes: AccessibleRoute[]; // 完整 legs、polyline、steps、warnings 與設施
+  // 其餘共用規劃結果欄位（alerts、arrivalEntrance 等）照原語意保留。
 }
 ```
 
-**失敗**：`{ "ok": false, "error": "…" }`（需要位置 / 規劃失敗）
+每條 route 的 routeToken／navigationId／routeVersion 沿用既有 optional 欄位。Redis 保存失敗仍保留可顯示的完整路線，不偽造 token、不偷偷重算。空 routes 或缺少 canonical 條件視為失敗。帳號 userId 與 `_canonicalRequest` 不會輸出。
 
-### 4.4 `getNavInstructions` — 逐步導航指引
+模型投影保留相同 planId／selectedRouteId／routeId 與每段運具、站名、時刻、警告，移除 token、幾何、steps 與設施大陣列。歷史 summary 上限 1200 字元，優先保留選中路線，裁切時標記 truncated；不能當作可信選擇同步。
 
-| 參數                         | 型別   | 說明                                          |
-| ---------------------------- | ------ | --------------------------------------------- |
-| `origin` * / `destination` * | string | 完整照抄；目前位置填 `current_location`       |
-| `mode`                       | enum   | 同上，預設 `normal`                           |
-| `departureTime`              | string | ISO8601 或 HH:mm                              |
-| `routeIndex`                 | number | 第幾條路線（0-based），預設 0                 |
-| `userHeading`                | number | 朝向（度，正北=0 順時針），有值才產生相對方向 |
+### 4.4 `getNavInstructions` — 已選路線的逐步指引
 
-**成功**：
+只接受模型提供的 `userHeading`（0–359，可省略）與 `language`（zh-TW／en，可省略）。可信 routeToken 由後端對話脈絡注入；模型提供的 token、origin、destination、routeIndex 不會用來選路或重新規劃。
 
-```jsonc
-{
-  "ok": true,
-  "routeName": "…",
-  "totalMinutes": 0,
-  "instructions": [
-    {
-      "text": "…",
-      "type": "turn|transit_board|transit_alight|facility|depart|arrive",
-      "bearing": "number|null",
-      "relativeDirection": "正前方|左前方|右前方|左側|右側|左後方|右後方|正後方|null",
-      "distanceM": "number|null",
-      "streetName": "string|null",
-      "legType": "WALK|BUS|METRO|THSR|TRA",
-      "polylineIndex": "number|null",
-    },
-  ],
-  "totalSteps": 0,
-  "initialBearing": 0,
-  "warnings": "string[]",
-}
-```
+內部沿用 `generateNavInstructionsFromInput`，成功回 `{ ok: true, instructions, totalSteps, initialBearing, warnings }`；指引詳細欄位沿用 [導航指引規格](./FUNCTIONAL_SPEC_NAV_INSTRUCTIONS.md)。
 
-**失敗**：`{ "ok": false, "error": "…" }`（含規劃失敗、`ORS_STEPS_UNAVAILABLE` / `INVALID_ROUTE_INPUT` / `UNSUPPORTED_LEG_TYPE`）
+無選擇回 `ROUTE_CONTEXT_REQUIRED`；無效／過期 token 回 `INVALID_ROUTE_TOKEN`；讀取失敗回 `ROUTE_CONTEXT_UNAVAILABLE`，均附 `ok: false` 與 error。指引 service 的其他原因碼原樣保留。使用者首次要逐步帶路但無路線時，先執行一次 planAccessibleRoute，再查指引。
+
+文字的 routeContext、語音 route.context.set／ack、條件優先序與前端遷移見 [AI 路線一致性遷移文件](../FRONTEND_MIGRATION_AI_ROUTE_CONSISTENCY.md)。
 
 ### 4.5 `getA11yFacilityDetails` — 依 OSM id 取設施詳情
 
@@ -703,8 +680,8 @@ TRA   = { type:"TRA",  trainNo; trainTypeName; departureStation;
 | --- | -------------------------- | --------------------- | ------------------------------------------- |
 | 1   | `findGooglePlaces`         | `query`               | `status`, `places`                          |
 | 2   | `findA11yPlaces`           | `query`               | `ok`, `searchLocation`, `places{4類}`       |
-| 3   | `planAccessibleRoute`      | `origin, destination` | `ok`, `routes[≤3]`                          |
-| 4   | `getNavInstructions`       | `origin, destination` | `ok`, `instructions`, `totalSteps`          |
+| 3   | `planAccessibleRoute`      | `origin, destination` | `ok`, `routeContractVersion`, `planId`, `selectedRouteId`, `routes`                          |
+| 4   | `getNavInstructions`       | 無；後端注入已選 token | `ok`, `instructions`, `totalSteps`          |
 | 5   | `getA11yFacilityDetails`   | `osmId`               | `ok`, `count`, `facilities`                 |
 | 6   | `findNearbyParking`        | query 或 lat/lng      | `ok`, `total`, `parkingSpots`               |
 | 7   | `getBusRoute`              | `routeName`           | `ok`, `directions[].stops`                  |

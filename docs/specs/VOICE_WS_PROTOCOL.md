@@ -2,6 +2,8 @@
 
 > 讀者：負責把語音功能接進正式前端的工程師。本文件目標是讓你不需要讀後端原始碼即可完成串接。
 > 事實來源：`src/modules/voice/voice.gateway.ts`、`src/modules/voice/live-bridge.ts`、`src/modules/voice/poc-client.html`（可運作參考實作）、`memory/reviews/plans/a73ce70ab30ec0f2.md` §3.10。
+> 2026-10-09：本機後端加入 AI 路線契約 v1、route.context.set／ack 與舊回覆隔離；尚未代表已部署，詳見 [遷移文件](../FRONTEND_MIGRATION_AI_ROUTE_CONSISTENCY.md)。
+> 2026-10-09：`session.start.language` 可傳入目前介面語言（`zh-TW`／`en`），與文字 AI 共用語言偏好契約，詳見 [語言串接說明](../FRONTEND_MIGRATION_AI_LANGUAGE.md)。
 > 定案：2026-07-10 使用者實測繁中音質可接受、工具轉接正常，採 **Gemini Live API proxy** 路線。
 
 ## 1. 總覽與架構
@@ -39,15 +41,39 @@ ws://localhost:<PORT>/api/v1/voice/ws   (本機開發)
 {
   "type": "session.start",
   "token": "<accessToken>",
+  "language": "en",
   "userLocation": { "latitude": 25.0478, "longitude": 121.517 }
 }
 ```
 
 - `token`：必填，字串。**絕不可放在 URL query string**，只能放在這個首訊息的 body 裡。
+- `language`：選填，只接受 `zh-TW`／`en`，代表目前介面語言；省略沿用模型依對話判斷的行為。非法值（包括 `null`、空字串、`en-US`）使握手失敗並關閉 `4401`。建立與重連時重新讀取偏好；連線中切換語言需關閉並重新建立 WebSocket，沒有語言更新控制訊息。導航中保留原有 `nav.resume` 復原流程；只關閉連線，不送會刪除快照的 `session.end`／`nav.cancel`。
 - `userLocation`：選填，`{ latitude, longitude }` 皆為 number 才會生效，否則整欄位被忽略（不會報錯，只是後端當作沒帶）。
 - 逾時未送、送出的不是合法 JSON、`type` 不是 `session.start`、`token` 不是字串、token 驗證失敗（含過期）→ 連線被關閉，close code `4401`。
 - 認證完成前若送出 binary frame 或非 `session.start` 的訊息，同樣直接 `close(4401)`。
-- 認證通過後，後端會先嘗試踢掉同一使用者「先前」的連線（見 §6 的 `4409`），再建立與 Gemini Live 的連線；成功後回傳 `{"type":"session.ready"}`，前端這時才能開始送音訊。
+- 認證通過後，後端會先嘗試踢掉同一使用者「先前」的連線（見 §6 的 `4409`），建立 bridge 後回傳 `session.ready` 與 `capabilities: { aiRouteContractVersion: 1, routeContextSync: true }`。ready 表示 client session 與導航控制可用，Gemini bootstrap 是非同步；初次 routeContext 會先查證，再建立上游連線。連線尚未就緒時上行音訊不排隊。
+
+### 2.2.1 目前查看路線的初始化與切換（v1）
+
+session.start 新增 optional `routeContractVersion: 1`、`routeContext: { routeToken } | null`、`routingPreferences`（mode／transitPreference／departureTime／avoidStairs／requireElevator）。新前端有選擇就傳 token，沒有就傳 null；routingPreferences 是預設，不覆蓋已選路線的 canonical 條件。routeToken 長度 1–256；偏好物件 strict，日期必須是含時區 ISO 格式，布林不能傳字串。
+
+連線中換選使用下列 strict frame：
+
+```json
+{ "type": "route.context.set", "requestId": "selection-2", "selectionVersion": 2, "routeContext": { "routeToken": "new-token" } }
+```
+
+requestId 去除空白後長度 1–128；selectionVersion 是安全範圍內非負整數，每次必須嚴格遞增；相同版本重送也算 STALE_SELECTION。清除時 routeContext 傳 null。後端確認脈絡與上游連線就緒後回：
+
+```json
+{ "type": "route.context.ack", "requestId": "selection-2", "selectionVersion": 2, "ok": true, "routeId": "route-2", "navigationId": "nav-2", "routeVersion": 1 }
+```
+
+清除成功時三個 identity 欄位為 null；失敗回同 requestId／selectionVersion 與 `ok: false, reason`，reason 為 INVALID_ROUTE_TOKEN／ROUTE_CONTEXT_UNAVAILABLE／STALE_SELECTION。格式錯誤或超出控制頻率限制不套用也不送成功 ack；前端 timeout 維持未同步。
+
+換選時立即停止並清空前端播放佇列。後端發 interrupted、淘汰舊音訊／工具回呼，重建 Gemini Live 上游連線後才 ack；同 token 的預設選擇回傳可直接確認。等待期間不要錄入下一個路線提問，也不要播放 binary audio，成功 ack 後才恢復。失敗不視為成功，沿用 voice error 復原流程。
+
+此控制不啟動／取消／重設導航，不執行規劃；nav.setRoute／nav.start 等仍管理 active navigation。nav.route_replaced 更新的若正是目前查看路線，前端另送 route.context.set；若查看不同候選，不強制改選。重連時在新的 session.start 重新傳入選中 token。
 
 ### 2.3 取得 token：登入 API
 
@@ -115,12 +141,12 @@ curl -X POST https://<host>/api/v1/user/login \
 
 | 型別                    | 傳輸        | 欄位                                                                                                                                                                                                                                           | 範例                                                                                                                                                                                                                                                                      | 觸發時機                                                                                                                                                            |
 | ----------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `session.ready`         | text (JSON) | `type`                                                                                                                                                                                                                                         | `{"type":"session.ready"}`                                                                                                                                                                                                                                                | 認證成功且 Gemini Live 連線建立完成，前端此時才可開始送音訊                                                                                                         |
+| `session.ready` | text (JSON) | `type`, `capabilities` | `{"type":"session.ready","capabilities":{"aiRouteContractVersion":1,"routeContextSync":true}}` | client session 可用；Gemini bootstrap 非同步 |
 | （音訊）                | binary      | 原始 PCM16 bytes                                                                                                                                                                                                                               | —                                                                                                                                                                                                                                                                         | Gemini 回覆的語音，見 §3.4                                                                                                                                          |
 | `transcript`            | text (JSON) | `type`, `role` (`"user"` \| `"model"`), `text` (string), `final?` (boolean，僅 `role:"user"`), `utteranceId?` (string，僅 `role:"user"`)                                                                                                       | `{"type":"transcript","role":"user","text":"我想去珠北車站","final":true,"utteranceId":"u1"}`                                                                                                                                                                             | 使用者語音辨識逐字稿（`role:"user"`）或模型回覆逐字稿（`role:"model"`）。見 §3.5 的 interim/final 規則                                                              |
 | `transcript.correction` | text (JSON) | `type`, `role` (`"user"`), `text` (string，校正後整句), `utteranceId` (string)                                                                                                                                                                 | `{"type":"transcript.correction","role":"user","text":"我想去竹北車站","utteranceId":"u1"}`                                                                                                                                                                               | 該句 `final:true` 送出後 0.5–2.5 秒內，音近錯字校正完成且**結果與原文不同**時補送；無變化、逾時或失敗時完全不送。見 §3.5                                            |
-| `tool_call`             | text (JSON) | `type`, `name` (string，工具名)                                                                                                                                                                                                                | `{"type":"tool_call","name":"getBusArrival"}`                                                                                                                                                                                                                             | 模型觸發工具呼叫的當下（工具開始執行前）                                                                                                                            |
-| `tool_result`           | text (JSON) | `type`, `name`, `ok` (boolean), `durationMs` (number), `result` (optional，工具回傳資料，任意 JSON 值：物件／陣列／`null`；與文字模式 SSE 的 `tool_result` 內容一致；`ok:false` 執行失敗時省略), `args` (optional，物件，模型呼叫工具時的參數) | `{"type":"tool_result","name":"findA11yPlaces","ok":true,"durationMs":812,"result":{"places":[{"id":"a11y_123","name":"台北車站無障礙電梯","latitude":25.0478,"longitude":121.517,"category":"elevator"}]},"args":{"latitude":25.033,"longitude":121.5654,"radius":500}}` | 工具執行完成（成功或失敗都會送）。`result` 為工具回傳的實際內容，前端可據此在地圖上撒點／畫路線；`result`、`args` 皆為 optional 且向後相容（未帶 = 行為與舊版相同） |
+| `tool_call` | text (JSON) | `name`, `callId`, `turnId` | `{"type":"tool_call","name":"planAccessibleRoute","callId":"c1","turnId":"t1"}` | 工具開始執行 |
+| `tool_result` | text (JSON) | `name`, `callId`, `turnId`, `ok`, `durationMs`, `result`, `args`, `summary` | `result` 路線為完整候選；schema 見遷移文件 | 同次呼叫 IDs 與 tool_call 相同；先送前端再送模型投影 |
 | `interrupted`           | text (JSON) | `type`                                                                                                                                                                                                                                         | `{"type":"interrupted"}`                                                                                                                                                                                                                                                  | 使用者開口打斷模型正在說話時（barge-in）                                                                                                                            |
 | `turn.complete`         | text (JSON) | `type`                                                                                                                                                                                                                                         | `{"type":"turn.complete"}`                                                                                                                                                                                                                                                | 這一輪模型回覆全部結束                                                                                                                                              |
 | `error`                 | text (JSON) | `type`, `code` (`"LIVE_CONNECT_FAILED"` \| `"LIVE_SESSION_ENDED"`)                                                                                                                                                                             | `{"type":"error","code":"LIVE_SESSION_ENDED"}`                                                                                                                                                                                                                            | 見下方說明                                                                                                                                                          |
@@ -150,12 +176,12 @@ curl -X POST https://<host>/api/v1/user/login \
 
 `error` 的兩種 `code`：
 
-- `LIVE_CONNECT_FAILED`：認證成功後，後端連 Gemini Live 失敗；緊接著會 `close(1011)`。
-- `LIVE_SESSION_ENDED`：Gemini Live 連線自然結束（如 ~10 分鐘上限，見 §8）；緊接著會 `close(1000, "live-session-ended")`。
+- `LIVE_CONNECT_FAILED`：初次或換選時連 Gemini Live 失敗。僅停用語音，保留 client socket、導航與警示；換選同時回失敗 ack。
+- `LIVE_SESSION_ENDED`：Gemini Live 連線結束或失敗，停用語音並保留 client socket、導航與警示。前端需依既有復原流程重建 voice session。
 
 ### 3.3 逐步導航 routeToken 與 wire schema
 
-先呼叫 `POST /api/v1/a11y/accessible-route`。每一條成功寫入 Redis 的 route 會多一個 optional `routeToken`（30 分鐘 TTL）；Redis 不可用時 route 仍可顯示，但不會有 token，也就不能啟動語音導航。token 是短效 bearer capability，前端不得記錄到 analytics/log 或放進 URL。
+可使用 AI 工具的完整路線結果，或手動呼叫 `POST /api/v1/a11y/accessible-route`。AI 結果不可再自動規劃一次。每一條成功寫入 Redis 的 route 會多一個 optional `routeToken`（30 分鐘 TTL）；Redis 不可用時 route 仍可顯示，但不會有 token，也就不能啟動語音導航。token 是短效 bearer capability，前端不得記錄到 analytics/log 或放進 URL。
 
 `nav.start.steps` 的每個 `NavStepDto` 精確為：
 

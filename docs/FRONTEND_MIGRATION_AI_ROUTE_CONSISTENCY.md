@@ -1,8 +1,10 @@
 # 前端遷移說明：AI 語音、文字與地圖共用同一份路線
 
-日期：2026-10-09  
-適用：`taipei-accessible-map`（Web）、`accessible-smart-map-mobile`（手機版）  
-狀態：**待實作的遷移規格。本文新增欄位與事件尚未在後端實作或部署，不能當成現行 API 直接呼叫。**
+日期：2026-10-09
+
+適用：`taipei-accessible-map`（Web）、`accessible-smart-map-mobile`（手機版）
+
+狀態：**後端已在本機工作樹實作；尚未部署。Web／手機版仍需依本文遷移與實機驗收。請先確認目標環境的能力宣告，再啟用新增事件。**
 
 ## 1. 結論與修改範圍
 
@@ -12,9 +14,9 @@
 
 本次不要求重做地圖、路線面板或音訊引擎。沿用現有 `AccessibleRoute`、路線 store、`routeToken` 與導航生命週期，修改資料傳遞與選擇同步。本文不新增 HTTP endpoint。
 
-## 2. 已確認的現況
+## 2. 修正前已確認的問題
 
-| 位置 | 現行行為 | 問題 |
+| 位置 | 修正前行為 | 問題 |
 | --- | --- | --- |
 | 後端 `src/modules/ai/agent-tools.ts` 的 `planAccessibleRoute`、`summarizeRoute` | 規劃後只回傳摘要；移除 polyline、routeId，沒有發出 routeToken | 同一份摘要同時交給模型與前端，前端無法直接取得完整路線 |
 | Web `src/lib/ai/toolActionMapper.ts`；手機 `src/features/ai/domain/toolActionMapper.ts` | 沒有可繪製線段、有起終點時產生 `compute-route` | 前端再次規劃，畫面可能與 AI 說明不同 |
@@ -41,17 +43,17 @@ HTTP JSON 回應沿用 `sendResponse` envelope；SSE／WS 沿用事件格式，�
 
 目前 `nav.setRoute` 是「準備導航」，`getActiveNavigationContext` 只有導航 active 時才提供脈絡。**它們尚不能完整代表「使用者正在瀏覽、尚未開始導航的路線」。**
 
-### 3.2 後端必須先完成
+### 3.2 後端實作契約
 
 1. 共用規劃 service 只執行一次，保存完整候選路線，再各自產生前端 DTO 與模型 DTO。沿用 route-token service 的保存機制，不呼叫自己的 HTTP endpoint，也不在 controller 複製規劃邏輯。
-2. AI 工具成功結果提供完整路線與下節識別欄位。SSE、WS 都送前端 DTO；Interactions function_result 與 Gemini Live function response 都只送模型 DTO。現行 AgentToolExecutor 是 `Promise<string>`，需要調整內部傳遞契約，不能只把完整 JSON 同時塞進兩個消費端。
+2. AI 工具成功結果提供完整路線與下節識別欄位。SSE、WS 都送前端 DTO；Interactions function_result 與 Gemini Live function response 都只送模型 DTO。AgentToolExecutor 已擴充為 `Promise<string | ProjectedToolResult>`，不能只把完整 JSON 同時塞進兩個消費端。
 3. 文字與語音的規劃都整合本輪明示需求、目前行程條件與使用者設定；缺值才能採預設。`none` 是明確取消乘車偏好，不能當成未指定。交通偏好維持軟性偏好，目的地含「火車站」不等於偏好火車。
 4. AI 工具 `getNavInstructions` 改由已選 routeToken 讀取路線，沿用 `generateNavInstructionsFromInput`；不得再依 origin/destination 或 routeIndex 偷偷重算。首次要求「帶我走」且尚無路線時，先走一次正常規劃流程。
 5. 實作第 5 節的路線脈絡同步與清除；模型只能從 token 對應的伺服器資料取得目前路線，不能把前端傳回的摘要當成可信導航資料。
-6. 路線專用歷史摘要保留候選識別、各段運具、路線／車次名稱、上下車站、時間、警告；前端不回傳完整幾何或用自然語言充當 routeToken。
+6. 路線專用歷史摘要優先保留選中候選識別、各段運具、路線／車次名稱、上下車站、時間、警告；上限 1200 字元，超過會先省略其他候選再減少路段，標記 truncated。完整追問以 token 脈絡為準；前端不回傳完整幾何或用自然語言充當 routeToken。
 7. 更新 Zod、OpenAPI、WS schemas、工具宣告與相關測試。本文所列新增 schema 均須有輸入長度、enum、未知欄位與錯誤處理規則。
 
-## 4. 目標工具結果契約（待實作）
+## 4. 工具結果契約（版本 1）
 
 ### 4.1 一份規劃，兩種表示
 
@@ -111,13 +113,13 @@ type AiRouteToolEvent = {
 };
 ```
 
-此處 `EffectiveRoutePreferences` 為上節定義的待新增型別。工具失敗仍使用 `result.ok: false` 與 error；沒有成功路線就不切換畫面、不覆蓋目前選擇、不觸發重算。外層 WS `ok` 目前只反映工具是否拋例外，不等於規劃成功。
+此處 `EffectiveRoutePreferences` 為上節的前端型別示意；正式 JSON schema 為 OpenAPI 的 `AiRoutePlanToolResult.effectivePreferences`。工具失敗仍使用 `result.ok: false` 與 error；沒有成功路線就不切換畫面、不覆蓋目前選擇、不觸發重算。外層 WS `ok` 目前只反映工具是否拋例外，不等於規劃成功。
 
 給模型的 DTO 必須包含同一個 planId、selectedRouteId、各候選 routeId，以及摘要後的 legs；不含 polyline 或 capability token。後端在模型執行工具時注入已驗證的 token，模型不需要自行抄寫 token。預設說明選中候選；若比較其他方案，必須明確說「另一個方案」，不能把不同方案的路段拼成一條。
 
-SSE／WS 都必須先發出對應 tool_result，再開始這份路線的文字／音訊說明。若前端無法套用有效結果，應中止該次回覆並顯示錯誤，避免保留舊地圖卻播放新路線說明。
+SSE 會先發出對應 tool_result；含工具呼叫的回合若有暫時文字會捨棄，回答回合完成後才依原 chunks 輸出，因此首字可能稍晚。WS 先發出完整 tool_result，再將摘要送回 Gemini 產生後續語音。若前端無法套用有效結果，應中止該次回覆並顯示錯誤，避免保留舊地圖卻播放新路線說明。
 
-## 5. 選中路線與對話同步（新增契約，待實作）
+## 5. 選中路線與對話同步（版本 1）
 
 ### 5.1 共用路線狀態
 
@@ -129,7 +131,7 @@ SSE／WS 都必須先發出對應 tool_result，再開始這份路線的文字�
 
 ### 5.2 文字請求與語音初始化
 
-`POST /api/v1/ai/chat` 和 WS `session.start` 擬新增：
+`POST /api/v1/ai/chat` 和 WS `session.start` 支援：
 
 ```ts
 type RouteContextInput = { routeToken: string } | null;
@@ -149,13 +151,15 @@ type RouteConversationInput = {
 
 新前端每次文字請求與語音初始化都明確送 routeContext：有選中路線就送 token，沒有就送 null。`undefined` 只為舊客戶端相容保留，代表沒有提供同步指令；`null` 是明確清除。前端無有效 token 時送 null，不拿舊 token 冒充目前選擇。
 
+新增物件採嚴格欄位驗證：routeToken 去除前後空白後長度 1–256；routingPreferences 只接受上列欄位、enum、boolean 與含時區 ISO 日期，不接受 HH:mm。既有 chat／session.start 頂層保留忽略未知欄位的相容行為。HTTP 格式錯誤回 400（仍受既有 auth／rate limit）；session.start 格式錯誤沿用 4401。
+
 routingPreferences 是表單／個人設定的輸入預設，不能覆蓋已選路線的 canonical request；本輪明示修改才建立新規劃。後端仍須依既有無障礙規則解析衝突或不完整需求，不能讓 generic 預設 normal 蓋過使用者已表明的輪椅需求。
 
 後端必須查 token 並建立可信上下文後才產生路線相關回答。帶入無效 token 的追問應回覆「路線已過期，請重新規劃」，不能默默改用更舊的記憶或重新規劃。一般非路線問題仍可正常回答。
 
 ### 5.3 語音連線中換選／清除
 
-擬新增以下控制事件，與既有 nav.setRoute／nav.start 分開：
+支援以下控制事件，與既有 nav.setRoute／nav.start 分開：
 
 ```json
 {
@@ -180,17 +184,21 @@ routingPreferences 是表單／個人設定的輸入預設，不能覆蓋已選�
 }
 ```
 
-清除時傳 `routeContext: null`；成功 ack 的 routeId、navigationId、routeVersion 均為 null。失敗回同一種 ack，`ok: false`，並包含 `reason: "INVALID_ROUTE_TOKEN" | "ROUTE_CONTEXT_UNAVAILABLE" | "STALE_SELECTION"`。以上 reason 與事件是新規格，不是目前已存在的 WS 錯誤碼。
+route.context.set 整個物件為 strict：requestId 為去除前後空白後 1–128 字元；selectionVersion 為 0 到 Number.MAX_SAFE_INTEGER 的整數，且同一連線內每次必須嚴格遞增（相同版本重送也回 STALE_SELECTION）。格式錯誤／超過 control rate limit 的 frame 不套用、不送成功 ack；前端 timeout 後維持未同步。
+
+清除時傳 `routeContext: null`；成功 ack 的 routeId、navigationId、routeVersion 均為 null。失敗回同一種 ack，`ok: false`，並包含 `reason: "INVALID_ROUTE_TOKEN" | "ROUTE_CONTEXT_UNAVAILABLE" | "STALE_SELECTION"`。以上為本機新後端實作的 reason；部署前舊環境仍不支援。
 
 selectionVersion 是前端在同一 socket 內單調遞增的選擇版本，與導航 routeVersion 不同；重連後在新 socket 重新計數。後端丟棄較舊更新，前端只採用與最新 requestId、selectionVersion 相符的 ack。失敗時不得繼續以舊路線代替新選擇回答，應進入脈絡未同步狀態；重試只重送脈絡，不呼叫規劃器。
 
 換選／清除時停止並清空舊路線的模型語音播放。後端必須取消或淘汰舊回覆，確認舊音訊不再轉送且新脈絡已建立後才 ack。前端等待 ack 期間不播放路線說明；timeout 時保留失敗狀態，不把等待時間結束視為成功。**目前下行 PCM 為無路線標籤的 binary frames，單靠 callId 或畫面切換無法擋掉舊音訊；這個停止與確認順序必須做整合驗證。**
 
+後端收到不同選擇時，會送出 `interrupted`、關閉舊 Gemini Live 連線，淘汰其音訊／工具／關閉回呼，並以新脈絡重建上游連線後才 ack。相同 token 的預設選擇回傳不重建，避免切斷剛取得路線的說明。換選期間上行音訊不排隊；前端應暫停錄音或提示等待，ack 成功後再接受路線提問。Live 重新連線失敗會回失敗 ack，保留 client socket 與導航；需沿用 voice error 復原流程。
+
 route.context.set 只改變對話所指的路線，不得開始、停止、重設逐步導航，也不得觸發規劃。既有 nav.setRoute／nav.start／nav.cancel／nav.resume 繼續負責導航生命週期。正在導航時，瀏覽另一候選不代表切換導航；對話須分清「目前查看」與「正在導航」的路線。「下一步／那班公車」等導航問題使用 active navigation context；若指涉不明確才確認。
 
 ### 5.4 能力確認
 
-新後端的 `session.ready` 擬增加 `capabilities: { aiRouteContractVersion: 1, routeContextSync: true }`。前端收到能力宣告後才能發送 route.context.set；當前只有 `{ type: "session.ready" }` 的回覆不表示支援。
+新後端的 `session.ready` 已增加 `capabilities: { aiRouteContractVersion: 1, routeContextSync: true }`。前端收到能力宣告後才能發送 route.context.set；只有 `{ type: "session.ready" }` 的舊回覆不表示支援。
 
 SSE 在請求送 routeContractVersion: 1；新後端於路線結果回同版本。缺少版本或必要欄位時按第 9 節的舊後端規則處理。舊 schema 可能忽略未知欄位，因此不能把 HTTP 200 或連線成功當成新契約確認。
 
@@ -307,8 +315,17 @@ SSE 用請求 AbortController 與本機路線狀態世代防止舊回覆更新�
 
 ## 10. 文件驗證與實作狀態
 
-本文件根據 2026-10-09 本機工作樹核對；後端基準 HEAD `12c03f7`、Web `8b965e4`、手機 `e4a4bda`，均不代表線上已部署版本。後端另有正在進行的英文指引變更，本文件沿用其現行欄位，沒有改動該批程式。
+本次後端實作以 HEAD `c62568f` 為基準，在本機工作樹完成；不代表已部署。Web `8b965e4`、手機 `e4a4bda` 是前一輪核對的前端基準，本次沒有修改前端。
 
-前一輪診斷已執行 4 個後端測試檔、178 項測試，全部通過；另以固定規劃資料執行實際摘要／前端 mapper，重現自動重算、偏好與時間遺失，並確認 getNavInstructions 再次規劃與歷史摘要丟失 legs。這些是現況診斷證據，不是本規格已實作的證據。
+已實作：完整路線與模型投影、canonical 條件、token 指引、SSE callId 與取消、WS callId／turnId、初始化與選擇同步、過期結果淘汰、路線摘要及 prompt。LINE 共用工具迴圈也套用同一次對話的路線脈絡，避免 plan 後查指引時失去 token；LINE 跨訊息的選擇同步不在本次契約內。
 
-本次只交付遷移文件。新增契約、前後端實作、部署、Web／手機實機與真實語音驗收仍待完成。交付實作時必須以 schemas 與實際測試回填本文件，並同步更新 [語音協定](./specs/VOICE_WS_PROTOCOL.md)、[AI 工具參考](./specs/AI_AGENT_TOOLS_REFERENCE.md) 與 OpenAPI，不得留下「文件說支援、程式仍忽略」的狀態。
+契約與競態 fixture 可見：
+
+- `src/modules/ai/agent-tools.test.ts`：共用規劃只呼叫一次、完整幾何、canonical 條件、token 缺失與過期。
+- `src/modules/ai/route-context.service.test.ts`：資料投影、條件延續、清除、晚到 lookup／工具結果與查詢逾時。
+- `src/modules/ai/ai.chat.controller.test.ts`、`src/modules/agent/agent-manager.service.test.ts`：HTTP 驗證、SSE 關聯、取消與模型結果投影。
+- `src/modules/voice/live-bridge.test.ts`、`voice.gateway.test.ts`、`voice.ws.schema.test.ts`：真實本機 WS 傳輸搭配模擬 Gemini、選擇版本與過期音訊／工具回呼。
+
+[語音協定](./specs/VOICE_WS_PROTOCOL.md)、[AI 工具參考](./specs/AI_AGENT_TOOLS_REFERENCE.md) 與 Zod／OpenAPI 已同步。最終建置與測試結果見 [後端實作報告](./reports/ai-route-consistency.md)。
+
+尚未完成：部署、前端遷移、Web／手機實機與真實 Gemini 語音驗收。固定 fixture 與模擬回呼證明資料契約及競態防護，不能保證真實模型每句播報都不出錯；上線前仍須依第 8 節核對實際逐字稿、音訊與地圖。
