@@ -12,6 +12,7 @@ export interface ExpoPushMessage {
   sound?: "default" | null;
   priority?: "default" | "normal" | "high";
   channelId?: string;
+  ttl?: number;
 }
 
 export type ExpoPushTicket =

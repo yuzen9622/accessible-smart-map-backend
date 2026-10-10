@@ -109,6 +109,29 @@ const hazardReportSchema = new Schema<IHazardReport>(
       default: undefined,
       select: false,
     },
+    reviewNotification: {
+      type: new Schema(
+        {
+          revision: { type: Number, required: true },
+          result: { type: String, required: true },
+          state: {
+            type: String,
+            enum: ["pending", "processing", "sent", "skipped", "expired"],
+            required: true,
+          },
+          createdAt: { type: Date, required: true },
+          deadlineAt: { type: Date, required: true },
+          nextAttemptAt: { type: Date, required: true },
+          attempts: { type: Number, required: true },
+          leaseToken: String,
+          leaseExpiresAt: Date,
+          delivered: { type: [String], default: [] },
+        },
+        { _id: false },
+      ),
+      default: undefined,
+      select: false,
+    },
     // Private upload intake / cleanup tombstone. Never public.
     photoIntake: {
       type: new Schema(
@@ -205,6 +228,19 @@ hazardReportSchema.index({
 hazardReportSchema.index({
   "photoIntake.state": 1,
   "photoIntake.nextCleanupAt": 1,
+});
+
+hazardReportSchema.index({
+  "reviewNotification.state": 1,
+  "reviewNotification.nextAttemptAt": 1,
+});
+hazardReportSchema.index({
+  "reviewNotification.state": 1,
+  "reviewNotification.leaseExpiresAt": 1,
+});
+hazardReportSchema.index({
+  "reviewNotification.state": 1,
+  "reviewNotification.deadlineAt": 1,
 });
 
 const HazardReport = model<IHazardReport>("HazardReport", hazardReportSchema);

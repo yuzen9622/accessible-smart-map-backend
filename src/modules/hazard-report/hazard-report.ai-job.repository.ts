@@ -1,3 +1,4 @@
+import { queueReviewNotificationStage } from "./hazard-report.notification-stages";
 import HazardReport from "../../model/hazard-report.model";
 import { DB_OPTIONS } from "./hazard-report.db";
 import { HAZARD_AI } from "../../config/hazard-ai";
@@ -233,6 +234,7 @@ export async function finalizeAiReview(
       "aiReviewJob.deadlineAt": { $gt: now },
     },
     [
+      queueReviewNotificationStage(`ai_${result.decision}`, now),
       {
         $set: {
           aiReview: {
@@ -311,9 +313,10 @@ export async function requeueAiJob(
 
 function failedStages(
   reasonCode: unknown,
-  now: unknown,
+  now: Date,
 ): Record<string, unknown>[] {
   return [
+    queueReviewNotificationStage("ai_failed", now),
     {
       $set: {
         aiReview: {

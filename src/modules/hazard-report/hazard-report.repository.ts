@@ -1,3 +1,4 @@
+import { queueReviewNotificationStage } from "./hazard-report.notification-stages";
 import { Types } from "mongoose";
 import { DB_OPTIONS } from "./hazard-report.db";
 import HazardReport from "../../model/hazard-report.model";
@@ -544,6 +545,21 @@ export async function setManualReview(
       ...INTAKE_COMPLETE,
     },
     [
+      queueReviewNotificationStage(
+        `manual_${manualReview.decision}`,
+        manualReview.reviewedAt,
+        {
+          $or: [
+            {
+              $ne: [
+                { $ifNull: ["$manualReview.decision", ""] },
+                manualReview.decision,
+              ],
+            },
+            { $ne: ["$status", manualReview.decision] },
+          ],
+        },
+      ),
       ...cancelAiReviewStages(),
       {
         $set: {
@@ -654,6 +670,7 @@ export async function scrubReportContent(
           "aiReview.observations",
           "aiReview.limitations",
           "aiReviewJob",
+          "reviewNotification",
         ],
       },
     ],

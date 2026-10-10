@@ -64,10 +64,17 @@ export async function findPushTokensByUserId(
  */
 export async function deletePushTokens(
   entries: Pick<IPushToken, "token" | "authSessionId">[],
+  options: { maxTimeMS?: number; timeoutMS?: number } = {},
 ): Promise<number> {
   if (!entries.length) return 0;
-  const result = await PushToken.deleteMany({
-    $or: entries.map(({ token, authSessionId }) => ({ token, authSessionId })),
-  });
+  const result = await PushToken.deleteMany(
+    {
+      $or: entries.map(({ token, authSessionId }) => ({
+        token,
+        authSessionId,
+      })),
+    },
+    options,
+  );
   return result.deletedCount;
 }

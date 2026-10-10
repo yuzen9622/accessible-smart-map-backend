@@ -1,3 +1,4 @@
+import { queueReviewNotificationStage } from "./hazard-report.notification-stages";
 import HazardReport from "../../model/hazard-report.model";
 import { HAZARD_AI } from "../../config/hazard-ai";
 import type { IHazardReport } from "../../types";
@@ -24,9 +25,43 @@ export async function persistLegacyAiResult(
       "manualReview.reviewedAt": { $exists: false },
     },
     [
+      // A technical retry may replace a previous suspicious legacy result.
+      // Revoke that notice without creating a notification for skipped work.
+      ...(result.verdict === "skipped"
+        ? [
+            {
+              $set: {
+                reviewNotification: {
+                  $cond: [
+                    { $eq: [{ $type: "$reviewNotification" }, "object"] },
+                    {
+                      $mergeObjects: [
+                        "$reviewNotification",
+                        { state: "skipped", delivered: [] },
+                      ],
+                    },
+                    "$$REMOVE",
+                  ],
+                },
+              },
+            },
+            {
+              $unset: [
+                "reviewNotification.leaseToken",
+                "reviewNotification.leaseExpiresAt",
+              ],
+            },
+          ]
+        : [
+            queueReviewNotificationStage(
+              `legacy_${result.verdict}`,
+              new Date(),
+              { $ne: ["$aiVerification.verdict", result.verdict] },
+            ),
+          ]),
       {
         $set: {
-          aiVerification: result,
+          aiVerification: { $literal: result },
           ...(status ? { status } : {}),
           ...(status === "rejected"
             ? { closedAt: { $ifNull: ["$closedAt", "$$NOW"] } }
