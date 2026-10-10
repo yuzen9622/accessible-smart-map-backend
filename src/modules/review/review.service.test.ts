@@ -215,6 +215,7 @@ describe("findByPlace", () => {
       placeId: "node/123456",
       placeType: "osm",
       status: "active",
+      moderationHiddenAt: null,
       $expr: {
         $gte: [
           {
@@ -274,6 +275,7 @@ describe("findByPlace", () => {
       placeId: "node/legacy-rounded",
       placeType: "osm",
       status: "active",
+      moderationHiddenAt: null,
       $expr: {
         $gte: [
           {

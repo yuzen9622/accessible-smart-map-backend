@@ -1,3 +1,8 @@
+import { optionalAuth } from "../../middleware/optional-auth.middleware";
+import {
+  requireContributor,
+  personalizedHeaders,
+} from "../content-safety/content-safety.middleware";
 import { Router } from "express";
 import middleware from "../../middleware/middleware";
 import { requireAdmin } from "../../middleware/require-admin.middleware";
@@ -5,6 +10,7 @@ import { validateRequest } from "../../middleware/validate-request.middleware";
 import {
   createReport,
   getNearbyReports,
+  getSafetyReports,
   getReport,
   getReportPhoto,
   getMyReports,
@@ -40,6 +46,8 @@ export function createHazardReportRouter(): Router {
   // the submitter's quota — only requests that reach `createReport` count.
   router.post(
     "/reports",
+    optionalAuth,
+    requireContributor,
     uploadPhoto,
     validateRequest({ body: CreateHazardReportSchema }),
     postReportsLimiter,
@@ -55,9 +63,18 @@ export function createHazardReportRouter(): Router {
 
   router.get(
     "/reports",
+    personalizedHeaders,
+    optionalAuth,
     nearbyLimiter,
     validateRequest({ query: NearbyReportsQuerySchema }),
     getNearbyReports,
+  );
+
+  router.get(
+    "/reports/safety",
+    nearbyLimiter,
+    validateRequest({ query: NearbyReportsQuerySchema }),
+    getSafetyReports,
   );
 
   // Must be registered before "/reports/:id" so "review-queue" is not
@@ -90,6 +107,8 @@ export function createHazardReportRouter(): Router {
 
   router.get(
     "/reports/:id",
+    personalizedHeaders,
+    optionalAuth,
     validateRequest({ params: ReportIdParamSchema }),
     getReport,
     getReportPhoto,

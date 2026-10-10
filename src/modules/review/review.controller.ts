@@ -29,7 +29,10 @@ export async function createReview(req: Request, res: Response) {
 
 export async function listReviews(req: Request, res: Response) {
   const query = req.validated?.query as ReviewQueryParams;
-  const result = await service.findByPlace(query);
+  const result = await service.findByPlace(
+    query,
+    ...(req.auth ? [req.auth.userId] : []),
+  );
   return send(res, result);
 }
 
@@ -48,6 +51,10 @@ export async function deleteReview(req: Request, res: Response) {
 
 export async function getAiSummary(req: Request, res: Response) {
   const query = req.validated?.query as ReviewSummaryInput;
-  const result = await service.getAiSummary(query.placeId, query.placeType);
+  const result = await service.getAiSummary(
+    query.placeId,
+    query.placeType,
+    ...(req.auth ? [req.auth.userId] : []),
+  );
   return send(res, result);
 }

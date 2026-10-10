@@ -457,10 +457,11 @@ describe("hazard report service with real MongoDB", () => {
       vi.spyOn(HazardReport, "updateOne").mockImplementationOnce(((
         ...args: Parameters<typeof real>
       ) =>
-        (async () => {
-          await real(...args);
+        real(...args).transform(() => {
+          // Keep the real query chain: throw only after Mongo acknowledged the write.
+          // Returning a bare Promise made .maxTimeMS fail before the write completed.
           throw new Error("ack lost");
-        })()) as never);
+        })) as never);
       const result = await createReport(input("r"));
       expect(result).toMatchObject({
         ok: true,

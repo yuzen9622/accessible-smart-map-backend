@@ -1,3 +1,4 @@
+import type { ContentModeration } from "../model/content-moderation.schema";
 import type { HazardReviewNotification } from "./hazard-review-notification";
 import type {
   HazardAiReview,
@@ -14,6 +15,8 @@ export type {
 export type AuthProvider = "google" | "apple" | "local";
 
 export interface IUser {
+  contentModeration?: ContentModeration;
+  contentRestrictedAt?: Date;
   _id: string;
   name: string;
   avatar?: string;
@@ -499,6 +502,8 @@ export type AiVerdict = "verified" | "suspicious" | "rejected" | "skipped";
 export type HazardStatus = "pending" | "verified" | "rejected" | "expired";
 
 export interface IHazardReport {
+  contentModeration?: ContentModeration;
+  moderationHiddenAt?: Date;
   _id: string;
   reporterId: string;
   reportedLocation: { type: "Point"; coordinates: [number, number] };

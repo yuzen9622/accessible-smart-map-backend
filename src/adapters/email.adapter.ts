@@ -54,6 +54,7 @@ function layout(title: string, bodyHtml: string): string {
  * @throws When Resend is configured but rejects the request.
  */
 export async function sendEmail(input: {
+  from?: string;
   to: string;
   subject: string;
   html: string;
@@ -61,7 +62,8 @@ export async function sendEmail(input: {
   idempotencyKey?: string;
 }): Promise<void> {
   const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.RESEND_FROM ?? "no-reply@2026.yuzen.dev";
+  const from =
+    input.from ?? process.env.RESEND_FROM ?? "no-reply@2026.yuzen.dev";
 
   if (!apiKey) {
     throw new Error("RESEND_API_KEY is not configured");

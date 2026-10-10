@@ -1,8 +1,15 @@
+import { contentModerationSchema } from "./content-moderation.schema";
 // pi-lens-ignore: 7016
 import { Schema, model } from "mongoose";
 import type { IUser } from "../types";
 const userSchema = new Schema<IUser>(
   {
+    contentModeration: {
+      type: contentModerationSchema,
+      default: undefined,
+      select: false,
+    },
+    contentRestrictedAt: { type: Date },
     name: { type: String, required: true },
     avatar: { type: String },
     email: { type: String, required: true, unique: true },

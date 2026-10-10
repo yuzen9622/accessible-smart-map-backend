@@ -18,13 +18,25 @@ const EARTH_RADIUS_M = 6_371_000;
 const INTERNAL_SELECT = "-closedAt -photoDelete";
 // `+aiReviewJob` is selected only so the view can derive `aiReview.delayed`;
 // the whitelist view in hazard-report.view.ts never copies it out.
-const PUBLIC_SELECT = `-reporterId -confirmedBy -deniedBy ${INTERNAL_SELECT} +aiReviewJob`;
+const PUBLIC_SELECT = `-confirmedBy -deniedBy ${INTERNAL_SELECT} +aiReviewJob`;
 const MINE_SELECT = `-confirmedBy -deniedBy ${INTERNAL_SELECT} +aiReviewJob`;
+
+function publicReportRecord(
+  row: Record<string, unknown>,
+): Record<string, unknown> {
+  const { reporterId, ...publicFields } = row;
+  return {
+    ...publicFields,
+    canBlockAuthor:
+      typeof reporterId === "string" && /^[a-f\d]{24}$/i.test(reporterId),
+  };
+}
 
 function activeVerifiedFilter(now: Date): Record<string, unknown> {
   return {
     $and: [
       INTAKE_COMPLETE,
+      { moderationHiddenAt: null },
       ACTIVE_VERIFIED_CLAUSE,
       {
         status: "verified",
@@ -137,6 +149,7 @@ export async function findActiveDuplicate(
     expiredAt: { $gt: now },
     $and: [
       INTAKE_COMPLETE,
+      { moderationHiddenAt: null },
       { contentScrubbedAt: { $exists: false } },
       activeDuplicateClause(now, staleLegacyBefore),
     ],
@@ -172,6 +185,7 @@ export async function mergeActiveDuplicate(
       expiredAt: { $gt: now },
       $and: [
         INTAKE_COMPLETE,
+        { moderationHiddenAt: null },
         { contentScrubbedAt: { $exists: false } },
         activeDuplicateClause(now, staleLegacyBefore),
       ],
@@ -295,6 +309,7 @@ export async function findNearbyReports(
   hazardType: HazardType | undefined,
   limit: number,
   now: Date,
+  excludedAuthorIds?: string[],
 ): Promise<Record<string, unknown>[]> {
   const perStatus = statuses.map((status) => {
     if (status === "verified") return activeVerifiedFilter(now);
@@ -307,9 +322,13 @@ export async function findNearbyReports(
     }
     return { status };
   });
-  return HazardReport.find({
+  const rows = await HazardReport.find({
     reportedLocation: nearQuery(lng, lat, radiusM),
     ...(hazardType ? { hazardType } : {}),
+    moderationHiddenAt: null,
+    ...(excludedAuthorIds?.length
+      ? { reporterId: { $nin: excludedAuthorIds } }
+      : {}),
     $and: [INTAKE_COMPLETE, { $or: perStatus }],
   })
     .select(PUBLIC_SELECT)
@@ -317,6 +336,7 @@ export async function findNearbyReports(
     .maxTimeMS(HAZARD_AI.dbTimeoutMs)
     .setOptions(DB_OPTIONS)
     .lean<Record<string, unknown>[]>();
+  return rows.map(publicReportRecord);
 }
 
 /**
@@ -415,11 +435,20 @@ export async function findConfirmedWithin(
  */
 export async function findPublicReportById(
   id: string,
+  excludedAuthorIds?: string[],
 ): Promise<Record<string, unknown> | null> {
   if (!Types.ObjectId.isValid(id)) return null;
-  return HazardReport.findOne({ _id: id, ...INTAKE_COMPLETE })
+  const row = await HazardReport.findOne({
+    _id: id,
+    ...INTAKE_COMPLETE,
+    moderationHiddenAt: null,
+    ...(excludedAuthorIds?.length
+      ? { reporterId: { $nin: excludedAuthorIds } }
+      : {}),
+  })
     .select(PUBLIC_SELECT)
     .lean<Record<string, unknown> | null>();
+  return row ? publicReportRecord(row) : null;
 }
 
 /**

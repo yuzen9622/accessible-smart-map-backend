@@ -1,3 +1,4 @@
+import { contentModerationSchema } from "./content-moderation.schema";
 import { Schema, model } from "mongoose";
 import type { IHazardReport } from "../types";
 
@@ -8,6 +9,12 @@ const GeoPoint = {
 
 const hazardReportSchema = new Schema<IHazardReport>(
   {
+    contentModeration: {
+      type: contentModerationSchema,
+      default: undefined,
+      select: false,
+    },
+    moderationHiddenAt: { type: Date },
     reporterId: { type: String, required: true, index: true },
 
     reportedLocation: GeoPoint,

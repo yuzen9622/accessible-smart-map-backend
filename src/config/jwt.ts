@@ -32,6 +32,9 @@ const toPublicUser = (user: IUser): IUser => {
     emailVerified: Boolean(source.emailVerified),
     tokenVersion: Number(source.tokenVersion ?? 0),
     role: source.role ?? "user",
+    ...(source.contentRestrictedAt
+      ? { contentRestrictedAt: source.contentRestrictedAt }
+      : {}),
     lineUserId: source.lineUserId ?? null,
     createdAt: source.createdAt,
     updatedAt: source.updatedAt,

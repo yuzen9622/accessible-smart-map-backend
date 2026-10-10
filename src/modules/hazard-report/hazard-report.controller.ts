@@ -95,19 +95,25 @@ async function getNearbyReports(req: Request, res: Response) {
     limit?: number;
   };
 
-  const result = await service.findNearby({
-    lat: query.lat,
-    lng: query.lng,
-    radius: query.radius,
-    hazardType: query.hazardType,
-    status: parseStatusList(query.status),
-    limit: query.limit,
-  });
+  const result = await service.findNearby(
+    {
+      lat: query.lat,
+      lng: query.lng,
+      radius: query.radius,
+      hazardType: query.hazardType,
+      status: parseStatusList(query.status),
+      limit: query.limit,
+    },
+    ...(req.auth ? [req.auth.userId] : []),
+  );
   return send(res, result);
 }
 
 async function getReport(req: Request, res: Response) {
-  const result = await service.findById(req.params.id as string);
+  const result = await service.findById(
+    req.params.id as string,
+    ...(req.auth ? [req.auth.userId] : []),
+  );
   return send(res, result);
 }
 
@@ -207,4 +213,13 @@ export async function getReportPhoto(req: Request, res: Response) {
   } finally {
     res.off("close", onClose);
   }
+}
+
+export async function getSafetyReports(req: Request, res: Response) {
+  return send(
+    res,
+    await service.findSafetyReports(
+      req.validated?.query as Parameters<typeof service.findSafetyReports>[0],
+    ),
+  );
 }

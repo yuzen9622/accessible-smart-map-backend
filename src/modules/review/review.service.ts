@@ -1,3 +1,4 @@
+import { blockedAuthorIds } from "../content-safety/content-safety.service";
 import {
   activeReviewExists,
   averageRating,
@@ -249,9 +250,18 @@ export async function createReview(
 
 export async function findByPlace(
   params: ReviewQueryParams,
+  viewerId?: string,
 ): Promise<ServiceResult<ReviewListResult>> {
   const { placeId, placeType, page, limit, minAggregateScore } = params;
-  const filter = { placeId, placeType, minAggregateScore };
+  const excludedAuthorIds = viewerId
+    ? await blockedAuthorIds(viewerId)
+    : undefined;
+  const filter = {
+    placeId,
+    placeType,
+    minAggregateScore,
+    ...(excludedAuthorIds ? { excludedAuthorIds } : {}),
+  };
 
   const { items, totalCount } = await findReviewPage(filter, page, limit);
 
@@ -350,16 +360,25 @@ export async function deleteReview(
 export async function getAiSummary(
   placeId: string,
   placeType: PlaceType,
+  viewerId?: string,
 ): Promise<ServiceResult<ReviewSummaryResult>> {
+  const excludedAuthorIds = viewerId
+    ? await blockedAuthorIds(viewerId)
+    : undefined;
   const { reviews, totalCount } = await findRatingsForSummary(
     placeId,
     placeType,
     50,
+    ...(excludedAuthorIds ? [excludedAuthorIds] : []),
   );
 
   let avgRating: number | null = null;
   if (totalCount > 0) {
-    avgRating = await averageRating({ placeId, placeType });
+    avgRating = await averageRating({
+      placeId,
+      placeType,
+      ...(excludedAuthorIds ? { excludedAuthorIds } : {}),
+    });
   }
 
   if (totalCount < MIN_REVIEWS_FOR_AI_SUMMARY) {

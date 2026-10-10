@@ -1,3 +1,4 @@
+import { createContentSafetyRouter } from "./modules/content-safety";
 import express, {
   type Express,
   type NextFunction,
@@ -155,6 +156,7 @@ app.use("/api/v1/a11y", createHazardReportRouter());
 app.use("/api/v1/a11y", createEnvironmentRouter());
 app.use("/api/v1/a11y", createWelfareRouter());
 app.use("/api/v1/a11y", createVisualA11yRouter());
+app.use("/api/v1", createContentSafetyRouter());
 app.use("/api/v1/a11y", createReviewRouter());
 app.use("/api/v1/a11y", createCampusRouter());
 app.use("/api/v1/a11y", createPlaceSearchRouter());

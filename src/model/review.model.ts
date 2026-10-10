@@ -1,3 +1,7 @@
+import {
+  contentModerationSchema,
+  type ContentModeration,
+} from "./content-moderation.schema";
 import { Schema, model } from "mongoose";
 
 export type PlaceType =
@@ -7,6 +11,8 @@ export type EntranceAccessibility =
   "step_free" | "ramp" | "stairs_with_assistance" | "inaccessible";
 
 export interface IReview {
+  contentModeration?: ContentModeration;
+  moderationHiddenAt?: Date;
   _id: string;
   placeId: string;
   placeType: PlaceType;
@@ -30,6 +36,12 @@ export interface IReview {
 
 const reviewSchema = new Schema<IReview>(
   {
+    contentModeration: {
+      type: contentModerationSchema,
+      default: undefined,
+      select: false,
+    },
+    moderationHiddenAt: { type: Date },
     placeId: { type: String, required: true },
     placeType: {
       type: String,

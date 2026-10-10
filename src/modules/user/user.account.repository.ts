@@ -1,3 +1,5 @@
+import ContentReport from "../../model/content-report.model";
+import UserBlock from "../../model/user-block.model";
 import { Types } from "mongoose";
 import User from "../../model/user.model";
 import Config from "../../model/config.model";
@@ -71,6 +73,12 @@ export async function deleteOwnedRecords(userId: string): Promise<number> {
     SosSession.deleteMany({ userId }),
     PushToken.deleteMany({ userId }),
     Review.deleteMany({ userId }),
+    UserBlock.deleteMany({
+      $or: [{ ownerId: userId }, { blockedUserId: userId }],
+    }),
+    ContentReport.deleteMany({
+      $or: [{ reporterId: userId }, { authorId: userId }],
+    }),
   ]);
   return results.reduce((sum, result) => sum + (result.deletedCount ?? 0), 0);
 }

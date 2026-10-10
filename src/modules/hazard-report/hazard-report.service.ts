@@ -1,3 +1,4 @@
+import { blockedAuthorIds } from "../content-safety/content-safety.service";
 import { randomUUID } from "node:crypto";
 import { Types } from "mongoose";
 import {
@@ -320,6 +321,7 @@ function errorName(err: unknown): string {
  */
 export async function findNearby(
   input: NearbyReportsInput,
+  viewerId?: string,
 ): Promise<ServiceResult> {
   const radius = Math.min(
     input.radius ?? DEFAULT_NEARBY_RADIUS_M,
@@ -331,6 +333,9 @@ export async function findNearby(
     input.status?.length ? input.status : DEFAULT_NEARBY_STATUS
   ) as HazardStatus[];
 
+  const excludedAuthorIds = viewerId
+    ? await blockedAuthorIds(viewerId)
+    : undefined;
   const reports = await findNearbyReports(
     input.lat,
     input.lng,
@@ -339,6 +344,7 @@ export async function findNearby(
     input.hazardType,
     limit,
     now,
+    ...(excludedAuthorIds ? [excludedAuthorIds] : []),
   );
 
   return {
@@ -396,11 +402,17 @@ export async function findConfirmedHazardsWithin(
  * @param id The report ObjectId string.
  * @returns A 200 with the report, or a 400/404 domain failure.
  */
-export async function findById(id: string): Promise<ServiceResult> {
+export async function findById(
+  id: string,
+  viewerId?: string,
+): Promise<ServiceResult> {
   if (!Types.ObjectId.isValid(id)) {
     return fail(ResponseCode.INVALID_INPUT, "INVALID_ID");
   }
-  const report = await findPublicReportById(id);
+  const report = await findPublicReportById(
+    id,
+    ...(viewerId ? [await blockedAuthorIds(viewerId)] : []),
+  );
   if (!report) {
     return fail(ResponseCode.NOT_FOUND, "REPORT_NOT_FOUND");
   }
@@ -655,4 +667,31 @@ export async function findActiveHazardsForAgent(input: {
       visibleHazards: review?.visibleHazards ?? [],
     };
   });
+}
+
+/** Anonymous safety facts: retain road risk while excluding personal UGC and moderated content. */
+export async function findSafetyReports(
+  input: NearbyReportsInput,
+): Promise<ServiceResult> {
+  const rows = await findActiveVerifiedWithin(
+    { lat: input.lat, lng: input.lng },
+    Math.min(input.radius ?? DEFAULT_NEARBY_RADIUS_M, MAX_NEARBY_RADIUS_M),
+    Math.min(input.limit ?? DEFAULT_LIMIT, MAX_LIMIT),
+    input.hazardType,
+    new Date(),
+  );
+  const reports = rows.map((row) => ({
+    _id: row._id,
+    hazardType: row.hazardType,
+    severity: row.severity,
+    reportedLocation: row.reportedLocation,
+    status: "verified",
+    expiredAt: row.expiredAt,
+  }));
+  return {
+    ok: true,
+    httpCode: ResponseCode.OK,
+    message: MSG.OK,
+    data: { reports, total: reports.length },
+  };
 }

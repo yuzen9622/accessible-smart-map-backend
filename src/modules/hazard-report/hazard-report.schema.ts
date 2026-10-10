@@ -12,6 +12,13 @@ const MAX_EXPECTED_UNTIL_DAYS = 180;
 
 export const CreateHazardReportSchema = z
   .object({
+    canBlockAuthor: z.boolean().optional().openapi({
+      description:
+        "是否存在可封鎖作者的提示；公開回應不暴露作者 ID，實際封鎖仍由後端驗證。",
+    }),
+    moderationHiddenAt: z.string().optional().openapi({
+      description: "平台下架時間；僅本人歷史或管理者授權內容會出現。",
+    }),
     hazardType: z.enum(HAZARD_TYPES).openapi({ example: "obstacle" }),
     severity: z.enum(SEVERITIES).openapi({
       example: "difficult",
@@ -595,5 +602,48 @@ registry.registerPath({
     404: { description: "無存取權、回報或照片不存在、已清除" },
     429: { description: "請求過於頻繁" },
     503: { description: "儲存或照片處理暫時不可用，可重試" },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/a11y/reports/safety",
+  tags: ["Hazard Report"],
+  summary: "公開導航安全事實（不含使用者文字、圖片、作者）",
+  description:
+    "個人封鎖不改變路況風險；僅提供仍有效且已驗證的障礙事實，平台下架內容一律排除。",
+  request: { query: NearbyReportsQuerySchema },
+  responses: {
+    200: {
+      description: "安全障礙資料",
+      content: {
+        "application/json": {
+          schema: z.object({
+            ok: z.boolean(),
+            status: z.string(),
+            code: z.number(),
+            message: z.string(),
+            data: z.object({
+              total: z.number(),
+              reports: z.array(
+                z.object({
+                  _id: z.string(),
+                  hazardType: z.string(),
+                  severity: z.string().optional(),
+                  reportedLocation: z.object({
+                    type: z.literal("Point"),
+                    coordinates: z.array(z.number()),
+                  }),
+                  status: z.literal("verified"),
+                  expiredAt: z.string(),
+                }),
+              ),
+            }),
+          }),
+        },
+      },
+    },
+    400: { description: "查詢參數錯誤" },
+    429: { description: "限流" },
   },
 });

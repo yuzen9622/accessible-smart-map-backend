@@ -27,6 +27,7 @@ const PUBLIC_KEYS = [
   "updatedAt",
   "expiredAt",
   "deidentifiedAt",
+  "moderationHiddenAt",
 ] as const;
 
 const AI_REVIEW_KEYS = [
@@ -83,6 +84,10 @@ export function toReportView(
 ): Row {
   const source = doc as Row;
   const view = pick(source, PUBLIC_KEYS);
+  view.canBlockAuthor =
+    source.canBlockAuthor === true ||
+    (typeof source.reporterId === "string" &&
+      /^[a-f\d]{24}$/i.test(source.reporterId));
   view.hasPhoto = Boolean(
     !source.contentScrubbedAt &&
     !source.deidentifiedAt &&

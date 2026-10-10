@@ -1,3 +1,6 @@
+import { startContentReportWorker } from "./modules/content-safety/content-safety.worker";
+let contentReportWorker:
+  ReturnType<typeof startContentReportWorker> | undefined;
 import { startSosNotificationWorker } from "./modules/sos/sos-notification.worker";
 import http from "http";
 import app from "./app";
@@ -101,6 +104,7 @@ mongoose
     stopRetentionJob = startRetentionJob(retentionConfig);
     sosNotificationTimer = startSosNotificationWorker();
     passwordAssistanceTimer = startPasswordAssistanceWorker();
+    contentReportWorker = startContentReportWorker();
     busFleetSyncTimer = startBusFleetSyncJob();
     void warmTrafficGeometryRuntime().then(() => {
       trafficGeometryTimer = startTrafficGeometryRefreshJob();
@@ -125,6 +129,7 @@ function shutdown(signalLog: string): void {
   stopHazardAiMonitor?.();
   void (async () => {
     await Promise.allSettled([
+      contentReportWorker?.stop() ?? Promise.resolve(),
       hazardReviewNotificationWorker?.stop() ?? Promise.resolve(),
       hazardAiWorker
         ? hazardAiWorker

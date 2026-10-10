@@ -49,6 +49,7 @@ export interface PlaceReviewFilter {
   placeId: string;
   placeType: PlaceType;
   minAggregateScore?: number;
+  excludedAuthorIds?: string[];
 }
 
 function buildPlaceFilter(filter: PlaceReviewFilter): Record<string, unknown> {
@@ -56,6 +57,10 @@ function buildPlaceFilter(filter: PlaceReviewFilter): Record<string, unknown> {
     placeId: filter.placeId,
     placeType: filter.placeType,
     status: "active" as const,
+    moderationHiddenAt: null,
+    ...(filter.excludedAuthorIds?.length
+      ? { userId: { $nin: filter.excludedAuthorIds } }
+      : {}),
     ...(filter.minAggregateScore !== undefined
       ? {
           $expr: {
@@ -162,8 +167,9 @@ export async function findRatingsForSummary(
   placeId: string,
   placeType: PlaceType,
   limit: number,
+  excludedAuthorIds?: string[],
 ): Promise<{ reviews: ReviewRatingComment[]; totalCount: number }> {
-  const query = { placeId, placeType, status: "active" as const };
+  const query = buildPlaceFilter({ placeId, placeType, excludedAuthorIds });
   const [reviews, totalCount] = await Promise.all([
     Review.find(query)
       .select("rating comment")
