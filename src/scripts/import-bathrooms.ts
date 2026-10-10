@@ -1,31 +1,15 @@
 import "dotenv/config";
 import fs from "fs";
+import { parseCsvLine } from "../utils/csv";
 import path from "path";
 import mongoose from "mongoose";
+import { replaceSnapshot } from "./replace-snapshot";
 import BathroomModel from "../model/bathroom.model";
 
 const DEFAULT_CSV = path.resolve(
   __dirname,
   "../../data/bathrooms/無障礙廁所.csv",
 );
-
-function parseCsvLine(line: string): string[] {
-  const fields: string[] = [];
-  let current = "";
-  let inQuotes = false;
-  for (const ch of line) {
-    if (ch === '"') {
-      inQuotes = !inQuotes;
-    } else if (ch === "," && !inQuotes) {
-      fields.push(current);
-      current = "";
-    } else {
-      current += ch;
-    }
-  }
-  fields.push(current);
-  return fields;
-}
 
 function rowToDoc(fields: string[]) {
   const [
@@ -47,9 +31,11 @@ function rowToDoc(fields: string[]) {
 
   let latitude = parseFloat(latStr);
   let longitude = parseFloat(lngStr);
-  if (!name || isNaN(latitude) || isNaN(longitude)) return null;
+  if (!name || !Number.isFinite(latitude) || !Number.isFinite(longitude))
+    return null;
 
   if (latitude > 90) [latitude, longitude] = [longitude, latitude];
+  if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return null;
 
   return {
     county,
@@ -70,16 +56,23 @@ function rowToDoc(fields: string[]) {
   };
 }
 
-async function main() {
+export async function main() {
   const dbUrl = process.env.DATABASE_URL;
   if (!dbUrl) throw new Error("DATABASE_URL env var is required");
 
   const csvPath = process.argv[2] ?? DEFAULT_CSV;
   const raw = fs.readFileSync(csvPath, "utf-8").replace(/^﻿/, "");
   const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  const expectedHeader =
+    "county,areacode,village,number,name,address,administration,latitude,longitude,grade,type2,type,exec,diaper";
+  if (parseCsvLine(lines[0] ?? "").join(",") !== expectedHeader) {
+    throw new Error(
+      "Unexpected bathroom CSV header; existing snapshot preserved",
+    );
+  }
   const dataLines = lines.slice(1);
 
-  const docs: ReturnType<typeof rowToDoc>[] = [];
+  const docs: NonNullable<ReturnType<typeof rowToDoc>>[] = [];
   let skipped = 0;
   for (const line of dataLines) {
     const doc = rowToDoc(parseCsvLine(line));
@@ -88,27 +81,23 @@ async function main() {
   }
   console.log(`Parsed ${docs.length} rows, skipped ${skipped}`);
 
-  await mongoose.connect(dbUrl);
-  console.log("Connected to MongoDB");
-
-  const del = await BathroomModel.deleteMany({});
-  console.log(`Cleared ${del.deletedCount} existing bathroom rows`);
-
-  const CHUNK = 500;
-  let inserted = 0;
-  for (let i = 0; i < docs.length; i += CHUNK) {
-    const batch = await BathroomModel.insertMany(
-      docs.slice(i, i + CHUNK) as any[],
-      { ordered: false },
+  if (!docs.length)
+    throw new Error(
+      "Refusing to import zero valid rows; existing snapshot preserved",
     );
-    inserted += batch.length;
-  }
 
-  console.log(`Inserted ${inserted} bathroom rows`);
-  await mongoose.disconnect();
+  try {
+    await mongoose.connect(dbUrl);
+    const inserted = await replaceSnapshot(BathroomModel, docs);
+    console.log(`Inserted ${inserted} bathroom rows`);
+  } finally {
+    await mongoose.disconnect();
+  }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+if (require.main === module) {
+  void main().catch((err: unknown) => {
+    console.error(err);
+    process.exitCode = 1;
+  });
+}
