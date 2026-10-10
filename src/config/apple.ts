@@ -3,7 +3,7 @@ export const APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys";
 export const APPLE_TOKEN_URL = "https://appleid.apple.com/auth/token";
 export const APPLE_REVOKE_URL = "https://appleid.apple.com/auth/revoke";
 export const APPLE_CLIENT_SECRET_TTL_SEC = 5 * 60;
-export const APPLE_DEFAULT_AUDIENCE = "dev.yuzen.accessiblesmartmap";
+export const APPLE_DEFAULT_AUDIENCE = "com.accessiblemap.app";
 export const APPLE_PRIVATE_RELAY_DOMAIN = "privaterelay.appleid.com";
 export const APPLE_FALLBACK_DISPLAY_NAME = "Apple 使用者";
 

@@ -23,14 +23,14 @@ describe("config/apple", () => {
   it("exports expected constants", () => {
     expect(APPLE_ISSUER).toBe("https://appleid.apple.com");
     expect(APPLE_JWKS_URL).toBe("https://appleid.apple.com/auth/keys");
-    expect(APPLE_DEFAULT_AUDIENCE).toBe("dev.yuzen.accessiblesmartmap");
+    expect(APPLE_DEFAULT_AUDIENCE).toBe("com.accessiblemap.app");
     expect(APPLE_PRIVATE_RELAY_DOMAIN).toBe("privaterelay.appleid.com");
     expect(APPLE_FALLBACK_DISPLAY_NAME).toBe("Apple 使用者");
   });
 
   it("returns default audience when APPLE_CLIENT_IDS is unset", () => {
     delete process.env.APPLE_CLIENT_IDS;
-    expect(getAppleAudiences()).toEqual(["dev.yuzen.accessiblesmartmap"]);
+    expect(getAppleAudiences()).toEqual(["com.accessiblemap.app"]);
   });
 
   it("parses comma-separated allowlist, trims whitespace, filters empty strings, and deduplicates", () => {

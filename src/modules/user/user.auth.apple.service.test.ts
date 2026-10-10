@@ -165,7 +165,7 @@ describe("user.auth.service — authenticateWithApple", () => {
     });
 
     expect(verifyAppleIdentityToken).toHaveBeenCalledWith("sample-token", {
-      audience: ["dev.yuzen.accessiblesmartmap"],
+      audience: ["com.accessiblemap.app"],
       rawNonce: "raw-nonce",
     });
   });
