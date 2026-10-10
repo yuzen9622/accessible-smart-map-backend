@@ -1,3 +1,4 @@
+import type { HazardReviewNotification } from "./hazard-review-notification";
 import type {
   HazardAiReview,
   HazardAiReviewJob,
@@ -552,6 +553,8 @@ export interface IHazardReport {
   aiReview?: HazardAiReview;
   /** Internal work metadata (select:false); never part of a view. */
   aiReviewJob?: HazardAiReviewJob;
+  /** Private latest-result push outbox; never exposed by transport views. */
+  reviewNotification?: HazardReviewNotification;
   /** Private intake/cleanup state (select:false); absent on legacy reports. */
   photoIntake?: HazardPhotoIntake;
 }

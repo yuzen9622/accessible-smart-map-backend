@@ -8,6 +8,7 @@ import {
   type HazardAiWorkerHandle,
 } from "./modules/hazard-report/hazard-report.ai-worker";
 import { startHazardAiMonitor } from "./modules/hazard-report/hazard-report.monitor.service";
+import { startHazardReviewNotificationWorker } from "./modules/hazard-report/hazard-report.notification.service";
 import { startBusFleetSyncJob } from "./modules/transit/bus-fleet-sync.worker";
 import { attachVoiceWebSocket } from "./modules/voice";
 import { attachAlertWebSocket } from "./modules/transit/alert.gateway";
@@ -41,6 +42,8 @@ let shutdownStarted = false;
 let stopRetentionJob: (() => void) | undefined;
 let hazardAiWorker: HazardAiWorkerHandle | undefined;
 let stopHazardAiMonitor: (() => void) | undefined;
+let hazardReviewNotificationWorker:
+  ReturnType<typeof startHazardReviewNotificationWorker> | undefined;
 
 const server = http.createServer(app);
 attachVoiceWebSocket(server);
@@ -84,6 +87,7 @@ mongoose
   .then(() => {
     console.log("Connected to MongoDB");
     startHazardExpiryJob();
+    hazardReviewNotificationWorker = startHazardReviewNotificationWorker();
     // HAZARD_AI_WORKER_ENABLED=false only stops AI claims; intake cleanup and
     // deadline convergence of queued reviews keep running.
     hazardAiWorker = startHazardAiWorker(undefined, {
@@ -121,6 +125,7 @@ function shutdown(signalLog: string): void {
   stopHazardAiMonitor?.();
   void (async () => {
     await Promise.allSettled([
+      hazardReviewNotificationWorker?.stop() ?? Promise.resolve(),
       hazardAiWorker
         ? hazardAiWorker
             .stop()

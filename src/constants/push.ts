@@ -14,4 +14,5 @@ export const PUSH_DEFAULT_LOCALE = "zh-TW";
 
 export const PUSH_EVENT_TYPE = {
   SOS_UPDATE: "sos_update",
+  HAZARD_REVIEW: "hazard_review",
 } as const;

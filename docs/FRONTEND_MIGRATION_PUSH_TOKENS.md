@@ -70,5 +70,5 @@ token 綁定的是**這次登入的 session**，不是帳號本身：
 ## 三、已知限制
 
 - 目前只處理 Expo 送出時當下回傳的 `DeviceNotRegistered` 錯誤，還沒有做 push receipt 的延遲查詢，所以有少數失效 token 會晚一次才被清掉。
-- 通報審核結果的推播尚未實作（issue 列為「可後續」）。
+- 通報審核結果現在由 durable worker 推送，使用 `data.type=hazard_review`、`reportId` 與 `notificationId`；請依[審核通知串接與可靠性說明](reports/hazard-review-notifications.md)接上通知點擊及「我的通報」最新狀態查詢。
 - Android 使用預設 notification channel；如果 App 要用自訂 channel，後端再補 `channelId`。
