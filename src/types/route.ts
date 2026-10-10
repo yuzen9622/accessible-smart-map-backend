@@ -241,6 +241,10 @@ export interface WalkLeg extends WalkA11yDetails {
 }
 
 export interface BusLeg {
+  /** Internal OTP instants; non-enumerable and never part of the public DTO. */
+  _scheduledDepartureTime?: number;
+  _boardingReadyTime?: number;
+  _scheduledTripId?: string;
   /** Scheduled on-board time from OTP, excluding waiting and walking. */
   rideMinutes?: number;
   type: "BUS";

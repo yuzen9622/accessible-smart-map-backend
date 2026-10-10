@@ -1,4 +1,18 @@
-import type { AccessibleRoute } from "../../types/route";
+import type { AccessibleRoute, BusLeg } from "../../types/route";
+
+/** Preserve the planned boarding identity independently of displayed live ETAs. */
+export function attachBusSchedule(
+  leg: BusLeg,
+  departureTime: number,
+  boardingReadyTime: number,
+  tripId: string,
+): void {
+  Object.defineProperties(leg, {
+    _scheduledDepartureTime: { value: departureTime },
+    _boardingReadyTime: { value: boardingReadyTime },
+    _scheduledTripId: { value: tripId },
+  });
+}
 
 /**
  * Attach non-serialized absolute schedule metadata used by route orchestration.

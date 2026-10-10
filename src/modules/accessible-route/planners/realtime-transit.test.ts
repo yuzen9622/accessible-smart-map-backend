@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AccessibleRoute } from "../../../types/route";
+import { attachBusSchedule } from "../route-schedule";
+import type { AccessibleRoute, BusLeg } from "../../../types/route";
 
 const { tdxFetch } = vi.hoisted(() => ({
   tdxFetch: vi.fn(),
@@ -71,7 +72,7 @@ describe("future scheduled realtime handling", () => {
         minute: "2-digit",
       });
     const arrival = new Date(departure.getTime() + 60 * 60 * 1000);
-    return {
+    const route: AccessibleRoute = {
       routeId: `future-${routeName}`,
       routeName,
       totalMinutes: 500,
@@ -100,6 +101,13 @@ describe("future scheduled realtime handling", () => {
       _scheduledEndTime: arrival.getTime(),
       _isFutureScheduled: true,
     };
+    attachBusSchedule(
+      route.legs[0] as BusLeg,
+      departure.getTime(),
+      departure.getTime() - 300000,
+      "scheduled-trip",
+    );
+    return route;
   }
 
   beforeEach(() => {
@@ -109,6 +117,10 @@ describe("future scheduled realtime handling", () => {
       json: async () => [
         {
           StopName: { Zh_tw: "起站" },
+          SubRouteUID: "SOON01",
+          StopUID: "TPE-A",
+          ScheduledTime: "15:18",
+          PlateNumb: "BUS-1",
           Direction: 0,
           EstimateTime: 60,
           StopStatus: 0,
@@ -211,7 +223,7 @@ describe("future scheduled realtime handling", () => {
 describe("bus low-floor enrichment", () => {
   /** Each test needs a unique route name: the ETA cache is keyed by URL. */
   function busRoute(routeName: string, stop: string): AccessibleRoute {
-    return {
+    const route: AccessibleRoute = {
       routeId: `r-${routeName}`,
       routeName,
       totalMinutes: 30,
@@ -238,7 +250,20 @@ describe("bus low-floor enrichment", () => {
       ],
       accessibilityHighlights: [],
     };
+    attachBusSchedule(
+      route.legs[0] as BusLeg,
+      Date.parse("2030-01-01T10:00:00+08:00"),
+      Date.now(),
+      "scheduled-trip",
+    );
+    return route;
   }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2030-01-01T09:57:00+08:00"));
+  });
+  afterEach(() => vi.useRealTimers());
 
   const alight = {
     StopName: { Zh_tw: "終站" },
@@ -254,6 +279,9 @@ describe("bus low-floor enrichment", () => {
       ok: true,
       json: async () => [
         {
+          SubRouteUID: (route.legs[0] as BusLeg).subRouteUid,
+          StopUID: "TPE-A",
+          ScheduledTime: "10:00",
           StopName: { Zh_tw: "低地板站" },
           Direction: 0,
           EstimateTime: 180,
@@ -276,7 +304,7 @@ describe("bus low-floor enrichment", () => {
       isLowFloor: true,
       hasLiftOrRamp: true,
       waitInfo: { time: 3, source: "realtime" },
-      estimatedWaitMinutes: 3,
+      estimatedWaitMinutes: 5,
     });
     expect(leg).not.toHaveProperty("lowFloorAlternative");
     expect(route.accessibilityHighlights).toEqual([]);
@@ -292,6 +320,9 @@ describe("bus low-floor enrichment", () => {
       ok: true,
       json: async () => [
         {
+          SubRouteUID: (route.legs[0] as BusLeg).subRouteUid,
+          StopUID: "TPE-A",
+          ScheduledTime: "10:00",
           StopName: { Zh_tw: "紀錄失敗站" },
           Direction: 0,
           EstimateTime: 180,
@@ -321,6 +352,9 @@ describe("bus low-floor enrichment", () => {
       ok: true,
       json: async () => [
         {
+          SubRouteUID: (route.legs[0] as BusLeg).subRouteUid,
+          StopUID: "TPE-A",
+          ScheduledTime: "10:00",
           StopName: { Zh_tw: "未知站" },
           Direction: 0,
           EstimateTime: 180,
@@ -348,6 +382,9 @@ describe("bus low-floor enrichment", () => {
       ok: true,
       json: async () => [
         {
+          SubRouteUID: (route.legs[0] as BusLeg).subRouteUid,
+          StopUID: "TPE-A",
+          ScheduledTime: "10:00",
           StopName: { Zh_tw: "高底盤站" },
           Direction: 0,
           EstimateTime: 120,
@@ -356,6 +393,9 @@ describe("bus low-floor enrichment", () => {
           PlateNumb: "KEA-1234",
         },
         {
+          SubRouteUID: (route.legs[0] as BusLeg).subRouteUid,
+          StopUID: "TPE-A",
+          ScheduledTime: "10:10",
           StopName: { Zh_tw: "高底盤站" },
           Direction: 0,
           EstimateTime: 720,
@@ -395,6 +435,9 @@ describe("bus low-floor enrichment", () => {
         ok: true,
         json: async () => [
           {
+            SubRouteUID: (route.legs[0] as BusLeg).subRouteUid,
+            StopUID: "TPE-A",
+            ScheduledTime: "10:00",
             StopName: { Zh_tw: "單筆站" },
             Direction: 0,
             EstimateTime: 120,
@@ -435,6 +478,9 @@ describe("bus low-floor enrichment", () => {
       ok: true,
       json: async () => [
         {
+          SubRouteUID: (route.legs[0] as BusLeg).subRouteUid,
+          StopUID: "TPE-A",
+          ScheduledTime: "10:00",
           StopName: { Zh_tw: "斷線站" },
           Direction: 0,
           EstimateTime: 180,
@@ -453,9 +499,9 @@ describe("bus low-floor enrichment", () => {
     expect(leg).toMatchObject({
       plateNumb: "KEA-1234",
       waitInfo: { time: 3, source: "realtime" },
-      estimatedWaitMinutes: 3,
+      estimatedWaitMinutes: 5,
     });
     expect(leg).not.toHaveProperty("isLowFloor");
-    expect(route.totalMinutes).toBe(28);
+    expect(route.totalMinutes).toBe(30);
   });
 });

@@ -7,6 +7,9 @@ import type { BusEtaTiming } from "../../../types/transit";
 import type { RailOdSuspension } from "../../../types/rail";
 
 export interface TdxEtaRecord extends BusEtaTiming {
+  SubRouteUID?: string;
+  StopUID?: string;
+  ScheduledTime?: string;
   StopName?: { Zh_tw?: string };
   Direction?: number;
   StopSequence?: number;

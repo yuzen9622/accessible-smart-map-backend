@@ -39,6 +39,7 @@ import { walkSpeedMps } from "../scoring";
 import { getRoutingConfig } from "../../../config/routing";
 import {
   attachInternalSchedule,
+  attachBusSchedule,
   retainEarliestFutureRoute,
 } from "../route-schedule";
 import type {
@@ -1956,6 +1957,15 @@ export async function planOtpRouteDetailed(
         futureScheduled && transitLegIndex === 0 ? undefined : waitMinutes,
         directions,
       );
+      if (mapped.type === "BUS") {
+        attachBusSchedule(
+          mapped,
+          leg.startTime,
+          clockMs +
+            (transitLegIndex === 0 ? (pre?.minutesEst ?? 0) * 60_000 : 0),
+          stripFeedId(leg.trip?.gtfsId),
+        );
+      }
       transitLegIndex++;
       clockMs = leg.endTime;
       legs.push(mapped);

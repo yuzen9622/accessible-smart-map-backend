@@ -4,20 +4,12 @@
  * After route planning has produced the final top-3, this service overlays
  * live TDX data onto transit legs — schedule-built routes become realtime:
  *
- *  • BUS — the FIRST transit leg of each route gets its scheduled wait
- *    replaced by the TDX EstimatedTimeOfArrival for that stop (the rider is
- *    standing there NOW; later legs board in the future, where an ETA is
- *    meaningless and the timetable stays authoritative). departureTime /
- *    arrivalTime shift to now + ETA (scheduled ride duration preserved) so
- *    the leg never mixes schedule clock times with a realtime wait; without
- *    a live ETA the leg stays fully schedule-based. The endpoint is
- *    chosen by the TDX system code — GTFS legs carry it in the stop-id
- *    prefix ("TXG2646"), MaaS legs in cityCode (from agency_id): THB →
- *    intercity (公路客運), city codes (TPE/NWT/TXG/…) → per-city ETA.
- *    That same leg also carries the TDX plate number and the BusVehicle
- *    low-floor flags for it; when the first bus is confirmed high-floor, a
- *    later low-floor service is looked up (other ETA records for the stop
- *    first, then on-road vehicle positions) and reported as an alternative.
+ *  • BUS — only the first transit boarding can receive a live countdown.
+ *    The record must identify the planned stop, branch, scheduled time and
+ *    one vehicle; its ETA must leave time to reach the boarding stop. Unknown
+ *    or unrelated arrivals retain the schedule, including NextBusTime and
+ *    service-status fallbacks. Planned clock times and duration are immutable.
+ *    Low-floor/plate annotations are attached only to the matched vehicle.
  *  • TRA — v3 TrainLiveBoard reports the delay of every currently-running
  *    train. MaaS legs have no train number (only a line name) — their real
  *    TrainNo is first recovered from the OD daily timetable (departure
@@ -45,7 +37,7 @@
  */
 
 import { tdxFetch } from "../../../config/fetch";
-import { BUS_DIRECTIONS } from "../../../constants/bus";
+import { canMatchBusTrip, matchPlannedBus } from "./bus-trip-match";
 import {
   busEtaIsFresh,
   busEtaSeconds,
@@ -55,8 +47,8 @@ import { railOdIsBoardable } from "../../../utils/rail-suspension";
 import { busUrl, trainUrl, traUrl, thsrUrl } from "../../../config/transit";
 import { odataUrlLiteral } from "../../../utils/transit-text";
 import { fetchRailLegGeometry } from "./otp-routing";
-import { gtfsTimeToSeconds, secondsToHHmm } from "./gtfs-time";
-import { taipeiSecondsOfDay, taipeiYmdDash } from "../../../config/taipei-time";
+import { gtfsTimeToSeconds } from "./gtfs-time";
+import { taipeiYmdDash } from "../../../config/taipei-time";
 import { findVehiclesByPlate } from "../../transit/bus.repository";
 import { recordRealtimeSightings } from "../../transit/bus-fleet.repository";
 import type { ITdxBusVehicle } from "../../../types";
@@ -206,7 +198,8 @@ export function annotateBusTdxCity(routes: AccessibleRoute[]): void {
 }
 
 /**
- * ETA endpoint for a GTFS-built bus leg. Queries BOTH stops and BOTH directions:
+ * ETA endpoint for a GTFS-built bus leg. Queries BOTH stops and BOTH directions
+ * within the planned sub-route:
  * GTFS direction_id does not reliably map onto TDX Direction (verified live: 860
  * at 三芝 — GTFS says 0, the bus actually heading there is TDX Direction 1), so
  * the direction is resolved from the data instead (board ETA < alight ETA for
@@ -220,9 +213,13 @@ function etaUrl(leg: BusLeg): string | null {
   if (!prefix || !leg.routeName || !leg.departureStop || !leg.arrivalStop) {
     return null;
   }
+  const stops = [leg.departureStopId, leg.arrivalStopId]
+    .filter((id): id is string => Boolean(id))
+    .map((id) => `StopUID eq '${odataUrlLiteral(id)}'`);
+  if (!stops.length || !leg.subRouteUid) return null;
   const query =
-    `?$format=JSON&$filter=contains(StopName/Zh_tw,'${odataUrlLiteral(leg.departureStop)}')` +
-    ` or contains(StopName/Zh_tw,'${odataUrlLiteral(leg.arrivalStop)}')`;
+    `?$format=JSON&$filter=SubRouteUID eq '${odataUrlLiteral(leg.subRouteUid)}'` +
+    ` and (${stops.join(" or ")})`;
   if (prefix === "THB") {
     return `${busUrl.interCityEstimatedTimeOfArrivalUrl}/${encodeURIComponent(leg.routeName)}${query}`;
   }
@@ -261,34 +258,13 @@ function pushUnique(arr: string[], text: string): void {
 }
 
 /**
- * First non-WALK leg — the only boarding that happens "now".
+ * First non-WALK leg; its own boarding instant determines live eligibility.
  *
  * @param route The route to scan.
  * @returns The first transit leg, or undefined.
  */
 function firstTransitLeg(route: AccessibleRoute) {
   return route.legs.find((l) => l.type !== "WALK");
-}
-
-/**
- * Record for `name`, preferring an exact StopName match over contains().
- *
- * @param records The ETA records to search.
- * @param name The stop name to match.
- * @param direction The TDX direction to filter on.
- * @returns The matching ETA record, or undefined.
- */
-function recordForStop(
-  records: TdxEtaRecord[],
-  name: string,
-  direction: number,
-): TdxEtaRecord | undefined {
-  const inDir = records.filter((r) => r.Direction === direction);
-  const exact = inDir.filter((r) => r.StopName?.Zh_tw === name);
-  const matched = exact.length
-    ? exact
-    : inDir.filter((r) => r.StopName?.Zh_tw?.includes(name));
-  return matched.find((r) => estimateSeconds(r) !== null) ?? matched[0];
 }
 
 /**
@@ -313,101 +289,32 @@ function estimateSeconds(record: TdxEtaRecord): number | null {
   return null;
 }
 
-/**
- * Once the wait is live, the scheduled clock times no longer describe the bus
- * the rider will actually board — shift departure to now + ETA and preserve
- * the scheduled ride duration, so a leg is either fully schedule-based or
- * fully realtime, never a mix of both.
- *
- * @param leg The bus leg to shift in place.
- * @param etaSec The live ETA in seconds.
- */
-function shiftLegToLiveEta(leg: BusLeg, etaSec: number): void {
-  if (!leg.departureTime || !leg.arrivalTime) return;
-  const depSec = gtfsTimeToSeconds(leg.departureTime);
-  const arrSec = gtfsTimeToSeconds(leg.arrivalTime);
-  if (isNaN(depSec) || isNaN(arrSec)) return;
-  const rideSec = arrSec >= depSec ? arrSec - depSec : arrSec + 86400 - depSec;
-  const nowSec = taipeiSecondsOfDay();
-  leg.departureTime = secondsToHHmm(nowSec + etaSec);
-  leg.arrivalTime = secondsToHHmm(nowSec + etaSec + rideSec);
-}
-
+/** Only a matched planned departure may contribute live display/vehicle data. */
 async function overlayBusEta(route: AccessibleRoute): Promise<void> {
   const leg = firstTransitLeg(route);
-  if (!leg || leg.type !== "BUS") return;
-  if (leg.waitInfo.source === "realtime") return;
+  if (!leg || leg.type !== "BUS" || !canMatchBusTrip(leg)) return;
+  if (leg.waitInfo?.source === "realtime") return;
   const url = etaUrl(leg);
   if (!url) return;
 
-  const records = (await fetchEtaRecords(url)).filter((r) => busEtaIsFresh(r));
-  if (!records.length) return;
+  const records = await fetchEtaRecords(url);
+  const match = matchPlannedBus(leg, records);
+  if (!match) return;
 
-  const candidates: {
-    est: number;
-    dir: number;
-    live: boolean;
-    board: TdxEtaRecord;
-  }[] = [];
-  const boards: TdxEtaRecord[] = [];
-  for (const dir of BUS_DIRECTIONS.filter((d) => d !== 255)) {
-    const board = recordForStop(records, leg.departureStop, dir);
-    if (!board) continue;
-    boards.push(board);
-
-    const estSeconds = estimateSeconds(board);
-    const live = busEtaSeconds(board) !== null && (board.StopStatus ?? 0) === 0;
-    if (estSeconds == null) continue;
-
-    const alight = recordForStop(records, leg.arrivalStop, dir);
-    if (alight) {
-      const alightSeconds = busEtaSeconds(alight);
-      if (alight.StopSequence != null && board.StopSequence != null) {
-        if (alight.StopSequence <= board.StopSequence) {
-          continue;
-        }
-      } else if (alightSeconds !== null && alightSeconds <= estSeconds) {
-        continue;
-      }
-    }
-    candidates.push({ est: estSeconds, dir, live, board });
-  }
-
-  if (candidates.length) {
-    const pick =
-      candidates.find((c) => c.dir === leg.direction) ?? candidates[0];
-    const prevWait = leg.estimatedWaitMinutes ?? 0;
-    const minutes = Math.round(pick.est / 60);
-    leg.waitInfo = pick.live
-      ? { time: minutes, source: "realtime" }
-      : {
-          time: secondsToHHmm(taipeiSecondsOfDay() + pick.est),
-          source: "schedule",
-        };
-    leg.estimatedWaitMinutes = minutes;
-    shiftLegToLiveEta(leg, pick.est);
-    if (route.transferCount === 0) {
-      route.totalMinutes = Math.max(1, route.totalMinutes - prevWait + minutes);
-    }
-    await annotateBusVehicle(route, leg, records, pick.dir, pick.board).catch(
-      () => undefined,
-    );
-    return;
-  }
-
-  if (
-    boards.length &&
-    boards.every((b) => b.StopStatus === 3 || b.StopStatus === 4)
-  ) {
-    leg.waitInfo = { time: null, source: "unavailable" };
-    leg.estimatedWaitMinutes = 0;
-    pushUnique(
-      route.accessibilityHighlights,
-      `⚠️ 公車「${leg.routeName}」即時資訊顯示${
-        boards[0].StopStatus === 3 ? "末班車已過" : "今日未營運"
-      }，請確認時刻表`,
-    );
-  }
+  // departureTime/arrivalTime and route duration remain the planned schedule.
+  // The ETA is a countdown from now, not the traveller's wait after walking.
+  leg.waitInfo = { time: Math.round(match.seconds / 60), source: "realtime" };
+  leg.plateNumb = match.board.PlateNumb;
+  const branchRecords = records.filter(
+    (r) => r.SubRouteUID === leg.subRouteUid,
+  );
+  await annotateBusVehicle(
+    route,
+    leg,
+    branchRecords,
+    match.direction,
+    match.board,
+  ).catch(() => undefined);
 }
 
 /**

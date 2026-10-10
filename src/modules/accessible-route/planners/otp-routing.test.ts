@@ -237,6 +237,39 @@ describe("OTP PLAN_QUERY searchWindow", () => {
 });
 
 describe("OTP BUS leg sub-route identity", () => {
+  it("retains absolute boarding time and access-walk completion without exposing internal metadata", async () => {
+    const departure = new Date("2030-01-01T09:00:00+08:00");
+    const boardAt = new Date("2030-01-01T10:00:00+08:00").getTime();
+    const walkEnds = departure.getTime() + 10 * 60_000;
+    const bus = transitItinerary("PLANNED", boardAt);
+    const walk = walkOnlyItinerary().legs[0];
+    post.mockResolvedValue(
+      okResp([
+        {
+          ...bus,
+          duration: 70 * 60,
+          legs: [
+            { ...walk, startTime: departure.getTime(), endTime: walkEnds },
+            ...bus.legs,
+          ],
+        },
+      ]),
+    );
+    const routes = await planOtpRoute(origin, destination, {
+      departureTime: departure,
+    });
+    const leg = routes.flatMap((r) => r.legs).find((l) => l.type === "BUS");
+    expect(leg).toMatchObject({
+      departureTime: "10:00",
+      _scheduledDepartureTime: boardAt,
+      _boardingReadyTime: walkEnds,
+      _scheduledTripId: "PLANNED_trip",
+    });
+    expect(JSON.stringify(leg)).not.toContain("_boardingReadyTime");
+    expect(JSON.stringify(leg)).not.toContain("_scheduledTripId");
+    expect(JSON.stringify(leg)).not.toContain("_scheduledDepartureTime");
+  });
+
   it("maps the scheduled GTFS sub-route UID and name onto the BUS leg", async () => {
     const itineraries = threeDistinctTransitItineraries();
     itineraries[0].legs[0].route.gtfsId = "1:TPE3070_0";

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AccessibleRoute } from "../../../types/route";
+import { attachBusSchedule } from "../route-schedule";
+import type { AccessibleRoute, BusLeg } from "../../../types/route";
 
 const { tdxFetch } = vi.hoisted(() => ({ tdxFetch: vi.fn() }));
 vi.mock("../../../config/fetch", () => ({ tdxFetch }));
@@ -19,7 +20,7 @@ const ago = (seconds: number) =>
   new Date(now.getTime() - seconds * 1000).toISOString();
 
 function bus(name: string): AccessibleRoute {
-  return {
+  const route: AccessibleRoute = {
     routeId: name,
     routeName: name,
     totalMinutes: 23,
@@ -47,6 +48,13 @@ function bus(name: string): AccessibleRoute {
       },
     ],
   };
+  attachBusSchedule(
+    route.legs[0] as BusLeg,
+    Date.parse("2026-10-05T12:03:00+08:00"),
+    now.getTime(),
+    "trip",
+  );
+  return route;
 }
 
 beforeEach(() => {
@@ -62,6 +70,10 @@ describe("real routing overlay consumes corrected TDX predictions", () => {
       ok: true,
       json: async () => [
         {
+          SubRouteUID: "EXACT_STOP_ELAPSED",
+          StopUID: "THB1",
+          ScheduledTime: "12:03",
+          PlateNumb: "BUS-1",
           StopName: { Zh_tw: "起站" },
           Direction: 10,
           EstimateTime: 30,
@@ -86,6 +98,10 @@ describe("real routing overlay consumes corrected TDX predictions", () => {
   it("supports Direction=10 and keeps counting down within the same cache entry", async () => {
     const rows = [
       {
+        SubRouteUID: "CACHE_CIRCLE",
+        StopUID: "THB1",
+        ScheduledTime: "12:03",
+        PlateNumb: "BUS-1",
         StopName: { Zh_tw: "起站" },
         Direction: 10,
         EstimateTime: 150,
@@ -94,6 +110,9 @@ describe("real routing overlay consumes corrected TDX predictions", () => {
         SrcTransTime: ago(60),
       },
       {
+        SubRouteUID: "CACHE_CIRCLE",
+        StopUID: "THB2",
+        PlateNumb: "BUS-1",
         StopName: { Zh_tw: "終站" },
         Direction: 10,
         EstimateTime: 1350,
@@ -148,15 +167,23 @@ describe("real routing overlay consumes corrected TDX predictions", () => {
       ok: true,
       json: async () => [
         {
+          SubRouteUID: "VALID_AFTER_ELAPSED",
+          StopUID: "THB1",
+          ScheduledTime: "12:03",
+          PlateNumb: "BUS-1",
           StopName: { Zh_tw: "起站" },
-          Direction: 10,
+          Direction: 0,
           EstimateTime: 30,
           SrcTransTime: ago(60),
           StopStatus: 0,
         },
         {
+          SubRouteUID: "VALID_AFTER_ELAPSED",
+          StopUID: "THB1",
+          ScheduledTime: "12:03",
+          PlateNumb: "BUS-1",
           StopName: { Zh_tw: "起站" },
-          Direction: 10,
+          Direction: 0,
           EstimateTime: 180,
           SrcTransTime: ago(60),
           StopStatus: 0,
