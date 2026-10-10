@@ -10,6 +10,8 @@
  * Pure functions only — no I/O, no clock beyond an injectable `now`.
  */
 
+import { DEFAULT_LANG, type SupportedLang } from "../../types/lang";
+import { NAVIGATION_MESSAGES } from "./navigation-messages";
 import type { HazardSeverity, HazardType } from "../../types";
 import type { RerouteReason } from "../accessible-route/accessible-route.types";
 
@@ -79,6 +81,7 @@ export type CorridorFinding =
     };
 
 export interface ClassifyContext {
+  language?: SupportedLang;
   /** canonicalRequest.requireElevator */
   requireElevator: boolean;
   /** NavigationSession.getSnapshotState().onVehicle */
@@ -105,12 +108,6 @@ const SEVERITY_RANK: Record<NavAdvisorySeverity, number> = {
   info: 1,
 };
 
-const HAZARD_TYPE_LABEL: Record<HazardType, string> = {
-  obstacle: "障礙物",
-  construction: "施工",
-  data_error: "資料錯誤",
-};
-
 const TRANSIT_TITLE_MAX = 60;
 
 /** Severity ordering, highest first. Stable for equal severities. */
@@ -132,14 +129,11 @@ export function classifyCorridorFinding(
   finding: CorridorFinding,
   ctx: ClassifyContext,
 ): NavAdvisory {
+  const messages = NAVIGATION_MESSAGES[ctx.language ?? DEFAULT_LANG];
   const issuedAt = (ctx.now ?? (() => new Date().toISOString()))();
 
   if (finding.category === "hazard") {
-    const typeLabel = HAZARD_TYPE_LABEL[finding.hazardType];
-    const title =
-      finding.distanceAheadM > 0
-        ? `前方 ${Math.round(finding.distanceAheadM)} 公尺有${typeLabel}回報`
-        : `前方有${typeLabel}回報`;
+    const title = messages.hazard(finding.hazardType, finding.distanceAheadM);
     const blocking = finding.severity === "blocking";
     const severity: NavAdvisorySeverity = blocking
       ? "critical"
@@ -158,7 +152,7 @@ export function classifyCorridorFinding(
       action,
       title,
       ...(finding.description ? { detail: finding.description } : {}),
-      speech: `注意，${title}${blocking ? "，正在為你重新規劃路線" : ""}`,
+      speech: messages.advisory(title, blocking),
       ...(action === "none"
         ? {}
         : { rerouteReason: "CONFIRMED_HAZARD" as const }),
@@ -169,7 +163,7 @@ export function classifyCorridorFinding(
   }
 
   if (finding.category === "facility") {
-    const title = `${finding.stationName}站電梯${finding.keyword}中`;
+    const title = messages.facility(finding.stationName, finding.keyword);
     const action: NavAdvisoryAction = ctx.requireElevator
       ? "reroute_applied"
       : "reroute_suggested";
@@ -180,11 +174,7 @@ export function classifyCorridorFinding(
       action,
       title,
       ...(finding.description ? { detail: finding.description } : {}),
-      speech: `注意，${title}${
-        action === "reroute_applied"
-          ? "，正在為你重新規劃路線"
-          : "，可查看替代路線"
-      }`,
+      speech: messages.advisory(title, action === "reroute_applied", true),
       rerouteReason: "FACILITY_OUTAGE",
       issuedAt,
     };
@@ -202,9 +192,7 @@ export function classifyCorridorFinding(
     action,
     title,
     ...(finding.description ? { detail: finding.description } : {}),
-    speech: `注意，即時通阻警報：${title}${
-      blocking ? "，正在為你重新規劃路線" : ""
-    }`,
+    speech: messages.transitAlert(title, blocking),
     ...(action === "none"
       ? {}
       : { rerouteReason: "TRANSIT_DISRUPTION" as const }),

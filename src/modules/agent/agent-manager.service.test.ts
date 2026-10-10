@@ -455,6 +455,29 @@ describe("runAgent façade", () => {
     expect(mockExec).not.toHaveBeenCalled();
   });
 
+  it("passes the session language to tools without model-supplied language", async () => {
+    mockCreate
+      .mockResolvedValueOnce(
+        functionCallResponse([{ name: "getNavInstructions", args: {} }]),
+      )
+      .mockResolvedValueOnce(stopResponse());
+    mockExec.mockResolvedValue(JSON.stringify({ ok: true, instructions: [] }));
+    await runAgent({
+      input: userInput("directions?"),
+      systemInstruction: undefined,
+      model: "test-model",
+      language: "en",
+      execTool: executeLocalTool,
+    });
+    expect(mockExec).toHaveBeenCalledWith(
+      "getNavInstructions",
+      {},
+      undefined,
+      undefined,
+      expect.objectContaining({ language: "en" }),
+    );
+  });
+
   it("routes tool execution through the injected executor", async () => {
     mockCreate
       .mockResolvedValueOnce(

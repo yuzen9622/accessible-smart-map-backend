@@ -46,6 +46,7 @@ export type AgentToolExecutor = (
   userLocation?: { latitude: number; longitude: number },
   userId?: string,
   memoryOptions?: {
+    language?: AgentLanguage;
     allowMemoryWrite?: boolean;
     explicitMemoryRequest?: boolean;
     routeToken?: string;

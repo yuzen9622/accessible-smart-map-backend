@@ -650,6 +650,37 @@ describe("voice gateway", () => {
     expect(bridge.startNavigation).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [
+      { type: "nav.setRoute", routeToken: "" },
+      "nav.error",
+      "The route token format is invalid.",
+    ],
+    [
+      { type: "nav.resume" },
+      "nav.resume_failed",
+      "The navigation resume request is invalid.",
+    ],
+  ])(
+    "localizes invalid navigation control frames %j",
+    async (payload, type, text) => {
+      const ws = connect();
+      await waitForOpen(ws);
+      const ready = waitForJson(ws);
+      ws.send(
+        JSON.stringify({
+          type: "session.start",
+          token: signToken("voice-invalid-english"),
+          language: "en",
+        }),
+      );
+      await ready;
+      const response = waitForJson(ws);
+      ws.send(JSON.stringify(payload));
+      await expect(response).resolves.toMatchObject({ type, message: text });
+    },
+  );
+
   it("emits nav.error for a parsed nav.setRoute with an invalid token", async () => {
     const ws = connect();
     await waitForOpen(ws);

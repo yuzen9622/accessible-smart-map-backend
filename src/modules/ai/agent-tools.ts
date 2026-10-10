@@ -1,3 +1,4 @@
+import type { AgentLanguage } from "../../types/agent";
 import {
   AgentNavOptionsSchema,
   AgentAccessibilityOptionsSchema,
@@ -1988,6 +1989,7 @@ export async function executeLocalTool(
   userLocation?: { latitude: number; longitude: number },
   userId?: string,
   options: {
+    language?: AgentLanguage;
     allowMemoryWrite?: boolean;
     explicitMemoryRequest?: boolean;
     lineUserId?: string;
@@ -2178,7 +2180,8 @@ export async function executeLocalTool(
     case "getNavInstructions": {
       const navOptions = AgentNavOptionsSchema.safeParse({
         userHeading: args.userHeading,
-        language: args.language,
+        language:
+          args.language === undefined ? options.language : args.language,
       });
       if (!navOptions.success)
         return JSON.stringify({

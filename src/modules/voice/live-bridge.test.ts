@@ -433,114 +433,126 @@ describe("createLiveBridge navigation turn arbiter", () => {
     getNavigationEnvelopeByToken.mockResolvedValue(null);
   });
 
-  it("emits one ordered backend reroute episode and atomically replaces the active session", async () => {
-    vi.useFakeTimers();
-    try {
-      let onmessage: ((message: unknown) => void) | undefined;
-      const session = makeSession();
-      const ws = makeWs();
-      connect.mockImplementation(async ({ callbacks }) => {
-        onmessage = callbacks.onmessage;
-        return session;
-      });
-      getNavigationEnvelopeByToken.mockResolvedValue({
-        navigationId: "11111111-1111-4111-8111-111111111111",
-        routeVersion: 1,
-        canonicalRequest: { requireElevator: false },
-      });
-      const pendingReroute = deferred<any>();
-      rerouteAccessibleRoute.mockReturnValue(pendingReroute.promise);
-      const rerouteResult = {
-        ok: true,
-        data: {
+  it.each(["en", "zh-TW"] as const)(
+    "reroutes and replaces the active session in %s",
+    async (language) => {
+      vi.useFakeTimers();
+      try {
+        let onmessage: ((message: unknown) => void) | undefined;
+        const session = makeSession();
+        const ws = makeWs();
+        connect.mockImplementation(async ({ callbacks }) => {
+          onmessage = callbacks.onmessage;
+          return session;
+        });
+        getNavigationEnvelopeByToken.mockResolvedValue({
+          navigationId: "11111111-1111-4111-8111-111111111111",
+          routeVersion: 1,
+          canonicalRequest: { requireElevator: false },
+        });
+        const pendingReroute = deferred<any>();
+        rerouteAccessibleRoute.mockReturnValue(pendingReroute.promise);
+        const rerouteResult = {
+          ok: true,
+          data: {
+            navigationId: "11111111-1111-4111-8111-111111111111",
+            previousRouteVersion: 1,
+            routeVersion: 2,
+            routeToken: "replacement",
+            route: walkRoute,
+            instructions: [],
+            steps: [],
+            warnings: [],
+            currentStepIndex: 0,
+            replayed: false,
+          },
+        };
+        const bridge = await createLiveBridge({
+          ws,
+          userId: "u",
+          language,
+          userLocation: { latitude: 25, longitude: 121 },
+        });
+        await bridge.voiceReady;
+        await bridge.armRouteToken("initial");
+        onmessage?.({
+          toolCall: {
+            functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
+          },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        const far = { latitude: 26, longitude: 122 };
+        for (let i = 0; i < 3; i++) {
+          bridge.updatePosition(far);
+          await vi.advanceTimersByTimeAsync(500);
+        }
+        expect(rerouteAccessibleRoute).toHaveBeenCalledOnce();
+        pendingReroute.resolve(rerouteResult);
+        await vi.advanceTimersByTimeAsync(0);
+
+        const messages = vi
+          .mocked(ws.send)
+          .mock.calls.map(([value]) => value)
+          .filter((value): value is string => typeof value === "string")
+          .map((value) => JSON.parse(value));
+        const types = messages.map((message) => message.type);
+        expect(types.filter((type) => type === "nav.rerouting")).toHaveLength(
+          1,
+        );
+        expect(types.indexOf("nav.offroute")).toBeLessThan(
+          types.indexOf("nav.rerouting"),
+        );
+        expect(types.indexOf("nav.rerouting")).toBeLessThan(
+          types.indexOf("nav.route_replaced"),
+        );
+        const rerouting = messages.find(
+          (message) => message.type === "nav.rerouting",
+        );
+        expect(rerouting).toEqual({
+          type: "nav.rerouting",
           navigationId: "11111111-1111-4111-8111-111111111111",
           previousRouteVersion: 1,
-          routeVersion: 2,
+          reason: "OFF_ROUTE",
+          clientRequestId: expect.stringMatching(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+          ),
+        });
+        const routeReplaced = messages.find(
+          (message) => message.type === "nav.route_replaced",
+        );
+        const initialStart = messages.find(
+          (message) => message.type === "nav.start",
+        );
+        expect(initialStart.steps.at(-1).instruction).toBe(
+          language === "en"
+            ? "You have arrived at your destination"
+            : "您已抵達目的地",
+        );
+        expect(routeReplaced).toEqual({
+          type: "nav.route_replaced",
+          navigationId: "11111111-1111-4111-8111-111111111111",
+          previousRouteVersion: 1,
+          reason: "OFF_ROUTE",
           routeToken: "replacement",
+          routeVersion: 2,
           route: walkRoute,
-          instructions: [],
-          steps: [],
+          steps: initialStart.steps,
           warnings: [],
           currentStepIndex: 0,
-          replayed: false,
-        },
-      };
-      const bridge = await createLiveBridge({
-        ws,
-        userId: "u",
-        userLocation: { latitude: 25, longitude: 121 },
-      });
-      await bridge.voiceReady;
-      await bridge.armRouteToken("initial");
-      onmessage?.({
-        toolCall: {
-          functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
-        },
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      const far = { latitude: 26, longitude: 122 };
-      for (let i = 0; i < 3; i++) {
-        bridge.updatePosition(far);
-        await vi.advanceTimersByTimeAsync(500);
+        });
+        expect(rerouteAccessibleRoute).toHaveBeenCalledWith({
+          routeToken: "initial",
+          currentPosition: far,
+          previousRouteVersion: 1,
+          reason: "OFF_ROUTE",
+          clientRequestId: rerouting.clientRequestId,
+          language,
+        });
+      } finally {
+        vi.useRealTimers();
       }
-      expect(rerouteAccessibleRoute).toHaveBeenCalledOnce();
-      pendingReroute.resolve(rerouteResult);
-      await vi.advanceTimersByTimeAsync(0);
-
-      const messages = vi
-        .mocked(ws.send)
-        .mock.calls.map(([value]) => value)
-        .filter((value): value is string => typeof value === "string")
-        .map((value) => JSON.parse(value));
-      const types = messages.map((message) => message.type);
-      expect(types.filter((type) => type === "nav.rerouting")).toHaveLength(1);
-      expect(types.indexOf("nav.offroute")).toBeLessThan(
-        types.indexOf("nav.rerouting"),
-      );
-      expect(types.indexOf("nav.rerouting")).toBeLessThan(
-        types.indexOf("nav.route_replaced"),
-      );
-      const rerouting = messages.find(
-        (message) => message.type === "nav.rerouting",
-      );
-      expect(rerouting).toEqual({
-        type: "nav.rerouting",
-        navigationId: "11111111-1111-4111-8111-111111111111",
-        previousRouteVersion: 1,
-        reason: "OFF_ROUTE",
-        clientRequestId: expect.stringMatching(
-          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-        ),
-      });
-      const routeReplaced = messages.find(
-        (message) => message.type === "nav.route_replaced",
-      );
-      const initialStart = messages.find(
-        (message) => message.type === "nav.start",
-      );
-      expect(routeReplaced).toEqual({
-        type: "nav.route_replaced",
-        navigationId: "11111111-1111-4111-8111-111111111111",
-        previousRouteVersion: 1,
-        reason: "OFF_ROUTE",
-        routeToken: "replacement",
-        routeVersion: 2,
-        route: walkRoute,
-        steps: initialStart.steps,
-        warnings: [],
-        currentStepIndex: 0,
-      });
-      expect(rerouteAccessibleRoute).toHaveBeenCalledWith({
-        routeToken: "initial",
-        currentPosition: far,
-        previousRouteVersion: 1,
-        reason: "OFF_ROUTE",
-        clientRequestId: rerouting.clientRequestId,
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    },
+  );
 
   it("discards an in-flight reroute result after navigation is cancelled", async () => {
     vi.useFakeTimers();
@@ -854,6 +866,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
       }
       expect(rerouteAccessibleRoute).toHaveBeenCalledOnce();
       expect(rerouteAccessibleRoute).toHaveBeenCalledWith({
+        language: "zh-TW",
         routeToken: "initial",
         currentPosition: far,
         previousRouteVersion: 1,
@@ -1073,6 +1086,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
         retryable: true,
       });
       expect(rerouteAccessibleRoute).toHaveBeenCalledWith({
+        language: "zh-TW",
         routeToken: "initial",
         currentPosition: far,
         previousRouteVersion: 1,
@@ -2133,6 +2147,47 @@ describe("createLiveBridge navigation resume and snapshot lifecycle", () => {
     expect(frameOf(ws, "nav.resume_failed")).toBeUndefined();
   });
 
+  it("rebuilds resumed steps and navigation errors using the new session language", async () => {
+    const { ws } = makeHarness();
+    const bridge = await createLiveBridge({ ws, userId: "u", language: "en" });
+    try {
+      await bridge.voiceReady;
+      await bridge.resumeNavigation(resumeMessage());
+      const resumed = frameOf(ws, "nav.resume_ok");
+      expect(resumed.currentStepIndex).toBe(1);
+      expect(resumed.steps.at(-1).instruction).toBe(
+        "You have arrived at your destination",
+      );
+      getNavigationSnapshot.mockResolvedValue(null);
+      await bridge.resumeNavigation(resumeMessage());
+      expect(frameOf(ws, "nav.resume_failed").message).toBe(
+        "Your navigation progress has expired. Please plan a new route.",
+      );
+    } finally {
+      bridge.close();
+    }
+  });
+
+  it("retains English after an expired token resets navigation", async () => {
+    const { ws } = makeHarness();
+    const bridge = await createLiveBridge({ ws, userId: "u", language: "en" });
+    try {
+      await bridge.voiceReady;
+      getRouteByToken.mockResolvedValueOnce(null);
+      expect(await bridge.armRouteToken("expired")).toBe(false);
+      expect(frameOf(ws, "nav.error").message).toBe(
+        "The route has expired. Please plan a new route.",
+      );
+      await bridge.armRouteToken("token");
+      bridge.startNavigation();
+      expect(frameOf(ws, "nav.start").steps.at(-1).instruction).toBe(
+        "You have arrived at your destination",
+      );
+    } finally {
+      bridge.close();
+    }
+  });
+
   it("re-persists the snapshot immediately after a successful resume", async () => {
     const { ws } = makeHarness();
     const bridge = await createLiveBridge({ ws, userId: "u" });
@@ -2514,6 +2569,45 @@ describe("AI selected-route synchronization", () => {
         expect(params.config.systemInstruction).toContain("Respond in English");
         expect(params.config.speechConfig).toBeUndefined();
       }
+    } finally {
+      bridge.close();
+    }
+  });
+
+  it("passes language to navigation tools after Live reconnect without model language args", async () => {
+    let callbacks: any;
+    const session = makeSession();
+    connect.mockImplementation(async (options) => {
+      callbacks = options.callbacks;
+      return session;
+    });
+    vi.mocked(executeLocalTool).mockResolvedValue(
+      JSON.stringify({ ok: true, instructions: [] }),
+    );
+    const bridge = await createLiveBridge({
+      ws: makeWs(),
+      userId: "u",
+      language: "en",
+    });
+    try {
+      await bridge.voiceReady;
+      await bridge.setRouteContext({ routeToken: "bus-token" });
+      callbacks.onmessage({
+        toolCall: {
+          functionCalls: [
+            { id: "directions", name: "getNavInstructions", args: {} },
+          ],
+        },
+      });
+      await vi.waitFor(() =>
+        expect(executeLocalTool).toHaveBeenCalledWith(
+          "getNavInstructions",
+          {},
+          undefined,
+          "u",
+          expect.objectContaining({ language: "en", routeToken: "bus-token" }),
+        ),
+      );
     } finally {
       bridge.close();
     }

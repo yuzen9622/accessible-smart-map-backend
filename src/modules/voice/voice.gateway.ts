@@ -1,3 +1,5 @@
+import { DEFAULT_LANG } from "../../types/lang";
+import { NAVIGATION_MESSAGES } from "./navigation-messages";
 import type http from "http";
 import type { AgentLanguage } from "../../types/agent";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
@@ -150,6 +152,7 @@ function handleConnection(
   heartbeatIntervalMs: number = HEARTBEAT_INTERVAL_MS,
 ): void {
   let authenticated = false;
+  let language: AgentLanguage = DEFAULT_LANG;
   let authInFlight: Promise<void> | null = null;
   let authQueue: { data: RawData; isBinary: boolean }[] = [];
   let authToken: string | null = null;
@@ -289,6 +292,7 @@ function handleConnection(
     }
     authToken = handshake.data.token;
     const id = result.userId;
+    language = handshake.data.language ?? DEFAULT_LANG;
     authenticated = true;
     const generation = ++connGen;
     if (authTimer) {
@@ -534,7 +538,7 @@ function handleConnection(
         sendJson({
           type: "nav.error",
           code: "NAV_ROUTE_INVALID",
-          message: "路線憑證格式無效",
+          message: NAVIGATION_MESSAGES[language].invalidToken,
         });
         return;
       }
@@ -585,7 +589,7 @@ function handleConnection(
           navigationId:
             typeof parsed.navigationId === "string" ? parsed.navigationId : "",
           code: "INVALID_REQUEST",
-          message: "恢復導航請求格式無效",
+          message: NAVIGATION_MESSAGES[language].invalidResume,
           retryable: false,
         });
         return;

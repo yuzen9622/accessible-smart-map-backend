@@ -1166,3 +1166,128 @@ describe("navigation-session domain purity", () => {
     expect(source).not.toMatch(/import[^;]+\bSession\b/);
   });
 });
+
+describe("NavigationSession language", () => {
+  it("passes session language to the generator", () => {
+    const generate = vi.fn(() => ({
+      ok: false as const,
+      status: 400,
+      reason: "INVALID_ROUTE_INPUT" as const,
+      message: "invalid",
+    }));
+    const session = new NavigationSession(generate, "en");
+    const selected = route([
+      walkLeg([coord(121), coord(121.001)], false, "A", "B"),
+    ]);
+    session.armRoute(selected);
+    session.start();
+    expect(generate).toHaveBeenCalledWith(selected, "en");
+  });
+
+  it.each(["en", "zh-TW"] as const)(
+    "generates real walking steps and synthetic arrival in %s",
+    (language) => {
+      const session = new NavigationSession(undefined, language);
+      session.armRoute(
+        route([walkLeg([coord(121), coord(121.001)], false, "A", "B")]),
+      );
+      const event = session.start().events.find((e) => e.type === "nav.start");
+      expect(event?.type).toBe("nav.start");
+      if (event?.type !== "nav.start") throw new Error("missing start");
+      expect(
+        event.steps.some(
+          (s) =>
+            s.instruction ===
+            (language === "en" ? "Arrive at B." : "抵達「B」"),
+        ),
+      ).toBe(true);
+      if (language === "en")
+        expect(event.steps.map((s) => s.instruction).join(" ")).not.toMatch(
+          /\p{Script=Han}/u,
+        );
+      session.start();
+      expect(session.takeNextSpeech()).toBe(
+        language === "en" ? "Navigation is already in progress." : "導航進行中",
+      );
+    },
+  );
+
+  it("translates planner-generated destination labels in synthetic arrivals", () => {
+    const session = new NavigationSession(undefined, "en");
+    session.armRoute(route([walkLeg([coord(121), coord(121.001)], false)]));
+    const event = session.start().events.find((e) => e.type === "nav.start");
+    if (event?.type !== "nav.start") throw new Error("missing start");
+    expect(
+      event.steps.some((s) => s.instruction === "Arrive at your destination."),
+    ).toBe(true);
+    expect(event.steps.map((s) => s.instruction).join(" ")).not.toMatch(
+      /\p{Script=Han}/u,
+    );
+  });
+
+  it.each(["DRIVE", "MOTORCYCLE"] as const)(
+    "localizes the synthetic %s stop",
+    (type) => {
+      const session = new NavigationSession(undefined, "en");
+      session.armRoute(route([driveLeg([coord(121), coord(121.001)], type)]));
+      const event = session.start().events.find((e) => e.type === "nav.start");
+      if (event?.type !== "nav.start") throw new Error("missing start");
+      expect(
+        event.steps.some(
+          (s) =>
+            s.instruction ===
+            "You have reached the end of the driving segment. Please park.",
+        ),
+      ).toBe(true);
+      expect(event.steps.map((s) => s.instruction).join(" ")).not.toMatch(
+        /\p{Script=Han}/u,
+      );
+    },
+  );
+
+  it("localizes invalid routes, off-route speech and corridor warnings", () => {
+    const session = new NavigationSession(undefined, "en");
+    expect(session.start().events).toContainEqual({
+      type: "nav.error",
+      code: "NO_ROUTE_ARMED",
+      message: "No route has been selected.",
+    });
+    expect(session.armRoute(route([])).events).toContainEqual({
+      type: "nav.error",
+      code: "NAV_ROUTE_INVALID",
+      message: "The route is invalid. Please plan a new route.",
+    });
+    session.armRoute(
+      route([walkLeg([coord(121), coord(121.01)], false, "A", "B")]),
+    );
+    session.start();
+    for (let i = 0; i < 3; i++)
+      session.onPosition({ latitude: 26, longitude: 122 });
+    expect(session.takeNextSpeech()).toBe(
+      "You appear to be off route. Please check your location.",
+    );
+    const effect = session.onCorridorFindings(
+      [
+        {
+          category: "hazard",
+          hazardId: "h",
+          hazardType: "obstacle",
+          severity: "blocking",
+          location: { latitude: 25, longitude: 121 },
+          distanceAheadM: 100,
+        },
+      ],
+      { requireElevator: false },
+    );
+    const advisory = effect.events.find((e) => e.type === "nav.advisory");
+    expect(advisory).toMatchObject({
+      advisories: [
+        {
+          title: "An obstacle has been reported 100 metres ahead",
+          speech:
+            "Caution: An obstacle has been reported 100 metres ahead. Replanning your route.",
+        },
+      ],
+    });
+  });
+});

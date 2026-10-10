@@ -1,3 +1,5 @@
+import { DEFAULT_LANG, type SupportedLang } from "../../types/lang";
+import { NAVIGATION_MESSAGES } from "./navigation-messages";
 import type { AccessibleRoute } from "../../types/route";
 import { taipeiSecondsOfDay } from "../../config/taipei-time";
 import type { MatchedAlert, TaiwanCityEn } from "../../types/transit";
@@ -47,7 +49,6 @@ const DEFAULT_TRANSIT_SPEED_MPS = 8.3;
 const DEFAULT_DRIVE_SPEED_MPS = 11.1;
 /** ~35 km/h, used only when a road leg carries no usable duration. */
 const DEFAULT_MOTORCYCLE_SPEED_MPS = 9.7;
-const ROAD_LEG_END_TEXT = "抵達車行路段終點，請停車";
 
 type Coord = [number, number];
 type StopReason = "user_voice" | "user_ui" | "arrived" | "session_end";
@@ -160,7 +161,10 @@ export interface ResolvedStep {
   bearing?: number | null;
 }
 
-type StepGenerator = (route: NavRouteInput) => GenerateVoiceNavStepsResult;
+type StepGenerator = (
+  route: NavRouteInput,
+  language: SupportedLang,
+) => GenerateVoiceNavStepsResult;
 
 const emptyEffect = (ok = true): NavEffect => ({ ok, events: [] });
 const isTransitType = (type: NavLegType): boolean =>
@@ -346,7 +350,12 @@ export class NavigationSession {
 
   constructor(
     private readonly generateSteps: StepGenerator = generateNavStepsWithLegIndex,
+    private readonly language: SupportedLang = DEFAULT_LANG,
   ) {}
+
+  private get messages() {
+    return NAVIGATION_MESSAGES[this.language];
+  }
 
   armRoute(route: AccessibleRoute): NavEffect {
     if (
@@ -374,7 +383,7 @@ export class NavigationSession {
   start(seedPosition?: NavPosition): NavEffect {
     if (this.disposed) return emptyEffect(false);
     if (this.active) {
-      this.enqueueSpeech("導航進行中");
+      this.enqueueSpeech(this.messages.inProgress);
       return emptyEffect();
     }
     if (!this.armedRoute) {
@@ -384,7 +393,7 @@ export class NavigationSession {
           {
             type: "nav.error",
             code: "NO_ROUTE_ARMED",
-            message: "尚未選擇路線",
+            message: this.messages.noRoute,
           },
         ],
       };
@@ -767,6 +776,7 @@ export class NavigationSession {
     const classified = findings.map((finding) =>
       classifyCorridorFinding(finding, {
         requireElevator: options.requireElevator,
+        language: this.language,
         onVehicle: this.onVehicle,
       }),
     );
@@ -811,7 +821,7 @@ export class NavigationSession {
     }));
   }
 
-  private invalidRoute(message = "路線資料無效，請重新規劃"): NavEffect {
+  private invalidRoute(message = this.messages.invalidRoute): NavEffect {
     return {
       ok: false,
       events: [{ type: "nav.error", code: "NAV_ROUTE_INVALID", message }],
@@ -843,7 +853,7 @@ export class NavigationSession {
           return null;
       }
     }
-    const generated = this.generateSteps(route);
+    const generated = this.generateSteps(route, this.language);
     if (!generated.ok) return null;
     const byLeg = new Map<number, VoiceStepLike[]>();
     for (const item of generated.steps) {
@@ -871,7 +881,9 @@ export class NavigationSession {
       if (legEnd && (!lastLegCoord || !sameCoord(lastLegCoord, legEnd))) {
         resolved.push({
           instruction:
-            leg.type === "WALK" ? `抵達「${leg.to}」` : ROAD_LEG_END_TEXT,
+            leg.type === "WALK"
+              ? this.messages.walkLegEnd(leg.to)
+              : this.messages.roadLegEnd,
           legIndex,
           legType: leg.type,
           polylineIndex: leg.polyline.length - 1,
@@ -1306,7 +1318,7 @@ export class NavigationSession {
         this.offrouteWarned = true;
         return {
           events: [{ type: "nav.offroute", distanceM: Math.round(distance) }],
-          speech: ["您似乎偏離路線，請確認目前位置"],
+          speech: [this.messages.offRoute],
         };
       }
     } else {

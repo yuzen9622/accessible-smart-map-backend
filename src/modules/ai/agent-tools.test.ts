@@ -1214,6 +1214,52 @@ describe("executeLocalTool dispatches new tools", () => {
     expect(JSON.parse(raw).ok).toBe(true);
   });
 
+  it.each([
+    [undefined, "en", "en"],
+    [undefined, "zh-TW", "zh-TW"],
+    ["zh-TW", "en", "zh-TW"],
+    ["en", "zh-TW", "en"],
+    [undefined, undefined, undefined],
+  ] as const)(
+    "defaults navigation language %s to session %s",
+    async (language, sessionLanguage, expected) => {
+      mockGenNav.mockResolvedValue({
+        ok: true,
+        data: { instructions: [], totalSteps: 0, warnings: [] },
+      });
+      await executeLocalTool(
+        "getNavInstructions",
+        { language },
+        undefined,
+        undefined,
+        { routeToken: "trusted", language: sessionLanguage },
+      );
+      expect(mockGenNav).toHaveBeenCalledWith({
+        routeToken: "trusted",
+        userHeading: undefined,
+        language: expected,
+      });
+    },
+  );
+
+  it.each(["ja", null, 7])(
+    "rejects an invalid explicit navigation language %s instead of falling back",
+    async (language) => {
+      const output = await executeLocalTool(
+        "getNavInstructions",
+        { language },
+        undefined,
+        undefined,
+        { routeToken: "trusted", language: "en" },
+      );
+      expect(JSON.parse(output)).toMatchObject({
+        ok: false,
+        reason: "INVALID_ROUTE_ARGUMENTS",
+      });
+      expect(mockGenNav).not.toHaveBeenCalled();
+    },
+  );
+
   it("getNavInstructions only trusts executor context, ignoring model tokens and legacy planning args", async () => {
     mockGenNav.mockResolvedValue({
       ok: true,

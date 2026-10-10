@@ -1,3 +1,5 @@
+import { DEFAULT_LANG } from "../../types/lang";
+import { NAVIGATION_MESSAGES } from "./navigation-messages";
 import {
   RouteConversationContext,
   createRouteAwareExecutor,
@@ -229,6 +231,8 @@ export async function createLiveBridge(
   options: LiveBridgeOptions,
 ): Promise<LiveBridge> {
   const { ws, userId, userLocation, history } = options;
+  const language = options.language ?? DEFAULT_LANG;
+  const messages = NAVIGATION_MESSAGES[language];
   const routeContext = new RouteConversationContext(options.routingPreferences);
   const contextReady =
     options.routeContext !== undefined
@@ -269,7 +273,7 @@ export async function createLiveBridge(
   let voiceEpoch = 0;
   let messageQueue = Promise.resolve();
   let pendingToolMessages = 0;
-  let navSession = new NavigationSession();
+  let navSession = new NavigationSession(undefined, language);
   let activeNavigation: ActiveNavigation | null = null;
   let navigationGeneration = 0;
   let lastSnapshotPersistedAt = 0;
@@ -656,6 +660,7 @@ export async function createLiveBridge(
       previousRouteVersion: navigation.routeVersion,
       reason,
       clientRequestId,
+      language,
     };
     sendRerouteJson({
       type: "nav.rerouting",
@@ -678,7 +683,7 @@ export async function createLiveBridge(
         });
         return false;
       }
-      const replacement = new NavigationSession();
+      const replacement = new NavigationSession(undefined, language);
       const armed = replacement.armRoute(result.data.route);
       const started = replacement.start(latestPosition ?? undefined);
       const startEvent = started.events.find(
@@ -696,7 +701,7 @@ export async function createLiveBridge(
           navigationId: navigation.navigationId,
           previousRouteVersion: rerouteRequest.previousRouteVersion,
           code: "NAV_ROUTE_INVALID",
-          message: "替代路線無法啟動",
+          message: messages.replacementInvalid,
           retryable: false,
         });
         return false;
@@ -732,14 +737,16 @@ export async function createLiveBridge(
       driveNavigationSpeech();
     } catch (err) {
       if (isCurrentReroute(snapshot)) {
+        console.warn(
+          "[voice] reroute failed",
+          summarizeError(err instanceof Error ? err.message : String(err)),
+        );
         sendRerouteJson({
           type: "nav.reroute_failed",
           navigationId: navigation.navigationId,
           previousRouteVersion: rerouteRequest.previousRouteVersion,
           code: "REROUTE_FAILED",
-          message: summarizeError(
-            err instanceof Error ? err.message : String(err),
-          ),
+          message: messages.rerouteFailed,
           retryable: true,
         });
       }
@@ -901,7 +908,7 @@ export async function createLiveBridge(
           const { ok: started } = startNavigation();
           result = JSON.stringify({
             ok: started,
-            message: started ? "已開始導航" : "尚未選擇路線",
+            message: started ? messages.started : messages.noRoute,
           });
         } else if (name === "stopNavigation") {
           applyEffect(navSession.stop("user_voice"));
@@ -910,10 +917,10 @@ export async function createLiveBridge(
           navigationGeneration++;
           pruneRerouteState();
           activeNavigation = null;
-          result = JSON.stringify({ ok: true, message: "已停止導航" });
+          result = JSON.stringify({ ok: true, message: messages.stopped });
         } else if (name === "repeatNavStep") {
           applyEffect(navSession.repeatCurrent());
-          result = JSON.stringify({ ok: true, message: "將重播目前步驟" });
+          result = JSON.stringify({ ok: true, message: messages.repeat });
         } else if (name === "getActiveNavigationContext") {
           result = JSON.stringify(navSession.getConversationContext());
         } else {
@@ -923,6 +930,7 @@ export async function createLiveBridge(
             latestPosition ?? userLocation,
             userId,
             {
+              language,
               allowMemoryWrite: memoryEnabled,
               isCurrent: () => voiceCurrent() && !cancelled(),
             },
@@ -1364,7 +1372,7 @@ export async function createLiveBridge(
           // for the armed-but-not-started case.
           applyEffect(navSession.cancel());
           navSession.dispose();
-          navSession = new NavigationSession();
+          navSession = new NavigationSession(undefined, language);
           activeNavigation = null;
           navigationGeneration++;
           pruneRerouteState();
@@ -1375,7 +1383,7 @@ export async function createLiveBridge(
               {
                 type: "nav.error",
                 code: "NAV_ROUTE_INVALID",
-                message: "路線已過期，請重新規劃",
+                message: messages.routeExpired,
               },
             ],
           });
@@ -1431,18 +1439,18 @@ export async function createLiveBridge(
         const snapshot = await getNavigationSnapshot(message.navigationId);
         if (!isCurrentArm()) return;
         if (!snapshot) {
-          fail("SNAPSHOT_NOT_FOUND", "導航進度已過期，請重新規劃");
+          fail("SNAPSHOT_NOT_FOUND", messages.snapshotExpired);
           return;
         }
         if (snapshot.userId !== userId) {
-          fail("USER_MISMATCH", "導航進度不屬於此帳號");
+          fail("USER_MISMATCH", messages.userMismatch);
           return;
         }
         if (
           snapshot.routeVersion !== message.routeVersion ||
           snapshot.routeToken !== message.routeToken
         ) {
-          fail("ROUTE_VERSION_MISMATCH", "導航版本已更新，請重新規劃");
+          fail("ROUTE_VERSION_MISMATCH", messages.versionMismatch);
           return;
         }
         const [route, envelope] = await Promise.all([
@@ -1456,7 +1464,7 @@ export async function createLiveBridge(
           envelope.navigationId !== snapshot.navigationId ||
           envelope.routeVersion !== snapshot.routeVersion
         ) {
-          fail("ROUTE_EXPIRED", "路線已過期，請重新規劃");
+          fail("ROUTE_EXPIRED", messages.routeExpired);
           return;
         }
         const resumePosition =
@@ -1473,7 +1481,7 @@ export async function createLiveBridge(
         if (!effect.ok) {
           activeNavigation = null;
           applyEffect(effect);
-          fail("ROUTE_EXPIRED", "路線已過期，請重新規劃");
+          fail("ROUTE_EXPIRED", messages.routeExpired);
           return;
         }
         if (resumePosition) latestPosition = resumePosition;
@@ -1501,7 +1509,7 @@ export async function createLiveBridge(
           type: "nav.resume_failed",
           navigationId: message.navigationId,
           code: "SNAPSHOT_NOT_FOUND",
-          message: "無法恢復導航，請重新規劃",
+          message: messages.resumeFailed,
           retryable: true,
         });
       }

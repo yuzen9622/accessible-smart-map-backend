@@ -224,3 +224,75 @@ describe("selectRerouteTrigger & AdvisoryDeduper", () => {
     expect(deduper.take([adv])).toHaveLength(1);
   });
 });
+
+describe("English navigation advisories", () => {
+  const context: ClassifyContext = {
+    requireElevator: false,
+    onVehicle: false,
+    language: "en",
+  };
+  it.each([true, false])(
+    "localizes facility warnings with requireElevator=%s while preserving source details",
+    (requireElevator) => {
+      const result = classifyCorridorFinding(
+        {
+          category: "facility",
+          railSystem: "TRTC",
+          stationId: "BL11",
+          stationName: "忠孝復興",
+          elevatorKey: "2",
+          keyword: "維修",
+          description: "2號出口電梯維修中",
+        },
+        { ...context, requireElevator },
+      );
+      expect(result.title).toBe(
+        "An elevator at 忠孝復興 station is unavailable",
+      );
+      expect(result.detail).toBe("2號出口電梯維修中");
+      expect(result.speech).toBe(
+        `Caution: An elevator at 忠孝復興 station is unavailable. ${requireElevator ? "Replanning your route." : "You can view alternative routes."}`,
+      );
+      expect(result.action).toBe(
+        requireElevator ? "reroute_applied" : "reroute_suggested",
+      );
+    },
+  );
+  it.each([true, false])(
+    "localizes transit warnings onVehicle=%s without changing disruption detection",
+    (onVehicle) => {
+      const result = classifyCorridorFinding(
+        {
+          category: "transit_alert",
+          alertId: "a",
+          title: "全線暫停",
+          description: "服務公告",
+        },
+        { ...context, onVehicle },
+      );
+      expect(result.speech).toBe(
+        `Transit service alert: 全線暫停.${onVehicle ? "" : " Replanning your route."}`,
+      );
+      expect(result.detail).toBe("服務公告");
+      expect(result.action).toBe(onVehicle ? "none" : "reroute_applied");
+    },
+  );
+  it.each(["obstacle", "construction", "data_error"] as const)(
+    "localizes zero-distance %s hazard reports",
+    (hazardType) => {
+      const result = classifyCorridorFinding(
+        {
+          category: "hazard",
+          hazardId: "h",
+          hazardType,
+          severity: "minor",
+          location: { latitude: 25, longitude: 121 },
+          distanceAheadM: 0,
+        },
+        context,
+      );
+      expect(result.speech).toMatch(/^Caution: .+ has been reported ahead\.$/);
+      expect(result.action).toBe("none");
+    },
+  );
+});

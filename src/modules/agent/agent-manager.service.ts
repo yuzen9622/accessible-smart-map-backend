@@ -492,6 +492,7 @@ export async function runToolLoop(
         resultStr = toolCache.get(cacheKey)!;
       } else {
         resultStr = await execTool(name, args, userLocation, userId, {
+          language: options.language,
           allowMemoryWrite,
           explicitMemoryRequest,
           ...(options.signal
