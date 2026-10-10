@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AccessibleRoute, BusLeg } from "../../../types/route";
 import { attachBusSchedule } from "../route-schedule";
-import { matchPlannedBus } from "./bus-trip-match";
+import { matchPlannedBus } from "../../transit/bus-trip-match";
 import type { TdxEtaRecord } from "./realtime-transit.types";
 
 const { tdxFetch, findVehiclesByPlate } = vi.hoisted(() => ({

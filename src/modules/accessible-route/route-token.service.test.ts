@@ -1,9 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { redisGet, storeInitialNavigationEnvelope } = vi.hoisted(() => ({
-  redisGet: vi.fn(),
-  storeInitialNavigationEnvelope: vi.fn(),
-}));
+const { redisGet, storeInitialNavigationEnvelope, storeBusPlan } = vi.hoisted(
+  () => ({
+    redisGet: vi.fn(),
+    storeBusPlan: vi.fn(),
+    storeInitialNavigationEnvelope: vi.fn(),
+  }),
+);
+vi.mock("./bus-plan.repository", () => ({ storeBusPlan }));
 vi.mock("../../config/redis", () => ({ redisGet }));
 vi.mock("./navigation-state.repository", () => ({
   navigationTokenKey: (token: string) => `voice-nav:route:${token}`,
@@ -49,6 +53,10 @@ describe("route token cache", () => {
     expect(stored.routeToken!).toMatch(/^[A-Za-z0-9_-]{40,}$/);
     expect(stored.navigationId).toMatch(/^[0-9a-f-]{36}$/);
     expect(stored.routeVersion).toBe(1);
+    expect(storeBusPlan).toHaveBeenCalledWith(
+      stored.routeToken,
+      expect.objectContaining({ routeId: sampleRoute.routeId }),
+    );
     expect(storeInitialNavigationEnvelope).toHaveBeenCalledWith(
       stored.routeToken,
       expect.objectContaining({
@@ -65,6 +73,7 @@ describe("route token cache", () => {
     const [stored] = await attachRouteTokens([sampleRoute], canonicalRequest);
     expect(stored).toEqual(sampleRoute);
     expect(stored.routeToken).toBeUndefined();
+    expect(storeBusPlan).not.toHaveBeenCalled();
   });
 
   it("resolves valid cached JSON and treats misses or malformed values as expired", async () => {

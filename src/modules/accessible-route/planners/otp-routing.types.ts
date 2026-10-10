@@ -35,7 +35,14 @@ export interface OtpLeg {
   trip?: { gtfsId?: string; wheelchairAccessible?: string } | null;
   legGeometry?: { points?: string } | null;
   intermediatePlaces?:
-    | { name?: string; lat?: number; lon?: number; stop?: OtpStop | null }[]
+    | {
+        name?: string;
+        lat?: number;
+        lon?: number;
+        stop?: OtpStop | null;
+        arrivalTime?: number;
+        departureTime?: number;
+      }[]
     | null;
   steps?: OtpStep[] | null;
 }

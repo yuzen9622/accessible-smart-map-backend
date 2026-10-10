@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "crypto";
+import { storeBusPlan } from "./bus-plan.repository";
 import { redisGet } from "../../config/redis";
 import type { AccessibleRoute } from "../../types/route";
 import type {
@@ -32,6 +33,7 @@ export async function attachRouteTokens(
         console.warn("[accessible-route] route token cache unavailable");
         return route;
       }
+      await storeBusPlan(routeToken, navigationRoute);
       return { ...navigationRoute, routeToken };
     }),
   );

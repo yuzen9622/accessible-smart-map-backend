@@ -19,6 +19,7 @@ vi.mock("./accessible-route.service", async (importActual) => {
     await importActual<typeof import("./accessible-route.service")>();
   return { ...actual, planAccessibleRouteForHttp: vi.fn() };
 });
+vi.mock("./bus-arrivals.service", () => ({ getPlannedBusArrivals: vi.fn() }));
 vi.mock("./reroute.service", () => ({ rerouteAccessibleRoute: vi.fn() }));
 
 import {
@@ -31,6 +32,7 @@ import {
   stubAuthUserLookup,
 } from "../../../tests/helpers/real-auth";
 import * as service from "./accessible-route.service";
+import { getPlannedBusArrivals } from "./bus-arrivals.service";
 import { rerouteAccessibleRoute } from "./reroute.service";
 import { AccessibleRouteSchema } from "./accessible-route.schema";
 
@@ -750,5 +752,52 @@ describe("POST /api/v1/a11y/accessible-route optional auth", () => {
 
     expect(res.status).toBe(403);
     expect(mockPlan).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET planned bus arrivals", () => {
+  it("uses the full leg index and the shared envelope without public caching", async () => {
+    vi.mocked(getPlannedBusArrivals).mockResolvedValue({
+      ok: true,
+      routeName: "307",
+      city: TaiwanCityEn.Taipei,
+      operators: [],
+      directions: [],
+    });
+    const res = await request(app)
+      .get(`${URL}/bus-arrivals`)
+      .query({ routeToken: "plan", legIndex: "2" });
+    expect(res.status).toBe(200);
+    expect(getPlannedBusArrivals).toHaveBeenCalledWith("plan", 2);
+    expect(res.body).toMatchObject({
+      ok: true,
+      code: 200,
+      data: { routeName: "307", directions: [] },
+    });
+    expect(res.headers["cache-control"]).toBe("private, no-store");
+  });
+  it.each([
+    { legIndex: 1 },
+    { routeToken: "plan" },
+    { routeToken: "plan", legIndex: -1 },
+    { routeToken: "plan", legIndex: 1.5 },
+    { routeToken: "plan", legIndex: 1, departureTime: "10:00" },
+  ])("rejects malformed or client-authored plan data: %j", async (query) => {
+    const res = await request(app).get(`${URL}/bus-arrivals`).query(query);
+    expect(res.status).toBe(400);
+    expect(getPlannedBusArrivals).not.toHaveBeenCalled();
+  });
+  it("returns expired capabilities as 404", async () => {
+    vi.mocked(getPlannedBusArrivals).mockResolvedValue({
+      ok: false,
+      status: ResponseCode.NOT_FOUND,
+      error: "expired",
+    });
+    const res = await request(app)
+      .get(`${URL}/bus-arrivals`)
+      .query({ routeToken: "expired", legIndex: 2 });
+    expect(res.status).toBe(404);
+    expect(res.body.ok).toBe(false);
+    expect(res.headers["cache-control"]).toBe("private, no-store");
   });
 });

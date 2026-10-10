@@ -241,6 +241,19 @@ export interface WalkLeg extends WalkA11yDetails {
 }
 
 export interface BusLeg {
+  /** Immutable plan snapshot, retained in the route-token cache for later polls. */
+  scheduledTrip?: {
+    tripId: string;
+    boardingReadyAt: number;
+    stops: {
+      stopUid?: string;
+      name: string;
+      arrivalAt?: number;
+      departureAt?: number;
+      lat?: number;
+      lng?: number;
+    }[];
+  };
   /** Internal OTP instants; non-enumerable and never part of the public DTO. */
   _scheduledDepartureTime?: number;
   _boardingReadyTime?: number;

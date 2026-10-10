@@ -37,7 +37,7 @@
  */
 
 import { tdxFetch } from "../../../config/fetch";
-import { canMatchBusTrip, matchPlannedBus } from "./bus-trip-match";
+import { canMatchBusTrip, matchPlannedBus } from "../../transit/bus-trip-match";
 import {
   busEtaIsFresh,
   busEtaSeconds,

@@ -1,3 +1,4 @@
+import { BusRouteDetailResponseSchema } from "../transit/transit.schema";
 import { DEFAULT_LANG, SUPPORTED_LANGS } from "../../types/lang";
 import { RelativeDirectionSchema } from "../../schemas/nav-instructions-data.schema";
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
@@ -517,6 +518,29 @@ const LowFloorAlternativeSchema = z
 const BusLegSchema = z
   .object({
     type: z.literal("BUS").openapi({ example: "BUS" }),
+    scheduledTrip: z
+      .object({
+        tripId: z.string(),
+        boardingReadyAt: z.number(),
+        stops: z.array(
+          z
+            .object({
+              stopUid: z.string().optional(),
+              name: z.string(),
+              arrivalAt: z.number().optional(),
+              departureAt: z.number().optional(),
+              lat: z.number().optional(),
+              lng: z.number().optional(),
+            })
+            .strict(),
+        ),
+      })
+      .strict()
+      .optional()
+      .openapi({
+        description:
+          "本次規劃的逐站時刻快照；epoch milliseconds，不隨即時資料改寫",
+      }),
     rideMinutes: z.number().nonnegative().optional().openapi({
       description: "公車預定乘車分鐘，不含候車與步行",
       example: 20,
@@ -1385,5 +1409,41 @@ registry.registerPath({
     410: { description: "routeToken 過期，或 token 是 legacy raw-route 格式" },
     422: { description: "planner 找不到可行替代路線" },
     503: { description: "Redis navigation state unavailable" },
+  },
+});
+
+/** A bearer route capability plus the original (all-modes) leg index. */
+export const PlannedBusArrivalsQuerySchema = z
+  .object({
+    routeToken: z.string().trim().min(1).max(256),
+    legIndex: z.coerce.number().int().nonnegative(),
+  })
+  .strict();
+
+registry.registerPath({
+  method: "get",
+  path: "/a11y/accessible-route/bus-arrivals",
+  tags: ["Accessibility"],
+  summary: "取得規劃班次的逐站到站資訊",
+  description:
+    "以 routeToken 及完整 legs 陣列中的 legIndex 查詢；只有匹配班次的即時資料會回傳分鐘數，否則保留原規劃各站時刻。公車查詢快照保存至最後公車預定抵達後 30 分鐘，最多 48 小時，不延長重新規劃效期；快照過期回 404，絕不改查下一班。",
+  request: { query: PlannedBusArrivalsQuerySchema },
+  responses: {
+    400: {
+      description: "參數無效或指定路段沒有公車班次時刻",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    404: {
+      description: "行程識別已過期",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    500: {
+      description: "伺服器錯誤",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    200: {
+      description: "規劃班次逐站資訊",
+      content: { "application/json": { schema: BusRouteDetailResponseSchema } },
+    },
   },
 });

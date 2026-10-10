@@ -48,5 +48,8 @@ export async function restoreRouteStopIds(
     for (const stop of leg.intermediateStops ?? []) {
       stop.stationUid = original(stop.stationUid) ?? stop.stationUid;
     }
+    for (const stop of leg.scheduledTrip?.stops ?? []) {
+      stop.stopUid = original(stop.stopUid);
+    }
   }
 }

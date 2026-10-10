@@ -1,4 +1,5 @@
 import { randomBytes } from "crypto";
+import { storeBusPlan } from "./bus-plan.repository";
 import { ResponseCode } from "../../types/code";
 import {
   REROUTE_MSG,
@@ -183,6 +184,7 @@ export async function rerouteAccessibleRoute(
     }
     if (finalized === "stale") return conflict(messages.CONFLICT);
     if (finalized === "conflict") return conflict(messages.CONFLICT);
+    await storeBusPlan(routeToken, route);
     return { ok: true, data };
   } catch (error) {
     await release();

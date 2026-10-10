@@ -58,6 +58,9 @@ export type BusRouteInfoResult =
   | BusServiceError;
 
 export type BusRouteDetailStop = {
+  stopUid?: string;
+  /** Only present when the ETA belongs to the planned trip's matched vehicle. */
+  plateNumb?: string;
   seq: number;
   name: string;
   lat?: number;

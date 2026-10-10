@@ -335,7 +335,7 @@ query Plan(
         route { gtfsId shortName longName type agency { gtfsId } }
         trip { gtfsId wheelchairAccessible }
         legGeometry { points }
-        intermediatePlaces { name lat lon stop { gtfsId code lat lon } }
+        intermediatePlaces { name lat lon arrivalTime departureTime stop { gtfsId code lat lon } }
         steps {
           distance
           lon
@@ -1965,6 +1965,38 @@ export async function planOtpRouteDetailed(
             (transitLegIndex === 0 ? (pre?.minutesEst ?? 0) * 60_000 : 0),
           stripFeedId(leg.trip?.gtfsId),
         );
+        mapped.scheduledTrip = {
+          tripId: stripFeedId(leg.trip?.gtfsId),
+          boardingReadyAt:
+            clockMs +
+            (transitLegIndex === 0 ? (pre?.minutesEst ?? 0) * 60_000 : 0),
+          stops: [
+            {
+              stopUid: mapped.departureStopId,
+              name: mapped.departureStop,
+              arrivalAt: leg.startTime,
+              departureAt: leg.startTime,
+              lat: leg.from.stop?.lat,
+              lng: leg.from.stop?.lon,
+            },
+            ...(leg.intermediatePlaces ?? []).map((stop) => ({
+              stopUid: stripFeedId(stop.stop?.gtfsId) || undefined,
+              name: stop.name ?? "",
+              arrivalAt: stop.arrivalTime,
+              departureAt: stop.departureTime,
+              lat: stop.lat ?? stop.stop?.lat,
+              lng: stop.lon ?? stop.stop?.lon,
+            })),
+            {
+              stopUid: mapped.arrivalStopId,
+              name: mapped.arrivalStop,
+              arrivalAt: leg.endTime,
+              departureAt: leg.endTime,
+              lat: leg.to.stop?.lat,
+              lng: leg.to.stop?.lon,
+            },
+          ],
+        };
       }
       transitLegIndex++;
       clockMs = leg.endTime;

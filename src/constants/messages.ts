@@ -19,6 +19,8 @@ export const MSG = {
  * centralized rather than inlined.
  */
 export const TRANSIT_MSG = {
+  PLAN_EXPIRED: "路線已過期，請重新規劃以取得即時到站資訊",
+  PLAN_BUS_MISSING: "找不到此路段的公車規劃班次",
   INVALID_PLATE: "無效的車牌號碼",
   INVALID_CITY: "請提供有效的縣市 (city)，例如 台北、台中",
   STOP_NOT_FOUND: "找不到符合的站牌，請確認站名與座標",

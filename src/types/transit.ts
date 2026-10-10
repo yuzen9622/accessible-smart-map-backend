@@ -92,6 +92,16 @@ export interface BusEtaTiming {
   UpdateTime?: string;
 }
 
+export interface BusPlannedEtaRecord extends BusEtaTiming {
+  SubRouteUID?: string;
+  StopUID?: string;
+  ScheduledTime?: string;
+  StopName?: { Zh_tw?: string };
+  Direction?: number;
+  StopSequence?: number;
+  NextBusTime?: string;
+}
+
 export type BusRealTimeByFrequency = {
   PlateNumb: string;
   Direction: BusDirection;

@@ -356,8 +356,10 @@ const BusRouteResponseSchema = ApiResponseSchema(
 const BusRouteDetailDirectionSchema = BusRouteDirectionSchema.extend({
   stops: z.array(
     BusRouteStopSchema.extend({
+      stopUid: z.string().optional(),
       estimateMinutes: z.number().nullable().openapi({ example: 3 }),
       statusLabel: z.string().openapi({ example: "正常" }),
+      plateNumb: z.string().optional(),
     }),
   ),
   polyline: z
@@ -385,7 +387,7 @@ const BusScheduleSchema = z
   })
   .openapi("BusSchedule");
 
-const BusRouteDetailResponseSchema = ApiResponseSchema(
+export const BusRouteDetailResponseSchema = ApiResponseSchema(
   z.object({
     routeName: z.string().openapi({ example: "99" }),
     city: z.string().openapi({ example: "Taichung" }),

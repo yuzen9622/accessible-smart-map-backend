@@ -3,19 +3,9 @@
  * Minimal shapes scoped to this planner — not the canonical src/types/transit.
  */
 
-import type { BusEtaTiming } from "../../../types/transit";
 import type { RailOdSuspension } from "../../../types/rail";
 
-export interface TdxEtaRecord extends BusEtaTiming {
-  SubRouteUID?: string;
-  StopUID?: string;
-  ScheduledTime?: string;
-  StopName?: { Zh_tw?: string };
-  Direction?: number;
-  StopSequence?: number;
-  NextBusTime?: string;
-  PlateNumb?: string;
-}
+export type { BusPlannedEtaRecord as TdxEtaRecord } from "../../../types/transit";
 
 /** Minimal shape of TDX Bus/RealTimeNearStop (on-road vehicle positions by stop). */
 export interface TdxRealTimeNearStopRecord {

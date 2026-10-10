@@ -12,6 +12,33 @@ import {
 } from "../../constants/messages";
 import { rerouteAccessibleRoute } from "./reroute.service";
 import type { RerouteRequest } from "./accessible-route.types";
+import { getPlannedBusArrivals } from "./bus-arrivals.service";
+
+export async function plannedBusArrivalsHttp(
+  req: Request,
+  res: Response<ApiResponse<unknown>>,
+) {
+  res.setHeader("Cache-Control", "private, no-store");
+  try {
+    const { routeToken, legIndex } = req.validated?.query as {
+      routeToken: string;
+      legIndex: number;
+    };
+    const result = await getPlannedBusArrivals(routeToken, legIndex);
+    if (!result.ok)
+      return sendResponse(res, false, "error", result.status, result.error);
+    const { ok, ...data } = result;
+    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
+  } catch {
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      ERROR_MESSAGE.INTERNAL,
+    );
+  }
+}
 
 /**
  * Resolves the caller's identity from an optional Bearer token so a logged-in

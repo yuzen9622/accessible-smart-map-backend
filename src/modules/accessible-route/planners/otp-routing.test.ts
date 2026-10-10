@@ -270,6 +270,51 @@ describe("OTP BUS leg sub-route identity", () => {
     expect(JSON.stringify(leg)).not.toContain("_scheduledDepartureTime");
   });
 
+  it("preserves intermediate stop instants across route-token JSON serialization", async () => {
+    const boardAt = Date.parse("2030-01-01T10:00:00+08:00");
+    const bus = transitItinerary("TIMED", boardAt);
+    post.mockResolvedValue(
+      okResp([
+        {
+          ...bus,
+          legs: [
+            {
+              ...bus.legs[0],
+              intermediatePlaces: [
+                {
+                  name: "中途站",
+                  lat: 25.04,
+                  lon: 121.56,
+                  stop: { gtfsId: "1:MID" },
+                  arrivalTime: boardAt + 300_000,
+                  departureTime: boardAt + 330_000,
+                },
+              ],
+            },
+          ],
+        },
+      ]),
+    );
+    const routes = await planOtpRoute(origin, destination, {
+      departureTime: new Date(boardAt - 600_000),
+    });
+    const leg = routes.flatMap((r) => r.legs).find((l) => l.type === "BUS");
+    expect(JSON.parse(JSON.stringify(leg)).scheduledTrip).toMatchObject({
+      tripId: "TIMED_trip",
+      stops: [
+        { name: "起站", departureAt: boardAt },
+        {
+          name: "中途站",
+          stopUid: "MID",
+          arrivalAt: boardAt + 300_000,
+          departureAt: boardAt + 330_000,
+        },
+        { name: "終站", arrivalAt: boardAt + 600_000 },
+      ],
+    });
+    expect(PLAN_QUERY).toContain("arrivalTime departureTime");
+  });
+
   it("maps the scheduled GTFS sub-route UID and name onto the BUS leg", async () => {
     const itineraries = threeDistinctTransitItineraries();
     itineraries[0].legs[0].route.gtfsId = "1:TPE3070_0";
@@ -764,11 +809,12 @@ describe("planOtpRoute search windows and timeouts", () => {
   it("reports successful routes and keeps the array wrapper compatible", async () => {
     post.mockResolvedValue(okResp(threeDistinctTransitItineraries()));
 
-    const detailed = await planOtpRouteDetailed(origin, destination);
+    const options = { departureTime: new Date("2030-01-01T09:00:00+08:00") };
+    const detailed = await planOtpRouteDetailed(origin, destination, options);
 
     expect(detailed.status).toBe("ok");
     if (detailed.status !== "ok") return;
-    await expect(planOtpRoute(origin, destination)).resolves.toEqual(
+    await expect(planOtpRoute(origin, destination, options)).resolves.toEqual(
       detailed.routes,
     );
   });

@@ -59,6 +59,9 @@ import {
 import { haversineMeters } from "../../utils/geo";
 import { redisGet, redisSet } from "../../config/redis";
 import { matchBusShape, normalizeBusShapes, type BusShape } from "./bus-shape";
+import type { BusLeg } from "../../types/route";
+import type { BusPlannedEtaRecord } from "../../types/transit";
+import { canMatchBusTrip, matchPlannedBus } from "./bus-trip-match";
 
 const BUS_SHAPE_CACHE_PREFIX = "bus:shape:v1:";
 const BUS_SHAPE_CACHE_TTL_SEC = 24 * 60 * 60;
@@ -645,6 +648,90 @@ export async function getBusArrivalAtStop(params: {
  * Get full route details: stops, ETA for all stops, and timetables.
  * Ideal for a full bus route view in an app.
  */
+/** Planned journey queries must never fall back to the line's next departure. */
+export async function getPlannedBusRouteDetail(
+  leg: BusLeg,
+  city: TaiwanCityEn | "InterCity",
+): Promise<BusRouteDetailResult> {
+  const planned = leg.scheduledTrip?.stops ?? [];
+  let records: BusPlannedEtaRecord[] = [];
+  if (canMatchBusTrip(leg)) {
+    try {
+      const scope = await fetchRouteScoped(
+        leg.routeName,
+        city,
+        ({ type, routeId }) =>
+          type === "City"
+            ? `${busUrl.cityEstimatedTimeOfArrivalUrl}/${city}/${encodeURIComponent(routeId)}?$format=JSON&$filter=SubRouteUID eq '${odataUrlLiteral(leg.subRouteUid)}'`
+            : `${busUrl.interCityEstimatedTimeOfArrivalUrl}/${encodeURIComponent(routeId)}?$format=JSON&$filter=SubRouteUID eq '${odataUrlLiteral(leg.subRouteUid)}'`,
+      );
+      records = scope.records;
+    } catch {
+      // A provider outage changes freshness, never the selected timetable.
+    }
+  }
+  const match = matchPlannedBus(leg, records);
+  const stops = planned.map((stop, index): BusRouteDetailStop => {
+    const candidates =
+      match &&
+      stop.stopUid &&
+      planned.filter((s) => s.stopUid === stop.stopUid).length === 1
+        ? records.filter(
+            (r) =>
+              r.StopUID === stop.stopUid &&
+              r.SubRouteUID === leg.subRouteUid &&
+              r.Direction === match.direction &&
+              r.PlateNumb === match.board.PlateNumb &&
+              r.StopStatus === 0 &&
+              busEtaSeconds(r) !== null,
+          )
+        : [];
+    const seconds =
+      candidates.length === 1 ? busEtaSeconds(candidates[0]) : null;
+    const instant =
+      index === 0
+        ? (stop.departureAt ?? stop.arrivalAt)
+        : (stop.arrivalAt ?? stop.departureAt);
+    const time =
+      typeof instant === "number" && Number.isFinite(instant)
+        ? new Date(instant).toLocaleTimeString("en-GB", {
+            timeZone: "Asia/Taipei",
+            hour: "2-digit",
+            minute: "2-digit",
+          })
+        : "";
+    return {
+      seq: index + 1,
+      stopUid: stop.stopUid,
+      name: stop.name,
+      lat: stop.lat,
+      lng: stop.lng,
+      estimateMinutes: seconds === null ? null : Math.round(seconds / 60),
+      statusLabel: seconds === null ? time : "正常",
+      ...(seconds !== null ? { plateNumb: match?.board.PlateNumb } : {}),
+    };
+  });
+  return {
+    ok: true,
+    routeName: leg.routeName,
+    city,
+    operators: [],
+    directions: [
+      {
+        subRouteUid: leg.subRouteUid,
+        subRouteName: leg.subRouteName,
+        direction: match?.direction ?? leg.direction,
+        directionLabel: dirLabel(match?.direction ?? leg.direction),
+        from: leg.departureStop,
+        to: leg.arrivalStop,
+        stopCount: stops.length,
+        stops,
+        polyline: leg.polyline,
+      },
+    ],
+  };
+}
+
 export async function getBusRouteDetail(params: {
   routeName: string;
   city: TaiwanCityEn | "InterCity";

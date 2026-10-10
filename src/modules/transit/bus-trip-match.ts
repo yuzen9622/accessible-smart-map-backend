@@ -1,8 +1,8 @@
-import type { BusLeg } from "../../../types/route";
-import { taipeiYmdDash } from "../../../config/taipei-time";
-import { BUS_DIRECTIONS } from "../../../constants/bus";
-import { busEtaSeconds } from "../../../utils/tdx-bus-eta";
-import type { TdxEtaRecord } from "./realtime-transit.types";
+import type { BusLeg } from "../../types/route";
+import { taipeiYmdDash } from "../../config/taipei-time";
+import { BUS_DIRECTIONS } from "../../constants/bus";
+import { busEtaSeconds } from "../../utils/tdx-bus-eta";
+import type { BusPlannedEtaRecord as TdxEtaRecord } from "../../types/transit";
 
 const BOARDING_LIVE_WINDOW_MS = 15 * 60_000;
 
