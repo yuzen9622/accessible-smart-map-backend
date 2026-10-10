@@ -57,6 +57,8 @@
 
 ### P1-01 — SOS 初始通知的 LINE 呼叫失敗後仍回報 notifiedCount，重試建立不會補送通知
 
+> 2026-10-10 修復：已完成程式修改及隔離回歸驗證，詳見 [SOS／快照修復紀錄](../reports/sos-snapshot-remediation.md)。以下保留修復前的稽核證據；正式部署與外部服務驗收尚未執行。
+
 **證據類型**：`behavior`，strict gate 通過。
 
 | 來源 | 當行引文 |
@@ -167,6 +169,8 @@ node -r ts-node/register/transpile-only /tmp/backend-audit-VOKIiX/data-probe.cjs
 ```
 
 ### P1-04 — 快照匯入在零筆合法資料時仍刪除現有集合並成功結束
+
+> 2026-10-10 修復：已完成程式修改及隔離回歸驗證，詳見 [SOS／快照修復紀錄](../reports/sos-snapshot-remediation.md)。以下保留修復前的稽核證據；正式部署與外部服務驗收尚未執行。
 
 **證據類型**：`behavior`，strict gate 通過。
 
