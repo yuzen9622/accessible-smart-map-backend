@@ -1,89 +1,182 @@
-# AGENTS Operating Rules — accessible-smart-map-backend
+# AGENTS.md
 
-Highest-priority rulebook for any agent (or human) editing this repo. Read it in
-full before changing code. It encodes the architecture the codebase already
-follows; new code must look like the existing code.
+This file provides guidance to agents when working with code in this repository.
 
-## 0) Environment
+## Commands
 
-- OS: macOS · Shell: zsh
-- Package manager: **pnpm** (do not use npm/yarn). Version pinned by `packageManager` in `package.json`; `pnpm-lock.yaml` is the only lockfile. The `build` / `prebuild` / `postinstall` scripts call `pnpm run` internally, so invoking them through npm fails.
-- Commands:
-  - install: `pnpm install` (CI/Docker: `pnpm install --frozen-lockfile`)
-  - dev: `pnpm dev`
-  - build / typecheck: `pnpm build` (runs `lint:arch` then `tsc`)
-  - boundary check only: `pnpm lint:arch`
-  - tests: `pnpm test` (`vitest run`) · watch: `pnpm test:watch`; specs live beside code as `*.test.ts`.
+```bash
+pnpm install       # Install deps from pnpm-lock.yaml (postinstall runs build)
+pnpm dev           # Dev server with hot reload (nodemon + ts-node via dotenvx)
+pnpm build         # Compile TypeScript → dist/ (prebuild runs clean first)
+pnpm start         # Run compiled dist/server.js
+pnpm clean         # Delete dist/
+pnpm test          # Run tests once (vitest)
+pnpm test:watch    # Vitest in watch mode
+```
 
-## 1) Mandatory read order before any edit
+Tests use **vitest**; specs live next to the code as `*.test.ts` (e.g. `src/modules/accessible-route/scoring.test.ts`).  
+We support unit tests and route-level integration tests. The integration test harness uses **supertest** to drive the Express application:
 
-1. This file (`AGENTS.md`).
-2. The `clean-backend-architecture` skill + its `references/layer-contracts.md`.
-3. `docs/reports/architecture-audit.md` (the current scorecard + migration log).
-4. The target feature files under `src/modules/<feature>/` before changing them.
+- `buildTestApp()` (from `tests/helpers/test-helpers.ts`) returns the real Express app instance (from `src/app.ts`) without starting the HTTP server or connecting to MongoDB.
+- `buildAuthorizationHeader(user?)` (from `tests/helpers/test-helpers.ts`) signs a JWT token and returns a Bearer header string for authenticated routes.
+- Mock the service layer with `vi.mock` in test files so that the request exercises router + middleware + validation + controller + envelope without touching the network or DB.
 
-Do not start code changes until 1–4 are done. When unsure where code goes, find
-the matching layer in the contracts — never guess.
+The package manager is **pnpm** (pinned by `packageManager` in `package.json`; `pnpm-lock.yaml` is the only lockfile — there is no `package-lock.json`). Use `pnpm`, not npm/yarn: the `build` / `prebuild` / `postinstall` / `build:otp` scripts call `pnpm run` internally, so running them through npm fails.
 
-## 2) Non-negotiable conventions (the 6 invariants, in our names)
+Data-import scripts run via dotenvx + ts-node and populate MongoDB from TDX / GTFS / OSM sources — e.g. `pnpm import:gtfs-all`, `pnpm import:tdx-tra`, `pnpm import:osm`. See `package.json` for the full list (`src/scripts/*`).
 
-1. **One file, one responsibility — filename says which.**
-   `*.router.ts` / `*.schema.ts` / `*.controller.ts` / `*.service.ts` /
-   `planners/*.ts` (domain helpers) / shared types in `src/types/`.
-2. **Single-direction dependency:** router → controller → service →
-   planners / adapters / models. Never backward; a service never imports a
-   controller/router or touches `req`/`res`; a controller never queries a model
-   or calls an external API directly; a controller never imports another module.
-3. **Validate at the edge** with Zod via `validateRequest({ body|query|params })`
-   in the router. The middleware writes the parsed value back onto `req.*`, so
-   controllers read already-validated, coerced, strict input. Schemas are
-   `.strict()`. Don't re-validate request shape in inner layers.
-4. **One response envelope:** every response goes through `sendResponse(...)`
-   (`src/config/lib.ts`). No ad-hoc `res.json({...})` envelopes.
-5. **No magic literals:** HTTP status from the `ResponseCode` enum
-   (`src/types/code.ts`); repeated messages from `MSG` / `ERROR_MESSAGE`
-   (`src/constants/messages.ts`); external URLs as named constants in `config/`.
-6. **One registration point:** every route mounts under `/api/v1` in
-   `src/app.ts`, via one `createXRouter()` exported from `modules/<feature>/index.ts`.
+Privacy retention: an in-process job (`src/modules/retention/`, started in `server.ts`) enforces the published retention policy — SOS auto-resolve + 30-day deletion, contact LINE location clearing, AI memory tombstones/12-month purge/vector reconciliation, hazard report de-identification 90 days after closure, deleted-account sweep. Tunables in `src/config/retention.ts` (env may only shorten policy deadlines; validated before `listen`). `pnpm retention:run [--dry-run]` runs it once; `pnpm retention:fix-photo-cache` rewrites existing hazard photo Cache-Control. See `docs/PRIVACY_DATA_RETENTION.md`, incl. the infra items code cannot enforce.
 
-Project specifics:
+`pnpm data:sync` runs every import in dependency order (`src/scripts/sync-all-data.ts`, registry in `sync-all-data-plan.ts`). Default = upsert-only base steps (TDX/OSM/北市/GTFS + PostGIS `import:taipei-ramps`); opt-in groups `--with-snapshot` (a11y-metro/bathrooms, wipe + reinsert), `--with-valhalla` (PBF → tiles → traffic map/tar, restarts Valhalla), `--with-slow` (parking scan, campus crawl — also wipes), `--with-paid` (welfare geocoding — also wipes; Chroma `import:rag`); `pnpm data:sync:all` enables all. `--only=` overrides groups, `--skip=` removes steps, `--plan` preflights only, plus `--fail-fast` / `--tdx-gap=<s>`. Any unmet env/file/service of a selected step aborts before anything runs. When adding an import script, register it there.
 
-- `modules/<feature>/` holds a feature's router/controller/service/schema + its
-  own helpers. The accessible-route routing engine's internals live in
-  `modules/accessible-route/planners/`.
-- Cross-cutting external API clients → `src/adapters/*.adapter.ts`
-  (`google.adapter`, `tdx.adapter`). Shared pure helpers → `src/utils/`.
-  `config/` holds ONLY config: client init, URL constants, env, time/redis/jwt.
-- Protected routes (`/api/v1/user/*`) pass through the JWT `middleware`.
-- API docs are generated from the Zod schemas (Scalar UI at `/docs`,
-  `/api/v1/openapi.json`); keep schemas in sync when changing a route.
-- A cross-module domain function is imported from the other module's **service
-  file directly** when the module barrel (`index.ts`) would create an import
-  cycle (see `accessible-route.service` → `../ai/ai.service`).
+## Environment Variables
 
-## 3) Per-task execution checklist
+Copy `.env.example` to `.env`. Required variables:
 
-1. Determine change type (auth/session vs plain data endpoint vs shared infra).
-2. Place each piece in its layer (§2); nothing in the wrong lane.
-3. Register the router at `modules/<feature>/index.ts` and mount it once in
-   `src/app.ts` under `/api/v1`.
-4. Update `.env.example` when adding a required env var.
-5. Run `pnpm build` — must be green (this also runs `lint:arch`).
-6. Run and verify any modified or added scripts (like Python tools, build pipelines) locally on actual or mock data to prove correctness before committing.
 
-## 4) Handoff requirements
+| Variable                                   | Purpose                                                                                 |
+| ------------------------------------------ | --------------------------------------------------------------------------------------- |
+| `PORT`                                     | Server port (default 5000)                                                              |
+| `CORS_ORIGINS`                             | Comma-separated allowed origins                                                         |
+| `GOOGLE_MAPS_API_KEY`                      | Google Maps reverse geocoding + Places Text Search                                      |
+| `VALHALLA_BASE_URL`                        | Self-hosted Valhalla — drive / motorcycle / walk route planning                         |
+| `VALHALLA_DATA_DIR`                        | Host directory containing versioned Valhalla tile releases                              |
+| `VALHALLA_PBF_PATH`                        | Host path to the Taiwan OSM PBF used for tile builds                                    |
+| `GEMINI_API_KEY`                           | Google Gemini AI (auto-read by `@google/genai` SDK)                                     |
+| `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | JWT signing                                                                             |
+| `DATABASE_URL`                             | MongoDB connection URI                                                                  |
+| `TDX_CLIENT_ID` / `TDX_CLIENT_SECRET`      | Taiwan transport data API credentials                                                   |
+| `OTP_BASE_URL`                             | OTP2 sidecar GraphQL server (default `http://localhost:8080`, internal only)            |
+| `GEMINI_API_URL`                           | OpenAI-compatible base URL for the AI API (default: Gemini's `/v1beta/openai` endpoint) |
+| `GEMINI_MODEL`                             | Model name used by all AI features (default: `gemini-3.7-flash`)                        |
+| `CWA_API_KEY`                              | 中央氣象署 CWA open-data key — weather block of `/a11y/environment`                          |
+| `MOENV_API_KEY`                            | 環境部環境資料開放平臺 AQI key（免費註冊會員後取得）                                                          |
 
-- List changed files and why each changed.
-- Confirm the endpoint mount path(s).
-- Confirm `pnpm build` result (pass/fail) — "done" means green, not "written".
-- List risks, assumptions, and TODOs.
 
-## 5) Enforcement (kept honest by tooling, not memory)
+## Architecture
 
-- **Import-boundary check:** `pnpm lint:arch`
-  (`src/scripts/check-architecture.mjs`) — fails the build when a layer boundary is
-  crossed. Grandfather a not-yet-migrated file via its `ALLOWLIST`, and delete
-  the entry in the same change that migrates it.
-- **Schema-as-contract:** OpenAPI docs are generated from the request schemas.
-- **Green build gate:** `pnpm build` runs the boundary check before `tsc`.
-- Rationale for non-obvious decisions lives under `docs/reports/`.
+This is a **layered, single-direction** backend (clean-architecture). A request flows one way and each file's suffix declares its job. Dependencies only point inward/forward — a router never calls a service directly, and a service never touches `req`/`res`.
+
+### Request flow
+
+```
+client → src/app.ts (Express, single /api/v1 prefix)
+       → modules/<feature>/<feature>.router.ts   transport: path + middleware chain, delegate to one controller
+       → [middleware] auth (protected routes) → validateRequest(schema)
+       → <feature>.controller.ts                 handler: read req.validated / identity, call ONE service method
+       → <feature>.service.ts                    domain: business logic + orchestration, no req/res
+       → adapters/*.adapter.ts | model/*.model.ts | config/*
+       → sendResponse() → envelope
+```
+
+Each module exposes a `createXRouter()` factory via its `index.ts` (the single registration point) and is mounted with one line in `src/app.ts`.
+
+### Layer conventions (where code goes)
+
+
+| Path                                    | Role                                                                                                                                    |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/modules/<feature>/*.router.ts`     | Route + middleware chain; delegates to one controller method                                                                            |
+| `src/modules/<feature>/*.schema.ts`     | Zod request schemas (edge validation); registered to OpenAPI                                                                            |
+| `src/modules/<feature>/*.controller.ts` | Thin handler: read `req.validated` / identity, call one service, `sendResponse`                                                         |
+| `src/modules/<feature>/*.service.ts`    | Business logic + orchestration; no framework objects                                                                                    |
+| `src/adapters/*.adapter.ts`             | External I/O clients (`google.adapter.ts` geocoding/Places, `valhalla.adapter.ts` road routing, `tdx.adapter.ts`) — one source per file |
+| `src/model/*.model.ts`                  | Mongoose models                                                                                                                         |
+| `src/constants/messages.ts`             | Shared message strings (no magic literals)                                                                                              |
+| `src/config/*`                          | Shared infra: `lib.ts` (envelope), `jwt.ts`, `redis.ts`, `fetch.ts`, `taipei-time.ts`, `transit.ts`, `ai.ts`, `ai/`                     |
+| `src/middleware/`                       | `middleware.ts` (JWT auth gate), `validate-request.middleware.ts`                                                                       |
+| `src/openapi/`                          | Schema-driven docs — served at `/docs`, spec at `/api/v1/openapi.json`                                                                  |
+| `src/utils/`                            | Pure helpers (e.g. `transit-text.ts`)                                                                                                   |
+| `src/types/`                            | Shared types — `code.ts` = `ResponseCode` enum, `express.d.ts` augments `req.validated` / `req.auth`                                    |
+
+
+> The legacy flat `routes/` / `controller/` / `service/` directories **no longer exist** — everything is under `modules/` + `adapters/`. Place new external I/O in `adapters/`, not a `service/` dir.
+
+### Route groups (all under `/api/v1`)
+
+
+| Prefix            | Router factory                | Domain                                                       |
+| ----------------- | ----------------------------- | ------------------------------------------------------------ |
+| `/api/v1/user`    | `createUserRouter`            | Auth — **mounted behind** `middleware` **(JWT)** in `app.ts` |
+| `/api/v1/transit` | `createTransitRouter`         | Bus/train real-time data                                     |
+| `/api/v1/a11y`    | `createA11yRouter`            | Accessibility places + bathrooms                             |
+| `/api/v1/a11y`    | `createAccessibleRouteRouter` | `POST /accessible-route` planner                             |
+| `/api/v1/a11y`    | `createNavInstructionsRouter` | Turn-by-turn navigation instructions                         |
+| `/api/v1/a11y`    | `createHazardReportRouter`    | Hazard reporting &amp; confirmation                          |
+| `/api/v1/a11y`    | `createEnvironmentRouter`     | `GET /environment` pre-trip weather/air/CCTV aggregation     |
+| `/api/v1/air`     | `createAirRouter`             | Air quality                                                  |
+| `/api/v1/ai`      | `createAiRouter`              | `/intent`, `/explain`, `/chat`                               |
+
+
+Several routers share the `/api/v1/a11y` prefix. Only `/api/v1/user` is wrapped in the auth middleware; all other routes are public (or use route-level auth hooks).
+
+The auth middleware (`src/middleware/middleware.ts`) **gates** (token expired → 401, missing/invalid → 403) and bypasses `/login`, `/token`, `/refresh`, `/logout`. On success it now **injects** `req.auth = { userId, user }` (typed in `express.d.ts`), so controllers behind it (e.g. hazard-report's `POST /reports`, `GET /reports/mine`) read identity from `req.auth.userId` instead of re-decoding. Public routes that optionally use a token (e.g. hazard-report's `/confirm`) still call `verifyAccessToken` themselves since the middleware never ran. The JWT payload is `{ user }`. It is mounted whole on `/api/v1/user`, and applied **per-route** elsewhere (the hazard-report router chains it onto just its protected routes).
+
+### Validation
+
+`validateRequest({ body?, query?, params? })` (`src/middleware/validate-request.middleware.ts`) runs Zod schemas at the edge, writes the parsed values to `req.validated` (and overwrites `req.body` / `req.query` / `req.params`). On failure it returns `ResponseCode.INVALID_INPUT` (400) with `{ errors }`.
+
+### Response shape
+
+All controllers use `sendResponse()` from `src/config/lib.ts`:
+
+```ts
+{ ok, status, code, message, data?, accessToken? }
+```
+
+`code` is the HTTP status from the `ResponseCode` enum (`src/types/code.ts` — currently 200/201/204/205/400/401/403/404/410/429/500/503). Domain-specific error categories go in `data` (e.g. `data.reason`), not in `code`. The refresh token is set as an `httpOnly` cookie, not in the JSON body.
+
+### Agent Chat flow (`POST /api/v1/ai/chat`)
+
+`aiChat` in `src/modules/ai/ai.chat.controller.ts` implements an **OpenAI-compatible streaming agent**:
+
+1. **Request** — `{ model?, messages, stream?, temperature?, userLocation? }` (OpenAI Chat Completions format).
+2. **Tool loop (non-streaming)** — the backend calls the LLM with the local tools declared in `src/config/ai/tool.ts`. If the model returns `finish_reason: "tool_calls"`, the matching function in `src/modules/ai/agent-tools.ts` runs and the result feeds back. Repeats up to 5 times.
+3. **Streaming response** — the final answer streams as SSE (`event: tool_call`, `event: tool_result`, then OpenAI delta chunks, ending with `data: [DONE]`).
+
+Agent tools include `findGooglePlaces`, `findA11yPlaces`, `planAccessibleRoute`, `getBusArrivalEstimate`, `getBusPosition`, `getAirQuality`, `getA11yFacilityDetails`. The `ai` module also exposes `POST /api/v1/ai/intent` (`aiIntent`) and `POST /api/v1/ai/explain` (`aiExplain`). AI configs (temperature, response schema, tool declarations) live in `src/config/ai/` (`config.ts`, `contents.ts`, `tool.ts`) and `src/config/ai.ts`; default model `gemini-3-flash-preview`.
+
+### TDX transit API
+
+`TdxTokenManager` (exported as the `tdxTokenManager` singleton) in `src/adapters/tdx.adapter.ts` handles OAuth2 `client_credentials` token acquisition + caching for the Taiwan transport data platform. All TDX HTTP calls go through `tdxFetch()` in `src/config/fetch.ts`, which attaches the Bearer token and retries once on 401. Bus route type (city vs. inter-city) is **never inferred from the route name** — TDX has 4-digit routes on both sides with zero overlap (`0557` is a HsinchuCounty city bus, `0968` is inter-city). Instead `busRouteQueryCandidates()` (`src/utils/transit-text.ts`) emits ordered candidate scopes from the caller-supplied `city`, and `fetchRouteScoped()` (`src/modules/transit/bus.service.ts`) probes them in order, taking the first that returns usable rows and memoizing the winning scope for 6 hours.
+
+### MongoDB models (`src/model/*.model.ts`)
+
+- `a11y.model.ts` — MRT elevator/ramp accessibility exits, `2dsphere` index for `$near` geospatial queries.
+- `bathroom.model.ts` — accessible bathrooms, also geospatial.
+- `user.model.ts` — user accounts.
+- Transit/routing data consumed by the accessible-route planner: `bus-stop`, `metro-station`, `train-station`, `osm-a11y`, and the GTFS models (`gtfs-stop`, `gtfs-trip`, `gtfs-pathway`, `gtfs-level`).
+
+### Circuit Breakers
+
+External calls to the OTP planner (for routing and rail geometry) are wrapped in isolated circuit breakers (`createBreaker` in `src/modules/accessible-route/planners/otp-routing.ts`).
+
+- **Breakers**: `planBreaker` and `railGeomBreaker`.
+- **Threshold**: Trips after 3 (`BREAKER_THRESHOLD`) consecutive failures, staying open for 60,000ms (`BREAKER_COOLDOWN_MS`).
+- **Behavior**: When the main planner circuit is open (`isOtpCircuitOpen()`), the routing service returns `ResponseCode.SERVICE_UNAVAILABLE` (503) with a localized error message (`路線規劃服務暫時忙線，請稍後再試`) so callers can distinguish temporary service outages from a genuine `404 Not Found` (no route exists).
+- **Request budget**: every OTP stage of one transit request shares `ROUTE_PLAN_BUDGET_MS` (`src/config/routing.ts`). The primary query keeps the client timeout; optional stages get only what remains and a stage cut short by the budget is not counted as an outage.
+
+### Routing tunables and OTP coupling
+
+Routing thresholds live in `src/config/routing.ts` (`getRoutingConfig()`: defaults + validated env overrides, invalid values throw), not as module constants. `WALK_SPEED_MPS` is deliberately not env-tunable: every (walk speed × wheelchair flag) the backend can send must be pre-warmed in `otp-data/router-config.json` `transit.transferCacheRequests`, otherwise OTP blocks 40 s+ building a transfer cache on first use — `src/config/routing.test.ts` enforces this. Short transit trips have no walking race: OTP's direct-walk itinerary competes in ranking, `WALKING_BETTER` is set only from OTP's own `WALKING_BETTER_THAN_TRANSIT`.
+
+Bus low-floor evidence: plate flags come from Mongo `busvehicles` (city syncs; never call TDX for this). Plate-on-route sightings (`busfleetsightings`: Taichung/Hsinchu fleet sync + realtime ETA plates) give a route's low-floor history, used only as a ranking credit in `low-floor-rerank.ts` — never written as GTFS `trips.wheelchair_accessible`. The OTP build merges co-located duplicate bus stops (step 1g); `restoreRouteStopIds` maps OTP's merged stop ids back to each route's own StopUID via Mongo `gtfsstopaliases`.
+
+## Agent Gating &amp; Tool Usage Guidelines
+
+This project enforces a dual-agent review process (Cross-Model Review). During the **planning phase** (before the task implementation plan is approved by Codex and approved by the user), the review gate is locked. Follow these tool calling guidelines:
+
+1. **File Reading &amp; Searching (Planning Phase)**:
+   - ❌ **Do not** use shell commands via `Bash` (such as `sed`, `grep`, or `cat` combined with pipes `|` or chaining `&&`) to inspect files, unless using the whitelisted read-only combinations below.
+   - **Always prefer** native tools for cleaner context and token efficiency:
+   - Use `view_file` to read specific file contents (always specify `StartLine` and `EndLine` for section reads).
+   - Use `grep_search` for full-text symbol and string searches.
+2. **Whitelisted Read-Only Commands**:
+   - The following commands are explicitly whitelisted and can be run via `Bash` (even in pipelines with `|`, `&&`, `;`, `\n`) during the planning phase:
+     - **Knowledge Graph**: `graphify query "<question>"`, `graphify explain "<concept>"`, `graphify path "<node1>" "<node2>"`
+     - **Git Queries**: `git status` (with `-s` / `--short`), `git diff` (with `--name-only` / `--cached` / `--staged`), `git log`, `git show`, `git ls-files`
+     - **Sed &amp; Grep**: `sed -n '<range>p' <file>` (must include `-n`), `grep` with search-only flags (`-i`, `-n`, `-w`, `-v`, `-F`, `-E`), and pagers like `head` or `tail`.
+     - **Diagnostics**: `locate`, `du`, `df`, `echo` (allowing env vars, rejecting `$()`), `env` / `printenv`, `date`, `whereis`, `which`.
+3. **Implementation Restrictions**:
+   - All modifying tools (e.g. `Write`, `Edit`, `apply_patch`) and mutating commands (e.g. `git commit`, `pnpm dev`) remain gated and will be blocked until the task plan is fully approved.
+
