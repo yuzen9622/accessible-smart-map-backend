@@ -281,7 +281,7 @@ export const SOS_REASON = {
 } as const;
 
 export const SOS_MSG = {
-  CREATED: "已發出求救通知",
+  CREATED: "已建立求救",
   ALREADY_ACTIVE: "已有進行中的求救",
   RESOLVED: "已解除求救",
   PUBLIC_OK: "OK",

@@ -61,6 +61,41 @@ const resolvedNoticeSchema = new Schema(
   { _id: false },
 );
 
+const initialNoticeSchema = new Schema(
+  {
+    status: {
+      type: String,
+      enum: ["queued", "accepted", "failed", "skipped"],
+      required: true,
+    },
+    recipients: { type: [String], required: true },
+    payload: {
+      type: new Schema(
+        {
+          userName: String,
+          type: {
+            type: String,
+            enum: ["body", "trapped", "share_location"],
+            required: true,
+          },
+          trackingUrl: { type: String, required: true },
+          address: String,
+        },
+        { _id: false },
+      ),
+      required: true,
+    },
+    retryKey: { type: String, required: true },
+    attempts: { type: Number, default: 0 },
+    nextAttemptAt: { type: Date, required: true },
+    retryUntil: { type: Date, required: true },
+    claimId: { type: String, default: null },
+    leaseUntil: { type: Date, default: null },
+    notifiedCount: { type: Number, default: 0 },
+  },
+  { _id: false },
+);
+
 const sosSessionSchema = new Schema<ISosSession>(
   {
     userId: { type: String, required: true },
@@ -77,6 +112,7 @@ const sosSessionSchema = new Schema<ISosSession>(
     handlingStatus: {
       type: String,
       enum: [
+        "pending",
         "notified",
         "acknowledged",
         "claimed",
@@ -104,6 +140,7 @@ const sosSessionSchema = new Schema<ISosSession>(
     timeline: { type: [timelineEntrySchema], default: [] },
     staleAlertSent: { type: Boolean, default: false },
     autoResolved: { type: Boolean, default: false },
+    initialNotice: { type: initialNoticeSchema, default: undefined },
     resolvedNotice: { type: resolvedNoticeSchema, default: undefined },
   },
   { timestamps: true },
@@ -123,6 +160,12 @@ sosSessionSchema.index(
   { "resolvedNotice.status": 1, "resolvedNotice.nextAttemptAt": 1 },
   { partialFilterExpression: { "resolvedNotice.status": "pending" } },
 );
+
+sosSessionSchema.index({
+  "initialNotice.status": 1,
+  status: 1,
+  "initialNotice.nextAttemptAt": 1,
+});
 
 const SosSession = model<ISosSession>("SosSession", sosSessionSchema);
 

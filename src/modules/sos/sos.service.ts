@@ -1,3 +1,7 @@
+import {
+  makeInitialNotice,
+  deliverInitialNotice,
+} from "./sos-notification.service";
 import crypto from "crypto";
 import { Types } from "mongoose";
 import {
@@ -11,15 +15,13 @@ import {
   findSessionByShareToken,
   findUserName,
   insertSession,
+  initializeInitialNotice,
   promoteToAcknowledged,
   pushAcknowledgement,
   resolveActiveSession,
   updateActiveSessionLocation,
 } from "./sos.repository";
-import {
-  sendSosNotification,
-  sendSosResolved,
-} from "../../adapters/line.adapter";
+import { sendSosResolved } from "../../adapters/line.adapter";
 import { ResponseCode } from "../../types/code";
 import { SOS_MSG, SOS_PUSH_MSG, SOS_REASON } from "../../constants/messages";
 import { PUSH_EVENT_TYPE } from "../../constants/push";
@@ -205,80 +207,62 @@ async function boundLineUserIds(userId: string): Promise<string[]> {
   return findBoundLineUserIds(userId);
 }
 
-/**
- * Creates an SOS session. Attempts a direct insert so the unique partial index
- * (`{userId} where status=active`) is the single source of truth against
- * double-tap races; on `E11000` it returns the existing active session (200,
- * no re-notification), otherwise 201 + best-effort multicast.
- *
- * @param input Requester id, SOS type and location.
- * @returns 201 (new) or 200 (existing active) with `{ sessionId, shareToken, notifiedCount }`.
- */
+/** Creates or reuses an active SOS and attempts its durable notification. */
 export async function createSession(
   input: CreateSosInput,
 ): Promise<ServiceResult> {
-  const shareToken = crypto.randomBytes(16).toString("hex");
-  const now = new Date();
-
-  try {
-    const session = await insertSession({
-      userId: input.userId,
+  let session = await findActiveSessionByUser(input.userId);
+  let created = false;
+  if (!session) {
+    const shareToken = crypto.randomBytes(16).toString("hex");
+    const now = new Date();
+    const initialNotice = await makeInitialNotice(input.userId, {
       type: input.type,
-      status: "active",
-      lat: input.lat,
-      lng: input.lng,
+      trackingUrl: trackingUrl(shareToken),
       address: input.address ?? null,
-      shareToken,
-      locationUpdatedAt: now,
-      timeline: [
-        { type: "created", actorType: "victim", at: now },
-        { type: "notified", actorType: "system", at: now },
-      ],
     });
-
-    const lineUserIds = await boundLineUserIds(input.userId);
-    let userName: string | undefined;
     try {
-      userName = await findUserName(input.userId);
-    } catch {
-      userName = undefined;
+      session = await insertSession({
+        ...input,
+        status: "active",
+        handlingStatus: "pending",
+        address: input.address ?? null,
+        shareToken,
+        locationUpdatedAt: now,
+        timeline: [{ type: "created", actorType: "victim", at: now }],
+        initialNotice,
+      });
+      created = true;
+    } catch (err) {
+      if ((err as { code?: number })?.code !== 11000) throw err;
+      session = await findActiveSessionByUser(input.userId);
+      if (!session) throw err;
     }
-    const notifiedCount = await sendSosNotification(lineUserIds, {
-      userName,
-      type: input.type,
-      trackingUrl: trackingUrl(session.shareToken),
-      address: session.address,
-    });
-
-    return {
-      ok: true,
-      httpCode: ResponseCode.CREATED,
-      message: SOS_MSG.CREATED,
-      data: {
-        sessionId: session._id,
-        shareToken: session.shareToken,
-        notifiedCount,
-      },
-    };
-  } catch (err) {
-    if ((err as { code?: number })?.code === 11000) {
-      const existing = await findActiveSessionByUser(input.userId);
-      if (existing) {
-        const notifiedCount = (await boundLineUserIds(input.userId)).length;
-        return {
-          ok: true,
-          httpCode: ResponseCode.OK,
-          message: SOS_MSG.ALREADY_ACTIVE,
-          data: {
-            sessionId: existing._id,
-            shareToken: existing.shareToken,
-            notifiedCount,
-          },
-        };
-      }
-    }
-    throw err;
   }
+  if (!session.initialNotice) {
+    await initializeInitialNotice(
+      String(session._id),
+      await makeInitialNotice(input.userId, {
+        type: session.type,
+        trackingUrl: trackingUrl(session.shareToken),
+        address: session.address,
+      }),
+    );
+  }
+  await deliverInitialNotice(String(session._id));
+  const current = await findSessionById(String(session._id));
+  const notice = current?.initialNotice;
+  return {
+    ok: true,
+    httpCode: created ? ResponseCode.CREATED : ResponseCode.OK,
+    message: created ? SOS_MSG.CREATED : SOS_MSG.ALREADY_ACTIVE,
+    data: {
+      sessionId: session._id,
+      shareToken: session.shareToken,
+      notifiedCount: notice?.notifiedCount ?? 0,
+      notificationStatus: notice?.status ?? "queued",
+    },
+  };
 }
 
 /**

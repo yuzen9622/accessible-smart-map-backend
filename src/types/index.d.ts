@@ -581,7 +581,13 @@ export interface ILineLinkCode {
 }
 
 export type SosHandlingStatus =
-  "notified" | "acknowledged" | "claimed" | "en_route" | "arrived" | "resolved";
+  | "pending"
+  | "notified"
+  | "acknowledged"
+  | "claimed"
+  | "en_route"
+  | "arrived"
+  | "resolved";
 
 export interface ISosAcknowledgement {
   contactId?: string | null;
@@ -629,6 +635,7 @@ export interface ISosSession {
   /** True when the system closed the session after it went stale. */
   autoResolved?: boolean;
   resolvedNotice?: ISosResolvedNotice;
+  initialNotice?: ISosInitialNotice;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -658,4 +665,23 @@ export interface ITrafficSection {
   endKm?: number;
   startPoint?: [number, number];
   updatedAt?: Date;
+}
+
+/** Durable initial SOS multicast; payload and audience remain fixed across retries. */
+export interface ISosInitialNotice {
+  status: "queued" | "accepted" | "failed" | "skipped";
+  recipients: string[];
+  payload: {
+    userName?: string;
+    type: "body" | "trapped" | "share_location";
+    trackingUrl: string;
+    address?: string | null;
+  };
+  retryKey: string;
+  attempts: number;
+  nextAttemptAt: Date;
+  retryUntil: Date;
+  claimId?: string | null;
+  leaseUntil?: Date | null;
+  notifiedCount: number;
 }

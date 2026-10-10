@@ -643,26 +643,35 @@ export function buildRouteCardFlex(
   };
 }
 
-/**
- * Multicasts the SOS notification to bound contacts (best-effort; individual
- * push failures are swallowed so they never block SOS creation).
- *
- * @param lineUserIds Bound contacts' LINE user ids.
- * @param payload SOS notification content.
- * @returns The number of recipients the notification was attempted for.
- */
+/** Sends a durable SOS attempt; only LINE acceptance counts as notified. */
 export async function sendSosNotification(
   lineUserIds: string[],
   payload: SosNotificationPayload,
+  retryKey: string,
+  timeoutMs: number,
 ): Promise<number> {
   if (lineUserIds.length === 0) return 0;
+  let timer: NodeJS.Timeout | undefined;
   try {
-    await getClient().multicast({
-      to: lineUserIds,
-      messages: [buildSosNotificationFlex(payload)],
-    });
+    await Promise.race([
+      getClient().multicast(
+        {
+          to: lineUserIds,
+          messages: [buildSosNotificationFlex(payload)],
+        },
+        retryKey,
+      ),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("LINE SOS notification timed out")),
+          timeoutMs,
+        );
+      }),
+    ]);
   } catch (err) {
-    console.error("[line.adapter] sendSosNotification failed", err);
+    if (!(err instanceof HTTPFetchError && err.status === 409)) throw err;
+  } finally {
+    clearTimeout(timer);
   }
   return lineUserIds.length;
 }

@@ -83,6 +83,29 @@ describe("POST /sos/sessions", () => {
     expect(res.body.data.shareToken).toBe(TOKEN_32);
   });
 
+  it("preserves the durable failure status without claiming any contacts were notified", async () => {
+    vi.mocked(service.createSession).mockResolvedValue({
+      ok: true,
+      httpCode: ResponseCode.CREATED,
+      message: SOS_MSG.CREATED,
+      data: {
+        sessionId: "s1",
+        shareToken: TOKEN_32,
+        notifiedCount: 0,
+        notificationStatus: "failed",
+      },
+    });
+    const res = await request(app)
+      .post(BASE)
+      .set("Authorization", auth)
+      .send({ type: "body", lat: 25, lng: 121 });
+    expect(res.status).toBe(201);
+    expect(res.body.data).toMatchObject({
+      notifiedCount: 0,
+      notificationStatus: "failed",
+    });
+  });
+
   it("returns 200 (not 201) with the existing session when one is already active", async () => {
     vi.mocked(service.createSession).mockResolvedValue({
       ok: true,

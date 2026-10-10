@@ -1,3 +1,4 @@
+import { startSosNotificationWorker } from "./modules/sos/sos-notification.worker";
 import http from "http";
 import app from "./app";
 import mongoose from "mongoose";
@@ -31,6 +32,7 @@ const PORT = process.env.PORT || 3000;
 // Validated before listening: a bad retention value must stop the deploy, not
 // leave the server up with the privacy retention job silently off.
 const retentionConfig = getRetentionConfig();
+let sosNotificationTimer: NodeJS.Timeout | undefined;
 let passwordAssistanceTimer: NodeJS.Timeout | undefined;
 let trafficGeometryTimer: NodeJS.Timeout | undefined;
 let busFleetSyncTimer: NodeJS.Timeout | undefined;
@@ -93,6 +95,7 @@ mongoose
       JSON.stringify({ paused: hazardAiWorker.getHealth().paused }),
     );
     stopRetentionJob = startRetentionJob(retentionConfig);
+    sosNotificationTimer = startSosNotificationWorker();
     passwordAssistanceTimer = startPasswordAssistanceWorker();
     busFleetSyncTimer = startBusFleetSyncJob();
     void warmTrafficGeometryRuntime().then(() => {
@@ -107,6 +110,7 @@ function shutdown(signalLog: string): void {
   console.log(signalLog);
   if (shutdownStarted) return;
   shutdownStarted = true;
+  if (sosNotificationTimer) clearInterval(sosNotificationTimer);
   if (passwordAssistanceTimer) clearInterval(passwordAssistanceTimer);
   if (trafficGeometryTimer) clearInterval(trafficGeometryTimer);
   if (busFleetSyncTimer) clearInterval(busFleetSyncTimer);

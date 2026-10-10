@@ -47,7 +47,16 @@ export const SosCreateResponseSchema = ApiResponse(
     shareToken: z
       .string()
       .openapi({ example: "9f8e7d6c5b4a39281706f5e4d3c2b1a0" }),
-    notifiedCount: z.number().openapi({ example: 2 }),
+    notifiedCount: z.number().openapi({
+      example: 2,
+      description: "LINE 已接受通知的收件人數，不代表已送達或已讀",
+    }),
+    notificationStatus: z
+      .enum(["queued", "accepted", "failed", "skipped"])
+      .openapi({
+        description:
+          "queued：待送出或傳送中；accepted：LINE 已接受；failed：嘗試失敗（期限與次數內會重試）；skipped：沒有已綁定聯絡人",
+      }),
   }),
   "SosCreateResponse",
 );
@@ -89,6 +98,14 @@ export const SosSnapshotResponseSchema = ApiResponse(
     sessionId: z.string().openapi({ example: "66b0abc123def4567890abcd" }),
     status: z.enum(["active", "resolved"]).openapi({ example: "active" }),
     handlingStatus: z.string().openapi({ example: "acknowledged" }),
+    notificationStatus: z.enum([
+      "queued",
+      "accepted",
+      "failed",
+      "skipped",
+      "unknown",
+    ]),
+    notifiedCount: z.number(),
     claimedBy: z.string().nullable().openapi({ example: null }),
     claimedByName: z.string().nullable().openapi({ example: "王小明" }),
     claimedAt: z.string().nullable().openapi({ example: null }),

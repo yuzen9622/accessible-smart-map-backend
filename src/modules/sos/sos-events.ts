@@ -16,6 +16,8 @@ export interface SosSnapshot {
   sessionId: string;
   status: "active" | "resolved";
   handlingStatus: string;
+  notificationStatus?: "queued" | "accepted" | "failed" | "skipped" | "unknown";
+  notifiedCount?: number;
   claimedBy?: string | null;
   claimedByName?: string | null;
   claimedAt?: Date | null;
@@ -53,6 +55,8 @@ export function buildSosSnapshot(session: ISosSession): SosSnapshot {
     sessionId: String(session._id),
     status: session.status,
     handlingStatus: session.handlingStatus,
+    notificationStatus: session.initialNotice?.status ?? "unknown",
+    notifiedCount: session.initialNotice?.notifiedCount ?? 0,
     claimedBy: session.claimedBy ?? null,
     claimedByName: session.claimedByName ?? null,
     claimedAt: session.claimedAt ?? null,

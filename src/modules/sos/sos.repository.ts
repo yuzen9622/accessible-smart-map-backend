@@ -1,7 +1,8 @@
+import { SOS_NOTICE } from "../../constants/sos";
 import SosSession from "../../model/sos-session.model";
 import EmergencyContact from "../../model/emergency-contact.model";
 import User from "../../model/user.model";
-import type { ISosSession } from "../../types";
+import type { ISosSession, ISosInitialNotice } from "../../types";
 
 /** An SOS session as stored, as a plain object. */
 export type SosSessionRecord = ISosSession & { _id: unknown };
@@ -189,7 +190,7 @@ export async function pushAcknowledgement(
  */
 export async function promoteToAcknowledged(sessionId: string): Promise<void> {
   await SosSession.updateOne(
-    { _id: sessionId, handlingStatus: "notified" },
+    { _id: sessionId, handlingStatus: { $in: ["pending", "notified"] } },
     { $set: { handlingStatus: "acknowledged" } },
   );
 }
@@ -465,4 +466,144 @@ export async function findOldestResolvedAt(): Promise<Date | null> {
     .select("resolvedAt")
     .lean<{ resolvedAt?: Date | null }>();
   return doc?.resolvedAt ?? null;
+}
+
+/** Initializes delivery for legacy sessions without inventing historical success. */
+export async function initializeInitialNotice(
+  sessionId: string,
+  notice: ISosInitialNotice,
+): Promise<void> {
+  await SosSession.updateOne(
+    { _id: sessionId, status: "active", initialNotice: { $exists: false } },
+    { $set: { initialNotice: notice } },
+  );
+}
+
+/** Claims one initial notification, with fencing shared by HTTP retries and workers. */
+export async function claimInitialNotice(
+  now: Date,
+  claimId: string,
+  sessionId?: string,
+): Promise<SosSessionRecord | null> {
+  return SosSession.findOneAndUpdate(
+    {
+      ...(sessionId ? { _id: sessionId } : {}),
+      status: "active",
+      "initialNotice.status": { $in: ["queued", "failed"] },
+      "initialNotice.attempts": { $lt: SOS_NOTICE.maxAttempts },
+      "initialNotice.retryUntil": { $gt: now },
+      // Explicit create retries may retry a failed, released attempt immediately.
+      ...(sessionId ? {} : { "initialNotice.nextAttemptAt": { $lte: now } }),
+      $or: [
+        { "initialNotice.claimId": null },
+        { "initialNotice.leaseUntil": { $lte: now } },
+      ],
+    },
+    {
+      $set: {
+        "initialNotice.status": "queued",
+        "initialNotice.claimId": claimId,
+        "initialNotice.leaseUntil": new Date(
+          now.getTime() + SOS_NOTICE.leaseMs,
+        ),
+      },
+      $inc: { "initialNotice.attempts": 1 },
+    },
+    { returnDocument: "after", sort: { "initialNotice.nextAttemptAt": 1 } },
+  ).lean<SosSessionRecord>();
+}
+
+/** Records acceptance and its timeline event in the same fenced write. */
+export async function acceptInitialNotice(
+  sessionId: string,
+  claimId: string,
+  count: number,
+): Promise<void> {
+  await SosSession.updateOne(
+    {
+      _id: sessionId,
+      "initialNotice.claimId": claimId,
+      "initialNotice.status": "queued",
+    },
+    [
+      {
+        $set: {
+          "initialNotice.status": "accepted",
+          "initialNotice.notifiedCount": count,
+          "initialNotice.claimId": null,
+          "initialNotice.leaseUntil": null,
+          handlingStatus: {
+            $cond: [
+              { $eq: ["$handlingStatus", "pending"] },
+              "notified",
+              "$handlingStatus",
+            ],
+          },
+          timeline: {
+            $concatArrays: [
+              { $ifNull: ["$timeline", []] },
+              [{ type: "notified", actorType: "system", at: new Date() }],
+            ],
+          },
+        },
+      },
+    ],
+    { updatePipeline: true },
+  );
+}
+
+/** Releases a failed attempt; only the current claim may change its state. */
+export async function failInitialNotice(
+  sessionId: string,
+  claimId: string,
+  attempts: number,
+): Promise<void> {
+  await SosSession.updateOne(
+    {
+      _id: sessionId,
+      "initialNotice.claimId": claimId,
+      "initialNotice.status": "queued",
+    },
+    {
+      $set: {
+        "initialNotice.status": "failed",
+        "initialNotice.claimId": null,
+        "initialNotice.leaseUntil": null,
+        "initialNotice.nextAttemptAt": new Date(
+          Date.now() + SOS_NOTICE.retryMs * 2 ** (attempts - 1),
+        ),
+      },
+    },
+  );
+}
+
+/** A crashed final attempt or expired retry window must not remain queued forever. */
+export async function expireInitialNotices(now: Date): Promise<void> {
+  await SosSession.updateMany(
+    {
+      "initialNotice.status": "queued",
+      $and: [
+        {
+          $or: [
+            { "initialNotice.claimId": null },
+            { "initialNotice.leaseUntil": { $lte: now } },
+          ],
+        },
+        {
+          $or: [
+            { status: "resolved" },
+            { "initialNotice.attempts": { $gte: SOS_NOTICE.maxAttempts } },
+            { "initialNotice.retryUntil": { $lte: now } },
+          ],
+        },
+      ],
+    },
+    {
+      $set: {
+        "initialNotice.status": "failed",
+        "initialNotice.claimId": null,
+        "initialNotice.leaseUntil": null,
+      },
+    },
+  );
 }
