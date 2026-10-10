@@ -46,8 +46,20 @@ token 過期或無效時回 400，`data.reason` 為 `INVALID_ROUTE_TOKEN`。
 
 路名、站名、路線名及列車車種名稱保留路線資料原文，不呼叫翻譯服務，也不保證這些專有名稱
 都有英文。後端產生的「起點／終點／中途點」通用標籤會改為英文。
-`accessible-route` 的路線摘要、評分與原始 leg 資料不屬於此文案契約；WebSocket 語音會話
-仍沿用原有語言設定。本次更新未新增 `lang` 別名或 `Accept-Language` 自動選擇。
+`accessible-route` 的路線摘要、評分與原始 leg 資料不屬於此文案契約。
+本次更新未新增 `lang` 別名或 `Accept-Language` 自動選擇。
+
+### 2026-10-10：語音導航沿用 session 語言
+
+連線 `/api/v1/voice/ws` 後，在 `session.start` 傳送 `language: "en"` 或 `"zh-TW"`；
+省略時仍為繁體中文。每次 WebSocket 重連請重新傳送目前語言，再送出 `nav.resume`。
+後端會以該 session 語言產生啟動、改道替換及續接步驟；Live 連線重建、路線失效後重選
+也保留該 session 語言。`nav.resume` 保留原有進度，不必另傳語言欄位。
+
+偏航、抵達、開始／停止／重播、導航錯誤及路況警示的後端文案支援英文；來源站名、
+路名、警報標題與描述仍保留原文。AI 的 `getNavInstructions` 未提供 `language` 時，
+工具執行器使用 session 語言作預設；明確提供有效語言時仍可覆寫，非法值仍拒絕。
+文字 AI 與語音 AI 共用此預設規則。
 
 ## 新增指引欄位
 
