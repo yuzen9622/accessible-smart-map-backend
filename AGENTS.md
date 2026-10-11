@@ -2,6 +2,10 @@
 
 This file provides guidance to agents when working with code in this repository.
 
+## Deployment Configuration
+
+All deployment configuration must live in the root `Dockerfile` and `docker-compose.yml` only. Do not create `infra/`, additional deployment config files, or standalone deployment startup/init scripts. Inline required scripts in these two files; documentation may reference them but must not become another configuration source.
+
 ## Commands
 
 ```bash
