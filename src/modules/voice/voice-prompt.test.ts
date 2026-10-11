@@ -64,7 +64,9 @@ describe("buildVoiceSystemPrompt nearest-place policy", () => {
   it("directs the model to request location instead of a station when GPS is absent", () => {
     const prompt = buildVoiceSystemPrompt();
 
-    expect(prompt).toContain("只詢問是否能取得位置");
+    expect(prompt).toContain("工具會向 App 確認位置");
+    expect(prompt).toContain("收到 LOCATION_REQUIRED 時保持對話");
+    expect(prompt).toContain("不要猜測最近的候選");
     expect(prompt).not.toContain("【使用者目前位置】緯度");
   });
 });

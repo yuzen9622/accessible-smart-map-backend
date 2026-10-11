@@ -1927,3 +1927,15 @@ describe("AI plan full route contract", () => {
     expect(result.routes[0].routeToken).toBeUndefined();
   });
 });
+
+it("returns actionable LOCATION_REQUIRED without invoking the planner or inventing an origin", async () => {
+  const result = JSON.parse(
+    await executeLocalTool("planAccessibleRoute", {
+      origin: "current_location",
+      destination: "台中車站",
+    }),
+  );
+  expect(result).toMatchObject({ ok: false, reason: "LOCATION_REQUIRED" });
+  expect(result.error).toContain("詢問出發地點");
+  expect(mockPlanRoute).not.toHaveBeenCalled();
+});

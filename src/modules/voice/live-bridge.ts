@@ -261,6 +261,27 @@ export async function createLiveBridge(
   let positionTimer: ReturnType<typeof setTimeout> | null = null;
   let lastPositionProcessedAt = 0;
   let latestPosition: NavPosition | null = userLocation ?? null;
+  let pendingLocation: { promise: Promise<void>; finish: () => void } | null =
+    null;
+
+  const requestClientLocation = (): Promise<void> => {
+    if (latestPosition) return Promise.resolve();
+    if (pendingLocation) return pendingLocation.promise;
+    let finish!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      const timer = setTimeout(() => finish(), 2_000);
+      finish = () => {
+        clearTimeout(timer);
+        pendingLocation = null;
+        resolve();
+      };
+    });
+    pendingLocation = { promise, finish };
+    // Older clients may ignore this. The bounded wait still returns a normal
+    // tool failure, allowing Gemini to ask for a starting point.
+    sendJson({ type: "location.request" });
+    return promise;
+  };
   let userTranscriptBuffer = "";
   let utteranceSeq = 0;
   let currentUtteranceId: string | null = null;
@@ -345,6 +366,7 @@ export async function createLiveBridge(
   ): void => {
     if (disposed || voiceState === "unavailable") return;
     voiceState = "unavailable";
+    pendingLocation?.finish();
     voiceEpoch++;
     for (const cancel of pendingBootstraps) cancel();
     const ending = session;
@@ -924,6 +946,15 @@ export async function createLiveBridge(
         } else if (name === "getActiveNavigationContext") {
           result = JSON.stringify(navSession.getConversationContext());
         } else {
+          if (
+            name === "planAccessibleRoute" &&
+            call.args?.origin === "current_location" &&
+            !latestPosition
+          ) {
+            await requestClientLocation();
+            if (!voiceCurrent()) return;
+            if (cancelled()) continue;
+          }
           result = await executeVoiceTool(
             name,
             (call.args ?? {}) as Record<string, unknown>,
@@ -966,7 +997,37 @@ export async function createLiveBridge(
           tool: name,
           ok,
           durationMs,
-          ...(ok ? {} : { error: response.error }),
+          ...(name === "planAccessibleRoute"
+            ? {
+                hasLocation: Boolean(latestPosition),
+                resultOk:
+                  typeof toolResult === "object" &&
+                  toolResult !== null &&
+                  "ok" in toolResult
+                    ? toolResult.ok === true
+                    : false,
+                failureCode: !ok
+                  ? "TOOL_EXECUTION_FAILED"
+                  : typeof toolResult === "object" &&
+                      toolResult !== null &&
+                      "ok" in toolResult &&
+                      toolResult.ok === false
+                    ? "reason" in toolResult &&
+                      typeof toolResult.reason === "string" &&
+                      [
+                        "LOCATION_REQUIRED",
+                        "INVALID_ROUTE_ARGUMENTS",
+                        "STALE_SELECTION",
+                        "ROUTE_CONTEXT_UNAVAILABLE",
+                      ].includes(toolResult.reason)
+                      ? toolResult.reason
+                      : "ROUTE_PLANNING_FAILED"
+                    : undefined,
+              }
+            : {}),
+          ...(ok || name === "planAccessibleRoute"
+            ? {}
+            : { error: response.error }),
         }),
       );
       sendJson({
@@ -1181,7 +1242,7 @@ export async function createLiveBridge(
             inputAudioTranscription: {},
             outputAudioTranscription: {},
             systemInstruction: withCurrentDate(
-              buildVoiceSystemPrompt(userLocation, memories, {
+              buildVoiceSystemPrompt(latestPosition ?? undefined, memories, {
                 language: options.language,
                 memoryEnabled,
                 history: conversationHistory,
@@ -1517,6 +1578,7 @@ export async function createLiveBridge(
     updatePosition(position: NavPosition): void {
       if (disposed) return;
       latestPosition = position;
+      pendingLocation?.finish();
       const now = Date.now();
       const elapsed = now - lastPositionProcessedAt;
       const processLatest = () => {
@@ -1614,6 +1676,7 @@ export async function createLiveBridge(
     if (disposed) return;
     closedByGateway = true;
     disposed = true;
+    pendingLocation?.finish();
     for (const cancel of pendingBootstraps) cancel();
     unsubscribeAlerts();
     pendingToolMessages = 0;

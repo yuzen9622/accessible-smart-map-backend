@@ -509,7 +509,9 @@ export async function planAccessibleRoute(args: {
     if (origin === "current_location" && !args.userLocation) {
       return JSON.stringify({
         ok: false,
-        error: "需要使用者位置以使用「目前位置」作為起點",
+        reason: "LOCATION_REQUIRED",
+        error:
+          "目前無法取得使用者位置，請詢問出發地點，或請使用者開啟定位後再試。不要猜測起點；這不表示目的地沒有可用路線。",
       });
     }
     const originInput =

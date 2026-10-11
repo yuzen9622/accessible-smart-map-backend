@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 
 const {
@@ -2885,4 +2885,151 @@ it("a superseded bootstrap cannot overwrite the new session's memory permission"
   });
   expect(loadMemories).not.toHaveBeenCalled();
   bridge.close();
+});
+
+describe("voice routing location recovery", () => {
+  let onmessage: (message: unknown) => void;
+  let onclose: () => void;
+  let session: ReturnType<typeof makeSession>;
+  let ws: WebSocket;
+  const frames = () =>
+    vi
+      .mocked(ws.send)
+      .mock.calls.map((call) => call[0])
+      .filter((value): value is string => typeof value === "string")
+      .map((value) => JSON.parse(value));
+  const callRoute = () =>
+    onmessage({
+      toolCall: {
+        functionCalls: [
+          {
+            id: "route",
+            name: "planAccessibleRoute",
+            args: { origin: "current_location", destination: "Station" },
+          },
+        ],
+      },
+    });
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    session = makeSession();
+    ws = makeWs();
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      onclose = callbacks.onclose;
+      return session;
+    });
+    vi.mocked(executeLocalTool).mockResolvedValue(
+      JSON.stringify({
+        ok: false,
+        reason: "LOCATION_REQUIRED",
+        error: "Please provide a starting point",
+      }),
+    );
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  it("asks the app for missing GPS and uses its reply before planning, without starting navigation", async () => {
+    const bridge = await createLiveBridge({ ws, userId: "fixture-user" });
+    await bridge.voiceReady;
+    callRoute();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(frames()).toContainEqual({ type: "location.request" });
+    expect(executeLocalTool).not.toHaveBeenCalled();
+    bridge.updatePosition({ latitude: 24.15, longitude: 120.68 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(executeLocalTool).toHaveBeenCalledWith(
+      "planAccessibleRoute",
+      expect.anything(),
+      { latitude: 24.15, longitude: 120.68 },
+      "fixture-user",
+      expect.anything(),
+    );
+    expect(frames().some((frame) => frame.type === "nav.start")).toBe(false);
+    expect(ws.close).not.toHaveBeenCalled();
+    bridge.close();
+  });
+  it("bounds the wait for a denied or unavailable fix and sends the failure back to the model without closing voice", async () => {
+    const log = vi.spyOn(console, "log");
+    const bridge = await createLiveBridge({ ws, userId: "fixture-user" });
+    await bridge.voiceReady;
+    callRoute();
+    await vi.advanceTimersByTimeAsync(2001);
+    expect(
+      frames().find((frame) => frame.type === "tool_result").result.reason,
+    ).toBe("LOCATION_REQUIRED");
+    expect(session.sendToolResponse).toHaveBeenCalled();
+    expect(session.close).not.toHaveBeenCalled();
+    expect(ws.close).not.toHaveBeenCalled();
+    const toolLog = log.mock.calls.find(([label]) => label === "[voice] tool");
+    expect(JSON.parse(toolLog![1])).toEqual({
+      tool: "planAccessibleRoute",
+      ok: true,
+      durationMs: 2000,
+      hasLocation: false,
+      resultOk: false,
+      failureCode: "LOCATION_REQUIRED",
+    });
+    log.mockRestore();
+    bridge.close();
+  });
+  it("continues the batch when only the location-dependent call is cancelled", async () => {
+    const bridge = await createLiveBridge({ ws, userId: "fixture-user" });
+    await bridge.voiceReady;
+    onmessage({
+      toolCall: {
+        functionCalls: [
+          {
+            id: "route",
+            name: "planAccessibleRoute",
+            args: { origin: "current_location", destination: "Station" },
+          },
+          { id: "context", name: "getActiveNavigationContext", args: {} },
+        ],
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    onmessage({ toolCallCancellation: { ids: ["route"] } });
+    bridge.updatePosition({ latitude: 24.15, longitude: 120.68 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(executeLocalTool).not.toHaveBeenCalled();
+    expect(session.sendToolResponse).toHaveBeenCalledWith({
+      functionResponses: [
+        expect.objectContaining({
+          id: "context",
+          name: "getActiveNavigationContext",
+        }),
+      ],
+    });
+    bridge.close();
+  });
+  it("does not execute a waiting route after the provider becomes unavailable", async () => {
+    const bridge = await createLiveBridge({ ws, userId: "fixture-user" });
+    await bridge.voiceReady;
+    callRoute();
+    await vi.advanceTimersByTimeAsync(0);
+    onclose();
+    bridge.updatePosition({ latitude: 24.15, longitude: 120.68 });
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(executeLocalTool).not.toHaveBeenCalled();
+    expect(session.sendToolResponse).not.toHaveBeenCalled();
+    expect(frames()).toContainEqual({
+      type: "error",
+      code: "LIVE_SESSION_ENDED",
+    });
+    bridge.close();
+  });
+  it("cancels an in-flight location request on close without executing its route", async () => {
+    const bridge = await createLiveBridge({ ws, userId: "fixture-user" });
+    await bridge.voiceReady;
+    callRoute();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(frames()).toContainEqual({ type: "location.request" });
+    bridge.close();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(executeLocalTool).not.toHaveBeenCalled();
+    expect(session.sendToolResponse).not.toHaveBeenCalled();
+  });
 });
