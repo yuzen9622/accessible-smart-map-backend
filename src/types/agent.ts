@@ -100,6 +100,8 @@ export interface AgentInput {
   toolAllowList?: string[];
   allowedFunctionNames?: string[];
   seedParts?: string[];
+  /** Chat opts into tools-or-finish decisions; omitted preserves legacy routing. */
+  toolPhaseMode?: "explicit";
   /** Streams the answer's text chunks as they are generated. */
   onTextDelta?: (text: string) => void;
 }

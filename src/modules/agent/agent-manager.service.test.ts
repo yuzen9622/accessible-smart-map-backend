@@ -59,6 +59,8 @@ const userInput = (text: string): InteractionInputStep[] => [
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockCreate.mockReset();
+  mockExec.mockReset();
   callSeq = 0;
 });
 
@@ -729,11 +731,14 @@ describe("routeOnce 工具目錄（回歸：eval 只傳 userId 時記憶工具�
 });
 
 /** An async iterable of streaming SSE events. */
-async function* eventStream(events: any[]) {
+async function* eventStream(events: unknown[]) {
   for (const e of events) yield e;
 }
 
-function streamedTextEvents(id: string, chunks: string[]) {
+function streamedTextEvents(
+  id: string,
+  chunks: string[],
+): Record<string, unknown>[] {
   return [
     {
       event_type: "interaction.created",
@@ -753,139 +758,269 @@ function streamedTextEvents(id: string, chunks: string[]) {
   ];
 }
 
-function streamedCallEvents(
-  id: string,
-  call: { id: string; name: string; argChunks: string[] },
-) {
-  return [
-    {
-      event_type: "interaction.created",
-      interaction: { id, status: "in_progress" },
-    },
-    {
-      event_type: "step.start",
-      index: 0,
-      step: { type: "function_call", id: call.id, name: call.name },
-    },
-    ...call.argChunks.map((a) => ({
-      event_type: "step.delta",
-      index: 0,
-      delta: { type: "arguments_delta", arguments: a },
-    })),
-    { event_type: "step.stop", index: 0 },
-    {
-      event_type: "interaction.completed",
-      interaction: { id, status: "requires_action" },
-    },
-  ];
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
-describe("streaming（M1-6：最終答案逐字送）", () => {
-  it("提供 onTextDelta 時改用 stream:true，並逐塊回呼", async () => {
-    mockCreate.mockResolvedValueOnce(
-      eventStream(streamedTextEvents("int-s1", ["您可以搭", "132 路", "。"])),
+const runStreaming = (
+  onTextDelta: (text: string) => void,
+  signal?: AbortSignal,
+) =>
+  runAgent({
+    input: userInput("去車站"),
+    systemInstruction: "SYS",
+    model: "test-model",
+    execTool: executeLocalTool,
+    onTextDelta,
+    signal,
+  });
+
+describe("safe answer streaming", () => {
+  it("streams the final answer before completion, never the routing draft", async () => {
+    const firstConsumed = deferred();
+    const finish = deferred();
+    async function* answer() {
+      for (const event of streamedTextEvents("answer", ["第一段"]).slice(
+        0,
+        -2,
+      )) {
+        yield event;
+      }
+      firstConsumed.resolve();
+      await finish.promise;
+      yield {
+        event_type: "step.delta",
+        index: 0,
+        delta: { type: "text", text: "第二段" },
+      };
+      yield {
+        event_type: "interaction.completed",
+        interaction: { id: "answer", status: "completed" },
+      };
+    }
+    // Serve the same incremental upstream to old and new implementations so
+    // the assertion catches buffering, not just a changed SDK call shape.
+    mockCreate.mockImplementation(async (params) =>
+      params.stream ? answer() : textResponse("不應公開的決策草稿"),
     );
     const chunks: string[] = [];
+    const running = runStreaming((text) => chunks.push(text));
+    await Promise.race([
+      firstConsumed.promise,
+      running.then(() => {
+        throw new Error("answer completed before the gated delta");
+      }),
+    ]);
+    const beforeCompletion = [...chunks];
+    finish.resolve();
+    const result = await running;
 
-    const result = await runToolLoop(
-      userInput("x"),
-      undefined,
-      "test-model",
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      false,
-      false,
-      false,
-      executeLocalTool,
-      { onTextDelta: (t) => chunks.push(t) },
-    );
-
-    expect((mockCreate.mock.calls[0][0] as any).stream).toBe(true);
-    expect(chunks).toEqual(["您可以搭", "132 路", "。"]);
-    // The reassembled text must equal the concatenation the client received.
-    expect(result.text).toBe("您可以搭132 路。");
+    expect(beforeCompletion).toEqual(["第一段"]);
+    expect(chunks).toEqual(["第一段", "第二段"]);
+    expect(result.text).toBe("第一段第二段");
+    expect(mockCreate.mock.calls[0][0].stream).toBeUndefined();
+    expect(mockCreate.mock.calls[1][0]).toMatchObject({
+      stream: true,
+      previous_interaction_id: "int-1",
+      system_instruction: "SYS",
+      generation_config: { tool_choice: "none" },
+    });
+    expect(mockCreate.mock.calls[1][0].tools).toBeUndefined();
+    expect(mockExec).not.toHaveBeenCalled();
   });
 
-  it("streaming 下把 arguments_delta 拼回完整的工具參數", async () => {
+  it("streams after the routing budget while preserving the last tool results", async () => {
+    for (let round = 0; round < MAX_ROUNDS; round++) {
+      mockCreate.mockResolvedValueOnce(
+        functionCallResponse([{ name: "getAirQuality", args: {} }]),
+      );
+    }
+    mockCreate.mockResolvedValueOnce(
+      eventStream(streamedTextEvents("budget-answer", ["已查到的資訊"])),
+    );
+    mockExec.mockResolvedValue('{"ok":true,"aqi":25}');
+    const chunks: string[] = [];
+    expect((await runStreaming((text) => chunks.push(text))).text).toBe(
+      "已查到的資訊",
+    );
+    expect(chunks).toEqual(["已查到的資訊"]);
+    expect(sentFunctionResults(MAX_ROUNDS)[0].result).toEqual({
+      ok: true,
+      aqi: 25,
+    });
+    expect(mockCreate.mock.calls[MAX_ROUNDS][0]).toMatchObject({
+      stream: true,
+      generation_config: { tool_choice: "none" },
+    });
+    expect(mockExec).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses a clean answer-only retry when the final stream completes with no text", async () => {
     mockCreate
+      .mockResolvedValueOnce(stopResponse())
       .mockResolvedValueOnce(
-        eventStream(
-          streamedCallEvents("int-s2", {
-            id: "call-x",
-            name: "getBusArrival",
-            argChunks: ['{"routeName":', '"132","stopName"', ':"臺中車站"}'],
-          }),
-        ),
+        eventStream(streamedTextEvents("empty-answer", [])),
       )
-      .mockResolvedValueOnce(eventStream(streamedTextEvents("int-s3", ["好"])));
-    mockExec.mockResolvedValue(JSON.stringify({ ok: true, etaMinutes: 3 }));
-
-    const result = await runToolLoop(
-      userInput("x"),
-      undefined,
-      "test-model",
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      false,
-      false,
-      false,
-      executeLocalTool,
-      { onTextDelta: () => {} },
+      .mockResolvedValueOnce(
+        eventStream(streamedTextEvents("retry-answer", ["重試回答"])),
+      );
+    const chunks: string[] = [];
+    expect((await runStreaming((text) => chunks.push(text))).text).toBe(
+      "重試回答",
     );
-
-    expect(mockExec).toHaveBeenCalledWith(
-      "getBusArrival",
-      { routeName: "132", stopName: "臺中車站" },
-      undefined,
-      undefined,
-      expect.anything(),
+    expect(chunks).toEqual(["重試回答"]);
+    expect(mockCreate.mock.calls[2][0]).toMatchObject({
+      stream: true,
+      generation_config: { tool_choice: "none" },
+    });
+    expect(mockCreate.mock.calls[2][0]).not.toHaveProperty(
+      "previous_interaction_id",
     );
-    expect(result.text).toBe("好");
   });
 
-  it("沒有 onTextDelta 時維持非串流呼叫", async () => {
+  it("keeps non-streaming's single-call direct answer", async () => {
     mockCreate.mockResolvedValueOnce(stopResponse());
-
-    await run(userInput("x"));
-
-    expect((mockCreate.mock.calls[0][0] as any).stream).toBeUndefined();
+    expect((await run(userInput("x"))).text).toBe("done");
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(mockCreate.mock.calls[0][0].stream).toBeUndefined();
   });
 
-  it("串流中斷（arguments 拼不成 JSON）時不炸掉，當成空參數", async () => {
-    mockCreate
-      .mockResolvedValueOnce(
-        eventStream(
-          streamedCallEvents("int-s4", {
-            id: "call-y",
-            name: "getAirQuality",
-            argChunks: ['{"lat":'],
-          }),
-        ),
-      )
-      .mockResolvedValueOnce(eventStream(streamedTextEvents("int-s5", ["ok"])));
-    mockExec.mockResolvedValue(JSON.stringify({ ok: true }));
-
-    const result = await runToolLoop(
-      userInput("x"),
-      undefined,
-      "test-model",
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      false,
-      false,
-      false,
-      executeLocalTool,
-      { onTextDelta: () => {} },
+  it("ignores thought summaries and text outside model_output steps", async () => {
+    const events = streamedTextEvents("answer", ["公開回答"]);
+    events.splice(
+      1,
+      0,
+      { event_type: "step.start", index: 5, step: { type: "thought" } },
+      {
+        event_type: "step.delta",
+        index: 5,
+        delta: { type: "text", text: "私有推理" },
+      },
+      {
+        event_type: "step.delta",
+        index: 5,
+        delta: { type: "thought_summary", text: "推理摘要" },
+      },
+      {
+        event_type: "step.delta",
+        index: 9,
+        delta: { type: "text", text: "未知步驟" },
+      },
     );
+    mockCreate
+      .mockResolvedValueOnce(stopResponse())
+      .mockResolvedValueOnce(eventStream(events));
+    const chunks: string[] = [];
+    expect((await runStreaming((text) => chunks.push(text))).text).toBe(
+      "公開回答",
+    );
+    expect(chunks).toEqual(["公開回答"]);
+  });
 
-    expect(mockExec.mock.calls[0][1]).toEqual({});
-    expect(result.text).toBe("ok");
+  it("fails closed if the answer-only provider unexpectedly requests a tool", async () => {
+    mockCreate.mockResolvedValueOnce(stopResponse()).mockResolvedValueOnce(
+      eventStream([
+        {
+          event_type: "interaction.created",
+          interaction: { id: "bad", status: "in_progress" },
+        },
+        {
+          event_type: "step.start",
+          index: 0,
+          step: { type: "function_call", id: "c", name: "getAirQuality" },
+        },
+        ...streamedTextEvents("bad", ["不應公開"]),
+      ]),
+    );
+    const onTextDelta = vi.fn();
+    await expect(runStreaming(onTextDelta)).rejects.toThrow(/tool/i);
+    expect(onTextDelta).not.toHaveBeenCalled();
+    expect(mockExec).not.toHaveBeenCalled();
+  });
+
+  it("never retries a transient failure after any answer text was published", async () => {
+    async function* broken() {
+      yield* eventStream(streamedTextEvents("broken", ["已送出"]).slice(0, -1));
+      throw Object.assign(new Error("upstream timeout"), { status: 503 });
+    }
+    mockCreate
+      .mockResolvedValueOnce(stopResponse())
+      .mockResolvedValueOnce(broken());
+    const chunks: string[] = [];
+    await expect(runStreaming((text) => chunks.push(text))).rejects.toThrow(
+      "upstream timeout",
+    );
+    expect(chunks).toEqual(["已送出"]);
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+  });
+
+  it("still retries transient failures before publishing any text", async () => {
+    mockCreate
+      .mockResolvedValueOnce(stopResponse())
+      .mockRejectedValueOnce(
+        Object.assign(new Error("upstream unavailable"), { status: 503 }),
+      )
+      .mockResolvedValueOnce(
+        eventStream(streamedTextEvents("retry", ["重試回答"])),
+      );
+    const chunks: string[] = [];
+    expect((await runStreaming((text) => chunks.push(text))).text).toBe(
+      "重試回答",
+    );
+    expect(chunks).toEqual(["重試回答"]);
+    expect(mockCreate).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not treat a truncated stream as a successful completed answer", async () => {
+    mockCreate
+      .mockResolvedValueOnce(stopResponse())
+      .mockResolvedValueOnce(
+        eventStream(streamedTextEvents("truncated", ["部分回答"]).slice(0, -1)),
+      );
+    const chunks: string[] = [];
+    await expect(runStreaming((text) => chunks.push(text))).rejects.toThrow(
+      /complet/i,
+    );
+    expect(chunks).toEqual(["部分回答"]);
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["failed", "cancelled", "incomplete", "budget_exceeded"])(
+    "rejects a final stream with terminal status %s",
+    async (status) => {
+      const events = streamedTextEvents("bad-status", ["部分回答"]);
+      events[events.length - 1] = {
+        event_type: "interaction.completed",
+        interaction: { id: "bad-status", status },
+      };
+      mockCreate
+        .mockResolvedValueOnce(stopResponse())
+        .mockResolvedValueOnce(eventStream(events));
+      await expect(runStreaming(() => {})).rejects.toThrow(/complet/i);
+      expect(mockCreate).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("stops publishing immediately when the caller cancels during generation", async () => {
+    mockCreate
+      .mockResolvedValueOnce(stopResponse())
+      .mockResolvedValueOnce(
+        eventStream(streamedTextEvents("cancelled", ["第一段", "不可送出"])),
+      );
+    const cancellation = new AbortController();
+    const chunks: string[] = [];
+    await expect(
+      runStreaming((text) => {
+        chunks.push(text);
+        cancellation.abort();
+      }, cancellation.signal),
+    ).rejects.toThrow();
+    expect(chunks).toEqual(["第一段"]);
+    expect(mockCreate).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -979,18 +1114,16 @@ describe("route result projection", () => {
 });
 
 it("does not publish speculative text emitted in the same round as a route tool call", async () => {
-  const mixed = streamedCallEvents("mixed", {
-    id: "c",
-    name: "planAccessibleRoute",
-    argChunks: ["{}"],
-  });
-  mixed.unshift({
-    event_type: "step.delta",
-    index: 5,
-    delta: { type: "text", text: "猜測搭火車" },
+  const mixed = functionCallResponse([
+    { name: "planAccessibleRoute", args: {} },
+  ]);
+  mixed.steps.unshift({
+    type: "model_output",
+    content: [{ type: "text", text: "猜測搭火車" }],
   } as any);
   mockCreate
-    .mockResolvedValueOnce(eventStream(mixed))
+    .mockResolvedValueOnce(mixed)
+    .mockResolvedValueOnce(textResponse("路線結果的私有草稿"))
     .mockResolvedValueOnce(
       eventStream(streamedTextEvents("answer", ["搭公車"])),
     );

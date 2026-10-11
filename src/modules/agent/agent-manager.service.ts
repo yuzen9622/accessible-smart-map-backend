@@ -4,6 +4,12 @@ import type OpenAI from "openai";
 import { googleGenAi, model } from "../../config/ai";
 import { AGENT_THINKING_LEVEL } from "../../config/ai/config";
 import { buildInteractionTools } from "./tool-catalog";
+import {
+  assertToolDecision,
+  FINISH_TOOL_PHASE_NAME,
+  FINISH_TOOL_PHASE_TOOL,
+  TOOL_DECISION_INSTRUCTION,
+} from "./tool-phase";
 import type {
   AgentInput,
   AgentLanguage,
@@ -34,13 +40,13 @@ export const MAX_ROUNDS = 18;
  * Interactions API dropped them (deprecated 2026-07-21) in favour of
  * `thinking_level`.
  *
- * @param mode "route" lets the model pick tools, "final" forbids them so it can
- *   only emit text, and "forced" constrains it to a named subset.
+ * @param mode "route" preserves legacy auto selection; "decision" requires a
+ *   tool/control call; "final" forbids tools; "forced" selects a named subset.
  * @param allowedFunctionNames Tool names to force, for mode "forced"
  * @returns The `generation_config` for `interactions.create`
  */
 function buildGenerationConfig(
-  mode: "route" | "final" | "forced",
+  mode: "route" | "decision" | "final" | "forced",
   allowedFunctionNames?: string[],
 ) {
   const tool_choice =
@@ -53,7 +59,9 @@ function buildGenerationConfig(
               tools: allowedFunctionNames,
             },
           }
-        : ("auto" as const);
+        : mode === "decision"
+          ? ("any" as const)
+          : ("auto" as const);
   // The Interactions API has no temperature/top_p/top_k (dropped 2026-07-21), so
   // the old `temperature: 0` greedy decoding is gone and cannot be restored. A
   // fixed `seed` was tried and measurably changed nothing, so tool-selection
@@ -83,13 +91,29 @@ function isSuccessResult(json: string): boolean {
   }
 }
 
+type InteractionStep = {
+  type?: string;
+  id?: string;
+  name?: string;
+  arguments?: Record<string, unknown>;
+  content?: Array<{ type?: string; text?: string }>;
+};
+
 type InteractionLike = {
   id: string;
   status?: string;
-  steps?: Array<Record<string, any>>;
+  steps?: InteractionStep[];
   output_text?: string;
   usage?: Record<string, unknown>;
   errors?: Array<Record<string, unknown>>;
+};
+
+type InteractionStreamEvent = {
+  event_type: string;
+  index?: number;
+  step?: InteractionStep;
+  delta?: { type?: string; text?: string };
+  interaction?: Partial<InteractionLike>;
 };
 
 /**
@@ -105,19 +129,20 @@ const INCOMPLETE_STATUSES = [
 ];
 
 /**
- * Consume a streamed interaction, forwarding text deltas to `onTextDelta` as
- * they arrive, and rebuild the same shape the non-streaming call returns so the
- * tool loop needs no separate code path.
+ * Consume an answer-only interaction. Publish only model_output text, never
+ * thought steps or tool requests, and require an explicit successful completion.
+ * Routing/tool decisions use non-streaming interactions and never enter here.
  *
  * @param stream The SSE event stream from `interactions.create({stream:true})`
  * @param onTextDelta Called with each incremental text chunk
  * @returns The reconstructed interaction
  */
 async function collectStream(
-  stream: AsyncIterable<Record<string, any>>,
+  stream: AsyncIterable<InteractionStreamEvent>,
   onTextDelta: (text: string) => void,
 ): Promise<InteractionLike> {
-  const calls = new Map<number, { id: string; name: string; args: string }>();
+  const outputSteps = new Set<number>();
+  let completed = false;
   let text = "";
   let id = "";
   let status: string | undefined;
@@ -134,56 +159,48 @@ async function collectStream(
         if (it.status) status = it.status;
         if (it.usage) usage = it.usage;
         if (it.errors) errors = it.errors;
+        if (event.event_type === "interaction.completed") completed = true;
         break;
       }
       case "step.start": {
         if (event.step?.type === "function_call") {
-          calls.set(event.index, {
-            id: String(event.step.id ?? ""),
-            name: String(event.step.name ?? ""),
-            // Arguments arrive as `arguments_delta` chunks; `step.start` may
-            // already carry a complete object for short calls.
-            args:
-              event.step.arguments && Object.keys(event.step.arguments).length
-                ? JSON.stringify(event.step.arguments)
-                : "",
-          });
+          throw new Error("Unexpected tool call in answer-only interaction");
         }
+        if (
+          event.step?.type === "model_output" &&
+          typeof event.index === "number"
+        ) {
+          outputSteps.add(event.index);
+        }
+        break;
+      }
+      case "step.stop": {
+        if (typeof event.index === "number") outputSteps.delete(event.index);
         break;
       }
       case "step.delta": {
         const delta = event.delta ?? {};
-        if (delta.type === "text" && typeof delta.text === "string") {
+        if (
+          typeof event.index === "number" &&
+          outputSteps.has(event.index) &&
+          delta.type === "text" &&
+          typeof delta.text === "string" &&
+          delta.text.length > 0
+        ) {
           text += delta.text;
           onTextDelta(delta.text);
-        } else if (
-          delta.type === "arguments_delta" &&
-          typeof delta.arguments === "string"
-        ) {
-          const call = calls.get(event.index);
-          if (call) call.args += delta.arguments;
         }
         break;
       }
     }
   }
 
-  const steps: Array<Record<string, any>> = [...calls.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([, c]) => {
-      let args: Record<string, unknown> = {};
-      try {
-        args = c.args ? JSON.parse(c.args) : {};
-      } catch {
-        /* malformed streamed arguments — treat as no args */
-      }
-      return {
-        type: "function_call",
-        id: c.id,
-        name: c.name,
-        arguments: args,
-      };
-    });
+  if (!completed || status !== "completed") {
+    throw new Error(
+      `Answer stream did not complete successfully (${status ?? "missing status"})`,
+    );
+  }
+  const steps: InteractionStep[] = [];
   if (text) {
     steps.push({ type: "model_output", content: [{ type: "text", text }] });
   }
@@ -214,7 +231,13 @@ const MAX_TRANSIENT_RETRIES = 2;
  * @returns The HTTP-ish status when one can be found
  */
 function errorStatus(err: unknown): number | undefined {
-  const e = err as Record<string, any> | undefined;
+  const e = err as
+    | {
+        status?: unknown;
+        code?: unknown;
+        response?: { status?: unknown };
+      }
+    | undefined;
   const raw = e?.status ?? e?.code ?? e?.response?.status;
   const n = typeof raw === "string" ? Number(raw) : raw;
   return typeof n === "number" && Number.isFinite(n) ? n : undefined;
@@ -252,22 +275,35 @@ async function createInteraction(
   params: Record<string, unknown>,
   label: string,
   onTextDelta?: (text: string) => void,
+  signal?: AbortSignal,
 ): Promise<InteractionLike> {
   let lastErr: unknown;
+  let publishedText = false;
   for (let attempt = 0; attempt <= MAX_TRANSIENT_RETRIES; attempt++) {
+    signal?.throwIfAborted();
     const startedAt = Date.now();
     try {
+      // SAFETY: the Interactions endpoint uses the steps schema. Its SDK
+      // overloads do not describe our dynamic params; consume only the fields
+      // in InteractionLike/InteractionStreamEvent and validate streamed output.
       const interaction = onTextDelta
         ? await collectStream(
             (await (googleGenAi.interactions.create as any)({
               ...params,
               stream: true,
-            })) as AsyncIterable<Record<string, any>>,
-            onTextDelta,
+            })) as AsyncIterable<InteractionStreamEvent>,
+            (text) => {
+              signal?.throwIfAborted();
+              // Once text is public, replaying the request would duplicate an
+              // already-delivered prefix. Surface failures instead of retrying.
+              publishedText = true;
+              onTextDelta(text);
+            },
           )
         : ((await (googleGenAi.interactions.create as any)(
             params,
-          )) as unknown as InteractionLike);
+          )) as InteractionLike);
+      signal?.throwIfAborted();
       const stepTypes = (interaction.steps ?? []).map((s) => s.type);
       const incomplete =
         interaction.status !== undefined &&
@@ -300,7 +336,13 @@ async function createInteraction(
           message: String((err as Error)?.message ?? err).slice(0, 300),
         }),
       );
-      if (attempt === MAX_TRANSIENT_RETRIES || !isTransient(err)) break;
+      if (
+        publishedText ||
+        signal?.aborted ||
+        attempt === MAX_TRANSIENT_RETRIES ||
+        !isTransient(err)
+      )
+        break;
       await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
     }
   }
@@ -353,9 +395,9 @@ function userInputStep(text: string): InteractionInputStep {
  * Stateful: only the first request carries the conversation history. Every
  * later round sends just the new `function_result` steps plus
  * `previous_interaction_id`, so the model's own `thought` signatures and tool
- * context stay server-side instead of being resent. `tools`,
- * `system_instruction` and `generation_config` are interaction-scoped and so
- * must be re-sent on every round.
+ * context stay server-side instead of being resent. Tool declarations and the
+ * decision-only instruction are re-sent on decision rounds; the answer round
+ * receives the original system instruction and disables tools entirely.
  *
  * @param initialInput The conversation so far, as Interactions input steps
  * @param systemInstruction System prompt passed on every round
@@ -372,7 +414,9 @@ function userInputStep(text: string): InteractionInputStep {
  * @param options extraTools appends caller-specific tool specs; toolAllowList
  *   is the execution-layer authorization boundary; allowedFunctionNames forces
  *   the first round's tool choice; seedParts appends extra user turns up front;
- *   onTextDelta streams the answer's text chunks as they are generated.
+ *   toolPhaseMode="explicit" requires tool-or-finish decisions, followed by one
+ *   answer-only generation. onTextDelta streams that answer as it is generated.
+ *   Legacy callers retain auto routing and the non-streaming answer shortcut.
  * @returns The model's final text answer plus parsed tool results. Always
  *   resolves with a `text` field (possibly empty).
  */
@@ -399,6 +443,7 @@ export async function runToolLoop(
     seedParts?: string[];
     onTextDelta?: (text: string) => void;
     signal?: AbortSignal;
+    toolPhaseMode?: "explicit";
   } = {},
 ): Promise<RunToolLoopResult> {
   const toolCache = new Map<string, Awaited<ReturnType<AgentToolExecutor>>>();
@@ -413,6 +458,28 @@ export async function runToolLoop(
     options.extraTools ?? [],
     options.toolAllowList,
   );
+  const explicitToolPhase = options.toolPhaseMode === "explicit";
+  const businessToolNames = new Set(tools.map((tool) => tool.name));
+  if (explicitToolPhase) {
+    if (businessToolNames.has(FINISH_TOOL_PHASE_NAME)) {
+      throw new Error("Reserved finish control name collision");
+    }
+    if (
+      options.allowedFunctionNames?.some((name) => !businessToolNames.has(name))
+    ) {
+      throw new Error(
+        "Invalid forced first-tool selection: tool is not declared",
+      );
+    }
+  }
+  const decisionTools = explicitToolPhase
+    ? [...tools, FINISH_TOOL_PHASE_TOOL]
+    : tools;
+  const decisionInstruction = explicitToolPhase
+    ? [systemInstruction, TOOL_DECISION_INSTRUCTION]
+        .filter(Boolean)
+        .join("\n\n")
+    : systemInstruction;
   const toolResults: RunToolLoopResult["toolResults"] = [];
 
   const pending: InteractionInputStep[] = [
@@ -420,10 +487,11 @@ export async function runToolLoop(
     ...(options.seedParts ?? []).map(userInputStep),
   ];
   let previousInteractionId: string | undefined;
+  // With no available business tools, answer the original input directly.
+  let toolPhaseFinished = explicitToolPhase && tools.length === 0;
 
-  for (let round = 0; round < MAX_ROUNDS; round++) {
+  for (let round = 0; round < MAX_ROUNDS && !toolPhaseFinished; round++) {
     options.signal?.throwIfAborted();
-    const roundText: string[] = [];
     const interaction = await createInteraction(
       {
         model: useModel,
@@ -431,37 +499,67 @@ export async function runToolLoop(
         ...(previousInteractionId
           ? { previous_interaction_id: previousInteractionId }
           : {}),
-        system_instruction: systemInstruction,
-        tools,
+        system_instruction: decisionInstruction,
+        tools: decisionTools,
         generation_config: buildGenerationConfig(
           round === 0 && options.allowedFunctionNames?.length
             ? "forced"
-            : "route",
+            : explicitToolPhase
+              ? "decision"
+              : "route",
           options.allowedFunctionNames,
         ),
       },
       `route-${round}`,
-      options.onTextDelta ? (text) => roundText.push(text) : undefined,
+      undefined,
+      options.signal,
     );
 
     options.signal?.throwIfAborted();
     previousInteractionId = interaction.id;
 
     const calls = functionCallsOf(interaction);
+    if (explicitToolPhase) {
+      assertToolDecision(
+        interaction,
+        calls,
+        round === 0 ? options.allowedFunctionNames : undefined,
+      );
+    }
     if (!calls.length) {
       const text = outputTextOf(interaction);
-      if (text) {
-        // Tool rounds may contain speculative prose before the tool request.
-        // Publish only completed answer rounds, after their route result exists.
-        for (const chunk of roundText) options.onTextDelta?.(chunk);
-        return { text, toolResults };
-      }
+      if (text && !options.onTextDelta) return { text, toolResults };
+      // The model has finished choosing tools. Streaming callers must generate
+      // an answer in a separate tool-disabled round: only there is it safe to
+      // publish text before knowing how the interaction ends.
       break;
     }
 
+    const hasBusinessCalls = calls.some(
+      (call) => call.name !== FINISH_TOOL_PHASE_NAME,
+    );
     for (const call of calls) {
       options.signal?.throwIfAborted();
       const { name, arguments: args } = call;
+      if (explicitToolPhase && name === FINISH_TOOL_PHASE_NAME) {
+        // A same-round lookup can change what else needs checking. Acknowledge
+        // every call ID, but only a finish-only decision may end the phase.
+        const ready = !hasBusinessCalls;
+        pending.push({
+          type: "function_result",
+          call_id: call.id,
+          name,
+          result: ready
+            ? { ready: true }
+            : {
+                ready: false,
+                error: "finish_must_be_requested_alone_after_tool_results",
+              },
+          is_error: !ready,
+        });
+        toolPhaseFinished = ready;
+        continue;
+      }
       const callId = call.id || randomUUID();
       onToolCall?.(name, args, callId);
 
@@ -469,8 +567,9 @@ export async function runToolLoop(
       // (no interception); any array (including `[]` = deny-all) is a
       // membership check — an unauthorized tool is never executed.
       if (
-        options.toolAllowList !== undefined &&
-        !options.toolAllowList.includes(name)
+        (explicitToolPhase && !businessToolNames.has(name)) ||
+        (options.toolAllowList !== undefined &&
+          !options.toolAllowList.includes(name))
       ) {
         console.warn(`[agent-manager] blocked unauthorized tool: ${name}`);
         const blocked = { error: "tool_not_allowed" };
@@ -562,9 +661,18 @@ export async function runToolLoop(
     }
   }
 
-  // Force a text answer. Anything still pending is the last round's tool
-  // results; with nothing pending the model already declined to speak, so nudge
-  // it explicitly rather than sending an empty input.
+  if (explicitToolPhase && !toolPhaseFinished) {
+    // Reaching the round limit is a backend stop, not evidence that the model
+    // finished all lookups. Preserve the pending results and disclose limits.
+    pending.push(
+      userInputStep(
+        "工具查詢已達回合上限。請只根據已取得的資訊回答，說明查詢限制與尚未確認之處；不要宣稱所有查詢已成功完成。",
+      ),
+    );
+  }
+
+  // Generate the user-facing answer once, after the explicit finish/control
+  // result (or a bounded backend stop). Legacy empty turns get a text nudge.
   const finalInput: InteractionInputStep[] = pending.length
     ? pending
     : [
@@ -582,11 +690,11 @@ export async function runToolLoop(
         ? { previous_interaction_id: previousInteractionId }
         : {}),
       system_instruction: systemInstruction,
-      tools,
       generation_config: buildGenerationConfig("final"),
     },
     "final",
     options.onTextDelta,
+    options.signal,
   );
 
   options.signal?.throwIfAborted();
@@ -614,6 +722,7 @@ export async function runToolLoop(
     },
     "final-retry",
     options.onTextDelta,
+    options.signal,
   );
 
   options.signal?.throwIfAborted();
@@ -697,6 +806,7 @@ export async function runAgent(input: AgentInput): Promise<AgentResult> {
       seedParts: input.seedParts,
       onTextDelta: input.onTextDelta,
       signal: input.signal,
+      toolPhaseMode: input.toolPhaseMode,
     },
   );
 }
