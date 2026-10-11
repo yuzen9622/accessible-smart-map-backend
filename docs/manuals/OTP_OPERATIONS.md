@@ -1,7 +1,6 @@
 # OTP2 維運手冊 — 資料更新、建圖、Docker 部署
 
 > 適用版本：OpenTripPlanner **2.9.0**（pin 於 `docker-compose.yml` 與 `build-otp-graph.sh`，2026-06-12 起）
-> 相關規格：`docs/specs/FUNCTIONAL_SPEC_OTP2_INTEGRATION.md`（Phase 16）
 
 本文件涵蓋 OTP sidecar 的完整生命週期：GTFS 資料取得 → 清理 → 台鐵班表注入 → graph 建置 → Docker 配置與啟動 → 驗證 → 故障排查。
 
@@ -91,7 +90,7 @@ pnpm otp:preflight
 
 WARN 不會擋（例如沒裝 gtfs-validator 就跳過驗證）。
 
-**高程（DEM）**：建圖會用 `fetch-otp-dem.py` 把內政部全台 20 m DTM 下載、轉成 EPSG:4326 的 `taiwan-dtm-20m.tif`，快取在 `OTP_DEM_DIR`（預設 `$OTP_DATA_DIR/dem`，約 250 MiB；上游 ETag 沒變就不重下），再複製進建圖目錄給 OTP 原生讀取。需要 `rasterio`。下載失敗只會 WARN 並沿用快取；**沒有 DEM 時圖照樣建成，但完全沒有高程**，輪椅 `maxSlope` 與坡度修正的步行時間都失效。驗證方式：查一段山坡步行路線的 `elevationGained`，應大於 0。高程那一步全台約 5 分鐘；graph 大小約 +18%。`router-config.json` 的 `slopeExceededReluctance: 0.1` 不可拿掉：有 DEM 後，預設值 1 會讓山區輪椅查詢整數溢位（GraphQL 回 `Negative value not expected`）。實驗依據見 `docs/reports/otp-graph-data-experiment-2026-10-05.md`。
+**高程（DEM）**：建圖會用 `fetch-otp-dem.py` 把內政部全台 20 m DTM 下載、轉成 EPSG:4326 的 `taiwan-dtm-20m.tif`，快取在 `OTP_DEM_DIR`（預設 `$OTP_DATA_DIR/dem`，約 250 MiB；上游 ETag 沒變就不重下），再複製進建圖目錄給 OTP 原生讀取。需要 `rasterio`。下載失敗只會 WARN 並沿用快取；**沒有 DEM 時圖照樣建成，但完全沒有高程**，輪椅 `maxSlope` 與坡度修正的步行時間都失效。驗證方式：查一段山坡步行路線的 `elevationGained`，應大於 0。高程那一步全台約 5 分鐘；graph 大小約 +18%。`router-config.json` 的 `slopeExceededReluctance: 0.1` 不可拿掉：有 DEM 後，預設值 1 會讓山區輪椅查詢整數溢位（GraphQL 回 `Negative value not expected`）。
 
 **內建碟空間不夠時**，把暫存區放到別顆碟：`OTP_WORK_ROOT=/Volumes/<外接碟>/otp-work`。
 
@@ -588,4 +587,4 @@ docker compose up -d otp                 # 重新拉起
 docker inspect otp --format '{{.State.Status}} {{.State.Health.Status}}'  # 等 running healthy
 ```
 
-> 相關背景與 TDX v2→v3 遷移細節，另見 `docs/specs/FUNCTIONAL_SPEC_OTP2_INTEGRATION.md` 與 `patch_gtfs.py` 檔頭。
+> TDX 資料處理細節見 `src/scripts/patch_gtfs.py` 檔頭。

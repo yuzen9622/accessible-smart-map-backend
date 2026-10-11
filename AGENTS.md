@@ -2,9 +2,17 @@
 
 This file provides guidance to agents when working with code in this repository.
 
+## Product Naming
+
+The product is **無障礙智慧地圖** (**Accessible Smart Map**). Use these names in user-facing copy, emails, and documentation; do not infer the brand from the repository name. Keep repository identifiers, paths, and geographic references to Taipei unchanged.
+
 ## Deployment Configuration
 
 All deployment configuration must live in the root `Dockerfile` and `docker-compose.yml` only. Do not create `infra/`, additional deployment config files, or standalone deployment startup/init scripts. Inline required scripts in these two files; documentation may reference them but must not become another configuration source.
+
+## Documentation Scope
+
+Tracked `docs/` is for current product/API usage, privacy and safety behavior, and self-hosting instructions. Keep API guides in `docs/api/`; HTTP schemas are maintained in OpenAPI. Do not add implementation plans, audit reports, migration checklists, execution logs, or per-task verification reports to tracked documentation. When local working notes are needed, use the ignored `.pi/notes/` directory; otherwise report completion in the conversation or PR. Update an existing guide instead of creating a duplicate report.
 
 ## Commands
 
@@ -37,7 +45,6 @@ Privacy retention: an in-process job (`src/modules/retention/`, started in `serv
 
 Copy `.env.example` to `.env`. Required variables:
 
-
 | Variable                                   | Purpose                                                                                 |
 | ------------------------------------------ | --------------------------------------------------------------------------------------- |
 | `PORT`                                     | Server port (default 5000)                                                              |
@@ -53,9 +60,8 @@ Copy `.env.example` to `.env`. Required variables:
 | `OTP_BASE_URL`                             | OTP2 sidecar GraphQL server (default `http://localhost:8080`, internal only)            |
 | `GEMINI_API_URL`                           | OpenAI-compatible base URL for the AI API (default: Gemini's `/v1beta/openai` endpoint) |
 | `GEMINI_MODEL`                             | Model name used by all AI features (default: `gemini-3.7-flash`)                        |
-| `CWA_API_KEY`                              | 中央氣象署 CWA open-data key — weather block of `/a11y/environment`                          |
-| `MOENV_API_KEY`                            | 環境部環境資料開放平臺 AQI key（免費註冊會員後取得）                                                          |
-
+| `CWA_API_KEY`                              | 中央氣象署 CWA open-data key — weather block of `/a11y/environment`                     |
+| `MOENV_API_KEY`                            | 環境部環境資料開放平臺 AQI key（免費註冊會員後取得）                                    |
 
 ## Architecture
 
@@ -77,7 +83,6 @@ Each module exposes a `createXRouter()` factory via its `index.ts` (the single r
 
 ### Layer conventions (where code goes)
 
-
 | Path                                    | Role                                                                                                                                    |
 | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/modules/<feature>/*.router.ts`     | Route + middleware chain; delegates to one controller method                                                                            |
@@ -93,11 +98,9 @@ Each module exposes a `createXRouter()` factory via its `index.ts` (the single r
 | `src/utils/`                            | Pure helpers (e.g. `transit-text.ts`)                                                                                                   |
 | `src/types/`                            | Shared types — `code.ts` = `ResponseCode` enum, `express.d.ts` augments `req.validated` / `req.auth`                                    |
 
-
 > The legacy flat `routes/` / `controller/` / `service/` directories **no longer exist** — everything is under `modules/` + `adapters/`. Place new external I/O in `adapters/`, not a `service/` dir.
 
 ### Route groups (all under `/api/v1`)
-
 
 | Prefix            | Router factory                | Domain                                                       |
 | ----------------- | ----------------------------- | ------------------------------------------------------------ |
@@ -110,7 +113,6 @@ Each module exposes a `createXRouter()` factory via its `index.ts` (the single r
 | `/api/v1/a11y`    | `createEnvironmentRouter`     | `GET /environment` pre-trip weather/air/CCTV aggregation     |
 | `/api/v1/air`     | `createAirRouter`             | Air quality                                                  |
 | `/api/v1/ai`      | `createAiRouter`              | `/intent`, `/explain`, `/chat`                               |
-
 
 Several routers share the `/api/v1/a11y` prefix. Only `/api/v1/user` is wrapped in the auth middleware; all other routes are public (or use route-level auth hooks).
 
@@ -183,4 +185,3 @@ This project enforces a dual-agent review process (Cross-Model Review). During t
      - **Diagnostics**: `locate`, `du`, `df`, `echo` (allowing env vars, rejecting `$()`), `env` / `printenv`, `date`, `whereis`, `which`.
 3. **Implementation Restrictions**:
    - All modifying tools (e.g. `Write`, `Edit`, `apply_patch`) and mutating commands (e.g. `git commit`, `pnpm dev`) remain gated and will be blocked until the task plan is fully approved.
-

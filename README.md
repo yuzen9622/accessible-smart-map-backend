@@ -370,6 +370,12 @@ docker compose logs -f backend
 
 ## API 接口分組說明
 
+HTTP API 的 request／response schema 以 `/api/v1/openapi.json` 為準；非生產環境可在 `/docs` 瀏覽互動式文件。其他使用說明：
+
+- API：[AI 工具與串流](docs/api/AI_AGENT_TOOLS_REFERENCE.md)、[語音 WebSocket](docs/api/VOICE_WS_PROTOCOL.md)、[App 推播](docs/api/PUSH_NOTIFICATIONS.md)、[步行指引詞彙](docs/api/WALK_STEPS_I18N_VOCABULARY.md)。
+- 政策：[內容安全](docs/CONTENT_SAFETY.md)、[隱私資料保存](docs/PRIVACY_DATA_RETENTION.md)。
+- 自行架設：[Ubuntu 部署](docs/manuals/DEPLOY_UBUNTU.md)、[MongoDB replica set](docs/manuals/MONGODB_REPLICA_SET.md)、[OTP 操作](docs/manuals/OTP_OPERATIONS.md)。
+
 所有路由均掛載於 `/api/v1` 前綴下：
 
 | 掛載路徑                            | 主要控制器                        | 職責說明                                      | 認證要求                      |

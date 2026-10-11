@@ -14,6 +14,7 @@
 | AI 對話 | 伺服器歷史 ≤ 30 日 | HTTP `/ai/chat` 不存歷史；LINE 對話在 Redis 保存 30 分鐘 | `line-memory.ts` |
 | AI 長期記憶 | 使用者可刪除；12 個月未使用清除 | 刪除即移除內容與分類等中繼資料（只留 `_id`/`userId`/`embeddingId`/時間的 tombstone 供向量補掃，最多 30 天）；`max(lastUsedAt, updatedAt)` 超過期限或 `expiresAt` 已過即刪；逐使用者比對 Chroma 清除孤兒向量 | `memory.retention.ts` |
 | 回報照片與可識別內容 | 過期或結案後 90 日內清除 | 階段 A：移除回報者／投票者／審核者身分、描述、EXIF 原始值、AI 理由與標籤；階段 B：刪除 GCS 照片與 URL。保留類型、位置、嚴重度、狀態、票數、時間供統計 | `hazard-report.retention.ts` |
+| App 推播回執追蹤 | 最長追蹤 23 小時，建立後 24 小時到期清除 | 僅存 ticket、帳號／註冊識別、狀態與受控錯誤碼，不存原始 token、通知內容或位置；獨立 receipt worker 收斂與清除，Mongo TTL 後備；刪帳及 deleted-account 補掃一併移除 | `user.push-receipt.repository.ts`、`user.push-receipt.worker.ts`、`user.account.repository.ts` |
 | 一般維運紀錄 | ≤ 30 日 | **基礎設施設定**（見下） | — |
 | 必要資安紀錄、備份 | ≤ 90 日 | **基礎設施設定**（見下） | — |
 
@@ -24,6 +25,8 @@
 - 已超過政策期限仍未處理的資料會以 `[retention] data past policy deadline` warning 記錄，可作為告警依據。
 - 設定只能縮短期限；不合法的設定會讓服務啟動失敗。
 - **限制**：retention job 在 MongoDB 連線成功後才啟動。若啟動時連不上 MongoDB，HTTP 仍會繼續服務（既有啟動行為）但 retention 不會執行，需以「一段時間沒有 `[retention] run` log」或部署健康檢查監控。
+
+推播回執使用獨立的一分鐘輪詢 worker 與固定到期時間，不套用上述一般 retention job 的一天安全緩衝。超過追蹤期限不再查詢；24 小時到期後由 worker 刪除，Mongo TTL 為後備。TTL 掃描是非同步的，因此**不承諾剛滿 24 小時即完成實體刪除**；資料庫或 worker 停機時可能延後，恢復後清除。它不延長通知發送期限，也不代表手機已收到或已讀。操作與錯誤處理見 [App 推播 API 與回執追蹤](api/PUSH_NOTIFICATIONS.md)。
 
 ## 使用者可見的變化
 
@@ -56,4 +59,5 @@ pnpm retention:fix-photo-cache    # 把既有回報照片的 Cache-Control 改�
 - **Gemini Interactions API**：AI agent 以 `previous_interaction_id` 串接多輪工具呼叫，代表 interaction 會保存在 Google 端，保存期依 Google 條款。
 - **Gemini Live（語音）**：原始音訊送往 Google，供應商端保存依其條款。
 - **LINE Messaging API**：通知內容經 LINE 傳遞。
+- **Expo Push Service／Apple APNs／Google FCM**：App 推播 token 與通知內容經這些服務投遞；Expo receipt 在 24 小時後清除，其餘供應商端保存依各服務條款，不能將本地追蹤資料期限當成所有供應商的保存期限。
 - **Google Places／Geocoding**：查詢座標與關鍵字送往 Google。

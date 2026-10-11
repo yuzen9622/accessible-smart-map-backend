@@ -1,10 +1,8 @@
-# 即時語音對話 WebSocket 協議規格（前端串接文件）
+# 即時語音對話 WebSocket API
 
-> 讀者：負責把語音功能接進正式前端的工程師。本文件目標是讓你不需要讀後端原始碼即可完成串接。
-> 事實來源：`src/modules/voice/voice.gateway.ts`、`src/modules/voice/live-bridge.ts`、`src/modules/voice/poc-client.html`（可運作參考實作）、`memory/reviews/plans/a73ce70ab30ec0f2.md` §3.10。
-> 2026-10-09：本機後端加入 AI 路線契約 v1、route.context.set／ack 與舊回覆隔離；尚未代表已部署，詳見 [遷移文件](../FRONTEND_MIGRATION_AI_ROUTE_CONSISTENCY.md)。
-> 2026-10-09：`session.start.language` 可傳入目前介面語言（`zh-TW`／`en`），與文字 AI 共用語言偏好契約，詳見 [語言串接說明](../FRONTEND_MIGRATION_AI_LANGUAGE.md)。
-> 定案：2026-07-10 使用者實測繁中音質可接受、工具轉接正常，採 **Gemini Live API proxy** 路線。
+> 本文件說明 API 使用者建立語音連線、傳送音訊與控制導航的方式。
+> `session.start.language` 的語言偏好見 §2.2；路線契約 v1 與 `route.context.set`／ack 見 §2.2.1。
+> 2026-10-09 加入的路線契約仍須確認目標環境已部署；請依 `session.ready.capabilities` 判斷支援能力，不要只依文件版本啟用。
 
 ## 1. 總覽與架構
 

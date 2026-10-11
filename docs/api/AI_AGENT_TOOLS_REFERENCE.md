@@ -239,11 +239,11 @@ TRA   = { type:"TRA",  trainNo; trainTypeName; departureStation;
 
 只接受模型提供的 `userHeading`（0–359，可省略）與 `language`（zh-TW／en，可省略）。可信 routeToken 由後端對話脈絡注入；模型提供的 token、origin、destination、routeIndex 不會用來選路或重新規劃。
 
-內部沿用 `generateNavInstructionsFromInput`，成功回 `{ ok: true, instructions, totalSteps, initialBearing, warnings }`；指引詳細欄位沿用 [導航指引規格](./FUNCTIONAL_SPEC_NAV_INSTRUCTIONS.md)。
+成功回 `{ ok: true, instructions, totalSteps, initialBearing, warnings }`；指引欄位以 `/api/v1/openapi.json` 中導航指引端點的回應 schema 為準。
 
 無選擇回 `ROUTE_CONTEXT_REQUIRED`；無效／過期 token 回 `INVALID_ROUTE_TOKEN`；讀取失敗回 `ROUTE_CONTEXT_UNAVAILABLE`，均附 `ok: false` 與 error。指引 service 的其他原因碼原樣保留。使用者首次要逐步帶路但無路線時，先執行一次 planAccessibleRoute，再查指引。
 
-文字的 routeContext、語音 route.context.set／ack、條件優先序與前端遷移見 [AI 路線一致性遷移文件](../FRONTEND_MIGRATION_AI_ROUTE_CONSISTENCY.md)。
+文字 request 的 `routeContext` 見本文件 §1，路線結果見 §4.3；完整 HTTP request schema 見 `/api/v1/openapi.json`。語音 `route.context.set`／ack 見 [WebSocket 協議](./VOICE_WS_PROTOCOL.md) §2.2.1。
 
 ### 4.5 `getA11yFacilityDetails` — 依 OSM id 取設施詳情
 
@@ -698,12 +698,4 @@ TRA   = { type:"TRA",  trainNo; trainTypeName; departureStation;
 
 其餘 8 個 `openAiChatTools` 與 12 個 `lineFamilyTools` 見 §8。
 
----
 
-## 維護指引
-
-新增 / 刪改工具時，需同步更新三處：
-
-1. `src/config/ai/tool.ts` — `openAiChatTools` / `memoryTools` / `lineFamilyTools` 宣告
-2. `src/modules/ai/agent-tools.ts` — 實作與 `executeLocalTool` 的 `switch`
-3. 本文件（`docs/specs/AI_AGENT_TOOLS_REFERENCE.md`）

@@ -2,9 +2,17 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Product Naming
+
+Follow the **Product Naming** section in `AGENTS.md` for the current brand and naming boundaries.
+
 ## Deployment Configuration
 
 All deployment configuration must live in the root `Dockerfile` and `docker-compose.yml` only. Do not create `infra/`, additional deployment config files, or standalone deployment startup/init scripts. Inline required scripts in these two files; documentation may reference them but must not become another configuration source.
+
+## Documentation Scope
+
+Tracked `docs/` is for current product/API usage, privacy and safety behavior, and self-hosting instructions. Keep API guides in `docs/api/`; HTTP schemas are maintained in OpenAPI. Do not add implementation plans, audit reports, migration checklists, execution logs, or per-task verification reports to tracked documentation. When local working notes are needed, use the ignored `.pi/notes/` directory; otherwise report completion in the conversation or PR. Update an existing guide instead of creating a duplicate report.
 
 ## Commands
 

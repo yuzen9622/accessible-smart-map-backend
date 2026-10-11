@@ -130,6 +130,15 @@ valhalla-data/
 
 
 /reports
+# Local development notes and one-off reports are not product documentation.
+# Keep public API guides in docs/api/; draft work belongs in .pi/notes/.
+/docs/archive/
+/docs/audit/
+/docs/reports/
+/docs/plans/
+/docs/specs/
+/docs/FRONTEND_MIGRATION_*.md
+/docs/CONTENT_SAFETY_VERIFICATION.md
 # AI eval reports (real-API output, not source)
 src/scripts/eval-reports/
 

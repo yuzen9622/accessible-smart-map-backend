@@ -3,7 +3,7 @@
  *
  * Uses the advanced NearBy endpoints for a spatial scan. The old assumption
  * that basic-layer city endpoints are empty no longer holds: Taipei CarPark
- * returned 673 rows on 2026-10-05 (see docs/reports/TDX_QUOTA_AND_DATA_DRIFT.md).
+ * returned 673 rows on 2026-10-05.
  * Other cities/resources still need individual coverage checks. This script scans urban
  * areas with a hexagonal-ish grid (step ~1.4 km, radius 1000 m, the API's max)
  * and upserts three collections:
