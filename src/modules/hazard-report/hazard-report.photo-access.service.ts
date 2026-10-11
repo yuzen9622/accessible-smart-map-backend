@@ -1,44 +1,18 @@
 import { readHazardPhoto } from "../../adapters/gcs.adapter";
+import { HAZARD_AI } from "../../config/hazard-ai";
 import { ResponseCode, ResponseMessage } from "../../types/code";
 import { findReportById } from "./hazard-report.repository";
 import { normalizeHazardPhoto } from "./hazard-report.photo";
 import type { PhotoMimeType, ServiceResult } from "./hazard-report.types";
+import {
+  isPublicReportPhoto,
+  resolvePhotoKey,
+} from "./hazard-report.photo-policy";
+
+export { resolvePhotoKey } from "./hazard-report.photo-policy";
 
 const PHOTO_UNAVAILABLE = "PHOTO_UNAVAILABLE";
 const PHOTO_NOT_FOUND = "PHOTO_NOT_FOUND";
-
-/** Only the configured bucket and this report's own key may be read. */
-export function resolvePhotoKey(
-  id: string,
-  report: { photoStoragePath?: string; photoUrl?: string },
-): string | undefined {
-  let key = report.photoStoragePath;
-  if (!key && report.photoUrl) {
-    const bucket = process.env.GCS_BUCKET_NAME;
-    if (!bucket) return undefined;
-    try {
-      const url = new URL(report.photoUrl);
-      if (
-        url.origin !== "https://storage.googleapis.com" ||
-        url.username ||
-        url.password ||
-        url.search ||
-        url.hash ||
-        !url.pathname.startsWith(`/${bucket}/`)
-      )
-        return undefined;
-      key = url.pathname.slice(bucket.length + 2);
-    } catch {
-      return undefined;
-    }
-  }
-  return key &&
-    new RegExp(`^reports/${id.toLowerCase()}\\.(jpg|png|webp|heic|heif)$`).test(
-      key,
-    )
-    ? key
-    : undefined;
-}
 
 function failure(
   httpCode: ResponseCode,
@@ -55,26 +29,104 @@ function failure(
   };
 }
 
-/** Authorize before GCS I/O; recheck after I/O so concurrent scrubbing wins. */
-export async function getPrivateReportPhoto(
+type PhotoAccessResult =
+  | (ServiceResult & { ok: false })
+  | { ok: true; buffer: Buffer; mimeType: "image/jpeg" };
+type StoredReport = Awaited<ReturnType<typeof findReportById>>;
+
+// Bound the whole DB/download/decode operation, not just codec workers.
+// Queued requests hold no photo bytes. Public and private reads share capacity.
+let activeReads = 0;
+const waitingReads: Array<{ grant: () => void }> = [];
+function releaseRead(): () => void {
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const next = waitingReads.shift();
+    if (next)
+      next.grant(); // Transfer this slot without incrementing activeReads.
+    else activeReads--;
+  };
+}
+
+async function acquireRead(signal?: AbortSignal): Promise<() => void> {
+  signal?.throwIfAborted();
+  if (activeReads < HAZARD_AI.decodeConcurrency) {
+    activeReads++;
+    return releaseRead();
+  }
+  if (waitingReads.length >= HAZARD_AI.decodeQueueLimit)
+    throw new Error(PHOTO_UNAVAILABLE);
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", cancel);
+    };
+    const cancel = () => {
+      const index = waitingReads.indexOf(entry);
+      if (index < 0) return;
+      waitingReads.splice(index, 1);
+      cleanup();
+      reject(new Error(PHOTO_UNAVAILABLE));
+    };
+    const entry = {
+      grant: () => {
+        cleanup();
+        resolve(releaseRead());
+      },
+    };
+    const timer = setTimeout(cancel, HAZARD_AI.providerTimeoutMs);
+    timer.unref();
+    waitingReads.push(entry);
+    signal?.addEventListener("abort", cancel, { once: true });
+  });
+}
+
+export function getPrivateReportPhoto(
   id: string,
   identity: { userId: string; admin: boolean },
   signal?: AbortSignal,
-): Promise<
-  | (ServiceResult & { ok: false })
-  | { ok: true; buffer: Buffer; mimeType: "image/jpeg" }
-> {
-  const mayRead = (report: Awaited<ReturnType<typeof findReportById>>) =>
-    report &&
-    !report.contentScrubbedAt &&
-    !report.deidentifiedAt &&
-    (identity.admin || report.reporterId === identity.userId);
+): Promise<PhotoAccessResult> {
+  return readAuthorizedPhoto(
+    id,
+    (report) =>
+      Boolean(
+        report &&
+        !report.contentScrubbedAt &&
+        !report.deidentifiedAt &&
+        (identity.admin || report.reporterId === identity.userId),
+      ),
+    signal,
+  );
+}
+
+export function getPublicReportPhoto(
+  id: string,
+  signal?: AbortSignal,
+): Promise<PhotoAccessResult> {
+  return readAuthorizedPhoto(
+    id,
+    (report) => Boolean(report && isPublicReportPhoto(report)),
+    signal,
+  );
+}
+
+/** Authorize before GCS I/O; recheck afterwards so revocation/expiry wins. */
+async function readAuthorizedPhoto(
+  id: string,
+  mayRead: (report: StoredReport) => boolean,
+  signal?: AbortSignal,
+): Promise<PhotoAccessResult> {
+  let release: (() => void) | undefined;
   try {
+    release = await acquireRead(signal);
     const report = await findReportById(id);
     if (!mayRead(report))
       return failure(ResponseCode.NOT_FOUND, PHOTO_NOT_FOUND);
     const key = resolvePhotoKey(id, report!);
     if (!key) return failure(ResponseCode.NOT_FOUND, PHOTO_NOT_FOUND);
+    signal?.throwIfAborted();
     const bytes = await readHazardPhoto(key, { signal });
     const ext = key.slice(key.lastIndexOf(".") + 1);
     const mime = `image/${ext === "jpg" ? "jpeg" : ext}` as PhotoMimeType;
@@ -90,5 +142,7 @@ export async function getPrivateReportPhoto(
     return code === "GCS_OBJECT_MISSING"
       ? failure(ResponseCode.NOT_FOUND, PHOTO_NOT_FOUND)
       : failure(ResponseCode.SERVICE_UNAVAILABLE, PHOTO_UNAVAILABLE);
+  } finally {
+    release?.();
   }
 }

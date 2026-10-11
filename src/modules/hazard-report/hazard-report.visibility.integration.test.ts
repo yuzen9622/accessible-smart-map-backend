@@ -178,6 +178,70 @@ describe("hazard-report visibility predicates with real MongoDB", () => {
     expect(toReportView(rows[0], false)).not.toHaveProperty("photoStoragePath");
   });
 
+  it("public and owner Mongo projections supply the public URL only while the photo is eligible", async () => {
+    const id = await seedV2Verified();
+    const expected = `/api/v1/a11y/reports/${id}/photo/public`;
+    const publicRow = (await findPublicReportById(id))!;
+    expect(toReportView(publicRow, false)).toMatchObject({
+      hasPhoto: true,
+      publicPhotoUrl: expected,
+    });
+    expect(
+      toReportView((await near(["verified"]))[0], false).publicPhotoUrl,
+    ).toBe(expected);
+    expect(
+      toReportView((await findReportsByReporter("reporter-1", {}, 10))[0], true)
+        .publicPhotoUrl,
+    ).toBe(expected);
+    expect(toReportView(publicRow, false)).not.toHaveProperty(
+      "photoStoragePath",
+    );
+    expect(toReportView(publicRow, false)).not.toHaveProperty("aiReviewJob");
+
+    await HazardReport.updateOne(
+      { _id: id },
+      { $set: { "aiVerification.prefilter.safeSearchBlocked": true } },
+    );
+    expect(
+      toReportView((await findPublicReportById(id))!, false).publicPhotoUrl,
+    ).toBeNull();
+    await HazardReport.updateOne(
+      { _id: id },
+      {
+        $unset: { "aiVerification.prefilter.safeSearchBlocked": "" },
+        $set: { expiredAt: new Date(0) },
+      },
+    );
+    expect(
+      toReportView((await findPublicReportById(id))!, false),
+    ).toMatchObject({ hasPhoto: true, publicPhotoUrl: null });
+    await HazardReport.updateOne(
+      { _id: id },
+      { $set: { moderationHiddenAt: new Date() } },
+    );
+    expect(await findPublicReportById(id)).toBeNull();
+    expect(
+      toReportView(
+        (await findReportsByReporter("reporter-1", {}, 10))[0],
+        true,
+      ),
+    ).toMatchObject({ hasPhoto: true, publicPhotoUrl: null });
+  });
+
+  it("legacy community verification remains in the feed without publishing its photo", async () => {
+    const id = await seedReport({
+      aiVerification: {
+        verdict: "skipped",
+        confidence: 0,
+        reason: "community-only",
+      },
+    });
+    expect((await near(["verified"])).map((r) => String(r._id))).toEqual([id]);
+    expect(
+      toReportView((await findPublicReportById(id))!, false),
+    ).toMatchObject({ hasPhoto: true, publicPhotoUrl: null });
+  });
+
   it("route eligibility keeps legacy unchanged and requires support for v2", async () => {
     const voters = { confirmedBy: ["other"], confirmCount: 1 };
     const legacy = await seedReport(voters);

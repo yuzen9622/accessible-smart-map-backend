@@ -13,6 +13,7 @@ import HazardReport from "../../model/hazard-report.model";
 import User from "../../model/user.model";
 import AuthSession from "../../model/auth-session.model";
 import PushToken from "../../model/push-token.model";
+import PushReceipt from "../../model/push-receipt.model";
 import { EXPO_PUSH_SEND_URL } from "../../constants/push";
 import type { ExpoPushMessage } from "../../adapters/expo-push.adapter";
 import type { IHazardReport } from "../../types";
@@ -331,6 +332,26 @@ describe("hazard review durable push (real Mongo, real user push service, mocked
     expect((await read(id))?.reviewNotification?.state).toBe("sent");
   });
 
+  it.each([undefined, null, "", " ", 42])(
+    "accepted ticket with unusable ID %j checkpoints without resending",
+    async (ticketId) => {
+      const { userId } = await recipient();
+      const { id } = await completed(userId);
+      fetchMock.mockResolvedValueOnce(
+        Response.json({ data: [{ status: "ok", id: ticketId }] }),
+      );
+      await deliverNextReviewNotification();
+      expect((await read(id))?.reviewNotification?.state).toBe("sent");
+      expect((await read(id))?.reviewNotification?.delivered).toHaveLength(1);
+      expect(await PushReceipt.findOne({ userId }).lean()).toMatchObject({
+        state: "unknown",
+        errorCode: "accepted_ticket_untrackable",
+      });
+      expect(await deliverNextReviewNotification()).toBe(false);
+      expect(messages()).toHaveLength(1);
+    },
+  );
+
   it("DeviceNotRegistered removes the token and finishes without an endless retry", async () => {
     const { userId } = await recipient();
     const { id } = await completed(userId);
@@ -535,7 +556,8 @@ describe("hazard review durable push (real Mongo, real user push service, mocked
     fetchMock.mockImplementationOnce(async () => {
       await mongoose.connection.db!.admin().command({
         configureFailPoint: "failCommand",
-        mode: { times: 1 },
+        // The first update is the receipt-ticket attach, the second the checkpoint.
+        mode: { times: 2 },
         data: { failCommands: ["update"], errorCode: 2 },
       });
       return Response.json({

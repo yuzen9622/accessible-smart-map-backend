@@ -213,7 +213,13 @@ const HazardReportSchema = z
       .openapi({ example: "人行道上有施工鐵板未固定" }),
     hasPhoto: z.boolean().openapi({
       example: true,
-      description: "照片是否仍保留；讀取照片仍須本人或管理員授權。",
+      description:
+        "照片是否仍保留，不代表公開存取權。一般訪客使用 publicPhotoUrl；本人／管理員可帶 Bearer token 讀私人照片入口。",
+    }),
+    publicPhotoUrl: z.string().nullable().openapi({
+      example: "/api/v1/a11y/reports/6670abc123def4567890abcd/photo/public",
+      description:
+        "免登入照片入口的同源相對路徑；AI／人工核可、未過期且未下架／清除時提供，否則為 null。舊版僅社群核可而無 AI／人工核可的照片不公開。URL 是當下提示，後續過期或下架仍可能回 404。",
     }),
     status: z.enum(STATUSES).openapi({ example: "pending" }),
     exifValidation: z
@@ -602,6 +608,37 @@ registry.registerPath({
     404: { description: "無存取權、回報或照片不存在、已清除" },
     429: { description: "請求過於頻繁" },
     503: { description: "儲存或照片處理暫時不可用，可重試" },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/a11y/reports/{id}/photo/public",
+  tags: ["Hazard Report"],
+  summary: "取得已核可且仍有效的公開回報照片（免登入）",
+  description:
+    "照片限 AI completed/supported 或人工 verified，且 status=verified、expiredAt 尚未到期、未下架／清除／去識別化。舊版需 AI verdict=verified 或人工核可，僅社群票數不算照片核可。已知 SafeSearch 阻擋的照片不公開。每次讀取私人 bucket 前與解碼後都查核資格；僅回 JPEG bytes，不回傳儲存 URL、不重新導向，不因附帶 token 而提供私人照片。Cache-Control: no-store；成功 JPEG 無 ETag/304，JSON 錯誤走既有 envelope。公開與私人讀取共用 process-wide 容量（最多 2 件執行、8 件等待、等待上限 10 秒），不依賴 Redis。",
+  security: [],
+  request: { params: PhotoReportIdParamSchema },
+  responses: {
+    200: {
+      description: "已移除影像 metadata 的可解碼 JPEG",
+      content: {
+        "image/jpeg": {
+          schema: z.string().openapi({ type: "string", format: "binary" }),
+        },
+      },
+    },
+    400: { description: "無效的回報 ID" },
+    404: {
+      description:
+        "回報／照片不存在或不符合公開條件（含過期／下架），統一 PHOTO_NOT_FOUND",
+    },
+    429: { description: "請求過於頻繁（與 nearby 共用 30/min 配額）" },
+    503: {
+      description:
+        "容量滿、等待逾時或資料庫／儲存／照片處理暫時不可用，可重試；PHOTO_UNAVAILABLE",
+    },
   },
 });
 

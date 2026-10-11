@@ -1,4 +1,7 @@
-import { getPrivateReportPhoto } from "./hazard-report.photo-access.service";
+import {
+  getPrivateReportPhoto,
+  getPublicReportPhoto as readPublicReportPhoto,
+} from "./hazard-report.photo-access.service";
 import crypto from "crypto";
 import type { Request, Response } from "express";
 import { sendResponse } from "../../config/lib";
@@ -193,22 +196,37 @@ export {
   reviewReport,
 };
 
-/** Binary success deliberately bypasses the JSON envelope; errors retain it. */
 export async function getReportPhoto(req: Request, res: Response) {
+  return sendPhoto(res, (signal) =>
+    getPrivateReportPhoto(
+      req.params.id as string,
+      { userId: req.auth!.userId, admin: req.auth!.user.role === "admin" },
+      signal,
+    ),
+  );
+}
+
+export async function getPublicReportPhoto(req: Request, res: Response) {
+  return sendPhoto(res, (signal) =>
+    readPublicReportPhoto(req.params.id as string, signal),
+  );
+}
+
+/** Binary success deliberately bypasses the JSON envelope; errors retain it. */
+async function sendPhoto(
+  res: Response,
+  read: (signal: AbortSignal) => ReturnType<typeof getPrivateReportPhoto>,
+) {
   const abort = new AbortController();
   const onClose = () => abort.abort();
   res.once("close", onClose);
   try {
-    const result = await getPrivateReportPhoto(
-      req.params.id as string,
-      { userId: req.auth!.userId, admin: req.auth!.user.role === "admin" },
-      abort.signal,
-    );
+    const result = await read(abort.signal);
     if (abort.signal.aborted) return;
     if (!result.ok) return send(res, result);
     res.status(ResponseCode.OK).setHeader("Content-Type", result.mimeType);
     res.setHeader("Content-Length", result.buffer.length);
-    // end avoids Express's automatic ETag/conditional 304 handling for private bytes.
+    // end avoids automatic ETag/304 handling: every request must recheck access.
     return res.end(result.buffer);
   } finally {
     res.off("close", onClose);

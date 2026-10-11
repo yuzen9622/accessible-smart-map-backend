@@ -148,6 +148,17 @@ export function privatePhotoHeaders(
   next();
 }
 
+/** Public approval may be revoked; never cache success or error responses. */
+export function publicPhotoHeaders(
+  _req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  next();
+}
+
 /** Verify the same live session as protected JSON routes, preserving private headers. */
 export async function requirePhotoLogin(
   req: Request,

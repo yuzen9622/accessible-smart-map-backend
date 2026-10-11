@@ -13,6 +13,7 @@ import {
   getSafetyReports,
   getReport,
   getReportPhoto,
+  getPublicReportPhoto,
   getMyReports,
   confirmReport,
   getReviewQueue,
@@ -33,6 +34,7 @@ import {
 import {
   uploadPhoto,
   privatePhotoHeaders,
+  publicPhotoHeaders,
   requirePhotoLogin,
   postReportsLimiter,
   confirmLimiter,
@@ -94,6 +96,14 @@ export function createHazardReportRouter(): Router {
     nearbyLimiter,
     validateRequest({ query: AiMetricsQuerySchema }),
     getAiMetrics,
+  );
+
+  router.get(
+    "/reports/:id/photo/public",
+    publicPhotoHeaders,
+    nearbyLimiter,
+    validateRequest({ params: PhotoReportIdParamSchema }),
+    getPublicReportPhoto,
   );
 
   router.get(

@@ -1,4 +1,5 @@
 import type { IHazardReport } from "../../types";
+import { isPublicReportPhoto } from "./hazard-report.photo-policy";
 import type {
   HazardAiReview,
   HazardAiReviewJob,
@@ -93,6 +94,9 @@ export function toReportView(
     !source.deidentifiedAt &&
     (source.photoStoragePath || source.photoUrl),
   );
+  view.publicPhotoUrl = isPublicReportPhoto(source, now)
+    ? `/api/v1/a11y/reports/${String(source._id).toLowerCase()}/photo/public`
+    : null;
   if (includeReporter && source.reporterId !== undefined) {
     view.reporterId = source.reporterId;
   }
