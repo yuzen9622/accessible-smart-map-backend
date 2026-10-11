@@ -137,6 +137,12 @@ curl -X POST https://<host>/api/v1/user/login \
 
 所有 `nav.*` 必須等收到 `session.ready` 才送。文字 control frame 上限為 8 KiB，後端另有逐連線 frame/byte budget；洪峰會以 `4408` 關閉。位置建議使用 `watchPosition` 並以約 10 公尺 distanceFilter 或路口事件節流。
 
+`nav.position` 也供一般語音查詢更新目前位置，不需要先開始導航，且單獨上傳不會啟動導航。握手期間才取得的位置，應在 `session.ready` 後補送。
+
+若 `planAccessibleRoute` 使用 `origin: "current_location"`，但後端尚無位置，後端會送出 `{ "type": "location.request" }`，最多等待 2 秒。前端可回傳既有定位；沒有定位時，僅在已授權的情況下取得位置，再以 `nav.position` 回覆，不因這個事件彈出權限要求。回傳前確認仍是同一段語音連線，避免延遲定位送進新對話。未支援此事件的舊前端可忽略。
+
+等待後仍無位置，工具回傳 `result: { ok: false, reason: "LOCATION_REQUIRED", error: "..." }`，模型可詢問出發地點或提醒開啟定位。這是可恢復的規劃失敗；前端保留語音與播放，不送 `session.end`，也不自動返回文字聊天。`tool_result.ok` 只表示工具執行是否拋出錯誤，路線是否成功須檢查 `result.ok`。
+
 ### 3.2 Server → Client
 
 | 型別                    | 傳輸        | 欄位                                                                                                                                                                                                                                           | 範例                                                                                                                                                                                                                                                                      | 觸發時機                                                                                                                                                            |
