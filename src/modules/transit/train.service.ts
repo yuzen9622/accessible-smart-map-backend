@@ -4,6 +4,7 @@ import {
   fetchRailStationTimetable,
 } from "../../adapters/rail.adapter";
 import { normalizeStationName } from "../../utils/station-name";
+import { ResponseCode } from "../../types/code";
 import {
   taipeiYmdDash,
   taipeiHHmm,
@@ -21,17 +22,26 @@ import type {
   StationTimetableResult,
   TrainTimetableEntry,
   StationTimetableEntry,
+  StationSuggestParams,
+  StationSuggestResult,
+  TrainServiceError,
 } from "./train.types";
 
 const MAX_TRAINS = 12;
+const MAX_STATION_SUGGESTIONS = 20;
 const MAX_RANGE_DAYS = 60;
 const TEMP_FAIL = "火車時刻查詢暫時失敗，請稍後再試";
 const TIME_RE = /^(\d{1,2}):(\d{2})$/;
 
 type Ok<T> = { ok: true; value: T };
-type Err = { ok: false; error: string };
+type Err = TrainServiceError;
 const ok = <T>(value: T): Ok<T> => ({ ok: true, value });
 const err = (error: string): Err => ({ ok: false, error });
+const upstreamFailure = (): Err => ({
+  ok: false,
+  error: TEMP_FAIL,
+  status: ResponseCode.SERVICE_UNAVAILABLE,
+});
 
 function validateRailSystem(raw: unknown): Ok<RailSystem> | Err {
   if (raw === undefined) return ok("TRA");
@@ -95,7 +105,7 @@ async function resolveStationId(
   name: string,
 ): Promise<Ok<string> | Err> {
   const outcome = await fetchRailStationIndex(system);
-  if (!outcome.ok) return err(TEMP_FAIL);
+  if (!outcome.ok) return upstreamFailure();
   const id = outcome.index.get(normalizeStationName(name));
   if (!id)
     return err(`找不到${systemLabel(system)}車站「${name}」，請確認站名`);
@@ -152,7 +162,7 @@ export async function getTrainTimetable(
     toId.value,
     date.value,
   );
-  if (!outcome.ok) return { ok: false, error: TEMP_FAIL };
+  if (!outcome.ok) return upstreamFailure();
 
   const all = [...outcome.items].sort(
     (a, b) => a.departureMinutes - b.departureMinutes,
@@ -182,6 +192,33 @@ export async function getTrainTimetable(
   const note = odNote(totalCount, matchedCount, trains.length);
   if (note) result.note = note;
   return result;
+}
+
+/**
+ * Suggest station names for autocomplete, matching `query` as a substring of the
+ * normalized station name (so "台北" matches "臺北"／"臺北車站" alike). With no
+ * query, returns the first page of the full station list. Reuses the same cached
+ * index `resolveStationId` uses, so this adds no extra upstream calls.
+ *
+ * @param params Optional query substring and rail system (defaults TRA).
+ * @returns Up to 20 matching stations, or `{ok:false}` if the upstream index fetch fails.
+ */
+export async function suggestTrainStations(
+  params: StationSuggestParams,
+): Promise<StationSuggestResult> {
+  const system = validateRailSystem(params.railSystem);
+  if (!system.ok) return system;
+
+  const outcome = await fetchRailStationIndex(system.value);
+  if (!outcome.ok) return upstreamFailure();
+
+  const needle = params.query ? normalizeStationName(params.query) : "";
+  const stations = [...outcome.index.entries()]
+    .filter(([name]) => (needle ? name.includes(needle) : true))
+    .slice(0, MAX_STATION_SUGGESTIONS)
+    .map(([name, stationID]) => ({ name, stationID }));
+
+  return { ok: true, railSystem: system.value, stations };
 }
 
 /**
@@ -219,7 +256,7 @@ export async function getStationTimetable(
     stationId.value,
     date.value,
   );
-  if (!outcome.ok) return { ok: false, error: TEMP_FAIL };
+  if (!outcome.ok) return upstreamFailure();
 
   const all = [...outcome.items].sort(
     (a, b) => a.departureMinutes - b.departureMinutes,

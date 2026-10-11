@@ -584,6 +584,182 @@ export const BusStopArrivalsResponseSchema = ApiResponseSchema(
   }),
 ).openapi("BusStopArrivalsResponse");
 
+const RailSystemQuery = z.enum(["TRA", "THSR"]).optional().openapi({
+  example: "TRA",
+  description: "鐵路系統：TRA=臺鐵、THSR=高鐵，省略預設 TRA",
+});
+const DateQuery = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .optional()
+  .openapi({
+    example: "2026-10-15",
+    description:
+      "查詢日期 YYYY-MM-DD（臺北時區），限今天起 60 天內，省略預設今天",
+  });
+const TimeQuery = z
+  .string()
+  .regex(/^\d{1,2}:\d{2}$/)
+  .optional();
+
+export const TrainTimetableQuerySchema = z
+  .object({
+    originStation: z.string().min(1).openapi({ example: "臺北" }),
+    destinationStation: z.string().min(1).openapi({ example: "臺中" }),
+    railSystem: RailSystemQuery,
+    date: DateQuery,
+    departAfter: TimeQuery.openapi({
+      example: "09:00",
+      description: "只看這個時間之後出發的車",
+    }),
+    arriveBy: TimeQuery.openapi({
+      example: "12:00",
+      description: "只看這個時間之前抵達的車",
+    }),
+  })
+  .strict();
+
+export const StationTimetableQuerySchema = z
+  .object({
+    station: z.string().min(1).openapi({ example: "臺北" }),
+    railSystem: RailSystemQuery,
+    date: DateQuery,
+    departAfter: TimeQuery.openapi({
+      example: "09:00",
+      description:
+        "只看這個時間之後出發的車；省略時，今天預設現在，未來日期預設 00:00",
+    }),
+  })
+  .strict();
+
+export const StationSuggestQuerySchema = z
+  .object({
+    query: z.string().optional().openapi({
+      example: "台北",
+      description: "站名關鍵字，省略回傳前段車站清單",
+    }),
+    railSystem: RailSystemQuery,
+  })
+  .strict();
+
+const StationSuggestionSchema = z.object({
+  name: z.string().openapi({ example: "臺北" }),
+  stationID: z.string().openapi({ example: "1000" }),
+});
+
+const StationSuggestResponseSchema = ApiResponseSchema(
+  z.object({
+    railSystem: z.enum(["TRA", "THSR"]),
+    stations: z.array(StationSuggestionSchema),
+  }),
+).openapi("StationSuggestResponse");
+
+registry.registerPath({
+  method: "get",
+  path: "/transit/train/stations",
+  tags: ["Transit"],
+  summary: "車站名稱建議（自動完成）",
+  description:
+    "依關鍵字（可省略）回傳最多 20 個相符車站名稱，用於輸入站名時的自動完成建議。",
+  request: { query: StationSuggestQuerySchema },
+  responses: {
+    200: {
+      description: "建議清單",
+      content: { "application/json": { schema: StationSuggestResponseSchema } },
+    },
+    400: { description: "參數錯誤" },
+    503: { description: "上游鐵路查詢服務暫時不可用" },
+    500: { description: "非預期伺服器錯誤" },
+  },
+});
+
+const TrainTimetableEntrySchema = z.object({
+  trainNo: z.string(),
+  trainType: z.string().optional(),
+  departureTime: z.string(),
+  arrivalTime: z.string(),
+  arrivesNextDay: z.literal(true).optional(),
+  durationMinutes: z.number(),
+});
+
+const StationTimetableEntrySchema = z.object({
+  trainNo: z.string(),
+  trainType: z.string().optional(),
+  direction: z.number().optional(),
+  destination: z.string().optional(),
+  departureTime: z.string(),
+  arrivalTime: z.string().optional(),
+});
+
+const TrainTimetableResponseSchema = ApiResponseSchema(
+  z.object({
+    railSystem: z.enum(["TRA", "THSR"]),
+    date: z.string(),
+    origin: z.object({ name: z.string(), stationID: z.string() }),
+    destination: z.object({ name: z.string(), stationID: z.string() }),
+    totalCount: z.number(),
+    matchedCount: z.number(),
+    firstTrain: z.string().nullable(),
+    lastTrain: z.string().nullable(),
+    trains: z.array(TrainTimetableEntrySchema),
+    note: z.string().optional(),
+  }),
+).openapi("TrainTimetableResponse");
+
+const StationTimetableResponseSchema = ApiResponseSchema(
+  z.object({
+    railSystem: z.enum(["TRA", "THSR"]),
+    date: z.string(),
+    station: z.object({ name: z.string(), stationID: z.string() }),
+    departAfter: z.string(),
+    totalCount: z.number(),
+    matchedCount: z.number(),
+    firstTrain: z.string().nullable(),
+    lastTrain: z.string().nullable(),
+    trains: z.array(StationTimetableEntrySchema),
+    note: z.string().optional(),
+  }),
+).openapi("StationTimetableResponse");
+
+registry.registerPath({
+  method: "get",
+  path: "/transit/train/timetable",
+  tags: ["Transit"],
+  summary: "兩站間的火車時刻（臺鐵／高鐵）",
+  description:
+    "依出發站、抵達站查詢某日兩站間的車次，可用 departAfter／arriveBy 篩選時間區段，最多回傳 12 筆。",
+  request: { query: TrainTimetableQuerySchema },
+  responses: {
+    200: {
+      description: "時刻查詢結果",
+      content: { "application/json": { schema: TrainTimetableResponseSchema } },
+    },
+    400: { description: "參數錯誤或查無車站" },
+    503: { description: "上游鐵路查詢服務暫時不可用" },
+    500: { description: "非預期伺服器錯誤" },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/transit/train/station-timetable",
+  tags: ["Transit"],
+  summary: "單一車站的發車看板（臺鐵／高鐵）",
+  description: "依車站查詢某日某時間之後的發車看板，最多回傳 12 筆。",
+  request: { query: StationTimetableQuerySchema },
+  responses: {
+    200: {
+      description: "發車看板",
+      content: {
+        "application/json": { schema: StationTimetableResponseSchema },
+      },
+    },
+    400: { description: "參數錯誤或查無車站" },
+    503: { description: "上游鐵路查詢服務暫時不可用" },
+    500: { description: "非預期伺服器錯誤" },
+  },
+});
+
 const AlertDirectionQuery = z.coerce.number().optional();
 const CommaSeparatedStationIdsQuery = z.string().transform((value) =>
   value

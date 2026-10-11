@@ -8,6 +8,7 @@ import { parseLocation } from "../../utils/geo";
 import type { BusStopArrivalsData } from "./transit.types";
 import * as busService from "./bus.service";
 import * as alertService from "./alert.service";
+import * as trainService from "./train.service";
 
 async function resolveCityOr400(
   city: string | undefined,
@@ -208,14 +209,125 @@ async function getTransitAlertsHandler(
   }
 }
 
-async function getTrainData(req: Request, _res: Response<ApiResponse<null>>) {
-  void req.query;
-}
-async function getHighSpeedTrainData(
+async function getTrainTimetableHandler(
   req: Request,
-  _res: Response<ApiResponse<null>>,
+  res: Response<ApiResponse<any>>,
 ) {
-  void req.query;
+  try {
+    const {
+      originStation,
+      destinationStation,
+      railSystem,
+      date,
+      departAfter,
+      arriveBy,
+    } = req.validated?.query as {
+      originStation: string;
+      destinationStation: string;
+      railSystem?: "TRA" | "THSR";
+      date?: string;
+      departAfter?: string;
+      arriveBy?: string;
+    };
+    const result = await trainService.getTrainTimetable({
+      originStation,
+      destinationStation,
+      railSystem,
+      date,
+      departAfter,
+      arriveBy,
+    });
+    if (!result.ok)
+      return sendResponse(
+        res,
+        false,
+        "error",
+        result.status ?? ResponseCode.INVALID_INPUT,
+        result.error,
+      );
+    const { ok, ...data } = result;
+    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
+  } catch (error) {
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      error instanceof Error ? error.message : TRANSIT_MSG.STOP_ARRIVALS_FAILED,
+    );
+  }
+}
+
+async function suggestTrainStationsHandler(
+  req: Request,
+  res: Response<ApiResponse<any>>,
+) {
+  try {
+    const { query, railSystem } = req.validated?.query as {
+      query?: string;
+      railSystem?: "TRA" | "THSR";
+    };
+    const result = await trainService.suggestTrainStations({
+      query,
+      railSystem,
+    });
+    if (!result.ok)
+      return sendResponse(
+        res,
+        false,
+        "error",
+        result.status ?? ResponseCode.INVALID_INPUT,
+        result.error,
+      );
+    const { ok, ...data } = result;
+    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
+  } catch (error) {
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      error instanceof Error ? error.message : TRANSIT_MSG.STOP_ARRIVALS_FAILED,
+    );
+  }
+}
+
+async function getStationTimetableHandler(
+  req: Request,
+  res: Response<ApiResponse<any>>,
+) {
+  try {
+    const { station, railSystem, date, departAfter } = req.validated?.query as {
+      station: string;
+      railSystem?: "TRA" | "THSR";
+      date?: string;
+      departAfter?: string;
+    };
+    const result = await trainService.getStationTimetable({
+      station,
+      railSystem,
+      date,
+      departAfter,
+    });
+    if (!result.ok)
+      return sendResponse(
+        res,
+        false,
+        "error",
+        result.status ?? ResponseCode.INVALID_INPUT,
+        result.error,
+      );
+    const { ok, ...data } = result;
+    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
+  } catch (error) {
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      error instanceof Error ? error.message : TRANSIT_MSG.STOP_ARRIVALS_FAILED,
+    );
+  }
 }
 
 async function searchBusRoutesHandler(
@@ -407,8 +519,9 @@ async function getBusStopArrivalsHandler(
 }
 
 export {
-  getTrainData,
-  getHighSpeedTrainData,
+  getTrainTimetableHandler,
+  getStationTimetableHandler,
+  suggestTrainStationsHandler,
   getBusRouteHandler,
   getBusRouteDetailHandler,
   getBusArrivalHandler,

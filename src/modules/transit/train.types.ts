@@ -1,4 +1,12 @@
 import type { RailSystem } from "../../types/rail";
+import type { ResponseCode } from "../../types/code";
+
+export interface TrainServiceError {
+  ok: false;
+  error: string;
+  /** Omitted for validation errors; upstream failures carry 503. */
+  status?: ResponseCode.INVALID_INPUT | ResponseCode.SERVICE_UNAVAILABLE;
+}
 
 export interface TrainTimetableParams {
   originStation: string;
@@ -15,6 +23,20 @@ export interface StationTimetableParams {
   departAfter?: string;
   railSystem?: RailSystem;
 }
+
+export interface StationSuggestParams {
+  query?: string;
+  railSystem?: RailSystem;
+}
+
+export interface StationSuggestion {
+  name: string;
+  stationID: string;
+}
+
+export type StationSuggestResult =
+  | { ok: true; railSystem: RailSystem; stations: StationSuggestion[] }
+  | TrainServiceError;
 
 export interface TrainTimetableEntry {
   trainNo: string;
@@ -48,7 +70,7 @@ export type TrainTimetableResult =
       trains: TrainTimetableEntry[];
       note?: string;
     }
-  | { ok: false; error: string };
+  | TrainServiceError;
 
 export type StationTimetableResult =
   | {
@@ -64,4 +86,4 @@ export type StationTimetableResult =
       trains: StationTimetableEntry[];
       note?: string;
     }
-  | { ok: false; error: string };
+  | TrainServiceError;

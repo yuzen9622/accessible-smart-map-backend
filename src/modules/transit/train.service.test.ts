@@ -11,8 +11,13 @@ import {
   fetchRailOdTimetable,
   fetchRailStationTimetable,
 } from "../../adapters/rail.adapter";
-import { getTrainTimetable, getStationTimetable } from "./train.service";
+import {
+  getTrainTimetable,
+  getStationTimetable,
+  suggestTrainStations,
+} from "./train.service";
 import type { NormalizedTrain, NormalizedStationTrain } from "../../types/rail";
+import { ResponseCode } from "../../types/code";
 
 const idx = fetchRailStationIndex as unknown as ReturnType<typeof vi.fn>;
 const odFetch = fetchRailOdTimetable as unknown as ReturnType<typeof vi.fn>;
@@ -61,6 +66,70 @@ beforeEach(() => {
   idx.mockResolvedValue({ ok: true, index: STATIONS });
 });
 
+describe("suggestTrainStations", () => {
+  it("normalizes 台/臺 and station suffixes and defaults to TRA", async () => {
+    expect(await suggestTrainStations({ query: "台北車站" })).toEqual({
+      ok: true,
+      railSystem: "TRA",
+      stations: [{ name: "臺北", stationID: "1000" }],
+    });
+    expect(idx).toHaveBeenCalledWith("TRA");
+  });
+
+  it("matches substrings and returns an empty list for no match", async () => {
+    expect(
+      await suggestTrainStations({ query: "北", railSystem: "THSR" }),
+    ).toEqual({
+      ok: true,
+      railSystem: "THSR",
+      stations: [{ name: "臺北", stationID: "1000" }],
+    });
+    expect(idx).toHaveBeenCalledWith("THSR");
+    expect(await suggestTrainStations({ query: "不存在" })).toEqual({
+      ok: true,
+      railSystem: "TRA",
+      stations: [],
+    });
+  });
+
+  it("caps both unfiltered and filtered suggestions at 20, filtering first", async () => {
+    const entries: [string, string][] = Array.from({ length: 25 }, (_, i) => [
+      `候選${i}`,
+      String(i),
+    ]);
+    idx.mockResolvedValue({
+      ok: true,
+      index: new Map([["其他", "other"], ...entries]),
+    });
+    const unfiltered = await suggestTrainStations({});
+    expect(unfiltered.ok && unfiltered.stations).toHaveLength(20);
+    expect(await suggestTrainStations({ query: "候選" })).toEqual({
+      ok: true,
+      railSystem: "TRA",
+      stations: entries
+        .slice(0, 20)
+        .map(([name, stationID]) => ({ name, stationID })),
+    });
+  });
+
+  it("rejects invalid rail systems without fetching the index", async () => {
+    expect(await suggestTrainStations({ railSystem: "MRT" as any })).toEqual({
+      ok: false,
+      error: "railSystem 只能是 TRA 或 THSR",
+    });
+    expect(idx).not.toHaveBeenCalled();
+  });
+
+  it("returns a temporary failure when the upstream index is unavailable", async () => {
+    idx.mockResolvedValue({ ok: false, errorCode: "HTTP_ERROR" });
+    expect(await suggestTrainStations({})).toEqual({
+      ok: false,
+      error: "火車時刻查詢暫時失敗，請稍後再試",
+      status: ResponseCode.SERVICE_UNAVAILABLE,
+    });
+  });
+});
+
 describe("getTrainTimetable station resolution (case 1/6/8)", () => {
   it("resolves normalized station names and returns an error naming an unknown station", async () => {
     odFetch.mockResolvedValue({
@@ -91,6 +160,7 @@ describe("getTrainTimetable station resolution (case 1/6/8)", () => {
     if (!out.ok) {
       expect(out.error).not.toContain("找不到");
       expect(out.error).toContain("暫時失敗");
+      expect(out.status).toBe(ResponseCode.SERVICE_UNAVAILABLE);
     }
   });
 
@@ -164,7 +234,10 @@ describe("getTrainTimetable filtering (case 2/3/4/5)", () => {
       NOW,
     );
     expect(out.ok).toBe(false);
-    if (!out.ok) expect(out.error).toContain("暫時失敗");
+    if (!out.ok) {
+      expect(out.error).toContain("暫時失敗");
+      expect(out.status).toBe(ResponseCode.SERVICE_UNAVAILABLE);
+    }
   });
 });
 

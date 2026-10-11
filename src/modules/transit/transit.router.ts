@@ -10,6 +10,9 @@ import {
   getNearbyStopsHandler,
   getBusStopArrivalsHandler,
   getTransitAlertsHandler,
+  getTrainTimetableHandler,
+  getStationTimetableHandler,
+  suggestTrainStationsHandler,
 } from "./transit.controller";
 import { validateRequest } from "../../middleware/validate-request.middleware";
 import {
@@ -23,6 +26,9 @@ import {
   BusNearbyQuerySchema,
   BusStopArrivalsQuerySchema,
   AlertQuerySchema,
+  TrainTimetableQuerySchema,
+  StationTimetableQuerySchema,
+  StationSuggestQuerySchema,
 } from "./transit.schema";
 
 export function createTransitRouter(): Router {
@@ -32,6 +38,22 @@ export function createTransitRouter(): Router {
     "/alerts",
     validateRequest({ query: AlertQuerySchema }),
     getTransitAlertsHandler,
+  );
+
+  router.get(
+    "/train/timetable",
+    validateRequest({ query: TrainTimetableQuerySchema }),
+    getTrainTimetableHandler,
+  );
+  router.get(
+    "/train/station-timetable",
+    validateRequest({ query: StationTimetableQuerySchema }),
+    getStationTimetableHandler,
+  );
+  router.get(
+    "/train/stations",
+    validateRequest({ query: StationSuggestQuerySchema }),
+    suggestTrainStationsHandler,
   );
 
   router.get(

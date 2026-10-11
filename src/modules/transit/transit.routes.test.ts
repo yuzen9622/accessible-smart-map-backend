@@ -26,11 +26,19 @@ vi.mock("./bus.service", async (orig) => ({
   getBusStopArrivals: vi.fn(),
 }));
 
+vi.mock("./train.service", async (orig) => ({
+  ...((await orig()) as any),
+  getTrainTimetable: vi.fn(),
+  getStationTimetable: vi.fn(),
+  suggestTrainStations: vi.fn(),
+}));
+
 import {
   startTestServer,
   stopTestServer,
 } from "../../../tests/helpers/test-helpers";
 import * as busService from "./bus.service";
+import * as trainService from "./train.service";
 import { ResponseCode } from "../../types/code";
 import { MSG } from "../../constants/messages";
 
@@ -785,5 +793,187 @@ describe("TDX extended bus directions", () => {
       param.schema.anyOf?.flatMap((s: any) => s.enum ?? []) ??
       param.schema.enum;
     expect(values).toEqual([0, 1, 2, 10, 255]);
+  });
+});
+
+describe("GET /api/v1/transit/train/timetable", () => {
+  it("returns 200 + service data with the `ok` flag stripped", async () => {
+    vi.mocked(trainService.getTrainTimetable).mockResolvedValue({
+      ok: true,
+      railSystem: "TRA",
+      date: "2026-10-15",
+      origin: { name: "臺北", stationID: "1000" },
+      destination: { name: "臺中", stationID: "3300" },
+      totalCount: 10,
+      matchedCount: 10,
+      firstTrain: "06:00",
+      lastTrain: "23:00",
+      trains: [],
+    } as any);
+
+    const query = {
+      originStation: "臺北",
+      destinationStation: "臺中",
+      railSystem: "TRA",
+      date: "2026-10-15",
+      departAfter: "09:00",
+      arriveBy: "12:00",
+    };
+    const res = await request(app).get(`${BASE}/train/timetable`).query(query);
+
+    expect(trainService.getTrainTimetable).toHaveBeenCalledWith(query);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      ok: true,
+      status: "success",
+      code: ResponseCode.OK,
+      message: MSG.OK,
+      data: {
+        railSystem: "TRA",
+        date: "2026-10-15",
+        origin: { name: "臺北", stationID: "1000" },
+        destination: { name: "臺中", stationID: "3300" },
+        totalCount: 10,
+        matchedCount: 10,
+        firstTrain: "06:00",
+        lastTrain: "23:00",
+        trains: [],
+      },
+    });
+  });
+
+  it("rejects a missing destinationStation with 400 (schema)", async () => {
+    const res = await request(app)
+      .get(`${BASE}/train/timetable`)
+      .query({ originStation: "臺北" });
+    expect(res.status).toBe(400);
+    expect(trainService.getTrainTimetable).not.toHaveBeenCalled();
+  });
+
+  it("maps a service error to 400", async () => {
+    vi.mocked(trainService.getTrainTimetable).mockResolvedValue({
+      ok: false,
+      error: "起訖站相同",
+    } as any);
+
+    const res = await request(app).get(`${BASE}/train/timetable`).query({
+      originStation: "臺北",
+      destinationStation: "臺北",
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.message).toBe("起訖站相同");
+  });
+});
+
+describe("GET /api/v1/transit/train/station-timetable", () => {
+  it("returns 200 + service data on success", async () => {
+    vi.mocked(trainService.getStationTimetable).mockResolvedValue({
+      ok: true,
+      railSystem: "TRA",
+      date: "2026-10-15",
+      station: { name: "臺北", stationID: "1000" },
+      departAfter: "09:00",
+      totalCount: 5,
+      matchedCount: 5,
+      firstTrain: "09:05",
+      lastTrain: "23:50",
+      trains: [],
+    } as any);
+
+    const query = {
+      station: "臺北",
+      railSystem: "TRA",
+      date: "2026-10-15",
+      departAfter: "09:00",
+    };
+    const res = await request(app)
+      .get(`${BASE}/train/station-timetable`)
+      .query(query);
+
+    expect(trainService.getStationTimetable).toHaveBeenCalledWith(query);
+    expect(res.status).toBe(200);
+    expect(res.body.data).not.toHaveProperty("ok");
+    expect(res.body.ok).toBe(true);
+    expect(res.body.data.station).toEqual({ name: "臺北", stationID: "1000" });
+  });
+
+  it("rejects a missing station with 400 (schema)", async () => {
+    const res = await request(app).get(`${BASE}/train/station-timetable`);
+    expect(res.status).toBe(400);
+    expect(trainService.getStationTimetable).not.toHaveBeenCalled();
+  });
+
+  it("maps a service error to 400", async () => {
+    vi.mocked(trainService.getStationTimetable).mockResolvedValue({
+      ok: false,
+      error: "找不到車站「不存在」，請確認站名",
+    } as any);
+
+    const res = await request(app)
+      .get(`${BASE}/train/station-timetable`)
+      .query({ station: "不存在" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.ok).toBe(false);
+  });
+});
+
+describe("GET /api/v1/transit/train/stations", () => {
+  it("returns 200 + suggestion list on success", async () => {
+    vi.mocked(trainService.suggestTrainStations).mockResolvedValue({
+      ok: true,
+      railSystem: "TRA",
+      stations: [{ name: "臺北", stationID: "1000" }],
+    } as any);
+
+    const res = await request(app)
+      .get(`${BASE}/train/stations`)
+      .query({ query: "台北" });
+
+    expect(trainService.suggestTrainStations).toHaveBeenCalledWith({
+      query: "台北",
+      railSystem: undefined,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      ok: true,
+      status: "success",
+      code: ResponseCode.OK,
+      message: MSG.OK,
+      data: {
+        railSystem: "TRA",
+        stations: [{ name: "臺北", stationID: "1000" }],
+      },
+    });
+  });
+
+  it("works with no query (full list page)", async () => {
+    vi.mocked(trainService.suggestTrainStations).mockResolvedValue({
+      ok: true,
+      railSystem: "THSR",
+      stations: [],
+    } as any);
+
+    const res = await request(app)
+      .get(`${BASE}/train/stations`)
+      .query({ railSystem: "THSR" });
+
+    expect(res.status).toBe(200);
+    expect(trainService.suggestTrainStations).toHaveBeenCalledWith({
+      query: undefined,
+      railSystem: "THSR",
+    });
+  });
+
+  it("maps a service error to 400", async () => {
+    vi.mocked(trainService.suggestTrainStations).mockResolvedValue({
+      ok: false,
+      error: "railSystem 只能是 TRA 或 THSR",
+    } as any);
+
+    const res = await request(app).get(`${BASE}/train/stations`);
+    expect(res.status).toBe(400);
   });
 });
