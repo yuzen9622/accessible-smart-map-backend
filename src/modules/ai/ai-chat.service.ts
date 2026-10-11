@@ -17,6 +17,8 @@ export type { RunToolLoopResult, RouteOnceResult } from "../../types/agent";
  * AI-module façade over the shared Agent Manager: injects this module's local
  * tool executor (`executeLocalTool`) and delegates to `runAgent`, so the chat
  * controller calls one same-module service rather than reaching across modules.
+ * Chat uses explicit tool decisions followed by one answer generation; other
+ * callers of the shared manager keep their existing routing policy.
  *
  * @param input The agent input contract minus `execTool` (bound here).
  * @returns The final text answer plus parsed tool results.
@@ -28,6 +30,7 @@ export async function runChatAgent(
   if (input.routeContext !== undefined) await context.set(input.routeContext);
   return runAgent({
     ...input,
+    toolPhaseMode: "explicit",
     systemInstruction: withResponseLanguage(
       (input.systemInstruction ?? "") + context.prompt,
       input.language,

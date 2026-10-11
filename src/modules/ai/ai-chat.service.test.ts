@@ -46,6 +46,7 @@ describe("runChatAgent facade", () => {
 
     expect(runAgent).toHaveBeenCalledWith({
       ...input,
+      toolPhaseMode: "explicit",
       execTool: expect.any(Function),
       systemInstruction: expect.stringContaining("目前查看的路線"),
     });
