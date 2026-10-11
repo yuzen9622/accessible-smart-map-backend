@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import PushToken from "../../model/push-token.model";
 import type { IPushToken, PushPlatform } from "../../types";
 
@@ -21,7 +22,7 @@ export async function upsertPushToken(
 ): Promise<IPushToken> {
   const stored = await PushToken.findOneAndUpdate(
     { token: fields.token },
-    { $set: fields },
+    { $set: { ...fields, registrationVersion: randomUUID() } },
     { upsert: true, returnDocument: "after" },
   ).lean<IPushToken>();
   return stored as IPushToken;
@@ -63,18 +64,87 @@ export async function findPushTokensByUserId(
  * @returns How many tokens were removed
  */
 export async function deletePushTokens(
-  entries: Pick<IPushToken, "token" | "authSessionId">[],
+  entries: Pick<
+    IPushToken,
+    "token" | "authSessionId" | "registrationVersion"
+  >[],
   options: { maxTimeMS?: number; timeoutMS?: number } = {},
 ): Promise<number> {
   if (!entries.length) return 0;
   const result = await PushToken.deleteMany(
     {
-      $or: entries.map(({ token, authSessionId }) => ({
+      $or: entries.map(({ token, authSessionId, registrationVersion }) => ({
         token,
         authSessionId,
+        // A re-registration rotates the version, so a delayed cleanup of the old
+        // registration cannot remove the fresh one even in the same session. A
+        // snapshot without a version matches only a still-unversioned row.
+        registrationVersion: registrationVersion ?? null,
       })),
     },
     options,
   );
   return result.deletedCount;
+}
+
+const REGISTRATION_DB_OPTIONS = { maxTimeMS: 5_000, timeoutMS: 5_000 };
+
+/**
+ * Gives a registration created before receipt tracking a version, atomically
+ * and only if the very same registration (id, token, owner, session) still has
+ * none, then returns the stored version. A concurrent re-registration changes
+ * the identity or rotates the version, so a stale snapshot never adopts it.
+ *
+ * @param token The registration as read
+ * @returns The registration's version, or null when it no longer matches
+ */
+export async function ensureRegistrationVersion(
+  token: Pick<
+    IPushToken,
+    "_id" | "token" | "userId" | "authSessionId" | "registrationVersion"
+  >,
+): Promise<string | null> {
+  if (token.registrationVersion) return token.registrationVersion;
+  const identity = {
+    _id: token._id,
+    token: token.token,
+    userId: token.userId,
+    authSessionId: token.authSessionId,
+  };
+  const version = randomUUID();
+  await PushToken.updateOne(
+    { ...identity, registrationVersion: null },
+    { $set: { registrationVersion: version } },
+    REGISTRATION_DB_OPTIONS,
+  );
+  const stored = await PushToken.findOne(
+    { ...identity, registrationVersion: { $ne: null } },
+    "registrationVersion",
+    REGISTRATION_DB_OPTIONS,
+  ).lean<Pick<IPushToken, "registrationVersion">>();
+  return stored?.registrationVersion ?? null;
+}
+
+/**
+ * Deletes exactly one registration generation. Matches id, version, owner and
+ * session so a re-registration, ownership transfer or recreation is preserved.
+ *
+ * @returns Whether the registration was deleted
+ */
+export async function deleteRegistrationGeneration(
+  target: Pick<
+    import("../../types/push-receipt").IPushReceipt,
+    "tokenId" | "registrationVersion" | "userId" | "authSessionId"
+  >,
+): Promise<boolean> {
+  const result = await PushToken.deleteOne(
+    {
+      _id: target.tokenId,
+      registrationVersion: target.registrationVersion,
+      userId: target.userId,
+      authSessionId: target.authSessionId,
+    },
+    REGISTRATION_DB_OPTIONS,
+  );
+  return result.deletedCount > 0;
 }

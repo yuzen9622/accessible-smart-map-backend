@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   deletePushTokenForUser,
   deletePushTokens,
+  ensureRegistrationVersion,
   findPushTokensByUserId,
   upsertPushToken,
 } from "./user.push-token.repository";
@@ -86,9 +87,10 @@ describe("push token repository with real MongoDB", () => {
       platform: "ios",
       locale: "zh-TW",
     });
+    const [current] = await findPushTokensByUserId("alice");
     expect(
       await deletePushTokens([
-        { token: TOKEN, authSessionId: "s-alice" },
+        current,
         { token: "ExponentPushToken[none]", authSessionId: "s-alice" },
       ]),
     ).toBe(1);
@@ -108,5 +110,68 @@ describe("push token repository with real MongoDB", () => {
       await deletePushTokens([{ token: TOKEN, authSessionId: "s-old" }]),
     ).toBe(0);
     expect(await findPushTokensByUserId("bob")).toHaveLength(1);
+  });
+
+  it("a stale snapshot cannot delete a re-registration, with or without a version", async () => {
+    const fields = {
+      token: TOKEN,
+      userId: "alice",
+      authSessionId: "s-alice",
+      platform: "ios" as const,
+      locale: "zh-TW",
+    };
+    const first = await upsertPushToken(fields);
+    const second = await upsertPushToken(fields);
+    expect(second.registrationVersion).not.toBe(first.registrationVersion);
+    expect(await deletePushTokens([first])).toBe(0);
+
+    // Legacy snapshot (no version) vs. a fresh registration that has one.
+    const legacySnapshot = { token: TOKEN, authSessionId: "s-alice" };
+    expect(await deletePushTokens([legacySnapshot])).toBe(0);
+    expect(await deletePushTokens([second])).toBe(1);
+
+    // A genuinely unversioned row is deleted by its unversioned snapshot.
+    await upsertPushToken(fields);
+    await PushToken.collection.updateOne(
+      { token: TOKEN },
+      { $unset: { registrationVersion: "" } },
+    );
+    expect(await deletePushTokens([legacySnapshot])).toBe(1);
+  });
+
+  it("legacy version assignment never adopts a concurrent different generation", async () => {
+    const fields = {
+      token: TOKEN,
+      userId: "alice",
+      authSessionId: "s-alice",
+      platform: "ios" as const,
+      locale: "zh-TW",
+    };
+    const stored = await upsertPushToken(fields);
+    await PushToken.collection.updateOne(
+      { token: TOKEN },
+      { $unset: { registrationVersion: "" } },
+    );
+    const snapshot = { ...stored, registrationVersion: undefined };
+    // Rebind to another owner/session before the stale snapshot is fenced.
+    await upsertPushToken({ ...fields, userId: "bob", authSessionId: "s-bob" });
+    expect(await ensureRegistrationVersion(snapshot)).toBeNull();
+    // The unchanged legacy row does receive a stable version.
+    await PushToken.collection.updateOne(
+      { token: TOKEN },
+      { $unset: { registrationVersion: "" } },
+    );
+    const bob = (await PushToken.findOne({ token: TOKEN }).lean())!;
+    const version = await ensureRegistrationVersion({
+      ...bob,
+      registrationVersion: undefined,
+    });
+    expect(version).toBeTruthy();
+    expect(
+      await ensureRegistrationVersion({
+        ...bob,
+        registrationVersion: undefined,
+      }),
+    ).toBe(version);
   });
 });

@@ -5,6 +5,19 @@ vi.mock("./user.push-token.repository", () => ({
   deletePushTokenForUser: vi.fn(),
   findPushTokensByUserId: vi.fn(),
   deletePushTokens: vi.fn(),
+  ensureRegistrationVersion: vi.fn(),
+}));
+vi.mock("./user.push-receipt.repository", () => ({
+  reserveReceiptAttempt: vi.fn(),
+  attachReceiptTicket: vi.fn(),
+  failReceiptAttempt: vi.fn(),
+  finishImmediateReceiptCleanup: vi.fn(),
+  discardReceiptAttempt: vi.fn(),
+}));
+vi.mock("./user.push-delivery.repository", () => ({
+  findDeliveryTokens: vi.fn(),
+  isPushDeliveryActive: vi.fn(),
+  PUSH_DELIVERY_DB_OPTIONS: {},
 }));
 vi.mock("./user.auth-session.repository", () => ({
   findActiveSessionsByUserId: vi.fn(),
@@ -15,8 +28,11 @@ vi.mock("../../adapters/expo-push.adapter", () => ({
 
 import {
   deletePushTokens,
+  ensureRegistrationVersion,
   findPushTokensByUserId,
 } from "./user.push-token.repository";
+import { isPushDeliveryActive } from "./user.push-delivery.repository";
+import { reserveReceiptAttempt } from "./user.push-receipt.repository";
 import { findActiveSessionsByUserId } from "./user.auth-session.repository";
 import { sendExpoPushMessages } from "../../adapters/expo-push.adapter";
 import { pickLocale, sendPushToUser } from "./user.push.service";
@@ -43,6 +59,9 @@ const build = (locale: string) => ({
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.mocked(ensureRegistrationVersion).mockResolvedValue("v1");
+  vi.mocked(reserveReceiptAttempt).mockResolvedValue("attempt");
+  vi.mocked(isPushDeliveryActive).mockResolvedValue(true);
   vi.mocked(deletePushTokens).mockImplementation(async (t) => t.length);
   vi.mocked(findActiveSessionsByUserId).mockResolvedValue([
     { _id: LIVE_SID } as never,
@@ -112,12 +131,16 @@ describe("sendPushToUser", () => {
 
     const res = await sendPushToUser(USER_ID, build, {});
 
-    expect(deletePushTokens).toHaveBeenLastCalledWith([
-      expect.objectContaining({
-        token: "ExponentPushToken[b]",
-        authSessionId: LIVE_SID,
-      }),
-    ]);
+    expect(deletePushTokens).toHaveBeenLastCalledWith(
+      [
+        expect.objectContaining({
+          token: "ExponentPushToken[b]",
+          authSessionId: LIVE_SID,
+          registrationVersion: "v1",
+        }),
+      ],
+      {},
+    );
     expect(res).toEqual({ sent: 1, removed: 1 });
   });
 

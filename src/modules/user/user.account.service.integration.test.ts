@@ -42,6 +42,7 @@ import LineLinkCode from "../../model/line-link-code.model";
 import EmergencyContact from "../../model/emergency-contact.model";
 import SosSession from "../../model/sos-session.model";
 import PushToken from "../../model/push-token.model";
+import PushReceipt from "../../model/push-receipt.model";
 import UserMemory from "../../model/user-memory.model";
 import DeletedAccount from "../../model/deleted-account.model";
 import Review from "../../model/review.model";
@@ -99,6 +100,19 @@ async function seedAccount(email: string, extra: Record<string, unknown> = {}) {
     platform: "ios",
     locale: "zh-TW",
   });
+  await PushReceipt.create({
+    attemptId: crypto.randomUUID(),
+    userId,
+    tokenId: "t",
+    registrationVersion: "v",
+    authSessionId: sessionId,
+    state: "pending",
+    ticketId: crypto.randomUUID(),
+    nextAttemptAt: new Date(),
+    deadlineAt: new Date(Date.now() + 3_600_000),
+    createdAt: new Date(),
+    expiresAt: new Date(Date.now() + 3_600_000),
+  });
   await UserMemory.create({
     userId,
     content: "c",
@@ -147,6 +161,7 @@ const OWNED_MODELS = [
   EmergencyContact,
   SosSession,
   PushToken,
+  PushReceipt,
   Review,
   AuthSession,
 ] as const;

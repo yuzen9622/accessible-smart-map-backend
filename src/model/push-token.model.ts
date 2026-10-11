@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Schema, model } from "mongoose";
 import type { IPushToken } from "../types";
 
@@ -8,6 +9,7 @@ const pushTokenSchema = new Schema<IPushToken>(
     authSessionId: { type: String, ref: "AuthSession", required: true },
     platform: { type: String, enum: ["ios", "android"], required: true },
     locale: { type: String, required: true },
+    registrationVersion: { type: String, default: () => randomUUID() },
   },
   { timestamps: true },
 );

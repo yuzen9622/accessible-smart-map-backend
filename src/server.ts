@@ -15,6 +15,7 @@ import { startHazardReviewNotificationWorker } from "./modules/hazard-report/haz
 import { startBusFleetSyncJob } from "./modules/transit/bus-fleet-sync.worker";
 import { attachVoiceWebSocket } from "./modules/voice";
 import { attachAlertWebSocket } from "./modules/transit/alert.gateway";
+import { startPushReceiptWorker } from "./modules/user/user.push-receipt.worker";
 import { startPasswordAssistanceWorker } from "./modules/user/user.password-assistance.worker";
 import { startAlertIngestion } from "./modules/transit/alert.ingest";
 import type { TdxMqttHandle } from "./adapters/tdx-mqtt.adapter";
@@ -44,6 +45,7 @@ let mqttHandle: TdxMqttHandle | undefined;
 let shutdownStarted = false;
 let stopRetentionJob: (() => void) | undefined;
 let hazardAiWorker: HazardAiWorkerHandle | undefined;
+let pushReceiptWorker: ReturnType<typeof startPushReceiptWorker> | undefined;
 let stopHazardAiMonitor: (() => void) | undefined;
 let hazardReviewNotificationWorker:
   ReturnType<typeof startHazardReviewNotificationWorker> | undefined;
@@ -101,6 +103,7 @@ mongoose
       "[hazard-ai] worker started",
       JSON.stringify({ paused: hazardAiWorker.getHealth().paused }),
     );
+    pushReceiptWorker = startPushReceiptWorker();
     stopRetentionJob = startRetentionJob(retentionConfig);
     sosNotificationTimer = startSosNotificationWorker();
     passwordAssistanceTimer = startPasswordAssistanceWorker();
@@ -130,6 +133,7 @@ function shutdown(signalLog: string): void {
   void (async () => {
     await Promise.allSettled([
       contentReportWorker?.stop() ?? Promise.resolve(),
+      pushReceiptWorker?.stop() ?? Promise.resolve(),
       hazardReviewNotificationWorker?.stop() ?? Promise.resolve(),
       hazardAiWorker
         ? hazardAiWorker

@@ -42,6 +42,10 @@ export async function isPushDeliveryActive(
       token: token.token,
       userId: token.userId,
       authSessionId: token.authSessionId,
+      // Generation fence: a re-registration in between rotated the version.
+      ...(token.registrationVersion
+        ? { registrationVersion: token.registrationVersion }
+        : {}),
     }).setOptions(PUSH_DELIVERY_DB_OPTIONS),
   ]);
   return Boolean(user && !deleted && session && registration);

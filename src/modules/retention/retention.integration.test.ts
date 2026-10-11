@@ -9,6 +9,8 @@ import {
   vi,
 } from "vitest";
 
+import PushReceipt from "../../model/push-receipt.model";
+
 // In-memory Chroma: id → metadata. `failDeletes` simulates an outage.
 const chroma = vi.hoisted(() => ({
   docs: new Map<string, Record<string, unknown>>(),
@@ -629,6 +631,22 @@ describe("deleted-account sweep", () => {
       currentRefreshJti: "jti",
       expiresAt: new Date(Date.now() + DAY),
     });
+    // Receipt callbacks may race with account deletion. The shared sweep must
+    // purge late rows without touching another account's tracking.
+    await PushReceipt.create(
+      [userId, "unrelated-user"].map((owner) => ({
+        attemptId: `late-receipt-${owner}`,
+        userId: owner,
+        tokenId: new Types.ObjectId().toString(),
+        registrationVersion: "old-generation",
+        authSessionId: new Types.ObjectId().toString(),
+        state: "awaiting_ticket" as const,
+        createdAt: new Date(),
+        nextAttemptAt: new Date(),
+        deadlineAt: new Date(Date.now() + DAY),
+        expiresAt: new Date(Date.now() + DAY),
+      })),
+    );
     const hazard = await HazardReport.create({
       reporterId: "ip:abc",
       reportedLocation: { type: "Point", coordinates: [121.5, 25.04] },
@@ -649,6 +667,10 @@ describe("deleted-account sweep", () => {
 
     expect(await Review.countDocuments({ userId })).toBe(0);
     expect(await AuthSession.countDocuments({ userId })).toBe(0);
+    expect(await PushReceipt.countDocuments({ userId })).toBe(0);
+    expect(await PushReceipt.countDocuments({ userId: "unrelated-user" })).toBe(
+      1,
+    );
     const mem = await UserMemory.findById(late._id).lean();
     expect(mem?.deletedAt).toBeInstanceOf(Date);
     expect(mem?.content).toBeUndefined();

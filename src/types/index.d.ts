@@ -80,6 +80,8 @@ export interface IPushToken {
   authSessionId: string;
   platform: PushPlatform;
   locale: string;
+  /** Rotated on every registration; absent only on rows created before receipt tracking. */
+  registrationVersion?: string;
   createdAt: Date;
   updatedAt: Date;
 }

@@ -5,7 +5,16 @@ import {
   PUSH_DELIVERY_DB_OPTIONS,
 } from "./user.push-delivery.repository";
 import {
+  attachReceiptTicket,
+  discardReceiptAttempt,
+  failReceiptAttempt,
+  finishImmediateReceiptCleanup,
+  reserveReceiptAttempt,
+} from "./user.push-receipt.repository";
+import { normalizeReceiptErrorCode } from "../../utils/push-error-code";
+import {
   deletePushTokenForUser,
+  ensureRegistrationVersion,
   deletePushTokens,
   findPushTokensByUserId,
   upsertPushToken,
@@ -17,9 +26,119 @@ import {
 } from "../../adapters/expo-push.adapter";
 import {
   EXPO_DEVICE_NOT_REGISTERED,
+  EXPO_PUSH_CHUNK_SIZE,
   PUSH_DEFAULT_LOCALE,
 } from "../../constants/push";
-import type { PushPlatform } from "../../types";
+import type { IPushToken, PushPlatform } from "../../types";
+import type { ExpoPushTicket } from "../../adapters/expo-push.adapter";
+
+type VersionedToken = IPushToken & { registrationVersion: string };
+
+/** Fences legacy rows with a version; null when the registration vanished. */
+async function withVersion(token: IPushToken): Promise<VersionedToken | null> {
+  const registrationVersion = await ensureRegistrationVersion(token);
+  return registrationVersion ? { ...token, registrationVersion } : null;
+}
+
+/**
+ * Records the outcome of a send on its pre-reserved attempt. Tracking trouble
+ * is logged with a controlled message and never alters acceptance handling or
+ * triggers another send.
+ */
+async function recordTicket(
+  attemptId: string,
+  ticket: ExpoPushTicket | undefined,
+): Promise<void> {
+  try {
+    if (ticket?.status === "ok") {
+      if (ticket.id === null) {
+        await failReceiptAttempt(
+          attemptId,
+          "accepted_ticket_untrackable",
+          "unknown",
+        );
+      } else if (!(await attachReceiptTicket(attemptId, ticket.id))) {
+        console.warn("[user.push] receipt tracking skipped for a ticket");
+      }
+    } else {
+      const providerCode = ticket?.details?.error;
+      if (providerCode) {
+        await failReceiptAttempt(
+          attemptId,
+          normalizeReceiptErrorCode(providerCode),
+          providerCode === EXPO_DEVICE_NOT_REGISTERED
+            ? "cleanup_pending"
+            : "failed",
+        );
+      } else {
+        await failReceiptAttempt(attemptId, "send_ambiguous", "unknown");
+      }
+    }
+  } catch {
+    console.warn("[user.push] receipt tracking failed; ticket left untracked");
+  }
+}
+
+/** Immediate rejection cleanup is recoverable independently of notification sends. */
+async function cleanupRejectedDevices(
+  devices: { token: VersionedToken; attemptId: string }[],
+): Promise<number> {
+  if (!devices.length) return 0;
+  let removed: number;
+  try {
+    removed = await deletePushTokens(
+      devices.map((d) => d.token),
+      PUSH_DELIVERY_DB_OPTIONS,
+    );
+  } catch {
+    console.warn("[user.push] registration cleanup deferred to receipt worker");
+    return 0;
+  }
+  await Promise.all(
+    devices.map(async ({ attemptId }) => {
+      try {
+        await finishImmediateReceiptCleanup(attemptId);
+      } catch {
+        // A repeated conditional delete is harmless; the worker finishes the row.
+        console.warn(
+          "[user.push] registration cleanup acknowledgement deferred",
+        );
+      }
+    }),
+  );
+  return removed;
+}
+
+/** Best-effort cleanup of a placeholder whose send never reached Expo. */
+async function discardQuietly(attemptId: string): Promise<void> {
+  try {
+    await discardReceiptAttempt(attemptId);
+  } catch {
+    // Left to the awaiting-ticket expiry; never blocks delivery.
+  }
+}
+
+/**
+ * Reserves tracking and then re-verifies the registration is still current
+ * (account, session, id + generation) so a revoked or re-registered device is
+ * not sent to. Returns null when the device must be skipped.
+ */
+async function prepareDevice(
+  stored: IPushToken,
+): Promise<{ token: VersionedToken; attemptId: string } | null> {
+  const token = await withVersion(stored);
+  if (!token) return null;
+  const attemptId = await reserveReceiptAttempt(token);
+  if (!attemptId) return null;
+  try {
+    if (await isPushDeliveryActive(token)) return { token, attemptId };
+  } catch {
+    await discardQuietly(attemptId);
+    throw new Error("delivery guard failed");
+  }
+  await discardQuietly(attemptId);
+  return null;
+}
 
 export interface RegisterPushTokenInput {
   userId: string;
@@ -144,36 +263,55 @@ export async function sendPushToUser(
     result.removed += await deletePushTokens(stale);
     if (!live.length) return result;
 
-    const messages: ExpoPushMessage[] = live.map((t) => ({
-      to: t.token,
-      ...build(t.locale),
-      data,
-      sound: "default",
-      priority: "high",
-    }));
-    const tickets = await sendExpoPushMessages(messages);
-
-    const unregistered: typeof live = [];
-    tickets.forEach((ticket, i) => {
-      if (ticket.status === "ok") {
-        result.sent += 1;
-        return;
-      }
-      if (ticket.details?.error === EXPO_DEVICE_NOT_REGISTERED) {
-        unregistered.push(live[i]);
-        return;
-      }
-      console.warn(
-        "[user.push] Expo rejected a push message",
-        ticket.details?.error ?? ticket.message,
+    // Bounded chunks: reserve + final guard immediately before each chunk's
+    // HTTP request, so later chunks cannot outlive their placeholders or send to
+    // devices revoked meanwhile. A device that fails preparation is skipped.
+    for (let i = 0; i < live.length; i += EXPO_PUSH_CHUNK_SIZE) {
+      const prepared = (
+        await Promise.all(
+          live.slice(i, i + EXPO_PUSH_CHUNK_SIZE).map(async (t) => {
+            try {
+              return await prepareDevice(t);
+            } catch {
+              console.warn("[user.push] device preparation failed; not sent");
+              return null;
+            }
+          }),
+        )
+      ).filter((r): r is NonNullable<typeof r> => r !== null);
+      if (!prepared.length) continue;
+      const targets = prepared.map((r) => r.token);
+      const tickets = await sendExpoPushMessages(
+        targets.map((t): ExpoPushMessage => ({
+          to: t.token,
+          ...build(t.locale),
+          data,
+          sound: "default",
+          priority: "high",
+        })),
       );
-    });
-    result.removed += await deletePushTokens(unregistered);
-  } catch (err) {
-    console.error(
-      "[user.push] sendPushToUser failed",
-      err instanceof Error ? err.message : err,
-    );
+      await Promise.all(
+        prepared.map((r, k) => recordTicket(r.attemptId, tickets[k])),
+      );
+
+      const unregistered: typeof prepared = [];
+      tickets.forEach((ticket, k) => {
+        if (ticket.status === "ok") {
+          result.sent += 1;
+        } else if (ticket.details?.error === EXPO_DEVICE_NOT_REGISTERED) {
+          unregistered.push(prepared[k]);
+        } else {
+          console.warn(
+            "[user.push] Expo rejected a push message",
+            normalizeReceiptErrorCode(ticket.details?.error),
+          );
+        }
+      });
+      result.removed += await cleanupRejectedDevices(unregistered);
+    }
+  } catch {
+    // Storage/provider error text may carry private data: log a fixed message.
+    console.error("[user.push] sendPushToUser failed");
   }
   return result;
 }
@@ -193,16 +331,28 @@ async function sendDurablePushToUser(
     cancelled: false,
   };
   const delivered = new Set(delivery.delivered);
-  for (const token of await findDeliveryTokens(userId)) {
-    const digest = createHash("sha256").update(token.token).digest("hex");
+  for (const stored of await findDeliveryTokens(userId)) {
+    const digest = createHash("sha256").update(stored.token).digest("hex");
     if (delivered.has(digest)) continue;
-    if (!(await isPushDeliveryActive(token))) continue;
+    const token = await withVersion(stored);
+    if (!token) continue;
+    // Storage errors propagate (before any send) under the durable retry policy.
+    const attemptId = await reserveReceiptAttempt(token);
+    if (!attemptId) continue;
+    // Final guard AFTER the reservation latency, then the caller's guard and the
+    // TTL immediately before the HTTP request.
+    if (!(await isPushDeliveryActive(token))) {
+      await discardQuietly(attemptId);
+      continue;
+    }
     if (!(await delivery.beforeSend())) {
+      await discardQuietly(attemptId);
       result.cancelled = true;
       return result;
     }
     const ttl = Math.floor((delivery.expiresAt.getTime() - Date.now()) / 1000);
     if (ttl <= 0) {
+      await discardQuietly(attemptId);
       result.cancelled = true;
       return result;
     }
@@ -216,6 +366,7 @@ async function sendDurablePushToUser(
         ttl,
       },
     ]);
+    await recordTicket(attemptId, ticket);
     if (ticket?.status === "ok") {
       result.sent += 1;
       if (!(await delivery.onAccepted(digest))) {
@@ -224,10 +375,7 @@ async function sendDurablePushToUser(
       }
       delivered.add(digest);
     } else if (ticket?.details?.error === EXPO_DEVICE_NOT_REGISTERED) {
-      result.removed += await deletePushTokens(
-        [token],
-        PUSH_DELIVERY_DB_OPTIONS,
-      );
+      result.removed += await cleanupRejectedDevices([{ token, attemptId }]);
     } else {
       result.retryable = true;
     }

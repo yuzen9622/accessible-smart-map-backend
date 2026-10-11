@@ -34,6 +34,35 @@ afterEach(() => {
 });
 
 describe("sendExpoPushMessages", () => {
+  it.each([
+    { status: "ok" },
+    { status: "ok", id: "" },
+    { status: "ok", id: " " },
+    { status: "ok", id: 42 },
+  ])("preserves acceptance with an untrackable ticket ID %j", async (raw) => {
+    fetchMock.mockResolvedValueOnce(Response.json({ data: [raw] }));
+    expect(await sendExpoPushMessages([message(0)])).toEqual([
+      { status: "ok", id: null },
+    ]);
+  });
+
+  it.each([null, {}])(
+    "rejects malformed ticket %j without losing adjacent accepted tickets",
+    async (malformed) => {
+      fetchMock.mockResolvedValueOnce(
+        Response.json({
+          data: [{ status: "ok", id: "accepted" }, malformed],
+        }),
+      );
+      const tickets = await sendExpoPushMessages([message(0), message(1)]);
+      expect(tickets[0]).toEqual({ status: "ok", id: "accepted" });
+      expect(tickets[1]).toEqual({
+        status: "error",
+        message: "Invalid Expo push ticket response",
+      });
+    },
+  );
+
   it("batches at 100 messages per request and keeps ticket order", async () => {
     fetchMock
       .mockResolvedValueOnce(okResponse(100))

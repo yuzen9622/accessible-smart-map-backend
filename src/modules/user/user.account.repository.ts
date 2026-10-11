@@ -10,6 +10,7 @@ import LineLinkCode from "../../model/line-link-code.model";
 import EmergencyContact from "../../model/emergency-contact.model";
 import SosSession from "../../model/sos-session.model";
 import PushToken from "../../model/push-token.model";
+import { deleteReceiptsForUser } from "./user.push-receipt.repository";
 import Review from "../../model/review.model";
 import HazardReport from "../../model/hazard-report.model";
 import UserMemory, {
@@ -72,6 +73,7 @@ export async function deleteOwnedRecords(userId: string): Promise<number> {
     EmergencyContact.deleteMany({ userId }),
     SosSession.deleteMany({ userId }),
     PushToken.deleteMany({ userId }),
+    deleteReceiptsForUser(userId).then((deletedCount) => ({ deletedCount })),
     Review.deleteMany({ userId }),
     UserBlock.deleteMany({
       $or: [{ ownerId: userId }, { blockedUserId: userId }],
