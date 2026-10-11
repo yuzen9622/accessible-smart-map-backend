@@ -5,8 +5,8 @@
 #   src/scripts/build-otp-graph.sh  # weekly graph rebuild (cron, spec §5)
 #
 # Services reach each other by name on the default compose network:
-#   backend → mongo:27017, otp:8080  (so OTP_BASE_URL/DATABASE_URL are overridden
-#   below to those, regardless of the localhost values in .env).
+#   backend → mongo:27017, otp:8080 (OTP_BASE_URL/DATABASE_URL below override
+#   the localhost values in .env).
 services:
   backend:
     build: .
@@ -18,9 +18,11 @@ services:
     environment:
       OTP_BASE_URL: http://otp:8080
       VALHALLA_BASE_URL: http://valhalla:8002
-      DATABASE_URL: mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongo:27017/accessible_map?authSource=admin&replicaSet=rs0
+      DATABASE_URL: >-
+        mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongo:27017/accessible_map?authSource=admin&replicaSet=rs0
       # 容器內走服務名；.env 的 127.0.0.1:5433 是給 host 腳本與測試用
-      PED_GRAPH_DATABASE_URL: postgresql://${PED_PG_USER}:${PED_PG_PASSWORD}@postgis:5432/ped_graph
+      PED_GRAPH_DATABASE_URL: >-
+        postgresql://${PED_PG_USER}:${PED_PG_PASSWORD}@postgis:5432/ped_graph
       # .env's CHROMA_URL is host-centric (localhost:8100); inside the container
       # localhost is the container itself, so reach the chroma service by name.
       CHROMA_URL: http://chroma:8000
@@ -43,6 +45,8 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
+      mongo-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       otp:
@@ -70,23 +74,70 @@ services:
     entrypoint: ["bash", "/opt/mongo/entrypoint.sh"]
     # Root creds enable auth on first init; the API connects as root with
     # authSource=admin (internal single-app DB). MONGO_ROOT_* come from .env.
-    environment:
+    environment: &mongo-auth
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
     volumes:
       - mongo-data:/data/db
       - mongo-keyfile:/data/keyfile
-      - ./infra/mongo:/opt/mongo:ro
+    configs:
+      - source: mongo-entrypoint
+        target: /opt/mongo/entrypoint.sh
+      - source: mongo-init
+        target: /opt/mongo/init.js
     ports:
       - "127.0.0.1:27018:27017"
-    # Init is an explicit authenticated operation; health only reports PRIMARY.
+    # mongo-init initializes with auth; health only reads PRIMARY.
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "const h=db.hello(); quit(h.setName === 'rs0' && h.isWritablePrimary ? 0 : 1)"]
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --eval
+        - >-
+          const h=db.hello();
+          quit(h.setName === 'rs0' && h.isWritablePrimary ? 0 : 1)
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 20s
+      # Allow the init job's 120s readiness + 30s election budget.
+      start_period: 150s
     restart: unless-stopped
+
+  mongo-init:
+    image: mongo:7
+    # One-shot init runs after Mongo starts, not after it becomes PRIMARY.
+    # This breaks the first-boot deadlock without mutating from healthchecks.
+    environment: *mongo-auth
+    entrypoint: ["bash", "-c"]
+    command:
+      - |
+        set -Eeuo pipefail
+        uri='mongodb://mongo:27017/admin?directConnection=true'
+        uri="$${uri}&serverSelectionTimeoutMS=2000&connectTimeoutMS=2000"
+        deadline=$$((SECONDS + 120))
+        until mongosh "$$uri" --quiet --eval '
+          const admin = db.getSiblingDB("admin");
+          if (!admin.auth(
+            process.env.MONGO_INITDB_ROOT_USERNAME,
+            process.env.MONGO_INITDB_ROOT_PASSWORD
+          )) quit(1);
+          quit(admin.runCommand({ping: 1}).ok ? 0 : 1);
+        ' >/dev/null 2>&1; do
+          if (( SECONDS >= deadline )); then
+            echo 'MongoDB authenticated startup timed out' >&2
+            exit 1
+          fi
+          sleep 1
+        done
+        exec mongosh "$$uri" --quiet /opt/mongo/init.js
+    configs:
+      - source: mongo-init
+        target: /opt/mongo/init.js
+    depends_on:
+      mongo:
+        condition: service_started
+    restart: "no"
 
   postgis:
     image: postgis/postgis:16-3.4-alpine
@@ -143,8 +194,10 @@ services:
       - -lc
       - >-
         test -f /custom_files/active/valhalla.json ||
-        { echo 'Valhalla config missing: run pnpm build:valhalla-tiles first' >&2; exit 78; };
-        exec valhalla_service /custom_files/active/valhalla.json ${VALHALLA_THREADS:-2} # yamllint disable-line rule:line-length
+        { echo 'Valhalla config missing: run pnpm build:valhalla-tiles first'
+        >&2; exit 78; };
+        exec valhalla_service /custom_files/active/valhalla.json
+        ${VALHALLA_THREADS:-2}
     ports:
       - "127.0.0.1:8002:8002"
     volumes:
@@ -181,6 +234,67 @@ services:
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
     restart: always
+
+# Keep deployment scripts inline; no separate infra files or bind mounts.
+# configs.content requires Docker Compose >= 2.23.1.
+configs:
+  mongo-entrypoint:
+    content: |
+      #!/usr/bin/env bash
+      set -Eeuo pipefail
+      # Persistent auth key; never print it or regenerate it on restart.
+      key=/data/keyfile/keyfile
+      if [ ! -s "$$key" ]; then
+        umask 077
+        openssl rand -base64 756 > "$$key.tmp"
+        chown mongodb:mongodb "$$key.tmp"
+        chmod 400 "$$key.tmp"
+        mv "$$key.tmp" "$$key"
+      fi
+      chown mongodb:mongodb "$$key"
+      chmod 400 "$$key"
+      exec /usr/local/bin/docker-entrypoint.sh mongod \
+        --replSet rs0 --keyFile "$$key" --bind_ip_all --oplogSize 256
+  mongo-init:
+    content: |
+      // Explicit init; run mongosh --quiet /opt/mongo/init.js via compose exec.
+      // Credentials stay inside the container; only topology status is printed.
+      const admin = db.getSiblingDB("admin");
+      if (
+        !admin.auth(
+          process.env.MONGO_INITDB_ROOT_USERNAME,
+          process.env.MONGO_INITDB_ROOT_PASSWORD,
+        )
+      ) {
+        throw new Error("MongoDB authentication failed");
+      }
+      let initialized = false;
+      try {
+        const config = rs.conf();
+        if (
+          config._id !== "rs0" ||
+          config.members.length !== 1 ||
+          config.members[0].host !== "mongo:27017"
+        ) {
+          throw new Error(
+            "Unexpected replica set configuration; refusing to reconfigure",
+          );
+        }
+        initialized = true;
+      } catch (error) {
+        if (error.code !== 94) throw error; // NotYetInitialized only
+      }
+      if (!initialized)
+        rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "mongo:27017" }] });
+      for (let attempt = 0; attempt < 60; attempt++) {
+        const hello = db.hello();
+        if (hello.setName === "rs0" && hello.isWritablePrimary) {
+          print("rs0 PRIMARY ready");
+          quit(0);
+        }
+        sleep(500);
+      }
+      throw new Error("Replica set did not elect a PRIMARY within 30 seconds");
 
 networks:
   shared:
