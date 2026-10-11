@@ -18,7 +18,7 @@ services:
     environment:
       OTP_BASE_URL: http://otp:8080
       VALHALLA_BASE_URL: http://valhalla:8002
-      DATABASE_URL: mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongo:27017/accessible_map?authSource=admin
+      DATABASE_URL: mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongo:27017/accessible_map?authSource=admin&replicaSet=rs0
       # 容器內走服務名；.env 的 127.0.0.1:5433 是給 host 腳本與測試用
       PED_GRAPH_DATABASE_URL: postgresql://${PED_PG_USER}:${PED_PG_PASSWORD}@postgis:5432/ped_graph
       # .env's CHROMA_URL is host-centric (localhost:8100); inside the container
@@ -67,6 +67,7 @@ services:
   mongo:
     image: mongo:7
     container_name: mongo
+    entrypoint: ["bash", "/opt/mongo/entrypoint.sh"]
     # Root creds enable auth on first init; the API connects as root with
     # authSource=admin (internal single-app DB). MONGO_ROOT_* come from .env.
     environment:
@@ -74,11 +75,13 @@ services:
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
     volumes:
       - mongo-data:/data/db
+      - mongo-keyfile:/data/keyfile
+      - ./infra/mongo:/opt/mongo:ro
     ports:
       - "127.0.0.1:27018:27017"
-    # No host port published — only the backend (same network) reaches it.
+    # Init is an explicit authenticated operation; health only reports PRIMARY.
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      test: ["CMD", "mongosh", "--quiet", "--eval", "const h=db.hello(); quit(h.setName === 'rs0' && h.isWritablePrimary ? 0 : 1)"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -185,5 +188,6 @@ networks:
     name: accessible-shared
 volumes:
   mongo-data:
+  mongo-keyfile:
   chroma-data:
   postgis-data:
