@@ -181,7 +181,7 @@ const routes = [
   {
     method: "post" as const,
     path: "/content-reports/{id}/decision",
-    summary: "管理者：可恢復處分與稽核（支援 standalone MongoDB）",
+    summary: "管理者：可恢復處分與交易式稽核（需要 replica set）",
     params: IdSchema,
     body: DecisionSchema,
     output: z.null(),

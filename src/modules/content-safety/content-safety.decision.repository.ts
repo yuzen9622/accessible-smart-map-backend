@@ -1,4 +1,5 @@
-import { Types } from "mongoose";
+import { Types, type ClientSession } from "mongoose";
+import { safetyTransaction } from "./content-safety.transaction";
 import ContentReport, {
   type ContentReportRecord,
   type ReportDecision,
@@ -23,11 +24,11 @@ const collectionFor = (subject: Subject) =>
     : subject.kind === "review"
       ? Review.collection
       : HazardReport.collection;
-async function readSubject(subject: Subject) {
+async function readSubject(subject: Subject, session?: ClientSession) {
   if (!Types.ObjectId.isValid(subject.id)) return null;
   const doc = await collectionFor(subject).findOne(
     { _id: new Types.ObjectId(subject.id) },
-    { projection: { contentModeration: 1 } },
+    { projection: { contentModeration: 1 }, session },
   );
   return doc
     ? { moderation: doc.contentModeration as ContentModeration | undefined }
@@ -46,7 +47,11 @@ const outcome = (d: ReportDecision) =>
         : ("pending" as const);
 
 /** Remove only receipts whose durable case no longer needs recovery. Never lower version. */
-async function pruneReceipts(subject: Subject, moderation?: ContentModeration) {
+async function pruneReceipts(
+  subject: Subject,
+  moderation: ContentModeration | undefined,
+  session: ClientSession,
+) {
   const receipts = moderation?.receipts ?? [];
   if (!receipts.length) return;
   const cases = await ContentReport.find({
@@ -54,6 +59,7 @@ async function pruneReceipts(subject: Subject, moderation?: ContentModeration) {
     purgeAt: { $gt: new Date() },
   })
     .select("decisions")
+    .session(session)
     .lean();
   const pending = new Set(
     cases.flatMap((c) =>
@@ -83,6 +89,7 @@ async function pruneReceipts(subject: Subject, moderation?: ContentModeration) {
           },
         },
       ],
+      { session },
     );
 }
 
@@ -92,6 +99,7 @@ async function finishDecision(
   state: "applied" | "superseded" | "failed",
   reason: string,
   createdAt: Date,
+  session: ClientSession,
 ) {
   const now = new Date();
   const update = {
@@ -111,7 +119,7 @@ async function finishDecision(
         }
       : {}),
   };
-  await ContentReport.updateOne(
+  const result = await ContentReport.updateOne(
     {
       _id: id,
       purgeAt: { $gt: now },
@@ -120,7 +128,9 @@ async function finishDecision(
       },
     },
     { $set: update },
+    { session },
   );
+  if (result.matchedCount !== 1) throw new Error("DECISION_AUDIT_CONFLICT");
 }
 
 export async function cleanupDecisionReceipt(
@@ -175,145 +185,14 @@ export async function cleanupDecisionReceipt(
  * accepted commands still finish, avoiding cancellation racing with an in-flight effect.
  */
 export async function reconcileDecision(id: string, requestId: string) {
-  const report = await ContentReport.findOne({
-    _id: id,
-    purgeAt: { $gt: new Date() },
-    $and: [admittedCaseFilter],
-  }).lean();
-  const decision = report?.decisions.find((d) => d.requestId === requestId);
-  if (!report || !decision) return "missing" as const;
-  if (decision.state !== "pending") {
-    await cleanupDecisionReceipt(report, decision);
-    return outcome(decision);
-  }
-  const subject = subjectFor(report, decision.action);
-  const key = receiptKey(id, requestId);
   try {
-    const before =
-      decision.action === "dismiss" ? null : await readSubject(subject);
-    // A prior write may have succeeded even if its acknowledgement/audit update failed.
-    if (before?.moderation?.receipts.some((r) => r.key === key)) {
-      await finishDecision(
-        id,
-        decision,
-        "applied",
-        "RECOVERED_TARGET_RECEIPT",
-        report.createdAt,
-      );
-    } else if (decision.action === "dismiss") {
-      await finishDecision(
-        id,
-        decision,
-        "applied",
-        "DISMISSED",
-        report.createdAt,
-      );
-    } else if (!before) {
-      await finishDecision(
-        id,
-        decision,
-        "failed",
-        "TARGET_MISSING",
-        report.createdAt,
-      );
-    } else if ((before.moderation?.version ?? 0) !== decision.expectedVersion) {
-      await finishDecision(
-        id,
-        decision,
-        "superseded",
-        "TARGET_VERSION_CHANGED",
-        report.createdAt,
-      );
-    } else {
-      await pruneReceipts(subject, before.moderation);
-      // Recheck case expiry/deletion after reads, immediately before the target operation.
-      if (
-        !(await ContentReport.exists({
-          _id: id,
-          purgeAt: { $gt: new Date() },
-          decisions: { $elemMatch: { requestId, state: "pending" } },
-        }))
-      )
-        return "missing" as const;
-      const now = new Date();
-      const field =
-        subject.kind === "user" ? "contentRestrictedAt" : "moderationHiddenAt";
-      const set =
-        decision.action === "hide" || decision.action === "restrict_author";
-      const version = decision.expectedVersion ?? 0;
-      const result = await collectionFor(subject).updateOne(
-        {
-          _id: new Types.ObjectId(subject.id),
-          $expr: { $gt: [{ $literal: report.purgeAt }, "$$NOW"] },
-          ...(version === 0
-            ? {
-                $or: [
-                  { "contentModeration.version": 0 },
-                  { "contentModeration.version": { $exists: false } },
-                ],
-              }
-            : { "contentModeration.version": version }),
-          [`contentModeration.receipts.${MAX_RECEIPTS - 1}`]: {
-            $exists: false,
-          },
-        },
-        [
-          {
-            $set: {
-              "contentModeration.version": version + 1,
-              [field]: set ? now : "$$REMOVE",
-              "contentModeration.receipts": {
-                $concatArrays: [
-                  { $ifNull: ["$contentModeration.receipts", []] },
-                  { $literal: [{ key, caseId: id, at: now }] },
-                ],
-              },
-            },
-          },
-        ],
-      );
-      if (result.matchedCount) {
-        await finishDecision(
-          id,
-          decision,
-          "applied",
-          "TARGET_UPDATED",
-          report.createdAt,
-        );
-      } else {
-        const after = await readSubject(subject);
-        if (after?.moderation?.receipts.some((r) => r.key === key))
-          await finishDecision(
-            id,
-            decision,
-            "applied",
-            "RECOVERED_TARGET_RECEIPT",
-            report.createdAt,
-          );
-        else if (!after)
-          await finishDecision(
-            id,
-            decision,
-            "failed",
-            "TARGET_MISSING",
-            report.createdAt,
-          );
-        else if ((after.moderation?.version ?? 0) !== version)
-          await finishDecision(
-            id,
-            decision,
-            "superseded",
-            "TARGET_VERSION_CHANGED",
-            report.createdAt,
-          );
-        else throw new Error("RECEIPT_CAPACITY");
-      }
-    }
+    const result = await safetyTransaction((session) =>
+      reconcileDecisionInSession(id, requestId, session),
+    );
     const settled = await ContentReport.findById(id).lean();
-    const terminal = settled?.decisions.find((d) => d.requestId === requestId);
-    if (!settled || !terminal) return "missing" as const;
-    await cleanupDecisionReceipt(settled, terminal);
-    return outcome(terminal);
+    const decision = settled?.decisions.find((d) => d.requestId === requestId);
+    if (settled && decision) await cleanupDecisionReceipt(settled, decision);
+    return result;
   } catch {
     // Persist retry state, retaining immutable intent even after unknown write outcomes.
     await ContentReport.updateOne(
@@ -328,6 +207,160 @@ export async function reconcileDecision(id: string, requestId: string) {
     );
     return "pending" as const;
   }
+}
+
+async function reconcileDecisionInSession(
+  id: string,
+  requestId: string,
+  session: ClientSession,
+) {
+  const report = await ContentReport.findOne({
+    _id: id,
+    purgeAt: { $gt: new Date() },
+    $and: [admittedCaseFilter],
+  })
+    .session(session)
+    .lean();
+  const decision = report?.decisions.find((d) => d.requestId === requestId);
+  if (!report || !decision) return "missing" as const;
+  if (decision.state !== "pending") {
+    return outcome(decision);
+  }
+  const subject = subjectFor(report, decision.action);
+  const key = receiptKey(id, requestId);
+  const before =
+    decision.action === "dismiss" ? null : await readSubject(subject, session);
+  // A prior write may have succeeded even if its acknowledgement/audit update failed.
+  if (before?.moderation?.receipts.some((r) => r.key === key)) {
+    await finishDecision(
+      id,
+      decision,
+      "applied",
+      "RECOVERED_TARGET_RECEIPT",
+      report.createdAt,
+      session,
+    );
+  } else if (decision.action === "dismiss") {
+    await finishDecision(
+      id,
+      decision,
+      "applied",
+      "DISMISSED",
+      report.createdAt,
+      session,
+    );
+  } else if (!before) {
+    await finishDecision(
+      id,
+      decision,
+      "failed",
+      "TARGET_MISSING",
+      report.createdAt,
+      session,
+    );
+  } else if ((before.moderation?.version ?? 0) !== decision.expectedVersion) {
+    await finishDecision(
+      id,
+      decision,
+      "superseded",
+      "TARGET_VERSION_CHANGED",
+      report.createdAt,
+      session,
+    );
+  } else {
+    await pruneReceipts(subject, before.moderation, session);
+    // Recheck case expiry/deletion after reads, immediately before the target operation.
+    if (
+      !(await ContentReport.exists({
+        _id: id,
+        purgeAt: { $gt: new Date() },
+        decisions: { $elemMatch: { requestId, state: "pending" } },
+      }).session(session))
+    )
+      return "missing" as const;
+    const now = new Date();
+    const field =
+      subject.kind === "user" ? "contentRestrictedAt" : "moderationHiddenAt";
+    const set =
+      decision.action === "hide" || decision.action === "restrict_author";
+    const version = decision.expectedVersion ?? 0;
+    const result = await collectionFor(subject).updateOne(
+      {
+        _id: new Types.ObjectId(subject.id),
+        $expr: { $gt: [{ $literal: report.purgeAt }, "$$NOW"] },
+        ...(version === 0
+          ? {
+              $or: [
+                { "contentModeration.version": 0 },
+                { "contentModeration.version": { $exists: false } },
+              ],
+            }
+          : { "contentModeration.version": version }),
+        [`contentModeration.receipts.${MAX_RECEIPTS - 1}`]: {
+          $exists: false,
+        },
+      },
+      [
+        {
+          $set: {
+            "contentModeration.version": version + 1,
+            [field]: set ? now : "$$REMOVE",
+            "contentModeration.receipts": {
+              $concatArrays: [
+                { $ifNull: ["$contentModeration.receipts", []] },
+                { $literal: [{ key, caseId: id, at: now }] },
+              ],
+            },
+          },
+        },
+      ],
+      { session },
+    );
+    if (result.matchedCount) {
+      await finishDecision(
+        id,
+        decision,
+        "applied",
+        "TARGET_UPDATED",
+        report.createdAt,
+        session,
+      );
+    } else {
+      const after = await readSubject(subject, session);
+      if (after?.moderation?.receipts.some((r) => r.key === key))
+        await finishDecision(
+          id,
+          decision,
+          "applied",
+          "RECOVERED_TARGET_RECEIPT",
+          report.createdAt,
+          session,
+        );
+      else if (!after)
+        await finishDecision(
+          id,
+          decision,
+          "failed",
+          "TARGET_MISSING",
+          report.createdAt,
+          session,
+        );
+      else if ((after.moderation?.version ?? 0) !== version)
+        await finishDecision(
+          id,
+          decision,
+          "superseded",
+          "TARGET_VERSION_CHANGED",
+          report.createdAt,
+          session,
+        );
+      else throw new Error("RECEIPT_CAPACITY");
+    }
+  }
+  const settled = await ContentReport.findById(id).session(session).lean();
+  const terminal = settled?.decisions.find((d) => d.requestId === requestId);
+  if (!settled || !terminal) return "missing" as const;
+  return outcome(terminal);
 }
 
 export async function decideCase(

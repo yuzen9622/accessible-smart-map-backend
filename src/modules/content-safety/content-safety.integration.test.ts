@@ -8,7 +8,7 @@ import {
   vi,
 } from "vitest";
 import mongoose from "mongoose";
-import { MongoMemoryServer } from "mongodb-memory-server";
+import { MongoMemoryReplSet } from "mongodb-memory-server";
 import { randomUUID } from "node:crypto";
 import express from "express";
 import request from "supertest";
@@ -63,7 +63,7 @@ function required<T>(value: T): NonNullable<T> {
   if (value == null) throw new Error("Required test fixture missing");
   return value as NonNullable<T>;
 }
-let mongo: MongoMemoryServer;
+let mongo: MongoMemoryReplSet;
 let author: string;
 let reporter: string;
 let admin: string;
@@ -99,15 +99,19 @@ beforeAll(async () => {
     tmpdir(),
     "accessible-smart-map-mongodb-binaries",
   );
-  mongo = await MongoMemoryServer.create({
-    instance: { args: ["--setParameter", "enableTestCommands=1"] },
+  mongo = await MongoMemoryReplSet.create({
+    replSet: {
+      count: 1,
+      storageEngine: "wiredTiger",
+      args: ["--setParameter", "enableTestCommands=1"],
+    },
   });
   await mongoose.connect(mongo.getUri(), {
     dbName: `content_safety_${randomUUID().replace(/-/g, "")}`,
   });
   expect(
     (await mongoose.connection.db?.admin().command({ hello: 1 }))?.setName,
-  ).toBeUndefined();
+  ).toBeTruthy();
   await Promise.all(
     Object.values(mongoose.models).map((model) => model.init()),
   );
@@ -656,46 +660,182 @@ describe("safety contract boundaries", () => {
   });
 });
 
-describe("standalone recovery and concurrency", () => {
-  it("recovers a quota reservation whose database acknowledgement was lost", async () => {
+describe("transaction rollback, legacy recovery and concurrency", () => {
+  it.each([
+    ["update", 112, "TransientTransactionError"],
+    ["commitTransaction", 1, "UnknownTransactionCommitResult"],
+  ])(
+    "retries %s failures without duplicate quota or mail",
+    async (command, code, label) => {
+      const db = required(mongoose.connection.db);
+      await db.admin().command({
+        configureFailPoint: "failCommand",
+        mode: { times: 1 },
+        data: {
+          failCommands: [command],
+          errorCode: code,
+          errorLabels: [label],
+        },
+      });
+      try {
+        expect((await reportContent(reporter, input())).ok).toBe(true);
+      } finally {
+        await db
+          .admin()
+          .command({ configureFailPoint: "failCommand", mode: "off" });
+      }
+      expect(await ContentReport.countDocuments()).toBe(1);
+      expect((await ContentSafetyQuota.findOne().lean())?.count).toBe(1);
+      expect(sendEmail).not.toHaveBeenCalled();
+      await drainContentReportMail();
+      await drainContentReportMail();
+      expect(sendEmail).toHaveBeenCalledTimes(2);
+    },
+  );
+  it("does not expose mail work until admission commits", async () => {
+    const realUpdate = ContentReport.findOneAndUpdate.bind(ContentReport);
+    const fault = vi
+      .spyOn(ContentReport, "findOneAndUpdate")
+      .mockImplementationOnce((...args) =>
+        realUpdate(...args).pre(async function () {
+          expect(await ContentReport.countDocuments()).toBe(0);
+          await drainContentReportMail();
+          expect(sendEmail).not.toHaveBeenCalled();
+        }),
+      );
+    try {
+      expect((await reportContent(reporter, input())).ok).toBe(true);
+    } finally {
+      fault.mockRestore();
+    }
+    await drainContentReportMail();
+    expect(sendEmail).toHaveBeenCalledTimes(2);
+  });
+  it("recovers a legacy target receipt without replaying its effect", async () => {
+    const row = await createCase();
+    const requestId = randomUUID();
+    await ContentReport.updateOne(
+      { _id: row._id },
+      {
+        $push: {
+          decisions: {
+            requestId,
+            actorId: admin,
+            action: "hide",
+            note: "legacy",
+            at: new Date(),
+            state: "pending",
+            expectedVersion: 0,
+          },
+        },
+      },
+    );
+    await Review.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(reviewId) },
+      {
+        $set: {
+          moderationHiddenAt: new Date(),
+          contentModeration: {
+            version: 1,
+            receipts: [
+              {
+                key: `${row._id}/${requestId}`,
+                caseId: String(row._id),
+                at: new Date(),
+              },
+            ],
+          },
+        },
+      },
+    );
+    expect(
+      await decideCase(String(row._id), admin, {
+        action: "restore",
+        note: "appeal",
+        requestId: randomUUID(),
+      }),
+    ).toBe("ok");
+    expect(await reconcileDecision(String(row._id), requestId)).toBe("ok");
+    const target = required(
+      await Review.findById(reviewId).select("+contentModeration").lean(),
+    );
+    expect(target.moderationHiddenAt).toBeUndefined();
+    expect(target.contentModeration).toMatchObject({
+      version: 2,
+      receipts: [],
+    });
+  });
+  it("rolls back the case, mail jobs and quota when quota acknowledgement fails", async () => {
     const realUpdate = ContentSafetyQuota.updateOne.bind(ContentSafetyQuota);
-    let injected = false;
     const fault = vi
       .spyOn(ContentSafetyQuota, "updateOne")
       .mockImplementation((...args) => {
         const query = realUpdate(...args);
-        if (!injected && args[1] && "$inc" in args[1]) {
-          injected = true;
-          return query.transform(() => {
-            throw new Error("quota ack lost");
-          });
-        }
-        return query;
+        return args[1] && "$inc" in args[1]
+          ? query.transform(() => {
+              throw new Error("quota ack lost");
+            })
+          : query;
       });
     try {
       expect((await reportContent(reporter, input())).httpCode).toBe(503);
     } finally {
       fault.mockRestore();
     }
-    const pending = required(await ContentReport.findOne().lean());
-    expect(pending.admission?.state).toBe("pending");
-    expect(pending.mails.team.state).toBe("pending");
-    expect(pending.mails.reporter.state).toBe("pending");
-    expect((await ContentSafetyQuota.findOne().lean())?.count).toBe(1);
+    expect(await ContentReport.countDocuments()).toBe(0);
+    expect(await ContentSafetyQuota.countDocuments()).toBe(0);
     await drainContentReportMail();
     expect(sendEmail).not.toHaveBeenCalled();
-    await drainContentSafetyRecovery();
-    expect((await ContentReport.findOne().lean())?.admission?.state).toBe(
-      "admitted",
-    );
+    expect((await reportContent(reporter, input())).ok).toBe(true);
     expect((await ContentSafetyQuota.findOne().lean())?.count).toBe(1);
-    await drainContentReportMail();
-    expect(sendEmail).toHaveBeenCalledTimes(2);
-    expect((await reportContent(reporter, input())).data).toMatchObject({
-      duplicate: true,
-    });
   });
-  it("recovers after the quota succeeds but the admission write fails", async () => {
+  it("aborts all admission writes when its final CAS does not match", async () => {
+    const realUpdate = ContentReport.findOneAndUpdate.bind(ContentReport);
+    const fault = vi
+      .spyOn(ContentReport, "findOneAndUpdate")
+      .mockImplementationOnce((...args) =>
+        realUpdate(...args).transform(() => null),
+      );
+    try {
+      expect((await reportContent(reporter, input())).httpCode).toBe(503);
+    } finally {
+      fault.mockRestore();
+    }
+    expect(await ContentReport.countDocuments()).toBe(0);
+    expect(await ContentSafetyQuota.countDocuments()).toBe(0);
+  });
+  it("rolls back the target when the audit CAS does not match", async () => {
+    const row = await createCase();
+    const realUpdate = ContentReport.updateOne.bind(ContentReport);
+    const fault = vi
+      .spyOn(ContentReport, "updateOne")
+      .mockImplementation((...args) => {
+        const query = realUpdate(...args);
+        return JSON.stringify(args[1]).includes('"decisions.$.state":"applied"')
+          ? query.transform((result) => ({ ...result, matchedCount: 0 }))
+          : query;
+      });
+    const action = {
+      action: "hide" as const,
+      note: "audit conflict",
+      requestId: randomUUID(),
+    };
+    try {
+      expect(await decideCase(String(row._id), admin, action)).toBe("pending");
+    } finally {
+      fault.mockRestore();
+    }
+    expect(
+      (await Review.findById(reviewId).lean())?.moderationHiddenAt,
+    ).toBeUndefined();
+    expect(
+      (await ContentReport.findById(row._id).lean())?.decisions[0].state,
+    ).toBe("pending");
+    expect(await reconcileDecision(String(row._id), action.requestId)).toBe(
+      "ok",
+    );
+  });
+  it("rolls back a reserved quota if completing admission fails", async () => {
     const fault = vi
       .spyOn(ContentReport, "findOneAndUpdate")
       .mockImplementationOnce(() => {
@@ -706,16 +846,9 @@ describe("standalone recovery and concurrency", () => {
     } finally {
       fault.mockRestore();
     }
-    expect((await ContentReport.findOne().lean())?.admission?.state).toBe(
-      "pending",
-    );
-    await Promise.all([
-      drainContentSafetyRecovery(),
-      drainContentSafetyRecovery(),
-    ]);
-    const row = required(await ContentReport.findOne().lean());
-    expect(row.admission?.state).toBe("admitted");
-    expect(row.admission?.history).toHaveLength(2);
+    expect(await ContentReport.countDocuments()).toBe(0);
+    expect(await ContentSafetyQuota.countDocuments()).toBe(0);
+    expect((await reportContent(reporter, input())).ok).toBe(true);
     expect((await ContentSafetyQuota.findOne().lean())?.count).toBe(1);
   });
   it("enforces a shared ceiling for different concurrent cases and retains rejected evidence", async () => {
@@ -789,7 +922,7 @@ describe("standalone recovery and concurrency", () => {
     await drainContentReportMail();
     expect(sendEmail).not.toHaveBeenCalled();
   });
-  it("recovers historical application after a later reverse decision has completed", async () => {
+  it("rolls back the target on audit failure and fences retry after a later decision", async () => {
     const row = await createCase();
     const action = {
       action: "hide" as const,
@@ -817,7 +950,7 @@ describe("standalone recovery and concurrency", () => {
     }
     expect(
       (await Review.findById(reviewId).lean())?.moderationHiddenAt,
-    ).toBeInstanceOf(Date);
+    ).toBeUndefined();
     expect(
       (await ContentReport.findById(row._id).lean())?.decisions[0].state,
     ).toBe("pending");
@@ -829,20 +962,20 @@ describe("standalone recovery and concurrency", () => {
       }),
     ).toBe("ok");
     expect(await reconcileDecision(String(row._id), action.requestId)).toBe(
-      "ok",
+      "superseded",
     );
     expect(
       (await Review.findById(reviewId).lean())?.moderationHiddenAt,
     ).toBeUndefined();
     const settled = required(await ContentReport.findById(row._id).lean());
     expect(settled.decisions.map((d) => d.state)).toEqual([
-      "applied",
+      "superseded",
       "applied",
     ]);
     expect(
       (await Review.findById(reviewId).select("+contentModeration").lean())
         ?.contentModeration,
-    ).toMatchObject({ version: 2, receipts: [] });
+    ).toMatchObject({ version: 1, receipts: [] });
   });
   it("recovers a target write with a lost acknowledgement without applying twice", async () => {
     const row = await createCase();
@@ -997,7 +1130,7 @@ describe("standalone recovery and concurrency", () => {
   });
 });
 
-describe("standalone fencing boundaries", () => {
+describe("transaction fencing boundaries", () => {
   it("does not admit a quota reservation after delayed DB work passes bucket expiry", async () => {
     const row = await createCase();
     await ContentReport.updateOne(
@@ -1026,7 +1159,7 @@ describe("standalone fencing boundaries", () => {
     await drainContentReportMail();
     expect(sendEmail).not.toHaveBeenCalled();
   });
-  it("fences an old admission worker after a new-hour attempt has started", async () => {
+  it("retries admission on a fresh snapshot after a concurrent new-hour attempt", async () => {
     const row = await createCase();
     const hour = required(row.admission).hour;
     await ContentReport.updateOne(
@@ -1056,7 +1189,7 @@ describe("standalone fencing boundaries", () => {
     }
     expect(
       (await ContentReport.findById(row._id).lean())?.admission,
-    ).toMatchObject({ hour: hour + 1, state: "pending" });
+    ).toMatchObject({ hour: hour + 1, state: "admitted" });
   });
   it("allows exactly one of two simultaneous opposing commands on the same target version", async () => {
     const row = await createCase();
