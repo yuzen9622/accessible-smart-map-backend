@@ -1,10 +1,12 @@
 /**
- * Publishes the three state-based LINE rich menus (unbound / bound / emergency)
- * and points their aliases at them. Safe to re-run: each alias is moved to the
- * new menu and the old menu is deleted.
+ * Publishes the emergency LINE rich menu (shown to bound contacts only while a
+ * family member's SOS is active) and points its alias at it. It never changes
+ * the account's default menu. Safe to re-run: the alias moves to the new menu;
+ * the old one is kept (linked users move over on their next sync) and printed
+ * so it can be deleted later.
  *
- *   pnpm line:richmenu              # render + publish (unbound becomes default)
- *   pnpm line:richmenu --preview=dir  # only write the PNGs for review
+ *   pnpm line:richmenu                # render + publish
+ *   pnpm line:richmenu --preview=dir  # only write the PNG for review
  *
  * Images are rendered from SVG with the machine's CJK fonts, so run this where
  * a Traditional Chinese font is installed (macOS PingFang TC / Noto Sans TC).
@@ -16,9 +18,9 @@ import path from "path";
 import sharp from "sharp";
 import { publishRichMenu } from "../adapters/line.adapter";
 import {
-  RICH_MENU_ALIAS,
+  EMERGENCY_RICH_MENU,
+  EMERGENCY_RICH_MENU_ALIAS,
   RICH_MENU_HEIGHT,
-  RICH_MENU_SPECS,
   RICH_MENU_WIDTH,
   richMenuCellBounds,
   toRichMenuRequest,
@@ -64,7 +66,7 @@ function escapeXml(text: string): string {
 }
 
 function renderSvg(spec: RichMenuSpec): string {
-  const background = spec.state === "emergency" ? "#B71C1C" : "#F3F5F8";
+  const background = "#B71C1C";
   const gap = 18;
   const cells = spec.cells
     .map((cell, index) => {
@@ -101,26 +103,27 @@ async function main() {
   if (previewArg) {
     const dir = previewArg.split("=")[1] || "line-richmenu-preview";
     await mkdir(dir, { recursive: true });
-    for (const spec of RICH_MENU_SPECS) {
-      const file = path.join(dir, `${spec.state}.png`);
-      await writeFile(file, await renderPng(spec));
-      console.log(`wrote ${file}`);
-    }
+    const file = path.join(dir, "emergency.png");
+    await writeFile(file, await renderPng(EMERGENCY_RICH_MENU));
+    console.log(`wrote ${file}`);
     return;
   }
 
   if (!process.env.LINE_CHANNEL_ACCESS_TOKEN) {
     throw new Error("LINE_CHANNEL_ACCESS_TOKEN is required");
   }
-  for (const spec of RICH_MENU_SPECS) {
-    const id = await publishRichMenu(
-      toRichMenuRequest(spec),
-      await renderPng(spec),
-      RICH_MENU_ALIAS[spec.state],
-      spec.state === "unbound",
-    );
-    console.log(`${spec.state}: ${id} (alias ${RICH_MENU_ALIAS[spec.state]})`);
-  }
+  const { richMenuId, previous } = await publishRichMenu(
+    toRichMenuRequest(EMERGENCY_RICH_MENU),
+    await renderPng(EMERGENCY_RICH_MENU),
+    EMERGENCY_RICH_MENU_ALIAS,
+  );
+  console.log(
+    `emergency: ${richMenuId} (alias ${EMERGENCY_RICH_MENU_ALIAS})${
+      previous && previous !== richMenuId
+        ? ` — replaced ${previous}; kept so linked users keep a working menu until their next sync`
+        : ""
+    }`,
+  );
 }
 
 main().catch((error) => {

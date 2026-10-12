@@ -1233,21 +1233,38 @@ export async function linkRichMenuToUser(
 }
 
 /**
- * Creates a rich menu with its image and points `aliasId` at it, then deletes
- * the menu the alias pointed to before (so re-running setup does not leak menus).
+ * Removes a user's per-user rich menu so the account's default menu shows.
+ * A user without a per-user menu is not an error.
+ *
+ * @param lineUserId The LINE user to reset.
+ */
+export async function unlinkRichMenuFromUser(
+  lineUserId: string,
+): Promise<void> {
+  try {
+    await getClient().unlinkRichMenuIdFromUser(lineUserId);
+  } catch (err) {
+    if (err instanceof HTTPFetchError && err.status === 404) return;
+    throw err;
+  }
+}
+
+/**
+ * Creates a rich menu with its image and points `aliasId` at it. The menu the
+ * alias pointed to before is NOT deleted: users still linked to it would drop to
+ * the default menu (possibly mid-emergency). They move to the new menu on their
+ * next sync; delete the old id later once nobody needs it.
  *
  * @param request The rich menu definition.
  * @param image The PNG menu image (must match `request.size`).
  * @param aliasId Stable alias the runtime resolves.
- * @param makeDefault Also make it the default menu for users without a link.
- * @returns The new rich menu id.
+ * @returns The new rich menu id and the one the alias replaced, if any.
  */
 export async function publishRichMenu(
   request: messagingApi.RichMenuRequest,
   image: Buffer,
   aliasId: string,
-  makeDefault = false,
-): Promise<string> {
+): Promise<{ richMenuId: string; previous: string | null }> {
   const api = getClient();
   await api.validateRichMenuObject(request);
   const { richMenuId } = await api.createRichMenu(request);
@@ -1261,11 +1278,5 @@ export async function publishRichMenu(
   } else {
     await api.createRichMenuAlias({ richMenuAliasId: aliasId, richMenuId });
   }
-  if (makeDefault) await api.setDefaultRichMenu(richMenuId);
-  if (previous && previous !== richMenuId) {
-    await api.deleteRichMenu(previous).catch((err) => {
-      console.warn("[line.adapter] old rich menu delete failed", err);
-    });
-  }
-  return richMenuId;
+  return { richMenuId, previous };
 }
