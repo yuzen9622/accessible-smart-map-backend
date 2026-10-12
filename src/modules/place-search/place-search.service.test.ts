@@ -685,3 +685,79 @@ describe("details", () => {
     });
   });
 });
+
+describe("nearby facility source display contract", () => {
+  it("explicit en/zh displays use OSM sources; omitted requests preserve legacy brief DTO", async () => {
+    stubAllModelsEmpty();
+    const location = Object.freeze({
+      type: "Point",
+      coordinates: Object.freeze([121.5645, 25.0339]),
+    });
+    const toilet = Object.freeze({
+      _id: "osm-wc",
+      name: "原廁所",
+      category: "toilet",
+      tags: Object.freeze({ "name:en": " Source restroom " }),
+      location,
+      importedAt: new Date("2026-01-01"),
+    });
+    const bathroom = Object.freeze({
+      _id: "wc",
+      name: "廁所",
+      address: " 原地址 ",
+      location,
+    });
+    stubFind(OsmA11y as any, [toilet]);
+    stubFind(BathroomModel as any, [bathroom]);
+    stubFind(A11y as any, [
+      Object.freeze({
+        _id: "metro",
+        "出入口電梯/無障礙坡道名稱": "捷運电梯",
+        location,
+      }),
+    ]);
+    vi.mocked(lookupOsmPlace).mockResolvedValue(osmPlace() as any);
+    const [en, zh, legacy] = await Promise.all([
+      service.details({ id: "osm:node:123456", lang: "en" }),
+      service.details({ id: "osm:node:123456", lang: "zh-TW" }),
+      service.details({ id: "osm:node:123456" }),
+    ]);
+    expect(en?.name).toBe("台北101");
+    expect(en?.fullAddress).toBe(legacy?.fullAddress);
+    expect(
+      en?.nearbyFacilities.toilets.find((f) => f.id === "osm-wc"),
+    ).toMatchObject({
+      name: "原廁所",
+      address: null,
+      displayName: "Source restroom",
+    });
+    expect(
+      zh?.nearbyFacilities.toilets.find((f) => f.id === "osm-wc")?.displayName,
+    ).toBe("原廁所");
+    expect(
+      en?.nearbyFacilities.toilets.find((f) => f.id === "wc"),
+    ).toMatchObject({ displayName: "廁所", displayAddress: " 原地址 " });
+    expect(en?.nearbyFacilities.metro[0]).toMatchObject({
+      name: "捷運电梯",
+      displayName: "捷運电梯",
+      address: null,
+    });
+    expect(en?.nearbyFacilities.metro[0]).not.toHaveProperty("displayAddress");
+    expect(
+      legacy?.nearbyFacilities.toilets.every((f) => !("displayName" in f)),
+    ).toBe(true);
+    expect(toilet.tags["name:en"]).toBe(" Source restroom ");
+    expect(JSON.stringify(vi.mocked(redisSet).mock.calls)).not.toContain(
+      "Source restroom",
+    );
+    stubFind(OsmA11y as any, [{ ...toilet, tags: { "name:en": " " } }]);
+    const fallback = await service.details({
+      id: "osm:node:123456",
+      lang: "en",
+    });
+    expect(
+      fallback?.nearbyFacilities.toilets.find((f) => f.id === "osm-wc")
+        ?.displayName,
+    ).toBe("原廁所");
+  });
+});

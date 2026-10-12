@@ -228,7 +228,7 @@ describe("GET /a11y/search/details/:id", () => {
       sessionToken: "tok",
       lat: 25.03,
       lng: 121.5,
-      lang: "zh-TW",
+      lang: undefined,
     });
   });
 

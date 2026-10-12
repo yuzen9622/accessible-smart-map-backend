@@ -1,3 +1,4 @@
+import { selectDisplayText } from "../../utils/source-display";
 import {
   countFacilitiesNearby,
   findNearbyFacilityRows,
@@ -69,6 +70,8 @@ export interface PlaceAccessibility {
 }
 
 export interface NearbyFacilityBrief {
+  displayName?: string;
+  displayAddress?: string;
   id: string;
   name: string;
   address: string | null;
@@ -340,13 +343,13 @@ function coordsOf(doc: {
  * helpers cap toilets at five and blend three sources into their metro bucket —
  * so these are dedicated queries returning exactly the shape the card needs.
  *
- * Only the category labels follow the requested language — the `name` and
- * `address` fields come from local datasets that exist in Chinese only.
+ * Canonical local fields stay unchanged; explicit language adds source-only displays.
  */
 async function findNearbyFacilities(
   lat: number,
   lng: number,
   lang: SupportedLang,
+  displayLang?: SupportedLang,
 ): Promise<{ toilets: NearbyFacilityBrief[]; metro: NearbyFacilityBrief[] }> {
   const { bathrooms, osmToilets, metro } = await findNearbyFacilityRows(
     lat,
@@ -361,7 +364,10 @@ async function findNearbyFacilities(
     address: string | null,
     category: string,
     typeLabel: string,
-    doc: { location?: { coordinates?: number[] } },
+    doc: {
+      location?: { coordinates?: number[] };
+      tags?: Record<string, unknown>;
+    },
     source: "government" | "osm",
     lastVerifiedAt: Date | undefined,
   ): NearbyFacilityBrief | null => {
@@ -371,6 +377,18 @@ async function findNearbyFacilities(
       id,
       name,
       address,
+      ...(displayLang !== undefined
+        ? {
+            displayName: selectDisplayText(
+              name,
+              source === "osm" ? doc.tags?.["name:en"] : undefined,
+              displayLang,
+            ),
+          }
+        : {}),
+      ...(displayLang !== undefined && typeof address === "string"
+        ? { displayAddress: selectDisplayText(address, undefined, displayLang) }
+        : {}),
       category,
       typeLabel,
       distanceMeters: Math.round(
@@ -638,7 +656,7 @@ export async function details(params: {
   const [placeLng, placeLat] = resolved.location.coordinates;
   const [accessibility, nearbyFacilities] = await Promise.all([
     computeAccessibility(placeLat, placeLng, accessibilitySignals),
-    findNearbyFacilities(placeLat, placeLng, lang),
+    findNearbyFacilities(placeLat, placeLng, lang, params.lang),
   ]);
 
   return {

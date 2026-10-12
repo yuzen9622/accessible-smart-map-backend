@@ -130,6 +130,13 @@ const AddressComponentsSchema = z
 
 const NearbyFacilityBriefSchema = z
   .object({
+    displayName: z
+      .string()
+      .optional()
+      .openapi({ description: "明確 lang 時依來源英文顯示，缺英文保留原名" }),
+    displayAddress: z.string().optional().openapi({
+      description: "明確 lang 且有來源地址時顯示，缺英文保留原地址",
+    }),
     id: z.string().openapi({ example: "66a1f2c3e4b5a6d7c8e9f0d4" }),
     name: z.string().openapi({ example: "市政府站無障礙廁所" }),
     address: z
@@ -338,7 +345,7 @@ registry.registerPath({
   tags: ["Accessibility"],
   summary: "地點詳情與無障礙判定",
   description:
-    "使用者點選某筆預測後呼叫，依 id 前綴分派到 Google Place Details 或 OSM lookup，取座標與欄位並就近查本地無障礙資料，回傳單一 PlaceResult（含三態徽章與附近設施）。nearbyFacilityCount 與 nearbyFacilities 僅展示附近資料，不是場所本身的無障礙證據，也不會推導 accessibility.status。osm: 開頭的 id 不會呼叫 Google、不消耗 session token。`lang=en` 時名稱、地址與 typeLabel 回英文；nearbyFacilities 的 name／address 來自本地中文資料集，僅 typeLabel 會翻譯。",
+    "使用者點選某筆預測後呼叫，依 id 前綴分派到 Google Place Details 或 OSM lookup，取座標與欄位並就近查本地無障礙資料，回傳單一 PlaceResult（含三態徽章與附近設施）。nearbyFacilityCount 與 nearbyFacilities 僅展示附近資料，不是場所本身的無障礙證據，也不會推導 accessibility.status。osm: 開頭的 id 不會呼叫 Google、不消耗 session token。`lang=en` 時名稱、地址與 typeLabel 回英文；nearbyFacilities 的 name／address 保留來源原文；明確 lang 時附 displayName（OSM name:en 或原名）及有來源地址時的 displayAddress，缺英文回退原文。",
   request: { params: DetailsParamsSchema, query: DetailsQuerySchema },
   responses: {
     200: {

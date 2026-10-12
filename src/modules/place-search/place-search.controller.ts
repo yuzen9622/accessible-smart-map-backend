@@ -79,7 +79,7 @@ async function details(
       sessionToken: sessiontoken,
       lat: toNum(lat),
       lng: toNum(lng),
-      lang: resolvedLang,
+      lang: lang === undefined ? undefined : resolvedLang,
     });
     if (!data) {
       return sendResponse(
