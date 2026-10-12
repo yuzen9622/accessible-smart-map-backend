@@ -6,7 +6,11 @@ import type { Request, Response } from "express";
 import { model } from "../../config/ai";
 import { sendResponse } from "../../config/lib";
 import { ResponseCode } from "../../types/code";
-import { MSG, ERROR_MESSAGE } from "../../constants/messages";
+import { MSG } from "../../constants/messages";
+import {
+  apiErrorMessage,
+  type ApiErrorReason,
+} from "../../constants/api-errors";
 import {
   runChatAgent,
   toInteractionInput,
@@ -26,6 +30,17 @@ import {
 import type { IUser } from "../../types";
 import type { AgentLanguage } from "../../types/agent";
 import { AgentRateLimitError } from "../agent/agent-manager.service";
+
+function chatError(reason: ApiErrorReason, language?: AgentLanguage) {
+  return {
+    code:
+      reason === "AI_RATE_LIMITED"
+        ? ResponseCode.TOO_MANY_REQUESTS
+        : ResponseCode.INTERNAL_ERROR,
+    message: apiErrorMessage(reason, language),
+    data: { reason },
+  };
+}
 
 function sendSse(res: Response, event: string, data: unknown): void {
   if (res.destroyed || res.writableEnded) return;
@@ -199,10 +214,7 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
         // Never emit an empty token as if it were a successful answer: that is
         // indistinguishable from a broken client. Surface it as an error.
         console.error("[ai/chat stream] empty answer from agent");
-        sendSse(res, "error", {
-          code: ResponseCode.INTERNAL_ERROR,
-          message: ERROR_MESSAGE.INTERNAL,
-        });
+        sendSse(res, "error", chatError("AI_EMPTY_RESPONSE", language));
       }
       if (cancellation.signal.aborted) return;
       res.write("event: done\ndata: done\n\n");
@@ -210,13 +222,16 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
     } catch (error: any) {
       if (cancellation.signal.aborted) return;
       console.error("[ai/chat stream]", error);
-      sendSse(res, "error", {
-        code:
+      sendSse(
+        res,
+        "error",
+        chatError(
           error instanceof AgentRateLimitError
-            ? ResponseCode.TOO_MANY_REQUESTS
-            : ResponseCode.INTERNAL_ERROR,
-        message: error?.message ?? ERROR_MESSAGE.INTERNAL,
-      });
+            ? "AI_RATE_LIMITED"
+            : "AI_REQUEST_FAILED",
+          language,
+        ),
+      );
       if (cancellation.signal.aborted) return;
       res.write("event: done\ndata: done\n\n");
       res.end();
@@ -249,7 +264,8 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
         false,
         "error",
         ResponseCode.INTERNAL_ERROR,
-        ERROR_MESSAGE.INTERNAL,
+        apiErrorMessage("AI_EMPTY_RESPONSE", language),
+        { reason: "AI_EMPTY_RESPONSE" },
       );
       return;
     }
@@ -274,14 +290,19 @@ export async function aiChat(req: Request, res: Response): Promise<void> {
   } catch (error: any) {
     if (cancellation.signal.aborted) return;
     console.error("[ai/chat]", error);
+    const failure = chatError(
+      error instanceof AgentRateLimitError
+        ? "AI_RATE_LIMITED"
+        : "AI_REQUEST_FAILED",
+      language,
+    );
     sendResponse(
       res,
       false,
       "error",
-      error instanceof AgentRateLimitError
-        ? ResponseCode.TOO_MANY_REQUESTS
-        : ResponseCode.INTERNAL_ERROR,
-      error?.message ?? ERROR_MESSAGE.INTERNAL,
+      failure.code,
+      failure.message,
+      failure.data,
     );
   }
 }

@@ -95,6 +95,32 @@ describe("trusted route context and projections", () => {
     );
     expect(raw).not.toHaveBeenCalled();
   });
+  it.each(["en", "zh-TW", undefined] as const)(
+    "localizes missing selection for %s without calling the executor",
+    async (language) => {
+      const ctx = new RouteConversationContext();
+      const raw = vi.fn();
+      const output = await createRouteAwareExecutor(ctx, raw)(
+        "getNavInstructions",
+        {},
+        undefined,
+        undefined,
+        { language },
+      );
+      expect(typeof output).toBe("string");
+      const parsed = JSON.parse(output as string);
+      expect(parsed).toMatchObject({
+        ok: false,
+        reason: "ROUTE_CONTEXT_REQUIRED",
+      });
+      expect(parsed.error).toBe(
+        language === "en"
+          ? "No route has been selected. Please plan and select a route before requesting instructions."
+          : "尚未選擇路線；請先規劃並選擇路線，再查詢詳細指引。",
+      );
+      expect(raw).not.toHaveBeenCalled();
+    },
+  );
   it("rejects stale token lookups and stale in-flight planning results after a clear", async () => {
     const ctx = new RouteConversationContext();
     let finish!: (value: unknown) => void;

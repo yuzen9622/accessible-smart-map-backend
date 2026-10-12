@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { sendResponse } from "../../config/lib";
-import { ResponseMessage, ResponseCode } from "../../types/code";
+import { ResponseCode } from "../../types/code";
+import { apiErrorMessage, type ApiErrorData } from "../../constants/api-errors";
 import { MSG } from "../../constants/messages";
 import { ApiResponse } from "../../types/response";
 import { parseRouteIntent, generateRouteExplanation } from "./ai.service";
@@ -16,11 +17,11 @@ import type { AccessibilityMode } from "../../types/route";
  */
 export async function aiExplain(
   req: Request,
-  res: Response<ApiResponse<RouteExplanation>>,
+  res: Response<ApiResponse<RouteExplanation | ApiErrorData>>,
 ) {
   try {
     const { route, mode, language } = req.body as {
-      route: Record<string, any>;
+      route: Record<string, unknown>;
       mode?: AccessibilityMode;
       language?: "zh-TW" | "en";
     };
@@ -36,7 +37,8 @@ export async function aiExplain(
         false,
         "error",
         ResponseCode.INTERNAL_ERROR,
-        "路線說明生成失敗，請稍後再試",
+        apiErrorMessage("AI_EXPLANATION_FAILED", language),
+        { reason: "AI_EXPLANATION_FAILED" },
       );
     }
     return sendResponse(
@@ -54,7 +56,8 @@ export async function aiExplain(
       false,
       "error",
       ResponseCode.INTERNAL_ERROR,
-      ResponseMessage.INTERNAL_ERROR,
+      apiErrorMessage("AI_REQUEST_FAILED", req.body.language),
+      { reason: "AI_REQUEST_FAILED" },
     );
   }
 }
@@ -68,7 +71,7 @@ export async function aiExplain(
  */
 export async function aiIntent(
   req: Request,
-  res: Response<ApiResponse<RouteIntent>>,
+  res: Response<ApiResponse<RouteIntent | ApiErrorData>>,
 ) {
   try {
     const { query } = req.body as { query: string };
@@ -80,7 +83,8 @@ export async function aiIntent(
         false,
         "error",
         ResponseCode.INVALID_INPUT,
-        "無法解析您的查詢，請改用『從 A 到 B』的描述方式",
+        apiErrorMessage("AI_INTENT_UNRESOLVED"),
+        { reason: "AI_INTENT_UNRESOLVED" },
       );
     }
 
@@ -92,7 +96,8 @@ export async function aiIntent(
       false,
       "error",
       ResponseCode.INTERNAL_ERROR,
-      ResponseMessage.INTERNAL_ERROR,
+      apiErrorMessage("AI_REQUEST_FAILED"),
+      { reason: "AI_REQUEST_FAILED" },
     );
   }
 }

@@ -1,4 +1,5 @@
 import type { AgentLanguage } from "../../types/agent";
+import { apiErrorMessage } from "../../constants/api-errors";
 import {
   AgentNavOptionsSchema,
   AgentAccessibilityOptionsSchema,
@@ -7,7 +8,7 @@ import { randomUUID } from "crypto";
 import { attachRouteTokens } from "../accessible-route/route-token.service";
 import {
   AGENT_ROUTE_CONTRACT_VERSION,
-  AGENT_ROUTE_ERRORS,
+  agentRouteError,
 } from "../../constants/agent-route";
 import type { CanonicalPlanRouteRequest } from "../accessible-route/accessible-route.types";
 import * as a11yService from "../a11y/a11y.service";
@@ -26,11 +27,13 @@ import { getEnvironmentInfo as fetchEnvironment } from "../environment/environme
 import type { GroundingChunk } from "@google/genai";
 import { googleGenAi, model } from "../../config/ai";
 import { getCoordinates, searchPlaces } from "../../adapters/google.adapter";
-import { buildBindUrl } from "../../adapters/line.adapter";
+import { bindEmergencyContactCode as bindEmergencyCode } from "../emergency-contact/emergency-contact.service";
+import { bindLineAccountCode as bindAccountCode } from "../user/user.service";
 import { planAccessibleRouteFromRequest } from "../accessible-route/accessible-route.service";
 import { generateNavInstructionsFromInput } from "../nav-instructions/nav-instructions.service";
 import {
   getAuthorizedSessionForLineUser,
+  getActiveSosChoicesForLineUser,
   acknowledgeSession,
   claimSession,
   updateHandlingStatus,
@@ -38,7 +41,6 @@ import {
 } from "../sos/sos.service";
 import { slimFacility } from "../accessible-route/facility-slim";
 import EmergencyContact from "../../model/emergency-contact.model";
-import LineLinkCode from "../../model/line-link-code.model";
 import SosSession from "../../model/sos-session.model";
 import User from "../../model/user.model";
 import * as memoryService from "./memory.service";
@@ -51,13 +53,14 @@ import type {
   ThsrLeg,
   TraLeg,
 } from "../accessible-route/accessible-route.service";
-import { ERROR_MESSAGE } from "../../constants/messages";
+import { ERROR_MESSAGE, LINE_MSG } from "../../constants/messages";
 import { TransitPreferenceSchema } from "../../schemas/transit-preference.schema";
 import type { DriveLeg } from "../../types/route";
 import type { TaiwanCityEn } from "../../types/transit";
 
 export async function findGooglePlaces(args: {
   query: string;
+  language?: AgentLanguage;
   latitude?: number;
   longitude?: number;
   userLocation?: { latitude: number; longitude: number };
@@ -79,13 +82,19 @@ export async function findGooglePlaces(args: {
       latitude: location?.latitude,
       longitude: location?.longitude,
       sortByDistance: Boolean(location),
+      ...(args.language ? { lang: args.language } : {}),
     });
     if (!places.length)
       return JSON.stringify({ status: "ZERO_RESULTS", places: [] });
     return JSON.stringify({ status: "OK", places });
   } catch (error: any) {
     console.error("[agent-tool:findGooglePlaces]", error.message);
-    return JSON.stringify({ error: "Google Places API 查詢失敗" });
+    return JSON.stringify({
+      reason: "PLACE_SEARCH_FAILED",
+      error: args.language
+        ? apiErrorMessage("PLACE_SEARCH_FAILED", args.language)
+        : "Google Places API 查詢失敗",
+    });
   }
 }
 
@@ -140,10 +149,6 @@ export async function findA11yPlaces(args: {
     console.error("[agent-tool:findA11yPlaces]", error);
     return JSON.stringify({ error: "資料庫查詢失敗" });
   }
-}
-
-function normalizeLineCode(code: string): string {
-  return code.trim().toUpperCase();
 }
 
 function googleMapsUrl(lat: number, lng: number): string {
@@ -471,6 +476,7 @@ function agentEffectivePreferences(request: CanonicalPlanRouteRequest) {
 export async function planAccessibleRoute(args: {
   origin: string;
   destination: string;
+  language?: AgentLanguage;
   mode?: string;
   transitPreference?: string;
   departureTime?: string;
@@ -487,7 +493,11 @@ export async function planAccessibleRoute(args: {
   if (!preference.success) {
     return JSON.stringify({
       ok: false,
-      error: ERROR_MESSAGE.INVALID_TRANSIT_PREFERENCE,
+      reason: "INVALID_ROUTE_ARGUMENTS",
+      error:
+        args.language === "en"
+          ? agentRouteError("INVALID_ROUTE_ARGUMENTS", args.language)
+          : ERROR_MESSAGE.INVALID_TRANSIT_PREFERENCE,
     });
   }
   try {
@@ -510,8 +520,7 @@ export async function planAccessibleRoute(args: {
       return JSON.stringify({
         ok: false,
         reason: "LOCATION_REQUIRED",
-        error:
-          "目前無法取得使用者位置，請詢問出發地點，或請使用者開啟定位後再試。不要猜測起點；這不表示目的地沒有可用路線。",
+        error: agentRouteError("LOCATION_REQUIRED", args.language),
       });
     }
     const originInput =
@@ -528,23 +537,29 @@ export async function planAccessibleRoute(args: {
       maxTransfers: 2,
       transitPreference: preference.data,
       departureTime,
+      ...(args.language ? { language: args.language } : {}),
     });
 
     if (!result.ok) {
-      return JSON.stringify({ ok: false, error: result.error });
+      return JSON.stringify({
+        ok: false,
+        error: result.error,
+        ...(result.data ?? {}),
+      });
     }
 
     const { _canonicalRequest: canonical, ...publicData } = result.data;
     if (!result.data.routes.length)
       return JSON.stringify({
         ok: false,
-        error: AGENT_ROUTE_ERRORS.EMPTY_ROUTES,
+        reason: "EMPTY_ROUTES",
+        error: agentRouteError("EMPTY_ROUTES", args.language),
       });
     if (!canonical)
       return JSON.stringify({
         ok: false,
         reason: "ROUTE_CONTEXT_UNAVAILABLE",
-        error: AGENT_ROUTE_ERRORS.ROUTE_CONTEXT_UNAVAILABLE,
+        error: agentRouteError("ROUTE_CONTEXT_UNAVAILABLE", args.language),
       });
     const routes = await attachRouteTokens(result.data.routes, canonical);
     const effectivePreferences = agentEffectivePreferences(canonical);
@@ -556,7 +571,12 @@ export async function planAccessibleRoute(args: {
       selectedRouteId: routes[0].routeId,
       origin: {
         ...result.data.origin,
-        name: origin === "current_location" ? "目前位置" : origin,
+        name:
+          origin === "current_location"
+            ? args.language === "en"
+              ? "Current location"
+              : "目前位置"
+            : origin,
       },
       destination: { ...result.data.destination, name: destination },
       mode: effectivePreferences.mode,
@@ -570,7 +590,8 @@ export async function planAccessibleRoute(args: {
     console.error("[agent-tool:planAccessibleRoute]", error);
     return JSON.stringify({
       ok: false,
-      error: error?.message ?? "路線規劃失敗",
+      reason: "ROUTE_PLANNING_FAILED",
+      error: agentRouteError("ROUTE_PLANNING_FAILED", args.language),
     });
   }
 }
@@ -1195,7 +1216,7 @@ export async function getNavInstructions(args: {
     return JSON.stringify({
       ok: false,
       reason: "ROUTE_CONTEXT_REQUIRED",
-      error: AGENT_ROUTE_ERRORS.ROUTE_CONTEXT_REQUIRED,
+      error: agentRouteError("ROUTE_CONTEXT_REQUIRED", args.language),
     });
   try {
     const result = await generateNavInstructionsFromInput({
@@ -1212,7 +1233,7 @@ export async function getNavInstructions(args: {
     return JSON.stringify({
       ok: false,
       reason: "ROUTE_CONTEXT_UNAVAILABLE",
-      error: AGENT_ROUTE_ERRORS.ROUTE_CONTEXT_UNAVAILABLE,
+      error: agentRouteError("ROUTE_CONTEXT_UNAVAILABLE", args.language),
     });
   }
 }
@@ -1248,125 +1269,21 @@ export async function searchAccessibilityGuide(args: {
 }
 
 export async function bindEmergencyContactCode(
-  args: {
-    code: string;
-  },
+  args: { code: string },
   lineUserId?: string,
 ): Promise<string> {
-  if (!lineUserId) {
-    return JSON.stringify({ ok: false, error: "缺少 LINE 使用者資訊" });
-  }
-  const code = normalizeLineCode(args.code ?? "");
-  if (!/^[A-Z0-9]{6}$/.test(code)) {
-    return JSON.stringify({ ok: false, error: "綁定碼格式錯誤" });
-  }
-
-  try {
-    const contact = await EmergencyContact.findOne({
-      bindStatus: "pending",
-      bindCode: code,
-      bindCodeExpiresAt: { $gt: new Date() },
-    });
-    if (!contact) {
-      return JSON.stringify({
-        ok: false,
-        errorCode: "NO_EMERGENCY_BIND_CODE",
-        error: "找不到可用的緊急聯絡人綁定碼",
-      });
-    }
-
-    contact.bindStatus = "bound";
-    contact.lineUserId = lineUserId;
-    contact.bindCode = undefined;
-    contact.bindCodeExpiresAt = undefined;
-    await contact.save();
-
-    return JSON.stringify({
-      ok: true,
-      bound: true,
-      contactId: String(contact._id),
-      contactName: contact.name,
-    });
-  } catch (error: any) {
-    console.error("[agent-tool:bindEmergencyContactCode]", error);
-    return JSON.stringify({ ok: false, error: "緊急聯絡人綁定失敗" });
-  }
+  return JSON.stringify(await bindEmergencyCode(args.code ?? "", lineUserId));
 }
 
 export async function bindLineAccountCode(
-  args: {
-    code: string;
-  },
+  args: { code: string },
   lineUserId?: string,
 ): Promise<string> {
-  if (!lineUserId) {
-    return JSON.stringify({ ok: false, error: "缺少 LINE 使用者資訊" });
-  }
-  const code = normalizeLineCode(args.code ?? "");
-  if (!/^[A-Z0-9]{6}$/.test(code)) {
-    return JSON.stringify({ ok: false, error: "綁定碼格式錯誤" });
-  }
-
-  try {
-    const linkCode = await LineLinkCode.findOne({
-      code,
-      expiresAt: { $gt: new Date() },
-    });
-    if (!linkCode) {
-      return JSON.stringify({
-        ok: false,
-        errorCode: "NO_LINE_BIND_CODE",
-        error: "找不到可用的 LINE 帳號綁定碼",
-      });
-    }
-
-    const existingBoundUser = await User.findOne({ lineUserId })
-      .select("_id name")
-      .lean();
-    if (
-      existingBoundUser &&
-      String(existingBoundUser._id) !== String(linkCode.userId)
-    ) {
-      return JSON.stringify({
-        ok: false,
-        error: "這個 LINE 帳號已綁定其他使用者",
-      });
-    }
-
-    const alreadyLinkedUser = await User.findById(linkCode.userId)
-      .select("name lineUserId")
-      .lean();
-    if (!alreadyLinkedUser) {
-      return JSON.stringify({ ok: false, error: "找不到對應的使用者" });
-    }
-    if (
-      alreadyLinkedUser.lineUserId &&
-      alreadyLinkedUser.lineUserId !== lineUserId
-    ) {
-      return JSON.stringify({
-        ok: false,
-        error: "這個使用者已綁定其他 LINE 帳號",
-      });
-    }
-
-    await User.updateOne({ _id: linkCode.userId }, { $set: { lineUserId } });
-    await LineLinkCode.deleteOne({ _id: linkCode._id });
-
-    return JSON.stringify({
-      ok: true,
-      bound: true,
-      userId: String(linkCode.userId),
-      userName: alreadyLinkedUser.name,
-      bindUrl: buildBindUrl(),
-    });
-  } catch (error: any) {
-    console.error("[agent-tool:bindLineAccountCode]", error);
-    return JSON.stringify({ ok: false, error: "LINE 帳號綁定失敗" });
-  }
+  return JSON.stringify(await bindAccountCode(args.code ?? "", lineUserId));
 }
 
 export async function getActiveSosContext(
-  args: object,
+  _args: Record<string, unknown>,
   lineUserId?: string,
 ): Promise<string> {
   if (!lineUserId) {
@@ -1726,58 +1643,74 @@ async function resolveActiveSosSessionId(
   return session ? String(session._id) : null;
 }
 
-export async function confirmSosReceived(
-  args: {
-    sessionId?: string;
-  },
+async function runSosReceiptTool(
+  action: "ack" | "claim",
+  args: { sessionId?: string },
   lineUserId?: string,
 ): Promise<string> {
-  if (!lineUserId) {
+  if (!lineUserId)
     return JSON.stringify({ ok: false, error: "LINE 使用者未識別" });
-  }
-  const sessionId =
-    args.sessionId?.trim() || (await resolveActiveSosSessionId(lineUserId));
-  if (!sessionId) {
-    return JSON.stringify({ ok: false, error: "找不到進行中的求救事件" });
-  }
+  let actionStarted = false;
   try {
-    const result = await acknowledgeSession({ sessionId, lineUserId });
+    let sessionId = args.sessionId?.trim();
+    if (!sessionId) {
+      const page = await getActiveSosChoicesForLineUser(lineUserId);
+      if (!page.bound || !page.sessions.length) {
+        return JSON.stringify({
+          ok: false,
+          error: page.bound ? LINE_MSG.SOS_NO_ACTIVE : LINE_MSG.SOS_NO_CONTACTS,
+        });
+      }
+      if (page.sessions.length > 1 || page.hasMore) {
+        return JSON.stringify({
+          ok: false,
+          errorCode: "SOS_SELECTION_REQUIRED",
+          error:
+            action === "ack"
+              ? LINE_MSG.SOS_CHOOSE_ACK
+              : LINE_MSG.SOS_CHOOSE_CLAIM,
+          sessions: page.sessions,
+          hasMore: page.hasMore,
+        });
+      }
+      sessionId = page.sessions[0].sessionId;
+    }
+    actionStarted = true;
+    const result =
+      action === "ack"
+        ? await acknowledgeSession({ sessionId, lineUserId })
+        : await claimSession({ sessionId, lineUserId });
     return JSON.stringify({
       ok: result.ok,
       message: result.message,
       data: result.data,
     });
-  } catch (error: any) {
-    console.error("[agent-tool:confirmSosReceived]", error);
-    return JSON.stringify({ ok: false, error: "確認收到通知失敗" });
+  } catch (error) {
+    console.error(
+      "[agent-tool:SosReceipt]",
+      error instanceof Error ? error.name : "UnknownError",
+    );
+    return JSON.stringify({
+      ok: false,
+      error: actionStarted
+        ? LINE_MSG.OPERATION_UNCONFIRMED
+        : LINE_MSG.SOS_QUERY_FAILED,
+    });
   }
 }
 
-export async function claimSosEvent(
-  args: {
-    sessionId?: string;
-  },
+export async function confirmSosReceived(
+  args: { sessionId?: string },
   lineUserId?: string,
 ): Promise<string> {
-  if (!lineUserId) {
-    return JSON.stringify({ ok: false, error: "LINE 使用者未識別" });
-  }
-  const sessionId =
-    args.sessionId?.trim() || (await resolveActiveSosSessionId(lineUserId));
-  if (!sessionId) {
-    return JSON.stringify({ ok: false, error: "找不到進行中的求救事件" });
-  }
-  try {
-    const result = await claimSession({ sessionId, lineUserId });
-    return JSON.stringify({
-      ok: result.ok,
-      message: result.message,
-      data: result.data,
-    });
-  } catch (error: any) {
-    console.error("[agent-tool:claimSosEvent]", error);
-    return JSON.stringify({ ok: false, error: "承接事件失敗" });
-  }
+  return runSosReceiptTool("ack", args, lineUserId);
+}
+
+export async function claimSosEvent(
+  args: { sessionId?: string },
+  lineUserId?: string,
+): Promise<string> {
+  return runSosReceiptTool("claim", args, lineUserId);
 }
 
 export async function updateSosHandlingStatus(
@@ -1987,7 +1920,7 @@ export async function deleteMemory(args: {
 
 export async function executeLocalTool(
   name: string,
-  args: Record<string, any>,
+  args: Record<string, unknown>,
   userLocation?: { latitude: number; longitude: number },
   userId?: string,
   options: {
@@ -2003,6 +1936,7 @@ export async function executeLocalTool(
       return findGooglePlaces({
         ...(args as Parameters<typeof findGooglePlaces>[0]),
         userLocation,
+        language: options.language,
       });
 
     case "findA11yPlaces":
@@ -2012,7 +1946,7 @@ export async function executeLocalTool(
         longitude: args.longitude,
         range: args.range,
         userLocation,
-      });
+      } as Parameters<typeof findA11yPlaces>[0]);
 
     case "findCampusAccessibility":
       return findCampusAccessibility({
@@ -2025,14 +1959,14 @@ export async function executeLocalTool(
         page: args.page,
         limit: args.limit,
         userLocation,
-      });
+      } as Parameters<typeof findCampusAccessibility>[0]);
 
     case "getCampusAccessibilityDetails":
       return getCampusAccessibilityDetails({
         campusId: args.campusId,
         type: args.type,
         limit: args.limit,
-      });
+      } as Parameters<typeof getCampusAccessibilityDetails>[0]);
 
     case "planAccessibleRoute": {
       const accessibility = AgentAccessibilityOptionsSchema.safeParse({
@@ -2043,7 +1977,7 @@ export async function executeLocalTool(
         return JSON.stringify({
           ok: false,
           reason: "INVALID_ROUTE_ARGUMENTS",
-          error: AGENT_ROUTE_ERRORS.INVALID_ROUTE_ARGUMENTS,
+          error: agentRouteError("INVALID_ROUTE_ARGUMENTS", options.language),
         });
       return planAccessibleRoute({
         origin: args.origin,
@@ -2055,7 +1989,8 @@ export async function executeLocalTool(
         userId,
         avoidStairs: args.avoidStairs,
         requireElevator: args.requireElevator,
-      });
+        language: options.language,
+      } as Parameters<typeof planAccessibleRoute>[0]);
     }
 
     case "getBusRoute":
@@ -2063,14 +1998,14 @@ export async function executeLocalTool(
         routeName: args.routeName,
         city: args.city,
         userLocation,
-      });
+      } as Parameters<typeof getBusRoute>[0]);
 
     case "getBusRouteDetail":
       return getBusRouteDetail({
         routeName: args.routeName,
         city: args.city,
         userLocation,
-      });
+      } as Parameters<typeof getBusRouteDetail>[0]);
 
     case "getBusArrival":
       return getBusArrival({
@@ -2079,7 +2014,7 @@ export async function executeLocalTool(
         city: args.city,
         direction: args.direction,
         userLocation,
-      });
+      } as Parameters<typeof getBusArrival>[0]);
 
     case "getBusTimetable":
       return getBusTimetable({
@@ -2088,7 +2023,7 @@ export async function executeLocalTool(
         afterTime: args.afterTime,
         limit: args.limit,
         userLocation,
-      });
+      } as Parameters<typeof getBusTimetable>[0]);
 
     case "getTrainTimetable":
       return getTrainTimetable({
@@ -2098,7 +2033,7 @@ export async function executeLocalTool(
         departAfter: args.departAfter,
         arriveBy: args.arriveBy,
         railSystem: args.railSystem,
-      });
+      } as Parameters<typeof getTrainTimetable>[0]);
 
     case "getStationTimetable":
       return getStationTimetable({
@@ -2106,7 +2041,7 @@ export async function executeLocalTool(
         date: args.date,
         departAfter: args.departAfter,
         railSystem: args.railSystem,
-      });
+      } as Parameters<typeof getStationTimetable>[0]);
 
     case "trackBuses":
       return trackBuses({
@@ -2114,7 +2049,7 @@ export async function executeLocalTool(
         city: args.city,
         direction: args.direction,
         userLocation,
-      });
+      } as Parameters<typeof trackBuses>[0]);
 
     case "findNearbyBusStops":
       return findNearbyBusStops({
@@ -2123,16 +2058,16 @@ export async function executeLocalTool(
         query: args.query,
         radius: args.radius,
         userLocation,
-      });
+      } as Parameters<typeof findNearbyBusStops>[0]);
 
     case "getAirQuality":
       return getAirQuality({
         latitude: args.latitude,
         longitude: args.longitude,
-      });
+      } as Parameters<typeof getAirQuality>[0]);
 
     case "getA11yFacilityDetails":
-      return getA11yFacilityDetails({ osmId: args.osmId });
+      return getA11yFacilityDetails({ osmId: args.osmId as string });
 
     case "getEnvironmentInfo":
       return getEnvironmentInfo({
@@ -2141,7 +2076,7 @@ export async function executeLocalTool(
         radius: args.radius,
         query: args.query,
         userLocation,
-      });
+      } as Parameters<typeof getEnvironmentInfo>[0]);
 
     case "getNearbyHazards":
       return getNearbyHazards({
@@ -2151,7 +2086,7 @@ export async function executeLocalTool(
         radiusM: args.radiusM,
         hazardType: args.hazardType,
         userLocation,
-      });
+      } as Parameters<typeof getNearbyHazards>[0]);
 
     case "findNearbyParking":
       return findNearbyParking({
@@ -2161,14 +2096,16 @@ export async function executeLocalTool(
         radiusM: args.radiusM,
         type: args.type,
         userLocation,
-      });
+      } as Parameters<typeof findNearbyParking>[0]);
 
     case "getMetroAlerts":
-      return getMetroAlerts({ railSystem: args.railSystem });
+      return getMetroAlerts({
+        railSystem: args.railSystem as string | undefined,
+      });
 
     case "getTransitAlerts":
       return getTransitAlerts({
-        mode: args.mode as any,
+        mode: args.mode as string,
         city: args.city as string | undefined,
         routeName: args.routeName as string | undefined,
         railSystem: args.railSystem as string | undefined,
@@ -2182,18 +2119,18 @@ export async function executeLocalTool(
     case "getNavInstructions": {
       const navOptions = AgentNavOptionsSchema.safeParse({
         userHeading: args.userHeading,
-        language:
-          args.language === undefined ? options.language : args.language,
+        language: args.language,
       });
       if (!navOptions.success)
         return JSON.stringify({
           ok: false,
           reason: "INVALID_ROUTE_ARGUMENTS",
-          error: AGENT_ROUTE_ERRORS.INVALID_ROUTE_ARGUMENTS,
+          error: agentRouteError("INVALID_ROUTE_ARGUMENTS", options.language),
         });
       return getNavInstructions({
         routeToken: options.routeToken,
         ...navOptions.data,
+        language: options.language ?? navOptions.data.language,
       });
     }
 

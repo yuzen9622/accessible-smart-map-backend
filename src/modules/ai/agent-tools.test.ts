@@ -64,17 +64,25 @@ vi.mock("../accessible-route/route-token.service", () => ({
 vi.mock("../accessible-route/facility-slim", () => ({
   slimFacility: vi.fn((f: any) => ({ osmId: f.osmId, category: f.category })),
 }));
+vi.mock("../sos/sos.service", async (importActual) => ({
+  ...(await importActual<typeof import("../sos/sos.service")>()),
+  getActiveSosChoicesForLineUser: vi.fn(),
+  acknowledgeSession: vi.fn(),
+  claimSession: vi.fn(),
+}));
 vi.mock("../../model/emergency-contact.model", () => ({
   default: {
     find: vi.fn(),
     findOne: vi.fn(),
     updateMany: vi.fn(),
+    findOneAndUpdate: vi.fn(),
   },
 }));
 vi.mock("../../model/line-link-code.model", () => ({
   default: {
     findOne: vi.fn(),
     deleteOne: vi.fn(),
+    findOneAndDelete: vi.fn(),
   },
 }));
 vi.mock("../../model/sos-session.model", () => ({
@@ -90,6 +98,7 @@ vi.mock("../../model/user.model", () => ({
     findById: vi.fn(),
     findOne: vi.fn(),
     updateOne: vi.fn(),
+    findOneAndUpdate: vi.fn(),
   },
 }));
 vi.mock("./memory.service", () => ({
@@ -140,7 +149,15 @@ import {
   planRouteToSosVictim,
   bindEmergencyContactCode,
   bindLineAccountCode,
+  confirmSosReceived,
+  claimSosEvent,
 } from "./agent-tools";
+import {
+  getActiveSosChoicesForLineUser,
+  acknowledgeSession,
+  claimSession,
+} from "../sos/sos.service";
+import { LINE_MSG } from "../../constants/messages";
 import * as metroService from "../transit/metro.service";
 import * as alertService from "../transit/alert.service";
 import * as busService from "../transit/bus.service";
@@ -192,9 +209,6 @@ const mockEmergencyContactFindOne =
 const mockLineLinkFindOne = LineLinkCode.findOne as unknown as ReturnType<
   typeof vi.fn
 >;
-const mockLineLinkDeleteOne = LineLinkCode.deleteOne as unknown as ReturnType<
-  typeof vi.fn
->;
 const mockSosSessionFindById = SosSession.findById as unknown as ReturnType<
   typeof vi.fn
 >;
@@ -204,7 +218,6 @@ const mockSosSessionFind = SosSession.find as unknown as ReturnType<
 const mockUserFind = User.find as unknown as ReturnType<typeof vi.fn>;
 const mockUserFindById = User.findById as unknown as ReturnType<typeof vi.fn>;
 const mockUserFindOne = User.findOne as unknown as ReturnType<typeof vi.fn>;
-const mockUserUpdateOne = User.updateOne as unknown as ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -1217,11 +1230,12 @@ describe("executeLocalTool dispatches new tools", () => {
   it.each([
     [undefined, "en", "en"],
     [undefined, "zh-TW", "zh-TW"],
-    ["zh-TW", "en", "zh-TW"],
-    ["en", "zh-TW", "en"],
+    ["zh-TW", "en", "en"],
+    ["en", "zh-TW", "zh-TW"],
+    ["en", undefined, "en"],
     [undefined, undefined, undefined],
   ] as const)(
-    "defaults navigation language %s to session %s",
+    "uses trusted session language %s/%s, falling back to model arguments only for legacy sessions",
     async (language, sessionLanguage, expected) => {
       mockGenNav.mockResolvedValue({
         ok: true,
@@ -1627,30 +1641,36 @@ describe("webSearch", () => {
 });
 
 describe("bindEmergencyContactCode agent tool", () => {
-  it("成功綁定緊急聯絡人，並將 bindCode 與時效改為 undefined", async () => {
-    const mockSave = vi.fn().mockResolvedValue({});
-    const mockContact = {
-      _id: "c1",
-      name: "媽媽",
-      bindStatus: "pending",
-      lineUserId: null,
-      bindCode: "K7X2QD",
-      bindCodeExpiresAt: new Date(Date.now() + 10000),
-      save: mockSave,
-    };
-    mockEmergencyContactFindOne.mockResolvedValue(mockContact);
-
-    const raw = await bindEmergencyContactCode({ code: "K7X2QD" }, "U1");
-    const result = JSON.parse(raw);
-
-    expect(result.ok).toBe(true);
-    expect(result.bound).toBe(true);
-    expect(result.contactName).toBe("媽媽");
-    expect(mockContact.bindStatus).toBe("bound");
-    expect(mockContact.lineUserId).toBe("U1");
-    expect(mockContact.bindCode).toBeUndefined();
-    expect(mockContact.bindCodeExpiresAt).toBeUndefined();
-    expect(mockSave).toHaveBeenCalled();
+  it("uses the domain's atomic redemption and preserves tool result fields", async () => {
+    vi.mocked(EmergencyContact.findOneAndUpdate).mockReturnValue({
+      lean: async () => ({
+        _id: "c1",
+        name: "媽媽",
+        bindStatus: "bound",
+        lineUserId: "U1",
+      }),
+    } as never);
+    const result = JSON.parse(
+      await bindEmergencyContactCode({ code: " k7x2qd " }, "U1"),
+    );
+    expect(result).toEqual({
+      ok: true,
+      bound: true,
+      contactId: "c1",
+      contactName: "媽媽",
+    });
+    expect(EmergencyContact.findOneAndUpdate).toHaveBeenCalledWith(
+      {
+        bindStatus: "pending",
+        bindCode: "K7X2QD",
+        bindCodeExpiresAt: { $gt: expect.any(Date) },
+      },
+      {
+        $set: { bindStatus: "bound", lineUserId: "U1" },
+        $unset: { bindCode: "", bindCodeExpiresAt: "" },
+      },
+      { returnDocument: "after" },
+    );
   });
 
   it("缺少 LINE 使用者資訊時回傳錯誤", async () => {
@@ -1668,7 +1688,9 @@ describe("bindEmergencyContactCode agent tool", () => {
   });
 
   it("找不到可用綁定碼或已過期時回傳錯誤", async () => {
-    mockEmergencyContactFindOne.mockResolvedValue(null);
+    vi.mocked(EmergencyContact.findOneAndUpdate).mockReturnValue({
+      lean: async () => null,
+    } as never);
     const raw = await bindEmergencyContactCode({ code: "ABCDEF" }, "U1");
     const result = JSON.parse(raw);
     expect(result.ok).toBe(false);
@@ -1677,43 +1699,154 @@ describe("bindEmergencyContactCode agent tool", () => {
 });
 
 describe("bindLineAccountCode agent tool", () => {
-  it("成功綁定 LINE 帳號並刪除對應的 LinkCode", async () => {
-    mockLineLinkFindOne.mockResolvedValue({
+  it("redeems the observed account code once and conditionally binds the user", async () => {
+    const expiresAt = new Date(Date.now() + 10000);
+    mockLineLinkFindOne.mockReturnValue({
+      lean: async () => ({
+        _id: "link1",
+        userId: "u1",
+        code: "K7X2QD",
+        expiresAt,
+      }),
+    });
+    mockUserFindOne.mockReturnValue({ lean: async () => null });
+    mockUserFindById.mockResolvedValue({
+      _id: "u1",
+      name: "王小明",
+      lineUserId: null,
+    });
+    vi.mocked(LineLinkCode.findOneAndDelete).mockResolvedValue({
+      _id: "link1",
+    } as never);
+    vi.mocked(User.findOneAndUpdate).mockReturnValue({
+      lean: async () => ({ _id: "u1", name: "王小明", lineUserId: "U1" }),
+    } as never);
+    const result = JSON.parse(
+      await bindLineAccountCode({ code: "K7X2QD" }, "U1"),
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      bound: true,
+      userId: "u1",
+      userName: "王小明",
+    });
+    expect(User.findOneAndUpdate).toHaveBeenCalledWith(
+      {
+        _id: "u1",
+        $or: [{ lineUserId: null }, { lineUserId: "" }, { lineUserId: "U1" }],
+      },
+      { $set: { lineUserId: "U1" } },
+      { returnDocument: "after" },
+    );
+    expect(LineLinkCode.findOneAndDelete).toHaveBeenCalledWith({
       _id: "link1",
       userId: "u1",
       code: "K7X2QD",
-      expiresAt: new Date(Date.now() + 10000),
+      expiresAt: { $eq: expiresAt, $gt: expect.any(Date) },
     });
-    mockUserFindOne.mockReturnValue({
-      select: () => ({
-        lean: () => Promise.resolve(null),
-      }),
-    });
-    mockUserFindById.mockReturnValue({
-      select: () => ({
-        lean: () =>
-          Promise.resolve({ _id: "u1", name: "王小明", lineUserId: null }),
-      }),
-    });
-
-    const raw = await bindLineAccountCode({ code: "K7X2QD" }, "U1");
-    const result = JSON.parse(raw);
-
-    expect(result.ok).toBe(true);
-    expect(mockUserUpdateOne).toHaveBeenCalledWith(
-      { _id: "u1" },
-      { $set: { lineUserId: "U1" } },
-    );
-    expect(mockLineLinkDeleteOne).toHaveBeenCalledWith({ _id: "link1" });
   });
 
   it("找不到可用帳號綁定碼時回傳錯誤", async () => {
-    mockLineLinkFindOne.mockResolvedValue(null);
+    mockLineLinkFindOne.mockReturnValue({ lean: async () => null });
     const raw = await bindLineAccountCode({ code: "ABCDEF" }, "U1");
     const result = JSON.parse(raw);
     expect(result.ok).toBe(false);
     expect(result.error).toContain("找不到可用的 LINE 帳號綁定碼");
   });
+});
+
+describe("SOS receipt tool target selection", () => {
+  it.each([confirmSosReceived, claimSosEvent])(
+    "does not pick latest when multiple active events exist",
+    async (tool) => {
+      vi.mocked(getActiveSosChoicesForLineUser).mockResolvedValue({
+        bound: true,
+        sessions: [
+          {
+            sessionId: "s1",
+            ownerName: "家人",
+            type: "body",
+            createdAt: new Date(),
+          },
+          {
+            sessionId: "s2",
+            ownerName: "家人",
+            type: "body",
+            createdAt: new Date(),
+          },
+        ],
+        hasMore: false,
+        offset: 0,
+      });
+      const result = JSON.parse(await tool({}, "L1"));
+      expect(result).toMatchObject({
+        ok: false,
+        errorCode: "SOS_SELECTION_REQUIRED",
+      });
+      expect(result.sessions).toHaveLength(2);
+      expect(acknowledgeSession).not.toHaveBeenCalled();
+      expect(claimSession).not.toHaveBeenCalled();
+    },
+  );
+
+  it("executes only the unique target", async () => {
+    vi.mocked(getActiveSosChoicesForLineUser).mockResolvedValue({
+      bound: true,
+      sessions: [
+        {
+          sessionId: "s1",
+          ownerName: "家人",
+          type: "body",
+          createdAt: new Date(),
+        },
+      ],
+      hasMore: false,
+      offset: 0,
+    });
+    vi.mocked(claimSession).mockResolvedValue({
+      ok: true,
+      httpCode: 200,
+      message: "claimed",
+    });
+    expect(JSON.parse(await claimSosEvent({}, "L1"))).toMatchObject({
+      ok: true,
+    });
+    expect(claimSession).toHaveBeenCalledWith({
+      sessionId: "s1",
+      lineUserId: "L1",
+    });
+  });
+
+  it("preserves explicit id and delegates authorization to the domain", async () => {
+    vi.mocked(acknowledgeSession).mockResolvedValue({
+      ok: false,
+      httpCode: 403,
+      message: "not authorized",
+    });
+    expect(
+      JSON.parse(await confirmSosReceived({ sessionId: "s2" }, "L1")),
+    ).toMatchObject({ ok: false, message: "not authorized" });
+    expect(getActiveSosChoicesForLineUser).not.toHaveBeenCalled();
+    expect(acknowledgeSession).toHaveBeenCalledWith({
+      sessionId: "s2",
+      lineUserId: "L1",
+    });
+  });
+
+  it.each([confirmSosReceived, claimSosEvent])(
+    "reports query failure rather than unbound or no event",
+    async (tool) => {
+      vi.mocked(getActiveSosChoicesForLineUser).mockRejectedValue(
+        new Error("database down"),
+      );
+      expect(JSON.parse(await tool({}, "L1"))).toEqual({
+        ok: false,
+        error: LINE_MSG.SOS_QUERY_FAILED,
+      });
+      expect(acknowledgeSession).not.toHaveBeenCalled();
+      expect(claimSession).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("agent transit preference declarations", () => {

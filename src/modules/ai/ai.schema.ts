@@ -1,6 +1,10 @@
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 import { registry } from "../../openapi/registry";
+import {
+  ApiErrorResponseSchema,
+  ValidationErrorResponseSchema,
+} from "../../schemas/api-error.schema";
 import { AgentLanguageSchema } from "../../schemas/agent-language.schema";
 import { RouteIntentSchema } from "../../schemas/route-intent.schema";
 import { ToolSummarySchema } from "../agent/conversation-context";
@@ -115,9 +119,16 @@ registry.registerPath({
       description: "生成的路線說明",
       content: { "application/json": { schema: ExplainResponseSchema } },
     },
+    400: {
+      description: "請求參數驗證失敗；data.reason=VALIDATION_FAILED",
+      content: {
+        "application/json": { schema: ValidationErrorResponseSchema },
+      },
+    },
     500: {
-      description: "伺服器錯誤或模型未產生可用說明",
-      content: { "application/json": { schema: IntentErrorSchema } },
+      description:
+        "模型無說明（AI_EXPLANATION_FAILED）或依賴失敗（AI_REQUEST_FAILED）",
+      content: { "application/json": { schema: ApiErrorResponseSchema } },
     },
   },
 });
@@ -457,7 +468,7 @@ registry.registerPath({
     `- event: tool_result — { name, result, summary, callId }；callId 對應同次 tool_call，result 是完整前端資料\n` +
     `- event: token — { text }；工具回合的暫時文字不輸出，回答回合完成後按 chunk 送出\n` +
     `- event: done — data 是字串 done（不是 JSON 或 [DONE]）\n` +
-    `- event: error — { code, message }；連線仍有效時補 done\n\n` +
+    `- event: error — { code, message, data: { reason } }；reason 為 AI_EMPTY_RESPONSE / AI_REQUEST_FAILED / AI_RATE_LIMITED。message 隨 language 提供安全備援，連線仍有效時補 done\n\n` +
     `**stream: false** — 標準 ApiResponse 包文字 chat.completion，不含工具結果。`,
   request: {
     body: {
@@ -479,12 +490,19 @@ registry.registerPath({
       },
     },
     400: {
-      description: "請求參數驗證失敗",
+      description: "請求參數驗證失敗；data.reason=VALIDATION_FAILED",
+      content: {
+        "application/json": { schema: ValidationErrorResponseSchema },
+      },
+    },
+    429: {
+      description:
+        "限流；Agent 配額錯誤帶 data.reason=AI_RATE_LIMITED，入口限流維持既有格式",
       content: { "application/json": { schema: IntentErrorSchema } },
     },
     500: {
-      description: "伺服器錯誤",
-      content: { "application/json": { schema: IntentErrorSchema } },
+      description: "data.reason=AI_EMPTY_RESPONSE 或 AI_REQUEST_FAILED",
+      content: { "application/json": { schema: ApiErrorResponseSchema } },
     },
   },
 });
@@ -508,12 +526,20 @@ registry.registerPath({
       content: { "application/json": { schema: IntentResponseSchema } },
     },
     400: {
-      description: "查詢無法解析為路線意圖",
-      content: { "application/json": { schema: IntentErrorSchema } },
+      description:
+        "驗證失敗（VALIDATION_FAILED）或意圖無法解析（AI_INTENT_UNRESOLVED）",
+      content: {
+        "application/json": {
+          schema: z.union([
+            ValidationErrorResponseSchema,
+            ApiErrorResponseSchema,
+          ]),
+        },
+      },
     },
     500: {
-      description: "伺服器錯誤",
-      content: { "application/json": { schema: IntentErrorSchema } },
+      description: "data.reason=AI_REQUEST_FAILED",
+      content: { "application/json": { schema: ApiErrorResponseSchema } },
     },
   },
 });

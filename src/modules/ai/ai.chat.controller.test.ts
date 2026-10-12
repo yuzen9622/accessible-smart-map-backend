@@ -98,6 +98,85 @@ describe("POST /api/v1/ai/chat 不再走舊 fallback，直接用 runChatAgent �
   });
 });
 
+describe("localized structured chat failures", () => {
+  it.each([false, true])(
+    "returns safe English reasons with stream=%s",
+    async (stream) => {
+      vi.mocked(runChatAgent).mockRejectedValue(
+        new Error("secret upstream credential"),
+      );
+      const res = await request(app)
+        .post(URL)
+        .set("X-Forwarded-For", `203.0.113.${requestIp++}`)
+        .send({
+          language: "en",
+          stream,
+          messages: [{ role: "user", content: "hi" }],
+        });
+      const failure = stream
+        ? JSON.parse(res.text.match(/event: error\ndata: ([^\n]+)/)![1])
+        : res.body;
+      expect(failure).toMatchObject({
+        code: 500,
+        data: { reason: "AI_REQUEST_FAILED" },
+      });
+      expect(failure.message).toBe(
+        "The assistant is temporarily unavailable. Please try again later.",
+      );
+      expect(res.text).not.toContain("secret upstream credential");
+    },
+  );
+
+  it.each([false, true])(
+    "reports an empty response distinctly with stream=%s",
+    async (stream) => {
+      vi.mocked(runChatAgent).mockResolvedValue({ text: "", toolResults: [] });
+      const res = await request(app)
+        .post(URL)
+        .set("X-Forwarded-For", `203.0.113.${requestIp++}`)
+        .send({
+          language: "en",
+          stream,
+          messages: [{ role: "user", content: "hi" }],
+        });
+      const failure = stream
+        ? JSON.parse(res.text.match(/event: error\ndata: ([^\n]+)/)![1])
+        : res.body;
+      expect(failure).toMatchObject({
+        code: 500,
+        data: { reason: "AI_EMPTY_RESPONSE" },
+      });
+      expect(failure.message).toContain("could not produce a response");
+    },
+  );
+
+  it.each([false, true])(
+    "preserves rate-limit status with stream=%s",
+    async (stream) => {
+      vi.mocked(runChatAgent).mockRejectedValue(
+        new AgentRateLimitError("private quota detail"),
+      );
+      const res = await request(app)
+        .post(URL)
+        .set("X-Forwarded-For", `203.0.113.${requestIp++}`)
+        .send({
+          language: "en",
+          stream,
+          messages: [{ role: "user", content: "hi" }],
+        });
+      const failure = stream
+        ? JSON.parse(res.text.match(/event: error\ndata: ([^\n]+)/)![1])
+        : res.body;
+      expect(failure).toMatchObject({
+        code: 429,
+        data: { reason: "AI_RATE_LIMITED" },
+      });
+      expect(failure.message).toContain("currently busy");
+      expect(res.text).not.toContain("private quota detail");
+    },
+  );
+});
+
 describe("空回答不得被當成成功回應（M2-2）", () => {
   it("non-streaming：agent 回空字串 → 500 error，不回 200 空內容", async () => {
     vi.mocked(runChatAgent).mockResolvedValue({ text: "", toolResults: [] });

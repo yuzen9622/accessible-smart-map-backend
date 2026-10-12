@@ -861,7 +861,7 @@ export const lineFamilyTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "confirmSosReceived",
       description:
-        "代表目前這個 LINE 使用者確認『已收到』指定 SOS 事件的通知，讓求救者端與其他家人知道你看到了。使用者說『我知道了』『收到』『我看到了』時使用。sessionId 省略時自動採用進行中的求救事件。",
+        "代表目前這個 LINE 使用者確認『已收到』指定 SOS 事件的通知，讓求救者端與其他家人知道你看到了。使用者說『我知道了』『收到』『我看到了』時使用。sessionId 省略時只有唯一進行中事件才執行；多件則回 SOS_SELECTION_REQUIRED，必須請使用者選擇，不可猜測或自選最新一件。",
       parameters: {
         type: "object",
         properties: {
@@ -879,7 +879,7 @@ export const lineFamilyTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "claimSosEvent",
       description:
-        "代表目前這個 LINE 使用者『承接』指定 SOS 事件，宣告由你負責處理，其他家人會被告知此事件已有人接手。使用者說『我來處理』『我過去』『交給我』時使用。sessionId 省略時自動採用進行中的求救事件。",
+        "代表目前這個 LINE 使用者『承接』指定 SOS 事件，宣告由你負責處理，其他家人會被告知此事件已有人接手。使用者說『我來處理』『我過去』『交給我』時使用。sessionId 省略時只有唯一進行中事件才執行；多件則回 SOS_SELECTION_REQUIRED，必須請使用者選擇，不可猜測或自選最新一件。",
       parameters: {
         type: "object",
         properties: {

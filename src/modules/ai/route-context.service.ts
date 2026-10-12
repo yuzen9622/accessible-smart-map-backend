@@ -1,18 +1,21 @@
 import { getNavigationEnvelopeByToken } from "../accessible-route/route-token.service";
-import { AGENT_ROUTE_ERRORS } from "../../constants/agent-route";
+import {
+  AGENT_ROUTE_ERRORS,
+  agentRouteError,
+} from "../../constants/agent-route";
 import type {
   RouteContextInput,
   RouteContextResult,
   RouteContextFailure,
   RoutingPreferences,
 } from "../../types/agent-route";
-import type { AgentToolExecutor } from "../../types/agent";
+import type { AgentLanguage, AgentToolExecutor } from "../../types/agent";
 import {
   projectRouteForModel,
   projectToolResult,
 } from "../../utils/agent-route-projection";
 
-const isRecord = (value: unknown): value is Record<string, any> =>
+const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 const ROUTE_CONTEXT_LOOKUP_TIMEOUT_MS = 5_000;
 const PREFERENCE_KEYS = [
@@ -25,22 +28,32 @@ const PREFERENCE_KEYS = [
 
 /** Per conversation selection; never changes the active turn-by-turn navigation. */
 export class RouteConversationContext {
-  private selected: Record<string, any> | undefined;
+  private selected: Record<string, unknown> | undefined;
   private tripPreferences: RoutingPreferences = {};
   private failure: RouteContextFailure | undefined;
   revision = 0;
   constructor(private readonly defaults: RoutingPreferences = {}) {}
 
   get token(): string | undefined {
-    return this.selected?.routeToken;
+    const token = this.selected?.routeToken;
+    return typeof token === "string" ? token : undefined;
   }
   get identity(): RouteContextResult {
     if (this.failure) return { ok: false, reason: this.failure };
     return {
       ok: true,
-      routeId: this.selected?.routeId ?? null,
-      navigationId: this.selected?.navigationId ?? null,
-      routeVersion: this.selected?.routeVersion ?? null,
+      routeId:
+        typeof this.selected?.routeId === "string"
+          ? this.selected.routeId
+          : null,
+      navigationId:
+        typeof this.selected?.navigationId === "string"
+          ? this.selected.navigationId
+          : null,
+      routeVersion:
+        typeof this.selected?.routeVersion === "number"
+          ? this.selected.routeVersion
+          : null,
     };
   }
   get preferences(): RoutingPreferences {
@@ -49,14 +62,14 @@ export class RouteConversationContext {
   get prompt(): string {
     return `\n\n【目前查看的路線】${JSON.stringify(this.failure ? { ok: false, reason: this.failure, message: AGENT_ROUTE_ERRORS[this.failure] } : this.selected ? projectRouteForModel({ route: this.selected, effectivePreferences: this.tripPreferences }) : { selected: false })}\n只有 selected=true 或 route 存在才有目前查看的路線；無選擇或讀取失敗時不得把歷史摘要冒充目前選擇。目前查看與正在導航可能不同；若目前有提供 getActiveNavigationContext 工具，導航中的問題須先查其脈絡；未提供時不可推測導航進度。工具的新規劃結果會更新目前查看的路線；詳細步驟只能查已選路線，不能重新規劃。\n【規劃預設】${JSON.stringify(this.preferences)}；只在使用者未明示時採用，勿用一般模式覆蓋已確認的無障礙需求。`;
   }
-  error(): string {
+  error(language?: AgentLanguage): string {
     const reason =
       this.failure ??
       (this.selected ? "ROUTE_CONTEXT_UNAVAILABLE" : "ROUTE_CONTEXT_REQUIRED");
     return JSON.stringify({
       ok: false,
       reason,
-      error: AGENT_ROUTE_ERRORS[reason],
+      error: agentRouteError(reason, language),
     });
   }
   async set(input: RouteContextInput): Promise<RouteContextResult> {
@@ -112,13 +125,12 @@ export class RouteConversationContext {
     );
     if (!selected) return;
     this.selected = selected;
-    this.tripPreferences = this.pickPreferences(
-      result.effectivePreferences ?? {},
-    );
+    this.tripPreferences = this.pickPreferences(result.effectivePreferences);
     this.failure = undefined;
     this.revision++;
   }
-  private pickPreferences(value: Record<string, any>): RoutingPreferences {
+  private pickPreferences(input: unknown): RoutingPreferences {
+    const value = isRecord(input) ? input : {};
     return Object.fromEntries(
       PREFERENCE_KEYS.filter((key) => value[key] !== undefined).map((key) => [
         key,
@@ -135,7 +147,8 @@ export function createRouteAwareExecutor(
 ): AgentToolExecutor {
   return async (name, args, location, userId, options) => {
     const revision = context.revision;
-    if (name === "getNavInstructions" && !context.token) return context.error();
+    if (name === "getNavInstructions" && !context.token)
+      return context.error(options?.language);
     const effectiveArgs =
       name === "planAccessibleRoute"
         ? {
@@ -153,7 +166,7 @@ export function createRouteAwareExecutor(
       return JSON.stringify({
         ok: false,
         reason: "STALE_SELECTION",
-        error: AGENT_ROUTE_ERRORS.STALE_SELECTION,
+        error: agentRouteError("STALE_SELECTION", options?.language),
       });
     let parsed: unknown;
     if (typeof output !== "string") parsed = output.clientResult;
