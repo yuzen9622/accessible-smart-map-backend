@@ -5,10 +5,100 @@ import {
   updateConfigByUserId,
   upsertConfigByUserId,
   upsertLineLinkCode,
+  usableLineAccountCodeExists,
+  findUsableLineAccountCode,
+  findUserBoundToLine,
+  consumeLineAccountCode,
+  bindUserToLineConditionally,
 } from "./user.repository";
+import { normalizeLineBindingCode } from "../../utils/line-binding-code";
+import type { LineAccountBindingResult } from "../../types/line-binding";
+export type { LineAccountBindingResult } from "../../types/line-binding";
 import { buildBindUrl } from "../../adapters/line.adapter";
+import { LINE_MSG } from "../../constants/messages";
 import crypto from "crypto";
 import type { IUser, IConfig, IA11yProfile } from "../../types";
+
+export async function hasUsableLineAccountCode(code: string): Promise<boolean> {
+  const normalized = normalizeLineBindingCode(code);
+  return normalized ? usableLineAccountCodeExists(normalized) : false;
+}
+
+export async function bindLineAccountCode(
+  code: string,
+  lineUserId?: string,
+): Promise<LineAccountBindingResult> {
+  if (!lineUserId?.trim()) return { ok: false, error: "缺少 LINE 使用者資訊" };
+  const normalized = normalizeLineBindingCode(code);
+  if (!normalized) return { ok: false, error: "綁定碼格式錯誤" };
+  let phase = "precheck";
+  try {
+    const linkCode = await findUsableLineAccountCode(normalized);
+    const noCode: LineAccountBindingResult = {
+      ok: false,
+      errorCode: "NO_LINE_BIND_CODE",
+      error: "找不到可用的 LINE 帳號綁定碼",
+    };
+    if (!linkCode) return noCode;
+    const existingBoundUser = await findUserBoundToLine(lineUserId);
+    if (
+      existingBoundUser &&
+      String(existingBoundUser._id) !== String(linkCode.userId)
+    ) {
+      return { ok: false, error: "這個 LINE 帳號已綁定其他使用者" };
+    }
+    const user = await findUserById(linkCode.userId);
+    if (!user) return { ok: false, error: "找不到對應的使用者" };
+    if (user.lineUserId && user.lineUserId !== lineUserId) {
+      return { ok: false, error: "這個使用者已綁定其他 LINE 帳號" };
+    }
+
+    // Standalone Mongo cannot atomically update both collections. Consume first:
+    // at most one redeemer proceeds, but a subsequent failure may burn the code.
+    // Never restore it: restoration can overwrite a concurrently reissued code.
+    phase = "consume";
+    if (!(await consumeLineAccountCode(linkCode))) return noCode;
+    phase = "bind-user";
+    const boundUser = await bindUserToLineConditionally(
+      linkCode.userId,
+      lineUserId,
+    );
+    if (!boundUser) {
+      const currentUser = await findUserById(linkCode.userId);
+      return {
+        ok: false,
+        error: currentUser
+          ? "這個使用者已綁定其他 LINE 帳號"
+          : "找不到對應的使用者",
+      };
+    }
+    return {
+      ok: true,
+      bound: true,
+      userId: String(boundUser._id),
+      userName: boundUser.name,
+      bindUrl: buildBindUrl(),
+    };
+  } catch (error: unknown) {
+    // Only a duplicate from the conditional user write represents a LINE conflict.
+    if (
+      phase === "bind-user" &&
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === 11000
+    ) {
+      return { ok: false, error: "這個 LINE 帳號已綁定其他使用者" };
+    }
+    // No raw error/code/identifier logging: write outcome may be unknown.
+    console.error(`[user:bind-line] ${phase} failed; outcome unconfirmed`);
+    return {
+      ok: false,
+      errorCode: "BIND_OUTCOME_UNCONFIRMED",
+      error: LINE_MSG.BIND_UNCONFIRMED,
+    };
+  }
+}
 
 const LINE_LINK_CODE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 const LINE_LINK_CODE_LENGTH = 6;

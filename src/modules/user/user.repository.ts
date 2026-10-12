@@ -1,7 +1,59 @@
 import User from "../../model/user.model";
 import Config from "../../model/config.model";
 import LineLinkCode from "../../model/line-link-code.model";
-import type { IUser, IConfig } from "../../types";
+import type { IUser, IConfig, ILineLinkCode } from "../../types";
+
+export async function usableLineAccountCodeExists(
+  code: string,
+): Promise<boolean> {
+  return Boolean(
+    await LineLinkCode.exists({ code, expiresAt: { $gt: new Date() } }),
+  );
+}
+
+export async function findUsableLineAccountCode(
+  code: string,
+): Promise<ILineLinkCode | null> {
+  return LineLinkCode.findOne({
+    code,
+    expiresAt: { $gt: new Date() },
+  }).lean<ILineLinkCode | null>();
+}
+
+/** Match the exact observed issuance, so a concurrently replaced code is not consumed. */
+export async function consumeLineAccountCode(
+  linkCode: ILineLinkCode,
+): Promise<boolean> {
+  return Boolean(
+    await LineLinkCode.findOneAndDelete({
+      _id: linkCode._id,
+      userId: linkCode.userId,
+      code: linkCode.code,
+      expiresAt: { $eq: linkCode.expiresAt, $gt: new Date() },
+    }),
+  );
+}
+
+export async function findUserBoundToLine(
+  lineUserId: string,
+): Promise<IUser | null> {
+  return User.findOne({ lineUserId }).lean<IUser | null>();
+}
+
+/** Conditional write plus the existing unique LINE index protect both binding directions. */
+export async function bindUserToLineConditionally(
+  userId: string,
+  lineUserId: string,
+): Promise<IUser | null> {
+  return User.findOneAndUpdate(
+    {
+      _id: userId,
+      $or: [{ lineUserId: null }, { lineUserId: "" }, { lineUserId }],
+    },
+    { $set: { lineUserId } },
+    { returnDocument: "after" },
+  ).lean<IUser | null>();
+}
 
 /**
  * Looks up a user by id.

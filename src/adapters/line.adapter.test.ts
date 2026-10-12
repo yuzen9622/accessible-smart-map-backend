@@ -17,6 +17,7 @@ vi.mock("@line/bot-sdk", () => ({
 
 import {
   buildBoundContactsMessage,
+  buildSosActionSelectionMessage,
   buildSosHistoryMessage,
   buildSosMenuMessage,
   buildUnbindConfirmMessage,
@@ -28,6 +29,54 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockReplyMessage.mockResolvedValue(undefined);
   mockShowLoadingAnimation.mockResolvedValue({});
+});
+
+describe("line.adapter — SOS target selection", () => {
+  it("uses bounded quick replies with event-specific ids, type, time and page controls", () => {
+    const sessions = Array.from({ length: 10 }, (_, i) => ({
+      sessionId: `s${i}`,
+      ownerName: "同名親友",
+      type: "body" as const,
+      createdAt: new Date("2026-10-12T00:00:00Z"),
+    }));
+    const message = buildSosActionSelectionMessage("claim", {
+      bound: true,
+      sessions,
+      hasMore: true,
+      offset: 10,
+    });
+    expect(message.quickReply?.items).toHaveLength(12);
+    expect(message.text).toContain("2026-10-12 08:00");
+    expect(message.text).toContain("人身安全");
+    const buttons = message.quickReply!.items!;
+    expect(buttons[0].action).toMatchObject({
+      type: "postback",
+      data: "action=claim&sid=s0",
+    });
+    expect(buttons[9].action).toMatchObject({
+      type: "postback",
+      data: "action=claim&sid=s9",
+    });
+    expect(buttons[10].action).toMatchObject({
+      data: "action=sos_action_page&intent=claim&offset=20",
+    });
+    expect(buttons[11].action).toMatchObject({
+      data: "action=sos_action_page&intent=claim&offset=0",
+    });
+  });
+
+  it("lets an emptied later page restart without inventing a target", () => {
+    const message = buildSosActionSelectionMessage("ack", {
+      bound: true,
+      sessions: [],
+      hasMore: false,
+      offset: 10,
+    });
+    expect(message.quickReply?.items).toHaveLength(1);
+    expect(message.quickReply?.items?.[0].action).toMatchObject({
+      data: "action=sos_action_page&intent=ack&offset=0",
+    });
+  });
 });
 
 describe("line.adapter — agent replies", () => {

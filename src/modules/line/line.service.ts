@@ -11,6 +11,7 @@ import {
   buildClaimedControlsMessage,
   buildSosHistoryMessage,
   buildSosMenuMessage,
+  buildSosActionSelectionMessage,
   buildUnbindConfirmMessage,
   replyAgentResult,
   replyMessages,
@@ -24,6 +25,7 @@ import {
   acknowledgeSession,
   claimSession,
   getAuthorizedSessionForLineUser,
+  getActiveSosChoicesForLineUser,
   resolveSession,
   updateHandlingStatus,
 } from "../sos/sos.service";
@@ -53,6 +55,15 @@ import {
   renameBoundContact,
   unbindContact,
 } from "./line-menu.service";
+
+import {
+  hasUsableEmergencyContactCode,
+  bindEmergencyContactCode,
+} from "../emergency-contact/emergency-contact.service";
+import {
+  hasUsableLineAccountCode,
+  bindLineAccountCode,
+} from "../user/user.service";
 
 const EVENT_DEDUP_TTL_SEC = 3600;
 const SOS_MENU_TRIGGER = "SOS資訊查詢";
@@ -184,7 +195,7 @@ function routeCardFromToolResults(
  * @returns The speech to reply with, falling back to the fixed info message.
  */
 function parseAgentSpeech(text: string | undefined): string {
-  if (!text) return LINE_MSG.INFO;
+  if (!text?.trim()) return LINE_MSG.AI_UNAVAILABLE;
   const trimmed = text.trim();
   if (trimmed.startsWith("{")) {
     try {
@@ -227,8 +238,11 @@ async function handleTextMessage(
     await replyAgentResult(replyToken, speech, routeCard);
     if (lineUserId) await appendLineChatTurn(lineUserId, text, speech);
   } catch (error) {
-    console.error("[line.service] family agent failed", error);
-    await replyText(replyToken, LINE_MSG.INFO);
+    console.error(
+      "[line.service] family agent failed",
+      error instanceof Error ? error.name : "UnknownError",
+    );
+    await replyText(replyToken, LINE_MSG.AI_UNAVAILABLE);
   }
 }
 
@@ -266,9 +280,135 @@ async function handleRenameInput(
   await replyText(replyToken, result.message);
 }
 
+type ReceiptAction = "ack" | "claim";
+
+/** Only complete affirmative statements are commands; questions/negations stay chat. */
+function receiptAction(text: string): ReceiptAction | undefined {
+  const normalized = text.replace(/[\s，,。.!！]/g, "");
+  if (
+    /^(?:(?:收到|我收到了|我收到回報))?(?:我處理|我來處理(?:這件事)?)$/.test(
+      normalized,
+    )
+  )
+    return "claim";
+  if (/^(?:收到|我收到了|我收到回報)$/.test(normalized)) return "ack";
+  return undefined;
+}
+
+/** Never pass a binding code to the model or save it in chat history. */
+async function handleBindingCode(
+  replyToken: string,
+  code: string,
+  lineUserId?: string,
+): Promise<void> {
+  if (!lineUserId) {
+    await replyText(replyToken, LINE_MSG.USER_REQUIRED);
+    return;
+  }
+  try {
+    const [emergency, account] = await Promise.all([
+      hasUsableEmergencyContactCode(code),
+      hasUsableLineAccountCode(code),
+    ]);
+    if (emergency && account) {
+      await replyText(replyToken, LINE_MSG.BIND_AMBIGUOUS);
+      return;
+    }
+    if (!emergency && !account) {
+      await replyText(replyToken, LINE_MSG.BIND_INVALID);
+      return;
+    }
+    const result = emergency
+      ? await bindEmergencyContactCode(code, lineUserId)
+      : await bindLineAccountCode(code, lineUserId);
+    await replyText(
+      replyToken,
+      result.ok
+        ? emergency
+          ? LINE_MSG.BIND_SUCCESS
+          : LINE_MSG.ACCOUNT_BIND_SUCCESS
+        : (result.error ?? LINE_MSG.OPERATION_UNCONFIRMED),
+    );
+  } catch (error) {
+    console.error(
+      "[line.service] binding failed",
+      error instanceof Error ? error.name : "UnknownError",
+    );
+    await replyText(replyToken, LINE_MSG.OPERATION_UNCONFIRMED);
+  }
+}
+
+/** Shared response mapping for text and notification-button receipt actions. */
+async function executeReceiptAction(
+  replyToken: string,
+  action: ReceiptAction,
+  sid: string,
+  lineUserId: string,
+): Promise<void> {
+  const result =
+    action === "claim"
+      ? await claimSession({ sessionId: sid, lineUserId })
+      : await acknowledgeSession({ sessionId: sid, lineUserId });
+  if (observedResolved(result)) {
+    await replyText(replyToken, LINE_MSG.SOS_ALREADY_RESOLVED);
+  } else if (action === "claim" && result.ok) {
+    await replyMessages(replyToken, [
+      { type: "text", text: result.message },
+      buildClaimedControlsMessage(sid),
+    ]);
+  } else {
+    await replyText(replyToken, result.message);
+  }
+}
+
+async function handleReceiptText(
+  replyToken: string,
+  action: ReceiptAction,
+  lineUserId?: string,
+  offset = 0,
+  selectionOnly = false,
+): Promise<void> {
+  if (!lineUserId) {
+    await replyText(replyToken, LINE_MSG.USER_REQUIRED);
+    return;
+  }
+  let actionStarted = false;
+  try {
+    const page = await getActiveSosChoicesForLineUser(lineUserId, offset);
+    if (!page.bound) {
+      await replyText(replyToken, LINE_MSG.SOS_NO_CONTACTS);
+    } else if (!page.sessions.length && offset === 0) {
+      await replyText(replyToken, LINE_MSG.SOS_NO_ACTIVE);
+    } else if (!selectionOnly && page.sessions.length === 1 && !page.hasMore) {
+      actionStarted = true;
+      await executeReceiptAction(
+        replyToken,
+        action,
+        page.sessions[0].sessionId,
+        lineUserId,
+      );
+    } else {
+      await replyMessages(replyToken, [
+        buildSosActionSelectionMessage(action, page),
+      ]);
+    }
+  } catch (error) {
+    console.error(
+      "[line.service] SOS text handling failed",
+      error instanceof Error ? error.name : "UnknownError",
+    );
+    await replyText(
+      replyToken,
+      actionStarted
+        ? LINE_MSG.OPERATION_UNCONFIRMED
+        : LINE_MSG.SOS_QUERY_FAILED,
+    );
+  }
+}
+
 /**
- * Routes an inbound text message. The SOS menu trigger and a pending display-name
- * edit are handled deterministically; everything else falls through to the agent.
+ * Routes explicit binding / receipt commands before ordinary chat. Bare codes
+ * retain name semantics only while an explicit display-name edit is pending.
  *
  * @param replyToken One-time reply token from the webhook event.
  * @param text The raw message text.
@@ -282,6 +422,21 @@ async function handleTextEvent(
   const trimmed = text.trim();
   if (trimmed === SOS_MENU_TRIGGER) {
     await replyMessages(replyToken, [buildSosMenuMessage()]);
+    return;
+  }
+
+  const explicitBinding = trimmed.match(/^綁定\s*([A-Za-z0-9]+)$/);
+  const action = receiptAction(trimmed);
+  if (explicitBinding || action) {
+    if (lineUserId) await clearPendingRename(lineUserId);
+    if (action) await handleReceiptText(replyToken, action, lineUserId);
+    else if (explicitBinding && /^[A-Za-z0-9]{6}$/.test(explicitBinding[1])) {
+      await handleBindingCode(
+        replyToken,
+        explicitBinding[1].toUpperCase(),
+        lineUserId,
+      );
+    } else await replyText(replyToken, LINE_MSG.BIND_FORMAT);
     return;
   }
 
@@ -301,13 +456,20 @@ async function handleTextEvent(
           trimmed,
         );
       } catch (error) {
-        console.error("[line.service] rename handling failed", error);
-        await replyText(replyToken, LINE_MSG.INFO);
+        console.error(
+          "[line.service] rename handling failed",
+          error instanceof Error ? error.name : "UnknownError",
+        );
+        await replyText(replyToken, LINE_MSG.OPERATION_UNCONFIRMED);
       }
       return;
     }
   }
 
+  if (/^[A-Za-z0-9]{6}$/.test(trimmed)) {
+    await handleBindingCode(replyToken, trimmed.toUpperCase(), lineUserId);
+    return;
+  }
   await handleTextMessage(replyToken, text, lineUserId);
 }
 
@@ -350,6 +512,22 @@ async function handleMenuPostback(
   try {
     if (action === "sos_menu") {
       await replyMessages(replyToken, [buildSosMenuMessage()]);
+      return;
+    }
+    if (action === "sos_action_page") {
+      const intent = params.get("intent");
+      const rawOffset = params.get("offset") ?? "";
+      const offset = Number(rawOffset);
+      if (
+        (intent !== "ack" && intent !== "claim") ||
+        !/^\d+$/.test(rawOffset) ||
+        !Number.isSafeInteger(offset) ||
+        offset > 100_000
+      ) {
+        await replyText(replyToken, LINE_MSG.INVALID_ACTION);
+        return;
+      }
+      await handleReceiptText(replyToken, intent, lineUserId, offset, true);
       return;
     }
     if (action === "sos_help") {
@@ -423,10 +601,13 @@ async function handleMenuPostback(
       return;
     }
 
-    await replyText(replyToken, LINE_MSG.INFO);
+    await replyText(replyToken, LINE_MSG.INVALID_ACTION);
   } catch (error) {
-    console.error("[line.service] menu postback handling failed", error);
-    await replyText(replyToken, LINE_MSG.INFO);
+    console.error(
+      "[line.service] menu postback handling failed",
+      error instanceof Error ? error.name : "UnknownError",
+    );
+    await replyText(replyToken, LINE_MSG.OPERATION_UNCONFIRMED);
   }
 }
 
@@ -474,7 +655,7 @@ async function handlePostback(event: webhook.PostbackEvent): Promise<void> {
 
   if (action?.startsWith("sos_")) {
     if (!lineUserId) {
-      await replyText(replyToken, LINE_MSG.INFO);
+      await replyText(replyToken, LINE_MSG.USER_REQUIRED);
       return;
     }
     await handleMenuPostback(replyToken, action, params, lineUserId);
@@ -482,7 +663,10 @@ async function handlePostback(event: webhook.PostbackEvent): Promise<void> {
   }
 
   if (!sid || !lineUserId) {
-    await replyText(replyToken, LINE_MSG.INFO);
+    await replyText(
+      replyToken,
+      lineUserId ? LINE_MSG.INVALID_ACTION : LINE_MSG.USER_REQUIRED,
+    );
     return;
   }
   if (
@@ -491,11 +675,11 @@ async function handlePostback(event: webhook.PostbackEvent): Promise<void> {
     action !== "status" &&
     action !== "resolve"
   ) {
-    await replyText(replyToken, LINE_MSG.INFO);
+    await replyText(replyToken, LINE_MSG.INVALID_ACTION);
     return;
   }
   if (action === "status" && value !== "en_route" && value !== "arrived") {
-    await replyText(replyToken, LINE_MSG.INFO);
+    await replyText(replyToken, LINE_MSG.INVALID_ACTION);
     return;
   }
 
@@ -512,27 +696,13 @@ async function handlePostback(event: webhook.PostbackEvent): Promise<void> {
 
     await showLoadingAnimation(lineUserId).catch(() => {});
 
-    if (action === "claim") {
-      const result = await claimSession({ sessionId: sid, lineUserId });
-      if (observedResolved(result)) {
-        await replyText(replyToken, LINE_MSG.SOS_ALREADY_RESOLVED);
-        return;
-      }
-      if (result.ok) {
-        await replyMessages(replyToken, [
-          { type: "text", text: result.message },
-          buildClaimedControlsMessage(sid),
-        ]);
-        return;
-      }
-      await replyText(replyToken, result.message);
+    if (action === "claim" || action === "ack") {
+      await executeReceiptAction(replyToken, action, sid, lineUserId);
       return;
     }
 
     let result: ServiceResult;
-    if (action === "ack") {
-      result = await acknowledgeSession({ sessionId: sid, lineUserId });
-    } else if (action === "status") {
+    if (action === "status") {
       result = await updateHandlingStatus({
         sessionId: sid,
         lineUserId,
@@ -548,8 +718,11 @@ async function handlePostback(event: webhook.PostbackEvent): Promise<void> {
     }
     await replyText(replyToken, result.message);
   } catch (error) {
-    console.error("[line.service] postback handling failed", error);
-    await replyText(replyToken, LINE_MSG.INFO);
+    console.error(
+      "[line.service] postback handling failed",
+      error instanceof Error ? error.name : "UnknownError",
+    );
+    await replyText(replyToken, LINE_MSG.OPERATION_UNCONFIRMED);
   }
 }
 

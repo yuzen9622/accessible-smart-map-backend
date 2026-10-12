@@ -29,6 +29,34 @@ export async function bindCodeExists(bindCode: string): Promise<boolean> {
   return Boolean(await EmergencyContact.exists({ bindCode }));
 }
 
+/** Query errors intentionally propagate rather than masquerading as no match. */
+export async function usableEmergencyContactCodeExists(
+  bindCode: string,
+): Promise<boolean> {
+  return Boolean(
+    await EmergencyContact.exists({
+      bindStatus: "pending",
+      bindCode,
+      bindCodeExpiresAt: { $gt: new Date() },
+    }),
+  );
+}
+
+/** Claim once; a bound contact can never be overwritten through this path. */
+export async function redeemEmergencyContactCode(
+  bindCode: string,
+  lineUserId: string,
+): Promise<EmergencyContactRecord | null> {
+  return EmergencyContact.findOneAndUpdate(
+    { bindStatus: "pending", bindCode, bindCodeExpiresAt: { $gt: new Date() } },
+    {
+      $set: { bindStatus: "bound", lineUserId },
+      $unset: { bindCode: "", bindCodeExpiresAt: "" },
+    },
+    { returnDocument: "after" },
+  ).lean<EmergencyContactRecord | null>();
+}
+
 /**
  * Lists one owner's contacts, newest first.
  *

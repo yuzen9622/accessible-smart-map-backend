@@ -241,6 +241,27 @@ describe("claimSession — atomicity / conflict", () => {
     expect(emitSosUpdate).not.toHaveBeenCalled();
   });
 
+  it("does not report a successful claim if the previously claimed event resolved during the action", async () => {
+    setupAuthorized();
+    vi.mocked(SosSession.findById)
+      .mockReturnValueOnce(
+        lean({ _id: SESSION_ID, userId: OWNER_ID, status: "active" }) as never,
+      )
+      .mockReturnValueOnce(
+        lean({ status: "resolved", claimedBy: FAM_LINE }) as never,
+      );
+    vi.mocked(SosSession.findOneAndUpdate).mockResolvedValueOnce(null as never);
+    const res = await claimSession({
+      sessionId: SESSION_ID,
+      lineUserId: FAM_LINE,
+    });
+    expect(res).toMatchObject({
+      ok: false,
+      data: { reason: SOS_REASON.SESSION_NOT_ACTIVE },
+    });
+    expect(emitSosUpdate).not.toHaveBeenCalled();
+  });
+
   it("conflict (null prev, claimed by someone else) returns ok:false 200 ALREADY_CLAIMED, no emit/notify", async () => {
     setupAuthorized();
     vi.mocked(SosSession.findById)

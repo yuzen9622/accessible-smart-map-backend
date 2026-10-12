@@ -11,6 +11,10 @@ vi.mock("../../adapters/line.adapter", () => ({
     _sid: sessionId,
   })),
   buildSosMenuMessage: vi.fn(() => ({ type: "text", text: "menu" })),
+  buildSosActionSelectionMessage: vi.fn(() => ({
+    type: "text",
+    text: "choose",
+  })),
   buildBoundContactsMessage: vi.fn(() => ({
     type: "flex",
     altText: "contacts",
@@ -38,7 +42,17 @@ vi.mock("./line-menu.service", () => ({
   unbindContact: vi.fn(),
 }));
 
+vi.mock("../emergency-contact/emergency-contact.service", () => ({
+  hasUsableEmergencyContactCode: vi.fn(),
+  bindEmergencyContactCode: vi.fn(),
+}));
+vi.mock("../user/user.service", () => ({
+  hasUsableLineAccountCode: vi.fn(),
+  bindLineAccountCode: vi.fn(),
+}));
+
 vi.mock("../sos/sos.service", () => ({
+  getActiveSosChoicesForLineUser: vi.fn(),
   acknowledgeSession: vi.fn(),
   claimSession: vi.fn(),
   updateHandlingStatus: vi.fn(),
@@ -82,6 +96,7 @@ import {
   buildClaimedControlsMessage,
   buildSosHistoryMessage,
   buildSosMenuMessage,
+  buildSosActionSelectionMessage,
   buildUnbindConfirmMessage,
   replyAgentResult,
   replyMessages,
@@ -103,6 +118,15 @@ import {
   unbindContact,
 } from "./line-menu.service";
 import {
+  hasUsableEmergencyContactCode,
+  bindEmergencyContactCode,
+} from "../emergency-contact/emergency-contact.service";
+import {
+  hasUsableLineAccountCode,
+  bindLineAccountCode,
+} from "../user/user.service";
+import {
+  getActiveSosChoicesForLineUser,
   acknowledgeSession,
   claimSession,
   getAuthorizedSessionForLineUser,
@@ -150,6 +174,38 @@ beforeEach(() => {
   vi.mocked(getLineChatHistory).mockResolvedValue([]);
   vi.mocked(appendLineChatTurn).mockResolvedValue(undefined);
   vi.mocked(getPendingRename).mockResolvedValue(null);
+  vi.mocked(hasUsableEmergencyContactCode).mockResolvedValue(false);
+  vi.mocked(hasUsableLineAccountCode).mockResolvedValue(false);
+  vi.mocked(bindEmergencyContactCode).mockResolvedValue({
+    ok: true,
+    bound: true,
+    contactId: "c1",
+    contactName: "家人",
+  });
+  vi.mocked(bindLineAccountCode).mockResolvedValue({
+    ok: true,
+    bound: true,
+    userId: "u1",
+    userName: "家人",
+    bindUrl: "https://line.me/test",
+  });
+  vi.mocked(getActiveSosChoicesForLineUser).mockResolvedValue({
+    bound: true,
+    sessions: [
+      {
+        sessionId: "s1",
+        ownerName: "家人",
+        type: "body",
+        createdAt: new Date(),
+      },
+    ],
+    hasMore: false,
+    offset: 0,
+  });
+  vi.mocked(buildSosActionSelectionMessage).mockReturnValue({
+    type: "text",
+    text: "choose",
+  });
   vi.mocked(setPendingRename).mockResolvedValue(undefined);
   vi.mocked(clearPendingRename).mockResolvedValue(undefined);
   vi.mocked(buildSosMenuMessage).mockReturnValue({
@@ -243,6 +299,225 @@ function postbackEvent(data: string): LineEvent {
     postback: { data },
   } as unknown as LineEvent;
 }
+
+describe("line.service — deterministic text actions", () => {
+  it("binds a bare code without AI or menu even when AI is down", async () => {
+    vi.mocked(runLineAgent).mockRejectedValue(new Error("AI unavailable"));
+    vi.mocked(hasUsableEmergencyContactCode).mockResolvedValue(true);
+    await handleEvents([textEvent("  abc123  ")]);
+    expect(bindEmergencyContactCode).toHaveBeenCalledWith("ABC123", "U1");
+    expect(replyText).toHaveBeenCalledWith("r1", LINE_MSG.BIND_SUCCESS);
+    expect(runLineAgent).not.toHaveBeenCalled();
+    expect(appendLineChatTurn).not.toHaveBeenCalled();
+  });
+
+  it("dispatches account codes without trying emergency binding", async () => {
+    vi.mocked(hasUsableLineAccountCode).mockResolvedValue(true);
+    await handleEvents([textEvent("ABC123")]);
+    expect(bindLineAccountCode).toHaveBeenCalledWith("ABC123", "U1");
+    expect(bindEmergencyContactCode).not.toHaveBeenCalled();
+    expect(runLineAgent).not.toHaveBeenCalled();
+  });
+
+  it.each(["ambiguous", "unknown", "database failure"])(
+    "does not bind or send codes to AI on %s",
+    async (scenario) => {
+      if (scenario === "ambiguous") {
+        vi.mocked(hasUsableEmergencyContactCode).mockResolvedValue(true);
+        vi.mocked(hasUsableLineAccountCode).mockResolvedValue(true);
+      } else if (scenario === "database failure") {
+        vi.mocked(hasUsableEmergencyContactCode).mockRejectedValue(
+          new Error("DB unavailable"),
+        );
+      }
+      await handleEvents([textEvent("ABC123")]);
+      expect(bindEmergencyContactCode).not.toHaveBeenCalled();
+      expect(bindLineAccountCode).not.toHaveBeenCalled();
+      expect(runLineAgent).not.toHaveBeenCalled();
+      expect(replyText).toHaveBeenCalled();
+      expect(replyText).not.toHaveBeenCalledWith("r1", LINE_MSG.INFO);
+    },
+  );
+
+  it("does not send group binding codes to AI", async () => {
+    const event = {
+      ...textEvent("ABC123"),
+      source: { type: "group", groupId: "G1" },
+    } as LineEvent;
+    await handleEvents([event]);
+    expect(hasUsableEmergencyContactCode).not.toHaveBeenCalled();
+    expect(bindEmergencyContactCode).not.toHaveBeenCalled();
+    expect(runLineAgent).not.toHaveBeenCalled();
+  });
+
+  it("preserves six-character names in rename mode but explicit binding interrupts it", async () => {
+    vi.mocked(getPendingRename).mockResolvedValue("c1");
+    vi.mocked(renameBoundContact).mockResolvedValue({
+      ok: true,
+      httpCode: 200,
+      message: "renamed",
+    });
+    await handleEvents([textEvent("Robert")]);
+    expect(renameBoundContact).toHaveBeenCalledWith({
+      lineUserId: "U1",
+      contactId: "c1",
+      name: "Robert",
+    });
+    vi.mocked(hasUsableEmergencyContactCode).mockResolvedValue(true);
+    await handleEvents([textEvent("綁定 abc123")]);
+    expect(bindEmergencyContactCode).toHaveBeenCalledWith("ABC123", "U1");
+    expect(renameBoundContact).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["收到", "我收到了", "我收到回報！"])(
+    "acknowledges %s without AI",
+    async (text) => {
+      await handleEvents([textEvent(text)]);
+      expect(acknowledgeSession).toHaveBeenCalledWith({
+        sessionId: "s1",
+        lineUserId: "U1",
+      });
+      expect(runLineAgent).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    "我處理",
+    "我來處理這件事",
+    "我收到回報 我處理",
+    "我收到回報，我處理。",
+  ])("claims once for %s without AI", async (text) => {
+    await handleEvents([textEvent(text)]);
+    expect(claimSession).toHaveBeenCalledExactlyOnceWith({
+      sessionId: "s1",
+      lineUserId: "U1",
+    });
+    expect(acknowledgeSession).not.toHaveBeenCalled();
+    expect(buildClaimedControlsMessage).toHaveBeenCalledWith("s1");
+    expect(runLineAgent).not.toHaveBeenCalled();
+  });
+
+  it.each(["我沒收到", "我不能處理", "你收到嗎", "我處理？"])(
+    "does not directly act on %s",
+    async (text) => {
+      await handleEvents([textEvent(text)]);
+      expect(acknowledgeSession).not.toHaveBeenCalled();
+      expect(claimSession).not.toHaveBeenCalled();
+      expect(getActiveSosChoicesForLineUser).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["-1", "NaN", "1.5", "100001", "9007199254740992", ""])(
+    "rejects invalid page offset %j without querying or writing",
+    async (offset) => {
+      await handleEvents([
+        postbackEvent(`action=sos_action_page&intent=claim&offset=${offset}`),
+      ]);
+      expect(replyText).toHaveBeenCalledWith("rp", LINE_MSG.INVALID_ACTION);
+      expect(getActiveSosChoicesForLineUser).not.toHaveBeenCalled();
+      expect(claimSession).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not accept a lifecycle action in a selection-page postback", async () => {
+    await handleEvents([
+      postbackEvent("action=sos_action_page&intent=resolve&offset=0"),
+    ]);
+    expect(getActiveSosChoicesForLineUser).not.toHaveBeenCalled();
+    expect(resolveSession).not.toHaveBeenCalled();
+  });
+
+  it("normalizes a resolved race returned by the direct action", async () => {
+    vi.mocked(claimSession).mockResolvedValue({
+      ok: false,
+      httpCode: 400,
+      message: "closed",
+      data: { reason: SOS_REASON.SESSION_NOT_ACTIVE },
+    });
+    await handleEvents([textEvent("我處理")]);
+    expect(replyText).toHaveBeenCalledWith("r1", LINE_MSG.SOS_ALREADY_RESOLVED);
+    expect(buildClaimedControlsMessage).not.toHaveBeenCalled();
+  });
+
+  it("SOS intent interrupts a pending rename", async () => {
+    vi.mocked(getPendingRename).mockResolvedValue("c1");
+    await handleEvents([textEvent("我處理")]);
+    expect(claimSession).toHaveBeenCalled();
+    expect(renameBoundContact).not.toHaveBeenCalled();
+    expect(clearPendingRename).toHaveBeenCalledWith("U1");
+  });
+
+  it("asks the caller to choose among multiple sessions without writing", async () => {
+    const page = {
+      bound: true,
+      sessions: [
+        {
+          sessionId: "s1",
+          ownerName: "甲",
+          type: "body" as const,
+          createdAt: new Date(),
+        },
+        {
+          sessionId: "s2",
+          ownerName: "乙",
+          type: "body" as const,
+          createdAt: new Date(),
+        },
+      ],
+      hasMore: false,
+      offset: 0,
+    };
+    vi.mocked(getActiveSosChoicesForLineUser).mockResolvedValue(page);
+    await handleEvents([textEvent("我處理")]);
+    expect(buildSosActionSelectionMessage).toHaveBeenCalledWith("claim", page);
+    expect(claimSession).not.toHaveBeenCalled();
+    expect(acknowledgeSession).not.toHaveBeenCalled();
+    expect(runLineAgent).not.toHaveBeenCalled();
+  });
+
+  it("does not auto-select the only item on a later page", async () => {
+    vi.mocked(getActiveSosChoicesForLineUser).mockResolvedValue({
+      bound: true,
+      sessions: [
+        {
+          sessionId: "s11",
+          ownerName: "家人",
+          type: "body",
+          createdAt: new Date(),
+        },
+      ],
+      hasMore: false,
+      offset: 10,
+    });
+    await handleEvents([
+      postbackEvent("action=sos_action_page&intent=claim&offset=10"),
+    ]);
+    expect(buildSosActionSelectionMessage).toHaveBeenCalled();
+    expect(claimSession).not.toHaveBeenCalled();
+  });
+
+  it.each(["unbound", "no active", "query failure"])(
+    "distinguishes %s without generic intro or AI",
+    async (scenario) => {
+      if (scenario === "query failure")
+        vi.mocked(getActiveSosChoicesForLineUser).mockRejectedValue(
+          new Error("DB down"),
+        );
+      else
+        vi.mocked(getActiveSosChoicesForLineUser).mockResolvedValue({
+          bound: scenario !== "unbound",
+          sessions: [],
+          hasMore: false,
+          offset: 0,
+        });
+      await handleEvents([textEvent("收到")]);
+      expect(replyText).toHaveBeenCalled();
+      expect(replyText).not.toHaveBeenCalledWith("r1", LINE_MSG.INFO);
+      expect(runLineAgent).not.toHaveBeenCalled();
+      expect(acknowledgeSession).not.toHaveBeenCalled();
+    },
+  );
+});
 
 describe("line.service — follow", () => {
   it("replies the welcome message", async () => {
@@ -361,12 +636,41 @@ describe("line.service — text message (agent loop)", () => {
     );
   });
 
-  it("falls back to the fixed info reply when the agent throws", async () => {
+  it("reports unavailable conversation rather than implying missing binding when AI throws", async () => {
     vi.mocked(runLineAgent).mockRejectedValue(new Error("boom"));
 
     await handleEvents([textEvent("他現在在哪")]);
 
-    expect(vi.mocked(replyText)).toHaveBeenCalledWith("r1", LINE_MSG.INFO);
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith(
+      "r1",
+      LINE_MSG.AI_UNAVAILABLE,
+    );
+  });
+
+  it.each(["", "   "])(
+    "uses a non-binding fallback for empty AI output %j",
+    async (text) => {
+      vi.mocked(runLineAgent).mockResolvedValue({ text, toolResults: [] });
+      await handleEvents([textEvent("他現在在哪")]);
+      expect(replyAgentResult).toHaveBeenCalledWith(
+        "r1",
+        LINE_MSG.AI_UNAVAILABLE,
+        null,
+      );
+    },
+  );
+
+  it("does not claim an operation failed when the tool succeeded but LINE reply failed", async () => {
+    vi.mocked(runLineAgent).mockResolvedValue({
+      text: "已承接",
+      toolResults: [{ name: "claimSosEvent", args: {}, result: { ok: true } }],
+    });
+    vi.mocked(replyAgentResult).mockRejectedValueOnce(
+      new Error("LINE unavailable"),
+    );
+    await handleEvents([textEvent("交給我吧")]);
+    expect(replyText).toHaveBeenCalledWith("r1", LINE_MSG.AI_UNAVAILABLE);
+    expect(replyText).not.toHaveBeenCalledWith("r1", LINE_MSG.INFO);
   });
 
   it("strips markdown from the agent reply before sending it to LINE", async () => {
@@ -478,7 +782,10 @@ describe("line.service — postback (deterministic SOS controls)", () => {
     await handleEvents([postbackEvent("action=status&sid=s1&v=bogus")]);
 
     expect(vi.mocked(updateHandlingStatus)).not.toHaveBeenCalled();
-    expect(vi.mocked(replyText)).toHaveBeenCalledWith("rp", LINE_MSG.INFO);
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith(
+      "rp",
+      LINE_MSG.INVALID_ACTION,
+    );
   });
 
   it("resolve delegates to resolveSession", async () => {
@@ -491,27 +798,36 @@ describe("line.service — postback (deterministic SOS controls)", () => {
     expect(vi.mocked(replyText)).toHaveBeenCalledWith("rp", "已解除求救");
   });
 
-  it("replies the info message when sid or user id is missing", async () => {
+  it("rejects a missing sid without trying the latest session", async () => {
     await handleEvents([postbackEvent("action=ack")]);
 
     expect(vi.mocked(acknowledgeSession)).not.toHaveBeenCalled();
-    expect(vi.mocked(replyText)).toHaveBeenCalledWith("rp", LINE_MSG.INFO);
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith(
+      "rp",
+      LINE_MSG.INVALID_ACTION,
+    );
   });
 
-  it("replies INFO for an unknown action without any session lookup", async () => {
+  it("rejects an unknown action without any session lookup", async () => {
     await handleEvents([postbackEvent("action=bogus&sid=s1")]);
 
     expect(vi.mocked(getAuthorizedSessionForLineUser)).not.toHaveBeenCalled();
     expect(vi.mocked(acknowledgeSession)).not.toHaveBeenCalled();
-    expect(vi.mocked(replyText)).toHaveBeenCalledWith("rp", LINE_MSG.INFO);
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith(
+      "rp",
+      LINE_MSG.INVALID_ACTION,
+    );
   });
 
-  it("replies INFO for an invalid status value without any session lookup", async () => {
+  it("rejects an invalid status value without any session lookup", async () => {
     await handleEvents([postbackEvent("action=status&sid=s1&v=bogus")]);
 
     expect(vi.mocked(getAuthorizedSessionForLineUser)).not.toHaveBeenCalled();
     expect(vi.mocked(updateHandlingStatus)).not.toHaveBeenCalled();
-    expect(vi.mocked(replyText)).toHaveBeenCalledWith("rp", LINE_MSG.INFO);
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith(
+      "rp",
+      LINE_MSG.INVALID_ACTION,
+    );
   });
 
   it("replies the unified resolved message and skips the action for a resolved session", async () => {
@@ -1006,16 +1322,22 @@ describe("line.service — SOS information menu", () => {
     );
   });
 
-  it("answers an unknown sos_ action with the info message", async () => {
+  it("rejects an unknown sos_ action", async () => {
     await handleEvents([postbackEvent("action=sos_unknown")]);
 
-    expect(vi.mocked(replyText)).toHaveBeenCalledWith("rp", LINE_MSG.INFO);
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith(
+      "rp",
+      LINE_MSG.INVALID_ACTION,
+    );
   });
 
   it("refuses menu postbacks without an identified user and never queries", async () => {
     await handleEvents([groupPostbackEvent("action=sos_contacts")]);
 
-    expect(vi.mocked(replyText)).toHaveBeenCalledWith("rp", LINE_MSG.INFO);
+    expect(vi.mocked(replyText)).toHaveBeenCalledWith(
+      "rp",
+      LINE_MSG.USER_REQUIRED,
+    );
     expect(vi.mocked(listBoundContacts)).not.toHaveBeenCalled();
     expect(vi.mocked(listSosHistory)).not.toHaveBeenCalled();
   });

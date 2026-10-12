@@ -1,5 +1,19 @@
 export type SosType = "body" | "trapped" | "share_location";
 
+export interface ActiveSosChoice {
+  sessionId: string;
+  ownerName: string;
+  type: SosType;
+  createdAt: Date;
+}
+
+export interface ActiveSosChoicePage {
+  bound: boolean;
+  sessions: ActiveSosChoice[];
+  hasMore: boolean;
+  offset: number;
+}
+
 /**
  * Uniform service-to-controller result. `httpCode` is the HTTP status (also the
  * envelope `code`); failures encode their domain reason inside `data.reason`.

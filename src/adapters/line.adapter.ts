@@ -1,7 +1,7 @@
 import { HTTPFetchError, messagingApi } from "@line/bot-sdk";
 import { LINE_MSG, SOS_TYPE_LABEL } from "../constants/messages";
 import { taipeiHHmm, taipeiYmdDash } from "../config/taipei-time";
-import type { SosType } from "../modules/sos/sos.types";
+import type { ActiveSosChoicePage, SosType } from "../modules/sos/sos.types";
 import type {
   LineBoundContact,
   LineSosHistoryData,
@@ -217,6 +217,59 @@ export function buildClaimedControlsMessage(
 }
 
 const MAX_CAROUSEL_BUBBLES = 10;
+
+/** A bounded page of authorized SOS events; buttons reauthorize on every click. */
+export function buildSosActionSelectionMessage(
+  action: "ack" | "claim",
+  page: ActiveSosChoicePage,
+): messagingApi.TextMessage {
+  const verb =
+    action === "ack" ? LINE_MSG.SOS_ACK_ACTION : LINE_MSG.SOS_CLAIM_ACTION;
+  const entries = page.sessions.slice(0, MAX_CAROUSEL_BUBBLES);
+  const items: messagingApi.QuickReplyItem[] = entries.map((entry, index) => ({
+    type: "action",
+    action: {
+      type: "postback",
+      label: `${index + 1}. ${entry.ownerName}`.slice(0, 20),
+      data: new URLSearchParams({ action, sid: entry.sessionId }).toString(),
+      displayText: `${verb}：${entry.ownerName}`.slice(0, 100),
+    },
+  }));
+  if (page.hasMore)
+    items.push({
+      type: "action",
+      action: {
+        type: "postback",
+        label: LINE_MSG.SOS_NEXT_PAGE,
+        data: `action=sos_action_page&intent=${action}&offset=${page.offset + entries.length}`,
+      },
+    });
+  if (page.offset > 0)
+    items.push({
+      type: "action",
+      action: {
+        type: "postback",
+        label: LINE_MSG.SOS_FIRST_PAGE,
+        data: `action=sos_action_page&intent=${action}&offset=0`,
+      },
+    });
+  const header = entries.length
+    ? action === "ack"
+      ? LINE_MSG.SOS_CHOOSE_ACK
+      : LINE_MSG.SOS_CHOOSE_CLAIM
+    : LINE_MSG.SOS_LIST_CHANGED;
+  return {
+    type: "text",
+    text: [
+      header,
+      ...entries.map(
+        (entry, index) =>
+          `${index + 1}. ${entry.ownerName.slice(0, 80)}｜${SOS_TYPE_LABEL[entry.type]}｜${taipeiYmdDash(entry.createdAt)} ${taipeiHHmm(entry.createdAt)}`,
+      ),
+    ].join("\n"),
+    quickReply: { items },
+  };
+}
 
 /**
  * Builds the SOS information menu: one text message carrying the four

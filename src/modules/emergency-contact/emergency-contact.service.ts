@@ -6,15 +6,67 @@ import {
   findContactById,
   findContactsByUser,
   insertContact,
+  redeemEmergencyContactCode,
+  usableEmergencyContactCodeExists,
 } from "./emergency-contact.repository";
+import { normalizeLineBindingCode } from "../../utils/line-binding-code";
+import type { EmergencyContactBindingResult } from "../../types/line-binding";
+export type { EmergencyContactBindingResult } from "../../types/line-binding";
 import { buildBindUrl } from "../../adapters/line.adapter";
 import { ResponseCode } from "../../types/code";
-import { CONTACT_MSG, CONTACT_REASON } from "../../constants/messages";
+import {
+  CONTACT_MSG,
+  CONTACT_REASON,
+  LINE_MSG,
+} from "../../constants/messages";
 import type {
   CreateContactInput,
   DeleteContactInput,
   ServiceResult,
 } from "./emergency-contact.types";
+
+export async function hasUsableEmergencyContactCode(
+  code: string,
+): Promise<boolean> {
+  const normalized = normalizeLineBindingCode(code);
+  return normalized ? usableEmergencyContactCodeExists(normalized) : false;
+}
+
+export async function bindEmergencyContactCode(
+  code: string,
+  lineUserId?: string,
+): Promise<EmergencyContactBindingResult> {
+  if (!lineUserId?.trim()) return { ok: false, error: "缺少 LINE 使用者資訊" };
+  const normalized = normalizeLineBindingCode(code);
+  if (!normalized) return { ok: false, error: "綁定碼格式錯誤" };
+  try {
+    const contact = await redeemEmergencyContactCode(normalized, lineUserId);
+    if (!contact) {
+      return {
+        ok: false,
+        errorCode: "NO_EMERGENCY_BIND_CODE",
+        error: "找不到可用的緊急聯絡人綁定碼",
+      };
+    }
+    return {
+      ok: true,
+      bound: true,
+      contactId: String(contact._id),
+      contactName: contact.name,
+    };
+  } catch {
+    // The write may have completed before its response failed. Do not claim otherwise,
+    // and do not log the code, LINE identifier, or raw database error.
+    console.error(
+      "[emergency-contact:bind] redemption failed; outcome unconfirmed",
+    );
+    return {
+      ok: false,
+      errorCode: "BIND_OUTCOME_UNCONFIRMED",
+      error: LINE_MSG.BIND_UNCONFIRMED,
+    };
+  }
+}
 
 const MAX_CONTACTS = 5;
 const BIND_CODE_TTL_MS = 24 * 60 * 60 * 1000;

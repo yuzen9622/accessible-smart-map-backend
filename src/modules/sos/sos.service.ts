@@ -8,6 +8,8 @@ import {
   applyHandlingUpdate,
   claimUnclaimedSession,
   findActiveSessionByUser,
+  findActiveSessionsByOwners,
+  findSosOwnerNames,
   findBoundContact,
   findBoundContactsByLineUser,
   findBoundLineUserIds,
@@ -29,6 +31,7 @@ import { pickLocale, sendPushToUser } from "../user/user.push.service";
 import { buildSosSnapshot, emitSosUpdate } from "./sos-events";
 import type { ISosSession } from "../../types";
 import type {
+  ActiveSosChoicePage,
   AcknowledgeSosInput,
   ClaimSosInput,
   CreateSosInput,
@@ -57,10 +60,7 @@ async function notifyOthers(
 ): Promise<void> {
   if (!lineUserIds.length) return;
   try {
-    const adapter =
-      (await import("../../adapters/line.adapter")) as unknown as {
-        pushSosUpdate?: (ids: string[], msg: string) => Promise<unknown>;
-      };
+    const adapter = await import("../../adapters/line.adapter");
     if (typeof adapter.pushSosUpdate === "function") {
       await adapter.pushSosUpdate(lineUserIds, message);
     }
@@ -115,6 +115,52 @@ function notifyOwnerPush(
     status: session.status,
     handlingStatus: session.handlingStatus,
   });
+}
+
+/**
+ * Lists active events for a bound LINE contact, without choosing the latest one.
+ * Read one extra row so a full page cannot be mistaken for the complete set.
+ * Writes must still reauthorize through the ordinary SOS domain operations.
+ */
+export async function getActiveSosChoicesForLineUser(
+  lineUserId: string,
+  offset = 0,
+): Promise<ActiveSosChoicePage> {
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > 100_000) {
+    throw new Error("Invalid SOS selection offset");
+  }
+  const empty: ActiveSosChoicePage = {
+    bound: false,
+    sessions: [],
+    hasMore: false,
+    offset,
+  };
+  if (!lineUserId) return empty;
+  const contacts = await findBoundContactsByLineUser(lineUserId);
+  const ownerIds = [
+    ...new Set(contacts.map((contact) => String(contact.userId))),
+  ];
+  if (!ownerIds.length) return empty;
+  const pageSize = 10;
+  const rows = await findActiveSessionsByOwners(ownerIds, offset, pageSize + 1);
+  const visible = rows.slice(0, pageSize);
+  const owners = visible.length
+    ? await findSosOwnerNames([
+        ...new Set(visible.map((row) => String(row.userId))),
+      ])
+    : [];
+  const names = new Map(owners.map((owner) => [String(owner._id), owner.name]));
+  return {
+    bound: true,
+    sessions: visible.map((row) => ({
+      sessionId: String(row._id),
+      ownerName: names.get(String(row.userId)) || "未命名使用者",
+      type: row.type,
+      createdAt: row.createdAt,
+    })),
+    hasMore: rows.length > pageSize,
+    offset,
+  };
 }
 
 /**
@@ -294,10 +340,7 @@ export async function updateLocation(
   });
   if (!updated) return fail(ResponseCode.INVALID_INPUT, "SESSION_NOT_ACTIVE");
 
-  emitSosUpdate(
-    String(updated._id),
-    buildSosSnapshot(updated as unknown as ISosSession),
-  );
+  emitSosUpdate(String(updated._id), buildSosSnapshot(updated));
 
   return {
     ok: true,
@@ -377,10 +420,7 @@ export async function acknowledgeSession(
 
   const updated = await findSessionById(input.sessionId);
   if (updated) {
-    emitSosUpdate(
-      input.sessionId,
-      buildSosSnapshot(updated as unknown as ISosSession),
-    );
+    emitSosUpdate(input.sessionId, buildSosSnapshot(updated));
     notifyOwnerPush(updated, { kind: "acknowledged" }, acting?.name);
     const others = (await boundLineUserIds(String(updated.userId))).filter(
       (id) => id !== input.lineUserId,
@@ -443,10 +483,7 @@ export async function claimSession(
   if (prev) {
     const updated = await findSessionById(input.sessionId);
     if (updated) {
-      emitSosUpdate(
-        input.sessionId,
-        buildSosSnapshot(updated as unknown as ISosSession),
-      );
+      emitSosUpdate(input.sessionId, buildSosSnapshot(updated));
       notifyOwnerPush(updated, { kind: "claimed" }, acting?.name);
       const others = (await boundLineUserIds(String(updated.userId))).filter(
         (id) => id !== input.lineUserId,
@@ -462,7 +499,10 @@ export async function claimSession(
   }
 
   const current = await findSessionById(input.sessionId);
-  if (current?.claimedBy === input.lineUserId) {
+  if (!current || current.status !== "active") {
+    return fail(ResponseCode.INVALID_INPUT, "SESSION_NOT_ACTIVE");
+  }
+  if (current.claimedBy === input.lineUserId) {
     return {
       ok: true,
       httpCode: ResponseCode.OK,
@@ -472,9 +512,6 @@ export async function claimSession(
         claimedByName: current.claimedByName ?? null,
       },
     };
-  }
-  if (!current || current.status !== "active") {
-    return fail(ResponseCode.INVALID_INPUT, "SESSION_NOT_ACTIVE");
   }
   return {
     ok: false,
@@ -528,10 +565,7 @@ export async function updateHandlingStatus(
   const updated = await applyHandlingUpdate(input.sessionId, update);
   if (!updated) return fail(ResponseCode.INVALID_INPUT, "SESSION_NOT_ACTIVE");
 
-  emitSosUpdate(
-    input.sessionId,
-    buildSosSnapshot(updated as unknown as ISosSession),
-  );
+  emitSosUpdate(input.sessionId, buildSosSnapshot(updated));
   notifyOwnerPush(
     updated,
     {
@@ -632,10 +666,7 @@ export async function resolveSession(
 
   const updated = await findSessionById(input.sessionId);
   if (updated) {
-    emitSosUpdate(
-      input.sessionId,
-      buildSosSnapshot(updated as unknown as ISosSession),
-    );
+    emitSosUpdate(input.sessionId, buildSosSnapshot(updated));
     if (input.lineUserId) {
       notifyOwnerPush(updated, { kind: "resolved" }, actorName);
     }
@@ -671,7 +702,7 @@ export async function getSessionForOwner(
     ok: true,
     httpCode: ResponseCode.OK,
     message: SOS_MSG.PUBLIC_OK,
-    data: buildSosSnapshot(session as unknown as ISosSession),
+    data: buildSosSnapshot(session),
   };
 }
 

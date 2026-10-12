@@ -27,6 +27,31 @@ export async function findBoundContactsByLineUser(
     .lean<BoundContactRef[]>();
 }
 
+/** Reads a bounded, stable page without exposing location data to selection UI. */
+export async function findActiveSessionsByOwners(
+  ownerIds: string[],
+  offset: number,
+  limit: number,
+): Promise<
+  Array<Pick<SosSessionRecord, "_id" | "userId" | "type" | "createdAt">>
+> {
+  return SosSession.find({ userId: { $in: ownerIds }, status: "active" })
+    .sort({ createdAt: -1, _id: -1 })
+    .skip(offset)
+    .limit(limit)
+    .select("_id userId type createdAt")
+    .lean();
+}
+
+/** Batch display names; authorization comes from the bound-contact query. */
+export async function findSosOwnerNames(
+  ownerIds: string[],
+): Promise<Array<{ _id: unknown; name?: string }>> {
+  return User.find({ _id: { $in: ownerIds } })
+    .select("name")
+    .lean();
+}
+
 /**
  * The bound contact linking one owner to one LINE user.
  *
@@ -129,7 +154,7 @@ export async function insertSession(
   doc: Record<string, unknown>,
 ): Promise<SosSessionRecord> {
   const created = await SosSession.create(doc);
-  return created.toObject() as unknown as SosSessionRecord;
+  return created.toObject();
 }
 
 /**

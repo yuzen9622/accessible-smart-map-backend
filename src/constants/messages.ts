@@ -362,6 +362,30 @@ export const SOS_TYPE_LABEL: Record<
 export const LINE_MSG = {
   WELCOME: "歡迎加入！請輸入朋友分享給你的 6 碼綁定碼以完成綁定。",
   BIND_SUCCESS: "綁定成功！當對方發出緊急求救時，你會在這裡收到通知。",
+  ACCOUNT_BIND_SUCCESS: "LINE 帳號綁定成功。",
+  BIND_UNCONFIRMED:
+    "目前無法確認綁定結果。請先查看綁定狀態；若尚未綁定，請重新產生綁定碼。",
+  BIND_INVALID:
+    "找不到可用的綁定碼，可能已過期或已使用。請確認六碼，或請對方重新產生。",
+  BIND_AMBIGUOUS:
+    "這組綁定碼同時對應兩種綁定用途，尚未執行綁定。請重新產生綁定碼。",
+  BIND_FORMAT: "請輸入六位英文字母或數字的綁定碼，例如「綁定 ABC123」。",
+  USER_REQUIRED: "請在與此官方帳號的一對一聊天室操作。",
+  AI_UNAVAILABLE:
+    "目前無法完成對話回覆。若你剛才要求處理求救事件，請先查看事件狀態；也可輸入「SOS資訊查詢」或使用通知卡片上的按鈕。",
+  OPERATION_UNCONFIRMED: "目前無法確認操作結果，請先查看綁定或求救事件狀態。",
+  INVALID_ACTION:
+    "這個操作無效，請使用通知卡片上的按鈕，或輸入「SOS資訊查詢」。",
+  SOS_QUERY_FAILED:
+    "目前無法查詢求救事件，請稍後再試，或使用原通知卡片上的按鈕。",
+  SOS_NO_ACTIVE: "目前沒有進行中的求救事件。",
+  SOS_CHOOSE_ACK: "請選擇要確認收到的求救事件：",
+  SOS_CHOOSE_CLAIM: "請選擇要承接的求救事件：",
+  SOS_LIST_CHANGED: "事件清單已變動，請重新選擇。",
+  SOS_NEXT_PAGE: "下一頁",
+  SOS_FIRST_PAGE: "重新查看事件",
+  SOS_ACK_ACTION: "確認收到",
+  SOS_CLAIM_ACTION: "我來處理",
   INFO: "這是緊急求救通知官方帳號。若你收到綁定碼，請直接輸入以完成綁定；當你綁定的親友發出求救時，我們會在此通知你。如遇緊急狀況，請直接撥打 119（消防/救護）或 110（警察）。",
   SOS_NOTIFY_TITLE: "緊急求救通知",
   SOS_RESOLVED_TITLE: "求救已解除",
@@ -382,7 +406,8 @@ export const LINE_MSG = {
   SOS_HISTORY_TITLE: "求助歷史",
   SOS_NO_HISTORY: "目前沒有求助紀錄。",
   SOS_CONTACT_NOT_FOUND: "找不到這筆綁定，可能已解除綁定。",
-  SOS_RENAME_PROMPT: "請直接輸入新的顯示名稱（輸入「取消」可放棄）。",
+  SOS_RENAME_PROMPT:
+    "請直接輸入新的顯示名稱（輸入「取消」可放棄）。若要改做綁定，請輸入「綁定 六碼」，或先取消改名再貼上綁定碼。",
   SOS_RENAME_CANCELLED: "已取消修改顯示名稱。",
   SOS_RENAME_INVALID:
     "顯示名稱請輸入 1 到 50 個字，請再輸入一次（輸入「取消」可放棄）。",
