@@ -3,6 +3,10 @@ import { z } from "zod";
 import { DEFAULT_LANG, SUPPORTED_LANGS } from "../../types/lang";
 import { registry } from "../../openapi/registry";
 import { NavInstructionsDataSchema } from "../../schemas/nav-instructions-data.schema";
+import {
+  ApiErrorResponseSchema,
+  ValidationErrorResponseSchema,
+} from "../../schemas/api-error.schema";
 
 extendZodWithOpenApi(z);
 
@@ -37,13 +41,7 @@ const NavInstructionsResponseSchema = z
   .openapi("NavInstructionsResponse");
 
 const NavErrorResponseSchema = z
-  .object({
-    ok: z.literal(false),
-    status: z.literal("error"),
-    code: z.number(),
-    message: z.string(),
-    data: z.object({ reason: z.string() }).optional(),
-  })
+  .union([ValidationErrorResponseSchema, ApiErrorResponseSchema])
   .openapi("NavInstructionsErrorResponse");
 
 registry.registerPath({

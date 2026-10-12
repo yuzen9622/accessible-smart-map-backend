@@ -128,6 +128,19 @@ describe("searchPlaces distance ordering", () => {
 });
 
 describe("place language", () => {
+  it.each(["en", "zh-TW"] as const)(
+    "uses the requested %s language for Text Search",
+    async (lang) => {
+      mockPost.mockResolvedValue({ data: { places: [] } });
+      await searchPlaces("台北車站", { lang });
+      expect(mockPost).toHaveBeenCalledWith(
+        "https://places.googleapis.com/v1/places:searchText",
+        expect.objectContaining({ textQuery: "台北車站", languageCode: lang }),
+        expect.any(Object),
+      );
+    },
+  );
+
   it("defaults autocomplete predictions to zh-TW", async () => {
     mockPost.mockResolvedValue({ data: { suggestions: [] } });
 

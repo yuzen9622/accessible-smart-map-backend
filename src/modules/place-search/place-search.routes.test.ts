@@ -241,6 +241,7 @@ describe("GET /a11y/search/details/:id", () => {
 
     expect(res.status).toBe(404);
     expect(res.body.message).toBe("Place not found");
+    expect(res.body.data.reason).toBe("PLACE_NOT_FOUND");
     expect(service.details).toHaveBeenCalledWith(
       expect.objectContaining({ lang: "en" }),
     );
@@ -294,12 +295,40 @@ describe("GET /a11y/search/details/:id", () => {
   });
 });
 
+describe("place-search structured failures", () => {
+  it.each(["autocomplete", "details"] as const)(
+    "localizes a %s failure without leaking upstream details",
+    async (kind) => {
+      vi.mocked(service[kind]).mockRejectedValue(new Error("upstream-secret"));
+      const path =
+        kind === "autocomplete"
+          ? `${BASE}/search/autocomplete?q=park`
+          : `${BASE}/search/details/google:123`;
+      const res = await request(app).get(path).query({ lang: "en" });
+      expect(res.status).toBe(500);
+      expect(res.body.data.reason).toBe("PLACE_SEARCH_FAILED");
+      expect(res.body.message).toBe(
+        "Place search failed. Please try again later.",
+      );
+      expect(res.text).not.toContain("upstream-secret");
+    },
+  );
+});
+
 describe("place-search OpenAPI", () => {
   it("publishes the details path and four nullable PlaceAccessibility properties", async () => {
     const res = await request(app).get("/api/v1/openapi.json");
 
     expect(res.status).toBe(200);
     expect(res.body.paths["/a11y/search/details/{id}"]).toHaveProperty("get");
+    expect(
+      res.body.paths["/a11y/search/details/{id}"].get.responses["400"].content[
+        "application/json"
+      ].schema.$ref,
+    ).toContain("ValidationErrorResponse");
+    expect(
+      res.body.components.schemas.ValidationIssue.properties.code.enum,
+    ).toContain("VALIDATION_TOO_SMALL");
     const props = res.body.components.schemas.PlaceAccessibility.properties;
     expect(props).toMatchObject({
       wheelchairAccess: { type: "boolean", nullable: true },

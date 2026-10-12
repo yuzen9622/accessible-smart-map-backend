@@ -1,6 +1,10 @@
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 import { registry } from "../../openapi/registry";
+import {
+  ApiErrorResponseSchema,
+  ValidationErrorResponseSchema,
+} from "../../schemas/api-error.schema";
 
 extendZodWithOpenApi(z);
 
@@ -315,8 +319,16 @@ registry.registerPath({
       description: "預測清單（任一來源失敗時只掉該來源，仍回 200）",
       content: { "application/json": { schema: AutocompleteResponseSchema } },
     },
-    400: { description: "缺少 q 或參數不合法" },
-    500: { description: "伺服器錯誤" },
+    400: {
+      description: "缺少 q 或參數不合法；data.reason=VALIDATION_FAILED",
+      content: {
+        "application/json": { schema: ValidationErrorResponseSchema },
+      },
+    },
+    500: {
+      description: "伺服器錯誤；data.reason=PLACE_SEARCH_FAILED",
+      content: { "application/json": { schema: ApiErrorResponseSchema } },
+    },
   },
 });
 
@@ -333,8 +345,19 @@ registry.registerPath({
       description: "地點詳情",
       content: { "application/json": { schema: PlaceDetailsResponseSchema } },
     },
-    400: { description: "id 前綴不合法或參數不合法" },
-    404: { description: "查無此地點或無可用座標" },
-    500: { description: "伺服器錯誤" },
+    400: {
+      description: "id 前綴不合法或參數不合法；data.reason=VALIDATION_FAILED",
+      content: {
+        "application/json": { schema: ValidationErrorResponseSchema },
+      },
+    },
+    404: {
+      description: "查無此地點或無可用座標；data.reason=PLACE_NOT_FOUND",
+      content: { "application/json": { schema: ApiErrorResponseSchema } },
+    },
+    500: {
+      description: "伺服器錯誤；data.reason=PLACE_SEARCH_FAILED",
+      content: { "application/json": { schema: ApiErrorResponseSchema } },
+    },
   },
 });

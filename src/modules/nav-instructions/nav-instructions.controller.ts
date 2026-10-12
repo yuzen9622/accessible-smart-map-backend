@@ -6,6 +6,7 @@ import { DEFAULT_LANG } from "../../types/lang";
 import type { NavInstructionsInput } from "./nav-instructions.types";
 import { NAV_API_MSG } from "../../constants/messages";
 import { generateNavInstructionsFromInput } from "./nav-instructions.service";
+import { localizeRouteReason } from "../../utils/route-messages";
 
 export async function navInstructions(
   req: Request,
@@ -37,14 +38,16 @@ export async function navInstructions(
       NAV_API_MSG[language].OK(result.data.totalSteps),
       result.data,
     );
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("[nav-instructions]", error);
     return sendResponse(
       res,
       false,
       "error",
       ResponseCode.INTERNAL_ERROR,
-      NAV_API_MSG[language].INTERNAL,
+      localizeRouteReason("NAV_INSTRUCTIONS_FAILED", language) ??
+        NAV_API_MSG[language].INTERNAL,
+      { reason: "NAV_INSTRUCTIONS_FAILED" },
     );
   }
 }

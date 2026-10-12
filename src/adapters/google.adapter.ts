@@ -271,6 +271,7 @@ export async function searchPlaces(
     longitude?: number;
     maxResults?: number;
     sortByDistance?: boolean;
+    lang?: SupportedLang;
   } = {},
 ): Promise<GooglePlace[]> {
   const key = MAPS_KEY();
@@ -278,7 +279,7 @@ export async function searchPlaces(
 
   const body: Record<string, unknown> = {
     textQuery: query,
-    languageCode: "zh-TW",
+    languageCode: opts.lang ?? DEFAULT_LANG,
     maxResultCount: opts.sortByDistance ? 10 : (opts.maxResults ?? 3),
   };
   if (opts.latitude !== undefined && opts.longitude !== undefined) {

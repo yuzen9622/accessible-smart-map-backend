@@ -2,16 +2,17 @@ import type { Request, Response } from "express";
 import { sendResponse } from "../../config/lib";
 import { ApiResponse } from "../../types/response";
 import { ResponseCode } from "../../types/code";
-import { MSG, ERROR_MESSAGE } from "../../constants/messages";
+import { MSG } from "../../constants/messages";
+import { apiErrorMessage, type ApiErrorData } from "../../constants/api-errors";
 import * as placeSearchService from "./place-search.service";
 import type { AutocompleteItem, PlaceResult } from "./place-search.service";
 import type { PlaceSource } from "./place-search.types";
-import { normalizeLang, type SupportedLang } from "../../types/lang";
+import { normalizeLang } from "../../types/lang";
 
-const PLACE_NOT_FOUND_MSG: Record<SupportedLang, string> = {
-  "zh-TW": "查無此地點",
-  en: "Place not found",
-};
+function requestLanguage(req: Request) {
+  const { lang } = (req.validated?.query ?? {}) as { lang?: string };
+  return lang === undefined ? undefined : normalizeLang(lang);
+}
 
 /** Parses a validated coordinate string into a number, or undefined when absent. */
 function toNum(value?: string): number | undefined {
@@ -25,7 +26,7 @@ function toSources(value?: string): PlaceSource[] | undefined {
 
 async function autocomplete(
   req: Request,
-  res: Response<ApiResponse<AutocompleteItem[]>>,
+  res: Response<ApiResponse<AutocompleteItem[] | ApiErrorData>>,
 ) {
   try {
     const { q, sessiontoken, lat, lng, sources, limit, lang } = (req.validated
@@ -54,12 +55,16 @@ async function autocomplete(
       false,
       "error",
       ResponseCode.INTERNAL_ERROR,
-      ERROR_MESSAGE.INTERNAL,
+      apiErrorMessage("PLACE_SEARCH_FAILED", requestLanguage(req)),
+      { reason: "PLACE_SEARCH_FAILED" },
     );
   }
 }
 
-async function details(req: Request, res: Response<ApiResponse<PlaceResult>>) {
+async function details(
+  req: Request,
+  res: Response<ApiResponse<PlaceResult | ApiErrorData>>,
+) {
   try {
     const { id } = (req.validated?.params ?? {}) as { id: string };
     const { sessiontoken, lat, lng, lang } = (req.validated?.query ?? {}) as {
@@ -82,7 +87,8 @@ async function details(req: Request, res: Response<ApiResponse<PlaceResult>>) {
         false,
         "error",
         ResponseCode.NOT_FOUND,
-        PLACE_NOT_FOUND_MSG[resolvedLang],
+        apiErrorMessage("PLACE_NOT_FOUND", resolvedLang),
+        { reason: "PLACE_NOT_FOUND" },
       );
     }
     return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
@@ -92,7 +98,8 @@ async function details(req: Request, res: Response<ApiResponse<PlaceResult>>) {
       false,
       "error",
       ResponseCode.INTERNAL_ERROR,
-      ERROR_MESSAGE.INTERNAL,
+      apiErrorMessage("PLACE_SEARCH_FAILED", requestLanguage(req)),
+      { reason: "PLACE_SEARCH_FAILED" },
     );
   }
 }
