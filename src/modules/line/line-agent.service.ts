@@ -22,10 +22,26 @@ export const LINE_TOOL_ALLOWLIST: string[] = [
   ...lineFamilyTools,
 ].flatMap((tool) => (tool.type === "function" ? [tool.function.name] : []));
 
+/**
+ * Tools that change state (bindings, SOS lifecycle). Excluded for turns whose
+ * text is a speech-to-text guess, so a mis-hearing can never bind an account or
+ * claim / resolve an SOS — those need typed text or a button.
+ */
+export const LINE_WRITE_TOOLS = new Set([
+  "bindEmergencyContactCode",
+  "bindLineAccountCode",
+  "confirmSosReceived",
+  "claimSosEvent",
+  "updateSosHandlingStatus",
+  "resolveSosEvent",
+]);
+
 export interface RunLineAgentParams {
   lineUserId: string;
   messages: OAIMessage[];
   userLocation?: { latitude: number; longitude: number };
+  /** Read-only tool set (voice transcripts). */
+  readOnly?: boolean;
 }
 
 /**
@@ -70,6 +86,11 @@ export function runLineAgent(params: RunLineAgentParams): Promise<AgentResult> {
     false,
     false,
     createRouteAwareExecutor(new RouteConversationContext(), execTool),
-    { extraTools: lineFamilyTools, toolAllowList: LINE_TOOL_ALLOWLIST },
+    {
+      extraTools: lineFamilyTools,
+      toolAllowList: params.readOnly
+        ? LINE_TOOL_ALLOWLIST.filter((name) => !LINE_WRITE_TOOLS.has(name))
+        : LINE_TOOL_ALLOWLIST,
+    },
   );
 }

@@ -220,7 +220,7 @@ async function handleTextMessage(
   replyToken: string,
   text: string,
   lineUserId?: string,
-  speechPrefix?: string,
+  voice?: { heard: string },
 ): Promise<void> {
   try {
     if (lineUserId) await showLoadingAnimation(lineUserId).catch(() => {});
@@ -241,12 +241,13 @@ async function handleTextMessage(
       lineUserId: lineUserId ?? "",
       messages,
       userLocation,
+      ...(voice ? { readOnly: true } : {}),
     });
     const speech = stripLineMarkdown(parseAgentSpeech(result.text));
     const routeCard = routeCardFromToolResults(result.toolResults);
     await replyAgentResult(
       replyToken,
-      speechPrefix ? `${speechPrefix}\n${speech}` : speech,
+      voice ? `${voice.heard}\n${speech}` : speech,
       routeCard,
       lineUserId,
     );
@@ -925,12 +926,9 @@ async function handleAudioMessage(
     await replyText(replyToken, LINE_MSG.AUDIO_FAILED, lineUserId);
     return;
   }
-  await handleTextMessage(
-    replyToken,
-    transcript,
-    lineUserId,
-    LINE_MSG.AUDIO_HEARD.replace("{text}", transcript),
-  );
+  await handleTextMessage(replyToken, transcript, lineUserId, {
+    heard: LINE_MSG.AUDIO_HEARD.replace("{text}", transcript),
+  });
 }
 
 async function handleEvent(event: LineEvent): Promise<void> {

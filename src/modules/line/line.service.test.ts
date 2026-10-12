@@ -1661,6 +1661,9 @@ describe("line.service — media messages", () => {
       null,
       "U1",
     );
+    expect(runLineAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ readOnly: true }),
+    );
   });
 
   it("never treats a transcript as a binding code", async () => {

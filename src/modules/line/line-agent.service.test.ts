@@ -58,3 +58,35 @@ it("keeps the planned route token for follow-up instructions while preserving LI
     routeToken: "trusted",
   });
 });
+
+it("drops every state-changing tool for read-only (voice) turns", async () => {
+  runToolLoop.mockResolvedValue({ text: "ok", toolResults: [] });
+  await runLineAgent({
+    lineUserId: "line-user",
+    messages: [{ role: "user", content: "我處理" }],
+    readOnly: true,
+  });
+  const allow: string[] = runToolLoop.mock.calls[0][11].toolAllowList;
+  for (const name of [
+    "bindEmergencyContactCode",
+    "bindLineAccountCode",
+    "confirmSosReceived",
+    "claimSosEvent",
+    "updateSosHandlingStatus",
+    "resolveSosEvent",
+  ]) {
+    expect(allow).not.toContain(name);
+  }
+  expect(allow).toContain("getActiveSosContext");
+});
+
+it("keeps write tools for typed turns", async () => {
+  runToolLoop.mockResolvedValue({ text: "ok", toolResults: [] });
+  await runLineAgent({
+    lineUserId: "line-user",
+    messages: [{ role: "user", content: "我處理" }],
+  });
+  expect(runToolLoop.mock.calls[0][11].toolAllowList).toContain(
+    "claimSosEvent",
+  );
+});
