@@ -23,6 +23,7 @@ import {
 import { createSession } from "./user.auth-session.repository";
 import { deleteOwnedRecords } from "./user.account.repository";
 import { registerPushToken, sendPushToUser } from "./user.push.service";
+import * as receiptRepository from "./user.push-receipt.repository";
 import {
   attachReceiptTicket,
   claimDueReceipt,
@@ -120,29 +121,64 @@ describe("Expo push receipt tracking (real Mongo, mocked Expo HTTP)", () => {
     await stopMongoTest(mongo);
   });
 
-  it("tracks each device's ticket, polls only when due, and never resends", async () => {
-    const { userId } = await setup(2);
-    const res = await sendPushToUser(userId, build, { k: 1 });
-    expect(res).toEqual({ sent: 2, removed: 0 });
-    const stored = await rows();
-    expect(stored.map((r) => [r.state, r.ticketId])).toEqual([
-      ["pending", "ticket-1"],
-      ["pending", "ticket-2"],
-    ]);
-    // Nothing sensitive is persisted.
-    expect(JSON.stringify(stored)).not.toMatch(/PRIVATE|ExponentPushToken/);
+  it.each([false, true])(
+    "tracks each device's ticket, polls only when due, and never resends (reverse reservation time: %s)",
+    async (reverseReservationTime) => {
+      const { userId } = await setup(2);
+      if (reverseReservationTime) {
+        const reserve = receiptRepository.reserveReceiptAttempt;
+        const now = Date.now();
+        let index = 0;
+        // Promise.all preserves send order, not the creation time of concurrent rows.
+        vi.spyOn(receiptRepository, "reserveReceiptAttempt").mockImplementation(
+          (token) => reserve(token, new Date(now + (index++ === 0 ? 1 : 0))),
+        );
+      }
+      const res = await sendPushToUser(userId, build, { k: 1 });
+      expect(res).toEqual({ sent: 2, removed: 0 });
+      const stored = await rows();
+      expect(stored).toHaveLength(2);
+      const send = fetchMock.mock.calls.find(
+        ([url]) => url === EXPO_PUSH_SEND_URL,
+      );
+      expect(send).toBeDefined();
+      const messages: Array<{ to: string }> = JSON.parse(
+        String(send![1]?.body),
+      );
+      const registrations = await PushToken.find({ userId }).lean();
+      expect(messages.map((message) => message.to).sort()).toEqual(
+        registrations.map((registration) => registration.token).sort(),
+      );
+      // Expo tickets correspond to HTTP payload order. Mongo insertion timestamps
+      // are not a delivery-order contract; verify the actual device association.
+      messages.forEach((message, index) => {
+        const registration = registrations.find(
+          (row) => row.token === message.to,
+        );
+        expect(registration).toBeDefined();
+        expect(
+          stored.find((row) => row.tokenId === String(registration!._id)),
+        ).toMatchObject({
+          state: "pending",
+          ticketId: `ticket-${index + 1}`,
+          registrationVersion: registration!.registrationVersion,
+        });
+      });
+      // Nothing sensitive is persisted.
+      expect(JSON.stringify(stored)).not.toMatch(/PRIVATE|ExponentPushToken/);
 
-    expect(await runPushReceiptPass()).toBe(0);
-    expect(calls(EXPO_PUSH_RECEIPTS_URL)).toBe(0);
+      expect(await runPushReceiptPass()).toBe(0);
+      expect(calls(EXPO_PUSH_RECEIPTS_URL)).toBe(0);
 
-    receipts = { "ticket-1": { status: "ok" }, "ticket-2": { status: "ok" } };
-    expect(await runPushReceiptPass(later(FIRST))).toBe(2);
-    expect((await rows()).map((r) => r.state)).toEqual([
-      "provider_accepted",
-      "provider_accepted",
-    ]);
-    expect(calls(EXPO_PUSH_SEND_URL)).toBe(1);
-  });
+      receipts = { "ticket-1": { status: "ok" }, "ticket-2": { status: "ok" } };
+      expect(await runPushReceiptPass(later(FIRST))).toBe(2);
+      expect((await rows()).map((r) => r.state)).toEqual([
+        "provider_accepted",
+        "provider_accepted",
+      ]);
+      expect(calls(EXPO_PUSH_SEND_URL)).toBe(1);
+    },
+  );
 
   it("durable sends keep their accepted checkpoint when ticket persistence fails, without resending", async () => {
     const { userId } = await setup(2);
