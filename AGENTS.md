@@ -12,7 +12,7 @@ All deployment configuration must live in the root `Dockerfile` and `docker-comp
 
 ## Documentation Scope
 
-Tracked `docs/` is for current product/API usage, privacy and safety behavior, and self-hosting instructions. Keep API guides in `docs/api/`; HTTP schemas are maintained in OpenAPI. Do not add implementation plans, audit reports, migration checklists, execution logs, or per-task verification reports to tracked documentation. When local working notes are needed, use the ignored `.pi/notes/` directory; otherwise report completion in the conversation or PR. Update an existing guide instead of creating a duplicate report.
+Tracked `docs/` is for current product/API usage, privacy and safety behavior, and self-hosting instructions. Keep API guides in `docs/api/`; HTTP schemas are maintained in OpenAPI. Do not add implementation plans, audit reports, migration checklists, execution logs, or per-task verification reports to tracked documentation. When local working notes are needed, use the ignored `.pi/notes/` directory; All plan please write in `.pi/plans/`. otherwise report completion in the conversation or PR. Update an existing guide instead of creating a duplicate report.
 
 ## Commands
 
