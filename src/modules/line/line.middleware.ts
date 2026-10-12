@@ -29,11 +29,14 @@ export const lineSignatureMiddleware = lineSdkMiddleware({
 });
 
 /**
- * Basic per-IP rate limit for the public webhook endpoint.
+ * Per-IP limit on rejected webhook calls only. Every genuine event arrives from
+ * LINE's shared platform IPs, so counting successful (signed) deliveries would
+ * throttle all users together; only failed-signature floods are counted.
  */
 export const webhookLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: 60,
+  skipSuccessfulRequests: true,
   standardHeaders: true,
   legacyHeaders: false,
   handler: (_req: Request, res: Response) =>
