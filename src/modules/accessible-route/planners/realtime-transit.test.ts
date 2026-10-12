@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { attachBusSchedule } from "../route-schedule";
 import type { AccessibleRoute, BusLeg } from "../../../types/route";
+import { presentRouteMessages } from "../../../utils/route-messages";
 
 const { tdxFetch } = vi.hoisted(() => ({
   tdxFetch: vi.fn(),
@@ -424,6 +425,17 @@ describe("bus low-floor enrichment", () => {
       },
     });
     expect(route.accessibilityHighlights[0]).toContain("高底盤");
+    expect(route._accessibilityHighlightMessages?.[0]).toMatchObject({
+      code: "ROUTE_HIGH_FLOOR_ALTERNATIVE",
+      params: { routeName: "LF3", plateNumb: "KEB-5678", etaMinutes: 12 },
+    });
+    expect(
+      presentRouteMessages(
+        route.accessibilityHighlights,
+        route._accessibilityHighlightMessages,
+        "en",
+      ).messages[0],
+    ).toContain("The first bus on");
     // The same-stop batch answered it, so RealTimeByFrequency is never called.
     expect(tdxFetch).toHaveBeenCalledTimes(1);
   });

@@ -76,6 +76,33 @@ describe("route token cache", () => {
     expect(storeBusPlan).not.toHaveBeenCalled();
   });
 
+  it("stores and reads structured route presentation details in schemaVersion=1 tokens", async () => {
+    storeInitialNavigationEnvelope.mockResolvedValue(true);
+    const routeWithDetails: AccessibleRoute = {
+      ...sampleRoute,
+      warnings: ["No accessible toilets are registered near the destination."],
+      warningDetails: [
+        {
+          index: 0,
+          code: "ROUTE_NO_ACCESSIBLE_TOILET",
+          message: "No accessible toilets are registered near the destination.",
+        },
+      ],
+    };
+    const [stored] = await attachRouteTokens(
+      [routeWithDetails],
+      canonicalRequest,
+    );
+    const [, envelope] = storeInitialNavigationEnvelope.mock.calls[0];
+    expect(envelope.route.warningDetails).toEqual(
+      routeWithDetails.warningDetails,
+    );
+    redisGet.mockResolvedValueOnce(JSON.stringify(envelope));
+    await expect(getRouteByToken(stored.routeToken!)).resolves.toMatchObject({
+      warningDetails: routeWithDetails.warningDetails,
+    });
+  });
+
   it("resolves valid cached JSON and treats misses or malformed values as expired", async () => {
     redisGet.mockResolvedValueOnce(JSON.stringify(sampleRoute));
     await expect(getRouteByToken("cap")).resolves.toEqual(sampleRoute);

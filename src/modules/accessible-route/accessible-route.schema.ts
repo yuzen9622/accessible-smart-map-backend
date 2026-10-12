@@ -7,6 +7,10 @@ import { TaiwanCityEn } from "../../types/transit";
 import { TransitPreferenceSchema } from "../../schemas/transit-preference.schema";
 import { registry } from "../../openapi/registry";
 import {
+  ApiErrorResponseSchema,
+  ValidationErrorResponseSchema,
+} from "../../schemas/api-error.schema";
+import {
   ROUTE_MSG,
   ROUTE_REASON,
   ROUTE_WARNING,
@@ -62,6 +66,11 @@ export const AccessibleRouteBodySchema = z
       .openapi({
         description: "使用者座標，用於解析 query 中的 current_location 起點。",
       }),
+    language: z.enum(SUPPORTED_LANGS).optional().openapi({
+      description:
+        "系統產生的路線與導航文案語言。省略時維持繁體中文；不翻譯來源站名、路名或公告。",
+      example: "en",
+    }),
     mode: z
       .enum(["wheelchair", "elderly", "visual_impaired", "normal"])
       .optional()
@@ -966,6 +975,17 @@ const RouteHazardAdvisorySchema = z
   .strict()
   .openapi("RouteHazardAdvisory");
 
+const RouteMessageDetailSchema = z
+  .object({
+    index: z.number().int().nonnegative(),
+    code: z.string().regex(/^[A-Z][A-Z0-9_]*$/),
+    params: z
+      .record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
+      .optional(),
+    message: z.string(),
+  })
+  .strict();
+
 export const AccessibleRouteSchema = z
   .object({
     routeId: z.string().openapi({ example: "route-001" }),
@@ -1008,6 +1028,13 @@ export const AccessibleRouteSchema = z
     accessibilityHighlights: z
       .array(z.string())
       .openapi({ example: ["全程低地板公車", "出入口設有電梯"] }),
+    accessibilityHighlightDetails: z
+      .array(RouteMessageDetailSchema)
+      .optional()
+      .openapi({
+        description:
+          "後端自有 highlight 的穩定訊息碼與安全參數；index 對應最終 accessibilityHighlights。來源名稱不會編碼。",
+      }),
     engine: z.enum(["pedestrian-a11y", "otp-fallback"]).optional().openapi({
       example: "pedestrian-a11y",
       description:
@@ -1017,6 +1044,10 @@ export const AccessibleRouteSchema = z
       example: true,
       description:
         "硬性無障礙條件未完全滿足，或台北 CSR 本應保護但無法選路而改用 OTP2 時為 true。CSR fallback 本身不附 warning。",
+    }),
+    warningDetails: z.array(RouteMessageDetailSchema).optional().openapi({
+      description:
+        "後端自有 warning 的穩定訊息碼與安全參數；index 對應最終 warnings。來源公告不會編碼。",
     }),
     warnings: z
       .array(z.string())
@@ -1071,6 +1102,10 @@ export const AccessibleRouteSchema = z
           "無障礙資料覆蓋信心：依沿途有 a11y 資料的路段比例（high ≥ 2/3、medium ≥ 1/3、low < 1/3）。" +
           "low 表示分數為保守估計（資料稀疏），與『真的無障礙差』不同。",
       }),
+    scoreWarningDetails: z.array(RouteMessageDetailSchema).optional().openapi({
+      description:
+        "評分 warning 的穩定訊息碼與安全參數；index 對應最終 scoreWarnings。",
+    }),
     scoreWarnings: z
       .array(z.string())
       .optional()
@@ -1228,32 +1263,22 @@ export const RouteFailureDataSchema = z
   .strict()
   .openapi("RouteFailureData");
 
-const ValidationErrorDataSchema = z
-  .object({
-    errors: z.array(
-      z
-        .object({
-          path: z.string().openapi({ example: "origin" }),
-          message: z.string().openapi({ example: "Invalid input" }),
-        })
-        .strict(),
-    ),
-  })
-  .strict();
-
 export const ErrorResponseSchema = z
-  .object({
-    ok: z.boolean().openapi({ example: false }),
-    status: z.enum(["success", "error"]).openapi({ example: "error" }),
-    code: z.number().openapi({ example: 400 }),
-    message: z.string().openapi({ example: "缺少參數或座標無法解析" }),
-    data: z
-      .union([RouteFailureDataSchema, ValidationErrorDataSchema])
-      .optional(),
-    accessToken: z.string().optional(),
-  })
-  .strict()
-  .openapi("ErrorResponse");
+  .union([
+    ValidationErrorResponseSchema,
+    ApiErrorResponseSchema,
+    z
+      .object({
+        ok: z.literal(false),
+        status: z.literal("error"),
+        code: z.number(),
+        message: z.string(),
+        data: RouteFailureDataSchema,
+        accessToken: z.string().optional(),
+      })
+      .strict(),
+  ])
+  .openapi("AccessibleRouteErrorResponse");
 
 const RerouteStepSchema = z
   .object({
@@ -1314,6 +1339,7 @@ export const AccessibleRouteRerouteDataSchema = z
     instructions: z.array(RerouteInstructionSchema),
     steps: z.array(RerouteStepSchema),
     warnings: z.array(z.string()),
+    warningDetails: z.array(RouteMessageDetailSchema).optional(),
     currentStepIndex: z.literal(0),
     replayed: z.boolean(),
   })
@@ -1402,13 +1428,32 @@ registry.registerPath({
         "application/json": { schema: AccessibleRouteRerouteResponseSchema },
       },
     },
-    400: { description: "嚴格 body schema 驗證失敗" },
+    400: {
+      description: "嚴格 body schema 驗證失敗，或替代路線請求無法解析",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
     401: { description: "帶了 Bearer token 但已過期" },
     403: { description: "Bearer token 無效" },
-    409: { description: "stale route version 或已有 reroute in flight" },
-    410: { description: "routeToken 過期，或 token 是 legacy raw-route 格式" },
-    422: { description: "planner 找不到可行替代路線" },
-    503: { description: "Redis navigation state unavailable" },
+    409: {
+      description: "stale route version 或已有 reroute in flight",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    410: {
+      description: "routeToken 過期，或 token 是 legacy raw-route 格式",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    422: {
+      description: "planner 找不到可行替代路線",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    500: {
+      description: "重新規劃失敗，附安全備援文案與 data.reason",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    503: {
+      description: "Redis navigation state 或路線規劃服務暫時不可用",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
   },
 });
 

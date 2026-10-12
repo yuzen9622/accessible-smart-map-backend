@@ -1,11 +1,71 @@
 import { describe, it, expect } from "vitest";
-import { buildAccessibilitySummary } from "./route-a11y";
+import {
+  buildAccessibilitySummary,
+  deriveHighlightMessages,
+  deriveHighlights,
+} from "./route-a11y";
 import type { IOsmA11y } from "../../../types";
 
 const node = (category: string, tags: Record<string, string> = {}): IOsmA11y =>
   ({ category, tags }) as unknown as IOsmA11y;
 
+describe("deriveHighlightMessages", () => {
+  it("emits stable descriptors at the producer while preserving legacy strings", () => {
+    const board = [node("elevator", { elevator: "yes" }), node("ramp")];
+    const messages = deriveHighlightMessages(board, [
+      node("crossing", { "traffic_signals:sound": "yes" }),
+    ]);
+    expect(messages.map((item) => item.legacyMessage)).toEqual(
+      deriveHighlights(board, [
+        node("crossing", { "traffic_signals:sound": "yes" }),
+      ]),
+    );
+    expect(messages.map((item) => item.code)).toEqual([
+      "ROUTE_BOARD_ELEVATOR_NEARBY",
+      "ROUTE_BOARD_RAMP_NEARBY",
+      "ROUTE_AUDIO_SIGNAL_NEARBY",
+    ]);
+  });
+});
+
 describe("buildAccessibilitySummary", () => {
+  it.each(["wheelchair", "elderly", "visual_impaired", "normal"] as const)(
+    "localizes %s summaries and preserves omitted language",
+    (mode) => {
+      for (const label of [
+        "excellent",
+        "good",
+        "fair",
+        "poor",
+        "critical",
+      ] as const) {
+        for (const facilities of [
+          [],
+          [
+            node("elevator"),
+            node("ramp"),
+            node("crossing", { tactile_paving: "yes" }),
+          ],
+        ]) {
+          const input = {
+            mode,
+            label,
+            facilities,
+            walkDistanceM: 450,
+            transferCount: 2,
+          };
+          expect(
+            buildAccessibilitySummary({ ...input, language: "zh-TW" }),
+          ).toBe(buildAccessibilitySummary(input));
+          const en = buildAccessibilitySummary({ ...input, language: "en" });
+          expect(en).not.toMatch(/[\u4e00-\u9fff]/);
+          expect(en).toContain(
+            mode === "visual_impaired" ? "2 transfer(s)" : "450 m",
+          );
+        }
+      }
+    },
+  );
   it("wheelchair: mentions elevator and a positive verdict when present + good label", () => {
     const s = buildAccessibilitySummary({
       mode: "wheelchair",

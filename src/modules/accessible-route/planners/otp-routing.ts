@@ -30,6 +30,7 @@ import {
 import { taipeiHHmm, taipeiYmdDash } from "../../../config/taipei-time";
 import { metroLineCode } from "../../../config/transit";
 import { ROUTE_WARNING } from "../../../constants/messages";
+import { routeMessage } from "../../../utils/route-messages";
 import {
   preferredOtpModes,
   reservePreferredRoute,
@@ -748,6 +749,13 @@ function selectWalkCandidates(routes: AccessibleRoute[]): AccessibleRoute[] {
       ROUTE_WARNING.STAIRS_CONSTRAINT_UNSATISFIED,
     ]),
   ];
+  leastStairs._warningMessages = [
+    ...(leastStairs._warningMessages ?? []),
+    routeMessage(
+      "ROUTE_STAIRS_CONSTRAINT_UNSATISFIED",
+      ROUTE_WARNING.STAIRS_CONSTRAINT_UNSATISFIED,
+    ),
+  ];
   return [leastStairs];
 }
 
@@ -1029,7 +1037,11 @@ async function lookupDirections(
       .select("tripId directionId")
       .lean<{ tripId: string; directionId: 0 | 1 }[]>();
     for (const t of trips) map.set(t.tripId, t.directionId ?? 0);
-  } catch {}
+  } catch {
+    console.warn(
+      "[otp-routing] GTFS direction lookup failed; using fallback directions",
+    );
+  }
   return map;
 }
 

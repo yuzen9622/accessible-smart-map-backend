@@ -62,6 +62,7 @@ import {
   type EnvConditions,
 } from "./scoring";
 import { buildAccessibilitySummary } from "./planners/route-a11y";
+import type { SupportedLang } from "../../types/lang";
 import {
   deriveWalkA11yDetails,
   unknownWalkA11yDetails,
@@ -84,6 +85,12 @@ import {
 } from "./park-arrival";
 import { attachRouteTokens } from "./route-token.service";
 import { normalizeWalkLegSteps } from "../../utils/nav-instructions-engine";
+import {
+  localizeRouteDetails,
+  localizeRouteReason,
+  presentRouteMessages,
+  routeMessage,
+} from "../../utils/route-messages";
 import {
   attachInternalSchedule,
   retainEarliestFutureRoute,
@@ -130,6 +137,31 @@ const PARKING_ARRIVAL_RADIUS_M = 200;
  */
 const PARK_ARRIVAL_BUDGET_MS = 800;
 const MAX_WALK_SEGMENT_CONCURRENCY = 4;
+
+function appendRouteWarning(
+  route: AccessibleRoute,
+  descriptor: import("../../types/route-message").RouteMessageDescriptor,
+): void {
+  const current = route.warnings ?? [];
+  if (current.includes(descriptor.legacyMessage)) return;
+  route.warnings = [...current, descriptor.legacyMessage];
+  route._warningMessages = [...(route._warningMessages ?? []), descriptor];
+}
+
+function appendRouteHighlight(
+  route: AccessibleRoute,
+  descriptor: import("../../types/route-message").RouteMessageDescriptor,
+): void {
+  if (route.accessibilityHighlights.includes(descriptor.legacyMessage)) return;
+  route.accessibilityHighlights = [
+    ...route.accessibilityHighlights,
+    descriptor.legacyMessage,
+  ];
+  route._accessibilityHighlightMessages = [
+    ...(route._accessibilityHighlightMessages ?? []),
+    descriptor,
+  ];
+}
 /** How far a transit endpoint may move to reach a street-level walkway. */
 const STREET_ANCHOR_TOLERANCE_M = 30;
 
@@ -301,6 +333,7 @@ function scoreRouteInPlace(
   minTime: number,
   mode: AccessibilityMode,
   env?: EnvConditions,
+  language?: SupportedLang,
 ): number {
   const facilities = collectRouteFacilities(r);
   const walkDistanceM = totalWalkDistanceM(r);
@@ -315,6 +348,7 @@ function scoreRouteInPlace(
     legDataCoverageRatio(r),
     env,
     r.transferCount,
+    language,
   );
   r.accessibilityScore = result.totalScore;
   r.accessibilityLabel = result.label;
@@ -322,6 +356,7 @@ function scoreRouteInPlace(
   r.factors = result.factors;
   r.dataConfidence = result.dataConfidence;
   r.scoreWarnings = result.warnings;
+  r._scoreWarningMessages = result.warningMessages;
   r.totalWalkDistanceM = walkDistanceM;
   r.accessibilitySummary = buildAccessibilitySummary({
     mode,
@@ -329,6 +364,7 @@ function scoreRouteInPlace(
     transferCount: r.transferCount,
     facilities,
     label: result.label,
+    language,
   });
   return result.totalScore;
 }
@@ -371,13 +407,14 @@ export function scoreAndRank(
   mode: AccessibilityMode = "normal",
   env?: EnvConditions,
   transitPreference?: TransitPreference,
+  language?: SupportedLang,
 ): AccessibleRoute[] {
   const maxTime = Math.max(...routes.map((r) => r.totalMinutes), 1);
   const minTime = Math.min(...routes.map((r) => r.totalMinutes), maxTime);
 
   return routes
     .map((r) => {
-      scoreRouteInPlace(r, maxTime, minTime, mode, env);
+      scoreRouteInPlace(r, maxTime, minTime, mode, env, language);
       return { route: r, cost: scoredRouteCost(r, mode, transitPreference) };
     })
     .sort((a, b) => a.cost - b.cost)
@@ -532,6 +569,7 @@ async function applyExtraA11yAnnotations(
   mode: AccessibilityMode | undefined,
   avoidStairs: boolean | undefined,
   opts: {
+    language?: SupportedLang;
     needsAccessibleToilet?: boolean;
     needsHandrail?: boolean;
     maxSlopePercent?: number;
@@ -559,12 +597,13 @@ async function applyExtraA11yAnnotations(
         total > 0
           ? `目的地附近有 ${total} 處無障礙廁所`
           : ROUTE_WARNING.NO_ACCESSIBLE_TOILET_NEARBY;
+      const descriptor =
+        total > 0
+          ? routeMessage("ROUTE_TOILET_AVAILABLE", note, { count: total })
+          : routeMessage("ROUTE_NO_ACCESSIBLE_TOILET", note);
       for (const r of routes) {
-        if (total > 0) {
-          r.accessibilityHighlights = [...r.accessibilityHighlights, note];
-        } else {
-          r.warnings = [...new Set([...(r.warnings ?? []), note])];
-        }
+        if (total > 0) appendRouteHighlight(r, descriptor);
+        else appendRouteWarning(r, descriptor);
       }
     } catch (err) {
       console.error(
@@ -583,12 +622,13 @@ async function applyExtraA11yAnnotations(
           !walkLegHasConfirmedHandrail(r, leg),
       );
       if (hasUnconfirmedHandrailStairs) {
-        r.warnings = [
-          ...new Set([
-            ...(r.warnings ?? []),
+        appendRouteWarning(
+          r,
+          routeMessage(
+            "ROUTE_STAIRS_HANDRAIL_UNKNOWN",
             ROUTE_WARNING.STAIRS_HANDRAIL_UNKNOWN,
-          ]),
-        ];
+          ),
+        );
       }
     }
   }
@@ -598,10 +638,12 @@ async function applyExtraA11yAnnotations(
     | undefined;
   if (opts.maxSlopePercent !== undefined) {
     const requestedMaxPercent = opts.maxSlopePercent;
+    let slopeMessageCode: string;
     const hasCsrWalkRoute = routes.some(
       (route) => route.engine === "pedestrian-a11y",
     );
     if (hasCsrWalkRoute) {
+      slopeMessageCode = "ROUTE_SLOPE_CSR";
       slopeConstraint = {
         requestedMaxPercent,
         enforced: false,
@@ -612,6 +654,7 @@ async function applyExtraA11yAnnotations(
       travelMode === "motorcycle" ||
       opts.routedByEngineWithNoElevationData
     ) {
+      slopeMessageCode = "ROUTE_SLOPE_NO_ELEVATION";
       slopeConstraint = {
         requestedMaxPercent,
         enforced: false,
@@ -622,6 +665,11 @@ async function applyExtraA11yAnnotations(
       const enforced =
         wheelchairEngaged &&
         requestedMaxPercent >= OTP_SERVER_MAX_SLOPE_PERCENT;
+      slopeMessageCode = wheelchairEngaged
+        ? enforced
+          ? "ROUTE_SLOPE_SERVER_LIMIT"
+          : "ROUTE_SLOPE_SERVER_DEFAULT"
+        : "ROUTE_SLOPE_WHEELCHAIR_DISABLED";
       slopeConstraint = {
         requestedMaxPercent,
         enforced,
@@ -632,9 +680,17 @@ async function applyExtraA11yAnnotations(
           : "此路線未啟用輪椅模式（avoidStairs 為 false），伺服器未套用任何坡度限制",
       };
     }
-    for (const r of routes) {
-      r.warnings = [...new Set([...(r.warnings ?? []), slopeConstraint!.note])];
-    }
+    const descriptor = routeMessage(slopeMessageCode, slopeConstraint.note, {
+      requestedMaxPercent: slopeConstraint.requestedMaxPercent,
+      enforced: slopeConstraint.enforced,
+      serverMaxPercent: OTP_SERVER_MAX_SLOPE_PERCENT,
+    });
+    for (const r of routes) appendRouteWarning(r, descriptor);
+    slopeConstraint.note = presentRouteMessages(
+      [descriptor.legacyMessage],
+      [descriptor],
+      opts.language,
+    ).messages[0];
   }
 
   return { slopeConstraint };
@@ -726,12 +782,13 @@ function applyA11yExclusion(
         routeStairsCount(route) < routeStairsCount(best) ? route : best,
       );
       leastStairs.degraded = true;
-      leastStairs.warnings = [
-        ...new Set([
-          ...(leastStairs.warnings ?? []),
+      appendRouteWarning(
+        leastStairs,
+        routeMessage(
+          "ROUTE_STAIRS_CONSTRAINT_UNSATISFIED",
           ROUTE_WARNING.STAIRS_CONSTRAINT_UNSATISFIED,
-        ]),
-      ];
+        ),
+      );
       console.warn(
         "[accessible-route] every candidate contains stairs; returning the least-stairs route",
         JSON.stringify({
@@ -851,8 +908,12 @@ async function enrichTopRoutes(
   destination: { lat: number; lng: number },
   mode: AccessibilityMode,
 ): Promise<void> {
-  const { nearbyA11y, attachA11yToLeg, deriveHighlights, enrichLegIndoor } =
-    await import("./planners/route-a11y");
+  const {
+    nearbyA11y,
+    attachA11yToLeg,
+    deriveHighlightMessages,
+    enrichLegIndoor,
+  } = await import("./planners/route-a11y");
 
   const originCoords: [number, number] = [origin.lng, origin.lat];
   const destCoords: [number, number] = [destination.lng, destination.lat];
@@ -915,7 +976,11 @@ async function enrichTopRoutes(
       if (!route.accessibilityHighlights.length) {
         const { board } = legA11y(transitLegs[0]);
         const { alight } = legA11y(transitLegs[transitLegs.length - 1]);
-        route.accessibilityHighlights = deriveHighlights(board, alight);
+        const highlightMessages = deriveHighlightMessages(board, alight);
+        route.accessibilityHighlights = highlightMessages.map(
+          (item) => item.legacyMessage,
+        );
+        route._accessibilityHighlightMessages = highlightMessages;
       }
       return undefined;
     }),
@@ -1165,15 +1230,20 @@ export async function applyConfirmedHazardPlanning(
     .map((route) => {
       const observed = planWithConfirmedHazards([route], knownHazards)
         .routes[0];
+      const descriptor = routeMessage(
+        "ROUTE_HAZARD_DATA_UNAVAILABLE",
+        ROUTE_WARNING.HAZARD_DATA_UNAVAILABLE,
+      );
+      const warnings = observed.warnings ?? [];
       return {
         ...observed,
         degraded: true,
-        warnings: [
-          ...new Set([
-            ...(observed.warnings ?? []),
-            ROUTE_WARNING.HAZARD_DATA_UNAVAILABLE,
-          ]),
-        ],
+        warnings: warnings.includes(descriptor.legacyMessage)
+          ? warnings
+          : [...warnings, descriptor.legacyMessage],
+        _warningMessages: warnings.includes(descriptor.legacyMessage)
+          ? observed._warningMessages
+          : [...(observed._warningMessages ?? []), descriptor],
       };
     })
     .sort(
@@ -1241,6 +1311,7 @@ async function finalizeRoutes(
   format: "standard" | "compact" = "standard",
   envPromise?: Promise<EnvConditions | undefined>,
   transitPreference?: TransitPreference,
+  language?: SupportedLang,
 ): Promise<AccessibleRoute[]> {
   const PRERANK_N = 8;
   const t: Record<string, number> = {};
@@ -1313,7 +1384,13 @@ async function finalizeRoutes(
   t0 = Date.now();
   // Stage 4: score with the enriched facility data, then compare confirmed
   // street-level hazards BEFORE selecting/slimming the final routes.
-  const baseRanked = scoreAndRank(eligible, mode, env, transitPreference);
+  const baseRanked = scoreAndRank(
+    eligible,
+    mode,
+    env,
+    transitPreference,
+    language,
+  );
   t.rank = Date.now() - t0;
   t0 = Date.now();
   const hazardPlan =
@@ -1914,6 +1991,7 @@ async function refineWalkOptionWithCsr(
   mode: AccessibilityMode,
   avoidStairs: boolean,
   transitPreference?: TransitPreference,
+  language?: SupportedLang,
 ): Promise<void> {
   const index = routes.findIndex((r) => r.legs.every((l) => l.type === "WALK"));
   if (index === -1) return;
@@ -1929,7 +2007,14 @@ async function refineWalkOptionWithCsr(
   const others = routes.filter((_, i) => i !== index);
   const times = [...others, refined].map((r) => r.totalMinutes);
   const maxTime = Math.max(...times, 1);
-  scoreRouteInPlace(refined, maxTime, Math.min(...times, maxTime), mode);
+  scoreRouteInPlace(
+    refined,
+    maxTime,
+    Math.min(...times, maxTime),
+    mode,
+    undefined,
+    language,
+  );
   const cost = scoredRouteCost(refined, mode, transitPreference);
   const at = others.findIndex(
     (r) => cost < scoredRouteCost(r, mode, transitPreference),
@@ -1994,17 +2079,29 @@ function annotateParkArrival(
   if (!parkArrival) return;
   for (const route of routes) {
     if (parkArrival.kind === "entrance") {
-      route.accessibilityHighlights = [
-        ...route.accessibilityHighlights,
-        arrivalEntranceHighlight(parkArrival.entrance),
-      ];
+      const entrance = parkArrival.entrance;
+      const legacyMessage = arrivalEntranceHighlight(entrance);
+      appendRouteHighlight(
+        route,
+        routeMessage("ROUTE_PARK_ENTRANCE_SELECTED", legacyMessage, {
+          parkName: entrance.parkName,
+          entranceName: entrance.entranceName,
+          ...(entrance.minClearWidthM === null
+            ? {}
+            : { widthM: entrance.minClearWidthM }),
+          ...(entrance.slopePercent === null
+            ? {}
+            : { slopePercent: entrance.slopePercent }),
+        }),
+      );
     } else {
-      route.warnings = [
-        ...new Set([
-          ...(route.warnings ?? []),
+      appendRouteWarning(
+        route,
+        routeMessage(
+          "ROUTE_PARK_NO_QUALIFYING_ENTRANCE",
           ROUTE_WARNING.PARK_NO_QUALIFYING_ENTRANCE,
-        ]),
-      ];
+        ),
+      );
     }
   }
 }
@@ -2039,14 +2136,19 @@ export async function planAccessibleRouteFromRequest(
         ok: false,
         status: ResponseCode.INTERNAL_ERROR,
         error:
+          localizeRouteReason("ROUTE_INTENT_UNAVAILABLE", body.language) ??
           "語意解析服務暫時無法使用，請稍後再試或直接提供 origin/destination",
+        data: { reason: "ROUTE_INTENT_UNAVAILABLE" },
       };
     }
     if (!intent) {
       return {
         ok: false,
         status: ResponseCode.INVALID_INPUT,
-        error: ERROR_MESSAGE.INTENT_PARSE_FAILED,
+        error:
+          localizeRouteReason("INTENT_PARSE_FAILED", body.language) ??
+          ERROR_MESSAGE.INTENT_PARSE_FAILED,
+        data: { reason: "INTENT_PARSE_FAILED" },
       };
     }
     origin =
@@ -2063,7 +2165,10 @@ export async function planAccessibleRouteFromRequest(
       return {
         ok: false,
         status: ResponseCode.INVALID_INPUT,
-        error: "查詢使用了『目前位置』，請一併提供 userLocation 座標",
+        error:
+          localizeRouteReason("CURRENT_LOCATION_REQUIRED", body.language) ??
+          "查詢使用了『目前位置』，請一併提供 userLocation 座標",
+        data: { reason: "CURRENT_LOCATION_REQUIRED" },
       };
     }
   }
@@ -2119,7 +2224,10 @@ export async function planAccessibleRouteFromRequest(
     return {
       ok: false,
       status: ResponseCode.INVALID_INPUT,
-      error: `${ERROR_MESSAGE.MISSING_PARAMS}：origin, destination`,
+      error:
+        localizeRouteReason("ROUTE_PARAMETERS_REQUIRED", body.language) ??
+        `${ERROR_MESSAGE.MISSING_PARAMS}：origin, destination`,
+      data: { reason: "ROUTE_PARAMETERS_REQUIRED" },
     };
   }
 
@@ -2144,14 +2252,20 @@ export async function planAccessibleRouteFromRequest(
     return {
       ok: false,
       status: ResponseCode.INVALID_INPUT,
-      error: "無法解析出發地或目的地座標",
+      error:
+        localizeRouteReason("COORDINATE_LOOKUP_FAILED", body.language) ??
+        "無法解析出發地或目的地座標",
+      data: { reason: "COORDINATE_LOOKUP_FAILED" },
     };
   }
   if (waypointCoords.some((w) => !w)) {
     return {
       ok: false,
       status: ResponseCode.INVALID_INPUT,
-      error: "無法解析中途點座標",
+      error:
+        localizeRouteReason("WAYPOINT_LOOKUP_FAILED", body.language) ??
+        "無法解析中途點座標",
+      data: { reason: "WAYPOINT_LOOKUP_FAILED" },
     };
   }
   const waypoints: LatLng[] = waypointCoords.map((w) => ({
@@ -2184,6 +2298,7 @@ export async function planAccessibleRouteFromRequest(
   const preflight = preflightAccessibleRoute(
     [originLatLng, ...waypoints, dest],
     getServiceCoverageConfig(),
+    body.language,
   );
   if (!preflight.ok) return preflight;
 
@@ -2243,6 +2358,7 @@ export async function planAccessibleRouteFromRequest(
     // shares one budget instead of each getting a fresh client timeout.
     const deadline = Date.now() + getRoutingConfig().planBudgetMs;
     const transitOptions: FindAccessibleRoutesOptions = {
+      language: body.language,
       mode: transitMode,
       transitPreference,
       maxTransfers: (maxTransfers ?? 2) as 0 | 1 | 2,
@@ -2261,7 +2377,7 @@ export async function planAccessibleRouteFromRequest(
     );
     if (transit.status === "unavailable") {
       logRequestTiming();
-      return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT);
+      return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT, {}, body.language);
     }
     if (transit.status === "no_route") {
       // The relaxed search only tells NO_ACCESSIBLE_ROUTE from NO_ROUTE; its
@@ -2279,15 +2395,19 @@ export async function planAccessibleRouteFromRequest(
         );
         logRequestTiming();
         if (relaxed.status === "unavailable") {
-          return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT);
+          return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT, {}, body.language);
         }
         if (relaxed.status === "ok" && relaxed.routes.length) {
-          return routeFailure(ROUTE_REASON.NO_ACCESSIBLE_ROUTE);
+          return routeFailure(
+            ROUTE_REASON.NO_ACCESSIBLE_ROUTE,
+            {},
+            body.language,
+          );
         }
-        return routeFailure(ROUTE_REASON.NO_ROUTE);
+        return routeFailure(ROUTE_REASON.NO_ROUTE, {}, body.language);
       }
       logRequestTiming();
-      return routeFailure(ROUTE_REASON.NO_ROUTE);
+      return routeFailure(ROUTE_REASON.NO_ROUTE, {}, body.language);
     }
     routes = transit.routes;
     await refineWalkOptionWithCsr(
@@ -2296,6 +2416,7 @@ export async function planAccessibleRouteFromRequest(
       transitMode,
       constraints.avoidStairs,
       transitPreference,
+      body.language,
     );
     if (isWalkOnlyAnswer(routes)) {
       transitFallback = {
@@ -2385,17 +2506,20 @@ export async function planAccessibleRouteFromRequest(
     }
     logRequestTiming();
     if (outcome.kind === "unavailable") {
-      return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT);
+      return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT, {}, body.language);
     }
     if (outcome.kind === "error") {
       return {
         ok: false,
         status: ResponseCode.INTERNAL_ERROR,
-        error: "路線規劃失敗，請稍後再試",
+        error:
+          localizeRouteReason("ROUTE_PLANNING_FAILED", body.language) ??
+          "路線規劃失敗，請稍後再試",
+        data: { reason: "ROUTE_PLANNING_FAILED" },
       };
     }
     if (outcome.kind === "empty") {
-      return routeFailure(ROUTE_REASON.NO_ROUTE);
+      return routeFailure(ROUTE_REASON.NO_ROUTE, {}, body.language);
     }
     routes = outcome.routes;
   }
@@ -2413,6 +2537,7 @@ export async function planAccessibleRouteFromRequest(
       needsHandrail,
       maxSlopePercent,
       routedByEngineWithNoElevationData,
+      language: body.language,
     },
   );
 
@@ -2430,7 +2555,68 @@ export async function planAccessibleRouteFromRequest(
     );
   }
 
-  const normalizedRoutes = routes.map(normalizeWalkSteps);
+  const normalizedRoutes = routes.map((route) => {
+    const normalized = normalizeWalkSteps(route);
+    const warnings = normalized._warningMessages
+      ? presentRouteMessages(
+          normalized.warnings,
+          normalized._warningMessages,
+          body.language,
+        )
+      : localizeRouteDetails(
+          normalized.warnings,
+          normalized.warningDetails,
+          body.language,
+        );
+    const scoreWarnings = normalized._scoreWarningMessages
+      ? presentRouteMessages(
+          normalized.scoreWarnings,
+          normalized._scoreWarningMessages,
+          body.language,
+        )
+      : localizeRouteDetails(
+          normalized.scoreWarnings,
+          normalized.scoreWarningDetails,
+          body.language,
+        );
+    const highlights = normalized._accessibilityHighlightMessages
+      ? presentRouteMessages(
+          normalized.accessibilityHighlights,
+          normalized._accessibilityHighlightMessages,
+          body.language,
+        )
+      : localizeRouteDetails(
+          normalized.accessibilityHighlights,
+          normalized.accessibilityHighlightDetails,
+          body.language,
+        );
+    const presented = {
+      ...normalized,
+      ...(warnings.messages.length ? { warnings: warnings.messages } : {}),
+      ...(warnings.details ? { warningDetails: warnings.details } : {}),
+      ...(scoreWarnings.messages.length
+        ? { scoreWarnings: scoreWarnings.messages }
+        : {}),
+      ...(scoreWarnings.details
+        ? { scoreWarningDetails: scoreWarnings.details }
+        : {}),
+      accessibilityHighlights: highlights.messages,
+      ...(highlights.details
+        ? { accessibilityHighlightDetails: highlights.details }
+        : {}),
+      _warningMessages: undefined,
+      _scoreWarningMessages: undefined,
+      _accessibilityHighlightMessages: undefined,
+    };
+    return Object.defineProperties(
+      presented,
+      Object.fromEntries(
+        Object.entries(Object.getOwnPropertyDescriptors(normalized)).filter(
+          ([, descriptor]) => !descriptor.enumerable,
+        ),
+      ),
+    ) as AccessibleRoute;
+  });
 
   const effectiveMode = mode ?? "normal";
   const effectiveConstraints = resolveA11yConstraints(effectiveMode, {
@@ -2449,6 +2635,7 @@ export async function planAccessibleRouteFromRequest(
     },
     travelMode,
     mode: effectiveMode,
+    ...(body.language ? { language: body.language } : {}),
     transitPreference: transitPreference ?? "none",
     maxTransfers: maxTransfers ?? 2,
     format: format === "compact" ? "compact" : "standard",
@@ -2598,7 +2785,12 @@ async function attachDrivingA11yHighlights(
     if (structures.length) {
       const hl = `目的地附近有 ${structures.length} 處電梯／坡道`;
       for (const r of routes)
-        r.accessibilityHighlights = [...r.accessibilityHighlights, hl];
+        appendRouteHighlight(
+          r,
+          routeMessage("ROUTE_WALK_NEARBY_FEATURES", hl, {
+            count: structures.length,
+          }),
+        );
     }
     return;
   }
@@ -2614,7 +2806,10 @@ async function attachDrivingA11yHighlights(
   if (parking.length) {
     const hl = `目的地 300m 內有 ${parking.length} 處身障停車格`;
     for (const r of routes)
-      r.accessibilityHighlights = [...r.accessibilityHighlights, hl];
+      appendRouteHighlight(
+        r,
+        routeMessage("ROUTE_NEARBY_PARKING", hl, { count: parking.length }),
+      );
   }
 }
 
@@ -2772,10 +2967,14 @@ async function findDrivingRoutes(
   if (opts.arrivalParking) {
     const { name, distanceM } = opts.arrivalParking;
     for (const r of routes) {
-      r.accessibilityHighlights = [
-        ...r.accessibilityHighlights,
-        `已為您導引至最近身障停車格「${name}」（距目的地約 ${distanceM} 公尺）`,
-      ];
+      appendRouteHighlight(
+        r,
+        routeMessage(
+          "ROUTE_PARKING_ARRIVAL",
+          `已為您導引至最近身障停車格「${name}」（距目的地約 ${distanceM} 公尺）`,
+          { name, distanceM },
+        ),
+      );
     }
   }
 
@@ -2968,9 +3167,16 @@ function combineSegments(segments: AccessibleRoute[]): AccessibleRoute {
     totalMinutes: segments.reduce((sum, s) => sum + s.totalMinutes, 0),
     transferCount: segments.reduce((sum, s) => sum + s.transferCount, 0),
     legs: mergeAdjacentWalkLegs(segments.flatMap((s) => s.legs)),
-    accessibilityHighlights: segments.flatMap(
-      (s) => s.accessibilityHighlights ?? [],
+    accessibilityHighlights: [
+      ...new Set(segments.flatMap((s) => s.accessibilityHighlights ?? [])),
+    ],
+    _accessibilityHighlightMessages: segments.flatMap(
+      (s) => s._accessibilityHighlightMessages ?? [],
     ),
+    ...(segments.some((s) => s.warnings?.length)
+      ? { warnings: [...new Set(segments.flatMap((s) => s.warnings ?? []))] }
+      : {}),
+    _warningMessages: segments.flatMap((s) => s._warningMessages ?? []),
     ...(segments[0]?.departureDate
       ? { departureDate: segments[0].departureDate }
       : {}),
@@ -3019,8 +3225,13 @@ function combineWalkSegments(segments: AccessibleRoute[]): AccessibleRoute {
     ),
     transferCount: 0,
     legs,
-    accessibilityHighlights: segments.flatMap(
-      (segment) => segment.accessibilityHighlights ?? [],
+    accessibilityHighlights: [
+      ...new Set(
+        segments.flatMap((segment) => segment.accessibilityHighlights ?? []),
+      ),
+    ],
+    _accessibilityHighlightMessages: segments.flatMap(
+      (segment) => segment._accessibilityHighlightMessages ?? [],
     ),
     ...(segments.some((segment) => segment.degraded) ? { degraded: true } : {}),
     ...(segments.some((segment) => segment.warnings?.length)
@@ -3028,6 +3239,9 @@ function combineWalkSegments(segments: AccessibleRoute[]): AccessibleRoute {
           warnings: [
             ...new Set(segments.flatMap((segment) => segment.warnings ?? [])),
           ],
+          _warningMessages: segments.flatMap(
+            (segment) => segment._warningMessages ?? [],
+          ),
         }
       : {}),
     totalWalkDistanceM: segments.reduce(
@@ -3134,7 +3348,15 @@ function buildCsrWalkRoute(plans: readonly CsrWalkPlan[]): AccessibleRoute {
     totalWalkDistanceM: legs.reduce((sum, leg) => sum + leg.distanceM, 0),
     attribution: CSR_WALK_ATTRIBUTION,
     ...(approximateIndoorSegments > 0
-      ? { warnings: [ROUTE_WARNING.CSR_WALK_APPROXIMATE_INDOOR_GEOMETRY] }
+      ? {
+          warnings: [ROUTE_WARNING.CSR_WALK_APPROXIMATE_INDOOR_GEOMETRY],
+          _warningMessages: [
+            routeMessage(
+              "ROUTE_CSR_APPROXIMATE_INDOOR",
+              ROUTE_WARNING.CSR_WALK_APPROXIMATE_INDOOR_GEOMETRY,
+            ),
+          ],
+        }
       : {}),
   };
 }
@@ -3333,6 +3555,7 @@ export async function findAccessibleRoutesDetailed(
       opts.format,
       envPromise,
       opts.transitPreference,
+      opts.language,
     );
     if (!routes.length) return { status: "no_route", routes: [] };
     return otp.walkingBetter
@@ -3394,6 +3617,7 @@ export async function findAccessibleRoutesDetailed(
     opts.format,
     envPromise,
     opts.transitPreference,
+    opts.language,
   );
   if (!routes.length) return { status: "no_route", routes: [] };
   return everySegmentWalkingBetter

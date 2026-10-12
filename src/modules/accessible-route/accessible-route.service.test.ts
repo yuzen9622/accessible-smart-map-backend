@@ -41,6 +41,7 @@ vi.mock("./planners/route-a11y", () => ({
   nearbyA11y: vi.fn().mockResolvedValue([]),
   attachA11yToLeg: vi.fn(),
   deriveHighlights: vi.fn(),
+  deriveHighlightMessages: vi.fn(() => []),
   enrichLegIndoor: vi.fn(),
   buildAccessibilitySummary: vi.fn().mockReturnValue(""),
 }));
@@ -144,7 +145,10 @@ import {
 import { planCsrWalkRoute } from "./planners/pedestrian-a11y/csr-walk-planner";
 import { getA11yProfile } from "../user/user.service";
 import { findConfirmedHazardsWithin } from "../hazard-report/hazard-report.service";
-import { enrichLegIndoor } from "./planners/route-a11y";
+import {
+  buildAccessibilitySummary,
+  enrichLegIndoor,
+} from "./planners/route-a11y";
 import { getCity, getCoordinates } from "../../adapters/google.adapter";
 import { getNlscAdministrativeArea } from "../../adapters/nlsc.adapter";
 import BusStopModel from "../../model/bus-stop.model";
@@ -1664,6 +1668,47 @@ describe("planAccessibleRouteFromRequest — needsAccessibleToilet", () => {
     );
   });
 
+  it("localizes the service-produced warning details without changing geometry or score", async () => {
+    vi.mocked(findNearby).mockResolvedValue({
+      nearbyOsm: [],
+      nearbyBathroom: [],
+    } as any);
+    vi.mocked(planOtpWalkDetailed)
+      .mockResolvedValueOnce({ status: "ok", routes: [walkRoute()] as any })
+      .mockResolvedValueOnce({ status: "ok", routes: [walkRoute()] as any });
+
+    const zh = await planAccessibleRouteFromRequest({
+      ...walkRequest,
+      language: "zh-TW",
+      needsAccessibleToilet: true,
+    });
+    const en = await planAccessibleRouteFromRequest({
+      ...walkRequest,
+      language: "en",
+      needsAccessibleToilet: true,
+    });
+
+    expect(zh.ok && en.ok).toBe(true);
+    if (!zh.ok || !en.ok) return;
+    const zhRoute = zh.data.routes[0];
+    const enRoute = en.data.routes[0];
+    expect(enRoute.warnings?.[0]).toMatch(/No accessible toilets/);
+    expect(enRoute.warningDetails).toEqual([
+      expect.objectContaining({
+        index: 0,
+        code: "ROUTE_NO_ACCESSIBLE_TOILET",
+        message: enRoute.warnings?.[0],
+      }),
+    ]);
+    expect(zhRoute.warnings).toContain(
+      ROUTE_WARNING.NO_ACCESSIBLE_TOILET_NEARBY,
+    );
+    expect(enRoute.legs.map((leg) => leg.polyline)).toEqual(
+      zhRoute.legs.map((leg) => leg.polyline),
+    );
+    expect(enRoute.accessibilityScore).toBe(zhRoute.accessibilityScore);
+  });
+
   it("does nothing when needsAccessibleToilet is not requested", async () => {
     const res = await planAccessibleRouteFromRequest(walkRequest);
 
@@ -1819,6 +1864,38 @@ describe("planAccessibleRouteFromRequest — maxSlopePercent honesty check", () 
     vi.mocked(findNearbyParking).mockResolvedValue([] as any);
   });
 
+  it.each([
+    [driveRequest, 5, "ROUTE_SLOPE_NO_ELEVATION"],
+    [
+      { ...walkRequest, avoidStairs: false },
+      5,
+      "ROUTE_SLOPE_WHEELCHAIR_DISABLED",
+    ],
+    [{ ...walkRequest, avoidStairs: true }, 3, "ROUTE_SLOPE_SERVER_DEFAULT"],
+    [{ ...walkRequest, avoidStairs: true }, 10, "ROUTE_SLOPE_SERVER_LIMIT"],
+  ] as const)(
+    "keeps the slope note consistent with its English warning (%j)",
+    async (request, maxSlopePercent, code) => {
+      const result = await planAccessibleRouteFromRequest({
+        ...request,
+        maxSlopePercent,
+        language: "en",
+      });
+      expect(result.ok).toBe(true);
+      const data = okData(result);
+      const detail = data.routes[0].warningDetails?.find(
+        (item) => item.code === code,
+      );
+      expect(detail).toBeDefined();
+      expect(data.slopeConstraint?.note).toBe(detail?.message);
+      expect(data.slopeConstraint?.note).not.toMatch(/[\u4e00-\u9fff]/);
+      expect(data.slopeConstraint?.requestedMaxPercent).toBe(maxSlopePercent);
+      expect(data.slopeConstraint?.enforced).toBe(
+        code === "ROUTE_SLOPE_SERVER_LIMIT",
+      );
+    },
+  );
+
   it("reports enforced=false for drive mode (no elevation data)", async () => {
     const res = await planAccessibleRouteFromRequest({
       ...driveRequest,
@@ -1934,6 +2011,49 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
     ],
     accessibilityHighlights: ["低底盤公車直達"],
   };
+
+  it("propagates English through real scoring and summary generation without changing route facts", async () => {
+    const actual = await vi.importActual<
+      typeof import("./planners/route-a11y")
+    >("./planners/route-a11y");
+    vi.mocked(buildAccessibilitySummary).mockImplementation(
+      actual.buildAccessibilitySummary,
+    );
+    vi.mocked(planOtpRouteDetailed).mockImplementation(async () =>
+      otpTransitOk([structuredClone(rooseveltBusRoute)] as any),
+    );
+    const request = {
+      travelMode: "transit" as const,
+      origin: nccuOrigin,
+      destination: mainStationDest,
+      mode: "wheelchair" as const,
+    };
+    const chinese = okData(
+      await planAccessibleRouteFromRequest(request),
+    ).routes;
+    const english = okData(
+      await planAccessibleRouteFromRequest({ ...request, language: "en" }),
+    ).routes;
+    expect(english.map((route) => route.routeId)).toEqual(
+      chinese.map((route) => route.routeId),
+    );
+    for (let i = 0; i < english.length; i++) {
+      expect(english[i].factors?.length).toBeGreaterThan(0);
+      expect(english[i].factors?.map((f) => f.text).join(" ")).not.toMatch(
+        /[\u4e00-\u9fff]/,
+      );
+      expect(english[i].accessibilitySummary).not.toMatch(/[\u4e00-\u9fff]/);
+      expect(chinese[i].accessibilitySummary).toMatch(/[\u4e00-\u9fff]/);
+      expect(english[i].legs).toEqual(chinese[i].legs);
+      expect(english[i].accessibilityScore).toBe(chinese[i].accessibilityScore);
+      expect(english[i].scoreComponents).toEqual(chinese[i].scoreComponents);
+      expect(
+        english[i].factors?.map(({ text: _text, ...factor }) => factor),
+      ).toEqual(
+        chinese[i].factors?.map(({ text: _text, ...factor }) => factor),
+      );
+    }
+  });
 
   it("測試 Case A: 政大 ➔ 台北車站 (輪椅模式公車路徑規劃)", async () => {
     vi.mocked(planOtpRouteDetailed).mockResolvedValue(

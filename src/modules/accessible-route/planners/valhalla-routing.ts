@@ -21,6 +21,7 @@ import type {
   RoadTravelMode,
 } from "../accessible-route.types";
 import { haversineCoords, haversineMeters } from "../../../utils/geo";
+import { routeMessage } from "../../../utils/route-messages";
 import { normalizeRelativeDirection } from "../../../utils/nav-instructions-engine";
 import { ValhallaRoutingError } from "./valhalla-routing.types";
 import { planOtpWalkDetailed } from "./otp-routing";
@@ -561,6 +562,17 @@ async function attachWalkAccessLegs(
       const wpByIndex = new Map(wpResolved.map((slot) => [slot.index, slot]));
 
       const highlights = [...route.accessibilityHighlights];
+      const highlightMessages = [
+        ...(route._accessibilityHighlightMessages ?? []),
+      ];
+      const addHighlight = (
+        code: string,
+        text: string,
+        params: Record<string, string | number | boolean>,
+      ) => {
+        highlights.push(text);
+        highlightMessages.push(routeMessage(code, text, params));
+      };
       let walkMinutes = 0;
       let walkDistanceM = 0;
       const legs: AccessibleRoute["legs"] = [];
@@ -570,10 +582,20 @@ async function attachWalkAccessLegs(
           legs.push(toWalkLeg(head, "起點", "上車處"));
           walkMinutes += head.minutesEst;
           walkDistanceM += head.distanceM;
-          highlights.push(`起點需步行約 ${head.distanceM} 公尺至可上車路段`);
+          addHighlight(
+            "ROUTE_WALK_FROM_ORIGIN",
+            `起點需步行約 ${head.distanceM} 公尺至可上車路段`,
+            { distanceM: head.distanceM },
+          );
         } else {
-          highlights.push(
+          addHighlight(
+            "ROUTE_WALK_CONNECTOR_UNAVAILABLE",
             `起點距可行車路段約 ${Math.round(gapHead)} 公尺，但無法建立可信步行路徑，請留意`,
+            {
+              placeLabel: "起點",
+              placeRole: "origin",
+              gapM: Math.round(gapHead),
+            },
           );
         }
       }
@@ -589,12 +611,26 @@ async function attachWalkAccessLegs(
           legs.push(toWalkLeg(slot.out, label, `${label} 停車處`));
           walkMinutes += slot.in.minutesEst + slot.out.minutesEst;
           walkDistanceM += slot.in.distanceM + slot.out.distanceM;
-          highlights.push(
+          addHighlight(
+            "ROUTE_WALK_WAYPOINT_PARKING",
             `${label} 需步行約 ${slot.in.distanceM + slot.out.distanceM} 公尺往返停車處`,
+            {
+              placeLabel: label,
+              placeRole: "waypoint",
+              waypointIndex: i + 1,
+              distanceM: slot.in.distanceM + slot.out.distanceM,
+            },
           );
         } else {
-          highlights.push(
+          addHighlight(
+            "ROUTE_WALK_CONNECTOR_UNAVAILABLE",
             `${label} 距可行車路段約 ${Math.round(slot.gap)} 公尺，但無法建立可信步行路徑，請留意`,
+            {
+              placeLabel: label,
+              placeRole: "waypoint",
+              waypointIndex: i + 1,
+              gapM: Math.round(slot.gap),
+            },
           );
         }
       });
@@ -604,12 +640,20 @@ async function attachWalkAccessLegs(
           legs.push(toWalkLeg(tail, "下車處", "終點"));
           walkMinutes += tail.minutesEst;
           walkDistanceM += tail.distanceM;
-          highlights.push(
+          addHighlight(
+            "ROUTE_WALK_TO_DESTINATION",
             `於終點前約 ${tail.distanceM} 公尺處停車，需步行至目的地`,
+            { distanceM: tail.distanceM },
           );
         } else {
-          highlights.push(
+          addHighlight(
+            "ROUTE_WALK_CONNECTOR_UNAVAILABLE",
             `目的地距可行車路段約 ${Math.round(gapTail)} 公尺，但無法建立可信步行路徑，請留意`,
+            {
+              placeLabel: "目的地",
+              placeRole: "destination",
+              gapM: Math.round(gapTail),
+            },
           );
         }
       }
@@ -620,6 +664,7 @@ async function attachWalkAccessLegs(
         totalMinutes: route.totalMinutes + walkMinutes,
         totalWalkDistanceM: walkDistanceM,
         accessibilityHighlights: highlights,
+        _accessibilityHighlightMessages: highlightMessages,
       };
     }),
   );
@@ -677,8 +722,16 @@ export async function planValhallaRoute(
     throw new ValhallaRoutingError("Malformed Valhalla response");
   }
   if (bypassFailed) {
-    for (const route of routes)
+    for (const route of routes) {
       route.accessibilityHighlights.push(TRAFFIC_MSG.CLOSURE_BYPASS_FAILED);
+      route._accessibilityHighlightMessages = [
+        ...(route._accessibilityHighlightMessages ?? []),
+        routeMessage(
+          "ROUTE_CLOSURE_BYPASS_FAILED",
+          TRAFFIC_MSG.CLOSURE_BYPASS_FAILED,
+        ),
+      ];
+    }
   }
   if (opts.travelMode === "walk" || routes.length === 0) return routes;
   return attachWalkAccessLegs(

@@ -1,6 +1,7 @@
 import { randomBytes } from "crypto";
 import { storeBusPlan } from "./bus-plan.repository";
 import { ResponseCode } from "../../types/code";
+import { DEFAULT_LANG } from "../../types/lang";
 import {
   REROUTE_MSG,
   REROUTE_MSG_EN,
@@ -32,19 +33,22 @@ const conflict = (message: string): RerouteResult => ({
   ok: false,
   status: ResponseCode.CONFLICT,
   error: message,
+  data: { reason: "REROUTE_CONFLICT" },
 });
 
 /** Shared HTTP/voice reroute orchestration with fail-closed Redis concurrency. */
 export async function rerouteAccessibleRoute(
   request: RerouteRequest,
 ): Promise<RerouteResult> {
-  const messages = request.language === "en" ? REROUTE_MSG_EN : REROUTE_MSG;
+  const language = request.language ?? DEFAULT_LANG;
+  const messages = language === "en" ? REROUTE_MSG_EN : REROUTE_MSG;
   const tokenRead = await readNavigationTokenStrict(request.routeToken);
   if (tokenRead.status === "unavailable") {
     return {
       ok: false,
       status: ResponseCode.SERVICE_UNAVAILABLE,
       error: messages.UNAVAILABLE,
+      data: { reason: "NAVIGATION_STATE_UNAVAILABLE" },
     };
   }
   if (
@@ -55,6 +59,7 @@ export async function rerouteAccessibleRoute(
       ok: false,
       status: ResponseCode.GONE,
       error: messages.GONE,
+      data: { reason: "ROUTE_TOKEN_EXPIRED_OR_UNSUPPORTED" },
     };
   }
   const previous = tokenRead.value;
@@ -71,6 +76,7 @@ export async function rerouteAccessibleRoute(
       ok: false,
       status: ResponseCode.SERVICE_UNAVAILABLE,
       error: messages.UNAVAILABLE,
+      data: { reason: "NAVIGATION_STATE_UNAVAILABLE" },
     };
   }
   if (begun.status === "replay") return { ok: true, data: begun.data };
@@ -90,14 +96,21 @@ export async function rerouteAccessibleRoute(
     };
     const planned = await planAccessibleRouteFromRequest({
       ...previous.canonicalRequest,
+      language,
       origin: currentOrigin,
       userLocation: currentOrigin,
     });
     if (!planned.ok) {
       await release();
-      return request.language === "en"
-        ? { ...planned, error: REROUTE_MSG_EN.PLAN_FAILED }
-        : planned;
+      const existingData = planned.data as
+        { reason?: string; [key: string]: unknown } | undefined;
+      return {
+        ...planned,
+        error: language === "en" ? REROUTE_MSG_EN.PLAN_FAILED : planned.error,
+        data: existingData?.reason
+          ? existingData
+          : { ...(existingData ?? {}), reason: "REROUTE_PLANNING_FAILED" },
+      };
     }
     const selected = planned.data.routes[0];
     if (!selected) {
@@ -105,10 +118,8 @@ export async function rerouteAccessibleRoute(
       return {
         ok: false,
         status: ResponseCode.UNPROCESSABLE_ENTITY,
-        error:
-          request.language === "en"
-            ? REROUTE_MSG_EN.NO_ROUTE
-            : ROUTE_MSG.NO_ROUTE,
+        error: language === "en" ? REROUTE_MSG_EN.NO_ROUTE : ROUTE_MSG.NO_ROUTE,
+        data: { reason: "NO_ROUTE" },
       };
     }
     const routeVersion = request.previousRouteVersion + 1;
@@ -120,15 +131,16 @@ export async function rerouteAccessibleRoute(
     const instructionsResult = generateNavInstructions(
       route,
       undefined,
-      request.language,
+      language,
     );
-    const stepsResult = generateNavStepsWithLegIndex(route, request.language);
+    const stepsResult = generateNavStepsWithLegIndex(route, language);
     if (!instructionsResult.ok || !stepsResult.ok) {
       await release();
       return {
         ok: false,
         status: ResponseCode.UNPROCESSABLE_ENTITY,
         error: messages.NO_STEPS,
+        data: { reason: "NAV_INSTRUCTIONS_UNAVAILABLE" },
       };
     }
     const routeToken = randomBytes(32).toString("base64url");
@@ -137,6 +149,12 @@ export async function rerouteAccessibleRoute(
       ...instructionsResult.data.warnings,
       ...stepsResult.warnings,
     ].filter((value, index, all) => all.indexOf(value) === index);
+    const warningDetails = (route.warningDetails ?? []).flatMap((detail) => {
+      const rawMessage = route.warnings?.[detail.index];
+      if (!rawMessage || detail.message !== rawMessage) return [];
+      const index = warnings.indexOf(rawMessage);
+      return index < 0 ? [] : [{ ...detail, index, message: rawMessage }];
+    });
     const data: RerouteData = {
       navigationId: previous.navigationId,
       previousRouteVersion: request.previousRouteVersion,
@@ -154,6 +172,7 @@ export async function rerouteAccessibleRoute(
         ),
       })),
       warnings,
+      ...(warningDetails.length ? { warningDetails } : {}),
       currentStepIndex: 0,
       replayed: false,
     };
@@ -166,6 +185,7 @@ export async function rerouteAccessibleRoute(
         ...previous.canonicalRequest,
         origin: currentOrigin,
         userLocation: currentOrigin,
+        language,
       },
     };
     const finalized = await finalizeReroute(
@@ -180,6 +200,7 @@ export async function rerouteAccessibleRoute(
         ok: false,
         status: ResponseCode.SERVICE_UNAVAILABLE,
         error: messages.UNAVAILABLE,
+        data: { reason: "NAVIGATION_STATE_UNAVAILABLE" },
       };
     }
     if (finalized === "stale") return conflict(messages.CONFLICT);

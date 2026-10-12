@@ -74,6 +74,7 @@ export interface RouteAccessibilityScore {
   label: ScoreLabel;
   dataConfidence: DataConfidence;
   warnings: string[];
+  warningMessages: import("../../types/route-message").RouteMessageDescriptor[];
   components: {
     facilityScore: number;
     timeScore: number;
@@ -90,6 +91,8 @@ export type LatLng = { lat: number; lng: number };
 export type RoadTravelMode = Exclude<TravelMode, "transit">;
 
 export interface FindAccessibleRoutesOptions {
+  /** Presentation only; never forwarded as an OTP routing/locale option. */
+  language?: SupportedLang;
   transitPreference?: TransitPreference;
   mode?: AccessibilityMode;
   maxTransfers?: 0 | 1 | 2;
@@ -138,6 +141,7 @@ export interface FindDrivingRoutesOptions {
 
 export interface PlanRouteRequest {
   transitPreference?: TransitPreference;
+  language?: SupportedLang;
   origin?: unknown;
   destination?: unknown;
   query?: string;
@@ -236,6 +240,7 @@ export interface RerouteData {
   instructions: RerouteInstruction[];
   steps: RerouteStep[];
   warnings: string[];
+  warningDetails?: import("../../types/route-message").RouteMessageDetail[];
   currentStepIndex: 0;
   replayed: boolean;
 }
@@ -292,7 +297,7 @@ export type PlanRouteResult =
       ok: false;
       status: ResponseCode;
       error: string;
-      data?: RouteFailureData;
+      data?: RouteFailureData | { reason: string; [key: string]: unknown };
     };
 
 export type AnyLeg = WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg | DriveLeg;

@@ -2,6 +2,7 @@ import { encode } from "@googlemaps/polyline-codec";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { computeValhallaRoutes } from "../../../adapters/valhalla.adapter";
 import { TRAFFIC_MSG } from "../../../constants/messages";
+import { presentRouteMessages } from "../../../utils/route-messages";
 import { planOtpWalkDetailed } from "./otp-routing";
 import {
   decodeValhallaShape,
@@ -404,6 +405,32 @@ describe("planValhallaRoute walk access legs", () => {
         h.includes("無法建立可信步行路徑"),
       ),
     ).toBe(true);
+  });
+
+  it("emits a machine-tagged connector warning that renders in English without changing the route", async () => {
+    pedestrianRouter(() => ({ status: "NO_ROUTE", trips: [] }));
+    const [route] = await planValhallaRoute(ORIGIN, DSNAP, {
+      travelMode: "drive",
+    });
+    const before = JSON.stringify(route);
+    const presented = presentRouteMessages(
+      route.accessibilityHighlights,
+      route._accessibilityHighlightMessages,
+      "en",
+    );
+    expect(presented.details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "ROUTE_WALK_CONNECTOR_UNAVAILABLE",
+          params: expect.objectContaining({
+            placeRole: "origin",
+            placeLabel: "Origin",
+          }),
+          message: expect.stringContaining("Origin is about"),
+        }),
+      ]),
+    );
+    expect(JSON.stringify(route)).toBe(before);
   });
 
   it("drops the connector when the pedestrian endpoint lands beyond tolerance", async () => {

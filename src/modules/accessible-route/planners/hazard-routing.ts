@@ -1,4 +1,5 @@
 import { ROUTE_WARNING } from "../../../constants/messages";
+import { routeMessage } from "../../../utils/route-messages";
 import type { HazardSeverity, HazardType } from "../../../types";
 import type {
   AccessibleRoute,
@@ -377,7 +378,10 @@ const INTERNAL_SCHEDULE_METADATA = [
 ] as const;
 
 type RouteDecoration = Partial<
-  Pick<AccessibleRoute, "hazardAdvisory" | "degraded" | "warnings">
+  Pick<
+    AccessibleRoute,
+    "hazardAdvisory" | "degraded" | "warnings" | "_warningMessages"
+  >
 >;
 
 /**
@@ -399,12 +403,22 @@ function decorateRoute(
 
 function appendWarning(
   route: AccessibleRoute,
-  warning: string,
+  descriptor: ReturnType<typeof routeMessage>,
   decoration: RouteDecoration = {},
 ): AccessibleRoute {
+  const warnings = route.warnings ?? [];
+  const descriptors = route._warningMessages ?? [];
+  const addDescriptor = !descriptors.some(
+    (item) => item.code === descriptor.code,
+  );
   return decorateRoute(route, {
     ...decoration,
-    warnings: [...new Set([...(route.warnings ?? []), warning])],
+    warnings: warnings.includes(descriptor.legacyMessage)
+      ? warnings
+      : [...warnings, descriptor.legacyMessage],
+    _warningMessages: addDescriptor
+      ? [...descriptors, descriptor]
+      : descriptors,
   });
 }
 
@@ -436,9 +450,13 @@ export function planConfirmedHazardRoutes(
     );
     const advisory = advisoryFor(onRoute);
     const decorated = onRoute.length
-      ? appendWarning(route, ROUTE_WARNING.HAZARD_ON_ROUTE, {
-          hazardAdvisory: advisory,
-        })
+      ? appendWarning(
+          route,
+          routeMessage("ROUTE_HAZARD_ON_ROUTE", ROUTE_WARNING.HAZARD_ON_ROUTE),
+          {
+            hazardAdvisory: advisory,
+          },
+        )
       : route;
     return { route: decorated, index, advisory };
   });
@@ -495,7 +513,10 @@ export function planConfirmedHazardRoutes(
     const selected = ranked[0];
     selected.route = appendWarning(
       selected.route,
-      ROUTE_WARNING.HAZARD_ALL_ROUTES_BLOCKED,
+      routeMessage(
+        "ROUTE_HAZARD_ALL_ROUTES_BLOCKED",
+        ROUTE_WARNING.HAZARD_ALL_ROUTES_BLOCKED,
+      ),
       { degraded: true },
     );
   }

@@ -48,6 +48,7 @@ import { busUrl, trainUrl, traUrl, thsrUrl } from "../../../config/transit";
 import { odataUrlLiteral } from "../../../utils/transit-text";
 import { fetchRailLegGeometry } from "./otp-routing";
 import { gtfsTimeToSeconds } from "./gtfs-time";
+import { routeMessage } from "../../../utils/route-messages";
 import { taipeiYmdDash } from "../../../config/taipei-time";
 import { findVehiclesByPlate } from "../../transit/bus.repository";
 import { recordRealtimeSightings } from "../../transit/bus-fleet.repository";
@@ -545,18 +546,35 @@ async function annotateBusVehicle(
   }
 
   const alt = leg.lowFloorAlternative;
-  pushUnique(
-    route.accessibilityHighlights,
-    alt
-      ? `⚠️ 首班公車「${leg.routeName}」為高底盤車；後續 ${alt.plateNumb} 為低地板車${
-          alt.etaMinutes != null
-            ? `（約 ${alt.etaMinutes} 分後到站）`
-            : alt.stopsAway != null
-              ? `（尚差 ${alt.stopsAway} 站）`
-              : ""
-        }`
-      : `⚠️ 首班公車「${leg.routeName}」為高底盤車，未查到後續低地板班次`,
-  );
+  const legacyMessage = alt
+    ? `⚠️ 首班公車「${leg.routeName}」為高底盤車；後續 ${alt.plateNumb} 為低地板車${
+        alt.etaMinutes != null
+          ? `（約 ${alt.etaMinutes} 分後到站）`
+          : alt.stopsAway != null
+            ? `（尚差 ${alt.stopsAway} 站）`
+            : ""
+      }`
+    : `⚠️ 首班公車「${leg.routeName}」為高底盤車，未查到後續低地板班次`;
+  if (!route.accessibilityHighlights.includes(legacyMessage)) {
+    route.accessibilityHighlights.push(legacyMessage);
+    route._accessibilityHighlightMessages = [
+      ...(route._accessibilityHighlightMessages ?? []),
+      routeMessage(
+        alt
+          ? "ROUTE_HIGH_FLOOR_ALTERNATIVE"
+          : "ROUTE_HIGH_FLOOR_NO_ALTERNATIVE",
+        legacyMessage,
+        alt
+          ? {
+              routeName: leg.routeName,
+              plateNumb: alt.plateNumb,
+              ...(alt.etaMinutes == null ? {} : { etaMinutes: alt.etaMinutes }),
+              ...(alt.stopsAway == null ? {} : { stopsAway: alt.stopsAway }),
+            }
+          : { routeName: leg.routeName },
+      ),
+    ];
+  }
 }
 
 const STATION_CACHE_TTL_MS = 6 * 60 * 60 * 1000;

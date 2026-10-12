@@ -18,6 +18,9 @@
 import OsmA11y from "../../../model/osm-a11y.model";
 import { getStationAccess } from "./indoor-graph";
 import type { IOsmA11y } from "../../../types";
+import type { SupportedLang } from "../../../types/lang";
+import type { RouteMessageDescriptor } from "../../../types/route-message";
+import { routeMessage } from "../../../utils/route-messages";
 import type {
   AccessibilityMode,
   WalkLeg,
@@ -60,48 +63,61 @@ export async function nearbyA11y(
  * @param alightA11y Accessibility facilities at the alighting stop.
  * @returns The derived highlight strings.
  */
-export function deriveHighlights(
+export function deriveHighlightMessages(
   boardA11y: IOsmA11y[],
   alightA11y: IOsmA11y[],
-): string[] {
+): RouteMessageDescriptor[] {
   const tagVal = (nodes: IOsmA11y[], key: string, val: string) =>
     nodes.some((f) => f.tags?.[key] === val);
   const hasCat = (nodes: IOsmA11y[], ...cats: string[]) =>
     nodes.some((f) => cats.includes(f.category));
 
-  const h: string[] = [];
+  const h: RouteMessageDescriptor[] = [];
   if (hasCat(boardA11y, "elevator") || tagVal(boardA11y, "elevator", "yes"))
-    h.push("乘車站附近有電梯");
+    h.push(routeMessage("ROUTE_BOARD_ELEVATOR_NEARBY", "乘車站附近有電梯"));
   if (hasCat(alightA11y, "elevator") || tagVal(alightA11y, "elevator", "yes"))
-    h.push("下車站附近有電梯");
-  if (hasCat(boardA11y, "kerb_cut", "ramp")) h.push("乘車站附近有無障礙坡道");
-  if (hasCat(alightA11y, "kerb_cut", "ramp")) h.push("下車站附近有無障礙坡道");
+    h.push(routeMessage("ROUTE_ALIGHT_ELEVATOR_NEARBY", "下車站附近有電梯"));
+  if (hasCat(boardA11y, "kerb_cut", "ramp"))
+    h.push(routeMessage("ROUTE_BOARD_RAMP_NEARBY", "乘車站附近有無障礙坡道"));
+  if (hasCat(alightA11y, "kerb_cut", "ramp"))
+    h.push(routeMessage("ROUTE_ALIGHT_RAMP_NEARBY", "下車站附近有無障礙坡道"));
   if (
     tagVal(boardA11y, "toilets:wheelchair", "yes") ||
     tagVal(alightA11y, "toilets:wheelchair", "yes")
   )
-    h.push("站點附近有無障礙廁所");
+    h.push(
+      routeMessage("ROUTE_ACCESSIBLE_TOILET_NEARBY", "站點附近有無障礙廁所"),
+    );
   if (
     tagVal(boardA11y, "tactile_paving", "yes") ||
     tagVal(alightA11y, "tactile_paving", "yes")
   )
-    h.push("附近有導盲磚");
+    h.push(routeMessage("ROUTE_TACTILE_PAVING_NEARBY", "附近有導盲磚"));
   if (
     tagVal(boardA11y, "traffic_signals:sound", "yes") ||
     tagVal(alightA11y, "traffic_signals:sound", "yes")
   )
-    h.push("附近有音響號誌");
+    h.push(routeMessage("ROUTE_AUDIO_SIGNAL_NEARBY", "附近有音響號誌"));
   if (
     tagVal(boardA11y, "wheelchair", "yes") ||
     tagVal(boardA11y, "wheelchair", "designated")
   )
-    h.push("乘車站設施完善");
+    h.push(routeMessage("ROUTE_BOARD_FACILITIES", "乘車站設施完善"));
   if (
     tagVal(alightA11y, "wheelchair", "yes") ||
     tagVal(alightA11y, "wheelchair", "designated")
   )
-    h.push("下車站設施完善");
+    h.push(routeMessage("ROUTE_ALIGHT_FACILITIES", "下車站設施完善"));
   return h;
+}
+
+export function deriveHighlights(
+  boardA11y: IOsmA11y[],
+  alightA11y: IOsmA11y[],
+): string[] {
+  return deriveHighlightMessages(boardA11y, alightA11y).map(
+    (item) => item.legacyMessage,
+  );
 }
 
 /**
@@ -116,7 +132,7 @@ export function deriveHighlights(
  * @param input.transferCount Number of transfers in the route.
  * @param input.facilities All OSM a11y nodes gathered along the route.
  * @param input.label The route's score label (drives the closing verdict).
- * @returns A one-sentence Chinese accessibility summary.
+ * @returns An accessibility summary; omitted language preserves Chinese copy.
  */
 export function buildAccessibilitySummary(input: {
   mode: AccessibilityMode;
@@ -124,8 +140,11 @@ export function buildAccessibilitySummary(input: {
   transferCount: number;
   facilities: IOsmA11y[];
   label: "excellent" | "good" | "fair" | "poor" | "critical";
+  language?: SupportedLang;
 }): string {
-  const { mode, walkDistanceM, transferCount, facilities, label } = input;
+  const { mode, walkDistanceM, transferCount, facilities, label, language } =
+    input;
+  const copy = (zh: string, en: string) => (language === "en" ? en : zh);
 
   const hasElevator = facilities.some(
     (n) =>
@@ -143,9 +162,17 @@ export function buildAccessibilitySummary(input: {
     (n) => n.tags?.["traffic_signals:sound"] === "yes",
   );
 
-  const walkText = `步行約 ${Math.round(walkDistanceM)} 公尺`;
+  const walkText = copy(
+    `步行約 ${Math.round(walkDistanceM)} 公尺`,
+    `Walk about ${Math.round(walkDistanceM)} m`,
+  );
   const transferText =
-    transferCount <= 0 ? "全程直達" : `需轉乘 ${transferCount} 次`;
+    transferCount <= 0
+      ? copy("全程直達", "Direct service")
+      : copy(
+          `需轉乘 ${transferCount} 次`,
+          `${transferCount} transfer(s) required`,
+        );
 
   const verdict = (good: string, ok: string, hard: string): string => {
     if (label === "excellent" || label === "good") return good;
@@ -158,39 +185,83 @@ export function buildAccessibilitySummary(input: {
   if (mode === "visual_impaired") {
     parts.push(
       hasTactilePaving || hasAudioSignal
-        ? "沿途設有導盲磚或語音號誌"
-        : "沿途導盲設施資訊有限",
+        ? copy(
+            "沿途設有導盲磚或語音號誌",
+            "Tactile paving or audible signals are available along the route",
+          )
+        : copy(
+            "沿途導盲設施資訊有限",
+            "Information on guidance facilities along the route is limited",
+          ),
     );
     parts.push(transferText);
     parts.push(
-      verdict("適合視障者通行", "大致可行，請留意路口", "通行較困難，建議結伴"),
+      verdict(
+        copy("適合視障者通行", "Suitable for visually impaired travellers"),
+        copy(
+          "大致可行，請留意路口",
+          "Generally feasible; take care at crossings",
+        ),
+        copy(
+          "通行較困難，建議結伴",
+          "Travel may be difficult; consider travelling with a companion",
+        ),
+      ),
     );
   } else if (mode === "elderly") {
     parts.push(walkText);
     parts.push(transferText);
-    if (hasElevator) parts.push("車站設有電梯可搭乘");
+    if (hasElevator)
+      parts.push(
+        copy("車站設有電梯可搭乘", "Elevators are available at stations"),
+      );
     parts.push(
       verdict(
-        "步行負擔低，適合長者",
-        "步行負擔尚可，請適度休息",
-        "步行或轉乘負擔較大，請斟酌",
+        copy(
+          "步行負擔低，適合長者",
+          "Low walking burden, suitable for older travellers",
+        ),
+        copy(
+          "步行負擔尚可，請適度休息",
+          "Moderate walking burden; take breaks as needed",
+        ),
+        copy(
+          "步行或轉乘負擔較大，請斟酌",
+          "Walking or transfers may be demanding; consider your needs",
+        ),
       ),
     );
   } else {
     parts.push(
       hasElevator
-        ? "全程設有電梯"
+        ? copy("全程設有電梯", "Elevators are available along the route")
         : hasRamp
-          ? "沿途設有無障礙坡道"
-          : "沿途無障礙設施資訊有限",
+          ? copy(
+              "沿途設有無障礙坡道",
+              "Accessible ramps are available along the route",
+            )
+          : copy(
+              "沿途無障礙設施資訊有限",
+              "Accessibility facility information along the route is limited",
+            ),
     );
     parts.push(walkText);
     parts.push(
-      verdict("適合輪椅通行", "大致可行，建議留意路況", "通行較困難，請斟酌"),
+      verdict(
+        copy("適合輪椅通行", "Suitable for wheelchair travel"),
+        copy(
+          "大致可行，建議留意路況",
+          "Generally feasible; check conditions along the route",
+        ),
+        copy(
+          "通行較困難，請斟酌",
+          "Travel may be difficult; consider your needs",
+        ),
+      ),
     );
   }
 
-  return parts.join("，");
+  return language === "en" ? `${parts.join("; ")}.` : parts.join("，");
 }
 
 /**

@@ -10,6 +10,10 @@
 import type { HazardSeverity, HazardType, IOsmA11y } from "./index";
 import type { RoadIncident } from "./traffic";
 import type { MatchedAlert, MetroAlert } from "./transit";
+import type {
+  RouteMessageDescriptor,
+  RouteMessageDetail,
+} from "./route-message";
 
 export type AccessibilityMode =
   "wheelchair" | "elderly" | "visual_impaired" | "normal";
@@ -457,6 +461,7 @@ export interface AccessibleRoute {
   transferCount: number;
   legs: (WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg | DriveLeg)[];
   accessibilityHighlights: string[];
+  accessibilityHighlightDetails?: RouteMessageDetail[];
   /**
    * Pure-walk planner provenance. `pedestrian-a11y` is a CSR-selected route;
    * `otp-fallback` states plainly that CSR did not decide it, so its
@@ -466,6 +471,10 @@ export interface AccessibleRoute {
   engine?: PureWalkRouteEngine;
   degraded?: boolean;
   warnings?: string[];
+  warningDetails?: RouteMessageDetail[];
+  /** Internal producer descriptors retained in route-token snapshots for reroute presentation. */
+  _warningMessages?: RouteMessageDescriptor[];
+  _accessibilityHighlightMessages?: RouteMessageDescriptor[];
   departureDate?: string;
   _scheduledDepartureTime?: number;
   _scheduledEndTime?: number;
@@ -475,6 +484,8 @@ export interface AccessibleRoute {
   accessibilityLabel?: "excellent" | "good" | "fair" | "poor" | "critical";
   dataConfidence?: "high" | "medium" | "low";
   scoreWarnings?: string[];
+  scoreWarningDetails?: RouteMessageDetail[];
+  _scoreWarningMessages?: RouteMessageDescriptor[];
   totalWalkDistanceM?: number;
   scoreComponents?: {
     facilityScore: number;

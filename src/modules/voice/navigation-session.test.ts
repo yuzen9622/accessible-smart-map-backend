@@ -6,6 +6,7 @@ import {
   type NavProgressEvent,
 } from "./voice.ws.schema";
 import type { NavigationSessionSnapshot } from "../accessible-route/navigation-state.repository";
+import { generateNavStepsWithLegIndex } from "../nav-instructions/nav-instructions.service";
 import {
   NavigationSession,
   distanceToPolylineM,
@@ -1050,6 +1051,34 @@ describe("NavigationSession resume from snapshot", () => {
     coord(121.001),
     coord(121.002),
   ];
+
+  it("restores English steps identical to HTTP navigation output without changing the 9-field WALK step contract", () => {
+    const routeWithSteps = identified(route([walkLeg(points)]));
+    const beforeKeys = Object.keys(
+      routeWithSteps.legs[0].type === "WALK"
+        ? (routeWithSteps.legs[0].steps?.[0] ?? {})
+        : {},
+    );
+    const expected = generateNavStepsWithLegIndex(routeWithSteps, "en");
+    const nav = new NavigationSession(undefined, "en");
+    const effect = nav.resume(
+      routeWithSteps,
+      snapshotOf({ currentStepIndex: 0 }),
+    );
+    const resumed = effect.events.find(
+      (event) => event.type === "nav.resume_ok",
+    ) as { steps: { instruction: string }[] };
+    expect(expected.ok).toBe(true);
+    if (!expected.ok) return;
+    expect(resumed.steps.map((step) => step.instruction)).toEqual(
+      expected.steps.map((step) => step.instruction.text),
+    );
+    expect(beforeKeys).toHaveLength(9);
+    expect(beforeKeys).not.toContain("instruction");
+    expect(beforeKeys).not.toContain("text");
+    expect(beforeKeys).not.toContain("type");
+    expect(beforeKeys).not.toContain("maneuver");
+  });
 
   it("emits nav.resume_ok carrying the snapshot correlation and full step list", () => {
     const nav = new NavigationSession();

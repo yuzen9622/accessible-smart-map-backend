@@ -9,6 +9,31 @@ import {
 import { ROUTE_WARNING } from "../../constants/messages";
 import { TaiwanCityEn } from "../../types/transit";
 
+describe("AccessibleRouteBodySchema language", () => {
+  const body = {
+    origin: { latitude: 25.04, longitude: 121.56 },
+    destination: { latitude: 25.03, longitude: 121.55 },
+  };
+
+  it.each(["en", "zh-TW"])("accepts language %s", (language) => {
+    expect(
+      AccessibleRouteBodySchema.parse({ ...body, language }).language,
+    ).toBe(language);
+  });
+
+  it("keeps language optional for legacy callers", () => {
+    expect(AccessibleRouteBodySchema.parse(body)).not.toHaveProperty(
+      "language",
+    );
+  });
+
+  it("rejects unsupported language values", () => {
+    expect(
+      AccessibleRouteBodySchema.safeParse({ ...body, language: "fr" }).success,
+    ).toBe(false);
+  });
+});
+
 describe("AccessibleRouteDataSchema administrative city", () => {
   const base = {
     origin: { lat: 25.04, lng: 121.56 },

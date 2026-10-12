@@ -94,11 +94,27 @@ describe("rerouteAccessibleRoute", () => {
     });
   });
 
+  it.each(["en", "zh-TW", undefined] as const)(
+    "provides a stable reason if finalization is unavailable (%s)",
+    async (language) => {
+      finalizeReroute.mockResolvedValue("unavailable");
+      const result = await rerouteAccessibleRoute({ ...request, language });
+      expect(result).toMatchObject({
+        ok: false,
+        status: 503,
+        data: { reason: "NAVIGATION_STATE_UNAVAILABLE" },
+      });
+      expect(planAccessibleRouteFromRequest).toHaveBeenCalledTimes(1);
+      expect(finalizeReroute).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("uses the canonical intent, replaces only origin/userLocation, selects the top route, and increments version", async () => {
     const result = await rerouteAccessibleRoute(request);
     expect(result.ok).toBe(true);
     expect(planAccessibleRouteFromRequest).toHaveBeenCalledWith({
       ...canonicalRequest,
+      language: "zh-TW",
       origin: { latitude: 25.02, longitude: 121.02 },
       userLocation: { latitude: 25.02, longitude: 121.02 },
     });
@@ -133,6 +149,7 @@ describe("rerouteAccessibleRoute", () => {
     );
     expect(planAccessibleRouteFromRequest).toHaveBeenCalledWith({
       ...canonicalRequest,
+      language: "en",
       origin: { latitude: 25.02, longitude: 121.02 },
       userLocation: { latitude: 25.02, longitude: 121.02 },
     });
@@ -160,6 +177,30 @@ describe("rerouteAccessibleRoute", () => {
       data: { routeToken: "same", replayed: true },
     });
     expect(planAccessibleRouteFromRequest).not.toHaveBeenCalled();
+  });
+
+  it("serializes parallel same-id retries: only the acquired request replans and finalizes", async () => {
+    beginReroute
+      .mockResolvedValueOnce({ status: "acquired" })
+      .mockResolvedValueOnce({
+        status: "replay",
+        data: {
+          routeToken: "committed-token",
+          routeVersion: 2,
+          replayed: true,
+        },
+      });
+    const [first, second] = await Promise.all([
+      rerouteAccessibleRoute({ ...request, language: "en" }),
+      rerouteAccessibleRoute({ ...request, language: "en" }),
+    ]);
+    expect(first.ok && second.ok).toBe(true);
+    expect(beginReroute).toHaveBeenCalledTimes(2);
+    expect(planAccessibleRouteFromRequest).toHaveBeenCalledTimes(1);
+    expect(finalizeReroute).toHaveBeenCalledTimes(1);
+    expect(
+      [first, second].some((result) => result.ok && result.data.replayed),
+    ).toBe(true);
   });
 
   it.each(["stale", "conflict"])(

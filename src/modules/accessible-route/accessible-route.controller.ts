@@ -13,6 +13,7 @@ import {
 import { rerouteAccessibleRoute } from "./reroute.service";
 import type { RerouteRequest } from "./accessible-route.types";
 import { getPlannedBusArrivals } from "./bus-arrivals.service";
+import { localizeRouteReason } from "../../utils/route-messages";
 
 export async function plannedBusArrivalsHttp(
   req: Request,
@@ -108,14 +109,17 @@ export async function accessibleRoute(
       MSG.OK,
       result.data,
     );
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("[accessible-route]", error);
+    const language = req.body?.language === "en" ? "en" : "zh-TW";
     return sendResponse(
       res,
       false,
       "error",
       ResponseCode.INTERNAL_ERROR,
-      error?.message ?? ERROR_MESSAGE.INTERNAL,
+      localizeRouteReason("ROUTE_PLANNING_FAILED", language) ??
+        ERROR_MESSAGE.INTERNAL,
+      { reason: "ROUTE_PLANNING_FAILED" },
     );
   }
 }
@@ -165,16 +169,19 @@ export async function rerouteAccessibleRouteHttp(
         : REROUTE_MSG.OK,
       result.data,
     );
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("[accessible-route-reroute]", error);
+    const language = (req.body as RerouteRequest | undefined)?.language;
     return sendResponse(
       res,
       false,
       "error",
       ResponseCode.INTERNAL_ERROR,
-      (req.body as RerouteRequest).language === "en"
+      language === "en"
         ? REROUTE_MSG_EN.PLAN_FAILED
-        : (error?.message ?? ERROR_MESSAGE.INTERNAL),
+        : (localizeRouteReason("REROUTE_FAILED", "zh-TW") ??
+            ERROR_MESSAGE.INTERNAL),
+      { reason: "REROUTE_FAILED" },
     );
   }
 }

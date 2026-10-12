@@ -23,6 +23,70 @@ import type { IOsmA11y } from "../../types";
 const node = (category: string, tags: Record<string, string> = {}): IOsmA11y =>
   ({ category, tags }) as unknown as IOsmA11y;
 
+describe("scoring factor language", () => {
+  it.each([0, 1, 2])(
+    "localizes factors with %s transfers without changing scoring",
+    (transfers) => {
+      const facilities = [
+        node("elevator"),
+        node("ramp"),
+        node("stairs", { highway: "steps" }),
+        node("path", { incline: "15%" }),
+      ];
+      const zh = scoreRoute(
+        facilities,
+        30,
+        40,
+        20,
+        2,
+        "wheelchair",
+        1500,
+        0,
+        undefined,
+        transfers,
+      );
+      const explicitZh = scoreRoute(
+        facilities,
+        30,
+        40,
+        20,
+        2,
+        "wheelchair",
+        1500,
+        0,
+        undefined,
+        transfers,
+        "zh-TW",
+      );
+      const en = scoreRoute(
+        facilities,
+        30,
+        40,
+        20,
+        2,
+        "wheelchair",
+        1500,
+        0,
+        undefined,
+        transfers,
+        "en",
+      );
+      expect(explicitZh).toEqual(zh);
+      const factors = en.factors ?? [];
+      expect(factors.length).toBeGreaterThan(0);
+      expect(factors.map((f) => f.text).join(" ")).not.toMatch(
+        /[\u4e00-\u9fff]/,
+      );
+      expect(factors.map((f) => f.text).join(" ")).toContain("1500 m");
+      const facts = (result: typeof en) => ({
+        ...result,
+        factors: result.factors?.map(({ text: _text, ...factor }) => factor),
+      });
+      expect(facts(en)).toEqual(facts(zh));
+    },
+  );
+});
+
 describe("slope / width / cross-slope contributions", () => {
   it("slope: free below 5%, capped at -35", () => {
     expect(slopeContribution(3)).toBe(0);

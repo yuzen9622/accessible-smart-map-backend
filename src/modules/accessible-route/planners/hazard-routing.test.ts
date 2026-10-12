@@ -211,6 +211,12 @@ describe("confirmed hazard candidate planning", () => {
         onRoute: [{ id: "work-1", severity }],
       });
       expect(plan.routes[0].warnings).toContain(ROUTE_WARNING.HAZARD_ON_ROUTE);
+      expect(plan.routes[0]._warningMessages).toContainEqual(
+        expect.objectContaining({
+          code: "ROUTE_HAZARD_ON_ROUTE",
+          legacyMessage: ROUTE_WARNING.HAZARD_ON_ROUTE,
+        }),
+      );
       expect(plan.routes[1].hazardAdvisory?.avoided).toBeUndefined();
     },
   );

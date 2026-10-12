@@ -9,8 +9,11 @@
  */
 
 import { WALK_SPEED_MPS } from "../../config/routing";
+import type { SupportedLang } from "../../types/lang";
 import type { IOsmA11y } from "../../types";
 import type { AccessibilityMode } from "../../types/route";
+import type { RouteMessageDescriptor } from "../../types/route-message";
+import { routeMessage } from "../../utils/route-messages";
 import type {
   TagWeightMap,
   ScoreLabel,
@@ -644,6 +647,7 @@ export function scoreRoute(
   dataCoverageRatio = 1,
   env?: EnvConditions,
   transferCount = 0,
+  language?: SupportedLang,
 ): RouteAccessibilityScore {
   const profile = MODE_PROFILES[mode] ?? MODE_PROFILES.normal;
   const facilityScore = scoreFacilitySet(facilityNodes);
@@ -739,12 +743,27 @@ export function scoreRoute(
   const totalScore = Math.max(0, Math.min(100, Math.round(rawTotal)));
 
   const dataConfidence = dataConfidenceFromRatio(dataCoverageRatio);
-  const warnings: string[] = [];
+  const warningMessages: RouteMessageDescriptor[] = [];
   if (dataConfidence === "low")
-    warnings.push("沿途無障礙資料不足，分數為保守估計");
-  if (walkPenalty >= 20) warnings.push("步行距離較長，行動不便者請留意");
-  if (transferPenalty >= 10) warnings.push("轉乘次數較多，行動不便者請留意");
-  if (envPenalty >= 10) warnings.push("天候或空氣品質不佳，通行較費力");
+    warningMessages.push(
+      routeMessage("ROUTE_DATA_SPARSE", "沿途無障礙資料不足，分數為保守估計"),
+    );
+  if (walkPenalty >= 20)
+    warningMessages.push(
+      routeMessage("ROUTE_LONG_WALK", "步行距離較長，行動不便者請留意"),
+    );
+  if (transferPenalty >= 10)
+    warningMessages.push(
+      routeMessage("ROUTE_MANY_TRANSFERS", "轉乘次數較多，行動不便者請留意"),
+    );
+  if (envPenalty >= 10)
+    warningMessages.push(
+      routeMessage(
+        "ROUTE_ADVERSE_ENVIRONMENT",
+        "天候或空氣品質不佳，通行較費力",
+      ),
+    );
+  const warnings = warningMessages.map((message) => message.legacyMessage);
 
   const components: RouteAccessibilityScore["components"] = {
     facilityScore: Math.round(adjustedFacilityScore),
@@ -756,13 +775,17 @@ export function scoreRoute(
   if (env) components.environmentScore = Math.round(100 - envPenalty);
 
   const factors: ScoreFactor[] = [];
+  const copy = (zh: string, en: string) => (language === "en" ? en : zh);
 
   // Positive factors
   if (hasElevator) {
     factors.push({
       type: "positive",
       icon: "elevator",
-      text: "車站或沿途設有無障礙電梯",
+      text: copy(
+        "車站或沿途設有無障礙電梯",
+        "Accessible elevators are available at stations or along the route.",
+      ),
       impact: 15,
     });
   }
@@ -770,7 +793,10 @@ export function scoreRoute(
     factors.push({
       type: "positive",
       icon: "ramp",
-      text: "設有無障礙坡道或平接緣石",
+      text: copy(
+        "設有無障礙坡道或平接緣石",
+        "Accessible ramps or flush kerbs are available.",
+      ),
       impact: 10,
     });
   }
@@ -778,7 +804,10 @@ export function scoreRoute(
     factors.push({
       type: "positive",
       icon: "bus_accessible",
-      text: "配置低地板公車或友善大眾運輸",
+      text: copy(
+        "配置低地板公車或友善大眾運輸",
+        "Low-floor buses or accessible public transport are available.",
+      ),
       impact: Math.min(highlightCount * 5, 10),
     });
   }
@@ -786,7 +815,7 @@ export function scoreRoute(
     factors.push({
       type: "positive",
       icon: "bus_accessible",
-      text: "一車直達無需轉乘",
+      text: copy("一車直達無需轉乘", "Direct service with no transfers."),
       impact: 5,
     });
   }
@@ -796,7 +825,10 @@ export function scoreRoute(
     factors.push({
       type: "negative",
       icon: "stairs",
-      text: "沿途包含階梯且無坡道替代",
+      text: copy(
+        "沿途包含階梯且無坡道替代",
+        "The route includes stairs without a ramp alternative.",
+      ),
       impact: -35,
     });
   }
@@ -804,7 +836,7 @@ export function scoreRoute(
     factors.push({
       type: "negative",
       icon: "slope",
-      text: "沿途包含較陡坡道",
+      text: copy("沿途包含較陡坡道", "The route includes steep slopes."),
       impact: -18,
     });
   }
@@ -812,7 +844,10 @@ export function scoreRoute(
     factors.push({
       type: "negative",
       icon: "long_walk",
-      text: `步行距離較長（${Math.round(walkDistanceM)} 公尺）`,
+      text: copy(
+        `步行距離較長（${Math.round(walkDistanceM)} 公尺）`,
+        `Long walking distance (${Math.round(walkDistanceM)} m).`,
+      ),
       impact: -Math.round(walkPenalty),
     });
   }
@@ -820,14 +855,17 @@ export function scoreRoute(
     factors.push({
       type: "info",
       icon: "transfer",
-      text: "途中需轉乘 1 次",
+      text: copy("途中需轉乘 1 次", "One transfer is required."),
       impact: -Math.round(transferPenalty),
     });
   } else if (transferCount >= 2) {
     factors.push({
       type: "negative",
       icon: "transfer",
-      text: `途中需轉乘 ${transferCount} 次，轉乘負擔較大`,
+      text: copy(
+        `途中需轉乘 ${transferCount} 次，轉乘負擔較大`,
+        `${transferCount} transfers are required, increasing the transfer burden.`,
+      ),
       impact: -Math.round(transferPenalty),
     });
   }
@@ -837,7 +875,10 @@ export function scoreRoute(
     factors.push({
       type: "info",
       icon: "sparse_data",
-      text: "沿途無障礙資料稀疏，評分採保守估計",
+      text: copy(
+        "沿途無障礙資料稀疏，評分採保守估計",
+        "Accessibility data is sparse; the score is a conservative estimate.",
+      ),
       impact: 0,
     });
   }
@@ -847,6 +888,7 @@ export function scoreRoute(
     label: scoreLabel(totalScore),
     dataConfidence,
     warnings,
+    warningMessages,
     components,
     factors,
   };

@@ -667,18 +667,44 @@ describe("accessible-route OpenAPI", () => {
         maxDistanceKm: { type: "number" },
       },
     });
+    for (const status of ["400", "422", "500", "503"]) {
+      expect(responses[status].content["application/json"].schema).toEqual({
+        $ref: "#/components/schemas/AccessibleRouteErrorResponse",
+      });
+    }
     expect(
-      res.body.components.schemas.ErrorResponse.properties.data.anyOf,
+      res.body.components.schemas.AccessibleRouteErrorResponse.anyOf,
     ).toEqual(
       expect.arrayContaining([
-        { $ref: "#/components/schemas/RouteFailureData" },
+        { $ref: "#/components/schemas/ValidationErrorResponse" },
+        { $ref: "#/components/schemas/ReasonErrorResponse" },
         expect.objectContaining({
           properties: expect.objectContaining({
-            errors: expect.objectContaining({ type: "array" }),
+            data: { $ref: "#/components/schemas/RouteFailureData" },
           }),
         }),
       ]),
     );
+    expect(
+      res.body.components.schemas.ValidationErrorResponse.properties.data,
+    ).toMatchObject({
+      properties: {
+        reason: { enum: ["VALIDATION_FAILED"] },
+        errors: {
+          type: "array",
+          items: { $ref: "#/components/schemas/ValidationIssue" },
+        },
+      },
+    });
+    const rerouteResponses =
+      res.body.paths["/a11y/accessible-route/reroute"].post.responses;
+    for (const status of ["400", "409", "410", "422", "500", "503"]) {
+      expect(
+        rerouteResponses[status].content["application/json"].schema,
+      ).toEqual({
+        $ref: "#/components/schemas/AccessibleRouteErrorResponse",
+      });
+    }
     expect(res.body.components.schemas.RouteHazardAdvisory).toMatchObject({
       type: "object",
       additionalProperties: false,

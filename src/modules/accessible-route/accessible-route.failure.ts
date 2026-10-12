@@ -5,6 +5,8 @@ import {
 } from "../../config/coverage";
 import { ROUTE_MSG, ROUTE_REASON } from "../../constants/messages";
 import { ResponseCode } from "../../types/code";
+import type { SupportedLang } from "../../types/lang";
+import { localizeRouteReason } from "../../utils/route-messages";
 import { pathLengthMeters } from "../../utils/geo";
 
 export type RouteFailureReason =
@@ -46,6 +48,7 @@ export type RoutePreflightResult =
 export function routeFailure<Reason extends RouteFailureReason>(
   reason: Reason,
   extra: Omit<RouteFailureData<Reason>, "reason"> = {},
+  language?: SupportedLang,
 ): RouteFailureResult<Reason> {
   const status =
     reason === ROUTE_REASON.UPSTREAM_TIMEOUT
@@ -54,7 +57,7 @@ export function routeFailure<Reason extends RouteFailureReason>(
   return {
     ok: false,
     status: status as RouteFailureStatus<Reason>,
-    error: ROUTE_MSG[reason],
+    error: localizeRouteReason(reason, language) ?? ROUTE_MSG[reason],
     data: { reason, ...extra } as RouteFailureData<Reason>,
   };
 }
@@ -67,17 +70,22 @@ export function routeFailure<Reason extends RouteFailureReason>(
 export function preflightAccessibleRoute(
   points: readonly ServiceCoveragePoint[],
   coverage: ServiceCoverageConfig,
+  language?: SupportedLang,
 ): RoutePreflightResult {
   if (!points.every((point) => isWithinServiceCoverage(point, coverage.bbox))) {
-    return routeFailure(ROUTE_REASON.OUT_OF_COVERAGE);
+    return routeFailure(ROUTE_REASON.OUT_OF_COVERAGE, {}, language);
   }
 
   const distanceKm = pathLengthMeters(points) / 1_000;
 
   if (distanceKm > coverage.maxRouteDistanceKm) {
-    return routeFailure(ROUTE_REASON.OUT_OF_RANGE, {
-      maxDistanceKm: coverage.maxRouteDistanceKm,
-    });
+    return routeFailure(
+      ROUTE_REASON.OUT_OF_RANGE,
+      {
+        maxDistanceKm: coverage.maxRouteDistanceKm,
+      },
+      language,
+    );
   }
 
   return { ok: true };
