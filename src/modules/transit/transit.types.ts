@@ -32,14 +32,18 @@ export type BusRouteDirection = {
   routeUid?: string;
   subRouteUid: string;
   subRouteName: string;
+  subRouteDisplayName?: string;
   direction: number;
   directionLabel: string;
   from: string;
+  fromDisplayName?: string;
   to: string;
+  toDisplayName?: string;
   stopCount: number;
   stops: {
     seq: number;
     name: string;
+    displayName?: string;
     stopUid?: string;
     lat?: number;
     lng?: number;
@@ -50,6 +54,7 @@ export type BusRouteInfoResult =
   | {
       ok: true;
       routeName: string;
+      routeDisplayName?: string;
       city: TaiwanCityEn | "InterCity";
       source: "db" | "tdx";
       operators: string[];
@@ -63,6 +68,7 @@ export type BusRouteDetailStop = {
   plateNumb?: string;
   seq: number;
   name: string;
+  displayName?: string;
   lat?: number;
   lng?: number;
   estimateMinutes: number | null;
@@ -73,10 +79,13 @@ export type BusRouteDetailDirection = {
   routeUid?: string;
   subRouteUid: string;
   subRouteName: string;
+  subRouteDisplayName?: string;
   direction: number;
   directionLabel: string;
   from: string;
+  fromDisplayName?: string;
   to: string;
+  toDisplayName?: string;
   stopCount: number;
   stops: BusRouteDetailStop[];
   /**
@@ -90,6 +99,7 @@ export type BusRouteDetailResult =
   | {
       ok: true;
       routeName: string;
+      routeDisplayName?: string;
       city: TaiwanCityEn | "InterCity";
       operators: string[];
       schedules?: BusScheduleByDirection[];
@@ -100,7 +110,9 @@ export type BusRouteDetailResult =
 export type BusArrival = {
   subRouteUid: string;
   subRouteName: string;
+  subRouteDisplayName?: string;
   stopName: string;
+  stopDisplayName?: string;
   direction: number;
   directionLabel: string;
   estimateMinutes: number | null;
@@ -112,8 +124,10 @@ export type BusArrivalResult =
   | {
       ok: true;
       routeName: string;
+      routeDisplayName?: string;
       city: TaiwanCityEn | "InterCity";
       stopName: string;
+      stopDisplayName?: string;
       arrivals: BusArrival[];
     }
   | BusServiceError;
@@ -130,10 +144,16 @@ export type BusScheduledTrip = {
   scheduleType: "trip";
   serviceDays: string;
   originStopName: string;
+  originStopDisplayName?: string;
   originDepartureTime: string;
   /** Per-stop times, present only when the operator actually published more
    * than the origin stop. Absent for every feed that publishes origin-only. */
-  stopTimes?: { seq: number; stopName: string; arrivalTime: string }[];
+  stopTimes?: {
+    seq: number;
+    stopName: string;
+    stopDisplayName?: string;
+    arrivalTime: string;
+  }[];
 };
 
 /** A headway-based service window: no discrete departures exist to enumerate. */
@@ -152,6 +172,7 @@ export type BusScheduleByDirection = {
   /** Present when TDX identifies which branch published this schedule. */
   subRouteUid?: string;
   subRouteName?: string;
+  subRouteDisplayName?: string;
   direction: number;
   directionLabel: string;
   first?: string;
@@ -163,6 +184,7 @@ export type BusTimetableResult =
   | {
       ok: true;
       routeName: string;
+      routeDisplayName?: string;
       city: TaiwanCityEn | "InterCity";
       schedules: BusScheduleByDirection[];
       /** States the upstream data's limit so callers never mistake an origin
@@ -176,6 +198,7 @@ export type BusTimetableResult =
 export type BusOnRoad = {
   subRouteUid: string;
   subRouteName: string;
+  subRouteDisplayName?: string;
   plateNumb: string;
   direction: number;
   directionLabel: string;
@@ -193,6 +216,7 @@ export type BusRealtimeOnRouteResult =
   | {
       ok: true;
       routeName: string;
+      routeDisplayName?: string;
       city: TaiwanCityEn | "InterCity";
       count: number;
       lowFloorCount: number;
@@ -202,9 +226,12 @@ export type BusRealtimeOnRouteResult =
 
 export type BusSearchResult = {
   routeName: string;
+  routeDisplayName?: string;
   city: string;
   departure: string;
+  departureDisplayName?: string;
   destination: string;
+  destinationDisplayName?: string;
   distance?: number;
 };
 
@@ -218,10 +245,12 @@ export type BusSearchRouteResult =
 export type BusNearbyStop = {
   stopUid: string;
   stopName: string;
+  stopDisplayName?: string;
   city: string;
   coordinates: [number, number];
   distance: number;
   routes: string[];
+  routeDisplayNames?: string[];
 };
 
 export type BusNearbyStopsResult =
@@ -233,11 +262,14 @@ export type BusNearbyStopsResult =
 
 export type BusStopArrival = {
   routeName: string;
+  routeDisplayName?: string;
   subRouteUid?: string;
   subRouteName?: string;
+  subRouteDisplayName?: string;
   direction: 0 | 1;
   /** Last stop of the sub-route in this direction; null when not stored. */
   headsign: string | null;
+  headsignDisplayName?: string | null;
   estimateMinutes: number | null;
   statusLabel: string;
   plateNumb?: string;
@@ -248,6 +280,7 @@ export type BusStopArrival = {
 
 export type BusStopArrivalsData = {
   stopName: string;
+  stopDisplayName?: string;
   city: string;
   arrivals: BusStopArrival[];
 };
@@ -258,9 +291,11 @@ export type BusStopArrivalsResult =
 export type BusStopSearchResult = {
   stopUid: string;
   stopName: string;
+  stopDisplayName?: string;
   city: string;
   coordinates: [number, number];
   routes: string[];
+  routeDisplayNames?: string[];
   distance?: number;
 };
 

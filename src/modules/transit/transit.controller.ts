@@ -1,3 +1,4 @@
+import { normalizeLang } from "../../types/lang";
 import { sendResponse } from "../../config/lib";
 import { ResponseCode } from "../../types/code";
 import { MSG, TRANSIT_MSG } from "../../constants/messages";
@@ -9,6 +10,11 @@ import type { BusStopArrivalsData } from "./transit.types";
 import * as busService from "./bus.service";
 import * as alertService from "./alert.service";
 import * as trainService from "./train.service";
+
+function sourceLanguage(req: Request) {
+  const lang = (req.validated?.query as { lang?: string })?.lang;
+  return lang === undefined ? {} : { lang: normalizeLang(lang) };
+}
 
 async function resolveCityOr400(
   city: string | undefined,
@@ -41,6 +47,7 @@ async function getBusRouteHandler(
     const resolved = await resolveCityOr400(city, res);
     if (!resolved) return;
     const result = await busService.getBusRouteInfo({
+      ...sourceLanguage(req),
       routeName,
       city: resolved,
     });
@@ -72,6 +79,7 @@ async function getBusRouteDetailHandler(
     const resolved = await resolveCityOr400(city, res);
     if (!resolved) return;
     const result = await busService.getBusRouteDetail({
+      ...sourceLanguage(req),
       routeName,
       city: resolved,
       subRouteUid,
@@ -105,6 +113,7 @@ async function getBusArrivalHandler(
     const resolved = await resolveCityOr400(city, res);
     if (!resolved) return;
     const result = await busService.getBusArrivalAtStop({
+      ...sourceLanguage(req),
       routeName,
       stopName,
       city: resolved,
@@ -137,6 +146,7 @@ async function getBusTimetableHandler(
     const resolved = await resolveCityOr400(city, res);
     if (!resolved) return;
     const result = await busService.getBusTimetable({
+      ...sourceLanguage(req),
       routeName,
       city: resolved,
     });
@@ -168,6 +178,7 @@ async function getBusPositionsHandler(
     const resolved = await resolveCityOr400(city, res);
     if (!resolved) return;
     const result = await busService.getBusRealtimeOnRoute({
+      ...sourceLanguage(req),
       routeName,
       city: resolved,
       direction,
@@ -230,6 +241,7 @@ async function getTrainTimetableHandler(
       arriveBy?: string;
     };
     const result = await trainService.getTrainTimetable({
+      ...sourceLanguage(req),
       originStation,
       destinationStation,
       railSystem,
@@ -268,6 +280,7 @@ async function suggestTrainStationsHandler(
       railSystem?: "TRA" | "THSR";
     };
     const result = await trainService.suggestTrainStations({
+      ...sourceLanguage(req),
       query,
       railSystem,
     });
@@ -304,6 +317,7 @@ async function getStationTimetableHandler(
       departAfter?: string;
     };
     const result = await trainService.getStationTimetable({
+      ...sourceLanguage(req),
       station,
       railSystem,
       date,
@@ -367,6 +381,9 @@ async function searchBusRoutesHandler(
       keyword,
       userLoc,
       limit ?? 50,
+      ...(sourceLanguage(req).lang === undefined
+        ? []
+        : ([sourceLanguage(req).lang] as const)),
     );
     if (!result.ok) {
       return sendResponse(
@@ -427,6 +444,9 @@ async function searchBusStopsHandler(
       keyword,
       userLoc,
       limit ?? 50,
+      ...(sourceLanguage(req).lang === undefined
+        ? []
+        : ([sourceLanguage(req).lang] as const)),
     );
     if (!result.ok) {
       return sendResponse(
@@ -461,7 +481,13 @@ async function getNearbyStopsHandler(
       radius: number;
       limit: number;
     };
-    const result = await busService.getNearbyStops({ lat, lng, radius, limit });
+    const result = await busService.getNearbyStops({
+      ...sourceLanguage(req),
+      lat,
+      lng,
+      radius,
+      limit,
+    });
     if (!result.ok) {
       return sendResponse(
         res,
@@ -498,6 +524,7 @@ async function getBusStopArrivalsHandler(
     const resolved = await resolveCityOr400(city, res);
     if (!resolved) return;
     const result = await busService.getBusStopArrivals({
+      ...sourceLanguage(req),
       stopName,
       city: resolved,
       lat,

@@ -1,3 +1,4 @@
+import type { SupportedLang } from "../../types/lang";
 import type { RailSystem } from "../../types/rail";
 import type { ResponseCode } from "../../types/code";
 
@@ -9,6 +10,7 @@ export interface TrainServiceError {
 }
 
 export interface TrainTimetableParams {
+  lang?: SupportedLang;
   originStation: string;
   destinationStation: string;
   date?: string;
@@ -18,6 +20,7 @@ export interface TrainTimetableParams {
 }
 
 export interface StationTimetableParams {
+  lang?: SupportedLang;
   station: string;
   date?: string;
   departAfter?: string;
@@ -25,12 +28,14 @@ export interface StationTimetableParams {
 }
 
 export interface StationSuggestParams {
+  lang?: SupportedLang;
   query?: string;
   railSystem?: RailSystem;
 }
 
 export interface StationSuggestion {
   name: string;
+  displayName?: string;
   stationID: string;
 }
 
@@ -41,6 +46,7 @@ export type StationSuggestResult =
 export interface TrainTimetableEntry {
   trainNo: string;
   trainType?: string;
+  trainTypeDisplayName?: string;
   departureTime: string;
   arrivalTime: string;
   arrivesNextDay?: true;
@@ -50,8 +56,10 @@ export interface TrainTimetableEntry {
 export interface StationTimetableEntry {
   trainNo: string;
   trainType?: string;
+  trainTypeDisplayName?: string;
   direction?: number;
   destination?: string;
+  destinationDisplayName?: string;
   departureTime: string;
   arrivalTime?: string;
 }
@@ -61,8 +69,8 @@ export type TrainTimetableResult =
       ok: true;
       railSystem: RailSystem;
       date: string;
-      origin: { name: string; stationID: string };
-      destination: { name: string; stationID: string };
+      origin: { name: string; stationID: string; displayName?: string };
+      destination: { name: string; stationID: string; displayName?: string };
       totalCount: number;
       matchedCount: number;
       firstTrain: string | null;
@@ -77,7 +85,7 @@ export type StationTimetableResult =
       ok: true;
       railSystem: RailSystem;
       date: string;
-      station: { name: string; stationID: string };
+      station: { name: string; stationID: string; displayName?: string };
       departAfter: string;
       totalCount: number;
       matchedCount: number;

@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import BusRouteModel from "../../model/bus-route.model";
 import BusStopModel from "../../model/bus-stop.model";
 import BusVehicleModel from "../../model/bus-vehicle.model";
+import { searchBusRoutes, searchBusStops } from "./bus.service";
 import {
   findRoutesByName,
   findRouteNamesBySubRoute,
@@ -175,6 +176,89 @@ describe("transit bus repository with real MongoDB", () => {
       expect.objectContaining({
         subRouteName: { Zh_tw: "Blue Line 1" },
         routeName: { Zh_tw: "Blue Line" },
+      }),
+    ]);
+  });
+
+  it("real English and Chinese searches resolve the same source IDs and preserve English projections", async () => {
+    // The preceding case drops this isolated database, including its geo index.
+    await BusStopModel.createIndexes();
+    await BusRouteModel.create({
+      subRouteUid: "bilingual-sub",
+      routeUid: "bilingual-route",
+      city: "Taipei",
+      routeName: { Zh_tw: "藍線", En: "Blue Line" },
+      subRouteName: { Zh_tw: "藍支線", En: "Blue Branch" },
+      direction: 0,
+      stops: [
+        {
+          seq: 1,
+          stopUID: "bilingual-stop",
+          stopName: { Zh_tw: "中央站", En: "Central Station" },
+          lat: 25.033,
+          lng: 121.565,
+        },
+      ],
+    });
+    await BusStopModel.create({
+      stopUid: "bilingual-stop",
+      stopName: { Zh_tw: "中央站", En: "Central Station" },
+      city: "Taipei",
+      subRouteIds: ["藍支線"],
+      location: { type: "Point", coordinates: [121.565, 25.033] },
+    });
+    expect(await searchRoutesByKeyword("Blue", 10)).toEqual([]);
+    expect(await searchStopsByKeyword("Central", 10)).toEqual([]);
+    const routeEn = await searchRoutesByKeyword("Blue", 10, true);
+    const routeZh = await searchRoutesByKeyword("藍", 10, true);
+    expect(routeEn).toEqual(routeZh);
+    expect(routeEn[0]).toMatchObject({
+      _id: { routeName: "藍線", city: "Taipei" },
+      routeNameEn: "Blue Line",
+      subRoutes: [{ stops: [{ stopName: { En: "Central Station" } }] }],
+    });
+    for (const location of [undefined, { lat: 25.033, lng: 121.565 }]) {
+      const en = await searchStopsByKeyword("Central", 10, location, true);
+      const zh = await searchStopsByKeyword("中央", 10, location, true);
+      expect(en.map((s) => s.stopUid)).toEqual(zh.map((s) => s.stopUid));
+      expect(en[0].stopName.En).toBe("Central Station");
+    }
+    expect(await searchBusRoutes("Blue", undefined, 10, "en")).toMatchObject({
+      routes: [
+        {
+          routeName: "藍線",
+          routeDisplayName: "Blue Line",
+          departure: "中央站",
+          departureDisplayName: "Central Station",
+        },
+      ],
+    });
+    expect(await searchBusStops("Central", undefined, 10, "en")).toMatchObject({
+      stops: [
+        {
+          stopUid: "bilingual-stop",
+          stopName: "中央站",
+          stopDisplayName: "Central Station",
+          routes: ["藍線"],
+          routeDisplayNames: ["Blue Line"],
+        },
+      ],
+    });
+    expect(
+      await searchBusStops("Central", undefined, 10, "zh-TW"),
+    ).toMatchObject({
+      stops: [
+        {
+          stopUid: "bilingual-stop",
+          stopDisplayName: "中央站",
+          routeDisplayNames: ["藍線"],
+        },
+      ],
+    });
+    expect(await findRouteNamesBySubRoute(["藍支線"])).toEqual([
+      expect.objectContaining({
+        routeName: { Zh_tw: "藍線", En: "Blue Line" },
+        subRouteName: { Zh_tw: "藍支線", En: "Blue Branch" },
       }),
     ]);
   });

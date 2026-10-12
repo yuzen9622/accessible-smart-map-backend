@@ -17,6 +17,7 @@ export type RailFetchErrorCode =
 export interface NormalizedTrain {
   trainNo: string;
   trainType?: string;
+  trainTypeEn?: string;
   departureTime: string;
   arrivalTime: string;
   departureMinutes: number;
@@ -28,8 +29,10 @@ export interface NormalizedTrain {
 export interface NormalizedStationTrain {
   trainNo: string;
   trainType?: string;
+  trainTypeEn?: string;
   direction?: number;
   destination?: string;
+  destinationEn?: string;
   departureTime: string;
   departureMinutes: number;
   arrivalTime?: string;
@@ -43,5 +46,9 @@ export type OdFetchOutcome = RailFetchOutcome<NormalizedTrain>;
 export type StationFetchOutcome = RailFetchOutcome<NormalizedStationTrain>;
 
 export type StationIndexOutcome =
-  | { ok: true; index: Map<string, string> }
+  | {
+      ok: true;
+      index: Map<string, string>;
+      byID?: Map<string, { name: string; nameEn?: string }>;
+    }
   | { ok: false; errorCode: RailFetchErrorCode };

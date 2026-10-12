@@ -1,3 +1,5 @@
+import type { SupportedLang } from "../../types/lang";
+import { selectDisplayText } from "../../utils/source-display";
 import {
   fetchRailStationIndex,
   fetchRailOdTimetable,
@@ -103,13 +105,29 @@ function systemLabel(system: RailSystem): string {
 async function resolveStationId(
   system: RailSystem,
   name: string,
-): Promise<Ok<string> | Err> {
+  lang?: SupportedLang,
+): Promise<Ok<{ id: string; name: string; nameEn?: string }> | Err> {
   const outcome = await fetchRailStationIndex(system);
   if (!outcome.ok) return upstreamFailure();
-  const id = outcome.index.get(normalizeStationName(name));
+  const id =
+    outcome.index.get(normalizeStationName(name)) ??
+    (lang !== undefined
+      ? [...(outcome.byID ?? [])].find(
+          ([, station]) =>
+            station.nameEn?.trim().toLowerCase() === name.trim().toLowerCase(),
+        )?.[0]
+      : undefined);
   if (!id)
     return err(`找不到${systemLabel(system)}車站「${name}」，請確認站名`);
-  return ok(id);
+  const source = outcome.byID?.get(id);
+  // Chinese input keeps the legacy canonical spelling; an English alias resolves
+  // to the catalog's original station name before any downstream query.
+  const canonical = outcome.index.has(normalizeStationName(name))
+    ? name
+    : (source?.name ??
+      [...outcome.index].find(([, value]) => value === id)?.[0] ??
+      name);
+  return ok({ id, name: canonical, nameEn: source?.nameEn });
 }
 
 /**
@@ -151,15 +169,26 @@ export async function getTrainTimetable(
     return { ok: false, error: "起訖站相同" };
   }
 
-  const fromId = await resolveStationId(system.value, origin.value);
+  const fromId = await resolveStationId(
+    system.value,
+    origin.value,
+    params.lang,
+  );
   if (!fromId.ok) return fromId;
-  const toId = await resolveStationId(system.value, destination.value);
+  const toId = await resolveStationId(
+    system.value,
+    destination.value,
+    params.lang,
+  );
   if (!toId.ok) return toId;
+
+  if (params.lang !== undefined && fromId.value.id === toId.value.id)
+    return err("起訖站相同");
 
   const outcome = await fetchRailOdTimetable(
     system.value,
-    fromId.value,
-    toId.value,
+    fromId.value.id,
+    toId.value.id,
     date.value,
   );
   if (!outcome.ok) return upstreamFailure();
@@ -174,15 +203,15 @@ export async function getTrainTimetable(
   const filtered = filterOd(all, departAfter.value, arriveBy.value);
   const matchedCount = filtered.length;
   const trains = truncate(filtered, departAfter.value, arriveBy.value).map(
-    toOdEntry,
+    (t) => toOdEntry(t, params.lang),
   );
 
   const result: TrainTimetableResult = {
     ok: true,
     railSystem: system.value,
     date: date.value,
-    origin: { name: origin.value, stationID: fromId.value },
-    destination: { name: destination.value, stationID: toId.value },
+    origin: stationPresentation(fromId.value, params.lang),
+    destination: stationPresentation(toId.value, params.lang),
     totalCount,
     matchedCount,
     firstTrain,
@@ -213,10 +242,32 @@ export async function suggestTrainStations(
   if (!outcome.ok) return upstreamFailure();
 
   const needle = params.query ? normalizeStationName(params.query) : "";
+  const englishNeedle = params.query?.trim().toLowerCase() ?? "";
   const stations = [...outcome.index.entries()]
-    .filter(([name]) => (needle ? name.includes(needle) : true))
+    .filter(
+      ([name, id]) =>
+        !needle ||
+        name.includes(needle) ||
+        (params.lang !== undefined &&
+          !!outcome.byID
+            ?.get(id)
+            ?.nameEn?.toLowerCase()
+            .includes(englishNeedle)),
+    )
     .slice(0, MAX_STATION_SUGGESTIONS)
-    .map(([name, stationID]) => ({ name, stationID }));
+    .map(([name, stationID]) => ({
+      name,
+      stationID,
+      ...(params.lang !== undefined
+        ? {
+            displayName: selectDisplayText(
+              name,
+              outcome.byID?.get(stationID)?.nameEn,
+              params.lang,
+            ),
+          }
+        : {}),
+    }));
 
   return { ok: true, railSystem: system.value, stations };
 }
@@ -248,12 +299,16 @@ export async function getStationTimetable(
   const departAfter =
     departAfterValid.value ?? (isToday ? taipeiHHmm(now) : "00:00");
 
-  const stationId = await resolveStationId(system.value, station.value);
+  const stationId = await resolveStationId(
+    system.value,
+    station.value,
+    params.lang,
+  );
   if (!stationId.ok) return stationId;
 
   const outcome = await fetchRailStationTimetable(
     system.value,
-    stationId.value,
+    stationId.value.id,
     date.value,
   );
   if (!outcome.ok) return upstreamFailure();
@@ -268,13 +323,15 @@ export async function getStationTimetable(
   const afterMin = timeToMinutes(departAfter);
   const filtered = all.filter((t) => t.departureMinutes >= afterMin);
   const matchedCount = filtered.length;
-  const trains = filtered.slice(0, MAX_TRAINS).map(toStationEntry);
+  const trains = filtered
+    .slice(0, MAX_TRAINS)
+    .map((t) => toStationEntry(t, params.lang));
 
   const result: StationTimetableResult = {
     ok: true,
     railSystem: system.value,
     date: date.value,
-    station: { name: station.value, stationID: stationId.value },
+    station: stationPresentation(stationId.value, params.lang),
     departAfter,
     totalCount,
     matchedCount,
@@ -314,26 +371,56 @@ function truncate(
   return trains.slice(0, MAX_TRAINS);
 }
 
-function toOdEntry(t: NormalizedTrain): TrainTimetableEntry {
+function toOdEntry(
+  t: NormalizedTrain,
+  lang?: SupportedLang,
+): TrainTimetableEntry {
   const entry: TrainTimetableEntry = {
     trainNo: t.trainNo,
     departureTime: t.departureTime,
     arrivalTime: t.arrivalTime,
     durationMinutes: t.durationMinutes,
   };
-  if (t.trainType) entry.trainType = t.trainType;
+  if (t.trainType) {
+    entry.trainType = t.trainType;
+    if (lang !== undefined)
+      entry.trainTypeDisplayName = selectDisplayText(
+        t.trainType,
+        t.trainTypeEn,
+        lang,
+      );
+  }
   if (t.arrivesNextDay) entry.arrivesNextDay = true;
   return entry;
 }
 
-function toStationEntry(t: NormalizedStationTrain): StationTimetableEntry {
+function toStationEntry(
+  t: NormalizedStationTrain,
+  lang?: SupportedLang,
+): StationTimetableEntry {
   const entry: StationTimetableEntry = {
     trainNo: t.trainNo,
     departureTime: t.departureTime,
   };
-  if (t.trainType) entry.trainType = t.trainType;
+  if (t.trainType) {
+    entry.trainType = t.trainType;
+    if (lang !== undefined)
+      entry.trainTypeDisplayName = selectDisplayText(
+        t.trainType,
+        t.trainTypeEn,
+        lang,
+      );
+  }
   if (t.direction !== undefined) entry.direction = t.direction;
-  if (t.destination) entry.destination = t.destination;
+  if (t.destination) {
+    entry.destination = t.destination;
+    if (lang !== undefined)
+      entry.destinationDisplayName = selectDisplayText(
+        t.destination,
+        t.destinationEn,
+        lang,
+      );
+  }
   if (t.arrivalTime) entry.arrivalTime = t.arrivalTime;
   return entry;
 }
@@ -365,4 +452,17 @@ function stationNote(
   }
   if (shown < matched) return `符合條件共 ${matched} 班，僅顯示 ${shown} 班。`;
   return undefined;
+}
+
+function stationPresentation(
+  source: { id: string; name: string; nameEn?: string },
+  lang?: SupportedLang,
+) {
+  return {
+    name: source.name,
+    stationID: source.id,
+    ...(lang !== undefined
+      ? { displayName: selectDisplayText(source.name, source.nameEn, lang) }
+      : {}),
+  };
 }

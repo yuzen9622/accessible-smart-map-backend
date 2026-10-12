@@ -47,9 +47,9 @@ function normalizeClock(value: string): string {
   return `${m[1].padStart(2, "0")}:${m[2]}`;
 }
 
-function asRecord(value: unknown): Record<string, any> | null {
+function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, any>)
+    ? (value as Record<string, unknown>)
     : null;
 }
 
@@ -93,6 +93,8 @@ export function parseOdBody(body: unknown): OdFetchOutcome {
     };
     const trainType = asRecord(info?.TrainTypeName)?.Zh_tw;
     if (typeof trainType === "string" && trainType) train.trainType = trainType;
+    const trainTypeEn = asRecord(info?.TrainTypeName)?.En;
+    if (typeof trainTypeEn === "string") train.trainTypeEn = trainTypeEn;
     if (crossesMidnight) train.arrivesNextDay = true;
     items.push(train);
   }
@@ -160,6 +162,9 @@ export function parseStationBody(body: unknown): StationFetchOutcome {
     const trainType =
       asRecord(row.TrainTypeName)?.Zh_tw ?? asRecord(info.TrainTypeName)?.Zh_tw;
     if (typeof trainType === "string" && trainType) train.trainType = trainType;
+    const trainTypeEn =
+      asRecord(row.TrainTypeName)?.En ?? asRecord(info?.TrainTypeName)?.En;
+    if (typeof trainTypeEn === "string") train.trainTypeEn = trainTypeEn;
     const direction = row.Direction ?? info.Direction;
     if (typeof direction === "number") train.direction = direction;
     const destination =
@@ -167,6 +172,10 @@ export function parseStationBody(body: unknown): StationFetchOutcome {
       asRecord(info.EndingStationName)?.Zh_tw;
     if (typeof destination === "string" && destination)
       train.destination = destination;
+    const destinationEn =
+      asRecord(row.EndingStationName)?.En ??
+      asRecord(info.EndingStationName)?.En;
+    if (typeof destinationEn === "string") train.destinationEn = destinationEn;
     const arr =
       row.ArrivalTime ?? asRecord(row.DestinationStopTime)?.ArrivalTime;
     if (clockValid(arr)) train.arrivalTime = normalizeClock(arr as string);
@@ -189,14 +198,20 @@ export function parseStationBody(body: unknown): StationFetchOutcome {
 export function parseStationList(body: unknown): StationIndexOutcome {
   if (!Array.isArray(body)) return { ok: false, errorCode: "BAD_PAYLOAD" };
   const index = new Map<string, string>();
+  const byID = new Map<string, { name: string; nameEn?: string }>();
   for (const raw of body) {
     const row = asRecord(raw);
     const id = row?.StationID;
     const name = asRecord(row?.StationName)?.Zh_tw;
     if (typeof id === "string" && id && typeof name === "string" && name) {
       index.set(normalizeStationName(name), id);
+      const english = asRecord(row?.StationName)?.En;
+      byID.set(id, {
+        name,
+        ...(typeof english === "string" ? { nameEn: english } : {}),
+      });
     }
   }
   if (index.size === 0) return { ok: false, errorCode: "BAD_PAYLOAD" };
-  return { ok: true, index };
+  return { ok: true, index, byID };
 }

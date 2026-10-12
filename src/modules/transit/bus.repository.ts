@@ -12,24 +12,25 @@ export interface BusRouteDoc {
   operators?: { name?: string }[];
   stops?: {
     seq: number;
-    stopName?: { Zh_tw?: string };
+    stopName?: { Zh_tw?: string; En?: string };
     lat: number;
     lng: number;
     stopUID?: string;
   }[];
-  routeName?: { Zh_tw?: string };
-  subRouteName?: { Zh_tw?: string };
+  routeName?: { Zh_tw?: string; En?: string };
+  subRouteName?: { Zh_tw?: string; En?: string };
   city?: string;
 }
 
 /** One grouped row from the route keyword search. */
 export interface BusRouteSearchRow {
+  routeNameEn?: string;
   _id: { routeName: string; city: string };
   subRoutes: {
     direction: number;
     stops?: {
       seq: number;
-      stopName?: { Zh_tw?: string };
+      stopName?: { Zh_tw?: string; En?: string };
       lat?: number;
       lng?: number;
     }[];
@@ -39,7 +40,7 @@ export interface BusRouteSearchRow {
 /** A stored bus stop as the search / nearby paths read it. */
 export interface BusStopDoc {
   stopUid: string;
-  stopName: { Zh_tw: string };
+  stopName: { Zh_tw: string; En?: string };
   city: string;
   location: { type: "Point"; coordinates: [number, number] };
   subRouteIds?: string[];
@@ -49,8 +50,8 @@ export interface BusStopDoc {
 
 /** The sub-route to route name mapping rows. */
 export interface SubRouteNameRow {
-  subRouteName?: { Zh_tw?: string };
-  routeName?: { Zh_tw?: string };
+  subRouteName?: { Zh_tw?: string; En?: string };
+  routeName?: { Zh_tw?: string; En?: string };
 }
 
 /**
@@ -64,7 +65,7 @@ export async function findVehiclesByPlate(
 ): Promise<ITdxBusVehicle[]> {
   return BusVehicleModel.find({
     plateNumb: { $in: plateNumbers },
-  }).lean() as unknown as Promise<ITdxBusVehicle[]>;
+  }).lean<ITdxBusVehicle[]>();
 }
 
 /**
@@ -118,7 +119,7 @@ export async function findRoutesByName(
     city === "InterCity"
       ? { "routeName.Zh_tw": { $in: routeNames } }
       : { city, "routeName.Zh_tw": { $in: routeNames } };
-  return BusRouteModel.find(query).lean() as unknown as Promise<BusRouteDoc[]>;
+  return BusRouteModel.find(query).lean<BusRouteDoc[]>();
 }
 
 /**
@@ -131,19 +132,18 @@ export async function findRoutesByName(
 export async function searchRoutesByKeyword(
   keyword: string,
   limit: number,
+  bilingual = false,
 ): Promise<BusRouteSearchRow[]> {
   return BusRouteModel.aggregate([
     {
       $match: {
-        "routeName.Zh_tw": {
-          $regex: buildFuzzyKeywordRegex(keyword),
-          $options: "i",
-        },
+        ...nameKeyword("routeName", buildFuzzyKeywordRegex(keyword), bilingual),
       },
     },
     {
       $group: {
         _id: { routeName: "$routeName.Zh_tw", city: "$city" },
+        routeNameEn: { $first: "$routeName.En" },
         subRoutes: { $push: { direction: "$direction", stops: "$stops" } },
       },
     },
@@ -165,6 +165,7 @@ export async function searchStopsByKeyword(
   keyword: string,
   limit: number,
   userLoc?: { lat: number; lng: number } | null,
+  bilingual = false,
 ): Promise<BusStopDoc[]> {
   const fuzzyRegex = buildFuzzyKeywordRegex(keyword);
 
@@ -176,10 +177,7 @@ export async function searchStopsByKeyword(
           distanceField: "distance",
           spherical: true,
           query: {
-            "stopName.Zh_tw": {
-              $regex: fuzzyRegex,
-              $options: "i",
-            },
+            ...nameKeyword("stopName", fuzzyRegex, bilingual),
           },
         },
       },
@@ -190,10 +188,7 @@ export async function searchStopsByKeyword(
   return BusStopModel.aggregate([
     {
       $match: {
-        "stopName.Zh_tw": {
-          $regex: fuzzyRegex,
-          $options: "i",
-        },
+        ...nameKeyword("stopName", fuzzyRegex, bilingual),
       },
     },
     { $limit: limit },
@@ -240,8 +235,8 @@ export async function findRouteNamesBySubRoute(
   return BusRouteModel.find({
     "subRouteName.Zh_tw": { $in: subRouteNames },
   })
-    .select("subRouteName.Zh_tw routeName.Zh_tw")
-    .lean() as unknown as Promise<SubRouteNameRow[]>;
+    .select("subRouteName routeName")
+    .lean<SubRouteNameRow[]>();
 }
 
 /**
@@ -289,6 +284,13 @@ export async function findRoutesBySubRouteUids(
 ): Promise<BusRouteDoc[]> {
   if (!subRouteUids.length) return [];
   return BusRouteModel.find({ subRouteUid: { $in: subRouteUids } })
-    .select("subRouteUid direction stops.seq stops.stopName.Zh_tw")
-    .lean() as unknown as Promise<BusRouteDoc[]>;
+    .select("subRouteUid direction stops.seq stops.stopName")
+    .lean<BusRouteDoc[]>();
+}
+
+function nameKeyword(field: string, regex: string, bilingual: boolean) {
+  const chinese = { [`${field}.Zh_tw`]: { $regex: regex, $options: "i" } };
+  return bilingual
+    ? { $or: [chinese, { [`${field}.En`]: { $regex: regex, $options: "i" } }] }
+    : chinese;
 }

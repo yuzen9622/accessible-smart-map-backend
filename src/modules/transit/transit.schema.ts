@@ -1,3 +1,4 @@
+import { SourceLangQuerySchema } from "../../schemas/source-language.schema";
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 import { registry } from "../../openapi/registry";
@@ -37,6 +38,7 @@ const DirectionQuery = z.coerce
 
 export const BusRouteQuerySchema = z
   .object({
+    lang: SourceLangQuerySchema,
     routeName: z.string().min(1).openapi({ example: "307" }),
     city: CityQuery,
   })
@@ -44,6 +46,7 @@ export const BusRouteQuerySchema = z
 
 export const BusRouteDetailQuerySchema = z
   .object({
+    lang: SourceLangQuerySchema,
     routeName: z.string().min(1).openapi({ example: "99" }),
     city: CityQuery,
     subRouteUid: z.string().min(1).optional().openapi({
@@ -56,6 +59,7 @@ export const BusRouteDetailQuerySchema = z
 
 export const BusArrivalQuerySchema = z
   .object({
+    lang: SourceLangQuerySchema,
     routeName: z.string().min(1).openapi({ example: "307" }),
     stopName: z.string().min(1).openapi({ example: "台北車站" }),
     city: CityQuery,
@@ -65,6 +69,7 @@ export const BusArrivalQuerySchema = z
 
 export const BusTimetableQuerySchema = z
   .object({
+    lang: SourceLangQuerySchema,
     routeName: z.string().min(1).openapi({ example: "307" }),
     city: CityQuery,
   })
@@ -72,6 +77,7 @@ export const BusTimetableQuerySchema = z
 
 export const BusPositionsQuerySchema = z
   .object({
+    lang: SourceLangQuerySchema,
     routeName: z.string().min(1).openapi({ example: "307" }),
     city: CityQuery,
     direction: DirectionQuery,
@@ -80,6 +86,7 @@ export const BusPositionsQuerySchema = z
 
 export const BusSearchQuerySchema = z
   .object({
+    lang: SourceLangQuerySchema,
     keyword: z
       .string()
       .min(1)
@@ -134,6 +141,7 @@ export const BusSearchQuerySchema = z
 
 export const BusStopSearchQuerySchema = z
   .object({
+    lang: SourceLangQuerySchema,
     keyword: z
       .string()
       .min(1)
@@ -220,6 +228,7 @@ const LngQuery = z
 
 export const BusNearbyQuerySchema = z
   .object({
+    lang: SourceLangQuerySchema,
     lat: LatQuery,
     lng: LngQuery,
     radius: z.coerce
@@ -241,6 +250,7 @@ export const BusNearbyQuerySchema = z
 
 export const BusStopArrivalsQuerySchema = z
   .object({
+    lang: SourceLangQuerySchema,
     stopName: z
       .string()
       .min(1)
@@ -318,12 +328,9 @@ const ApiResponseSchema = <T extends z.ZodTypeAny>(data: T) =>
     accessToken: z.string().optional(),
   });
 
-const BusServiceResponseSchema = ApiResponseSchema(
-  z.object({ ok: z.boolean() }).passthrough(),
-).openapi("BusServiceResponse");
-
 const BusRouteStopSchema = z.object({
   seq: z.number().openapi({ example: 1 }),
+  displayName: z.string().optional(),
   name: z.string().openapi({ example: "干城站" }),
   lat: z.number().optional().openapi({ example: 24.1402 }),
   lng: z.number().optional().openapi({ example: 120.6845 }),
@@ -333,10 +340,13 @@ const BusRouteDirectionSchema = z
   .object({
     routeUid: z.string().optional().openapi({ example: "TXG99" }),
     subRouteUid: z.string().openapi({ example: "TXG991" }),
+    subRouteDisplayName: z.string().optional(),
     subRouteName: z.string().openapi({ example: "99延" }),
     direction: DirectionSchema,
     directionLabel: z.string().openapi({ example: "去程" }),
+    fromDisplayName: z.string().optional(),
     from: z.string().openapi({ example: "精武車站" }),
+    toDisplayName: z.string().optional(),
     to: z.string().openapi({ example: "臺中區監理所" }),
     stopCount: z.number().openapi({ example: 57 }),
     stops: z.array(BusRouteStopSchema),
@@ -345,6 +355,7 @@ const BusRouteDirectionSchema = z
 
 const BusRouteResponseSchema = ApiResponseSchema(
   z.object({
+    routeDisplayName: z.string().optional(),
     routeName: z.string().openapi({ example: "99" }),
     city: z.string().openapi({ example: "Taichung" }),
     source: z.enum(["db", "tdx"]),
@@ -378,17 +389,46 @@ const BusRouteDetailDirectionSchema = BusRouteDirectionSchema.extend({
 const BusScheduleSchema = z
   .object({
     subRouteUid: z.string().optional().openapi({ example: "TXG991" }),
+    subRouteDisplayName: z.string().optional(),
     subRouteName: z.string().optional().openapi({ example: "99延" }),
     direction: DirectionSchema,
     directionLabel: z.string().openapi({ example: "去程" }),
     first: z.string().optional().openapi({ example: "06:00" }),
     last: z.string().optional().openapi({ example: "22:00" }),
-    frequencies: z.array(z.object({}).passthrough()),
+    frequencies: z.array(
+      z
+        .object({
+          originStopDisplayName: z.string().optional(),
+          stopTimes: z
+            .array(
+              z.object({
+                seq: z.number(),
+                stopName: z.string(),
+                stopDisplayName: z.string().optional(),
+                arrivalTime: z.string(),
+              }),
+            )
+            .optional(),
+        })
+        .passthrough(),
+    ),
   })
   .openapi("BusSchedule");
 
+const BusTimetableResponseSchema = ApiResponseSchema(
+  z.object({
+    routeName: z.string(),
+    routeDisplayName: z.string().optional(),
+    city: z.string(),
+    schedules: z.array(BusScheduleSchema),
+    note: z.string(),
+    truncated: z.boolean().optional(),
+  }),
+).openapi("BusTimetableResponse");
+
 export const BusRouteDetailResponseSchema = ApiResponseSchema(
   z.object({
+    routeDisplayName: z.string().optional(),
     routeName: z.string().openapi({ example: "99" }),
     city: z.string().openapi({ example: "Taichung" }),
     operators: z.array(z.string()),
@@ -403,10 +443,12 @@ const BusArrivalRecordSchema = z
       example: "TPE3070",
       description: "TDX SubRouteUID，可用來精確過濾子路線",
     }),
+    subRouteDisplayName: z.string().optional(),
     subRouteName: z.string().openapi({
       example: "307 往撫遠街",
       description: "TDX SubRouteName.Zh_tw",
     }),
+    stopDisplayName: z.string().optional(),
     stopName: z.string().openapi({ example: "台北車站" }),
     direction: DirectionSchema,
     directionLabel: z.string().openapi({ example: "去程" }),
@@ -418,8 +460,10 @@ const BusArrivalRecordSchema = z
 
 const BusArrivalResponseSchema = ApiResponseSchema(
   z.object({
+    routeDisplayName: z.string().optional(),
     routeName: z.string().openapi({ example: "307" }),
     city: z.string().openapi({ example: "Taipei" }),
+    stopDisplayName: z.string().optional(),
     stopName: z.string().openapi({ example: "台北車站" }),
     arrivals: z.array(BusArrivalRecordSchema),
   }),
@@ -431,6 +475,7 @@ const BusPositionRecordSchema = z
       example: "TPE3070",
       description: "TDX SubRouteUID，可用來精確過濾子路線",
     }),
+    subRouteDisplayName: z.string().optional(),
     subRouteName: z.string().openapi({
       example: "307 往撫遠街",
       description: "TDX SubRouteName.Zh_tw",
@@ -454,6 +499,7 @@ const BusPositionRecordSchema = z
 
 const BusPositionsResponseSchema = ApiResponseSchema(
   z.object({
+    routeDisplayName: z.string().optional(),
     routeName: z.string().openapi({ example: "307" }),
     city: z.string().openapi({ example: "Taipei" }),
     count: z.number().openapi({ example: 3 }),
@@ -464,13 +510,16 @@ const BusPositionsResponseSchema = ApiResponseSchema(
 
 export const BusSearchResultSchema = z
   .object({
+    routeDisplayName: z.string().optional(),
     routeName: z.string().openapi({ example: "307", description: "路線名稱" }),
     city: z
       .string()
       .openapi({ example: "Taipei", description: "路線所屬縣市英文名" }),
+    departureDisplayName: z.string().optional(),
     departure: z
       .string()
       .openapi({ example: "撫順街口", description: "去程起點站" }),
+    destinationDisplayName: z.string().optional(),
     destination: z
       .string()
       .openapi({ example: "板橋國中", description: "去程終點站" }),
@@ -493,6 +542,7 @@ export const BusStopSearchResultSchema = z
     stopUid: z
       .string()
       .openapi({ example: "TPE16523", description: "站牌唯一識別碼" }),
+    stopDisplayName: z.string().optional(),
     stopName: z
       .string()
       .openapi({ example: "台北車站", description: "站牌名稱" }),
@@ -503,6 +553,7 @@ export const BusStopSearchResultSchema = z
       example: [121.5171, 25.0478],
       description: "站牌經緯度座標 [lng, lat]",
     }),
+    routeDisplayNames: z.array(z.string()).optional(),
     routes: z.array(z.string()).openapi({
       example: ["307", "652"],
       description: "停靠該站牌的公車路線清單",
@@ -525,6 +576,7 @@ export const BusNearbyStopSchema = z
     stopUid: z
       .string()
       .openapi({ example: "TPE16523", description: "站牌唯一識別碼" }),
+    stopDisplayName: z.string().optional(),
     stopName: z
       .string()
       .openapi({ example: "台北車站", description: "站牌名稱" }),
@@ -538,6 +590,7 @@ export const BusNearbyStopSchema = z
     distance: z
       .number()
       .openapi({ example: 120, description: "與使用者的距離 (公尺)" }),
+    routeDisplayNames: z.array(z.string()).optional(),
     routes: z.array(z.string()).openapi({
       example: ["307", "652"],
       description: "停靠該站牌的公車路線清單",
@@ -553,10 +606,13 @@ export const BusNearbyResponseSchema = ApiResponseSchema(
 
 const BusStopArrivalSchema = z
   .object({
+    routeDisplayName: z.string().optional(),
     routeName: z.string().openapi({ example: "307" }),
     subRouteUid: z.string().optional().openapi({ example: "TPE3070" }),
+    subRouteDisplayName: z.string().optional(),
     subRouteName: z.string().optional().openapi({ example: "307 往撫遠街" }),
     direction: DirectionSchema,
+    headsignDisplayName: z.string().nullable().optional(),
     headsign: z.string().nullable().openapi({
       example: "撫遠街",
       description: "該子路線同方向的末站名稱；查無時為 null",
@@ -578,6 +634,7 @@ const BusStopArrivalSchema = z
 
 export const BusStopArrivalsResponseSchema = ApiResponseSchema(
   z.object({
+    stopDisplayName: z.string().optional(),
     stopName: z.string().openapi({ example: "臺北車站(忠孝)" }),
     city: z.string().openapi({ example: "Taipei" }),
     arrivals: z.array(BusStopArrivalSchema),
@@ -604,6 +661,7 @@ const TimeQuery = z
 
 export const TrainTimetableQuerySchema = z
   .object({
+    lang: SourceLangQuerySchema,
     originStation: z.string().min(1).openapi({ example: "臺北" }),
     destinationStation: z.string().min(1).openapi({ example: "臺中" }),
     railSystem: RailSystemQuery,
@@ -621,6 +679,7 @@ export const TrainTimetableQuerySchema = z
 
 export const StationTimetableQuerySchema = z
   .object({
+    lang: SourceLangQuerySchema,
     station: z.string().min(1).openapi({ example: "臺北" }),
     railSystem: RailSystemQuery,
     date: DateQuery,
@@ -634,6 +693,7 @@ export const StationTimetableQuerySchema = z
 
 export const StationSuggestQuerySchema = z
   .object({
+    lang: SourceLangQuerySchema,
     query: z.string().optional().openapi({
       example: "台北",
       description: "站名關鍵字，省略回傳前段車站清單",
@@ -643,6 +703,7 @@ export const StationSuggestQuerySchema = z
   .strict();
 
 const StationSuggestionSchema = z.object({
+  displayName: z.string().optional(),
   name: z.string().openapi({ example: "臺北" }),
   stationID: z.string().openapi({ example: "1000" }),
 });
@@ -675,6 +736,7 @@ registry.registerPath({
 
 const TrainTimetableEntrySchema = z.object({
   trainNo: z.string(),
+  trainTypeDisplayName: z.string().optional(),
   trainType: z.string().optional(),
   departureTime: z.string(),
   arrivalTime: z.string(),
@@ -684,8 +746,10 @@ const TrainTimetableEntrySchema = z.object({
 
 const StationTimetableEntrySchema = z.object({
   trainNo: z.string(),
+  trainTypeDisplayName: z.string().optional(),
   trainType: z.string().optional(),
   direction: z.number().optional(),
+  destinationDisplayName: z.string().optional(),
   destination: z.string().optional(),
   departureTime: z.string(),
   arrivalTime: z.string().optional(),
@@ -695,8 +759,16 @@ const TrainTimetableResponseSchema = ApiResponseSchema(
   z.object({
     railSystem: z.enum(["TRA", "THSR"]),
     date: z.string(),
-    origin: z.object({ name: z.string(), stationID: z.string() }),
-    destination: z.object({ name: z.string(), stationID: z.string() }),
+    origin: z.object({
+      displayName: z.string().optional(),
+      name: z.string(),
+      stationID: z.string(),
+    }),
+    destination: z.object({
+      displayName: z.string().optional(),
+      name: z.string(),
+      stationID: z.string(),
+    }),
     totalCount: z.number(),
     matchedCount: z.number(),
     firstTrain: z.string().nullable(),
@@ -710,7 +782,11 @@ const StationTimetableResponseSchema = ApiResponseSchema(
   z.object({
     railSystem: z.enum(["TRA", "THSR"]),
     date: z.string(),
-    station: z.object({ name: z.string(), stationID: z.string() }),
+    station: z.object({
+      displayName: z.string().optional(),
+      name: z.string(),
+      stationID: z.string(),
+    }),
     departAfter: z.string(),
     totalCount: z.number(),
     matchedCount: z.number(),
@@ -986,7 +1062,7 @@ registry.registerPath({
   responses: {
     200: {
       description: "時刻表",
-      content: { "application/json": { schema: BusServiceResponseSchema } },
+      content: { "application/json": { schema: BusTimetableResponseSchema } },
     },
     400: { description: "缺少縣市或參數" },
     404: { description: "找不到時刻表" },

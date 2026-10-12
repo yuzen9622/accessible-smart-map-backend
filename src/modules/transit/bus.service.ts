@@ -1,3 +1,5 @@
+import type { SupportedLang } from "../../types/lang";
+import { selectDisplayText } from "../../utils/source-display";
 /**
  * Bus query service powering the AI agent's bus tools and the /transit/bus/*
  * REST endpoints. Reads imported static data (BusRoute, BusVehicle) and calls
@@ -282,6 +284,7 @@ type NormalizedRoute = {
   routeUid?: string;
   subRouteUid: string;
   subRouteName: string;
+  subRouteDisplayName?: string;
   direction: number;
   operators: string[];
   stops: BusRouteDirection["stops"];
@@ -308,6 +311,13 @@ function buildDirections(records: NormalizedRoute[]): BusRouteDirection[] {
         routeUid: r.routeUid,
         subRouteUid: r.subRouteUid,
         subRouteName: r.subRouteName,
+        ...(r.subRouteDisplayName !== undefined
+          ? {
+              subRouteDisplayName: r.subRouteDisplayName,
+              fromDisplayName: stops[0]?.displayName ?? "",
+              toDisplayName: stops[stops.length - 1]?.displayName ?? "",
+            }
+          : {}),
         direction: r.direction,
         directionLabel: dirLabel(r.direction),
         from: stops[0]?.name ?? "",
@@ -408,6 +418,7 @@ async function resolveRouteUids(
 }
 
 export async function getBusRouteInfo(params: {
+  lang?: SupportedLang;
   routeName: string;
   city: TaiwanCityEn | "InterCity";
   subRouteUid?: string;
@@ -434,6 +445,12 @@ export async function getBusRouteInfo(params: {
         routeUid: d.routeUid,
         subRouteUid: d.subRouteUid,
         subRouteName: d.subRouteName?.Zh_tw || d.routeName?.Zh_tw || routeId,
+        ...display(
+          "subRouteDisplayName",
+          d.subRouteName?.Zh_tw || d.routeName?.Zh_tw || routeId,
+          d.subRouteName?.En || d.routeName?.En,
+          params.lang,
+        ),
         direction: d.direction,
         operators: (d.operators ?? [])
           .map((o) => o.name)
@@ -441,6 +458,12 @@ export async function getBusRouteInfo(params: {
         stops: (d.stops ?? []).map((s) => ({
           seq: s.seq,
           name: s.stopName?.Zh_tw ?? "",
+          ...display(
+            "displayName",
+            s.stopName?.Zh_tw ?? "",
+            s.stopName?.En,
+            params.lang,
+          ),
           stopUid: s.stopUID,
           lat: s.lat,
           lng: s.lng,
@@ -449,6 +472,12 @@ export async function getBusRouteInfo(params: {
       return {
         ok: true,
         routeName: matchingDocs[0].routeName?.Zh_tw || routeId,
+        ...display(
+          "routeDisplayName",
+          matchingDocs[0].routeName?.Zh_tw || routeId,
+          matchingDocs[0].routeName?.En,
+          params.lang,
+        ),
         city,
         source: "db",
         operators: [...new Set(normalized.flatMap((n) => n.operators))],
@@ -484,6 +513,12 @@ export async function getBusRouteInfo(params: {
       subRouteUid: r.SubRouteUID,
       subRouteName:
         r.SubRouteName?.Zh_tw ?? r.RouteName?.Zh_tw ?? params.routeName,
+      ...display(
+        "subRouteDisplayName",
+        r.SubRouteName?.Zh_tw ?? r.RouteName?.Zh_tw ?? params.routeName,
+        r.SubRouteName?.En ?? r.RouteName?.En,
+        params.lang,
+      ),
       direction: r.Direction,
       operators: (r.Operators ?? [])
         .map((o: any) => o.OperatorName?.Zh_tw)
@@ -491,6 +526,12 @@ export async function getBusRouteInfo(params: {
       stops: (r.Stops ?? []).map((s: any) => ({
         seq: s.StopSequence,
         name: s.StopName?.Zh_tw ?? "",
+        ...display(
+          "displayName",
+          s.StopName?.Zh_tw ?? "",
+          s.StopName?.En,
+          params.lang,
+        ),
         stopUid: s.StopUID,
         lat: s.StopPosition?.PositionLat,
         lng: s.StopPosition?.PositionLon,
@@ -499,6 +540,12 @@ export async function getBusRouteInfo(params: {
     return {
       ok: true,
       routeName: scope?.routeId ?? routeId,
+      ...display(
+        "routeDisplayName",
+        scope?.routeId ?? routeId,
+        matchingLive[0].RouteName?.En,
+        params.lang,
+      ),
       city,
       source: "tdx",
       operators: [...new Set(normalized.flatMap((n) => n.operators))],
@@ -519,6 +566,7 @@ export async function getBusRouteInfo(params: {
  * getBusRealtimeOnRoute / trackBuses.
  */
 export async function getBusArrivalAtStop(params: {
+  lang?: SupportedLang;
   routeName: string;
   stopName: string;
   city: TaiwanCityEn | "InterCity";
@@ -601,7 +649,21 @@ export async function getBusArrivalAtStop(params: {
       .map(({ r, fresh, estimateMinutes, stopStatus, nextBusTime }) => ({
         subRouteUid: r.SubRouteUID,
         subRouteName: r.SubRouteName?.Zh_tw,
+        ...(r.SubRouteName?.Zh_tw !== undefined
+          ? display(
+              "subRouteDisplayName",
+              r.SubRouteName.Zh_tw,
+              r.SubRouteName?.En,
+              params.lang,
+            )
+          : {}),
         stopName: r.StopName?.Zh_tw ?? stopName,
+        ...display(
+          "stopDisplayName",
+          r.StopName?.Zh_tw ?? stopName,
+          r.StopName?.En,
+          params.lang,
+        ),
         direction: r.Direction,
         directionLabel: dirLabel(r.Direction),
         estimateMinutes,
@@ -631,8 +693,20 @@ export async function getBusArrivalAtStop(params: {
     return {
       ok: true,
       routeName: scope?.routeId ?? routeId,
+      ...display(
+        "routeDisplayName",
+        scope?.routeId ?? routeId,
+        matched[0].RouteName?.En,
+        params.lang,
+      ),
       city,
       stopName,
+      ...display(
+        "stopDisplayName",
+        stopName,
+        matched[0].StopName?.En,
+        params.lang,
+      ),
       arrivals,
     };
   } catch (err) {
@@ -733,6 +807,7 @@ export async function getPlannedBusRouteDetail(
 }
 
 export async function getBusRouteDetail(params: {
+  lang?: SupportedLang;
   routeName: string;
   city: TaiwanCityEn | "InterCity";
   subRouteUid?: string;
@@ -891,6 +966,12 @@ export async function getBusRouteDetail(params: {
     return {
       ok: true,
       routeName: etaScope?.routeId ?? routeInfoRes.routeName ?? routeId,
+      ...(params.lang !== undefined
+        ? {
+            routeDisplayName:
+              routeInfoRes.routeDisplayName ?? routeInfoRes.routeName,
+          }
+        : {}),
       city,
       operators: routeInfoRes.operators,
       schedules: timetableRes.ok ? timetableRes.schedules : undefined,
@@ -938,6 +1019,7 @@ function serviceDayLabel(sd?: Record<string, number>): string {
  * frequency (headway) bands (TDX V2 Schedule — frequency-based).
  */
 export async function getBusTimetable(params: {
+  lang?: SupportedLang;
   routeName: string;
   city: TaiwanCityEn | "InterCity";
   subRouteUid?: string;
@@ -982,6 +1064,7 @@ export async function getBusTimetable(params: {
     type ScheduleBucket = {
       subRouteUid?: string;
       subRouteName?: string;
+      subRouteDisplayName?: string;
       direction: number;
       frequencies: BusFrequency[];
     };
@@ -995,6 +1078,14 @@ export async function getBusTimetable(params: {
       const bucket = bySubRouteAndDir.get(key) ?? {
         subRouteUid,
         subRouteName: keepSubRoute ? r.SubRouteName?.Zh_tw : undefined,
+        ...(keepSubRoute && r.SubRouteName?.Zh_tw !== undefined
+          ? display(
+              "subRouteDisplayName",
+              r.SubRouteName.Zh_tw,
+              r.SubRouteName?.En,
+              params.lang,
+            )
+          : {}),
         direction: r.Direction,
         frequencies: [] as BusFrequency[],
       };
@@ -1015,6 +1106,12 @@ export async function getBusTimetable(params: {
           .map((st: any) => ({
             seq: st.StopSequence,
             stopName: st.StopName?.Zh_tw ?? "",
+            ...display(
+              "stopDisplayName",
+              st.StopName?.Zh_tw ?? "",
+              st.StopName?.En,
+              params.lang,
+            ),
             arrivalTime: st.ArrivalTime || st.DepartureTime || "",
           }))
           .filter((st: any) => st.arrivalTime);
@@ -1025,6 +1122,12 @@ export async function getBusTimetable(params: {
           scheduleType: "trip",
           serviceDays: serviceDayLabel(t.ServiceDay),
           originStopName: origin.stopName,
+          ...(params.lang !== undefined
+            ? {
+                originStopDisplayName:
+                  origin.stopDisplayName ?? origin.stopName,
+              }
+            : {}),
           originDepartureTime: origin.arrivalTime,
           // Only surface per-stop times when upstream published more than the
           // origin; otherwise the field would imply data that does not exist.
@@ -1049,65 +1152,88 @@ export async function getBusTimetable(params: {
           a.direction - b.direction ||
           (a.subRouteUid ?? "").localeCompare(b.subRouteUid ?? ""),
       )
-      .map(({ subRouteUid, subRouteName, direction, frequencies: all }) => {
-        // first/last describe the whole published service, so compute them
-        // BEFORE any afterTime/limit filtering narrows the view.
-        const times = all.flatMap((f) =>
-          f.scheduleType === "trip"
-            ? [f.originDepartureTime]
-            : [f.start, f.end].filter(
-                Boolean as unknown as (v: unknown) => boolean,
-              ),
-        ) as string[];
-        const sorted = [...times].sort();
-
-        // Upstream can repeat byte-identical entries for the same branch.
-        // Deduplicate before filtering so `limit` counts distinct departures.
-        const seen = new Set<string>();
-        let frequencies = all.filter((f) => {
-          const key =
-            f.scheduleType === "trip"
-              ? `t|${f.serviceDays}|${f.originStopName}|${f.originDepartureTime}`
-              : `h|${f.serviceDays}|${f.start}|${f.end}|${f.minHeadwayMins}|${f.maxHeadwayMins}`;
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
-        if (after) {
-          // Headway windows are kept unless they have already ended: they still
-          // answer "how often", which is all such routes can offer.
-          frequencies = frequencies.filter((f) =>
-            f.scheduleType === "trip"
-              ? f.originDepartureTime >= after
-              : (f.end ?? "23:59") >= after,
-          );
-        }
-        frequencies = [...frequencies].sort((a, b) => {
-          const ka =
-            a.scheduleType === "trip" ? a.originDepartureTime : (a.start ?? "");
-          const kb =
-            b.scheduleType === "trip" ? b.originDepartureTime : (b.start ?? "");
-          return ka.localeCompare(kb);
-        });
-        if (limit && frequencies.length > limit) {
-          truncated = true;
-          frequencies = frequencies.slice(0, limit);
-        }
-
-        return {
-          ...(subRouteUid ? { subRouteUid } : {}),
-          ...(subRouteName ? { subRouteName } : {}),
+      .map(
+        ({
+          subRouteUid,
+          subRouteName,
+          subRouteDisplayName,
           direction,
-          directionLabel: dirLabel(direction),
-          first: sorted[0],
-          last: sorted[sorted.length - 1],
-          frequencies,
-        };
-      });
+          frequencies: all,
+        }) => {
+          // first/last describe the whole published service, so compute them
+          // BEFORE any afterTime/limit filtering narrows the view.
+          // SAFETY: BusFrequency supplies only string/undefined clock fields;
+          // Boolean removes undefined and empty strings, leaving string times.
+          const times = all.flatMap((f) =>
+            f.scheduleType === "trip"
+              ? [f.originDepartureTime]
+              : [f.start, f.end].filter(
+                  Boolean as unknown as (v: unknown) => boolean,
+                ),
+          ) as string[];
+          const sorted = [...times].sort();
+
+          // Upstream can repeat byte-identical entries for the same branch.
+          // Deduplicate before filtering so `limit` counts distinct departures.
+          const seen = new Set<string>();
+          let frequencies = all.filter((f) => {
+            const key =
+              f.scheduleType === "trip"
+                ? `t|${f.serviceDays}|${f.originStopName}|${f.originDepartureTime}`
+                : `h|${f.serviceDays}|${f.start}|${f.end}|${f.minHeadwayMins}|${f.maxHeadwayMins}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+          if (after) {
+            // Headway windows are kept unless they have already ended: they still
+            // answer "how often", which is all such routes can offer.
+            frequencies = frequencies.filter((f) =>
+              f.scheduleType === "trip"
+                ? f.originDepartureTime >= after
+                : (f.end ?? "23:59") >= after,
+            );
+          }
+          frequencies = [...frequencies].sort((a, b) => {
+            const ka =
+              a.scheduleType === "trip"
+                ? a.originDepartureTime
+                : (a.start ?? "");
+            const kb =
+              b.scheduleType === "trip"
+                ? b.originDepartureTime
+                : (b.start ?? "");
+            return ka.localeCompare(kb);
+          });
+          if (limit && frequencies.length > limit) {
+            truncated = true;
+            frequencies = frequencies.slice(0, limit);
+          }
+
+          return {
+            ...(subRouteUid ? { subRouteUid } : {}),
+            ...(subRouteName ? { subRouteName } : {}),
+            ...(subRouteDisplayName !== undefined
+              ? { subRouteDisplayName }
+              : {}),
+            direction,
+            directionLabel: dirLabel(direction),
+            first: sorted[0],
+            last: sorted[sorted.length - 1],
+            frequencies,
+          };
+        },
+      );
 
     return {
       ok: true,
       routeName: scope?.routeId ?? routeId,
+      ...display(
+        "routeDisplayName",
+        scope?.routeId ?? routeId,
+        matchingRecords[0].RouteName?.En,
+        params.lang,
+      ),
       city,
       schedules,
       note: "本路線時刻僅為起站發車時刻（originDepartureTime）或班距（headway）；上游未提供中途站的到站時刻。要推估中途站時間必須自行估算並向使用者標明為估計值。",
@@ -1153,6 +1279,7 @@ async function exactRouteNameToKeep(
 }
 
 export async function getBusRealtimeOnRoute(params: {
+  lang?: SupportedLang;
   routeName: string;
   city: TaiwanCityEn | "InterCity";
   direction?: number;
@@ -1198,6 +1325,14 @@ export async function getBusRealtimeOnRoute(params: {
       return {
         subRouteUid: r.SubRouteUID,
         subRouteName: r.SubRouteName?.Zh_tw,
+        ...(r.SubRouteName?.Zh_tw !== undefined
+          ? display(
+              "subRouteDisplayName",
+              r.SubRouteName.Zh_tw,
+              r.SubRouteName?.En,
+              params.lang,
+            )
+          : {}),
         plateNumb: r.PlateNumb,
         direction: r.Direction,
         directionLabel: dirLabel(r.Direction),
@@ -1218,6 +1353,12 @@ export async function getBusRealtimeOnRoute(params: {
     return {
       ok: true,
       routeName: keepRouteName ?? scope?.routeId ?? routeId,
+      ...display(
+        "routeDisplayName",
+        keepRouteName ?? scope?.routeId ?? routeId,
+        records[0].RouteName?.En,
+        params.lang,
+      ),
       city,
       count: buses.length,
       lowFloorCount: buses.filter((b) => b.isLowFloor === "是").length,
@@ -1245,10 +1386,15 @@ export async function searchBusRoutes(
   keyword: string,
   userLoc?: { lat: number; lng: number } | null,
   limit: number = 50,
+  lang?: SupportedLang,
 ): Promise<BusSearchRouteResult> {
   try {
     const queryLimit = userLoc ? 2000 : limit;
-    const routes = await searchRoutesByKeyword(keyword, queryLimit);
+    const routes = await searchRoutesByKeyword(
+      keyword,
+      queryLimit,
+      lang !== undefined,
+    );
 
     type RouteWithDistance = {
       item: BusSearchResult;
@@ -1300,6 +1446,19 @@ export async function searchBusRoutes(
       return {
         item: {
           routeName: r._id.routeName,
+          ...display("routeDisplayName", r._id.routeName, r.routeNameEn, lang),
+          ...display(
+            "departureDisplayName",
+            departure,
+            sortedStops[0]?.stopName?.En,
+            lang,
+          ),
+          ...display(
+            "destinationDisplayName",
+            destination,
+            sortedStops[sortedStops.length - 1]?.stopName?.En,
+            lang,
+          ),
           city: r._id.city,
           departure,
           destination,
@@ -1349,10 +1508,16 @@ export async function searchBusStops(
   keyword: string,
   userLoc?: { lat: number; lng: number } | null,
   limit: number = 50,
+  lang?: SupportedLang,
 ): Promise<BusStopSearchRouteResult> {
   try {
     const queryLimit = userLoc ? 500 : 250;
-    const stops = await searchStopsByKeyword(keyword, queryLimit, userLoc);
+    const stops = await searchStopsByKeyword(
+      keyword,
+      queryLimit,
+      userLoc,
+      lang !== undefined,
+    );
 
     if (!stops.length) {
       return { ok: true, stops: [] };
@@ -1363,10 +1528,12 @@ export async function searchBusStops(
     ];
     const routes = await findRouteNamesBySubRoute(allSubRouteIds);
 
+    const routeEnglish = new Map<string, unknown>();
     const routeMap = new Map<string, string>();
     for (const r of routes) {
       if (r.subRouteName?.Zh_tw && r.routeName?.Zh_tw) {
         routeMap.set(r.subRouteName.Zh_tw, r.routeName.Zh_tw);
+        routeEnglish.set(r.routeName.Zh_tw, r.routeName.En);
       }
     }
 
@@ -1428,6 +1595,7 @@ export async function searchBusStops(
         mergedMap.set(key, {
           stopUid: s.stopUid,
           stopName: s.stopName.Zh_tw,
+          ...display("stopDisplayName", s.stopName.Zh_tw, s.stopName.En, lang),
           city: s.city,
           coordinates: s.location.coordinates as [number, number],
           routes: [...new Set(routesForStop)].sort(),
@@ -1456,7 +1624,19 @@ export async function searchBusStops(
 
     const finalStops = stopList.slice(0, limit);
 
-    return { ok: true, stops: finalStops };
+    return {
+      ok: true,
+      stops: finalStops.map((s) => ({
+        ...s,
+        ...(lang !== undefined
+          ? {
+              routeDisplayNames: s.routes.map((n) =>
+                selectDisplayText(n, routeEnglish.get(n), lang),
+              ),
+            }
+          : {}),
+      })),
+    };
   } catch (err) {
     return {
       ok: false,
@@ -1470,6 +1650,7 @@ export async function searchBusStops(
  * Get nearby bus stops sorted by distance.
  */
 export async function getNearbyStops(params: {
+  lang?: SupportedLang;
   lat: number;
   lng: number;
   radius: number;
@@ -1491,10 +1672,12 @@ export async function getNearbyStops(params: {
     ];
     const routes = await findRouteNamesBySubRoute(allSubRouteIds);
 
+    const routeEnglish = new Map<string, unknown>();
     const routeMap = new Map<string, string>();
     for (const r of routes) {
       if (r.subRouteName?.Zh_tw && r.routeName?.Zh_tw) {
         routeMap.set(r.subRouteName.Zh_tw, r.routeName.Zh_tw);
+        routeEnglish.set(r.routeName.Zh_tw, r.routeName.En);
       }
     }
 
@@ -1519,11 +1702,16 @@ export async function getNearbyStops(params: {
           existing.distance = dist;
           existing.coordinates = s.location.coordinates as [number, number];
           existing.stopUid = s.stopUid;
+          Object.assign(
+            existing,
+            display("stopDisplayName", stopNameZh, s.stopName.En, params.lang),
+          );
         }
       } else {
         mergedMap.set(stopNameZh, {
           stopUid: s.stopUid,
           stopName: stopNameZh,
+          ...display("stopDisplayName", stopNameZh, s.stopName.En, params.lang),
           city: s.city,
           coordinates: s.location.coordinates as [number, number],
           distance: dist,
@@ -1536,7 +1724,19 @@ export async function getNearbyStops(params: {
       .sort((a, b) => a.distance - b.distance)
       .slice(0, limit);
 
-    return { ok: true, stops: finalStops };
+    return {
+      ok: true,
+      stops: finalStops.map((s) => ({
+        ...s,
+        ...(params.lang !== undefined
+          ? {
+              routeDisplayNames: s.routes.map((n) =>
+                selectDisplayText(n, routeEnglish.get(n), params.lang),
+              ),
+            }
+          : {}),
+      })),
+    };
   } catch (err) {
     return {
       ok: false,
@@ -1583,20 +1783,25 @@ function compareEstimate(a: number | null, b: number | null): number {
 /** Last stop name per `subRouteUid|direction`, from one batched lookup. */
 async function headsignMap(
   subRouteUids: string[],
-): Promise<Map<string, string>> {
+): Promise<Map<string, { name: string; english?: string }>> {
   const docs = await findRoutesBySubRouteUids(subRouteUids);
-  const map = new Map<string, string>();
+  const map = new Map<string, { name: string; english?: string }>();
   for (const doc of docs) {
     const last = (doc.stops ?? []).reduce<
       NonNullable<BusRouteDoc["stops"]>[number] | null
     >((acc, stop) => (!acc || stop.seq > acc.seq ? stop : acc), null);
     const name = last?.stopName?.Zh_tw;
-    if (name) map.set(`${doc.subRouteUid}|${doc.direction}`, name);
+    if (name)
+      map.set(`${doc.subRouteUid}|${doc.direction}`, {
+        name,
+        english: last?.stopName?.En,
+      });
   }
   return map;
 }
 
 async function loadStopArrivals(params: {
+  lang?: SupportedLang;
   stopName: string;
   city: TaiwanCityEn;
   lat: number;
@@ -1643,8 +1848,17 @@ async function loadStopArrivals(params: {
       rows.push({
         key: `${routeName}|${r.SubRouteUID ?? ""}|${r.Direction}`,
         routeName,
+        ...display("routeDisplayName", routeName, r.RouteName?.En, params.lang),
         subRouteUid: r.SubRouteUID,
         subRouteName: r.SubRouteName?.Zh_tw,
+        ...(r.SubRouteName?.Zh_tw !== undefined
+          ? display(
+              "subRouteDisplayName",
+              r.SubRouteName.Zh_tw,
+              r.SubRouteName?.En,
+              params.lang,
+            )
+          : {}),
         direction: r.Direction,
         headsign: null,
         estimateMinutes,
@@ -1692,15 +1906,37 @@ async function loadStopArrivals(params: {
         return {
           ...a,
           headsign: a.subRouteUid
-            ? (headsigns.get(`${a.subRouteUid}|${a.direction}`) ?? null)
+            ? (headsigns.get(`${a.subRouteUid}|${a.direction}`)?.name ?? null)
             : null,
+          ...(params.lang !== undefined
+            ? {
+                headsignDisplayName: (() => {
+                  const h = headsigns.get(`${a.subRouteUid}|${a.direction}`);
+                  return h
+                    ? selectDisplayText(h.name, h.english, params.lang)
+                    : null;
+                })(),
+              }
+            : {}),
           isLowFloor: flagOrNull(veh?.isLowFloor),
           hasLiftOrRamp: flagOrNull(veh?.hasLiftOrRamp),
         };
       })
       .sort((a, b) => compareEstimate(a.estimateMinutes, b.estimateMinutes));
 
-    return { ok: true, stopName, city, arrivals };
+    return {
+      ok: true,
+      stopName,
+      city,
+      ...display(
+        "stopDisplayName",
+        stopName,
+        nearby.find((s) => normalizeStopName(s.stopName.Zh_tw) === wanted)
+          ?.stopName.En,
+        params.lang,
+      ),
+      arrivals,
+    };
   } catch (err) {
     return {
       ok: false,
@@ -1726,6 +1962,7 @@ function flagOrNull(code?: number): boolean | null {
  * `Streaming/InterCity/{RouteName}` form with no city-wide StopUID listing.
  */
 export async function getBusStopArrivals(params: {
+  lang?: SupportedLang;
   stopName: string;
   city: TaiwanCityEn | "InterCity";
   lat: number;
@@ -1740,7 +1977,7 @@ export async function getBusStopArrivals(params: {
     };
   }
 
-  const key = stopArrivalsKey(city, stopName, lat, lng);
+  const key = `${stopArrivalsKey(city, stopName, lat, lng)}|${params.lang ?? "legacy"}`;
   const now = Date.now();
   const cached = stopArrivalsCache.get(key);
   if (cached && cached.expiresAt > now) {
@@ -1751,6 +1988,7 @@ export async function getBusStopArrivals(params: {
   if (pending) return pending;
 
   const request = loadAndCacheStopArrivals(key, {
+    lang: params.lang,
     stopName,
     city,
     lat,
@@ -1762,7 +2000,13 @@ export async function getBusStopArrivals(params: {
 
 async function loadAndCacheStopArrivals(
   key: string,
-  params: { stopName: string; city: TaiwanCityEn; lat: number; lng: number },
+  params: {
+    lang?: SupportedLang;
+    stopName: string;
+    city: TaiwanCityEn;
+    lat: number;
+    lng: number;
+  },
 ): Promise<BusStopArrivalsResult> {
   try {
     const result = await loadStopArrivals(params);
@@ -1784,4 +2028,19 @@ async function loadAndCacheStopArrivals(
   } finally {
     stopArrivalsInFlight.delete(key);
   }
+}
+
+function display<K extends string>(
+  key: K,
+  canonical: string,
+  english: unknown,
+  lang?: SupportedLang,
+): Partial<Record<K, string>> {
+  // SAFETY: the computed property is exactly the supplied K; its sole value is a string.
+  return lang === undefined
+    ? {}
+    : ({ [key]: selectDisplayText(canonical, english, lang) } as Record<
+        K,
+        string
+      >);
 }
