@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
-import type { ZodType } from "zod";
+import type { ZodIssue, ZodType } from "zod";
+import { VALIDATION_CODES } from "../constants/validation";
 import { ResponseCode } from "../types/code";
 import { sendResponse } from "../config/lib";
 
@@ -9,9 +10,48 @@ interface ValidateSchemas {
   params?: ZodType;
 }
 
+/** Only schema-owned scalar constraints are public; custom issue params are not. */
+function publicIssue(issue: ZodIssue) {
+  const code = Object.prototype.hasOwnProperty.call(
+    VALIDATION_CODES,
+    issue.code,
+  )
+    ? VALIDATION_CODES[issue.code as keyof typeof VALIDATION_CODES]
+    : VALIDATION_CODES.invalid;
+  const params: Record<string, string | number | boolean> = {};
+  const bound = (value: number | bigint) =>
+    typeof value === "bigint"
+      ? String(value)
+      : Number.isFinite(value)
+        ? value
+        : undefined;
+  if (issue.code === "too_small" || issue.code === "too_big") {
+    const key = issue.code === "too_small" ? "minimum" : "maximum";
+    const value = bound(
+      issue.code === "too_small" ? issue.minimum : issue.maximum,
+    );
+    if (value !== undefined) params[key] = value;
+    params.inclusive = issue.inclusive ?? false;
+    params.type = issue.origin;
+  } else if (issue.code === "invalid_type") {
+    params.expected = issue.expected;
+  } else if (issue.code === "invalid_format") {
+    params.format = issue.format;
+  } else if (issue.code === "not_multiple_of") {
+    const divisor = bound(issue.divisor);
+    if (divisor !== undefined) params.divisor = divisor;
+  }
+  return {
+    path: issue.path.join("."),
+    message: issue.message,
+    code,
+    ...(Object.keys(params).length ? { params } : {}),
+  };
+}
+
 export function validateRequest(schemas: ValidateSchemas) {
   return (req: Request, res: Response, next: NextFunction) => {
-    const errors: { path: string; message: string }[] = [];
+    const errors: ReturnType<typeof publicIssue>[] = [];
     const validated: Record<string, unknown> = {};
 
     const targets: [keyof ValidateSchemas, unknown][] = [
@@ -26,7 +66,7 @@ export function validateRequest(schemas: ValidateSchemas) {
       const result = schema.safeParse(value);
       if (!result.success) {
         result.error.issues.forEach((issue) => {
-          errors.push({ path: issue.path.join("."), message: issue.message });
+          errors.push(publicIssue(issue));
         });
       } else {
         validated[key] = result.data;
@@ -40,7 +80,7 @@ export function validateRequest(schemas: ValidateSchemas) {
         "error",
         ResponseCode.INVALID_INPUT,
         "Invalid request.",
-        { errors },
+        { reason: "VALIDATION_FAILED", errors },
       );
     }
 
