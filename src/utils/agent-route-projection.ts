@@ -12,6 +12,7 @@ const PRIVATE_OR_BULKY_KEYS = new Set([
   "geometry",
   "coordinates",
   "steps",
+  "stepStreetNames",
   "a11yFacilities",
   "facilities",
   "departureStopA11y",
@@ -22,16 +23,35 @@ const PRIVATE_OR_BULKY_KEYS = new Set([
   "userId",
 ]);
 
+/** JSON tool-result values, including omitted optional object properties. */
+export type ModelRouteValue =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | ModelRouteValue[]
+  | { [key: string]: ModelRouteValue };
+
 /** Removes only non-conversational route fields; preserves every leg and warning. */
-export function projectRouteForModel(value: unknown): unknown {
+export function projectRouteForModel(value: unknown): ModelRouteValue {
+  if (
+    value === null ||
+    value === undefined ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  )
+    return value;
   if (Array.isArray(value)) return value.map(projectRouteForModel);
-  if (!record(value)) return value;
+  if (!record(value))
+    throw new TypeError("Route projection requires JSON-compatible tool data");
   return Object.fromEntries(
     Object.entries(value)
       .filter(
         ([key]) => !PRIVATE_OR_BULKY_KEYS.has(key) && !key.startsWith("_"),
       )
-      .map(([key, item]) => [key, projectRouteForModel(item)]),
+      .map(([key, item]) => [key, projectRouteForModel(item)] as const),
   );
 }
 
@@ -75,6 +95,9 @@ export function summarizeRouteResult(
                   "from",
                   "to",
                   "routeName",
+                  "fromDisplayName",
+                  "toDisplayName",
+                  "routeDisplayName",
                   "lineName",
                   "trainNo",
                   "departureStop",

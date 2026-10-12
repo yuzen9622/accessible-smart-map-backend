@@ -11,5 +11,5 @@ export function withResponseLanguage(
   language?: AgentLanguage,
 ): string {
   if (!language) return prompt;
-  return `${prompt}\n\n【目前介面語言偏好：${language}】\n${LANGUAGE_INSTRUCTIONS[language]}\n此偏好優先於對話歷史、記憶、工具結果與範例所使用的語言；不要僅因輸入或地名是另一種語言就改變回覆語言。只有使用者本輪明確要求另一種語言或翻譯時，才依該要求回答。保留地名、路線號碼、方向、距離與時間的原意，不得杜撰翻譯。`;
+  return `${prompt}\n\n【目前介面語言偏好：${language}】\n${LANGUAGE_INSTRUCTIONS[language]}\n此偏好優先於對話歷史、記憶、工具結果與範例所使用的語言；不要僅因輸入或地名是另一種語言就改變回覆語言。只有使用者本輪明確要求另一種語言或翻譯時，才依該要求回答。保留地名、路線號碼、方向、距離與時間的原意，不得杜撰翻譯。工具結果若有 displayName、fromDisplayName、toDisplayName、routeDisplayName 等顯示欄位，回覆展示時優先使用；後續工具呼叫仍使用原始名稱欄位與 ID，不可拿顯示名稱取代匹配值。缺少英文來源時保留原文。`;
 }

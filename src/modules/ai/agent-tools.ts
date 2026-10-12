@@ -58,6 +58,11 @@ import { TransitPreferenceSchema } from "../../schemas/transit-preference.schema
 import type { DriveLeg } from "../../types/route";
 import type { TaiwanCityEn } from "../../types/transit";
 
+/** Keep legacy service call arity when no trusted session language was supplied. */
+function sourceLanguageArgs(language?: AgentLanguage): [AgentLanguage?] {
+  return language === undefined ? [] : [language];
+}
+
 export async function findGooglePlaces(args: {
   query: string;
   language?: AgentLanguage;
@@ -99,6 +104,7 @@ export async function findGooglePlaces(args: {
 }
 
 export async function findA11yPlaces(args: {
+  language?: AgentLanguage;
   query?: string;
   latitude?: number;
   longitude?: number;
@@ -136,6 +142,7 @@ export async function findA11yPlaces(args: {
       searchLat,
       searchLng,
       searchRange,
+      ...sourceLanguageArgs(args.language),
     );
     return JSON.stringify({
       ok: true,
@@ -220,6 +227,7 @@ function clampInt(
 }
 
 export async function findCampusAccessibility(args: {
+  language?: AgentLanguage;
   query?: string;
   latitude?: number;
   longitude?: number;
@@ -247,6 +255,7 @@ export async function findCampusAccessibility(args: {
         coordsInput.longitude,
         args.radiusM ?? 1000,
         args.type,
+        ...sourceLanguageArgs(args.language),
       );
       return JSON.stringify({
         ok: true,
@@ -261,13 +270,16 @@ export async function findCampusAccessibility(args: {
       });
     }
 
-    const keywordResult = await campusService.findAll({
-      city: args.city,
-      type: args.type,
-      keyword: args.query,
-      page,
-      limit,
-    });
+    const keywordResult = await campusService.findAll(
+      {
+        city: args.city,
+        type: args.type,
+        keyword: args.query,
+        page,
+        limit,
+      },
+      ...sourceLanguageArgs(args.language),
+    );
     if (keywordResult.totalCount > 0 || !args.query) {
       return JSON.stringify({
         ok: true,
@@ -296,6 +308,7 @@ export async function findCampusAccessibility(args: {
       coords.longitude,
       args.radiusM ?? 1000,
       args.type,
+      ...sourceLanguageArgs(args.language),
     );
     return JSON.stringify({
       ok: true,
@@ -312,12 +325,16 @@ export async function findCampusAccessibility(args: {
 }
 
 export async function getCampusAccessibilityDetails(args: {
+  language?: AgentLanguage;
   campusId: number;
   type?: string;
   limit?: number;
 }): Promise<string> {
   try {
-    const campus = await campusService.findByCampusId(args.campusId);
+    const campus = await campusService.findByCampusId(
+      args.campusId,
+      ...sourceLanguageArgs(args.language),
+    );
     if (!campus) {
       return JSON.stringify({ ok: false, error: "查無此校區" });
     }
@@ -334,6 +351,9 @@ export async function getCampusAccessibilityDetails(args: {
         schoolId: campus.schoolId,
         schoolName: campus.schoolName,
         branchName: campus.branchName,
+        displaySchoolName: campus.displaySchoolName,
+        displayBranchName: campus.displayBranchName,
+        displayAddress: campus.displayAddress,
         city: campus.city,
         address: campus.address,
         phone: campus.phone,
@@ -356,9 +376,18 @@ export async function getCampusAccessibilityDetails(args: {
 function summarizeLeg(
   leg: WalkLeg | BusLeg | MetroLeg | ThsrLeg | TraLeg | DriveLeg,
 ): Record<string, unknown> {
+  const displayFields = Object.fromEntries(
+    Object.entries(leg).filter(
+      ([key, value]) =>
+        ["fromDisplayName", "toDisplayName", "routeDisplayName"].includes(
+          key,
+        ) && typeof value === "string",
+    ),
+  );
   if (leg.type === "DRIVE" || leg.type === "MOTORCYCLE") {
     return {
       type: leg.type,
+      ...displayFields,
       distanceM: leg.distanceM,
       durationMin: leg.durationMin,
       durationInTrafficMin: leg.durationInTrafficMin ?? null,
@@ -369,6 +398,7 @@ function summarizeLeg(
   if (leg.type === "WALK") {
     return {
       type: "WALK",
+      ...displayFields,
       from: leg.from,
       to: leg.to,
       distanceM: leg.distanceM,
@@ -378,6 +408,7 @@ function summarizeLeg(
   if (leg.type === "BUS") {
     return {
       type: "BUS",
+      ...displayFields,
       rideMinutes: leg.rideMinutes,
       routeName: leg.routeName,
       departureStop: leg.departureStop,
@@ -392,6 +423,7 @@ function summarizeLeg(
   if (leg.type === "METRO") {
     return {
       type: "METRO",
+      ...displayFields,
       railSystem: leg.railSystem,
       lineId: leg.lineId,
       lineName: leg.lineName,
@@ -407,6 +439,7 @@ function summarizeLeg(
   if (leg.type === "THSR") {
     return {
       type: "THSR",
+      ...displayFields,
       trainNo: leg.trainNo,
       departureStation: leg.departureStation,
       arrivalStation: leg.arrivalStation,
@@ -419,6 +452,7 @@ function summarizeLeg(
   if (leg.type === "TRA") {
     return {
       type: "TRA",
+      ...displayFields,
       trainNo: leg.trainNo,
       trainTypeName: leg.trainTypeName,
       departureStation: leg.departureStation,
@@ -615,6 +649,7 @@ async function resolveBusCityOrError(
 }
 
 export async function getBusRoute(args: {
+  language?: AgentLanguage;
   routeName: string;
   city?: string;
   userLocation?: { latitude: number; longitude: number };
@@ -623,6 +658,7 @@ export async function getBusRoute(args: {
     const city = await resolveBusCityOrError(args.city, args.userLocation);
     if (typeof city !== "string") return JSON.stringify({ ok: false, ...city });
     const result = await busService.getBusRouteInfo({
+      ...(args.language ? { lang: args.language } : {}),
       routeName: args.routeName,
       city,
     });
@@ -634,6 +670,7 @@ export async function getBusRoute(args: {
 }
 
 export async function getBusRouteDetail(args: {
+  language?: AgentLanguage;
   routeName: string;
   city?: string;
   userLocation?: { latitude: number; longitude: number };
@@ -642,6 +679,7 @@ export async function getBusRouteDetail(args: {
     const city = await resolveBusCityOrError(args.city, args.userLocation);
     if (typeof city !== "string") return JSON.stringify({ ok: false, ...city });
     const result = await busService.getBusRouteDetail({
+      ...(args.language ? { lang: args.language } : {}),
       routeName: args.routeName,
       city,
     });
@@ -653,6 +691,7 @@ export async function getBusRouteDetail(args: {
 }
 
 export async function getBusArrival(args: {
+  language?: AgentLanguage;
   routeName: string;
   stopName: string;
   city?: string;
@@ -663,6 +702,7 @@ export async function getBusArrival(args: {
     const city = await resolveBusCityOrError(args.city, args.userLocation);
     if (typeof city !== "string") return JSON.stringify({ ok: false, ...city });
     const result = await busService.getBusArrivalAtStop({
+      ...(args.language ? { lang: args.language } : {}),
       routeName: args.routeName,
       stopName: args.stopName,
       city,
@@ -676,6 +716,7 @@ export async function getBusArrival(args: {
 }
 
 export async function getBusTimetable(args: {
+  language?: AgentLanguage;
   routeName: string;
   city?: string;
   afterTime?: string;
@@ -686,6 +727,7 @@ export async function getBusTimetable(args: {
     const city = await resolveBusCityOrError(args.city, args.userLocation);
     if (typeof city !== "string") return JSON.stringify({ ok: false, ...city });
     const result = await busService.getBusTimetable({
+      ...(args.language ? { lang: args.language } : {}),
       routeName: args.routeName,
       city,
       afterTime: args.afterTime,
@@ -699,6 +741,7 @@ export async function getBusTimetable(args: {
 }
 
 export async function getTrainTimetable(args: {
+  language?: AgentLanguage;
   originStation: string;
   destinationStation: string;
   date?: string;
@@ -707,7 +750,11 @@ export async function getTrainTimetable(args: {
   railSystem?: "TRA" | "THSR";
 }): Promise<string> {
   try {
-    const result = await trainService.getTrainTimetable(args);
+    const { language, ...params } = args;
+    const result = await trainService.getTrainTimetable({
+      ...params,
+      ...(language ? { lang: language } : {}),
+    });
     return JSON.stringify(result);
   } catch (error: any) {
     console.error("[agent-tool:getTrainTimetable]", error);
@@ -716,13 +763,18 @@ export async function getTrainTimetable(args: {
 }
 
 export async function getStationTimetable(args: {
+  language?: AgentLanguage;
   station: string;
   date?: string;
   departAfter?: string;
   railSystem?: "TRA" | "THSR";
 }): Promise<string> {
   try {
-    const result = await trainService.getStationTimetable(args);
+    const { language, ...params } = args;
+    const result = await trainService.getStationTimetable({
+      ...params,
+      ...(language ? { lang: language } : {}),
+    });
     return JSON.stringify(result);
   } catch (error: any) {
     console.error("[agent-tool:getStationTimetable]", error);
@@ -731,6 +783,7 @@ export async function getStationTimetable(args: {
 }
 
 export async function trackBuses(args: {
+  language?: AgentLanguage;
   routeName: string;
   city?: string;
   direction?: number;
@@ -740,6 +793,7 @@ export async function trackBuses(args: {
     const city = await resolveBusCityOrError(args.city, args.userLocation);
     if (typeof city !== "string") return JSON.stringify({ ok: false, ...city });
     const result = await busService.getBusRealtimeOnRoute({
+      ...(args.language ? { lang: args.language } : {}),
       routeName: args.routeName,
       city,
       direction: args.direction,
@@ -752,6 +806,7 @@ export async function trackBuses(args: {
 }
 
 export async function findNearbyBusStops(args: {
+  language?: AgentLanguage;
   latitude?: number;
   longitude?: number;
   query?: string;
@@ -786,6 +841,7 @@ export async function findNearbyBusStops(args: {
       });
     }
     const result = await busService.getNearbyStops({
+      ...(args.language ? { lang: args.language } : {}),
       lat: latitude,
       lng: longitude,
       radius: args.radius ?? 500,
@@ -826,6 +882,7 @@ export async function getAirQuality(args: {
 }
 
 export async function getA11yFacilityDetails(args: {
+  language?: AgentLanguage;
   osmId: string;
 }): Promise<string> {
   try {
@@ -836,7 +893,10 @@ export async function getA11yFacilityDetails(args: {
     if (!ids.length) {
       return JSON.stringify({ ok: false, error: "缺少 osmId 參數" });
     }
-    const places = await a11yService.findByOsmIds(ids);
+    const places = await a11yService.findByOsmIds(
+      ids,
+      ...sourceLanguageArgs(args.language),
+    );
     if (!places.length) {
       return JSON.stringify({
         ok: false,
@@ -1019,6 +1079,7 @@ export async function getNearbyHazards(args: {
 }
 
 export async function findNearbyParking(args: {
+  language?: AgentLanguage;
   latitude?: number;
   longitude?: number;
   query?: string;
@@ -1054,6 +1115,7 @@ export async function findNearbyParking(args: {
       longitude,
       args.radiusM ?? 500,
       args.type,
+      ...sourceLanguageArgs(args.language),
     );
     return JSON.stringify({
       ok: true,
@@ -1408,6 +1470,7 @@ export async function getSosLiveLocation(
 
 export async function planRouteToSosVictim(
   args: {
+    language?: AgentLanguage;
     sessionId: string;
     mode?: string;
     departureTime?: string;
@@ -1457,6 +1520,7 @@ export async function planRouteToSosVictim(
         longitude: sessionResult.session.lng,
       },
       keepExactDestination: true,
+      ...(args.language ? { language: args.language } : {}),
       mode: validMode,
       maxTransfers: 2,
       departureTime: args.departureTime,
@@ -1495,6 +1559,7 @@ export async function planRouteToSosVictim(
 
 export async function findSosNearbyPlaces(
   args: {
+    language?: AgentLanguage;
     sessionId: string;
     query: string;
     maxResults?: number;
@@ -1524,6 +1589,7 @@ export async function findSosNearbyPlaces(
       latitude: result.session.lat,
       longitude: result.session.lng,
       maxResults: args.maxResults ?? 3,
+      ...(args.language ? { lang: args.language } : {}),
     });
     return JSON.stringify({
       ok: true,
@@ -1541,6 +1607,7 @@ export async function findSosNearbyPlaces(
 
 export async function findSosNearbyA11yPlaces(
   args: {
+    language?: AgentLanguage;
     sessionId: string;
     query: string;
     range?: number;
@@ -1569,6 +1636,7 @@ export async function findSosNearbyA11yPlaces(
       result.session.lat,
       result.session.lng,
       args.range ?? 300,
+      ...sourceLanguageArgs(args.language),
     );
     return JSON.stringify({
       ok: true,
@@ -1946,6 +2014,7 @@ export async function executeLocalTool(
         longitude: args.longitude,
         range: args.range,
         userLocation,
+        language: options.language,
       } as Parameters<typeof findA11yPlaces>[0]);
 
     case "findCampusAccessibility":
@@ -1959,6 +2028,7 @@ export async function executeLocalTool(
         page: args.page,
         limit: args.limit,
         userLocation,
+        language: options.language,
       } as Parameters<typeof findCampusAccessibility>[0]);
 
     case "getCampusAccessibilityDetails":
@@ -1966,6 +2036,7 @@ export async function executeLocalTool(
         campusId: args.campusId,
         type: args.type,
         limit: args.limit,
+        language: options.language,
       } as Parameters<typeof getCampusAccessibilityDetails>[0]);
 
     case "planAccessibleRoute": {
@@ -1998,6 +2069,7 @@ export async function executeLocalTool(
         routeName: args.routeName,
         city: args.city,
         userLocation,
+        language: options.language,
       } as Parameters<typeof getBusRoute>[0]);
 
     case "getBusRouteDetail":
@@ -2005,6 +2077,7 @@ export async function executeLocalTool(
         routeName: args.routeName,
         city: args.city,
         userLocation,
+        language: options.language,
       } as Parameters<typeof getBusRouteDetail>[0]);
 
     case "getBusArrival":
@@ -2014,6 +2087,7 @@ export async function executeLocalTool(
         city: args.city,
         direction: args.direction,
         userLocation,
+        language: options.language,
       } as Parameters<typeof getBusArrival>[0]);
 
     case "getBusTimetable":
@@ -2023,6 +2097,7 @@ export async function executeLocalTool(
         afterTime: args.afterTime,
         limit: args.limit,
         userLocation,
+        language: options.language,
       } as Parameters<typeof getBusTimetable>[0]);
 
     case "getTrainTimetable":
@@ -2033,6 +2108,7 @@ export async function executeLocalTool(
         departAfter: args.departAfter,
         arriveBy: args.arriveBy,
         railSystem: args.railSystem,
+        language: options.language,
       } as Parameters<typeof getTrainTimetable>[0]);
 
     case "getStationTimetable":
@@ -2041,6 +2117,7 @@ export async function executeLocalTool(
         date: args.date,
         departAfter: args.departAfter,
         railSystem: args.railSystem,
+        language: options.language,
       } as Parameters<typeof getStationTimetable>[0]);
 
     case "trackBuses":
@@ -2049,6 +2126,7 @@ export async function executeLocalTool(
         city: args.city,
         direction: args.direction,
         userLocation,
+        language: options.language,
       } as Parameters<typeof trackBuses>[0]);
 
     case "findNearbyBusStops":
@@ -2058,6 +2136,7 @@ export async function executeLocalTool(
         query: args.query,
         radius: args.radius,
         userLocation,
+        language: options.language,
       } as Parameters<typeof findNearbyBusStops>[0]);
 
     case "getAirQuality":
@@ -2067,7 +2146,10 @@ export async function executeLocalTool(
       } as Parameters<typeof getAirQuality>[0]);
 
     case "getA11yFacilityDetails":
-      return getA11yFacilityDetails({ osmId: args.osmId as string });
+      return getA11yFacilityDetails({
+        osmId: args.osmId as string,
+        language: options.language,
+      });
 
     case "getEnvironmentInfo":
       return getEnvironmentInfo({
@@ -2096,6 +2178,7 @@ export async function executeLocalTool(
         radiusM: args.radiusM,
         type: args.type,
         userLocation,
+        language: options.language,
       } as Parameters<typeof findNearbyParking>[0]);
 
     case "getMetroAlerts":
@@ -2181,6 +2264,7 @@ export async function executeLocalTool(
           sessionId: args.sessionId as string,
           mode: args.mode as string | undefined,
           departureTime: args.departureTime as string | undefined,
+          language: options.language,
         },
         options.lineUserId,
       );
@@ -2191,6 +2275,7 @@ export async function executeLocalTool(
           sessionId: args.sessionId as string,
           query: args.query as string,
           maxResults: args.maxResults as number | undefined,
+          language: options.language,
         },
         options.lineUserId,
       );
@@ -2201,6 +2286,7 @@ export async function executeLocalTool(
           sessionId: args.sessionId as string,
           query: args.query as string,
           range: args.range as number | undefined,
+          language: options.language,
         },
         options.lineUserId,
       );

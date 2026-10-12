@@ -1,0 +1,115 @@
+import { describe, expect, it } from "vitest";
+import {
+  projectRouteForModel,
+  projectToolResult,
+  summarizeRouteResult,
+} from "./agent-route-projection";
+
+describe("source name route projections", () => {
+  it("retains valid JSON values and omitted optional fields", () => {
+    expect(
+      projectRouteForModel({ a: null, b: undefined, c: [true, 0, "原文"] }),
+    ).toEqual({ a: null, b: undefined, c: [true, 0, "原文"] });
+  });
+  it.each([BigInt(1), Symbol("not JSON"), () => "not JSON"])(
+    "rejects unsupported tool data rather than making a false domain assertion",
+    (value) => {
+      expect(() => projectRouteForModel({ value })).toThrow(
+        "JSON-compatible tool data",
+      );
+    },
+  );
+  const step = Object.freeze({
+    relativeDirection: "DEPART",
+    absoluteDirection: "NORTH",
+    streetName: "羅斯福路",
+    bogusName: false,
+    area: false,
+    stairs: false,
+    steepSlope: false,
+    distanceM: 80,
+    location: [121.5, 25.05],
+  });
+  const leg = Object.freeze({
+    type: "WALK",
+    from: "起點",
+    to: "臺北車站",
+    fromDisplayName: "Origin",
+    toDisplayName: "Taipei Main Station",
+    routeDisplayName: "Walking route",
+    steps: Object.freeze([step]),
+    stepStreetNames: Object.freeze([
+      {
+        index: 0,
+        streetName: "羅斯福路",
+        nameEn: "Roosevelt Road",
+        displayName: "Roosevelt Road",
+      },
+    ]),
+    polyline: [
+      [121.5, 25.05],
+      [121.501, 25.05],
+    ],
+  });
+  const payload = Object.freeze({
+    planId: "plan",
+    selectedRouteId: "route",
+    routes: Object.freeze([
+      {
+        routeId: "route",
+        routeToken: "private-capability",
+        legs: [leg],
+        warnings: [],
+      },
+    ]),
+  });
+
+  it("retains the canonical nine fields and sidecar for the client but excludes bulk street data from the model", () => {
+    const before = JSON.stringify(payload);
+    const result = projectToolResult(payload);
+    expect(result.clientResult).toBe(payload);
+    expect(JSON.stringify(result.modelResult)).not.toContain(
+      "private-capability",
+    );
+    expect(JSON.stringify(result.modelResult)).not.toContain("stepStreetNames");
+    expect(JSON.stringify(result.modelResult)).not.toContain("Roosevelt Road");
+    expect(result.modelResult).toMatchObject({
+      routes: [
+        {
+          legs: [
+            {
+              from: "起點",
+              to: "臺北車站",
+              fromDisplayName: "Origin",
+              toDisplayName: "Taipei Main Station",
+            },
+          ],
+        },
+      ],
+    });
+    expect(Object.keys(step)).toHaveLength(9);
+    expect(JSON.stringify(payload)).toBe(before);
+  });
+
+  it("keeps source displays alongside canonical values in bounded model summaries", () => {
+    const summary = summarizeRouteResult(payload, 4000);
+    expect(summary).not.toBeNull();
+    expect(JSON.parse(summary ?? "null")).toMatchObject({
+      routes: [
+        {
+          legs: [
+            {
+              from: "起點",
+              to: "臺北車站",
+              fromDisplayName: "Origin",
+              toDisplayName: "Taipei Main Station",
+              routeDisplayName: "Walking route",
+            },
+          ],
+        },
+      ],
+    });
+    expect(summary).not.toContain("stepStreetNames");
+    expect(summary).not.toContain("private-capability");
+  });
+});

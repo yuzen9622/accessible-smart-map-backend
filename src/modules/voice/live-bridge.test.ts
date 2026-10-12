@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import type { WalkStep } from "../../types/route";
 
 const {
   connect,
@@ -2146,6 +2147,61 @@ describe("createLiveBridge navigation resume and snapshot lifecycle", () => {
     expect(NavResumeOkMessageSchema.parse(ok)).toEqual(ok);
     expect(frameOf(ws, "nav.resume_failed")).toBeUndefined();
   });
+
+  it.each([
+    ["en", "Roosevelt Road"],
+    ["zh-TW", "羅斯福路"],
+  ] as const)(
+    "resumes source-backed street names in %s without changing saved machine steps",
+    async (language, expectedStreet) => {
+      const { ws } = makeHarness();
+      const route = structuredClone(identifiedRoute);
+      const sourceSteps: WalkStep[] = route.legs[0].steps.map(
+        (step: WalkStep) => ({
+          relativeDirection: step.relativeDirection,
+          absoluteDirection: step.absoluteDirection,
+          streetName: "羅斯福路",
+          bogusName: false,
+          area: false,
+          stairs: false,
+          steepSlope: false,
+          distanceM: step.distanceM,
+          location: step.location,
+        }),
+      );
+      const sourceLeg = {
+        ...route.legs[0],
+        steps: sourceSteps,
+        stepStreetNames: sourceSteps.map((step, index) => ({
+          index,
+          streetName: step.streetName,
+          nameEn: "Roosevelt Road",
+          displayName: "羅斯福路",
+        })),
+      };
+      const saved = { ...route, legs: [sourceLeg] };
+      const before = JSON.stringify(saved);
+      getRouteByToken.mockResolvedValue(saved);
+      const bridge = await createLiveBridge({ ws, userId: "u", language });
+      try {
+        await bridge.voiceReady;
+        await bridge.resumeNavigation(resumeMessage());
+        const resumed = frameOf(ws, "nav.resume_ok");
+        expect(resumed.currentStepIndex).toBe(1);
+        expect(
+          resumed.steps.some((step: { instruction: string }) =>
+            step.instruction.includes(expectedStreet),
+          ),
+        ).toBe(true);
+        expect(JSON.stringify(saved)).toBe(before);
+        expect(rerouteAccessibleRoute).not.toHaveBeenCalled();
+        for (const step of sourceSteps)
+          expect(Object.keys(step)).toHaveLength(9);
+      } finally {
+        bridge.close();
+      }
+    },
+  );
 
   it("rebuilds resumed steps and navigation errors using the new session language", async () => {
     const { ws } = makeHarness();

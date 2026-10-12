@@ -1,11 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("axios", () => ({ default: { post: vi.fn(), get: vi.fn() } }));
+vi.mock("../a11y/a11y.repository");
+vi.mock("../transit/bus.repository");
 vi.mock("../accessible-route/accessible-route.service", () => ({
   planAccessibleRouteFromRequest: vi.fn(),
 }));
 
 import axios from "axios";
+import type { IOsmA11y } from "../../types";
+import { findOsmByIds } from "../a11y/a11y.repository";
+import { findRoutesByName, type BusRouteDoc } from "../transit/bus.repository";
 import { executeLocalTool } from "./agent-tools";
 import { planAccessibleRouteFromRequest } from "../accessible-route/accessible-route.service";
 
@@ -15,6 +20,119 @@ beforeEach(() => {
 });
 
 describe("server-owned tool language", () => {
+  const busRoute: BusRouteDoc = {
+    routeUid: "TPE42",
+    subRouteUid: "TPE42A",
+    direction: 0,
+    routeName: { Zh_tw: "42", En: "Route 42" },
+    subRouteName: { Zh_tw: "42副線", En: "Route 42 branch" },
+    stops: [
+      {
+        seq: 1,
+        stopUID: "TPE001",
+        stopName: { Zh_tw: "原站", En: "Source Station" },
+        lat: 25.05,
+        lng: 121.5,
+      },
+    ],
+  };
+  Object.freeze(busRoute);
+
+  it.each(["en", "zh-TW", undefined] as const)(
+    "uses trusted %s through real transit service while preserving canonical query inputs",
+    async (language) => {
+      vi.mocked(findRoutesByName).mockResolvedValue([busRoute]);
+      const before = JSON.stringify(busRoute);
+      const result = JSON.parse(
+        await executeLocalTool(
+          "getBusRoute",
+          { routeName: "42", city: "Taipei", language: "zh-TW", lang: "zh-TW" },
+          undefined,
+          undefined,
+          { language },
+        ),
+      );
+      expect(result.ok).toBe(true);
+      expect(findRoutesByName).toHaveBeenCalledWith("Taipei", ["42"]);
+      expect(result.routeName).toBe("42");
+      expect(result.directions[0].stops[0]).toMatchObject({
+        name: "原站",
+        stopUid: "TPE001",
+      });
+      if (language === undefined)
+        expect(result).not.toHaveProperty("routeDisplayName");
+      else {
+        expect(result.routeDisplayName).toBe(
+          language === "en" ? "Route 42" : "42",
+        );
+        expect(result.directions[0].stops[0].displayName).toBe(
+          language === "en" ? "Source Station" : "原站",
+        );
+      }
+      expect(JSON.stringify(busRoute)).toBe(before);
+    },
+  );
+
+  const facility: IOsmA11y = Object.freeze({
+    osmId: "123",
+    name: "原始電梯",
+    category: "elevator",
+    importedAt: new Date(0),
+    tags: Object.freeze({ "name:en": "Source Elevator" }),
+    location: {
+      type: "Point",
+      coordinates: [121.5, 25.05],
+    } as IOsmA11y["location"],
+  });
+
+  it.each(["en", "zh-TW", undefined] as const)(
+    "uses trusted %s through real facility service and slim projection",
+    async (language) => {
+      vi.mocked(findOsmByIds).mockResolvedValue([facility]);
+      const result = JSON.parse(
+        await executeLocalTool(
+          "getA11yFacilityDetails",
+          { osmId: "123", language: "en" },
+          undefined,
+          undefined,
+          { language },
+        ),
+      );
+      expect(findOsmByIds).toHaveBeenCalledWith(["123"]);
+      expect(result.facilities[0]).toMatchObject({
+        osmId: "123",
+        name: "原始電梯",
+        category: "elevator",
+      });
+      if (language === undefined)
+        expect(result.facilities[0]).not.toHaveProperty("displayName");
+      else
+        expect(result.facilities[0].displayName).toBe(
+          language === "en" ? "Source Elevator" : "原始電梯",
+        );
+      expect(facility).not.toHaveProperty("displayName");
+    },
+  );
+
+  it("does not mutate shared facility sources across concurrent locale requests", async () => {
+    vi.mocked(findOsmByIds).mockResolvedValue([facility]);
+    const results = await Promise.all(
+      (["en", "zh-TW"] as const).map((language) =>
+        executeLocalTool(
+          "getA11yFacilityDetails",
+          { osmId: "123", language: "fr" },
+          undefined,
+          undefined,
+          { language },
+        ),
+      ),
+    );
+    expect(
+      results.map((raw) => JSON.parse(raw).facilities[0].displayName),
+    ).toEqual(["Source Elevator", "原始電梯"]);
+    expect(facility.name).toBe("原始電梯");
+  });
+
   it.each(["en", "zh-TW", undefined] as const)(
     "sends session %s through the real Google adapter, not model-supplied language",
     async (language) => {
