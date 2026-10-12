@@ -1,3 +1,4 @@
+import { copyWithDescriptors } from "../../utils/route-source-names";
 import { randomBytes, randomUUID } from "crypto";
 import { storeBusPlan } from "./bus-plan.repository";
 import { redisGet } from "../../config/redis";
@@ -21,7 +22,10 @@ export async function attachRouteTokens(
       const routeToken = randomBytes(32).toString("base64url");
       const navigationId = randomUUID();
       const routeVersion = 1;
-      const navigationRoute = { ...route, navigationId, routeVersion };
+      const navigationRoute = copyWithDescriptors(route, {
+        navigationId,
+        routeVersion,
+      });
       const stored = await storeInitialNavigationEnvelope(routeToken, {
         schemaVersion: 1,
         route: navigationRoute,
@@ -34,7 +38,7 @@ export async function attachRouteTokens(
         return route;
       }
       await storeBusPlan(routeToken, navigationRoute);
-      return { ...navigationRoute, routeToken };
+      return copyWithDescriptors(navigationRoute, { routeToken });
     }),
   );
 }

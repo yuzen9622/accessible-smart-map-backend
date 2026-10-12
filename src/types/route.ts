@@ -35,6 +35,7 @@ export type TravelMode = "transit" | "drive" | "motorcycle" | "walk";
 type PureWalkRouteEngine = "pedestrian-a11y" | "otp-fallback";
 
 export interface SlimA11y {
+  displayName?: string;
   osmId: string;
   category: IOsmA11y["category"];
   name?: string;
@@ -195,13 +196,32 @@ export interface WalkStep {
   location: [number, number];
 }
 
+/** Source-backed street names beside WalkStep, never additional step fields. */
+export interface WalkStepStreetName {
+  index: number;
+  streetName: string;
+  nameEn: string;
+  displayName: string;
+}
+
+export interface RouteSourceNames {
+  fromNameEn?: string;
+  toNameEn?: string;
+  routeNameEn?: string;
+  fromDisplayName?: string;
+  toDisplayName?: string;
+  routeDisplayName?: string;
+}
+
 export interface IntermediateStop {
   name: string;
+  nameEn?: string;
+  displayName?: string;
   stationUid?: string;
   location?: [number, number];
 }
 
-export interface WalkLeg extends WalkA11yDetails {
+export interface WalkLeg extends WalkA11yDetails, RouteSourceNames {
   type: "WALK";
   a11yRefs?: string[];
   from: string;
@@ -217,6 +237,7 @@ export interface WalkLeg extends WalkA11yDetails {
     coords: [number, number];
   } | null;
   steps?: WalkStep[];
+  stepStreetNames?: WalkStepStreetName[];
   /**
    * CSR-engine facility runs over this leg's `polyline`, ordered and
    * non-overlapping. Absent on OTP / Valhalla walking legs, which carry no
@@ -244,7 +265,7 @@ export interface WalkLeg extends WalkA11yDetails {
   a11yPoints?: WalkA11yPoint[];
 }
 
-export interface BusLeg {
+export interface BusLeg extends RouteSourceNames {
   /** Immutable plan snapshot, retained in the route-token cache for later polls. */
   scheduledTrip?: {
     tripId: string;
@@ -300,7 +321,7 @@ export interface BusLeg {
   lowFloorAlternative?: LowFloorAlternative;
 }
 
-export interface MetroLeg {
+export interface MetroLeg extends RouteSourceNames {
   type: "METRO";
   a11yRefs?: string[];
   railSystem: string;
@@ -327,7 +348,7 @@ export interface MetroLeg {
   alerts?: MetroAlert[];
 }
 
-export interface ThsrLeg {
+export interface ThsrLeg extends RouteSourceNames {
   type: "THSR";
   a11yRefs?: string[];
   trainNo: string;
@@ -349,7 +370,7 @@ export interface ThsrLeg {
   alerts?: MatchedAlert[];
 }
 
-export interface TraLeg {
+export interface TraLeg extends RouteSourceNames {
   type: "TRA";
   a11yRefs?: string[];
   trainNo: string;

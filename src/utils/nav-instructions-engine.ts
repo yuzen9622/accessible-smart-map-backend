@@ -1,3 +1,6 @@
+import { selectDisplayText } from "./source-display";
+import { validStreetNames } from "./route-source-names";
+import type { WalkStepStreetName } from "../types/route";
 import { ResponseCode } from "../types/code";
 import { taipeiHHmm } from "../config/taipei-time";
 import { calcBearing, degToCompassWord, haversineCoords } from "./geo";
@@ -254,6 +257,42 @@ function isFacilityDirection(relativeDirection: string): boolean {
   );
 }
 
+const stepOrigins = new WeakMap<WalkStep, number[]>();
+function inheritStep(step: WalkStep, source: WalkStep): WalkStep {
+  stepOrigins.set(step, stepOrigins.get(source) ?? []);
+  return step;
+}
+
+/** Remap only validated source provenance through canonical merge/split operations. */
+export function normalizedStreetNames(
+  leg: WalkLeg,
+  steps: WalkStep[],
+  language?: SupportedLang,
+): WalkStepStreetName[] {
+  const valid = validStreetNames(leg);
+  return steps.flatMap((step, index) => {
+    const origins = stepOrigins.get(step) ?? [];
+    const entries = origins.map((origin) => valid.get(origin));
+    const first = entries[0];
+    if (
+      !first ||
+      entries.some(
+        (e) =>
+          !e || e.nameEn !== first.nameEn || e.streetName !== step.streetName,
+      )
+    )
+      return [];
+    return [
+      {
+        index,
+        streetName: step.streetName,
+        nameEn: first.nameEn,
+        displayName: selectDisplayText(step.streetName, first.nameEn, language),
+      },
+    ];
+  });
+}
+
 function mergeWalkSteps(steps: WalkStep[]): WalkStep[] {
   const merged: WalkStep[] = [];
   for (const step of steps) {
@@ -277,11 +316,15 @@ function mergeWalkSteps(steps: WalkStep[]): WalkStep[] {
       !isFacilityDirection(previous.relativeDirection) &&
       (previousContinues || step.distanceM < 15)
     ) {
+      stepOrigins.set(previous, [
+        ...(stepOrigins.get(previous) ?? []),
+        ...(stepOrigins.get(step) ?? []),
+      ]);
       previous.distanceM += step.distanceM;
       previous.steepSlope = previous.steepSlope || step.steepSlope;
       continue;
     }
-    merged.push({ ...step });
+    merged.push(inheritStep({ ...step }, step));
   }
   return merged;
 }
@@ -332,7 +375,9 @@ function splitLongWalkSteps(
       continue;
     }
     const chunkDistance = step.distanceM / chunkCount;
-    expanded.push({ ...step, distanceM: Math.round(chunkDistance) });
+    expanded.push(
+      inheritStep({ ...step, distanceM: Math.round(chunkDistance) }, step),
+    );
     let emitted = 1;
     for (let chunk = 1; chunk < chunkCount; chunk++) {
       const target = (geometryDistance * chunk) / chunkCount;
@@ -344,13 +389,18 @@ function splitLongWalkSteps(
         location[1] === expanded.at(-1)!.location[1]
       )
         continue;
-      expanded.push({
-        ...step,
-        relativeDirection: "CONTINUE",
-        absoluteDirection: null,
-        distanceM: Math.round(chunkDistance),
-        location,
-      });
+      expanded.push(
+        inheritStep(
+          {
+            ...step,
+            relativeDirection: "CONTINUE",
+            absoluteDirection: null,
+            distanceM: Math.round(chunkDistance),
+            location,
+          },
+          step,
+        ),
+      );
       emitted++;
     }
     const emittedDistance = expanded
@@ -368,7 +418,7 @@ function prepareWalkSteps(leg: WalkLeg, isFirstLeg: boolean): WalkStep[] {
       !isFirstLeg && index === 0 && initialDirection === "DEPART"
         ? "CONTINUE"
         : initialDirection;
-    return {
+    const prepared: WalkStep = {
       relativeDirection,
       absoluteDirection: normalizeAbsoluteDirection(step.absoluteDirection),
       streetName: typeof step.streetName === "string" ? step.streetName : "",
@@ -382,6 +432,8 @@ function prepareWalkSteps(leg: WalkLeg, isFirstLeg: boolean): WalkStep[] {
           : 0,
       location: step.location,
     };
+    stepOrigins.set(prepared, [index]);
+    return prepared;
   });
   return splitLongWalkSteps(mergeWalkSteps(steps), leg.polyline ?? []);
 }
@@ -571,6 +623,12 @@ function buildWalkInstructionSteps(
   const polyline = leg.polyline ?? [];
   const steps = normalizeWalkLegSteps(leg, isFirstLeg);
   if (steps.length === 0) return [];
+  const names = new Map(
+    normalizedStreetNames(leg, steps, language).map((entry) => [
+      entry.index,
+      entry.displayName,
+    ]),
+  );
   let searchIndex = 0;
   return steps.map((step, i) => {
     const polylineIndex = nearestPolylineIndex(
@@ -581,14 +639,21 @@ function buildWalkInstructionSteps(
     if (polylineIndex !== null) searchIndex = polylineIndex;
     const bearing = stepBearing(step, polyline, polylineIndex);
     const type = stepType(step.relativeDirection ?? "CONTINUE");
+    const nextIndex = steps.findIndex(
+      (candidate, index) => index > i && hasStreetName(candidate),
+    );
     const nextNamed =
-      steps
-        .slice(i + 1)
-        .find(hasStreetName)
-        ?.streetName.trim() ?? null;
+      nextIndex < 0
+        ? null
+        : (names.get(nextIndex) ?? steps[nextIndex].streetName.trim());
     return {
       step,
-      text: walkStepText(step, bearing, nextNamed, language),
+      text: walkStepText(
+        { ...step, streetName: names.get(i) ?? step.streetName },
+        bearing,
+        nextNamed,
+        language,
+      ),
       type,
       bearing,
       polylineIndex,
@@ -630,11 +695,11 @@ function walkLegToInstructions(
       text:
         language === "en"
           ? isFirstLeg
-            ? `Head ${bearing !== null ? englishCompass(bearing) : "forward"} toward ${englishPlaceLabel(leg.to)}`
-            : `Continue toward ${englishPlaceLabel(leg.to)}`
+            ? `Head ${bearing !== null ? englishCompass(bearing) : "forward"} toward ${englishPlaceLabel(selectDisplayText(leg.to, leg.toNameEn, language))}`
+            : `Continue toward ${englishPlaceLabel(selectDisplayText(leg.to, leg.toNameEn, language))}`
           : isFirstLeg
-            ? `請朝${heading}方向出發，沿路前往「${leg.to}」`
-            : `請沿路前往「${leg.to}」`,
+            ? `請朝${heading}方向出發，沿路前往「${selectDisplayText(leg.to, leg.toNameEn, language)}」`
+            : `請沿路前往「${selectDisplayText(leg.to, leg.toNameEn, language)}」`,
       type: isFirstLeg ? "depart" : "turn",
       bearing,
       relativeDirection: null,
@@ -699,12 +764,12 @@ function busInstructions(
         : "";
     return [
       transitInstruction(
-        `Wait at ${leg.departureStop} and board bus ${leg.routeName}.${wait}`,
+        `Wait at ${selectDisplayText(leg.departureStop, leg.fromNameEn, language)} and board bus ${selectDisplayText(leg.routeName, leg.routeNameEn, language)}.${wait}`,
         "transit_board",
         "BUS",
       ),
       transitInstruction(
-        `Get off at ${leg.arrivalStop}.`,
+        `Get off at ${selectDisplayText(leg.arrivalStop, leg.toNameEn, language)}.`,
         "transit_alight",
         "BUS",
       ),
@@ -714,8 +779,8 @@ function busInstructions(
     typeof leg.estimatedWaitMinutes === "number" && leg.estimatedWaitMinutes > 0
       ? `，預估等候約 ${leg.estimatedWaitMinutes} 分鐘`
       : "";
-  const board = `請在「${leg.departureStop}」站牌等候，搭乘公車「${leg.routeName}」${waitText}。`;
-  const alight = `抵達「${leg.arrivalStop}」站後請下車。`;
+  const board = `請在「${selectDisplayText(leg.departureStop, leg.fromNameEn, language)}」站牌等候，搭乘公車「${selectDisplayText(leg.routeName, leg.routeNameEn, language)}」${waitText}。`;
+  const alight = `抵達「${selectDisplayText(leg.arrivalStop, leg.toNameEn, language)}」站後請下車。`;
   return [
     transitInstruction(board, "transit_board", "BUS"),
     transitInstruction(alight, "transit_alight", "BUS"),
@@ -741,12 +806,12 @@ function metroInstructions(
       : " Check the station's accessible facilities before entering.";
     return [
       transitInstruction(
-        `Take ${system} ${leg.lineName} from ${leg.departureStation} toward ${leg.arrivalStation}.${ride}${facility}`,
+        `Take ${system} ${selectDisplayText(leg.lineName, leg.routeNameEn, language)} from ${selectDisplayText(leg.departureStation, leg.fromNameEn, language)} toward ${selectDisplayText(leg.arrivalStation, leg.toNameEn, language)}.${ride}${facility}`,
         "transit_board",
         "METRO",
       ),
       transitInstruction(
-        `Get off at ${leg.arrivalStation}.`,
+        `Get off at ${selectDisplayText(leg.arrivalStation, leg.toNameEn, language)}.`,
         "transit_alight",
         "METRO",
       ),
@@ -757,8 +822,8 @@ function metroInstructions(
   const facility = leg.facilityHighlights?.some((f) => f.includes("電梯"))
     ? "請優先使用電梯進站。"
     : "請留意進站無障礙設施狀況。";
-  const board = `請搭乘${system}「${leg.lineName}」，在「${leg.departureStation}」站上車，往「${leg.arrivalStation}」方向${ride}。${facility}`;
-  const alight = `請在「${leg.arrivalStation}」站下車。`;
+  const board = `請搭乘${system}「${selectDisplayText(leg.lineName, leg.routeNameEn, language)}」，在「${selectDisplayText(leg.departureStation, leg.fromNameEn, language)}」站上車，往「${selectDisplayText(leg.arrivalStation, leg.toNameEn, language)}」方向${ride}。${facility}`;
+  const alight = `請在「${selectDisplayText(leg.arrivalStation, leg.toNameEn, language)}」站下車。`;
   return [
     transitInstruction(board, "transit_board", "METRO"),
     transitInstruction(alight, "transit_alight", "METRO"),
@@ -774,12 +839,12 @@ function thsrInstructions(
   if (language === "en") {
     return [
       transitInstruction(
-        `Take Taiwan High Speed Rail train ${leg.trainNo} from ${leg.departureStation}${dep ? ` at ${dep}` : ""} to ${leg.arrivalStation}${arr ? `, arriving at ${arr}` : ""}.`,
+        `Take Taiwan High Speed Rail train ${leg.trainNo} from ${selectDisplayText(leg.departureStation, leg.fromNameEn, language)}${dep ? ` at ${dep}` : ""} to ${selectDisplayText(leg.arrivalStation, leg.toNameEn, language)}${arr ? `, arriving at ${arr}` : ""}.`,
         "transit_board",
         "THSR",
       ),
       transitInstruction(
-        `Get off at ${leg.arrivalStation}.`,
+        `Get off at ${selectDisplayText(leg.arrivalStation, leg.toNameEn, language)}.`,
         "transit_alight",
         "THSR",
       ),
@@ -787,8 +852,8 @@ function thsrInstructions(
   }
   const depText = dep ? `預計 ${dep} ` : "";
   const arrText = arr ? `，${arr} 抵達` : "，抵達";
-  const board = `請搭乘高鐵 ${leg.trainNo} 次列車，${depText}由「${leg.departureStation}」出發${arrText}「${leg.arrivalStation}」。`;
-  const alight = `請在「${leg.arrivalStation}」站下車。`;
+  const board = `請搭乘高鐵 ${leg.trainNo} 次列車，${depText}由「${selectDisplayText(leg.departureStation, leg.fromNameEn, language)}」出發${arrText}「${selectDisplayText(leg.arrivalStation, leg.toNameEn, language)}」。`;
+  const alight = `請在「${selectDisplayText(leg.arrivalStation, leg.toNameEn, language)}」站下車。`;
   return [
     transitInstruction(board, "transit_board", "THSR"),
     transitInstruction(alight, "transit_alight", "THSR"),
@@ -804,12 +869,12 @@ function traInstructions(
   if (language === "en") {
     return [
       transitInstruction(
-        `Take Taiwan Railways ${leg.trainTypeName ? `${leg.trainTypeName} ` : ""}train ${leg.trainNo} from ${leg.departureStation}${dep ? ` at ${dep}` : ""} to ${leg.arrivalStation}${arr ? `, arriving at ${arr}` : ""}.`,
+        `Take Taiwan Railways ${selectDisplayText(leg.trainTypeName, leg.routeNameEn, language) ? `${selectDisplayText(leg.trainTypeName, leg.routeNameEn, language)} ` : ""}train ${leg.trainNo} from ${selectDisplayText(leg.departureStation, leg.fromNameEn, language)}${dep ? ` at ${dep}` : ""} to ${selectDisplayText(leg.arrivalStation, leg.toNameEn, language)}${arr ? `, arriving at ${arr}` : ""}.`,
         "transit_board",
         "TRA",
       ),
       transitInstruction(
-        `Get off at ${leg.arrivalStation}.`,
+        `Get off at ${selectDisplayText(leg.arrivalStation, leg.toNameEn, language)}.`,
         "transit_alight",
         "TRA",
       ),
@@ -817,9 +882,15 @@ function traInstructions(
   }
   const depText = dep ? `預計 ${dep} ` : "";
   const arrText = arr ? `，${arr} 抵達` : "，抵達";
-  const trainType = leg.trainTypeName ? `${leg.trainTypeName} ` : "";
-  const board = `請搭乘台鐵${trainType}${leg.trainNo} 次，${depText}由「${leg.departureStation}」出發${arrText}「${leg.arrivalStation}」。`;
-  const alight = `請在「${leg.arrivalStation}」站下車。`;
+  const trainType = selectDisplayText(
+    leg.trainTypeName,
+    leg.routeNameEn,
+    language,
+  )
+    ? `${selectDisplayText(leg.trainTypeName, leg.routeNameEn, language)} `
+    : "";
+  const board = `請搭乘台鐵${trainType}${leg.trainNo} 次，${depText}由「${selectDisplayText(leg.departureStation, leg.fromNameEn, language)}」出發${arrText}「${selectDisplayText(leg.arrivalStation, leg.toNameEn, language)}」。`;
+  const alight = `請在「${selectDisplayText(leg.arrivalStation, leg.toNameEn, language)}」站下車。`;
   return [
     transitInstruction(board, "transit_board", "TRA"),
     transitInstruction(alight, "transit_alight", "TRA"),

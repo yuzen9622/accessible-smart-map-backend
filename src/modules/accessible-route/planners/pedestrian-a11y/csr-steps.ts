@@ -2,6 +2,7 @@ import type {
   AccessibilityMode,
   WalkAbsoluteDirection,
   WalkStep,
+  WalkStepStreetName,
 } from "../../../../types/route";
 import {
   calcBearing,
@@ -292,4 +293,43 @@ export function buildCsrWalkSteps(
   }
 
   return steps;
+}
+
+/** Source names travel beside steps; they never change the nine machine fields. */
+export function buildCsrStepStreetNames(
+  graph: PedGraph,
+  edgeAttrPath: Int32Array,
+  steps: readonly WalkStep[],
+): WalkStepStreetName[] {
+  const names: WalkStepStreetName[] = [];
+  for (
+    let index = 0;
+    index < Math.min(edgeAttrPath.length, steps.length);
+    index += 1
+  ) {
+    const attr = edgeAttrPath[index];
+    const englishIndex = graph.edgeStreetNameEn?.[attr] ?? -1;
+    const nameEn =
+      englishIndex >= 0
+        ? graph.streetNamesEn?.[englishIndex]?.trim()
+        : undefined;
+    const canonicalIndex = graph.edgeStreetName[attr];
+    const canonical =
+      canonicalIndex >= 0 ? graph.streetNames[canonicalIndex] : "";
+    const step = steps[index];
+    if (
+      !nameEn ||
+      !canonical ||
+      step.bogusName ||
+      step.streetName !== canonical
+    )
+      continue;
+    names.push({
+      index,
+      streetName: canonical,
+      nameEn,
+      displayName: canonical,
+    });
+  }
+  return names;
 }

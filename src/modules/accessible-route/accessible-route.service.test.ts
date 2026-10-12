@@ -1,4 +1,13 @@
+import express from "express";
+import requestHttp from "supertest";
+import { createAccessibleRouteRouter } from "./accessible-route.router";
+import { AccessibleRouteSchema } from "./accessible-route.schema";
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { lookupRouteNameSources } from "./route-display-enrichment.repository";
+vi.mock("./route-display-enrichment.repository", () => ({
+  lookupRouteNameSources: vi.fn(),
+  trainNameKey: (system: string, id: string) => `${system}:${id}`,
+}));
 
 // Mock tdxFetch to prevent real network calls during transit route enrichment
 vi.mock("../../adapters/taipei-metro-notice.adapter", () => ({
@@ -110,6 +119,7 @@ vi.mock("./navigation-state.repository", async (importActual) => {
     await importActual<typeof import("./navigation-state.repository")>();
   return {
     ...actual,
+    storeInitialNavigationEnvelope: vi.fn(),
     readNavigationTokenStrict: vi.fn(),
     beginReroute: vi.fn(),
     finalizeReroute: vi.fn(),
@@ -217,6 +227,12 @@ const hasParkingGuide = (hl: string[]) =>
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.mocked(lookupRouteNameSources).mockResolvedValue({
+    busStops: new Map(),
+    busRoutes: new Map(),
+    metroStations: new Map(),
+    trainStations: new Map(),
+  });
   vi.mocked(BusStopModel.findOne).mockReturnValue({
     select: () => ({ lean: () => Promise.resolve({ city: "Taipei" }) }),
   } as any);
@@ -970,6 +986,118 @@ describe("planAccessibleRouteFromRequest walk mode CSR selection", () => {
     expect(leg.type === "WALK" ? leg.a11yPoints : undefined).toEqual([
       { type: "curb_ramp", location: [121.555, 25.035] },
     ]);
+  });
+
+  it.each(["en", "zh-TW", undefined] as const)(
+    "preserves CSR source sidecars and WALK9 through real service for %s",
+    async (language) => {
+      const plan = csrWalkPlan();
+      plan.steps = [
+        {
+          ...plan.steps[0],
+          streetName: "中山路",
+          bogusName: false,
+          distanceM: 70,
+        },
+      ];
+      plan.stepStreetNames = [
+        {
+          index: 0,
+          streetName: "中山路",
+          nameEn: "Source Road",
+          displayName: "中山路",
+        },
+      ];
+      vi.mocked(planCsrWalkRoute).mockResolvedValue({
+        status: "ok",
+        plans: [plan],
+      });
+      const res = await planAccessibleRouteFromRequest({
+        ...walkRequest,
+        ...(language ? { language } : {}),
+      });
+      const leg = okData(res).routes[0].legs[0];
+      expect(leg.type).toBe("WALK");
+      if (leg.type !== "WALK") return;
+      expect(leg.stepStreetNames).toEqual([
+        {
+          index: 0,
+          streetName: "中山路",
+          nameEn: "Source Road",
+          displayName: language === "en" ? "Source Road" : "中山路",
+        },
+      ]);
+      expect(Object.keys(leg.steps![0])).toHaveLength(9);
+      expect(leg.steps![0].streetName).toBe("中山路");
+      expect(vi.mocked(lookupRouteNameSources)).toHaveBeenCalledTimes(
+        language ? 1 : 0,
+      );
+    },
+  );
+
+  it("serves real enrichment through HTTP and strict schemas with exactly canonical WALK9", async () => {
+    const plan = csrWalkPlan();
+    plan.steps = [
+      {
+        ...plan.steps[0],
+        streetName: "中山路",
+        bogusName: false,
+        distanceM: 70,
+      },
+    ];
+    plan.stepStreetNames = [
+      {
+        index: 0,
+        streetName: "中山路",
+        nameEn: "Source Road",
+        displayName: "中山路",
+      },
+    ];
+    vi.mocked(planCsrWalkRoute).mockResolvedValue({
+      status: "ok",
+      plans: [plan],
+    });
+    const app = express();
+    app.use(express.json());
+    app.use(createAccessibleRouteRouter());
+    for (const language of ["en", "zh-TW"] as const) {
+      const response = await requestHttp(app)
+        .post("/accessible-route")
+        .send({ ...walkRequest, language });
+      expect(response.status).toBe(200);
+      const result = response.body.data.routes[0];
+      expect(AccessibleRouteSchema.safeParse(result).success).toBe(true);
+      const leg = result.legs[0];
+      expect(leg.stepStreetNames).toEqual([
+        {
+          index: 0,
+          streetName: "中山路",
+          nameEn: "Source Road",
+          displayName: language === "en" ? "Source Road" : "中山路",
+        },
+      ]);
+      expect(Object.keys(leg.steps[0]).sort()).toEqual(
+        [
+          "relativeDirection",
+          "absoluteDirection",
+          "streetName",
+          "bogusName",
+          "area",
+          "stairs",
+          "steepSlope",
+          "distanceM",
+          "location",
+        ].sort(),
+      );
+      expect(leg.steps[0].streetName).toBe("中山路");
+    }
+    expect(
+      (
+        await requestHttp(app)
+          .post("/accessible-route")
+          .send({ ...walkRequest, language: "fr" })
+      ).status,
+    ).toBe(400);
   });
 
   it("carries the CSR plan's steps onto the WalkLeg", async () => {
@@ -2012,6 +2140,61 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
     accessibilityHighlights: ["低底盤公車直達"],
   };
 
+  it.each(["en", "zh-TW", undefined] as const)(
+    "uses real enrichment after planning and preserves canonical route facts for %s",
+    async (language) => {
+      const raw = structuredClone(rooseveltBusRoute);
+      const bus = raw.legs.find((leg) => leg.type === "BUS")!;
+      Object.assign(bus, {
+        departureStopId: "TPE-source",
+        arrivalStopId: "KHH-source",
+        subRouteUid: "TPE-route",
+      });
+      vi.mocked(planOtpRouteDetailed).mockResolvedValue(
+        otpTransitOk([raw] as any),
+      );
+      vi.mocked(lookupRouteNameSources).mockResolvedValue({
+        busStops: new Map([
+          ["TPE-source", "Taipei Source"],
+          ["KHH-source", "Other Source"],
+        ]),
+        busRoutes: new Map([["TPE-route", "Official Bus"]]),
+        metroStations: new Map(),
+        trainStations: new Map(),
+      });
+      const res = await planAccessibleRouteFromRequest({
+        travelMode: "transit",
+        origin: nccuOrigin,
+        destination: mainStationDest,
+        mode: "wheelchair",
+        ...(language ? { language } : {}),
+      });
+      const leg = okData(res).routes[0].legs.find((leg) => leg.type === "BUS")!;
+      expect(leg).toMatchObject({
+        departureStop: bus.departureStop,
+        arrivalStop: bus.arrivalStop,
+        routeName: bus.routeName,
+        departureStopId: "TPE-source",
+        arrivalStopId: "KHH-source",
+        subRouteUid: "TPE-route",
+        polyline: bus.polyline,
+      });
+      if (language)
+        expect(leg).toMatchObject({
+          fromNameEn: "Taipei Source",
+          toNameEn: "Other Source",
+          routeNameEn: "Official Bus",
+          fromDisplayName:
+            language === "en" ? "Taipei Source" : bus.departureStop,
+          toDisplayName: language === "en" ? "Other Source" : bus.arrivalStop,
+        });
+      else expect(leg).not.toHaveProperty("fromDisplayName");
+      expect(vi.mocked(lookupRouteNameSources)).toHaveBeenCalledTimes(
+        language ? 1 : 0,
+      );
+    },
+  );
+
   it("propagates English through real scoring and summary generation without changing route facts", async () => {
     const actual = await vi.importActual<
       typeof import("./planners/route-a11y")
@@ -2044,7 +2227,30 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
       );
       expect(english[i].accessibilitySummary).not.toMatch(/[\u4e00-\u9fff]/);
       expect(chinese[i].accessibilitySummary).toMatch(/[\u4e00-\u9fff]/);
-      expect(english[i].legs).toEqual(chinese[i].legs);
+      // Explicit-language presentation adds fields; canonical planning facts remain exact.
+      expect(
+        english[i].legs.map((leg) => {
+          const {
+            fromDisplayName: _from,
+            toDisplayName: _to,
+            routeDisplayName: _route,
+            ...canonical
+          } = leg as typeof leg & {
+            fromDisplayName?: string;
+            toDisplayName?: string;
+            routeDisplayName?: string;
+          };
+          return canonical;
+        }),
+      ).toEqual(chinese[i].legs);
+      expect(
+        english[i].legs.every(
+          (leg) => "fromDisplayName" in leg && "toDisplayName" in leg,
+        ),
+      ).toBe(true);
+      expect(chinese[i].legs.every((leg) => !("fromDisplayName" in leg))).toBe(
+        true,
+      );
       expect(english[i].accessibilityScore).toBe(chinese[i].accessibilityScore);
       expect(english[i].scoreComponents).toEqual(chinese[i].scoreComponents);
       expect(
@@ -2439,8 +2645,19 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
     });
 
     it("re-plans the Taipei walk option with CSR and ranks it by the same cost", async () => {
+      const oldWalk = otpWalkOnly(30);
+      Object.assign(oldWalk.legs[0], {
+        stepStreetNames: [
+          {
+            index: 0,
+            streetName: "舊路",
+            nameEn: "Stale Road",
+            displayName: "Stale Road",
+          },
+        ],
+      });
       vi.mocked(planOtpRouteDetailed).mockResolvedValue(
-        otpTransitOk([rooseveltBusRoute, otpWalkOnly(30)] as any),
+        otpTransitOk([rooseveltBusRoute, oldWalk] as any),
       );
       vi.mocked(planCsrWalkRoute).mockResolvedValue({
         status: "ok",
@@ -2459,6 +2676,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
       expect(routes.some((r) => r.routeName === "步行路線")).toBe(false);
       const walk = routes.find((r) => r.legs.every((l) => l.type === "WALK"));
       expect(walk).toMatchObject({ engine: "pedestrian-a11y" });
+      expect(walk?.legs[0]).not.toHaveProperty("stepStreetNames");
       expect(typeof walk?.accessibilityScore).toBe("number");
       expect(okData(res).fallback).toBeUndefined();
     });

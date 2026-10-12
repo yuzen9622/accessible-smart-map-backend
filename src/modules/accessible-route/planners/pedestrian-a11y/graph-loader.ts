@@ -174,7 +174,9 @@ const EDGE_PAGE_QUERY_WITH_STREET_NAME = `
     attr_meta->'gov_sidewalk_source_id'->>'value' AS sidewalk_source_id,
     attr_meta->'gov_sidewalk_source_id'->>'attributes_applied' AS sidewalk_attributes_applied,
     attr_meta->'sidewalk_ramp_count'->>'value' AS sidewalk_ramp_count,
-    way_name.name AS street_name
+    way_name.name AS street_name,
+    -- Row JSON keeps legacy lookup tables without name_en readable.
+    to_jsonb(way_name)->>'name_en' AS street_name_en
   FROM ped_edge
   LEFT JOIN ped_osm_way_name AS way_name
     ON way_name.osm_way_id = CASE
@@ -229,6 +231,7 @@ interface EdgeRow extends EdgeCountRow {
   sidewalk_attributes_applied?: unknown;
   sidewalk_ramp_count: unknown;
   street_name?: unknown;
+  street_name_en?: unknown;
 }
 
 interface WayNameTableRow {
@@ -276,6 +279,7 @@ interface EdgeStorage {
   edgeSidewalkId: Int32Array;
   edgeSidewalkRampCount: Uint16Array;
   edgeStreetName: Int32Array;
+  edgeStreetNameEn: Int32Array;
 }
 
 interface SidewalkTables {
@@ -284,6 +288,7 @@ interface SidewalkTables {
 
 interface StreetNameTables {
   streetNames: readonly string[];
+  streetNamesEn: readonly string[];
 }
 
 interface EdgeCountResult {
@@ -487,6 +492,8 @@ function createEdgeStorage(directedEdgeCount: number): EdgeStorage {
   edgeSidewalkId.fill(-1);
   const edgeStreetName = new Int32Array(directedEdgeCount);
   edgeStreetName.fill(-1);
+  const edgeStreetNameEn = new Int32Array(directedEdgeCount);
+  edgeStreetNameEn.fill(-1);
   return {
     adjTarget: new Int32Array(directedEdgeCount),
     adjAttr: new Int32Array(directedEdgeCount),
@@ -504,6 +511,7 @@ function createEdgeStorage(directedEdgeCount: number): EdgeStorage {
     edgeSidewalkId,
     edgeSidewalkRampCount: new Uint16Array(directedEdgeCount),
     edgeStreetName,
+    edgeStreetNameEn,
   };
 }
 
@@ -904,6 +912,8 @@ async function fillEdges(
   const sidewalkIds: string[] = [];
   const streetNameIndexes = new Map<string, number>();
   const streetNames: string[] = [];
+  const englishIndexes = new Map<string, number>();
+  const streetNamesEn: string[] = [];
   let cursor = BigInt(MIN_BIGINT);
   let edgeIndex = 0;
 
@@ -1004,6 +1014,19 @@ async function fillEdges(
         }
         storage.edgeStreetName[edgeIndex] = streetNameIndex;
       }
+      const english = nullableText(
+        row.street_name_en,
+        "street_name_en",
+      )?.trim();
+      if (english) {
+        let englishIndex = englishIndexes.get(english);
+        if (englishIndex === undefined) {
+          englishIndex = streetNamesEn.length;
+          englishIndexes.set(english, englishIndex);
+          streetNamesEn.push(english);
+        }
+        storage.edgeStreetNameEn[edgeIndex] = englishIndex;
+      }
       writeOffset[from.denseId] += 1;
       cursor = edgeId;
       edgeIndex += 1;
@@ -1024,6 +1047,7 @@ async function fillEdges(
   return {
     sidewalkIds: Object.freeze(sidewalkIds),
     streetNames: Object.freeze(streetNames),
+    streetNamesEn: Object.freeze(streetNamesEn),
   };
 }
 
@@ -1063,7 +1087,7 @@ export async function loadPedGraph(
       "[graph-loader] ped_osm_way_name not found; street names disabled until the backfill runs",
     );
   }
-  const { sidewalkIds, streetNames } = await fillEdges(
+  const { sidewalkIds, streetNames, streetNamesEn } = await fillEdges(
     client,
     version.versionId,
     nodeStorage.originalNodeId,
@@ -1136,6 +1160,8 @@ export async function loadPedGraph(
     edgeSidewalkRampCount: edgeStorage.edgeSidewalkRampCount,
     edgeStreetName: edgeStorage.edgeStreetName,
     streetNames,
+    edgeStreetNameEn: edgeStorage.edgeStreetNameEn,
+    streetNamesEn,
     edgeRampPoints,
   };
 }

@@ -226,6 +226,9 @@ export interface PedGraph {
   /** Interned index into `streetNames`, or -1 when this edge's way has no recorded name. */
   edgeStreetName: Int32Array;
   readonly streetNames: readonly string[];
+  /** Source name:en indexed per edge, never used for routing or canonical interning. */
+  edgeStreetNameEn?: Int32Array;
+  readonly streetNamesEn?: readonly string[];
 
   /**
    * Curb ramp point coordinates recorded near this dense edge, WGS84

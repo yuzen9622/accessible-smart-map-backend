@@ -4,6 +4,7 @@ import type {
   WalkA11yPoint,
   WalkA11ySegment,
   WalkStep,
+  WalkStepStreetName,
 } from "../../../../types/route";
 import type { LngLat } from "./ped-graph-geometry.repository";
 
@@ -77,9 +78,11 @@ export interface CsrWalkPlan {
   a11yPoints: WalkA11yPoint[];
   /**
    * Turn-by-turn steps derived from the selected edges' geometry and facility
-   * types. Carries no street names — the CSR graph has none.
+   * types. Canonical street names come from the optional OSM lookup table.
    */
   steps: WalkStep[];
+  /** Optional source English beside, never inside, the machine steps. */
+  stepStreetNames?: WalkStepStreetName[];
   /**
    * De-duplicated ramp total recorded on the government sidewalk segments
    * this plan travels along. See `sumSidewalkRampCount`.

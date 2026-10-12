@@ -4,6 +4,7 @@ import {
   STANDARD_STEEP_SLOPE_THRESHOLD_PERCENT,
   WHEELCHAIR_STEEP_SLOPE_THRESHOLD_PERCENT,
   buildCsrWalkSteps,
+  buildCsrStepStreetNames,
   turnDirection,
 } from "./csr-steps";
 import { EDGE_TYPE, NODE_FLAG, type PedGraph } from "./graph.types";
@@ -120,6 +121,98 @@ function nodes(
 const BASE: LngLat = [121, 25];
 const NORTH: LngLat = [121, 25.001];
 const EAST: LngLat = [121.001, 25.001];
+
+describe("CSR source street sidecar", () => {
+  it("uses traversed edge identity and preserves exactly nine frozen machine fields", () => {
+    const graph = {
+      ...createGraph(
+        [{ streetName: "中正路" }, { streetName: "中正路" }],
+        nodes(3),
+      ),
+      edgeStreetNameEn: Int32Array.from([0, 1]),
+      streetNamesEn: Object.freeze(["Zhongzheng Road", "Jhongjheng Road"]),
+    };
+    const path = Int32Array.from([1, 0]);
+    const steps = buildCsrWalkSteps(
+      graph,
+      Int32Array.from([0, 1, 2]),
+      path,
+      contiguousSpans(2),
+      [BASE, NORTH, EAST],
+      0,
+      "normal",
+    );
+    const original = structuredClone(steps);
+    steps.forEach(Object.freeze);
+    Object.freeze(steps);
+    expect(buildCsrStepStreetNames(graph, path, steps)).toEqual([
+      {
+        index: 0,
+        streetName: "中正路",
+        nameEn: "Jhongjheng Road",
+        displayName: "中正路",
+      },
+      {
+        index: 1,
+        streetName: "中正路",
+        nameEn: "Zhongzheng Road",
+        displayName: "中正路",
+      },
+    ]);
+    expect(steps).toEqual(original);
+    for (const step of steps)
+      expect(Object.keys(step).sort()).toEqual(
+        [
+          "relativeDirection",
+          "absoluteDirection",
+          "streetName",
+          "bogusName",
+          "area",
+          "stairs",
+          "steepSlope",
+          "distanceM",
+          "location",
+        ].sort(),
+      );
+  });
+
+  it("omits missing English, old graph sources, and stale canonical step mappings", () => {
+    const graph = createGraph([{ streetName: "道路" }], nodes(2));
+    const path = Int32Array.from([0]);
+    const steps = buildCsrWalkSteps(
+      graph,
+      Int32Array.from([0, 1]),
+      path,
+      contiguousSpans(1),
+      [BASE, NORTH],
+      0,
+      "normal",
+    );
+    expect(buildCsrStepStreetNames(graph, path, steps)).toEqual([]);
+    expect(
+      buildCsrStepStreetNames(
+        {
+          ...graph,
+          edgeStreetNameEn: Int32Array.from([0]),
+          streetNamesEn: ["  "],
+        },
+        path,
+        steps,
+      ),
+    ).toEqual([]);
+    expect(
+      buildCsrStepStreetNames(
+        {
+          ...graph,
+          edgeStreetNameEn: Int32Array.from([0]),
+          streetNamesEn: ["Road"],
+        },
+        path,
+        [{ ...steps[0], streetName: "別的道路" }],
+      ),
+    ).toEqual([]);
+  });
+});
 
 describe("turnDirection", () => {
   it("pins the 20° boundary, left and right", () => {

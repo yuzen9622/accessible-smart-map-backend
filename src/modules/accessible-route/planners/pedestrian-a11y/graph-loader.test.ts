@@ -107,7 +107,9 @@ function createQueryable(fixture: GraphFixture): {
         );
         if (!sql.includes("ped_osm_way_name")) {
           return {
-            rows: page.map(({ street_name, ...rest }) => rest) as R[],
+            rows: page.map(
+              ({ street_name, street_name_en, ...rest }) => rest,
+            ) as R[],
           };
         }
         return { rows: page as R[] };
@@ -273,6 +275,66 @@ function expectCoreGraph(graph: PedGraph): void {
 }
 
 describe("loadPedGraph", () => {
+  it("keeps source English per edge without merging equal canonical names or changing routing arrays", async () => {
+    const fixture = coreFixture();
+    fixture.edges[0].street_name = "中正路";
+    fixture.edges[1].street_name = "中正路";
+    const before = await loadPedGraph(createQueryable(fixture).client);
+    fixture.edges[0].street_name_en = " Zhongzheng Road ";
+    fixture.edges[1].street_name_en = "Jhongjheng Road";
+    const { client, calls } = createQueryable(fixture);
+    const after = await loadPedGraph(client);
+    expect(after.streetNames).toEqual(["中正路"]);
+    expect(after.streetNamesEn).toEqual(["Zhongzheng Road", "Jhongjheng Road"]);
+    expect(Array.from(after.edgeStreetNameEn ?? [])).toEqual([0, 1, -1]);
+    expect(Object.isFrozen(after.streetNamesEn)).toBe(true);
+    const {
+      edgeStreetNameEn: _beforeEn,
+      streetNamesEn: _beforeNames,
+      ...beforeCore
+    } = before;
+    const {
+      edgeStreetNameEn: _afterEn,
+      streetNamesEn: _afterNames,
+      ...afterCore
+    } = after;
+    expect(afterCore).toEqual(beforeCore);
+    expect(before.streetNamesEn).toEqual([]);
+    expect(
+      calls.some((call) =>
+        call.sql.includes("to_jsonb(way_name)->>'name_en' AS street_name_en"),
+      ),
+    ).toBe(true);
+  });
+
+  it.each([undefined, null, "", "   "])(
+    "loads legacy or blank English (%j) without inventing translations",
+    async (english) => {
+      const fixture = coreFixture();
+      fixture.edges[0].street_name = "羅斯福路";
+      fixture.edges[0].street_name_en = english;
+      const graph = await loadPedGraph(createQueryable(fixture).client);
+      expect(graph.streetNames).toEqual(["羅斯福路"]);
+      expect(graph.streetNamesEn).toEqual([]);
+      expect(Array.from(graph.edgeStreetNameEn ?? [])).toEqual([-1, -1, -1]);
+    },
+  );
+
+  it("loads refreshed source names without mutating an earlier graph snapshot", async () => {
+    const fixture = coreFixture();
+    fixture.edges[0].street_name = "道路";
+    fixture.edges[0].street_name_en = "Old Road";
+    const first = await loadPedGraph(createQueryable(fixture).client);
+    fixture.edges[0].street_name_en = "Updated Road";
+    const second = await loadPedGraph(createQueryable(fixture).client);
+    expect(first.streetNamesEn).toEqual(["Old Road"]);
+    expect(second.streetNamesEn).toEqual(["Updated Road"]);
+    fixture.wayNameTableExists = false;
+    const missing = await loadPedGraph(createQueryable(fixture).client);
+    expect(missing.streetNames).toEqual([]);
+    expect(missing.streetNamesEn).toEqual([]);
+  });
+
   it("loads only the active version into dense CSR storage when omitted", async () => {
     const fixture = coreFixture();
     fixture.versions.unshift({

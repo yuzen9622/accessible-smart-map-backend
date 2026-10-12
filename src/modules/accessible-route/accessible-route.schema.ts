@@ -177,6 +177,7 @@ export const AccessibleRouteRerouteBodySchema = z
 const OsmA11ySchema = z
   .object({
     osmId: z.string().openapi({ example: "node/123456789" }),
+    displayName: z.string().optional(),
     name: z.string().optional().openapi({ example: "市政府站 2 號出口電梯" }),
     category: z
       .enum(["wheelchair_accessible", "kerb_cut", "ramp", "elevator", "toilet"])
@@ -218,10 +219,32 @@ const A11yRefsSchema = z
       "僅 compact 格式：對應路線層級 facilities 字典的 osmId 鍵（此時各段設施陣列為空）。",
   });
 
+const RouteSourceNameFields = {
+  fromNameEn: z.string().optional(),
+  toNameEn: z.string().optional(),
+  routeNameEn: z.string().optional(),
+  fromDisplayName: z.string().optional(),
+  toDisplayName: z.string().optional(),
+  routeDisplayName: z.string().optional(),
+};
+
 const WalkLegSchema = z
   .object({
+    ...RouteSourceNameFields,
     type: z.literal("WALK").openapi({ example: "WALK" }),
     a11yRefs: A11yRefsSchema,
+    stepStreetNames: z
+      .array(
+        z
+          .object({
+            index: z.number().int().nonnegative(),
+            streetName: z.string(),
+            nameEn: z.string(),
+            displayName: z.string(),
+          })
+          .strict(),
+      )
+      .optional(),
     from: z.string().openapi({ example: "起點" }),
     to: z.string().openapi({ example: "市政府站" }),
     distanceM: z.number().openapi({ example: 320 }),
@@ -436,6 +459,8 @@ const WaitInfoSchema = z
 const IntermediateStopSchema = z
   .object({
     name: z.string().openapi({ example: "中間站名" }),
+    nameEn: z.string().optional(),
+    displayName: z.string().optional(),
     stationUid: z.string().optional().openapi({ example: "TRTC-R08" }),
     location: z
       .tuple([z.number(), z.number()])
@@ -526,6 +551,7 @@ const LowFloorAlternativeSchema = z
 
 const BusLegSchema = z
   .object({
+    ...RouteSourceNameFields,
     type: z.literal("BUS").openapi({ example: "BUS" }),
     scheduledTrip: z
       .object({
@@ -667,6 +693,7 @@ const MetroAlertResultSchema = z
 
 const MetroLegSchema = z
   .object({
+    ...RouteSourceNameFields,
     type: z.literal("METRO").openapi({ example: "METRO" }),
     a11yRefs: A11yRefsSchema,
     railSystem: z.string().openapi({ example: "TRTC" }),
@@ -716,6 +743,7 @@ const MetroLegSchema = z
 
 const ThsrLegSchema = z
   .object({
+    ...RouteSourceNameFields,
     type: z.literal("THSR").openapi({ example: "THSR" }),
     a11yRefs: A11yRefsSchema,
     trainNo: z.string().openapi({ example: "0617" }),
@@ -752,6 +780,7 @@ const ThsrLegSchema = z
 
 const TraLegSchema = z
   .object({
+    ...RouteSourceNameFields,
     type: z.literal("TRA").openapi({ example: "TRA" }),
     a11yRefs: A11yRefsSchema,
     trainNo: z.string().openapi({ example: "0131" }),

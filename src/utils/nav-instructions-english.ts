@@ -53,7 +53,7 @@ function distanceSuffix(distanceM: number): string {
   return `, then continue for ${distance}`;
 }
 
-/** Keep source names intact; the route does not carry translated name pairs. */
+/** Render the caller-selected source street name on a temporary narration copy. */
 export function englishWalkInstruction(
   step: WalkStep,
   bearing: number | null,

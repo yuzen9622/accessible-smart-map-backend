@@ -43,6 +43,7 @@ const A11Y_TAG_WHITELIST = new Set<string>([
   "lit",
   "capacity:disabled",
   "name",
+  "name:en",
   "opening_hours",
   "level",
   "amenity",
@@ -61,6 +62,8 @@ export function slimFacility(f: IOsmA11y): SlimA11y {
     location: f.location,
   };
   if (f.name) slim.name = f.name;
+  if ("displayName" in f && typeof f.displayName === "string")
+    slim.displayName = f.displayName;
   if (f.wheelchair) slim.wheelchair = f.wheelchair;
   const src = f.tags ?? {};
   let tags: Record<string, string> | undefined;

@@ -43,7 +43,7 @@ import type {
   CsrWalkResult,
 } from "./csr-walk.types";
 import { buildA11ySegments, type EdgeGeometrySpan } from "./a11y-segments";
-import { buildCsrWalkSteps } from "./csr-steps";
+import { buildCsrStepStreetNames, buildCsrWalkSteps } from "./csr-steps";
 import { collectRampPoints } from "./ramp-points";
 import { sumSidewalkRampCount } from "./sidewalk-ramp-count";
 import { snapToGraph, type EdgeIndex, type SnapResult } from "./spatial-index";
@@ -725,6 +725,20 @@ export async function planCsrWalkRoute(
     const connectorDistanceM = origin.distanceM + destination.distanceM;
     const connectorDurationS = connectorDistanceM / profile.walkSpeedMps;
     const connectors = addSnapConnectors(geometry.polyline, from, to);
+    const steps = buildCsrWalkSteps(
+      graph,
+      route.nodePath,
+      route.edgeAttrPath,
+      geometry.spans,
+      connectors.polyline,
+      connectors.indexOffset,
+      options.mode,
+    );
+    const stepStreetNames = buildCsrStepStreetNames(
+      graph,
+      route.edgeAttrPath,
+      steps,
+    );
 
     plans.push({
       polyline: connectors.polyline,
@@ -743,15 +757,8 @@ export async function planCsrWalkRoute(
         geometry.spans,
         connectors.indexOffset,
       ),
-      steps: buildCsrWalkSteps(
-        graph,
-        route.nodePath,
-        route.edgeAttrPath,
-        geometry.spans,
-        connectors.polyline,
-        connectors.indexOffset,
-        options.mode,
-      ),
+      steps,
+      ...(stepStreetNames.length > 0 ? { stepStreetNames } : {}),
       sidewalkRampCount: sumSidewalkRampCount(graph, route.edgeAttrPath),
       a11yPoints: collectRampPoints(graph, route.edgeAttrPath),
       diagnostics: {

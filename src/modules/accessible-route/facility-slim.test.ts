@@ -13,6 +13,21 @@ const baseFacility: IOsmA11y = {
 } as unknown as IOsmA11y;
 
 describe("slimFacility", () => {
+  it("preserves canonical names, source name:en and presentation while slimming", () => {
+    const original = Object.freeze({
+      ...baseFacility,
+      name: "電梯",
+      displayName: "Lift",
+      tags: Object.freeze({ "name:en": "Lift", unrelated: "drop" }),
+    });
+    expect(slimFacility(original)).toMatchObject({
+      name: "電梯",
+      displayName: "Lift",
+      tags: { "name:en": "Lift" },
+    });
+    expect(slimFacility(original).tags).not.toHaveProperty("unrelated");
+    expect(original.name).toBe("電梯");
+  });
   it("keeps the handrail tag, so a downstream stairs/handrail check can still see it after slimming", () => {
     const slim = slimFacility({
       ...baseFacility,

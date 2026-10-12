@@ -874,6 +874,55 @@ describe("planCsrWalkRoute geometry assembly", () => {
     ]);
   });
 
+  it("carries source English beside identical steps without changing the chosen path or costs", async () => {
+    const graph = corridorGraph();
+    const canonicalGraph = {
+      ...graph,
+      edgeStreetName: new Int32Array(graph.directedEdgeCount).fill(0),
+      streetNames: Object.freeze(["羅斯福路"]),
+    };
+    serveGraph(canonicalGraph);
+    vi.mocked(getPedGraphClient).mockResolvedValue(
+      geometryClient({
+        "1000": lineString([
+          [TAIPEI_LNG, A_LAT],
+          [TAIPEI_LNG, B_LAT],
+        ]),
+        "1002": lineString([
+          [TAIPEI_LNG, B_LAT],
+          [TAIPEI_LNG, C_LAT],
+        ]),
+      }),
+    );
+    const before = await planCsrWalkRoute([originPoint, destinationPoint], {
+      mode: "normal",
+    });
+    serveGraph({
+      ...canonicalGraph,
+      edgeStreetNameEn: new Int32Array(graph.directedEdgeCount).fill(0),
+      streetNamesEn: Object.freeze(["Roosevelt Road"]),
+    });
+    const after = await planCsrWalkRoute([originPoint, destinationPoint], {
+      mode: "normal",
+    });
+    expect(before.status).toBe("ok");
+    expect(after.status).toBe("ok");
+    if (before.status !== "ok" || after.status !== "ok")
+      throw new Error("Expected the same valid corridor");
+    const { stepStreetNames, ...facts } = after.plans[0];
+    expect(facts).toEqual(before.plans[0]);
+    expect(stepStreetNames).toEqual(
+      before.plans[0].steps.map((step, index) => ({
+        index,
+        streetName: step.streetName,
+        nameEn: "Roosevelt Road",
+        displayName: step.streetName,
+      })),
+    );
+    expect(stepStreetNames).toHaveLength(2);
+    expect(before.plans[0].stepStreetNames).toBeUndefined();
+  });
+
   it("emits one step per traversed edge, each located on the returned polyline", async () => {
     serveGraph(corridorGraph());
     vi.mocked(getPedGraphClient).mockResolvedValue(

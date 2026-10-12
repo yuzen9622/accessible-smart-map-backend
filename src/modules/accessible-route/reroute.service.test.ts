@@ -179,6 +179,34 @@ describe("rerouteAccessibleRoute", () => {
     expect(planAccessibleRouteFromRequest).not.toHaveBeenCalled();
   });
 
+  it("replays the first source-backed result unchanged even if retry switches language", async () => {
+    const planned = route("source-result");
+    Object.assign(planned.legs[0], {
+      toNameEn: "Source Destination",
+      toDisplayName: "Source Destination",
+    });
+    planAccessibleRouteFromRequest.mockResolvedValue({
+      ok: true,
+      data: { routes: [planned] },
+    });
+    const first = await rerouteAccessibleRoute({ ...request, language: "en" });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.data.instructions[0].text).toContain("Source Destination");
+    const stored = JSON.parse(JSON.stringify(first.data));
+    beginReroute.mockResolvedValue({
+      status: "replay",
+      data: { ...stored, replayed: true },
+    });
+    const replay = await rerouteAccessibleRoute({
+      ...request,
+      language: "zh-TW",
+    });
+    expect(replay.ok && replay.data).toEqual({ ...stored, replayed: true });
+    expect(planAccessibleRouteFromRequest).toHaveBeenCalledTimes(1);
+    expect(finalizeReroute).toHaveBeenCalledTimes(1);
+  });
+
   it("serializes parallel same-id retries: only the acquired request replans and finalizes", async () => {
     beginReroute
       .mockResolvedValueOnce({ status: "acquired" })

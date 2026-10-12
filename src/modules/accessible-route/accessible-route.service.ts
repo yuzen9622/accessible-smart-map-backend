@@ -1,3 +1,6 @@
+import { copyWithDescriptors } from "../../utils/route-source-names";
+import { enrichRouteDisplayNames } from "./route-display-enrichment";
+import { normalizedStreetNames } from "../../utils/nav-instructions-engine";
 import { getCoordinates } from "../../adapters/google.adapter";
 import { resolveCity } from "../geography/city.service";
 import {
@@ -2555,8 +2558,9 @@ export async function planAccessibleRouteFromRequest(
     );
   }
 
-  const normalizedRoutes = routes.map((route) => {
-    const normalized = normalizeWalkSteps(route);
+  const displayRoutes = await enrichRouteDisplayNames(routes, body.language);
+  const normalizedRoutes = displayRoutes.map((route) => {
+    const normalized = normalizeWalkSteps(route, body.language);
     const warnings = normalized._warningMessages
       ? presentRouteMessages(
           normalized.warnings,
@@ -2689,13 +2693,27 @@ export async function planAccessibleRouteFromRequest(
  *   produces no usable result, and the whole route is left unchanged if
  *   normalization throws.
  */
-function normalizeWalkSteps(route: AccessibleRoute): AccessibleRoute {
+function normalizeWalkSteps(
+  route: AccessibleRoute,
+  language?: SupportedLang,
+): AccessibleRoute {
   try {
     const legs = route.legs.map((leg, index) => {
       if (leg.type !== "WALK") return leg;
       const normalizedSteps = normalizeWalkLegSteps(leg, index === 0);
       if (normalizedSteps.length === 0) return leg;
-      return { ...leg, steps: normalizedSteps };
+      return copyWithDescriptors(leg, {
+        steps: normalizedSteps,
+        ...(leg.stepStreetNames
+          ? {
+              stepStreetNames: normalizedStreetNames(
+                leg,
+                normalizedSteps,
+                language,
+              ),
+            }
+          : {}),
+      });
     });
     return Object.defineProperties(
       { ...route, legs },
@@ -3141,6 +3159,17 @@ function mergeAdjacentWalkLegs(
         ...(prev.steps || leg.steps
           ? { steps: [...(prev.steps ?? []), ...(leg.steps ?? [])] }
           : {}),
+        ...(prev.stepStreetNames || leg.stepStreetNames
+          ? {
+              stepStreetNames: [
+                ...(prev.stepStreetNames ?? []),
+                ...(leg.stepStreetNames ?? []).map((entry) => ({
+                  ...entry,
+                  index: entry.index + (prev.steps?.length ?? 0),
+                })),
+              ],
+            }
+          : {}),
         ...(prev.a11yRefs || leg.a11yRefs
           ? { a11yRefs: [...(prev.a11yRefs ?? []), ...(leg.a11yRefs ?? [])] }
           : {}),
@@ -3327,6 +3356,7 @@ function buildCsrWalkRoute(plans: readonly CsrWalkPlan[]): AccessibleRoute {
     exitInfo: null,
     a11ySegments: plan.a11ySegments,
     steps: plan.steps,
+    ...(plan.stepStreetNames ? { stepStreetNames: plan.stepStreetNames } : {}),
     sidewalkRampCount: plan.sidewalkRampCount,
     a11yPoints: plan.a11yPoints,
   }));
