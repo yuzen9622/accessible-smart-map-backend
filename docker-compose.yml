@@ -45,8 +45,6 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
-      mongo-init:
-        condition: service_completed_successfully
       redis:
         condition: service_healthy
       otp:
@@ -72,9 +70,12 @@ services:
     image: mongo:7
     container_name: mongo
     entrypoint: ["bash", "/opt/mongo/entrypoint.sh"]
+    # Reap any orphaned children during startup/shutdown.
+    init: true
+    stop_grace_period: 30s
     # Root creds enable auth on first init; the API connects as root with
     # authSource=admin (internal single-app DB). MONGO_ROOT_* come from .env.
-    environment: &mongo-auth
+    environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
     volumes:
@@ -83,11 +84,13 @@ services:
     configs:
       - source: mongo-entrypoint
         target: /opt/mongo/entrypoint.sh
+      - source: mongo-bootstrap
+        target: /opt/mongo/bootstrap.sh
       - source: mongo-init
         target: /opt/mongo/init.js
     ports:
       - "127.0.0.1:27018:27017"
-    # mongo-init initializes with auth; health only reads PRIMARY.
+    # Startup validates the topology; health is read-only and requires PRIMARY.
     healthcheck:
       test:
         - CMD
@@ -95,49 +98,15 @@ services:
         - --quiet
         - --eval
         - >-
+          if (!require('fs').existsSync('/tmp/mongo-ready')) quit(1);
           const h=db.hello();
           quit(h.setName === 'rs0' && h.isWritablePrimary ? 0 : 1)
       interval: 10s
       timeout: 5s
       retries: 5
-      # Allow the init job's 120s readiness + 30s election budget.
+      # Allow startup's 120s readiness + 30s election budget.
       start_period: 150s
     restart: unless-stopped
-
-  mongo-init:
-    image: mongo:7
-    # One-shot init runs after Mongo starts, not after it becomes PRIMARY.
-    # This breaks the first-boot deadlock without mutating from healthchecks.
-    environment: *mongo-auth
-    entrypoint: ["bash", "-c"]
-    command:
-      - |
-        set -Eeuo pipefail
-        uri='mongodb://mongo:27017/admin?directConnection=true'
-        uri="$${uri}&serverSelectionTimeoutMS=2000&connectTimeoutMS=2000"
-        deadline=$$((SECONDS + 120))
-        until mongosh "$$uri" --quiet --eval '
-          const admin = db.getSiblingDB("admin");
-          if (!admin.auth(
-            process.env.MONGO_INITDB_ROOT_USERNAME,
-            process.env.MONGO_INITDB_ROOT_PASSWORD
-          )) quit(1);
-          quit(admin.runCommand({ping: 1}).ok ? 0 : 1);
-        ' >/dev/null 2>&1; do
-          if (( SECONDS >= deadline )); then
-            echo 'MongoDB authenticated startup timed out' >&2
-            exit 1
-          fi
-          sleep 1
-        done
-        exec mongosh "$$uri" --quiet /opt/mongo/init.js
-    configs:
-      - source: mongo-init
-        target: /opt/mongo/init.js
-    depends_on:
-      mongo:
-        condition: service_started
-    restart: "no"
 
   postgis:
     image: postgis/postgis:16-3.4-alpine
@@ -253,8 +222,78 @@ configs:
       fi
       chown mongodb:mongodb "$$key"
       chmod 400 "$$key"
-      exec /usr/local/bin/docker-entrypoint.sh mongod \
-        --replSet rs0 --keyFile "$$key" --bind_ip_all --oplogSize 256
+      # Never inherit a successful readiness marker across container restarts.
+      rm -f /tmp/mongo-ready /tmp/docker-entrypoint-temp-mongod.pid
+      mongo_pid=''
+      init_pid=''
+      cleanup() {
+        trap - EXIT TERM INT
+        rm -f /tmp/mongo-ready
+        # Forward shutdown to both process groups and reap direct children.
+        if [ -n "$$init_pid" ]; then
+          kill -TERM -- "-$$init_pid" 2>/dev/null || true
+        fi
+        if [ -n "$$mongo_pid" ]; then
+          kill -TERM -- "-$$mongo_pid" 2>/dev/null || true
+        fi
+        # The official first-boot mongod uses --fork (its own session).
+        if [ -s /tmp/docker-entrypoint-temp-mongod.pid ]; then
+          temp_pid=$$(< /tmp/docker-entrypoint-temp-mongod.pid)
+          if [[ "$$temp_pid" =~ ^[0-9]+$$ ]]; then
+            kill -TERM "$$temp_pid" 2>/dev/null || true
+            deadline=$$((SECONDS + 25))
+            while kill -0 "$$temp_pid" 2>/dev/null &&
+              (( SECONDS < deadline )); do
+              sleep 0.1
+            done
+          fi
+        fi
+        wait 2>/dev/null || true
+      }
+      trap cleanup EXIT
+      trap 'exit 143' TERM
+      trap 'exit 130' INT
+      setsid /usr/local/bin/docker-entrypoint.sh mongod \
+        --replSet rs0 --keyFile "$$key" --bind_ip_all --oplogSize 256 &
+      mongo_pid=$$!
+      setsid bash /opt/mongo/bootstrap.sh &
+      init_pid=$$!
+      status=0
+      finished=''
+      wait -n -p finished "$$mongo_pid" "$$init_pid" || status=$$?
+      if [ "$$finished" != "$$init_pid" ] || [ "$$status" -ne 0 ]; then
+        echo 'MongoDB startup failed; stopping container' >&2
+        if [ "$$status" -eq 0 ]; then status=1; fi
+        exit "$$status"
+      fi
+      init_pid=''
+      touch /tmp/mongo-ready
+      # Stay alive for mongod; Docker's restart policy handles unexpected exits.
+      wait "$$mongo_pid"
+  mongo-bootstrap:
+    content: |
+      #!/usr/bin/env bash
+      set -Eeuo pipefail
+      # Use the network address, not loopback: the official image starts a
+      # temporary localhost-only standalone while creating the first root user.
+      uri='mongodb://mongo:27017/admin?directConnection=true'
+      uri="$${uri}&serverSelectionTimeoutMS=2000&connectTimeoutMS=2000"
+      deadline=$$((SECONDS + 120))
+      until mongosh "$$uri" --quiet --eval '
+        const admin = db.getSiblingDB("admin");
+        if (!admin.auth(
+          process.env.MONGO_INITDB_ROOT_USERNAME,
+          process.env.MONGO_INITDB_ROOT_PASSWORD
+        )) quit(1);
+        quit(admin.runCommand({ping: 1}).ok ? 0 : 1);
+      ' >/dev/null 2>&1; do
+        if (( SECONDS >= deadline )); then
+          echo 'MongoDB authenticated startup timed out' >&2
+          exit 1
+        fi
+        sleep 1
+      done
+      exec mongosh "$$uri" --quiet /opt/mongo/init.js
   mongo-init:
     content: |
       // Explicit init; run mongosh --quiet /opt/mongo/init.js via compose exec.
