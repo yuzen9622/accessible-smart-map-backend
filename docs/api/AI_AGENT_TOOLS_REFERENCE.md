@@ -2,7 +2,7 @@
 
 **端點**：`POST /api/v1/ai/chat`
 **狀態**：Active — 反映 repo 現行實作
-**日期**：2026-06-30（2026-10-09 更新 AI 路線一致性契約）
+**日期**：2026-06-30（2026-10-12 更新語言傳遞與結構化錯誤）
 **SDK**：原生 `@google/genai` Interactions API（stateful）；工具仍以 OpenAI function schema 定義，由 `tool-catalog.ts` 轉成 Gemini 宣告
 
 > 本文件描述「目前程式碼實際掛載的工具與回傳形狀」。
@@ -56,6 +56,7 @@
   "stream": "boolean", // 預設 false
   "temperature": "number", // 0~2，預設 0.2（工具迴圈內固定 0）
   "userLocation": { "latitude": "number", "longitude": "number" }, // 選填
+  "language": "en", // 選填：en | zh-TW；不送時保留原本語言推論行為
   "routeContractVersion": 1, // 選填；新前端應送
   "routeContext": { "routeToken": "伺服器發出的短效 token" }, // 或 null 清除
   "routingPreferences": { "mode": "wheelchair", "transitPreference": "bus" }, // 選填預設
@@ -70,9 +71,24 @@
 | `tool_result` | `{ name, result, summary, callId }`       | 該工具解析後結果（＝本文件各 result） |
 | `token`       | `{ text }`               | 最終回答逐塊串流                      |
 | `done`        | `done`                   | 結束                                  |
-| `error`       | `{ code: 500, message }` | 例外（其後仍補 `done`）               |
+| `error`       | `{ code: 500\|429, message, data: { reason } }` | 例外（其後仍補 `done`）               |
 
-> 工具事件（`tool_call` / `tool_result`）會在「最終回答串流」**之前**全部送完：含工具的回合若混有文字會先捨棄，無工具的回答回合完成後依原 chunks 輸出。最終強制回答仍支援逐塊串流。
+> 工具事件（`tool_call` / `tool_result`）會在「最終回答串流」**之前**全部送完。Chat 的工具決策階段不對外發布推測文字；結束工具階段後，再產生正式回答並即時傳送 `token`。內部結束工具階段的控制信號不會出現在前端工具事件裡。
+
+### 語言與錯誤處理
+
+- Web／Mobile 把當前介面語言放在 body `language`，不要新增 `Accept-Language` 優先規則，也不要要求模型自行填語言參數。
+- 後端將同一個語言傳給 `findGooglePlaces` 的 Google Text Search、`planAccessibleRoute` 及 `getNavInstructions`。有 session 語言時以其為準；舊 session 未提供語言時，導航工具仍接受既有合法的工具語言參數。
+- Google 搜尋結果可能提供英文名稱／地址；這不表示本地設施資料、路名或站名已全部英文化。沒有英文來源時保留原文，不猜譯官方名稱。
+- JSON 錯誤的數字 `code` 與 SSE error 的數字 `code` 仍為 HTTP 狀態語意；業務原因在 `data.reason`：`AI_EMPTY_RESPONSE`、`AI_REQUEST_FAILED`、`AI_RATE_LIMITED`。前端以 reason 對應字典，未知 reason 顯示安全的 `message`。
+- 工具失敗仍用原本的 `error` 欄位，新增的 `reason` 位於工具 result 頂層，不套用 HTTP envelope。不要把工具的 reason 與 HTTP 數字 code 混用。
+- 語言切換後，新查詢使用新語言；不要為了把舊工具卡片翻譯成英文而自動重跑規劃。完整路線及 routeToken 仍以原本一次規劃為準。
+
+英文 SSE 失敗例：
+
+```json
+{ "code": 500, "message": "The assistant is temporarily unavailable. Please try again later.", "data": { "reason": "AI_REQUEST_FAILED" } }
+```
 
 ### stream: false — 標準 ApiResponse 包 OpenAI chat.completion
 
@@ -105,8 +121,8 @@
 
 | 面向     | 行為                                                                                                        |
 | -------- | ----------------------------------------------------------------------------------------------------------- |
-| 最大輪數 | `MAX_ROUNDS = 18`；某輪無 function call 且有文字即直接回傳                                                  |
-| 呼叫模式 | `tool_choice: "auto"`（首輪可用 `allowedFunctionNames` 強制 `any`）；Interactions API **沒有 temperature**  |
+| 最大輪數 | `MAX_ROUNDS = 18`；Chat 採明確工具階段，收到合法結束信號後才產生正式回答 |
+| 呼叫模式 | Chat 工具決策使用 `tool_choice: "any"`，正式回答使用 `none`；其他 caller 可維持原本 auto 流程；Interactions API **沒有 temperature** |
 | 歷程保留 | stateful：每輪以 `previous_interaction_id` 串接，只送新的 function result，不重送整段歷程                  |
 | 結果包裝 | 工具回傳 JSON 字串 → `JSON.parse` → `functionResponse: { name, response }`；非物件則包成 `{ result: <值> }` |
 | 收尾     | 用完輪數或某輪回空時，再以 `tool_choice: "none"` 做一次 final round 產生最終文字                            |
@@ -164,7 +180,7 @@ TRA   = { type:"TRA",  trainNo; trainTypeName; departureStation;
 { "status": "ZERO_RESULTS", "places": [] }
 ```
 
-**失敗**：`{ "error": "Google Places API 查詢失敗" }`
+**失敗**：`{ "reason": "PLACE_SEARCH_FAILED", "error": "Google Places API 查詢失敗" }`。指定 `language: "en"` 時 `error` 為安全英文提示；不含上游 exception 或憑證。
 
 ### 4.2 `findA11yPlaces` — 無障礙設施 DB（電梯/廁所/坡道/輪椅，**不含停車位**）
 
@@ -669,6 +685,14 @@ TRA   = { type:"TRA",  trainNo; trainTypeName; departureStation;
 | `claimSosEvent`            | —                   | 承接 SOS 事件                                 |
 | `updateSosHandlingStatus`  | —（`status`）       | 更新處理進度（前往中／已抵達）                |
 | `resolveSosEvent`          | —                   | 標記 SOS 已解除                               |
+
+`confirmSosReceived`、`claimSosEvent` 可傳入 `sessionId`；省略時，僅在目前 LINE 使用者有**唯一一件**可操作的進行中 SOS 時執行。多件時回傳 `ok: false`、`errorCode: "SOS_SELECTION_REQUIRED"`、`sessions` 與 `hasMore`，不會自動選最新事件。須先請使用者選擇；指定事件仍會重新驗證綁定權限與事件狀態。
+
+LINE 一對一聊天室可直接貼上六位英數綁定碼，或輸入「綁定 ABC123」，不需開選單、不經 AI。碼若同時對應親友綁定及 App 帳號綁定，會拒絕並請重新產生。正在修改顯示名稱時，裸六位英數仍作為姓名；改用明確的「綁定 六碼」可切換操作。
+
+明確輸入「收到／我收到回報」或「我處理／我來處理」也不經 AI；多件 SOS 會提供事件選擇按鈕與分頁。一般自然語言對話仍由 agent 處理。
+
+綁定工具回傳 `errorCode: "BIND_OUTCOME_UNCONFIRMED"` 表示無法確認寫入結果，**不代表一定未綁定**。請先查看綁定狀態；若尚未綁定，再重新產生驗證碼。App 帳號碼為單次兌換，兌換途中失敗可能已消耗，系統不會回復舊碼而覆蓋新碼。
 
 ---
 
