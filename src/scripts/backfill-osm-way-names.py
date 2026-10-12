@@ -16,10 +16,10 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, NamedTuple
 
 NAME_TAG_PREFERENCE = ("name", "name:zh", "name:zh-Hant")
 
@@ -27,8 +27,13 @@ CREATE_TABLE_SQL = """
     CREATE TABLE IF NOT EXISTS ped_osm_way_name (
       osm_way_id     BIGINT PRIMARY KEY,
       name           TEXT NOT NULL,
+      name_en        TEXT,
       source_version TEXT NOT NULL
     )
+"""
+
+ADD_ENGLISH_COLUMN_SQL = """
+    ALTER TABLE ped_osm_way_name ADD COLUMN IF NOT EXISTS name_en TEXT
 """
 
 WAY_ID_QUERY = """
@@ -38,10 +43,11 @@ WAY_ID_QUERY = """
 """
 
 UPSERT_SQL = """
-    INSERT INTO ped_osm_way_name (osm_way_id, name, source_version)
+    INSERT INTO ped_osm_way_name (osm_way_id, name, name_en, source_version)
     VALUES %s
     ON CONFLICT (osm_way_id) DO UPDATE SET
       name = EXCLUDED.name,
+      name_en = EXCLUDED.name_en,
       source_version = EXCLUDED.source_version
 """
 
@@ -63,6 +69,22 @@ def name_for_tags(tags: Mapping[str, str]) -> str | None:
     return None
 
 
+class WayName(NamedTuple):
+    """Source names; English is optional and never replaces the canonical name."""
+
+    name: str
+    name_en: str | None
+
+
+def names_for_tags(tags: Mapping[str, str]) -> WayName | None:
+    """Keep canonical selection unchanged; record only explicit nonblank name:en."""
+    name = name_for_tags(tags)
+    if name is None:
+        return None
+    english = tags.get("name:en", "").strip() or None
+    return WayName(name, english)
+
+
 def source_updated_at(path: Path) -> str:
     """Return the UTC calendar date of an input file for provenance metadata."""
     return (
@@ -81,7 +103,7 @@ def import_osmium() -> Any:
     return osmium
 
 
-def collect_way_names(pbf_path: Path, way_ids: set[int]) -> dict[int, str]:
+def collect_way_names(pbf_path: Path, way_ids: set[int]) -> dict[int, WayName]:
     """Scan a PBF once for the names of exactly the requested way ids.
 
     Only tags are needed (no node locations), so this reads directly off
@@ -96,7 +118,7 @@ def collect_way_names(pbf_path: Path, way_ids: set[int]) -> dict[int, str]:
     class WayNameCollector(osmium.SimpleHandler):
         def __init__(self) -> None:
             super().__init__()
-            self.names: dict[int, str] = {}
+            self.names: dict[int, WayName] = {}
 
         def way(self, way: Any) -> None:
             try:
@@ -105,7 +127,7 @@ def collect_way_names(pbf_path: Path, way_ids: set[int]) -> dict[int, str]:
                 return
             if way_id not in way_ids:
                 return
-            name = name_for_tags(dict(way.tags))
+            name = names_for_tags(dict(way.tags))
             if name is not None:
                 self.names[way_id] = name
 
@@ -115,8 +137,9 @@ def collect_way_names(pbf_path: Path, way_ids: set[int]) -> dict[int, str]:
 
 
 def ensure_way_name_table(cursor: Any) -> None:
-    """Idempotently create `ped_osm_way_name` if it does not exist yet."""
+    """Idempotently prepare new and legacy lookup tables, never graph rows."""
     cursor.execute(CREATE_TABLE_SQL)
+    cursor.execute(ADD_ENGLISH_COLUMN_SQL)
 
 
 def fetch_requested_way_ids(cursor: Any) -> set[int]:
@@ -126,7 +149,7 @@ def fetch_requested_way_ids(cursor: Any) -> set[int]:
 
 
 def write_way_names(
-    cursor: Any, names: Mapping[int, str], source_version: str
+    cursor: Any, names: Mapping[int, WayName], source_version: str
 ) -> None:
     """Bulk upsert way names, keyed by OSM way id."""
     from psycopg2.extras import execute_values
@@ -134,7 +157,8 @@ def write_way_names(
     if not names:
         return
     rows = [
-        (way_id, name, source_version) for way_id, name in names.items()
+        (way_id, name.name, name.name_en, source_version)
+        for way_id, name in names.items()
     ]
     execute_values(cursor, UPSERT_SQL, rows, page_size=1_000)
 
