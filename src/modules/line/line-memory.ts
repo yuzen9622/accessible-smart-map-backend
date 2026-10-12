@@ -142,3 +142,82 @@ export async function clearPendingRename(lineUserId: string): Promise<void> {
     console.error("[line-memory] failed to clear pending rename", error);
   }
 }
+
+export interface LineLastLocation {
+  latitude: number;
+  longitude: number;
+}
+
+/** A shared location only grounds follow-up questions for this long. */
+const LINE_LOCATION_TTL_SEC = 30 * 60;
+
+function lineLocationKey(lineUserId: string): string {
+  return `line:loc:${lineUserId}`;
+}
+
+/**
+ * Remembers the user's most recently shared LINE location so the next
+ * questions ("附近廁所？", "規劃路線") can use it. Expires after 30 minutes.
+ *
+ * @param lineUserId LINE user identifier.
+ * @param location The shared coordinates.
+ * @returns Nothing; Redis failures are logged and ignored.
+ */
+export async function setLineLastLocation(
+  lineUserId: string,
+  location: LineLastLocation,
+): Promise<void> {
+  if (!redisClient) return;
+  try {
+    await redisClient.set(
+      lineLocationKey(lineUserId),
+      JSON.stringify(location),
+      "EX",
+      LINE_LOCATION_TTL_SEC,
+    );
+  } catch (error) {
+    console.error("[line-memory] failed to set last location", error);
+  }
+}
+
+/**
+ * @param lineUserId LINE user identifier.
+ * @returns The location shared within the last 30 minutes, or undefined.
+ */
+export async function getLineLastLocation(
+  lineUserId: string,
+): Promise<LineLastLocation | undefined> {
+  if (!redisClient) return undefined;
+  try {
+    const raw = await redisClient.get(lineLocationKey(lineUserId));
+    if (!raw) return undefined;
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      typeof (parsed as LineLastLocation).latitude === "number" &&
+      typeof (parsed as LineLastLocation).longitude === "number"
+    ) {
+      const { latitude, longitude } = parsed as LineLastLocation;
+      return { latitude, longitude };
+    }
+    return undefined;
+  } catch (error) {
+    console.error("[line-memory] failed to read last location", error);
+    return undefined;
+  }
+}
+
+/**
+ * Drops the remembered location (e.g. when the user leaves the chat).
+ *
+ * @param lineUserId LINE user identifier.
+ */
+export async function clearLineLastLocation(lineUserId: string): Promise<void> {
+  if (!redisClient) return;
+  try {
+    await redisClient.del(lineLocationKey(lineUserId));
+  } catch (error) {
+    console.error("[line-memory] failed to clear last location", error);
+  }
+}

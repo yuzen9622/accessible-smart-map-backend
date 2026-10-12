@@ -13,6 +13,12 @@ import {
   buildSosMenuMessage,
   buildSosActionSelectionMessage,
   buildUnbindConfirmMessage,
+  buildActiveSosMessage,
+  buildLocationFollowUpMessage,
+  buildRoutePreviewLinkMessage,
+  buildShareLocationMessage,
+  buildWelcomeMessage,
+  downloadMessageContent,
   replyAgentResult,
   replyMessages,
   replyText,
@@ -26,6 +32,7 @@ import {
   claimSession,
   getAuthorizedSessionForLineUser,
   getActiveSosChoicesForLineUser,
+  listActiveSosForLineUser,
   resolveSession,
   updateHandlingStatus,
 } from "../sos/sos.service";
@@ -43,12 +50,18 @@ import type { AccessibilityMode, TravelMode } from "../../types/route";
 import type { OAIMessage } from "../../types/openai-chat";
 import {
   appendLineChatTurn,
+  clearLineLastLocation,
   clearPendingRename,
   getLineChatHistory,
+  getLineLastLocation,
+  setLineLastLocation,
   getPendingRename,
   setPendingRename,
 } from "./line-memory";
 import { runLineAgent } from "./line-agent.service";
+import { syncRichMenu } from "./line-richmenu";
+import { transcribeAudio } from "../../adapters/ai-audio.adapter";
+import { routePreviewUrl, sosTrackingUrl } from "../../config/public-links";
 import {
   listBoundContacts,
   listSosHistory,
@@ -68,6 +81,11 @@ import {
 const EVENT_DEDUP_TTL_SEC = 3600;
 const SOS_MENU_TRIGGER = "SOS資訊查詢";
 const RENAME_CANCEL_WORD = "取消";
+/** LINE voice messages are AAC in an MP4 container. */
+const LINE_AUDIO_MIME = "audio/mp4";
+const MAX_AUDIO_DURATION_MS = 60_000;
+const MAX_AUDIO_BYTES = 2 * 1024 * 1024;
+const AUDIO_TRANSCRIBE_TIMEOUT_MS = 15_000;
 
 function getUserId(event: LineEvent): string | undefined {
   const source = event.source as webhook.UserSource | undefined;
@@ -81,22 +99,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function routePreviewUrl(previewToken?: string): string | undefined {
-  const explicitBase = process.env.PUBLIC_LIFF_ROUTE_BASE_URL?.trim();
-  const fallbackBase = process.env.PUBLIC_TRACKING_BASE_URL?.trim();
-  const base =
-    explicitBase ||
-    (fallbackBase ? `${fallbackBase.replace(/\/$/, "")}/liff/route` : "");
-  if (!base) return undefined;
-  try {
-    const url = new URL(base);
-    if (previewToken) url.searchParams.set("sessionId", previewToken);
-    return url.toString();
-  } catch {
-    return undefined;
-  }
 }
 
 function fail<T = never>(
@@ -218,10 +220,16 @@ async function handleTextMessage(
   replyToken: string,
   text: string,
   lineUserId?: string,
+  speechPrefix?: string,
 ): Promise<void> {
   try {
     if (lineUserId) await showLoadingAnimation(lineUserId).catch(() => {});
-    const history = lineUserId ? await getLineChatHistory(lineUserId) : [];
+    const [history, userLocation] = lineUserId
+      ? await Promise.all([
+          getLineChatHistory(lineUserId),
+          getLineLastLocation(lineUserId),
+        ])
+      : [[], undefined];
     const messages: OAIMessage[] = [
       ...history.map((turn): OAIMessage => ({
         role: turn.role,
@@ -232,17 +240,23 @@ async function handleTextMessage(
     const result = await runLineAgent({
       lineUserId: lineUserId ?? "",
       messages,
+      userLocation,
     });
     const speech = stripLineMarkdown(parseAgentSpeech(result.text));
     const routeCard = routeCardFromToolResults(result.toolResults);
-    await replyAgentResult(replyToken, speech, routeCard);
+    await replyAgentResult(
+      replyToken,
+      speechPrefix ? `${speechPrefix}\n${speech}` : speech,
+      routeCard,
+      lineUserId,
+    );
     if (lineUserId) await appendLineChatTurn(lineUserId, text, speech);
   } catch (error) {
     console.error(
       "[line.service] family agent failed",
       error instanceof Error ? error.name : "UnknownError",
     );
-    await replyText(replyToken, LINE_MSG.AI_UNAVAILABLE);
+    await replyText(replyToken, LINE_MSG.AI_UNAVAILABLE, lineUserId);
   }
 }
 
@@ -321,6 +335,7 @@ async function handleBindingCode(
     const result = emergency
       ? await bindEmergencyContactCode(code, lineUserId)
       : await bindLineAccountCode(code, lineUserId);
+    if (result.ok && emergency) void syncRichMenu(lineUserId, true);
     await replyText(
       replyToken,
       result.ok
@@ -539,8 +554,28 @@ async function handleMenuPostback(
       await replyText(replyToken, LINE_MSG.SOS_BIND_PROMPT);
       return;
     }
+    if (action === "sos_share_location") {
+      await replyMessages(replyToken, [
+        buildShareLocationMessage(LINE_MSG.SHARE_LOCATION_PROMPT),
+      ]);
+      return;
+    }
+    if (action === "sos_claim") {
+      await handleReceiptText(replyToken, "claim", lineUserId);
+      return;
+    }
 
     await showLoadingAnimation(lineUserId).catch(() => {});
+
+    if (action === "sos_status") {
+      await replySosStatus(replyToken, lineUserId);
+      return;
+    }
+
+    if (action === "sos_route") {
+      await handleSosRoute(replyToken, lineUserId, params.get("sid"));
+      return;
+    }
 
     if (action === "sos_contacts") {
       const result = await listBoundContacts(lineUserId);
@@ -598,6 +633,7 @@ async function handleMenuPostback(
       }
       const result = await unbindContact({ lineUserId, contactId });
       await replyText(replyToken, result.message);
+      if (result.ok) void syncRichMenu(lineUserId, true);
       return;
     }
 
@@ -635,7 +671,7 @@ function observedResolved(result: ServiceResult): boolean {
  * they still require an identified LINE user because every menu query is scoped by
  * `lineUserId`. Every other action is an SOS control postback from a notification or
  * claim-controls message, and maps to a deterministic SOS service call (never the agent). Malformed
- * postbacks are answered with the generic info message without any session lookup;
+ * postbacks are answered with the invalid-action message without any session lookup;
  * once the action is known-valid, an authorization-preserving pre-check replies with
  * the unified "resolved" message for an already-closed session (and unauthorized
  * callers get the standard permission reply), before the action runs. A resolution
@@ -662,7 +698,7 @@ async function handlePostback(event: webhook.PostbackEvent): Promise<void> {
     return;
   }
 
-  if (!sid || !lineUserId) {
+  if (!sid || !/^(?:[a-fA-F0-9]{24}|[a-f0-9]{32})$/.test(sid) || !lineUserId) {
     await replyText(
       replyToken,
       lineUserId ? LINE_MSG.INVALID_ACTION : LINE_MSG.USER_REQUIRED,
@@ -684,7 +720,9 @@ async function handlePostback(event: webhook.PostbackEvent): Promise<void> {
   }
 
   try {
-    const auth = await getAuthorizedSessionForLineUser(lineUserId, sid);
+    const auth = await getAuthorizedSessionForLineUser(lineUserId, sid, {
+      allowLegacyShareToken: true,
+    });
     if (!auth?.session) {
       await replyText(replyToken, SOS_MSG.NOT_AUTHORIZED_CONTACT);
       return;
@@ -696,20 +734,22 @@ async function handlePostback(event: webhook.PostbackEvent): Promise<void> {
 
     await showLoadingAnimation(lineUserId).catch(() => {});
 
+    // Never pass an old card's share token into domain writes or new controls.
+    const sessionId = String(auth.session._id);
     if (action === "claim" || action === "ack") {
-      await executeReceiptAction(replyToken, action, sid, lineUserId);
+      await executeReceiptAction(replyToken, action, sessionId, lineUserId);
       return;
     }
 
     let result: ServiceResult;
     if (action === "status") {
       result = await updateHandlingStatus({
-        sessionId: sid,
+        sessionId,
         lineUserId,
         handlingStatus: value as "en_route" | "arrived",
       });
     } else {
-      result = await resolveSession({ sessionId: sid, lineUserId });
+      result = await resolveSession({ sessionId, lineUserId });
     }
 
     if (observedResolved(result)) {
@@ -726,6 +766,88 @@ async function handlePostback(event: webhook.PostbackEvent): Promise<void> {
   }
 }
 
+/**
+ * Replies with the status carousel of every active SOS this contact follows.
+ *
+ * @param replyToken One-time reply token from the webhook event.
+ * @param lineUserId The LINE user id of the caller.
+ */
+async function replySosStatus(
+  replyToken: string,
+  lineUserId: string,
+): Promise<void> {
+  const { bound, sessions } = await listActiveSosForLineUser(lineUserId);
+  if (!bound) {
+    await replyText(replyToken, LINE_MSG.SOS_NO_CONTACTS);
+    return;
+  }
+  if (!sessions.length) {
+    await replyText(replyToken, LINE_MSG.SOS_NO_ACTIVE);
+    return;
+  }
+  await replyMessages(replyToken, [
+    buildActiveSosMessage(
+      sessions.map((entry) => ({
+        ...entry,
+        trackingUrl: sosTrackingUrl(entry.shareToken),
+      })),
+    ),
+  ]);
+}
+
+/**
+ * Route from the contact to a family member in distress. Needs a location the
+ * contact shared within the last 30 minutes; otherwise asks for one with LINE's
+ * native location picker. With several active events and no `sid`, the status
+ * carousel lets the user pick (each card has its own route button).
+ *
+ * @param replyToken One-time reply token from the webhook event.
+ * @param lineUserId The LINE user id of the caller.
+ * @param sid Optional session id from a card button.
+ */
+async function handleSosRoute(
+  replyToken: string,
+  lineUserId: string,
+  sid: string | null,
+): Promise<void> {
+  const { bound, sessions } = await listActiveSosForLineUser(lineUserId);
+  if (!bound) {
+    await replyText(replyToken, LINE_MSG.SOS_NO_CONTACTS);
+    return;
+  }
+  const target = sid
+    ? sessions.find((entry) => entry.sessionId === sid)
+    : sessions.length === 1
+      ? sessions[0]
+      : undefined;
+  if (!target) {
+    if (sid || !sessions.length) {
+      await replyText(replyToken, LINE_MSG.SOS_NO_ACTIVE);
+      return;
+    }
+    await replySosStatus(replyToken, lineUserId);
+    return;
+  }
+  if (!(await getLineLastLocation(lineUserId))) {
+    await replyMessages(replyToken, [
+      buildShareLocationMessage(LINE_MSG.SOS_ROUTE_NEED_LOCATION),
+    ]);
+    return;
+  }
+  const url = routePreviewUrl(target.shareToken);
+  if (!url) {
+    await replyText(replyToken, LINE_MSG.SOS_ROUTE_UNAVAILABLE);
+    return;
+  }
+  await replyMessages(replyToken, [buildRoutePreviewLinkMessage(url)]);
+}
+
+/**
+ * A shared location is remembered for follow-up questions and, for bound
+ * contacts, becomes the origin of the route to the family member. The reply
+ * offers the next step: the SOS route when an event is active, otherwise the
+ * common place-based queries.
+ */
 async function handleLocationMessage(
   replyToken: string,
   message: Extract<LineEvent, { type: "message" }>["message"] & {
@@ -735,25 +857,92 @@ async function handleLocationMessage(
 ): Promise<void> {
   if (!lineUserId) return;
 
-  await updateBoundContactLocations(
-    lineUserId,
-    message.latitude,
-    message.longitude,
-  );
+  await Promise.all([
+    updateBoundContactLocations(
+      lineUserId,
+      message.latitude,
+      message.longitude,
+    ),
+    setLineLastLocation(lineUserId, {
+      latitude: message.latitude,
+      longitude: message.longitude,
+    }),
+  ]);
 
   if (!replyToken) return;
 
-  await replyText(
+  let sessions: Array<{ sessionId: string }> = [];
+  try {
+    sessions = (await listActiveSosForLineUser(lineUserId)).sessions;
+  } catch (error) {
+    console.error(
+      "[line.service] active SOS lookup failed",
+      error instanceof Error ? error.name : "UnknownError",
+    );
+  }
+  await replyMessages(replyToken, [
+    buildLocationFollowUpMessage(
+      sessions.length === 1 ? sessions[0].sessionId : undefined,
+      sessions.length > 0,
+    ),
+  ]);
+}
+
+/**
+ * Voice messages are transcribed and answered by the assistant, echoing what
+ * was heard so a mis-hearing is visible. Transcripts only go to the chat agent
+ * — never to binding or SOS receipt commands, which must not run on a guess.
+ */
+async function handleAudioMessage(
+  replyToken: string,
+  message: { id: string; duration?: number },
+  lineUserId?: string,
+): Promise<void> {
+  if (!lineUserId) {
+    await replyText(replyToken, LINE_MSG.USER_REQUIRED);
+    return;
+  }
+  if ((message.duration ?? 0) > MAX_AUDIO_DURATION_MS) {
+    await replyText(replyToken, LINE_MSG.AUDIO_TOO_LONG);
+    return;
+  }
+  await showLoadingAnimation(lineUserId).catch(() => {});
+  let transcript = "";
+  try {
+    const audio = await downloadMessageContent(message.id, MAX_AUDIO_BYTES);
+    transcript = await transcribeAudio(
+      audio,
+      LINE_AUDIO_MIME,
+      AUDIO_TRANSCRIBE_TIMEOUT_MS,
+    );
+  } catch (error) {
+    console.error(
+      "[line.service] audio transcription failed",
+      error instanceof Error ? error.name : "UnknownError",
+    );
+  }
+  if (!transcript) {
+    await replyText(replyToken, LINE_MSG.AUDIO_FAILED, lineUserId);
+    return;
+  }
+  await handleTextMessage(
     replyToken,
-    "收到您的位置！請問要查這個位置的天氣、找附近無障礙設施，還是規劃前往路線呢？",
+    transcript,
+    lineUserId,
+    LINE_MSG.AUDIO_HEARD.replace("{text}", transcript),
   );
 }
 
 async function handleEvent(event: LineEvent): Promise<void> {
   switch (event.type) {
-    case "follow":
-      if (event.replyToken) await replyText(event.replyToken, LINE_MSG.WELCOME);
+    case "follow": {
+      const userId = getUserId(event);
+      if (event.replyToken) {
+        await replyMessages(event.replyToken, [buildWelcomeMessage()]);
+      }
+      if (userId) await syncRichMenu(userId, true);
       return;
+    }
     case "postback":
       await handlePostback(event);
       return;
@@ -769,12 +958,23 @@ async function handleEvent(event: LineEvent): Promise<void> {
         await handleLocationMessage(event.replyToken, message, lineUserId);
         return;
       }
+      if (message.type === "audio") {
+        await handleAudioMessage(event.replyToken, message, lineUserId);
+        return;
+      }
+      await replyText(
+        event.replyToken,
+        message.type === "image"
+          ? LINE_MSG.MEDIA_IMAGE_UNSUPPORTED
+          : LINE_MSG.MEDIA_UNSUPPORTED,
+      );
       return;
     }
     case "unfollow": {
       const userId = getUserId(event);
       if (userId) {
         await releaseContactsForLineUser(userId);
+        await clearLineLastLocation(userId);
       }
       return;
     }
@@ -795,6 +995,14 @@ export async function handleEvents(events: LineEvent[]): Promise<void> {
         if (!fresh) continue;
       }
       await handleEvent(event);
+      // Bindings can also change from the app; settle the menu lazily.
+      const lineUserId = getUserId(event);
+      if (
+        lineUserId &&
+        (event.type === "message" || event.type === "postback")
+      ) {
+        void syncRichMenu(lineUserId);
+      }
     } catch (err) {
       console.error("[line.service] event handling failed", err);
     }

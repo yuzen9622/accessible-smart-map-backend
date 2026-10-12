@@ -9,6 +9,7 @@ import {
   claimUnclaimedSession,
   findActiveSessionByUser,
   findActiveSessionsByOwners,
+  findActiveSessionDetailsByOwners,
   findSosOwnerNames,
   findBoundContact,
   findBoundContactsByLineUser,
@@ -25,13 +26,19 @@ import {
 } from "./sos.repository";
 import { sendSosResolved } from "../../adapters/line.adapter";
 import { ResponseCode } from "../../types/code";
+import { sosTrackingUrl } from "../../config/public-links";
 import { SOS_MSG, SOS_PUSH_MSG, SOS_REASON } from "../../constants/messages";
 import { PUSH_EVENT_TYPE } from "../../constants/push";
 import { pickLocale, sendPushToUser } from "../user/user.push.service";
-import { buildSosSnapshot, emitSosUpdate } from "./sos-events";
+import {
+  buildSosSnapshot,
+  emitSosContactLifecycle,
+  emitSosUpdate,
+} from "./sos-events";
 import type { ISosSession } from "../../types";
 import type {
   ActiveSosChoicePage,
+  ActiveSosDetail,
   AcknowledgeSosInput,
   ClaimSosInput,
   CreateSosInput,
@@ -164,16 +171,55 @@ export async function getActiveSosChoicesForLineUser(
 }
 
 /**
+ * Active events of every owner this LINE user is bound to, with the status
+ * fields the LINE status card shows. Read-only; actions reauthorize per click.
+ *
+ * @param lineUserId The bound contact's LINE user id.
+ * @returns Whether the user has any binding, and up to `limit` active events.
+ */
+export async function listActiveSosForLineUser(
+  lineUserId: string,
+  limit = 10,
+): Promise<{ bound: boolean; sessions: ActiveSosDetail[] }> {
+  if (!lineUserId) return { bound: false, sessions: [] };
+  const contacts = await findBoundContactsByLineUser(lineUserId);
+  const ownerIds = [
+    ...new Set(contacts.map((contact) => String(contact.userId))),
+  ];
+  if (!ownerIds.length) return { bound: false, sessions: [] };
+  const rows = await findActiveSessionDetailsByOwners(ownerIds, limit);
+  const owners = rows.length
+    ? await findSosOwnerNames([...new Set(rows.map((r) => String(r.userId)))])
+    : [];
+  const names = new Map(owners.map((owner) => [String(owner._id), owner.name]));
+  return {
+    bound: true,
+    sessions: rows.map((row) => ({
+      sessionId: String(row._id),
+      shareToken: row.shareToken,
+      ownerName: names.get(String(row.userId)) || "未命名使用者",
+      type: row.type,
+      address: row.address ?? null,
+      handlingStatus: row.handlingStatus,
+      claimedByName: row.claimedByName ?? null,
+      locationUpdatedAt: row.locationUpdatedAt,
+    })),
+  };
+}
+
+/**
  * Authorizes a LINE user for a session: they must be a bound emergency contact
  * of the session owner. Shared single source of truth for every SOS family tool.
  *
  * @param lineUserId The acting LINE user id.
- * @param sessionId The target session id.
+ * @param sessionId The target session id (or a legacy notification share token when opted in).
+ * @param options Only LINE postbacks opt into legacy token lookup; binding is still required.
  * @returns `{ session, ownerName }` when authorized, otherwise `null`.
  */
 export async function getAuthorizedSessionForLineUser(
   lineUserId: string,
   sessionId: string,
+  options: { allowLegacyShareToken?: boolean } = {},
 ): Promise<{
   session: {
     _id: string;
@@ -194,7 +240,17 @@ export async function getAuthorizedSessionForLineUser(
   const contacts = await findBoundContactsByLineUser(lineUserId);
   if (!contacts.length) return null;
   const ownerIds = new Set(contacts.map((contact) => contact.userId));
-  const session = await findSessionById(sessionId);
+  if (
+    options.allowLegacyShareToken &&
+    !/^(?:[a-fA-F0-9]{24}|[a-f0-9]{32})$/.test(sessionId)
+  )
+    return null;
+  // Old notification buttons put the tracking token in sid. Resolve it only at
+  // this opt-in boundary, then apply the SAME bound-contact authorization.
+  const session =
+    options.allowLegacyShareToken && /^[a-f0-9]{32}$/.test(sessionId)
+      ? await findSessionByShareToken(sessionId)
+      : await findSessionById(sessionId);
   if (!session || !ownerIds.has(String(session.userId))) return null;
   const ownerName = await findUserName(String(session.userId));
   return {
@@ -233,17 +289,6 @@ function fail(
 }
 
 /**
- * Builds the public tracking URL for a share token.
- *
- * @param shareToken The session's high-entropy share token.
- * @returns The full tracking URL for LINE notifications / browsers.
- */
-function trackingUrl(shareToken: string): string {
-  const base = process.env.PUBLIC_TRACKING_BASE_URL ?? "";
-  return `${base}/zh-TW?sos=${shareToken}`;
-}
-
-/**
  * Returns the LINE user ids of the caller's bound emergency contacts.
  *
  * @param userId Owner's user id.
@@ -264,7 +309,7 @@ export async function createSession(
     const now = new Date();
     const initialNotice = await makeInitialNotice(input.userId, {
       type: input.type,
-      trackingUrl: trackingUrl(shareToken),
+      trackingUrl: sosTrackingUrl(shareToken),
       address: input.address ?? null,
     });
     try {
@@ -290,7 +335,7 @@ export async function createSession(
       String(session._id),
       await makeInitialNotice(input.userId, {
         type: session.type,
-        trackingUrl: trackingUrl(session.shareToken),
+        trackingUrl: sosTrackingUrl(session.shareToken),
         address: session.address,
       }),
     );
@@ -662,7 +707,12 @@ export async function resolveSession(
   } catch {
     userName = undefined;
   }
-  await sendSosResolved(await boundLineUserIds(ownerUserId), userName);
+  const contactLineUserIds = await boundLineUserIds(ownerUserId);
+  await sendSosResolved(contactLineUserIds, userName);
+  emitSosContactLifecycle({
+    kind: "resolved",
+    lineUserIds: contactLineUserIds,
+  });
 
   const updated = await findSessionById(input.sessionId);
   if (updated) {
@@ -743,6 +793,8 @@ export async function getPublicByToken(
       lng: session.lng,
       address: session.address ?? null,
       updatedAt: session.locationUpdatedAt,
+      // Progress only — never contact names: anyone holding the link can read this.
+      handlingStatus: session.handlingStatus,
     },
   };
 }

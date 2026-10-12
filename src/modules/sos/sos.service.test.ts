@@ -31,6 +31,7 @@ vi.mock("../user/user.push.service", async (importActual) => ({
 }));
 vi.mock("./sos-events", () => ({
   emitSosUpdate: vi.fn(),
+  emitSosContactLifecycle: vi.fn(),
   buildSosSnapshot: vi.fn(() => ({ snapshot: true })),
 }));
 
@@ -46,6 +47,7 @@ import {
   updateHandlingStatus,
   resolveSession,
   getSessionForOwner,
+  getPublicByToken,
 } from "./sos.service";
 import { ResponseCode } from "../../types/code";
 import { SOS_MSG, SOS_REASON } from "../../constants/messages";
@@ -630,5 +632,28 @@ describe("owner push notifications", () => {
     const { build, data } = pushCall();
     expect(data).toMatchObject({ event: "resolved", status: "resolved" });
     expect(build("zh-TW").body).toBe("媽媽已解除這次求救");
+  });
+});
+
+describe("getPublicByToken", () => {
+  it("exposes handling progress but never contact names", async () => {
+    vi.mocked(SosSession.findOne).mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        _id: SESSION_ID,
+        type: "body",
+        status: "active",
+        lat: 25,
+        lng: 121,
+        address: null,
+        locationUpdatedAt: new Date("2026-10-12T10:00:00Z"),
+        handlingStatus: "en_route",
+        claimedByName: "小明",
+        acknowledgements: [{ lineUserId: "L1", name: "小華" }],
+      }),
+    } as never);
+    const result = await getPublicByToken("0123456789abcdef0123456789abcdef");
+    expect(result.ok).toBe(true);
+    expect(result.data).toMatchObject({ handlingStatus: "en_route" });
+    expect(JSON.stringify(result.data)).not.toMatch(/小明|小華|L1/);
   });
 });

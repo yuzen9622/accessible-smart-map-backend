@@ -360,7 +360,8 @@ export const SOS_TYPE_LABEL: Record<
 } as const;
 
 export const LINE_MSG = {
-  WELCOME: "歡迎加入！請輸入朋友分享給你的 6 碼綁定碼以完成綁定。",
+  WELCOME:
+    "歡迎加入無障礙家人助理！\n・家人給了你 6 碼綁定碼：直接輸入即可完成綁定，對方求救時你會在這裡收到通知。\n・也可以直接問我天氣、公車、無障礙設施或路線。\n請從下方按鈕開始。",
   BIND_SUCCESS: "綁定成功！當對方發出緊急求救時，你會在這裡收到通知。",
   ACCOUNT_BIND_SUCCESS: "LINE 帳號綁定成功。",
   BIND_UNCONFIRMED:
@@ -399,7 +400,7 @@ export const LINE_MSG = {
   SOS_MENU_PROMPT: "請選擇要查詢或管理的項目：",
   SOS_BIND_PROMPT: "請輸入 6 碼綁定驗證碼",
   SOS_HELP:
-    "SOS 使用方式\n1. 對方在 App 按下求救後，你會在這裡收到通知卡片，可直接按「我收到了」或「我來處理這件事」。\n2. 承接事件後，可用按鈕更新「前往中」「已抵達」，抵達並確認平安後按「解除警報」。\n3. 通知卡片可查看即時位置，也可以直接問我前往對方位置的無障礙路線。\n4. 想新增可以照顧的家人，向對方索取 6 碼綁定碼後輸入即可。\n如遇緊急狀況，請直接撥打 119（消防/救護）或 110（警察）。",
+    "SOS 使用方式\n1. 對方在 App 按下求救後，你會在這裡收到通知卡片，可直接按「我收到了」或「我來處理這件事」。\n2. 承接事件後，可用按鈕更新「前往中」「已抵達」，抵達並確認平安後按「解除警報」。\n3. 按「查看即時位置」可看到對方位置（手機有安裝 App 會直接在 App 開啟）。先按「分享我的位置」，再按「前往路線」就能規劃過去的路。\n4. 想新增可以照顧的家人，向對方索取 6 碼綁定碼後輸入即可。\n5. 也可以直接傳語音或文字問我。\n如遇緊急狀況，請直接撥打 119（消防/救護）或 110（警察）。",
   SOS_CONTACTS_TITLE: "目前綁定的使用者",
   SOS_NO_CONTACTS:
     "你目前沒有綁定任何使用者。請向對方索取 6 碼綁定驗證碼後輸入即可完成綁定。",
@@ -412,7 +413,38 @@ export const LINE_MSG = {
   SOS_RENAME_INVALID:
     "顯示名稱請輸入 1 到 50 個字，請再輸入一次（輸入「取消」可放棄）。",
   SOS_UNBIND_DONE: "已解除綁定，你不會再收到這位使用者的求救通知。",
+  SOS_STATUS_TITLE: "進行中的求救",
+  SOS_PLAN_ROUTE: "規劃前往路線",
+  SHARE_MY_LOCATION: "分享我的位置",
+  SHARE_LOCATION_PROMPT:
+    "請按下方「分享我的位置」，傳送你目前的位置；之後就能規劃前往家人位置的路線。",
+  SOS_ROUTE_NEED_LOCATION:
+    "還沒收到你最近的位置。請先按下方「分享我的位置」，再按一次「規劃前往路線」。",
+  SOS_ROUTE_READY: "已依你分享的位置準備好前往路線，點下方按鈕查看。",
+  SOS_ROUTE_UNAVAILABLE: "目前無法產生路線連結，請稍後再試。",
+  LOCATION_RECEIVED:
+    "收到你的位置！想查這附近的什麼？可以點下方按鈕，或直接輸入問題。",
+  LOCATION_RECEIVED_SOS:
+    "已更新你的位置，家人那邊的路線規劃會用這個位置當起點。",
+  CLAIMED_CONTROLS:
+    "可用下方按鈕分享你的位置、更新處理狀態，或在抵達後解除警報。",
+  MEDIA_IMAGE_UNSUPPORTED: "目前還看不懂圖片，請用文字描述，或傳送位置給我。",
+  MEDIA_UNSUPPORTED: "目前只支援文字、語音和位置訊息喔。",
+  AUDIO_TOO_LONG: "語音太長了，請在 1 分鐘內說完，或改用文字輸入。",
+  AUDIO_FAILED: "語音沒有辨識成功，請再說一次，或改用文字輸入。",
+  AUDIO_HEARD: "（我聽到的是：「{text}」）",
 } as const;
+
+/** Contact-facing labels for an SOS session's handling status. */
+export const SOS_HANDLING_LABEL: Record<string, string> = {
+  pending: "等待回應",
+  notified: "已通知家人",
+  acknowledged: "已有家人收到",
+  claimed: "已有家人承接",
+  en_route: "家人前往中",
+  arrived: "家人已抵達",
+  resolved: "已解除",
+};
 
 /**
  * Shared user-facing strings for the authentication endpoints. Credential

@@ -32,6 +32,7 @@ import { startTrafficLiveRefreshJob } from "./modules/traffic/traffic-live.worke
 import { startValhallaTrafficTarWorker } from "./modules/traffic/valhalla-traffic.worker";
 import { getRetentionConfig } from "./config/retention";
 import { startRetentionJob } from "./modules/retention/retention.job";
+import { startLineRichMenuSync } from "./modules/line/line-richmenu";
 const PORT = process.env.PORT || 3000;
 
 // Validated before listening: a bad retention value must stop the deploy, not
@@ -82,6 +83,8 @@ void getPedGraphRuntime().then((runtime) => {
 });
 
 const stopTransitFreshnessJob = startTransitFreshnessJob();
+// In-process SOS lifecycle events switch LINE contacts' rich menus.
+const stopLineRichMenuSync = startLineRichMenuSync();
 
 // Live traffic refresher is SWR + Redis only (no Mongo dependency); start unconditionally.
 const trafficLiveTimer = startTrafficLiveRefreshJob();
@@ -128,6 +131,7 @@ function shutdown(signalLog: string): void {
   if (trafficLiveTimer) clearInterval(trafficLiveTimer);
   if (valhallaTrafficTarTimer) clearInterval(valhallaTrafficTarTimer);
   stopTransitFreshnessJob();
+  stopLineRichMenuSync();
   stopRetentionJob?.();
   stopHazardAiMonitor?.();
   void (async () => {

@@ -174,7 +174,7 @@ describe("initial SOS delivery with real Mongo and LINE adapter", () => {
     if (!notice) throw new Error("Expected claimed notification");
     await sendSosNotification(
       notice.recipients,
-      notice.payload,
+      { ...notice.payload, sessionId: id },
       notice.retryKey,
       SOS_NOTICE.timeoutMs,
     );
@@ -380,7 +380,11 @@ describe("initial SOS delivery with real Mongo and LINE adapter", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const sending = sendSosNotification(
       ["line-one"],
-      { type: "body", trackingUrl: "https://example.invalid" },
+      {
+        sessionId: "000000000000000000000002",
+        type: "body",
+        trackingUrl: "https://example.invalid",
+      },
       "stable-key",
       100,
     );

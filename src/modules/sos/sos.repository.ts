@@ -43,6 +43,35 @@ export async function findActiveSessionsByOwners(
     .lean();
 }
 
+/** Active sessions with the fields a bound contact's LINE status card shows. */
+export async function findActiveSessionDetailsByOwners(
+  ownerIds: string[],
+  limit: number,
+): Promise<
+  Array<
+    Pick<
+      SosSessionRecord,
+      | "_id"
+      | "userId"
+      | "type"
+      | "shareToken"
+      | "address"
+      | "handlingStatus"
+      | "claimedByName"
+      | "locationUpdatedAt"
+      | "createdAt"
+    >
+  >
+> {
+  return SosSession.find({ userId: { $in: ownerIds }, status: "active" })
+    .sort({ createdAt: -1, _id: -1 })
+    .limit(limit)
+    .select(
+      "_id userId type shareToken address handlingStatus claimedByName locationUpdatedAt createdAt",
+    )
+    .lean();
+}
+
 /** Batch display names; authorization comes from the bound-contact query. */
 export async function findSosOwnerNames(
   ownerIds: string[],

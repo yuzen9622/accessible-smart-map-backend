@@ -1,7 +1,16 @@
 import { HTTPFetchError, messagingApi } from "@line/bot-sdk";
-import { LINE_MSG, SOS_TYPE_LABEL } from "../constants/messages";
+import {
+  LINE_MSG,
+  SOS_HANDLING_LABEL,
+  SOS_TYPE_LABEL,
+} from "../constants/messages";
+import { forLineExternalOpen } from "../config/public-links";
 import { taipeiHHmm, taipeiYmdDash } from "../config/taipei-time";
-import type { ActiveSosChoicePage, SosType } from "../modules/sos/sos.types";
+import type {
+  ActiveSosChoicePage,
+  ActiveSosDetail,
+  SosType,
+} from "../modules/sos/sos.types";
 import type {
   LineBoundContact,
   LineSosHistoryData,
@@ -39,6 +48,7 @@ export function buildBindUrl(): string {
 }
 
 interface SosNotificationPayload {
+  sessionId: string;
   userName?: string;
   type: SosType;
   trackingUrl: string;
@@ -56,22 +66,6 @@ export interface RouteCardPayload {
   destination: string;
   options: RouteCardOption[];
   liffUrl?: string;
-}
-
-/**
- * Extracts the SOS session id from a tracking URL. The tracking URL is built by
- * the SOS service as `${base}/zh-TW?sos=<sessionId>`, so the id is read from the
- * `sos` query parameter without coupling this adapter to the service layer.
- *
- * @param trackingUrl The public tracking URL embedded in the notification.
- * @returns The session id, or undefined when the URL cannot be parsed.
- */
-function extractSessionId(trackingUrl: string): string | undefined {
-  try {
-    return new URL(trackingUrl).searchParams.get("sos") ?? undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 /**
@@ -114,7 +108,8 @@ function buildSosNotificationFlex(
     });
   }
 
-  const sessionId = extractSessionId(payload.trackingUrl);
+  // The public tracking URL contains a share token, never a database id.
+  const sessionId = payload.sessionId;
   const footerContents: messagingApi.FlexComponent[] = [];
   if (sessionId) {
     footerContents.push(
@@ -149,7 +144,7 @@ function buildSosNotificationFlex(
     action: {
       type: "uri",
       label: LINE_MSG.VIEW_LOCATION,
-      uri: payload.trackingUrl,
+      uri: forLineExternalOpen(payload.trackingUrl),
     },
   });
 
@@ -181,9 +176,10 @@ export function buildClaimedControlsMessage(
 ): messagingApi.TextMessage {
   return {
     type: "text",
-    text: "可使用下方按鈕更新處理狀態，或在抵達後解除警報。",
+    text: LINE_MSG.CLAIMED_CONTROLS,
     quickReply: {
       items: [
+        shareLocationItem(),
         {
           type: "action",
           action: {
@@ -861,8 +857,9 @@ export async function showLoadingAnimation(chatId: string): Promise<void> {
 export async function replyText(
   replyToken: string,
   text: string,
+  fallbackUserId?: string,
 ): Promise<void> {
-  await replyMessages(replyToken, [{ type: "text", text }]);
+  await replyMessages(replyToken, [{ type: "text", text }], fallbackUserId);
 }
 
 /**
@@ -876,10 +873,11 @@ export async function replyAgentResult(
   replyToken: string,
   text: string,
   routeCard?: RouteCardPayload | null,
+  fallbackUserId?: string,
 ): Promise<void> {
   const messages: LineReplyMessage[] = [{ type: "text", text }];
   if (routeCard) messages.push(buildRouteCardFlex(routeCard));
-  await replyMessages(replyToken, messages);
+  await replyMessages(replyToken, messages, fallbackUserId);
 }
 
 /**
@@ -891,6 +889,7 @@ export async function replyAgentResult(
 export async function replyMessages(
   replyToken: string,
   messages: LineReplyMessage[],
+  fallbackUserId?: string,
 ): Promise<void> {
   try {
     await getClient().replyMessage({
@@ -898,6 +897,375 @@ export async function replyMessages(
       messages,
     });
   } catch (err) {
+    if (fallbackUserId && isExpiredReplyToken(err)) {
+      try {
+        await getClient().pushMessage({ to: fallbackUserId, messages });
+        return;
+      } catch (pushErr) {
+        console.error("[line.adapter] reply push fallback failed", pushErr);
+        return;
+      }
+    }
     console.error("[line.adapter] replyMessages failed", err);
   }
+}
+
+/**
+ * A slow reply (agent tool loop, voice transcription) can outlive the one-time
+ * reply token; LINE then answers 400 "Invalid reply token" and nothing was sent,
+ * so a push is safe and cannot duplicate the reply.
+ */
+function isExpiredReplyToken(err: unknown): boolean {
+  return (
+    err instanceof HTTPFetchError &&
+    err.status === 400 &&
+    /reply token/i.test(err.body ?? "")
+  );
+}
+
+/** LINE's native "send my location" picker; only valid as a quick reply. */
+function shareLocationItem(): messagingApi.QuickReplyItem {
+  return {
+    type: "action",
+    action: { type: "location", label: LINE_MSG.SHARE_MY_LOCATION },
+  };
+}
+
+function messageItem(label: string, text: string): messagingApi.QuickReplyItem {
+  return { type: "action", action: { type: "message", label, text } };
+}
+
+/**
+ * First message after a follow: two clear entry points instead of assuming the
+ * user already holds a binding code.
+ *
+ * @returns The welcome text with quick replies.
+ */
+export function buildWelcomeMessage(): messagingApi.TextMessage {
+  return {
+    type: "text",
+    text: LINE_MSG.WELCOME,
+    quickReply: {
+      items: [
+        {
+          type: "action",
+          action: {
+            type: "postback",
+            label: "我有綁定碼",
+            data: "action=sos_bind_start",
+            displayText: "我有綁定碼",
+            inputOption: "openKeyboard",
+          },
+        },
+        {
+          type: "action",
+          action: {
+            type: "postback",
+            label: "怎麼使用",
+            data: "action=sos_help",
+            displayText: "怎麼使用",
+          },
+        },
+        messageItem("附近無障礙廁所", "我附近的無障礙廁所在哪裡？"),
+        messageItem("今天天氣", "今天天氣如何？"),
+      ],
+    },
+  };
+}
+
+/**
+ * A prompt carrying LINE's location picker, for flows that need the contact's
+ * current position (route to the person in distress).
+ *
+ * @param text The prompt text.
+ * @returns A text message with the share-location quick reply.
+ */
+export function buildShareLocationMessage(
+  text: string,
+): messagingApi.TextMessage {
+  return { type: "text", text, quickReply: { items: [shareLocationItem()] } };
+}
+
+/**
+ * Reply to a shared location. With an active SOS the next step is the route to
+ * the family member; otherwise offer the common place-based queries, which the
+ * agent answers using the location remembered for this chat.
+ *
+ * @param activeSosSessionId The single active SOS this user follows, if any.
+ * @param hasActiveSos Whether any SOS this user follows is active.
+ * @returns The follow-up text message.
+ */
+export function buildLocationFollowUpMessage(
+  activeSosSessionId?: string,
+  hasActiveSos = false,
+): messagingApi.TextMessage {
+  if (hasActiveSos) {
+    const items: messagingApi.QuickReplyItem[] = [];
+    if (activeSosSessionId) {
+      items.push({
+        type: "action",
+        action: {
+          type: "postback",
+          label: LINE_MSG.SOS_PLAN_ROUTE,
+          data: `action=sos_route&sid=${activeSosSessionId}`,
+          displayText: LINE_MSG.SOS_PLAN_ROUTE,
+        },
+      });
+    }
+    items.push({
+      type: "action",
+      action: {
+        type: "postback",
+        label: LINE_MSG.SOS_STATUS_TITLE,
+        data: "action=sos_status",
+        displayText: "查看進行中的求救",
+      },
+    });
+    return {
+      type: "text",
+      text: LINE_MSG.LOCATION_RECEIVED_SOS,
+      quickReply: { items },
+    };
+  }
+  return {
+    type: "text",
+    text: LINE_MSG.LOCATION_RECEIVED,
+    quickReply: {
+      items: [
+        messageItem("無障礙廁所", "這附近的無障礙廁所在哪裡？"),
+        messageItem("無障礙設施", "這附近有哪些無障礙設施？"),
+        messageItem("天氣", "這裡現在天氣如何？"),
+        messageItem("空氣品質", "這裡的空氣品質如何？"),
+        messageItem("規劃路線", "我想從這裡出發規劃路線"),
+      ],
+    },
+  };
+}
+
+function activeSosBubble(
+  entry: ActiveSosDetail & { trackingUrl: string },
+): messagingApi.FlexBubble {
+  const status =
+    SOS_HANDLING_LABEL[entry.handlingStatus] ?? entry.handlingStatus;
+  const body: messagingApi.FlexComponent[] = [
+    {
+      type: "text",
+      text: entry.ownerName,
+      weight: "bold",
+      size: "lg",
+      wrap: true,
+    },
+    {
+      type: "text",
+      text: `${SOS_TYPE_LABEL[entry.type]}・${status}${
+        entry.claimedByName ? `（${entry.claimedByName}）` : ""
+      }`,
+      color: "#D0021B",
+      size: "sm",
+      wrap: true,
+      margin: "sm",
+    },
+    {
+      type: "text",
+      text: `位置：${entry.address ?? "地址查詢中"}`,
+      wrap: true,
+      size: "sm",
+      margin: "md",
+    },
+    {
+      type: "text",
+      text: `位置更新：${taipeiHHmm(new Date(entry.locationUpdatedAt))}`,
+      size: "xs",
+      color: "#666666",
+      margin: "sm",
+    },
+  ];
+  const footer: messagingApi.FlexComponent[] = [
+    {
+      type: "button",
+      style: "primary",
+      color: "#D0021B",
+      action: {
+        type: "uri",
+        label: LINE_MSG.VIEW_LOCATION,
+        uri: forLineExternalOpen(entry.trackingUrl),
+      },
+    },
+    {
+      type: "button",
+      style: "secondary",
+      action: {
+        type: "postback",
+        label: LINE_MSG.SOS_PLAN_ROUTE,
+        data: `action=sos_route&sid=${entry.sessionId}`,
+        displayText: LINE_MSG.SOS_PLAN_ROUTE,
+      },
+    },
+  ];
+  if (!entry.claimedByName) {
+    footer.push({
+      type: "button",
+      style: "link",
+      action: {
+        type: "postback",
+        label: LINE_MSG.SOS_CLAIM_ACTION,
+        data: `action=claim&sid=${entry.sessionId}`,
+        displayText: "我來處理這件事",
+      },
+    });
+  }
+  return {
+    type: "bubble",
+    body: { type: "box", layout: "vertical", contents: body },
+    footer: {
+      type: "box",
+      layout: "vertical",
+      spacing: "sm",
+      contents: footer,
+    },
+  };
+}
+
+/**
+ * Status carousel of the active SOS events this contact follows: who, what,
+ * where, who is handling it, plus live-location / route / claim actions.
+ *
+ * @param entries Active events with their public tracking URLs.
+ * @returns A Flex carousel with a share-location quick reply.
+ */
+export function buildActiveSosMessage(
+  entries: Array<ActiveSosDetail & { trackingUrl: string }>,
+): messagingApi.FlexMessage {
+  return {
+    type: "flex",
+    altText: LINE_MSG.SOS_STATUS_TITLE,
+    contents: {
+      type: "carousel",
+      contents: entries.slice(0, MAX_CAROUSEL_BUBBLES).map(activeSosBubble),
+    },
+    quickReply: { items: [shareLocationItem()] },
+  };
+}
+
+/**
+ * @param url The web route-preview URL.
+ * @returns A short message whose button opens the route preview.
+ */
+export function buildRoutePreviewLinkMessage(
+  url: string,
+): messagingApi.TemplateMessage {
+  return {
+    type: "template",
+    altText: LINE_MSG.SOS_ROUTE_READY,
+    template: {
+      type: "buttons",
+      text: LINE_MSG.SOS_ROUTE_READY,
+      actions: [{ type: "uri", label: LINE_MSG.SOS_PLAN_ROUTE, uri: url }],
+    },
+  };
+}
+
+let blobClient: messagingApi.MessagingApiBlobClient | null = null;
+
+function getBlobClient(): messagingApi.MessagingApiBlobClient {
+  if (!blobClient) {
+    blobClient = new messagingApi.MessagingApiBlobClient({
+      channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN ?? "",
+    });
+  }
+  return blobClient;
+}
+
+/**
+ * Downloads a user-sent message's binary content (e.g. a voice message).
+ *
+ * @param messageId The LINE message id.
+ * @param maxBytes Abort once the content exceeds this size.
+ * @returns The content bytes.
+ * @throws When the download fails or exceeds `maxBytes`.
+ */
+export async function downloadMessageContent(
+  messageId: string,
+  maxBytes: number,
+): Promise<Buffer> {
+  const stream = await getBlobClient().getMessageContent(messageId);
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of stream) {
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buf.length;
+    if (size > maxBytes) {
+      stream.destroy();
+      throw new Error("LINE message content too large");
+    }
+    chunks.push(buf);
+  }
+  return Buffer.concat(chunks);
+}
+
+/**
+ * Resolves a rich menu alias to its current menu id.
+ *
+ * @param aliasId The rich menu alias id.
+ * @returns The rich menu id, or null when the alias does not exist.
+ */
+export async function getRichMenuIdByAlias(
+  aliasId: string,
+): Promise<string | null> {
+  try {
+    const alias = await getClient().getRichMenuAlias(aliasId);
+    return alias.richMenuId;
+  } catch (err) {
+    if (err instanceof HTTPFetchError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+/**
+ * @param lineUserId The LINE user to switch.
+ * @param richMenuId The rich menu to show them.
+ */
+export async function linkRichMenuToUser(
+  lineUserId: string,
+  richMenuId: string,
+): Promise<void> {
+  await getClient().linkRichMenuIdToUser(lineUserId, richMenuId);
+}
+
+/**
+ * Creates a rich menu with its image and points `aliasId` at it, then deletes
+ * the menu the alias pointed to before (so re-running setup does not leak menus).
+ *
+ * @param request The rich menu definition.
+ * @param image The PNG menu image (must match `request.size`).
+ * @param aliasId Stable alias the runtime resolves.
+ * @param makeDefault Also make it the default menu for users without a link.
+ * @returns The new rich menu id.
+ */
+export async function publishRichMenu(
+  request: messagingApi.RichMenuRequest,
+  image: Buffer,
+  aliasId: string,
+  makeDefault = false,
+): Promise<string> {
+  const api = getClient();
+  await api.validateRichMenuObject(request);
+  const { richMenuId } = await api.createRichMenu(request);
+  await getBlobClient().setRichMenuImage(
+    richMenuId,
+    new Blob([new Uint8Array(image)], { type: "image/png" }),
+  );
+  const previous = await getRichMenuIdByAlias(aliasId);
+  if (previous) {
+    await api.updateRichMenuAlias(aliasId, { richMenuId });
+  } else {
+    await api.createRichMenuAlias({ richMenuAliasId: aliasId, richMenuId });
+  }
+  if (makeDefault) await api.setDefaultRichMenu(richMenuId);
+  if (previous && previous !== richMenuId) {
+    await api.deleteRichMenu(previous).catch((err) => {
+      console.warn("[line.adapter] old rich menu delete failed", err);
+    });
+  }
+  return richMenuId;
 }

@@ -89,6 +89,20 @@ export const SosPublicResponseSchema = ApiResponse(
       .nullable()
       .openapi({ example: "台北市信義區市府路1號" }),
     updatedAt: z.string().openapi({ example: "2026-07-19T08:30:00.000Z" }),
+    handlingStatus: z
+      .enum([
+        "pending",
+        "notified",
+        "acknowledged",
+        "claimed",
+        "en_route",
+        "arrived",
+        "resolved",
+      ])
+      .openapi({
+        example: "en_route",
+        description: "家人處理進度（不含任何聯絡人姓名）",
+      }),
   }),
   "SosPublicResponse",
 );

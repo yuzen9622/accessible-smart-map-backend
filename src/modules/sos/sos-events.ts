@@ -110,3 +110,36 @@ export function onSosUpdate(
     emitter.off(ch, cb);
   };
 }
+
+/**
+ * Contact-facing lifecycle edges (contacts were told an SOS started, or that it
+ * ended). Lets other modules — e.g. LINE rich-menu switching — react without the
+ * SOS module importing them.
+ */
+export interface SosContactLifecycleEvent {
+  kind: "notified" | "resolved";
+  lineUserIds: string[];
+}
+
+const CONTACT_LIFECYCLE_CHANNEL = "sos:contact-lifecycle";
+
+/**
+ * @param event The lifecycle edge and the LINE users it concerns.
+ */
+export function emitSosContactLifecycle(event: SosContactLifecycleEvent): void {
+  if (!event.lineUserIds.length) return;
+  emitter.emit(CONTACT_LIFECYCLE_CHANNEL, event);
+}
+
+/**
+ * @param cb Callback invoked for each contact lifecycle edge.
+ * @returns An unsubscribe function.
+ */
+export function onSosContactLifecycle(
+  cb: (event: SosContactLifecycleEvent) => void,
+): () => void {
+  emitter.on(CONTACT_LIFECYCLE_CHANNEL, cb);
+  return () => {
+    emitter.off(CONTACT_LIFECYCLE_CHANNEL, cb);
+  };
+}

@@ -11,7 +11,11 @@ import {
   findSessionById,
   findUserName,
 } from "./sos.repository";
-import { buildSosSnapshot, emitSosUpdate } from "./sos-events";
+import {
+  buildSosSnapshot,
+  emitSosContactLifecycle,
+  emitSosUpdate,
+} from "./sos-events";
 
 /** Freeze the audience and payload before the first network attempt. */
 export async function makeInitialNotice(
@@ -44,11 +48,15 @@ export async function deliverInitialNotice(
   try {
     const count = await sendSosNotification(
       notice.recipients,
-      notice.payload,
+      { ...notice.payload, sessionId: id },
       notice.retryKey,
       SOS_NOTICE.timeoutMs,
     );
     await acceptInitialNotice(id, claimId, count);
+    emitSosContactLifecycle({
+      kind: "notified",
+      lineUserIds: notice.recipients,
+    });
   } catch (error) {
     console.warn("[sos] initial notification attempt failed", {
       sessionId: id,

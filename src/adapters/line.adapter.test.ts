@@ -2,20 +2,39 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const mockReplyMessage = vi.fn();
 const mockShowLoadingAnimation = vi.fn();
+const mockPushMessage = vi.fn();
+const mockMulticast = vi.fn();
 
-vi.mock("@line/bot-sdk", () => ({
-  messagingApi: {
-    MessagingApiClient: vi.fn(function MessagingApiClient() {
-      return {
-        replyMessage: mockReplyMessage,
-        multicast: vi.fn(),
-        showLoadingAnimation: mockShowLoadingAnimation,
-      };
-    }),
-  },
-}));
+vi.mock("@line/bot-sdk", () => {
+  class HTTPFetchError extends Error {
+    constructor(
+      public status: number,
+      public body: string,
+    ) {
+      super(`HTTP ${status}`);
+    }
+  }
+  return {
+    HTTPFetchError,
+    messagingApi: {
+      MessagingApiClient: vi.fn(function MessagingApiClient() {
+        return {
+          replyMessage: mockReplyMessage,
+          pushMessage: mockPushMessage,
+          multicast: mockMulticast,
+          showLoadingAnimation: mockShowLoadingAnimation,
+        };
+      }),
+    },
+  };
+});
 
+import { HTTPFetchError } from "@line/bot-sdk";
 import {
+  buildActiveSosMessage,
+  buildClaimedControlsMessage,
+  replyMessages,
+  sendSosNotification,
   buildBoundContactsMessage,
   buildSosActionSelectionMessage,
   buildSosHistoryMessage,
@@ -29,6 +48,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockReplyMessage.mockResolvedValue(undefined);
   mockShowLoadingAnimation.mockResolvedValue({});
+  mockPushMessage.mockResolvedValue({});
+  mockMulticast.mockResolvedValue({});
 });
 
 describe("line.adapter — SOS target selection", () => {
@@ -261,5 +282,100 @@ describe("line.adapter — SOS menu builders", () => {
       ),
     ).toEqual(["action=sos_history&owner=u1", "action=sos_history&owner=u2"]);
     expect((filtered.quickReply?.items ?? []).length).toBeLessThanOrEqual(13);
+  });
+});
+
+describe("line.adapter — reply fallback", () => {
+  const messages = [{ type: "text" as const, text: "hi" }];
+
+  it("pushes when a slow reply outlived the reply token", async () => {
+    mockReplyMessage.mockRejectedValue(
+      new (HTTPFetchError as any)(400, '{"message":"Invalid reply token"}'),
+    );
+    await replyMessages("rt", messages, "U1");
+    expect(mockPushMessage).toHaveBeenCalledWith({ to: "U1", messages });
+  });
+
+  it("does not push on other failures (the reply may have been delivered)", async () => {
+    mockReplyMessage.mockRejectedValue(new (HTTPFetchError as any)(500, ""));
+    await replyMessages("rt", messages, "U1");
+    expect(mockPushMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not push without a fallback user", async () => {
+    mockReplyMessage.mockRejectedValue(
+      new (HTTPFetchError as any)(400, "Invalid reply token"),
+    );
+    await replyMessages("rt", messages);
+    expect(mockPushMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("line.adapter — app-aware live location links", () => {
+  it("opens the notification's tracking link outside LINE so the app can claim it", async () => {
+    await sendSosNotification(
+      ["U1"],
+      {
+        sessionId: "64b7f0c2a1b2c3d4e5f60718",
+        type: "body",
+        trackingUrl: "https://map.example.com/zh-TW/sos/?token=abc",
+      },
+      "retry",
+      1000,
+    );
+    const flex = mockMulticast.mock.calls[0][0].messages[0];
+    const uris = JSON.stringify(flex).match(/"uri":"[^"]+"/g);
+    expect(uris).toEqual([
+      '"uri":"https://map.example.com/zh-TW/sos/?token=abc&openExternalBrowser=1"',
+    ]);
+  });
+
+  it("status cards link by tracking URL and claim by session id", () => {
+    const message = buildActiveSosMessage([
+      {
+        sessionId: "64b7f0c2a1b2c3d4e5f60718",
+        shareToken: "t",
+        ownerName: "媽媽",
+        type: "body",
+        address: null,
+        handlingStatus: "notified",
+        claimedByName: null,
+        locationUpdatedAt: new Date("2026-10-12T10:00:00Z"),
+        trackingUrl: "https://map.example.com/zh-TW/sos/?token=t",
+      },
+    ]);
+    const json = JSON.stringify(message);
+    expect(json).toContain("openExternalBrowser=1");
+    expect(json).toContain("action=claim&sid=64b7f0c2a1b2c3d4e5f60718");
+    expect(json).toContain("action=sos_route&sid=64b7f0c2a1b2c3d4e5f60718");
+    expect(message.quickReply?.items?.[0]?.action?.type).toBe("location");
+  });
+
+  it("hides the claim button once someone is handling it", () => {
+    const json = JSON.stringify(
+      buildActiveSosMessage([
+        {
+          sessionId: "s1",
+          shareToken: "t",
+          ownerName: "媽媽",
+          type: "body",
+          address: null,
+          handlingStatus: "claimed",
+          claimedByName: "小明",
+          locationUpdatedAt: new Date(),
+          trackingUrl: "https://map.example.com/zh-TW/sos/?token=t",
+        },
+      ]),
+    );
+    expect(json).not.toContain("action=claim");
+    expect(json).toContain("小明");
+  });
+
+  it("claimed controls start with LINE's share-location picker", () => {
+    const items = buildClaimedControlsMessage("s1").quickReply?.items ?? [];
+    expect(items[0].action).toEqual({
+      type: "location",
+      label: "分享我的位置",
+    });
   });
 });

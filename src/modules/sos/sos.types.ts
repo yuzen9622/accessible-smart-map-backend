@@ -7,6 +7,17 @@ export interface ActiveSosChoice {
   createdAt: Date;
 }
 
+export interface ActiveSosDetail {
+  sessionId: string;
+  shareToken: string;
+  ownerName: string;
+  type: SosType;
+  address: string | null;
+  handlingStatus: string;
+  claimedByName: string | null;
+  locationUpdatedAt: Date;
+}
+
 export interface ActiveSosChoicePage {
   bound: boolean;
   sessions: ActiveSosChoice[];

@@ -21,6 +21,32 @@ vi.mock("../../adapters/line.adapter", () => ({
   })),
   buildSosHistoryMessage: vi.fn(() => ({ type: "flex", altText: "history" })),
   buildUnbindConfirmMessage: vi.fn(() => ({ type: "text", text: "confirm" })),
+  buildWelcomeMessage: vi.fn(() => ({ type: "text", text: "welcome" })),
+  buildShareLocationMessage: vi.fn((text: string) => ({
+    type: "text",
+    text,
+    _shareLocation: true,
+  })),
+  buildLocationFollowUpMessage: vi.fn((sid?: string, hasActiveSos = false) => ({
+    type: "text",
+    text: "location-follow-up",
+    _sid: sid,
+    _hasActiveSos: hasActiveSos,
+  })),
+  buildActiveSosMessage: vi.fn(() => ({ type: "flex", altText: "status" })),
+  buildRoutePreviewLinkMessage: vi.fn((url: string) => ({
+    type: "template",
+    _url: url,
+  })),
+  downloadMessageContent: vi.fn(),
+}));
+
+vi.mock("./line-richmenu", () => ({
+  syncRichMenu: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../../adapters/ai-audio.adapter", () => ({
+  transcribeAudio: vi.fn(),
 }));
 
 vi.mock("./line-agent.service", () => ({
@@ -33,6 +59,9 @@ vi.mock("./line-memory", () => ({
   getPendingRename: vi.fn().mockResolvedValue(null),
   setPendingRename: vi.fn().mockResolvedValue(undefined),
   clearPendingRename: vi.fn().mockResolvedValue(undefined),
+  getLineLastLocation: vi.fn().mockResolvedValue(undefined),
+  setLineLastLocation: vi.fn().mockResolvedValue(undefined),
+  clearLineLastLocation: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./line-menu.service", () => ({
@@ -58,6 +87,10 @@ vi.mock("../sos/sos.service", () => ({
   updateHandlingStatus: vi.fn(),
   resolveSession: vi.fn(),
   getAuthorizedSessionForLineUser: vi.fn(),
+  listActiveSosForLineUser: vi.fn().mockResolvedValue({
+    bound: false,
+    sessions: [],
+  }),
 }));
 
 vi.mock("../../config/redis", () => ({
@@ -109,6 +142,7 @@ import {
   clearPendingRename,
   getLineChatHistory,
   getPendingRename,
+  setLineLastLocation,
   setPendingRename,
 } from "./line-memory";
 import {
@@ -138,9 +172,21 @@ import EmergencyContact from "../../model/emergency-contact.model";
 import SosSession from "../../model/sos-session.model";
 import User from "../../model/user.model";
 import { planAccessibleRouteFromRequest } from "../accessible-route/accessible-route.service";
+import {
+  buildActiveSosMessage,
+  buildRoutePreviewLinkMessage,
+  buildShareLocationMessage,
+  downloadMessageContent,
+} from "../../adapters/line.adapter";
+import { transcribeAudio } from "../../adapters/ai-audio.adapter";
+import { syncRichMenu } from "./line-richmenu";
+import { getLineLastLocation } from "./line-memory";
+import { listActiveSosForLineUser } from "../sos/sos.service";
 import { LINE_MSG, SOS_MSG, SOS_REASON } from "../../constants/messages";
 import { ResponseCode } from "../../types/code";
 import type { LineEvent } from "./line.types";
+
+const POSTBACK_SESSION_ID = "68f000000000000000000001";
 
 const contactModel = EmergencyContact as unknown as {
   find: ReturnType<typeof vi.fn>;
@@ -164,7 +210,11 @@ beforeEach(() => {
   vi.mocked(replyMessages).mockResolvedValue(undefined);
   vi.mocked(showLoadingAnimation).mockResolvedValue(undefined);
   vi.mocked(getAuthorizedSessionForLineUser).mockResolvedValue({
-    session: { _id: "s1", userId: "u1", status: "active" } as any,
+    session: {
+      _id: POSTBACK_SESSION_ID,
+      userId: "u1",
+      status: "active",
+    } as any,
     ownerName: "王小明",
   });
   vi.mocked(buildClaimedControlsMessage).mockReturnValue({
@@ -528,7 +578,9 @@ describe("line.service — follow", () => {
         source: { type: "user", userId: "U1" },
       } as unknown as LineEvent,
     ]);
-    expect(vi.mocked(replyText)).toHaveBeenCalledWith("rF", LINE_MSG.WELCOME);
+    expect(vi.mocked(replyMessages)).toHaveBeenCalledWith("rF", [
+      { type: "text", text: "welcome" },
+    ]);
   });
 });
 
@@ -549,6 +601,7 @@ describe("line.service — text message (agent loop)", () => {
       "r1",
       "你好呀",
       null,
+      "U1",
     );
     expect(vi.mocked(appendLineChatTurn)).toHaveBeenCalledWith(
       "U1",
@@ -587,6 +640,7 @@ describe("line.service — text message (agent loop)", () => {
       "r1",
       "台北目前多雲。",
       null,
+      "U1",
     );
   });
 
@@ -633,6 +687,7 @@ describe("line.service — text message (agent loop)", () => {
         liffUrl:
           "https://liff.example.com/route?sessionId=a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
       },
+      "U1",
     );
   });
 
@@ -644,6 +699,7 @@ describe("line.service — text message (agent loop)", () => {
     expect(vi.mocked(replyText)).toHaveBeenCalledWith(
       "r1",
       LINE_MSG.AI_UNAVAILABLE,
+      "U1",
     );
   });
 
@@ -656,6 +712,7 @@ describe("line.service — text message (agent loop)", () => {
         "r1",
         LINE_MSG.AI_UNAVAILABLE,
         null,
+        "U1",
       );
     },
   );
@@ -669,7 +726,7 @@ describe("line.service — text message (agent loop)", () => {
       new Error("LINE unavailable"),
     );
     await handleEvents([textEvent("交給我吧")]);
-    expect(replyText).toHaveBeenCalledWith("r1", LINE_MSG.AI_UNAVAILABLE);
+    expect(replyText).toHaveBeenCalledWith("r1", LINE_MSG.AI_UNAVAILABLE, "U1");
     expect(replyText).not.toHaveBeenCalledWith("r1", LINE_MSG.INFO);
   });
 
@@ -685,6 +742,7 @@ describe("line.service — text message (agent loop)", () => {
       "r1",
       "台北目前 多雲\n・ 溫度 28 度",
       null,
+      "U1",
     );
   });
 
@@ -722,29 +780,36 @@ describe("line.service — text message (agent loop)", () => {
       "r1",
       "你好呀",
       null,
+      "U1",
     );
   });
 });
 
 describe("line.service — postback (deterministic SOS controls)", () => {
   it("ack delegates to acknowledgeSession and surfaces the message", async () => {
-    await handleEvents([postbackEvent("action=ack&sid=s1")]);
+    await handleEvents([
+      postbackEvent(`action=ack&sid=${POSTBACK_SESSION_ID}`),
+    ]);
 
     expect(vi.mocked(acknowledgeSession)).toHaveBeenCalledWith({
-      sessionId: "s1",
+      sessionId: POSTBACK_SESSION_ID,
       lineUserId: "U1",
     });
     expect(vi.mocked(replyText)).toHaveBeenCalledWith("rp", "已確認收到通知");
   });
 
   it("claim success replies the message plus the claim-controls message", async () => {
-    await handleEvents([postbackEvent("action=claim&sid=s1")]);
+    await handleEvents([
+      postbackEvent(`action=claim&sid=${POSTBACK_SESSION_ID}`),
+    ]);
 
     expect(vi.mocked(claimSession)).toHaveBeenCalledWith({
-      sessionId: "s1",
+      sessionId: POSTBACK_SESSION_ID,
       lineUserId: "U1",
     });
-    expect(vi.mocked(buildClaimedControlsMessage)).toHaveBeenCalledWith("s1");
+    expect(vi.mocked(buildClaimedControlsMessage)).toHaveBeenCalledWith(
+      POSTBACK_SESSION_ID,
+    );
     expect(vi.mocked(replyMessages)).toHaveBeenCalledWith("rp", [
       { type: "text", text: "你已承接此事件" },
       { type: "text", text: "controls" },
@@ -758,7 +823,9 @@ describe("line.service — postback (deterministic SOS controls)", () => {
       message: "此事件已由他人承接",
     } as any);
 
-    await handleEvents([postbackEvent("action=claim&sid=s1")]);
+    await handleEvents([
+      postbackEvent(`action=claim&sid=${POSTBACK_SESSION_ID}`),
+    ]);
 
     expect(vi.mocked(replyMessages)).not.toHaveBeenCalled();
     expect(vi.mocked(replyText)).toHaveBeenCalledWith(
@@ -768,10 +835,12 @@ describe("line.service — postback (deterministic SOS controls)", () => {
   });
 
   it("status delegates handlingStatus to updateHandlingStatus", async () => {
-    await handleEvents([postbackEvent("action=status&sid=s1&v=en_route")]);
+    await handleEvents([
+      postbackEvent(`action=status&sid=${POSTBACK_SESSION_ID}&v=en_route`),
+    ]);
 
     expect(vi.mocked(updateHandlingStatus)).toHaveBeenCalledWith({
-      sessionId: "s1",
+      sessionId: POSTBACK_SESSION_ID,
       lineUserId: "U1",
       handlingStatus: "en_route",
     });
@@ -779,7 +848,9 @@ describe("line.service — postback (deterministic SOS controls)", () => {
   });
 
   it("rejects an invalid status value", async () => {
-    await handleEvents([postbackEvent("action=status&sid=s1&v=bogus")]);
+    await handleEvents([
+      postbackEvent(`action=status&sid=${POSTBACK_SESSION_ID}&v=bogus`),
+    ]);
 
     expect(vi.mocked(updateHandlingStatus)).not.toHaveBeenCalled();
     expect(vi.mocked(replyText)).toHaveBeenCalledWith(
@@ -789,10 +860,12 @@ describe("line.service — postback (deterministic SOS controls)", () => {
   });
 
   it("resolve delegates to resolveSession", async () => {
-    await handleEvents([postbackEvent("action=resolve&sid=s1")]);
+    await handleEvents([
+      postbackEvent(`action=resolve&sid=${POSTBACK_SESSION_ID}`),
+    ]);
 
     expect(vi.mocked(resolveSession)).toHaveBeenCalledWith({
-      sessionId: "s1",
+      sessionId: POSTBACK_SESSION_ID,
       lineUserId: "U1",
     });
     expect(vi.mocked(replyText)).toHaveBeenCalledWith("rp", "已解除求救");
@@ -809,7 +882,9 @@ describe("line.service — postback (deterministic SOS controls)", () => {
   });
 
   it("rejects an unknown action without any session lookup", async () => {
-    await handleEvents([postbackEvent("action=bogus&sid=s1")]);
+    await handleEvents([
+      postbackEvent(`action=bogus&sid=${POSTBACK_SESSION_ID}`),
+    ]);
 
     expect(vi.mocked(getAuthorizedSessionForLineUser)).not.toHaveBeenCalled();
     expect(vi.mocked(acknowledgeSession)).not.toHaveBeenCalled();
@@ -820,7 +895,9 @@ describe("line.service — postback (deterministic SOS controls)", () => {
   });
 
   it("rejects an invalid status value without any session lookup", async () => {
-    await handleEvents([postbackEvent("action=status&sid=s1&v=bogus")]);
+    await handleEvents([
+      postbackEvent(`action=status&sid=${POSTBACK_SESSION_ID}&v=bogus`),
+    ]);
 
     expect(vi.mocked(getAuthorizedSessionForLineUser)).not.toHaveBeenCalled();
     expect(vi.mocked(updateHandlingStatus)).not.toHaveBeenCalled();
@@ -832,11 +909,17 @@ describe("line.service — postback (deterministic SOS controls)", () => {
 
   it("replies the unified resolved message and skips the action for a resolved session", async () => {
     vi.mocked(getAuthorizedSessionForLineUser).mockResolvedValue({
-      session: { _id: "s1", userId: "u1", status: "resolved" } as any,
+      session: {
+        _id: POSTBACK_SESSION_ID,
+        userId: "u1",
+        status: "resolved",
+      } as any,
       ownerName: "王小明",
     });
 
-    await handleEvents([postbackEvent("action=claim&sid=s1")]);
+    await handleEvents([
+      postbackEvent(`action=claim&sid=${POSTBACK_SESSION_ID}`),
+    ]);
 
     expect(vi.mocked(claimSession)).not.toHaveBeenCalled();
     expect(vi.mocked(showLoadingAnimation)).not.toHaveBeenCalled();
@@ -849,7 +932,9 @@ describe("line.service — postback (deterministic SOS controls)", () => {
   it("replies the standard permission message for an unauthorized contact", async () => {
     vi.mocked(getAuthorizedSessionForLineUser).mockResolvedValue(null as any);
 
-    await handleEvents([postbackEvent("action=ack&sid=s1")]);
+    await handleEvents([
+      postbackEvent(`action=ack&sid=${POSTBACK_SESSION_ID}`),
+    ]);
 
     expect(vi.mocked(acknowledgeSession)).not.toHaveBeenCalled();
     expect(vi.mocked(replyText)).toHaveBeenCalledWith(
@@ -866,7 +951,9 @@ describe("line.service — postback (deterministic SOS controls)", () => {
       data: { reason: SOS_REASON.SESSION_NOT_ACTIVE },
     } as any);
 
-    await handleEvents([postbackEvent("action=claim&sid=s1")]);
+    await handleEvents([
+      postbackEvent(`action=claim&sid=${POSTBACK_SESSION_ID}`),
+    ]);
 
     expect(vi.mocked(replyMessages)).not.toHaveBeenCalled();
     expect(vi.mocked(replyText)).toHaveBeenCalledWith(
@@ -883,7 +970,9 @@ describe("line.service — postback (deterministic SOS controls)", () => {
       data: { reason: SOS_REASON.ALREADY_RESOLVED },
     } as any);
 
-    await handleEvents([postbackEvent("action=ack&sid=s1")]);
+    await handleEvents([
+      postbackEvent(`action=ack&sid=${POSTBACK_SESSION_ID}`),
+    ]);
 
     expect(vi.mocked(replyText)).toHaveBeenCalledWith(
       "rp",
@@ -892,7 +981,9 @@ describe("line.service — postback (deterministic SOS controls)", () => {
   });
 
   it("shows the loading animation for an active claim postback", async () => {
-    await handleEvents([postbackEvent("action=claim&sid=s1")]);
+    await handleEvents([
+      postbackEvent(`action=claim&sid=${POSTBACK_SESSION_ID}`),
+    ]);
 
     expect(vi.mocked(showLoadingAnimation)).toHaveBeenCalledWith("U1");
   });
@@ -931,10 +1022,16 @@ describe("line.service — location message", () => {
         },
       },
     );
-    expect(vi.mocked(replyText)).toHaveBeenCalledWith(
-      "r2",
-      "收到您的位置！請問要查這個位置的天氣、找附近無障礙設施，還是規劃前往路線呢？",
-    );
+    expect(vi.mocked(setLineLastLocation)).toHaveBeenCalledWith("U1", {
+      latitude: 25.0478,
+      longitude: 121.5171,
+    });
+    expect(vi.mocked(replyMessages)).toHaveBeenCalledWith("r2", [
+      expect.objectContaining({
+        text: "location-follow-up",
+        _hasActiveSos: false,
+      }),
+    ]);
   });
 });
 
@@ -1431,5 +1528,187 @@ describe("line.service — pending display-name edit", () => {
     expect(vi.mocked(replyMessages)).toHaveBeenCalledWith("r1", [
       { type: "text", text: "menu" },
     ]);
+  });
+});
+
+const ACTIVE_SOS = {
+  sessionId: "64b7f0c2a1b2c3d4e5f60718",
+  shareToken: "0123456789abcdef0123456789abcdef",
+  ownerName: "媽媽",
+  type: "body" as const,
+  address: "台北車站",
+  handlingStatus: "notified",
+  claimedByName: null,
+  locationUpdatedAt: new Date("2026-10-12T10:00:00Z"),
+};
+
+function mediaEvent(message: Record<string, unknown>): LineEvent {
+  return {
+    type: "message",
+    replyToken: "rm",
+    source: { type: "user", userId: "U1" },
+    message,
+  } as unknown as LineEvent;
+}
+
+describe("line.service — location follow-up", () => {
+  it("offers the SOS route for the single active event after a location", async () => {
+    vi.mocked(listActiveSosForLineUser).mockResolvedValue({
+      bound: true,
+      sessions: [ACTIVE_SOS],
+    });
+    await handleEvents([locationEvent("r2")]);
+    expect(replyMessages).toHaveBeenCalledWith("r2", [
+      expect.objectContaining({
+        _sid: ACTIVE_SOS.sessionId,
+        _hasActiveSos: true,
+      }),
+    ]);
+  });
+
+  it("passes the remembered location to the agent", async () => {
+    vi.mocked(getLineLastLocation).mockResolvedValue({
+      latitude: 25.03,
+      longitude: 121.56,
+    });
+    vi.mocked(getLineChatHistory).mockResolvedValue([]);
+    vi.mocked(runLineAgent).mockResolvedValue({ text: "好", toolResults: [] });
+    await handleEvents([textEvent("這附近的無障礙廁所在哪裡？")]);
+    expect(runLineAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userLocation: { latitude: 25.03, longitude: 121.56 },
+      }),
+    );
+  });
+});
+
+describe("line.service — SOS route and status postbacks", () => {
+  beforeEach(() => {
+    process.env.PUBLIC_TRACKING_BASE_URL = "https://map.example.com";
+    vi.mocked(listActiveSosForLineUser).mockResolvedValue({
+      bound: true,
+      sessions: [ACTIVE_SOS],
+    });
+  });
+
+  it("asks for the contact's location before planning a route", async () => {
+    vi.mocked(getLineLastLocation).mockResolvedValue(undefined);
+    await handleEvents([postbackEvent("action=sos_route")]);
+    expect(buildShareLocationMessage).toHaveBeenCalledWith(
+      LINE_MSG.SOS_ROUTE_NEED_LOCATION,
+    );
+    expect(buildRoutePreviewLinkMessage).not.toHaveBeenCalled();
+  });
+
+  it("links the route preview by share token once a location is known", async () => {
+    vi.mocked(getLineLastLocation).mockResolvedValue({
+      latitude: 25.03,
+      longitude: 121.56,
+    });
+    await handleEvents([
+      postbackEvent(`action=sos_route&sid=${ACTIVE_SOS.sessionId}`),
+    ]);
+    expect(buildRoutePreviewLinkMessage).toHaveBeenCalledWith(
+      `https://map.example.com/zh-TW/?sessionId=${ACTIVE_SOS.shareToken}`,
+    );
+  });
+
+  it("does not route to an event the user does not follow", async () => {
+    await handleEvents([
+      postbackEvent("action=sos_route&sid=ffffffffffffffffffffffff"),
+    ]);
+    expect(replyText).toHaveBeenCalledWith("rp", LINE_MSG.SOS_NO_ACTIVE);
+    expect(buildRoutePreviewLinkMessage).not.toHaveBeenCalled();
+  });
+
+  it("lets the user pick when several events are active", async () => {
+    vi.mocked(listActiveSosForLineUser).mockResolvedValue({
+      bound: true,
+      sessions: [
+        ACTIVE_SOS,
+        { ...ACTIVE_SOS, sessionId: "64b7f0c2a1b2c3d4e5f60719" },
+      ],
+    });
+    await handleEvents([postbackEvent("action=sos_route")]);
+    expect(buildActiveSosMessage).toHaveBeenCalled();
+  });
+
+  it("builds status cards with share-token tracking links", async () => {
+    await handleEvents([postbackEvent("action=sos_status")]);
+    expect(buildActiveSosMessage).toHaveBeenCalledWith([
+      expect.objectContaining({
+        trackingUrl: `https://map.example.com/zh-TW/sos/?token=${ACTIVE_SOS.shareToken}`,
+      }),
+    ]);
+  });
+});
+
+describe("line.service — media messages", () => {
+  it("answers a voice message through the agent and echoes the transcript", async () => {
+    vi.mocked(downloadMessageContent).mockResolvedValue(Buffer.from("aac"));
+    vi.mocked(transcribeAudio).mockResolvedValue("附近有無障礙廁所嗎");
+    vi.mocked(getLineChatHistory).mockResolvedValue([]);
+    vi.mocked(runLineAgent).mockResolvedValue({
+      text: "有的",
+      toolResults: [],
+    });
+    await handleEvents([
+      mediaEvent({ type: "audio", id: "m1", duration: 3000 }),
+    ]);
+    expect(replyAgentResult).toHaveBeenCalledWith(
+      "rm",
+      "（我聽到的是：「附近有無障礙廁所嗎」）\n有的",
+      null,
+      "U1",
+    );
+  });
+
+  it("never treats a transcript as a binding code", async () => {
+    vi.mocked(downloadMessageContent).mockResolvedValue(Buffer.from("aac"));
+    vi.mocked(transcribeAudio).mockResolvedValue("ABC123");
+    vi.mocked(getLineChatHistory).mockResolvedValue([]);
+    vi.mocked(runLineAgent).mockResolvedValue({ text: "?", toolResults: [] });
+    await handleEvents([
+      mediaEvent({ type: "audio", id: "m1", duration: 1000 }),
+    ]);
+    expect(hasUsableEmergencyContactCode).not.toHaveBeenCalled();
+    expect(bindEmergencyContactCode).not.toHaveBeenCalled();
+  });
+
+  it("rejects voice messages over a minute without downloading", async () => {
+    await handleEvents([
+      mediaEvent({ type: "audio", id: "m1", duration: 61_000 }),
+    ]);
+    expect(downloadMessageContent).not.toHaveBeenCalled();
+    expect(replyText).toHaveBeenCalledWith("rm", LINE_MSG.AUDIO_TOO_LONG);
+  });
+
+  it("replies a hint for images instead of staying silent", async () => {
+    await handleEvents([mediaEvent({ type: "image", id: "m2" })]);
+    expect(replyText).toHaveBeenCalledWith(
+      "rm",
+      LINE_MSG.MEDIA_IMAGE_UNSUPPORTED,
+    );
+  });
+});
+
+describe("line.service — rich menu switching", () => {
+  it("links the menu for a new follower", async () => {
+    await handleEvents([
+      {
+        type: "follow",
+        replyToken: "rF",
+        source: { type: "user", userId: "U1" },
+      } as unknown as LineEvent,
+    ]);
+    expect(syncRichMenu).toHaveBeenCalledWith("U1", true);
+  });
+
+  it("switches the menu after a successful family binding", async () => {
+    vi.mocked(hasUsableEmergencyContactCode).mockResolvedValue(true);
+    vi.mocked(hasUsableLineAccountCode).mockResolvedValue(false);
+    vi.mocked(bindEmergencyContactCode).mockResolvedValue({ ok: true } as any);
+    await handleEvents([textEvent("綁定 ABC123")]);
+    expect(syncRichMenu).toHaveBeenCalledWith("U1", true);
   });
 });

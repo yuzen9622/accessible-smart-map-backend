@@ -56,6 +56,7 @@ import type {
 import { ERROR_MESSAGE, LINE_MSG } from "../../constants/messages";
 import { TransitPreferenceSchema } from "../../schemas/transit-preference.schema";
 import type { DriveLeg } from "../../types/route";
+import { forLineExternalOpen, sosTrackingUrl } from "../../config/public-links";
 import type { TaiwanCityEn } from "../../types/transit";
 
 /** Keep legacy service call arity when no trusted session language was supplied. */
@@ -160,11 +161,6 @@ export async function findA11yPlaces(args: {
 
 function googleMapsUrl(lat: number, lng: number): string {
   return `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
-}
-
-function publicTrackingUrl(sessionId: string): string {
-  const base = process.env.PUBLIC_TRACKING_BASE_URL ?? "";
-  return `${base}/zh-TW?sos=${sessionId}`;
 }
 
 async function getLineContacts(
@@ -1390,7 +1386,7 @@ export async function getActiveSosContext(
         locationUpdatedAt: session.locationUpdatedAt,
         updatedAt: session.updatedAt,
         mapsUrl: googleMapsUrl(session.lat, session.lng),
-        trackingUrl: publicTrackingUrl(String(session._id)),
+        trackingUrl: forLineExternalOpen(sosTrackingUrl(session.shareToken)),
       }));
 
     const latestSession = sessions[0]
@@ -1407,7 +1403,9 @@ export async function getActiveSosContext(
           locationUpdatedAt: sessions[0].locationUpdatedAt,
           updatedAt: sessions[0].updatedAt,
           mapsUrl: googleMapsUrl(sessions[0].lat, sessions[0].lng),
-          trackingUrl: publicTrackingUrl(String(sessions[0]._id)),
+          trackingUrl: forLineExternalOpen(
+            sosTrackingUrl(sessions[0].shareToken),
+          ),
         }
       : null;
 
@@ -1459,7 +1457,7 @@ export async function getSosLiveLocation(
       lng: session.lng,
       address: session.address ?? null,
       locationUpdatedAt: session.locationUpdatedAt,
-      trackingUrl: publicTrackingUrl(String(session._id)),
+      trackingUrl: forLineExternalOpen(sosTrackingUrl(session.shareToken)),
       mapsUrl: googleMapsUrl(session.lat, session.lng),
     });
   } catch (error: any) {
