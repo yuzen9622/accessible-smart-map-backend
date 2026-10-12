@@ -41,10 +41,6 @@ vi.mock("../../adapters/line.adapter", () => ({
   downloadMessageContent: vi.fn(),
 }));
 
-vi.mock("./line-richmenu", () => ({
-  syncRichMenu: vi.fn().mockResolvedValue(undefined),
-}));
-
 vi.mock("../../adapters/ai-audio.adapter", () => ({
   transcribeAudio: vi.fn(),
 }));
@@ -179,7 +175,6 @@ import {
   downloadMessageContent,
 } from "../../adapters/line.adapter";
 import { transcribeAudio } from "../../adapters/ai-audio.adapter";
-import { syncRichMenu } from "./line-richmenu";
 import { getLineLastLocation } from "./line-memory";
 import { listActiveSosForLineUser } from "../sos/sos.service";
 import { LINE_MSG, SOS_MSG, SOS_REASON } from "../../constants/messages";
@@ -1692,26 +1687,5 @@ describe("line.service — media messages", () => {
       "rm",
       LINE_MSG.MEDIA_IMAGE_UNSUPPORTED,
     );
-  });
-});
-
-describe("line.service — rich menu switching", () => {
-  it("links the menu for a new follower", async () => {
-    await handleEvents([
-      {
-        type: "follow",
-        replyToken: "rF",
-        source: { type: "user", userId: "U1" },
-      } as unknown as LineEvent,
-    ]);
-    expect(syncRichMenu).toHaveBeenCalledWith("U1", true);
-  });
-
-  it("switches the menu after a successful family binding", async () => {
-    vi.mocked(hasUsableEmergencyContactCode).mockResolvedValue(true);
-    vi.mocked(hasUsableLineAccountCode).mockResolvedValue(false);
-    vi.mocked(bindEmergencyContactCode).mockResolvedValue({ ok: true } as any);
-    await handleEvents([textEvent("綁定 ABC123")]);
-    expect(syncRichMenu).toHaveBeenCalledWith("U1", true);
   });
 });

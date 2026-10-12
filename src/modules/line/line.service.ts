@@ -59,7 +59,6 @@ import {
   setPendingRename,
 } from "./line-memory";
 import { runLineAgent } from "./line-agent.service";
-import { syncRichMenu } from "./line-richmenu";
 import { transcribeAudio } from "../../adapters/ai-audio.adapter";
 import { routePreviewUrl, sosTrackingUrl } from "../../config/public-links";
 import {
@@ -336,7 +335,6 @@ async function handleBindingCode(
     const result = emergency
       ? await bindEmergencyContactCode(code, lineUserId)
       : await bindLineAccountCode(code, lineUserId);
-    if (result.ok && emergency) void syncRichMenu(lineUserId, true);
     await replyText(
       replyToken,
       result.ok
@@ -555,16 +553,6 @@ async function handleMenuPostback(
       await replyText(replyToken, LINE_MSG.SOS_BIND_PROMPT);
       return;
     }
-    if (action === "sos_share_location") {
-      await replyMessages(replyToken, [
-        buildShareLocationMessage(LINE_MSG.SHARE_LOCATION_PROMPT),
-      ]);
-      return;
-    }
-    if (action === "sos_claim") {
-      await handleReceiptText(replyToken, "claim", lineUserId);
-      return;
-    }
 
     await showLoadingAnimation(lineUserId).catch(() => {});
 
@@ -634,7 +622,6 @@ async function handleMenuPostback(
       }
       const result = await unbindContact({ lineUserId, contactId });
       await replyText(replyToken, result.message);
-      if (result.ok) void syncRichMenu(lineUserId, true);
       return;
     }
 
@@ -933,14 +920,11 @@ async function handleAudioMessage(
 
 async function handleEvent(event: LineEvent): Promise<void> {
   switch (event.type) {
-    case "follow": {
-      const userId = getUserId(event);
+    case "follow":
       if (event.replyToken) {
         await replyMessages(event.replyToken, [buildWelcomeMessage()]);
       }
-      if (userId) await syncRichMenu(userId, true);
       return;
-    }
     case "postback":
       await handlePostback(event);
       return;
@@ -993,14 +977,6 @@ export async function handleEvents(events: LineEvent[]): Promise<void> {
         if (!fresh) continue;
       }
       await handleEvent(event);
-      // Bindings can also change from the app; settle the menu lazily.
-      const lineUserId = getUserId(event);
-      if (
-        lineUserId &&
-        (event.type === "message" || event.type === "postback")
-      ) {
-        void syncRichMenu(lineUserId);
-      }
     } catch (err) {
       console.error("[line.service] event handling failed", err);
     }

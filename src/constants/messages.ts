@@ -416,8 +416,6 @@ export const LINE_MSG = {
   SOS_STATUS_TITLE: "進行中的求救",
   SOS_PLAN_ROUTE: "規劃前往路線",
   SHARE_MY_LOCATION: "分享我的位置",
-  SHARE_LOCATION_PROMPT:
-    "請按下方「分享我的位置」，傳送你目前的位置；之後就能規劃前往家人位置的路線。",
   SOS_ROUTE_NEED_LOCATION:
     "還沒收到你最近的位置。請先按下方「分享我的位置」，再按一次「規劃前往路線」。",
   SOS_ROUTE_READY: "已依你分享的位置準備好前往路線，點下方按鈕查看。",

@@ -31,7 +31,6 @@ vi.mock("../user/user.push.service", async (importActual) => ({
 }));
 vi.mock("./sos-events", () => ({
   emitSosUpdate: vi.fn(),
-  emitSosContactLifecycle: vi.fn(),
   buildSosSnapshot: vi.fn(() => ({ snapshot: true })),
 }));
 

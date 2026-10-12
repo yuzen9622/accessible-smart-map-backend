@@ -30,11 +30,7 @@ import { sosTrackingUrl } from "../../config/public-links";
 import { SOS_MSG, SOS_PUSH_MSG, SOS_REASON } from "../../constants/messages";
 import { PUSH_EVENT_TYPE } from "../../constants/push";
 import { pickLocale, sendPushToUser } from "../user/user.push.service";
-import {
-  buildSosSnapshot,
-  emitSosContactLifecycle,
-  emitSosUpdate,
-} from "./sos-events";
+import { buildSosSnapshot, emitSosUpdate } from "./sos-events";
 import type { ISosSession } from "../../types";
 import type {
   ActiveSosChoicePage,
@@ -707,12 +703,7 @@ export async function resolveSession(
   } catch {
     userName = undefined;
   }
-  const contactLineUserIds = await boundLineUserIds(ownerUserId);
-  await sendSosResolved(contactLineUserIds, userName);
-  emitSosContactLifecycle({
-    kind: "resolved",
-    lineUserIds: contactLineUserIds,
-  });
+  await sendSosResolved(await boundLineUserIds(ownerUserId), userName);
 
   const updated = await findSessionById(input.sessionId);
   if (updated) {

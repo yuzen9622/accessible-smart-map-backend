@@ -13,11 +13,7 @@ import {
   markResolvedNoticeAttemptFailed,
   markResolvedNoticeSent,
 } from "./sos.repository";
-import {
-  buildSosSnapshot,
-  emitSosContactLifecycle,
-  emitSosUpdate,
-} from "./sos-events";
+import { buildSosSnapshot, emitSosUpdate } from "./sos-events";
 import type { ISosSession } from "../../types";
 import type { RetentionContext, RetentionTask } from "../../types/retention";
 
@@ -112,7 +108,6 @@ export const sosResolvedNoticeTask: RetentionTask = {
           userName,
         );
         await markResolvedNoticeSent(sessionId, claimId);
-        emitSosContactLifecycle({ kind: "resolved", lineUserIds });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.warn(
