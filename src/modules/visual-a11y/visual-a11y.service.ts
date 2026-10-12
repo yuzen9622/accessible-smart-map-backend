@@ -1,3 +1,5 @@
+import type { SupportedLang } from "../../types/lang";
+import { selectDisplayText } from "../../utils/source-display";
 import {
   findAudioSignalsInBbox,
   findNearbyVisualA11y,
@@ -72,8 +74,22 @@ export async function findNearby(
   lng: number,
   radiusM = 500,
   type?: IVisualA11y["type"],
+  lang?: SupportedLang,
 ) {
-  return findNearbyVisualA11y(lat, lng, radiusM, type);
+  const rows = await findNearbyVisualA11y(lat, lng, radiusM, type);
+  if (lang === undefined) return rows;
+  return rows.map((row) => {
+    const name = row.properties.name ?? row.properties.roadName;
+    const displayName = selectDisplayText(
+      typeof name === "string" ? name : "",
+      row.properties.nameEn,
+      lang,
+    );
+    return {
+      ...row,
+      ...(displayName.trim() ? { displayName } : {}),
+    };
+  });
 }
 
 export async function syncFromOverpass(): Promise<{

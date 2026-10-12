@@ -1,3 +1,5 @@
+import type { SupportedLang } from "../../types/lang";
+import { displayFacility } from "./a11y.display";
 import { fetchTaipeiMetroNotices } from "../../adapters/taipei-metro-notice.adapter";
 import {
   activeElevatorNotices,
@@ -123,17 +125,20 @@ function withPlaceNotices(
  */
 export async function findAllFacilities(
   categories?: A11yCategory[],
+  lang?: SupportedLang,
 ): Promise<A11yFacility[]> {
   const want = categories && categories.length > 0 ? new Set(categories) : null;
   const [own, campus, notices] = await Promise.all([
-    findOwnFacilityGroups(categories),
+    findOwnFacilityGroups(categories, lang),
     campusService.findAllFacilities(),
     loadMetroNotices(),
   ]);
   const facilities = [
     ...withFacilityNotices(own.metro, notices),
     ...own.osm,
-    ...campus.slice(0, A11Y_MAX_RESULTS).map(campusToFacility),
+    ...campus
+      .slice(0, A11Y_MAX_RESULTS)
+      .map((f) => displayFacility(campusToFacility(f), lang)),
     ...own.bathroom,
     ...own.parking,
   ];
@@ -144,9 +149,11 @@ export async function findAllFacilities(
  * Elevator facilities only: metro names containing 電梯, OSM `elevator`, and
  * campus facilities whose resolved type code is `elevator`.
  */
-export async function findElevatorFacilities(): Promise<A11yFacility[]> {
+export async function findElevatorFacilities(
+  lang?: SupportedLang,
+): Promise<A11yFacility[]> {
   const [own, campus, notices] = await Promise.all([
-    findOwnElevatorFacilities(),
+    findOwnElevatorFacilities(lang),
     campusService.findAllFacilities(),
     loadMetroNotices(),
   ]);
@@ -155,7 +162,7 @@ export async function findElevatorFacilities(): Promise<A11yFacility[]> {
     ...campus
       .filter((f) => f.type === "elevator")
       .slice(0, A11Y_MAX_RESULTS)
-      .map(campusToFacility),
+      .map((f) => displayFacility(campusToFacility(f), lang)),
   ];
 }
 
@@ -163,9 +170,11 @@ export async function findElevatorFacilities(): Promise<A11yFacility[]> {
  * Ramp facilities only: metro names containing 坡道 but NOT 電梯 (mutually
  * exclusive with the elevator route), OSM `ramp`, and campus `ramp`.
  */
-export async function findRampFacilities(): Promise<A11yFacility[]> {
+export async function findRampFacilities(
+  lang?: SupportedLang,
+): Promise<A11yFacility[]> {
   const [own, campus] = await Promise.all([
-    findOwnRampFacilities(),
+    findOwnRampFacilities(lang),
     campusService.findAllFacilities(),
   ]);
   return [
@@ -173,7 +182,7 @@ export async function findRampFacilities(): Promise<A11yFacility[]> {
     ...campus
       .filter((f) => f.type === "ramp")
       .slice(0, A11Y_MAX_RESULTS)
-      .map(campusToFacility),
+      .map((f) => displayFacility(campusToFacility(f), lang)),
   ];
 }
 
@@ -181,9 +190,11 @@ export async function findRampFacilities(): Promise<A11yFacility[]> {
  * Accessible bathroom facilities: the bathroom collection, OSM `toilet`, and
  * campus `accessible_toilet`. Metro has no bathroom data.
  */
-export async function findBathroomFacilities(): Promise<A11yFacility[]> {
+export async function findBathroomFacilities(
+  lang?: SupportedLang,
+): Promise<A11yFacility[]> {
   const [own, campus] = await Promise.all([
-    findOwnBathroomFacilities(),
+    findOwnBathroomFacilities(lang),
     campusService.findAllFacilities(),
   ]);
   return [
@@ -191,7 +202,7 @@ export async function findBathroomFacilities(): Promise<A11yFacility[]> {
     ...campus
       .filter((f) => f.type === "accessible_toilet")
       .slice(0, A11Y_MAX_RESULTS)
-      .map(campusToFacility),
+      .map((f) => displayFacility(campusToFacility(f), lang)),
   ];
 }
 
@@ -204,7 +215,12 @@ export async function findBathroomFacilities(): Promise<A11yFacility[]> {
  * @param radiusM Search radius in metres
  * @returns The nearby place groups
  */
-export async function findNearby(lat: number, lng: number, radiusM = 150) {
+export async function findNearby(
+  lat: number,
+  lng: number,
+  radiusM = 150,
+  lang?: SupportedLang,
+) {
   const [rows, nearbyCampus, notices] = await Promise.all([
     findOwnNearby(lat, lng, radiusM),
     campusService.findFacilitiesNearby(lat, lng, radiusM),
@@ -216,12 +232,13 @@ export async function findNearby(lat: number, lng: number, radiusM = 150) {
         rows.metro,
         rows.osm as IOsmA11y[],
         nearbyCampus.map(campusToA11yPlace),
+        lang,
       ),
       notices,
     ),
-    nearbyBathroom: rows.bathroom,
-    nearbyOsm: rows.osm,
-    nearbyParking: rows.parking,
+    nearbyBathroom: rows.bathroom.map((row) => displayFacility(row, lang)),
+    nearbyOsm: rows.osm.map((row) => displayFacility(row, lang)),
+    nearbyParking: rows.parking.map((row) => displayFacility(row, lang)),
   };
 }
 
@@ -237,6 +254,7 @@ export async function findNearbyLimited(
   lat: number,
   lng: number,
   radiusM = 300,
+  lang?: SupportedLang,
 ) {
   const [rows, nearbyCampus, notices] = await Promise.all([
     findOwnNearbyLimited(lat, lng, radiusM),
@@ -249,12 +267,13 @@ export async function findNearbyLimited(
         rows.metro,
         rows.osm as IOsmA11y[],
         nearbyCampus.slice(0, 15).map(campusToA11yPlace),
+        lang,
       ),
       notices,
     ),
-    nearbyBathroom: rows.bathroom,
-    nearbyOsm: rows.osm,
-    nearbyParking: rows.parking,
+    nearbyBathroom: rows.bathroom.map((row) => displayFacility(row, lang)),
+    nearbyOsm: rows.osm.map((row) => displayFacility(row, lang)),
+    nearbyParking: rows.parking.map((row) => displayFacility(row, lang)),
   };
 }
 

@@ -1,3 +1,4 @@
+import { SourceLangQuerySchema } from "../../schemas/source-language.schema";
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 import { registry } from "../../openapi/registry";
@@ -6,6 +7,7 @@ extendZodWithOpenApi(z);
 
 export const VisualA11yNearbyQuerySchema = z
   .object({
+    lang: SourceLangQuerySchema,
     lat: z.coerce.number().min(-90).max(90).openapi({ example: 25.047 }),
     lng: z.coerce.number().min(-180).max(180).openapi({ example: 121.517 }),
     radius: z.coerce
@@ -39,6 +41,7 @@ const VisualA11yPropertiesSchema = z.object({
 
 export const VisualA11yItemSchema = z
   .object({
+    displayName: z.string().optional(),
     _id: z.string().openapi({ example: "66a1f2c3e4b5a6d7c8e9f0d4" }),
     source: z.enum(["osm", "taipei_tce"]).openapi({
       example: "taipei_tce",

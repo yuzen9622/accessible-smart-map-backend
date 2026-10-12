@@ -1,3 +1,6 @@
+import { selectDisplayText } from "../../utils/source-display";
+import type { SupportedLang } from "../../types/lang";
+import { displayFacility } from "./a11y.display";
 import { getServiceCoverageConfig } from "../../config/coverage";
 import type { MetroOutageNotice } from "../../utils/metro-notice";
 import type {
@@ -51,6 +54,8 @@ export function getServiceCoverage(): ServiceCoverageConfig {
 export type A11yPlace = Omit<IA11y, "_id"> & {
   _id?: unknown;
   source: "metro" | "osm" | "campus";
+  displayName?: string;
+  displaySchoolName?: string;
   outageNotice?: MetroOutageNotice;
   osmId?: string;
   wheelchair?: IOsmA11y["wheelchair"];
@@ -76,8 +81,19 @@ const OSM_CATEGORY_FALLBACK_NAME: Record<string, string> = {
  * Normalizes an OSM accessibility document into the A11y (metro) response
  * shape so both sources render through the same frontend layer.
  */
-export function osmToA11yPlace(doc: IOsmA11y): A11yPlace {
+export function osmToA11yPlace(doc: IOsmA11y, lang?: SupportedLang): A11yPlace {
   return {
+    ...(lang !== undefined
+      ? {
+          displayName: selectDisplayText(
+            doc.name ??
+              OSM_CATEGORY_FALLBACK_NAME[doc.category] ??
+              doc.category,
+            doc.tags?.["name:en"],
+            lang,
+          ),
+        }
+      : {}),
     項次: doc.osmId,
     "出入口電梯/無障礙坡道名稱":
       doc.name ?? OSM_CATEGORY_FALLBACK_NAME[doc.category] ?? doc.category,
@@ -102,13 +118,16 @@ export function mergeA11yPlaces(
   metro: Omit<IA11y, "_id">[],
   osm: IOsmA11y[],
   campus: A11yPlace[] = [],
+  lang?: SupportedLang,
 ): A11yPlace[] {
   return [
-    ...metro.map((doc) => ({ ...doc, source: "metro" as const })),
+    ...metro.map((doc) =>
+      displayFacility({ ...doc, source: "metro" as const }, lang),
+    ),
     ...osm
       .filter((doc) => OSM_STRUCTURE_CATEGORIES.includes(doc.category))
-      .map(osmToA11yPlace),
-    ...campus,
+      .map((doc) => osmToA11yPlace(doc, lang)),
+    ...campus.map((doc) => displayFacility(doc, lang)),
   ];
 }
 
@@ -124,6 +143,8 @@ export type A11yCategory = (typeof A11Y_CATEGORIES)[number];
 type A11yGeoPoint = { type: "Point"; coordinates: [number, number] };
 
 interface A11yFacilityBase {
+  displayName?: string;
+  displaySchoolName?: string;
   _id: string;
   name: string;
   location: A11yGeoPoint;
@@ -216,48 +237,68 @@ export function bumpCategory(
   else if (category === "parking") counts.parking++;
 }
 
-function metroToFacility(doc: IA11y): A11yFacility {
+function metroToFacility(doc: IA11y, lang?: SupportedLang): A11yFacility {
   const name = doc["出入口電梯/無障礙坡道名稱"];
-  return {
-    _id: idOf(doc),
-    name,
-    location: doc.location,
-    category: classifyMetroCategory(name),
-    source: "metro",
-    exitName: extractMetroExitName(name),
-  };
+  return displayFacility(
+    {
+      _id: idOf(doc),
+      name,
+      location: doc.location,
+      category: classifyMetroCategory(name),
+      source: "metro",
+      exitName: extractMetroExitName(name),
+    },
+    lang,
+  );
 }
 
-function osmToFacility(doc: IOsmA11y): A11yFacility {
-  return {
-    _id: idOf(doc),
-    name: doc.name ?? OSM_CATEGORY_FALLBACK_NAME[doc.category] ?? doc.category,
-    location: doc.location,
-    category: mapOsmCategory(doc.category),
-    source: "osm",
-    osmId: doc.osmId,
-    wheelchair: doc.wheelchair ?? null,
-  };
+function osmToFacility(doc: IOsmA11y, lang?: SupportedLang): A11yFacility {
+  return displayFacility(
+    {
+      _id: idOf(doc),
+      name:
+        doc.name ?? OSM_CATEGORY_FALLBACK_NAME[doc.category] ?? doc.category,
+      location: doc.location,
+      category: mapOsmCategory(doc.category),
+      source: "osm",
+      osmId: doc.osmId,
+      wheelchair: doc.wheelchair ?? null,
+    },
+    lang,
+    doc.tags?.["name:en"],
+  );
 }
 
-function bathroomToFacility(doc: IBathroom): A11yFacility {
-  return {
-    _id: idOf(doc),
-    name: doc.name,
-    location: doc.location,
-    category: "toilet",
-    source: "bathroom",
-  };
+function bathroomToFacility(
+  doc: IBathroom,
+  lang?: SupportedLang,
+): A11yFacility {
+  return displayFacility(
+    {
+      _id: idOf(doc),
+      name: doc.name,
+      location: doc.location,
+      category: "toilet",
+      source: "bathroom",
+    },
+    lang,
+  );
 }
 
-function parkingToFacility(doc: IDisabledParking): A11yFacility {
-  return {
-    _id: idOf(doc),
-    name: doc.placeName,
-    location: doc.location,
-    category: "parking",
-    source: "parking",
-  };
+function parkingToFacility(
+  doc: IDisabledParking,
+  lang?: SupportedLang,
+): A11yFacility {
+  return displayFacility(
+    {
+      _id: idOf(doc),
+      name: doc.placeName,
+      location: doc.location,
+      category: "parking",
+      source: "parking",
+    },
+    lang,
+  );
 }
 
 /**
@@ -272,6 +313,7 @@ function parkingToFacility(doc: IDisabledParking): A11yFacility {
  */
 export async function findOwnFacilityGroups(
   categories?: A11yCategory[],
+  lang?: SupportedLang,
 ): Promise<{
   metro: A11yFacility[];
   osm: A11yFacility[];
@@ -295,10 +337,10 @@ export async function findOwnFacilityGroups(
       : [],
   ]);
   return {
-    metro: metro.map(metroToFacility),
-    osm: osm.map(osmToFacility),
-    bathroom: bathroom.map(bathroomToFacility),
-    parking: parking.map(parkingToFacility),
+    metro: metro.map((doc) => metroToFacility(doc, lang)),
+    osm: osm.map((doc) => osmToFacility(doc, lang)),
+    bathroom: bathroom.map((doc) => bathroomToFacility(doc, lang)),
+    parking: parking.map((doc) => parkingToFacility(doc, lang)),
   };
 }
 
@@ -306,36 +348,51 @@ export async function findOwnFacilityGroups(
  * This module's own elevator facilities: metro names containing 電梯 and OSM
  * `elevator`.
  */
-export async function findOwnElevatorFacilities(): Promise<A11yFacility[]> {
+export async function findOwnElevatorFacilities(
+  lang?: SupportedLang,
+): Promise<A11yFacility[]> {
   const [metro, osm] = await Promise.all([
     findMetroElevators(A11Y_MAX_RESULTS),
     findOsmByCategory("elevator", A11Y_MAX_RESULTS),
   ]);
-  return [...metro.map(metroToFacility), ...osm.map(osmToFacility)];
+  return [
+    ...metro.map((doc) => metroToFacility(doc, lang)),
+    ...osm.map((doc) => osmToFacility(doc, lang)),
+  ];
 }
 
 /**
  * This module's own ramp facilities: metro names containing 坡道 but NOT 電梯
  * (mutually exclusive with the elevator route) and OSM `ramp`.
  */
-export async function findOwnRampFacilities(): Promise<A11yFacility[]> {
+export async function findOwnRampFacilities(
+  lang?: SupportedLang,
+): Promise<A11yFacility[]> {
   const [metro, osm] = await Promise.all([
     findMetroRamps(A11Y_MAX_RESULTS),
     findOsmByCategory("ramp", A11Y_MAX_RESULTS),
   ]);
-  return [...metro.map(metroToFacility), ...osm.map(osmToFacility)];
+  return [
+    ...metro.map((doc) => metroToFacility(doc, lang)),
+    ...osm.map((doc) => osmToFacility(doc, lang)),
+  ];
 }
 
 /**
  * This module's own accessible bathrooms: the bathroom collection and OSM
  * `toilet`. Metro has no bathroom data.
  */
-export async function findOwnBathroomFacilities(): Promise<A11yFacility[]> {
+export async function findOwnBathroomFacilities(
+  lang?: SupportedLang,
+): Promise<A11yFacility[]> {
   const [bathroom, osm] = await Promise.all([
     findAccessibleBathrooms(A11Y_MAX_RESULTS),
     findOsmByCategory("toilet", A11Y_MAX_RESULTS),
   ]);
-  return [...bathroom.map(bathroomToFacility), ...osm.map(osmToFacility)];
+  return [
+    ...bathroom.map((doc) => bathroomToFacility(doc, lang)),
+    ...osm.map((doc) => osmToFacility(doc, lang)),
+  ];
 }
 
 /**
@@ -451,7 +508,7 @@ function parkingLotToItem(doc: IParkingLot): ParkingLotNearbyItem {
  * fills the shared cap in that priority order. `disabled` also includes lots
  * whose disabled capacity is confirmed; `standard` includes every lot.
  */
-export async function findNearbyParking(
+async function findNearbyParkingRaw(
   lat: number,
   lng: number,
   radiusM = 1000,
@@ -509,6 +566,17 @@ export async function findNearbyParking(
   ];
 }
 
+export async function findNearbyParking(
+  lat: number,
+  lng: number,
+  radiusM = 1000,
+  type: ParkingKind | "all" = "all",
+  lang?: SupportedLang,
+) {
+  const rows = await findNearbyParkingRaw(lat, lng, radiusM, type);
+  return rows.map((row) => displayFacility(row, lang));
+}
+
 export async function findOwnNearby(
   lat: number,
   lng: number,
@@ -529,8 +597,9 @@ export async function findOwnNearbyLimited(
   return findNearbyA11yRowsLimited(lat, lng, radiusM, 150);
 }
 
-export async function findByOsmIds(ids: string[]) {
-  return findOsmByIds(ids);
+export async function findByOsmIds(ids: string[], lang?: SupportedLang) {
+  const rows = await findOsmByIds(ids);
+  return rows.map((row) => displayFacility(row, lang));
 }
 
 export type QuickAssessMode =

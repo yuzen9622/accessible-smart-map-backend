@@ -1,3 +1,4 @@
+import { normalizeLang, type SupportedLang } from "../../types/lang";
 import type { Request, Response } from "express";
 import { sendResponse } from "../../config/lib";
 import { ResponseCode } from "../../types/code";
@@ -13,7 +14,13 @@ export async function getNearbyVisualA11y(req: Request, res: Response) {
       radius: number;
       type?: IVisualA11y["type"];
     };
-    const result = await service.findNearby(lat, lng, radius, type);
+    const result = await service.findNearby(
+      lat,
+      lng,
+      radius,
+      type,
+      ...readLanguageArgs(req),
+    );
     return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, result);
   } catch (error) {
     console.error(error);
@@ -41,4 +48,14 @@ export async function syncVisualA11y(_req: Request, res: Response) {
       ERROR_MESSAGE.INTERNAL,
     );
   }
+}
+
+function readLanguage(req: Request) {
+  const lang = (req.validated?.query as { lang?: string } | undefined)?.lang;
+  return lang === undefined ? undefined : normalizeLang(lang);
+}
+
+function readLanguageArgs(req: Request): [] | [SupportedLang] {
+  const lang = readLanguage(req);
+  return lang === undefined ? [] : [lang];
 }

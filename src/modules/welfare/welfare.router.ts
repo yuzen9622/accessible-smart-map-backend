@@ -9,6 +9,7 @@ import {
   WelfareNearbyQuerySchema,
   WelfareListQuerySchema,
   WelfareParamsSchema,
+  WelfareDetailQuerySchema,
 } from "./welfare.schema";
 
 export function createWelfareRouter(): Router {
@@ -25,7 +26,10 @@ export function createWelfareRouter(): Router {
   );
   router.get(
     "/welfare/:id",
-    validateRequest({ params: WelfareParamsSchema }),
+    validateRequest({
+      params: WelfareParamsSchema,
+      query: WelfareDetailQuerySchema,
+    }),
     getWelfareById,
   );
   return router;

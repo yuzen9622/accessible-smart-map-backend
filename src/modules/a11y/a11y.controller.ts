@@ -1,3 +1,4 @@
+import { normalizeLang, type SupportedLang } from "../../types/lang";
 import type { Request, Response } from "express";
 import type { ServiceCoverageConfig } from "../../config/coverage";
 import { sendResponse } from "../../config/lib";
@@ -16,7 +17,10 @@ async function getAllFacilities(
     const { category } = (req.validated?.query ?? {}) as {
       category?: A11yCategory[];
     };
-    const data = await a11yOrchestration.findAllFacilities(category);
+    const data = await a11yOrchestration.findAllFacilities(
+      category,
+      ...readLanguageArgs(req),
+    );
     return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
   } catch {
     return sendResponse(
@@ -52,7 +56,9 @@ async function getBathrooms(
   res: Response<ApiResponse<A11yFacility[]>>,
 ) {
   try {
-    const data = await a11yOrchestration.findBathroomFacilities();
+    const data = await a11yOrchestration.findBathroomFacilities(
+      ...readLanguageArgs(req),
+    );
     return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
   } catch {
     return sendResponse(
@@ -70,7 +76,9 @@ async function getRamps(
   res: Response<ApiResponse<A11yFacility[]>>,
 ) {
   try {
-    const data = await a11yOrchestration.findRampFacilities();
+    const data = await a11yOrchestration.findRampFacilities(
+      ...readLanguageArgs(req),
+    );
     return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
   } catch {
     return sendResponse(
@@ -88,7 +96,9 @@ async function getElevators(
   res: Response<ApiResponse<A11yFacility[]>>,
 ) {
   try {
-    const data = await a11yOrchestration.findElevatorFacilities();
+    const data = await a11yOrchestration.findElevatorFacilities(
+      ...readLanguageArgs(req),
+    );
     return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
   } catch {
     return sendResponse(
@@ -117,7 +127,10 @@ async function getA11yPlace(req: Request, res: Response<ApiResponse<any>>) {
         `${ERROR_MESSAGE.MISSING_PARAMS}：osmId`,
       );
     }
-    const places = await a11yService.findByOsmIds(ids);
+    const places = await a11yService.findByOsmIds(
+      ids,
+      ...readLanguageArgs(req),
+    );
     if (!places.length) {
       return sendResponse(
         res,
@@ -145,6 +158,8 @@ async function nearbyA11y(req: Request, res: Response<ApiResponse<any>>) {
     const result = await a11yOrchestration.findNearby(
       Number(lat as string),
       Number(lng as string),
+      undefined,
+      ...readLanguageArgs(req),
     );
     return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, result);
   } catch (error) {
@@ -171,6 +186,7 @@ async function nearbyParking(req: Request, res: Response<ApiResponse<any>>) {
       Number(lng),
       radius != null ? Number(radius) : undefined,
       type,
+      ...readLanguageArgs(req),
     );
     return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, result);
   } catch (error) {
@@ -221,3 +237,13 @@ export {
   getA11yPlace,
   quickAssess,
 };
+
+function readLanguage(req: Request) {
+  const lang = (req.validated?.query as { lang?: string } | undefined)?.lang;
+  return lang === undefined ? undefined : normalizeLang(lang);
+}
+
+function readLanguageArgs(req: Request): [] | [SupportedLang] {
+  const lang = readLanguage(req);
+  return lang === undefined ? [] : [lang];
+}

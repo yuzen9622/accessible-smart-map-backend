@@ -1,3 +1,4 @@
+import { SourceLangQuerySchema } from "../../schemas/source-language.schema";
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 import { registry } from "../../openapi/registry";
@@ -5,10 +6,15 @@ import { A11Y_CATEGORIES } from "./a11y.service";
 
 extendZodWithOpenApi(z);
 
+export const FacilityReadQuerySchema = z
+  .object({ lang: SourceLangQuerySchema })
+  .strict();
+
 export const ServiceCoverageQuerySchema = z.object({}).strict();
 
 export const NearbyA11yQuerySchema = z
   .object({
+    lang: SourceLangQuerySchema,
     lat: z
       .string()
       .regex(/^-?\d+(\.\d+)?$/, "Must be a valid latitude")
@@ -50,6 +56,7 @@ export const QuickAssessQuerySchema = z
 
 export const A11yPlaceQuerySchema = z
   .object({
+    lang: SourceLangQuerySchema,
     osmId: z.string().min(1).openapi({
       example: "12342946149",
       description: "OSM 設施 id，可用逗號分隔做批次查詢（如「123,456」）",
@@ -59,6 +66,7 @@ export const A11yPlaceQuerySchema = z
 
 export const ParkingNearbyQuerySchema = z
   .object({
+    lang: SourceLangQuerySchema,
     lat: z
       .string()
       .regex(/^-?\d+(\.\d+)?$/, "Must be a valid latitude")
@@ -110,6 +118,8 @@ export const MetroOutageNoticeSchema = z
 
 export const A11ySchema = z
   .object({
+    displayName: z.string().optional(),
+    displaySchoolName: z.string().optional(),
     _id: z.string().optional().openapi({ example: "66a1f2c3e4b5a6d7c8e9f0a1" }),
     項次: z.string().openapi({ example: "1" }),
     "出入口電梯/無障礙坡道名稱": z
@@ -142,6 +152,7 @@ const A11yCategoryEnum = z
 
 export const AllFacilitiesQuerySchema = z
   .object({
+    lang: SourceLangQuerySchema,
     category: z
       .string()
       .min(1)
@@ -160,6 +171,7 @@ export const A11yFacilitySchema = z
   .discriminatedUnion("source", [
     z
       .object({
+        displayName: z.string().optional(),
         _id: z.string().openapi({ example: "66a1f2c3e4b5a6d7c8e9f0a1" }),
         name: z.string().openapi({ example: "台北車站 M8 出口電梯" }),
         location: GeoPointSchema,
@@ -174,6 +186,7 @@ export const A11yFacilitySchema = z
       .strict(),
     z
       .object({
+        displayName: z.string().optional(),
         _id: z.string(),
         name: z.string().openapi({ example: "無障礙坡道" }),
         location: GeoPointSchema,
@@ -191,16 +204,19 @@ export const A11yFacilitySchema = z
       .strict(),
     z
       .object({
+        displayName: z.string().optional(),
         _id: z.string(),
         name: z.string().openapi({ example: "無障礙電梯" }),
         location: GeoPointSchema,
         category: A11yCategoryEnum,
         source: z.literal("campus"),
+        displaySchoolName: z.string().optional(),
         schoolName: z.string().openapi({ example: "國立臺北科技大學" }),
       })
       .strict(),
     z
       .object({
+        displayName: z.string().optional(),
         _id: z.string(),
         name: z.string().openapi({ example: "台北車站無障礙廁所" }),
         location: GeoPointSchema,
@@ -210,6 +226,7 @@ export const A11yFacilitySchema = z
       .strict(),
     z
       .object({
+        displayName: z.string().optional(),
         _id: z.string(),
         name: z.string().openapi({ example: "商港八路身障停車格" }),
         location: GeoPointSchema,
@@ -222,6 +239,8 @@ export const A11yFacilitySchema = z
 
 export const BathroomSchema = z
   .object({
+    displayName: z.string().optional(),
+    displayAddress: z.string().optional(),
     _id: z.string().openapi({ example: "66a1f2c3e4b5a6d7c8e9f0b2" }),
     county: z.string().openapi({ example: "臺北市" }),
     areacode: z.string().openapi({ example: "100" }),
@@ -241,6 +260,7 @@ export const BathroomSchema = z
 
 export const OsmA11ySchema = z
   .object({
+    displayName: z.string().optional(),
     osmId: z.string().openapi({ example: "node/1234567890" }),
     name: z.string().optional().openapi({ example: "無障礙坡道" }),
     category: z
@@ -260,6 +280,7 @@ export const OsmA11ySchema = z
 
 export const DisabledParkingSchema = z
   .object({
+    displayName: z.string().optional(),
     _id: z.string().openapi({ example: "66a1f2c3e4b5a6d7c8e9f0c3" }),
     city: z.string().openapi({ example: "新北市" }),
     district: z.string().openapi({ example: "八里區" }),
@@ -416,6 +437,7 @@ registry.registerPath({
   summary: "所有無障礙廁所",
   description:
     "回傳所有無障礙廁所（廁所資料庫＋OSM toilet＋校園無障礙廁所），統一正規化形狀，不分頁。",
+  request: { query: FacilityReadQuerySchema },
   responses: {
     200: {
       description: "無障礙廁所清單",
@@ -432,6 +454,7 @@ registry.registerPath({
   summary: "所有無障礙坡道",
   description:
     "回傳所有無障礙坡道（捷運坡道＋OSM ramp＋校園坡道），統一正規化形狀，不分頁。",
+  request: { query: FacilityReadQuerySchema },
   responses: {
     200: {
       description: "無障礙坡道清單",
@@ -448,6 +471,7 @@ registry.registerPath({
   summary: "所有無障礙電梯",
   description:
     "回傳所有無障礙電梯（捷運電梯＋OSM elevator＋校園電梯），統一正規化形狀，不分頁。",
+  request: { query: FacilityReadQuerySchema },
   responses: {
     200: {
       description: "無障礙電梯清單",
@@ -552,6 +576,8 @@ export const ParkingNearbyItemSchema = DisabledParkingSchema.extend({
 
 export const ParkingLotNearbyItemSchema = z
   .object({
+    displayName: z.string().optional(),
+    displayAddress: z.string().optional(),
     type: z.literal("lot").openapi({ example: "lot" }),
     _id: z.string().openapi({ example: "66a1f2c3e4b5a6d7c8e9f0c3" }),
     carParkId: z.string().openapi({ example: "txg-2156" }),

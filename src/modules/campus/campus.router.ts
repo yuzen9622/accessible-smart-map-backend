@@ -12,6 +12,7 @@ import {
   CampusListQuerySchema,
   CampusSchoolsQuerySchema,
   CampusParamsSchema,
+  CampusDetailQuerySchema,
 } from "./campus.schema";
 
 export function createCampusRouter(): Router {
@@ -34,7 +35,10 @@ export function createCampusRouter(): Router {
   );
   router.get(
     "/campus/:campusId",
-    validateRequest({ params: CampusParamsSchema }),
+    validateRequest({
+      params: CampusParamsSchema,
+      query: CampusDetailQuerySchema,
+    }),
     getCampusByCampusId,
   );
   return router;

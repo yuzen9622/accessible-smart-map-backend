@@ -1,3 +1,4 @@
+import { SourceLangQuerySchema } from "../../schemas/source-language.schema";
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 import { registry } from "../../openapi/registry";
@@ -6,6 +7,7 @@ extendZodWithOpenApi(z);
 
 export const WelfareNearbyQuerySchema = z
   .object({
+    lang: SourceLangQuerySchema,
     lat: z.coerce.number().min(-90).max(90).openapi({ example: 25.05 }),
     lng: z.coerce.number().min(-180).max(180).openapi({ example: 121.51 }),
     radius: z.coerce
@@ -20,12 +22,17 @@ export const WelfareNearbyQuerySchema = z
 
 export const WelfareListQuerySchema = z
   .object({
+    lang: SourceLangQuerySchema,
     county: z.string().optional().openapi({ example: "臺北市" }),
     type: z
       .string()
       .optional()
       .openapi({ example: "日間型機構", description: "機構類型" }),
   })
+  .strict();
+
+export const WelfareDetailQuerySchema = z
+  .object({ lang: SourceLangQuerySchema })
   .strict();
 
 export const WelfareParamsSchema = z.object({
@@ -48,6 +55,8 @@ const CapacitySchema = z.object({
 
 export const WelfareSchema = z
   .object({
+    displayName: z.string().optional(),
+    displayAddress: z.string().optional(),
     _id: z.string().openapi({ example: "66a1f2c3e4b5a6d7c8e9f0d4" }),
     name: z.string().openapi({ example: "新北市愛維養護中心" }),
     county: z.string().openapi({ example: "新北市" }),
@@ -126,7 +135,7 @@ registry.registerPath({
   tags: ["Welfare"],
   summary: "福利機構詳情",
   description: "依機構 id 回傳完整資訊（含核定/實際服務人數、評鑑）。",
-  request: { params: WelfareParamsSchema },
+  request: { params: WelfareParamsSchema, query: WelfareDetailQuerySchema },
   responses: {
     200: {
       description: "福利機構詳情",

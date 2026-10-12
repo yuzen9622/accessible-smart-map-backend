@@ -1,3 +1,5 @@
+import type { SupportedLang } from "../../types/lang";
+import { selectDisplayText } from "../../utils/source-display";
 import {
   aggregateSchoolPage,
   findCampusByBranchId,
@@ -11,6 +13,36 @@ import type { CampusSort } from "./campus.types";
 import { resolveFacType } from "./campus.fac-type";
 import { toPublicId, toRawId } from "./campus.util";
 
+function displayCampus<
+  T extends {
+    schoolName?: string;
+    branchName?: string;
+    name?: string;
+    address?: string;
+  },
+>(row: T, lang?: SupportedLang): T {
+  if (lang === undefined) return row;
+  return {
+    ...row,
+    ...(typeof row.schoolName === "string"
+      ? {
+          displaySchoolName: selectDisplayText(row.schoolName, undefined, lang),
+        }
+      : {}),
+    ...(typeof row.branchName === "string"
+      ? {
+          displayBranchName: selectDisplayText(row.branchName, undefined, lang),
+        }
+      : {}),
+    ...(typeof row.name === "string"
+      ? { displayName: selectDisplayText(row.name, undefined, lang) }
+      : {}),
+    ...(typeof row.address === "string"
+      ? { displayAddress: selectDisplayText(row.address, undefined, lang) }
+      : {}),
+  };
+}
+
 export interface FacTypeCount {
   code: string;
   label: string;
@@ -18,6 +50,10 @@ export interface FacTypeCount {
 }
 
 export interface CampusSummary {
+  displaySchoolName?: string;
+  displayBranchName?: string;
+  displayAddress?: string;
+
   campusId: number;
   schoolId: number;
   schoolName: string;
@@ -32,6 +68,8 @@ export interface CampusSummary {
 }
 
 export interface CampusFacilityOut {
+  displayName?: string;
+
   facUid: string;
   facTypeId?: number;
   type?: string;
@@ -46,6 +84,10 @@ export interface CampusFacilityOut {
 }
 
 export interface CampusDetail {
+  displaySchoolName?: string;
+  displayBranchName?: string;
+  displayAddress?: string;
+
   _id: string;
   campusId: number;
   schoolId: number;
@@ -63,6 +105,8 @@ export interface CampusDetail {
 }
 
 export interface CampusSchool {
+  displaySchoolName?: string;
+
   schoolId: number;
   schoolName: string;
   city?: string;
@@ -205,9 +249,10 @@ export async function findNearby(
   lng: number,
   radiusM = 1000,
   type?: string,
+  lang?: SupportedLang,
 ): Promise<CampusSummary[]> {
   const docs = await findCampusesNearby(lat, lng, radiusM, type);
-  return docs.map(toSummary);
+  return docs.map((doc) => displayCampus(toSummary(doc), lang));
 }
 
 /**
@@ -216,6 +261,10 @@ export async function findNearby(
  * facilities that have their own coordinates are emitted.
  */
 export interface CampusFacilityPlace {
+  displayName?: string;
+  displaySchoolName?: string;
+  displayBranchName?: string;
+
   campusId: number;
   schoolId: number;
   schoolName: string;
@@ -284,7 +333,9 @@ function toFacilityPlace(
  *
  * @returns One place per located facility.
  */
-export async function findAllFacilities(): Promise<CampusFacilityPlace[]> {
+export async function findAllFacilities(
+  lang?: SupportedLang,
+): Promise<CampusFacilityPlace[]> {
   const docs = await findCampusesWithLocatedFacilities();
   const out: CampusFacilityPlace[] = [];
   for (const campus of docs) {
@@ -292,7 +343,7 @@ export async function findAllFacilities(): Promise<CampusFacilityPlace[]> {
       if (hasCoordinates(f)) out.push(toFacilityPlace(campus, f));
     }
   }
-  return out;
+  return out.map((row) => displayCampus(row, lang));
 }
 
 /**
@@ -310,6 +361,7 @@ export async function findFacilitiesNearby(
   lat: number,
   lng: number,
   radiusM: number,
+  lang?: SupportedLang,
 ): Promise<CampusFacilityPlace[]> {
   const docs = await findCampusesNearbyWithFacilities(
     lat,
@@ -326,7 +378,9 @@ export async function findFacilitiesNearby(
         out.push({ place: toFacilityPlace(campus, f), dist });
     }
   }
-  return out.sort((a, b) => a.dist - b.dist).map((x) => x.place);
+  return out
+    .sort((a, b) => a.dist - b.dist)
+    .map((x) => displayCampus(x.place, lang));
 }
 
 /**
@@ -339,6 +393,7 @@ export async function findFacilitiesNearby(
  */
 export async function findAll(
   filter: CampusListFilter,
+  lang?: SupportedLang,
 ): Promise<CampusListResult> {
   const { city, type, keyword, schoolId, sort, page, limit } = filter;
   const { docs, totalCount } = await findCampusPage(
@@ -349,7 +404,7 @@ export async function findAll(
   );
 
   return {
-    items: docs.map(toSummary),
+    items: docs.map((doc) => displayCampus(toSummary(doc), lang)),
     totalCount,
     page,
     totalPages: Math.ceil(totalCount / limit),
@@ -365,9 +420,19 @@ export async function findAll(
  */
 export async function findByCampusId(
   campusId: number,
+  lang?: SupportedLang,
 ): Promise<CampusDetail | null> {
   const doc = await findCampusByBranchId(toRawId(campusId));
-  return doc ? toDetail(doc) : null;
+  if (!doc) return null;
+  const detail = toDetail(doc);
+  if (lang === undefined) return detail;
+  return displayCampus(
+    {
+      ...detail,
+      facilities: detail.facilities.map((f) => displayCampus(f, lang)),
+    },
+    lang,
+  );
 }
 
 /**
@@ -379,6 +444,7 @@ export async function findByCampusId(
  */
 export async function listSchools(
   filter: CampusSchoolFilter,
+  lang?: SupportedLang,
 ): Promise<CampusSchoolListResult> {
   const { city, keyword, page, limit } = filter;
   const { items: rows, totalCount } = await aggregateSchoolPage(
@@ -395,5 +461,10 @@ export async function listSchools(
     facilityCount: s.facilityCount,
   }));
 
-  return { items, totalCount, page, totalPages: Math.ceil(totalCount / limit) };
+  return {
+    items: items.map((row) => displayCampus(row, lang)),
+    totalCount,
+    page,
+    totalPages: Math.ceil(totalCount / limit),
+  };
 }

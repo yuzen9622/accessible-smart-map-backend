@@ -13,6 +13,7 @@ import {
 import { validateRequest } from "../../middleware/validate-request.middleware";
 import {
   AllFacilitiesQuerySchema,
+  FacilityReadQuerySchema,
   ServiceCoverageQuerySchema,
   NearbyA11yQuerySchema,
   A11yPlaceQuerySchema,
@@ -32,9 +33,21 @@ export function createA11yRouter(): Router {
     validateRequest({ query: AllFacilitiesQuerySchema }),
     getAllFacilities,
   );
-  router.get("/all-bathrooms", getBathrooms);
-  router.get("/all-ramps", getRamps);
-  router.get("/all-elevators", getElevators);
+  router.get(
+    "/all-bathrooms",
+    validateRequest({ query: FacilityReadQuerySchema }),
+    getBathrooms,
+  );
+  router.get(
+    "/all-ramps",
+    validateRequest({ query: FacilityReadQuerySchema }),
+    getRamps,
+  );
+  router.get(
+    "/all-elevators",
+    validateRequest({ query: FacilityReadQuerySchema }),
+    getElevators,
+  );
   router.get(
     "/nearby-a11y",
     validateRequest({ query: NearbyA11yQuerySchema }),

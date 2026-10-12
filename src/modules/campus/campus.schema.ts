@@ -1,3 +1,4 @@
+import { SourceLangQuerySchema } from "../../schemas/source-language.schema";
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 import { registry } from "../../openapi/registry";
@@ -12,6 +13,7 @@ const TYPE_DESCRIPTION = `設施類型代碼（英文 code），可用值見 GET
 
 export const CampusNearbyQuerySchema = z
   .object({
+    lang: SourceLangQuerySchema,
     lat: z.coerce.number().min(-90).max(90).openapi({ example: 25.05 }),
     lng: z.coerce.number().min(-180).max(180).openapi({ example: 121.51 }),
     radius: z.coerce
@@ -29,6 +31,7 @@ export const CampusNearbyQuerySchema = z
 
 export const CampusListQuerySchema = z
   .object({
+    lang: SourceLangQuerySchema,
     city: z
       .string()
       .optional()
@@ -72,6 +75,7 @@ export const CampusListQuerySchema = z
 
 export const CampusSchoolsQuerySchema = z
   .object({
+    lang: SourceLangQuerySchema,
     city: z
       .string()
       .optional()
@@ -89,6 +93,10 @@ export const CampusSchoolsQuerySchema = z
       .default(50)
       .openapi({ example: 50, description: "每頁筆數，預設 50，上限 100" }),
   })
+  .strict();
+
+export const CampusDetailQuerySchema = z
+  .object({ lang: SourceLangQuerySchema })
   .strict();
 
 export const CampusParamsSchema = z
@@ -114,6 +122,7 @@ const FacTypeCountSchema = z.object({
 });
 
 const CampusFacilitySchema = z.object({
+  displayName: z.string().optional(),
   facUid: z.string().openapi({ example: "F123456" }),
   facTypeId: z.number().optional().openapi({ example: 8 }),
   type: z
@@ -146,6 +155,9 @@ const CampusFacilitySchema = z.object({
 
 export const CampusSummarySchema = z
   .object({
+    displaySchoolName: z.string().optional(),
+    displayBranchName: z.string().optional(),
+    displayAddress: z.string().optional(),
     campusId: z.number().openapi({ example: 29 }),
     schoolId: z.number().openapi({ example: 33 }),
     schoolName: z.string().openapi({ example: "國立臺中科技大學" }),
@@ -171,6 +183,9 @@ export const CampusSummarySchema = z
 
 export const CampusDetailSchema = z
   .object({
+    displaySchoolName: z.string().optional(),
+    displayBranchName: z.string().optional(),
+    displayAddress: z.string().optional(),
     _id: z.string().openapi({ example: "66a1f2c3e4b5a6d7c8e9f0d4" }),
     campusId: z.number().openapi({ example: 29 }),
     schoolId: z.number().openapi({ example: 33 }),
@@ -203,6 +218,7 @@ export const CampusFacTypeSchema = z
 
 const CampusSchoolSchema = z
   .object({
+    displaySchoolName: z.string().optional(),
     schoolId: z.number().openapi({ example: 33 }),
     schoolName: z.string().openapi({ example: "國立臺中科技大學" }),
     city: z.string().optional().openapi({ example: "臺中市" }),
@@ -340,7 +356,7 @@ registry.registerPath({
   summary: "校區無障礙設施詳情",
   description:
     "依 campusId 回傳單一校區的完整資訊，含 facilities 設施陣列（每筆帶 type 代碼）。",
-  request: { params: CampusParamsSchema },
+  request: { params: CampusParamsSchema, query: CampusDetailQuerySchema },
   responses: {
     200: {
       description: "校區詳情",
