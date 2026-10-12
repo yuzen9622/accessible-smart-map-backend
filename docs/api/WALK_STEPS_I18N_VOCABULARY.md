@@ -296,3 +296,67 @@ params 不包含被拒絕的輸入、token、任意 custom params 或巢狀 issu
 若新的欄位不存在，前端必須仍能處理舊 `{ path, message }` 錯誤。
 AI 的 HTTP／SSE 與工具錯誤位置不同，見 [AI 工具參考](AI_AGENT_TOOLS_REFERENCE.md#語言與錯誤處理)。
 完整 HTTP schema 以 `/api/v1/openapi.json` 為準。
+
+## 九、來源名稱與顯示欄位
+
+名稱不是訊息字典 key。後端只採用來源已有的英文（TDX `En`、OSM `name:en`、視障設施 `nameEn`），沒有英文就保留原文，不自行音譯或翻譯官方名稱。英文介面仍可能合理地出現中文地名、地址或業者名稱。
+
+### 語言與相容性
+
+- 地點、設施與交通名稱讀取端點使用 optional query `lang=en` / `lang=zh-TW`，也接受既有 en-/zh- 語言別名（如 `en-US`、`zh-Hant`）。不支援的值回驗證錯誤；不新增全域 `Accept-Language` 優先規則。
+- 新增的設施／交通 display 契約：省略 `lang` 時不新增 display 欄位，維持既有 DTO。原本 Places 搜尋的 `name`／地址已隨 `lang` 在 provider 層選語言，其既有行為不變。
+- 路線規劃與導航仍使用 body `language`。原始 `name`、`routeName`、站名、ID、方向、幾何與評分不會被 display 名稱取代。
+- UI 選用「非空 display 值 → 原始名稱 → 原有類別備援」，不可用顯示文字做去重、查詢、站點匹配或儲存識別。後續請求使用原 ID／canonical 欄位。
+- 來源為 English-only、沒有中文 canonical 名稱時，en 可提供英文 display；無可用文字則可能省略 display，前端仍需類別備援。
+
+### 設施與交通欄位
+
+以下是顯示欄位導覽，完整巢狀位置以 OpenAPI 為準。全部路徑前綴為 `/api/v1`。
+
+| 端點／結果 | 可選顯示欄位 |
+| --- | --- |
+| `/a11y/all-facilities`、`all-bathrooms`、`all-ramps`、`all-elevators`、`nearby-a11y`、`place`、`parking/nearby`、`visual-a11y` | `displayName`；適用的地址另有 `displayAddress`，學校有 `displaySchoolName` |
+| `/a11y/campus`、`campus/nearby`、`campus/schools`、`campus/:campusId` | `displaySchoolName`、`displayBranchName`、`displayAddress`；設施 `displayName`。沒有英文來源的校名／地址維持原文 |
+| `/a11y/welfare`、`welfare/nearby`、`welfare/:id` | `displayName`、`displayAddress`；來源無英文則維持原文 |
+| Places details 的 `nearbyFacilities` | 依同次 `lang` 提供設施 display，既有 Place 主名稱／地址契約不變 |
+| `/transit/bus/route`、`route-detail` | `routeDisplayName`；directions 的 `subRouteDisplayName`、`fromDisplayName`、`toDisplayName`；stops 的 `displayName` |
+| `/transit/bus/arrival` | `routeDisplayName`、`stopDisplayName`；arrivals 的 `subRouteDisplayName`、`stopDisplayName` |
+| `/transit/bus/timetable` | `routeDisplayName`；有原始支線名的 schedules 有 `subRouteDisplayName`；trip 的 `originStopDisplayName`、stopTimes 的 `stopDisplayName` |
+| `/transit/bus/positions` | `routeDisplayName`；buses 的 `subRouteDisplayName` |
+| `/transit/bus/search-routes`（含 `search-route` alias） | routes 的 `routeDisplayName`、`departureDisplayName`、`destinationDisplayName` |
+| `/transit/bus/search-stops`（含 `search-stop` alias）、`nearby-stops` | stops 的 `stopDisplayName`、`routeDisplayNames`；後者逐項對應原 `routes` 的順序 |
+| `/transit/bus/stop-arrivals` | `stopDisplayName`；arrivals 的 `routeDisplayName`、`subRouteDisplayName`、`headsignDisplayName`（原無 headsign 時為 null） |
+| `/transit/train/timetable`、`station-timetable`、`stations` | 起訖／車站的 `displayName`；班次的 `trainTypeDisplayName`，station-timetable 另有 `destinationDisplayName` |
+
+公車路線／站點搜尋可使用已保存的英文名稱，鐵路車站建議／時刻查詢可使用來源英文解析原 ID；顯示語言不會把 ID 或後續 matching 改成英文文字。這不代表每個接受名稱的 API 都能任意翻譯輸入。
+
+### 路線與 WALK 路名側車
+
+在明確指定 `language` 的路線回應中，WALK／BUS／METRO／TRA／THSR leg 可增加 `fromDisplayName`、`toDisplayName`，有路線／線名／車種名稱時可有 `routeDisplayName`。有真實來源時保留 `fromNameEn`、`toNameEn`、`routeNameEn`；中途站可有 `nameEn`／`displayName`。此階段不承諾 DRIVE／MOTORCYCLE 或所有線名都有英文來源。
+
+WALK **仍只有既有九個 step 機器欄位**。CSR 來源英文路名放在 leg 的可選 `stepStreetNames`，不放進 step：
+
+```json
+{
+  "stepStreetNames": [{
+    "index": 0,
+    "streetName": "羅斯福路",
+    "nameEn": "Roosevelt Road",
+    "displayName": "Roosevelt Road"
+  }]
+}
+```
+
+- `index` 指向**同一 leg 的原始 `steps`**，不是導航 instructions 的索引。
+- 顯示前同時核對 index 與 canonical `streetName`；重複 index、越界、名稱不符、空英文都回退原 `steps[index].streetName`。不可僅以中文路名做 map key，因為不同道路可能同名。
+- sidecar 是可選來源 metadata；無論有無提供規劃語言，前端都不能假設它一定存在。沒有 sidecar 的舊 token 仍可導航。
+- `/a11y/route/instructions` 與新的 Voice session/resume 會使用本次語言，依 token 保存的來源資料產生路名，不靠舊 `displayName` 猜測。相同 token 可要求 en／zh-TW 指引，不必重新規劃。
+- OTP／Valhalla 的 locale 設定不等於會翻譯 street name；本契約沒有為此切換 provider locale。
+
+### 快取、資料更新與前端切換
+
+前端的名稱查詢 cache key、request dependencies 與 stale-response 判斷須包含 effective language。Mobile 的 `system` 應先解析成 en／zh-TW，但不得改寫使用者的「跟隨系統」設定。
+
+切語言不可自動 reroute。可用既有來源欄位重新呈現名稱，或取得同 token 的新語言導航；沒有來源就保留原文。舊 route 的 display 欄位屬原請求語言，不能直接當成新語言結果。相同 reroute `clientRequestId` 仍重播首次結果，即使重試時換語言也不會重新規劃。
+
+CSR 英文可用率取決於 `ped_osm_way_name.name_en` 是否已有資料。程式可讀舊版沒有 `name_en` 的表，但不會憑空產生英文。名稱回填屬獨立資料維運操作；更新 lookup 後需重新載入記憶體 graph（例如重啟使用該 graph 的 backend process），只等 ACTIVE version 檢查不會重載同版本名稱。單純更新來源名稱不需重建 graph 拓樸或成本。

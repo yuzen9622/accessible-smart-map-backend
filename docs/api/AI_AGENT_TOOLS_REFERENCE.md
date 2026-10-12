@@ -2,7 +2,7 @@
 
 **端點**：`POST /api/v1/ai/chat`
 **狀態**：Active — 反映 repo 現行實作
-**日期**：2026-06-30（2026-10-12 更新語言傳遞與結構化錯誤）
+**日期**：2026-06-30（2026-10-12 更新語言傳遞、來源名稱與結構化錯誤）
 **SDK**：原生 `@google/genai` Interactions API（stateful）；工具仍以 OpenAI function schema 定義，由 `tool-catalog.ts` 轉成 Gemini 宣告
 
 > 本文件描述「目前程式碼實際掛載的工具與回傳形狀」。
@@ -78,8 +78,10 @@
 ### 語言與錯誤處理
 
 - Web／Mobile 把當前介面語言放在 body `language`，不要新增 `Accept-Language` 優先規則，也不要要求模型自行填語言參數。
-- 後端將同一個語言傳給 `findGooglePlaces` 的 Google Text Search、`planAccessibleRoute` 及 `getNavInstructions`。有 session 語言時以其為準；舊 session 未提供語言時，導航工具仍接受既有合法的工具語言參數。
-- Google 搜尋結果可能提供英文名稱／地址；這不表示本地設施資料、路名或站名已全部英文化。沒有英文來源時保留原文，不猜譯官方名稱。
+- 後端將同一個語言傳給 Google Text Search、路線／導航、設施／校園／停車位與公車／鐵路查詢工具；SOS 的附近查詢／路線工具也沿用可信 caller 語言，授權方式不變。有 session 語言時以其為準，忽略模型自行提供的名稱查詢 `lang`／`language`；舊 session 未提供語言時，導航工具仍接受既有合法的工具語言參數。
+- Google 搜尋結果可能提供英文名稱／地址；本地／TDX 結果使用來源支持的 `displayName`、`stopDisplayName`、`routeDisplayName` 等附加欄位，原始名稱／ID 不變。沒有英文來源時保留原文，不猜譯官方名稱。欄位位置與回退規則見[來源名稱契約](WALK_STEPS_I18N_VOCABULARY.md#九來源名稱與顯示欄位)。
+- 工具卡片／回答優先展示有效 display 值，但後續工具呼叫仍使用 ID／原始欄位，不能拿顯示譯名當匹配值。省略可信語言的名稱查詢保留舊 DTO；模型不得自行打開新語系契約。
+- 路線 clientResult 保留可選 `stepStreetNames`，modelResult 移除此 bulky sidecar；機器 `steps` 仍維持九欄。模型與 bounded summary 保留 leg 的 `fromDisplayName`、`toDisplayName`、`routeDisplayName`，不代表模型取得完整步行來源表。
 - JSON 錯誤的數字 `code` 與 SSE error 的數字 `code` 仍為 HTTP 狀態語意；業務原因在 `data.reason`：`AI_EMPTY_RESPONSE`、`AI_REQUEST_FAILED`、`AI_RATE_LIMITED`。前端以 reason 對應字典，未知 reason 顯示安全的 `message`。
 - 工具失敗仍用原本的 `error` 欄位，新增的 `reason` 位於工具 result 頂層，不套用 HTTP envelope。不要把工具的 reason 與 HTTP 數字 code 混用。
 - 語言切換後，新查詢使用新語言；不要為了把舊工具卡片翻譯成英文而自動重跑規劃。完整路線及 routeToken 仍以原本一次規劃為準。
@@ -138,7 +140,7 @@ GooglePlace = { name; place_id; formatted_address; rating?: number;
                 location: { latitude; longitude } }
 
 SlimA11y   = { osmId; category; location;            // slimFacility 瘦身後
-               name?; wheelchair?; tags?: Record<string,string> }   // tags 只留白名單鍵
+               name?; displayName?; wheelchair?; tags?: Record<string,string> }   // tags 白名單包含來源 name:en
 
 IA11y      = { _id; 項次; "出入口電梯/無障礙坡道名稱"; 經度; 緯度; location }
 IBathroom  = { _id; county; village; name; address; administration;
