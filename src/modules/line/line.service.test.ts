@@ -1628,11 +1628,11 @@ describe("line.service — SOS route and status postbacks", () => {
     expect(buildActiveSosMessage).toHaveBeenCalled();
   });
 
-  it("builds status cards with share-token tracking links", async () => {
+  it("builds status cards with fragment share-token tracking links", async () => {
     await handleEvents([postbackEvent("action=sos_status")]);
     expect(buildActiveSosMessage).toHaveBeenCalledWith([
       expect.objectContaining({
-        trackingUrl: `https://map.example.com/zh-TW/sos/?token=${ACTIVE_SOS.shareToken}`,
+        trackingUrl: `https://map.example.com/zh-TW/sos/#token=${ACTIVE_SOS.shareToken}`,
       }),
     ]);
   });

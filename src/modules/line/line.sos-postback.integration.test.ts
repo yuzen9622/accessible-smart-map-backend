@@ -113,7 +113,9 @@ async function notify() {
   if (tracking?.type !== "button" || tracking.action.type !== "uri") {
     throw new Error("Missing actual tracking link");
   }
-  const legacyToken = new URL(tracking.action.uri).searchParams.get("token");
+  const legacyToken = new URLSearchParams(
+    new URL(tracking.action.uri).hash.slice(1),
+  ).get("token");
   expect(legacyToken).toBe(session.shareToken);
   expect(legacyToken).toMatch(/^[a-f0-9]{32}$/);
   return { session, contactId: contact.insertedId, legacyToken, button };

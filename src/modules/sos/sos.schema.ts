@@ -82,13 +82,26 @@ export const SosPublicResponseSchema = ApiResponse(
       .enum(["body", "trapped", "share_location"])
       .openapi({ example: "body" }),
     status: z.enum(["active", "resolved"]).openapi({ example: "active" }),
-    lat: z.number().openapi({ example: 25.033 }),
-    lng: z.number().openapi({ example: 121.5654 }),
-    address: z
-      .string()
-      .nullable()
-      .openapi({ example: "台北市信義區市府路1號" }),
-    updatedAt: z.string().openapi({ example: "2026-07-19T08:30:00.000Z" }),
+    lat: z
+      .number()
+      .optional()
+      .openapi({ example: 25.033, description: "僅 active 時提供" }),
+    lng: z
+      .number()
+      .optional()
+      .openapi({ example: 121.5654, description: "僅 active 時提供" }),
+    address: z.string().nullable().optional().openapi({
+      example: "台北市信義區市府路1號",
+      description: "僅 active 時提供",
+    }),
+    updatedAt: z.string().optional().openapi({
+      example: "2026-07-19T08:30:00.000Z",
+      description: "位置更新時間，僅 active 時提供",
+    }),
+    resolvedAt: z.string().optional().openapi({
+      example: "2026-07-19T09:00:00.000Z",
+      description: "僅 resolved 時提供",
+    }),
     handlingStatus: z
       .enum([
         "pending",
@@ -152,10 +165,37 @@ export const SosSnapshotResponseSchema = ApiResponse(
         .openapi({ example: "台北市信義區市府路1號" }),
       updatedAt: z.string().openapi({ example: "2026-07-19T08:30:00.000Z" }),
     }),
+    viewers: z
+      .array(
+        z.object({
+          firstSeenAt: z.string(),
+          lastSeenAt: z.string(),
+        }),
+      )
+      .openapi({
+        example: [],
+        description:
+          "讀取過公開追蹤連結的裝置（以 IP+UA 的雜湊估算，非精確人數；最多記 50 筆）",
+      }),
+    activeViewerCount: z.number().openapi({
+      example: 2,
+      description: "快照產生時，最近 viewerActiveWindowSeconds 內讀取過的數量",
+    }),
+    viewerActiveWindowSeconds: z.number().openapi({ example: 180 }),
     resolvedAt: z.string().nullable().openapi({ example: null }),
     updatedAt: z.string().openapi({ example: "2026-07-19T08:30:00.000Z" }),
   }),
   "SosSnapshotResponse",
+);
+
+export const SosShareTokenResponseSchema = ApiResponse(
+  z.object({
+    sessionId: z.string().openapi({ example: "66b0abc123def4567890abcd" }),
+    shareToken: z
+      .string()
+      .openapi({ example: "0a1b2c3d4e5f60718293a4b5c6d7e8f9" }),
+  }),
+  "SosShareTokenResponse",
 );
 
 export const SosErrorResponseSchema = z
@@ -281,6 +321,39 @@ registry.registerPath({
 });
 
 registry.registerPath({
+  method: "post",
+  path: "/sos/sessions/{id}/share-token",
+  tags: ["SOS"],
+  summary: "重設分享連結（限本人）",
+  description:
+    "換發新的 shareToken，舊連結立即失效（包含已寄給 LINE 聯絡人的通知連結），查看紀錄一併清除。",
+  security: [{ bearerAuth: [] }],
+  request: { params: SessionIdParamSchema },
+  responses: {
+    200: {
+      description: "已換發，回傳新的 shareToken",
+      content: { "application/json": { schema: SosShareTokenResponseSchema } },
+    },
+    400: {
+      description: "求救已結束",
+      content: { "application/json": { schema: SosErrorResponseSchema } },
+    },
+    401: {
+      description: "Token 過期",
+      content: { "application/json": { schema: SosErrorResponseSchema } },
+    },
+    403: {
+      description: "非本人或無效 Token",
+      content: { "application/json": { schema: SosErrorResponseSchema } },
+    },
+    404: {
+      description: "找不到求救紀錄",
+      content: { "application/json": { schema: SosErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
   method: "get",
   path: "/sos/sessions/{id}",
   tags: ["SOS"],
@@ -341,7 +414,7 @@ registry.registerPath({
   tags: ["SOS"],
   summary: "公開追蹤頁查詢（無需登入）",
   description:
-    "以高熵 shareToken（建立事件時回傳，非 session id）查詢，避免可被猜測/列舉的 ObjectId 暴露即時位置。",
+    "以高熵 shareToken（建立事件時回傳，非 session id）查詢，避免可被猜測/列舉的 ObjectId 暴露即時位置。僅 active 回傳位置；解除後 24 小時內只回狀態，之後 410。每次讀取以 IP+UA 的雜湊估算查看裝置數供求救者檢視。回應不可快取（Cache-Control: no-store）。",
   request: { params: ShareTokenParamSchema },
   responses: {
     200: {
@@ -354,6 +427,10 @@ registry.registerPath({
     },
     410: {
       description: "此追蹤連結已失效",
+      content: { "application/json": { schema: SosErrorResponseSchema } },
+    },
+    429: {
+      description: "請求過於頻繁",
       content: { "application/json": { schema: SosErrorResponseSchema } },
     },
   },

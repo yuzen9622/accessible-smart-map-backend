@@ -47,6 +47,7 @@ import {
   resolveSession,
   getSessionForOwner,
   getPublicByToken,
+  rotateShareToken,
 } from "./sos.service";
 import { ResponseCode } from "../../types/code";
 import { SOS_MSG, SOS_REASON } from "../../constants/messages";
@@ -654,5 +655,155 @@ describe("getPublicByToken", () => {
     expect(result.ok).toBe(true);
     expect(result.data).toMatchObject({ handlingStatus: "en_route" });
     expect(JSON.stringify(result.data)).not.toMatch(/小明|小華|L1/);
+  });
+});
+
+describe("getPublicByToken — resolved and viewers", () => {
+  const TOKEN = "0123456789abcdef0123456789abcdef";
+  const reader = { ip: "203.0.113.5", userAgent: "UA/1" };
+
+  it("stops returning any location once resolved", async () => {
+    vi.mocked(SosSession.findOne).mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        _id: SESSION_ID,
+        type: "body",
+        status: "resolved",
+        handlingStatus: "resolved",
+        lat: 25,
+        lng: 121,
+        address: "台北市信義區市府路1號",
+        locationUpdatedAt: new Date(),
+        resolvedAt: new Date(Date.now() - 60_000),
+      }),
+    } as never);
+    const result = await getPublicByToken(TOKEN, reader);
+    expect(result.ok).toBe(true);
+    expect(result.data).toMatchObject({ status: "resolved" });
+    expect(result.data).not.toHaveProperty("lat");
+    expect(result.data).not.toHaveProperty("lng");
+    expect(result.data).not.toHaveProperty("address");
+    // A resolved session records no viewers.
+    expect(SosSession.updateOne).not.toHaveBeenCalled();
+  });
+
+  it("answers 410 once the status-only window has passed", async () => {
+    vi.mocked(SosSession.findOne).mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        _id: SESSION_ID,
+        status: "resolved",
+        resolvedAt: new Date(Date.now() - 25 * 60 * 60 * 1000),
+      }),
+    } as never);
+    const result = await getPublicByToken(TOKEN, reader);
+    expect(result.httpCode).toBe(ResponseCode.GONE);
+  });
+
+  it("records an anonymous reader by keyed hash and notifies the owner", async () => {
+    vi.mocked(SosSession.findOne).mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        _id: SESSION_ID,
+        type: "body",
+        status: "active",
+        lat: 25,
+        lng: 121,
+        locationUpdatedAt: new Date(),
+        handlingStatus: "notified",
+      }),
+    } as never);
+    vi.mocked(SosSession.updateOne).mockResolvedValue({
+      modifiedCount: 1,
+    } as never);
+    vi.mocked(SosSession.findById).mockReturnValue(
+      lean({ _id: SESSION_ID, status: "active" }) as never,
+    );
+
+    const result = await getPublicByToken(TOKEN, reader);
+
+    expect(result.data).toMatchObject({ lat: 25, lng: 121 });
+    const [filter, update] = vi.mocked(SosSession.updateOne).mock.calls[0];
+    const pushed = (update as { $push: { viewers: { key: string } } }).$push
+      .viewers;
+    expect(filter).toMatchObject({ _id: SESSION_ID, status: "active" });
+    expect(pushed.key).toMatch(/^[0-9a-f]{32}$/);
+    // The raw IP and UA are never stored.
+    expect(JSON.stringify(update)).not.toMatch(/203\.0\.113\.5|UA\/1/);
+    expect(emitSosUpdate).toHaveBeenCalledWith(SESSION_ID, expect.anything());
+  });
+
+  it("still returns the location when viewer bookkeeping fails", async () => {
+    vi.mocked(SosSession.findOne).mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        _id: SESSION_ID,
+        type: "body",
+        status: "active",
+        lat: 25,
+        lng: 121,
+        locationUpdatedAt: new Date(),
+        handlingStatus: "notified",
+      }),
+    } as never);
+    vi.mocked(SosSession.updateOne).mockRejectedValue(new Error("db down"));
+    const result = await getPublicByToken(TOKEN, reader);
+    expect(result.ok).toBe(true);
+    expect(result.data).toMatchObject({ lat: 25 });
+  });
+});
+
+describe("rotateShareToken", () => {
+  it("issues a fresh token for the owner's active session", async () => {
+    vi.mocked(SosSession.findById).mockReturnValue(
+      lean({
+        _id: SESSION_ID,
+        userId: OWNER_ID,
+        status: "active",
+        shareToken: "a".repeat(32),
+      }) as never,
+    );
+    vi.mocked(SosSession.findOneAndUpdate).mockReturnValue(
+      lean({ _id: SESSION_ID, userId: OWNER_ID, status: "active" }) as never,
+    );
+
+    const result = await rotateShareToken({
+      userId: OWNER_ID,
+      sessionId: SESSION_ID,
+    });
+
+    expect(result.ok).toBe(true);
+    const token = (result.data as { shareToken: string }).shareToken;
+    expect(token).toMatch(/^[0-9a-f]{32}$/);
+    expect(token).not.toBe("a".repeat(32));
+    const [filter, update] = vi.mocked(SosSession.findOneAndUpdate).mock
+      .calls[0];
+    expect(filter).toEqual({ _id: SESSION_ID, status: "active" });
+    expect(update).toEqual({ $set: { shareToken: token, viewers: [] } });
+    expect(emitSosUpdate).toHaveBeenCalled();
+  });
+
+  it("refuses another user's session", async () => {
+    vi.mocked(SosSession.findById).mockReturnValue(
+      lean({
+        _id: SESSION_ID,
+        userId: "someone-else",
+        status: "active",
+      }) as never,
+    );
+    const result = await rotateShareToken({
+      userId: OWNER_ID,
+      sessionId: SESSION_ID,
+    });
+    expect(result.httpCode).toBe(ResponseCode.FORBIDDEN);
+    expect(SosSession.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it("refuses a resolved session", async () => {
+    vi.mocked(SosSession.findById).mockReturnValue(
+      lean({ _id: SESSION_ID, userId: OWNER_ID, status: "resolved" }) as never,
+    );
+    const result = await rotateShareToken({
+      userId: OWNER_ID,
+      sessionId: SESSION_ID,
+    });
+    expect(result.httpCode).toBe(ResponseCode.INVALID_INPUT);
+    expect(SosSession.findOneAndUpdate).not.toHaveBeenCalled();
   });
 });

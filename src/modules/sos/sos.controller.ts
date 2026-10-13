@@ -60,9 +60,21 @@ async function resolveSession(req: Request, res: Response) {
   return send(res, result);
 }
 
+async function rotateShareToken(req: Request, res: Response) {
+  const params = req.validated?.params as { id: string };
+  const result = await service.rotateShareToken({
+    userId: req.auth!.userId,
+    sessionId: params.id,
+  });
+  return send(res, result);
+}
+
 async function getPublicSession(req: Request, res: Response) {
   const params = req.validated?.params as { token: string };
-  const result = await service.getPublicByToken(params.token);
+  const result = await service.getPublicByToken(params.token, {
+    ip: req.ip ?? "",
+    userAgent: req.get("user-agent") ?? "",
+  });
   return send(res, result);
 }
 
@@ -168,6 +180,7 @@ export {
   createSession,
   updateLocation,
   resolveSession,
+  rotateShareToken,
   getPublicSession,
   getSession,
   streamSession,

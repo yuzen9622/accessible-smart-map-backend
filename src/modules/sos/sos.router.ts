@@ -5,10 +5,12 @@ import {
   createSession,
   updateLocation,
   resolveSession,
+  rotateShareToken,
   getPublicSession,
   getSession,
   streamSession,
 } from "./sos.controller";
+import { publicTrackingLimiter, trackingHeaders } from "./sos.middleware";
 import {
   CreateSosSchema,
   UpdateSosLocationSchema,
@@ -43,8 +45,18 @@ export function createSosRouter(): Router {
     resolveSession,
   );
 
+  router.post(
+    "/sessions/:id/share-token",
+    middleware,
+    trackingHeaders,
+    validateRequest({ params: SessionIdParamSchema }),
+    rotateShareToken,
+  );
+
   router.get(
     "/sessions/:token/public",
+    publicTrackingLimiter,
+    trackingHeaders,
     validateRequest({ params: ShareTokenParamSchema }),
     getPublicSession,
   );

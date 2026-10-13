@@ -1,4 +1,5 @@
 import { EventEmitter } from "events";
+import { SOS_VIEWER } from "../../constants/sos";
 import type { ISosSession } from "../../types";
 
 /**
@@ -35,6 +36,16 @@ export interface SosSnapshot {
     address?: string | null;
     updatedAt: Date;
   };
+  /**
+   * Devices that read the public tracking link (anonymous estimates). Clients
+   * decay "currently viewing" from `lastSeenAt` with `viewerActiveWindowSeconds`.
+   */
+  viewers: {
+    firstSeenAt: Date;
+    lastSeenAt: Date;
+  }[];
+  activeViewerCount: number;
+  viewerActiveWindowSeconds: number;
   resolvedAt?: Date | null;
   updatedAt: Date;
 }
@@ -51,6 +62,11 @@ function channel(sessionId: string): string {
  * @returns The normalized snapshot.
  */
 export function buildSosSnapshot(session: ISosSession): SosSnapshot {
+  const viewers = (session.viewers ?? []).map((v) => ({
+    firstSeenAt: v.firstSeenAt,
+    lastSeenAt: v.lastSeenAt,
+  }));
+  const activeSince = Date.now() - SOS_VIEWER.activeWindowMs;
   return {
     sessionId: String(session._id),
     status: session.status,
@@ -78,6 +94,11 @@ export function buildSosSnapshot(session: ISosSession): SosSnapshot {
       address: session.address ?? null,
       updatedAt: session.locationUpdatedAt,
     },
+    viewers,
+    activeViewerCount: viewers.filter(
+      (v) => new Date(v.lastSeenAt).getTime() >= activeSince,
+    ).length,
+    viewerActiveWindowSeconds: SOS_VIEWER.activeWindowMs / 1000,
     resolvedAt: session.resolvedAt ?? null,
     updatedAt: session.updatedAt,
   };

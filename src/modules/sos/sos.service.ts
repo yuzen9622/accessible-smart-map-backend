@@ -21,12 +21,15 @@ import {
   initializeInitialNotice,
   promoteToAcknowledged,
   pushAcknowledgement,
+  recordSessionViewer,
+  replaceShareToken,
   resolveActiveSession,
   updateActiveSessionLocation,
 } from "./sos.repository";
 import { sendSosResolved } from "../../adapters/line.adapter";
 import { ResponseCode } from "../../types/code";
 import { sosTrackingUrl } from "../../config/public-links";
+import { SOS_RESOLVED_STATUS_MS, SOS_VIEWER } from "../../constants/sos";
 import { SOS_MSG, SOS_PUSH_MSG, SOS_REASON } from "../../constants/messages";
 import { PUSH_EVENT_TYPE } from "../../constants/push";
 import { pickLocale, sendPushToUser } from "../user/user.push.service";
@@ -40,13 +43,59 @@ import type {
   CreateSosInput,
   GetSosForOwnerInput,
   ResolveSosInput,
+  RotateShareTokenInput,
+  SosReader,
   ServiceResult,
   UpdateLocationInput,
   UpdateSosStatusInput,
   FamilyHandlingStatus,
 } from "./sos.types";
 
-const TRACKING_EXPIRY_MS = 24 * 60 * 60 * 1000;
+/** A fresh 128-bit share token. */
+function newShareToken(): string {
+  return crypto.randomBytes(16).toString("hex");
+}
+
+/**
+ * Opaque per-session key for an anonymous link reader. Keyed (HMAC) so the
+ * stored value cannot be reversed by enumerating IPs, and salted with the
+ * session id so one device cannot be correlated across sessions.
+ */
+function linkReaderKey(sessionId: string, reader: SosReader): string {
+  return crypto
+    .createHmac("sha256", process.env.JWT_ACCESS_SECRET ?? "")
+    .update(`sos-viewer\0${sessionId}\0${reader.ip}\0${reader.userAgent}`)
+    .digest("hex")
+    .slice(0, 32);
+}
+
+/**
+ * Best-effort "who is viewing" bookkeeping: a failure here must never block
+ * the reader from seeing the location. Pushes a fresh snapshot to the owner
+ * when the viewer list changed.
+ *
+ * @param sessionId Session id
+ * @param key Opaque device key
+ */
+async function noteSessionViewer(
+  sessionId: string,
+  key: string,
+): Promise<void> {
+  try {
+    const changed = await recordSessionViewer(sessionId, key, new Date(), {
+      refreshMs: SOS_VIEWER.refreshMs,
+      maxEntries: SOS_VIEWER.maxEntries,
+    });
+    if (!changed) return;
+    const updated = await findSessionById(sessionId);
+    if (updated) emitSosUpdate(sessionId, buildSosSnapshot(updated));
+  } catch (err) {
+    console.error(
+      "[sos.service] viewer bookkeeping failed",
+      err instanceof Error ? err.name : "UnknownError",
+    );
+  }
+}
 
 /**
  * Best-effort LINE push to the OTHER bound contacts of a session (excludes the
@@ -301,7 +350,7 @@ export async function createSession(
   let session = await findActiveSessionByUser(input.userId);
   let created = false;
   if (!session) {
-    const shareToken = crypto.randomBytes(16).toString("hex");
+    const shareToken = newShareToken();
     const now = new Date();
     const initialNotice = await makeInitialNotice(input.userId, {
       type: input.type,
@@ -748,14 +797,55 @@ export async function getSessionForOwner(
 }
 
 /**
- * Public tracking lookup by share token (no auth). Resolved sessions older than
- * 24h are treated as expired (410).
+ * Issues a new share token for the owner's active session; the old link stops
+ * working immediately — including the link inside LINE notifications already
+ * sent to bound contacts.
  *
- * @param token The 32-char share token.
- * @returns 200 with a minimal location view, 404 unknown, or 410 expired.
+ * @param input Owner id and session id.
+ * @returns 200 with `{ sessionId, shareToken }`, or 404/403/400 per guards.
+ */
+export async function rotateShareToken(
+  input: RotateShareTokenInput,
+): Promise<ServiceResult> {
+  if (!Types.ObjectId.isValid(input.sessionId)) {
+    return fail(ResponseCode.NOT_FOUND, "SESSION_NOT_FOUND");
+  }
+  const session = await findSessionById(input.sessionId);
+  if (!session) return fail(ResponseCode.NOT_FOUND, "SESSION_NOT_FOUND");
+  if (String(session.userId) !== input.userId) {
+    return fail(ResponseCode.FORBIDDEN, "NOT_SESSION_OWNER");
+  }
+  if (session.status !== "active") {
+    return fail(ResponseCode.INVALID_INPUT, "SESSION_NOT_ACTIVE");
+  }
+  const shareToken = newShareToken();
+  const updated = await replaceShareToken(
+    input.sessionId,
+    shareToken,
+    sosTrackingUrl(shareToken),
+  );
+  if (!updated) return fail(ResponseCode.INVALID_INPUT, "SESSION_NOT_ACTIVE");
+  emitSosUpdate(input.sessionId, buildSosSnapshot(updated));
+  return {
+    ok: true,
+    httpCode: ResponseCode.OK,
+    message: SOS_MSG.SHARE_TOKEN_ROTATED,
+    data: { sessionId: input.sessionId, shareToken },
+  };
+}
+
+/**
+ * Public tracking lookup by share token (no auth). Only an active session
+ * reveals its location. A resolved one answers status-only for a short while
+ * (so an open tracker can say "ended"), then 410.
+ *
+ * @param shareToken The 32-char share token.
+ * @param reader The requesting device, for the owner's viewer count.
+ * @returns 200 with a minimal view, 404 unknown, or 410 expired.
  */
 export async function getPublicByToken(
   shareToken: string,
+  reader?: SosReader,
 ): Promise<ServiceResult> {
   const session = await findSessionByShareToken(shareToken);
   if (!session) {
@@ -766,12 +856,29 @@ export async function getPublicByToken(
       data: { reason: SOS_REASON.SESSION_NOT_FOUND },
     };
   }
-  if (
-    session.status === "resolved" &&
-    session.resolvedAt &&
-    Date.now() - new Date(session.resolvedAt).getTime() > TRACKING_EXPIRY_MS
-  ) {
-    return fail(ResponseCode.GONE, "TRACKING_EXPIRED");
+  if (session.status === "resolved") {
+    const resolvedAt = session.resolvedAt ? new Date(session.resolvedAt) : null;
+    if (
+      !resolvedAt ||
+      Date.now() - resolvedAt.getTime() > SOS_RESOLVED_STATUS_MS
+    ) {
+      return fail(ResponseCode.GONE, "TRACKING_EXPIRED");
+    }
+    return {
+      ok: true,
+      httpCode: ResponseCode.OK,
+      message: SOS_MSG.PUBLIC_OK,
+      data: {
+        type: session.type,
+        status: session.status,
+        handlingStatus: session.handlingStatus,
+        resolvedAt,
+      },
+    };
+  }
+  if (reader) {
+    const sessionId = String(session._id);
+    await noteSessionViewer(sessionId, linkReaderKey(sessionId, reader));
   }
   return {
     ok: true,

@@ -86,3 +86,14 @@ export interface GetSosForOwnerInput {
   userId: string;
   sessionId: string;
 }
+
+export interface RotateShareTokenInput {
+  userId: string;
+  sessionId: string;
+}
+
+/** The device reading a public tracking link (never stored raw). */
+export interface SosReader {
+  ip: string;
+  userAgent: string;
+}

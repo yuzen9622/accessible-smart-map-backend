@@ -1054,7 +1054,7 @@ describe("LINE SOS tools", () => {
     const result = JSON.parse(raw);
     expect(result.ok).toBe(true);
     expect(result.activeSessions[0].trackingUrl).toContain(
-      "/zh-TW/sos/?token=token123",
+      "/zh-TW/sos/#token=token123",
     );
   });
 
@@ -1088,7 +1088,44 @@ describe("LINE SOS tools", () => {
     const raw = await getSosLiveLocation({ sessionId: "s1" }, "line-1");
     const result = JSON.parse(raw);
     expect(result.ok).toBe(true);
-    expect(result.trackingUrl).toContain("/zh-TW/sos/?token=token123");
+    expect(result.trackingUrl).toContain("/zh-TW/sos/#token=token123");
+  });
+
+  it("getSosLiveLocation 對已解除的求救不回傳位置", async () => {
+    mockEmergencyContactFind.mockReturnValue({
+      select: () => ({
+        lean: () =>
+          Promise.resolve([{ _id: "c1", userId: "u1", name: "王小明" }]),
+      }),
+    });
+    mockSosSessionFindById.mockReturnValue({
+      lean: () =>
+        Promise.resolve({
+          _id: "s1",
+          userId: "u1",
+          type: "body",
+          status: "resolved",
+          address: "台北車站",
+          lat: 25.0478,
+          lng: 121.5171,
+          resolvedAt: new Date("2026-07-09T02:00:00.000Z"),
+          locationUpdatedAt: new Date("2026-07-09T01:00:00.000Z"),
+          shareToken: "token123",
+        }),
+    });
+    mockUserFindById.mockReturnValue({
+      select: () => ({
+        lean: () => Promise.resolve({ name: "王小明" }),
+      }),
+    });
+
+    const result = JSON.parse(
+      await getSosLiveLocation({ sessionId: "s1" }, "line-1"),
+    );
+    expect(result).toMatchObject({ ok: true, status: "resolved" });
+    expect(result).not.toHaveProperty("lat");
+    expect(result).not.toHaveProperty("address");
+    expect(result).not.toHaveProperty("trackingUrl");
   });
 
   it("planRouteToSosVictim 使用共享位置當起點", async () => {

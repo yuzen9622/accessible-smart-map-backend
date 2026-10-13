@@ -42,6 +42,15 @@ const timelineEntrySchema = new Schema(
   { _id: false },
 );
 
+const viewerSchema = new Schema(
+  {
+    key: { type: String, required: true },
+    firstSeenAt: { type: Date, required: true },
+    lastSeenAt: { type: Date, required: true },
+  },
+  { _id: false },
+);
+
 // Delivery state of the "SOS ended" notice for system auto-resolves, which
 // must reach contacts even when LINE is briefly down. Manual resolves notify
 // best-effort inline and never set this.
@@ -138,6 +147,7 @@ const sosSessionSchema = new Schema<ISosSession>(
     claimedAt: { type: Date, default: null },
     acknowledgements: { type: [acknowledgementSchema], default: [] },
     timeline: { type: [timelineEntrySchema], default: [] },
+    viewers: { type: [viewerSchema], default: [] },
     staleAlertSent: { type: Boolean, default: false },
     autoResolved: { type: Boolean, default: false },
     initialNotice: { type: initialNoticeSchema, default: undefined },

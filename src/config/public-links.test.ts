@@ -11,10 +11,10 @@ afterEach(() => {
 });
 
 describe("public links", () => {
-  it("builds the app-claimable tracking path from the share token", () => {
+  it("keeps the share token in the fragment of the app-claimable path", () => {
     process.env.PUBLIC_TRACKING_BASE_URL = "https://map.example.com/";
     expect(sosTrackingUrl("abc")).toBe(
-      "https://map.example.com/zh-TW/sos/?token=abc",
+      "https://map.example.com/zh-TW/sos/#token=abc",
     );
   });
 
@@ -36,11 +36,11 @@ describe("public links", () => {
     expect(routePreviewUrl("abc")).toBeUndefined();
   });
 
-  it("adds LINE's external-browser flag without dropping the token", () => {
+  it("adds LINE's external-browser flag and keeps the fragment token", () => {
     expect(
-      forLineExternalOpen("https://map.example.com/zh-TW/sos/?token=abc"),
+      forLineExternalOpen("https://map.example.com/zh-TW/sos/#token=abc"),
     ).toBe(
-      "https://map.example.com/zh-TW/sos/?token=abc&openExternalBrowser=1",
+      "https://map.example.com/zh-TW/sos/?openExternalBrowser=1#token=abc",
     );
   });
 });

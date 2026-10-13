@@ -296,6 +296,7 @@ export const SOS_MSG = {
   ALREADY_CLAIMED: "此事件已由其他家人承接",
   ALREADY_RESOLVED: "此事件已結案",
   NOT_AUTHORIZED_CONTACT: "你沒有此事件的權限",
+  SHARE_TOKEN_ROTATED: "已重設分享連結，舊連結已失效",
 } as const;
 
 export const ACCOUNT_MSG = {

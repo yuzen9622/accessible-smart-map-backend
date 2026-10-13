@@ -212,6 +212,83 @@ export async function updateActiveSessionLocation(
 }
 
 /**
+ * Records one tracking-link read on an active session. A new device is
+ * appended until `maxEntries` exist (later ones are not added, nothing is
+ * evicted); a returning device refreshes `lastSeenAt` only once it is older
+ * than `refreshMs`, so polling clients cost at most one write per device per
+ * interval.
+ *
+ * @param sessionId Session id
+ * @param key Opaque device key
+ * @param now Read time
+ * @param opts Refresh interval and list cap
+ * @returns True when the stored viewer list changed
+ */
+export async function recordSessionViewer(
+  sessionId: string,
+  key: string,
+  now: Date,
+  opts: { refreshMs: number; maxEntries: number },
+): Promise<boolean> {
+  const added = await SosSession.updateOne(
+    {
+      _id: sessionId,
+      status: "active",
+      "viewers.key": { $ne: key },
+      [`viewers.${opts.maxEntries - 1}`]: { $exists: false },
+    },
+    { $push: { viewers: { key, firstSeenAt: now, lastSeenAt: now } } },
+  );
+  if (added.modifiedCount > 0) return true;
+  const refreshed = await SosSession.updateOne(
+    {
+      _id: sessionId,
+      status: "active",
+      viewers: {
+        $elemMatch: {
+          key,
+          lastSeenAt: { $lte: new Date(now.getTime() - opts.refreshMs) },
+        },
+      },
+    },
+    { $set: { "viewers.$.lastSeenAt": now } },
+  );
+  return refreshed.modifiedCount > 0;
+}
+
+/**
+ * Swaps an active session's share token, invalidating the old link at once.
+ * Recorded viewers are cleared (they held the old link). A not-yet-delivered
+ * initial notice gets the new link too.
+ *
+ * @param sessionId Session id
+ * @param shareToken The new share token
+ * @param trackingUrl The tracking link to store on a pending initial notice
+ * @returns The session after the update, or null when it is no longer active
+ */
+export async function replaceShareToken(
+  sessionId: string,
+  shareToken: string,
+  trackingUrl: string,
+): Promise<SosSessionRecord | null> {
+  const updated = await SosSession.findOneAndUpdate(
+    { _id: sessionId, status: "active" },
+    { $set: { shareToken, viewers: [] } },
+    { returnDocument: "after" },
+  ).lean<SosSessionRecord | null>();
+  if (updated?.initialNotice) {
+    await SosSession.updateOne(
+      {
+        _id: sessionId,
+        "initialNotice.status": { $in: ["queued", "failed"] },
+      },
+      { $set: { "initialNotice.payload.trackingUrl": trackingUrl } },
+    );
+  }
+  return updated;
+}
+
+/**
  * Records a contact's acknowledgement, at most once per LINE user.
  *
  * @param sessionId Session id

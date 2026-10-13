@@ -623,6 +623,16 @@ export interface ISosTimelineEntry {
   at: Date;
 }
 
+/**
+ * One device reading a session's public tracking link, keyed by a keyed hash
+ * of IP + User-Agent (an estimate of distinct devices, never the raw values).
+ */
+export interface ISosViewer {
+  key: string;
+  firstSeenAt: Date;
+  lastSeenAt: Date;
+}
+
 export interface ISosSession {
   _id: string;
   userId: string;
@@ -641,6 +651,7 @@ export interface ISosSession {
   claimedAt?: Date | null;
   acknowledgements: ISosAcknowledgement[];
   timeline: ISosTimelineEntry[];
+  viewers?: ISosViewer[];
   staleAlertSent: boolean;
   /** True when the system closed the session after it went stale. */
   autoResolved?: boolean;

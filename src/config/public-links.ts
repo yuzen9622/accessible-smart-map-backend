@@ -2,9 +2,11 @@
  * Public web links handed to LINE users. Each carries the SOS session's
  * high-entropy share token — never the enumerable Mongo ObjectId.
  *
- * The tracking path `/zh-TW/sos/?token=` is also claimed by the mobile app
+ * The tracking path `/zh-TW/sos/` is also claimed by the mobile app
  * (Universal Links / App Links), so a contact with the app installed lands in
- * the app and everyone else gets the web tracker.
+ * the app and everyone else gets the web tracker. The token rides in the URL
+ * fragment, which browsers never send to a server, so it stays out of CDN /
+ * server logs and `Referer` headers.
  */
 const DEFAULT_LOCALE = "zh-TW";
 
@@ -14,11 +16,11 @@ function trimBase(value: string | undefined): string {
 
 /**
  * @param shareToken The session's public share token.
- * @returns The public live-location tracking URL.
+ * @returns The public live-location tracking URL (token in the fragment).
  */
 export function sosTrackingUrl(shareToken: string): string {
   const base = trimBase(process.env.PUBLIC_TRACKING_BASE_URL);
-  return `${base}/${DEFAULT_LOCALE}/sos/?token=${encodeURIComponent(shareToken)}`;
+  return `${base}/${DEFAULT_LOCALE}/sos/#token=${encodeURIComponent(shareToken)}`;
 }
 
 /**

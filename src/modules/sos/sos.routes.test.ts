@@ -15,6 +15,7 @@ vi.mock("./sos.service", () => ({
   createSession: vi.fn(),
   updateLocation: vi.fn(),
   resolveSession: vi.fn(),
+  rotateShareToken: vi.fn(),
   getPublicByToken: vi.fn(),
   getSessionForOwner: vi.fn(),
 }));
@@ -171,12 +172,31 @@ describe("GET /sos/sessions/:token/public", () => {
         updatedAt: new Date().toISOString(),
       },
     });
-    const res = await request(app).get(`${BASE}/${SHARE_TOKEN}/public`);
+    const res = await request(app)
+      .get(`${BASE}/${SHARE_TOKEN}/public`)
+      .set("User-Agent", "tracker-test");
     expect(res.status).toBe(200);
     expect(res.body.data.type).toBe("trapped");
     expect(vi.mocked(service.getPublicByToken)).toHaveBeenCalledWith(
       SHARE_TOKEN,
+      { ip: expect.any(String), userAgent: "tracker-test" },
     );
+  });
+
+  it("marks the location response uncacheable, unindexable and referrer-free", async () => {
+    vi.mocked(service.getPublicByToken).mockResolvedValue({
+      ok: true,
+      httpCode: ResponseCode.OK,
+      message: SOS_MSG.PUBLIC_OK,
+      data: { type: "body", status: "active", lat: 25, lng: 121 },
+    });
+    const res = await request(app).get(`${BASE}/${SHARE_TOKEN}/public`);
+    expect(res.headers["cache-control"]).toBe("no-store");
+    expect(res.headers["x-robots-tag"]).toBe("noindex, nofollow");
+    expect(res.headers["referrer-policy"]).toBe("no-referrer");
+    expect(
+      res.headers["ratelimit-limit"] ?? res.headers["ratelimit"],
+    ).toBeDefined();
   });
 
   it("returns 404 for an unknown token", async () => {
@@ -206,6 +226,34 @@ describe("GET /sos/sessions/:token/public", () => {
     const res = await request(app).get(`${BASE}/short/public`);
     expect(res.status).toBe(400);
     expect(vi.mocked(service.getPublicByToken)).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /sos/sessions/:id/share-token", () => {
+  it("rejects without a token with 403 (service not called)", async () => {
+    const res = await request(app).post(`${BASE}/${OID}/share-token`);
+    expect(res.status).toBe(403);
+    expect(vi.mocked(service.rotateShareToken)).not.toHaveBeenCalled();
+  });
+
+  it("rotates for the owner and returns the new token uncached", async () => {
+    stubAuthSessionLookup(buildDbSession());
+    vi.mocked(service.rotateShareToken).mockResolvedValue({
+      ok: true,
+      httpCode: ResponseCode.OK,
+      message: SOS_MSG.SHARE_TOKEN_ROTATED,
+      data: { sessionId: OID, shareToken: TOKEN_32 },
+    });
+    const res = await request(app)
+      .post(`${BASE}/${OID}/share-token`)
+      .set("Authorization", auth);
+    expect(res.status).toBe(200);
+    expect(res.body.data.shareToken).toBe(TOKEN_32);
+    expect(res.headers["cache-control"]).toBe("no-store");
+    expect(vi.mocked(service.rotateShareToken)).toHaveBeenCalledWith({
+      userId: expect.any(String),
+      sessionId: OID,
+    });
   });
 });
 

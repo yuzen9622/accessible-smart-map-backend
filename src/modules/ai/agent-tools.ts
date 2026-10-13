@@ -1340,6 +1340,12 @@ export async function bindLineAccountCode(
   return JSON.stringify(await bindAccountCode(args.code ?? "", lineUserId));
 }
 
+/** Tool answer once an SOS has ended: its location is no longer shared. */
+const SOS_ENDED_RESULT = {
+  ok: false,
+  error: "此求救已結束，不再提供位置",
+} as const;
+
 export async function getActiveSosContext(
   _args: Record<string, unknown>,
   lineUserId?: string,
@@ -1397,15 +1403,20 @@ export async function getActiveSosContext(
             userNameById.get(String(sessions[0].userId)) ?? "未知使用者",
           type: sessions[0].type,
           status: sessions[0].status,
-          address: sessions[0].address ?? null,
-          lat: sessions[0].lat,
-          lng: sessions[0].lng,
-          locationUpdatedAt: sessions[0].locationUpdatedAt,
           updatedAt: sessions[0].updatedAt,
-          mapsUrl: googleMapsUrl(sessions[0].lat, sessions[0].lng),
-          trackingUrl: forLineExternalOpen(
-            sosTrackingUrl(sessions[0].shareToken),
-          ),
+          // A resolved event no longer reveals where the owner was.
+          ...(sessions[0].status === "active"
+            ? {
+                address: sessions[0].address ?? null,
+                lat: sessions[0].lat,
+                lng: sessions[0].lng,
+                locationUpdatedAt: sessions[0].locationUpdatedAt,
+                mapsUrl: googleMapsUrl(sessions[0].lat, sessions[0].lng),
+                trackingUrl: forLineExternalOpen(
+                  sosTrackingUrl(sessions[0].shareToken),
+                ),
+              }
+            : {}),
         }
       : null;
 
@@ -1447,6 +1458,17 @@ export async function getSosLiveLocation(
       return JSON.stringify({ ok: false, error: "找不到可查詢的 SOS session" });
     }
     const { session, ownerName } = result;
+    if (session.status !== "active") {
+      return JSON.stringify({
+        ok: true,
+        sessionId: session._id,
+        ownerName,
+        type: session.type,
+        status: session.status,
+        resolvedAt: session.resolvedAt ?? null,
+        message: SOS_ENDED_RESULT.error,
+      });
+    }
     return JSON.stringify({
       ok: true,
       sessionId: session._id,
@@ -1489,6 +1511,10 @@ export async function planRouteToSosVictim(
     );
     if (!sessionResult?.session) {
       return JSON.stringify({ ok: false, error: "找不到可查詢的 SOS session" });
+    }
+
+    if (sessionResult.session.status !== "active") {
+      return JSON.stringify(SOS_ENDED_RESULT);
     }
 
     const sharedLocation = await getLatestSharedLineLocation(lineUserId);
@@ -1583,6 +1609,10 @@ export async function findSosNearbyPlaces(
       return JSON.stringify({ ok: false, error: "找不到可查詢的 SOS session" });
     }
 
+    if (result.session.status !== "active") {
+      return JSON.stringify(SOS_ENDED_RESULT);
+    }
+
     const places = await searchPlaces(args.query.trim(), {
       latitude: result.session.lat,
       longitude: result.session.lng,
@@ -1630,6 +1660,10 @@ export async function findSosNearbyA11yPlaces(
     if (!result?.session) {
       return JSON.stringify({ ok: false, error: "找不到可查詢的 SOS session" });
     }
+
+    if (result.session.status !== "active") {
+      return JSON.stringify(SOS_ENDED_RESULT);
+    }
     const places = await a11yOrchestration.findNearbyLimited(
       result.session.lat,
       result.session.lng,
@@ -1674,6 +1708,10 @@ export async function getSosEnvironmentInfo(
     );
     if (!result?.session) {
       return JSON.stringify({ ok: false, error: "找不到可查詢的 SOS session" });
+    }
+
+    if (result.session.status !== "active") {
+      return JSON.stringify(SOS_ENDED_RESULT);
     }
     const data = await fetchEnvironment(
       result.session.lat,
