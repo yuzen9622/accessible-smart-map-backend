@@ -222,6 +222,7 @@ export interface RerouteInstruction {
   type: string;
   bearing: number | null;
   relativeDirection: string | null;
+  maneuver: string | null;
   distanceM: number | null;
   streetName: string | null;
   legType: string;

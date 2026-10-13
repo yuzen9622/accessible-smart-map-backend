@@ -184,6 +184,43 @@ describe("AccessibleRouteRerouteDataSchema", () => {
     };
     expect(AccessibleRouteRerouteDataSchema.parse(data)).toEqual(data);
   });
+
+  it("requires the engine maneuver on every reroute instruction", () => {
+    const instruction = {
+      text: "請繼續直行",
+      type: "turn",
+      bearing: 90,
+      relativeDirection: null,
+      maneuver: "CONTINUE",
+      distanceM: 210,
+      streetName: null,
+      legType: "WALK",
+      stairs: false,
+      legIndex: 0,
+      polylineIndex: 3,
+      cumulativeDistanceM: 300,
+    };
+    const data = (instructions: unknown[]) => ({
+      navigationId: "11111111-1111-4111-8111-111111111111",
+      previousRouteVersion: 1,
+      routeVersion: 2,
+      routeToken: "replacement",
+      route,
+      instructions,
+      steps: [],
+      warnings: [],
+      currentStepIndex: 0,
+      replayed: false,
+    });
+    expect(
+      AccessibleRouteRerouteDataSchema.safeParse(data([instruction])).success,
+    ).toBe(true);
+    const { maneuver: _omitted, ...withoutManeuver } = instruction;
+    expect(
+      AccessibleRouteRerouteDataSchema.safeParse(data([withoutManeuver]))
+        .success,
+    ).toBe(false);
+  });
 });
 
 const metroAlert = {

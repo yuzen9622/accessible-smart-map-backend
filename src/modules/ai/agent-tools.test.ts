@@ -948,8 +948,11 @@ describe("getNavInstructions", () => {
   const navOk = {
     ok: true,
     data: {
-      instructions: [{ text: "搭乘 99 公車", legType: "BUS" }],
-      totalSteps: 1,
+      instructions: [
+        { text: "搭乘 99 公車", legType: "BUS", maneuver: null },
+        { text: "請繼續直行", legType: "WALK", maneuver: "CONTINUE" },
+      ],
+      totalSteps: 2,
       warnings: [],
     },
   };
@@ -964,7 +967,7 @@ describe("getNavInstructions", () => {
     );
     expect(result).toMatchObject({
       ok: true,
-      totalSteps: 1,
+      totalSteps: 2,
       instructions: navOk.data.instructions,
     });
     expect(mockGenNav).toHaveBeenCalledWith({

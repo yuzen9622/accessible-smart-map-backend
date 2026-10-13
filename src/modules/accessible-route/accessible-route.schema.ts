@@ -1,6 +1,9 @@
 import { BusRouteDetailResponseSchema } from "../transit/transit.schema";
 import { DEFAULT_LANG, SUPPORTED_LANGS } from "../../types/lang";
-import { RelativeDirectionSchema } from "../../schemas/nav-instructions-data.schema";
+import {
+  NavManeuverSchema,
+  RelativeDirectionSchema,
+} from "../../schemas/nav-instructions-data.schema";
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 import { TaiwanCityEn } from "../../types/transit";
@@ -1340,6 +1343,7 @@ const RerouteInstructionSchema = z
     ]),
     bearing: z.number().nullable(),
     relativeDirection: RelativeDirectionSchema.nullable(),
+    maneuver: NavManeuverSchema,
     distanceM: z.number().nullable(),
     streetName: z.string().nullable(),
     legType: z.enum([
