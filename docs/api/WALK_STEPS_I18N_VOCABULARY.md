@@ -51,6 +51,13 @@ instruction 型別均不屬於本契約。
 WALK step 明確移除 `instruction`、`maneuver`、`text`、`type`。這四個字若出現在
 序列化後的 WALK step，即屬契約違反；其中道路 leg 的同名欄位不受影響。
 
+這條禁令只針對 `route.legs[].steps[]`。逐步導航輸出
+（`POST /a11y/route/instructions` 的 `instructions[].maneuver`、reroute 的
+`instructions[].maneuver`、語音 WS 的 `steps[].maneuver`）另有 `maneuver` 欄位：
+步行步驟填入本表 4.1 的 `relativeDirection` token（長直線切段產生的進度點固定為
+`CONTINUE`），其他指引為 `null`。它與指引上同名的 `relativeDirection`（依使用者朝向
+計算的「正前方／右側…」）意義不同，前端判斷直行或轉向應以 `maneuver` 為準。
+
 ---
 
 ## 四、前端 i18n 詞彙表

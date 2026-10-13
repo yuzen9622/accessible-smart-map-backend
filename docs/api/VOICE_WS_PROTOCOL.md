@@ -196,8 +196,17 @@ interface NavStepDto {
   legType: "WALK" | "BUS" | "METRO" | "THSR" | "TRA";
   distanceM: number | null;
   isTransit: boolean;
+  type?: string;
+  relativeDirection?: string | null;
+  maneuver?: WalkRelativeDirection | null;
+  streetName?: string | null;
+  bearing?: number | null;
 }
 ```
+
+`maneuver` 與 `/a11y/route/instructions` 的 `instructions[].maneuver` 同義：步行步驟為路線引擎動作
+（`CONTINUE`／`STRAIGHT` 表示沿路直行，含長直線切段的進度點），其他步驟為 `null`。
+`nav.start`、`nav.route_replaced`、`nav.resume_ok` 的 `steps` 都帶這個欄位；舊後端可能省略，前端應視為未知。
 
 內部 geofence 座標一律是 GeoJSON tuple `[lng, lat]`。v1 僅 WALK 逐步導航；BUS/METRO/THSR/TRA 只在上車點播報並以 GPS 追蹤下車點；含 DRIVE/MOTORCYCLE 的 route 在 start 時回 `NAV_ROUTE_INVALID`。
 
