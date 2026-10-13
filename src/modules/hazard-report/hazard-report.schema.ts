@@ -2,6 +2,10 @@ import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 import { registry } from "../../openapi/registry";
 import { HAZARD_AI_ALERT_CODES } from "../../config/hazard-ai";
+import {
+  OBJECTIONABLE_CONTENT,
+  isAcceptableText,
+} from "../content-safety/content-safety.text-filter";
 
 extendZodWithOpenApi(z);
 
@@ -35,6 +39,7 @@ export const CreateHazardReportSchema = z
       .string()
       .max(500)
       .optional()
+      .refine(isAcceptableText, { message: OBJECTIONABLE_CONTENT })
       .openapi({ example: "人行道上有施工鐵板未固定" }),
     expectedUntil: z
       .string()

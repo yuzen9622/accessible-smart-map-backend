@@ -89,3 +89,26 @@ describe("structured review request schemas", () => {
     ).toBe(false);
   });
 });
+
+describe("review comment content filter", () => {
+  it("rejects objectionable comments on create and update", () => {
+    const created = CreateReviewSchema.safeParse({
+      ...VALID_CREATE,
+      comment: "店員是智障",
+    });
+    expect(created.success).toBe(false);
+    expect(created.error?.issues[0]?.message).toBe("OBJECTIONABLE_CONTENT");
+    expect(UpdateReviewSchema.safeParse({ comment: "fuck this" }).success).toBe(
+      false,
+    );
+  });
+
+  it("accepts ordinary accessibility feedback", () => {
+    expect(
+      CreateReviewSchema.safeParse({
+        ...VALID_CREATE,
+        comment: "主幹道旁的入口有坡道",
+      }).success,
+    ).toBe(true);
+  });
+});

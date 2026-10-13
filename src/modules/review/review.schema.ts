@@ -1,6 +1,10 @@
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 import { registry } from "../../openapi/registry";
+import {
+  OBJECTIONABLE_CONTENT,
+  isAcceptableText,
+} from "../content-safety/content-safety.text-filter";
 
 extendZodWithOpenApi(z);
 
@@ -75,6 +79,7 @@ export const CreateReviewSchema = z
       .string()
       .max(500)
       .optional()
+      .refine(isAcceptableText, { message: OBJECTIONABLE_CONTENT })
       .openapi({ example: "電梯空間寬敞，坡道坡度適中" }),
   })
   .strict();
@@ -140,6 +145,7 @@ export const UpdateReviewSchema = z
       .string()
       .max(500)
       .optional()
+      .refine(isAcceptableText, { message: OBJECTIONABLE_CONTENT })
       .openapi({ example: "再次造訪，電梯已修好" }),
   })
   .strict();

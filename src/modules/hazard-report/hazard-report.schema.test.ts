@@ -58,3 +58,23 @@ describe("CreateHazardReportSchema", () => {
     ).toBe(false);
   });
 });
+
+describe("hazard description content filter", () => {
+  it("rejects objectionable descriptions", () => {
+    const result = CreateHazardReportSchema.safeParse({
+      ...BASE,
+      description: "靠北 這裡又擋住",
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.message).toBe("OBJECTIONABLE_CONTENT");
+  });
+
+  it("accepts ordinary descriptions", () => {
+    expect(
+      CreateHazardReportSchema.safeParse({
+        ...BASE,
+        description: "人行道上有施工鐵板未固定",
+      }).success,
+    ).toBe(true);
+  });
+});
