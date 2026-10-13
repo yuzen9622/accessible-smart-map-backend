@@ -75,6 +75,9 @@ export const WALK_RELATIVE_DIRECTION_VALUES = [
   "EXIT_STATION",
 ] as const;
 
+export type WalkRelativeDirection =
+  (typeof WALK_RELATIVE_DIRECTION_VALUES)[number];
+
 export const WALK_ABSOLUTE_DIRECTION_VALUES = [
   "NORTH",
   "NORTHEAST",
@@ -96,9 +99,11 @@ const WALK_ABSOLUTE_DIRECTION_SET = new Set<string>(
 /** Normalizes arbitrary upstream turn tokens to the public walk-step vocabulary. */
 export function normalizeRelativeDirection(
   raw: string | null | undefined,
-): string {
+): WalkRelativeDirection {
   const value = raw?.trim().toUpperCase();
-  return value && WALK_RELATIVE_DIRECTION_SET.has(value) ? value : "CONTINUE";
+  return value && WALK_RELATIVE_DIRECTION_SET.has(value)
+    ? (value as WalkRelativeDirection)
+    : "CONTINUE";
 }
 
 /** Normalizes an upstream compass token to the public eight-point vocabulary. */
@@ -523,6 +528,7 @@ function roadLegToInstructions(
         type: isFirstLeg ? "depart" : "turn",
         bearing,
         relativeDirection: null,
+        maneuver: null,
         distanceM: leg.distanceM,
         streetName: null,
         legType: leg.type,
@@ -561,6 +567,7 @@ function roadLegToInstructions(
       type: roadStepType(step.maneuver),
       bearing,
       relativeDirection: null,
+      maneuver: null,
       distanceM: step.distanceM,
       streetName: null,
       legType: leg.type,
@@ -591,6 +598,7 @@ function exitInfoInstruction(
     type: "facility",
     bearing: null,
     relativeDirection: null,
+    maneuver: null,
     distanceM: null,
     streetName: null,
     legType: "WALK",
@@ -678,6 +686,7 @@ function walkLegToInstructions(
         type,
         bearing: type === "facility" ? null : bearing,
         relativeDirection: null,
+        maneuver: normalizeRelativeDirection(step.relativeDirection),
         distanceM: step.distanceM ?? null,
         streetName: hasStreetName(step) ? step.streetName.trim() : null,
         legType: "WALK",
@@ -703,6 +712,7 @@ function walkLegToInstructions(
       type: isFirstLeg ? "depart" : "turn",
       bearing,
       relativeDirection: null,
+      maneuver: null,
       distanceM: leg.distanceM ?? null,
       streetName: null,
       legType: "WALK",
@@ -729,6 +739,7 @@ function transitInstruction(
     type,
     bearing: null,
     relativeDirection: null,
+    maneuver: null,
     distanceM: null,
     streetName: null,
     legType,
@@ -1055,6 +1066,7 @@ export function generateNavStepsWithLegIndex(
       type: "arrive",
       bearing: null,
       relativeDirection: null,
+      maneuver: null,
       distanceM: null,
       streetName: null,
       legType: (legs[legs.length - 1] as { type: NavLegType }).type,

@@ -5,6 +5,7 @@
 
 import type { SupportedLang } from "../../types/lang";
 import type { ResponseCode } from "../../types/code";
+import type { WalkRelativeDirection } from "../../utils/nav-instructions-engine";
 
 export type RelativeDirection =
   | "正前方"
@@ -43,6 +44,12 @@ export interface NavInstruction {
   type: NavInstructionType;
   bearing: number | null;
   relativeDirection: RelativeDirection | null;
+  /**
+   * Routing-engine maneuver for WALK steps (CONTINUE for split checkpoints);
+   * null for every other instruction. Unlike `relativeDirection`, it never
+   * depends on bearing or the caller's heading.
+   */
+  maneuver: WalkRelativeDirection | null;
   distanceM: number | null;
   streetName: string | null;
   legType: NavLegType;

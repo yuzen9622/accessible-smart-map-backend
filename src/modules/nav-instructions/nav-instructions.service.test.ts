@@ -463,6 +463,100 @@ describe("generateNavInstructions", () => {
     expect(
       prompts.every((instruction) => instruction.text.includes("此路段含樓梯")),
     ).toBe(true);
+    expect(prompts.map((instruction) => instruction.maneuver)).toEqual([
+      "DEPART",
+      "CONTINUE",
+      "CONTINUE",
+      "CONTINUE",
+      "CONTINUE",
+    ]);
+    expect(result.data.instructions.at(-1)?.maneuver).toBeNull();
+  });
+
+  it("keeps the engine maneuver even when the turn barely changes bearing", () => {
+    // Real right turn whose geometry stays almost due east (~11° off).
+    const polyline: [number, number][] = [
+      [121.5, 25],
+      [121.501, 25],
+      [121.502, 25.00019],
+      [121.503, 25.00038],
+    ];
+    const leg: WalkLeg = {
+      ...walkWithSteps(),
+      polyline,
+      steps: [
+        {
+          relativeDirection: "DEPART",
+          absoluteDirection: "EAST",
+          streetName: "甲路",
+          bogusName: false,
+          area: false,
+          stairs: false,
+          steepSlope: false,
+          distanceM: 100,
+          location: polyline[0],
+        },
+        {
+          relativeDirection: "RIGHT",
+          absoluteDirection: "EAST",
+          streetName: "乙路",
+          bogusName: false,
+          area: false,
+          stairs: false,
+          steepSlope: false,
+          distanceM: 200,
+          location: polyline[1],
+        },
+      ],
+    };
+    const zh = generateNavInstructions({ legs: [leg] }, 90);
+    const en = generateNavInstructions({ legs: [leg] }, 270, "en");
+    expect(zh.ok && en.ok).toBe(true);
+    if (!zh.ok || !en.ok) return;
+    expect(zh.data.instructions[1]).toMatchObject({
+      maneuver: "RIGHT",
+      relativeDirection: "正前方",
+    });
+    const maneuvers = (data: typeof zh.data) =>
+      data.instructions.map((instruction) => instruction.maneuver);
+    expect(maneuvers(zh.data)).toEqual(["DEPART", "RIGHT", null]);
+    expect(maneuvers(en.data)).toEqual(maneuvers(zh.data));
+  });
+
+  it("sets maneuver only on walk steps, keeping facility steps and nulling everything else", () => {
+    const facilityWalk = walkWithSteps();
+    facilityWalk.steps = facilityWalk.steps?.map((step, index) =>
+      index === 1 ? { ...step, relativeDirection: "ELEVATOR" } : step,
+    );
+    facilityWalk.exitInfo = {
+      exitName: "M6",
+      exitNumber: "M6",
+      type: "elevator",
+      coords: [121.518, 25.048],
+    };
+    const noSteps: WalkLeg = { ...walkWithSteps(), steps: undefined };
+    const result = generateNavInstructions({
+      legs: [facilityWalk, metroLeg(), noSteps, roadLeg("DRIVE")],
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(
+      result.data.instructions.map(({ type, legType, maneuver }) => [
+        type,
+        legType,
+        maneuver,
+      ]),
+    ).toEqual([
+      ["depart", "WALK", "DEPART"],
+      ["facility", "WALK", "ELEVATOR"],
+      ["facility", "WALK", null],
+      ["transit_board", "METRO", null],
+      ["transit_alight", "METRO", null],
+      ["turn", "WALK", null],
+      ["depart", "DRIVE", null],
+      ["turn", "DRIVE", null],
+      ["arrive", "DRIVE", null],
+    ]);
   });
 
   it("reclassifies DEPART on later walk legs and exposes their public leg indexes", () => {

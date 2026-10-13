@@ -1,5 +1,6 @@
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
+import { WALK_RELATIVE_DIRECTION_VALUES } from "../utils/nav-instructions-engine";
 
 extendZodWithOpenApi(z);
 
@@ -32,6 +33,16 @@ export const RelativeDirectionSchema = z
   ])
   .openapi("RelativeDirection");
 
+export const NavManeuverSchema = z
+  .enum(WALK_RELATIVE_DIRECTION_VALUES)
+  .nullable()
+  .openapi("NavManeuver", {
+    description:
+      "路線引擎給出的步行動作（與 route.legs[].steps[].relativeDirection 同一組 enum）。" +
+      "CONTINUE／STRAIGHT 代表沿路直行，含後端把長直線切段產生的進度點，不是轉向點；" +
+      "不由 bearing 推算、不受 userHeading 影響。非步行指引（道路、大眾運輸、出口設施、抵達、無 steps 的簡化指引）固定為 null。",
+  });
+
 const NavInstructionSchema = z
   .object({
     text: z.string(),
@@ -45,6 +56,7 @@ const NavInstructionSchema = z
     ]),
     bearing: z.number().nullable(),
     relativeDirection: RelativeDirectionSchema.nullable(),
+    maneuver: NavManeuverSchema,
     distanceM: z.number().nullable().openapi({
       description: "完成本步 maneuver 後、到下一步之前要行進的距離（公尺）",
     }),
