@@ -166,11 +166,13 @@ describe("NavigationSession pure domain state", () => {
         "instruction",
         "isTransit",
         "legType",
+        "maneuver",
         "relativeDirection",
         "streetName",
         "type",
       ].sort(),
     );
+    expect(firstStep.maneuver).toBe("DEPART");
     expect(nav.takeNextSpeech()).toBeNull();
     nav.onPosition(pos(start));
     expect(nav.takeNextSpeech()).toBe(

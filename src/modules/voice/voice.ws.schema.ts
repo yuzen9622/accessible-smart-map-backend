@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { AgentLanguageSchema } from "../../schemas/agent-language.schema";
+import { NavManeuverSchema } from "../../schemas/nav-instructions-data.schema";
 import {
   NavPositionSchema,
   NavSetRouteSchema,
@@ -159,6 +160,7 @@ const NavStepDtoSchema = z
     isTransit: z.boolean(),
     type: z.string().optional(),
     relativeDirection: z.string().nullable().optional(),
+    maneuver: NavManeuverSchema.optional(),
     streetName: z.string().nullable().optional(),
     bearing: z.number().nullable().optional(),
   })

@@ -224,6 +224,21 @@ describe("nav.resume outbound schemas", () => {
     expect(NavResumeOkMessageSchema.parse(okPayload)).toEqual(okPayload);
   });
 
+  it("accepts an optional engine maneuver and rejects unknown maneuver codes", () => {
+    const withManeuver = (maneuver: unknown) => ({
+      ...okPayload,
+      steps: [{ ...okPayload.steps[0], maneuver }],
+    });
+    for (const maneuver of ["CONTINUE", "RIGHT", null]) {
+      expect(
+        NavResumeOkMessageSchema.safeParse(withManeuver(maneuver)).success,
+      ).toBe(true);
+    }
+    expect(
+      NavResumeOkMessageSchema.safeParse(withManeuver("TURN_RIGHT")).success,
+    ).toBe(false);
+  });
+
   it("rejects unknown keys and an out-of-contract step", () => {
     expect(
       NavResumeOkMessageSchema.safeParse({ ...okPayload, extra: 1 }).success,

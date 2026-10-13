@@ -62,6 +62,7 @@ export interface NavStepDto {
   isTransit: boolean;
   type?: string;
   relativeDirection?: string | null;
+  maneuver?: NavInstruction["maneuver"];
   streetName?: string | null;
   bearing?: number | null;
 }
@@ -157,6 +158,7 @@ export interface ResolvedStep {
   kind: StepKind;
   type?: string;
   relativeDirection?: string | null;
+  maneuver?: NavInstruction["maneuver"];
   streetName?: string | null;
   bearing?: number | null;
 }
@@ -816,6 +818,7 @@ export class NavigationSession {
       isTransit: step.isTransit,
       type: step.type,
       relativeDirection: step.relativeDirection ?? null,
+      maneuver: step.maneuver ?? null,
       streetName: step.streetName ?? null,
       bearing: step.bearing ?? null,
     }));
@@ -893,6 +896,7 @@ export class NavigationSession {
           kind: "leg_end",
           type: "arrive",
           relativeDirection: null,
+          maneuver: null,
           streetName: null,
           bearing: null,
         });
@@ -942,6 +946,7 @@ export class NavigationSession {
       kind: instruction.type,
       type: instruction.type,
       relativeDirection: instruction.relativeDirection ?? null,
+      maneuver: instruction.maneuver,
       streetName: instruction.streetName ?? null,
       bearing: instruction.bearing ?? null,
     };
