@@ -109,7 +109,7 @@ export interface CsrWalkPoint {
  * @param mode Requested accessibility mode.
  * @returns The cost profile for that mode at the strict relaxation level.
  */
-function profileFor(mode: AccessibilityMode): CostProfile {
+export function profileFor(mode: AccessibilityMode): CostProfile {
   return {
     name: mode,
     walkSpeedMps: walkSpeedMps(mode),

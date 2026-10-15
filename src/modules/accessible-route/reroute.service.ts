@@ -24,6 +24,7 @@ import {
 } from "./navigation-state.repository";
 import { planAccessibleRouteFromRequest } from "./accessible-route.service";
 import { isNavigationEnvelope } from "./route-token.service";
+import { venueArrivalPlanner } from "./venue-arrival.port";
 
 export type RerouteResult =
   | { ok: true; data: RerouteData }
@@ -63,6 +64,20 @@ export async function rerouteAccessibleRoute(
     };
   }
   const previous = tokenRead.value;
+  // A venue trip keeps its gate for good: if the venue was re-imported and
+  // that gate is gone or moved, the token no longer supports rerouting.
+  const storedVenueArrival = previous.canonicalRequest.venueArrival;
+  if (
+    storedVenueArrival &&
+    !(await venueArrivalPlanner().isVenueArrivalCurrent(storedVenueArrival))
+  ) {
+    return {
+      ok: false,
+      status: ResponseCode.GONE,
+      error: messages.VENUE_UPDATED,
+      data: { reason: "ROUTE_TOKEN_EXPIRED_OR_UNSUPPORTED" },
+    };
+  }
   if (previous.routeVersion !== request.previousRouteVersion) {
     return conflict(messages.CONFLICT);
   }
@@ -106,7 +121,11 @@ export async function rerouteAccessibleRoute(
         { reason?: string; [key: string]: unknown } | undefined;
       return {
         ...planned,
-        error: language === "en" ? REROUTE_MSG_EN.PLAN_FAILED : planned.error,
+        // a stale venue keeps its own 410 message in both languages
+        error:
+          language === "en" && planned.status !== ResponseCode.GONE
+            ? REROUTE_MSG_EN.PLAN_FAILED
+            : planned.error,
         data: existingData?.reason
           ? existingData
           : { ...(existingData ?? {}), reason: "REROUTE_PLANNING_FAILED" },
@@ -175,6 +194,12 @@ export async function rerouteAccessibleRoute(
       ...(warningDetails.length ? { warningDetails } : {}),
       currentStepIndex: 0,
       replayed: false,
+      ...(planned.data.venueArrival
+        ? {
+            venueArrival: planned.data.venueArrival,
+            venueLeg: planned.data.venueLeg,
+          }
+        : {}),
     };
     const envelope: NavigationRouteEnvelope = {
       schemaVersion: 1,
@@ -186,6 +211,10 @@ export async function rerouteAccessibleRoute(
         origin: currentOrigin,
         userLocation: currentOrigin,
         language,
+        // the venue version actually used for this leg, not the stored one
+        ...(planned.data.venueArrival
+          ? { venueArrival: planned.data.venueArrival }
+          : {}),
       },
     };
     const finalized = await finalizeReroute(

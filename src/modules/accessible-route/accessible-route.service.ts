@@ -22,6 +22,8 @@ import { peekPedGraphSnapshot } from "./planners/pedestrian-a11y/graph-runtime";
 import { nearestOutdoorPoint } from "./planners/pedestrian-a11y/spatial-index";
 import {
   ERROR_MESSAGE,
+  REROUTE_MSG,
+  REROUTE_MSG_EN,
   ROUTE_REASON,
   ROUTE_WARNING,
   TRANSIT_FALLBACK_REASON,
@@ -65,7 +67,9 @@ import {
   type EnvConditions,
 } from "./scoring";
 import { buildAccessibilitySummary } from "./planners/route-a11y";
-import type { SupportedLang } from "../../types/lang";
+import { DEFAULT_LANG, type SupportedLang } from "../../types/lang";
+import { venueArrivalPlanner } from "./venue-arrival.port";
+import type { VenueArrival, VenueRoute } from "./venue-leg.types";
 import {
   deriveWalkA11yDetails,
   unknownWalkA11yDetails,
@@ -2030,6 +2034,21 @@ async function refineWalkOptionWithCsr(
 }
 
 /**
+ * The venue (indoor) routing mode for a trip: a hard step-free requirement
+ * uses the strict wheelchair rules indoors whatever the accessibility mode.
+ *
+ * @param mode Resolved accessibility mode, if any.
+ * @param avoidStairs Explicit or profile-derived step-free requirement.
+ * @returns The mode the venue leg is planned with.
+ */
+export function venueModeFor(
+  mode: AccessibilityMode | undefined,
+  avoidStairs: boolean | undefined,
+): AccessibilityMode {
+  return avoidStairs === true ? "wheelchair" : (mode ?? "normal");
+}
+
+/**
  * Resolve a park destination to an accessible entrance. Advisory: a failed
  * lookup, or one exceeding {@link PARK_ARRIVAL_BUDGET_MS}, keeps the
  * destination the caller asked for.
@@ -2223,6 +2242,78 @@ export async function planAccessibleRouteFromRequest(
     }
   }
 
+  // A venue destination is resolved to one fixed gate before routing; the
+  // outdoor route ends there and the indoor leg continues from it.
+  let venueArrival: VenueArrival | undefined;
+  let venueLeg: VenueRoute | undefined;
+  const venueLang = body.language ?? DEFAULT_LANG;
+  if (body.destinationVenuePlace && origin) {
+    const originPoint =
+      typeof origin === "string"
+        ? await getCoordinates(origin)
+        : (origin as { latitude: number; longitude: number });
+    if (!originPoint) {
+      return {
+        ok: false,
+        status: ResponseCode.INVALID_INPUT,
+        error:
+          localizeRouteReason("COORDINATE_LOOKUP_FAILED", body.language) ??
+          "無法解析出發地或目的地座標",
+        data: { reason: "COORDINATE_LOOKUP_FAILED" },
+      };
+    }
+    const resolved = await venueArrivalPlanner().resolveVenueArrival({
+      venueId: body.destinationVenuePlace.venueId,
+      placeId: body.destinationVenuePlace.placeId,
+      origin: { lat: originPoint.latitude, lng: originPoint.longitude },
+      mode: venueModeFor(mode, avoidStairs),
+      lang: venueLang,
+    });
+    if (!resolved.ok) {
+      // This endpoint never answers 404 (engine outcomes are 422): an unknown
+      // venue or place is invalid input, like an unresolvable address.
+      if (resolved.status === ResponseCode.NOT_FOUND) {
+        return {
+          ok: false,
+          status: ResponseCode.INVALID_INPUT,
+          error:
+            localizeRouteReason("VENUE_PLACE_NOT_FOUND", body.language) ??
+            resolved.error,
+          data: { reason: "VENUE_PLACE_NOT_FOUND" },
+        };
+      }
+      return resolved;
+    }
+    venueArrival = resolved.venueArrival;
+    venueLeg = resolved.venueLeg;
+    origin = originPoint;
+    destination = {
+      latitude: venueArrival.gateLocation.lat,
+      longitude: venueArrival.gateLocation.lng,
+    };
+  } else if (body.venueArrival) {
+    // Reroute of a venue trip: the destination is already the stored gate.
+    const replanned = await venueArrivalPlanner().replanVenueLeg(
+      body.venueArrival,
+      venueLang,
+    );
+    if (!replanned.ok) {
+      return "stale" in replanned
+        ? {
+            ok: false,
+            status: ResponseCode.GONE,
+            error:
+              venueLang === "en"
+                ? REROUTE_MSG_EN.VENUE_UPDATED
+                : REROUTE_MSG.VENUE_UPDATED,
+            data: { reason: "ROUTE_TOKEN_EXPIRED_OR_UNSUPPORTED" },
+          }
+        : replanned;
+    }
+    venueArrival = replanned.venueArrival;
+    venueLeg = replanned.venueLeg;
+  }
+
   if (!origin || !destination) {
     return {
       ok: false,
@@ -2283,17 +2374,18 @@ export async function planAccessibleRouteFromRequest(
     lat: destCoords.latitude,
     lng: destCoords.longitude,
   };
-  const parkArrival = body.keepExactDestination
-    ? null
-    : await lookupParkArrival({
-        ...(typeof destination === "string"
-          ? { destinationText: destination }
-          : {}),
-        requested: requestedDest,
-        origin: originLatLng,
-        mode: mode ?? "normal",
-        ...(maxSlopePercent === undefined ? {} : { maxSlopePercent }),
-      });
+  const parkArrival =
+    body.keepExactDestination || venueArrival
+      ? null
+      : await lookupParkArrival({
+          ...(typeof destination === "string"
+            ? { destinationText: destination }
+            : {}),
+          requested: requestedDest,
+          origin: originLatLng,
+          mode: mode ?? "normal",
+          ...(maxSlopePercent === undefined ? {} : { maxSlopePercent }),
+        });
   const arrivalEntrance =
     parkArrival?.kind === "entrance" ? parkArrival.entrance : undefined;
   const dest: LatLng = arrivalEntrance?.location ?? requestedDest;
@@ -2653,6 +2745,7 @@ export async function planAccessibleRouteFromRequest(
     needsHandrail: needsHandrail ?? false,
     ...(maxSlopePercent === undefined ? {} : { maxSlopePercent }),
     ...(body.keepExactDestination ? { keepExactDestination: true } : {}),
+    ...(venueArrival ? { venueArrival, keepExactDestination: true } : {}),
     ...(futureDeparture
       ? { departureTime: futureDeparture.toISOString() }
       : {}),
@@ -2667,6 +2760,7 @@ export async function planAccessibleRouteFromRequest(
       : {}),
     ...(waypoints.length ? { waypoints } : {}),
     ...(arrivalEntrance ? { arrivalEntrance } : {}),
+    ...(venueArrival ? { venueArrival, venueLeg } : {}),
     routes: normalizedRoutes,
     ...(intent ? { intent } : {}),
     ...(slopeConstraint ? { slopeConstraint } : {}),

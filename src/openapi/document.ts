@@ -13,6 +13,7 @@ import "../modules/environment/environment.schema";
 import "../modules/review/review.schema";
 import "../modules/content-safety/content-safety.schema";
 import "../modules/campus/campus.schema";
+import "../modules/venue/venue.schema";
 import "../modules/emergency-contact/emergency-contact.schema";
 import "../modules/sos/sos.schema";
 import "../modules/line/line.schema";

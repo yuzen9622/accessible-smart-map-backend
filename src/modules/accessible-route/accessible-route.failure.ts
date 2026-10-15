@@ -12,11 +12,24 @@ import { pathLengthMeters } from "../../utils/geo";
 export type RouteFailureReason =
   (typeof ROUTE_REASON)[keyof typeof ROUTE_REASON];
 
+/**
+ * Why a venue (campus) destination has no step-free route. Present only on
+ * NO_ACCESSIBLE_ROUTE from a venue route.
+ */
+export interface VenueAccessibility {
+  venueId: string;
+  placeId: string;
+  levelRef: string | null;
+  /** Reachable on foot, but not within the requested mode's limits. */
+  stepFreeReachable: false;
+}
+
 export interface RouteFailureData<
   Reason extends RouteFailureReason = RouteFailureReason,
 > {
   reason: Reason;
   maxDistanceKm?: number;
+  venueAccessibility?: VenueAccessibility;
 }
 
 type RouteFailureStatus<Reason extends RouteFailureReason> =

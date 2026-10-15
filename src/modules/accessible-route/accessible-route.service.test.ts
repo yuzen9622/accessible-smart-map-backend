@@ -127,6 +127,24 @@ vi.mock("./navigation-state.repository", async (importActual) => {
   };
 });
 
+vi.mock("../venue/venue.service", () => ({
+  resolveVenueArrival: vi.fn(),
+  replanVenueLeg: vi.fn(),
+  isVenueArrivalCurrent: vi.fn(),
+}));
+
+import {
+  isVenueArrivalCurrent,
+  replanVenueLeg,
+  resolveVenueArrival,
+} from "../venue/venue.service";
+import { registerVenueArrivalPlanner } from "./venue-arrival.port";
+
+registerVenueArrivalPlanner({
+  resolveVenueArrival,
+  replanVenueLeg,
+  isVenueArrivalCurrent,
+});
 import { rerouteAccessibleRoute } from "./reroute.service";
 import * as navigationStateRepo from "./navigation-state.repository";
 import {
@@ -163,6 +181,7 @@ import { getCity, getCoordinates } from "../../adapters/google.adapter";
 import { getNlscAdministrativeArea } from "../../adapters/nlsc.adapter";
 import BusStopModel from "../../model/bus-stop.model";
 import {
+  REROUTE_MSG_EN,
   ROUTE_MSG,
   ROUTE_REASON,
   ROUTE_WARNING,
@@ -177,6 +196,7 @@ import type { PlanRouteResult } from "./accessible-route.types";
 import type { OtpRoutePlanResult } from "./planners/otp-routing";
 import type { CsrWalkPlan } from "./planners/pedestrian-a11y/csr-walk.types";
 import type { WalkStep } from "../../types/route";
+import type { VenueRoute } from "./venue-leg.types";
 
 /**
  * Narrow a successful plan result to its payload. The tests below assert
@@ -4427,5 +4447,297 @@ describe("confirmed blocking hazard CSR alternatives", () => {
     expect(route.hazardAdvisory?.onRoute.map((h) => h.id)).toContain(hazard.id);
     expect(route.hazardAdvisory?.avoided ?? []).toEqual([]);
     expect(route.degraded).toBe(true);
+  });
+});
+
+describe("venue destinations (destinationVenuePlace)", () => {
+  const origin = { latitude: 24.149, longitude: 120.683 };
+  const gate = { lat: 24.1498, lng: 120.684 };
+  const place = { venueId: "nutc-sanmin", placeId: "zk@3F" };
+  const venueArrival = {
+    ...place,
+    gateId: "gate-main",
+    gateLocation: gate,
+    mode: "wheelchair" as const,
+    venueVersion: 4,
+  };
+  const venueLeg: VenueRoute = {
+    venueId: "nutc-sanmin",
+    venueVersion: 4,
+    mode: "wheelchair",
+    fromPlaceId: "gate-main",
+    toPlaceId: "zk@3F",
+    distanceM: 120,
+    durationS: 200,
+    elevatorRides: 1,
+    stairFlights: 0,
+    path: { coordinates: [], buildingIds: [], levelRefs: [] },
+    segments: [],
+    steps: [],
+  };
+  const busToGate = () =>
+    otpTransitOk([
+      {
+        routeId: "to-gate",
+        routeName: "307 接駁",
+        totalMinutes: 12,
+        transferCount: 0,
+        accessibilityHighlights: [],
+        legs: [
+          {
+            type: "BUS",
+            routeName: "307",
+            subRouteUid: "307",
+            subRouteName: "307",
+            departureStop: "A",
+            arrivalStop: "B",
+            direction: 0,
+            rideMinutes: 10,
+            polyline: [
+              [origin.longitude, origin.latitude],
+              [gate.lng, gate.lat],
+            ],
+            departureStopA11y: [],
+            arrivalStopA11y: [],
+            waitInfo: { time: null, source: "unavailable" },
+          },
+        ],
+      },
+    ]);
+
+  beforeEach(() => {
+    vi.mocked(planOtpRouteDetailed).mockImplementation(async () => busToGate());
+  });
+
+  it("routes outdoors to the chosen gate and attaches the indoor leg", async () => {
+    vi.mocked(resolveVenueArrival).mockResolvedValue({
+      ok: true,
+      venueArrival,
+      venueLeg,
+    });
+    const res = await planAccessibleRouteFromRequest({
+      origin,
+      destinationVenuePlace: place,
+      mode: "wheelchair",
+    });
+    expect(res.ok).toBe(true);
+    const data = okData(res);
+    expect(data.destination).toEqual(gate);
+    expect(data.venueArrival).toEqual(venueArrival);
+    expect(data.venueLeg).toBe(venueLeg);
+    expect(resolveVenueArrival).toHaveBeenCalledTimes(1);
+    expect(resolveVenueArrival).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ...place,
+        mode: "wheelchair",
+        origin: { lat: origin.latitude, lng: origin.longitude },
+      }),
+    );
+    // every outdoor plan targets the one chosen gate; no park redirect
+    expect(planOtpRouteDetailed).toHaveBeenCalled();
+    for (const call of vi.mocked(planOtpRouteDetailed).mock.calls) {
+      expect(call[1]).toEqual(gate);
+    }
+    expect(findParkArrivalCandidates).not.toHaveBeenCalled();
+    expect(data._canonicalRequest).toMatchObject({
+      destination: { latitude: gate.lat, longitude: gate.lng },
+      keepExactDestination: true,
+      venueArrival,
+    });
+    expect(data._canonicalRequest).not.toHaveProperty("destinationVenuePlace");
+  });
+
+  it("plans the indoor leg with wheelchair rules when the trip requires step-free access", async () => {
+    vi.mocked(resolveVenueArrival).mockResolvedValue({
+      ok: true,
+      venueArrival,
+      venueLeg,
+    });
+    await planAccessibleRouteFromRequest({
+      origin,
+      destinationVenuePlace: place,
+      mode: "elderly",
+      avoidStairs: true,
+    });
+    expect(resolveVenueArrival).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "wheelchair" }),
+    );
+  });
+
+  it("answers an unknown venue place with 400 VENUE_PLACE_NOT_FOUND, never 404", async () => {
+    vi.mocked(resolveVenueArrival).mockResolvedValue({
+      ok: false,
+      status: ResponseCode.NOT_FOUND,
+      error: "查無此場域地點",
+    });
+    const res = await planAccessibleRouteFromRequest({
+      origin,
+      destinationVenuePlace: place,
+    });
+    expect(res).toMatchObject({
+      ok: false,
+      status: ResponseCode.INVALID_INPUT,
+      data: { reason: "VENUE_PLACE_NOT_FOUND" },
+    });
+    expect(planOtpRouteDetailed).not.toHaveBeenCalled();
+  });
+
+  it("fails the whole request when the venue place is unreachable, without routing to the gate", async () => {
+    const failure = {
+      ok: false as const,
+      status: ResponseCode.UNPROCESSABLE_ENTITY as const,
+      error: ROUTE_MSG.NO_ACCESSIBLE_ROUTE,
+      data: {
+        reason: ROUTE_REASON.NO_ACCESSIBLE_ROUTE,
+        venueAccessibility: {
+          ...place,
+          levelRef: "3F",
+          stepFreeReachable: false as const,
+        },
+      },
+    };
+    vi.mocked(resolveVenueArrival).mockResolvedValue(failure);
+    const res = await planAccessibleRouteFromRequest({
+      origin,
+      destinationVenuePlace: place,
+      mode: "wheelchair",
+    });
+    expect(res).toEqual(failure);
+    expect(planOtpRouteDetailed).not.toHaveBeenCalled();
+  });
+
+  const tokenWith = async () => {
+    vi.mocked(resolveVenueArrival).mockResolvedValue({
+      ok: true,
+      venueArrival,
+      venueLeg,
+    });
+    const initial = await planAccessibleRouteFromRequest({
+      origin,
+      destinationVenuePlace: place,
+      mode: "wheelchair",
+    });
+    const data = okData(initial);
+    const canonical = data._canonicalRequest;
+    if (!canonical) throw new Error("no canonical request");
+    const navigationId = "44444444-4444-4444-8444-444444444444";
+    vi.mocked(navigationStateRepo.readNavigationTokenStrict).mockResolvedValue({
+      status: "ok",
+      value: {
+        schemaVersion: 1,
+        navigationId,
+        routeVersion: 1,
+        route: { ...data.routes[0], navigationId, routeVersion: 1 },
+        canonicalRequest: canonical,
+      },
+    });
+    vi.mocked(navigationStateRepo.beginReroute).mockResolvedValue({
+      status: "acquired",
+    });
+    vi.mocked(navigationStateRepo.finalizeReroute).mockResolvedValue("ok");
+  };
+  const reroute = () =>
+    rerouteAccessibleRoute({
+      routeToken: "venue-token",
+      currentPosition: { latitude: 24.1492, longitude: 120.6833 },
+      previousRouteVersion: 1,
+      reason: "OFF_ROUTE",
+      clientRequestId: "55555555-5555-4555-8555-555555555555",
+    });
+
+  it("answers 410 before taking the reroute lock when the stored gate is no longer current", async () => {
+    await tokenWith();
+    vi.mocked(isVenueArrivalCurrent).mockResolvedValue(false);
+    const rerouted = await reroute();
+    expect(rerouted).toMatchObject({
+      ok: false,
+      status: ResponseCode.GONE,
+      data: { reason: "ROUTE_TOKEN_EXPIRED_OR_UNSUPPORTED" },
+    });
+    expect(navigationStateRepo.beginReroute).not.toHaveBeenCalled();
+    expect(replanVenueLeg).not.toHaveBeenCalled();
+  });
+
+  it("keeps the stale-venue 410 message in English when the place vanishes after the gate check", async () => {
+    await tokenWith();
+    vi.mocked(isVenueArrivalCurrent).mockResolvedValue(true);
+    vi.mocked(replanVenueLeg).mockResolvedValue({ ok: false, stale: true });
+    const rerouted = await rerouteAccessibleRoute({
+      routeToken: "venue-token",
+      currentPosition: { latitude: 24.1492, longitude: 120.6833 },
+      previousRouteVersion: 1,
+      reason: "OFF_ROUTE",
+      clientRequestId: "66666666-6666-4666-8666-666666666666",
+      language: "en",
+    });
+    expect(rerouted).toMatchObject({
+      ok: false,
+      status: ResponseCode.GONE,
+      error: REROUTE_MSG_EN.VENUE_UPDATED,
+      data: { reason: "ROUTE_TOKEN_EXPIRED_OR_UNSUPPORTED" },
+    });
+  });
+
+  it("rebuilds the indoor leg from the same gate and stores the venue version actually used", async () => {
+    await tokenWith();
+    vi.mocked(isVenueArrivalCurrent).mockResolvedValue(true);
+    const newLeg = { ...venueLeg, venueVersion: 5 };
+    vi.mocked(replanVenueLeg).mockResolvedValue({
+      ok: true,
+      venueArrival: { ...venueArrival, venueVersion: 5 },
+      venueLeg: newLeg,
+    });
+    vi.mocked(planOtpRouteDetailed).mockClear();
+    const rerouted = await reroute();
+    if (!rerouted.ok) throw new Error(rerouted.error);
+    expect(replanVenueLeg).toHaveBeenCalledWith(venueArrival, "zh-TW");
+    expect(resolveVenueArrival).toHaveBeenCalledTimes(1); // only the initial plan; never re-select a gate
+    expect(planOtpRouteDetailed).toHaveBeenCalled();
+    for (const call of vi.mocked(planOtpRouteDetailed).mock.calls) {
+      expect(call[1]).toEqual(gate);
+    }
+    expect(rerouted.data.venueArrival?.venueVersion).toBe(5);
+    expect(rerouted.data.venueLeg).toBe(newLeg);
+    const committed = vi.mocked(navigationStateRepo.finalizeReroute).mock
+      .calls[0]?.[3];
+    expect(committed?.canonicalRequest.venueArrival?.venueVersion).toBe(5);
+  });
+
+  it("carries the newer version into the next reroute instead of falling back to the first one", async () => {
+    await tokenWith();
+    vi.mocked(isVenueArrivalCurrent).mockResolvedValue(true);
+    vi.mocked(replanVenueLeg)
+      .mockResolvedValueOnce({
+        ok: true,
+        venueArrival: { ...venueArrival, venueVersion: 5 },
+        venueLeg: { ...venueLeg, venueVersion: 5 },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        venueArrival: { ...venueArrival, venueVersion: 6 },
+        venueLeg: { ...venueLeg, venueVersion: 6 },
+      });
+    const first = await reroute();
+    if (!first.ok) throw new Error(first.error);
+    const committed = vi.mocked(navigationStateRepo.finalizeReroute).mock
+      .calls[0]?.[3];
+    if (!committed) throw new Error("first reroute was not committed");
+    vi.mocked(navigationStateRepo.readNavigationTokenStrict).mockResolvedValue({
+      status: "ok",
+      value: committed,
+    });
+    const second = await rerouteAccessibleRoute({
+      routeToken: "venue-token",
+      currentPosition: { latitude: 24.1493, longitude: 120.6834 },
+      previousRouteVersion: committed.routeVersion,
+      reason: "OFF_ROUTE",
+      clientRequestId: "77777777-7777-4777-8777-777777777777",
+    });
+    if (!second.ok) throw new Error(second.error);
+    expect(vi.mocked(replanVenueLeg).mock.calls[1]?.[0].venueVersion).toBe(5);
+    expect(
+      vi.mocked(navigationStateRepo.finalizeReroute).mock.calls[1]?.[3]
+        .canonicalRequest.venueArrival?.venueVersion,
+    ).toBe(6);
   });
 });

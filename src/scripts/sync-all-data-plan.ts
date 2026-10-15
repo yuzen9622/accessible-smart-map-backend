@@ -253,6 +253,21 @@ export const SYNC_STEPS: readonly SyncStep[] = [
       "prints `generated: false, skipped: true` (no edge map / no speed data) and still exits 0 — check its Result line",
   },
 
+  {
+    // Private, gitignored campus data: opt-in so a machine without the file
+    // (e.g. the deploy host) can still run the default sync.
+    id: "venue-nutc-sanmin",
+    group: "snapshot",
+    command: pnpmScript(
+      "import:venue",
+      "--file",
+      "data/venues/nutc-sanmin.osm",
+    ),
+    backends: ["mongo"],
+    requiredEnv: [...MONGO_ENV],
+    requiredFiles: ["data/venues/nutc-sanmin.osm"],
+  },
+
   // --- slow: heavy TDX quota or a long crawl ---
   {
     id: "parking-tdx",

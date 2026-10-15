@@ -64,15 +64,24 @@ describe("getRoutingConfig", () => {
         minTypeCoverage: 0.8,
       },
       fleetSightingTtlDays: 30,
+      venue: {
+        stairsAvoidanceMultiplier: 4,
+        elevatorWaitS: 30,
+        elevatorPerFloorS: 3,
+      },
     });
   });
 
   it("reads overrides from the environment", () => {
     vi.stubEnv("ROUTE_PLAN_BUDGET_MS", "12000");
     vi.stubEnv("LOW_FLOOR_MIN_TYPE_COVERAGE", "0.5");
+    vi.stubEnv("VENUE_STAIRS_AVOIDANCE_MULTIPLIER", "1");
+    vi.stubEnv("VENUE_ELEVATOR_WAIT_S", "45.5");
     const config = getRoutingConfig();
     expect(config.planBudgetMs).toBe(12_000);
     expect(config.lowFloorEvidence.minTypeCoverage).toBe(0.5);
+    expect(config.venue.stairsAvoidanceMultiplier).toBe(1);
+    expect(config.venue.elevatorWaitS).toBe(45.5);
   });
 
   it.each([
@@ -81,6 +90,15 @@ describe("getRoutingConfig", () => {
     ["OTP_NUM_ITINERARIES", "2.5"],
     ["LOW_FLOOR_MIN_TYPE_COVERAGE", "1.5"],
     ["BUS_FLEET_SIGHTING_TTL_DAYS", "0"],
+    ["VENUE_STAIRS_AVOIDANCE_MULTIPLIER", "0.5"],
+    ["VENUE_STAIRS_AVOIDANCE_MULTIPLIER", "Infinity"],
+    ["VENUE_ELEVATOR_WAIT_S", "0"],
+    ["VENUE_ELEVATOR_PER_FLOOR_S", "-3"],
+    // finite but large enough to overflow a weighted stair edge to Infinity
+    ["VENUE_STAIRS_AVOIDANCE_MULTIPLIER", "1e308"],
+    ["VENUE_STAIRS_AVOIDANCE_MULTIPLIER", "101"],
+    ["VENUE_ELEVATOR_WAIT_S", "601"],
+    ["VENUE_ELEVATOR_PER_FLOOR_S", "1e308"],
   ])(
     "rejects an invalid %s=%s instead of silently defaulting",
     (name, value) => {

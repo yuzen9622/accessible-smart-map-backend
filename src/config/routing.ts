@@ -25,6 +25,19 @@ export interface LowFloorEvidenceConfig {
   minTypeCoverage: number;
 }
 
+/** Indoor venue routing (campus, station) tunables. */
+export interface VenueRoutingConfig {
+  /**
+   * Multiplier on stairs for the elderly and visual_impaired venue profiles:
+   * they prefer elevators but may still take stairs. 1 = neutral.
+   */
+  stairsAvoidanceMultiplier: number;
+  /** Expected wait for an elevator car, seconds. */
+  elevatorWaitS: number;
+  /** Ride time per floor travelled, seconds. */
+  elevatorPerFloorS: number;
+}
+
 export interface RoutingConfig {
   /**
    * Total time one transit planning request may spend across every OTP stage
@@ -39,6 +52,7 @@ export interface RoutingConfig {
   lowFloorEvidence: LowFloorEvidenceConfig;
   /** How long a bus fleet sighting (plate seen on a route) is kept. */
   fleetSightingTtlDays: number;
+  venue: VenueRoutingConfig;
 }
 
 const DEFAULTS: RoutingConfig = {
@@ -51,6 +65,11 @@ const DEFAULTS: RoutingConfig = {
     minTypeCoverage: 0.8,
   },
   fleetSightingTtlDays: 30,
+  venue: {
+    stairsAvoidanceMultiplier: 4,
+    elevatorWaitS: 30,
+    elevatorPerFloorS: 3,
+  },
 };
 
 function readNumber(
@@ -70,6 +89,12 @@ function readNumber(
 
 const positiveInteger = (value: number) => Number.isInteger(value) && value > 0;
 const ratio = (value: number) => value >= 0 && value <= 1;
+const atLeastOne = (value: number) => value >= 1;
+const positive = (value: number) => value > 0;
+/** Upper bounds keep weighted venue costs finite (a huge multiplier would
+ * overflow a stair edge to Infinity and silently forbid it). */
+const VENUE_MAX_STAIRS_MULTIPLIER = 100;
+const VENUE_MAX_ELEVATOR_S = 600;
 
 /**
  * Resolves the routing tunables. Overrides are read on every call so a bad
@@ -125,5 +150,25 @@ export function getRoutingConfig(): RoutingConfig {
       positiveInteger,
       "a positive whole number of days",
     ),
+    venue: {
+      stairsAvoidanceMultiplier: readNumber(
+        "VENUE_STAIRS_AVOIDANCE_MULTIPLIER",
+        d.venue.stairsAvoidanceMultiplier,
+        (v) => atLeastOne(v) && v <= VENUE_MAX_STAIRS_MULTIPLIER,
+        `a number from 1 to ${VENUE_MAX_STAIRS_MULTIPLIER}`,
+      ),
+      elevatorWaitS: readNumber(
+        "VENUE_ELEVATOR_WAIT_S",
+        d.venue.elevatorWaitS,
+        (v) => positive(v) && v <= VENUE_MAX_ELEVATOR_S,
+        `a positive number of seconds up to ${VENUE_MAX_ELEVATOR_S}`,
+      ),
+      elevatorPerFloorS: readNumber(
+        "VENUE_ELEVATOR_PER_FLOOR_S",
+        d.venue.elevatorPerFloorS,
+        (v) => positive(v) && v <= VENUE_MAX_ELEVATOR_S,
+        `a positive number of seconds up to ${VENUE_MAX_ELEVATOR_S}`,
+      ),
+    },
   };
 }

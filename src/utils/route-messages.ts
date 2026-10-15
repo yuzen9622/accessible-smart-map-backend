@@ -43,6 +43,10 @@ const CATALOG: Record<string, { "zh-TW": string; en: string }> = {
     "zh-TW": "無法解析出發地或目的地座標",
     en: "Could not resolve the origin or destination coordinates.",
   },
+  VENUE_PLACE_NOT_FOUND: {
+    "zh-TW": "查無此場域或場域地點",
+    en: "The venue or venue place does not exist.",
+  },
   WAYPOINT_LOOKUP_FAILED: {
     "zh-TW": "無法解析中途點座標",
     en: "Could not resolve one or more waypoint coordinates.",

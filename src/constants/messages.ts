@@ -114,6 +114,7 @@ export const REROUTE_MSG = {
   CONFLICT: "路線版本或重新規劃狀態衝突",
   UNAVAILABLE: "導航狀態服務暫時無法使用",
   NO_STEPS: "替代路線無法產生導航步驟",
+  VENUE_UPDATED: "目的地場域資料已更新，請重新規劃路線",
 } as const;
 
 export const REROUTE_MSG_EN = {
@@ -125,6 +126,8 @@ export const REROUTE_MSG_EN = {
     "Unable to generate navigation instructions for the replacement route",
   NO_ROUTE: "No viable route was found",
   PLAN_FAILED: "Unable to replan the route. Please try again later",
+  VENUE_UPDATED:
+    "The destination venue has been updated. Please plan the route again",
 } as const;
 
 export const MEMORY_MSG = {
@@ -213,6 +216,11 @@ export const NAV_API_MSG = {
 
 export const CAMPUS_MSG = {
   NOT_FOUND: "查無此校區",
+} as const;
+
+export const VENUE_MSG = {
+  NOT_FOUND: "查無此場域",
+  PLACE_NOT_FOUND: "查無此場域地點",
 } as const;
 
 export const REVIEW_MSG = {

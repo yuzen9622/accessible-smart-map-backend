@@ -455,6 +455,71 @@ describe("POST /api/v1/a11y/accessible-route travel modes + waypoints", () => {
     expect(mockPlan).not.toHaveBeenCalled();
   });
 
+  it("accepts origin + destinationVenuePlace and passes it to the service", async () => {
+    mockPlan.mockResolvedValue({
+      ok: false,
+      status: ResponseCode.INVALID_INPUT,
+      error: "查無此場域或場域地點",
+      data: { reason: "VENUE_PLACE_NOT_FOUND" },
+    });
+    const venuePlace = { venueId: "nutc-sanmin", placeId: "zk@3F" };
+    const res = await request(app)
+      .post(URL)
+      .send({
+        origin: { latitude: 24.149, longitude: 120.683 },
+        destinationVenuePlace: venuePlace,
+      });
+    expect(res.status).toBe(400);
+    expect(mockPlan.mock.calls[0][0].destinationVenuePlace).toEqual(venuePlace);
+  });
+
+  it.each([
+    [
+      "with destination",
+      {
+        origin: { latitude: 24.1, longitude: 120.6 },
+        destination: { latitude: 24.2, longitude: 120.7 },
+      },
+    ],
+    [
+      "with query",
+      { origin: { latitude: 24.1, longitude: 120.6 }, query: "到中科大樓3樓" },
+    ],
+    ["without origin", {}],
+    [
+      "with an empty destination",
+      { origin: { latitude: 24.1, longitude: 120.6 }, destination: "" },
+    ],
+  ])("rejects destinationVenuePlace %s with 400", async (_label, extra) => {
+    const res = await request(app)
+      .post(URL)
+      .send({
+        ...extra,
+        destinationVenuePlace: { venueId: "nutc-sanmin", placeId: "zk@3F" },
+      });
+    expect(res.status).toBe(400);
+    expect(mockPlan).not.toHaveBeenCalled();
+  });
+
+  it("never accepts a client-supplied venueArrival", async () => {
+    const res = await request(app)
+      .post(URL)
+      .send({
+        origin: { latitude: 24.1, longitude: 120.6 },
+        destination: { latitude: 24.2, longitude: 120.7 },
+        venueArrival: {
+          venueId: "x",
+          placeId: "y",
+          gateId: "g",
+          gateLocation: { lat: 24, lng: 120 },
+          mode: "normal",
+          venueVersion: 1,
+        },
+      });
+    expect(res.status).toBe(400);
+    expect(mockPlan).not.toHaveBeenCalled();
+  });
+
   it("rejects more than 5 waypoints with 400", async () => {
     const res = await request(app)
       .post(URL)

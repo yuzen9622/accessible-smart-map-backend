@@ -159,6 +159,25 @@ describe("selectSteps", () => {
   });
 });
 
+describe("venue import step", () => {
+  const venue = SYNC_STEPS.find((s) => s.id === "venue-nutc-sanmin");
+
+  it("runs only with --with-snapshot, because the .osm is private to its author", () => {
+    expect(venue?.group).toBe("snapshot");
+    expect(select([])).not.toContain("venue-nutc-sanmin");
+    expect(select(["--with-snapshot"])).toContain("venue-nutc-sanmin");
+  });
+
+  it("is blocked before anything runs when the private file is absent", () => {
+    const env = Object.fromEntries(
+      (venue?.requiredEnv ?? []).map((name) => [name, "set"]),
+    );
+    expect(venue && findStepBlockers(venue, env, () => false)).toEqual([
+      "missing data/venues/nutc-sanmin.osm",
+    ]);
+  });
+});
+
 describe("findStepBlockers", () => {
   const step: SyncStep = {
     id: "x",
