@@ -7,10 +7,14 @@
 | 方法 | 路徑 | 用途 |
 | --- | --- | --- |
 | GET | `/api/v1/a11y/venues` | 已匯入場域摘要 |
-| GET | `/api/v1/a11y/venues/{venueId}` | 建築外框、樓層（`elevationM`）、地點 `places`、顯示用幾何 `features`，以及樓梯／階梯／坡道／手扶梯／電梯 `connections`（各點 `[lng, lat, z]` 與樓層，坡道附最大坡度） |
+| GET | `/api/v1/a11y/venues/{venueId}` | 建築外框、樓層（`elevationM`）、地點 `places`、顯示用幾何 `features`，一般平走路網 `walkways`，以及樓梯／階梯／坡道／手扶梯／電梯 `connections`（各點 `[lng, lat, z]` 與樓層，坡道附最大坡度） |
 | POST | `/api/v1/a11y/venues/{venueId}/route` | `{ fromPlaceId, toPlaceId, mode?, language? }` → 路徑與步驟 |
 
 - **地點 id**：教室等為 `a11ymap:id`；跨多層重複的地點為 `${id}@${levelRef}`（例 `a-room06@3F`）；每棟每層的樓層錨點為 `${buildingId}@${levelRef}`（「到中科大樓 3F」＝ `zk@3F`）。「建築＋樓層」請由前端從 `places` 換成錨點 id。
+- **發布版本**：以 `venueId + version` 識別與快取同一批圖資；`sourceSha256` 是原始 OSM 的 SHA-256（舊文件無來源時為 null），不包含發布建築清單，不能單獨作為發布版本。
+- **校園顯示**：`walkways` 每筆是一條一般平走邊，`coordinates` 是兩個 `[lng, lat, z]` 端點，並有逐點的 `buildingIds`／`levelRefs`；兩端同棟／同層時另提供共同的 `buildingId`／`levelRef`，其餘為 null。樓梯、階梯、手扶梯、電梯與坡道另在 `connections`，不要重複繪製。`walkways` 是顯示路網，完整行程仍由 route API 計算。
+- **樓層資料**：`buildings[].levels[].coverage` 的 `hasAnchor` 表示該層有可選樓層錨點；`hasRouteData` 表示該層有路網邊；`hasDisplayGeometry` 表示該層有顯示圖形。三者只描述資料存在，均不表示已完整描繪、現場核實或輪椅可達。選擇目的地以實際 `places` 為準，可達性以 route 結果為準。
+- **待核實資訊**：建築、features、walkways 與 connections 保留 `heightPending`、`note`、`fixme`。`heightPending=true` 代表高度待確認，不能依估計 z 生成實測樓梯；`note`／`fixme` 可能包含電梯停靠表等通行資訊尚待現場核實的條件，不能只用 `heightStatus` 取代這些條件。
 - **`mode`**（預設 `wheelchair`），伺服器依模式決定成本，不接受自訂 profile：
   - `wheelchair`：不走樓梯／階梯／手扶梯，坡度 > 12%、寬度 < 0.9 m、`wheelchair=no` 不可通行。沒標 `width` 的路以可通過計算（與戶外步行路網相同）；坡道沒標寬度時匯入會警告。
   - `elderly`、`visual_impaired`：偏好電梯，但沒有電梯可達時仍會走樓梯（樓梯成本 × `VENUE_STAIRS_AVOIDANCE_MULTIPLIER`，預設 4）。
@@ -61,12 +65,14 @@
 ## 匯入
 
 ```bash
-pnpm import:venue -- --file data/venues/nutc-sanmin.osm --venue nutc-sanmin --name "國立臺中科技大學 三民校區" --dry-run
+pnpm import:venue -- --file data/venues/nutc-sanmin.osm --venue nutc-sanmin --name "國立臺中科技大學 三民校區" --buildings info,zk,changming,hanying --dry-run
 ```
 
+- `nutc-sanmin` 預設只發布 `info`、`zk`、`changming`、`hanying` 四棟；一般場域預設完整來源。`--buildings id-a,id-b` 可明確指定發布範圍；空白、重複、無效或來源不存在的 id 會失敗。`--all-buildings` 明確要求完整來源驗證，不能與 `--buildings` 同用。
+- 範圍外建築及其室內地點、路網、顯示圖形不會發布；外框仍留在原始 OSM。排除在樓層數等內部驗證前生效，但無法辨識排除建築的外框時仍拒絕發布，避免將未完成建築誤當戶外捷徑。跨棟連通道、校門與未穿過排除建築的校園步道保留，不刪改來源檔案。
 - 先完整編譯與驗證；任何錯誤都不寫入（`--venue` 也必須是小寫英數、`-`、`_`，與 API 路徑規則相同）。警告會列出「從校門走不到」或「輪椅無法抵達」的地點、缺錨點的樓層，以及離其他線不到 0.5 公尺卻沒共用節點的端點（多半是漏接），供補資料。
 - 拿掉 `--dry-run` 後以單一文件覆寫該場域並遞增 `version`；API 依版本自動重建路網，不需重啟。
-- `pnpm data:sync --with-snapshot` 會一併執行（步驟 `venue-nutc-sanmin`，預設同步不含）。
+- `pnpm data:sync --with-snapshot` 會一併執行（步驟 `venue-nutc-sanmin`，使用相同四棟預設，預設同步不含）。
 
 ## 隱私
 
