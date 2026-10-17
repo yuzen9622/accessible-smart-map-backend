@@ -254,6 +254,7 @@ export const SYNC_STEPS: readonly SyncStep[] = [
   },
 
   {
+    // import:venue owns the default four-building publication scope.
     // Private, gitignored campus data: opt-in so a machine without the file
     // (e.g. the deploy host) can still run the default sync.
     id: "venue-nutc-sanmin",

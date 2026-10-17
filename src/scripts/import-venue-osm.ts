@@ -10,7 +10,7 @@
  * which the API's venue graph cache keys on.
  *
  * Run: pnpm import:venue -- --file data/venues/nutc-sanmin.osm \
- *        --venue nutc-sanmin --name "國立臺中科技大學 三民校區" [--dry-run]
+ *        --venue nutc-sanmin --name "國立臺中科技大學 三民校區" [--buildings info,zk,changming,hanying] [--dry-run]
  */
 
 import "dotenv/config";
@@ -26,25 +26,70 @@ export const DEFAULT_VENUE_FILE = "data/venues/nutc-sanmin.osm";
 const DEFAULT_VENUE_ID = "nutc-sanmin";
 const DEFAULT_VENUE_NAME = "國立臺中科技大學 三民校區";
 
-function arg(name: string): string | undefined {
-  const i = process.argv.indexOf(`--${name}`);
-  return i >= 0 ? process.argv[i + 1] : undefined;
+/** The first NUTC publication; other source buildings stay in the private OSM. */
+export const DEFAULT_NUTC_BUILDING_IDS = [
+  "info",
+  "zk",
+  "changming",
+  "hanying",
+] as const;
+
+/** Parse before reading data or opening a database connection. */
+export function parseVenueImportArgs(argv: readonly string[]) {
+  const arg = (name: string) => {
+    const inline = argv.find((value) => value.startsWith(`--${name}=`));
+    if (inline !== undefined) return inline.slice(name.length + 3);
+    const i = argv.indexOf(`--${name}`);
+    if (i < 0) return undefined;
+    const value = argv[i + 1];
+    if (!value || value.startsWith("--"))
+      throw new Error(`--${name} requires a value`);
+    return value;
+  };
+  const venueId = arg("venue") ?? DEFAULT_VENUE_ID;
+  const rawBuildings = arg("buildings");
+  const allBuildings = argv.includes("--all-buildings");
+  if (allBuildings && rawBuildings !== undefined)
+    throw new Error("--buildings and --all-buildings are mutually exclusive");
+  const buildingIds =
+    rawBuildings !== undefined
+      ? rawBuildings.split(",").map((id) => id.trim())
+      : !allBuildings && venueId === DEFAULT_VENUE_ID
+        ? [...DEFAULT_NUTC_BUILDING_IDS]
+        : undefined;
+  if (
+    buildingIds &&
+    (!buildingIds.length ||
+      new Set(buildingIds).size !== buildingIds.length ||
+      buildingIds.some((id) => !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(id)))
+  ) {
+    throw new Error(
+      "--buildings requires a non-empty, unique list of building ids",
+    );
+  }
+  return {
+    file: arg("file") ?? DEFAULT_VENUE_FILE,
+    venueId,
+    name: arg("name") ?? DEFAULT_VENUE_NAME,
+    dryRun: argv.includes("--dry-run"),
+    buildingIds,
+  };
 }
 
 async function main() {
-  const file = arg("file") ?? DEFAULT_VENUE_FILE;
-  const venueId = arg("venue") ?? DEFAULT_VENUE_ID;
-  const name = arg("name") ?? DEFAULT_VENUE_NAME;
-  const dryRun = process.argv.includes("--dry-run");
+  const { file, venueId, name, dryRun, buildingIds } = parseVenueImportArgs(
+    process.argv.slice(2),
+  );
 
   const xml = await readFile(file, "utf8");
   const { venue, errors, warnings } = compileVenue(parseOsmXml(xml), {
     venueId,
     name,
+    buildingIds,
   });
 
   console.log(
-    `[venue] ${venueId}: ${venue.buildings.length} buildings, ${venue.places.length} places, ` +
+    `[venue] ${venueId} [${buildingIds?.join(",") ?? "all buildings"}]: ${venue.buildings.length} buildings, ${venue.places.length} places, ` +
       `${venue.nodes.length} nodes, ${venue.edges.length} edges, ${venue.features.length} features`,
   );
   for (const w of warnings) console.warn(`[venue] 警告：${w}`);

@@ -85,6 +85,8 @@ const NEAR_MISS_DZ_M = 1;
 export interface CompileOptions {
   venueId: string;
   name: string;
+  /** Publish only these buildings; omitted means the complete source. */
+  buildingIds?: readonly string[];
 }
 
 export interface CompileResult {
@@ -429,6 +431,33 @@ export function compileVenue(
   const buildings: VenueBuilding[] = [];
   const buildingById = new Map<string, VenueBuilding>();
   const outlineOwner = new Map<string, VenueBuilding>();
+  const published = options.buildingIds ? new Set(options.buildingIds) : null;
+  if (
+    published &&
+    (!published.size ||
+      published.size !== options.buildingIds?.length ||
+      [...published].some((id) => !ID_RE.test(id)))
+  ) {
+    errors.push("buildingIds 必須是非空、不重複的有效建築 id 清單");
+  }
+  const excluded: { id: string; rings: LngLat[][] }[] = [];
+  const excludedOutline = new Set<string>();
+  const outsidePublication = (tags: OsmTags) =>
+    Boolean(
+      published &&
+      tags.building &&
+      tags["a11ymap:id"] &&
+      !published.has(tags["a11ymap:id"]),
+    );
+  const excludeBuilding = (
+    tags: OsmTags,
+    rings: LngLat[][],
+    ways: OsmWay[],
+  ) => {
+    excluded.push({ id: tags["a11ymap:id"], rings });
+    for (const way of ways)
+      for (const id of way.nodeIds) excludedOutline.add(id);
+  };
 
   const ringOf = (way: OsmWay): LngLat[] | null => {
     const pts = way.nodeIds.map(node);
@@ -541,7 +570,7 @@ export function compileVenue(
   const unnamed: string[] = [];
   /** A building outside navigation is fine, but it must not vanish silently. */
   const accepts = (osmRef: string, tags: OsmTags) => {
-    if (!tags.building) return false;
+    if (!tags.building || outsidePublication(tags)) return false;
     if (!tags["a11ymap:id"]) {
       unnamed.push(tags.name ? `${osmRef}（${tags.name}）` : osmRef);
       return false;
@@ -580,6 +609,12 @@ export function compileVenue(
     Boolean(tags.building) && !tags["a11ymap:id"];
 
   for (const way of osm.ways.values()) {
+    if (outsidePublication(way.tags)) {
+      const ring = ringOf(way);
+      if (ring) excludeBuilding(way.tags, [ring], [way]);
+      else errors.push(`無法安全排除建築 way/${way.id}：外框未閉合或缺節點`);
+      continue;
+    }
     if (!accepts(`way/${way.id}`, way.tags)) {
       const ring = isUntagged(way.tags) ? ringOf(way) : null;
       if (ring) {
@@ -598,6 +633,12 @@ export function compileVenue(
     addBuilding(`way/${way.id}`, way.tags, [ring], [way]);
   }
   for (const rel of osm.relations.values()) {
+    if (outsidePublication(rel.tags)) {
+      const parsed = relationRings(rel);
+      if (parsed) excludeBuilding(rel.tags, parsed.rings, parsed.members);
+      else errors.push(`無法安全排除建築 relation/${rel.id}：外框成員不完整`);
+      continue;
+    }
     if (!accepts(`relation/${rel.id}`, rel.tags)) {
       const parsed = isUntagged(rel.tags) ? relationRings(rel) : null;
       if (parsed) {
@@ -620,15 +661,6 @@ export function compileVenue(
   if (unnamed.length) {
     warnings.push(
       `${unnamed.length} 棟建築沒標 a11ymap:id，不會納入導航：${unnamed.join("、")}`,
-    );
-  }
-
-  for (const el of [...osm.ways.values(), ...osm.relations.values()]) {
-    const rawId = el.tags["a11ymap:id"];
-    if (!rawId || el.tags.building) continue;
-    const kind = "nodeIds" in el ? "way" : "relation";
-    errors.push(
-      `a11ymap:id「${rawId}」標在 ${kind} ${el.id} 上；地點要標在路網節點上（通常是主要門）`,
     );
   }
 
@@ -677,6 +709,97 @@ export function compileVenue(
     return hit ? indoorInUntagged(what, hit) : false;
   };
 
+  // Explicit publication exclusions differ from untagged authoring mistakes:
+  // skip their contents before validation, without turning them into outdoors.
+  const excludedAt = (point: LngLat) =>
+    buildings.some((b) => inPolygon(point, b.footprint))
+      ? false
+      : excluded.some((b) => inPolygon(point, b.rings));
+  const excludedNode = (id: string) => {
+    if (buildingAt(id)) return false; // included/shared entrances take priority
+    const n = node(id);
+    return excludedOutline.has(id) || (n ? excludedAt(ll(n)) : false);
+  };
+  /** Probe every polygon-boundary interval, including off-centre crossings. */
+  const segmentInExcluded = (a: LngLat, b: LngLat) => {
+    const ts = [0, 1];
+    const dx = b[0] - a[0],
+      dy = b[1] - a[1];
+    const rings = [
+      ...excluded.flatMap((x) => x.rings),
+      ...buildings.flatMap((x) => x.footprint),
+    ];
+    for (const ring of rings)
+      for (let i = 1; i < ring.length; i += 1) {
+        const c = ring[i - 1],
+          d = ring[i];
+        const ex = d[0] - c[0],
+          ey = d[1] - c[1];
+        const den = dx * ey - dy * ex;
+        if (Math.abs(den) < 1e-20) continue;
+        const cx = c[0] - a[0],
+          cy = c[1] - a[1];
+        const t = (cx * ey - cy * ex) / den;
+        const u = (cx * dy - cy * dx) / den;
+        if (t >= 0 && t <= 1 && u >= 0 && u <= 1) ts.push(t);
+      }
+    ts.sort((x, y) => x - y);
+    return ts.slice(1).some((t, i) => {
+      const mid = (t + ts[i]) / 2;
+      return excludedAt([a[0] + dx * mid, a[1] + dy * mid]);
+    });
+  };
+  const wayInExcluded = (way: OsmWay) => {
+    if (!excluded.length) return false;
+    if (way.nodeIds.some(excludedNode)) return true;
+    return way.nodeIds.slice(1).some((id, i) => {
+      const a = node(way.nodeIds[i]),
+        b = node(id);
+      return a && b ? segmentInExcluded(ll(a), ll(b)) : false;
+    });
+  };
+  if (published) {
+    for (const id of published)
+      if (!buildingById.has(id)) {
+        errors.push(`發布建築「${id}」不存在或無有效外框／樓層資料`);
+      }
+    if (excluded.length)
+      warnings.push(
+        `發布範圍排除建築：${excluded.map((b) => b.id).join("、")}`,
+      );
+  }
+  // Unsupported relations outside the publication must not block selected data.
+  // Only skip when every member is known to belong to an excluded building.
+  const relationInExcluded = (
+    rel: OsmRelation,
+    seen = new Set<string>(),
+  ): boolean => {
+    if (!rel.members.length || seen.has(rel.id)) return false;
+    const next = new Set([...seen, rel.id]);
+    return rel.members.every((member) => {
+      if (member.type === "node") return excludedNode(member.ref);
+      if (member.type === "way") {
+        const way = osm.ways.get(member.ref);
+        return Boolean(way?.nodeIds.length && way.nodeIds.every(excludedNode));
+      }
+      const nested = osm.relations.get(member.ref);
+      return nested ? relationInExcluded(nested, next) : false;
+    });
+  };
+  for (const el of [...osm.ways.values(), ...osm.relations.values()]) {
+    const rawId = el.tags["a11ymap:id"];
+    if (
+      !rawId ||
+      el.tags.building ||
+      ("nodeIds" in el ? wayInExcluded(el) : relationInExcluded(el))
+    )
+      continue;
+    const kind = "nodeIds" in el ? "way" : "relation";
+    errors.push(
+      `a11ymap:id「${rawId}」標在 ${kind} ${el.id} 上；地點要標在路網節點上（通常是主要門）`,
+    );
+  }
+
   // ---- routable way instances -------------------------------------------
   const instances: WayInstance[] = [];
   /** ordinals each OSM node is used on by routable ways */
@@ -695,7 +818,13 @@ export function compileVenue(
 
   for (const way of osm.ways.values()) {
     const hw = way.tags.highway;
-    if (!hw || !ROUTABLE_HIGHWAYS.has(hw) || way.tags.area === "yes") continue;
+    if (
+      !hw ||
+      !ROUTABLE_HIGHWAYS.has(hw) ||
+      way.tags.area === "yes" ||
+      wayInExcluded(way)
+    )
+      continue;
     if (way.nodeIds.some((nid) => !node(nid))) {
       errors.push(`way ${way.id} 參照了不存在的節點`);
       continue;
@@ -852,6 +981,7 @@ export function compileVenue(
     Number.isFinite(tagNumber(value)) &&
     Math.abs(tagNumber(value) ?? 0) <= MAX_ABS_HEIGHT_M;
   for (const n of osm.nodes.values()) {
+    if (excludedNode(n.id)) continue;
     const ele = n.tags["a11ymap:ele"];
     if (ele !== undefined && !validEle(ele)) {
       errors.push(`node ${n.id} 的 a11ymap:ele「${ele}」不是有效高度`);
@@ -1062,7 +1192,7 @@ export function compileVenue(
 
   // ---- elevators ---------------------------------------------------------
   for (const n of osm.nodes.values()) {
-    if (n.tags.highway !== "elevator") continue;
+    if (n.tags.highway !== "elevator" || excludedNode(n.id)) continue;
     const lv = levelsOf(n.tags);
     if (!lv) {
       errors.push(badLevels(`電梯節點 ${n.id}`));
@@ -1137,6 +1267,7 @@ export function compileVenue(
     places.push(p);
   };
   for (const n of osm.nodes.values()) {
+    if (excludedNode(n.id)) continue;
     const rawId = n.tags["a11ymap:id"];
     const anchor = n.tags["a11ymap:anchor"] === "yes";
     if (!rawId && !anchor) continue;
@@ -1249,7 +1380,7 @@ export function compileVenue(
       (way.tags.highway === "steps" && way.tags.area === "yes"
         ? "stairs"
         : undefined);
-    if (!featureKind) continue;
+    if (!featureKind || wayInExcluded(way)) continue;
     const ring = ringOf(way);
     if (!ring) {
       errors.push(
@@ -1292,7 +1423,7 @@ export function compileVenue(
     }
   }
   for (const n of osm.nodes.values()) {
-    if (!n.tags.door && !n.tags.entrance) continue;
+    if ((!n.tags.door && !n.tags.entrance) || excludedNode(n.id)) continue;
     const lv = levelsOf(n.tags);
     if (!lv) {
       errors.push(badLevels(`門 node ${n.id}`));
