@@ -46,10 +46,41 @@ export const VenueRouteBodySchema = z
   })
   .strict();
 
+const ProvenanceAnnotations = {
+  heightPending: z.boolean().optional().openapi({
+    description:
+      "高度仍待核實；不代表電梯停靠樓層或連通性已現場確認，須同時保留 note / fixme 的限制說明",
+  }),
+  note: z.string().optional().openapi({
+    description: "來源的補充註記，保留高度、停靠層與連通性等原始限制語意",
+  }),
+  fixme: z
+    .string()
+    .optional()
+    .openapi({ description: "來源仍待補齊或現場核實的事項" }),
+};
+
+const LevelCoverageSchema = z
+  .object({
+    hasAnchor: z
+      .boolean()
+      .openapi({ description: "此棟此層有實際樓層錨點（places.kind=anchor）" }),
+    hasRouteData: z.boolean().openapi({
+      description:
+        "此棟此層節點有相接路網邊；僅表示有路網資料，不保證可達或輪椅可通行",
+    }),
+    hasDisplayGeometry: z.boolean().openapi({
+      description:
+        "此棟此層有實際房間、走廊、門等顯示幾何；建築外框與宣告樓層數不算",
+    }),
+  })
+  .openapi("VenueLevelCoverage");
+
 const LevelSchema = z.object({
   ordinal: z.number().int(),
   ref: z.string().openapi({ example: "1F" }),
   elevationM: z.number(),
+  coverage: LevelCoverageSchema,
 });
 
 const BuildingSchema = z
@@ -68,6 +99,7 @@ const BuildingSchema = z
     }),
     osmRef: z.string(),
     moeRef: z.string().optional(),
+    ...ProvenanceAnnotations,
   })
   .openapi("VenueBuilding");
 
@@ -115,6 +147,7 @@ const FeatureSchema = z
     geometryStatus: z.enum(["surveyed", "traced", "schematic"]),
     heightStatus: z.enum(["measured", "drawing", "estimated"]),
     source: z.string().optional(),
+    ...ProvenanceAnnotations,
   })
   .openapi("VenueFeature");
 
@@ -142,9 +175,57 @@ const ConnectionSchema = z
         "高度與坡度的可信度（取最不確定者）；estimated 時前端應顯示「坡度未實測」，不顯示精確數字",
     }),
     source: z.string().optional(),
+    ...ProvenanceAnnotations,
     osmRef: z.string(),
   })
   .openapi("VenueConnection");
+
+const WalkwaySchema = z
+  .object({
+    id: z
+      .string()
+      .openapi({ description: "穩定的路網邊 id，每筆為一條邊的兩端點" }),
+    kind: z.enum([
+      "corridor",
+      "footway",
+      "path",
+      "pedestrian",
+      "service",
+      "crossing",
+    ]),
+    indoor: z.boolean(),
+    coordinates: z
+      .tuple([
+        z.tuple([z.number(), z.number(), z.number()]),
+        z.tuple([z.number(), z.number(), z.number()]),
+      ])
+      .openapi({
+        description:
+          "兩端點 [lng, lat, z]；z 為場域基準面以上公尺，非手機定位樓層",
+      }),
+    buildingId: z
+      .string()
+      .nullable()
+      .openapi({ description: "兩端同棟時為該棟 id，戶外或跨棟邊為 null" }),
+    levelRef: z.string().nullable().openapi({
+      description: "兩端同棟同層時為該層，否則 null；跨界請依 levelRefs",
+    }),
+    buildingIds: z
+      .tuple([z.string().nullable(), z.string().nullable()])
+      .openapi({
+        description: "各端點所屬建築，順序對應 coordinates；戶外為 null",
+      }),
+    levelRefs: z.tuple([z.string().nullable(), z.string().nullable()]).openapi({
+      description: "各端點樓層，順序對應 coordinates；戶外或中間高度為 null",
+    }),
+    wheelchair: z.enum(["yes", "no", "limited", "unknown"]),
+    geometryStatus: z.enum(["surveyed", "traced", "schematic"]),
+    heightStatus: z.enum(["measured", "drawing", "estimated"]),
+    source: z.string().optional(),
+    ...ProvenanceAnnotations,
+    osmRef: z.string(),
+  })
+  .openapi("VenueWalkway");
 
 const VenueDetailSchema = z
   .object({
@@ -153,9 +234,17 @@ const VenueDetailSchema = z
     version: z.number().int(),
     importedAt: z.string(),
     center: LngLatSchema,
+    sourceSha256: z.string().nullable().openapi({
+      description:
+        "本次匯入原始檔的 SHA-256；舊文件無來源雜湊時為 null。此值不包含發布建築範圍，快取仍須使用 venueId + version",
+    }),
     buildings: z.array(BuildingSchema),
     places: z.array(PlaceSchema),
     features: z.array(FeatureSchema),
+    walkways: z.array(WalkwaySchema).openapi({
+      description:
+        "一般平走路網，包含戶外步道、室內走廊與跨棟連通邊；樓梯、坡道、手扶梯與電梯另在 connections，避免重複繪製",
+    }),
     connections: z.array(ConnectionSchema).openapi({
       description: "樓梯、戶外階梯、坡道、手扶梯與電梯，含各點高度，供 3D 繪製",
     }),
@@ -223,7 +312,7 @@ registry.registerPath({
   tags: ["Venue"],
   summary: "室內場域詳細資料",
   description:
-    "回傳建築外框、樓層（含樓板高度）、可選的起訖地點（教室、校門、樓層錨點）與顯示用的室內幾何（房間、走廊、門、電梯、樓梯）。牆面由用戶端依房間外框生成。",
+    "回傳已發布建築外框、樓層高度與資料涵蓋度、可選起訖地點（教室、校門、樓層錨點）、室內顯示幾何、一般步道與垂直連通設施。包含來源雜湊與待核實註記。牆面由用戶端依房間外框生成；有樓層宣告不代表該層已有完整圖資。",
   request: { params: VenueParamsSchema },
   responses: {
     200: {

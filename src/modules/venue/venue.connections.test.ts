@@ -57,4 +57,23 @@ describe("venueConnections", () => {
       0, 3.6, 7.2,
     ]);
   });
+
+  it("aggregates pending heights and distinct notes without certifying stop floors", () => {
+    const data = structuredClone(venue);
+    const elevatorEdges = data.edges.filter((edge) => edge.kind === "elevator");
+    elevatorEdges.forEach((edge, index) => {
+      edge.heightPending = index === 0;
+      edge.note = index === 0 ? "停靠樓層仍待現場核實" : "高度參考圖面";
+      edge.fixme = "現場確認停靠表";
+    });
+    const elevator = venueConnections(data).find(
+      (connection) => connection.kind === "elevator",
+    );
+    expect(elevator).toMatchObject({
+      heightPending: true,
+      note: "停靠樓層仍待現場核實\n高度參考圖面",
+      fixme: "現場確認停靠表",
+      levelRefs: ["1F", "2F", "3F"],
+    });
+  });
 });

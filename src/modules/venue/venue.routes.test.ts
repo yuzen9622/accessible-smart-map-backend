@@ -179,4 +179,63 @@ describe("OpenAPI", () => {
       Object.keys(paths["/a11y/venues/{venueId}/route"]?.post?.responses ?? {}),
     ).toEqual(expect.arrayContaining(["200", "404", "422"]));
   });
+
+  it("documents walkways, independent floor coverage and unresolved source annotations", () => {
+    const schemas = generateOpenAPIDocument().components?.schemas;
+    expect(schemas?.VenueDetail).toMatchObject({
+      required: expect.arrayContaining(["sourceSha256", "walkways"]),
+      properties: {
+        sourceSha256: { type: "string", nullable: true },
+        walkways: {
+          type: "array",
+          items: { $ref: "#/components/schemas/VenueWalkway" },
+        },
+      },
+    });
+    expect(schemas?.VenueLevelCoverage).toMatchObject({
+      required: ["hasAnchor", "hasRouteData", "hasDisplayGeometry"],
+      properties: {
+        hasRouteData: {
+          type: "boolean",
+          description: expect.stringContaining("不保證可達"),
+        },
+      },
+    });
+    expect(schemas?.VenueWalkway).toMatchObject({
+      required: expect.arrayContaining([
+        "buildingIds",
+        "levelRefs",
+        "coordinates",
+      ]),
+      properties: {
+        kind: {
+          enum: [
+            "corridor",
+            "footway",
+            "path",
+            "pedestrian",
+            "service",
+            "crossing",
+          ],
+        },
+      },
+    });
+    for (const name of [
+      "VenueBuilding",
+      "VenueFeature",
+      "VenueConnection",
+      "VenueWalkway",
+    ] as const) {
+      expect(schemas?.[name]).toMatchObject({
+        properties: {
+          heightPending: {
+            type: "boolean",
+            description: expect.stringContaining("不代表電梯停靠樓層"),
+          },
+          note: { type: "string" },
+          fixme: { type: "string" },
+        },
+      });
+    }
+  });
 });

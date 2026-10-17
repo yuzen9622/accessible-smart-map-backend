@@ -1,10 +1,10 @@
 import { levelRefOf } from "./venue.compile";
 import type {
-  GeometryStatus,
   HeightStatus,
   VenueData,
   VenueEdge,
   VenueNode,
+  VenueProvenance,
   VenueWheelchairTag,
 } from "./venue.types";
 
@@ -15,7 +15,7 @@ export type VenueConnectionKind =
  * A way between heights (stairs, steps, ramp, escalator) or an elevator
  * shaft, with 3D points, so clients can draw it without the routing graph.
  */
-export interface VenueConnection {
+export interface VenueConnection extends VenueProvenance {
   id: string;
   kind: VenueConnectionKind;
   buildingId: string | null;
@@ -27,12 +27,6 @@ export interface VenueConnection {
   /** Steepest grade along a ramp, as a ratio. */
   slopeRatio?: number;
   stepCount?: number;
-  /** How the way was drawn. */
-  geometryStatus: GeometryStatus;
-  /** How its heights (and a ramp's grade) are known; the least certain wins. */
-  heightStatus: HeightStatus;
-  /** `a11ymap:source` of the way or elevator node. */
-  source?: string;
   osmRef: string;
 }
 
@@ -131,7 +125,25 @@ export function venueConnections(venue: VenueData): VenueConnection[] {
       ...(edges.find((e) => e.source)?.source
         ? { source: edges.find((e) => e.source)?.source }
         : {}),
+      ...(edges.some((e) => e.heightPending !== undefined)
+        ? { heightPending: edges.some((e) => e.heightPending === true) }
+        : {}),
+      ...joinedAnnotations(edges),
       osmRef: edges[0].osmRef,
     };
   });
+}
+
+/** Preserve distinct author annotations when a connection spans many edges. */
+function joinedAnnotations(
+  edges: VenueEdge[],
+): Pick<VenueProvenance, "note" | "fixme"> {
+  const result: Pick<VenueProvenance, "note" | "fixme"> = {};
+  for (const key of ["note", "fixme"] as const) {
+    const values = [
+      ...new Set(edges.map((edge) => edge[key]?.trim()).filter(Boolean)),
+    ];
+    if (values.length) result[key] = values.join("\n");
+  }
+  return result;
 }

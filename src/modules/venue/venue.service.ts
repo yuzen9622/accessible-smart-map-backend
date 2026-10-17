@@ -9,6 +9,11 @@ import {
 } from "../accessible-route/accessible-route.failure";
 import { venueConnections, type VenueConnection } from "./venue.connections";
 import { buildVenueGraph, type VenueGraph } from "./venue.graph";
+import {
+  venueBuildings,
+  venueWalkways,
+  type VenueWalkway,
+} from "./venue.presentation";
 import * as repository from "./venue.repository";
 import { planVenueRoute as planOnGraph, type VenueRoute } from "./venue.route";
 import { haversineM } from "./venue.compile";
@@ -24,6 +29,7 @@ interface CompiledVenue {
   venue: VenueDocument;
   graph: VenueGraph;
   connections: VenueConnection[];
+  walkways: VenueWalkway[];
 }
 
 const compiled = new Map<string, CompiledVenue>();
@@ -45,6 +51,7 @@ function adopt(venue: VenueDocument): CompiledVenue {
     venue,
     graph: buildVenueGraph(venue, venue.version, getRoutingConfig().venue),
     connections: venueConnections(venue),
+    walkways: venueWalkways(venue),
   };
   compiled.set(venue.venueId, entry);
   return entry;
@@ -126,10 +133,12 @@ export async function getVenueDetail(venueId: string) {
     version: v.version,
     importedAt: v.importedAt,
     center: v.center,
-    buildings: v.buildings,
+    sourceSha256: v.source?.sha256 ?? null,
+    buildings: venueBuildings(v),
     places: v.places,
     features: v.features,
     connections: entry.connections,
+    walkways: entry.walkways,
   };
 }
 

@@ -24,7 +24,30 @@ export interface VenueLevel {
   elevationM: number;
 }
 
-export interface VenueBuilding {
+/** Source annotations retained without treating estimates as site confirmation. */
+export interface VenueProvenance {
+  geometryStatus: GeometryStatus;
+  heightStatus: HeightStatus;
+  /** `a11ymap:source`: photo file name or scan id. */
+  source?: string;
+  /** Height still awaits verification; does not confirm elevator stop floors. */
+  heightPending?: boolean;
+  /** Author's note, including any qualification of connectivity or stop floors. */
+  note?: string;
+  /** Outstanding authoring or site-verification work. */
+  fixme?: string;
+}
+
+export interface VenueLevelCoverage {
+  /** A real selectable floor anchor exists. */
+  hasAnchor: boolean;
+  /** At least one graph edge is incident to a node on this building/floor. */
+  hasRouteData: boolean;
+  /** A display feature is explicitly associated with this building/floor. */
+  hasDisplayGeometry: boolean;
+}
+
+export interface VenueBuilding extends VenueProvenance {
   id: string;
   name: string;
   aliases: string[];
@@ -33,10 +56,6 @@ export interface VenueBuilding {
   levels: VenueLevel[];
   floorHeightM: number;
   groundOffsetM: number;
-  heightStatus: HeightStatus;
-  geometryStatus: GeometryStatus;
-  /** `a11ymap:source`: photo file name or scan id the data was taken from. */
-  source?: string;
   osmRef: string;
   moeRef?: string;
 }
@@ -91,7 +110,7 @@ export type VenueEdgeKind =
 
 export type VenueWheelchairTag = "yes" | "no" | "limited" | "unknown";
 
-export interface VenueEdge {
+export interface VenueEdge extends VenueProvenance {
   id: string;
   from: string;
   to: string;
@@ -113,10 +132,6 @@ export interface VenueEdge {
   smoothness?: string;
   /** True when the source way carries an incline, i.e. it is a ramp. */
   ramp: boolean;
-  /** How the way was drawn and how its heights are known (provenance). */
-  geometryStatus: GeometryStatus;
-  heightStatus: HeightStatus;
-  source?: string;
   /** Source way, for authoring reports. */
   osmRef: string;
 }
@@ -125,7 +140,7 @@ export type VenueFeatureKind =
   "room" | "corridor" | "area" | "door" | "elevator" | "stairs";
 
 /** Display-only geometry; walls are derived from room outlines by clients. */
-export interface VenueFeature {
+export interface VenueFeature extends VenueProvenance {
   id: string;
   kind: VenueFeatureKind;
   buildingId: string | null;
@@ -136,9 +151,6 @@ export interface VenueFeature {
   geometry:
     | { type: "Polygon"; coordinates: LngLat[][] }
     | { type: "Point"; coordinates: LngLat };
-  geometryStatus: GeometryStatus;
-  heightStatus: HeightStatus;
-  source?: string;
 }
 
 export interface VenueData {

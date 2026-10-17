@@ -29,7 +29,7 @@ const { venue } = compileVenue(
   { venueId: "mini", name: "Mini" },
 );
 const doc = (version: number): VenueDocument => ({
-  ...venue,
+  ...structuredClone(venue),
   version,
   importedAt: new Date(0),
   source: { file: "mini-campus.osm", sha256: "x" },
@@ -98,6 +98,52 @@ describe("venue graph cache", () => {
 });
 
 describe("getVenueDetail", () => {
+  it("projects floor coverage, walkways and the import source hash from the stored venue", async () => {
+    const stored = doc(1);
+    stored.buildings[0].levels.push({
+      ordinal: 9,
+      ref: "10F",
+      elevationM: 32.4,
+    });
+    vi.mocked(repository.findVenueVersion).mockResolvedValue(1);
+    vi.mocked(repository.findVenue).mockResolvedValue(stored);
+    const detail = await getVenueDetail("mini");
+    expect(detail?.sourceSha256).toBe("x");
+    expect(detail?.walkways.some((way) => way.kind === "footway")).toBe(true);
+    expect(
+      detail?.buildings[0].levels.find((level) => level.ref === "10F")
+        ?.coverage,
+    ).toEqual({
+      hasAnchor: false,
+      hasRouteData: false,
+      hasDisplayGeometry: false,
+    });
+    expect(
+      detail?.buildings[0].levels.find((level) => level.ref === "1F")?.coverage,
+    ).toEqual({
+      hasAnchor: true,
+      hasRouteData: true,
+      hasDisplayGeometry: true,
+    });
+  });
+
+  it("returns no pending annotations and a null hash for legacy documents without provenance", async () => {
+    const stored = doc(1);
+    Reflect.deleteProperty(stored, "source");
+    vi.mocked(repository.findVenueVersion).mockResolvedValue(1);
+    vi.mocked(repository.findVenue).mockResolvedValue(stored);
+    const detail = await getVenueDetail("mini");
+    expect(detail?.sourceSha256).toBeNull();
+    expect(
+      detail?.walkways.every((way) => way.heightPending === undefined),
+    ).toBe(true);
+    expect(
+      detail?.connections.every(
+        (connection) => connection.heightPending === undefined,
+      ),
+    ).toBe(true);
+  });
+
   it("returns the stairs, ramps and elevators with their heights", async () => {
     vi.mocked(repository.findVenueVersion).mockResolvedValue(1);
     vi.mocked(repository.findVenue).mockResolvedValue(doc(1));

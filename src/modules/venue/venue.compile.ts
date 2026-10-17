@@ -335,6 +335,23 @@ function sourceOf(tags: OsmTags): { source?: string } {
   return source ? { source } : {};
 }
 
+/** Public authoring qualifications; do not infer that an estimate is surveyed. */
+function authoringOf(tags: OsmTags): {
+  heightPending?: boolean;
+  note?: string;
+  fixme?: string;
+} {
+  const note = tags.note?.trim();
+  const fixme = tags.fixme?.trim();
+  return {
+    ...(tags["a11ymap:height_pending"] === "yes"
+      ? { heightPending: true }
+      : {}),
+    ...(note ? { note } : {}),
+    ...(fixme ? { fixme } : {}),
+  };
+}
+
 /**
  * @returns How an element was drawn (`a11ymap:geometry_status`, default
  * traced), how its heights are known (`a11ymap:height_status`, default
@@ -344,8 +361,12 @@ function provenanceOf(tags: OsmTags): {
   geometryStatus: GeometryStatus;
   heightStatus: HeightStatus;
   source?: string;
+  heightPending?: boolean;
+  note?: string;
+  fixme?: string;
 } {
   return {
+    ...authoringOf(tags),
     geometryStatus: statusTag<GeometryStatus>(
       tags,
       "a11ymap:geometry_status",
@@ -506,6 +527,7 @@ export function compileVenue(
         ["surveyed", "traced", "schematic"],
       ),
       ...sourceOf(tags),
+      ...authoringOf(tags),
       osmRef,
       ...(tags["ref:moe"] ? { moeRef: tags["ref:moe"] } : {}),
     };
