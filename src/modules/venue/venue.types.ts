@@ -72,7 +72,16 @@ export interface VenuePlace {
   levelRef: string | null;
   /** Graph node this place routes from / to. */
   nodeId: string;
+  /** Source-backed alternatives on the same building/floor; unique, includes nodeId, at most 16. */
+  arrivalNodeIds?: string[];
   location: LngLat;
+  /** Source-verified display feature at this arrival point, if unambiguous. */
+  featureId?: string | null;
+  arrivalKind?: "door" | "corridor" | "place" | null;
+  /** Whether this navigation point is an explicitly authored door. */
+  doorKnown?: boolean | null;
+  connectionId?: string | null;
+  connectionIds?: string[];
   /** Gates only: the gate's own `wheelchair` tag. */
   wheelchair?: VenueWheelchairTag;
   /** Parking only: accessible spaces (`capacity:disabled`). */
@@ -112,6 +121,9 @@ export type VenueWheelchairTag = "yes" | "no" | "limited" | "unknown";
 
 export interface VenueEdge extends VenueProvenance {
   id: string;
+  /** Name/ref of the source way or elevator node, never inferred. */
+  name?: string;
+  ref?: string;
   from: string;
   to: string;
   kind: VenueEdgeKind;
@@ -139,9 +151,21 @@ export interface VenueEdge extends VenueProvenance {
 export type VenueFeatureKind =
   "room" | "corridor" | "area" | "door" | "elevator" | "stairs";
 
-/** Display-only geometry; walls are derived from room outlines by clients. */
+/** Public source semantics, deliberately limited to renderer-relevant tags. */
+export interface VenueFeatureTags {
+  indoor?: string;
+  amenity?: string;
+  "a11ymap:area_type"?: string;
+  ref?: string;
+}
+
+/** Display-only source geometry; preserve every polygon ring unchanged. */
 export interface VenueFeature extends VenueProvenance {
   id: string;
+  osmRef?: string;
+  tags?: VenueFeatureTags;
+  connectionId?: string | null;
+  connectionIds?: string[];
   kind: VenueFeatureKind;
   buildingId: string | null;
   levelRef: string | null;
@@ -153,6 +177,17 @@ export interface VenueFeature extends VenueProvenance {
     | { type: "Point"; coordinates: LngLat };
 }
 
+/** Explicit source wall line; unknown thickness is not a measured dimension. */
+export interface VenueWall extends VenueProvenance {
+  id: string;
+  osmRef: string;
+  buildingId: string | null;
+  ordinal: number | null;
+  levelRef: string | null;
+  geometry: { type: "LineString"; coordinates: LngLat[] };
+  thicknessM?: number | null;
+}
+
 export interface VenueData {
   venueId: string;
   name: string;
@@ -162,6 +197,8 @@ export interface VenueData {
   nodes: VenueNode[];
   edges: VenueEdge[];
   features: VenueFeature[];
+  /** Optional for legacy compiled documents imported before wall support. */
+  walls?: VenueWall[];
 }
 
 /** Stored document: compiled venue plus import provenance. */

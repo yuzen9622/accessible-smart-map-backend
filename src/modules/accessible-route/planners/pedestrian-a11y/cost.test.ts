@@ -154,6 +154,46 @@ describe("edgeCost", () => {
     expect(edgeCost(graph, 0, wheelchairProfile(), 0, 1)).toBe(INFEASIBLE);
   });
 
+  it("bars steps, indoor stairs and escalators only when forbidStairs is explicit", () => {
+    for (const edgeType of [
+      EDGE_TYPE.STEPS,
+      EDGE_TYPE.INDOOR_STAIRS,
+      EDGE_TYPE.INDOOR_ESCALATOR,
+    ]) {
+      const graph = createGraph({ lengthM: 10, edgeType });
+      for (const name of ["normal", "elderly", "visual_impaired"] as const) {
+        const profile: CostProfile = {
+          name,
+          walkSpeedMps: 1.3,
+          relaxationLevel: 0,
+        };
+        expect(edgeCost(graph, 0, profile, 0, 1)).toBe(10);
+        expect(
+          edgeCost(graph, 0, { ...profile, forbidStairs: true }, 0, 1),
+        ).toBe(INFEASIBLE);
+      }
+    }
+  });
+
+  it("keeps a stair-free non-wheelchair profile's own indoor speed and restrictions", () => {
+    const graph = createGraph({
+      lengthM: 100,
+      traversalTimeS: 20,
+      flags: EDGE_FLAG.INDOOR,
+      edgeType: EDGE_TYPE.INDOOR_WALKWAY,
+      widthM: 0.4,
+      wheelchair: WHEELCHAIR.NO,
+    });
+    const profile: CostProfile = {
+      name: "elderly",
+      walkSpeedMps: 1.1,
+      relaxationLevel: 0,
+      forbidStairs: true,
+    };
+    expect(edgeCost(graph, 0, profile, 0, 1)).toBe(22);
+    expect(edgeCost(graph, 0, wheelchairProfile(), 0, 1)).toBe(INFEASIBLE);
+  });
+
   it("multiplies only stairs when a non-wheelchair profile sets stairsAvoidanceMultiplier", () => {
     const walkway = createGraph({
       lengthM: 10,

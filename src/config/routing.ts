@@ -31,6 +31,7 @@ export interface VenueRoutingConfig {
    * Multiplier on stairs for the elderly and visual_impaired venue profiles:
    * they prefer elevators but may still take stairs. 1 = neutral.
    */
+  /** Legacy configuration retained for compatibility; venue modes now forbid stairs. */
   stairsAvoidanceMultiplier: number;
   /** Expected wait for an elevator car, seconds. */
   elevatorWaitS: number;

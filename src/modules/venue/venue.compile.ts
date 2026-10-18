@@ -42,7 +42,11 @@ import type {
   VenuePlace,
   VenuePlaceKind,
   VenueWheelchairTag,
+  VenueFeatureTags,
+  VenueWall,
 } from "./venue.types";
+import { venueConnectionId, venueConnectionKind } from "./venue.connection-id";
+import { compileFeatureArrivals } from "./venue.arrivals";
 
 /** Data default when a building does not tag `a11ymap:floor_height`. */
 export const DEFAULT_FLOOR_HEIGHT_M = 3.6;
@@ -329,6 +333,16 @@ function statusTag<T extends string>(
 ): T {
   const v = tags[key] as T | undefined;
   return v && allowed.includes(v) ? v : fallback;
+}
+
+/** Explicit negative opening tags do not describe a known door or entrance. */
+function isAuthoredOpening(value: string | undefined): boolean {
+  const tagged = value?.trim();
+  return Boolean(tagged && tagged !== "no");
+}
+
+function hasAuthoredDoor(tags: OsmTags): boolean {
+  return isAuthoredOpening(tags.door) || isAuthoredOpening(tags.entrance);
 }
 
 /** @returns `{ source }` from `a11ymap:source`, or nothing. */
@@ -991,8 +1005,8 @@ export function compileVenue(
   const nodeKindOf = (tags: OsmTags): VenueNodeKind => {
     if (tags.highway === "elevator") return "elevator";
     if (tags.barrier === "gate") return "gate";
-    if (tags.entrance) return "entrance";
-    if (tags.door) return "door";
+    if (isAuthoredOpening(tags.entrance)) return "entrance";
+    if (isAuthoredOpening(tags.door)) return "door";
     if (tags["a11ymap:id"] || tags["a11ymap:anchor"] === "yes") return "place";
     return "path";
   };
@@ -1150,6 +1164,8 @@ export function compileVenue(
       }
       edges.push({
         id: `${w.id}:${i - 1}@${inst.levelSuffix}`,
+        ...(w.tags.name ? { name: w.tags.name } : {}),
+        ...(w.tags.ref ? { ref: w.tags.ref } : {}),
         from: a.id,
         to: b.id,
         kind,
@@ -1181,9 +1197,7 @@ export function compileVenue(
       const tags = node(key.split("@")[0])?.tags;
       if (tags?.wheelchair === "no") e.wheelchair = "no";
       const doorWidth =
-        tags && (tags.door || tags.entrance)
-          ? parseWidth(tags.width)
-          : undefined;
+        tags && hasAuthoredDoor(tags) ? parseWidth(tags.width) : undefined;
       if (doorWidth !== undefined) {
         e.widthM = Math.min(e.widthM ?? Number.POSITIVE_INFINITY, doorWidth);
       }
@@ -1226,6 +1240,8 @@ export function compileVenue(
       for (let j = i + 1; j < keys.length; j += 1) {
         edges.push({
           id: `elevator/${n.id}:${keys[i].ordinal}-${keys[j].ordinal}`,
+          ...(n.tags.name ? { name: n.tags.name } : {}),
+          ...(n.tags.ref ? { ref: n.tags.ref } : {}),
           from: keys[i].key,
           to: keys[j].key,
           kind: "elevator",
@@ -1252,7 +1268,7 @@ export function compileVenue(
   const placeIds = new Set<string>();
   const placeKindOf = (tags: OsmTags): VenuePlaceKind => {
     if (tags.barrier === "gate") return "gate";
-    if (tags.entrance) return "entrance";
+    if (isAuthoredOpening(tags.entrance)) return "entrance";
     if (tags.indoor === "room") return "room";
     if (tags.amenity === "parking") return "parking";
     if (tags.amenity) return "amenity";
@@ -1289,7 +1305,7 @@ export function compileVenue(
       anchor ||
       n.tags.indoor !== undefined ||
       (n.tags.level !== undefined &&
-        !n.tags.entrance &&
+        !isAuthoredOpening(n.tags.entrance) &&
         n.tags.barrier !== "gate");
     if (indoorPlace && indoorInUntagged(`地點 node ${n.id}`, ll(n))) continue;
     const levelsForPlace = ordinals.length
@@ -1373,13 +1389,70 @@ export function compileVenue(
 
   // ---- display features ----------------------------------------------------
   const features: VenueFeature[] = [];
+  const featureNodes = new Map<string, Set<string>>();
+  const featureKindOf = (tags: OsmTags): VenueFeatureKind | undefined =>
+    FEATURE_INDOOR.get(tags.indoor ?? "") ??
+    (tags.highway === "elevator" ? "elevator" : undefined) ??
+    (tags.highway === "steps" && tags.area === "yes" ? "stairs" : undefined);
+  const featureTagsOf = (
+    tags: OsmTags,
+    ordinal: number,
+  ): { tags?: VenueFeatureTags } => {
+    const retained: VenueFeatureTags = {
+      ...(tags.indoor ? { indoor: tags.indoor } : {}),
+      ...(tags.amenity ? { amenity: tags.amenity } : {}),
+      ...(tags["a11ymap:area_type"]
+        ? { "a11ymap:area_type": tags["a11ymap:area_type"] }
+        : {}),
+      ...(tags.ref ? { ref: applyLevelTemplate(tags.ref, ordinal) } : {}),
+    };
+    return Object.keys(retained).length ? { tags: retained } : {};
+  };
+  const addPolygonFeatures = (
+    osmRef: string,
+    tags: OsmTags,
+    kind: VenueFeatureKind,
+    rings: LngLat[][],
+    sourceNodeIds: string[],
+  ) => {
+    const label = osmRef.replace("/", " ");
+    const lv = levelsOf(tags);
+    if (!lv) {
+      errors.push(badLevels(`外框 ${label}`));
+      return;
+    }
+    const ring = rings[0];
+    const centroid: LngLat = [
+      ring.reduce((sum, p) => sum + p[0], 0) / ring.length,
+      ring.reduce((sum, p) => sum + p[1], 0) / ring.length,
+    ];
+    const b = buildings.find((bb) => inPolygon(centroid, bb.footprint)) ?? null;
+    for (const o of lv.all.length ? lv.all : [0]) {
+      if (b && !levelOf(b, o)) {
+        errors.push(
+          `外框 ${label} 在「${b.name}」的 ${levelRefOf(o)}，但該棟沒有這一層`,
+        );
+        continue;
+      }
+      const id = `${osmRef}@${o}`;
+      features.push({
+        id,
+        osmRef,
+        ...featureTagsOf(tags, o),
+        kind,
+        buildingId: b?.id ?? null,
+        levelRef: b ? levelRefOf(o) : null,
+        ordinal: o,
+        ...(tags.name ? { name: applyLevelTemplate(tags.name, o) } : {}),
+        ...(tags.ref ? { ref: applyLevelTemplate(tags.ref, o) } : {}),
+        geometry: { type: "Polygon", coordinates: rings },
+        ...provenanceOf(tags),
+      });
+      featureNodes.set(id, new Set(sourceNodeIds));
+    }
+  };
   for (const way of osm.ways.values()) {
-    const featureKind: VenueFeatureKind | undefined =
-      FEATURE_INDOOR.get(way.tags.indoor ?? "") ??
-      (way.tags.highway === "elevator" ? "elevator" : undefined) ??
-      (way.tags.highway === "steps" && way.tags.area === "yes"
-        ? "stairs"
-        : undefined);
+    const featureKind = featureKindOf(way.tags);
     if (!featureKind || wayInExcluded(way)) continue;
     const ring = ringOf(way);
     if (!ring) {
@@ -1389,41 +1462,41 @@ export function compileVenue(
       continue;
     }
     if (wayInUntagged(`外框 way ${way.id}`, way)) continue;
-    const lv = levelsOf(way.tags);
-    if (!lv) {
-      errors.push(badLevels(`外框 way ${way.id}`));
+    addPolygonFeatures(
+      `way/${way.id}`,
+      way.tags,
+      featureKind,
+      [ring],
+      way.nodeIds,
+    );
+  }
+  for (const rel of osm.relations.values()) {
+    const featureKind = featureKindOf(rel.tags);
+    if (!featureKind || relationInExcluded(rel)) continue;
+    const parsed = relationRings(rel);
+    if (!parsed) {
+      errors.push(
+        `外框 relation ${rel.id} 需要一圈封閉 outer 與完整 inner 成員`,
+      );
       continue;
     }
-    const ordinals = lv.all;
-    const centroid: LngLat = [
-      ring.reduce((s, p) => s + p[0], 0) / ring.length,
-      ring.reduce((s, p) => s + p[1], 0) / ring.length,
-    ];
-    const b = buildings.find((bb) => inPolygon(centroid, bb.footprint)) ?? null;
-    for (const o of ordinals.length ? ordinals : [0]) {
-      if (b && !levelOf(b, o)) {
-        errors.push(
-          `外框 way ${way.id} 在「${b.name}」的 ${levelRefOf(o)}，但該棟沒有這一層`,
-        );
-        continue;
-      }
-      features.push({
-        id: `way/${way.id}@${o}`,
-        kind: featureKind,
-        buildingId: b?.id ?? null,
-        levelRef: b ? levelRefOf(o) : null,
-        ordinal: o,
-        ...(way.tags.name
-          ? { name: applyLevelTemplate(way.tags.name, o) }
-          : {}),
-        ...(way.tags.ref ? { ref: applyLevelTemplate(way.tags.ref, o) } : {}),
-        geometry: { type: "Polygon", coordinates: [ring] },
-        ...provenanceOf(way.tags),
-      });
-    }
+    if (parsed.members.some(wayInExcluded)) continue;
+    if (
+      parsed.members.some((way) =>
+        wayInUntagged(`外框 relation ${rel.id}`, way),
+      )
+    )
+      continue;
+    addPolygonFeatures(
+      `relation/${rel.id}`,
+      rel.tags,
+      featureKind,
+      parsed.rings,
+      parsed.members.flatMap((way) => way.nodeIds),
+    );
   }
   for (const n of osm.nodes.values()) {
-    if ((!n.tags.door && !n.tags.entrance) || excludedNode(n.id)) continue;
+    if (!hasAuthoredDoor(n.tags) || excludedNode(n.id)) continue;
     const lv = levelsOf(n.tags);
     if (!lv) {
       errors.push(badLevels(`門 node ${n.id}`));
@@ -1439,18 +1512,222 @@ export function compileVenue(
         );
         continue;
       }
+      const id = `node/${n.id}@${o}`;
       features.push({
-        id: `node/${n.id}@${o}`,
+        id,
+        osmRef: `node/${n.id}`,
+        ...featureTagsOf(n.tags, o),
         kind: "door",
         buildingId: b?.id ?? null,
         levelRef: b ? levelRefOf(o) : null,
         ordinal: o,
         ...(n.tags.name ? { name: n.tags.name } : {}),
+        ...(n.tags.ref ? { ref: applyLevelTemplate(n.tags.ref, o) } : {}),
         geometry: { type: "Point", coordinates: ll(n) },
         ...provenanceOf(n.tags),
       });
+      featureNodes.set(id, new Set([n.id]));
     }
   }
+
+  // Explicit walls remain open source lines; a display thickness is not a
+  // surveyed wall dimension. Apply the same publication/level checks as areas.
+  const walls: VenueWall[] = [];
+  for (const way of osm.ways.values()) {
+    if (way.tags.indoor !== "wall" || wayInExcluded(way)) continue;
+    const pts = way.nodeIds.map(node);
+    if (pts.length < 2 || pts.some((p) => !p)) {
+      errors.push(`牆線 way ${way.id} 需要至少兩個存在的節點`);
+      continue;
+    }
+    if (wayInUntagged(`牆線 way ${way.id}`, way)) continue;
+    const lv = levelsOf(way.tags);
+    if (!lv) {
+      errors.push(badLevels(`牆線 way ${way.id}`));
+      continue;
+    }
+    const coordinates = (pts as OsmNode[]).map(ll);
+    const owners = new Set(
+      way.nodeIds.map(buildingAt).filter((b): b is VenueBuilding => b !== null),
+    );
+    const b = owners.size === 1 ? [...owners][0] : null;
+    for (const o of lv.all.length ? lv.all : [0]) {
+      if (b && !levelOf(b, o)) {
+        errors.push(
+          `牆線 way ${way.id} 在「${b.name}」的 ${levelRefOf(o)}，但該棟沒有這一層`,
+        );
+        continue;
+      }
+      walls.push({
+        id: `way/${way.id}@${o}`,
+        osmRef: `way/${way.id}`,
+        buildingId: b?.id ?? null,
+        ordinal: o,
+        levelRef: b ? levelRefOf(o) : null,
+        geometry: { type: "LineString", coordinates },
+        thicknessM: null,
+        ...provenanceOf(way.tags),
+      });
+    }
+  }
+
+  // Source identities and containment provide display associations only; no
+  // graph node, elevator stop or connection is added by an area polygon.
+  const connectionEdges = new Map<string, VenueEdge[]>();
+  for (const edge of edges) {
+    const id = venueConnectionId(edge);
+    if (!id) continue;
+    const list = connectionEdges.get(id) ?? [];
+    list.push(edge);
+    connectionEdges.set(id, list);
+  }
+  const shaftFeatures = features.filter(
+    (f) =>
+      f.geometry.type === "Polygon" &&
+      (f.kind === "elevator" ||
+        f.tags?.["a11ymap:area_type"] === "elevator-shaft"),
+  );
+  const stairFeatures = features.filter(
+    (f) =>
+      f.geometry.type === "Polygon" &&
+      (f.kind === "stairs" || f.tags?.["a11ymap:area_type"] === "stairwell"),
+  );
+  const contains = (f: VenueFeature, point: LngLat) =>
+    f.geometry.type === "Polygon" && inPolygon(point, f.geometry.coordinates);
+  const uniqueContainer = (
+    f: VenueFeature,
+    point: LngLat,
+    candidates: VenueFeature[],
+  ) =>
+    candidates.filter(
+      (other) =>
+        other.buildingId === f.buildingId &&
+        other.ordinal === f.ordinal &&
+        contains(other, point),
+    ).length === 1;
+  const featureConnections = new Map<string, Set<string>>();
+  const associate = (f: VenueFeature, id: string) => {
+    const ids = featureConnections.get(f.id) ?? new Set<string>();
+    ids.add(id);
+    featureConnections.set(f.id, ids);
+  };
+  for (const f of shaftFeatures) {
+    if (!f.buildingId) continue;
+    const candidates = [...connectionEdges].filter(([, group]) => {
+      const edge = group[0];
+      if (edge.kind !== "elevator") return false;
+      const original = node(edge.osmRef.slice("node/".length));
+      return (
+        original &&
+        buildingAt(original.id)?.id === f.buildingId &&
+        contains(f, ll(original))
+      );
+    });
+    if (candidates.length !== 1) continue;
+    const [id, group] = candidates[0];
+    const original = node(group[0].osmRef.slice("node/".length)) as OsmNode;
+    if (uniqueContainer(f, ll(original), shaftFeatures)) associate(f, id);
+  }
+  for (const inst of instances) {
+    if (inst.levelSuffix !== "span") continue;
+    const edge = edges.find((e) => e.id === `${inst.way.id}:0@span`);
+    if (
+      !edge ||
+      !["stairs", "steps", "escalator"].includes(
+        venueConnectionKind(edge) ?? "",
+      )
+    )
+      continue;
+    const id = venueConnectionId(edge) as string;
+    for (const i of [0, inst.nodeKeys.length - 1]) {
+      const endpoint = nodes.get(inst.nodeKeys[i]) as VenueNode;
+      for (const f of stairFeatures) {
+        const point: LngLat = [endpoint.lng, endpoint.lat];
+        if (
+          f.buildingId &&
+          f.buildingId === endpoint.buildingId &&
+          f.ordinal === endpoint.ordinal &&
+          contains(f, point) &&
+          uniqueContainer(f, point, stairFeatures)
+        )
+          associate(f, id);
+      }
+    }
+  }
+  const incidentConnections = (key: string) =>
+    [...connectionEdges]
+      .filter(([, group]) => group.some((e) => e.from === key || e.to === key))
+      .map(([id]) => id);
+  const references = (ids: Iterable<string>) => {
+    const connectionIds = [...new Set(ids)].sort();
+    return {
+      connectionId: connectionIds.length === 1 ? connectionIds[0] : null,
+      connectionIds,
+    };
+  };
+  for (const f of features) {
+    const ids = featureConnections.get(f.id) ?? new Set<string>();
+    if (f.kind === "door" && f.osmRef?.startsWith("node/")) {
+      for (const id of incidentConnections(`${f.osmRef.slice(5)}@${f.ordinal}`))
+        ids.add(id);
+    }
+    Object.assign(f, references(ids));
+  }
+  for (const place of places) {
+    const navigationNode = nodes.get(place.nodeId) as VenueNode;
+    const sourceId = place.nodeId.split("@")[0];
+    const tags = node(sourceId)?.tags ?? {};
+    const door = hasAuthoredDoor(tags);
+    const corridor = edges.some(
+      (e) =>
+        e.kind === "corridor" &&
+        (e.from === place.nodeId || e.to === place.nodeId),
+    );
+    const sameContext = features.filter(
+      (f) =>
+        f.buildingId === place.buildingId &&
+        f.ordinal === navigationNode.ordinal,
+    );
+    const polygons = sameContext.filter(
+      (f) =>
+        f.geometry.type === "Polygon" &&
+        (place.kind === "room" ? f.kind === "room" : f.kind !== "corridor"),
+    );
+    const sharedDoor = door
+      ? polygons.filter((f) => featureNodes.get(f.id)?.has(sourceId))
+      : [];
+    const refMatches =
+      place.buildingId && place.ref
+        ? polygons.filter((f) => f.ref === place.ref)
+        : [];
+    const direct = sameContext.filter((f) => f.osmRef === `node/${sourceId}`);
+    const match = sharedDoor.length
+      ? sharedDoor.length === 1
+        ? sharedDoor[0]
+        : null
+      : refMatches.length
+        ? refMatches.length === 1
+          ? refMatches[0]
+          : null
+        : door && direct.length === 1
+          ? direct[0]
+          : null;
+    place.featureId = match?.id ?? null;
+    place.arrivalKind = door ? "door" : corridor ? "corridor" : "place";
+    place.doorKnown = door ? true : corridor ? false : null;
+    Object.assign(place, references(incidentConnections(place.nodeId)));
+  }
+
+  compileFeatureArrivals(
+    osm,
+    nodes,
+    edges,
+    features,
+    places,
+    errors,
+    contains,
+    hasAuthoredDoor,
+  );
 
   // ---- connectivity report -------------------------------------------------
   warnings.push(
@@ -1478,6 +1755,7 @@ export function compileVenue(
       nodes: [...nodes.values()],
       edges,
       features,
+      walls,
     },
     errors,
     warnings,

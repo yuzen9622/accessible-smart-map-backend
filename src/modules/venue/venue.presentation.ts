@@ -21,6 +21,8 @@ export interface VenueWalkway extends VenueProvenance {
   kind: Exclude<VenueEdge["kind"], "steps" | "escalator" | "elevator">;
   indoor: boolean;
   coordinates: [LngLatZ, LngLatZ];
+  /** Compiled source endpoints in the same order as coordinates. */
+  nodeIds: [string, string];
   /** Common building/floor only; null when crossing a boundary or outdoors. */
   buildingId: string | null;
   levelRef: string | null;
@@ -61,6 +63,7 @@ export function venueWalkways(venue: VenueData): VenueWalkway[] {
         id: edge.id,
         kind: edge.kind,
         indoor: edge.indoor,
+        nodeIds: [edge.from, edge.to],
         coordinates: [
           [from.lng, from.lat, Number.isFinite(from.z) ? from.z : 0],
           [to.lng, to.lat, Number.isFinite(to.z) ? to.z : 0],
@@ -107,12 +110,19 @@ export function venueBuildings(venue: VenueData): VenuePresentedBuilding[] {
             node.ordinal === level.ordinal &&
             incident.has(node.id),
         ),
-        hasDisplayGeometry: venue.features.some(
-          (feature) =>
-            feature.buildingId === building.id &&
-            feature.levelRef === level.ref &&
-            feature.ordinal === level.ordinal,
-        ),
+        hasDisplayGeometry:
+          venue.features.some(
+            (feature) =>
+              feature.buildingId === building.id &&
+              feature.levelRef === level.ref &&
+              feature.ordinal === level.ordinal,
+          ) ||
+          (venue.walls ?? []).some(
+            (wall) =>
+              wall.buildingId === building.id &&
+              wall.levelRef === level.ref &&
+              wall.ordinal === level.ordinal,
+          ),
       },
     })),
   }));

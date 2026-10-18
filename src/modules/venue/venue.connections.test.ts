@@ -32,6 +32,9 @@ describe("venueConnections", () => {
     expect(byId("way/-108@span")).toMatchObject({
       buildingId: "bldg-a",
       levelRefs: ["1F", "2F"],
+      nodeIds: ["-16@0", "-17@1"],
+      name: null,
+      ref: null,
       stepCount: 20,
       wheelchair: "no",
     });
@@ -56,6 +59,107 @@ describe("venueConnections", () => {
     expect(byId("node/-11")?.coordinates.map((c) => c[2])).toEqual([
       0, 3.6, 7.2,
     ]);
+  });
+
+  it("keeps source node IDs ordered with each coordinate and elevator stop", () => {
+    const sourceNodes = new Map(venue.nodes.map((node) => [node.id, node]));
+    for (const connection of connections) {
+      expect(connection.nodeIds).toHaveLength(connection.coordinates.length);
+      expect(connection.nodeIds).toHaveLength(connection.levelRefs.length);
+      expect(
+        connection.nodeIds.map((id) => {
+          const node = sourceNodes.get(id);
+          if (!node) throw new Error(`unknown source node ${id}`);
+          return [node.lng, node.lat, Math.round(node.z * 100) / 100];
+        }),
+      ).toEqual(connection.coordinates);
+    }
+    expect(byId("node/-11")?.nodeIds).toEqual(["-11@0", "-11@1", "-11@2"]);
+  });
+
+  it("returns only explicit feature links for separate shafts with the same name and position", () => {
+    const data = structuredClone(venue);
+    const firstId = "node/-11";
+    const secondId = "node/-999";
+    const elevatorEdges = data.edges.filter((edge) => edge.kind === "elevator");
+    const elevatorNodeIds = [
+      ...new Set(elevatorEdges.flatMap((edge) => [edge.from, edge.to])),
+    ];
+    for (const node of data.nodes.filter((node) =>
+      elevatorNodeIds.includes(node.id),
+    )) {
+      data.nodes.push({ ...node, id: `${node.id}-parallel` });
+    }
+    data.edges.push(
+      ...elevatorEdges.map((edge) => ({
+        ...edge,
+        id: `${edge.id}-parallel`,
+        from: `${edge.from}-parallel`,
+        to: `${edge.to}-parallel`,
+        osmRef: secondId,
+        name: "共用電梯",
+        ref: "B",
+      })),
+    );
+    elevatorEdges.forEach((edge) => {
+      edge.name = "共用電梯";
+      edge.ref = "A";
+    });
+    const feature = structuredClone(data.features[0]);
+    delete feature.connectionId;
+    delete feature.connectionIds;
+    data.features = [
+      { ...feature, id: "shaft-a", name: "共用電梯", connectionIds: [firstId] },
+      { ...feature, id: "shaft-b", name: "共用電梯", connectionId: secondId },
+      { ...feature, id: "unlinked", name: "共用電梯" },
+      {
+        ...feature,
+        id: "shared-core",
+        connectionId: firstId,
+        connectionIds: [firstId, secondId],
+      },
+      {
+        ...feature,
+        id: "non-stop-shaft-boundary",
+        ordinal: 3,
+        levelRef: "4F",
+        connectionId: firstId,
+      },
+    ];
+    const projected = venueConnections(data);
+    expect(
+      projected.find((connection) => connection.id === firstId),
+    ).toMatchObject({
+      name: "共用電梯",
+      ref: "A",
+      featureIds: ["shaft-a", "shared-core", "non-stop-shaft-boundary"],
+      nodeIds: ["-11@0", "-11@1", "-11@2"],
+      levelRefs: ["1F", "2F", "3F"],
+    });
+    expect(
+      projected.find((connection) => connection.id === secondId),
+    ).toMatchObject({
+      name: "共用電梯",
+      ref: "B",
+      featureIds: ["shaft-b", "shared-core"],
+      nodeIds: ["-11@0-parallel", "-11@1-parallel", "-11@2-parallel"],
+    });
+    expect(
+      data.features.find(
+        (candidate) => candidate.id === "non-stop-shaft-boundary",
+      ),
+    ).toMatchObject({ ordinal: 3, levelRef: "4F" });
+  });
+
+  it("keeps inferred route slopes outside the authored display connection set", () => {
+    const data = structuredClone(venue);
+    const levelWalk = data.edges.find((edge) => edge.kind === "corridor");
+    if (!levelWalk) throw new Error("fixture lacks a corridor");
+    levelWalk.slopeRatio = 0.08;
+    levelWalk.ramp = false;
+    expect(venueConnections(data).map((connection) => connection.id)).toEqual(
+      connections.map((connection) => connection.id),
+    );
   });
 
   it("aggregates pending heights and distinct notes without certifying stop floors", () => {

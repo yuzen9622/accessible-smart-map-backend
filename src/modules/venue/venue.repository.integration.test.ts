@@ -65,6 +65,42 @@ describe("venue repository with real MongoDB", () => {
     ]);
   });
 
+  it("persists source walls, tags and arrival semantics without stripping additive fields", async () => {
+    const source = parseOsmXml(
+      readFileSync(
+        path.join(__dirname, "__fixtures__/mini-campus.osm"),
+        "utf8",
+      ),
+    );
+    source.ways.set("-9000", {
+      id: "-9000",
+      nodeIds: ["-20", "-21"],
+      tags: { indoor: "wall", level: "0", note: "Unknown thickness" },
+    });
+    const result = compileVenue(source, {
+      venueId: "mini",
+      name: "Mini Campus",
+    });
+    expect(result.errors).toEqual([]);
+    const imported = { ...importDoc(), ...result.venue };
+    await replaceVenue(imported);
+    const stored = await findVenue("mini");
+    expect(stored?.walls).toEqual(result.venue.walls);
+    expect(stored?.walls?.[0]).toMatchObject({
+      id: "way/-9000@0",
+      thicknessM: null,
+      note: "Unknown thickness",
+    });
+    expect(stored?.features).toEqual(result.venue.features);
+    expect(
+      stored?.places.find((place) => place.id === "a-room06@1F"),
+    ).toMatchObject({
+      featureId: "way/-110@0",
+      arrivalKind: "corridor",
+      doorKnown: false,
+    });
+  });
+
   it("gives concurrent imports distinct, increasing versions", async () => {
     // the harness drops the database between tests, indexes included
     await VenueModel.createIndexes();

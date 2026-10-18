@@ -7,6 +7,14 @@ import { compileVenue } from "./venue.compile";
 import { buildVenueGraph } from "./venue.graph";
 import { parseOsmXml } from "./venue-osm.parse";
 import { planVenueRoute, venueProfileFor } from "./venue.route";
+import { venueConnections } from "./venue.connections";
+import { profileFor } from "../accessible-route/planners/pedestrian-a11y/csr-walk-planner";
+import type {
+  VenueData,
+  VenueEdge,
+  VenueNode,
+  VenuePlace,
+} from "./venue.types";
 
 const CONFIG: VenueRoutingConfig = {
   stairsAvoidanceMultiplier: 4,
@@ -40,23 +48,25 @@ const types = (from: string, to: string, mode: AccessibilityMode) => {
 };
 
 describe("venueProfileFor", () => {
-  it("keeps wheelchair and normal strict and neutral, and sets the stairs multiplier only for elderly and visual_impaired", () => {
-    expect(venueProfileFor("wheelchair", CONFIG)).toMatchObject({
-      name: "wheelchair",
-      relaxationLevel: 0,
-    });
-    expect(
-      venueProfileFor("wheelchair", CONFIG).stairsAvoidanceMultiplier,
-    ).toBeUndefined();
-    expect(
-      venueProfileFor("normal", CONFIG).stairsAvoidanceMultiplier,
-    ).toBeUndefined();
-    expect(venueProfileFor("elderly", CONFIG).stairsAvoidanceMultiplier).toBe(
-      4,
-    );
-    expect(
-      venueProfileFor("visual_impaired", CONFIG).stairsAvoidanceMultiplier,
-    ).toBe(4);
+  it("preserves each mode's profile and bars stairs only for venue elderly and visual_impaired", () => {
+    for (const mode of [
+      "wheelchair",
+      "normal",
+      "elderly",
+      "visual_impaired",
+    ] as const) {
+      const outdoorProfile = profileFor(mode);
+      const expected =
+        mode === "elderly" || mode === "visual_impaired"
+          ? { ...outdoorProfile, forbidStairs: true }
+          : outdoorProfile;
+      expect(venueProfileFor(mode, CONFIG)).toEqual(expected);
+      expect(outdoorProfile.forbidStairs).toBeUndefined();
+      expect(outdoorProfile.stairsAvoidanceMultiplier).toBeUndefined();
+      expect(
+        venueProfileFor(mode, CONFIG).stairsAvoidanceMultiplier,
+      ).toBeUndefined();
+    }
   });
 });
 
@@ -88,9 +98,16 @@ describe("planVenueRoute on the fictional fixture", () => {
     expect(steps).toContain("stairs");
     expect(steps).toContain("steps");
     expect(steps).not.toContain("elevator");
-    // two flights in a row are one stairs step covering both floors
+    // Distinct authored facilities keep separate identities even when adjacent.
     expect(r.route.steps.filter((s) => s.type === "stairs")).toEqual([
-      expect.objectContaining({ instruction: "走樓梯從 3F 下到 1F（2 層）" }),
+      expect.objectContaining({
+        connectionId: "way/-109@span",
+        instruction: "走樓梯從 3F 下到 2F（1 層）",
+      }),
+      expect.objectContaining({
+        connectionId: "way/-108@span",
+        instruction: "走樓梯從 2F 下到 1F（1 層）",
+      }),
     ]);
     expect(r.route.stairFlights).toBe(2);
   });
@@ -130,18 +147,27 @@ describe("planVenueRoute on the fictional fixture", () => {
     );
   });
 
-  it("makes elderly and visually impaired walkers prefer the elevator and the ramp", () => {
+  it("routes elderly and visually impaired walkers by elevator and ramp without stairs, steps or escalators", () => {
     for (const mode of ["elderly", "visual_impaired"] as const) {
       const steps = types("a-room06@3F", "bldg-b@1F", mode);
       expect(steps).toContain("elevator");
       expect(steps).toContain("ramp");
       expect(steps).not.toContain("stairs");
+      expect(steps).not.toContain("steps");
+      expect(steps).not.toContain("escalator");
     }
   });
 
-  it("still routes elderly over stairs when no elevator reaches the floor", () => {
-    expect(types("bldg-b@1F", "b-lab", "elderly")).toContain("stairs");
-  });
+  it.each(["elderly", "visual_impaired"] as const)(
+    "reports NO_ACCESSIBLE_ROUTE for %s when only stairs reach the floor",
+    (mode) => {
+      expect(plan("bldg-b@1F", "b-lab", mode)).toEqual({
+        ok: false,
+        reason: "NO_ACCESSIBLE_ROUTE",
+        levelRef: "2F",
+      });
+    },
+  );
 
   it("reports NO_ACCESSIBLE_ROUTE for a wheelchair when the floor is reachable only by stairs", () => {
     const r = plan("gate-main", "b-lab", "wheelchair");
@@ -283,6 +309,13 @@ describe("wheelchair hard limits where the barred element is the only way", () =
       reason: "NO_ACCESSIBLE_ROUTE",
       levelRef: "2F",
     });
+    for (const mode of ["elderly", "visual_impaired"] as const) {
+      expect(v.plan("gate-main", "b-lab", mode)).toEqual({
+        ok: false,
+        reason: "NO_ACCESSIBLE_ROUTE",
+        levelRef: "2F",
+      });
+    }
     const r = v.plan("bldg-b@1F", "b-lab", "normal");
     if (!r.ok) throw new Error(r.reason);
     expect(r.route.steps.map((s) => s.type)).not.toContain("stairs");
@@ -367,7 +400,9 @@ describe("door width", () => {
       ok: false,
       reason: "NO_ACCESSIBLE_ROUTE",
     });
-    expect(v.plan("gate-main", "a-room06@1F", "normal").ok).toBe(true);
+    for (const mode of ["normal", "elderly", "visual_impaired"] as const) {
+      expect(v.plan("gate-main", "a-room06@1F", mode).ok).toBe(true);
+    }
   });
 });
 
@@ -382,5 +417,406 @@ describe("grade status", () => {
     expect(r.route.steps.find((s) => s.type === "ramp")?.instruction).toMatch(
       /（坡度未實測）$/,
     );
+  });
+});
+
+/** A connected source chain lets route tests control facility and height metadata. */
+function chainVenue(
+  edgeValues: Partial<VenueEdge>[],
+  nodeValues: Partial<VenueNode>[] = [],
+): VenueData {
+  const nodes: VenueNode[] = Array.from(
+    { length: edgeValues.length + 1 },
+    (_, i) => ({
+      id: `node/-${900 + i}@0`,
+      lng: 120.68 + i * 0.0001,
+      lat: 24.15,
+      z: 0,
+      buildingId: "bldg-a",
+      ordinal: 0,
+      indoor: true,
+      kind: "path",
+      kerbRamp: false,
+      ...nodeValues[i],
+    }),
+  );
+  const edges: VenueEdge[] = edgeValues.map((value, i) => ({
+    id: `way/-900:${i}@0`,
+    from: nodes[i].id,
+    to: nodes[i + 1].id,
+    kind: "corridor",
+    indoor: true,
+    lengthM: 10,
+    wheelchair: "yes",
+    ramp: false,
+    osmRef: "way/-900",
+    geometryStatus: "traced",
+    heightStatus: "estimated",
+    ...value,
+  }));
+  const at = (id: string, n: VenueNode): VenuePlace => ({
+    id,
+    name: id,
+    kind: "room",
+    nodeId: n.id,
+    location: [n.lng, n.lat],
+    buildingId: n.buildingId,
+    levelRef: n.ordinal === null ? null : `${n.ordinal + 1}F`,
+  });
+  return {
+    ...venue,
+    nodes,
+    edges,
+    features: [],
+    places: [
+      at("Origin", nodes[0]),
+      at("Destination", nodes[nodes.length - 1]),
+    ],
+  };
+}
+
+function planChain(
+  data: VenueData,
+  lang: "zh-TW" | "en" = "zh-TW",
+  reverse = false,
+) {
+  const [origin, destination] = data.places;
+  const result = planVenueRoute(
+    buildVenueGraph(data, 1, CONFIG),
+    data,
+    reverse ? destination : origin,
+    reverse ? origin : destination,
+    "normal",
+    CONFIG,
+    lang,
+  );
+  if (!result.ok) throw new Error(result.reason);
+  return result.route;
+}
+
+describe("source-backed route metadata", () => {
+  it("uses existing connection IDs and separates adjacent ramp facilities", () => {
+    const data = chainVenue([
+      { ramp: true, heightPending: false },
+      { ramp: true, heightPending: true },
+      { ramp: true, osmRef: "way/-901", id: "way/-901:0@0" },
+    ]);
+    const route = planChain(data);
+    const ramps = route.steps.filter((s) => s.type === "ramp");
+    expect(ramps).toEqual([
+      expect.objectContaining({
+        connectionId: "way/-900@0",
+        pathStart: 0,
+        pathEnd: 2,
+        heightPending: true,
+      }),
+      expect.objectContaining({
+        connectionId: "way/-901@0",
+        pathStart: 2,
+        pathEnd: 3,
+      }),
+    ]);
+    expect(ramps[1]).not.toHaveProperty("heightPending");
+    const ids = new Set(
+      venueConnections(data).map((connection) => connection.id),
+    );
+    for (const step of ramps)
+      expect(ids.has(step.connectionId as string)).toBe(true);
+    expect(route.path.coordinates.map((point) => point[2])).toEqual([
+      0, 0, 0, 0,
+    ]);
+    expect(ramps[0].instruction).toBe("走坡道約 20 公尺（坡度未實測）");
+    // In reverse, the true flag is still aggregated over the same source facility.
+    expect(
+      planChain(data, "en", true).steps.filter((s) => s.type === "ramp"),
+    ).toEqual([
+      expect.objectContaining({
+        connectionId: "way/-901@0",
+        pathStart: 0,
+        pathEnd: 1,
+      }),
+      expect.objectContaining({
+        connectionId: "way/-900@0",
+        heightPending: true,
+        pathStart: 1,
+        pathEnd: 3,
+      }),
+    ]);
+  });
+
+  it("leaves only slope-inferred ramps without a facility ID and keeps pending at z=0", () => {
+    const data = chainVenue([{ slopeRatio: 0.02, heightPending: true }]);
+    expect(venueConnections(data)).toEqual([]);
+    expect(
+      planChain(data).steps.find((step) => step.type === "ramp"),
+    ).toMatchObject({
+      connectionId: null,
+      heightPending: true,
+      pathStart: 0,
+      pathEnd: 1,
+    });
+  });
+
+  it("preserves explicit false but omits unknown heightPending", () => {
+    const pending = chainVenue([{ ramp: true, heightPending: false }]);
+    expect(
+      planChain(pending).steps.find((step) => step.type === "ramp"),
+    ).toHaveProperty("heightPending", false);
+    const unknown = chainVenue([{ ramp: true }]);
+    expect(
+      planChain(unknown).steps.find((step) => step.type === "ramp"),
+    ).not.toHaveProperty("heightPending");
+  });
+
+  it("retains stable elevator identity and a single wait on a multi-floor ride", () => {
+    const result = plan("a-room06@3F", "a-room06@1F", "wheelchair");
+    if (!result.ok) throw new Error(result.reason);
+    const elevators = result.route.steps.filter(
+      (step) => step.type === "elevator",
+    );
+    expect(elevators).toEqual([
+      expect.objectContaining({ connectionId: "node/-11", durationS: 36 }),
+    ]);
+    expect(
+      venueConnections(venue).some(
+        (connection) => connection.id === elevators[0].connectionId,
+      ),
+    ).toBe(true);
+    expect(result.route.elevatorRides).toBe(1);
+  });
+});
+
+describe("typed place arrivals", () => {
+  it("describes a corridor arrival explicitly in both languages even for a room place", () => {
+    const data = chainVenue([{}]);
+    Object.assign(data.places[1], {
+      arrivalKind: "corridor",
+      doorKnown: false,
+      name: "2101",
+      kind: "room",
+    });
+    expect(planChain(data).steps.at(-1)?.instruction).toBe("抵達2101附近走廊");
+    expect(planChain(data, "en").steps.at(-1)?.instruction).toBe(
+      "Arrive at the corridor near 2101",
+    );
+  });
+
+  it("names the door only when its typed arrival and known-door evidence agree", () => {
+    const data = chainVenue([{}]);
+    Object.assign(data.places[1], { arrivalKind: "door", doorKnown: true });
+    expect(planChain(data).steps.at(-1)?.instruction).toBe(
+      "抵達Destination門口",
+    );
+    expect(planChain(data, "en").steps.at(-1)?.instruction).toBe(
+      "Arrive at the door of Destination",
+    );
+    data.places[1].doorKnown = false;
+    expect(planChain(data).steps.at(-1)?.instruction).toBe("抵達Destination");
+    delete data.places[1].arrivalKind;
+    delete data.places[1].doorKnown;
+    expect(planChain(data, "en").steps.at(-1)?.instruction).toBe(
+      "Arrive at Destination",
+    );
+  });
+});
+
+describe("building transition indices", () => {
+  it.each([false, true])(
+    "preserves the existing outdoor entry/exit boundary (reverse=%s)",
+    (reverse) => {
+      const data = chainVenue(
+        [{}, { indoor: false }, { indoor: false }],
+        [
+          {},
+          {},
+          { buildingId: null, ordinal: null, indoor: false },
+          { buildingId: null, ordinal: null, indoor: false },
+        ],
+      );
+      const route = planChain(data, "zh-TW", reverse);
+      const transition = route.steps.find(
+        (step) => step.type === (reverse ? "enter" : "exit"),
+      );
+      expect(transition).toMatchObject({
+        buildingId: "bldg-a",
+        pathStart: reverse ? 2 : 1,
+        pathEnd: reverse ? 2 : 1,
+      });
+      expect(route.path.buildingIds).toEqual(
+        reverse
+          ? [null, null, "bldg-a", "bldg-a"]
+          : ["bldg-a", "bldg-a", null, null],
+      );
+    },
+  );
+  it.each([false, true])(
+    "keeps entry at the preceding boundary vertex (reverse=%s)",
+    (reverse) => {
+      const data = chainVenue(
+        [{}, {}, {}],
+        [
+          { buildingId: "bldg-a", ordinal: 2, z: 7.2 },
+          { buildingId: "bldg-a", ordinal: 2, z: 7.2 },
+          { buildingId: "bldg-b", ordinal: 2, z: 7.2 },
+          { buildingId: "bldg-b", ordinal: 2, z: 7.2 },
+        ],
+      );
+      const route = planChain(data, "zh-TW", reverse);
+      const sourceBuilding = reverse ? "bldg-b" : "bldg-a";
+      const destinationBuilding = reverse ? "bldg-a" : "bldg-b";
+      expect(route.steps.find((step) => step.type === "enter")).toMatchObject({
+        buildingId: destinationBuilding,
+        levelRef: "3F",
+        pathStart: 1,
+        pathEnd: 1,
+      });
+      // Instructions may announce entry before the per-point building context changes.
+      expect(route.path.buildingIds).toEqual([
+        sourceBuilding,
+        sourceBuilding,
+        destinationBuilding,
+        destinationBuilding,
+      ]);
+      expect(route.path.levelRefs).toEqual(["3F", "3F", "3F", "3F"]);
+      expect(route.path.coordinates.map((point) => point[2])).toEqual([
+        7.2, 7.2, 7.2, 7.2,
+      ]);
+      expect(route.segments).toEqual([
+        {
+          buildingId: sourceBuilding,
+          levelRef: "3F",
+          pathStart: 0,
+          pathEnd: 2,
+        },
+        {
+          buildingId: destinationBuilding,
+          levelRef: "3F",
+          pathStart: 2,
+          pathEnd: 3,
+        },
+      ]);
+    },
+  );
+});
+
+describe("multiple source-backed arrival nodes", () => {
+  function alternatives() {
+    const data = chainVenue([{ kind: "steps", lengthM: 5 }, { lengthM: 30 }]);
+    data.edges[1].from = data.nodes[0].id;
+    Object.assign(data.places[1], {
+      nodeId: data.nodes[1].id,
+      location: [data.nodes[1].lng, data.nodes[1].lat],
+      arrivalNodeIds: [data.nodes[1].id, data.nodes[2].id],
+      arrivalKind: "corridor",
+      doorKnown: false,
+    });
+    return data;
+  }
+  function attempt(data: VenueData, mode: AccessibilityMode) {
+    return planVenueRoute(
+      buildVenueGraph(data, 1, CONFIG),
+      data,
+      data.places[0],
+      data.places[1],
+      mode,
+      CONFIG,
+      "zh-TW",
+    );
+  }
+  it("selects the accessible alternative and reports its actual endpoint while preserving the destination identity", () => {
+    const data = alternatives();
+    const result = attempt(data, "wheelchair");
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.route.toPlaceId).toBe("Destination");
+    expect(result.route.path.coordinates.at(-1)).toEqual([
+      data.nodes[2].lng,
+      data.nodes[2].lat,
+      0,
+    ]);
+    expect(result.route.distanceM).toBe(30);
+    expect(result.route.steps.at(-1)?.instruction).toBe(
+      "抵達Destination附近走廊",
+    );
+    expect(result.route.steps.map((step) => step.type)).not.toContain("stairs");
+    const ordinary = attempt(data, "normal");
+    if (!ordinary.ok) throw new Error(ordinary.reason);
+    expect(ordinary.route.path.coordinates.at(-1)).toEqual([
+      data.nodes[1].lng,
+      data.nodes[1].lat,
+      0,
+    ]);
+    expect(ordinary.route.distanceM).toBe(5);
+  });
+  it("does not label a selected corridor alternative as the primary known door", () => {
+    const data = alternatives();
+    data.nodes[1].kind = "door";
+    Object.assign(data.places[1], { arrivalKind: "door", doorKnown: true });
+    const result = attempt(data, "wheelchair");
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.route.steps.at(-1)?.instruction).toBe(
+      "抵達Destination附近走廊",
+    );
+    const ordinary = attempt(data, "normal");
+    if (!ordinary.ok) throw new Error(ordinary.reason);
+    expect(ordinary.route.steps.at(-1)?.instruction).toBe(
+      "抵達Destination門口",
+    );
+  });
+  it("evaluates origin alternatives and does not use an inaccessible primary origin", () => {
+    const data = alternatives();
+    data.places.reverse();
+    const result = attempt(data, "wheelchair");
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.route.fromPlaceId).toBe("Destination");
+    expect(result.route.path.coordinates[0]).toEqual([
+      data.nodes[2].lng,
+      data.nodes[2].lat,
+      0,
+    ]);
+  });
+  it("classifies failure using every legal pair rather than the disconnected primary", () => {
+    const data = alternatives();
+    data.edges = [{ ...data.edges[1], kind: "steps" }];
+    expect(attempt(data, "wheelchair")).toEqual({
+      ok: false,
+      reason: "NO_ACCESSIBLE_ROUTE",
+      levelRef: "1F",
+    });
+    data.edges = [];
+    expect(attempt(data, "wheelchair")).toEqual({
+      ok: false,
+      reason: "NO_ROUTE",
+    });
+  });
+  it("rejects alternative nodes on a different building or floor rather than inventing an endpoint", () => {
+    const data = alternatives();
+    data.nodes[2].ordinal = 1;
+    expect(attempt(data, "wheelchair")).toEqual({
+      ok: false,
+      reason: "NO_ROUTE",
+    });
+    data.nodes[2].ordinal = 0;
+    data.nodes[2].buildingId = "other";
+    expect(attempt(data, "wheelchair")).toEqual({
+      ok: false,
+      reason: "NO_ROUTE",
+    });
+  });
+  it("fails closed for malformed, missing-primary and unbounded candidate lists", () => {
+    const data = alternatives();
+    for (const ids of [
+      [],
+      [data.nodes[2].id],
+      ["missing", data.nodes[1].id],
+      [data.nodes[1].id, data.nodes[1].id],
+      Array.from({ length: 17 }, (_, i) => data.nodes[i % 3].id),
+    ]) {
+      data.places[1].arrivalNodeIds = ids;
+      expect(attempt(data, "wheelchair")).toEqual({
+        ok: false,
+        reason: "NO_ROUTE",
+      });
+    }
   });
 });

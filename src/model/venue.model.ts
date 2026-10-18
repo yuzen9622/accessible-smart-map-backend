@@ -18,6 +18,7 @@ const venueSchema = new Schema<VenueDocument>(
     nodes: { type: Schema.Types.Mixed, required: true },
     edges: { type: Schema.Types.Mixed, required: true },
     features: { type: Schema.Types.Mixed, required: true },
+    walls: { type: Schema.Types.Mixed, default: [] },
     warnings: { type: [String], default: [] },
     source: {
       file: { type: String, required: true },

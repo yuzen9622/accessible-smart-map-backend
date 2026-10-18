@@ -37,7 +37,7 @@ export const VenueRouteBodySchema = z
     mode: z.enum(MODES).default("wheelchair").openapi({
       example: "wheelchair",
       description:
-        "通行模式：wheelchair 不走樓梯；elderly / visual_impaired 偏好電梯但可走樓梯；normal 最短路線。伺服器依此解析成本設定，不接受自訂 profile。",
+        "通行模式：wheelchair / elderly / visual_impaired 均禁止樓梯、階梯及手扶梯，跨樓層使用可通行的電梯或坡道；normal 最短路線。各模式保留自己的步速與其他通行限制，不接受自訂 profile。",
     }),
     language: z.enum(SUPPORTED_LANGS).default(DEFAULT_LANG).openapi({
       example: "zh-TW",
@@ -120,7 +120,33 @@ const PlaceSchema = z
     buildingId: z.string().nullable(),
     levelRef: z.string().nullable(),
     nodeId: z.string(),
+    arrivalNodeIds: z.array(z.string()).min(1).max(16).optional().openapi({
+      uniqueItems: true,
+      description:
+        "同一建築、樓層已由來源確認的真實到達節點；最多 16 個、不重複且包含 nodeId。省略時只用 nodeId；後端按通行模式從起終點候選配對選最低成本路線，路徑首尾為實選節點，place ID 不變",
+    }),
     location: LngLatSchema,
+    featureId: z.string().nullable().optional().openapi({
+      description:
+        "相同建築與樓層下，由來源拓樸、唯一房號、明確 a11ymap:arrival_node 或唯一垂直設施落點識別的顯示圖形；無法確定時為 null，不依名稱或最近距離猜測",
+    }),
+    arrivalKind: z
+      .enum(["door", "corridor", "place"])
+      .nullable()
+      .optional()
+      .openapi({
+        description:
+          "實際導航到達點語意；corridor 是走廊到達點，不代表已確認房門位置",
+      }),
+    doorKnown: z.boolean().nullable().optional().openapi({
+      description:
+        "此導航點是否有明確來源門位標記；走廊點為 false，並非宣稱附近沒有門；未知為 null 或省略，不能由 kind=room 推定",
+    }),
+    connectionId: z.string().nullable().optional(),
+    connectionIds: z.array(z.string()).optional().openapi({
+      description:
+        "與此地點任一真實到達節點相接的 connection IDs；多筆時 connectionId 為 null，不代表所有模式皆可使用每個設施",
+    }),
     wheelchair: z.enum(["yes", "no", "limited", "unknown"]).optional().openapi({
       description:
         "僅校門：輪椅可否通過。校外導進校內時，非 normal 模式只選 yes 的校門",
@@ -131,10 +157,30 @@ const PlaceSchema = z
   })
   .openapi("VenuePlace");
 
+const FeatureTagsSchema = z
+  .object({
+    indoor: z.string().optional(),
+    amenity: z.string().optional(),
+    "a11ymap:area_type": z.string().optional(),
+    ref: z.string().optional(),
+  })
+  .strict()
+  .openapi("VenueFeatureTags", {
+    description:
+      "來源分類標籤白名單；toilets / vertical-core / elevator-shaft / stairwell 依來源保留，不由名稱推定，也不保證井道在該層停靠",
+  });
+
 const FeatureSchema = z
   .object({
     id: z.string(),
     kind: z.enum(["room", "corridor", "area", "door", "elevator", "stairs"]),
+    osmRef: z.string().optional(),
+    tags: FeatureTagsSchema.optional(),
+    connectionId: z.string().nullable().optional(),
+    connectionIds: z.array(z.string()).optional().openapi({
+      description:
+        "依來源節點或同棟設施幾何包含關係識別的 connections；未知或歧義為空，不依名稱或最近距離猜測；井道關聯不新增停靠層",
+    }),
     buildingId: z.string().nullable(),
     levelRef: z.string().nullable(),
     ordinal: z.number().int().nullable(),
@@ -155,6 +201,23 @@ const ConnectionSchema = z
   .object({
     id: z.string(),
     kind: z.enum(["stairs", "steps", "ramp", "escalator", "elevator"]),
+    name: z
+      .string()
+      .nullable()
+      .optional()
+      .openapi({ description: "來源設施名稱；未知為 null" }),
+    ref: z
+      .string()
+      .nullable()
+      .optional()
+      .openapi({ description: "來源設施編號；未知為 null" }),
+    nodeIds: z.array(z.string()).optional().openapi({
+      description:
+        "compiled source node IDs，與 coordinates / levelRefs 同長同序；電梯僅列實際停靠點，不用座標字串產生 ID",
+    }),
+    featureIds: z.array(z.string()).optional().openapi({
+      description: "來源顯示圖形的反向關聯；不代表井道出現的每層都可搭乘",
+    }),
     buildingId: z.string().nullable(),
     coordinates: z
       .array(z.tuple([z.number(), z.number(), z.number()]))
@@ -194,6 +257,10 @@ const WalkwaySchema = z
       "crossing",
     ]),
     indoor: z.boolean(),
+    nodeIds: z.tuple([z.string(), z.string()]).optional().openapi({
+      description:
+        "實際路網邊兩端 compiled source node IDs，順序對應 coordinates；供顯示入口側拓樸，不能推定門寬或替代 route API",
+    }),
     coordinates: z
       .tuple([
         z.tuple([z.number(), z.number(), z.number()]),
@@ -227,6 +294,28 @@ const WalkwaySchema = z
   })
   .openapi("VenueWalkway");
 
+const WallSchema = z
+  .object({
+    id: z.string(),
+    osmRef: z.string(),
+    buildingId: z.string().nullable(),
+    ordinal: z.number().int().nullable(),
+    levelRef: z.string().nullable(),
+    geometry: z.object({
+      type: z.literal("LineString"),
+      coordinates: z.array(LngLatSchema).min(2),
+    }),
+    geometryStatus: z.enum(["surveyed", "traced", "schematic"]),
+    heightStatus: z.enum(["measured", "drawing", "estimated"]),
+    thicknessM: z.number().positive().nullable().optional().openapi({
+      description:
+        "來源明確標註的牆厚（公尺）；未知為 null，前端示意厚度不能視為實測值",
+    }),
+    source: z.string().optional(),
+    ...ProvenanceAnnotations,
+  })
+  .openapi("VenueWall");
+
 const VenueDetailSchema = z
   .object({
     venueId: z.string(),
@@ -241,6 +330,10 @@ const VenueDetailSchema = z
     buildings: z.array(BuildingSchema),
     places: z.array(PlaceSchema),
     features: z.array(FeatureSchema),
+    walls: z.array(WallSchema).openapi({
+      description:
+        "來源 indoor=wall 的牆線，依原始頂點順序保留，不猜測開口或門寬；舊資料未匯入牆線時為空陣列",
+    }),
     walkways: z.array(WalkwaySchema).openapi({
       description:
         "一般平走路網，包含戶外步道、室內走廊與跨棟連通邊；樓梯、坡道、手扶梯與電梯另在 connections，避免重複繪製",
@@ -312,7 +405,7 @@ registry.registerPath({
   tags: ["Venue"],
   summary: "室內場域詳細資料",
   description:
-    "回傳已發布建築外框、樓層高度與資料涵蓋度、可選起訖地點（教室、校門、樓層錨點）、室內顯示幾何、一般步道與垂直連通設施。包含來源雜湊與待核實註記。牆面由用戶端依房間外框生成；有樓層宣告不代表該層已有完整圖資。",
+    "回傳已發布建築外框、樓層高度與資料涵蓋度、可選起訖地點（教室、校門、樓層錨點）、室內顯示幾何、一般步道與垂直連通設施。包含來源雜湊與待核實註記。來源牆線另在 walls，房間共牆可由用戶端依原始外框處理；有樓層宣告不代表該層已有完整圖資。",
   request: { params: VenueParamsSchema },
   responses: {
     200: {
@@ -330,7 +423,7 @@ registry.registerPath({
   tags: ["Venue"],
   summary: "場域內無障礙路線",
   description:
-    "規劃同一場域兩個地點之間的路線，回傳帶樓板高度的路徑與跨樓層步驟（電梯、樓梯、坡道、進出建築）。輪椅不走樓梯；長者與視障偏好電梯但可走樓梯；一般為最短路線。",
+    "規劃同一場域兩個地點之間的路線，回傳帶樓板高度的路徑與跨樓層步驟（電梯、樓梯、坡道、進出建築）。輪椅、長者與視障模式均禁止樓梯、階梯及手扶梯，保留各模式原有其他限制；一般為最短路線。",
   request: {
     params: VenueParamsSchema,
     body: { content: { "application/json": { schema: VenueRouteBodySchema } } },

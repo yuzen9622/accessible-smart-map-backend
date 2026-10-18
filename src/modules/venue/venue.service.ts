@@ -137,6 +137,7 @@ export async function getVenueDetail(venueId: string) {
     buildings: venueBuildings(v),
     places: v.places,
     features: v.features,
+    walls: v.walls ?? [],
     connections: entry.connections,
     walkways: entry.walkways,
   };

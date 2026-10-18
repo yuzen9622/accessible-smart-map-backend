@@ -166,6 +166,76 @@ describe("POST /api/v1/a11y/venues/:venueId/route", () => {
 });
 
 describe("OpenAPI", () => {
+  it("publishes the additive renderer topology, source walls and arrival contracts", () => {
+    const schemas = generateOpenAPIDocument().components?.schemas;
+    expect(schemas?.VenueFeature).toMatchObject({
+      properties: {
+        tags: { $ref: "#/components/schemas/VenueFeatureTags" },
+        osmRef: { type: "string" },
+        connectionId: { type: "string", nullable: true },
+        connectionIds: { type: "array", items: { type: "string" } },
+      },
+    });
+    expect(schemas?.VenueFeatureTags).toMatchObject({
+      additionalProperties: false,
+      properties: {
+        indoor: { type: "string" },
+        amenity: { type: "string" },
+        "a11ymap:area_type": { type: "string" },
+        ref: { type: "string" },
+      },
+    });
+    expect(schemas?.VenueConnection).toMatchObject({
+      properties: {
+        nodeIds: { type: "array", items: { type: "string" } },
+        featureIds: { type: "array", items: { type: "string" } },
+        name: { type: "string", nullable: true },
+        ref: { type: "string", nullable: true },
+      },
+    });
+    expect(schemas?.VenuePlace).toMatchObject({
+      properties: {
+        arrivalNodeIds: {
+          type: "array",
+          minItems: 1,
+          maxItems: 16,
+          uniqueItems: true,
+          items: { type: "string" },
+        },
+        featureId: { type: "string", nullable: true },
+        arrivalKind: {
+          enum: ["door", "corridor", "place", null],
+          nullable: true,
+        },
+        doorKnown: { type: "boolean", nullable: true },
+        connectionIds: { type: "array" },
+      },
+    });
+    expect(schemas?.VenueWall).toMatchObject({
+      properties: {
+        geometry: { properties: { type: { enum: ["LineString"] } } },
+        thicknessM: { type: "number", nullable: true },
+        osmRef: { type: "string" },
+      },
+    });
+    expect(schemas?.VenueDetail).toMatchObject({
+      properties: {
+        walls: {
+          type: "array",
+          items: { $ref: "#/components/schemas/VenueWall" },
+        },
+      },
+    });
+    expect(schemas?.VenueRouteStep).toMatchObject({
+      properties: {
+        connectionId: { type: "string", nullable: true },
+        heightPending: { type: "boolean" },
+        pathStart: {
+          description: expect.stringContaining("path.buildingIds/levelRefs"),
+        },
+      },
+    });
+  });
   it("documents the venue endpoints", () => {
     const paths = generateOpenAPIDocument().paths ?? {};
     expect(Object.keys(paths)).toEqual(

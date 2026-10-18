@@ -32,14 +32,25 @@ export const VenueRouteStepSchema = z
     ]),
     instruction: z.string(),
     maneuver: z.enum(["left", "right", "uturn"]).optional(),
+    connectionId: z.string().nullable().optional().openapi({
+      description:
+        "對應場域 detail.connections[].id；只由坡度推導、沒有可識別來源設施的坡道為 null",
+    }),
+    heightPending: z.boolean().optional().openapi({
+      description:
+        "此步驟任一來源邊的高度仍待核實；即使 z 相同也不能當作已確認平地，缺值表示未知",
+    }),
     distanceM: z.number(),
     durationS: z.number(),
     buildingId: z.string().nullable(),
     levelRef: z.string().nullable(),
     fromLevelRef: z.string().optional(),
     toLevelRef: z.string().optional(),
-    pathStart: z.number().int(),
-    pathEnd: z.number().int(),
+    pathStart: z.number().int().openapi({
+      description:
+        "path 的起點索引（含）；enter/exit 可在邊界前一點觸發，step 建築不代表該點歸屬，實際歸屬以 path.buildingIds/levelRefs 為準",
+    }),
+    pathEnd: z.number().int().openapi({ description: "path 的終點索引（含）" }),
   })
   .openapi("VenueRouteStep");
 

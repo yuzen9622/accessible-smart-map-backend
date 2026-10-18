@@ -130,10 +130,12 @@ describe("getVenueDetail", () => {
   it("returns no pending annotations and a null hash for legacy documents without provenance", async () => {
     const stored = doc(1);
     Reflect.deleteProperty(stored, "source");
+    Reflect.deleteProperty(stored, "walls");
     vi.mocked(repository.findVenueVersion).mockResolvedValue(1);
     vi.mocked(repository.findVenue).mockResolvedValue(stored);
     const detail = await getVenueDetail("mini");
     expect(detail?.sourceSha256).toBeNull();
+    expect(detail?.walls).toEqual([]);
     expect(
       detail?.walkways.every((way) => way.heightPending === undefined),
     ).toBe(true);
@@ -142,6 +144,67 @@ describe("getVenueDetail", () => {
         (connection) => connection.heightPending === undefined,
       ),
     ).toBe(true);
+  });
+
+  it("preserves stored display semantics, polygon rings, arrival metadata and source walls", async () => {
+    const stored = doc(1);
+    const feature = stored.features.find(
+      (candidate) => candidate.geometry.type === "Polygon",
+    );
+    const place = stored.places.find((candidate) => candidate.kind === "room");
+    if (!feature || !place || feature.geometry.type !== "Polygon") {
+      throw new Error("fixture lacks a room polygon or place");
+    }
+    feature.tags = {
+      indoor: "area",
+      amenity: "toilets",
+      "a11ymap:area_type": "elevator-shaft",
+      ref: "101",
+    };
+    feature.osmRef = "way/source-feature";
+    feature.connectionId = "node/-11";
+    feature.connectionIds = ["node/-11"];
+    feature.geometry.coordinates.push([
+      [120.68018, 24.1501],
+      [120.68019, 24.1501],
+      [120.68019, 24.15011],
+      [120.68018, 24.1501],
+    ]);
+    place.featureId = feature.id;
+    place.arrivalKind = "corridor";
+    place.doorKnown = false;
+    place.connectionIds = ["node/-11"];
+    stored.walls = [
+      {
+        id: "way/source-wall@0",
+        osmRef: "way/source-wall",
+        buildingId: "bldg-a",
+        ordinal: 0,
+        levelRef: "1F",
+        geometry: {
+          type: "LineString",
+          coordinates: [
+            [120.6801, 24.1501],
+            [120.6802, 24.1501],
+          ],
+        },
+        geometryStatus: "traced",
+        heightStatus: "estimated",
+        thicknessM: null,
+        note: "來源沒有門位",
+      },
+    ];
+    const expected = structuredClone(stored);
+    vi.mocked(repository.findVenueVersion).mockResolvedValue(1);
+    vi.mocked(repository.findVenue).mockResolvedValue(stored);
+    const detail = await getVenueDetail("mini");
+    expect(detail?.features).toEqual(expected.features);
+    expect(detail?.places).toEqual(expected.places);
+    expect(detail?.walls).toEqual(expected.walls);
+    expect(
+      detail?.connections.find((connection) => connection.id === "node/-11")
+        ?.featureIds,
+    ).toContain(feature.id);
   });
 
   it("returns the stairs, ramps and elevators with their heights", async () => {
@@ -194,28 +257,31 @@ describe("planVenueRoute", () => {
     ).toMatchObject({ ok: false, status: 404 });
   });
 
-  it("maps a stairs-only destination to 422 NO_ACCESSIBLE_ROUTE with venueAccessibility", async () => {
-    const r = await planVenueRoute({
-      venueId: "mini",
-      fromPlaceId: "gate-main",
-      toPlaceId: "b-lab",
-      mode: "wheelchair",
-      lang: "zh-TW",
-    });
-    expect(r).toMatchObject({
-      ok: false,
-      status: 422,
-      data: {
-        reason: "NO_ACCESSIBLE_ROUTE",
-        venueAccessibility: {
-          venueId: "mini",
-          placeId: "b-lab",
-          levelRef: "2F",
-          stepFreeReachable: false,
+  it.each(["wheelchair", "elderly", "visual_impaired"] as const)(
+    "maps a stairs-only destination to 422 NO_ACCESSIBLE_ROUTE for %s with venueAccessibility",
+    async (mode) => {
+      const r = await planVenueRoute({
+        venueId: "mini",
+        fromPlaceId: "gate-main",
+        toPlaceId: "b-lab",
+        mode,
+        lang: "zh-TW",
+      });
+      expect(r).toMatchObject({
+        ok: false,
+        status: 422,
+        data: {
+          reason: "NO_ACCESSIBLE_ROUTE",
+          venueAccessibility: {
+            venueId: "mini",
+            placeId: "b-lab",
+            levelRef: "2F",
+            stepFreeReachable: false,
+          },
         },
-      },
-    });
-  });
+      });
+    },
+  );
 
   it("returns the route with the version it was planned on", async () => {
     const r = await planVenueRoute({
@@ -370,7 +436,7 @@ describe("gate choice", () => {
   const origin = { lat: 24.1501, lng: 120.683 };
   const gateFor = async (
     placeId: string,
-    mode: "wheelchair" | "elderly" | "normal",
+    mode: "wheelchair" | "elderly" | "visual_impaired" | "normal",
   ) => {
     const r = await resolveVenueArrival({
       venueId: "mini",
@@ -389,16 +455,19 @@ describe("gate choice", () => {
     expect(await gateFor("bldg-b@1F", "elderly")).toBe("gate-main");
   });
 
-  it("ranks gates by the mode's weighted cost, so elderly avoid a stairs-only gate", async () => {
-    useVenue(
-      withSideGate(
-        "<tag k='wheelchair' v='yes' />",
-        "<tag k='highway' v='steps' /><tag k='step_count' v='40' />",
-      ),
-    );
-    expect(await gateFor("bldg-b@1F", "normal")).toBe("gate-side");
-    expect(await gateFor("bldg-b@1F", "elderly")).toBe("gate-main");
-  });
+  it.each(["elderly", "visual_impaired"] as const)(
+    "excludes a stairs-only gate for %s and searches the usable alternative gate",
+    async (mode) => {
+      useVenue(
+        withSideGate(
+          "<tag k='wheelchair' v='yes' />",
+          "<tag k='highway' v='steps' /><tag k='step_count' v='40' />",
+        ),
+      );
+      expect(await gateFor("bldg-b@1F", "normal")).toBe("gate-side");
+      expect(await gateFor("bldg-b@1F", mode)).toBe("gate-main");
+    },
+  );
 
   it("reports NO_ACCESSIBLE_ROUTE, not NO_ROUTE, when only an unusable gate reaches the place", async () => {
     useVenue(

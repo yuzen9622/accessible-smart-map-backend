@@ -33,6 +33,17 @@ describe("venueWalkways", () => {
       true,
     );
     expect(walkways.every((way) => way.coordinates.length === 2)).toBe(true);
+    for (const walkway of walkways) {
+      const edge = expected.find((candidate) => candidate.id === walkway.id);
+      expect(walkway.nodeIds).toEqual([edge?.from, edge?.to]);
+      expect(
+        walkway.nodeIds.map((id) => {
+          const node = venue.nodes.find((candidate) => candidate.id === id);
+          if (!node) throw new Error(`unknown source node ${id}`);
+          return [node.lng, node.lat, node.z];
+        }),
+      ).toEqual(walkway.coordinates);
+    }
     const doorBoundary = walkways.find(
       (way) =>
         way.buildingIds.includes(null) && way.buildingIds.includes("bldg-a"),
@@ -70,6 +81,7 @@ describe("venueWalkways", () => {
       id: "skybridge",
       kind: "corridor",
       indoor: data.edges[0].indoor,
+      nodeIds: [a.id, b.id],
       coordinates: [
         [a.lng, a.lat, a.z],
         [b.lng, b.lat, b.z],
@@ -186,6 +198,43 @@ describe("venueBuildings coverage", () => {
       hasDisplayGeometry: false,
     });
     expect(building.levels.every((level) => !("coverage" in level))).toBe(true);
+  });
+
+  it("counts an explicit source wall as display geometry without adding route or anchor coverage", () => {
+    const data = copy();
+    const building = data.buildings[0];
+    building.levels.push({ ordinal: 7, ref: "8F", elevationM: 25.2 });
+    data.walls = [
+      {
+        id: "wall-only@7",
+        osmRef: "way/wall-only",
+        buildingId: building.id,
+        ordinal: 7,
+        levelRef: "8F",
+        geometry: {
+          type: "LineString",
+          coordinates: [
+            [120.68, 24.15],
+            [120.6801, 24.15],
+          ],
+        },
+        geometryStatus: "traced",
+        heightStatus: "estimated",
+      },
+    ];
+    expect(
+      venueBuildings(data)[0].levels.find((level) => level.ref === "8F")
+        ?.coverage,
+    ).toEqual({
+      hasAnchor: false,
+      hasRouteData: false,
+      hasDisplayGeometry: true,
+    });
+    data.walls[0].ordinal = 6;
+    expect(
+      venueBuildings(data)[0].levels.find((level) => level.ref === "8F")
+        ?.coverage.hasDisplayGeometry,
+    ).toBe(false);
   });
 
   it("does not borrow an anchor, graph node or feature from another building or floor", () => {

@@ -28,13 +28,21 @@ export interface VenueRouteStep {
   type: VenueStepType;
   instruction: string;
   maneuver?: VenueManeuver;
+  /** Stable detail.connections ID; null if a slope alone suggested a ramp. */
+  connectionId?: string | null;
+  /** True if any source edge in the step has unverified height. */
+  heightPending?: boolean;
   distanceM: number;
   durationS: number;
   buildingId: string | null;
   levelRef: string | null;
   fromLevelRef?: string;
   toLevelRef?: string;
-  /** Inclusive range of `path.coordinates` this step covers. */
+  /**
+   * Inclusive path range. Zero-length enter/exit instructions can trigger at
+   * the point before a building boundary; their context names the instruction
+   * target. Actual point ownership always comes from path.buildingIds/levelRefs.
+   */
   pathStart: number;
   pathEnd: number;
 }

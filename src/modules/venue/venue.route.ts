@@ -5,8 +5,8 @@
  * Routing reuses the CSR `dijkstra` and `edgeCost` unchanged. The profile is
  * resolved on the server from the requested mode only (strict
  * `relaxationLevel: 0`): wheelchair never takes stairs; elderly and
- * visual_impaired get the configured stairs multiplier, so they prefer an
- * elevator but can still be routed over stairs; normal stays neutral.
+ * visual_impaired explicitly forbid steps, stairs and escalators while
+ * retaining their own profiles; normal stays neutral.
  *
  * `distanceM` / `durationS` are summed from the raw edge length and time, never
  * from Dijkstra's weighted cost.
@@ -18,7 +18,9 @@ import type { CostProfile } from "../accessible-route/planners/pedestrian-a11y/c
 import { profileFor } from "../accessible-route/planners/pedestrian-a11y/csr-walk-planner";
 import { dijkstra } from "../accessible-route/planners/pedestrian-a11y/dijkstra";
 import { levelRefOf } from "./venue.compile";
+import { MAX_ARRIVAL_NODES } from "./venue.arrivals";
 import { leastCertain } from "./venue.connections";
+import { venueConnectionId } from "./venue.connection-id";
 import type {
   VenueManeuver,
   VenueRoute,
@@ -63,11 +65,11 @@ export type VenuePlanOutcome =
  */
 export function venueProfileFor(
   mode: AccessibilityMode,
-  config: Pick<VenueRoutingConfig, "stairsAvoidanceMultiplier">,
+  _config: Pick<VenueRoutingConfig, "stairsAvoidanceMultiplier">,
 ): CostProfile {
   const base = profileFor(mode);
   return mode === "elderly" || mode === "visual_impaired"
-    ? { ...base, stairsAvoidanceMultiplier: config.stairsAvoidanceMultiplier }
+    ? { ...base, forbidStairs: true }
     : base;
 }
 
@@ -135,25 +137,29 @@ export function planVenueRoute(
   config: VenueRoutingConfig,
   lang: SupportedLang,
 ): VenuePlanOutcome {
-  const src = vg.nodeIndex.get(from.nodeId);
-  const dst = vg.nodeIndex.get(to.nodeId);
-  if (src === undefined || dst === undefined)
-    return { ok: false, reason: "NO_ROUTE" };
+  const sources = arrivalIndices(vg, from);
+  const destinations = arrivalIndices(vg, to);
+  if (!sources || !destinations) return { ok: false, reason: "NO_ROUTE" };
 
   const profile = venueProfileFor(mode, config);
-  const result = dijkstra(vg.graph, src, dst, profile);
+  const bestPath = (costProfile: CostProfile) => {
+    let best: ReturnType<typeof dijkstra> = null;
+    for (const src of sources)
+      for (const dst of destinations) {
+        const candidate = dijkstra(vg.graph, src, dst, costProfile);
+        if (candidate && (!best || candidate.totalCost < best.totalCost))
+          best = candidate;
+      }
+    return best;
+  };
+  const result = bestPath(profile);
   if (!result) {
-    const anyRoute = dijkstra(
-      vg.graph,
-      src,
-      dst,
-      venueProfileFor("normal", config),
-    );
+    const anyRoute =
+      mode === "normal" ? null : bestPath(venueProfileFor("normal", config));
     return anyRoute
       ? { ok: false, reason: "NO_ACCESSIBLE_ROUTE", levelRef: to.levelRef }
       : { ok: false, reason: "NO_ROUTE" };
   }
-
   const pathNodes = Array.from(result.nodePath, (i) => vg.nodes[i]);
   const pathEdges: PathEdge[] = Array.from(result.edgeAttrPath, (attr, i) => {
     const edge = vg.edgeOfAttr[attr];
@@ -169,7 +175,14 @@ export function planVenueRoute(
   const levelRef = (n: VenueNode) =>
     n.buildingId && n.ordinal !== null ? levelRefOf(n.ordinal) : null;
 
-  const steps = buildSteps(pathEdges, from, to, buildingName, levelRef, lang);
+  const steps = buildSteps(
+    pathEdges,
+    placeAtNode(from, pathNodes[0]),
+    placeAtNode(to, pathNodes[pathNodes.length - 1]),
+    buildingName,
+    levelRef,
+    lang,
+  );
   const levelRefs = pathNodes.map(levelRef);
   const distanceM = pathEdges.reduce(
     (s, p) => s + (p.edge.kind === "elevator" ? 0 : p.edge.lengthM),
@@ -205,6 +218,50 @@ export function planVenueRoute(
   };
 }
 
+/** Legacy single-node places retain their original endpoint behavior. */
+function arrivalIndices(vg: VenueGraph, place: VenuePlace): number[] | null {
+  if (place.arrivalNodeIds === undefined) {
+    const index = vg.nodeIndex.get(place.nodeId);
+    return index === undefined ? null : [index];
+  }
+  const ids = place.arrivalNodeIds;
+  if (
+    !Array.isArray(ids) ||
+    ids.length < 1 ||
+    ids.length > MAX_ARRIVAL_NODES ||
+    new Set(ids).size !== ids.length ||
+    !ids.includes(place.nodeId)
+  )
+    return null;
+  const indices: number[] = [];
+  for (const id of ids) {
+    const index = vg.nodeIndex.get(id);
+    if (index === undefined) return null;
+    const node = vg.nodes[index];
+    const levelRef =
+      node.buildingId && node.ordinal !== null
+        ? levelRefOf(node.ordinal)
+        : null;
+    if (node.buildingId !== place.buildingId || levelRef !== place.levelRef)
+      return null;
+    indices.push(index);
+  }
+  return indices;
+}
+
+/** Keep semantic identity/name, while instructions refer to the chosen real arrival. */
+function placeAtNode(place: VenuePlace, node: VenueNode): VenuePlace {
+  if (place.nodeId === node.id) return place;
+  const door = node.kind === "door" || node.kind === "entrance";
+  return {
+    ...place,
+    nodeId: node.id,
+    location: [node.lng, node.lat],
+    arrivalKind: door ? "door" : "corridor",
+    doorKnown: door,
+  };
+}
+
 /**
  * @returns Floors between the start of the first edge and the end of the
  * last, or 0 when either end has no floor.
@@ -225,7 +282,10 @@ function floorsByStairs(pathEdges: PathEdge[]): number {
   pathEdges.forEach((p, i) => {
     if (p.edge.kind !== "steps") return;
     runStart ??= p;
-    if (pathEdges[i + 1]?.edge.kind !== "steps") {
+    if (
+      pathEdges[i + 1]?.edge.kind !== "steps" ||
+      venueConnectionId(pathEdges[i + 1].edge) !== venueConnectionId(p.edge)
+    ) {
       floors += floorsOf(runStart, p);
       runStart = null;
     }
@@ -356,6 +416,7 @@ function buildSteps(
       j < last &&
       classOf(pathEdges[j].edge) === cls &&
       contextOf(pathEdges[j]) === ctx &&
+      venueConnectionId(pathEdges[j].edge) === venueConnectionId(p.edge) &&
       (cls !== "walk" || pathEdges[j].from.ordinal === p.from.ordinal)
     ) {
       j += 1;
@@ -374,6 +435,10 @@ function buildSteps(
       pathEnd: end.i + 1,
       distanceM: Math.round(dist),
       durationS: Math.round(dur),
+      ...(cls !== "walk"
+        ? { connectionId: venueConnectionId(first.edge) }
+        : {}),
+      ...heightPendingOf(run),
     };
     const l1 = levelRef(first.from);
     const l2 = levelRef(end.to);
@@ -431,7 +496,9 @@ function buildSteps(
           : t("走階梯", "Take the steps")(lang),
       });
     } else if (cls === "ramp") {
-      const up = end.to.z > first.from.z;
+      const rise = end.to.z - first.from.z;
+      const directionZh = rise > 0 ? "上行" : rise < 0 ? "下行" : "";
+      const directionEn = rise > 0 ? "up" : rise < 0 ? "down" : "along";
       const grade =
         Math.round(Math.max(...run.map((r) => r.edge.slopeRatio ?? 0)) * 1000) /
         10;
@@ -456,8 +523,8 @@ function buildSteps(
         type: "ramp",
         levelRef: l1,
         instruction: t(
-          `走坡道${up ? "上行" : "下行"}約 ${base.distanceM} 公尺${gradeZh}`,
-          `Go ${up ? "up" : "down"} the ramp for ${base.distanceM} m${gradeEn}`,
+          `走坡道${directionZh}約 ${base.distanceM} 公尺${gradeZh}`,
+          `Go ${directionEn} the ramp for ${base.distanceM} m${gradeEn}`,
         )(lang),
       });
     } else {
@@ -479,7 +546,7 @@ function buildSteps(
   }
   steps.push({
     type: "arrive",
-    instruction: t(`抵達${toPlace.name}`, `Arrive at ${toPlace.name}`)(lang),
+    instruction: arrivalInstruction(toPlace, lang),
     distanceM: 0,
     durationS: 0,
     buildingId: toPlace.buildingId,
@@ -488,6 +555,32 @@ function buildSteps(
     pathEnd: last,
   });
   return steps;
+}
+
+/** Preserve authored unknown-height semantics across an instruction run. */
+function heightPendingOf(
+  run: PathEdge[],
+): Pick<VenueRouteStep, "heightPending"> {
+  return run.some((p) => p.edge.heightPending !== undefined)
+    ? { heightPending: run.some((p) => p.edge.heightPending === true) }
+    : {};
+}
+
+/** Arrival wording is based only on typed source semantics. */
+function arrivalInstruction(place: VenuePlace, lang: SupportedLang): string {
+  if (place.arrivalKind === "corridor") {
+    return t(
+      `抵達${place.name}附近走廊`,
+      `Arrive at the corridor near ${place.name}`,
+    )(lang);
+  }
+  if (place.arrivalKind === "door" && place.doorKnown === true) {
+    return t(
+      `抵達${place.name}門口`,
+      `Arrive at the door of ${place.name}`,
+    )(lang);
+  }
+  return t(`抵達${place.name}`, `Arrive at ${place.name}`)(lang);
 }
 
 function zeroStep(
@@ -596,6 +689,7 @@ function walkSteps(
       levelRef: levelRef(part[0].from),
       pathStart: part[0].i,
       pathEnd: part[part.length - 1].i + 1,
+      ...heightPendingOf(part),
     };
   });
 }
