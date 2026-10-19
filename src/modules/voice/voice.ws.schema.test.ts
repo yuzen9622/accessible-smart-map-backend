@@ -307,3 +307,19 @@ describe("route selection message validation", () => {
       ).toBe(false);
   });
 });
+
+it("validates assistant-end session.ending frames", async () => {
+  const { SessionEndingMessageSchema } = await import("./voice.ws.schema");
+  expect(
+    SessionEndingMessageSchema.parse({
+      type: "session.ending",
+      reason: "assistant-end",
+    }),
+  ).toEqual({ type: "session.ending", reason: "assistant-end" });
+  expect(
+    SessionEndingMessageSchema.safeParse({
+      type: "session.ending",
+      reason: "client-end",
+    }).success,
+  ).toBe(false);
+});

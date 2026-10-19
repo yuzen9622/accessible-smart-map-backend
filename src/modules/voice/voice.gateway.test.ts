@@ -1250,3 +1250,19 @@ describe("route context gateway contract", () => {
     });
   });
 });
+
+it("treats a bridge-initiated assistant-end close as a voice-only close", async () => {
+  const ws = connect();
+  await waitForOpen(ws);
+  const ready = waitForJson(ws);
+  sendSessionStart(ws, "voice-assistant-end");
+  await ready;
+  const bridge = await mockCreateLiveBridge.mock.results.at(-1)!.value;
+  const serverWs = mockCreateLiveBridge.mock.calls.at(-1)![0].ws;
+  const closed = waitForClose(ws);
+  serverWs.close(1000, "assistant-end");
+  expect(await closed).toEqual({ code: 1000, reason: "assistant-end" });
+  await vi.waitFor(() => expect(bridge.close).toHaveBeenCalledOnce());
+  expect(bridge.endSession).not.toHaveBeenCalled();
+  expect(bridge.cancelNav).not.toHaveBeenCalled();
+});

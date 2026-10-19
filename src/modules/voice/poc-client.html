@@ -148,6 +148,8 @@
       let ws = null;
       let audioCtx = null;
       let micStream = null;
+      let assistantEnding = false;
+      let playbackCleanupTimer = null;
       let workletNode = null;
       let playCtx = null;
       let playHead = 0;
@@ -232,7 +234,8 @@
           } else {
             silentFrames = 0;
           }
-          if (ws && ws.readyState === WebSocket.OPEN) ws.send(e.data);
+          if (!assistantEnding && ws && ws.readyState === WebSocket.OPEN)
+            ws.send(e.data);
         };
         src.connect(workletNode);
       }
@@ -269,6 +272,7 @@
       }
 
       function connect() {
+        assistantEnding = false;
         const token = $("token").value.trim();
         if (!token) {
           setStatus("請先貼上 token");
@@ -292,11 +296,22 @@
             playPcm24(e.data);
             return;
           }
-          const msg = JSON.parse(e.data);
+          let msg;
+          try {
+            msg = JSON.parse(e.data);
+          } catch {
+            log($("events"), "忽略無法解析的伺服器訊息", "evt err");
+            return;
+          }
           switch (msg.type) {
             case "session.ready":
               setStatus("已就緒，請開始說話");
               await startMic();
+              break;
+            case "session.ending":
+              assistantEnding = true;
+              stopMic();
+              setStatus("助理結束中");
               break;
             case "transcript":
               handleTranscript(msg);
@@ -315,7 +330,7 @@
               );
               break;
             case "interrupted":
-              clearPlayback();
+              if (!assistantEnding) clearPlayback();
               // 只結束當前字幕行；utteranceId 對照表要留著，因為被打斷那句的
               // transcript.correction 會在 interrupted 之後才到。
               userLineEl = null;
@@ -331,7 +346,15 @@
         };
         ws.onclose = (e) => {
           setStatus("連線關閉 (" + e.code + " " + e.reason + ")");
-          cleanup();
+          if (e.reason === "assistant-end" || assistantEnding) {
+            stopMic();
+            const remaining = playCtx
+              ? Math.max(0, playHead - playCtx.currentTime)
+              : 0;
+            playbackCleanupTimer = setTimeout(cleanup, remaining * 1000 + 100);
+          } else {
+            cleanup();
+          }
         };
         ws.onerror = () => setStatus("連線錯誤");
         $("connect").disabled = true;
@@ -365,15 +388,21 @@
         userLinesById.delete(msg.utteranceId);
       }
 
-      function cleanup() {
-        userLineEl = null;
-        userLinesById.clear();
+      function stopMic() {
         if (workletNode) workletNode.disconnect();
         if (micStream) micStream.getTracks().forEach((t) => t.stop());
         if (audioCtx) audioCtx.close();
         workletNode = null;
         micStream = null;
         audioCtx = null;
+      }
+
+      function cleanup() {
+        if (playbackCleanupTimer) clearTimeout(playbackCleanupTimer);
+        playbackCleanupTimer = null;
+        userLineEl = null;
+        userLinesById.clear();
+        stopMic();
         clearPlayback();
         $("connect").disabled = false;
         $("disconnect").disabled = true;
