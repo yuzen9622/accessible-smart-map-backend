@@ -61,6 +61,7 @@
 | 出入口 | 節點在建築外框上 `entrance=*` `door=*` `wheelchair` `width` `level=0` | 有台階的門標 `wheelchair=no`，輪椅不會經過；`width`（淨寬，公尺）< 0.9 時輪椅也不會經過，其他模式不受影響 |
 | 校門 | 節點 `barrier=gate` `entrance=main\|yes` `a11ymap:id` `name` `wheelchair` | 沒標 `entrance=main` 或 `yes` → 匯入失敗（校外路線可能導到這裡，不能是管制門）；輪椅、長者、視障模式只會從 `wheelchair=yes` 的校門進入 |
 | 停車場 | 戶外步道上的節點 `amenity=parking` `a11ymap:id` `name` `capacity:disabled`（無障礙車位數） | 標在無障礙車位旁、接到步道的位置；`kind` 為 `parking`，可當路線起點（停好車 → 館內任一處）。停車場外框（building 或 area）只供顯示 |
+| 廁所 | 房間外框或地點節點 `amenity=toilets` `wheelchair=yes\|no` | 有無障礙廁間標 `yes`；有標才會出現在 `features[].tags.wheelchair` 與對應地點的 `wheelchair`，沒標則省略（視為未知） |
 | 地點 | 路網上的節點 `a11ymap:id` `name` `ref` `level` | 多門房間只把主要門標成地點；名稱可用 `{L}` 代入樓層號（`ref={L}06` → 3F 為 `306`）。`a11ymap:id` 標在房間外框等 way／relation 上 → 匯入失敗 |
 | 樓層錨點 | 路網節點 `a11ymap:anchor=yes`（通常是電梯口） | 每棟每層一個；缺的樓層會警告，且無法用「建築＋樓層」（錨點 id）選為起訖，該層標了 `a11ymap:id` 的地點照常可用 |
 | 房間外框 | 封閉 way 或 multipolygon `indoor=room/corridor/area` `level` | 只供 3D 顯示，所有 rings 原樣保留；牆可由前端依外框處理；沒閉合會匯入失敗 |
