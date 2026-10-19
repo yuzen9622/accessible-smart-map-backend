@@ -81,7 +81,7 @@ export async function rerouteAccessibleRoute(
   }
   if (begun.status === "replay") return { ok: true, data: begun.data };
   if (begun.status === "stale") return conflict(messages.CONFLICT);
-  if (begun.status === "conflict") return conflict(messages.CONFLICT);
+  if (begun.status !== "acquired") return conflict(messages.CONFLICT);
 
   const release = () =>
     releaseReroute(
@@ -203,8 +203,10 @@ export async function rerouteAccessibleRoute(
         data: { reason: "NAVIGATION_STATE_UNAVAILABLE" },
       };
     }
-    if (finalized === "stale") return conflict(messages.CONFLICT);
-    if (finalized === "conflict") return conflict(messages.CONFLICT);
+    if (finalized === "stale" || finalized === "conflict") {
+      await release();
+      return conflict(messages.CONFLICT);
+    }
     await storeBusPlan(routeToken, route);
     return { ok: true, data };
   } catch (error) {

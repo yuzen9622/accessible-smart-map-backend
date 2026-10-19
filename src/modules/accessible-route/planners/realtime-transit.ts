@@ -727,22 +727,44 @@ async function applyTraDelays(
     if (!trainNo) continue;
     leg.trainNo = trainNo;
     const delay = delays.get(trainNo);
-    if (delay === undefined) continue;
-
+    if (delay === undefined || !Number.isFinite(delay) || delay < 0) continue;
+    // Absolute constraints and totals must change by the delta, including when
+    // a previously delayed service recovers to zero delay.
+    const previous =
+      Object.getOwnPropertyDescriptor(leg, "_appliedDelayMs")?.value ?? 0;
+    const delta = delay * 60000 - previous;
+    for (const field of [
+      "_scheduledDepartureTime",
+      "_scheduledArrivalTime",
+    ] as const) {
+      const value = leg[field];
+      if (typeof value === "number") leg[field] = value + delta;
+    }
+    Object.defineProperty(leg, "_appliedDelayMs", {
+      value: delay * 60000,
+      configurable: true,
+    });
+    if (!totalAdjusted) {
+      route.totalMinutes += delta / 60000;
+      totalAdjusted = true;
+    }
     if (delay > 0) {
-      const minutes = (leg.estimatedWaitMinutes ?? 0) + delay;
+      const minutes = Math.max(
+        0,
+        (leg.estimatedWaitMinutes ?? 0) + delta / 60000,
+      );
       leg.waitInfo = { time: minutes, source: "realtime" };
       leg.estimatedWaitMinutes = minutes;
       const note = `⚠️ 列車 ${leg.trainNo} 誤點約 ${delay} 分`;
       pushUnique(leg.facilityHighlights, note);
       pushUnique(route.accessibilityHighlights, note);
-      if (!totalAdjusted) {
-        route.totalMinutes += delay;
-        totalAdjusted = true;
-      }
     } else {
+      leg.estimatedWaitMinutes = Math.max(
+        0,
+        (leg.estimatedWaitMinutes ?? 0) + delta / 60000,
+      );
       leg.waitInfo = {
-        time: leg.estimatedWaitMinutes ?? 0,
+        time: leg.estimatedWaitMinutes,
         source: "realtime",
       };
     }
@@ -941,18 +963,35 @@ async function recoverRailLeg(
   if (leg.type === "TRA" && match.trainType)
     leg.trainTypeName = match.trainType;
 
-  if (match.dep && match.dep !== leg.departureTime) {
+  if (
+    match.dep &&
+    (match.dep !== leg.departureTime ||
+      (match.arr && match.arr !== leg.arrivalTime))
+  ) {
     pushUnique(
       leg.facilityHighlights,
       `🕒 已對應實際班次 ${match.trainNo}（表訂 ${leg.departureTime} → 實際 ${match.dep}）`,
     );
+    // OD dates are Taipei service dates, not the host's local timezone.
+    const departureAt = Date.parse(`${date}T${match.dep}:00+08:00`);
+    let arrivalAt = match.arr
+      ? Date.parse(`${date}T${match.arr}:00+08:00`)
+      : NaN;
+    if (arrivalAt < departureAt) arrivalAt += 86400000;
+    if (Number.isFinite(departureAt))
+      Object.defineProperty(leg, "_scheduledDepartureTime", {
+        value: departureAt,
+        writable: true,
+      });
+    if (Number.isFinite(arrivalAt))
+      Object.defineProperty(leg, "_scheduledArrivalTime", {
+        value: arrivalAt,
+        writable: true,
+      });
     leg.departureTime = match.dep;
     if (match.arr) {
       leg.arrivalTime = match.arr;
-      leg.rideMinutes = Math.max(
-        1,
-        clockMinutes(match.arr) - clockMinutes(match.dep),
-      );
+      leg.rideMinutes = Math.max(1, (arrivalAt - departureAt) / 60000);
     }
     if (leg.waitInfo.source === "schedule") {
       leg.waitInfo = { time: match.dep, source: "schedule" };
@@ -986,15 +1025,25 @@ export async function recoverRailTrainNos(
           ? taipeiYmdDash(new Date(r._scheduledDepartureTime))
           : (r.departureDate ?? taipeiYmdDash());
       return r.legs.map((leg) => {
+        // A later rail leg may depart after midnight on a different service
+        // date than the route origin. Its own absolute instant is authoritative.
+        const legDate =
+          (leg.type === "TRA" || leg.type === "THSR") &&
+          typeof leg._scheduledDepartureTime === "number"
+            ? taipeiYmdDash(new Date(leg._scheduledDepartureTime))
+            : date;
         if (leg.type === "TRA" && traIdx) {
-          return recoverRailLeg(leg, date, traIdx, fetchOdTimetable).catch(
+          return recoverRailLeg(leg, legDate, traIdx, fetchOdTimetable).catch(
             () => undefined,
           );
         }
         if (leg.type === "THSR" && thsrIdx) {
-          return recoverRailLeg(leg, date, thsrIdx, fetchThsrOdTimetable).catch(
-            () => undefined,
-          );
+          return recoverRailLeg(
+            leg,
+            legDate,
+            thsrIdx,
+            fetchThsrOdTimetable,
+          ).catch(() => undefined);
         }
         return Promise.resolve();
       });

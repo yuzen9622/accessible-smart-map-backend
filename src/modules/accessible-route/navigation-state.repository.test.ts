@@ -1,4 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import Redis from "ioredis";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 const { evalRedis, getRedis, setRedis, delRedis, redisReady } = vi.hoisted(
   () => ({
@@ -22,11 +31,20 @@ vi.mock("../../config/redis", () => ({
 }));
 
 import {
+  beginNavigationResume,
   beginReroute,
+  commitNavigationResume,
   deleteNavigationSnapshot,
   finalizeReroute,
   getNavigationSnapshot,
+  getAdoptedCandidateReplacement,
+  getNavigationStopStatus,
+  markNavigationStopped,
   readNavigationTokenStrict,
+  resolveCandidateDecision,
+  recoverCandidateDecision,
+  releaseNavigationResume,
+  type CandidateDecision,
   storeInitialNavigationEnvelope,
   storeNavigationSnapshot,
   type NavigationSessionSnapshot,
@@ -74,6 +92,12 @@ const envelope = {
 describe("navigation-state repository Lua tri-state", () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it("fails closed when adopted resume proof is unavailable or malformed", async () => {
+    evalRedis.mockRejectedValueOnce(new Error("offline"));
+    expect(await getAdoptedCandidateReplacement(snapshot, "old", 1)).toBeNull();
+    evalRedis.mockResolvedValueOnce("not-json");
+    expect(await getAdoptedCandidateReplacement(snapshot, "old", 1)).toBeNull();
+  });
   it("atomically stores the initial envelope and v1 head", async () => {
     evalRedis.mockResolvedValue(1);
     await expect(
@@ -91,6 +115,7 @@ describe("navigation-state repository Lua tri-state", () => {
 
   it.each([
     [["acquired", ""], { status: "acquired" }],
+    [["reconciling", ""], { status: "reconciling" }],
     [["stale", "2"], { status: "stale" }],
     [["conflict", "other"], { status: "conflict" }],
   ])("maps begin Lua result %j without fail-open", async (raw, expected) => {
@@ -136,11 +161,13 @@ describe("navigation-state repository Lua tri-state", () => {
     ).resolves.toBe("ok");
     expect(evalRedis).toHaveBeenCalledWith(
       expect.stringContaining('redis.call("SET", KEYS[3]'),
-      4,
+      6,
       "voice-nav:reroute-lock:nav:1",
       "voice-nav:head:nav",
       "voice-nav:route:next",
       "voice-nav:reroute-completed:nav:request",
+      "voice-nav:candidate-decision:nav",
+      "voice-nav:resume-lock:nav",
       "request",
       "1",
       JSON.stringify(nextEnvelope),
@@ -157,22 +184,30 @@ describe("navigation session snapshot", () => {
   it("writes the snapshot under its own key with the sliding 30 minute TTL", async () => {
     setRedis.mockResolvedValue("OK");
     await storeNavigationSnapshot(snapshot);
-    expect(setRedis).toHaveBeenCalledWith(
+    expect(evalRedis).toHaveBeenCalledWith(
+      expect.stringContaining("old.routeVersion > snapshot.routeVersion"),
+      4,
       "voice-nav:snapshot:nav",
+      "voice-nav:head:nav",
+      "voice-nav:stopped:nav",
+      "voice-nav:candidate-decision:nav",
       JSON.stringify(snapshot),
-      "EX",
-      1800,
+      "1800",
     );
   });
 
   it("honours an explicit ttl override", async () => {
     setRedis.mockResolvedValue("OK");
     await storeNavigationSnapshot(snapshot, 60);
-    expect(setRedis).toHaveBeenCalledWith(
+    expect(evalRedis).toHaveBeenCalledWith(
+      expect.any(String),
+      4,
       expect.any(String),
       expect.any(String),
-      "EX",
-      60,
+      expect.any(String),
+      expect.any(String),
+      JSON.stringify(snapshot),
+      "60",
     );
   });
 
@@ -225,10 +260,73 @@ describe("navigation session snapshot", () => {
     await deleteNavigationSnapshot("nav", "u");
     expect(evalRedis).toHaveBeenCalledWith(
       expect.any(String),
-      1,
+      3,
       "voice-nav:snapshot:nav",
+      "voice-nav:stopped:nav",
+      "voice-nav:resume-lock:nav",
       "u",
+      "1800",
     );
+  });
+
+  it("acquires and releases the atomic resume fence", async () => {
+    evalRedis
+      .mockResolvedValueOnce("acquired")
+      .mockResolvedValueOnce("committed")
+      .mockResolvedValueOnce(1);
+    await expect(beginNavigationResume(snapshot, "attempt")).resolves.toBe(
+      "acquired",
+    );
+    expect(evalRedis).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining('return "acquired"'),
+      5,
+      "voice-nav:snapshot:nav",
+      "voice-nav:stopped:nav",
+      "voice-nav:resume-lock:nav",
+      "voice-nav:head:nav",
+      "voice-nav:candidate-decision:nav",
+      "user-1",
+      "token",
+      "2",
+      "attempt",
+      "10",
+    );
+    await expect(commitNavigationResume(snapshot, "attempt")).resolves.toBe(
+      "committed",
+    );
+    expect(evalRedis).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('return "committed"'),
+      5,
+      "voice-nav:resume-lock:nav",
+      "voice-nav:stopped:nav",
+      "voice-nav:snapshot:nav",
+      "voice-nav:head:nav",
+      "voice-nav:candidate-decision:nav",
+      "user-1",
+      "attempt",
+      "10",
+      "token",
+      "2",
+    );
+    await releaseNavigationResume("nav", "attempt");
+    expect(evalRedis).toHaveBeenNthCalledWith(
+      3,
+      expect.any(String),
+      1,
+      "voice-nav:resume-lock:nav",
+      "attempt",
+    );
+  });
+
+  it("returns strict stop persistence and tombstone status", async () => {
+    evalRedis.mockResolvedValue("stopped");
+    await expect(markNavigationStopped("nav", "u")).resolves.toBe("stopped");
+    getRedis.mockResolvedValueOnce("u");
+    await expect(getNavigationStopStatus("nav", "u")).resolves.toBe("stopped");
+    getRedis.mockResolvedValueOnce(null);
+    await expect(getNavigationStopStatus("nav", "u")).resolves.toBe("active");
   });
 
   it("fails soft when Redis is unavailable", async () => {
@@ -236,7 +334,344 @@ describe("navigation session snapshot", () => {
     await expect(storeNavigationSnapshot(snapshot)).resolves.toBeUndefined();
     await expect(getNavigationSnapshot("nav")).resolves.toBeNull();
     await expect(deleteNavigationSnapshot("nav", "u")).resolves.toBeUndefined();
+    await expect(markNavigationStopped("nav", "u")).resolves.toBe(
+      "unavailable",
+    );
+    await expect(getNavigationStopStatus("nav", "u")).resolves.toBe(
+      "unavailable",
+    );
     expect(setRedis).not.toHaveBeenCalled();
     expect(evalRedis).not.toHaveBeenCalled();
   });
 });
+
+// Run only against a disposable local Redis: CANDIDATE_REDIS_TEST_URL=redis://127.0.0.1:<port>.
+describe.runIf(Boolean(process.env.CANDIDATE_REDIS_TEST_URL))(
+  "candidate decision real Redis Lua",
+  () => {
+    let client: Redis;
+    const nextEnvelope = {
+      ...envelope,
+      routeVersion: 2,
+      route: { ...envelope.route, navigationId: "nav", routeVersion: 2 },
+    };
+    const data = {
+      navigationId: "nav",
+      previousRouteVersion: 1,
+      routeVersion: 2,
+      routeToken: "next",
+      route: nextEnvelope.route,
+      instructions: [],
+      steps: [],
+      warnings: [],
+      currentStepIndex: 0 as const,
+      replayed: false,
+    };
+    const decision: CandidateDecision = {
+      createdAt: Date.now(),
+      state: "PENDING_DECISION",
+      navigationId: "nav",
+      previousVersion: 1,
+      nextVersion: 2,
+      oldToken: "old",
+      newToken: "next",
+      proposalId: "p",
+    };
+    beforeAll(() => {
+      client = new Redis(process.env.CANDIDATE_REDIS_TEST_URL!);
+    });
+    afterAll(async () => {
+      await client?.quit();
+    });
+    beforeEach(async () => {
+      await client.flushdb();
+      redisReady.mockResolvedValue(undefined);
+      evalRedis.mockImplementation((...args: any[]) =>
+        client.eval(...(args as [string, number, ...string[]])),
+      );
+      getRedis.mockImplementation((key: string) => client.get(key));
+      await storeInitialNavigationEnvelope("old", envelope);
+    });
+    const finalize = async () => {
+      expect(await beginReroute("nav", 1, "p")).toEqual({ status: "acquired" });
+      expect(
+        await finalizeReroute(1, "p", "next", nextEnvelope, data, decision),
+      ).toBe("ok");
+    };
+    it("finalize atomically writes head/token/completed/PENDING and releases lock", async () => {
+      await finalize();
+      expect(
+        await client.mget(
+          "voice-nav:head:nav",
+          "voice-nav:route:next",
+          "voice-nav:reroute-completed:nav:p",
+          "voice-nav:reroute-lock:nav:1",
+        ),
+      ).toEqual([
+        "2",
+        JSON.stringify(nextEnvelope),
+        JSON.stringify(data),
+        null,
+      ]);
+      expect(
+        JSON.parse((await client.get("voice-nav:candidate-decision:nav"))!)
+          .state,
+      ).toBe("PENDING_DECISION");
+      expect(await beginReroute("nav", 2, "other")).toEqual({
+        status: "reconciling",
+      });
+    });
+    it("lost finalize reply probes exact commit then persists ADOPTED+snapshot atomically", async () => {
+      await finalize();
+      expect(
+        await resolveCandidateDecision(decision, nextEnvelope, data, "probe"),
+      ).toBe("PENDING_DECISION");
+      expect(
+        await resolveCandidateDecision(decision, nextEnvelope, data, "adopt", {
+          ...snapshot,
+          routeToken: "next",
+        }),
+      ).toBe("ADOPTED");
+      expect(await getNavigationSnapshot("nav")).toMatchObject({
+        routeToken: "next",
+        routeVersion: 2,
+      });
+      // Restart/retry cannot roll back a published navigation.
+      expect(await recoverCandidateDecision("nav")).toBe("ADOPTED");
+      expect(
+        await resolveCandidateDecision(
+          decision,
+          nextEnvelope,
+          data,
+          "rollback",
+        ),
+      ).toBe("ADOPTED");
+      expect((await beginReroute("nav", 2, "other")).status).toBe("acquired");
+    });
+    it("resume proof requires ADOPTED and exactly the matching old/new token and versions", async () => {
+      await finalize();
+      const nextSnapshot = { ...snapshot, routeToken: "next" };
+      expect(
+        await getAdoptedCandidateReplacement(nextSnapshot, "old", 1),
+      ).toBeNull();
+      await resolveCandidateDecision(
+        decision,
+        nextEnvelope,
+        data,
+        "adopt",
+        nextSnapshot,
+      );
+      expect(
+        await getAdoptedCandidateReplacement(nextSnapshot, "old", 1),
+      ).toEqual(data);
+      expect(
+        await getAdoptedCandidateReplacement(nextSnapshot, "wrong", 1),
+      ).toBeNull();
+      expect(
+        await getAdoptedCandidateReplacement(nextSnapshot, "old", 0),
+      ).toBeNull();
+      await client.set("voice-nav:head:nav", "3");
+      expect(
+        await getAdoptedCandidateReplacement(nextSnapshot, "old", 1),
+      ).toBeNull();
+    });
+    it("unpublished PENDING recovers by rollback and old token can reroute", async () => {
+      await finalize();
+      expect(await recoverCandidateDecision("nav")).toBe("ROLLED_BACK");
+      expect(
+        await client.mget(
+          "voice-nav:head:nav",
+          "voice-nav:route:next",
+          "voice-nav:reroute-completed:nav:p",
+          "voice-nav:reroute-lock:nav:1",
+        ),
+      ).toEqual(["1", null, null, null]);
+      expect(await readNavigationTokenStrict("old")).toEqual({
+        status: "ok",
+        value: envelope,
+      });
+      expect((await beginReroute("nav", 1, "retry")).status).toBe("acquired");
+    });
+    it("ROLLBACK_REQUIRED resumes; repeated lost rollback reply is harmless", async () => {
+      await finalize();
+      await client.set(
+        "voice-nav:candidate-decision:nav",
+        JSON.stringify({ ...decision, state: "ROLLBACK_REQUIRED" }),
+      );
+      expect(await recoverCandidateDecision("nav")).toBe("ROLLED_BACK");
+      expect(await recoverCandidateDecision("nav")).toBe("missing");
+      expect(await client.get("voice-nav:head:nav")).toBe("1");
+    });
+    it("conditional rollback never regresses a newer head", async () => {
+      await finalize();
+      await client.set("voice-nav:head:nav", "3");
+      expect(await recoverCandidateDecision("nav")).toBe("mismatch");
+      expect(await client.get("voice-nav:head:nav")).toBe("3");
+    });
+    it("old snapshot cannot overwrite adopted version and stop cannot resurrect snapshot", async () => {
+      await finalize();
+      await resolveCandidateDecision(decision, nextEnvelope, data, "adopt", {
+        ...snapshot,
+        routeToken: "next",
+      });
+      await storeNavigationSnapshot({
+        ...snapshot,
+        routeVersion: 1,
+        routeToken: "old",
+        updatedAt: Date.now(),
+      });
+      expect(await getNavigationSnapshot("nav")).toMatchObject({
+        routeVersion: 2,
+        routeToken: "next",
+      });
+      await deleteNavigationSnapshot("nav", "user-1");
+      await storeNavigationSnapshot({
+        ...snapshot,
+        routeToken: "next",
+        updatedAt: Date.now(),
+      });
+      expect(await getNavigationSnapshot("nav")).toBeNull();
+    });
+    it("lets stop cancel a pending resume before publication", async () => {
+      await storeNavigationSnapshot({
+        ...snapshot,
+        routeVersion: 1,
+        routeToken: "old",
+        updatedAt: Date.now(),
+      });
+      const saved = await getNavigationSnapshot("nav");
+      if (!saved) throw new Error("expected stored snapshot");
+      expect(await beginNavigationResume(saved, "resume-attempt")).toBe(
+        "acquired",
+      );
+
+      await expect(markNavigationStopped("nav", "user-1")).resolves.toBe(
+        "stopped",
+      );
+      await expect(
+        commitNavigationResume(saved, "resume-attempt"),
+      ).resolves.toBe("stopped");
+      await releaseNavigationResume("nav", "resume-attempt");
+      expect(await getNavigationSnapshot("nav")).toBeNull();
+    });
+
+    it("orders stop after a committed resume publication fence", async () => {
+      await storeNavigationSnapshot({
+        ...snapshot,
+        routeVersion: 1,
+        routeToken: "old",
+        updatedAt: Date.now(),
+      });
+      const saved = await getNavigationSnapshot("nav");
+      if (!saved) throw new Error("expected stored snapshot");
+      expect(await beginNavigationResume(saved, "resume-attempt")).toBe(
+        "acquired",
+      );
+      expect(await commitNavigationResume(saved, "resume-attempt")).toBe(
+        "committed",
+      );
+
+      let stopped = false;
+      const stopping = markNavigationStopped("nav", "user-1").then((status) => {
+        stopped = true;
+        return status;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(stopped).toBe(false);
+      await releaseNavigationResume("nav", "resume-attempt");
+      await expect(stopping).resolves.toBe("stopped");
+    });
+
+    it("durably records stop when a committed resume owner disappears", async () => {
+      await storeNavigationSnapshot({
+        ...snapshot,
+        routeVersion: 1,
+        routeToken: "old",
+        updatedAt: Date.now(),
+      });
+      const saved = await getNavigationSnapshot("nav");
+      if (!saved) throw new Error("expected stored snapshot");
+      expect(await beginNavigationResume(saved, "orphaned-resume")).toBe(
+        "acquired",
+      );
+      expect(await commitNavigationResume(saved, "orphaned-resume")).toBe(
+        "committed",
+      );
+      await client.expire("voice-nav:resume-lock:nav", 1);
+
+      await expect(markNavigationStopped("nav", "user-1")).resolves.toBe(
+        "stopped",
+      );
+      expect(await client.get("voice-nav:stopped:nav")).toBe("user-1");
+      expect(await getNavigationSnapshot("nav")).toBeNull();
+    });
+
+    it("prevents reroute finalization while resume publication is fenced", async () => {
+      await storeNavigationSnapshot({
+        ...snapshot,
+        routeVersion: 1,
+        routeToken: "old",
+        updatedAt: Date.now(),
+      });
+      const saved = await getNavigationSnapshot("nav");
+      if (!saved) throw new Error("expected stored snapshot");
+      expect(await beginReroute("nav", 1, "p")).toEqual({
+        status: "acquired",
+      });
+      expect(await beginNavigationResume(saved, "resume-attempt")).toBe(
+        "acquired",
+      );
+      expect(
+        await finalizeReroute(1, "p", "next", nextEnvelope, data, decision),
+      ).toBe("conflict");
+      expect(await commitNavigationResume(saved, "resume-attempt")).toBe(
+        "committed",
+      );
+      await releaseNavigationResume("nav", "resume-attempt");
+    });
+
+    it("rejects resume commit if the durable route version advanced", async () => {
+      await storeNavigationSnapshot({
+        ...snapshot,
+        routeVersion: 1,
+        routeToken: "old",
+        updatedAt: Date.now(),
+      });
+      const saved = await getNavigationSnapshot("nav");
+      if (!saved) throw new Error("expected stored snapshot");
+      expect(await beginNavigationResume(saved, "resume-attempt")).toBe(
+        "acquired",
+      );
+      await client.set("voice-nav:head:nav", "2", "EX", 1800);
+      expect(await commitNavigationResume(saved, "resume-attempt")).toBe(
+        "stale",
+      );
+      await releaseNavigationResume("nav", "resume-attempt");
+    });
+
+    it("stop before adoption blocks publication", async () => {
+      await finalize();
+      await deleteNavigationSnapshot("nav", "user-1");
+      expect(
+        await resolveCandidateDecision(
+          decision,
+          nextEnvelope,
+          data,
+          "adopt",
+          snapshot,
+        ),
+      ).toBe("ROLLBACK_REQUIRED");
+      expect(await recoverCandidateDecision("nav")).toBe("ROLLED_BACK");
+      expect(await getNavigationSnapshot("nav")).toBeNull();
+    });
+    it("expired lock cannot finalize or leave a candidate marker", async () => {
+      await beginReroute("nav", 1, "p");
+      await client.del("voice-nav:reroute-lock:nav:1");
+      expect(
+        await finalizeReroute(1, "p", "next", nextEnvelope, data, decision),
+      ).toBe("conflict");
+      expect(await client.get("voice-nav:head:nav")).toBe("1");
+      expect(await client.get("voice-nav:candidate-decision:nav")).toBeNull();
+    });
+  },
+);

@@ -1,12 +1,17 @@
+import {
+  groupRoutesByTransitSkeleton,
+  resolveCandidateGroup,
+  compareRoutesByArrival,
+  type PairSearchMemo,
+} from "./bus-stop-pair-candidates";
+import { createCandidateRequestBudget } from "../transit/bus-stop-pair-eta.service";
+import { taipeiIsoOffset } from "../../config/taipei-time";
 import { copyWithDescriptors } from "../../utils/route-source-names";
 import { enrichRouteDisplayNames } from "./route-display-enrichment";
 import { normalizedStreetNames } from "../../utils/nav-instructions-engine";
 import { getCoordinates } from "../../adapters/google.adapter";
 import { resolveCity } from "../geography/city.service";
-import {
-  reservePreferredRoute,
-  transitPreferencePenalty,
-} from "./planners/transit-preference";
+import { transitPreferencePenalty } from "./planners/transit-preference";
 import type { TransitPreference } from "../../types/route";
 import { parseRouteIntent } from "./route-intent.port";
 import { getA11yProfile } from "../user/user.service";
@@ -51,16 +56,10 @@ import { slimRoutes, compactRoutes } from "./facility-slim";
 import { slimRouteGeometry } from "./geometry-slim";
 import { getRoutingConfig } from "../../config/routing";
 import { restoreRouteStopIds } from "./stop-aliases";
-import {
-  rerankByLowFloor,
-  type RouteLowFloorHistory,
-} from "./low-floor-rerank";
-import { demoteElevatorNoticeRoutes } from "./elevator-notice-rerank";
 import { matchAudioSignals, paddedBbox } from "./planners/audio-signals";
 import {
   scoreRoute,
   routeCost,
-  prerankCost,
   resolveA11yConstraints,
   type EnvConditions,
 } from "./scoring";
@@ -94,10 +93,7 @@ import {
   presentRouteMessages,
   routeMessage,
 } from "../../utils/route-messages";
-import {
-  attachInternalSchedule,
-  retainEarliestFutureRoute,
-} from "./route-schedule";
+import { attachInternalSchedule } from "./route-schedule";
 import {
   buildHazardQueryArea,
   pointToSegmentDistanceM,
@@ -425,37 +421,6 @@ export function scoreAndRank(
 }
 
 /**
- * Stage-1 pre-ranking for the two-stage pipeline: order candidates by a cheap,
- * accessibility-aware proxy (time + transfers + walk distance) that needs NO OSM
- * data, so the top-N can be enriched before the real scoreRoute runs. Without
- * this, scoring ran on the un-enriched candidate set (facility data still empty)
- * and the accessibility budget collapsed to pure travel time.
- *
- * @param routes Candidate routes.
- * @param mode Accessibility mode driving the proxy penalties.
- * @returns Routes sorted by ascending proxy cost (best first).
- */
-function prerankByProxy(
-  routes: AccessibleRoute[],
-  mode: AccessibilityMode,
-  transitPreference?: TransitPreference,
-): AccessibleRoute[] {
-  return routes
-    .map((r) => ({
-      route: r,
-      cost:
-        prerankCost(
-          r.totalMinutes,
-          r.transferCount,
-          totalWalkDistanceM(r),
-          mode,
-        ) + transitPreferencePenalty(r, transitPreference),
-    }))
-    .sort((a, b) => a.cost - b.cost)
-    .map((s) => s.route);
-}
-
-/**
  * Count confirmed stairs-only features in a walk leg while preserving explicit
  * wheelchair-ramp exceptions. OTP can merge consecutive OSM ways into one step,
  * and streetName reflects only the first way; string matching therefore creates
@@ -713,22 +678,6 @@ function routeStairsCount(route: AccessibleRoute): number {
 }
 
 /**
- * Place confirmed step-free routes before stair-bearing routes while retaining
- * the existing accessibility proxy order within each group.
- * @param routes Proxy-ranked candidate routes.
- * @returns Candidates ordered to keep step-free options inside the enrichment window.
- */
-function prioritizeStepFreeRoutes(
-  routes: AccessibleRoute[],
-): AccessibleRoute[] {
-  const stepFree = routes.filter((route) => routeStairsCount(route) === 0);
-  const withStairs = routes
-    .filter((route) => routeStairsCount(route) > 0)
-    .sort((a, b) => routeStairsCount(a) - routeStairsCount(b));
-  return [...stepFree, ...withStairs];
-}
-
-/**
  * Hard-constraint exclusion: with `requireElevator` a route is excluded when a
  * rail leg has facility data but no working elevator, and with `avoidStairs` when
  * a walk leg passes a stairs-only barrier. Legs with NO facility data are
@@ -807,90 +756,6 @@ function applyA11yExclusion(
     );
   }
   return routes;
-}
-
-function transitLegKey(leg: BusLeg | MetroLeg | ThsrLeg | TraLeg): string {
-  switch (leg.type) {
-    case "BUS":
-      return `BUS|${leg.routeName}|${leg.departureStop}|${leg.arrivalStop}|${leg.direction}`;
-    case "METRO":
-      return `METRO|${leg.railSystem}|${leg.departureStationUid}|${leg.arrivalStationUid}`;
-    case "THSR":
-      return `THSR|${leg.departureStationUID}|${leg.arrivalStationUID}`;
-    case "TRA":
-      return `TRA|${leg.departureStationUID}|${leg.arrivalStationUID}`;
-  }
-}
-
-function buildRouteKey(r: AccessibleRoute): string {
-  const transitLegs = r.legs.filter(
-    (l): l is BusLeg | MetroLeg | ThsrLeg | TraLeg => l.type !== "WALK",
-  );
-  if (transitLegs.length === 0) return "";
-  return transitLegs.map(transitLegKey).join("::");
-}
-
-function deduplicateRoutes(routes: AccessibleRoute[]): AccessibleRoute[] {
-  const seen = new Set<string>();
-  return routes.filter((r) => {
-    const key = buildRouteKey(r);
-    if (key === "") return true;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-/**
- * Cross-planner normalization key: the GTFS graph and the TDX hosted engine can
- * emit the SAME bus line snapped to different stop pairs, which survives the
- * stop-level dedup above as two near-identical candidates. Keys a bus leg at the
- * line level (routeName + direction); rail legs keep their stop-pair identity.
- *
- * @param leg Transit leg to derive a logical key for.
- * @returns The logical leg key.
- */
-function logicalLegKey(leg: BusLeg | MetroLeg | ThsrLeg | TraLeg): string {
-  return leg.type === "BUS"
-    ? `BUS|${leg.routeName}|${leg.direction}`
-    : transitLegKey(leg);
-}
-
-function collapseLogicalDuplicates(
-  routes: AccessibleRoute[],
-): AccessibleRoute[] {
-  const best = new Map<string, AccessibleRoute>();
-  const walkOnly: AccessibleRoute[] = [];
-  for (const r of routes) {
-    const transitLegs = r.legs.filter(
-      (l): l is BusLeg | MetroLeg | ThsrLeg | TraLeg => l.type !== "WALK",
-    );
-    if (!transitLegs.length) {
-      walkOnly.push(r);
-      continue;
-    }
-    const key = transitLegs.map(logicalLegKey).join("::");
-    const prev = best.get(key);
-    if (!prev) {
-      best.set(key, r);
-      continue;
-    }
-    const prevFuture =
-      prev._isFutureScheduled &&
-      typeof prev._scheduledDepartureTime === "number";
-    const routeFuture =
-      r._isFutureScheduled && typeof r._scheduledDepartureTime === "number";
-    if (
-      (routeFuture &&
-        (!prevFuture ||
-          (r._scheduledDepartureTime as number) <
-            (prev._scheduledDepartureTime as number))) ||
-      (!routeFuture && !prevFuture && r.totalMinutes < prev.totalMinutes)
-    ) {
-      best.set(key, r);
-    }
-  }
-  return [...best.values(), ...walkOnly];
 }
 
 /**
@@ -1261,50 +1126,6 @@ export async function applyConfirmedHazardPlanning(
   };
 }
 
-/**
- * Shared finalization: dedupe → cross-planner line-level collapse → proxy
- * pre-rank + confirmed-hazard candidate selection → top-N a11y enrichment
- * (fail-soft) → hard-constraint exclusion → mode-aware score + final
- * confirmed-hazard ranking → top 3 → realtime facility overlay (fail-soft) →
- * realtime transit overlay
- * (bus ETA + TRA delays, fail-soft) → boarding-accessibility tie-break within
- * the top 3 (fail-soft) → facility slimming (runs LAST so scoring
- * and the overlays see full documents).
- *
- * @param routes Candidate routes to finalize.
- * @param origin Journey origin coordinates.
- * @param destination Journey destination coordinates.
- * @param mode Accessibility mode for scoring.
- * @param constraints Resolved hard accessibility constraints for exclusion.
- * @param format Response shape; "compact" dedupes facilities route-level.
- * @param envPromise Environment lookup started alongside route planning.
- * @returns The top-3 finalized routes.
- */
-/**
- * Low-floor history for the first bus leg of each route. Fail-soft: an empty
- * map when the lookup fails, so ranking falls back to live plates only.
- *
- * @param routes Routes about to be reranked.
- * @returns History keyed by TDX sub-route uid.
- */
-async function loadLowFloorHistory(
-  routes: AccessibleRoute[],
-): Promise<RouteLowFloorHistory> {
-  const subRoutes = routes.flatMap((route) => {
-    const leg = route.legs.find((l) => l.type !== "WALK");
-    return leg?.type === "BUS" && leg.subRouteUid ? [leg.subRouteUid] : [];
-  });
-  if (!subRoutes.length) return new Map();
-  try {
-    const { findRouteLowFloorEvidence } =
-      await import("../transit/bus-fleet.repository");
-    return await findRouteLowFloorEvidence(subRoutes);
-  } catch (err) {
-    console.warn("[accessible-route] low-floor history lookup failed", err);
-    return new Map();
-  }
-}
-
 async function finalizeRoutes(
   routes: AccessibleRoute[],
   origin: { lat: number; lng: number },
@@ -1315,148 +1136,144 @@ async function finalizeRoutes(
   envPromise?: Promise<EnvConditions | undefined>,
   transitPreference?: TransitPreference,
   language?: SupportedLang,
+  planningNow = Date.now(),
 ): Promise<AccessibleRoute[]> {
-  const PRERANK_N = 8;
-  const t: Record<string, number> = {};
-  let t0 = Date.now();
-  // Stage 1: cheap accessibility-aware proxy pre-rank (no OSM data), then
-  // compare every fully-matchable candidate to confirmed hazards BEFORE top-N.
-  // Otherwise a clear ninth route can never be selected over eight blocked ones.
-  const candidates = collapseLogicalDuplicates(deduplicateRoutes(routes));
-  const proxyRanked = prerankByProxy(candidates, mode, transitPreference);
-  const proxyEligible = constraints.avoidStairs
-    ? prioritizeStepFreeRoutes(proxyRanked)
-    : proxyRanked;
-  const [communityHazards, governmentHazards] = await Promise.all([
-    loadConfirmedHazards(proxyEligible, defaultConfirmedHazardLookup),
-    loadGovernmentHazards(proxyEligible),
+  // All bounded upstream members survive until canonical grouping and chain
+  // search. In particular, no route-name collapse or arbitrary pre-rank eight.
+  let candidates = routes;
+  const [community, government] = await Promise.all([
+    loadConfirmedHazards(candidates, defaultConfirmedHazardLookup),
+    loadGovernmentHazards(candidates),
   ]);
-  const confirmedHazards = combineHazards(communityHazards, governmentHazards);
-  const proxyHazardPlan =
-    confirmedHazards === undefined
-      ? unappliedHazardPlan(proxyEligible)
-      : planWithConfirmedHazards(proxyEligible, confirmedHazards);
-  // A preferred-mode route ranked below the cut keeps one slot, but only when
-  // it is clear of known blocking hazards and, for step-free requests, stairs.
-  const topN = reservePreferredRoute(
-    proxyHazardPlan.selectionApplied
-      ? proxyHazardPlan.routes.slice(0, PRERANK_N)
-      : retainEarliestFutureRoute(
-          proxyHazardPlan.routes,
-          proxyHazardPlan.routes,
-          PRERANK_N,
-        ),
-    proxyHazardPlan.routes,
-    PRERANK_N,
-    transitPreference,
-    (route) =>
-      !route.hazardAdvisory?.blockingOnRoute &&
-      (!constraints.avoidStairs || routeStairsCount(route) === 0),
-  );
-  t.prerank = Date.now() - t0;
-  t0 = Date.now();
-  // Stage 2: a11y enrichment (Mongo) BEFORE scoring, so facility data is real
-  // when scoreRoute runs — otherwise the accessibility budget collapses to 0.
+  const hazards = combineHazards(community, government);
+  if (hazards !== undefined)
+    candidates = planWithConfirmedHazards(candidates, hazards).routes;
   try {
-    await enrichTopRoutes(topN, origin, destination, mode);
+    await enrichTopRoutes(candidates, origin, destination, mode);
   } catch (err) {
-    console.warn("[accessible-route] top-N a11y enrichment failed", err);
+    console.warn("[accessible-route] a11y enrichment failed", err);
   }
-  if (mode === "visual_impaired") await attachAudioSignals(topN);
-  t.enrich = Date.now() - t0;
-  t0 = Date.now();
-  // One weather/air lookup per request (cached, CCTV-free); an environment
-  // factor into the score. Never let an env failure break routing.
+  if (mode === "visual_impaired") await attachAudioSignals(candidates);
+  let notices = new Set<AccessibleRoute>();
+  try {
+    const { overlayFacilityStatus } =
+      await import("./planners/facility-status");
+    notices = await overlayFacilityStatus(candidates, mode);
+  } catch (err) {
+    console.warn("[accessible-route] facility overlay failed", err);
+  }
+  try {
+    const { overlayRealtimeTransit, recoverRailTrainNos, annotateBusTdxCity } =
+      await import("./planners/realtime-transit");
+    annotateBusTdxCity(candidates);
+    await recoverRailTrainNos(candidates);
+    await overlayRealtimeTransit(candidates);
+  } catch (err) {
+    console.warn("[accessible-route] realtime overlay failed", err);
+  }
+  const safe = candidates.filter(
+    (r) => !isRouteExcluded(r, constraints) && !r.degraded,
+  );
+  // Hazard and station-level elevator notices remain advisory, not new hard
+  // exclusions. Preserve their existing demotion as explicit eligibility tiers.
+  for (const route of candidates)
+    Object.defineProperty(route, "_advisoryEligibilityTier", {
+      value: Number(
+        !!route.hazardAdvisory?.blockingOnRoute ||
+          (notices.has(route) &&
+            (mode === "wheelchair" || constraints.requireElevator)),
+      ),
+      configurable: true,
+    });
+  const unsafe = candidates.filter((r) => !safe.includes(r));
+  // Keep the legacy graceful fallback, but label every retained member as
+  // degraded, and defer activating it until safe candidate chains are tried.
+  const fallback = applyA11yExclusion(unsafe, constraints);
+  for (const route of fallback) route.degraded = true;
+  const realtimeNow = Date.now();
+  const budget = createCandidateRequestBudget();
+  const memo: PairSearchMemo = new Map();
+  let feasible: AccessibleRoute[] = [];
+  try {
+    for (const tier of [safe, fallback]) {
+      const groups = groupRoutesByTransitSkeleton(tier);
+      const solved = await Promise.all(
+        groups.map((g) =>
+          resolveCandidateGroup({
+            members: g.members,
+            mode,
+            planningNow,
+            realtimeNow,
+            budget,
+            memo,
+            validateMaterialized: async (base, collections) => {
+              const replacements = [...collections].flatMap(
+                ([index, collection]) =>
+                  [...collection.materialized].map(([id, leg]) => {
+                    const legs = base.legs.slice();
+                    legs[index] = leg;
+                    return {
+                      collection,
+                      id,
+                      route: copyWithDescriptors(base, { legs }),
+                    };
+                  }),
+              );
+              await enrichTopRoutes(
+                replacements.map((v) => v.route),
+                origin,
+                destination,
+                mode,
+              ).catch((err) =>
+                console.warn(
+                  "[accessible-route] candidate a11y enrichment failed",
+                  err,
+                ),
+              );
+              if (hazards !== undefined)
+                planWithConfirmedHazards(
+                  replacements.map((v) => v.route),
+                  hazards,
+                );
+              for (const { collection, id, route } of replacements) {
+                if (
+                  (isRouteExcluded(route, constraints) && !base.degraded) ||
+                  (route.hazardAdvisory?.blockingOnRoute ?? 0) >
+                    (base.hazardAdvisory?.blockingOnRoute ?? 0)
+                ) {
+                  collection.materialized.delete(id);
+                  collection.candidates = collection.candidates.filter(
+                    (c) => c.candidateId !== id,
+                  );
+                }
+              }
+            },
+          }),
+        ),
+      );
+      feasible = solved.flat();
+      if (feasible.length) break;
+    }
+  } finally {
+    budget.close();
+  }
   let env: EnvConditions | undefined;
   try {
     env = envPromise
       ? await envPromise
       : await getWeatherAndAirQuality(destination.lat, destination.lng);
-  } catch (err) {
-    console.warn("[accessible-route] environment lookup failed", err);
+  } catch {
     env = undefined;
   }
-  t.env = Date.now() - t0;
-  t0 = Date.now();
-  // Stage 3: hard-constraint exclusion, which MUST run after enrichment — the
-  // planners emit rail legs with an empty facilityHighlights and enrichLegIndoor
-  // is what fills in the elevator notes the exclusion reads. Filtering before
-  // Stage 2 silently excluded nothing at all.
-  const eligible = applyA11yExclusion(topN, constraints);
-  t.exclude = Date.now() - t0;
-  t0 = Date.now();
-  // Stage 4: score with the enriched facility data, then compare confirmed
-  // street-level hazards BEFORE selecting/slimming the final routes.
-  const baseRanked = scoreAndRank(
-    eligible,
-    mode,
-    env,
-    transitPreference,
-    language,
-  );
-  t.rank = Date.now() - t0;
-  t0 = Date.now();
-  const hazardPlan =
-    confirmedHazards === undefined
-      ? unappliedHazardPlan(baseRanked)
-      : planWithConfirmedHazards(baseRanked, confirmedHazards);
-  // Keep the legacy earliest-future-service guarantee only when hazard evidence
-  // did not select between alternatives. A known blocking hazard must not be
-  // reintroduced at index zero by that schedule-only override.
-  const top = reservePreferredRoute(
-    hazardPlan.selectionApplied
-      ? hazardPlan.routes.slice(0, 3)
-      : retainEarliestFutureRoute(hazardPlan.routes, hazardPlan.routes, 3),
-    hazardPlan.routes,
-    3,
-    transitPreference,
-    (route) => !route.hazardAdvisory?.blockingOnRoute && !route.degraded,
-  );
-  t.hazard = Date.now() - t0;
-  t0 = Date.now();
-  let elevatorNoticeRoutes = new Set<AccessibleRoute>();
-  try {
-    const { overlayFacilityStatus } =
-      await import("./planners/facility-status");
-    elevatorNoticeRoutes = await overlayFacilityStatus(top, mode);
-  } catch (err) {
-    console.warn("[accessible-route] facility status overlay failed", err);
-  }
-  t.facilityOverlay = Date.now() - t0;
-  t0 = Date.now();
-  // Route low-floor history is advisory; it loads alongside the live overlay.
-  const lowFloorHistory = loadLowFloorHistory(top);
-  try {
-    const { overlayRealtimeTransit, recoverRailTrainNos, annotateBusTdxCity } =
-      await import("./planners/realtime-transit");
-    annotateBusTdxCity(top);
-    await recoverRailTrainNos(top).catch(() => undefined);
-    await overlayRealtimeTransit(top);
-  } catch (err) {
-    console.warn("[accessible-route] realtime transit overlay failed", err);
-  }
-  t.realtimeOverlay = Date.now() - t0;
-  t0 = Date.now();
-  try {
-    rerankByLowFloor(top, mode, transitPreference, await lowFloorHistory);
-  } catch (err) {
-    console.warn("[accessible-route] low-floor rerank failed", err);
-  }
-  demoteElevatorNoticeRoutes(
-    top,
-    elevatorNoticeRoutes,
-    mode,
-    constraints.requireElevator,
-  );
-  t.lowFloorRerank = Date.now() - t0;
-  // Derive B12 details while full facility tags are still attached. slimRoutes
-  // and compactRoutes only project/move facility arrays, so these direct WALK
-  // fields remain stable in either response format.
+  const scored = scoreAndRank(feasible, mode, env, transitPreference, language);
+  const top = groupRoutesByTransitSkeleton(scored.sort(compareRoutesByArrival))
+    .map((group) => group.members[0])
+    .slice(0, 3);
+  // Nothing after the arrival-first comparator may reorder routes.
   attachWalkA11yDetails(top);
   slimRoutes(top);
   slimRouteGeometry(top);
   if (format === "compact") compactRoutes(top);
-  console.log("[route-timing] finalize", JSON.stringify(t));
   return top;
 }
 
@@ -2112,6 +1929,7 @@ function annotateParkArrival(
 export async function planAccessibleRouteFromRequest(
   body: PlanRouteRequest,
 ): Promise<PlanRouteResult> {
+  const planningNow = Date.now();
   let { origin, destination } = body;
   const { query, userLocation, maxTransfers, departureTime, format } = body;
   const travelMode = body.travelMode ?? "transit";
@@ -2271,10 +2089,9 @@ export async function planAccessibleRouteFromRequest(
       data: { reason: "WAYPOINT_LOOKUP_FAILED" },
     };
   }
-  const waypoints: LatLng[] = waypointCoords.map((w) => ({
-    lat: w!.latitude,
-    lng: w!.longitude,
-  }));
+  const waypoints: LatLng[] = waypointCoords.flatMap((w) =>
+    w ? [{ lat: w.latitude, lng: w.longitude }] : [],
+  );
 
   const lat = originCoords.latitude;
   const lng = originCoords.longitude;
@@ -2558,6 +2375,18 @@ export async function planAccessibleRouteFromRequest(
     );
   }
 
+  // All successful road/walk routes share the resolved request instant. Transit
+  // chains already carry their own authoritative origin/destination instants.
+  for (const route of routes) {
+    if (!route.departureTime || !route.arrivalTime) {
+      const start =
+        futureDeparture?.getTime() ??
+        route._scheduledDepartureTime ??
+        planningNow;
+      route.departureTime = taipeiIsoOffset(start);
+      route.arrivalTime = taipeiIsoOffset(start + route.totalMinutes * 60000);
+    }
+  }
   const displayRoutes = await enrichRouteDisplayNames(routes, body.language);
   const normalizedRoutes = displayRoutes.map((route) => {
     const normalized = normalizeWalkSteps(route, body.language);
@@ -3586,6 +3415,7 @@ export async function findAccessibleRoutesDetailed(
       envPromise,
       opts.transitPreference,
       opts.language,
+      opts.departureTime?.getTime() ?? t0,
     );
     if (!routes.length) return { status: "no_route", routes: [] };
     return otp.walkingBetter
@@ -3648,6 +3478,7 @@ export async function findAccessibleRoutesDetailed(
     envPromise,
     opts.transitPreference,
     opts.language,
+    opts.departureTime?.getTime() ?? t0,
   );
   if (!routes.length) return { status: "no_route", routes: [] };
   return everySegmentWalkingBetter

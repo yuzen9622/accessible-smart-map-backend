@@ -9,6 +9,15 @@ import {
 import { ROUTE_WARNING } from "../../constants/messages";
 import { TaiwanCityEn } from "../../types/transit";
 
+it("preserves additive offset route timestamps", () => {
+  const parsed = AccessibleRouteSchema.parse({
+    ...route,
+    departureTime: "2030-01-01T23:59:00+08:00",
+    arrivalTime: "2030-01-02T00:01:00+08:00",
+  });
+  expect(parsed).toHaveProperty("arrivalTime", "2030-01-02T00:01:00+08:00");
+});
+
 describe("AccessibleRouteBodySchema language", () => {
   const body = {
     origin: { latitude: 25.04, longitude: 121.56 },

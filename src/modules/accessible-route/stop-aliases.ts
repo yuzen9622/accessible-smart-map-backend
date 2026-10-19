@@ -16,6 +16,18 @@ export async function restoreRouteStopIds(
     route.legs.filter((leg): leg is BusLeg => leg.type === "BUS"),
   );
   if (!busLegs.length) return;
+  // Preserve the authoritative OTP ids before any route-specific restoration,
+  // even when Mongo is unavailable. Never reverse an ambiguous historical row.
+  for (const leg of busLegs) {
+    if (!leg._canonicalDepartureStopId && leg.departureStopId)
+      Object.defineProperty(leg, "_canonicalDepartureStopId", {
+        value: leg.departureStopId,
+      });
+    if (!leg._canonicalArrivalStopId && leg.arrivalStopId)
+      Object.defineProperty(leg, "_canonicalArrivalStopId", {
+        value: leg.arrivalStopId,
+      });
+  }
   const routeIdOf = (leg: BusLeg) => `${leg.subRouteUid}_${leg.direction}`;
   const pairs = busLegs.flatMap((leg) => {
     const routeId = routeIdOf(leg);

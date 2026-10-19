@@ -2,7 +2,7 @@ import express from "express";
 import requestHttp from "supertest";
 import { createAccessibleRouteRouter } from "./accessible-route.router";
 import { AccessibleRouteSchema } from "./accessible-route.schema";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { lookupRouteNameSources } from "./route-display-enrichment.repository";
 vi.mock("./route-display-enrichment.repository", () => ({
   lookupRouteNameSources: vi.fn(),
@@ -196,7 +196,59 @@ const driveRequest = {
   destination: { latitude: 25.03, longitude: 121.55 },
 };
 
-const otpTransitOk = (routes: any[]) => ({ status: "ok" as const, routes });
+// Service fixtures represent the absolute timing/identity evidence emitted by
+// the real OTP mapper. Do not ask the candidate solver to invent these values.
+const FIXTURE_NOW = Date.parse("2026-10-18T08:00:00+08:00");
+const otpTransitOk = (routes: unknown[]) => ({
+  status: "ok" as const,
+  routes: routes.map((raw) => {
+    const input = raw as import("../../types/route").AccessibleRoute;
+    const route = Object.defineProperties(
+      {},
+      Object.getOwnPropertyDescriptors(input),
+    ) as import("../../types/route").AccessibleRoute;
+    route.legs = input.legs.map(
+      (leg) =>
+        Object.defineProperties(
+          {},
+          Object.getOwnPropertyDescriptors(leg),
+        ) as typeof leg,
+    );
+    const start = route._scheduledDepartureTime ?? FIXTURE_NOW;
+    let cursor = start;
+    const walks = route.legs
+      .filter((l) => l.type === "WALK")
+      .reduce((n, l) => n + l.minutesEst * 60000, 0);
+    const transit = route.legs.filter((l) => l.type !== "WALK");
+    const duration = Math.max(
+      60000,
+      (route.totalMinutes * 60000 - walks) / Math.max(1, transit.length),
+    );
+    route.legs.forEach((leg, index) => {
+      if (leg.type === "WALK") {
+        cursor += leg.minutesEst * 60000;
+        return;
+      }
+      if (!(
+        leg.type === "BUS" ||
+        leg.type === "METRO" ||
+        leg.type === "TRA" ||
+        leg.type === "THSR"
+      ))
+        return;
+      leg._scheduledDepartureTime ??= cursor;
+      leg._scheduledArrivalTime ??= leg._scheduledDepartureTime + duration;
+      if (leg.type === "BUS") {
+        leg.subRouteUid ??= `fixture-${leg.routeName}`;
+        leg.departureStopId ??= `${leg.subRouteUid}-A-${index}`;
+        leg.arrivalStopId ??= `${leg.subRouteUid}-B-${index}`;
+      }
+      cursor = leg._scheduledArrivalTime;
+    });
+    return route;
+  }),
+});
+afterEach(() => vi.useRealTimers());
 const otpTransitNoRoute = (): OtpRoutePlanResult => ({
   status: "no_route" as const,
   routes: [],
@@ -227,6 +279,8 @@ const hasParkingGuide = (hl: string[]) =>
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(FIXTURE_NOW);
   vi.mocked(lookupRouteNameSources).mockResolvedValue({
     busStops: new Map(),
     busRoutes: new Map(),
@@ -2623,7 +2677,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
       vi.stubEnv("ROUTE_PLAN_BUDGET_MS", "1");
       try {
         vi.mocked(planOtpRouteDetailed).mockImplementation(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 10));
+          vi.setSystemTime(FIXTURE_NOW + 10);
           return otpTransitNoRoute();
         });
 
@@ -2839,7 +2893,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
                 from: "出發地",
                 to: "起站",
                 distanceM: walkDistanceM,
-                minutesEst: 120,
+                minutesEst: 1,
                 polyline: [],
                 a11yFacilities: [],
               },
@@ -2911,8 +2965,8 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
     expect(earliest).toBeDefined();
     expect(earliest?.departureDate).toBe("2030-01-02");
     expect(earliest?.legs.find((leg) => leg.type === "BUS")).toMatchObject({
-      departureTime: "06:20",
-      waitInfo: { time: "06:20", source: "schedule" },
+      departureTime: "06:21",
+      waitInfo: { time: "06:21", source: "schedule" },
     });
   });
 });
@@ -3475,7 +3529,7 @@ describe("transit preference reserves a top-three slot", () => {
       busRoute(),
     ] as any);
 
-  it("returns a much slower bus route when bus is preferred", async () => {
+  it("does not let preference displace earlier arrivals in the same eligibility tier", async () => {
     vi.mocked(planOtpRouteDetailed).mockResolvedValue(candidates());
     const res = await planAccessibleRouteFromRequest({
       travelMode: "transit",
@@ -3486,7 +3540,7 @@ describe("transit preference reserves a top-three slot", () => {
     });
     const routes = okData(res).routes;
     expect(routes).toHaveLength(3);
-    expect(routes.find((r) => r.routeName === "1819")?.totalMinutes).toBe(78);
+    expect(routes.map((r) => r.routeName)).toEqual(["M1", "M2", "M3"]);
   });
 
   it("keeps the plain ranking without a preference", async () => {
@@ -4284,7 +4338,7 @@ describe("request and AI transit preference propagation", () => {
   });
 });
 
-it("retains a preferred ninth candidate through enrichment and final ranking", async () => {
+it("enriches all candidates but does not promote a later preferred ninth arrival", async () => {
   vi.mocked(getTransitAlerts).mockResolvedValue({
     ok: true,
     mode: "bus",
@@ -4349,7 +4403,8 @@ it("retains a preferred ninth candidate through enrichment and final ranking", a
     transitPreference: "rail",
   });
   expect(result.ok).toBe(true);
-  expect(okData(result).routes[0].routeId).toBe("rail");
+  expect(okData(result).routes[0].routeId).toBe("bus-0");
+  expect(okData(result).routes.map((r) => r.routeId)).not.toContain("rail");
   expect(okData(result).routes.some((r) => r.routeId.startsWith("bus-"))).toBe(
     true,
   );

@@ -1,5 +1,12 @@
 import { redisGet, redisSet } from "../../config/redis";
 import type { AccessibleRoute, BusLeg } from "../../types/route";
+import {
+  getBusCandidateContext,
+  type BusRouteCandidateContext,
+} from "./bus-stop-pair-candidates";
+export interface BusPlanSnapshotV2 extends BusRouteCandidateContext {
+  schemaVersion: 2;
+}
 
 const BUS_PLAN_PREFIX = "bus-plan:";
 const ARRIVAL_GRACE_SEC = 30 * 60;
@@ -14,6 +21,22 @@ export async function storeBusPlan(
   token: string,
   route: AccessibleRoute,
 ): Promise<void> {
+  const context = getBusCandidateContext(route);
+  if (context && Object.keys(context.legs).length) {
+    const arrival = route.arrivalTime
+      ? Date.parse(route.arrivalTime)
+      : Date.now();
+    const ttl = Math.min(
+      MAX_BUS_PLAN_TTL_SEC,
+      Math.max(
+        ARRIVAL_GRACE_SEC,
+        Math.ceil((arrival - Date.now()) / 1000) + ARRIVAL_GRACE_SEC,
+      ),
+    );
+    const snapshot: BusPlanSnapshotV2 = { schemaVersion: 2, ...context };
+    await redisSet(`${BUS_PLAN_PREFIX}${token}`, JSON.stringify(snapshot), ttl);
+    return;
+  }
   const legs: BusPlanSnapshot["legs"] = {};
   let lastArrival = Date.now();
   route.legs.forEach((leg, index) => {
@@ -58,11 +81,11 @@ export async function storeBusPlan(
 /** Never renew TTL on read; this snapshot cannot authorize a reroute. */
 export async function readBusPlan(
   token: string,
-): Promise<BusPlanSnapshot | null> {
+): Promise<BusPlanSnapshot | BusPlanSnapshotV2 | null> {
   const raw = await redisGet(`${BUS_PLAN_PREFIX}${token}`);
   if (!raw) return null;
   try {
-    const snapshot = JSON.parse(raw) as BusPlanSnapshot;
+    const snapshot = JSON.parse(raw) as BusPlanSnapshot | BusPlanSnapshotV2;
     return snapshot?.legs && typeof snapshot.legs === "object"
       ? snapshot
       : null;

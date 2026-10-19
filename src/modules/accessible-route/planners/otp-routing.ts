@@ -1953,6 +1953,12 @@ export async function planOtpRouteDetailed(
       if (!isTransitLeg(leg)) {
         if ((leg.distance ?? 0) > 0) {
           const wl = walkLegFrom(leg, j === 0, j === it.legs.length - 1);
+          // Display minutes round short walks; chain feasibility uses the exact
+          // measured OTP duration, otherwise an eight-second connector can
+          // incorrectly miss its own scheduled boarding by 52 seconds.
+          Object.defineProperty(wl, "_durationMs", {
+            value: Math.max(0, leg.endTime - leg.startTime),
+          });
           if (j === 0 && pre) wl.from = pre.to;
           if (j === it.legs.length - 1 && post) wl.to = post.from;
           legs.push(wl);
@@ -1969,6 +1975,15 @@ export async function planOtpRouteDetailed(
         futureScheduled && transitLegIndex === 0 ? undefined : waitMinutes,
         directions,
       );
+      Object.defineProperty(mapped, "_scheduledArrivalTime", {
+        value: leg.endTime,
+        writable: true,
+      });
+      if (mapped.type !== "BUS")
+        Object.defineProperty(mapped, "_scheduledDepartureTime", {
+          value: leg.startTime,
+          writable: true,
+        });
       if (mapped.type === "BUS") {
         attachBusSchedule(
           mapped,
@@ -2045,9 +2060,10 @@ export async function planOtpRouteDetailed(
         : "walk";
 
     const scheduledDepartureTime =
-      it.legs[0]?.startTime ??
-      transitOtpLegs[0]?.startTime ??
-      selectedAttempt.anchor.getTime();
+      (it.legs[0]?.startTime ??
+        transitOtpLegs[0]?.startTime ??
+        selectedAttempt.anchor.getTime()) -
+      (pre?.minutesEst ?? 0) * 60000;
     const scheduledEndTime =
       (it.legs[it.legs.length - 1]?.endTime ?? scheduledDepartureTime) +
       (post?.minutesEst ?? 0) * 60_000;
