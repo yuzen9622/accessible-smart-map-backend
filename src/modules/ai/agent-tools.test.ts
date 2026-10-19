@@ -113,6 +113,7 @@ vi.mock("../../config/ai", () => ({
     models: { generateContent: vi.fn() },
   },
   model: "test-model",
+  getWebSearchTimeoutMs: vi.fn(() => 15_000),
 }));
 
 import * as a11yService from "../a11y/a11y.service";
@@ -123,7 +124,7 @@ import { getCoordinates, searchPlaces } from "../../adapters/google.adapter";
 import { planAccessibleRouteFromRequest } from "../accessible-route/accessible-route.service";
 import { generateNavInstructionsFromInput } from "../nav-instructions/nav-instructions.service";
 import { attachRouteTokens } from "../accessible-route/route-token.service";
-import { googleGenAi } from "../../config/ai";
+import { getWebSearchTimeoutMs, googleGenAi } from "../../config/ai";
 import EmergencyContact from "../../model/emergency-contact.model";
 import LineLinkCode from "../../model/line-link-code.model";
 import SosSession from "../../model/sos-session.model";
@@ -1662,9 +1663,27 @@ describe("webSearch", () => {
         contents: "台北市無障礙交通最新政策",
         config: expect.objectContaining({
           tools: [{ googleSearch: {} }],
+          abortSignal: expect.any(AbortSignal),
         }),
       }),
     );
+  });
+
+  it("超過時限時中止搜尋並回逾時原因", async () => {
+    vi.mocked(getWebSearchTimeoutMs).mockReturnValueOnce(10);
+    mockGenerateContent.mockImplementation(
+      ({ config }: { config: { abortSignal: AbortSignal } }) =>
+        new Promise((_, reject) =>
+          config.abortSignal.addEventListener("abort", () =>
+            reject(config.abortSignal.reason),
+          ),
+        ),
+    );
+    const result = JSON.parse(
+      await webSearch({ query: "台北車站餐廳營業時間" }),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("WEB_SEARCH_TIMEOUT");
   });
 
   it("空 query 回錯誤", async () => {

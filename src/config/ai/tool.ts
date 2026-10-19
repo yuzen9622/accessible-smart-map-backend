@@ -634,7 +634,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "webSearch",
       description:
-        "搜尋公開網路並回傳最新資訊與來源（answer 與 sources）。適合最新消息、近期政策、當前狀態、或本地工具與知識庫都無法回答的一般網路問題。回答必須根據回傳的 answer 與 sources 並附上來源。",
+        "搜尋公開網路並回傳最新資訊與來源（answer 與 sources）。適合最新消息、近期政策、當前狀態、或本地工具與知識庫都無法回答的一般網路問題。一次約需 10 秒，店家營業時間請用 findGooglePlaces 的 openingHours，不要用此工具查。回答必須根據回傳的 answer 與 sources 並附上來源。",
       parameters: {
         type: "object",
         properties: {

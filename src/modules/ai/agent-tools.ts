@@ -24,8 +24,8 @@ import { getActiveRoadIncidents } from "../traffic/road-incident.service";
 import { haversineMeters } from "../../utils/geo";
 import { isBusDirection } from "../../utils/transit-text";
 import { getEnvironmentInfo as fetchEnvironment } from "../environment/environment.service";
-import type { GroundingChunk } from "@google/genai";
-import { googleGenAi, model } from "../../config/ai";
+import { ThinkingLevel, type GroundingChunk } from "@google/genai";
+import { getWebSearchTimeoutMs, googleGenAi, model } from "../../config/ai";
 import { getCoordinates, searchPlaces } from "../../adapters/google.adapter";
 import { bindEmergencyContactCode as bindEmergencyCode } from "../emergency-contact/emergency-contact.service";
 import { bindLineAccountCode as bindAccountCode } from "../user/user.service";
@@ -1927,6 +1927,7 @@ export async function webSearch(args: { query: string }): Promise<string> {
     return JSON.stringify({ ok: false, error: "搜尋關鍵字不能為空" });
   }
 
+  const signal = AbortSignal.timeout(getWebSearchTimeoutMs());
   try {
     const response = await googleGenAi.models.generateContent({
       model,
@@ -1934,6 +1935,8 @@ export async function webSearch(args: { query: string }): Promise<string> {
       config: {
         tools: [{ googleSearch: {} }],
         temperature: 0,
+        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+        abortSignal: signal,
       },
     });
     const grounding = response.candidates?.[0]?.groundingMetadata;
@@ -1948,6 +1951,12 @@ export async function webSearch(args: { query: string }): Promise<string> {
     });
   } catch (error: any) {
     console.error("[agent-tool:webSearch]", error);
+    if (signal.aborted)
+      return JSON.stringify({
+        ok: false,
+        reason: "WEB_SEARCH_TIMEOUT",
+        error: "網路搜尋逾時，請直接告知使用者目前查不到，不要重試",
+      });
     return JSON.stringify({ ok: false, error: "網路搜尋失敗" });
   }
 }

@@ -9,4 +9,20 @@ const googleGenAi = new GoogleGenAI({
 
 const model = process.env.GEMINI_MODEL || "gemini-3.7-flash";
 
-export { googleGenAi, model };
+/**
+ * @returns Upper bound for one webSearch tool call. A voice turn is blocked
+ *   until every tool in it responds, so an unbounded search stalls the reply.
+ */
+function getWebSearchTimeoutMs(): number {
+  const raw = process.env.WEB_SEARCH_TIMEOUT_MS;
+  if (raw == null || raw.trim() === "") return 15_000;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(
+      `Invalid WEB_SEARCH_TIMEOUT_MS: expected a positive number of milliseconds, got "${raw}"`,
+    );
+  }
+  return parsed;
+}
+
+export { googleGenAi, model, getWebSearchTimeoutMs };
