@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import { InteractionStatus, ThinkingLevel } from "@google/genai";
+import { InteractionStatus } from "@google/genai";
 import type { WalkStep } from "../../types/route";
 
 const {
@@ -1294,6 +1294,246 @@ describe("createLiveBridge navigation turn arbiter", () => {
     await vi.waitFor(() =>
       expect(session.sendClientContent).toHaveBeenCalledOnce(),
     );
+  });
+
+  it("speaks queued navigation once the model turn has degraded into a trimmed silent tail", async () => {
+    let onmessage: ((message: unknown) => void) | undefined;
+    const session = makeSession();
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      return session;
+    });
+    const bridge = await createLiveBridge({
+      ws: makeWs(),
+      userId: "u",
+      userLocation: { latitude: 25, longitude: 121 },
+    });
+    await bridge.voiceReady;
+    await bridge.armRouteToken("cap");
+    onmessage?.({
+      serverContent: {
+        inputTranscription: { text: "開始導航", finished: true },
+      },
+      toolCall: {
+        functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
+      },
+    });
+    await vi.waitFor(() =>
+      expect(session.sendToolResponse).toHaveBeenCalledOnce(),
+    );
+    const oneSecondOfSilence = Buffer.alloc(48_000).toString("base64");
+    onmessage?.({
+      serverContent: {
+        modelTurn: {
+          parts: [
+            { inlineData: { data: farewell(500) } },
+            ...Array.from({ length: 30 }, () => ({
+              inlineData: { data: oneSecondOfSilence },
+            })),
+          ],
+        },
+      },
+    });
+    // Live keeps the turn open until the hidden tail would finish playing.
+    onmessage?.({ serverContent: { generationComplete: true } });
+    await vi.waitFor(() =>
+      expect(session.sendClientContent).toHaveBeenCalledOnce(),
+    );
+  });
+
+  it("does not replay or flush when its own navigation content ends a generated turn", async () => {
+    let onmessage: ((message: unknown) => void) | undefined;
+    const session = makeSession();
+    const ws = makeWs();
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      return session;
+    });
+    const bridge = await createLiveBridge({
+      ws,
+      userId: "u",
+      userLocation: { latitude: 25, longitude: 121 },
+    });
+    await bridge.voiceReady;
+    await bridge.armRouteToken("cap");
+    onmessage?.({
+      serverContent: {
+        inputTranscription: { text: "開始導航", finished: true },
+      },
+      toolCall: {
+        functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
+      },
+    });
+    await vi.waitFor(() =>
+      expect(session.sendToolResponse).toHaveBeenCalledOnce(),
+    );
+    onmessage?.({
+      serverContent: {
+        modelTurn: { parts: [{ inlineData: { data: farewell(500) } }] },
+        outputTranscription: { text: "好的，開始導航。" },
+      },
+    });
+    onmessage?.({ serverContent: { generationComplete: true } });
+    await vi.waitFor(() =>
+      expect(session.sendClientContent).toHaveBeenCalledOnce(),
+    );
+    const announcement = session.sendClientContent.mock.calls[0][0].turns;
+    // Live's observed order: the old turn's interrupted, then its turnComplete.
+    onmessage?.({ serverContent: { interrupted: true } });
+    onmessage?.({ serverContent: { turnComplete: true } });
+    onmessage?.({
+      serverContent: {
+        modelTurn: { parts: [{ inlineData: { data: farewell(500) } }] },
+      },
+    });
+    onmessage?.({ serverContent: { generationComplete: true } });
+    onmessage?.({ serverContent: { turnComplete: true } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const frames = vi
+      .mocked(ws.send)
+      .mock.calls.filter(([value]) => typeof value === "string")
+      .map(([value]) => JSON.parse(value as string));
+    expect(frames.some((frame) => frame.type === "interrupted")).toBe(false);
+    expect(
+      frames.filter((frame) => frame.type === "turn.complete"),
+    ).toHaveLength(2);
+    expect(
+      session.sendClientContent.mock.calls.filter(
+        ([content]) => content.turns === announcement,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("forwards a barge-in that follows its own preempting interrupt", async () => {
+    let onmessage: ((message: unknown) => void) | undefined;
+    const session = makeSession();
+    const ws = makeWs();
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      return session;
+    });
+    const bridge = await createLiveBridge({
+      ws,
+      userId: "u",
+      userLocation: { latitude: 25, longitude: 121 },
+    });
+    await bridge.voiceReady;
+    await bridge.armRouteToken("cap");
+    onmessage?.({
+      serverContent: {
+        inputTranscription: { text: "開始導航", finished: true },
+      },
+      toolCall: {
+        functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
+      },
+    });
+    await vi.waitFor(() =>
+      expect(session.sendToolResponse).toHaveBeenCalledOnce(),
+    );
+    onmessage?.({ serverContent: { generationComplete: true } });
+    await vi.waitFor(() =>
+      expect(session.sendClientContent).toHaveBeenCalledOnce(),
+    );
+    onmessage?.({ serverContent: { interrupted: true } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const interruptedFrames = () =>
+      vi
+        .mocked(ws.send)
+        .mock.calls.filter(([value]) => typeof value === "string")
+        .map(([value]) => JSON.parse(value as string))
+        .filter((frame) => frame.type === "interrupted");
+    expect(interruptedFrames()).toHaveLength(0);
+    onmessage?.({ serverContent: { interrupted: true } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(interruptedFrames()).toHaveLength(1);
+  });
+
+  it("finishes a navigation turn at generationComplete so its playback wait cannot time out voice", async () => {
+    vi.useFakeTimers();
+    try {
+      let onmessage: ((message: unknown) => void) | undefined;
+      const session = makeSession();
+      const ws = makeWs();
+      connect.mockImplementation(async ({ callbacks }) => {
+        onmessage = callbacks.onmessage;
+        return session;
+      });
+      const bridge = await createLiveBridge({
+        ws,
+        userId: "u",
+        userLocation: { latitude: 25, longitude: 121 },
+      });
+      await bridge.voiceReady;
+      await bridge.armRouteToken("cap");
+      onmessage?.({
+        serverContent: {
+          inputTranscription: { text: "開始導航", finished: true },
+        },
+        toolCall: {
+          functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      onmessage?.({ serverContent: { turnComplete: true } });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(session.sendClientContent).toHaveBeenCalledOnce();
+      onmessage?.({ serverContent: { generationComplete: true } });
+      await vi.advanceTimersByTimeAsync(60_000);
+      const frames = vi
+        .mocked(ws.send)
+        .mock.calls.filter(([value]) => typeof value === "string")
+        .map(([value]) => JSON.parse(value as string));
+      expect(frames).not.toContainEqual({
+        type: "error",
+        code: "LIVE_SESSION_ENDED",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("treats a fully generated announcement as spoken, so a later barge-in does not replay it", async () => {
+    let onmessage: ((message: unknown) => void) | undefined;
+    const session = makeSession();
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      return session;
+    });
+    const bridge = await createLiveBridge({
+      ws: makeWs(),
+      userId: "u",
+      userLocation: { latitude: 25, longitude: 121 },
+    });
+    await bridge.voiceReady;
+    await bridge.armRouteToken("cap");
+    onmessage?.({
+      serverContent: {
+        inputTranscription: { text: "開始導航", finished: true },
+      },
+      toolCall: {
+        functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
+      },
+    });
+    await vi.waitFor(() =>
+      expect(session.sendToolResponse).toHaveBeenCalledOnce(),
+    );
+    onmessage?.({ serverContent: { turnComplete: true } });
+    await vi.waitFor(() =>
+      expect(session.sendClientContent).toHaveBeenCalledOnce(),
+    );
+    const announcement = session.sendClientContent.mock.calls[0][0].turns;
+    onmessage?.({ serverContent: { generationComplete: true } });
+    // The barge-in arrives after playback started, not in the same tick.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    onmessage?.({ serverContent: { interrupted: true } });
+    onmessage?.({ serverContent: { turnComplete: true } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(
+      session.sendClientContent.mock.calls.filter(
+        ([content]) => content.turns === announcement,
+      ),
+    ).toHaveLength(1);
   });
 
   it("prioritizes interrupted over turnComplete and replays the whole sentence only at a later idle boundary", async () => {
@@ -3314,6 +3554,17 @@ describe("voice routing location recovery", () => {
   });
 });
 
+/** Base64 PCM16 tone at 24 kHz that the output trimmer counts as speech. */
+function farewell(ms: number): string {
+  const buf = Buffer.alloc(ms * 48);
+  for (let i = 0; i < ms * 24; i++)
+    buf.writeInt16LE(
+      Math.round(3000 * Math.sin((2 * Math.PI * 200 * i) / 24000)),
+      i * 2,
+    );
+  return buf.toString("base64");
+}
+
 describe("Live model and assistant end", () => {
   let ws: WebSocket;
   let session: ReturnType<typeof makeSession>;
@@ -3362,12 +3613,10 @@ describe("Live model and assistant end", () => {
     vi.useRealTimers();
     vi.unstubAllEnvs();
   });
-  it("uses the extended thinking Live model, HIGH, and a Live-only end tool", () => {
+  it("uses gemini-3.8-live without a thinking config and a Live-only end tool", () => {
     const args = connect.mock.calls[0][0];
-    expect(args.model).toBe("gemini-3.8-live-extended-thinking");
-    expect(args.config.thinkingConfig).toEqual({
-      thinkingLevel: ThinkingLevel.HIGH,
-    });
+    expect(args.model).toBe("gemini-3.8-live");
+    expect(args.config).not.toHaveProperty("thinkingConfig");
     expect(
       args.config.tools
         .flatMap((t: any) => t.functionDeclarations ?? [])
@@ -3489,18 +3738,65 @@ describe("Live model and assistant end", () => {
     await vi.advanceTimersByTimeAsync(16000);
     expect(ws.close).not.toHaveBeenCalled();
   });
+  it("trims the silent tail after an answer and drops its dot transcript", async () => {
+    const silence = Buffer.alloc(48000).toString("base64");
+    const audioFrames = () =>
+      vi.mocked(ws.send).mock.calls.filter((c) => Buffer.isBuffer(c[0])).length;
+    const modelText = () =>
+      events()
+        .filter((e) => e.type === "transcript" && e.role === "model")
+        .map((e) => e.text);
+    await emit({
+      serverContent: {
+        modelTurn: {
+          parts: [
+            { inlineData: { data: farewell(500) } },
+            { inlineData: { data: silence } },
+            ...Array.from({ length: 30 }, () => ({
+              inlineData: { data: silence },
+            })),
+          ],
+        },
+        outputTranscription: { text: "我正在確認營業細節。" },
+      },
+    });
+    await emit({
+      serverContent: { outputTranscription: { text: ". . . . . . . ." } },
+    });
+    expect(audioFrames()).toBe(2);
+    expect(modelText()).toEqual(["我正在確認營業細節。"]);
+    await emit({
+      serverContent: {
+        modelTurn: { parts: [{ inlineData: { data: farewell(300) } }] },
+      },
+    });
+    expect(audioFrames()).toBe(3);
+    await emit({ serverContent: { turnComplete: true } });
+    await emit({
+      serverContent: {
+        modelTurn: { parts: [{ inlineData: { data: silence } }] },
+      },
+    });
+    expect(audioFrames()).toBe(4);
+  });
+  it("still forwards a user barge-in during a generated turn's playback wait", async () => {
+    await emit({
+      serverContent: {
+        modelTurn: { parts: [{ inlineData: { data: farewell(500) } }] },
+      },
+    });
+    await emit({ serverContent: { generationComplete: true } });
+    await emit({ serverContent: { interrupted: true } });
+    expect(events()).toContainEqual({ type: "interrupted" });
+  });
+
   it("ignores stale model environment overrides and keeps the required Live model", async () => {
     bridge.close();
     vi.stubEnv("GEMINI_LIVE_MODEL", "legacy-live-model");
     connect.mockClear();
     bridge = await createLiveBridge({ ws, userId: "voice-end-user" });
     await bridge.voiceReady;
-    expect(connect.mock.calls[0][0].model).toBe(
-      "gemini-3.8-live-extended-thinking",
-    );
-    expect(connect.mock.calls[0][0].config.thinkingConfig).toEqual({
-      thinkingLevel: ThinkingLevel.HIGH,
-    });
+    expect(connect.mock.calls[0][0].model).toBe("gemini-3.8-live");
   });
   it("does not use an older end transcript after a new utterance starts", async () => {
     await emit({
@@ -3712,6 +4008,7 @@ describe("Live model and assistant end", () => {
     await end("再見");
     await emit({
       serverContent: {
+        modelTurn: { parts: [{ inlineData: { data: farewell(500) } }] },
         turnComplete: true,
         interactionStatus: InteractionStatus.IN_PROGRESS,
       },
@@ -3729,7 +4026,24 @@ describe("Live model and assistant end", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(ws.close).toHaveBeenCalledExactlyOnceWith(1000, "assistant-end");
   });
-  it("keeps the 15 second deadline for turnComplete without interactionStatus", async () => {
+  it("starts grace when a turn without interactionStatus spoke the farewell", async () => {
+    await end("再見");
+    // gemini-3.8-live completes the tool turn before it speaks.
+    await emit({ serverContent: { turnComplete: true } });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(ws.close).not.toHaveBeenCalled();
+    await emit({
+      serverContent: {
+        modelTurn: { parts: [{ inlineData: { data: farewell(1000) } }] },
+        turnComplete: true,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(1749);
+    expect(ws.close).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ws.close).toHaveBeenCalledExactlyOnceWith(1000, "assistant-end");
+  });
+  it("keeps the 15 second deadline for a silent turnComplete without interactionStatus", async () => {
     await end("再見");
     await emit({ serverContent: { turnComplete: true } });
     await vi.advanceTimersByTimeAsync(2000);

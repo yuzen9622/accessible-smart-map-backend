@@ -21,11 +21,11 @@ import {
   LiveServerMessage,
   InteractionStatus,
   Modality,
-  ThinkingLevel,
   Session,
 } from "@google/genai";
 import { googleGenAi } from "../../config/ai";
 import { AGENT_TEMPERATURE } from "../../config/ai/config";
+import { getVoiceOutputTrimConfig } from "../../config/voice-live";
 import { buildGeminiTools } from "../agent/tool-catalog";
 import { executeLocalTool } from "../ai/agent-tools";
 import {
@@ -34,6 +34,11 @@ import {
 } from "./voice-prompt";
 import type { AgentLanguage } from "../../types/agent";
 import { normalizeVoiceTranscript } from "./transcript-normalizer";
+import {
+  OUTPUT_PCM_BYTES_PER_MS,
+  OutputSilenceTrimmer,
+  filterModelTranscriptPiece,
+} from "./live-output-filter";
 import { isExplicitEndIntent } from "./end-intent";
 import { classifyNavigationIntent } from "./navigation-intent";
 import type { AccessibleRoute } from "../../types/route";
@@ -84,8 +89,7 @@ import {
   type VoiceRerouteOutboundMessage,
 } from "./voice.ws.schema";
 
-const LIVE_MODEL = "gemini-3.8-live-extended-thinking";
-const OUTPUT_PCM_BYTES_PER_MS = 48;
+const LIVE_MODEL = "gemini-3.8-live";
 const ASSISTANT_END_PLAYBACK_PAD_MS = 750;
 const ASSISTANT_END_MIN_GRACE_MS = 1_500;
 const ASSISTANT_END_MAX_GRACE_MS = 8_000;
@@ -364,6 +368,15 @@ export async function createLiveBridge(
   let disposed = false;
   let cumulativeTokens = 0;
   let liveState: LiveTurnState = "IDLE";
+  // Live sends generationComplete once a turn's audio is fully generated, then
+  // holds turnComplete until realtime playback of it (hidden tail included)
+  // would end. Navigation speech goes out at generationComplete; content sent
+  // in that window interrupts only the playback wait, and the old turn's
+  // interrupted + turnComplete that follow must not touch the new nav turn.
+  let generationFinished = false;
+  let preemptedFinishedTurn = false;
+  // Only the first interrupted after a preempt is ours; later ones are barge-in.
+  let preemptInterruptPending = false;
   let navSpeaking = false;
   let turnTimeout: ReturnType<typeof setTimeout> | null = null;
   let turnTimeoutStrikes = 0;
@@ -561,6 +574,9 @@ export async function createLiveBridge(
     turnTimeoutStrikes = 0;
     clearTurnTimeout();
     liveState = "IDLE";
+    generationFinished = false;
+    preemptedFinishedTurn = false;
+    preemptInterruptPending = false;
     try {
       ending?.close();
     } catch (err) {
@@ -795,6 +811,9 @@ export async function createLiveBridge(
     }
     navSpeaking = true;
     liveState = "AWAIT_MODEL";
+    preemptedFinishedTurn = generationFinished;
+    preemptInterruptPending = generationFinished;
+    generationFinished = false;
     startTurnTimeout();
   };
 
@@ -1080,8 +1099,11 @@ export async function createLiveBridge(
     }
   };
 
+  const outputTrimmer = new OutputSilenceTrimmer(getVoiceOutputTrimConfig());
   const forwardAudio = (base64Data: string): void => {
     if (ws.readyState !== WebSocket.OPEN) return;
+    const decoded = Buffer.from(base64Data, "base64");
+    if (!outputTrimmer.accept(decoded)) return;
     if (ws.bufferedAmount > MAX_BUFFERED_BYTES) {
       console.warn(
         "[voice] dropping downstream audio frame",
@@ -1089,7 +1111,6 @@ export async function createLiveBridge(
       );
       return;
     }
-    const decoded = Buffer.from(base64Data, "base64");
     ws.send(decoded, { binary: true });
     if (assistantEnding) assistantEnding.audioBytes += decoded.length;
   };
@@ -1828,6 +1849,17 @@ export async function createLiveBridge(
       });
   };
 
+  const commitModelTranscript = (): void => {
+    if (modelTranscriptBuffer.trim()) {
+      conversationHistory.push({
+        role: "assistant",
+        text: modelTranscriptBuffer,
+      });
+      if (conversationHistory.length > 20) conversationHistory.shift();
+    }
+    modelTranscriptBuffer = "";
+  };
+
   const handleServerMessage = async (
     message: LiveServerMessage,
     msgEpoch: number,
@@ -1875,16 +1907,31 @@ export async function createLiveBridge(
         }
         if (content.inputTranscription.finished) finalizeUserTranscript();
       }
-      if (content.outputTranscription?.text) {
-        modelTranscriptBuffer += content.outputTranscription.text;
+      const modelPiece = content.outputTranscription?.text
+        ? filterModelTranscriptPiece(
+            modelTranscriptBuffer,
+            content.outputTranscription.text,
+          )
+        : null;
+      if (modelPiece) {
+        modelTranscriptBuffer += modelPiece;
         sendJson({
           type: "transcript",
           role: "model",
-          text: normalizeVoiceTranscript(content.outputTranscription.text),
+          text: normalizeVoiceTranscript(modelPiece),
         });
       }
-      if (content.interrupted) {
+      if (content.interrupted && preemptInterruptPending) {
+        preemptInterruptPending = false;
+        // Our own navigation content ended a turn whose audio was already
+        // complete: keep its answer and leave the new nav turn untouched.
+        commitModelTranscript();
+        outputTrimmer.reset();
+        if (content.turnComplete) preemptedFinishedTurn = false;
+      } else if (content.interrupted) {
+        generationFinished = false;
         modelTranscriptBuffer = "";
+        outputTrimmer.reset();
         if (userTranscriptBuffer.trim()) finalizeUserTranscript();
         lastFinalUserTranscript = null;
         navSession.onInterrupted();
@@ -1896,6 +1943,7 @@ export async function createLiveBridge(
     }
     if (message.toolCall?.functionCalls?.length) {
       if (content?.interrupted) return;
+      outputTrimmer.reset();
       liveState = "TOOL_PENDING";
       await handleToolCalls(
         message.toolCall.functionCalls,
@@ -1905,15 +1953,32 @@ export async function createLiveBridge(
       );
       if (!disposed && voiceState === "ready" && msgEpoch === voiceEpoch)
         liveState = "AWAIT_MODEL";
+    } else if (
+      content?.turnComplete &&
+      !content.interrupted &&
+      preemptedFinishedTurn
+    ) {
+      preemptedFinishedTurn = false;
+      preemptInterruptPending = false;
+      commitModelTranscript();
+      outputTrimmer.reset();
+      sendJson({ type: "turn.complete" });
+    } else if (
+      content?.generationComplete &&
+      !content.turnComplete &&
+      !content.interrupted
+    ) {
+      generationFinished = true;
+      if (navSpeaking) navSession.onTurnComplete();
+      navSpeaking = false;
+      turnTimeoutStrikes = 0;
+      clearTurnTimeout();
+      liveState = "IDLE";
+      driveNavigationSpeech();
     } else if (content?.turnComplete && !content.interrupted) {
-      if (modelTranscriptBuffer.trim()) {
-        conversationHistory.push({
-          role: "assistant",
-          text: modelTranscriptBuffer,
-        });
-        if (conversationHistory.length > 20) conversationHistory.shift();
-      }
-      modelTranscriptBuffer = "";
+      generationFinished = false;
+      commitModelTranscript();
+      outputTrimmer.reset();
       if (userTranscriptBuffer.trim()) finalizeUserTranscript();
       // A completed model turn cannot authorize ending a later user turn.
       lastFinalUserTranscript = null;
@@ -1923,8 +1988,14 @@ export async function createLiveBridge(
       clearTurnTimeout();
       liveState = "IDLE";
       sendJson({ type: "turn.complete" });
-      // Extended thinking may emit completed filler turns while still reasoning.
-      if (content.interactionStatus === InteractionStatus.IDLE)
+      // IDLE is explicit; IN_PROGRESS marks a filler turn. gemini-3.8-live
+      // sends no status and completes the tool turn before speaking, so
+      // without one only a turn that carried the farewell audio counts.
+      if (
+        content.interactionStatus === InteractionStatus.IDLE ||
+        (content.interactionStatus === undefined &&
+          (assistantEnding?.audioBytes ?? 0) > 0)
+      )
         scheduleAssistantEndClose();
       driveNavigationSpeech();
     }
@@ -1987,7 +2058,6 @@ export async function createLiveBridge(
           memoryEnabled = sessionMemoryEnabled;
           const liveConfig: LiveConnectConfig = {
             responseModalities: [Modality.AUDIO],
-            thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
             inputAudioTranscription: buildInputAudioTranscription(language),
             outputAudioTranscription: {},
             systemInstruction: withCurrentDate(
@@ -2145,6 +2215,9 @@ export async function createLiveBridge(
       navSession.onInterrupted();
       navSpeaking = false;
       liveState = "IDLE";
+      generationFinished = false;
+      preemptedFinishedTurn = false;
+      preemptInterruptPending = false;
       turnTimeoutStrikes = 0;
       clearTurnTimeout();
       sendJson({ type: "interrupted" });

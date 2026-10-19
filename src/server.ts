@@ -31,12 +31,15 @@ import {
 import { startTrafficLiveRefreshJob } from "./modules/traffic/traffic-live.worker";
 import { startValhallaTrafficTarWorker } from "./modules/traffic/valhalla-traffic.worker";
 import { getRetentionConfig } from "./config/retention";
+import { getVoiceOutputTrimConfig } from "./config/voice-live";
 import { startRetentionJob } from "./modules/retention/retention.job";
 const PORT = process.env.PORT || 3000;
 
 // Validated before listening: a bad retention value must stop the deploy, not
 // leave the server up with the privacy retention job silently off.
 const retentionConfig = getRetentionConfig();
+// Same for voice output trimming: a typo must fail the deploy, not every voice session.
+getVoiceOutputTrimConfig();
 let sosNotificationTimer: NodeJS.Timeout | undefined;
 let passwordAssistanceTimer: NodeJS.Timeout | undefined;
 let trafficGeometryTimer: NodeJS.Timeout | undefined;
