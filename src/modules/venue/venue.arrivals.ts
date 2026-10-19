@@ -208,6 +208,9 @@ export function compileFeatureArrivals(
       ...(arrivalNodeIds.length > 1 ? { arrivalNodeIds } : {}),
       location: [primary.lng, primary.lat],
       featureId: feature.id,
+      ...(feature.tags?.wheelchair
+        ? { wheelchair: feature.tags.wheelchair }
+        : {}),
       arrivalKind: door ? "door" : "corridor",
       doorKnown: door,
       ...refs(arrivalNodeIds.flatMap((key) => [...(incident.get(key) ?? [])])),

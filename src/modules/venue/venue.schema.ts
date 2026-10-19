@@ -149,7 +149,7 @@ const PlaceSchema = z
     }),
     wheelchair: z.enum(["yes", "no", "limited", "unknown"]).optional().openapi({
       description:
-        "僅校門：輪椅可否通過。校外導進校內時，非 normal 模式只選 yes 的校門",
+        "校門：輪椅可否通過，校外導進校內時，非 normal 模式只選 yes 的校門。廁所：來源有標 wheelchair 時才回傳，yes 表示有無障礙廁間；未標則省略",
     }),
     accessibleSpaces: z.number().int().optional().openapi({
       description: "僅停車場：無障礙車位數（capacity:disabled）",
@@ -163,6 +163,9 @@ const FeatureTagsSchema = z
     amenity: z.string().optional(),
     "a11ymap:area_type": z.string().optional(),
     ref: z.string().optional(),
+    wheelchair: z.enum(["yes", "no", "limited", "unknown"]).optional().openapi({
+      description: "僅 amenity=toilets：來源 wheelchair 標籤；未標則省略",
+    }),
   })
   .strict()
   .openapi("VenueFeatureTags", {

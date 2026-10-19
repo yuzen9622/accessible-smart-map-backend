@@ -1372,7 +1372,8 @@ export function compileVenue(
             levelRef,
             nodeId: key,
             location: ll(n),
-            ...(placeKindOf(n.tags) === "gate"
+            ...(placeKindOf(n.tags) === "gate" ||
+            (n.tags.amenity === "toilets" && n.tags.wheelchair)
               ? { wheelchair: wheelchairTag(n.tags.wheelchair) }
               : {}),
             ...(placeKindOf(n.tags) === "parking" &&
@@ -1405,6 +1406,9 @@ export function compileVenue(
         ? { "a11ymap:area_type": tags["a11ymap:area_type"] }
         : {}),
       ...(tags.ref ? { ref: applyLevelTemplate(tags.ref, ordinal) } : {}),
+      ...(tags.amenity === "toilets" && tags.wheelchair
+        ? { wheelchair: wheelchairTag(tags.wheelchair) }
+        : {}),
     };
     return Object.keys(retained).length ? { tags: retained } : {};
   };

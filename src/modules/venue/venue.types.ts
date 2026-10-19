@@ -82,7 +82,7 @@ export interface VenuePlace {
   doorKnown?: boolean | null;
   connectionId?: string | null;
   connectionIds?: string[];
-  /** Gates only: the gate's own `wheelchair` tag. */
+  /** Gates and toilets only: the source `wheelchair` tag. */
   wheelchair?: VenueWheelchairTag;
   /** Parking only: accessible spaces (`capacity:disabled`). */
   accessibleSpaces?: number;
@@ -157,6 +157,8 @@ export interface VenueFeatureTags {
   amenity?: string;
   "a11ymap:area_type"?: string;
   ref?: string;
+  /** Toilets only: the source `wheelchair` tag, normalized. */
+  wheelchair?: VenueWheelchairTag;
 }
 
 /** Display-only source geometry; preserve every polygon ring unchanged. */

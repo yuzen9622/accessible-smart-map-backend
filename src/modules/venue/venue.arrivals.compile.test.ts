@@ -303,4 +303,63 @@ describe("source-backed selectable feature arrivals", () => {
       doorKnown: true,
     });
   });
+
+  it("carries a toilet's wheelchair tag to its feature and arrival place only when tagged", () => {
+    const f = fixture();
+    f.rectangle("toilet-accessible", 50, 50, 60, 60, {
+      indoor: "area",
+      amenity: "toilets",
+      wheelchair: "yes",
+      level: "0",
+      "a11ymap:arrival_node": "landing0",
+    });
+    f.rectangle("toilet-untagged", 70, 50, 80, 60, {
+      indoor: "area",
+      amenity: "toilets",
+      level: "0",
+      "a11ymap:arrival_node": "landing0",
+    });
+    const { venue, errors } = f.compile();
+    expect(errors).toEqual([]);
+    const byFeature = (id: string) => ({
+      feature: venue.features.find((x) => x.id === id),
+      place: venue.places.find((x) => x.featureId === id),
+    });
+    const tagged = byFeature("way/toilet-accessible@0");
+    expect(tagged.feature?.tags?.wheelchair).toBe("yes");
+    expect(tagged.place?.wheelchair).toBe("yes");
+    const untagged = byFeature("way/toilet-untagged@0");
+    expect(untagged.feature?.tags).not.toHaveProperty("wheelchair");
+    expect(untagged.place).not.toHaveProperty("wheelchair");
+  });
+
+  it("carries a toilet node place's wheelchair tag only when tagged", () => {
+    const f = fixture();
+    f.way(
+      "toilet-approach",
+      [
+        f.point(40, 30, { level: "0" }),
+        f.point(45, 30, {
+          level: "0",
+          amenity: "toilets",
+          wheelchair: "no",
+          "a11ymap:id": "wc-a",
+          name: "廁所 A",
+        }),
+        f.point(50, 30, {
+          level: "0",
+          amenity: "toilets",
+          "a11ymap:id": "wc-b",
+          name: "廁所 B",
+        }),
+      ],
+      { highway: "corridor", level: "0" },
+    );
+    const { venue, errors } = f.compile();
+    expect(errors).toEqual([]);
+    expect(venue.places.find((x) => x.id === "wc-a")?.wheelchair).toBe("no");
+    expect(venue.places.find((x) => x.id === "wc-b")).not.toHaveProperty(
+      "wheelchair",
+    );
+  });
 });
