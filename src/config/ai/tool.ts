@@ -14,6 +14,11 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
             type: "string",
             description: "搜尋關鍵字，例如：'附近的咖啡廳' 或 '台中歌劇院'",
           },
+          locationQuery: {
+            type: "string",
+            description:
+              "使用者明示的搜尋中心地名。台中車站附近的餐廳 → query 餐廳、locationQuery 台中車站；query 不應包含中心地名。我附近／這附近／附近且未指名地點時不要填。",
+          },
           latitude: { type: "number", description: "使用者當前緯度（選填）" },
           longitude: { type: "number", description: "使用者當前經度（選填）" },
         },
