@@ -222,6 +222,8 @@ export interface GooglePlace {
   rating?: number;
   location: { latitude: number; longitude: number };
   distanceMeters?: number;
+  openNow?: boolean;
+  openingHours?: string[];
 }
 
 function haversineDistanceMeters(
@@ -300,7 +302,7 @@ export async function searchPlaces(
           "Content-Type": "application/json",
           "X-Goog-Api-Key": key,
           "X-Goog-FieldMask":
-            "places.id,places.displayName,places.formattedAddress,places.rating,places.location",
+            "places.id,places.displayName,places.formattedAddress,places.rating,places.location,places.currentOpeningHours.openNow,places.regularOpeningHours.weekdayDescriptions",
         },
       },
     );
@@ -312,6 +314,8 @@ export async function searchPlaces(
       formatted_address: p.formattedAddress,
       rating: p.rating,
       location: p.location,
+      openNow: p.currentOpeningHours?.openNow,
+      openingHours: p.regularOpeningHours?.weekdayDescriptions,
     }));
     if (
       opts.sortByDistance &&

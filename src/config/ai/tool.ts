@@ -6,7 +6,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "findGooglePlaces",
       description:
-        "使用 Google Maps 搜尋一般地點、商家、景點或交通場站。使用者問『最近的火車站／捷運站』時，直接以『火車站／捷運站』為 query 呼叫；session 會自動套用目前位置並按候選地點的直線距離排序，不要反問使用者要哪一站。這是 fallback 工具——若上述專用工具都不適用，才使用此工具。",
+        "使用 Google Maps 搜尋一般地點、商家、景點或交通場站。使用者問『最近的火車站／捷運站』時，直接以『火車站／捷運站』為 query 呼叫；session 會自動套用目前位置並按候選地點的直線距離排序，不要反問使用者要哪一站。每個結果含 openNow（現在是否營業）與 openingHours（每週營業時間）；問營業時間、還開不開、幾點打烊時直接用這兩個欄位回答，不要再呼叫 webSearch。這是 fallback 工具——若上述專用工具都不適用，才使用此工具。",
       parameters: {
         type: "object",
         properties: {

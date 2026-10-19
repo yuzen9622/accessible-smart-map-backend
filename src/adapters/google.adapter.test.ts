@@ -86,6 +86,33 @@ describe("searchPlaces distance ordering", () => {
     expect(places[0].distanceMeters).toBeUndefined();
   });
 
+  it("returns opening hours so callers can answer 還開嗎 without a web search", async () => {
+    mockPost.mockResolvedValue({
+      data: {
+        places: [
+          {
+            id: "r1",
+            displayName: { text: "餐廳" },
+            formattedAddress: "r1",
+            location: { latitude: 25.0478, longitude: 121.517 },
+            currentOpeningHours: { openNow: false },
+            regularOpeningHours: {
+              weekdayDescriptions: ["星期一: 11:00 – 21:30"],
+            },
+          },
+        ],
+      },
+    });
+
+    const [place] = await searchPlaces("台北車站 餐廳");
+
+    expect(place.openNow).toBe(false);
+    expect(place.openingHours).toEqual(["星期一: 11:00 – 21:30"]);
+    expect(mockPost.mock.calls[0][2].headers["X-Goog-FieldMask"]).toContain(
+      "places.regularOpeningHours.weekdayDescriptions",
+    );
+  });
+
   it("drops malformed coordinates without losing valid nearby candidates", async () => {
     mockPost.mockResolvedValue({
       data: {
