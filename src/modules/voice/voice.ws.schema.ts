@@ -334,6 +334,16 @@ export type NavResumeFailedMessage = z.infer<
 >;
 export type NavResumeOkEvent = z.infer<typeof NavResumeOkMessageSchema>;
 
+/** Assistant accepted an explicit request to end voice, not navigation. */
+export const SessionEndingMessageSchema = z
+  .object({
+    type: z.literal("session.ending"),
+    reason: z.literal("assistant-end"),
+  })
+  .strict();
+
+type SessionEndingMessage = z.infer<typeof SessionEndingMessageSchema>;
+
 export type VoiceOutboundMessage =
   | {
       type: "session.ready";
@@ -341,6 +351,7 @@ export type VoiceOutboundMessage =
     }
   | RouteContextAckMessage
   | { type: "error"; code: "LIVE_CONNECT_FAILED" }
+  | SessionEndingMessage
   | { type: "nav.error"; code: "NAV_ROUTE_INVALID"; message: string }
   | NavProgressEvent
   | VoiceRerouteOutboundMessage

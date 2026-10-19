@@ -20,6 +20,8 @@ const gtfsStopAliasSchema = new Schema<IGtfsStopAlias>({
 });
 
 gtfsStopAliasSchema.index({ routeId: 1, stopId: 1 }, { unique: true });
+gtfsStopAliasSchema.index({ stopId: 1 });
+gtfsStopAliasSchema.index({ routeId: 1, originalStopId: 1 });
 
 const GtfsStopAliasModel = model<IGtfsStopAlias>(
   "GtfsStopAlias",

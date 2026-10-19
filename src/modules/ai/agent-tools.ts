@@ -66,6 +66,7 @@ function sourceLanguageArgs(language?: AgentLanguage): [AgentLanguage?] {
 
 export async function findGooglePlaces(args: {
   query: string;
+  locationQuery?: string;
   language?: AgentLanguage;
   latitude?: number;
   longitude?: number;
@@ -81,9 +82,21 @@ export async function findGooglePlaces(args: {
       Number.isFinite(args.longitude) &&
       args.longitude >= -180 &&
       args.longitude <= 180;
-    const location = hasValidPair
-      ? { latitude: args.latitude!, longitude: args.longitude! }
-      : args.userLocation;
+    const locationQuery = args.locationQuery?.trim();
+    const explicitCenter = locationQuery
+      ? await getCoordinates(locationQuery)
+      : null;
+    if (locationQuery && !explicitCenter)
+      return JSON.stringify({
+        ok: false,
+        reason: "LOCATION_NOT_FOUND",
+        locationQuery,
+      });
+    const location =
+      explicitCenter ??
+      (hasValidPair
+        ? { latitude: args.latitude!, longitude: args.longitude! }
+        : args.userLocation);
     const places = await searchPlaces(args.query, {
       latitude: location?.latitude,
       longitude: location?.longitude,

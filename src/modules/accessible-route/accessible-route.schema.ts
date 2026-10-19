@@ -1,4 +1,7 @@
-import { BusRouteDetailResponseSchema } from "../transit/transit.schema";
+import {
+  BusRouteDetailResponseSchema,
+  BusDepartureCandidateSchema,
+} from "../transit/transit.schema";
 import { DEFAULT_LANG, SUPPORTED_LANGS } from "../../types/lang";
 import {
   NavManeuverSchema,
@@ -577,6 +580,12 @@ const LowFloorAlternativeSchema = z
 
 const BusLegSchema = z
   .object({
+    geometrySource: z.literal("route_stops").optional().openapi({
+      description:
+        "Geometry materialized from validated ordered route-stop coordinates, not a measured shape",
+    }),
+    departureCandidates: z.array(BusDepartureCandidateSchema).max(5).optional(),
+    candidateSearchComplete: z.boolean().optional(),
     ...RouteSourceNameFields,
     type: z.literal("BUS").openapi({ example: "BUS" }),
     scheduledTrip: z
@@ -1043,6 +1052,14 @@ const RouteMessageDetailSchema = z
 
 export const AccessibleRouteSchema = z
   .object({
+    departureTime: z.string().datetime({ offset: true }).optional().openapi({
+      description:
+        "Journey origin movement start, full ISO date and timezone (+08:00 for Taiwan)",
+    }),
+    arrivalTime: z.string().datetime({ offset: true }).optional().openapi({
+      description:
+        "Feasible full-chain destination arrival, full ISO date and timezone (+08:00 for Taiwan)",
+    }),
     routeId: z.string().openapi({ example: "route-001" }),
     navigationId: z.string().uuid().optional().openapi({
       description: "同一次導航的穩定 UUID；只有成功 tokenized 的路線提供。",

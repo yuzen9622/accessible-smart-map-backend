@@ -265,7 +265,40 @@ export interface WalkLeg extends WalkA11yDetails, RouteSourceNames {
   a11yPoints?: WalkA11yPoint[];
 }
 
-export interface BusLeg extends RouteSourceNames {
+export type BusVehicleAccessibility = "low_floor" | "high_floor" | "unknown";
+export type BusCandidateTimeSource = "realtime" | "schedule" | "unknown";
+export interface BusDepartureCandidate {
+  candidateId: string;
+  routeName: string;
+  subRouteUid: string;
+  subRouteName?: string;
+  direction: 0 | 1;
+  departureStopId: string;
+  arrivalStopId: string;
+  tripId?: string;
+  plateNumb?: string;
+  estimatedWaitMinutes: number | null;
+  boardingTime: string | null;
+  alightingTime: string | null;
+  boardingTimeSource: BusCandidateTimeSource;
+  alightingTimeSource: BusCandidateTimeSource;
+  vehicleAccessibility: BusVehicleAccessibility;
+  hasLiftOrRamp: boolean | null;
+  selected: boolean;
+}
+
+export interface TransitAbsoluteSchedule {
+  _scheduledDepartureTime?: number;
+  _scheduledArrivalTime?: number;
+}
+
+export interface BusLeg extends RouteSourceNames, TransitAbsoluteSchedule {
+  /** Live identity geometry from validated ordered route-stop coordinates. */
+  geometrySource?: "route_stops";
+  departureCandidates?: BusDepartureCandidate[];
+  candidateSearchComplete?: boolean;
+  _canonicalDepartureStopId?: string;
+  _canonicalArrivalStopId?: string;
   /** Immutable plan snapshot, retained in the route-token cache for later polls. */
   scheduledTrip?: {
     tripId: string;
@@ -321,7 +354,7 @@ export interface BusLeg extends RouteSourceNames {
   lowFloorAlternative?: LowFloorAlternative;
 }
 
-export interface MetroLeg extends RouteSourceNames {
+export interface MetroLeg extends RouteSourceNames, TransitAbsoluteSchedule {
   type: "METRO";
   a11yRefs?: string[];
   railSystem: string;
@@ -348,7 +381,7 @@ export interface MetroLeg extends RouteSourceNames {
   alerts?: MetroAlert[];
 }
 
-export interface ThsrLeg extends RouteSourceNames {
+export interface ThsrLeg extends RouteSourceNames, TransitAbsoluteSchedule {
   type: "THSR";
   a11yRefs?: string[];
   trainNo: string;
@@ -370,7 +403,7 @@ export interface ThsrLeg extends RouteSourceNames {
   alerts?: MatchedAlert[];
 }
 
-export interface TraLeg extends RouteSourceNames {
+export interface TraLeg extends RouteSourceNames, TransitAbsoluteSchedule {
   type: "TRA";
   a11yRefs?: string[];
   trainNo: string;
@@ -467,6 +500,8 @@ export interface ScoreFactor {
 }
 
 export interface AccessibleRoute {
+  departureTime?: string;
+  arrivalTime?: string;
   routeId: string;
   /** Stable identity shared by every replacement route in one navigation. */
   navigationId?: string;

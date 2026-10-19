@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import { InteractionStatus, ThinkingLevel } from "@google/genai";
 import type { WalkStep } from "../../types/route";
 
 const {
   connect,
+  readNavigationTokenStrict,
+  getAdoptedCandidateReplacement,
+  switchNavigationCandidate,
   getRouteByToken,
   getNavigationEnvelopeByToken,
   rerouteAccessibleRoute,
@@ -12,8 +16,15 @@ const {
   storeNavigationSnapshot,
   getNavigationSnapshot,
   deleteNavigationSnapshot,
+  markNavigationStopped,
+  beginNavigationResume,
+  commitNavigationResume,
+  releaseNavigationResume,
 } = vi.hoisted(() => ({
   connect: vi.fn(),
+  readNavigationTokenStrict: vi.fn(),
+  getAdoptedCandidateReplacement: vi.fn(),
+  switchNavigationCandidate: vi.fn(),
   getRouteByToken: vi.fn(),
   getNavigationEnvelopeByToken: vi.fn(),
   rerouteAccessibleRoute: vi.fn(),
@@ -22,6 +33,10 @@ const {
   storeNavigationSnapshot: vi.fn(),
   getNavigationSnapshot: vi.fn(),
   deleteNavigationSnapshot: vi.fn(),
+  markNavigationStopped: vi.fn().mockResolvedValue("stopped"),
+  beginNavigationResume: vi.fn().mockResolvedValue("acquired"),
+  commitNavigationResume: vi.fn().mockResolvedValue("committed"),
+  releaseNavigationResume: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../../config/ai", () => ({ googleGenAi: { live: { connect } } }));
 vi.mock("../agent/tool-catalog", () => ({ buildGeminiTools: vi.fn(() => []) }));
@@ -29,14 +44,29 @@ vi.mock("../ai/agent-tools", () => ({ executeLocalTool: vi.fn() }));
 vi.mock("../accessible-route/route-token.service", () => ({
   getRouteByToken,
   getNavigationEnvelopeByToken,
+  isNavigationEnvelope: (v: any) =>
+    v?.schemaVersion === 1 &&
+    typeof v.navigationId === "string" &&
+    Number.isInteger(v.routeVersion) &&
+    Boolean(v.route) &&
+    Boolean(v.canonicalRequest),
 }));
 vi.mock("../accessible-route/reroute.service", () => ({
   rerouteAccessibleRoute,
 }));
+vi.mock("../accessible-route/candidate-route-switch.service", () => ({
+  switchNavigationCandidate,
+}));
 vi.mock("../accessible-route/navigation-state.repository", () => ({
+  readNavigationTokenStrict,
+  getAdoptedCandidateReplacement,
   storeNavigationSnapshot,
   getNavigationSnapshot,
   deleteNavigationSnapshot,
+  markNavigationStopped,
+  beginNavigationResume,
+  commitNavigationResume,
+  releaseNavigationResume,
 }));
 vi.mock("../ai/memory.service", () => ({ getMemorySettings, loadMemories }));
 vi.mock("./transcript-corrector", () => ({
@@ -419,10 +449,13 @@ describe("createLiveBridge Live config", () => {
     const declarations =
       connect.mock.calls[0][0].config.tools.at(-1).functionDeclarations;
     expect(declarations.map((item: any) => item.name)).toEqual([
+      "proposeNavigationCandidate",
+      "confirmNavigationCandidateSwitch",
       "startNavigation",
       "stopNavigation",
       "repeatNavStep",
       "getActiveNavigationContext",
+      "endVoiceSession",
     ]);
   });
 });
@@ -477,6 +510,9 @@ describe("createLiveBridge navigation turn arbiter", () => {
         await bridge.voiceReady;
         await bridge.armRouteToken("initial");
         onmessage?.({
+          serverContent: {
+            inputTranscription: { text: "開始導航", finished: true },
+          },
           toolCall: {
             functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
           },
@@ -576,6 +612,9 @@ describe("createLiveBridge navigation turn arbiter", () => {
       await bridge.voiceReady;
       await bridge.armRouteToken("initial");
       onmessage?.({
+        serverContent: {
+          inputTranscription: { text: "開始導航", finished: true },
+        },
         toolCall: {
           functionCalls: [{ id: "start", name: "startNavigation", args: {} }],
         },
@@ -650,6 +689,9 @@ describe("createLiveBridge navigation turn arbiter", () => {
       await bridge.voiceReady;
       await bridge.armRouteToken("initial");
       onmessage?.({
+        serverContent: {
+          inputTranscription: { text: "開始導航", finished: true },
+        },
         toolCall: {
           functionCalls: [
             { id: "start-old", name: "startNavigation", args: {} },
@@ -696,12 +738,18 @@ describe("createLiveBridge navigation turn arbiter", () => {
       pendingNewRoute.resolve(newerRoute);
       await pendingNewArm;
       onmessage?.({
+        serverContent: {
+          inputTranscription: { text: "停止導航", finished: true },
+        },
         toolCall: {
           functionCalls: [{ id: "stop-old", name: "stopNavigation", args: {} }],
         },
       });
       await vi.advanceTimersByTimeAsync(0);
       onmessage?.({
+        serverContent: {
+          inputTranscription: { text: "開始導航", finished: true },
+        },
         toolCall: {
           functionCalls: [
             { id: "start-new", name: "startNavigation", args: {} },
@@ -756,6 +804,9 @@ describe("createLiveBridge navigation turn arbiter", () => {
       await bridge.voiceReady;
       await bridge.armRouteToken("initial");
       onmessage?.({
+        serverContent: {
+          inputTranscription: { text: "開始導航", finished: true },
+        },
         toolCall: {
           functionCalls: [
             { id: "start-old", name: "startNavigation", args: {} },
@@ -792,12 +843,18 @@ describe("createLiveBridge navigation turn arbiter", () => {
       await vi.advanceTimersByTimeAsync(0);
 
       onmessage?.({
+        serverContent: {
+          inputTranscription: { text: "停止導航", finished: true },
+        },
         toolCall: {
           functionCalls: [{ id: "stop-old", name: "stopNavigation", args: {} }],
         },
       });
       await vi.advanceTimersByTimeAsync(0);
       onmessage?.({
+        serverContent: {
+          inputTranscription: { text: "開始導航", finished: true },
+        },
         toolCall: {
           functionCalls: [
             { id: "start-new", name: "startNavigation", args: {} },
@@ -851,6 +908,9 @@ describe("createLiveBridge navigation turn arbiter", () => {
       await bridge.voiceReady;
       await bridge.armRouteToken("initial");
       onmessage?.({
+        serverContent: {
+          inputTranscription: { text: "開始導航", finished: true },
+        },
         toolCall: {
           functionCalls: [
             { id: "start-old", name: "startNavigation", args: {} },
@@ -943,6 +1003,9 @@ describe("createLiveBridge navigation turn arbiter", () => {
       secondPending.resolve(secondRoute);
       await secondArm;
       onmessage?.({
+        serverContent: {
+          inputTranscription: { text: "開始導航", finished: true },
+        },
         toolCall: {
           functionCalls: [{ id: "start", name: "startNavigation", args: {} }],
         },
@@ -987,6 +1050,9 @@ describe("createLiveBridge navigation turn arbiter", () => {
       await bridge.voiceReady;
       await bridge.armRouteToken("initial");
       onmessage?.({
+        serverContent: {
+          inputTranscription: { text: "開始導航", finished: true },
+        },
         toolCall: {
           functionCalls: [{ id: "start", name: "startNavigation", args: {} }],
         },
@@ -998,6 +1064,9 @@ describe("createLiveBridge navigation turn arbiter", () => {
       pendingRoute.resolve(pendingRouteValue);
       await pendingArm;
       onmessage?.({
+        serverContent: {
+          inputTranscription: { text: "開始導航", finished: true },
+        },
         toolCall: {
           functionCalls: [
             { id: "restart-old", name: "startNavigation", args: {} },
@@ -1048,6 +1117,9 @@ describe("createLiveBridge navigation turn arbiter", () => {
       await bridge.voiceReady;
       await bridge.armRouteToken("initial");
       onmessage?.({
+        serverContent: {
+          inputTranscription: { text: "開始導航", finished: true },
+        },
         toolCall: {
           functionCalls: [{ id: "start", name: "startNavigation", args: {} }],
         },
@@ -1123,6 +1195,9 @@ describe("createLiveBridge navigation turn arbiter", () => {
     await bridge.voiceReady;
     await bridge.armRouteToken("cap");
     onmessage?.({
+      serverContent: {
+        inputTranscription: { text: "開始導航", finished: true },
+      },
       toolCall: {
         functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
       },
@@ -1163,6 +1238,9 @@ describe("createLiveBridge navigation turn arbiter", () => {
       await bridge.voiceReady;
       await bridge.armRouteToken("cap");
       onmessage?.({
+        serverContent: {
+          inputTranscription: { text: "開始導航", finished: true },
+        },
         toolCall: {
           functionCalls: [{ id: "nav-1", name: "startNavigation", args: {} }],
         },
@@ -1201,6 +1279,9 @@ describe("createLiveBridge navigation turn arbiter", () => {
     });
     bridge.updatePosition({ latitude: 25, longitude: 121 });
     onmessage?.({
+      serverContent: {
+        inputTranscription: { text: "開始導航", finished: true },
+      },
       toolCall: {
         functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
       },
@@ -1230,6 +1311,9 @@ describe("createLiveBridge navigation turn arbiter", () => {
     await bridge.voiceReady;
     await bridge.armRouteToken("cap");
     onmessage?.({
+      serverContent: {
+        inputTranscription: { text: "開始導航", finished: true },
+      },
       toolCall: {
         functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
       },
@@ -1271,6 +1355,9 @@ describe("createLiveBridge navigation turn arbiter", () => {
       await bridge.voiceReady;
       await bridge.armRouteToken("cap");
       onmessage?.({
+        serverContent: {
+          inputTranscription: { text: "開始導航", finished: true },
+        },
         toolCall: {
           functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
         },
@@ -1321,6 +1408,9 @@ describe("createLiveBridge navigation turn arbiter", () => {
     await bridge.voiceReady;
     await bridge.armRouteToken("cap");
     onmessage?.({
+      serverContent: {
+        inputTranscription: { text: "開始導航", finished: true },
+      },
       toolCall: {
         functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
       },
@@ -1392,6 +1482,9 @@ describe("createLiveBridge navigation turn arbiter", () => {
     resolveOld(oldRoute);
     await oldArm;
     onmessage?.({
+      serverContent: {
+        inputTranscription: { text: "開始導航", finished: true },
+      },
       toolCall: {
         functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
       },
@@ -1426,6 +1519,9 @@ describe("createLiveBridge navigation turn arbiter", () => {
       await bridge.voiceReady;
       await bridge.armRouteToken("cap");
       onmessage?.({
+        serverContent: {
+          inputTranscription: { text: "開始導航", finished: true },
+        },
         toolCall: {
           functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
         },
@@ -1482,6 +1578,9 @@ describe("createLiveBridge navigation turn arbiter", () => {
     await bridge.voiceReady;
     await bridge.armRouteToken("cap");
     onmessage?.({
+      serverContent: {
+        inputTranscription: { text: "開始導航", finished: true },
+      },
       toolCall: {
         functionCalls: [{ id: "start", name: "startNavigation", args: {} }],
       },
@@ -1840,7 +1939,20 @@ describe("createLiveBridge reroute generation ownership", () => {
       routeVersion: 1,
     }));
     const call = async (id: string, name: string): Promise<void> => {
-      onmessage?.({ toolCall: { functionCalls: [{ id, name, args: {} }] } });
+      onmessage?.({
+        serverContent: {
+          inputTranscription: {
+            text:
+              name === "startNavigation"
+                ? "開始導航"
+                : name === "stopNavigation"
+                  ? "停止導航"
+                  : "查詢",
+            finished: true,
+          },
+        },
+        toolCall: { functionCalls: [{ id, name, args: {} }] },
+      });
       await vi.advanceTimersByTimeAsync(0);
     };
     return { ws, session, call };
@@ -2110,7 +2222,20 @@ describe("createLiveBridge navigation resume and snapshot lifecycle", () => {
       return session;
     });
     const call = async (id: string, name: string): Promise<void> => {
-      onmessage?.({ toolCall: { functionCalls: [{ id, name, args: {} }] } });
+      onmessage?.({
+        serverContent: {
+          inputTranscription: {
+            text:
+              name === "startNavigation"
+                ? "開始導航"
+                : name === "stopNavigation"
+                  ? "停止導航"
+                  : "查詢",
+            finished: true,
+          },
+        },
+        toolCall: { functionCalls: [{ id, name, args: {} }] },
+      });
       await vi.advanceTimersByTimeAsync(0);
     };
     return { ws, session, call };
@@ -2423,6 +2548,102 @@ describe("createLiveBridge navigation resume and snapshot lifecycle", () => {
     }
   });
 
+  it("stops and tombstones a navigation while resume is still loading", async () => {
+    vi.useFakeTimers();
+    try {
+      const pendingSnapshot = deferred<ReturnType<typeof snapshot>>();
+      getNavigationSnapshot.mockReturnValueOnce(pendingSnapshot.promise);
+      const { ws, call } = makeHarness();
+      const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.voiceReady;
+
+      const resume = bridge.resumeNavigation(resumeMessage());
+      await Promise.resolve();
+      expect(getNavigationSnapshot).toHaveBeenCalledWith(NAV_ID);
+
+      const stopping = call("stop-pending-resume", "stopNavigation");
+      await vi.advanceTimersByTimeAsync(0);
+      await stopping;
+
+      expect(frameOf(ws, "nav.stop")).toEqual({
+        type: "nav.stop",
+        reason: "user_voice",
+      });
+      expect(markNavigationStopped).toHaveBeenCalledWith(NAV_ID, "u");
+
+      pendingSnapshot.resolve(snapshot());
+      await resume;
+      expect(frameOf(ws, "nav.resume_ok")).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails closed when the distributed resume commit loses to stop", async () => {
+    const ws = makeWs();
+    connect.mockImplementation(async () => makeSession());
+    const bridge = await createLiveBridge({ ws, userId: "u" });
+    await bridge.voiceReady;
+    commitNavigationResume.mockResolvedValueOnce("stopped");
+
+    await bridge.resumeNavigation(resumeMessage());
+
+    expect(frameOf(ws, "nav.resume_ok")).toBeUndefined();
+    expect(frameOf(ws, "nav.resume_failed")).toMatchObject({
+      code: "SNAPSHOT_NOT_FOUND",
+    });
+    expect(releaseNavigationResume).toHaveBeenCalledWith(
+      NAV_ID,
+      expect.any(String),
+    );
+    bridge.close();
+  });
+
+  it("a stop on another bridge invalidates a resume after its snapshot was read", async () => {
+    let onMessageA: ((message: unknown) => void) | undefined;
+    const wsA = makeWs();
+    const wsB = makeWs();
+    connect
+      .mockImplementationOnce(async ({ callbacks }: any) => {
+        onMessageA = callbacks.onmessage;
+        return makeSession();
+      })
+      .mockImplementationOnce(async () => makeSession());
+
+    const bridgeA = await createLiveBridge({ ws: wsA, userId: "u" });
+    const bridgeB = await createLiveBridge({ ws: wsB, userId: "u" });
+    await Promise.all([bridgeA.voiceReady, bridgeB.voiceReady]);
+    await bridgeA.armRouteToken("token");
+    bridgeA.startNavigation();
+
+    const pendingRoute = deferred<typeof identifiedRoute>();
+    getRouteByToken.mockReturnValueOnce(pendingRoute.promise);
+    const resume = bridgeB.resumeNavigation(resumeMessage());
+    await vi.waitFor(() => expect(getRouteByToken).toHaveBeenCalled());
+
+    onMessageA?.({
+      serverContent: {
+        inputTranscription: { text: "停止導航", finished: true },
+      },
+      toolCall: {
+        functionCalls: [{ id: "cross-stop", name: "stopNavigation", args: {} }],
+      },
+    });
+    await vi.waitFor(() =>
+      expect(markNavigationStopped).toHaveBeenCalledWith(NAV_ID, "u"),
+    );
+
+    pendingRoute.resolve(identifiedRoute);
+    await resume;
+    expect(frameOf(wsB, "nav.resume_ok")).toBeUndefined();
+    expect(frameOf(wsB, "nav.resume_failed")).toMatchObject({
+      code: "SNAPSHOT_NOT_FOUND",
+    });
+
+    bridgeA.close();
+    bridgeB.close();
+  });
+
   it("keeps the snapshot when the socket closes so a reconnect can resume", async () => {
     vi.useFakeTimers();
     try {
@@ -2497,6 +2718,9 @@ describe("createLiveBridge navigation independence from the voice session", () =
     await toolBridge.voiceReady;
     await toolBridge.armRouteToken("cap");
     onmessage?.({
+      serverContent: {
+        inputTranscription: { text: "開始導航", finished: true },
+      },
       toolCall: {
         functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
       },
@@ -3087,5 +3311,976 @@ describe("voice routing location recovery", () => {
     await vi.advanceTimersByTimeAsync(3000);
     expect(executeLocalTool).not.toHaveBeenCalled();
     expect(session.sendToolResponse).not.toHaveBeenCalled();
+  });
+});
+
+describe("Live model and assistant end", () => {
+  let ws: WebSocket;
+  let session: ReturnType<typeof makeSession>;
+  let bridge: Awaited<ReturnType<typeof createLiveBridge>>;
+  let onmessage: (message: any) => void;
+  async function emit(message: any) {
+    onmessage(message);
+    // Drain the serialized server-message queue without advancing timers.
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+  }
+  async function end(text: string) {
+    await emit({
+      serverContent: { inputTranscription: { text, finished: true } },
+    });
+    await emit({
+      toolCall: {
+        functionCalls: [{ id: "end-1", name: "endVoiceSession", args: {} }],
+      },
+    });
+  }
+  function events() {
+    return vi
+      .mocked(ws.send)
+      .mock.calls.filter((c) => typeof c[0] === "string")
+      .map((c) => JSON.parse(c[0] as string));
+  }
+  function output() {
+    return session.sendToolResponse.mock.calls.at(-1)?.[0]?.functionResponses[0]
+      .response.output;
+  }
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+    getNavigationEnvelopeByToken.mockResolvedValue(null);
+    session = makeSession();
+    ws = makeWs();
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      return session;
+    });
+    bridge = await createLiveBridge({ ws, userId: "voice-end-user" });
+    await bridge.voiceReady;
+  });
+  afterEach(() => {
+    bridge?.close();
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
+  it("uses the extended thinking Live model, HIGH, and a Live-only end tool", () => {
+    const args = connect.mock.calls[0][0];
+    expect(args.model).toBe("gemini-3.8-live-extended-thinking");
+    expect(args.config.thinkingConfig).toEqual({
+      thinkingLevel: ThinkingLevel.HIGH,
+    });
+    expect(
+      args.config.tools
+        .flatMap((t: any) => t.functionDeclarations ?? [])
+        .map((t: any) => t.name),
+    ).toContain("endVoiceSession");
+  });
+  it("biases input transcription toward Traditional Chinese and accessibility terms", () => {
+    const config = connect.mock.calls[0][0].config;
+    expect(config.inputAudioTranscription.languageCodes).toEqual([
+      "zh-TW",
+      "en-US",
+    ]);
+    expect(config.inputAudioTranscription.customVocabulary).toEqual(
+      expect.arrayContaining([
+        "無障礙智慧地圖",
+        "無障礙",
+        "低地板公車",
+        "復康巴士",
+        "導盲磚",
+      ]),
+    );
+  });
+  it("puts English first when the voice session language is English", async () => {
+    bridge.close();
+    connect.mockClear();
+    bridge = await createLiveBridge({
+      ws,
+      userId: "voice-end-user",
+      language: "en",
+    });
+    await bridge.voiceReady;
+    expect(
+      connect.mock.calls[0][0].config.inputAudioTranscription.languageCodes,
+    ).toEqual(["en-US", "zh-TW"]);
+  });
+  it("accepts explicit end, responds before farewell playback grace, and preserves navigation", async () => {
+    getRouteByToken.mockResolvedValueOnce(walkRoute);
+    getNavigationEnvelopeByToken.mockResolvedValueOnce({
+      navigationId: "end-nav",
+      routeVersion: 1,
+    });
+    expect(await bridge.armRouteToken("walk-end")).toBe(true);
+    bridge.startNavigation();
+    await emit({
+      serverContent: {
+        turnComplete: true,
+        interactionStatus: InteractionStatus.IDLE,
+      },
+    });
+    const stored = storeNavigationSnapshot.mock.calls.length;
+    expect(stored).toBeGreaterThan(0);
+    await end("再見");
+    expect(events()).toContainEqual({
+      type: "session.ending",
+      reason: "assistant-end",
+    });
+    expect(output()).toContain('"ok":true');
+    const eventCall = vi
+      .mocked(ws.send)
+      .mock.calls.findIndex(
+        (c) => typeof c[0] === "string" && c[0].includes('"session.ending"'),
+      );
+    expect(vi.mocked(ws.send).mock.invocationCallOrder[eventCall]).toBeLessThan(
+      session.sendToolResponse.mock.invocationCallOrder[0],
+    );
+    expect(ws.close).not.toHaveBeenCalled();
+    bridge.sendAudio(Buffer.alloc(20));
+    expect(session.sendRealtimeInput).not.toHaveBeenCalled();
+    await emit({
+      serverContent: {
+        modelTurn: {
+          parts: [
+            { inlineData: { data: Buffer.alloc(48000).toString("base64") } },
+          ],
+        },
+        turnComplete: true,
+        interactionStatus: InteractionStatus.IDLE,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(1749);
+    expect(ws.close).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ws.close).toHaveBeenCalledExactlyOnceWith(1000, "assistant-end");
+    expect(deleteNavigationSnapshot).not.toHaveBeenCalled();
+    expect(storeNavigationSnapshot.mock.calls.length).toBe(stored);
+    expect(events().some((e) => e.type === "nav.stop")).toBe(false);
+  });
+  it.each([
+    "不要結束語音",
+    "台中車站附近有什麼餐廳",
+    "再見是什麼意思",
+    "再見的英文怎麼說",
+  ])("rejects tool end for %s", async (text) => {
+    await end(text);
+    expect(output()).toContain("EXPLICIT_END_REQUIRED");
+    await vi.advanceTimersByTimeAsync(16000);
+    expect(ws.close).not.toHaveBeenCalled();
+    expect(events().some((e) => e.type === "session.ending")).toBe(false);
+  });
+  it.each(["可以結束語音嗎", "請幫我掛斷"])(
+    "accepts an explicit request %s",
+    async (text) => {
+      await end(text);
+      expect(output()).toContain('"ok":true');
+      expect(events()).toContainEqual({
+        type: "session.ending",
+        reason: "assistant-end",
+      });
+    },
+  );
+  it("does not close on ordinary answer completion without an end tool", async () => {
+    await emit({
+      serverContent: {
+        inputTranscription: { text: "找餐廳", finished: true },
+        turnComplete: true,
+        interactionStatus: InteractionStatus.IDLE,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(16000);
+    expect(ws.close).not.toHaveBeenCalled();
+  });
+  it("ignores stale model environment overrides and keeps the required Live model", async () => {
+    bridge.close();
+    vi.stubEnv("GEMINI_LIVE_MODEL", "legacy-live-model");
+    connect.mockClear();
+    bridge = await createLiveBridge({ ws, userId: "voice-end-user" });
+    await bridge.voiceReady;
+    expect(connect.mock.calls[0][0].model).toBe(
+      "gemini-3.8-live-extended-thinking",
+    );
+    expect(connect.mock.calls[0][0].config.thinkingConfig).toEqual({
+      thinkingLevel: ThinkingLevel.HIGH,
+    });
+  });
+  it("does not use an older end transcript after a new utterance starts", async () => {
+    await emit({
+      serverContent: { inputTranscription: { text: "再見", finished: true } },
+    });
+    await emit({
+      serverContent: { inputTranscription: { text: "等一下找餐廳" } },
+    });
+    await emit({
+      toolCall: {
+        functionCalls: [{ id: "new", name: "endVoiceSession", args: {} }],
+      },
+    });
+    expect(output()).toContain("EXPLICIT_END_REQUIRED");
+    await vi.advanceTimersByTimeAsync(16000);
+    expect(ws.close).not.toHaveBeenCalled();
+  });
+  it.each(["same batch", "reverse batch", "later call"])(
+    "blocks stopNavigation after endVoiceSession in %s without deleting the snapshot",
+    async (timing) => {
+      getRouteByToken.mockResolvedValueOnce(walkRoute);
+      getNavigationEnvelopeByToken.mockResolvedValueOnce({
+        navigationId: "ending-guard-nav",
+        routeVersion: 1,
+      });
+      expect(await bridge.armRouteToken("ending-guard-route")).toBe(true);
+      bridge.startNavigation();
+      await emit({
+        serverContent: {
+          turnComplete: true,
+          interactionStatus: InteractionStatus.IDLE,
+        },
+      });
+      expect(storeNavigationSnapshot).toHaveBeenCalled();
+      await emit({
+        serverContent: { inputTranscription: { text: "再見", finished: true } },
+      });
+      const endCall = { id: "end", name: "endVoiceSession", args: {} };
+      const stopCall = { id: "stop", name: "stopNavigation", args: {} };
+      await emit({
+        toolCall: {
+          functionCalls:
+            timing === "same batch"
+              ? [endCall, stopCall]
+              : timing === "reverse batch"
+                ? [stopCall, endCall]
+                : [endCall],
+        },
+      });
+      if (timing === "later call") {
+        await emit({
+          serverContent: {
+            turnComplete: true,
+            interactionStatus: InteractionStatus.IDLE,
+          },
+        });
+        await vi.advanceTimersByTimeAsync(500);
+        await emit({ toolCall: { functionCalls: [stopCall] } });
+      }
+      const responses = session.sendToolResponse.mock.calls.flatMap(
+        ([payload]) => payload.functionResponses,
+      );
+      expect(
+        responses.find((r: any) => r.id === "stop")?.response.output,
+      ).toContain("VOICE_SESSION_ENDING");
+      expect(
+        JSON.parse(responses.find((r: any) => r.id === "end")!.response.output),
+      ).toEqual({
+        ok: true,
+        message: "請只用一句簡短道別，不要再提問或提供其他資訊。",
+      });
+      expect(events().filter((e) => e.type === "session.ending")).toHaveLength(
+        1,
+      );
+      expect(events().some((e) => e.type === "nav.stop")).toBe(false);
+      expect(deleteNavigationSnapshot).not.toHaveBeenCalled();
+      expect(ws.close).not.toHaveBeenCalled();
+    },
+  );
+  it.each(["turn complete", "new audio"])(
+    "rejects a stale end candidate after %s without a new transcript",
+    async (boundary) => {
+      await emit({
+        serverContent: { inputTranscription: { text: "再見", finished: true } },
+      });
+      await emit({
+        serverContent: {
+          turnComplete: true,
+          interactionStatus: InteractionStatus.IDLE,
+        },
+      });
+      if (boundary === "new audio") bridge.sendAudio(Buffer.alloc(20));
+      await emit({
+        toolCall: {
+          functionCalls: [{ id: "stale", name: "endVoiceSession", args: {} }],
+        },
+      });
+      expect(output()).toContain("EXPLICIT_END_REQUIRED");
+      await vi.advanceTimersByTimeAsync(16000);
+      expect(ws.close).not.toHaveBeenCalled();
+    },
+  );
+  it("invalidates an end candidate at a new audio boundary before model turn completion", async () => {
+    await emit({
+      serverContent: { inputTranscription: { text: "再見", finished: true } },
+    });
+    await emit({ serverContent: { modelTurn: { parts: [{ text: "好的" }] } } });
+    bridge.sendAudio(Buffer.alloc(20));
+    await emit({
+      toolCall: {
+        functionCalls: [{ id: "new-audio", name: "endVoiceSession", args: {} }],
+      },
+    });
+    expect(output()).toContain("EXPLICIT_END_REQUIRED");
+    await vi.advanceTimersByTimeAsync(16000);
+    expect(ws.close).not.toHaveBeenCalled();
+  });
+  it.each(["audible PCM", "interrupted"])(
+    "invalidates a USER_INPUT end candidate on %s before a new transcript",
+    async (boundary) => {
+      bridge.sendAudio(Buffer.alloc(20));
+      await emit({
+        serverContent: { inputTranscription: { text: "再見", finished: true } },
+      });
+      if (boundary === "audible PCM") {
+        const pcm = Buffer.alloc(21); // Odd trailing byte must not be read as PCM16.
+        for (let i = 0; i + 1 < pcm.length; i += 2) pcm.writeInt16LE(1000, i);
+        bridge.sendAudio(pcm);
+      } else {
+        await emit({ serverContent: { interrupted: true } });
+      }
+      await emit({
+        toolCall: {
+          functionCalls: [
+            { id: "stale-input", name: "endVoiceSession", args: {} },
+          ],
+        },
+      });
+      expect(output()).toContain("EXPLICIT_END_REQUIRED");
+      await vi.advanceTimersByTimeAsync(16000);
+      expect(ws.close).not.toHaveBeenCalled();
+      expect(events().some((e) => e.type === "session.ending")).toBe(false);
+    },
+  );
+  it("keeps the current candidate across continuous USER_INPUT silence frames", async () => {
+    bridge.sendAudio(Buffer.alloc(20));
+    await emit({
+      serverContent: { inputTranscription: { text: "再見", finished: true } },
+    });
+    bridge.sendAudio(Buffer.alloc(20));
+    bridge.sendAudio(Buffer.alloc(20));
+    await emit({
+      toolCall: {
+        functionCalls: [{ id: "valid", name: "endVoiceSession", args: {} }],
+      },
+    });
+    expect(output()).toContain('"ok":true');
+    expect(events()).toContainEqual({
+      type: "session.ending",
+      reason: "assistant-end",
+    });
+  });
+  it("waits for a post-tool farewell turn, not a tool-associated turnComplete", async () => {
+    await emit({
+      serverContent: { inputTranscription: { text: "再見", finished: true } },
+    });
+    await emit({
+      serverContent: {
+        turnComplete: true,
+        interactionStatus: InteractionStatus.IDLE,
+      },
+      toolCall: {
+        functionCalls: [{ id: "end", name: "endVoiceSession", args: {} }],
+      },
+    });
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(ws.close).not.toHaveBeenCalled();
+    await emit({
+      serverContent: {
+        turnComplete: true,
+        interactionStatus: InteractionStatus.IDLE,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(1499);
+    expect(ws.close).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ws.close).toHaveBeenCalledExactlyOnceWith(1000, "assistant-end");
+  });
+  it("waits the full playback grace when farewell completes near the deadline", async () => {
+    await end("再見");
+    await vi.advanceTimersByTimeAsync(14000);
+    await emit({
+      serverContent: {
+        modelTurn: {
+          parts: [
+            { inlineData: { data: Buffer.alloc(48000).toString("base64") } },
+          ],
+        },
+        turnComplete: true,
+        interactionStatus: InteractionStatus.IDLE,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(1749);
+    expect(ws.close).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ws.close).toHaveBeenCalledExactlyOnceWith(1000, "assistant-end");
+  });
+  it("does not start grace for IN_PROGRESS and waits full grace after IDLE", async () => {
+    await end("再見");
+    await emit({
+      serverContent: {
+        turnComplete: true,
+        interactionStatus: InteractionStatus.IN_PROGRESS,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(ws.close).not.toHaveBeenCalled();
+    await emit({
+      serverContent: {
+        turnComplete: true,
+        interactionStatus: InteractionStatus.IDLE,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(1499);
+    expect(ws.close).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ws.close).toHaveBeenCalledExactlyOnceWith(1000, "assistant-end");
+  });
+  it("keeps the 15 second deadline for turnComplete without interactionStatus", async () => {
+    await end("再見");
+    await emit({ serverContent: { turnComplete: true } });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(ws.close).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(12999);
+    expect(ws.close).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ws.close).toHaveBeenCalledExactlyOnceWith(1000, "assistant-end");
+  });
+  it("does not start grace for an interrupted IDLE turn", async () => {
+    await end("再見");
+    await emit({
+      serverContent: {
+        interrupted: true,
+        turnComplete: true,
+        interactionStatus: InteractionStatus.IDLE,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(ws.close).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(13000);
+    expect(ws.close).toHaveBeenCalledExactlyOnceWith(1000, "assistant-end");
+  });
+  it("bounds an accepted end with no farewell turn to 15 seconds", async () => {
+    await end("沒事了");
+    await vi.advanceTimersByTimeAsync(14999);
+    expect(ws.close).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ws.close).toHaveBeenCalledExactlyOnceWith(1000, "assistant-end");
+  });
+  it("clears ending timers when the provider closes", async () => {
+    await end("結束語音");
+    connect.mock.calls[0][0].callbacks.onclose({});
+    expect(ws.close).toHaveBeenCalledExactlyOnceWith(1000, "assistant-end");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it.each(["farewell", "deadline"])(
+    "preserves the assistant-end %s timer on route context updates",
+    async (boundary) => {
+      await end("結束語音");
+      if (boundary === "farewell")
+        await emit({
+          serverContent: {
+            turnComplete: true,
+            interactionStatus: InteractionStatus.IDLE,
+          },
+        });
+      const timerCount = vi.getTimerCount();
+      expect(await bridge.setRouteContext({ routeToken: "new-route" })).toEqual(
+        {
+          ok: false,
+          reason: "ROUTE_CONTEXT_UNAVAILABLE",
+        },
+      );
+      expect(ws.close).not.toHaveBeenCalled();
+      expect(connect).toHaveBeenCalledOnce();
+      expect(session.close).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(timerCount);
+      await vi.advanceTimersByTimeAsync(boundary === "farewell" ? 1499 : 14999);
+      expect(ws.close).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(ws.close).toHaveBeenCalledExactlyOnceWith(1000, "assistant-end");
+    },
+  );
+  it("cleans assistant-end timers on bridge.close", async () => {
+    await end("先這樣");
+    expect(events().some((e) => e.type === "session.ending")).toBe(true);
+    await emit({
+      serverContent: {
+        turnComplete: true,
+        interactionStatus: InteractionStatus.IDLE,
+      },
+    });
+    bridge.close();
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(ws.close).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("candidate control server guards", () => {
+  let onmessage: (m: any) => void;
+  let ws: WebSocket;
+  let session: ReturnType<typeof makeSession>;
+  let bridge: Awaited<ReturnType<typeof createLiveBridge>>;
+  const tokenRoute = {
+    ...walkRoute,
+    navigationId: "direct-nav",
+    routeVersion: 1,
+    routeToken: "first-token",
+  };
+  const envelope = {
+    schemaVersion: 1,
+    navigationId: "direct-nav",
+    routeVersion: 1,
+    route: tokenRoute,
+    canonicalRequest: { requireElevator: true },
+  };
+  const messages = () =>
+    vi
+      .mocked(ws.send)
+      .mock.calls.filter((c) => typeof c[0] === "string")
+      .map((c) => JSON.parse(c[0] as string));
+  const utter = (text: string) =>
+    onmessage({
+      serverContent: { inputTranscription: { text, finished: true } },
+    });
+  const tool = (name: string, args = {}) =>
+    onmessage({
+      toolCall: {
+        functionCalls: [{ id: Math.random().toString(), name, args }],
+      },
+    });
+  const settle = async () => {
+    await vi.waitFor(() => expect(session.sendToolResponse).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 0));
+  };
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    session = makeSession();
+    ws = makeWs();
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      return session;
+    });
+    readNavigationTokenStrict.mockResolvedValue({
+      status: "ok",
+      value: envelope,
+    });
+    vi.mocked(executeLocalTool).mockResolvedValue(
+      JSON.stringify({
+        ok: true,
+        routes: [
+          tokenRoute,
+          { ...tokenRoute, routeId: "r2", routeToken: "second-token" },
+        ],
+      }),
+    );
+    bridge = await createLiveBridge({ ws, userId: "u" });
+    await bridge.voiceReady;
+  });
+  afterEach(() => bridge.close());
+  it("direct plans emit tool_result before real nav.start before model response, same-token echo is inert", async () => {
+    const order: string[] = [];
+    vi.mocked(ws.send).mockImplementation(((raw: any) => {
+      if (typeof raw === "string") order.push(JSON.parse(raw).type);
+    }) as any);
+    session.sendToolResponse.mockImplementation(() => order.push("model"));
+    utter("帶我去醫院");
+    tool("planAccessibleRoute");
+    await settle();
+    expect(order.indexOf("tool_result")).toBeLessThan(
+      order.indexOf("nav.start"),
+    );
+    expect(order.indexOf("nav.start")).toBeLessThan(order.indexOf("model"));
+    expect(JSON.stringify(session.sendToolResponse.mock.calls)).toContain(
+      "navigationStarted",
+    );
+    expect(await bridge.armRouteToken("first-token")).toBe(true);
+    expect(getRouteByToken).not.toHaveBeenCalled();
+  });
+  it("resumes an unpublished ADOPTED next version by replacing before resume_ok", async () => {
+    const nextRoute = {
+      ...tokenRoute,
+      routeVersion: 2,
+      routeToken: "adopted-token",
+    };
+    const snapshot = {
+      navigationId: "direct-nav",
+      userId: "u",
+      routeVersion: 2,
+      routeToken: "adopted-token",
+      currentStepIndex: 0,
+      onVehicle: false,
+      latestPosition: null,
+      updatedAt: Date.now(),
+    };
+    getNavigationSnapshot.mockResolvedValue(snapshot);
+    getRouteByToken.mockResolvedValue(nextRoute);
+    getNavigationEnvelopeByToken.mockResolvedValue({
+      ...envelope,
+      routeVersion: 2,
+      route: nextRoute,
+    });
+    getAdoptedCandidateReplacement.mockResolvedValue({
+      navigationId: "direct-nav",
+      previousRouteVersion: 1,
+      routeVersion: 2,
+      routeToken: "adopted-token",
+      route: nextRoute,
+      steps: [],
+      instructions: [],
+      warnings: [],
+      currentStepIndex: 0,
+      replayed: false,
+    });
+    await bridge.resumeNavigation({
+      type: "nav.resume",
+      navigationId: "direct-nav",
+      routeVersion: 1,
+      routeToken: "first-token",
+      lastKnownStepIndex: 0,
+    });
+    const events = messages();
+    expect(
+      events
+        .filter(
+          (m) => m.type === "nav.route_replaced" || m.type === "nav.resume_ok",
+        )
+        .map((m) => m.type),
+    ).toEqual(["nav.route_replaced", "nav.resume_ok"]);
+    expect(events.find((m) => m.type === "nav.route_replaced")).toMatchObject({
+      previousRouteVersion: 1,
+      routeVersion: 2,
+      routeToken: "adopted-token",
+      route: nextRoute,
+    });
+    expect(
+      events.find((m) => m.type === "nav.route_replaced").steps.length,
+    ).toBeGreaterThan(0);
+    expect(getAdoptedCandidateReplacement).toHaveBeenCalledWith(
+      snapshot,
+      "first-token",
+      1,
+    );
+  });
+  it.each(["pending", "version jump"])(
+    "fails closed for an unproven resume mismatch: %s",
+    async (kind) => {
+      getNavigationSnapshot.mockResolvedValue({
+        navigationId: "direct-nav",
+        userId: "u",
+        routeVersion: kind === "pending" ? 2 : 3,
+        routeToken: "new-token",
+        currentStepIndex: 0,
+        onVehicle: false,
+        latestPosition: null,
+        updatedAt: Date.now(),
+      });
+      getAdoptedCandidateReplacement.mockResolvedValue(null);
+      await bridge.resumeNavigation({
+        type: "nav.resume",
+        navigationId: "direct-nav",
+        routeVersion: 1,
+        routeToken: "first-token",
+        lastKnownStepIndex: 0,
+      });
+      expect(
+        messages().some(
+          (m) => m.type === "nav.route_replaced" || m.type === "nav.resume_ok",
+        ),
+      ).toBe(false);
+      expect(messages().find((m) => m.type === "nav.resume_failed").code).toBe(
+        "ROUTE_VERSION_MISMATCH",
+      );
+    },
+  );
+  it("a finalized direct utterance can auto-start at most once", async () => {
+    utter("導航到醫院");
+    tool("planAccessibleRoute");
+    await settle();
+    session.sendToolResponse.mockClear();
+    tool("planAccessibleRoute");
+    await settle();
+    expect(messages().filter((m) => m.type === "nav.start")).toHaveLength(1);
+  });
+  it("a plan overtaken by UI selection cannot install its candidate registry", async () => {
+    const pending = deferred<any>();
+    vi.mocked(executeLocalTool).mockReturnValueOnce(pending.promise);
+    utter("有哪些路線");
+    tool("planAccessibleRoute");
+    await vi.waitFor(() => expect(executeLocalTool).toHaveBeenCalled());
+    getRouteByToken.mockResolvedValue(tokenRoute);
+    getNavigationEnvelopeByToken.mockResolvedValue(envelope);
+    await bridge.armRouteToken("ui-token");
+    pending.resolve(
+      JSON.stringify({
+        ok: true,
+        routes: [
+          tokenRoute,
+          { ...tokenRoute, routeToken: "second-token", routeId: "r2" },
+        ],
+      }),
+    );
+    await settle();
+    session.sendToolResponse.mockClear();
+    utter("換第二條");
+    tool("proposeNavigationCandidate", { candidateNumber: 2 });
+    await settle();
+    expect(JSON.stringify(session.sendToolResponse.mock.calls)).toContain(
+      "CANDIDATE_UNAVAILABLE",
+    );
+  });
+  it("UI arming updates used candidates and excludes its active token", async () => {
+    utter("有哪些路線");
+    tool("planAccessibleRoute");
+    await settle();
+    getRouteByToken.mockResolvedValue({
+      ...tokenRoute,
+      routeToken: "second-token",
+    });
+    getNavigationEnvelopeByToken.mockResolvedValue(envelope);
+    await bridge.armRouteToken("second-token");
+    session.sendToolResponse.mockClear();
+    utter("換第二條");
+    tool("proposeNavigationCandidate", { candidateNumber: 2 });
+    await settle();
+    expect(JSON.stringify(session.sendToolResponse.mock.calls)).toContain(
+      "CANDIDATE_UNAVAILABLE",
+    );
+  });
+  it("executor isCurrent expires as soon as a newer transcript arrives", async () => {
+    const pending = deferred<any>();
+    vi.mocked(executeLocalTool).mockReturnValueOnce(pending.promise);
+    utter("導航到醫院");
+    tool("planAccessibleRoute");
+    await vi.waitFor(() => expect(executeLocalTool).toHaveBeenCalled());
+    const context = vi.mocked(executeLocalTool).mock.calls[0].at(-1) as any;
+    expect(context.isCurrent()).toBe(true);
+    utter("比較路線");
+    expect(context.isCurrent()).toBe(false);
+    pending.resolve(JSON.stringify({ ok: true, routes: [tokenRoute] }));
+    await settle();
+    expect(messages().some((m) => m.type === "nav.start")).toBe(false);
+  });
+  it("a newer utterance during client location wait prevents planner execution", async () => {
+    utter("導航到醫院");
+    tool("planAccessibleRoute", { origin: "current_location" });
+    await vi.waitFor(() =>
+      expect(messages().some((m) => m.type === "location.request")).toBe(true),
+    );
+    utter("比較路線");
+    bridge.updatePosition({ latitude: 25, longitude: 121 });
+    await settle();
+    expect(executeLocalTool).not.toHaveBeenCalled();
+  });
+  it("publishes ADOPTED when a new utterance arrives during durable adoption", async () => {
+    utter("導航到醫院");
+    tool("planAccessibleRoute");
+    await settle();
+    session.sendToolResponse.mockClear();
+    utter("換第二條");
+    tool("proposeNavigationCandidate", { candidateNumber: 2 });
+    await settle();
+    const proposal = JSON.parse(
+      session.sendToolResponse.mock.calls[0][0].functionResponses[0].response
+        .output,
+    );
+    switchNavigationCandidate.mockImplementationOnce(async (input) => {
+      const route = {
+        ...tokenRoute,
+        routeToken: "replacement",
+        routeVersion: 2,
+      };
+      const data = {
+        navigationId: "direct-nav",
+        previousRouteVersion: 1,
+        routeVersion: 2,
+        routeToken: "replacement",
+        route,
+        steps: [],
+        instructions: [],
+        warnings: [],
+        currentStepIndex: 0,
+        replayed: false,
+      };
+      expect(input.prepare(data, { ...envelope, route, routeVersion: 2 })).toBe(
+        true,
+      );
+      expect(input.isAuthorized()).toBe(true);
+      utter("下一個問題");
+      expect(input.isAuthorized()).toBe(false);
+      expect(input.isNavigationCurrent()).toBe(true);
+      input.adopt(data, { ...envelope, route, routeVersion: 2 });
+      return { status: "adopted", data };
+    });
+    session.sendToolResponse.mockClear();
+    utter("確認");
+    tool("confirmNavigationCandidateSwitch", {
+      proposalId: proposal.proposalId,
+    });
+    await settle();
+    expect(
+      messages().filter((m) => m.type === "nav.route_replaced"),
+    ).toHaveLength(1);
+  });
+  it("retries a deferred off-route reroute after reconciliation rolls back", async () => {
+    utter("導航到醫院");
+    tool("planAccessibleRoute");
+    await settle();
+    session.sendToolResponse.mockClear();
+
+    utter("換第二條");
+    tool("proposeNavigationCandidate", { candidateNumber: 2 });
+    await settle();
+    const proposed = JSON.parse(
+      session.sendToolResponse.mock.calls[0][0].functionResponses[0].response
+        .output,
+    );
+
+    let reconciled: ((status: string) => void) | undefined;
+    switchNavigationCandidate.mockImplementationOnce(async (input) => {
+      reconciled = input.onReconciled;
+      return {
+        status: "reconciling",
+        reason: "NAVIGATION_STATE_RECONCILING",
+      };
+    });
+    session.sendToolResponse.mockClear();
+    utter("確認");
+    tool("confirmNavigationCandidateSwitch", {
+      proposalId: proposed.proposalId,
+    });
+    await settle();
+
+    vi.useFakeTimers();
+    try {
+      const far = { latitude: 26, longitude: 122 };
+      for (let index = 0; index < 3; index++) {
+        bridge.updatePosition(far);
+        await vi.advanceTimersByTimeAsync(500);
+      }
+      expect(
+        messages().some((message) => message.type === "nav.offroute"),
+      ).toBe(true);
+      expect(rerouteAccessibleRoute).not.toHaveBeenCalled();
+      expect(reconciled).toBeTypeOf("function");
+
+      reconciled?.("ROLLED_BACK");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(rerouteAccessibleRoute).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: "OFF_ROUTE", currentPosition: far }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("missing comparison metrics and accessibility evidence are explicit null", async () => {
+    vi.mocked(executeLocalTool).mockResolvedValue(
+      JSON.stringify({
+        ok: true,
+        routes: [
+          tokenRoute,
+          {
+            ...tokenRoute,
+            routeId: "r2",
+            routeToken: "second-token",
+            totalMinutes: undefined,
+            transferCount: undefined,
+            accessibilityHighlights: undefined,
+          },
+        ],
+      }),
+    );
+    utter("導航到醫院");
+    tool("planAccessibleRoute");
+    await settle();
+    session.sendToolResponse.mockClear();
+    utter("換第二條");
+    tool("proposeNavigationCandidate", { candidateNumber: 2 });
+    await settle();
+    const output = JSON.parse(
+      session.sendToolResponse.mock.calls[0][0].functionResponses[0].response
+        .output,
+    );
+    expect(output).toMatchObject({
+      totalMinutes: null,
+      transferCount: null,
+      accessibilityHighlights: null,
+      difference: {
+        minutes: null,
+        transfers: null,
+        accessibility: { current: [], candidate: null },
+      },
+    });
+  });
+  it("information and model start bypass cannot start", async () => {
+    utter("怎麼去醫院");
+    tool("planAccessibleRoute");
+    tool("startNavigation");
+    await settle();
+    expect(messages().some((m) => m.type === "nav.start")).toBe(false);
+  });
+  it("first token missing never selects second", async () => {
+    vi.mocked(executeLocalTool).mockResolvedValue(
+      JSON.stringify({
+        ok: true,
+        routes: [
+          { ...tokenRoute, routeToken: undefined },
+          { ...tokenRoute, routeToken: "second" },
+        ],
+      }),
+    );
+    utter("導航到醫院");
+    tool("planAccessibleRoute");
+    await settle();
+    expect(readNavigationTokenStrict).not.toHaveBeenCalled();
+    expect(messages().some((m) => m.type === "nav.start")).toBe(false);
+    expect(JSON.stringify(session.sendToolResponse.mock.calls)).toContain(
+      "navigationStarted",
+    );
+  });
+  it("queued older transcript cannot authorize after newer transcript arrival", async () => {
+    utter("導航到醫院");
+    tool("planAccessibleRoute");
+    utter("比較路線");
+    await settle();
+    expect(messages().some((m) => m.type === "nav.start")).toBe(false);
+  });
+  it("late canonical read loses to UI cancel", async () => {
+    const pending = deferred<any>();
+    readNavigationTokenStrict.mockReturnValue(pending.promise);
+    utter("導航到醫院");
+    tool("planAccessibleRoute");
+    await vi.waitFor(() =>
+      expect(readNavigationTokenStrict).toHaveBeenCalled(),
+    );
+    bridge.cancelNav();
+    pending.resolve({ status: "ok", value: envelope });
+    await settle();
+    expect(messages().some((m) => m.type === "nav.start")).toBe(false);
+  });
+  it("proposal does not mutate; only next explicit confirm commits once", async () => {
+    utter("導航到醫院");
+    tool("planAccessibleRoute");
+    await settle();
+    session.sendToolResponse.mockClear();
+    utter("換第二條");
+    tool("proposeNavigationCandidate", { candidateNumber: 2 });
+    await settle();
+    expect(switchNavigationCandidate).not.toHaveBeenCalled();
+    const outputs = session.sendToolResponse.mock.calls.flatMap(
+      (c) => c[0].functionResponses,
+    );
+    const proposal = JSON.parse(outputs[0].response.output as string);
+    expect(proposal.proposalId).toEqual(expect.any(String));
+    expect(JSON.stringify(outputs)).not.toContain("second-token");
+    switchNavigationCandidate.mockResolvedValue({
+      status: "failed",
+      reason: "fixture",
+    });
+    utter("確認");
+    tool("confirmNavigationCandidateSwitch", {
+      proposalId: proposal.proposalId,
+    });
+    tool("confirmNavigationCandidateSwitch", {
+      proposalId: proposal.proposalId,
+    });
+    await vi.waitFor(() =>
+      expect(switchNavigationCandidate).toHaveBeenCalledTimes(1),
+    );
   });
 });

@@ -2114,3 +2114,65 @@ it("returns actionable LOCATION_REQUIRED without invoking the planner or inventi
   expect(result.error).toContain("詢問出發地點");
   expect(mockPlanRoute).not.toHaveBeenCalled();
 });
+
+describe("explicit Places search center", () => {
+  const gps = { latitude: 25.04, longitude: 121.56 };
+  const center = { latitude: 24.137, longitude: 120.686 };
+  beforeEach(() => {
+    vi.mocked(getCoordinates).mockReset().mockResolvedValue(center);
+    vi.mocked(searchPlaces).mockReset().mockResolvedValue([]);
+  });
+  it("resolves 台中車站 before search and never uses session GPS", async () => {
+    await executeLocalTool(
+      "findGooglePlaces",
+      { query: "餐廳", locationQuery: " 台中車站 " },
+      gps,
+      "user",
+    );
+    expect(getCoordinates).toHaveBeenCalledExactlyOnceWith("台中車站");
+    expect(searchPlaces).toHaveBeenCalledExactlyOnceWith("餐廳", {
+      ...center,
+      sortByDistance: true,
+    });
+    expect(searchPlaces).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining(gps),
+    );
+  });
+  it("does not fall back to GPS when explicit center cannot resolve", async () => {
+    vi.mocked(getCoordinates).mockResolvedValue(null);
+    const result = JSON.parse(
+      await executeLocalTool(
+        "findGooglePlaces",
+        { query: "餐廳", locationQuery: "台中車站" },
+        gps,
+      ),
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "LOCATION_NOT_FOUND",
+      locationQuery: "台中車站",
+    });
+    expect(searchPlaces).not.toHaveBeenCalled();
+  });
+  it("preserves GPS for nearby searches without a named center", async () => {
+    await executeLocalTool("findGooglePlaces", { query: "餐廳" }, gps);
+    expect(searchPlaces).toHaveBeenCalledWith("餐廳", {
+      ...gps,
+      sortByDistance: true,
+    });
+    expect(getCoordinates).not.toHaveBeenCalled();
+  });
+  it("declares locationQuery separately from query", async () => {
+    const { openAiChatTools } = await import("../../config/ai/tool");
+    const tool = openAiChatTools.find(
+      (t) => t.type === "function" && t.function.name === "findGooglePlaces",
+    );
+    expect(
+      tool?.type === "function" && tool.function.parameters?.properties,
+    ).toHaveProperty(
+      "locationQuery",
+      expect.objectContaining({ type: "string" }),
+    );
+  });
+});

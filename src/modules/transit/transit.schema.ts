@@ -426,8 +426,65 @@ const BusTimetableResponseSchema = ApiResponseSchema(
   }),
 ).openapi("BusTimetableResponse");
 
+export const BusDepartureCandidateSchema = z
+  .object({
+    candidateId: z.string(),
+    routeName: z.string(),
+    subRouteUid: z.string(),
+    subRouteName: z.string().optional(),
+    direction: z.union([z.literal(0), z.literal(1)]),
+    departureStopId: z.string(),
+    arrivalStopId: z.string(),
+    tripId: z.string().optional(),
+    plateNumb: z.string().optional(),
+    estimatedWaitMinutes: z.number().finite().nonnegative().nullable(),
+    boardingTime: z.string().datetime({ offset: true }).nullable(),
+    alightingTime: z.string().datetime({ offset: true }).nullable(),
+    boardingTimeSource: z.enum(["realtime", "schedule", "unknown"]),
+    alightingTimeSource: z.enum(["realtime", "schedule", "unknown"]),
+    vehicleAccessibility: z
+      .enum(["low_floor", "high_floor", "unknown"])
+      .openapi({
+        description:
+          "unknown means no confirmed vehicle evidence, not high-floor",
+      }),
+    hasLiftOrRamp: z.boolean().nullable(),
+    selected: z.boolean(),
+  })
+  .strict()
+  .superRefine((candidate, ctx) => {
+    for (const [time, source] of [
+      [candidate.boardingTime, candidate.boardingTimeSource],
+      [candidate.alightingTime, candidate.alightingTimeSource],
+    ]) {
+      if ((time === null) !== (source === "unknown"))
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "Null timestamps must use unknown source, and only unknown source may have null timestamps",
+        });
+    }
+    if (
+      candidate.selected &&
+      (!candidate.boardingTime || !candidate.alightingTime)
+    )
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Selected candidates require both trustworthy endpoints",
+      });
+  })
+  .openapi("BusDepartureCandidate", {
+    description:
+      "At most five mode-aware boarding-ordered services, including the selected feasible chain. Null times use unknown source; ISO timestamps include date and offset (+08:00 for Taiwan).",
+  });
+
 export const BusRouteDetailResponseSchema = ApiResponseSchema(
   z.object({
+    departureCandidates: z.array(BusDepartureCandidateSchema).max(5).optional(),
+    candidateSearchComplete: z.boolean().optional().openapi({
+      description:
+        "false means bounded search was partial; no global optimum is asserted",
+    }),
     routeDisplayName: z.string().optional(),
     routeName: z.string().openapi({ example: "99" }),
     city: z.string().openapi({ example: "Taichung" }),

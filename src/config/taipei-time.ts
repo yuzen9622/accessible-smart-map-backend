@@ -136,6 +136,11 @@ export function taipeiHHmm(d: Date = new Date()): string {
  * @param d The instant to format (defaults to now).
  * @returns The Taipei datetime as "YYYY-MM-DDTHH:mm:ss".
  */
+/** Public ISO instant, independent of the host timezone. */
+export function taipeiIsoOffset(epoch: number): string {
+  return `${new Date(epoch + 8 * 3600000).toISOString().slice(0, -1)}+08:00`;
+}
+
 export function taipeiIsoLocal(d: Date = new Date()): string {
   const p = taipeiParts(d);
   return `${p.year}-${p2(p.month)}-${p2(p.day)}T${p2(p.hour)}:${p2(p.minute)}:${p2(p.second)}`;

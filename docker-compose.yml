@@ -156,7 +156,7 @@ services:
     restart: unless-stopped
 
   valhalla:
-    image: ghcr.io/valhalla/valhalla:3.8.2@sha256:a4eae918af15ffb392a6c1434bc64083d28f022d5968a02cba09780ba54cd62d # yamllint disable-line rule:line-length
+    image: ghcr.io/valhalla/valhalla:3.9.1@sha256:4fd114eb1d26b8fc2f43bcb3df234c1b63a0bf13c277405e5943d5361dc575de # yamllint disable-line rule:line-length
     container_name: valhalla
     command:
       - bash
@@ -180,7 +180,7 @@ services:
     restart: unless-stopped
 
   valhalla-build:
-    image: ghcr.io/valhalla/valhalla:3.8.2@sha256:a4eae918af15ffb392a6c1434bc64083d28f022d5968a02cba09780ba54cd62d # yamllint disable-line rule:line-length
+    image: ghcr.io/valhalla/valhalla:3.9.1@sha256:4fd114eb1d26b8fc2f43bcb3df234c1b63a0bf13c277405e5943d5361dc575de # yamllint disable-line rule:line-length
     profiles: ["valhalla-build"]
     entrypoint: ["bash", "-lc"]
     volumes:
@@ -341,8 +341,8 @@ networks:
     name: accessible-shared
 volumes:
   mongo-data:
-    # Override only after a verified recovery; the original volume stays intact.
-    name: ${MONGO_DATA_VOLUME_NAME:-${COMPOSE_PROJECT_NAME}_mongo-data}
+    # Fixed on purpose: the restored 2026-10-19 volume; switch only by editing this line.
+    name: taipei-accessible-backend_mongo-restored-20261019
   mongo-keyfile:
   chroma-data:
   postgis-data:

@@ -27,7 +27,9 @@ class TdxTokenManager {
   }
 
   async refreshToken(force = false): Promise<string> {
-    if (this.refreshing && !force) return this.refreshing;
+    // A caller's 401 must not launch another unbounded shared refresh.
+    if (this.refreshing) return this.refreshing;
+    if (force) this.accessToken = null;
 
     const clientId = process.env.TDX_CLIENT_ID;
     const clientSecret = process.env.TDX_CLIENT_SECRET;
@@ -35,6 +37,11 @@ class TdxTokenManager {
       throw new Error("TDX_CLIENT_ID / TDX_CLIENT_SECRET 未設定");
     }
 
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(new Error("TDX token timeout")),
+      5000,
+    );
     this.refreshing = (async () => {
       const body = new URLSearchParams({
         grant_type: "client_credentials",
@@ -46,11 +53,11 @@ class TdxTokenManager {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body,
+        signal: controller.signal,
       });
 
       if (!res.ok) {
         const text = await res.text().catch(() => "");
-        this.refreshing = null;
         throw new Error(`TDX 取得 token 失敗: ${res.status} ${text}`);
       }
 
@@ -66,11 +73,15 @@ class TdxTokenManager {
       );
       this.accessToken = json.access_token;
       this.expiresAt = Date.now() + expiresInMs;
-      this.refreshing = null;
-      return this.accessToken!;
+      return json.access_token;
     })();
 
-    return this.refreshing;
+    try {
+      return await this.refreshing;
+    } finally {
+      clearTimeout(timer);
+      this.refreshing = null;
+    }
   }
 }
 

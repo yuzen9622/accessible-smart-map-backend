@@ -13,12 +13,15 @@ import { projectToolResult } from "../../utils/agent-route-projection";
 import { WebSocket } from "ws";
 import { randomUUID } from "crypto";
 import {
+  AudioTranscriptionConfig,
   FunctionCall,
   FunctionDeclaration,
   FunctionResponse,
   LiveConnectConfig,
   LiveServerMessage,
+  InteractionStatus,
   Modality,
+  ThinkingLevel,
   Session,
 } from "@google/genai";
 import { googleGenAi } from "../../config/ai";
@@ -31,6 +34,15 @@ import {
 } from "./voice-prompt";
 import type { AgentLanguage } from "../../types/agent";
 import { normalizeVoiceTranscript } from "./transcript-normalizer";
+import { isExplicitEndIntent } from "./end-intent";
+import { classifyNavigationIntent } from "./navigation-intent";
+import type { AccessibleRoute } from "../../types/route";
+import {
+  retryCandidateSwitchReconciliation,
+  switchNavigationCandidate,
+} from "../accessible-route/candidate-route-switch.service";
+import { isNavigationEnvelope } from "../accessible-route/route-token.service";
+import type { RerouteData } from "../accessible-route/accessible-route.types";
 import { correctUserTranscript } from "./transcript-corrector";
 import { withCurrentDate } from "../../config/ai/chat-prompt";
 import {
@@ -40,6 +52,12 @@ import {
 import { rerouteAccessibleRoute } from "../accessible-route/reroute.service";
 import {
   deleteNavigationSnapshot,
+  markNavigationStopped,
+  beginNavigationResume,
+  commitNavigationResume,
+  releaseNavigationResume,
+  readNavigationTokenStrict,
+  getAdoptedCandidateReplacement,
   getNavigationSnapshot,
   storeNavigationSnapshot,
 } from "../accessible-route/navigation-state.repository";
@@ -56,6 +74,7 @@ import { scanRemainingCorridor } from "./corridor-monitor";
 import type { RerouteReason } from "../accessible-route/accessible-route.types";
 import type { NavPosition } from "./navigation.schema";
 import {
+  SessionEndingMessageSchema,
   NavAdvisoryMessageSchema,
   NavResumeFailedMessageSchema,
   VoiceRerouteOutboundMessageSchema,
@@ -64,6 +83,24 @@ import {
   type NavResumeMessage,
   type VoiceRerouteOutboundMessage,
 } from "./voice.ws.schema";
+
+const LIVE_MODEL = "gemini-3.8-live-extended-thinking";
+const OUTPUT_PCM_BYTES_PER_MS = 48;
+const ASSISTANT_END_PLAYBACK_PAD_MS = 750;
+const ASSISTANT_END_MIN_GRACE_MS = 1_500;
+const ASSISTANT_END_MAX_GRACE_MS = 8_000;
+const ASSISTANT_END_MAX_WAIT_MS = 15_000;
+
+// Match the POC's mean absolute PCM16 energy threshold; ignore an odd tail byte.
+function hasPcmVoiceActivity(data: Buffer): boolean {
+  const samples = Math.floor(data.length / 2);
+  if (samples === 0) return false;
+  let energy = 0;
+  for (let i = 0; i < samples; i++) {
+    energy += Math.abs(data.readInt16LE(i * 2));
+  }
+  return energy / samples >= 300;
+}
 
 const MAX_BUFFERED_BYTES = 1024 * 1024;
 const ERROR_SUMMARY_MAX_CHARS = 200;
@@ -75,6 +112,22 @@ const SNAPSHOT_MIN_INTERVAL_MS = 5_000;
 const TURN_TIMEOUT_MS = 15_000;
 const LIVE_CONNECT_TIMEOUT_MS = 15_000;
 const TURN_TIMEOUT_STRIKES = 2;
+
+// Coordinates stop/resume races across bridge instances in this Node process;
+// Redis tombstones provide the durable cross-process boundary.
+const localNavigationStopRevisions = new Map<string, number>();
+const navigationStopRevision = (navigationId: string): number =>
+  localNavigationStopRevisions.get(navigationId) ?? 0;
+const bumpNavigationStopRevision = (navigationId: string): void => {
+  localNavigationStopRevisions.set(
+    navigationId,
+    navigationStopRevision(navigationId) + 1,
+  );
+  if (localNavigationStopRevisions.size > 10_000) {
+    const oldest = localNavigationStopRevisions.keys().next().value;
+    if (oldest) localNavigationStopRevisions.delete(oldest);
+  }
+};
 
 type ActiveNavigation = {
   routeToken: string;
@@ -105,6 +158,28 @@ type LiveTurnState =
   "IDLE" | "USER_INPUT" | "TOOL_PENDING" | "AWAIT_MODEL" | "MODEL_OUTPUT";
 
 const NAV_FUNCTIONS: FunctionDeclaration[] = [
+  {
+    name: "proposeNavigationCandidate",
+    description: "使用者要求換線時提案；只比較候選，不切換。",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        candidateNumber: { type: "integer" },
+        candidateId: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "confirmNavigationCandidateSwitch",
+    description: "只在提案後下一句明確確認時切換。",
+    parametersJsonSchema: {
+      type: "object",
+      properties: { proposalId: { type: "string" } },
+      required: ["proposalId"],
+      additionalProperties: false,
+    },
+  },
   {
     name: "startNavigation",
     description: "開始已由使用者在畫面選定的無障礙路線導航",
@@ -142,6 +217,16 @@ const NAV_FUNCTIONS: FunctionDeclaration[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "endVoiceSession",
+    description:
+      "僅在使用者最後一句明確要求結束語音（再見、結束語音、先這樣、沒事了）時呼叫；回答完問題、工具完成、沉默或否定句都不可呼叫。呼叫後只說一句簡短道別，不停止導航。",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
 ];
 
 /**
@@ -173,6 +258,30 @@ function parseLiveLanguageCode(): string | undefined {
   if (!raw) return undefined;
   if (!/^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,4})*$/.test(raw)) return undefined;
   return raw;
+}
+
+const INPUT_TRANSCRIPTION_CUSTOM_VOCABULARY = [
+  "無障礙智慧地圖",
+  "無障礙",
+  "捷運",
+  "台鐵",
+  "高鐵",
+  "低地板公車",
+  "復康巴士",
+  "輪椅",
+  "電梯",
+  "坡道",
+  "導盲磚",
+];
+
+/** Biases the display-only ASR transcript without changing Live model reasoning. */
+function buildInputAudioTranscription(
+  language: AgentLanguage,
+): AudioTranscriptionConfig {
+  return {
+    languageCodes: language === "en" ? ["en-US", "zh-TW"] : ["zh-TW", "en-US"],
+    customVocabulary: [...INPUT_TRANSCRIPTION_CUSTOM_VOCABULARY],
+  };
 }
 
 export interface LiveBridgeOptions {
@@ -282,10 +391,77 @@ export async function createLiveBridge(
     sendJson({ type: "location.request" });
     return promise;
   };
+  let lastFinalUserTranscript: string | null = null;
+  let assistantEnding: { audioBytes: number; responded: boolean } | null = null;
+  let assistantEndCloseTimer: ReturnType<typeof setTimeout> | null = null;
+  let assistantEndDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearAssistantEndTimers = (): void => {
+    if (assistantEndCloseTimer) clearTimeout(assistantEndCloseTimer);
+    if (assistantEndDeadlineTimer) clearTimeout(assistantEndDeadlineTimer);
+    assistantEndCloseTimer = null;
+    assistantEndDeadlineTimer = null;
+  };
+  const finishAssistantEnd = (): void => {
+    clearAssistantEndTimers();
+    if (!disposed && ws.readyState === WebSocket.OPEN)
+      ws.close(1000, "assistant-end");
+  };
+  const scheduleAssistantEndClose = (): void => {
+    if (!assistantEnding?.responded || assistantEndCloseTimer) return;
+    if (assistantEndDeadlineTimer) clearTimeout(assistantEndDeadlineTimer);
+    assistantEndDeadlineTimer = null;
+    const playbackMs = Math.ceil(
+      assistantEnding.audioBytes / OUTPUT_PCM_BYTES_PER_MS,
+    );
+    const graceMs = Math.min(
+      ASSISTANT_END_MAX_GRACE_MS,
+      Math.max(
+        ASSISTANT_END_MIN_GRACE_MS,
+        playbackMs + ASSISTANT_END_PLAYBACK_PAD_MS,
+      ),
+    );
+    assistantEndCloseTimer = setTimeout(finishAssistantEnd, graceMs);
+  };
   let userTranscriptBuffer = "";
   let utteranceSeq = 0;
   let currentUtteranceId: string | null = null;
   let armGen = 0;
+  let inputArrivalRevision = 0;
+  let transcriptArrivalRevision = 0;
+  type Utterance = {
+    utteranceId: string;
+    utteranceSeq: number;
+    arrivalRevision: number;
+    text: string;
+  };
+  let finalizedUtterance: Utterance | null = null;
+  const consumedDirectUtterances = new WeakSet<Utterance>();
+  let planGeneration = 0;
+  type Candidate = {
+    ordinal: number;
+    id: string;
+    route: AccessibleRoute;
+    token?: string;
+  };
+  let registry: {
+    generation: number;
+    candidates: Candidate[];
+    used: Set<number>;
+    selectedOrdinal?: number;
+  } | null = null;
+  let proposal: {
+    id: string;
+    candidate: Candidate;
+    planGeneration: number;
+    navigationGeneration: number;
+    armGeneration: number;
+    createdSeq: number;
+    expectedDecisionSeq: number;
+    expiresAt: number;
+    consumed: boolean;
+  } | null = null;
+  let pendingDirectToken: string | null = null;
+  const reconcilingNavigations = new Set<string>();
   /**
    * Bumped whenever voice degrades. Messages queued under an older epoch are
    * dropped instead of replayed: a tool call the model emitted before the
@@ -306,6 +482,11 @@ export async function createLiveBridge(
   let lastCorridorScanAt = 0;
   let corridorScanTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingCriticalRerouteReason: RerouteReason | null = null;
+  let pendingReconciledOffRoute: {
+    navigationId: string;
+    generation: number;
+    position: NavPosition;
+  } | null = null;
   let pendingRouteArm: {
     armGeneration: number;
   } | null = null;
@@ -364,6 +545,11 @@ export async function createLiveBridge(
   const markVoiceUnavailable = (
     code: "LIVE_CONNECT_FAILED" | "LIVE_SESSION_ENDED",
   ): void => {
+    if (assistantEnding) {
+      finishAssistantEnd();
+      return;
+    }
+    clearAssistantEndTimers();
     if (disposed || voiceState === "unavailable") return;
     voiceState = "unavailable";
     pendingLocation?.finish();
@@ -449,6 +635,7 @@ export async function createLiveBridge(
       // A deliberate end must not leave a snapshot a later reconnect could
       // resume from; an unannounced disconnect leaves it to expire on its TTL.
       for (const id of idsToDelete) {
+        bumpNavigationStopRevision(id);
         void Promise.resolve(deleteNavigationSnapshot(id, userId)).catch(
           () => {},
         );
@@ -581,7 +768,7 @@ export async function createLiveBridge(
   };
 
   const driveNavigationSpeech = (): void => {
-    if (disposed) return;
+    if (disposed || assistantEnding) return;
     if (voiceState === "unavailable") {
       drainNavigationSpeech();
       return;
@@ -641,10 +828,24 @@ export async function createLiveBridge(
     const navigation = activeNavigation;
     const now = Date.now();
     if (
+      navigation &&
+      triggerPosition &&
+      reason === "OFF_ROUTE" &&
+      reconcilingNavigations.has(navigation.navigationId)
+    ) {
+      pendingReconciledOffRoute = {
+        navigationId: navigation.navigationId,
+        generation: navigation.generation,
+        position: triggerPosition,
+      };
+      return false;
+    }
+    if (
       disposed ||
       !navigation ||
       navigation.generation !== navigationGeneration ||
-      !triggerPosition
+      !triggerPosition ||
+      reconcilingNavigations.has(navigation.navigationId)
     ) {
       if (reason !== "OFF_ROUTE") {
         pendingCriticalRerouteReason = reason;
@@ -888,14 +1089,63 @@ export async function createLiveBridge(
       );
       return;
     }
-    ws.send(Buffer.from(base64Data, "base64"), { binary: true });
+    const decoded = Buffer.from(base64Data, "base64");
+    ws.send(decoded, { binary: true });
+    if (assistantEnding) assistantEnding.audioBytes += decoded.length;
   };
+
+  const prepareSession = (route: AccessibleRoute) => {
+    const prepared = new NavigationSession(undefined, language);
+    const armed = prepared.armRoute(route);
+    const effect = prepared.start(latestPosition ?? undefined);
+    const startEvent = effect.events.find((e) => e.type === "nav.start");
+    if (
+      !armed.ok ||
+      !effect.ok ||
+      !startEvent ||
+      startEvent.type !== "nav.start"
+    ) {
+      prepared.dispose();
+      return null;
+    }
+    return { session: prepared, effect, startEvent };
+  };
+  const replacementEvent = (
+    data: RerouteData,
+    steps: NonNullable<
+      ReturnType<typeof prepareSession>
+    >["startEvent"]["steps"],
+  ) => ({
+    type: "nav.route_replaced" as const,
+    navigationId: data.navigationId,
+    previousRouteVersion: data.previousRouteVersion,
+    routeVersion: data.routeVersion,
+    routeToken: data.routeToken,
+    route: data.route,
+    steps,
+    warnings: data.warnings,
+    currentStepIndex: 0 as const,
+    reason: "MANUAL" as const,
+  });
 
   const handleToolCalls = async (
     functionCalls: FunctionCall[],
     msgEpoch: number,
     toolGen: number,
+    arrivalRevision: number,
   ): Promise<void> => {
+    if (userTranscriptBuffer.trim()) finalizeUserTranscript();
+    const authorization = finalizedUtterance;
+    const authorized = (): boolean =>
+      Boolean(
+        authorization &&
+        finalizedUtterance === authorization &&
+        authorization.arrivalRevision === inputArrivalRevision &&
+        arrivalRevision === inputArrivalRevision,
+      );
+    const toolCurrent = (): boolean =>
+      authorization ? authorized() : arrivalRevision === inputArrivalRevision;
+    const intent = classifyNavigationIntent(authorization?.text ?? "");
     // Re-read through a call: voice can degrade across any await below, and a
     // tool from a dead session must not reach startNavigation/stopNavigation.
     const voiceCurrent = (): boolean =>
@@ -903,6 +1153,33 @@ export async function createLiveBridge(
       voiceState === "ready" &&
       msgEpoch === voiceEpoch &&
       toolGen === toolGeneration;
+    // Arm before any tool side effects, regardless of the order within the batch.
+    // Keep the first accepted call separate so it still instructs a farewell.
+    const endCall = functionCalls.find(
+      (call) =>
+        call.name === "endVoiceSession" &&
+        !(call.id && cancelledCalls.has(call.id)),
+    );
+    let acceptedEndCall: FunctionCall | undefined;
+    if (voiceCurrent() && !assistantEnding && endCall) {
+      if (userTranscriptBuffer.trim()) finalizeUserTranscript();
+      if (authorized() && isExplicitEndIntent(lastFinalUserTranscript)) {
+        proposal = null;
+        assistantEnding = { audioBytes: 0, responded: false };
+        acceptedEndCall = endCall;
+        lastFinalUserTranscript = null;
+        sendJson(
+          SessionEndingMessageSchema.parse({
+            type: "session.ending",
+            reason: "assistant-end",
+          }),
+        );
+        assistantEndDeadlineTimer = setTimeout(
+          finishAssistantEnd,
+          ASSISTANT_END_MAX_WAIT_MS,
+        );
+      }
+    }
     const functionResponses: FunctionResponse[] = [];
     for (const call of functionCalls) {
       if (!voiceCurrent()) return;
@@ -911,7 +1188,7 @@ export async function createLiveBridge(
       const turnId = liveTurnId;
       const cancelled = () => Boolean(call.id && cancelledCalls.has(call.id));
       if (cancelled()) continue;
-      if (navSpeaking) {
+      if (navSpeaking && !assistantEnding) {
         functionResponses.push({
           id: call.id,
           name,
@@ -924,28 +1201,351 @@ export async function createLiveBridge(
       let ok = true;
       let response: Record<string, unknown>;
       let toolResult: unknown;
+      let directCommit: (() => boolean) | null = null;
       try {
         let result: Awaited<ReturnType<typeof executeVoiceTool>>;
-        if (name === "startNavigation") {
+        if (assistantEnding && name !== "endVoiceSession") {
+          result = JSON.stringify({
+            ok: false,
+            reason: "VOICE_SESSION_ENDING",
+          });
+        } else if (
+          [
+            "startNavigation",
+            "stopNavigation",
+            "proposeNavigationCandidate",
+            "confirmNavigationCandidateSwitch",
+          ].includes(name) &&
+          (!authorized() ||
+            (name === "startNavigation" && intent.kind !== "start") ||
+            (name === "stopNavigation" && intent.kind !== "stop"))
+        ) {
+          result = JSON.stringify({
+            ok: false,
+            reason: "EXPLICIT_NAVIGATION_AUTHORIZATION_REQUIRED",
+          });
+        } else if (name === "proposeNavigationCandidate") {
+          proposal = null;
+          const candidates = registry?.candidates ?? [];
+          const ordinal = call.args?.candidateNumber;
+          const id = call.args?.candidateId;
+          const candidate = candidates.find(
+            (c) =>
+              (ordinal === undefined || c.ordinal === ordinal) &&
+              (id === undefined || c.id === id) &&
+              (intent.candidateNumber === undefined ||
+                c.ordinal === intent.candidateNumber) &&
+              !registry?.used.has(c.ordinal) &&
+              c.token !== activeNavigation?.routeToken,
+          );
+          if (
+            intent.kind !== "switch" ||
+            !authorization ||
+            !activeNavigation ||
+            !registry ||
+            !candidate?.token ||
+            reconcilingNavigations.has(activeNavigation.navigationId)
+          ) {
+            result = JSON.stringify({
+              ok: false,
+              reason: "CANDIDATE_UNAVAILABLE",
+            });
+          } else {
+            proposal = {
+              id: randomUUID(),
+              candidate,
+              planGeneration: registry.generation,
+              navigationGeneration,
+              armGeneration: armGen,
+              createdSeq: authorization.utteranceSeq,
+              expectedDecisionSeq: authorization.utteranceSeq + 1,
+              expiresAt: Date.now() + 120_000,
+              consumed: false,
+            };
+            const current = (
+              registry.candidates.find(
+                (c) => c.token === activeNavigation?.routeToken,
+              ) ??
+              registry.candidates.find(
+                (c) => c.ordinal === registry?.selectedOrdinal,
+              )
+            )?.route;
+            result = JSON.stringify({
+              ok: true,
+              proposalId: proposal.id,
+              candidateNumber: candidate.ordinal,
+              candidateId: candidate.id,
+              totalMinutes: candidate.route.totalMinutes ?? null,
+              transferCount: candidate.route.transferCount ?? null,
+              accessibilityHighlights:
+                candidate.route.accessibilityHighlights ?? null,
+              difference: {
+                minutes:
+                  typeof current?.totalMinutes === "number" &&
+                  typeof candidate.route.totalMinutes === "number"
+                    ? candidate.route.totalMinutes - current.totalMinutes
+                    : null,
+                transfers:
+                  typeof current?.transferCount === "number" &&
+                  typeof candidate.route.transferCount === "number"
+                    ? candidate.route.transferCount - current.transferCount
+                    : null,
+                accessibility: current
+                  ? {
+                      current: current.accessibilityHighlights ?? null,
+                      candidate:
+                        candidate.route.accessibilityHighlights ?? null,
+                    }
+                  : null,
+              },
+              message: "請說明差異並等待下一句明確確認；缺資料不可猜測。",
+            });
+          }
+        } else if (name === "confirmNavigationCandidateSwitch") {
+          const p = proposal;
+          const navigation = activeNavigation;
+          if (
+            !p ||
+            p.consumed ||
+            !authorization ||
+            intent.kind !== "confirm" ||
+            p.id !== call.args?.proposalId ||
+            p.expectedDecisionSeq !== authorization.utteranceSeq ||
+            Date.now() >= p.expiresAt ||
+            p.planGeneration !== registry?.generation ||
+            p.navigationGeneration !== navigationGeneration ||
+            p.armGeneration !== armGen ||
+            !navigation ||
+            reconcilingNavigations.has(navigation.navigationId)
+          ) {
+            result = JSON.stringify({
+              ok: false,
+              reason: "PROPOSAL_NOT_AUTHORIZED",
+            });
+          } else {
+            p.consumed = true;
+            let prepared: ReturnType<typeof prepareSession> | null = null;
+            const isNavigationCurrent = () =>
+              !disposed &&
+              p.navigationGeneration === navigationGeneration &&
+              p.armGeneration === armGen;
+            const isAuthorized = () =>
+              voiceCurrent() &&
+              authorized() &&
+              !cancelled() &&
+              proposal === p &&
+              p.consumed &&
+              p.planGeneration === registry?.generation;
+            const onReconciled = (status: string): void => {
+              // Retry exhaustion leaves the durable marker unresolved. Keep the
+              // pending OFF_ROUTE and re-enter recovery instead of waiting for
+              // NavigationSession to emit another one-shot off-route event.
+              reconcilingNavigations.delete(navigation.navigationId);
+              const settled = prepared as ReturnType<typeof prepareSession>;
+              if (settled && navSession !== settled.session)
+                settled.session.dispose();
+              const pending = pendingReconciledOffRoute;
+              const currentNavigation = activeNavigation;
+              if (
+                (status === "ROLLED_BACK" || status === "missing") &&
+                pending &&
+                currentNavigation &&
+                pending.navigationId === currentNavigation.navigationId &&
+                pending.generation === navigationGeneration &&
+                currentNavigation.generation === navigationGeneration
+              ) {
+                pendingReconciledOffRoute = null;
+                void rerouteForReason(
+                  "OFF_ROUTE",
+                  latestPosition ?? pending.position,
+                );
+                return;
+              }
+              if (
+                status === "retry_exhausted" &&
+                pending?.navigationId === navigation.navigationId &&
+                !disposed
+              ) {
+                reconcilingNavigations.add(navigation.navigationId);
+                const timer = setTimeout(
+                  () =>
+                    retryCandidateSwitchReconciliation(
+                      navigation.navigationId,
+                      onReconciled,
+                    ),
+                  8_000,
+                );
+                timer.unref?.();
+                return;
+              }
+              if (
+                !pending ||
+                pending.navigationId === navigation.navigationId
+              ) {
+                pendingReconciledOffRoute = null;
+              }
+            };
+            const switched = await switchNavigationCandidate({
+              activeToken: navigation.routeToken,
+              previousVersion: navigation.routeVersion,
+              candidateToken: p.candidate.token!,
+              proposalId: p.id,
+              language,
+              snapshot: {
+                navigationId: navigation.navigationId,
+                userId,
+                routeToken: navigation.routeToken,
+                routeVersion: navigation.routeVersion,
+                currentStepIndex: 0,
+                onVehicle: false,
+                latestPosition: latestPosition ?? null,
+                updatedAt: Date.now(),
+              },
+              isAuthorized,
+              isNavigationCurrent,
+              prepare: (data) => {
+                prepared = prepareSession(data.route);
+                if (!prepared) return false;
+                try {
+                  VoiceRerouteOutboundMessageSchema.parse(
+                    replacementEvent(data, prepared.startEvent.steps),
+                  );
+                  return true;
+                } catch {
+                  prepared.session.dispose();
+                  prepared = null;
+                  return false;
+                }
+              },
+              adopt: (data, envelope) => {
+                // A durable ADOPTED decision is irreversible, but a newer UI stop/selection still wins locally.
+                if (
+                  disposed ||
+                  navigationGeneration !== p.navigationGeneration ||
+                  armGen !== p.armGeneration ||
+                  !prepared
+                )
+                  return;
+                navSession.dispose();
+                navSession = prepared.session;
+                activeNavigation = {
+                  routeToken: data.routeToken,
+                  navigationId: data.navigationId,
+                  routeVersion: data.routeVersion,
+                  generation: ++navigationGeneration,
+                  requireElevator:
+                    envelope.canonicalRequest.requireElevator ?? false,
+                };
+                registry?.used.add(p.candidate.ordinal);
+                if (registry) registry.selectedOrdinal = p.candidate.ordinal;
+                proposal = null;
+                resetCorridorState();
+                sendRerouteJson(
+                  replacementEvent(data, prepared.startEvent.steps),
+                );
+              },
+              onReconciled,
+            });
+            if (switched.status === "failed")
+              (
+                prepared as ReturnType<typeof prepareSession>
+              )?.session.dispose();
+            if (switched.status === "reconciling")
+              reconcilingNavigations.add(navigation.navigationId);
+            result = JSON.stringify({
+              ok: switched.status === "adopted",
+              status: switched.status,
+              ...(switched.status === "adopted"
+                ? {}
+                : { reason: switched.reason }),
+              message:
+                switched.status === "reconciling"
+                  ? "導航狀態確認中，尚未宣稱切換。"
+                  : undefined,
+            });
+          }
+        } else if (name === "startNavigation") {
           const { ok: started } = startNavigation();
           result = JSON.stringify({
             ok: started,
             message: started ? messages.started : messages.noRoute,
           });
+        } else if (name === "endVoiceSession") {
+          if (call === acceptedEndCall) {
+            acceptedEndCall = undefined;
+            result = JSON.stringify({
+              ok: true,
+              message: "請只用一句簡短道別，不要再提問或提供其他資訊。",
+            });
+          } else if (assistantEnding) {
+            result = JSON.stringify({ ok: true, alreadyEnding: true });
+          } else {
+            result = JSON.stringify({
+              ok: false,
+              reason: "EXPLICIT_END_REQUIRED",
+              message: "使用者沒有明確要求結束語音，請繼續對話，不要道別。",
+            });
+          }
         } else if (name === "stopNavigation") {
-          applyEffect(navSession.stop("user_voice"));
+          proposal = null;
+          const idsToDelete = new Set<string>();
+          if (activeNavigation?.navigationId)
+            idsToDelete.add(activeNavigation.navigationId);
+          if (pendingResumeNavigationId)
+            idsToDelete.add(pendingResumeNavigationId);
+          for (const navigationId of idsToDelete)
+            bumpNavigationStopRevision(navigationId);
+          // Invalidate local work first, then let the Redis stop/resume fence
+          // choose a total order before publishing the local nav.stop event.
           armGen++;
-          pendingRouteArm = null;
           navigationGeneration++;
+          pendingRouteArm = null;
+          pendingReconciledOffRoute = null;
+          const stopStatuses = await Promise.all(
+            [...idsToDelete].map((navigationId) =>
+              markNavigationStopped(navigationId, userId),
+            ),
+          );
+          const stopPersisted = stopStatuses.every(
+            (status) => status === "stopped",
+          );
+          const stopped = navSession.stop("user_voice");
+          const emittedStop = stopped.events.some(
+            (event) => event.type === "nav.stop",
+          );
+          applyEffect(stopped);
+          if (!emittedStop && idsToDelete.size > 0) {
+            sendJson({ type: "nav.stop", reason: "user_voice" });
+          }
+          pendingResumeNavigationId = null;
           pruneRerouteState();
           activeNavigation = null;
-          result = JSON.stringify({ ok: true, message: messages.stopped });
+          result = JSON.stringify({
+            ok: idsToDelete.size === 0 || stopPersisted,
+            ...(idsToDelete.size > 0 && !stopPersisted
+              ? { reason: "NAVIGATION_STOP_PERSISTENCE_FAILED" }
+              : {}),
+            message:
+              idsToDelete.size > 0 && !stopPersisted
+                ? language === "en"
+                  ? "Navigation stopped on this connection, but the stop could not be saved. Please wait before reconnecting."
+                  : "已停止目前連線的導航，但無法保存停止狀態；重新連線前請稍後再試。"
+                : messages.stopped,
+          });
         } else if (name === "repeatNavStep") {
           applyEffect(navSession.repeatCurrent());
           result = JSON.stringify({ ok: true, message: messages.repeat });
         } else if (name === "getActiveNavigationContext") {
           result = JSON.stringify(navSession.getConversationContext());
         } else {
+          if (name === "planAccessibleRoute") {
+            proposal = null;
+            registry = null;
+            planGeneration++;
+          }
+          const ownPlanGeneration = planGeneration;
+          const ownNavigationGeneration = navigationGeneration;
+          const ownArmGeneration = armGen;
           if (
             name === "planAccessibleRoute" &&
             call.args?.origin === "current_location" &&
@@ -955,17 +1555,118 @@ export async function createLiveBridge(
             if (!voiceCurrent()) return;
             if (cancelled()) continue;
           }
-          result = await executeVoiceTool(
-            name,
-            (call.args ?? {}) as Record<string, unknown>,
-            latestPosition ?? userLocation,
-            userId,
-            {
-              language,
-              allowMemoryWrite: memoryEnabled,
-              isCurrent: () => voiceCurrent() && !cancelled(),
-            },
-          );
+          if (name === "planAccessibleRoute" && !toolCurrent()) {
+            result = JSON.stringify({
+              ok: false,
+              reason: "STALE_AUTHORIZATION",
+            });
+          } else
+            result = await executeVoiceTool(
+              name,
+              (call.args ?? {}) as Record<string, unknown>,
+              latestPosition ?? userLocation,
+              userId,
+              {
+                language,
+                allowMemoryWrite: memoryEnabled,
+                isCurrent: () =>
+                  voiceCurrent() && toolCurrent() && !cancelled(),
+              },
+            );
+          if (
+            name === "planAccessibleRoute" &&
+            voiceCurrent() &&
+            authorized() &&
+            !cancelled() &&
+            ownPlanGeneration === planGeneration &&
+            ownNavigationGeneration === navigationGeneration &&
+            ownArmGeneration === armGen
+          ) {
+            const raw =
+              typeof result === "string"
+                ? JSON.parse(result)
+                : result.clientResult;
+            const routes = (raw as { routes?: AccessibleRoute[] })?.routes;
+            if ((raw as { ok?: boolean })?.ok && Array.isArray(routes)) {
+              registry = {
+                generation: ownPlanGeneration,
+                candidates: routes.map((route, index) => ({
+                  ordinal: index + 1,
+                  id: route.routeId,
+                  route,
+                  token: route.routeToken,
+                })),
+                used: new Set(),
+              };
+              if (
+                intent.kind === "direct" &&
+                authorization &&
+                !consumedDirectUtterances.has(authorization)
+              ) {
+                consumedDirectUtterances.add(authorization);
+                const first = registry.candidates[0];
+                const current = () =>
+                  voiceCurrent() &&
+                  authorized() &&
+                  !cancelled() &&
+                  ownPlanGeneration === planGeneration &&
+                  ownNavigationGeneration === navigationGeneration &&
+                  ownArmGeneration === armGen;
+                if (first?.token && current()) {
+                  pendingDirectToken = first.token;
+                  const canonical = await readNavigationTokenStrict(
+                    first.token,
+                  );
+                  if (
+                    current() &&
+                    canonical.status === "ok" &&
+                    isNavigationEnvelope(canonical.value) &&
+                    canonical.value.route.routeId === first.route.routeId &&
+                    canonical.value.navigationId === first.route.navigationId &&
+                    canonical.value.routeVersion === first.route.routeVersion &&
+                    canonical.value.route.navigationId ===
+                      canonical.value.navigationId &&
+                    canonical.value.route.routeVersion ===
+                      canonical.value.routeVersion
+                  ) {
+                    const envelope = canonical.value;
+                    const prepared = prepareSession(envelope.route);
+                    if (prepared)
+                      directCommit = () => {
+                        if (!current()) {
+                          prepared.session.dispose();
+                          pendingDirectToken = null;
+                          return false;
+                        }
+                        const old = activeNavigation;
+                        navSession.dispose();
+                        navSession = prepared.session;
+                        activeNavigation = {
+                          routeToken: first.token!,
+                          navigationId: envelope.navigationId,
+                          routeVersion: envelope.routeVersion,
+                          generation: ++navigationGeneration,
+                          requireElevator:
+                            envelope.canonicalRequest.requireElevator ?? false,
+                        };
+                        registry?.used.add(first.ordinal);
+                        if (registry) registry.selectedOrdinal = first.ordinal;
+                        pendingDirectToken = null;
+                        resetCorridorState();
+                        applyEffect(prepared.effect);
+                        persistNavigationSnapshot(true);
+                        if (old && old.navigationId !== envelope.navigationId)
+                          void Promise.resolve(
+                            deleteNavigationSnapshot(old.navigationId, userId),
+                          ).catch(() => {});
+                        return true;
+                      };
+                  }
+                  if (!directCommit) pendingDirectToken = null;
+                }
+              }
+            }
+          }
         }
         let modelResult: unknown;
         if (typeof result === "string") {
@@ -1041,10 +1742,33 @@ export async function createLiveBridge(
         args: call.args ?? {},
         summary: ok ? summarizeToolResult(toolResult) : "",
       });
+      if (name === "planAccessibleRoute" && intent.kind === "direct") {
+        const navigationStarted = directCommit?.() ?? false;
+        let output: Record<string, unknown> = {};
+        try {
+          output = JSON.parse(String(response.output ?? "{}"));
+        } catch {
+          /* retain explicit failure below */
+        }
+        response = {
+          output: JSON.stringify({
+            ...output,
+            navigationStarted,
+            ...(navigationStarted
+              ? {}
+              : {
+                  navigationStartReason:
+                    "ROUTE_NOT_READY_OR_AUTHORIZATION_STALE",
+                }),
+          }),
+        };
+      }
       functionResponses.push({ id: call.id, name, response });
     }
-    if (voiceCurrent() && session)
+    if (voiceCurrent() && session) {
       session.sendToolResponse({ functionResponses });
+      if (assistantEnding) assistantEnding.responded = true;
+    }
   };
 
   /**
@@ -1061,6 +1785,20 @@ export async function createLiveBridge(
     userTranscriptBuffer = "";
     currentUtteranceId = null;
     if (!raw || !utteranceId) return;
+    lastFinalUserTranscript = raw;
+    finalizedUtterance = {
+      utteranceId,
+      utteranceSeq,
+      arrivalRevision: transcriptArrivalRevision,
+      text: raw,
+    };
+    if (
+      proposal &&
+      (utteranceSeq !== proposal.expectedDecisionSeq ||
+        classifyNavigationIntent(raw).kind !== "confirm" ||
+        Date.now() >= proposal.expiresAt)
+    )
+      proposal = null;
     conversationHistory.push({ role: "user", text: raw });
     if (conversationHistory.length > 20) conversationHistory.shift();
     sendJson({
@@ -1094,6 +1832,7 @@ export async function createLiveBridge(
     message: LiveServerMessage,
     msgEpoch: number,
     msgToolGeneration: number,
+    arrivalRevision: number,
   ): Promise<void> => {
     // The queue can hold this message across a degradation; replaying it would
     // drive navigation from a session that no longer exists.
@@ -1114,12 +1853,14 @@ export async function createLiveBridge(
         if (part.inlineData?.data) forwardAudio(part.inlineData.data);
       }
       if (content.inputTranscription) {
+        transcriptArrivalRevision = arrivalRevision;
         if (content.inputTranscription.text) {
           liveState = "USER_INPUT";
           const piece = normalizeVoiceTranscript(
             content.inputTranscription.text,
           );
           if (!currentUtteranceId) {
+            lastFinalUserTranscript = null;
             currentUtteranceId = `u${++utteranceSeq}`;
             liveTurnId = randomUUID();
           }
@@ -1145,6 +1886,7 @@ export async function createLiveBridge(
       if (content.interrupted) {
         modelTranscriptBuffer = "";
         if (userTranscriptBuffer.trim()) finalizeUserTranscript();
+        lastFinalUserTranscript = null;
         navSession.onInterrupted();
         navSpeaking = false;
         clearTurnTimeout();
@@ -1159,6 +1901,7 @@ export async function createLiveBridge(
         message.toolCall.functionCalls,
         msgEpoch,
         msgToolGeneration,
+        arrivalRevision,
       );
       if (!disposed && voiceState === "ready" && msgEpoch === voiceEpoch)
         liveState = "AWAIT_MODEL";
@@ -1172,12 +1915,17 @@ export async function createLiveBridge(
       }
       modelTranscriptBuffer = "";
       if (userTranscriptBuffer.trim()) finalizeUserTranscript();
+      // A completed model turn cannot authorize ending a later user turn.
+      lastFinalUserTranscript = null;
       if (navSpeaking) navSession.onTurnComplete();
       navSpeaking = false;
       turnTimeoutStrikes = 0;
       clearTurnTimeout();
       liveState = "IDLE";
       sendJson({ type: "turn.complete" });
+      // Extended thinking may emit completed filler turns while still reasoning.
+      if (content.interactionStatus === InteractionStatus.IDLE)
+        scheduleAssistantEndClose();
       driveNavigationSpeech();
     }
     if (message.usageMetadata?.totalTokenCount != null) {
@@ -1239,7 +1987,8 @@ export async function createLiveBridge(
           memoryEnabled = sessionMemoryEnabled;
           const liveConfig: LiveConnectConfig = {
             responseModalities: [Modality.AUDIO],
-            inputAudioTranscription: {},
+            thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
+            inputAudioTranscription: buildInputAudioTranscription(language),
             outputAudioTranscription: {},
             systemInstruction: withCurrentDate(
               buildVoiceSystemPrompt(latestPosition ?? undefined, memories, {
@@ -1262,8 +2011,7 @@ export async function createLiveBridge(
           if (languageCode) liveConfig.speechConfig = { languageCode };
 
           const connected = await googleGenAi.live.connect({
-            model:
-              process.env.GEMINI_LIVE_MODEL ?? "gemini-3.1-flash-live-preview",
+            model: LIVE_MODEL,
             config: liveConfig,
             callbacks: {
               onmessage: (message: LiveServerMessage) => {
@@ -1277,9 +2025,18 @@ export async function createLiveBridge(
                 if (hasToolCalls) pendingToolMessages++;
                 const msgEpoch = expectedEpoch;
                 const msgToolGeneration = toolGeneration;
+                const arrivalRevision = message.serverContent
+                  ?.inputTranscription
+                  ? ++inputArrivalRevision
+                  : inputArrivalRevision;
                 messageQueue = messageQueue
                   .then(() =>
-                    handleServerMessage(message, msgEpoch, msgToolGeneration),
+                    handleServerMessage(
+                      message,
+                      msgEpoch,
+                      msgToolGeneration,
+                      arrivalRevision,
+                    ),
                   )
                   .catch((err) => {
                     console.error(
@@ -1358,6 +2115,9 @@ export async function createLiveBridge(
     async setRouteContext(
       input: RouteContextInput,
     ): Promise<RouteContextResult> {
+      if (assistantEnding) {
+        return { ok: false, reason: "ROUTE_CONTEXT_UNAVAILABLE" };
+      }
       if (disposed || voiceUnavailable())
         return { ok: false, reason: "ROUTE_CONTEXT_UNAVAILABLE" };
       // The UI echoes the default selection after receiving a plan. Do not cut
@@ -1380,6 +2140,7 @@ export async function createLiveBridge(
       modelTranscriptBuffer = "";
       userTranscriptBuffer = "";
       currentUtteranceId = null;
+      lastFinalUserTranscript = null;
       liveTurnId = randomUUID();
       navSession.onInterrupted();
       navSpeaking = false;
@@ -1403,7 +2164,15 @@ export async function createLiveBridge(
       return selected;
     },
     sendAudio(data: Buffer): void {
-      if (disposed || !session) return;
+      if (disposed || !session || assistantEnding) return;
+      if (hasPcmVoiceActivity(data)) inputArrivalRevision++;
+      // Continuous silence preserves this utterance's final transcript, but
+      // audible new speech invalidates it even before its transcript arrives.
+      if (
+        liveState !== "USER_INPUT" ||
+        (lastFinalUserTranscript !== null && hasPcmVoiceActivity(data))
+      )
+        lastFinalUserTranscript = null;
       liveState = "USER_INPUT";
       session?.sendRealtimeInput({
         audio: {
@@ -1413,6 +2182,21 @@ export async function createLiveBridge(
       });
     },
     async armRouteToken(routeToken: string): Promise<boolean> {
+      if (
+        !disposed &&
+        (routeToken === activeNavigation?.routeToken ||
+          routeToken === pendingDirectToken)
+      ) {
+        const selected = registry?.candidates.find(
+          (candidate) => candidate.token === routeToken,
+        );
+        if (selected && registry) {
+          registry.selectedOrdinal = selected.ordinal;
+          registry.used.add(selected.ordinal);
+        }
+        return true;
+      }
+      proposal = null;
       const generation = ++armGen;
       const arm = { armGeneration: generation };
       pendingRouteArm = arm;
@@ -1464,6 +2248,13 @@ export async function createLiveBridge(
                 envelope.canonicalRequest?.requireElevator ?? false,
             }
           : null;
+        const selected = registry?.candidates.find(
+          (candidate) => candidate.token === routeToken,
+        );
+        if (selected && registry) {
+          registry.selectedOrdinal = selected.ordinal;
+          registry.used.add(selected.ordinal);
+        }
         resetCorridorState();
         return true;
       } catch (err) {
@@ -1476,11 +2267,15 @@ export async function createLiveBridge(
     },
     async resumeNavigation(message: NavResumeMessage): Promise<void> {
       if (disposed) return;
+      proposal = null;
       const arm = { armGeneration: ++armGen };
       pendingRouteArm = arm;
       pendingResumeNavigationId = message.navigationId;
+      const stopRevisionAtStart = navigationStopRevision(message.navigationId);
       const isCurrentArm = (): boolean =>
         !disposed && arm.armGeneration === armGen && pendingRouteArm === arm;
+      let resumeAttemptId: string | null = null;
+      let resumeFenceAcquired = false;
       const fail = (
         code: NavResumeFailedMessage["code"],
         text: string,
@@ -1507,12 +2302,26 @@ export async function createLiveBridge(
           fail("USER_MISMATCH", messages.userMismatch);
           return;
         }
+        let adoptedReplacement: RerouteData | null = null;
         if (
           snapshot.routeVersion !== message.routeVersion ||
           snapshot.routeToken !== message.routeToken
         ) {
-          fail("ROUTE_VERSION_MISMATCH", messages.versionMismatch);
-          return;
+          if (
+            snapshot.navigationId === message.navigationId &&
+            snapshot.routeVersion === message.routeVersion + 1
+          ) {
+            adoptedReplacement = await getAdoptedCandidateReplacement(
+              snapshot,
+              message.routeToken,
+              message.routeVersion,
+            );
+            if (!isCurrentArm()) return;
+          }
+          if (!adoptedReplacement) {
+            fail("ROUTE_VERSION_MISMATCH", messages.versionMismatch);
+            return;
+          }
         }
         const [route, envelope] = await Promise.all([
           getRouteByToken(snapshot.routeToken),
@@ -1526,6 +2335,74 @@ export async function createLiveBridge(
           envelope.routeVersion !== snapshot.routeVersion
         ) {
           fail("ROUTE_EXPIRED", messages.routeExpired);
+          return;
+        }
+        // Validate the replacement against canonical token data before changing local state.
+        let resumeReplacement: ReturnType<typeof replacementEvent> | null =
+          null;
+        if (adoptedReplacement) {
+          const prepared = prepareSession(route);
+          if (!prepared) {
+            fail("ROUTE_EXPIRED", messages.routeExpired);
+            return;
+          }
+          try {
+            resumeReplacement = replacementEvent(
+              { ...adoptedReplacement, route },
+              prepared.startEvent.steps,
+            );
+            VoiceRerouteOutboundMessageSchema.parse(resumeReplacement);
+          } finally {
+            prepared.session.dispose();
+          }
+        }
+        resumeAttemptId = randomUUID();
+        const resumeFence = await beginNavigationResume(
+          snapshot,
+          resumeAttemptId,
+        );
+        if (!isCurrentArm()) {
+          if (resumeFence === "acquired")
+            void releaseNavigationResume(
+              snapshot.navigationId,
+              resumeAttemptId,
+            );
+          return;
+        }
+        if (resumeFence === "user_mismatch") {
+          fail("USER_MISMATCH", messages.userMismatch);
+          return;
+        }
+        if (
+          resumeFence === "stopped" ||
+          resumeFence === "missing" ||
+          resumeFence === "stale"
+        ) {
+          fail("SNAPSHOT_NOT_FOUND", messages.snapshotExpired);
+          return;
+        }
+        if (resumeFence !== "acquired")
+          throw new Error(`navigation resume fence ${resumeFence}`);
+        resumeFenceAcquired = true;
+        const resumeCommit = await commitNavigationResume(
+          snapshot,
+          resumeAttemptId,
+        );
+        if (
+          resumeCommit !== "committed" ||
+          navigationStopRevision(snapshot.navigationId) !== stopRevisionAtStart
+        ) {
+          void releaseNavigationResume(snapshot.navigationId, resumeAttemptId);
+          resumeFenceAcquired = false;
+          if (resumeCommit === "user_mismatch")
+            fail("USER_MISMATCH", messages.userMismatch);
+          else if (
+            resumeCommit === "stopped" ||
+            navigationStopRevision(snapshot.navigationId) !==
+              stopRevisionAtStart
+          )
+            fail("SNAPSHOT_NOT_FOUND", messages.snapshotExpired);
+          else throw new Error(`navigation resume commit ${resumeCommit}`);
           return;
         }
         const resumePosition =
@@ -1542,10 +2419,13 @@ export async function createLiveBridge(
         if (!effect.ok) {
           activeNavigation = null;
           applyEffect(effect);
+          void releaseNavigationResume(snapshot.navigationId, resumeAttemptId);
+          resumeFenceAcquired = false;
           fail("ROUTE_EXPIRED", messages.routeExpired);
           return;
         }
         if (resumePosition) latestPosition = resumePosition;
+        reconcilingNavigations.delete(snapshot.navigationId);
         activeNavigation = {
           routeToken: snapshot.routeToken,
           navigationId: snapshot.navigationId,
@@ -1554,11 +2434,16 @@ export async function createLiveBridge(
           requireElevator: envelope.canonicalRequest?.requireElevator ?? false,
         };
         resetCorridorState();
+        if (resumeReplacement) sendRerouteJson(resumeReplacement);
         applyEffect(effect);
+        void releaseNavigationResume(snapshot.navigationId, resumeAttemptId);
+        resumeFenceAcquired = false;
         persistNavigationSnapshot(true);
         void checkCurrentTransitAlerts();
         driveNavigationSpeech();
       } catch (err) {
+        if (resumeFenceAcquired && resumeAttemptId)
+          void releaseNavigationResume(message.navigationId, resumeAttemptId);
         if (!isCurrentArm()) return;
         pendingRouteArm = null;
         pendingResumeNavigationId = null;
@@ -1627,10 +2512,13 @@ export async function createLiveBridge(
       }
     },
     cancelNav(): void {
+      proposal = null;
       const idsToDelete = new Set<string>();
       if (activeNavigation?.navigationId)
         idsToDelete.add(activeNavigation.navigationId);
       if (pendingResumeNavigationId) idsToDelete.add(pendingResumeNavigationId);
+      for (const navigationId of idsToDelete)
+        bumpNavigationStopRevision(navigationId);
       armGen++;
       navigationGeneration++;
       pruneRerouteState();
@@ -1648,10 +2536,14 @@ export async function createLiveBridge(
       }
     },
     endSession(): void {
+      proposal = null;
+      registry = null;
       const idsToDelete = new Set<string>();
       if (activeNavigation?.navigationId)
         idsToDelete.add(activeNavigation.navigationId);
       if (pendingResumeNavigationId) idsToDelete.add(pendingResumeNavigationId);
+      for (const navigationId of idsToDelete)
+        bumpNavigationStopRevision(navigationId);
       armGen++;
       navigationGeneration++;
       pruneRerouteState();
@@ -1673,9 +2565,13 @@ export async function createLiveBridge(
   };
 
   function closeBridge(): void {
+    clearAssistantEndTimers();
     if (disposed) return;
     closedByGateway = true;
     disposed = true;
+    proposal = null;
+    registry = null;
+    finalizedUtterance = null;
     pendingLocation?.finish();
     for (const cancel of pendingBootstraps) cancel();
     unsubscribeAlerts();

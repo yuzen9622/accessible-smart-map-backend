@@ -39,6 +39,7 @@ const busRouteSchema = new Schema<ITdxBusRoute>({
 busRouteSchema.index({ subRouteUid: 1, direction: 1 }, { unique: true });
 // Route lookup by city + name.
 busRouteSchema.index({ city: 1, "routeName.Zh_tw": 1 });
+busRouteSchema.index({ city: 1, "stops.stopUID": 1 });
 
 const BusRouteModel = model<ITdxBusRoute>("BusRoute", busRouteSchema);
 export default BusRouteModel;

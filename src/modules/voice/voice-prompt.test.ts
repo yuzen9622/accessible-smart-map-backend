@@ -139,3 +139,25 @@ describe("buildVoiceSystemPrompt user memories", () => {
     expect(promptWithEmptyMem).not.toContain("【使用者記憶】");
   });
 });
+
+it("explains named Places centers and explicit-only voice ending", () => {
+  const prompt = buildVoiceSystemPrompt();
+  for (const rule of [
+    "locationQuery",
+    "台中車站",
+    "我附近",
+    "endVoiceSession",
+    "不要結束語音",
+    "回答完問題",
+  ])
+    expect(prompt).toContain(rule);
+});
+
+it("requires actual direct start and two-phase next-utterance confirmation", () => {
+  const prompt = buildVoiceSystemPrompt();
+  expect(prompt).toContain("navigationStarted:true");
+  expect(prompt).toContain("proposeNavigationCandidate");
+  expect(prompt).toContain("confirmNavigationCandidateSwitch");
+  expect(prompt).toContain("120 秒");
+  expect(prompt).toContain("資訊詢問不自動開始");
+});

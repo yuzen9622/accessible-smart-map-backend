@@ -7,7 +7,7 @@
 - 部署設定只放根目錄 `Dockerfile` 與 `docker-compose.yml`。MongoDB 的啟動與初始化腳本直接定義於 `docker-compose.yml` 的 `configs.content`，由 Compose 掛載到容器 `/opt/mongo/`；不需要主機腳本檔案。此功能需要 Docker Compose 2.23.1 以上。
 - Compose 內嵌的 `mongo-entrypoint` 在 mongo-keyfile volume 首次建立內部認證 key，owner=mongodb、mode=400；重啟不重建。不可提交或輸出 key。
 - Compose 只對主機127.0.0.1:27018開埠，內部後端用 mongo:27017。初始化與健康檢查分離，健康須 rs0 PRIMARY。
-- data 卷預設仍是 `<Compose project>_mongo-data`。完成備份、還原與資料比對後，可用既有環境檔中的 `MONGO_DATA_VOLUME_NAME` 指定已驗證的新資料卷；這只切換 data 卷，keyfile 與帳密保持原樣，原資料卷不會被覆寫或刪除。維運時應確認使用的環境檔都指向同一個恢復卷，避免重建後接回舊卷。
+- data 卷名稱固定寫在 `docker-compose.yml`（目前為 2026-10-19 還原後的 `taipei-accessible-backend_mongo-restored-20261019`），不透過環境變數切換。改用其他資料卷前須完成備份、還原與資料比對，再直接修改該行；這只切換 data 卷，keyfile 與帳密保持原樣，原資料卷不會被覆寫或刪除。
 - 新環境直接 `docker compose up -d`：`mongo` 容器自行啟動資料庫，等待正式 MongoDB 認證連線可用（最多120秒），再初始化／驗證 replica set 並等待 PRIMARY（最多30秒）。不再建立獨立的 `mongo-init` 容器；只執行 `docker compose up -d mongo` 也會完成初始化。
 - 後端等待 `mongo` 健康才啟動。健康檢查只讀取本次啟動的初始化成功標記與 PRIMARY 狀態，不執行初始化。每次啟動都清除舊標記並驗證拓樸；發現其他 replica set／member 設定時拒絕覆寫，初始化失敗會停止容器並依 restart policy 重試，不會放行後端。
 - 容器啟用 init process 回收孤兒程序；啟動包裝程式轉送停止訊號並等待子程序退出，正常停機寬限為30秒。初始化使用 `mongo:27017`，避免誤連官方 image 首次建立 root 帳號時的暫時 localhost-only standalone。

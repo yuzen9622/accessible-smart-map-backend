@@ -231,7 +231,7 @@ describe("rerouteAccessibleRoute", () => {
     ).toBe(true);
   });
 
-  it.each(["stale", "conflict"])(
+  it.each(["stale", "conflict", "reconciling"])(
     "rejects %s same-version concurrency without calling the planner",
     async (status) => {
       beginReroute.mockResolvedValue({ status });
@@ -241,8 +241,23 @@ describe("rerouteAccessibleRoute", () => {
         status: ResponseCode.CONFLICT,
       });
       expect(planAccessibleRouteFromRequest).not.toHaveBeenCalled();
+      expect(finalizeReroute).not.toHaveBeenCalled();
     },
   );
+
+  it("releases the reroute lock when resume fencing rejects finalization", async () => {
+    finalizeReroute.mockResolvedValue("conflict");
+    await expect(rerouteAccessibleRoute(request)).resolves.toMatchObject({
+      ok: false,
+      status: 409,
+      data: { reason: "REROUTE_CONFLICT" },
+    });
+    expect(releaseReroute).toHaveBeenCalledWith(
+      "nav-1",
+      1,
+      "11111111-1111-4111-8111-111111111111",
+    );
+  });
 
   it("fails closed when Redis is unavailable and never calls the planner", async () => {
     readNavigationTokenStrict.mockResolvedValue({ status: "unavailable" });
