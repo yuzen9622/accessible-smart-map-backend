@@ -1426,7 +1426,9 @@ export function compileVenue(
       ring.reduce((sum, p) => sum + p[0], 0) / ring.length,
       ring.reduce((sum, p) => sum + p[1], 0) / ring.length,
     ];
-    const b = buildings.find((bb) => inPolygon(centroid, bb.footprint)) ?? null;
+    // outer ring only: a ring corridor's centroid sits in the courtyard hole
+    const b =
+      buildings.find((bb) => inPolygon(centroid, [bb.footprint[0]])) ?? null;
     for (const o of lv.all.length ? lv.all : [0]) {
       if (b && !levelOf(b, o)) {
         errors.push(

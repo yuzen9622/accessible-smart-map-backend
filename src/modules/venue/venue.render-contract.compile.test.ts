@@ -102,6 +102,39 @@ function fixture() {
 }
 
 describe("source-backed renderer compilation", () => {
+  it("assigns an indoor polygon whose centroid falls in the footprint courtyard to that building", () => {
+    const f = fixture();
+    const outer = required(f.osm.ways.get("building"));
+    outer.tags = {};
+    f.rectangle("courtyard", 40, 40, 60, 60, {});
+    f.osm.relations.set("holed-building", {
+      id: "holed-building",
+      tags: {
+        type: "multipolygon",
+        building: "yes",
+        name: "Fictional",
+        "a11ymap:id": "fictional",
+        "building:levels": "3",
+      },
+      members: [
+        { type: "way", ref: "building", role: "outer" },
+        { type: "way", ref: "courtyard", role: "inner" },
+      ],
+    });
+    f.rectangle("ring-corridor", 30, 30, 70, 70, {
+      indoor: "corridor",
+      level: "1",
+      name: "環形走廊",
+    });
+
+    const { venue, errors } = f.compile();
+
+    expect(errors).toEqual([]);
+    expect(
+      venue.features.find((x) => x.osmRef === "way/ring-corridor"),
+    ).toMatchObject({ buildingId: "fictional", levelRef: "2F", ordinal: 1 });
+  });
+
   it("retains only public feature tags and every polygon ring without reshaping", () => {
     const f = fixture();
     f.rectangle("outer", 10, 40, 90, 90, {});
