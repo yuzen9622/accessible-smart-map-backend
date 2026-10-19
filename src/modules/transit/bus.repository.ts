@@ -3,6 +3,98 @@ import BusVehicleModel from "../../model/bus-vehicle.model";
 import BusStopModel from "../../model/bus-stop.model";
 import type { BusFleetObservation, ITdxBusVehicle } from "../../types";
 import { buildFuzzyKeywordRegex } from "../../utils/transit-text";
+import { expandOriginalStopsForCanonical } from "./stop-alias.repository";
+import mongoose from "mongoose";
+
+export const MAX_VALID_ROUTES_PER_PAIR = 24;
+export const MAX_TRIPS_PER_ROUTE = 4;
+export interface BusPairRoute extends BusRouteDoc {
+  board: NonNullable<BusRouteDoc["stops"]>[number];
+  alight: NonNullable<BusRouteDoc["stops"]>[number];
+}
+/** Validity is evaluated inside Mongo BEFORE the overflow sentinel limit. */
+export async function findRoutesServingCanonicalPair(input: {
+  city: string;
+  canonicalBoardStopId: string;
+  canonicalAlightStopId: string;
+  maxValidRoutes?: number;
+}): Promise<{ routes: BusPairRoute[]; complete: boolean }> {
+  if (mongoose.connection.readyState !== mongoose.ConnectionStates.connected)
+    return { routes: [], complete: false };
+  const aliases = await expandOriginalStopsForCanonical([
+    input.canonicalBoardStopId,
+    input.canonicalAlightStopId,
+  ]);
+  const boards = aliases.stops.get(input.canonicalBoardStopId) ?? [
+      input.canonicalBoardStopId,
+    ],
+    alights = aliases.stops.get(input.canonicalAlightStopId) ?? [
+      input.canonicalAlightStopId,
+    ];
+  const cap = Math.min(
+    MAX_VALID_ROUTES_PER_PAIR,
+    Math.max(1, input.maxValidRoutes ?? MAX_VALID_ROUTES_PER_PAIR),
+  );
+  const routes = await BusRouteModel.aggregate<BusPairRoute>([
+    {
+      $match: {
+        city: input.city,
+        "stops.stopUID": { $in: boards },
+        stops: { $elemMatch: { stopUID: { $in: alights } } },
+      },
+    },
+    {
+      $set: {
+        _boards: {
+          $filter: {
+            input: "$stops",
+            as: "s",
+            cond: { $in: ["$$s.stopUID", boards] },
+          },
+        },
+        _alights: {
+          $filter: {
+            input: "$stops",
+            as: "s",
+            cond: { $in: ["$$s.stopUID", alights] },
+          },
+        },
+      },
+    },
+    {
+      $match: {
+        $expr: {
+          $and: [
+            { $eq: [{ $size: "$_boards" }, 1] },
+            { $eq: [{ $size: "$_alights" }, 1] },
+          ],
+        },
+        direction: { $in: [0, 1] },
+      },
+    },
+    {
+      $set: {
+        board: { $arrayElemAt: ["$_boards", 0] },
+        alight: { $arrayElemAt: ["$_alights", 0] },
+      },
+    },
+    { $match: { $expr: { $lt: ["$board.seq", "$alight.seq"] } } },
+    {
+      $sort: {
+        subRouteUid: 1,
+        direction: 1,
+        "board.stopUID": 1,
+        "alight.stopUID": 1,
+      },
+    },
+    { $limit: cap + 1 },
+    { $unset: ["_boards", "_alights"] },
+  ]).option({ maxTimeMS: 1500 });
+  return {
+    routes: routes.slice(0, cap),
+    complete: aliases.complete && routes.length <= cap,
+  };
+}
 
 /** A stored bus route with the stop list the info endpoint reads. */
 export interface BusRouteDoc {

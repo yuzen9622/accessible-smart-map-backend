@@ -722,6 +722,77 @@ export async function getBusArrivalAtStop(params: {
  * Get full route details: stops, ETA for all stops, and timetables.
  * Ideal for a full bus route view in an app.
  */
+/** Identity-consistent detail for a newly selected pair service; intermediate
+ * geometry does not imply intermediate stop-time measurements, so only
+ * `vehicleStopTimes` measured for this leg's own plate fill a stop's ETA. */
+export function getCandidateBusRouteDetail(
+  leg: BusLeg,
+  city: TaiwanCityEn | "InterCity",
+  vehicleStopTimes: ReadonlyMap<string, number> = new Map(),
+  now = Date.now(),
+): BusRouteDetailResult {
+  const stops = [
+    {
+      name: leg.departureStop,
+      stationUid: leg.departureStopId,
+      location: leg.polyline[0],
+    },
+    ...(leg.intermediateStops ?? []),
+    {
+      name: leg.arrivalStop,
+      stationUid: leg.arrivalStopId,
+      location: leg.polyline[leg.polyline.length - 1],
+    },
+  ];
+  return {
+    ok: true,
+    routeName: leg.routeName,
+    city,
+    operators: [],
+    directions: [
+      {
+        subRouteUid: leg.subRouteUid,
+        subRouteName: leg.subRouteName,
+        direction: leg.direction,
+        directionLabel: dirLabel(leg.direction),
+        from: leg.departureStop,
+        to: leg.arrivalStop,
+        stopCount: stops.length,
+        polyline: leg.polyline,
+        stops: stops.map((s, i): BusRouteDetailStop => {
+          const at = s.stationUid
+            ? vehicleStopTimes.get(s.stationUid)
+            : undefined;
+          const stop = {
+            seq: i + 1,
+            stopUid: s.stationUid,
+            name: s.name,
+            lat: s.location?.[1],
+            lng: s.location?.[0],
+          };
+          if (at !== undefined)
+            return {
+              ...stop,
+              estimateMinutes: Math.max(0, Math.round((at - now) / 60000)),
+              statusLabel: "正常",
+              plateNumb: leg.plateNumb,
+            };
+          return {
+            ...stop,
+            estimateMinutes: null,
+            statusLabel:
+              i === 0
+                ? (leg.departureTime ?? "")
+                : i === stops.length - 1
+                  ? (leg.arrivalTime ?? "")
+                  : "",
+          };
+        }),
+      },
+    ],
+  };
+}
+
 /** Planned journey queries must never fall back to the line's next departure. */
 export async function getPlannedBusRouteDetail(
   leg: BusLeg,

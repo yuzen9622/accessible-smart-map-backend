@@ -103,6 +103,8 @@ export type BusRouteDetailResult =
       city: TaiwanCityEn | "InterCity";
       operators: string[];
       schedules?: BusScheduleByDirection[];
+      departureCandidates?: import("../../types/route").BusDepartureCandidate[];
+      candidateSearchComplete?: boolean;
       directions: BusRouteDetailDirection[];
     }
   | BusServiceError;
