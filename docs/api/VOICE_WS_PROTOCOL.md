@@ -6,14 +6,14 @@
 
 ## 1. 總覽與架構
 
-前端透過一條 WebSocket 連線把使用者的麥克風音訊即時串流給後端，後端不做語音辨識/合成，而是原樣轉發給 Google Gemini Live API，再把 Gemini 的逐字稿、工具呼叫、回覆音訊轉發回前端。後端同時是「單一真相」的工具執行者：Gemini 要查公車到站、規劃路線等，都是後端本地執行 tool 後把結果回傳給 Gemini。
+前端透過一條 WebSocket 連線把使用者的麥克風音訊即時串流給後端，後端不做語音辨識/合成，而是原樣轉發給 Google Gemini Live API，再把 Gemini 的逐字稿、工具呼叫、回覆音訊轉發回前端。語音模型固定為 `gemini-3.8-live-extended-thinking`，不接受環境變數覆蓋；後端同時是「單一真相」的工具執行者：Gemini 要查公車到站、規劃路線等，都是後端本地執行 tool 後把結果回傳給 Gemini。
 
 ```
 ┌──────────┐   wss:// (JSON + binary PCM16/16k)   ┌──────────────────┐   Gemini Live SDK   ┌─────────────────┐
 │  前端       │ ───────────────────────────────────▶ │  Voice Gateway    │ ──────────────────▶ │ Gemini Live API │
-│ (瀏覽器)    │ ◀─────────────────────────────────── │ (voice.gateway.ts │ ◀────────────────── │ (gemini-3.1-    │
-│            │   JSON 事件 + binary PCM16/24k        │  + live-bridge.ts)│   audio/transcript/  │ flash-live-     │
-└──────────┘                                        └──────────────────┘   tool_call          │ preview)        │
+│ (瀏覽器)    │ ◀─────────────────────────────────── │ (voice.gateway.ts │ ◀────────────────── │ (gemini-3.8-    │
+│            │   JSON 事件 + binary PCM16/24k        │  + live-bridge.ts)│   audio/transcript/  │ live-extended-  │
+└──────────┘                                        └──────────────────┘   tool_call          │ thinking)       │
                                                               │                                └─────────────────┘
                                                               ▼
                                                      本地工具執行（公車到站、
@@ -152,6 +152,7 @@ curl -X POST https://<host>/api/v1/user/login \
 | `tool_call` | text (JSON) | `name`, `callId`, `turnId` | `{"type":"tool_call","name":"planAccessibleRoute","callId":"c1","turnId":"t1"}` | 工具開始執行 |
 | `tool_result` | text (JSON) | `name`, `callId`, `turnId`, `ok`, `durationMs`, `result`, `args`, `summary` | `result` 路線為完整候選；schema 見遷移文件 | 同次呼叫 IDs 與 tool_call 相同；先送前端再送模型投影 |
 | `interrupted`           | text (JSON) | `type`                                                                                                                                                                                                                                         | `{"type":"interrupted"}`                                                                                                                                                                                                                                                  | 使用者開口打斷模型正在說話時（barge-in）                                                                                                                            |
+| `session.ending` | text (JSON) | `type`, `reason` | `{"type":"session.ending","reason":"assistant-end"}` | 使用者明確要求結束，後端已接受；停止麥克風上行，繼續播放下行音訊 |
 | `turn.complete`         | text (JSON) | `type`                                                                                                                                                                                                                                         | `{"type":"turn.complete"}`                                                                                                                                                                                                                                                | 這一輪模型回覆全部結束                                                                                                                                              |
 | `error`                 | text (JSON) | `type`, `code` (`"LIVE_CONNECT_FAILED"` \| `"LIVE_SESSION_ENDED"`)                                                                                                                                                                             | `{"type":"error","code":"LIVE_SESSION_ENDED"}`                                                                                                                                                                                                                            | 見下方說明                                                                                                                                                          |
 | `nav.start`             | text (JSON) | `steps`, `currentStepIndex`, `totalSteps`                                                                                                                                                                                                      | `{"type":"nav.start","steps":[...],"currentStepIndex":0,"totalSteps":5}`                                                                                                                                                                                                  | 語音工具成功開始導航，前端渲染整條步驟                                                                                                                              |
@@ -289,6 +290,7 @@ HTTP accessible-route ── route + routeToken ──▶ 前端選路
 | `4409` | 同一使用者在別處開了新的語音連線（新連線會踢掉舊連線）                                                                       | 提示使用者「已在其他裝置/分頁開啟語音對話」，不要自動重連此連線                                         |
 | `4408` | 認證後文字 frame/byte budget 耗盡                                                                                            | 視為異常流量；停止送資料，退避後完整重連                                                                |
 | `4410` | Gemini 導航語音 turn 連續兩次逾時                                                                                            | 完整重連；重新送 `session.start`，收到 ready 後重新 `nav.setRoute(routeToken)`                          |
+| `1000` | reason `assistant-end`：使用者明確結束意圖後由助理關閉語音 | 停止麥克風、播放完已排程音訊才清理；不取消導航，不刪導航 snapshot |
 | `1000` | 正常關閉：前端主動 WS close／相容的 `session.end`（reason `client-end`），或 Gemini Live 結束（reason `live-session-ended`） | 使用者主動結束則正常收尾；Live 結束則重新走完整連線流程                                                 |
 | `1011` | 伺服器內部錯誤，目前唯一來源是認證後連 Gemini Live 失敗（`LIVE_CONNECT_FAILED`）                                             | 提示暫時無法使用語音，可加退避後重試                                                                    |
 
@@ -340,3 +342,18 @@ pnpm dev
 ```
 
 啟動後瀏覽器開 `http://localhost:<PORT>/api/v1/voice/poc`，即可用後端提供的參考測試頁（`poc-client.html`）貼上 accessToken 實際跑一次語音對話，用來對照自己前端實作的行為是否一致。
+
+### 助理結束語音（Live-only）
+
+`endVoiceSession` 僅在最後完成的 user transcript 明確要求結束時接受（例如「再見」「先這樣」「可以結束語音嗎」「請幫我掛斷」）。「不要結束語音」、詢問「再見」的意思、一般問題、回答完成、工具完成或沉默都不是結束意圖。拒絕時 `tool_result.result.reason` 為 `EXPLICIT_END_REQUIRED`，socket 保持開啟。
+
+接受時先送 `session.ending`（reason `assistant-end`），再回工具結果請模型只說一句簡短道別。後端只在工具回應後的道別訊息同時回報 `turnComplete: true` 與 `interactionStatus: InteractionStatus.IDLE` 時，視為 extended thinking 全部完成，依轉發 PCM 音訊長度加 750ms 留出完整 1.5–8 秒播放 grace，再以 `1000 / assistant-end` 關閉。`InteractionStatus.IN_PROGRESS`、缺少狀態、filler turn、工具呼叫附帶的 turnComplete 或 `interrupted` 都不開始 grace，仍保留 15 秒未完成 deadline；一旦 IDLE 開始 grace，會取消原 deadline，避免截斷播放。模型已斷線則直接正常關閉。前端收到 event 後停止麥克風上行，仍繼續接收及播放音訊；收到 close 後等已排程播放完成才清理播放資源，不應自動重連。
+
+這與前端送 `session.end` 的 `client-end` 不同：`assistant-end` **只關語音 socket**，不呼叫 stopNavigation、不取消路線、不刪除導航 snapshot；快照依既有 TTL 保留，可使用既有恢復流程。正式前端需自行實作新 event 與 close reason，內建 POC 已示範停 mic 與播放後清理。
+
+### 語音導航與候選換線（Live-only）
+
+- 「導航到／帶我去」在最新語句授權有效時，規劃成功直接開始第一推薦候選；`tool_result` → `nav.start` → 模型工具回覆依序送出。資訊詢問只規劃，否定句不授權開始或停止；同一完成語句最多自動開始一次。
+- 「換一條／第 N 條」只提案，比較時間、轉乘及可取得的無障礙資訊（缺資料為 `null`／`[]`），不提案目前 active token 或已用候選。只有下一句明確確認且在 120 秒內才提交；停止導航使用既有 `nav.stop`，不結束語音。
+- durable `ADOPTED` 前的新語句會取消舊授權；`ADOPTED` 後新語句不阻止發布既有 `nav.route_replaced`，但較新的 UI 選線／停止仍優先。狀態確認中的有界重試耗盡後，後續 mutation 可重新觸發 recovery，不永久鎖住 session。
+- 若提交已 `ADOPTED`、事件未發布就斷線，`nav.resume` 帶舊版本／token 時，只允許同 navigationId、server snapshot 恰為 client version + 1、marker 與 old/new token 完全匹配的恢復：先送既有 `nav.route_replaced`（previous 為 client version，canonical 新 route/token/steps），再送 `nav.resume_ok`。其餘不匹配或無法驗證仍 fail closed；不新增 wire event 或要求 frontend 修改。
