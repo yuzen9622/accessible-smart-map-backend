@@ -21,6 +21,7 @@ import { createA11yRouter } from "./modules/a11y";
 import {
   createAccessibleRouteRouter,
   registerRouteIntentParser,
+  registerVenueArrivalPlanner,
 } from "./modules/accessible-route";
 import { createNavInstructionsRouter } from "./modules/nav-instructions";
 import { createPlaceSearchRouter } from "./modules/place-search";
@@ -38,6 +39,7 @@ import { createWelfareRouter } from "./modules/welfare";
 import { createVisualA11yRouter } from "./modules/visual-a11y";
 import { createReviewRouter } from "./modules/review";
 import { createCampusRouter } from "./modules/campus";
+import { createVenueRouter, venueArrivalPlanner } from "./modules/venue";
 import { createEmergencyContactRouter } from "./modules/emergency-contact";
 import { createSosRouter } from "./modules/sos";
 import { createLineRouter } from "./modules/line";
@@ -49,6 +51,9 @@ import { getTransitDataFreshness } from "./modules/accessible-route/planners/otp
 // module supplies the implementation, so the dependency stays one-way
 // (ai → accessible-route) instead of the two modules importing each other.
 registerRouteIntentParser(parseRouteIntent);
+// Same for venues: venue routes on the planner's pedestrian core, so the
+// planner declares a venue-arrival port and `venue` implements it.
+registerVenueArrivalPlanner(venueArrivalPlanner);
 
 const app: Express = express();
 
@@ -159,6 +164,7 @@ app.use("/api/v1/a11y", createVisualA11yRouter());
 app.use("/api/v1", createContentSafetyRouter());
 app.use("/api/v1/a11y", createReviewRouter());
 app.use("/api/v1/a11y", createCampusRouter());
+app.use("/api/v1/a11y", createVenueRouter());
 app.use("/api/v1/a11y", createPlaceSearchRouter());
 app.use("/api/v1/air", createAirRouter());
 app.use("/api/v1/traffic", createTrafficRouter());

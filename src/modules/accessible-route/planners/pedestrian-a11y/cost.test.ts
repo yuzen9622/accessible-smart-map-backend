@@ -124,7 +124,7 @@ describe("edgeCost", () => {
     expect(edgeCost(graph, 0.5, wheelchairProfile(), 0, 1)).toBe(INFEASIBLE);
   });
 
-  it("costs the three neutral profiles as base traversal without any penalty", () => {
+  it("costs the three non-wheelchair profiles without a stairs multiplier as base traversal", () => {
     // Every wheelchair penalty dimension is set to its worst value at once: a
     // neutral profile must still return the plain base traversal cost, proving
     // no elderly or visual-impairment penalty was invented.
@@ -152,6 +152,82 @@ describe("edgeCost", () => {
       }
     }
     expect(edgeCost(graph, 0, wheelchairProfile(), 0, 1)).toBe(INFEASIBLE);
+  });
+
+  it("bars steps, indoor stairs and escalators only when forbidStairs is explicit", () => {
+    for (const edgeType of [
+      EDGE_TYPE.STEPS,
+      EDGE_TYPE.INDOOR_STAIRS,
+      EDGE_TYPE.INDOOR_ESCALATOR,
+    ]) {
+      const graph = createGraph({ lengthM: 10, edgeType });
+      for (const name of ["normal", "elderly", "visual_impaired"] as const) {
+        const profile: CostProfile = {
+          name,
+          walkSpeedMps: 1.3,
+          relaxationLevel: 0,
+        };
+        expect(edgeCost(graph, 0, profile, 0, 1)).toBe(10);
+        expect(
+          edgeCost(graph, 0, { ...profile, forbidStairs: true }, 0, 1),
+        ).toBe(INFEASIBLE);
+      }
+    }
+  });
+
+  it("keeps a stair-free non-wheelchair profile's own indoor speed and restrictions", () => {
+    const graph = createGraph({
+      lengthM: 100,
+      traversalTimeS: 20,
+      flags: EDGE_FLAG.INDOOR,
+      edgeType: EDGE_TYPE.INDOOR_WALKWAY,
+      widthM: 0.4,
+      wheelchair: WHEELCHAIR.NO,
+    });
+    const profile: CostProfile = {
+      name: "elderly",
+      walkSpeedMps: 1.1,
+      relaxationLevel: 0,
+      forbidStairs: true,
+    };
+    expect(edgeCost(graph, 0, profile, 0, 1)).toBe(22);
+    expect(edgeCost(graph, 0, wheelchairProfile(), 0, 1)).toBe(INFEASIBLE);
+  });
+
+  it("multiplies only stairs when a non-wheelchair profile sets stairsAvoidanceMultiplier", () => {
+    const walkway = createGraph({
+      lengthM: 10,
+      edgeType: EDGE_TYPE.INDOOR_WALKWAY,
+    });
+    for (const edgeType of [EDGE_TYPE.STEPS, EDGE_TYPE.INDOOR_STAIRS]) {
+      const stairs = createGraph({ lengthM: 10, edgeType });
+      for (const name of ["elderly", "visual_impaired"] as const) {
+        const profile: CostProfile = {
+          name,
+          walkSpeedMps: 1,
+          relaxationLevel: 0,
+          stairsAvoidanceMultiplier: 4,
+        };
+        expect(edgeCost(stairs, 0, profile, 0, 1)).toBe(40);
+        expect(edgeCost(walkway, 0, profile, 0, 1)).toBe(10);
+      }
+    }
+  });
+
+  it("keeps wheelchair stairs infeasible regardless of stairsAvoidanceMultiplier", () => {
+    const stairs = createGraph({
+      lengthM: 10,
+      edgeType: EDGE_TYPE.INDOOR_STAIRS,
+    });
+    expect(
+      edgeCost(
+        stairs,
+        0,
+        { ...wheelchairProfile(), stairsAvoidanceMultiplier: 4 },
+        0,
+        1,
+      ),
+    ).toBe(INFEASIBLE);
   });
 
   it("keeps neutral indoor cost at traversal time times the profile speed", () => {

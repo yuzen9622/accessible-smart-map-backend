@@ -28,6 +28,7 @@ import type {
   TaiwanCityEn,
 } from "../../types/transit";
 import type { RouteFailureData } from "./accessible-route.failure";
+import type { VenueArrival, VenueRoute } from "./venue-leg.types";
 import type { TRANSIT_FALLBACK_REASON } from "../../constants/messages";
 
 export type TagWeightMap = Record<string, Record<string, number>>;
@@ -164,6 +165,17 @@ export interface PlanRouteRequest {
    * position (an SOS victim), so it must not be redirected to a park entrance.
    */
   keepExactDestination?: boolean;
+  /**
+   * A place inside an indoor venue (campus). Mutually exclusive with
+   * `destination` and `query`; requires `origin`. The outdoor route ends at
+   * the chosen venue gate and `venueLeg` continues inside.
+   */
+  destinationVenuePlace?: { venueId: string; placeId: string };
+  /**
+   * Internal, never client-supplied: the venue hand-over stored on a route
+   * token. A reroute plans outdoors to its fixed gate and rebuilds the leg.
+   */
+  venueArrival?: VenueArrival;
 }
 
 export interface CanonicalPlanRouteRequest extends PlanRouteRequest {
@@ -244,6 +256,10 @@ export interface RerouteData {
   warningDetails?: import("../../types/route-message").RouteMessageDetail[];
   currentStepIndex: 0;
   replayed: boolean;
+  /** Present when the trip ends inside a venue: the gate hand-over, on the venue version used. */
+  venueArrival?: VenueArrival;
+  /** The indoor leg from the gate, rebuilt on this reroute. */
+  venueLeg?: VenueRoute;
 }
 
 /** The accessible park entrance a park-bound route was led to. */
@@ -276,6 +292,10 @@ export type PlanRouteResult =
         waypoints?: LatLng[];
         /** Present only when the destination is a park and the route was led to one of its accessible entrances; `destination` is then that entrance. */
         arrivalEntrance?: ArrivalEntrance;
+        /** Present only for `destinationVenuePlace`: the venue gate every route ends at; `destination` is that gate. */
+        venueArrival?: VenueArrival;
+        /** Present only for `destinationVenuePlace`: the indoor route from the gate to the place. */
+        venueLeg?: VenueRoute;
         routes: AccessibleRoute[];
         intent?: RouteIntent;
         /** Present only when the caller (or their profile) requested a maxSlopePercent; tells them whether it could actually be enforced. */

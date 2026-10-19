@@ -12,6 +12,7 @@ import { z } from "zod";
 import { TaiwanCityEn } from "../../types/transit";
 import { TransitPreferenceSchema } from "../../schemas/transit-preference.schema";
 import { registry } from "../../openapi/registry";
+import { VenueArrivalSchema, VenueRouteSchema } from "./venue-leg.schema";
 import {
   ApiErrorResponseSchema,
   ValidationErrorResponseSchema,
@@ -147,11 +148,33 @@ export const AccessibleRouteBodySchema = z
           "依序經過的中途點（新增目的地），最多 5 個；字串會被地理編碼。適用所有交通工具（大眾運輸以分段串接規劃）。",
         example: ["中正紀念堂"],
       }),
+    destinationVenuePlace: z
+      .object({
+        venueId: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/),
+        placeId: z.string().min(1).max(200),
+      })
+      .strict()
+      .optional()
+      .openapi({
+        description:
+          "目的地為室內場域（校園）中的地點，取自 GET /a11y/venues/{venueId} 的 places。需搭配 origin，不可同時提供 destination 或 query。系統挑選一個校門：戶外路線終點為該校門（destination），data.venueLeg 為校門到地點的校內路線；校內不可達時整個請求回 422，不會只導到校門。",
+        example: { venueId: "nutc-sanmin", placeId: "zk@3F" },
+      }),
   })
   .strict()
-  .refine((b) => (b.origin && b.destination) || b.query, {
-    message: "請提供 origin+destination，或自然語言 query",
-  });
+  .refine(
+    (b) =>
+      b.destinationVenuePlace
+        ? // presence, not truthiness: an empty destination is still a destination
+          Boolean(b.origin) &&
+          b.destination === undefined &&
+          b.query === undefined
+        : Boolean((b.origin && b.destination) || b.query),
+    {
+      message:
+        "請提供 origin+destination、origin+destinationVenuePlace，或自然語言 query",
+    },
+  );
 
 export const AccessibleRouteRerouteBodySchema = z
   .object({
@@ -1229,6 +1252,14 @@ export const AccessibleRouteDataSchema = z
         description:
           "僅當目的地判定為臺北市公園時出現：路線終點已改為該公園中符合使用者淨寬／坡度條件、且離起點直線最近的無障礙出入口，此時 destination 即為此出入口座標。文字目的地需與公園名稱相符且地理編碼落在公園範圍內；座標目的地需落在公園範圍內。若該公園沒有符合條件的出入口，則不出現此欄位，終點維持原指定位置並於 routes[].warnings 提示。",
       }),
+    venueArrival: VenueArrivalSchema.optional().openapi({
+      description:
+        "僅 destinationVenuePlace 請求出現：所有 routes 的終點校門（destination 即此校門）。",
+    }),
+    venueLeg: VenueRouteSchema.optional().openapi({
+      description:
+        "僅 destinationVenuePlace 請求出現：校門到目的地的校內路線（含跨樓層步驟）。語音／nav-instructions 只涵蓋戶外段。",
+    }),
     routes: z.array(AccessibleRouteSchema),
     intent: RouteIntentSchema.optional().openapi({
       description:
@@ -1308,6 +1339,19 @@ export const RouteFailureDataSchema = z
       description:
         "僅 reason=OUT_OF_RANGE 時出現；此次請求允許的相鄰點總距離上限（公里）。",
     }),
+    venueAccessibility: z
+      .object({
+        venueId: z.string(),
+        placeId: z.string(),
+        levelRef: z.string().nullable(),
+        stepFreeReachable: z.literal(false),
+      })
+      .strict()
+      .optional()
+      .openapi({
+        description:
+          "僅場域（校園）路線且 reason=NO_ACCESSIBLE_ROUTE 時出現：目的地可步行到達，但沒有符合所選模式限制的路線（例如輪椅遇到樓梯、手扶梯、過窄、過陡或標示不可通行）。",
+      }),
   })
   .strict()
   .openapi("RouteFailureData");
@@ -1392,6 +1436,11 @@ export const AccessibleRouteRerouteDataSchema = z
     warningDetails: z.array(RouteMessageDetailSchema).optional(),
     currentStepIndex: z.literal(0),
     replayed: z.boolean(),
+    venueArrival: VenueArrivalSchema.optional(),
+    venueLeg: VenueRouteSchema.optional().openapi({
+      description:
+        "目的地在室內場域時，依目前場域版本從同一校門重算的校內路線。",
+    }),
   })
   .strict()
   .openapi("AccessibleRouteRerouteData");
@@ -1429,7 +1478,8 @@ registry.registerPath({
       },
     },
     400: {
-      description: "缺少參數或座標無法解析",
+      description:
+        "缺少參數或座標無法解析；destinationVenuePlace 的場域或地點不存在時 data.reason=VENUE_PLACE_NOT_FOUND",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     401: { description: "帶了 Bearer token 但已過期" },
@@ -1489,7 +1539,8 @@ registry.registerPath({
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     410: {
-      description: "routeToken 過期，或 token 是 legacy raw-route 格式",
+      description:
+        "routeToken 過期、token 是 legacy raw-route 格式，或目的地場域已更新且原校門已移除／移位（需重新規劃，不會自動換校門）",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     422: {

@@ -71,6 +71,20 @@ export interface CostProfile {
   name: "wheelchair" | "elderly" | "visual_impaired" | "normal";
   walkSpeedMps: number;
   relaxationLevel: number;
+  /**
+   * Multiplier on STEPS / INDOOR_STAIRS for a non-wheelchair profile that
+   * should prefer elevators without being barred from stairs. Retained for
+   * compatibility with explicit callers; when absent the profile stays neutral,
+   * so the CSR walk planner's behaviour is unchanged. Ignored for wheelchair, where
+   * {@link stepsPenalty} already makes unramped stairs infeasible.
+   */
+  stairsAvoidanceMultiplier?: number;
+  /**
+   * Explicit venue policy: bar steps, stairs and escalators while preserving
+   * this profile's name, walking speed and other cost rules. Absent by default
+   * in the outdoor CSR planner.
+   */
+  forbidStairs?: boolean;
 }
 
 /**
@@ -371,9 +385,13 @@ function applyAdditivePenalty(cost: number, penaltyM: number): number {
  * The wheelchair profile applies the full penalty model. `normal`, `elderly`
  * and `visual_impaired` are deliberately NEUTRAL in this phase: base traversal
  * only, with no invented per-mode penalty, because no source-backed elderly or
- * visual-impairment edge attribute exists in the graph yet. Selection for those
- * modes is therefore shortest-path; the fare-gate policy still applies to all
- * four modes because it is enforced in the search, not in this cost model.
+ * visual-impairment edge attribute exists in the graph yet. The one exception
+ * is an explicit `profile.stairsAvoidanceMultiplier`, applied to STEPS and
+ * INDOOR_STAIRS. An explicit `profile.forbidStairs` bars steps, stairs and
+ * escalators before costing; venue elderly / visual_impaired profiles set it,
+ * while outdoor CSR profiles stay shortest-path. The fare-gate policy still applies
+ * to all four modes because it is enforced in the search, not in this cost
+ * model.
  *
  * All multipliers are checked before application to remain at least 1.0 and all
  * additive penalties are checked to remain non-negative. Those invariants keep
@@ -399,12 +417,29 @@ export function edgeCost(
   if (!isValidAttributeIndex(graph, attrIdx)) {
     return INFEASIBLE;
   }
+  const edgeType = graph.edgeType[attrIdx];
+  if (
+    profile.forbidStairs &&
+    (edgeType === EDGE_TYPE.STEPS ||
+      edgeType === EDGE_TYPE.INDOOR_STAIRS ||
+      edgeType === EDGE_TYPE.INDOOR_ESCALATOR)
+  ) {
+    return INFEASIBLE;
+  }
   const unpenalizedCost = baseCost(graph, attrIdx, profile);
   if (unpenalizedCost === INFEASIBLE) {
     return INFEASIBLE;
   }
   if (profile.name !== "wheelchair") {
-    return applyAdditivePenalty(unpenalizedCost, MINIMUM_ADDITIVE_PENALTY_M);
+    const isStairs =
+      edgeType === EDGE_TYPE.STEPS || edgeType === EDGE_TYPE.INDOOR_STAIRS;
+    const cost = isStairs
+      ? applyMultiplier(
+          unpenalizedCost,
+          profile.stairsAvoidanceMultiplier ?? MINIMUM_PENALTY_MULTIPLIER,
+        )
+      : unpenalizedCost;
+    return applyAdditivePenalty(cost, MINIMUM_ADDITIVE_PENALTY_M);
   }
   const multipliers = [
     slopePenalty(graph, attrIdx, profile),
