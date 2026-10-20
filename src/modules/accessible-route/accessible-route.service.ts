@@ -5,7 +5,7 @@ import {
   type PairSearchMemo,
 } from "./bus-stop-pair-candidates";
 import { createCandidateRequestBudget } from "../transit/bus-stop-pair-eta.service";
-import { taipeiIsoOffset } from "../../config/taipei-time";
+import { nextTaipeiClock, taipeiIsoOffset } from "../../config/taipei-time";
 import { copyWithDescriptors } from "../../utils/route-source-names";
 import { enrichRouteDisplayNames } from "./route-display-enrichment";
 import { normalizedStreetNames } from "../../utils/nav-instructions-engine";
@@ -2218,16 +2218,17 @@ export async function planAccessibleRouteFromRequest(
   const city = await resolveCity(lat, lng);
   const cityMs = Date.now() - tCity;
 
-  // Offset-free ISO datetimes from AI tools are Taipei wall-clock times.
+  // Offset-free ISO datetimes and bare "HH:mm" from AI tools are Taipei
+  // wall-clock times; a bare clock already past today means tomorrow.
   // Preserve explicit offsets; never let the host timezone choose the instant.
   const normalizedDeparture =
     departureTime &&
     /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(departureTime)
       ? `${departureTime}+08:00`
       : departureTime;
-  const parsedDeparture = normalizedDeparture
-    ? new Date(normalizedDeparture)
-    : undefined;
+  const parsedDeparture = !normalizedDeparture
+    ? undefined
+    : (nextTaipeiClock(normalizedDeparture) ?? new Date(normalizedDeparture));
   const futureDeparture =
     parsedDeparture &&
     !isNaN(parsedDeparture.getTime()) &&

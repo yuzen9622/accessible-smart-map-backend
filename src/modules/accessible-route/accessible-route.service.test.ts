@@ -449,6 +449,8 @@ describe("planAccessibleRouteFromRequest departure timezone", () => {
     ["2026-10-01T20:30:00+08:00", "2026-10-01T12:30:00.000Z"],
     ["2026-10-01T20:30:00Z", "2026-10-01T20:30:00.000Z"],
     ["2026-10-01T20:30:00-04:00", "2026-10-02T00:30:00.000Z"],
+    ["23:59", "2026-10-01T15:59:00.000Z"],
+    ["07:30", "2026-10-01T23:30:00.000Z"],
   ])("passes %s to the planner as %s", async (departureTime, expected) => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-01T12:17:00Z"));

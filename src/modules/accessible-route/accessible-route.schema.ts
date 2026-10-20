@@ -118,7 +118,7 @@ export const AccessibleRouteBodySchema = z
     }),
     departureTime: z.string().optional().openapi({
       description:
-        "ISO 8601 出發時間，預設為現在；GTFS 路徑會採用，過去或無效時間視為現在。",
+        "ISO 8601 出發時間，或台北時間 HH:mm（今天已過則為明天）；預設為現在；GTFS 路徑會採用，過去或無效時間視為現在。",
       example: "2026-06-10T08:30:00+08:00",
     }),
     format: z.enum(["standard", "compact"]).optional().openapi({
@@ -870,6 +870,21 @@ const DriveStepSchema = z
   .strict()
   .openapi("DriveStep");
 
+const DriveManeuverSchema = z
+  .object({
+    instruction: z.string().optional(),
+    type: z.number(),
+    lengthKm: z.number(),
+    timeSec: z.number(),
+    beginShapeIndex: z.number(),
+    endShapeIndex: z.number(),
+    streetNames: z.array(z.string()).optional(),
+    highway: z.boolean().optional(),
+    stairs: z.boolean().optional(),
+  })
+  .strict()
+  .openapi("DriveManeuver");
+
 const DriveLegSchema = z
   .object({
     type: z.literal("DRIVE").openapi({ example: "DRIVE" }),
@@ -900,6 +915,7 @@ const DriveLegSchema = z
       ],
     }),
     steps: z.array(DriveStepSchema).optional(),
+    maneuvers: z.array(DriveManeuverSchema).optional(),
     incidents: z.array(RoadIncidentSchema).optional().openapi({
       description:
         "本路段上的 TDX 即時路況事件；缺值＝未比對到事件（不代表沒有事件）",
