@@ -567,33 +567,52 @@ export function buildSosHistoryMessage(
   };
 }
 
+/** Facts the system has about a session it closed because it went stale. */
+export interface SosStaleResolve {
+  startedAt: Date;
+  locationUpdatedAt: Date;
+}
+
+function taipeiDateTime(d: Date): string {
+  return `${taipeiYmdDash(d)} ${taipeiHHmm(d)}`;
+}
+
 /**
- * Builds the SOS resolved Flex Message (§7.7).
+ * Builds the SOS resolved Flex Message (§7.7). A stale auto-resolve only
+ * knows the location stopped updating, so it must not tell contacts the
+ * person is safe.
  *
  * @param userName Optional name of the person who was in distress.
+ * @param stale Present when the system closed the session, not a person.
  * @returns A LINE Flex Message ready to push.
  */
-function buildSosResolvedFlex(userName?: string): messagingApi.FlexMessage {
+function buildSosResolvedFlex(
+  userName?: string,
+  stale?: SosStaleResolve,
+): messagingApi.FlexMessage {
+  const title = stale
+    ? LINE_MSG.SOS_AUTO_RESOLVED_TITLE
+    : LINE_MSG.SOS_RESOLVED_TITLE;
+  const body = stale
+    ? `${userName ?? "對方"}於 ${taipeiDateTime(stale.startedAt)} 發出的求救，位置自 ${taipeiDateTime(stale.locationUpdatedAt)} 後未再更新，系統已自動結束追蹤。這不代表已確認平安，請直接聯絡本人確認。`
+    : userName
+      ? `${userName} 的求救已解除，目前平安。`
+      : undefined;
   const contents: messagingApi.FlexComponent[] = [
     {
       type: "text",
-      text: LINE_MSG.SOS_RESOLVED_TITLE,
+      text: title,
       weight: "bold",
       size: "lg",
-      color: "#2E7D32",
+      color: stale ? "#E65100" : "#2E7D32",
     },
   ];
-  if (userName) {
-    contents.push({
-      type: "text",
-      text: `${userName} 的求救已解除，目前平安。`,
-      wrap: true,
-      margin: "md",
-    });
+  if (body) {
+    contents.push({ type: "text", text: body, wrap: true, margin: "md" });
   }
   return {
     type: "flex",
-    altText: LINE_MSG.SOS_RESOLVED_TITLE,
+    altText: title,
     contents: {
       type: "bubble",
       body: { type: "box", layout: "vertical", contents },
@@ -758,6 +777,7 @@ export async function sendSosResolved(
  * @param lineUserIds Bound contacts' LINE user ids.
  * @param retryKey Stable UUID for every attempt of this one notice.
  * @param timeoutMs Give up waiting after this long (the attempt is retried).
+ * @param stale When the session started and last reported a location.
  * @param userName Optional name of the person who was in distress.
  * @throws When LINE rejects the request or the timeout elapses.
  */
@@ -765,6 +785,7 @@ export async function pushSosResolved(
   lineUserIds: string[],
   retryKey: string,
   timeoutMs: number,
+  stale: SosStaleResolve,
   userName?: string,
 ): Promise<void> {
   if (lineUserIds.length === 0) return;
@@ -778,7 +799,10 @@ export async function pushSosResolved(
   try {
     await Promise.race([
       getClient().multicast(
-        { to: lineUserIds, messages: [buildSosResolvedFlex(userName)] },
+        {
+          to: lineUserIds,
+          messages: [buildSosResolvedFlex(userName, stale)],
+        },
         retryKey,
       ),
       timeout,

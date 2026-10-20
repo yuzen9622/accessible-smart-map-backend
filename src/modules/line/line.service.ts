@@ -44,6 +44,7 @@ import type {
   LineBoundContact,
   LineEvent,
   LineRoutePreviewData,
+  LinePlannedRoutePreviewData,
   LineServiceResult,
 } from "./line.types";
 import type { AccessibilityMode, TravelMode } from "../../types/route";
@@ -51,6 +52,7 @@ import type { OAIMessage } from "../../types/openai-chat";
 import {
   appendLineChatTurn,
   clearLineLastLocation,
+  clearLineLastRouteToken,
   clearPendingRename,
   getLineChatHistory,
   getLineLastLocation,
@@ -59,6 +61,11 @@ import {
   setPendingRename,
 } from "./line-memory";
 import { runLineAgent } from "./line-agent.service";
+import {
+  getLinePlanPreview,
+  storeLinePlanPreview,
+} from "./line-route-preview.repository";
+import { LINE_PLAN_TOKEN_PATTERN } from "./line.constants";
 import { transcribeAudio } from "../../adapters/ai-audio.adapter";
 import { routePreviewUrl, sosTrackingUrl } from "../../config/public-links";
 import {
@@ -136,19 +143,18 @@ function describeRouteLegs(legs: unknown): string | undefined {
  * @param toolResults Collected tool results from the agent loop.
  * @returns A route card payload, or null when no usable route result exists.
  */
-function routeCardFromToolResults(
+async function routeCardFromToolResults(
   toolResults: Array<{ name: string; result: unknown }>,
-): RouteCardPayload | null {
+): Promise<RouteCardPayload | null> {
   const entry = [...toolResults]
     .reverse()
     .find(
       (item) =>
-        (item.name === "planRouteToSosVictim" ||
-          item.name === "planAccessibleRoute") &&
-        isRecord(item.result) &&
-        item.result.ok === true,
+        item.name === "planRouteToSosVictim" ||
+        item.name === "planAccessibleRoute",
     );
-  if (!entry || !isRecord(entry.result)) return null;
+  if (!entry || !isRecord(entry.result) || entry.result.ok !== true)
+    return null;
 
   const result = entry.result;
   const routes = Array.isArray(result.routes) ? result.routes : [];
@@ -180,11 +186,20 @@ function routeCardFromToolResults(
       asString(result.ownerName) ??
       "目的地")
     : (asString(result.ownerName) ?? "目的地");
+  const shareToken = isSos ? asString(result.shareToken) : undefined;
+  const planToken =
+    !isSos && routePreviewUrl() ? await storeLinePlanPreview(result) : null;
   return {
-    origin: isSos ? "你分享的位置" : "你的位置",
+    origin: isSos
+      ? "你分享的位置"
+      : ((isRecord(result.origin) ? asString(result.origin.name) : undefined) ??
+        "你的位置"),
     destination,
     options,
-    liffUrl: routePreviewUrl(asString(result.shareToken)),
+    liffUrl:
+      shareToken || planToken
+        ? routePreviewUrl(shareToken, planToken ?? undefined)
+        : undefined,
   };
 }
 
@@ -242,8 +257,12 @@ async function handleTextMessage(
       userLocation,
       ...(voice ? { readOnly: true } : {}),
     });
-    const speech = stripLineMarkdown(parseAgentSpeech(result.text));
-    const routeCard = routeCardFromToolResults(result.toolResults);
+    const routeCard = await routeCardFromToolResults(result.toolResults);
+    const agentSpeech = stripLineMarkdown(parseAgentSpeech(result.text));
+    const speech =
+      routeCard && !routeCard.liffUrl
+        ? `${agentSpeech}\n${LINE_MSG.ROUTE_PREVIEW_UNAVAILABLE}`
+        : agentSpeech;
     await replyAgentResult(
       replyToken,
       voice ? `${voice.heard}\n${speech}` : speech,
@@ -956,7 +975,10 @@ async function handleEvent(event: LineEvent): Promise<void> {
       const userId = getUserId(event);
       if (userId) {
         await releaseContactsForLineUser(userId);
-        await clearLineLastLocation(userId);
+        await Promise.all([
+          clearLineLastLocation(userId),
+          clearLineLastRouteToken(userId),
+        ]);
       }
       return;
     }
@@ -986,11 +1008,10 @@ export async function handleEvents(events: LineEvent[]): Promise<void> {
 /**
  * Resolves the route preview for a LINE route-preview URL.
  *
- * The URL carries the SOS session's high-entropy shareToken (32 hex chars,
- * generated at session creation) — never the low-entropy Mongo ObjectId, which
- * is guessable/enumerable and would leak the victim's and contact's locations.
+ * General plans are read from their 30-minute capability snapshot. SOS links
+ * use the session's high-entropy shareToken, never an enumerable Mongo ObjectId.
  *
- * @param previewToken The shareToken from the route-preview query.
+ * @param previewToken A general plan capability or SOS shareToken.
  * @returns Route preview data or a failure envelope.
  */
 export async function getRoutePreview(
@@ -998,7 +1019,15 @@ export async function getRoutePreview(
   travelMode?: TravelMode,
   mode?: AccessibilityMode,
   departureTime?: string,
-): Promise<LineServiceResult<LineRoutePreviewData>> {
+): Promise<
+  LineServiceResult<LineRoutePreviewData | LinePlannedRoutePreviewData>
+> {
+  if (LINE_PLAN_TOKEN_PATTERN.test(previewToken)) {
+    const plan = await getLinePlanPreview(previewToken);
+    return plan
+      ? { ok: true, httpCode: ResponseCode.OK, message: "OK", data: plan }
+      : fail(ResponseCode.NOT_FOUND, LINE_MSG.ROUTE_PREVIEW_EXPIRED);
+  }
   if (!/^[0-9a-f]{32}$/.test(previewToken)) {
     return fail(ResponseCode.NOT_FOUND, "找不到進行中的求救紀錄");
   }

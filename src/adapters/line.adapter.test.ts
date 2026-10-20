@@ -33,8 +33,10 @@ import { HTTPFetchError } from "@line/bot-sdk";
 import {
   buildActiveSosMessage,
   buildClaimedControlsMessage,
+  pushSosResolved,
   replyMessages,
   sendSosNotification,
+  sendSosResolved,
   buildBoundContactsMessage,
   buildSosActionSelectionMessage,
   buildSosHistoryMessage,
@@ -377,5 +379,39 @@ describe("line.adapter — app-aware live location links", () => {
       type: "location",
       label: "分享我的位置",
     });
+  });
+});
+
+describe("line.adapter — SOS resolved notice", () => {
+  function sentTexts(): string[] {
+    const message = mockMulticast.mock.calls[0][0].messages[0];
+    return [
+      message.altText,
+      ...message.contents.body.contents.map((c: { text: string }) => c.text),
+    ];
+  }
+
+  it("tells contacts a manually resolved SOS is safe", async () => {
+    await sendSosResolved(["U1"], "小明");
+    expect(sentTexts().join("\n")).toContain("目前平安");
+  });
+
+  it("never claims an auto-resolved stale SOS is safe and dates the original alert", async () => {
+    await pushSosResolved(
+      ["U1"],
+      "retry-key",
+      1000,
+      {
+        startedAt: new Date("2026-10-13T04:07:00Z"),
+        locationUpdatedAt: new Date("2026-10-13T04:10:00Z"),
+      },
+      "小明",
+    );
+    const text = sentTexts().join("\n");
+    expect(text).not.toContain("平安。");
+    expect(text).not.toContain("求救已解除");
+    expect(text).toContain("2026-10-13 12:07");
+    expect(text).toContain("2026-10-13 12:10");
+    expect(text).toContain("請直接聯絡");
   });
 });

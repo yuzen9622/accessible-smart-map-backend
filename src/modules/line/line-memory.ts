@@ -151,6 +151,49 @@ export interface LineLastLocation {
 /** A shared location only grounds follow-up questions for this long. */
 const LINE_LOCATION_TTL_SEC = 30 * 60;
 
+function lineRouteTokenKey(lineUserId: string): string {
+  return `line:route:${lineUserId}`;
+}
+
+export async function getLineLastRouteToken(
+  lineUserId: string,
+): Promise<string | undefined> {
+  if (!redisClient) return undefined;
+  try {
+    return (await redisClient.get(lineRouteTokenKey(lineUserId))) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function setLineLastRouteToken(
+  lineUserId: string,
+  token: string,
+): Promise<void> {
+  if (!redisClient) return;
+  try {
+    await redisClient.set(
+      lineRouteTokenKey(lineUserId),
+      token,
+      "EX",
+      LINE_CHAT_TTL_SEC,
+    );
+  } catch {
+    console.error("[line-memory] failed to remember selected route");
+  }
+}
+
+export async function clearLineLastRouteToken(
+  lineUserId: string,
+): Promise<void> {
+  if (!redisClient) return;
+  try {
+    await redisClient.del(lineRouteTokenKey(lineUserId));
+  } catch {
+    console.error("[line-memory] failed to clear selected route");
+  }
+}
+
 function lineLocationKey(lineUserId: string): string {
   return `line:loc:${lineUserId}`;
 }

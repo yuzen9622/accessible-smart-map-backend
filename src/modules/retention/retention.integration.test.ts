@@ -261,6 +261,21 @@ describe("SOS retention", () => {
     expect(doc?.resolvedNotice?.status).toBe("sent");
   });
 
+  it("tells contacts when the stale SOS started and last moved", async () => {
+    const calls: unknown[][] = [];
+    line.impl = async (...args: unknown[]) => {
+      calls.push(args);
+    };
+    const created = await SosSession.create(sosDoc());
+    await sosAutoResolveTask.runBatch(ctx);
+    await sosResolvedNoticeTask.runBatch(ctx);
+    expect(calls).toHaveLength(1);
+    expect(calls[0][3]).toEqual({
+      startedAt: created.createdAt,
+      locationUpdatedAt: created.locationUpdatedAt,
+    });
+  });
+
   it("deletes resolved sessions only once past the cutoff", async () => {
     const old = await SosSession.create(
       sosDoc({ status: "resolved", resolvedAt: ago(29.5 * DAY) }),

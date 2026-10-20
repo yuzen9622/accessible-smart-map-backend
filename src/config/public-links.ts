@@ -1,11 +1,11 @@
 /**
- * Public web links handed to LINE users. Each carries the SOS session's
- * high-entropy share token — never the enumerable Mongo ObjectId.
+ * Public web links handed to LINE users carry high-entropy capabilities,
+ * never enumerable Mongo ObjectIds.
  *
  * The tracking path `/zh-TW/sos/` is also claimed by the mobile app
  * (Universal Links / App Links), so a contact with the app installed lands in
- * the app and everyone else gets the web tracker. The token rides in the URL
- * fragment, which browsers never send to a server, so it stays out of CDN /
+ * the app and everyone else gets the web tracker. The tracking token rides in
+ * the URL fragment, which browsers never send to a server, so it stays out of CDN /
  * server logs and `Referer` headers.
  */
 const DEFAULT_LOCALE = "zh-TW";
@@ -24,10 +24,14 @@ export function sosTrackingUrl(shareToken: string): string {
 }
 
 /**
- * @param shareToken The session's public share token, when known.
+ * @param shareToken The SOS session's public share token, when known.
+ * @param planToken The cached general route plan's capability, when known.
  * @returns The web route-preview URL, or undefined when no base is configured.
  */
-export function routePreviewUrl(shareToken?: string): string | undefined {
+export function routePreviewUrl(
+  shareToken?: string,
+  planToken?: string,
+): string | undefined {
   const base =
     trimBase(process.env.PUBLIC_LIFF_ROUTE_BASE_URL) ||
     (trimBase(process.env.PUBLIC_TRACKING_BASE_URL)
@@ -36,7 +40,10 @@ export function routePreviewUrl(shareToken?: string): string | undefined {
   if (!base) return undefined;
   try {
     const url = new URL(base);
+    url.searchParams.delete("sessionId");
+    url.searchParams.delete("planToken");
     if (shareToken) url.searchParams.set("sessionId", shareToken);
+    else if (planToken) url.searchParams.set("planToken", planToken);
     return url.toString();
   } catch {
     return undefined;

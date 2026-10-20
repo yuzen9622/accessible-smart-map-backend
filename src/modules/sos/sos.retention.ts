@@ -105,6 +105,10 @@ export const sosResolvedNoticeTask: RetentionTask = {
           lineUserIds,
           session.resolvedNotice.retryKey,
           config.sosNoticeSendTimeoutMs,
+          {
+            startedAt: session.createdAt,
+            locationUpdatedAt: session.locationUpdatedAt,
+          },
           userName,
         );
         await markResolvedNoticeSent(sessionId, claimId);

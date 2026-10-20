@@ -1,4 +1,6 @@
 import type { webhook } from "@line/bot-sdk";
+import type { z } from "zod";
+import type { AiRoutePlanToolResultSchema } from "../ai/ai.schema";
 import type { PlanRouteResult } from "../accessible-route/accessible-route.service";
 import type { ResponseCode } from "../../types/code";
 import type { SosType } from "../sos/sos.types";
@@ -18,6 +20,10 @@ export interface LineRoutePreviewData extends PlanRouteData {
   originLabel: string;
   destinationLabel: string;
 }
+
+export type LinePlannedRoutePreviewData = z.infer<
+  typeof AiRoutePlanToolResultSchema
+>;
 
 export interface LineBoundContact {
   contactId: string;

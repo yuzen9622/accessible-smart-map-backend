@@ -399,6 +399,7 @@ export const LINE_MSG = {
   INFO: "這是緊急求救通知官方帳號。若你收到綁定碼，請直接輸入以完成綁定；當你綁定的親友發出求救時，我們會在此通知你。如遇緊急狀況，請直接撥打 119（消防/救護）或 110（警察）。",
   SOS_NOTIFY_TITLE: "緊急求救通知",
   SOS_RESOLVED_TITLE: "求救已解除",
+  SOS_AUTO_RESOLVED_TITLE: "求救追蹤已自動結束",
   SOS_ALREADY_RESOLVED: "此求救已解除，無需處理。",
   VIEW_LOCATION: "查看即時位置",
   APP_INFO:
@@ -429,6 +430,8 @@ export const LINE_MSG = {
     "還沒收到你最近的位置。請先按下方「分享我的位置」，再按一次「規劃前往路線」。",
   SOS_ROUTE_READY: "已依你分享的位置準備好前往路線，點下方按鈕查看。",
   SOS_ROUTE_UNAVAILABLE: "目前無法產生路線連結，請稍後再試。",
+  ROUTE_PREVIEW_EXPIRED: "這份路線連結已失效，請回到 LINE 重新規劃路線。",
+  ROUTE_PREVIEW_UNAVAILABLE: "地圖連結暫時無法建立，請稍後重新規劃路線。",
   LOCATION_RECEIVED:
     "收到你的位置！想查這附近的什麼？可以點下方按鈕，或直接輸入問題。",
   LOCATION_RECEIVED_SOS:

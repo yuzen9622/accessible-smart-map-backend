@@ -7,7 +7,7 @@
 | 資料 | 政策 | 執行方式 | 位置 |
 |---|---|---|---|
 | 帳號、偏好、聯絡人 | 驗證刪除申請後 30 日內清除 | 刪除帳號時即時硬刪；另登記 `DeletedAccount`，補掃刪除帳號刪除後才寫入的資料（併發請求） | `user.account.service.ts`、`user.account.retention.ts` |
-| 一般導航位置 | 即時處理，不保存軌跡 | route token 存 Redis 30 分鐘 TTL；voice 不落地；access log 只記路由樣板（不含 query、path 參數） | `navigation-state.repository.ts`、`middleware/access-log.middleware.ts` |
+| 一般導航位置 | 即時處理，不保存軌跡 | route token 存 Redis 30 分鐘 TTL；LINE 一般路線的 LIFF 預覽快照與最近選定 route token 亦存 Redis，最多 30 分鐘，不因查看或追問細節續期；voice 不落地；access log 只記路由樣板（不含 query、path 參數） | `navigation-state.repository.ts`、`line-route-preview.repository.ts`、`line-memory.ts`、`middleware/access-log.middleware.ts` |
 | SOS 位置與事件 | 解除後 30 日內刪除 | 解除滿期限即刪整筆 session；位置超過 24 小時未更新的 active SOS 由系統自動解除並通知聯絡人（失敗會重送） | `sos.retention.ts` |
 | SOS 追蹤連結查看紀錄 | 隨 SOS session 刪除 | 公開連結讀取者只存 `HMAC(IP+User-Agent)` 截斷值與首次／最後讀取時間（不存原始 IP、UA）；每筆 session 最多 50 筆；重設分享連結時清除 | `sos.service.ts`、`sos.repository.ts` |
 | 聯絡人 LINE 分享位置 | 視同 SOS 位置，30 日 | `lastLineLat/Lng` 超過期限未更新即清空 | `line.retention.ts` |

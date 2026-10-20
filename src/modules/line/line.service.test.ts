@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { lineRoutePlanFixture } from "../../../tests/helpers/line-route";
 
 vi.mock("../../adapters/line.adapter", () => ({
   replyAgentResult: vi.fn().mockResolvedValue(undefined),
@@ -58,6 +59,7 @@ vi.mock("./line-memory", () => ({
   getLineLastLocation: vi.fn().mockResolvedValue(undefined),
   setLineLastLocation: vi.fn().mockResolvedValue(undefined),
   clearLineLastLocation: vi.fn().mockResolvedValue(undefined),
+  clearLineLastRouteToken: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./line-menu.service", () => ({
@@ -91,6 +93,8 @@ vi.mock("../sos/sos.service", () => ({
 
 vi.mock("../../config/redis", () => ({
   redisSetNx: vi.fn(),
+  redisSetChecked: vi.fn().mockResolvedValue(true),
+  redisGet: vi.fn(),
 }));
 
 vi.mock("../../model/emergency-contact.model", () => ({
@@ -163,7 +167,7 @@ import {
   resolveSession,
   updateHandlingStatus,
 } from "../sos/sos.service";
-import { redisSetNx } from "../../config/redis";
+import { redisSetNx, redisSetChecked } from "../../config/redis";
 import EmergencyContact from "../../model/emergency-contact.model";
 import SosSession from "../../model/sos-session.model";
 import User from "../../model/user.model";
@@ -204,6 +208,7 @@ beforeEach(() => {
   vi.mocked(replyText).mockResolvedValue(undefined);
   vi.mocked(replyMessages).mockResolvedValue(undefined);
   vi.mocked(showLoadingAnimation).mockResolvedValue(undefined);
+  vi.mocked(redisSetChecked).mockResolvedValue(true);
   vi.mocked(getAuthorizedSessionForLineUser).mockResolvedValue({
     session: {
       _id: POSTBACK_SESSION_ID,
@@ -639,13 +644,13 @@ describe("line.service — text message (agent loop)", () => {
     );
   });
 
-  it("surfaces a route card built from a plan tool result", async () => {
+  it("surfaces an SOS route card using the original share token", async () => {
     process.env.PUBLIC_LIFF_ROUTE_BASE_URL = "https://liff.example.com/route";
     vi.mocked(runLineAgent).mockResolvedValue({
       text: "我幫你找到可前往的路線。",
       toolResults: [
         {
-          name: "planAccessibleRoute",
+          name: "planRouteToSosVictim",
           args: {},
           result: {
             ok: true,
@@ -670,7 +675,7 @@ describe("line.service — text message (agent loop)", () => {
       "r1",
       "我幫你找到可前往的路線。",
       {
-        origin: "你的位置",
+        origin: "你分享的位置",
         destination: "台北車站",
         options: [
           {
@@ -684,6 +689,73 @@ describe("line.service — text message (agent loop)", () => {
       },
       "U1",
     );
+  });
+
+  it("hands a general planned trip to LIFF instead of linking the empty map", async () => {
+    process.env.PUBLIC_LIFF_ROUTE_BASE_URL = "https://liff.line.me/test-liff";
+    vi.mocked(runLineAgent).mockResolvedValue({
+      text: "搭乘公車到台北車站。",
+      toolResults: [
+        {
+          name: "planAccessibleRoute",
+          args: { origin: "current_location", destination: "台北車站" },
+          result: lineRoutePlanFixture(),
+        },
+      ],
+    });
+
+    await handleEvents([textEvent("我要去台北車站")]);
+
+    const [, text, card] = vi.mocked(replyAgentResult).mock.calls[0];
+    expect(text).toBe("搭乘公車到台北車站。");
+    expect(card?.liffUrl).toBeTruthy();
+    const url = new URL(card!.liffUrl!);
+    expect(url.toString()).not.toBe("https://liff.line.me/test-liff");
+    expect(url.searchParams.has("sessionId")).toBe(false);
+  });
+
+  it("explains when the route is available but a map link cannot be created", async () => {
+    process.env.PUBLIC_LIFF_ROUTE_BASE_URL = "https://liff.line.me/test-liff";
+    vi.mocked(redisSetChecked).mockResolvedValue(false);
+    vi.mocked(runLineAgent).mockResolvedValue({
+      text: "搭乘公車到台北車站。",
+      toolResults: [
+        {
+          name: "planAccessibleRoute",
+          args: {},
+          result: lineRoutePlanFixture(),
+        },
+      ],
+    });
+    await handleEvents([textEvent("我要去台北車站")]);
+    expect(vi.mocked(replyAgentResult).mock.calls[0][1]).toContain(
+      "地圖連結暫時無法建立",
+    );
+    expect(
+      vi.mocked(replyAgentResult).mock.calls[0][2]?.liffUrl,
+    ).toBeUndefined();
+  });
+
+  it("does not offer an older route card after the latest planning attempt failed", async () => {
+    process.env.PUBLIC_LIFF_ROUTE_BASE_URL = "https://liff.line.me/test-liff";
+    vi.mocked(runLineAgent).mockResolvedValue({
+      text: "新的條件查不到路線。",
+      toolResults: [
+        {
+          name: "planAccessibleRoute",
+          args: {},
+          result: lineRoutePlanFixture(),
+        },
+        {
+          name: "planAccessibleRoute",
+          args: {},
+          result: { ok: false, error: "no route" },
+        },
+      ],
+    });
+    await handleEvents([textEvent("改走另一個目的地")]);
+    expect(vi.mocked(replyAgentResult).mock.calls[0][2]).toBeNull();
+    expect(redisSetChecked).not.toHaveBeenCalled();
   });
 
   it("reports unavailable conversation rather than implying missing binding when AI throws", async () => {

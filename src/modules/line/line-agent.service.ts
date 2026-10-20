@@ -11,6 +11,11 @@ import { lineFamilyTools, openAiChatTools } from "../../config/ai/tool";
 import { model } from "../../config/ai";
 import type { AgentResult, AgentToolExecutor } from "../../types/agent";
 import type { OAIMessage } from "../../types/openai-chat";
+import {
+  clearLineLastRouteToken,
+  getLineLastRouteToken,
+  setLineLastRouteToken,
+} from "./line-memory";
 
 /**
  * Tool names a family LINE user may execute: the general read-only query tools
@@ -52,8 +57,20 @@ export interface RunLineAgentParams {
  * @param params The caller's LINE user id, conversation messages, and optional location.
  * @returns The agent result (final text plus collected tool results).
  */
-export function runLineAgent(params: RunLineAgentParams): Promise<AgentResult> {
-  let systemPrompt = withCurrentDate(LINE_FAMILY_SYSTEM_PROMPT);
+export async function runLineAgent(
+  params: RunLineAgentParams,
+): Promise<AgentResult> {
+  const context = new RouteConversationContext();
+  const previousToken = params.lineUserId
+    ? await getLineLastRouteToken(params.lineUserId)
+    : undefined;
+  if (previousToken) {
+    const restored = await context.set({ routeToken: previousToken });
+    if (!restored.ok) await clearLineLastRouteToken(params.lineUserId);
+  }
+  const initialRevision = context.revision;
+  let systemPrompt =
+    withCurrentDate(LINE_FAMILY_SYSTEM_PROMPT) + context.prompt;
   if (params.userLocation) {
     systemPrompt = withUserLocation(systemPrompt, params.userLocation);
   }
@@ -74,7 +91,7 @@ export function runLineAgent(params: RunLineAgentParams): Promise<AgentResult> {
       lineUserId: params.lineUserId,
     });
 
-  return runToolLoop(
+  const result = await runToolLoop(
     input,
     systemInstruction,
     model,
@@ -85,7 +102,7 @@ export function runLineAgent(params: RunLineAgentParams): Promise<AgentResult> {
     false,
     false,
     false,
-    createRouteAwareExecutor(new RouteConversationContext(), execTool),
+    createRouteAwareExecutor(context, execTool),
     {
       extraTools: lineFamilyTools,
       toolAllowList: params.readOnly
@@ -93,4 +110,10 @@ export function runLineAgent(params: RunLineAgentParams): Promise<AgentResult> {
         : LINE_TOOL_ALLOWLIST,
     },
   );
+  if (params.lineUserId && context.revision !== initialRevision) {
+    if (context.token)
+      await setLineLastRouteToken(params.lineUserId, context.token);
+    else await clearLineLastRouteToken(params.lineUserId);
+  }
+  return result;
 }

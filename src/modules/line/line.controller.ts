@@ -3,6 +3,8 @@ import { ResponseCode } from "../../types/code";
 import { sendResponse } from "../../config/lib";
 import * as service from "./line.service";
 import type { LineEvent } from "./line.types";
+import type { z } from "zod";
+import type { RoutePreviewQuerySchema } from "./line.schema";
 
 /**
  * Webhook handler: acknowledges with 200 immediately (LINE resends on slow
@@ -21,18 +23,14 @@ export function handleWebhook(req: Request, res: Response) {
 }
 
 export async function getRoutePreview(req: Request, res: Response) {
-  const query = req.validated?.query as {
-    sessionId: string;
-    travelMode?: any;
-    mode?: any;
-    departureTime?: string;
-  };
+  const query = req.validated?.query as z.infer<typeof RoutePreviewQuerySchema>;
   const result = await service.getRoutePreview(
-    query.sessionId,
+    query.sessionId ?? query.planToken ?? "",
     query.travelMode,
     query.mode,
     query.departureTime,
   );
+  res.setHeader("Cache-Control", "no-store");
   return sendResponse(
     res,
     result.ok,
