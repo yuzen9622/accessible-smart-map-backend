@@ -694,6 +694,12 @@ LINE 一對一聊天室可直接貼上六位英數綁定碼，或輸入「綁定
 
 明確輸入「收到／我收到回報」或「我處理／我來處理」也不經 AI；多件 SOS 會提供事件選擇按鈕與分頁。一般自然語言對話仍由 agent 處理。
 
+一般問路會沿用 30 分鐘內分享的 LINE 位置；未另外指定起點時使用 `current_location`，未指定交通方式時沿用既有大眾運輸預設。後續詢問同一趟路線的細節會還原可信 `routeToken`，不把歷史文字當成仍有效的路線。
+
+LINE 的「查看地圖」會以短效 `planToken` 開啟 LIFF／網頁的同一份已規劃結果（完整候選、選定路線、無障礙條件及交通偏好），不再次呼叫規劃器、不自動開始導航。連結不含起訖座標或 LINE 使用者 ID。持有連結即可讀取，請勿公開轉貼；快取無法寫入時不提供誤導的空地圖按鈕。連結 30 分鐘後失效，須回 LINE 重新規劃。
+
+前端以 `GET /api/v1/line/route-preview?planToken=…` 載入一般規劃，回傳 `data` 為 §4.3 的路線結果契約。原有 SOS 使用 `?sessionId=<SOS shareToken>`；兩個參數互斥，一般 `planToken` 不接受 `travelMode`、`mode` 或 `departureTime` 覆寫。查詢無效回 400，連結不存在／過期回 404，回應採 `Cache-Control: no-store`。完整 HTTP schema 以 OpenAPI 為準。
+
 綁定工具回傳 `errorCode: "BIND_OUTCOME_UNCONFIRMED"` 表示無法確認寫入結果，**不代表一定未綁定**。請先查看綁定狀態；若尚未綁定，再重新產生驗證碼。App 帳號碼為單次兌換，兌換途中失敗可能已消耗，系統不會回復舊碼而覆蓋新碼。
 
 ---

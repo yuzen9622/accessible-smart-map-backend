@@ -20,6 +20,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const ROUTE_CONTEXT_LOOKUP_TIMEOUT_MS = 5_000;
 const PREFERENCE_KEYS = [
   "mode",
+  "travelMode",
   "transitPreference",
   "departureTime",
   "avoidStairs",

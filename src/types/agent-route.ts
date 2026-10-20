@@ -1,8 +1,9 @@
-import type { AccessibilityMode, TransitPreference } from "./route";
+import type { AccessibilityMode, TransitPreference, TravelMode } from "./route";
 
 export type RouteContextInput = { routeToken: string } | null;
 export interface RoutingPreferences {
   mode?: AccessibilityMode;
+  travelMode?: TravelMode;
   transitPreference?: TransitPreference;
   departureTime?: string;
   avoidStairs?: boolean;

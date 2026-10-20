@@ -1,5 +1,8 @@
+import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 import { TransitPreferenceSchema } from "./transit-preference.schema";
+
+extendZodWithOpenApi(z);
 
 export const RouteContextInputSchema = z
   .object({ routeToken: z.string().trim().min(1).max(256) })

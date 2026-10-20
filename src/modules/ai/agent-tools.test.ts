@@ -18,6 +18,9 @@ vi.mock("../transit/metro.service", () => ({
 vi.mock("../transit/alert.service", () => ({
   getTransitAlerts: vi.fn(),
 }));
+vi.mock("../transit/alert-scope", () => ({
+  getRailAlertsByName: vi.fn(),
+}));
 vi.mock("../transit/train.service", () => ({
   getTrainTimetable: vi.fn(),
   getStationTimetable: vi.fn(),
@@ -134,6 +137,7 @@ import { searchKnowledge } from "./knowledge.service";
 import {
   getEnvironmentInfo,
   findCampusAccessibility,
+  getA11yFacilityDetails,
   getCampusAccessibilityDetails,
   getNearbyHazards,
   findNearbyParking,
@@ -161,6 +165,7 @@ import {
 import { LINE_MSG } from "../../constants/messages";
 import * as metroService from "../transit/metro.service";
 import * as alertService from "../transit/alert.service";
+import { getRailAlertsByName } from "../transit/alert-scope";
 import * as busService from "../transit/bus.service";
 import { getActiveRoadIncidents } from "../traffic/road-incident.service";
 
@@ -191,6 +196,7 @@ const mockMetroAlerts = metroService.getMetroAlerts as unknown as ReturnType<
 >;
 const mockGetTransitAlerts =
   alertService.getTransitAlerts as unknown as ReturnType<typeof vi.fn>;
+const mockRailAlertsByName = vi.mocked(getRailAlertsByName);
 const mockResolveBusCity = busService.resolveBusCity as unknown as ReturnType<
   typeof vi.fn
 >;
@@ -383,6 +389,40 @@ describe("getEnvironmentInfo", () => {
 });
 
 // ---------------------------------------------------------------------------
+// getA11yFacilityDetails
+// ---------------------------------------------------------------------------
+describe("getA11yFacilityDetails", () => {
+  it("回傳完整 OSM tags，不套用列表精簡白名單", async () => {
+    vi.mocked(a11yService.findByOsmIds).mockResolvedValue([
+      {
+        osmId: "node/1",
+        category: "toilet",
+        location: { type: "Point", coordinates: [121.5, 25.04] },
+        tags: {
+          amenity: "toilets",
+          "toilets:wheelchair": "yes",
+          description: "位於二樓，需向服務台借鑰匙",
+          operator: "臺北市政府",
+        },
+        importedAt: new Date("2026-06-24T00:00:00.000Z"),
+      },
+    ] as never);
+
+    const result = JSON.parse(
+      await getA11yFacilityDetails({ osmId: "node/1" }),
+    );
+
+    expect(result.facilities[0].tags).toEqual({
+      amenity: "toilets",
+      "toilets:wheelchair": "yes",
+      description: "位於二樓，需向服務台借鑰匙",
+      operator: "臺北市政府",
+    });
+    expect(result.facilities[0]).not.toHaveProperty("importedAt");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // findCampusAccessibility / getCampusAccessibilityDetails
 // ---------------------------------------------------------------------------
 describe("campus accessibility agent tools", () => {
@@ -463,6 +503,40 @@ describe("campus accessibility agent tools", () => {
       1000,
       "accessible_toilet",
     );
+  });
+
+  it("附近搜尋套用縣市篩選與分頁", async () => {
+    const campus = (campusId: number, city: string) => ({
+      ...campusSummary,
+      campusId,
+      city,
+    });
+    mockCampusFindNearby.mockResolvedValue([
+      campus(1, "臺北市"),
+      campus(2, "新北市"),
+      campus(3, "臺北市"),
+      campus(4, "臺北市"),
+    ]);
+
+    const result = JSON.parse(
+      await findCampusAccessibility({
+        city: "台北市",
+        page: 2,
+        limit: 2,
+        userLocation: { latitude: 25.05, longitude: 121.51 },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      mode: "nearby",
+      total: 3,
+      page: 2,
+      totalPages: 2,
+    });
+    expect(
+      result.campuses.map((c: { campusId: number }) => c.campusId),
+    ).toEqual([4]);
   });
 
   it("校名查不到時 geocode 地點後改查附近校區", async () => {
@@ -886,55 +960,80 @@ describe("getTransitAlerts", () => {
     expect(result.alerts[0].alertId).toBe("alert-307");
   });
 
-  it("捷運行駛與台鐵查詢正常透傳", async () => {
-    mockGetTransitAlerts.mockResolvedValue({
+  it("雙鐵以名稱查詢：路線、站名、車次分別傳給名稱解析", async () => {
+    mockRailAlertsByName.mockResolvedValue({
       ok: true,
       mode: "metro",
-      matchedAt: "2026-08-15T10:00:00Z",
       alerts: [],
     });
 
     const rawMetro = await getTransitAlerts({
       mode: "metro",
       routeName: "板南線",
-      railSystem: "TRTC",
+      stopName: "台北車站",
+      railSystem: "TRTCMG",
     });
     expect(JSON.parse(rawMetro).ok).toBe(true);
-
-    mockGetTransitAlerts.mockResolvedValue({
-      ok: true,
-      mode: "tra",
-      matchedAt: "2026-08-15T10:00:00Z",
-      alerts: [],
+    expect(mockRailAlertsByName).toHaveBeenLastCalledWith({
+      mode: "metro",
+      railSystem: "TRTCMG",
+      lineName: "板南線",
+      stationName: "台北車站",
+      trainNo: undefined,
+      direction: undefined,
     });
 
-    const rawTra = await getTransitAlerts({
-      mode: "tra",
-      trainNo: "123",
-      stopName: "台北",
+    await getTransitAlerts({ mode: "tra", routeName: "123", stopName: "台北" });
+    expect(mockRailAlertsByName).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        mode: "tra",
+        trainNo: "123",
+        lineName: undefined,
+        stationName: "台北",
+      }),
+    );
+  });
+
+  it("名稱無法解析時回傳失敗而非「營運正常」", async () => {
+    mockRailAlertsByName.mockResolvedValue({
+      ok: false,
+      reason: "UNKNOWN_STATION",
+      error: "找不到捷運站「不存在站」",
     });
-    expect(JSON.parse(rawTra).ok).toBe(true);
+
+    const result = JSON.parse(
+      await getTransitAlerts({ mode: "metro", stopName: "不存在站" }),
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      reason: "UNKNOWN_STATION",
+      error: "找不到捷運站「不存在站」",
+    });
   });
 
   it("executeLocalTool 支援 getTransitAlerts 派工", async () => {
-    mockGetTransitAlerts.mockResolvedValue({
+    mockRailAlertsByName.mockResolvedValue({
       ok: true,
       mode: "thsr",
-      matchedAt: "2026-08-15T10:00:00Z",
       alerts: [],
     });
 
     const raw = await executeLocalTool("getTransitAlerts", {
       mode: "thsr",
+      stopName: "左營",
       trainNo: "603",
     });
     const result = JSON.parse(raw);
     expect(result.ok).toBe(true);
     expect(result.mode).toBe("thsr");
+    expect(mockRailAlertsByName).toHaveBeenLastCalledWith(
+      expect.objectContaining({ stationName: "左營", trainNo: undefined }),
+    );
   });
 
   it("底層服務拋錯時回傳失敗", async () => {
-    mockGetTransitAlerts.mockRejectedValue(new Error("Network failure"));
+    mockRailAlertsByName.mockRejectedValue(new Error("Network failure"));
     const raw = await getTransitAlerts({ mode: "metro" });
     const result = JSON.parse(raw);
     expect(result.ok).toBe(false);
@@ -1194,6 +1293,71 @@ describe("LINE SOS tools", () => {
         keepExactDestination: true,
       }),
     );
+  });
+
+  it("planRouteToSosVictim 依指定交通方式規劃，無效值不規劃", async () => {
+    mockEmergencyContactFindOne.mockReturnValue({
+      sort: () => ({
+        select: () => ({
+          lean: () =>
+            Promise.resolve({
+              lastLineLat: 25.03,
+              lastLineLng: 121.56,
+              lastLineLocationUpdatedAt: new Date("2026-07-09T01:10:00.000Z"),
+            }),
+        }),
+      }),
+    });
+    mockEmergencyContactFind.mockReturnValue({
+      select: () => ({
+        lean: () => Promise.resolve([{ _id: "c1", userId: "u1" }]),
+      }),
+    });
+    mockSosSessionFindById.mockReturnValue({
+      lean: () =>
+        Promise.resolve({
+          _id: "s1",
+          userId: "u1",
+          status: "active",
+          lat: 25.0478,
+          lng: 121.5171,
+          shareToken: "token123",
+        }),
+    });
+    mockUserFindById.mockReturnValue({
+      select: () => ({ lean: () => Promise.resolve({ name: "王小明" }) }),
+    });
+    mockPlanRoute.mockResolvedValue({
+      ok: true,
+      data: { routes: [{ routeName: "drive", totalMinutes: 9, legs: [] }] },
+    });
+
+    const result = JSON.parse(
+      await executeLocalTool(
+        "planRouteToSosVictim",
+        { sessionId: "s1", travelMode: "drive" },
+        undefined,
+        undefined,
+        { lineUserId: "line-1" },
+      ),
+    );
+    expect(result).toMatchObject({ ok: true, travelMode: "drive" });
+    expect(mockPlanRoute).toHaveBeenLastCalledWith(
+      expect.objectContaining({ travelMode: "drive" }),
+    );
+
+    mockPlanRoute.mockClear();
+    const invalid = JSON.parse(
+      await planRouteToSosVictim(
+        { sessionId: "s1", travelMode: "helicopter" },
+        "line-1",
+      ),
+    );
+    expect(invalid).toMatchObject({
+      ok: false,
+      reason: "INVALID_ROUTE_ARGUMENTS",
+    });
+    expect(mockPlanRoute).not.toHaveBeenCalled();
   });
 });
 
@@ -2005,6 +2169,40 @@ describe("agent transit preference dispatch", () => {
       expect(mockPlanRoute).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("agent travel mode dispatch", () => {
+  it("forwards each travel mode from planAccessibleRoute to the planner", async () => {
+    mockPlanRoute.mockResolvedValue({
+      ok: false,
+      error: "no route in fixture",
+    });
+    for (const travelMode of ["transit", "drive", "motorcycle", "walk"]) {
+      await executeLocalTool(
+        "planAccessibleRoute",
+        { origin: "台北車站", destination: "板橋車站", travelMode },
+        undefined,
+      );
+      expect(mockPlanRoute).toHaveBeenLastCalledWith(
+        expect.objectContaining({ travelMode }),
+      );
+    }
+  });
+  it("rejects an unknown travel mode before planning", async () => {
+    mockPlanRoute.mockClear();
+    const result = JSON.parse(
+      await executeLocalTool(
+        "planAccessibleRoute",
+        { origin: "A", destination: "B", travelMode: "bike" },
+        undefined,
+      ),
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "INVALID_ROUTE_ARGUMENTS",
+    });
+    expect(mockPlanRoute).not.toHaveBeenCalled();
+  });
 });
 
 describe("AI plan full route contract", () => {

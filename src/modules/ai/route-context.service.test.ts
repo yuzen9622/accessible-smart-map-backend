@@ -39,6 +39,7 @@ const result = {
   routes: [route],
   effectivePreferences: {
     mode: "wheelchair",
+    travelMode: "drive",
     transitPreference: "bus",
     avoidStairs: true,
   },
@@ -168,6 +169,7 @@ describe("trusted route context and projections", () => {
     });
     expect(raw.mock.calls[0][1]).toMatchObject({
       mode: "wheelchair",
+      travelMode: "drive",
       transitPreference: "none",
       avoidStairs: false,
     });

@@ -138,6 +138,12 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
             enum: ["wheelchair", "elderly", "visual_impaired", "normal"],
             description: "只有使用者明示或已確認時才傳；省略沿用行程或個人設定",
           },
+          travelMode: {
+            type: "string",
+            enum: ["transit", "drive", "motorcycle", "walk"],
+            description:
+              "交通方式：transit 大眾運輸、drive 開車、motorcycle 騎機車、walk 全程步行／輪椅。只有使用者明示時才傳；省略沿用已確認行程，否則為 transit。與無障礙 mode 無關",
+          },
           transitPreference: {
             type: "string",
             enum: ["none", "bus", "rail", "metro"],
@@ -212,7 +218,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "getBusArrival",
       description:
-        "回傳某條公車路線在某個站牌的即時預估到站時間（還有幾分鐘到）。若已知該班車車牌，會一併回報是否為低底盤車。適合比較多條路線在同一站誰先到。",
+        "回傳某條公車路線在某個站牌的即時預估到站時間（還有幾分鐘到）；有車牌時一併附上，但不含低底盤判斷。使用者問來車是否為低底盤時，再呼叫 trackBuses 查在線車輛。適合比較多條路線在同一站誰先到。",
       parameters: {
         type: "object",
         properties: {
@@ -557,7 +563,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           routeName: {
             type: "string",
             description:
-              "公車路線名稱（如 '307'、'承德幹線'）或捷運路線名稱（如 '淡水信義線'、'板南線'）",
+              "公車路線名稱（如 '307'、'承德幹線'）、捷運路線名稱（如 '淡水信義線'、'板南線'）或台鐵路線名稱（如 '西部幹線'）",
           },
           city: {
             type: "string",
@@ -566,16 +572,19 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           },
           railSystem: {
             type: "string",
-            enum: ["TRTC", "KRTC", "TYMC", "TMRT", "NTMC", "KLRT"],
-            description: "捷運系統代碼（預設 TRTC 台北捷運）",
+            enum: ["TRTC", "TRTCMG", "KRTC", "TYMC", "TMRT", "KLRT"],
+            description:
+              "捷運系統代碼（預設 TRTC 台北捷運；TRTCMG 貓空纜車）。新北捷運無即時通阻資料",
           },
           trainNo: {
             type: "string",
-            description: "台鐵或高鐵車次號碼（如 '123'）",
+            description:
+              "台鐵車次號碼（如 '123'）。高鐵通阻依路段公告，無法用車次查詢，請改填 stopName",
           },
           stopName: {
             type: "string",
-            description: "站牌名稱或捷運/火車站名",
+            description:
+              "公車站牌名稱或捷運／台鐵／高鐵站名（如 '台北車站'）。捷運、台鐵需 routeName、stopName 或 trainNo 至少一項；高鐵必填",
           },
           direction: {
             type: "number",
@@ -777,6 +786,12 @@ export const lineFamilyTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
             type: "string",
             enum: ["wheelchair", "elderly", "visual_impaired", "normal"],
             description: "無障礙需求模式，預設 normal",
+          },
+          travelMode: {
+            type: "string",
+            enum: ["transit", "drive", "motorcycle", "walk"],
+            description:
+              "交通方式：transit 大眾運輸、drive 開車、motorcycle 騎機車、walk 全程步行／輪椅。只有使用者明示時才傳；省略為 transit。與無障礙 mode 無關",
           },
           departureTime: {
             type: "string",

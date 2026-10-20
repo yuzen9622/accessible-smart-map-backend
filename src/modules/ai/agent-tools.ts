@@ -17,8 +17,10 @@ import * as busService from "../transit/bus.service";
 import * as metroService from "../transit/metro.service";
 import * as trainService from "../transit/train.service";
 import * as alertService from "../transit/alert.service";
+import { getRailAlertsByName } from "../transit/alert-scope";
 import * as airService from "../air/air.service";
 import * as campusService from "../campus/campus.service";
+import { cityFilter } from "../campus/campus.util";
 import * as hazardService from "../hazard-report/hazard-report.service";
 import { getActiveRoadIncidents } from "../traffic/road-incident.service";
 import { haversineMeters } from "../../utils/geo";
@@ -55,7 +57,7 @@ import type {
 } from "../accessible-route/accessible-route.service";
 import { ERROR_MESSAGE, LINE_MSG } from "../../constants/messages";
 import { TransitPreferenceSchema } from "../../schemas/transit-preference.schema";
-import type { DriveLeg } from "../../types/route";
+import type { DriveLeg, TravelMode } from "../../types/route";
 import { forLineExternalOpen, sosTrackingUrl } from "../../config/public-links";
 import type { TaiwanCityEn } from "../../types/transit";
 
@@ -235,6 +237,27 @@ function clampInt(
   return Math.min(Math.max(Number.isFinite(n) ? n : fallback, min), max);
 }
 
+/** Apply the tool's city filter and paging to a distance-sorted nearby list. */
+function pageNearbyCampuses<T extends { city?: string }>(
+  campuses: T[],
+  city: string | undefined,
+  page: number,
+  limit: number,
+) {
+  const cityPattern = city?.trim()
+    ? new RegExp(cityFilter(city.trim()).$regex)
+    : undefined;
+  const inCity = cityPattern
+    ? campuses.filter((campus) => cityPattern.test(campus.city ?? ""))
+    : campuses;
+  return {
+    total: inCity.length,
+    page,
+    totalPages: Math.ceil(inCity.length / limit),
+    campuses: inCity.slice((page - 1) * limit, page * limit),
+  };
+}
+
 export async function findCampusAccessibility(args: {
   language?: AgentLanguage;
   query?: string;
@@ -274,8 +297,7 @@ export async function findCampusAccessibility(args: {
           lat: coordsInput.latitude,
           lng: coordsInput.longitude,
         },
-        total: campuses.length,
-        campuses: campuses.slice(0, limit),
+        ...pageNearbyCampuses(campuses, args.city, page, limit),
       });
     }
 
@@ -324,8 +346,7 @@ export async function findCampusAccessibility(args: {
       mode: "nearby",
       query: args.query,
       searchLocation: { lat: coords.latitude, lng: coords.longitude },
-      total: campuses.length,
-      campuses: campuses.slice(0, limit),
+      ...pageNearbyCampuses(campuses, args.city, page, limit),
     });
   } catch (error: any) {
     console.error("[agent-tool:findCampusAccessibility]", error);
@@ -488,6 +509,22 @@ function summarizeRoute(route: AccessibleRoute): Record<string, unknown> {
   };
 }
 
+const TRAVEL_MODES: readonly TravelMode[] = [
+  "transit",
+  "drive",
+  "motorcycle",
+  "walk",
+];
+
+function parseTravelMode(
+  value: string | undefined,
+): { ok: true; value?: TravelMode } | { ok: false } {
+  if (value === undefined) return { ok: true };
+  return TRAVEL_MODES.includes(value as TravelMode)
+    ? { ok: true, value: value as TravelMode }
+    : { ok: false };
+}
+
 /** Only public effective conditions; never includes account identity or capability tokens. */
 function agentEffectivePreferences(request: CanonicalPlanRouteRequest) {
   const {
@@ -521,6 +558,7 @@ export async function planAccessibleRoute(args: {
   destination: string;
   language?: AgentLanguage;
   mode?: string;
+  travelMode?: string;
   transitPreference?: string;
   departureTime?: string;
   userLocation?: { latitude: number; longitude: number };
@@ -529,6 +567,15 @@ export async function planAccessibleRoute(args: {
   requireElevator?: boolean;
 }): Promise<string> {
   const { origin, destination, mode, departureTime } = args;
+
+  const travelMode = parseTravelMode(args.travelMode);
+  if (!travelMode.ok) {
+    return JSON.stringify({
+      ok: false,
+      reason: "INVALID_ROUTE_ARGUMENTS",
+      error: agentRouteError("INVALID_ROUTE_ARGUMENTS", args.language),
+    });
+  }
 
   const preference = TransitPreferenceSchema.optional().safeParse(
     args.transitPreference,
@@ -578,6 +625,7 @@ export async function planAccessibleRoute(args: {
       avoidStairs: args.avoidStairs,
       requireElevator: args.requireElevator,
       maxTransfers: 2,
+      ...(travelMode.value ? { travelMode: travelMode.value } : {}),
       transitPreference: preference.data,
       departureTime,
       ...(args.language ? { language: args.language } : {}),
@@ -915,7 +963,11 @@ export async function getA11yFacilityDetails(args: {
     return JSON.stringify({
       ok: true,
       count: places.length,
-      facilities: places.map(slimFacility),
+      // The drill-down tool: list tools stay slim, details carry every OSM tag.
+      facilities: places.map((place) => ({
+        ...slimFacility(place),
+        tags: place.tags ?? {},
+      })),
     });
   } catch (error: any) {
     console.error("[agent-tool:getA11yFacilityDetails]", error);
@@ -1182,7 +1234,9 @@ export async function getTransitAlerts(args: {
       });
     }
 
-    let ctx: alertService.TransitContext;
+    let result:
+      | alertService.TransitAlertResult
+      | Awaited<ReturnType<typeof getRailAlertsByName>>;
 
     if (mode === "bus") {
       const routeName = args.routeName?.trim() || "";
@@ -1199,64 +1253,42 @@ export async function getTransitAlerts(args: {
       if (typeof cityResult !== "string") {
         return JSON.stringify({ ok: false, ...cityResult });
       }
-      ctx = {
+      result = await alertService.getTransitAlerts({
         mode: "bus",
         city: cityResult as TaiwanCityEn,
         routeName,
         direction: isBusDirection(args.direction) ? args.direction : undefined,
         stopName: args.stopName?.trim() || undefined,
-      };
-    } else if (mode === "metro") {
-      const validRailSystems = ["TRTC", "KRTC", "TYMC", "TMRT", "NTMC", "KLRT"];
-      const rawSystem = (args.railSystem || "TRTC").toUpperCase();
-      const railSystem = validRailSystems.includes(rawSystem)
-        ? (rawSystem as "TRTC" | "KRTC" | "TYMC" | "TMRT" | "NTMC" | "KLRT")
-        : "TRTC";
-      ctx = {
-        mode: "metro",
-        railSystem,
-        lineCode: args.routeName?.trim() || undefined,
-        stationIds: args.stopName?.trim() ? [args.stopName.trim()] : undefined,
-      };
-    } else if (mode === "tra") {
-      ctx = {
-        mode: "tra",
-        trainNo:
-          args.trainNo?.trim() ||
-          (args.routeName && /^\d+$/.test(args.routeName.trim())
-            ? args.routeName.trim()
-            : undefined),
-        lineId:
-          args.routeName && !/^\d+$/.test(args.routeName.trim())
-            ? args.routeName.trim()
-            : undefined,
-        stationIds: args.stopName?.trim() ? [args.stopName.trim()] : undefined,
-        direction:
-          args.direction === 0 || args.direction === 1
-            ? args.direction
-            : undefined,
-      };
+      });
     } else {
-      ctx = {
-        mode: "thsr",
-        lineId: args.routeName?.trim() || undefined,
-        fromStationId: args.stopName?.trim() || undefined,
-        direction:
-          args.direction === 0 || args.direction === 1
-            ? args.direction
+      const routeName = args.routeName?.trim() || undefined;
+      const numericRoute =
+        mode === "tra" && routeName && /^\d+$/.test(routeName);
+      result = await getRailAlertsByName({
+        mode,
+        railSystem: args.railSystem?.trim() || undefined,
+        lineName: numericRoute ? undefined : routeName,
+        stationName: args.stopName?.trim() || undefined,
+        trainNo:
+          mode === "tra"
+            ? args.trainNo?.trim() || (numericRoute ? routeName : undefined)
             : undefined,
-      };
+        direction: args.direction,
+      });
     }
 
-    const result = await alertService.getTransitAlerts(ctx);
     if (!result.ok) {
-      return JSON.stringify({ ok: false, error: result.error });
+      return JSON.stringify({
+        ok: false,
+        ...("reason" in result ? { reason: result.reason } : {}),
+        error: result.error,
+      });
     }
 
     const alerts = result.alerts;
     return JSON.stringify({
       ok: true,
-      mode: ctx.mode,
+      mode,
       total: alerts.length,
       alerts,
       summary:
@@ -1506,6 +1538,7 @@ export async function planRouteToSosVictim(
     language?: AgentLanguage;
     sessionId: string;
     mode?: string;
+    travelMode?: string;
     departureTime?: string;
   },
   lineUserId?: string,
@@ -1515,6 +1548,14 @@ export async function planRouteToSosVictim(
   }
   if (!args.sessionId?.trim()) {
     return JSON.stringify({ ok: false, error: "缺少 sessionId" });
+  }
+  const travelMode = parseTravelMode(args.travelMode);
+  if (!travelMode.ok) {
+    return JSON.stringify({
+      ok: false,
+      reason: "INVALID_ROUTE_ARGUMENTS",
+      error: agentRouteError("INVALID_ROUTE_ARGUMENTS", args.language),
+    });
   }
 
   try {
@@ -1559,6 +1600,7 @@ export async function planRouteToSosVictim(
       keepExactDestination: true,
       ...(args.language ? { language: args.language } : {}),
       mode: validMode,
+      ...(travelMode.value ? { travelMode: travelMode.value } : {}),
       maxTransfers: 2,
       departureTime: args.departureTime,
     });
@@ -1583,6 +1625,7 @@ export async function planRouteToSosVictim(
         updatedAt: sharedLocation.updatedAt,
       },
       mode: validMode,
+      travelMode: travelMode.value ?? "transit",
       routes: result.data.routes.slice(0, 3).map(summarizeRoute),
     });
   } catch (error: any) {
@@ -2112,6 +2155,7 @@ export async function executeLocalTool(
         origin: args.origin,
         destination: args.destination,
         mode: args.mode,
+        travelMode: args.travelMode,
         transitPreference: args.transitPreference,
         departureTime: args.departureTime,
         userLocation,
@@ -2321,6 +2365,7 @@ export async function executeLocalTool(
         {
           sessionId: args.sessionId as string,
           mode: args.mode as string | undefined,
+          travelMode: args.travelMode as string | undefined,
           departureTime: args.departureTime as string | undefined,
           language: options.language,
         },
