@@ -2135,11 +2135,18 @@ export async function createLiveBridge(
                 if (!closedByGateway)
                   markVoiceUnavailable("LIVE_SESSION_ENDED");
               },
-              onclose: () => {
+              onclose: (e) => {
                 if (expectedEpoch !== voiceEpoch || disposed) return;
                 // Gemini hanging up must never hang up on the client: navigation
                 // and alerts keep running on this same socket.
                 if (closedByGateway) return;
+                console.warn(
+                  "[voice] live session closed by upstream",
+                  JSON.stringify({
+                    code: e?.code,
+                    reason: summarizeError(e?.reason),
+                  }),
+                );
                 markVoiceUnavailable("LIVE_SESSION_ENDED");
               },
             },

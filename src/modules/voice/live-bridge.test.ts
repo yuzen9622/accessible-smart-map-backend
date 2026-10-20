@@ -3005,6 +3005,27 @@ describe("createLiveBridge navigation independence from the voice session", () =
     bridge.close();
   });
 
+  it("logs the upstream close code so mid-session voice loss is diagnosable", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const ws = makeWs();
+    let onclose: ((e: { code: number; reason: string }) => void) | undefined;
+    connect.mockImplementation(async ({ callbacks }) => {
+      onclose = callbacks.onclose;
+      return makeSession();
+    });
+    const bridge = await createLiveBridge({ ws, userId: "u" });
+    await bridge.voiceReady;
+
+    onclose?.({ code: 1011, reason: "Internal error" });
+
+    expect(warn).toHaveBeenCalledWith(
+      "[voice] live session closed by upstream",
+      JSON.stringify({ code: 1011, reason: "Internal error" }),
+    );
+    bridge.close();
+    warn.mockRestore();
+  });
+
   it("resolves before the Gemini handshake settles", async () => {
     vi.useFakeTimers();
     try {
