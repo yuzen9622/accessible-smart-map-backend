@@ -58,6 +58,8 @@ services:
     container_name: redis
     # Ephemeral conversation cache (pending intent TTL 30m, chat history);
     # no host port published — only the backend (same network) reaches it.
+    volumes:
+      - ${REDIS_DATA_SOURCE:-redis-data}:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -67,19 +69,20 @@ services:
     restart: unless-stopped
 
   mongo:
-    image: mongo:7
+    image: mongo:7@sha256:9bdaeb6dac6e7e762e84e2f84103d1f9bb078fa1ba6bde8bb9d2274f655ad173 # yamllint disable-line rule:line-length
     container_name: mongo
     entrypoint: ["bash", "/opt/mongo/entrypoint.sh"]
     # Reap any orphaned children during startup/shutdown.
     init: true
     stop_grace_period: 30s
+    mem_limit: ${MONGO_MEMORY_LIMIT:-0}
     # Root creds enable auth on first init; the API connects as root with
     # authSource=admin (internal single-app DB). MONGO_ROOT_* come from .env.
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
     volumes:
-      - mongo-data:/data/db
+      - ${MONGO_DATA_SOURCE:-mongo-data}:/data/db
       - mongo-keyfile:/data/keyfile
     configs:
       - source: mongo-entrypoint
@@ -341,8 +344,8 @@ networks:
     name: accessible-shared
 volumes:
   mongo-data:
-    # Fixed on purpose: the restored 2026-10-19 volume; switch only by editing this line.
-    name: taipei-accessible-backend_mongo-restored-20261019
+    name: taipei-accessible-backend_mongo-data
   mongo-keyfile:
+  redis-data:
   chroma-data:
   postgis-data:
