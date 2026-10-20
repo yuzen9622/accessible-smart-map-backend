@@ -17,7 +17,8 @@ Checks:
              stray zip ingested as a duplicate network)
   geometry   share of patterns per mode whose geometry has no more points
              than stops (drawn stop-to-stop) stays under the mode's limit
-  tra-shape  every TRA stop sequence fits its assigned shape within 500 m
+  tra-shape  every TRA stop sequence fits its assigned shape within OTP's
+             stop-to-shape snap distance (tra_shape_geometry.py)
              (requires --feed; independent of the service audit)
   coverage   buses exist in at least --min-bus-cities route_id prefixes
   freshness  every --require rail/metro operator runs trips today

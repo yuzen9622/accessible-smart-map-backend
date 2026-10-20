@@ -269,11 +269,12 @@ class NativeShapeRepairTest(unittest.TestCase):
                 with open(self.feed, "rb") as f:
                     self.assertEqual(f.read(), before)
 
-    def test_alignment_uses_segments_and_500_metre_boundary(self):
+    def test_alignment_uses_segments_and_otp_snap_boundary(self):
         shape = Shape([(121, 24), (122, 24)])
         patterns = {("line", ("a", "b")): ["TRA_test"]}
         from tra_shape_geometry import MY
-        for metres, expected in [(499, False), (501, True)]:
+        # 165 m: Dawu on the production 162 pattern, which OTP drew straight.
+        for metres, expected in [(139, False), (141, True), (165, True)]:
             coord = {"a": (121, 24), "b": (121.5, 24 + metres / MY)}
             self.assertEqual(bool(find_misaligned_patterns(coord, patterns, {"line": shape})), expected)
 

@@ -4,7 +4,11 @@ import io
 import math
 from collections import defaultdict
 
-MAX_STOP_SHAPE_DISTANCE_M = 500.0
+# OTP's maxStopToShapeSnapDistance (default 150 m, not overridden in
+# build-config.json): one stop farther than that from its shape makes OTP
+# draw the whole pattern stop-to-stop. The margin covers this projection's
+# error against OTP's spherical distance.
+MAX_STOP_SHAPE_DISTANCE_M = 140.0
 LAT0 = 23.7
 MX = math.cos(math.radians(LAT0)) * 111320.0
 MY = 110540.0
