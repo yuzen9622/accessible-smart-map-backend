@@ -22,6 +22,7 @@ import {
   InteractionStatus,
   Modality,
   Session,
+  StartSensitivity,
 } from "@google/genai";
 import { googleGenAi } from "../../config/ai";
 import { AGENT_TEMPERATURE } from "../../config/ai/config";
@@ -2060,6 +2061,15 @@ export async function createLiveBridge(
             responseModalities: [Modality.AUDIO],
             inputAudioTranscription: buildInputAudioTranscription(language),
             outputAudioTranscription: {},
+            // Default sensitivity takes the assistant's own speaker echo for
+            // barge-in and cuts answers after the first sentence; LOW still
+            // stops for a user who actually talks over it.
+            realtimeInputConfig: {
+              automaticActivityDetection: {
+                startOfSpeechSensitivity:
+                  StartSensitivity.START_SENSITIVITY_LOW,
+              },
+            },
             systemInstruction: withCurrentDate(
               buildVoiceSystemPrompt(latestPosition ?? undefined, memories, {
                 language: options.language,

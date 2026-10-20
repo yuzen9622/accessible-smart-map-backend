@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import { InteractionStatus } from "@google/genai";
+import { InteractionStatus, StartSensitivity } from "@google/genai";
 import type { WalkStep } from "../../types/route";
 
 const {
@@ -426,6 +426,17 @@ describe("createLiveBridge Live config", () => {
     expect(connect.mock.calls[0][0].config.speechConfig).toEqual({
       languageCode: "cmn-TW",
     });
+  });
+
+  it("keeps barge-in but lowers start-of-speech sensitivity so speaker echo does not interrupt", async () => {
+    await (
+      await createLiveBridge({ ws: makeWs(), userId: "u" })
+    ).voiceReady;
+    const { realtimeInputConfig } = connect.mock.calls[0][0].config;
+    expect(realtimeInputConfig.automaticActivityDetection).toEqual({
+      startOfSpeechSensitivity: StartSensitivity.START_SENSITIVITY_LOW,
+    });
+    expect(realtimeInputConfig.activityHandling).toBeUndefined();
   });
 
   it("omits speechConfig when the language code is unset or malformed", async () => {
