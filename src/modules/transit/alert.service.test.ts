@@ -477,6 +477,51 @@ describe("getTransitAlerts", () => {
     });
   });
 
+  it("matches a section disruption on a TRA line queried by line only", async () => {
+    mockTdxJson({
+      Alerts: [
+        {
+          AlertID: "tra-wl-section",
+          Title: "豐原－后里 中斷",
+          Description: "單線雙向行車",
+          Status: 2,
+          Scope: {
+            LineSections: [
+              {
+                LineID: "WL",
+                StartingStationID: "3230",
+                EndingStationID: "3250",
+              },
+            ],
+          },
+        },
+        {
+          AlertID: "tra-el-section",
+          Title: "東部幹線延誤",
+          Description: "延誤",
+          Status: 2,
+          Scope: {
+            LineSections: [
+              {
+                LineID: "EL",
+                StartingStationID: "7000",
+                EndingStationID: "7010",
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    const result = await getTransitAlerts({ mode: "tra", lineId: "WL" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.alerts.map((alert) => alert.alertId)).toEqual([
+      "tra-wl-section",
+    ]);
+  });
+
   it("matches a THSR alert section that covers the requested OD", async () => {
     mockTdxJson([
       {

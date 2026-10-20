@@ -1,19 +1,15 @@
 import { tdxFetch } from "../../config/fetch";
 import { metroUrl } from "../../config/transit";
 import { findMetroStationsByUids } from "./metro.repository";
+import {
+  SUPPORTED_METRO_SYSTEMS,
+  type SupportedMetroSystem,
+} from "./alert.service";
 import type { MetroAlert, MetroAlertResult } from "../../types/transit";
 
 export type { MetroAlert, MetroAlertResult };
 
-const SUPPORTED_METRO_SYSTEMS = [
-  "TRTC",
-  "KRTC",
-  "TYMC",
-  "TMRT",
-  "KLRT",
-  "TRTCMG",
-] as const;
-type MetroRailSystem = (typeof SUPPORTED_METRO_SYSTEMS)[number];
+type MetroRailSystem = SupportedMetroSystem;
 
 interface TdxMetroAlert {
   AlertID: string;

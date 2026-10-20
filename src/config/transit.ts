@@ -33,6 +33,7 @@ export const alertUrl = {
   busInterCityUrl:
     "https://tdx.transportdata.tw/api/basic/v2/Bus/Alert/InterCity",
   traAlertUrl: "https://tdx.transportdata.tw/api/basic/v3/Rail/TRA/Alert",
+  traLineUrl: "https://tdx.transportdata.tw/api/basic/v3/Rail/TRA/Line",
   thsrAlertUrl: "https://tdx.transportdata.tw/api/basic/v2/Rail/THSR/AlertInfo",
 };
 
@@ -60,6 +61,7 @@ export const METRO_STATION_SYSTEMS = [
 export const metroUrl = {
   stationUrl: (s: string) => `${METRO_BASE}/Station/${s}`,
   stationOfLineUrl: (s: string) => `${METRO_BASE}/StationOfLine/${s}`,
+  lineUrl: (s: string) => `${METRO_BASE}/Line/${s}`,
   s2sTravelTimeUrl: (s: string) => `${METRO_BASE}/S2STravelTime/${s}`,
   frequencyUrl: (s: string) => `${METRO_BASE}/Frequency/${s}`,
   stationFacilityUrl: (s: string) => `${METRO_BASE}/StationFacility/${s}`,

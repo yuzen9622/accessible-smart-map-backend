@@ -181,7 +181,7 @@ const MATCH_KIND_PRIORITY: Record<MatchKind, number> = {
   line: 2,
   section: 1,
 };
-const SUPPORTED_METRO_SYSTEMS = [
+export const SUPPORTED_METRO_SYSTEMS = [
   "TRTC",
   "KRTC",
   "TYMC",
@@ -189,7 +189,7 @@ const SUPPORTED_METRO_SYSTEMS = [
   "KLRT",
   "TRTCMG",
 ] as const;
-type SupportedMetroSystem = (typeof SUPPORTED_METRO_SYSTEMS)[number];
+export type SupportedMetroSystem = (typeof SUPPORTED_METRO_SYSTEMS)[number];
 
 /** Drop cached alert payloads (primarily for deterministic tests). */
 export function clearTransitAlertsCache(): void {
@@ -570,6 +570,14 @@ function matchTra(
   }
   if (scope.LineSections?.some((section) => covers(section, ctx.stationIds))) {
     return { kind: "section" };
+  }
+  // Line-only question: any disruption on that line counts, including
+  // section-scoped ones, since there is no station to narrow it down.
+  if (ctx.lineId && !ctx.trainNo && !ctx.stationIds?.length) {
+    if (scope.LineSections?.some((section) => section.LineID === ctx.lineId))
+      return { kind: "section" };
+    if (scope.Lines?.some((line) => line.LineID === ctx.lineId))
+      return { kind: "line" };
   }
   const hasSpecificScope =
     (scope.Trains && scope.Trains.length > 0) ||
