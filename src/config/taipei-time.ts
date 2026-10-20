@@ -178,3 +178,22 @@ export function taipeiWallClock(
 export function addTaipeiDays(d: Date, n: number): Date {
   return new Date(d.getTime() + n * 86_400_000);
 }
+
+/**
+ * The next instant at a Taipei "HH:mm" wall clock: today if not yet past
+ * (the current minute counts as today), otherwise tomorrow. Returns undefined for anything but a valid HH:mm.
+ *
+ * @param hhmm The Taipei wall-clock time, "HH:mm".
+ * @param now The reference instant (defaults to now).
+ * @returns The next matching instant, or undefined.
+ */
+export function nextTaipeiClock(
+  hhmm: string,
+  now: Date = new Date(),
+): Date | undefined {
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(hhmm);
+  if (!match) return undefined;
+  const today = taipeiWallClock(now, Number(match[1]), Number(match[2]));
+  const currentMinute = Math.floor(now.getTime() / 60_000) * 60_000;
+  return today.getTime() >= currentMinute ? today : addTaipeiDays(today, 1);
+}
