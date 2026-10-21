@@ -60,7 +60,7 @@ describe("hazard AI job repository with real MongoDB", () => {
     });
     expect(await claimNextAiJob(new Date(), "lease-2")).toBeNull();
     const doc = await readDoc(id);
-    expect(doc?.aiReview.state).toBe("processing");
+    expect(doc?.aiReview?.state).toBe("processing");
   });
 
   it("lets exactly one of two concurrent workers claim the same job", async () => {
@@ -129,8 +129,9 @@ describe("hazard AI job repository with real MongoDB", () => {
       aiVerification: { verdict: "verified" },
       aiReview: { state: "completed", decision: "supported" },
     });
-    expect(doc?.aiReviewJob.leaseToken).toBeUndefined();
-    expect(doc?.aiReview.queuedAt).toBeInstanceOf(Date);
+    expect(doc?.aiReviewJob).toBeDefined();
+    expect(doc?.aiReviewJob?.leaseToken).toBeUndefined();
+    expect(doc?.aiReview?.queuedAt).toBeInstanceOf(Date);
   });
 
   it("projects needs_evidence to pending/suspicious and unsupported to a closed rejection", async () => {
@@ -189,7 +190,7 @@ describe("hazard AI job repository with real MongoDB", () => {
         await finalizeAiReview(fence(claim), decision(), new Date()),
         name,
       ).toBe(false);
-      expect((await readDoc(id))?.aiReview.state, name).toBe("processing");
+      expect((await readDoc(id))?.aiReview?.state, name).toBe("processing");
     }
   });
 
@@ -201,7 +202,7 @@ describe("hazard AI job repository with real MongoDB", () => {
       await requeueAiJob(fence(claim), "AI_TIMEOUT", later, 1, new Date()),
     ).toBe(true);
     const doc = await readDoc(id);
-    expect(doc?.aiReview.state).toBe("queued");
+    expect(doc?.aiReview?.state).toBe("queued");
     expect(doc?.aiReviewJob).toMatchObject({
       errorCode: "AI_TIMEOUT",
       invalidOutputAttempts: 1,
@@ -262,15 +263,15 @@ describe("hazard AI job repository with real MongoDB", () => {
     expect(outcome).toEqual({ failed: 3, cancelled: 1 });
     for (const id of [pastDeadline, exhausted, expiredLeaseExhausted]) {
       const doc = await readDoc(id);
-      expect(doc?.aiReview.state).toBe("failed");
-      expect(doc?.aiReviewJob.generation).toBe(2);
+      expect(doc?.aiReview?.state).toBe("failed");
+      expect(doc?.aiReviewJob?.generation).toBe(2);
       expect(doc?.aiVerification.verdict).toBe("skipped");
       expect(doc?.status).toBe("pending");
     }
-    expect((await readDoc(reportExpired))?.aiReview.state).toBe("cancelled");
-    expect((await readDoc(liveLease))?.aiReview.state).toBe("processing");
-    expect((await readDoc(healthy))?.aiReview.state).toBe("queued");
-    expect((await readDoc(completed))?.aiReview.decision).toBe(
+    expect((await readDoc(reportExpired))?.aiReview?.state).toBe("cancelled");
+    expect((await readDoc(liveLease))?.aiReview?.state).toBe("processing");
+    expect((await readDoc(healthy))?.aiReview?.state).toBe("queued");
+    expect((await readDoc(completed))?.aiReview?.decision).toBe(
       "needs_evidence",
     );
   });
@@ -331,7 +332,7 @@ describe("hazard AI job repository with real MongoDB", () => {
       status: "expired",
       aiReview: { state: "cancelled" },
     });
-    expect(cancelled?.aiReviewJob.generation).toBe(2);
+    expect(cancelled?.aiReviewJob?.generation).toBe(2);
     expect(cancelled?.closedAt).toBeInstanceOf(Date);
     // A late result from the revoked lease cannot resurrect it.
     expect(await finalizeAiReview(fence(claim), decision(), new Date())).toBe(
@@ -363,7 +364,7 @@ describe("hazard AI job repository with real MongoDB", () => {
     );
     const doc = await readDoc(id);
     expect(doc?.status).toBe("rejected");
-    expect(doc?.manualReview.reviewerId).toBe("admin-1");
+    expect(doc?.manualReview?.reviewerId).toBe("admin-1");
 
     // Verifying reopens: closedAt is cleared.
     const reopened = await setManualReview(id, {
