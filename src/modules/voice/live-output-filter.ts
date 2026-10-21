@@ -10,24 +10,52 @@ const WORD_CHAR = /[\p{L}\p{N}]/u;
  * minutes of silence or hiss after the answer, and it arrives faster than
  * realtime, so the client would queue all of it ahead of the next answer.
  */
+export interface TurnAudioStats {
+  speechMs: number;
+  keptSilenceMs: number;
+  droppedMs: number;
+}
+
 export class OutputSilenceTrimmer {
   private silentMs = 0;
+  private stats: TurnAudioStats = {
+    speechMs: 0,
+    keptSilenceMs: 0,
+    droppedMs: 0,
+  };
 
   constructor(private readonly config: VoiceOutputTrimConfig) {}
 
   /** @returns Whether this PCM16 chunk should be forwarded to the client. */
   accept(pcm: Buffer): boolean {
+    const ms = pcm.length / OUTPUT_PCM_BYTES_PER_MS;
     if (this.isSpeech(pcm)) {
       this.silentMs = 0;
+      this.stats.speechMs += ms;
       return true;
     }
-    this.silentMs += pcm.length / OUTPUT_PCM_BYTES_PER_MS;
-    return this.silentMs <= this.config.maxSilenceMs;
+    this.silentMs += ms;
+    const keep = this.silentMs <= this.config.maxSilenceMs;
+    if (keep) this.stats.keptSilenceMs += ms;
+    else this.stats.droppedMs += ms;
+    return keep;
   }
 
-  /** Call at every turn boundary so a new answer starts untrimmed. */
-  reset(): void {
+  /** @returns The current turn's audio so far, without ending the turn. */
+  peek(): TurnAudioStats {
+    return { ...this.stats };
+  }
+
+  /**
+   * Call at every turn boundary so a new answer starts untrimmed.
+   *
+   * @returns What the finished turn's audio consisted of.
+   */
+  reset(): TurnAudioStats {
+    const stats = this.stats;
     this.silentMs = 0;
+    this.stats = { speechMs: 0, keptSilenceMs: 0, droppedMs: 0 };
+    return stats;
   }
 
   private isSpeech(pcm: Buffer): boolean {

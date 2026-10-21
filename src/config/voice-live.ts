@@ -59,3 +59,59 @@ export function getVoiceOutputTrimConfig(): VoiceOutputTrimConfig {
     ),
   };
 }
+
+// Live accepts any voiceName and silently falls back to its default for an
+// unknown one, so a typo would go unnoticed without this list.
+const LIVE_PREBUILT_VOICES = [
+  "Zephyr",
+  "Puck",
+  "Charon",
+  "Kore",
+  "Fenrir",
+  "Leda",
+  "Orus",
+  "Aoede",
+  "Callirrhoe",
+  "Autonoe",
+  "Enceladus",
+  "Iapetus",
+  "Umbriel",
+  "Algieba",
+  "Despina",
+  "Erinome",
+  "Algenib",
+  "Rasalgethi",
+  "Laomedeia",
+  "Achernar",
+  "Alnilam",
+  "Schedar",
+  "Gacrux",
+  "Pulcherrima",
+  "Achird",
+  "Zubenelgenubi",
+  "Vindemiatrix",
+  "Sadachbia",
+  "Sadaltager",
+  "Sulafat",
+] as const;
+
+/**
+ * Prebuilt Gemini Live voice for every voice session.
+ *
+ * @returns The canonical voice name from GEMINI_LIVE_VOICE (any letter case),
+ *   or undefined to keep Gemini's default voice.
+ * @throws When GEMINI_LIVE_VOICE names no prebuilt voice.
+ */
+export function getLiveVoiceName(): string | undefined {
+  const raw = process.env.GEMINI_LIVE_VOICE?.trim();
+  if (!raw) return undefined;
+  const voice = LIVE_PREBUILT_VOICES.find(
+    (name) => name.toLowerCase() === raw.toLowerCase(),
+  );
+  if (!voice) {
+    throw new Error(
+      `Invalid GEMINI_LIVE_VOICE: expected one of ${LIVE_PREBUILT_VOICES.join(", ")}, got "${raw}"`,
+    );
+  }
+  return voice;
+}

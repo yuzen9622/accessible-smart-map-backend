@@ -370,6 +370,7 @@ describe("createLiveBridge Live config", () => {
     vi.clearAllMocks();
     delete process.env.GEMINI_LIVE_TEMPERATURE;
     delete process.env.GEMINI_LIVE_LANGUAGE_CODE;
+    delete process.env.GEMINI_LIVE_VOICE;
     connect.mockResolvedValue(makeSession());
   });
 
@@ -396,26 +397,22 @@ describe("createLiveBridge Live config", () => {
     },
   );
 
-  it("defaults temperature to 0 (aligned with the text agent)", async () => {
-    await (
-      await createLiveBridge({ ws: makeWs(), userId: "u" })
-    ).voiceReady;
-    expect(connect.mock.calls[0][0].config.temperature).toBe(0);
-  });
-
-  it("uses a valid GEMINI_LIVE_TEMPERATURE and falls back for an invalid one", async () => {
+  it("uses a valid GEMINI_LIVE_TEMPERATURE and otherwise leaves Live's default", async () => {
     process.env.GEMINI_LIVE_TEMPERATURE = "0.4";
     await (
       await createLiveBridge({ ws: makeWs(), userId: "u" })
     ).voiceReady;
     expect(connect.mock.calls[0][0].config.temperature).toBe(0.4);
 
-    connect.mockClear();
-    process.env.GEMINI_LIVE_TEMPERATURE = "abc";
-    await (
-      await createLiveBridge({ ws: makeWs(), userId: "u" })
-    ).voiceReady;
-    expect(connect.mock.calls[0][0].config.temperature).toBe(0);
+    for (const raw of [undefined, "abc"]) {
+      connect.mockClear();
+      if (raw === undefined) delete process.env.GEMINI_LIVE_TEMPERATURE;
+      else process.env.GEMINI_LIVE_TEMPERATURE = raw;
+      await (
+        await createLiveBridge({ ws: makeWs(), userId: "u" })
+      ).voiceReady;
+      expect(connect.mock.calls[0][0].config).not.toHaveProperty("temperature");
+    }
   });
 
   it("adds speechConfig only for a validly-formatted language code", async () => {
@@ -437,6 +434,18 @@ describe("createLiveBridge Live config", () => {
       startOfSpeechSensitivity: StartSensitivity.START_SENSITIVITY_LOW,
     });
     expect(realtimeInputConfig.activityHandling).toBeUndefined();
+  });
+
+  it("pins the configured prebuilt voice alongside the language code", async () => {
+    process.env.GEMINI_LIVE_VOICE = "Kore";
+    process.env.GEMINI_LIVE_LANGUAGE_CODE = "cmn-TW";
+    await (
+      await createLiveBridge({ ws: makeWs(), userId: "u" })
+    ).voiceReady;
+    expect(connect.mock.calls[0][0].config.speechConfig).toEqual({
+      languageCode: "cmn-TW",
+      voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } },
+    });
   });
 
   it("omits speechConfig when the language code is unset or malformed", async () => {

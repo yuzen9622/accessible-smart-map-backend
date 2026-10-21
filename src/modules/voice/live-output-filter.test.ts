@@ -23,6 +23,24 @@ const silence = (ms: number) => pcm(ms, () => 0);
 const hiss = (ms: number) => pcm(ms, (i) => (i % 2 ? 2000 : -2000));
 
 describe("OutputSilenceTrimmer", () => {
+  it("reports how much of the turn was speech, kept silence and dropped silence", () => {
+    const t = new OutputSilenceTrimmer(CONFIG);
+    t.accept(speech(500));
+    t.accept(silence(1000));
+    expect(t.peek()).toEqual({
+      speechMs: 500,
+      keptSilenceMs: 1000,
+      droppedMs: 0,
+    });
+    t.accept(silence(1000));
+    expect(t.reset()).toEqual({
+      speechMs: 500,
+      keptSilenceMs: 1000,
+      droppedMs: 1000,
+    });
+    expect(t.reset()).toEqual({ speechMs: 0, keptSilenceMs: 0, droppedMs: 0 });
+  });
+
   it("forwards speech and natural pauses", () => {
     const t = new OutputSilenceTrimmer(CONFIG);
     expect(t.accept(speech(500))).toBe(true);

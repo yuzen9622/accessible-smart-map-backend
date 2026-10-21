@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getVoiceOutputTrimConfig } from "./voice-live";
+import { getLiveVoiceName, getVoiceOutputTrimConfig } from "./voice-live";
 
 describe("getVoiceOutputTrimConfig", () => {
   afterEach(() => vi.unstubAllEnvs());
@@ -34,5 +34,26 @@ describe("getVoiceOutputTrimConfig", () => {
   ])("rejects %s=%s", (name, value) => {
     vi.stubEnv(name, value);
     expect(() => getVoiceOutputTrimConfig()).toThrow(name);
+  });
+});
+
+describe("getLiveVoiceName", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("leaves the voice to Gemini when unset or blank", () => {
+    vi.stubEnv("GEMINI_LIVE_VOICE", undefined);
+    expect(getLiveVoiceName()).toBeUndefined();
+    vi.stubEnv("GEMINI_LIVE_VOICE", " ");
+    expect(getLiveVoiceName()).toBeUndefined();
+  });
+
+  it("accepts a prebuilt voice in any letter case", () => {
+    vi.stubEnv("GEMINI_LIVE_VOICE", " kore ");
+    expect(getLiveVoiceName()).toBe("Kore");
+  });
+
+  it("rejects an unknown voice instead of letting Live fall back silently", () => {
+    vi.stubEnv("GEMINI_LIVE_VOICE", "Korea");
+    expect(() => getLiveVoiceName()).toThrow("GEMINI_LIVE_VOICE");
   });
 });

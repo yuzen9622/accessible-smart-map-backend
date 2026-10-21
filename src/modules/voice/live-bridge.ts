@@ -25,8 +25,10 @@ import {
   StartSensitivity,
 } from "@google/genai";
 import { googleGenAi } from "../../config/ai";
-import { AGENT_TEMPERATURE } from "../../config/ai/config";
-import { getVoiceOutputTrimConfig } from "../../config/voice-live";
+import {
+  getLiveVoiceName,
+  getVoiceOutputTrimConfig,
+} from "../../config/voice-live";
 import { buildGeminiTools } from "../agent/tool-catalog";
 import { executeLocalTool } from "../ai/agent-tools";
 import {
@@ -38,6 +40,7 @@ import { normalizeVoiceTranscript } from "./transcript-normalizer";
 import {
   OUTPUT_PCM_BYTES_PER_MS,
   OutputSilenceTrimmer,
+  type TurnAudioStats,
   filterModelTranscriptPiece,
 } from "./live-output-filter";
 import { isExplicitEndIntent } from "./end-intent";
@@ -235,18 +238,19 @@ const NAV_FUNCTIONS: FunctionDeclaration[] = [
 ];
 
 /**
- * Resolves the Live session sampling temperature. Defaults to the shared
- * AGENT_TEMPERATURE (0, matching the text agent) and falls back to it for
- * empty, non-numeric, or out-of-range GEMINI_LIVE_TEMPERATURE values so a bad
+ * Resolves an optional Live session sampling temperature. Unlike the text
+ * agent, Live is left at the model default: at temperature 0 gemini-3.8-live
+ * often streams a full transcript with silent audio. Empty, non-numeric, or
+ * out-of-range GEMINI_LIVE_TEMPERATURE values also keep the default so a bad
  * env can never send NaN into the Live connect call.
  *
- * @returns A finite temperature in [0, 2].
+ * @returns A finite temperature in [0, 2], or undefined for the model default.
  */
-function parseLiveTemperature(): number {
+function parseLiveTemperature(): number | undefined {
   const raw = process.env.GEMINI_LIVE_TEMPERATURE;
-  if (raw == null || raw.trim() === "") return AGENT_TEMPERATURE;
+  if (raw == null || raw.trim() === "") return undefined;
   const n = Number(raw);
-  if (!Number.isFinite(n) || n < 0 || n > 2) return AGENT_TEMPERATURE;
+  if (!Number.isFinite(n) || n < 0 || n > 2) return undefined;
   return n;
 }
 
@@ -1101,11 +1105,36 @@ export async function createLiveBridge(
   };
 
   const outputTrimmer = new OutputSilenceTrimmer(getVoiceOutputTrimConfig());
+  let turnAudioStartedAt: number | null = null;
+  let turnBackpressureDrops = 0;
+  // One line per answer, so "text but no sound" reports show whether the
+  // model sent speech at all and how long it held the turn open.
+  const logTurnAudio = (event: string, stats: TurnAudioStats): void => {
+    if (turnAudioStartedAt === null) return;
+    console.log(
+      "[voice] turn audio",
+      JSON.stringify({
+        event,
+        speechMs: Math.round(stats.speechMs),
+        keptSilenceMs: Math.round(stats.keptSilenceMs),
+        droppedMs: Math.round(stats.droppedMs),
+        backpressureDrops: turnBackpressureDrops,
+        sinceFirstAudioMs: Date.now() - turnAudioStartedAt,
+      }),
+    );
+  };
+  const endTurnAudio = (end: string): void => {
+    logTurnAudio(end, outputTrimmer.reset());
+    turnAudioStartedAt = null;
+    turnBackpressureDrops = 0;
+  };
   const forwardAudio = (base64Data: string): void => {
     if (ws.readyState !== WebSocket.OPEN) return;
+    turnAudioStartedAt ??= Date.now();
     const decoded = Buffer.from(base64Data, "base64");
     if (!outputTrimmer.accept(decoded)) return;
     if (ws.bufferedAmount > MAX_BUFFERED_BYTES) {
+      turnBackpressureDrops++;
       console.warn(
         "[voice] dropping downstream audio frame",
         JSON.stringify({ bufferedAmount: ws.bufferedAmount }),
@@ -1927,12 +1956,12 @@ export async function createLiveBridge(
         // Our own navigation content ended a turn whose audio was already
         // complete: keep its answer and leave the new nav turn untouched.
         commitModelTranscript();
-        outputTrimmer.reset();
+        endTurnAudio("preempted");
         if (content.turnComplete) preemptedFinishedTurn = false;
       } else if (content.interrupted) {
         generationFinished = false;
         modelTranscriptBuffer = "";
-        outputTrimmer.reset();
+        endTurnAudio("interrupted");
         if (userTranscriptBuffer.trim()) finalizeUserTranscript();
         lastFinalUserTranscript = null;
         navSession.onInterrupted();
@@ -1944,7 +1973,7 @@ export async function createLiveBridge(
     }
     if (message.toolCall?.functionCalls?.length) {
       if (content?.interrupted) return;
-      outputTrimmer.reset();
+      endTurnAudio("tool-call");
       liveState = "TOOL_PENDING";
       await handleToolCalls(
         message.toolCall.functionCalls,
@@ -1962,7 +1991,7 @@ export async function createLiveBridge(
       preemptedFinishedTurn = false;
       preemptInterruptPending = false;
       commitModelTranscript();
-      outputTrimmer.reset();
+      endTurnAudio("preempted-turn-complete");
       sendJson({ type: "turn.complete" });
     } else if (
       content?.generationComplete &&
@@ -1970,6 +1999,7 @@ export async function createLiveBridge(
       !content.interrupted
     ) {
       generationFinished = true;
+      logTurnAudio("generation-complete", outputTrimmer.peek());
       if (navSpeaking) navSession.onTurnComplete();
       navSpeaking = false;
       turnTimeoutStrikes = 0;
@@ -1979,7 +2009,7 @@ export async function createLiveBridge(
     } else if (content?.turnComplete && !content.interrupted) {
       generationFinished = false;
       commitModelTranscript();
-      outputTrimmer.reset();
+      endTurnAudio("turn-complete");
       if (userTranscriptBuffer.trim()) finalizeUserTranscript();
       // A completed model turn cannot authorize ending a later user turn.
       lastFinalUserTranscript = null;
@@ -2081,14 +2111,22 @@ export async function createLiveBridge(
               ...buildGeminiTools(userId, memoryEnabled),
               { functionDeclarations: NAV_FUNCTIONS },
             ],
-            temperature: parseLiveTemperature(),
           };
           // Native audio follows system instructions, not speechConfig.languageCode.
           // Retain the legacy env setting only when no frontend preference is given.
           const languageCode = options.language
             ? undefined
             : parseLiveLanguageCode();
-          if (languageCode) liveConfig.speechConfig = { languageCode };
+          const temperature = parseLiveTemperature();
+          if (temperature !== undefined) liveConfig.temperature = temperature;
+          const voiceName = getLiveVoiceName();
+          if (languageCode || voiceName)
+            liveConfig.speechConfig = {
+              ...(languageCode && { languageCode }),
+              ...(voiceName && {
+                voiceConfig: { prebuiltVoiceConfig: { voiceName } },
+              }),
+            };
 
           const connected = await googleGenAi.live.connect({
             model: LIVE_MODEL,
