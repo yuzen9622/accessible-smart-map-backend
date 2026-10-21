@@ -77,6 +77,7 @@ vi.mock("../../config/redis", () => ({
 }));
 
 import { Types } from "mongoose";
+import type { IEmergencyContact, ISosSession } from "../../types";
 import {
   clearMongoTestDatabase,
   startMongoTest,
@@ -157,7 +158,7 @@ afterAll(async () => {
   await stopMongoTest(mongo);
 });
 
-function sosDoc(over: Record<string, unknown> = {}) {
+function sosDoc(over: Partial<ISosSession> = {}) {
   return {
     userId: new Types.ObjectId().toString(),
     type: "body",
@@ -167,7 +168,7 @@ function sosDoc(over: Record<string, unknown> = {}) {
     shareToken: new Types.ObjectId().toString(),
     locationUpdatedAt: ago(30 * HOUR),
     ...over,
-  };
+  } satisfies Partial<ISosSession>;
 }
 
 describe("SOS retention", () => {
@@ -197,7 +198,10 @@ describe("SOS retention", () => {
   it("does not resolve a session whose location moved after the scan read it", async () => {
     const session = await SosSession.create(sosDoc());
     // The phone reports in before the atomic update runs.
-    await updateActiveSessionLocation(String(session._id), 25.05, 121.52);
+    await updateActiveSessionLocation(String(session._id), {
+      lat: 25.05,
+      lng: 121.52,
+    });
     await expect(sosAutoResolveTask.runBatch(ctx)).resolves.toBe(0);
     expect((await SosSession.findById(session._id).lean())?.status).toBe(
       "active",
@@ -300,7 +304,7 @@ describe("contact location retention", () => {
       bindStatus: "bound",
       lastLineLat: 25,
       lastLineLng: 121,
-    };
+    } satisfies Partial<IEmergencyContact>;
     const old = await EmergencyContact.create({
       ...base,
       lastLineLocationUpdatedAt: ago(29.5 * DAY),
