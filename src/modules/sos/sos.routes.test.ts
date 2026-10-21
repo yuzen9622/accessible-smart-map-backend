@@ -36,6 +36,7 @@ import { emitSosUpdate, type SosSnapshot } from "./sos-events";
 import * as service from "./sos.service";
 import { ResponseCode } from "../../types/code";
 import { SOS_MSG, SOS_REASON } from "../../constants/messages";
+import { SOS_VIEWER } from "../../constants/sos";
 
 let app: Awaited<ReturnType<typeof startTestServer>>;
 const BASE = "/api/v1/sos/sessions";
@@ -404,6 +405,9 @@ describe("GET /sos/sessions/:id/stream (SSE)", () => {
                   handlingStatus: "acknowledged",
                   acknowledgements: [],
                   timeline: [],
+                  viewers: [],
+                  activeViewerCount: 0,
+                  viewerActiveWindowSeconds: SOS_VIEWER.activeWindowMs / 1000,
                   location: {
                     lat: 25.01,
                     lng: 121.51,
@@ -523,6 +527,9 @@ describe("GET /sos/sessions/:id/stream (SSE)", () => {
                   handlingStatus: "acknowledged",
                   acknowledgements: [],
                   timeline: [],
+                  viewers: [],
+                  activeViewerCount: 0,
+                  viewerActiveWindowSeconds: SOS_VIEWER.activeWindowMs / 1000,
                   location: { lat: 25.01, lng: 121.51, updatedAt: new Date() },
                   updatedAt: new Date(),
                 });
@@ -577,6 +584,9 @@ describe("GET /sos/sessions/:id/stream (SSE)", () => {
                   handlingStatus: "acknowledged",
                   acknowledgements: [],
                   timeline: [],
+                  viewers: [],
+                  activeViewerCount: 0,
+                  viewerActiveWindowSeconds: SOS_VIEWER.activeWindowMs / 1000,
                   location: { lat: 25.01, lng: 121.51, updatedAt: new Date() },
                   updatedAt: new Date(),
                 });
