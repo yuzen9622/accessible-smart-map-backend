@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { InteractionStatus, StartSensitivity } from "@google/genai";
 import type { WalkStep } from "../../types/route";
+import type { AgentToolExecutor } from "../../types/agent";
 
 const {
   connect,
@@ -4423,7 +4424,9 @@ describe("candidate control server guards", () => {
     });
   const tool = (
     name: string,
-    args = name === "planAccessibleRoute" ? { startNavigation: true } : {},
+    args: Parameters<AgentToolExecutor>[1] = name === "planAccessibleRoute"
+      ? { startNavigation: true }
+      : {},
   ) =>
     onmessage({
       toolCall: {
@@ -4693,14 +4696,15 @@ describe("candidate control server guards", () => {
         },
       });
       await vi.waitFor(() => expect(executeLocalTool).toHaveBeenCalledOnce());
-      const options = vi.mocked(executeLocalTool).mock.calls[0][4]!;
-      expect(options.isCurrent?.()).toBe(true);
+      const options: Parameters<AgentToolExecutor>[4] =
+        vi.mocked(executeLocalTool).mock.calls[0][4];
+      expect(options?.isCurrent?.()).toBe(true);
       onmessage(
         boundary === "interrupted"
           ? { serverContent: { interrupted: true } }
           : { toolCallCancellation: { ids: ["cancel-planning"] } },
       );
-      expect(options.isCurrent?.()).toBe(false);
+      expect(options?.isCurrent?.()).toBe(false);
       pending.resolve(JSON.stringify({ ok: true, routes: [tokenRoute] }));
       onmessage({
         toolCall: {
@@ -4742,10 +4746,11 @@ describe("candidate control server guards", () => {
     utter("導航到醫院");
     tool("planAccessibleRoute");
     await vi.waitFor(() => expect(executeLocalTool).toHaveBeenCalled());
-    const context = vi.mocked(executeLocalTool).mock.calls[0].at(-1) as any;
-    expect(context.isCurrent()).toBe(true);
+    const context: Parameters<AgentToolExecutor>[4] =
+      vi.mocked(executeLocalTool).mock.calls[0][4];
+    expect(context?.isCurrent?.()).toBe(true);
     utter("比較路線");
-    expect(context.isCurrent()).toBe(false);
+    expect(context?.isCurrent?.()).toBe(false);
     pending.resolve(JSON.stringify({ ok: true, routes: [tokenRoute] }));
     await settle();
     expect(messages().some((m) => m.type === "nav.start")).toBe(false);
