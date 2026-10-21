@@ -353,7 +353,9 @@ it("uses the same explicit tool-phase policy for non-streaming chat without expo
   });
   const body = await response.json();
   expect(response.status).toBe(200);
-  expect(body.data.choices[0].message.content).toBe("你好");
+  expect(body).toMatchObject({
+    data: { choices: [{ message: { content: "你好" } }] },
+  });
   expect(JSON.stringify(body)).not.toContain("finishToolPhase");
   expect(mockCreate.mock.calls[0][0]).toMatchObject({
     generation_config: { tool_choice: "any" },
