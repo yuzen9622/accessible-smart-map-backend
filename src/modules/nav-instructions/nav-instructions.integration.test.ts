@@ -23,6 +23,7 @@ beforeEach(() => {
         {
           text: "沿測試路線前進，續行約 100 公尺",
           type: "depart",
+          maneuver: "DEPART",
           bearing: 90,
           relativeDirection: null,
           distanceM: 100,
