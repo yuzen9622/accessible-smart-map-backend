@@ -42,7 +42,7 @@ describe("buildVoiceSystemPrompt nearest-place policy", () => {
       longitude: 121.517,
     });
 
-    expect(prompt).toContain("不要反問要去哪個 X");
+    expect(prompt).toContain("不要要求使用者重複指定最近的地點");
     expect(prompt).toContain("先呼叫 findGooglePlaces");
     expect(prompt).toContain("再呼叫 planAccessibleRoute");
     expect(prompt).toContain("【使用者目前位置】");
@@ -54,11 +54,12 @@ describe("buildVoiceSystemPrompt nearest-place policy", () => {
       longitude: 121.517,
     });
 
-    expect(prompt).toContain("附近有哪些 X");
+    expect(prompt).toContain("使用者僅想探索附近地點");
     expect(prompt).toContain("不要自動規劃路線");
     expect(prompt).toContain(
-      "只有使用者接著要求帶路時才呼叫 planAccessibleRoute",
+      "需要路線資訊或實際帶路時再呼叫 planAccessibleRoute",
     );
+    expect(prompt).toContain("不以特定詞句判定");
   });
 
   it("directs the model to request location instead of a station when GPS is absent", () => {
@@ -66,6 +67,9 @@ describe("buildVoiceSystemPrompt nearest-place policy", () => {
 
     expect(prompt).toContain("工具會向 App 確認位置");
     expect(prompt).toContain("收到 LOCATION_REQUIRED 時保持對話");
+    expect(prompt).toContain(
+      "STALE_SELECTION 代表查詢已被較新的要求取代，不代表沒有定位",
+    );
     expect(prompt).toContain("不要猜測最近的候選");
     expect(prompt).not.toContain("【使用者目前位置】緯度");
   });
@@ -147,17 +151,21 @@ it("explains named Places centers and explicit-only voice ending", () => {
     "台中車站",
     "我附近",
     "endVoiceSession",
-    "不要結束語音",
+    "否定、資訊詢問、引用指令",
     "回答完問題",
   ])
     expect(prompt).toContain(rule);
 });
 
-it("requires actual direct start and two-phase next-utterance confirmation", () => {
+it("requires semantic direct start and current proposal confirmation", () => {
   const prompt = buildVoiceSystemPrompt();
   expect(prompt).toContain("navigationStarted:true");
   expect(prompt).toContain("proposeNavigationCandidate");
   expect(prompt).toContain("confirmNavigationCandidateSwitch");
-  expect(prompt).toContain("120 秒");
-  expect(prompt).toContain("資訊詢問不自動開始");
+  expect(prompt).toContain("同一使用者回合");
+  expect(prompt).toContain("無固定對話期限");
+  expect(prompt).toContain("startNavigation:true");
+  expect(prompt).toContain("省略 startNavigation 或設 false");
+  expect(prompt).not.toContain("120 秒");
+  expect(prompt).toContain("不自動導航");
 });

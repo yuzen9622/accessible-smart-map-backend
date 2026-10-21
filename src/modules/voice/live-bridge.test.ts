@@ -3448,6 +3448,174 @@ it("a superseded bootstrap cannot overwrite the new session's memory permission"
   bridge.close();
 });
 
+describe("voice planning with continuous microphone input", () => {
+  it("keeps a second current-location plan and its retry valid despite untranscribed PCM", async () => {
+    vi.clearAllMocks();
+    getMemorySettings.mockResolvedValue({ memoryEnabled: false });
+    let onmessage!: (message: unknown) => void;
+    const session = makeSession();
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      return session;
+    });
+    const pending = deferred<string>();
+    vi.mocked(executeLocalTool)
+      .mockResolvedValueOnce(
+        JSON.stringify({ ok: true, routes: [], selectedRouteId: null }),
+      )
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValue(
+        JSON.stringify({ ok: true, routes: [], selectedRouteId: null }),
+      );
+    const bridge = await createLiveBridge({
+      ws: makeWs(),
+      userId: "continuous-pcm-planning",
+      userLocation: { latitude: 24.1306588, longitude: 120.6373201 },
+    });
+    const request = (id: string, origin: string) =>
+      onmessage({
+        toolCall: {
+          functionCalls: [
+            {
+              id,
+              name: "planAccessibleRoute",
+              args: { origin, destination: "臺中車站" },
+            },
+          ],
+        },
+      });
+    try {
+      await bridge.voiceReady;
+      onmessage({
+        serverContent: {
+          inputTranscription: { text: "臺中高鐵站到臺中車站", finished: true },
+        },
+      });
+      request("named-origin", "臺中高鐵站");
+      await vi.waitFor(() =>
+        expect(session.sendToolResponse).toHaveBeenCalledTimes(1),
+      );
+      onmessage({ serverContent: { turnComplete: true } });
+      onmessage({
+        serverContent: {
+          inputTranscription: { text: "目前位置到臺中車站", finished: true },
+        },
+      });
+      request("current-origin", "current_location");
+      await vi.waitFor(() => expect(executeLocalTool).toHaveBeenCalledTimes(2));
+      const pcm = Buffer.alloc(3200);
+      for (let index = 0; index < pcm.length; index += 2)
+        pcm.writeInt16LE(1000, index);
+      for (let frame = 0; frame < 5; frame++) bridge.sendAudio(pcm);
+      pending.resolve(
+        JSON.stringify({ ok: true, routes: [], selectedRouteId: null }),
+      );
+      await vi.waitFor(() =>
+        expect(session.sendToolResponse).toHaveBeenCalledTimes(2),
+      );
+      request("retry-current-origin", "current_location");
+      await vi.waitFor(() =>
+        expect(session.sendToolResponse).toHaveBeenCalledTimes(3),
+      );
+      const responses = session.sendToolResponse.mock.calls.map(([value]) =>
+        JSON.parse(value.functionResponses[0].response.output),
+      );
+      expect(
+        responses.map((result) => ({ ok: result.ok, reason: result.reason })),
+      ).toEqual([{ ok: true }, { ok: true }, { ok: true }]);
+      expect(executeLocalTool).toHaveBeenCalledTimes(3);
+      expect(vi.mocked(executeLocalTool).mock.calls[1][2]).toEqual({
+        latitude: 24.1306588,
+        longitude: 120.6373201,
+      });
+    } finally {
+      bridge.close();
+    }
+  });
+});
+
+describe("voice planning transcript completion", () => {
+  it.each([
+    {},
+    { text: "" },
+    { text: "   " },
+    { finished: true },
+    { text: "", finished: true },
+  ])(
+    "keeps an in-flight GPS plan current after a non-speech transcription frame %j",
+    async (completion) => {
+      vi.clearAllMocks();
+      getMemorySettings.mockResolvedValue({ memoryEnabled: false });
+      let onmessage!: (message: unknown) => void;
+      const session = makeSession();
+      connect.mockImplementation(async ({ callbacks }) => {
+        onmessage = callbacks.onmessage;
+        return session;
+      });
+      const pending = deferred<string>();
+      vi.mocked(executeLocalTool).mockReturnValue(pending.promise);
+      const ws = makeWs();
+      const bridge = await createLiveBridge({
+        ws,
+        userId: "voice-location-regression",
+        userLocation: { latitude: 24.1306588, longitude: 120.6373201 },
+      });
+      try {
+        await bridge.voiceReady;
+        onmessage({
+          serverContent: { inputTranscription: { text: "我要到臺中車站" } },
+        });
+        onmessage({
+          toolCall: {
+            functionCalls: [
+              {
+                id: "gps-plan",
+                name: "planAccessibleRoute",
+                args: { origin: "current_location", destination: "臺中車站" },
+              },
+            ],
+          },
+        });
+        await vi.waitFor(() => expect(executeLocalTool).toHaveBeenCalledOnce());
+        onmessage({ serverContent: { inputTranscription: completion } });
+        pending.resolve(
+          JSON.stringify({ ok: true, routes: [], selectedRouteId: null }),
+        );
+        await vi.waitFor(() =>
+          expect(session.sendToolResponse).toHaveBeenCalledOnce(),
+        );
+        expect(vi.mocked(executeLocalTool).mock.calls[0][2]).toEqual({
+          latitude: 24.1306588,
+          longitude: 120.6373201,
+        });
+        const response =
+          session.sendToolResponse.mock.calls[0][0].functionResponses[0];
+        expect(JSON.parse(response.response.output)).toMatchObject({
+          ok: true,
+        });
+        const frames = vi
+          .mocked(ws.send)
+          .mock.calls.map(([value]) => value)
+          .filter((value): value is string => typeof value === "string")
+          .map((value) => JSON.parse(value));
+        expect(
+          frames.find((frame) => frame.type === "tool_result").result,
+        ).toMatchObject({ ok: true });
+        expect(
+          frames.filter(
+            (frame) =>
+              frame.type === "transcript" &&
+              frame.role === "user" &&
+              frame.final,
+          ),
+        ).toHaveLength(1);
+      } finally {
+        bridge.close();
+      }
+    },
+  );
+});
+
 describe("voice routing location recovery", () => {
   let onmessage: (message: unknown) => void;
   let onclose: () => void;
@@ -3693,81 +3861,90 @@ describe("Live model and assistant end", () => {
       connect.mock.calls[0][0].config.inputAudioTranscription.languageCodes,
     ).toEqual(["en-US", "zh-TW"]);
   });
-  it("accepts explicit end, responds before farewell playback grace, and preserves navigation", async () => {
-    getRouteByToken.mockResolvedValueOnce(walkRoute);
-    getNavigationEnvelopeByToken.mockResolvedValueOnce({
-      navigationId: "end-nav",
-      routeVersion: 1,
-    });
-    expect(await bridge.armRouteToken("walk-end")).toBe(true);
-    bridge.startNavigation();
-    await emit({
-      serverContent: {
-        turnComplete: true,
-        interactionStatus: InteractionStatus.IDLE,
-      },
-    });
-    const stored = storeNavigationSnapshot.mock.calls.length;
-    expect(stored).toBeGreaterThan(0);
-    await end("再見");
-    expect(events()).toContainEqual({
-      type: "session.ending",
-      reason: "assistant-end",
-    });
-    expect(output()).toContain('"ok":true');
-    const eventCall = vi
-      .mocked(ws.send)
-      .mock.calls.findIndex(
-        (c) => typeof c[0] === "string" && c[0].includes('"session.ending"'),
-      );
-    expect(vi.mocked(ws.send).mock.invocationCallOrder[eventCall]).toBeLessThan(
-      session.sendToolResponse.mock.invocationCallOrder[0],
-    );
-    expect(ws.close).not.toHaveBeenCalled();
-    bridge.sendAudio(Buffer.alloc(20));
-    expect(session.sendRealtimeInput).not.toHaveBeenCalled();
-    await emit({
-      serverContent: {
-        modelTurn: {
-          parts: [
-            { inlineData: { data: Buffer.alloc(48000).toString("base64") } },
-          ],
+  it.each(["再見", "Bye-bye.", "謝謝你，拜拜。"])(
+    "accepts %s, drains farewell playback, and preserves navigation",
+    async (text) => {
+      getRouteByToken.mockResolvedValueOnce(walkRoute);
+      getNavigationEnvelopeByToken.mockResolvedValueOnce({
+        navigationId: "end-nav",
+        routeVersion: 1,
+      });
+      expect(await bridge.armRouteToken("walk-end")).toBe(true);
+      bridge.startNavigation();
+      await emit({
+        serverContent: {
+          turnComplete: true,
+          interactionStatus: InteractionStatus.IDLE,
         },
-        turnComplete: true,
-        interactionStatus: InteractionStatus.IDLE,
-      },
-    });
-    await vi.advanceTimersByTimeAsync(1749);
-    expect(ws.close).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(ws.close).toHaveBeenCalledExactlyOnceWith(1000, "assistant-end");
-    expect(deleteNavigationSnapshot).not.toHaveBeenCalled();
-    expect(storeNavigationSnapshot.mock.calls.length).toBe(stored);
-    expect(events().some((e) => e.type === "nav.stop")).toBe(false);
-  });
+      });
+      const stored = storeNavigationSnapshot.mock.calls.length;
+      expect(stored).toBeGreaterThan(0);
+      await end(text);
+      expect(events()).toContainEqual({
+        type: "session.ending",
+        reason: "assistant-end",
+      });
+      expect(output()).toContain('"ok":true');
+      const eventCall = vi
+        .mocked(ws.send)
+        .mock.calls.findIndex(
+          (c) => typeof c[0] === "string" && c[0].includes('"session.ending"'),
+        );
+      expect(
+        vi.mocked(ws.send).mock.invocationCallOrder[eventCall],
+      ).toBeLessThan(session.sendToolResponse.mock.invocationCallOrder[0]);
+      expect(ws.close).not.toHaveBeenCalled();
+      bridge.sendAudio(Buffer.alloc(20));
+      expect(session.sendRealtimeInput).not.toHaveBeenCalled();
+      await emit({
+        serverContent: {
+          modelTurn: {
+            parts: [
+              { inlineData: { data: Buffer.alloc(48000).toString("base64") } },
+            ],
+          },
+          turnComplete: true,
+          interactionStatus: InteractionStatus.IDLE,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(1749);
+      expect(ws.close).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(ws.close).toHaveBeenCalledExactlyOnceWith(1000, "assistant-end");
+      expect(deleteNavigationSnapshot).not.toHaveBeenCalled();
+      expect(storeNavigationSnapshot.mock.calls.length).toBe(stored);
+      expect(events().some((e) => e.type === "nav.stop")).toBe(false);
+    },
+  );
   it.each([
     "不要結束語音",
     "台中車站附近有什麼餐廳",
     "再見是什麼意思",
     "再見的英文怎麼說",
-  ])("rejects tool end for %s", async (text) => {
-    await end(text);
-    expect(output()).toContain("EXPLICIT_END_REQUIRED");
-    await vi.advanceTimersByTimeAsync(16000);
-    expect(ws.close).not.toHaveBeenCalled();
-    expect(events().some((e) => e.type === "session.ending")).toBe(false);
-  });
-  it.each(["可以結束語音嗎", "請幫我掛斷"])(
-    "accepts an explicit request %s",
+  ])(
+    "delegates semantics to the model rather than classifying %s",
     async (text) => {
       await end(text);
       expect(output()).toContain('"ok":true');
-      expect(events()).toContainEqual({
-        type: "session.ending",
-        reason: "assistant-end",
-      });
+      await vi.advanceTimersByTimeAsync(16000);
+      expect(ws.close).toHaveBeenCalledExactlyOnceWith(1000, "assistant-end");
+      expect(events().some((e) => e.type === "session.ending")).toBe(true);
     },
   );
+  it.each([
+    "可以結束語音嗎",
+    "請幫我掛斷",
+    "Bye-bye.",
+    "謝謝你，拜拜。",
+    "好的，那今天就先這樣，謝謝你，拜拜。",
+  ])("accepts an explicit request %s", async (text) => {
+    await end(text);
+    expect(output()).toContain('"ok":true');
+    expect(events()).toContainEqual({
+      type: "session.ending",
+      reason: "assistant-end",
+    });
+  });
   it("does not close on ordinary answer completion without an end tool", async () => {
     await emit({
       serverContent: {
@@ -3839,7 +4016,7 @@ describe("Live model and assistant end", () => {
     await bridge.voiceReady;
     expect(connect.mock.calls[0][0].model).toBe("gemini-3.8-live");
   });
-  it("does not use an older end transcript after a new utterance starts", async () => {
+  it("accepts a current model end decision after a new utterance starts", async () => {
     await emit({
       serverContent: { inputTranscription: { text: "再見", finished: true } },
     });
@@ -3851,9 +4028,9 @@ describe("Live model and assistant end", () => {
         functionCalls: [{ id: "new", name: "endVoiceSession", args: {} }],
       },
     });
-    expect(output()).toContain("EXPLICIT_END_REQUIRED");
+    expect(output()).toContain('"ok":true');
     await vi.advanceTimersByTimeAsync(16000);
-    expect(ws.close).not.toHaveBeenCalled();
+    expect(ws.close).toHaveBeenCalledExactlyOnceWith(1000, "assistant-end");
   });
   it.each(["same batch", "reverse batch", "later call"])(
     "blocks stopNavigation after endVoiceSession in %s without deleting the snapshot",
@@ -3918,7 +4095,7 @@ describe("Live model and assistant end", () => {
     },
   );
   it.each(["turn complete", "new audio"])(
-    "rejects a stale end candidate after %s without a new transcript",
+    "accepts a current model end decision after %s without requiring a transcript",
     async (boundary) => {
       await emit({
         serverContent: { inputTranscription: { text: "再見", finished: true } },
@@ -3935,12 +4112,12 @@ describe("Live model and assistant end", () => {
           functionCalls: [{ id: "stale", name: "endVoiceSession", args: {} }],
         },
       });
-      expect(output()).toContain("EXPLICIT_END_REQUIRED");
+      expect(output()).toContain('"ok":true');
       await vi.advanceTimersByTimeAsync(16000);
-      expect(ws.close).not.toHaveBeenCalled();
+      expect(ws.close).toHaveBeenCalledExactlyOnceWith(1000, "assistant-end");
     },
   );
-  it("invalidates an end candidate at a new audio boundary before model turn completion", async () => {
+  it("does not make audio a lexical end authorization boundary", async () => {
     await emit({
       serverContent: { inputTranscription: { text: "再見", finished: true } },
     });
@@ -3951,12 +4128,12 @@ describe("Live model and assistant end", () => {
         functionCalls: [{ id: "new-audio", name: "endVoiceSession", args: {} }],
       },
     });
-    expect(output()).toContain("EXPLICIT_END_REQUIRED");
+    expect(output()).toContain('"ok":true');
     await vi.advanceTimersByTimeAsync(16000);
-    expect(ws.close).not.toHaveBeenCalled();
+    expect(ws.close).toHaveBeenCalledExactlyOnceWith(1000, "assistant-end");
   });
   it.each(["audible PCM", "interrupted"])(
-    "invalidates a USER_INPUT end candidate on %s before a new transcript",
+    "accepts a new model end call after %s without requiring ASR",
     async (boundary) => {
       bridge.sendAudio(Buffer.alloc(20));
       await emit({
@@ -3976,10 +4153,10 @@ describe("Live model and assistant end", () => {
           ],
         },
       });
-      expect(output()).toContain("EXPLICIT_END_REQUIRED");
+      expect(output()).toContain('"ok":true');
       await vi.advanceTimersByTimeAsync(16000);
-      expect(ws.close).not.toHaveBeenCalled();
-      expect(events().some((e) => e.type === "session.ending")).toBe(false);
+      expect(ws.close).toHaveBeenCalledExactlyOnceWith(1000, "assistant-end");
+      expect(events().some((e) => e.type === "session.ending")).toBe(true);
     },
   );
   it("keeps the current candidate across continuous USER_INPUT silence frames", async () => {
@@ -3999,6 +4176,58 @@ describe("Live model and assistant end", () => {
       type: "session.ending",
       reason: "assistant-end",
     });
+  });
+  it.each(["end first", "stop first"])(
+    "blocks narration tools including end pre-arm (%s)",
+    async (order) => {
+      getRouteByToken.mockResolvedValueOnce(walkRoute);
+      getNavigationEnvelopeByToken.mockResolvedValueOnce({
+        navigationId: "narration-nav",
+        routeVersion: 1,
+      });
+      await bridge.armRouteToken("narration-token");
+      bridge.updatePosition({ latitude: 25, longitude: 121 });
+      bridge.startNavigation();
+      expect(session.sendClientContent).toHaveBeenCalled();
+      const endCall = {
+        id: "narration-end",
+        name: "endVoiceSession",
+        args: {},
+      };
+      const stopCall = {
+        id: "narration-stop",
+        name: "stopNavigation",
+        args: {},
+      };
+      await emit({
+        toolCall: {
+          functionCalls:
+            order === "end first" ? [endCall, stopCall] : [stopCall, endCall],
+        },
+      });
+      expect(
+        events().some(
+          (e) => e.type === "session.ending" || e.type === "nav.stop",
+        ),
+      ).toBe(false);
+      expect(markNavigationStopped).not.toHaveBeenCalled();
+      expect(JSON.stringify(session.sendToolResponse.mock.calls)).toContain(
+        "navigation speech turn cannot execute tools",
+      );
+    },
+  );
+  it("rejects a queued end decision overtaken by real text before execution", async () => {
+    onmessage({
+      toolCall: {
+        functionCalls: [{ id: "old-end", name: "endVoiceSession", args: {} }],
+      },
+    });
+    onmessage({
+      serverContent: { inputTranscription: { text: "等一下", finished: true } },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(output()).toContain("STALE_SELECTION");
+    expect(events().some((e) => e.type === "session.ending")).toBe(false);
   });
   it("waits for a post-tool farewell turn, not a tool-associated turnComplete", async () => {
     await emit({
@@ -4192,7 +4421,10 @@ describe("candidate control server guards", () => {
     onmessage({
       serverContent: { inputTranscription: { text, finished: true } },
     });
-  const tool = (name: string, args = {}) =>
+  const tool = (
+    name: string,
+    args = name === "planAccessibleRoute" ? { startNavigation: true } : {},
+  ) =>
     onmessage({
       toolCall: {
         functionCalls: [{ id: Math.random().toString(), name, args }],
@@ -4342,15 +4574,66 @@ describe("candidate control server guards", () => {
       );
     },
   );
-  it("a finalized direct utterance can auto-start at most once", async () => {
+  it("the same direct tool call ID can auto-start at most once", async () => {
     utter("導航到醫院");
-    tool("planAccessibleRoute");
+    const call = {
+      id: "single-direct-action",
+      name: "planAccessibleRoute",
+      args: { startNavigation: true },
+    };
+    onmessage({ toolCall: { functionCalls: [call] } });
     await settle();
     session.sendToolResponse.mockClear();
-    tool("planAccessibleRoute");
+    onmessage({ toolCall: { functionCalls: [{ ...call }] } });
     await settle();
     expect(messages().filter((m) => m.type === "nav.start")).toHaveLength(1);
+    expect(executeLocalTool).toHaveBeenCalledOnce();
+    expect(JSON.stringify(session.sendToolResponse.mock.calls)).toContain(
+      "DUPLICATE_TOOL_CALL",
+    );
   });
+  it("untranscribed PCM does not prevent direct navigation or candidate registry installation", async () => {
+    const pending = deferred<string>();
+    vi.mocked(executeLocalTool).mockReturnValueOnce(pending.promise);
+    utter("帶我去醫院");
+    tool("planAccessibleRoute");
+    await vi.waitFor(() => expect(executeLocalTool).toHaveBeenCalledOnce());
+    const pcm = Buffer.alloc(3200);
+    for (let index = 0; index < pcm.length; index += 2)
+      pcm.writeInt16LE(1000, index);
+    bridge.sendAudio(pcm);
+    pending.resolve(
+      JSON.stringify({
+        ok: true,
+        routes: [
+          tokenRoute,
+          { ...tokenRoute, routeId: "r2", routeToken: "second-token" },
+        ],
+      }),
+    );
+    await settle();
+    expect(
+      messages().find((message) => message.type === "tool_result").result,
+    ).toMatchObject({ ok: true });
+    expect(messages().some((message) => message.type === "nav.start")).toBe(
+      true,
+    );
+    expect(readNavigationTokenStrict).toHaveBeenCalledOnce();
+    expect(
+      messages().filter((message) => message.type === "nav.start"),
+    ).toHaveLength(1);
+    session.sendToolResponse.mockClear();
+    utter("換第二條");
+    tool("proposeNavigationCandidate", { candidateNumber: 2 });
+    await settle();
+    expect(
+      JSON.parse(
+        session.sendToolResponse.mock.calls[0][0].functionResponses[0].response
+          .output,
+      ),
+    ).toMatchObject({ ok: true, candidateNumber: 2 });
+  });
+
   it("a plan overtaken by UI selection cannot install its candidate registry", async () => {
     const pending = deferred<any>();
     vi.mocked(executeLocalTool).mockReturnValueOnce(pending.promise);
@@ -4396,6 +4679,63 @@ describe("candidate control server guards", () => {
       "CANDIDATE_UNAVAILABLE",
     );
   });
+  it.each(["interrupted", "tool cancellation"])(
+    "invalidates a pending plan on %s despite allowing untranscribed PCM",
+    async (boundary) => {
+      const pending = deferred<string>();
+      vi.mocked(executeLocalTool).mockReturnValueOnce(pending.promise);
+      utter("目前位置到臺中車站");
+      onmessage({
+        toolCall: {
+          functionCalls: [
+            { id: "cancel-planning", name: "planAccessibleRoute", args: {} },
+          ],
+        },
+      });
+      await vi.waitFor(() => expect(executeLocalTool).toHaveBeenCalledOnce());
+      const options = vi.mocked(executeLocalTool).mock.calls[0][4]!;
+      expect(options.isCurrent?.()).toBe(true);
+      onmessage(
+        boundary === "interrupted"
+          ? { serverContent: { interrupted: true } }
+          : { toolCallCancellation: { ids: ["cancel-planning"] } },
+      );
+      expect(options.isCurrent?.()).toBe(false);
+      pending.resolve(JSON.stringify({ ok: true, routes: [tokenRoute] }));
+      onmessage({
+        toolCall: {
+          functionCalls: [
+            {
+              id: "queue-barrier",
+              name: "getActiveNavigationContext",
+              args: {},
+            },
+          ],
+        },
+      });
+      await vi.waitFor(() =>
+        expect(
+          messages().some(
+            (message) =>
+              message.type === "tool_result" &&
+              message.name === "getActiveNavigationContext",
+          ),
+        ).toBe(true),
+      );
+      expect(
+        messages().some(
+          (message) =>
+            message.type === "tool_result" &&
+            message.name === "planAccessibleRoute" &&
+            message.result?.ok === true,
+        ),
+      ).toBe(false);
+      expect(messages().some((message) => message.type === "nav.start")).toBe(
+        false,
+      );
+    },
+  );
+
   it("executor isCurrent expires as soon as a newer transcript arrives", async () => {
     const pending = deferred<any>();
     vi.mocked(executeLocalTool).mockReturnValueOnce(pending.promise);
@@ -4462,7 +4802,6 @@ describe("candidate control server guards", () => {
       return { status: "adopted", data };
     });
     session.sendToolResponse.mockClear();
-    utter("確認");
     tool("confirmNavigationCandidateSwitch", {
       proposalId: proposal.proposalId,
     });
@@ -4494,7 +4833,6 @@ describe("candidate control server guards", () => {
       };
     });
     session.sendToolResponse.mockClear();
-    utter("確認");
     tool("confirmNavigationCandidateSwitch", {
       proposalId: proposed.proposalId,
     });
@@ -4562,9 +4900,9 @@ describe("candidate control server guards", () => {
       },
     });
   });
-  it("information and model start bypass cannot start", async () => {
+  it("planning-only requests do not arm a route for a later start call", async () => {
     utter("怎麼去醫院");
-    tool("planAccessibleRoute");
+    tool("planAccessibleRoute", { startNavigation: false });
     tool("startNavigation");
     await settle();
     expect(messages().some((m) => m.type === "nav.start")).toBe(false);
@@ -4608,7 +4946,25 @@ describe("candidate control server guards", () => {
     await settle();
     expect(messages().some((m) => m.type === "nav.start")).toBe(false);
   });
-  it("proposal does not mutate; only next explicit confirm commits once", async () => {
+  it("can propose another available route without requiring a candidate number", async () => {
+    tool("planAccessibleRoute");
+    await settle();
+    session.sendToolResponse.mockClear();
+    utter("這條不適合我，換個方案吧");
+    tool("proposeNavigationCandidate", {});
+    await settle();
+    const proposal = JSON.parse(
+      session.sendToolResponse.mock.calls[0][0].functionResponses[0].response
+        .output,
+    );
+    expect(proposal).toMatchObject({
+      ok: true,
+      candidateNumber: 2,
+      proposalId: expect.any(String),
+    });
+    expect(switchNavigationCandidate).not.toHaveBeenCalled();
+  });
+  it("proposal does not mutate; same-user-turn model confirmation commits once", async () => {
     utter("導航到醫院");
     tool("planAccessibleRoute");
     await settle();
@@ -4627,7 +4983,6 @@ describe("candidate control server guards", () => {
       status: "failed",
       reason: "fixture",
     });
-    utter("確認");
     tool("confirmNavigationCandidateSwitch", {
       proposalId: proposal.proposalId,
     });
@@ -4638,4 +4993,267 @@ describe("candidate control server guards", () => {
       expect(switchNavigationCandidate).toHaveBeenCalledTimes(1),
     );
   });
+  it("Live schema is extended without mutating the actual shared catalogue", async () => {
+    const catalog = await vi.importActual<
+      typeof import("../agent/tool-catalog")
+    >("../agent/tool-catalog");
+    const shared = catalog.buildGeminiTools("u", false);
+    const original = JSON.stringify(shared);
+    vi.mocked(buildGeminiTools).mockReturnValueOnce(shared);
+    bridge.close();
+    bridge = await createLiveBridge({ ws, userId: "u" });
+    await bridge.voiceReady;
+    const config = connect.mock.calls.at(-1)![0].config;
+    const declaration = config.tools
+      .flatMap((t: any) => t.functionDeclarations ?? [])
+      .find((d: any) => d.name === "planAccessibleRoute");
+    expect(
+      declaration.parametersJsonSchema.properties.startNavigation,
+    ).toMatchObject({ type: "boolean", default: false });
+    expect(JSON.stringify(shared)).toBe(original);
+    expect(original).not.toContain('"startNavigation"');
+  });
+  it("keeps a proposal through intervening conversation and more than 120 seconds", async () => {
+    tool("planAccessibleRoute");
+    await settle();
+    session.sendToolResponse.mockClear();
+    tool("proposeNavigationCandidate", { candidateNumber: 2 });
+    await settle();
+    const { proposalId } = JSON.parse(
+      session.sendToolResponse.mock.calls[0][0].functionResponses[0].response
+        .output,
+    );
+    utter("這段路的景色怎麼樣？");
+    await new Promise((r) => setTimeout(r, 0));
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 180_000);
+    try {
+      switchNavigationCandidate.mockResolvedValueOnce({
+        status: "failed",
+        reason: "fixture",
+      });
+      session.sendToolResponse.mockClear();
+      tool("confirmNavigationCandidateSwitch", { proposalId });
+      await settle();
+      expect(switchNavigationCandidate).toHaveBeenCalledOnce();
+    } finally {
+      clock.mockRestore();
+    }
+  });
+  it.each(["new text", "tool cancellation"])(
+    "invalidates in-flight switch on %s",
+    async (boundary) => {
+      tool("planAccessibleRoute");
+      await settle();
+      session.sendToolResponse.mockClear();
+      tool("proposeNavigationCandidate", { candidateNumber: 2 });
+      await settle();
+      const { proposalId } = JSON.parse(
+        session.sendToolResponse.mock.calls[0][0].functionResponses[0].response
+          .output,
+      );
+      const pending = deferred<any>();
+      switchNavigationCandidate.mockReturnValueOnce(pending.promise);
+      onmessage({
+        toolCall: {
+          functionCalls: [
+            {
+              id: "pending-switch",
+              name: "confirmNavigationCandidateSwitch",
+              args: { proposalId },
+            },
+          ],
+        },
+      });
+      await vi.waitFor(() =>
+        expect(switchNavigationCandidate).toHaveBeenCalledOnce(),
+      );
+      const input = switchNavigationCandidate.mock.calls[0][0];
+      expect(input.isAuthorized()).toBe(true);
+      if (boundary === "new text") utter("先不要動");
+      else onmessage({ toolCallCancellation: { ids: ["pending-switch"] } });
+      expect(input.isAuthorized()).toBe(false);
+      pending.resolve({ status: "failed", reason: "STALE_SELECTION" });
+      await new Promise((r) => setTimeout(r, 0));
+      expect(messages().some((m) => m.type === "nav.route_replaced")).toBe(
+        false,
+      );
+    },
+  );
+  it.each(["new text", "tool cancellation"])(
+    "finishes a committed stop locally despite %s while persistence settles",
+    async (boundary) => {
+      tool("planAccessibleRoute");
+      await settle();
+      onmessage({ serverContent: { turnComplete: true } });
+      const persistedStop = deferred<string>();
+      markNavigationStopped.mockReturnValueOnce(persistedStop.promise);
+      onmessage({
+        toolCall: {
+          functionCalls: [
+            { id: "committing-stop", name: "stopNavigation", args: {} },
+          ],
+        },
+      });
+      await vi.waitFor(() =>
+        expect(markNavigationStopped).toHaveBeenCalledWith("direct-nav", "u"),
+      );
+      expect(messages().some((m) => m.type === "nav.stop")).toBe(false);
+      if (boundary === "new text") utter("謝謝，順便告訴我天氣");
+      else onmessage({ toolCallCancellation: { ids: ["committing-stop"] } });
+      persistedStop.resolve("stopped");
+      await vi.waitFor(() =>
+        expect(messages().filter((m) => m.type === "nav.stop")).toHaveLength(1),
+      );
+      tool("getActiveNavigationContext", {});
+      await vi.waitFor(() => {
+        const result = messages().find(
+          (m) =>
+            m.type === "tool_result" && m.name === "getActiveNavigationContext",
+        );
+        expect(result?.result).toMatchObject({ active: false });
+      });
+    },
+  );
+  it.each([
+    "lookup fails before stop",
+    "lookup fails after stop",
+    "lookup succeeds after stop",
+  ])(
+    "settles the stopped route while an uncommitted selection changes: %s",
+    async (boundary) => {
+      tool("planAccessibleRoute");
+      await settle();
+      onmessage({ serverContent: { turnComplete: true } });
+      const persistedStop = deferred<string>();
+      markNavigationStopped.mockReturnValueOnce(persistedStop.promise);
+      onmessage({
+        toolCall: {
+          functionCalls: [
+            { id: "stop-before-selection", name: "stopNavigation", args: {} },
+          ],
+        },
+      });
+      await vi.waitFor(() =>
+        expect(markNavigationStopped).toHaveBeenCalledWith("direct-nav", "u"),
+      );
+      const lookup = deferred<any>();
+      const selectedRoute = {
+        ...tokenRoute,
+        routeId: "selected-route",
+        navigationId: "selected-nav",
+        routeToken: "selected-token",
+      };
+      getRouteByToken.mockReturnValueOnce(lookup.promise);
+      getNavigationEnvelopeByToken.mockResolvedValueOnce({
+        ...envelope,
+        navigationId: "selected-nav",
+        route: selectedRoute,
+      });
+      const selection = bridge.armRouteToken("selected-token").then(
+        (armed) => ({ armed }),
+        (error: Error) => ({ error: error.message }),
+      );
+      if (boundary === "lookup fails before stop") {
+        lookup.reject(new Error("route lookup unavailable"));
+        expect(await selection).toEqual({ error: "route lookup unavailable" });
+      }
+      persistedStop.resolve("stopped");
+      await vi.waitFor(() =>
+        expect(messages().filter((m) => m.type === "nav.stop")).toHaveLength(1),
+      );
+      if (boundary === "lookup fails after stop") {
+        lookup.reject(new Error("route lookup unavailable"));
+        expect(await selection).toEqual({ error: "route lookup unavailable" });
+      } else if (boundary === "lookup succeeds after stop") {
+        lookup.resolve(selectedRoute);
+        expect(await selection).toEqual({ armed: true });
+        bridge.startNavigation();
+        onmessage({ serverContent: { turnComplete: true } });
+      }
+      tool("getActiveNavigationContext", {});
+      await vi.waitFor(() => {
+        const result = messages().find(
+          (m) =>
+            m.type === "tool_result" && m.name === "getActiveNavigationContext",
+        );
+        expect(result?.result).toMatchObject({
+          active: boundary === "lookup succeeds after stop",
+        });
+      });
+    },
+  );
+  it("does not stop a newer route when an older durable stop finishes", async () => {
+    tool("planAccessibleRoute");
+    await settle();
+    onmessage({ serverContent: { turnComplete: true } });
+    const persistedStop = deferred<string>();
+    markNavigationStopped.mockReturnValueOnce(persistedStop.promise);
+    onmessage({
+      toolCall: {
+        functionCalls: [
+          { id: "old-route-stop", name: "stopNavigation", args: {} },
+        ],
+      },
+    });
+    await vi.waitFor(() =>
+      expect(markNavigationStopped).toHaveBeenCalledWith("direct-nav", "u"),
+    );
+    const newerRoute = {
+      ...tokenRoute,
+      routeId: "newer-route",
+      navigationId: "newer-nav",
+      routeToken: "newer-token",
+    };
+    getRouteByToken.mockResolvedValueOnce(newerRoute);
+    getNavigationEnvelopeByToken.mockResolvedValueOnce({
+      ...envelope,
+      navigationId: "newer-nav",
+      route: newerRoute,
+    });
+    expect(await bridge.armRouteToken("newer-token")).toBe(true);
+    bridge.startNavigation();
+    const responsesBefore = session.sendToolResponse.mock.calls.length;
+    persistedStop.resolve("stopped");
+    await vi.waitFor(() =>
+      expect(session.sendToolResponse.mock.calls.length).toBeGreaterThan(
+        responsesBefore,
+      ),
+    );
+    expect(messages().some((m) => m.type === "nav.stop")).toBe(false);
+    onmessage({ serverContent: { turnComplete: true } });
+    tool("getActiveNavigationContext", {});
+    await vi.waitFor(() => {
+      const result = messages().find(
+        (m) =>
+          m.type === "tool_result" && m.name === "getActiveNavigationContext",
+      );
+      expect(result?.result).toMatchObject({ active: true });
+    });
+  });
+  it.each(["new text", "tool cancellation"])(
+    "prevents direct start after a late canonical read on %s",
+    async (boundary) => {
+      const pending = deferred<any>();
+      readNavigationTokenStrict.mockReturnValueOnce(pending.promise);
+      onmessage({
+        toolCall: {
+          functionCalls: [
+            {
+              id: "pending-direct",
+              name: "planAccessibleRoute",
+              args: { startNavigation: true },
+            },
+          ],
+        },
+      });
+      await vi.waitFor(() =>
+        expect(readNavigationTokenStrict).toHaveBeenCalledOnce(),
+      );
+      if (boundary === "new text") utter("先不要動");
+      else onmessage({ toolCallCancellation: { ids: ["pending-direct"] } });
+      pending.resolve({ status: "ok", value: envelope });
+      await new Promise((r) => setTimeout(r, 0));
+      expect(messages().some((m) => m.type === "nav.start")).toBe(false);
+    },
+  );
 });

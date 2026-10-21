@@ -43,8 +43,6 @@ import {
   type TurnAudioStats,
   filterModelTranscriptPiece,
 } from "./live-output-filter";
-import { isExplicitEndIntent } from "./end-intent";
-import { classifyNavigationIntent } from "./navigation-intent";
 import type { AccessibleRoute } from "../../types/route";
 import {
   retryCandidateSwitchReconciliation,
@@ -98,17 +96,6 @@ const ASSISTANT_END_PLAYBACK_PAD_MS = 750;
 const ASSISTANT_END_MIN_GRACE_MS = 1_500;
 const ASSISTANT_END_MAX_GRACE_MS = 8_000;
 const ASSISTANT_END_MAX_WAIT_MS = 15_000;
-
-// Match the POC's mean absolute PCM16 energy threshold; ignore an odd tail byte.
-function hasPcmVoiceActivity(data: Buffer): boolean {
-  const samples = Math.floor(data.length / 2);
-  if (samples === 0) return false;
-  let energy = 0;
-  for (let i = 0; i < samples; i++) {
-    energy += Math.abs(data.readInt16LE(i * 2));
-  }
-  return energy / samples >= 300;
-}
 
 const MAX_BUFFERED_BYTES = 1024 * 1024;
 const ERROR_SUMMARY_MAX_CHARS = 200;
@@ -180,7 +167,8 @@ const NAV_FUNCTIONS: FunctionDeclaration[] = [
   },
   {
     name: "confirmNavigationCandidateSwitch",
-    description: "只在提案後下一句明確確認時切換。",
+    description:
+      "依使用者的自然語意決定切換，使用有效 proposalId；明確要求換線時可在提案後直接確認，不需另一句口令。",
     parametersJsonSchema: {
       type: "object",
       properties: { proposalId: { type: "string" } },
@@ -228,7 +216,7 @@ const NAV_FUNCTIONS: FunctionDeclaration[] = [
   {
     name: "endVoiceSession",
     description:
-      "僅在使用者最後一句明確要求結束語音（再見、結束語音、先這樣、沒事了）時呼叫；回答完問題、工具完成、沉默或否定句都不可呼叫。呼叫後只說一句簡短道別，不停止導航。",
+      "依自然語意判斷使用者確實希望結束語音時呼叫，不要求固定說法；資訊詢問、引用、否定、回答完問題、工具完成或沉默都不代表結束。呼叫後只說一句簡短道別，不停止導航。",
     parametersJsonSchema: {
       type: "object",
       properties: {},
@@ -365,6 +353,8 @@ export async function createLiveBridge(
   let liveTurnId = randomUUID();
   let toolGeneration = 0;
   const cancelledCalls = new Set<string>();
+  const executedActionIds = new Set<string>();
+  const executedActions = new WeakSet<FunctionCall>();
   const pendingBootstraps = new Set<() => void>();
   let session: Session | null = null;
   let voiceState: VoiceState = "connecting";
@@ -409,7 +399,6 @@ export async function createLiveBridge(
     sendJson({ type: "location.request" });
     return promise;
   };
-  let lastFinalUserTranscript: string | null = null;
   let assistantEnding: { audioBytes: number; responded: boolean } | null = null;
   let assistantEndCloseTimer: ReturnType<typeof setTimeout> | null = null;
   let assistantEndDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
@@ -445,15 +434,6 @@ export async function createLiveBridge(
   let currentUtteranceId: string | null = null;
   let armGen = 0;
   let inputArrivalRevision = 0;
-  let transcriptArrivalRevision = 0;
-  type Utterance = {
-    utteranceId: string;
-    utteranceSeq: number;
-    arrivalRevision: number;
-    text: string;
-  };
-  let finalizedUtterance: Utterance | null = null;
-  const consumedDirectUtterances = new WeakSet<Utterance>();
   let planGeneration = 0;
   type Candidate = {
     ordinal: number;
@@ -473,9 +453,6 @@ export async function createLiveBridge(
     planGeneration: number;
     navigationGeneration: number;
     armGeneration: number;
-    createdSeq: number;
-    expectedDecisionSeq: number;
-    expiresAt: number;
     consumed: boolean;
   } | null = null;
   let pendingDirectToken: string | null = null;
@@ -1186,17 +1163,8 @@ export async function createLiveBridge(
     arrivalRevision: number,
   ): Promise<void> => {
     if (userTranscriptBuffer.trim()) finalizeUserTranscript();
-    const authorization = finalizedUtterance;
-    const authorized = (): boolean =>
-      Boolean(
-        authorization &&
-        finalizedUtterance === authorization &&
-        authorization.arrivalRevision === inputArrivalRevision &&
-        arrivalRevision === inputArrivalRevision,
-      );
-    const toolCurrent = (): boolean =>
-      authorization ? authorized() : arrivalRevision === inputArrivalRevision;
-    const intent = classifyNavigationIntent(authorization?.text ?? "");
+    const requestCurrent = (): boolean =>
+      arrivalRevision === inputArrivalRevision;
     // Re-read through a call: voice can degrade across any await below, and a
     // tool from a dead session must not reach startNavigation/stopNavigation.
     const voiceCurrent = (): boolean =>
@@ -1212,24 +1180,26 @@ export async function createLiveBridge(
         !(call.id && cancelledCalls.has(call.id)),
     );
     let acceptedEndCall: FunctionCall | undefined;
-    if (voiceCurrent() && !assistantEnding && endCall) {
-      if (userTranscriptBuffer.trim()) finalizeUserTranscript();
-      if (authorized() && isExplicitEndIntent(lastFinalUserTranscript)) {
-        proposal = null;
-        assistantEnding = { audioBytes: 0, responded: false };
-        acceptedEndCall = endCall;
-        lastFinalUserTranscript = null;
-        sendJson(
-          SessionEndingMessageSchema.parse({
-            type: "session.ending",
-            reason: "assistant-end",
-          }),
-        );
-        assistantEndDeadlineTimer = setTimeout(
-          finishAssistantEnd,
-          ASSISTANT_END_MAX_WAIT_MS,
-        );
-      }
+    if (
+      voiceCurrent() &&
+      requestCurrent() &&
+      !navSpeaking &&
+      !assistantEnding &&
+      endCall
+    ) {
+      proposal = null;
+      assistantEnding = { audioBytes: 0, responded: false };
+      acceptedEndCall = endCall;
+      sendJson(
+        SessionEndingMessageSchema.parse({
+          type: "session.ending",
+          reason: "assistant-end",
+        }),
+      );
+      assistantEndDeadlineTimer = setTimeout(
+        finishAssistantEnd,
+        ASSISTANT_END_MAX_WAIT_MS,
+      );
     }
     const functionResponses: FunctionResponse[] = [];
     for (const call of functionCalls) {
@@ -1247,7 +1217,39 @@ export async function createLiveBridge(
         });
         continue;
       }
+      const startRequested =
+        name === "planAccessibleRoute" && call.args?.startNavigation === true;
+      const action =
+        startRequested ||
+        [
+          "startNavigation",
+          "stopNavigation",
+          "proposeNavigationCandidate",
+          "confirmNavigationCandidateSwitch",
+        ].includes(name);
+      if (
+        action &&
+        (call.id ? executedActionIds.has(call.id) : executedActions.has(call))
+      ) {
+        functionResponses.push({
+          id: call.id,
+          name,
+          response: {
+            output: JSON.stringify({
+              ok: false,
+              reason: "DUPLICATE_TOOL_CALL",
+            }),
+          },
+        });
+        continue;
+      }
+      if (action && requestCurrent() && !assistantEnding) {
+        if (call.id) executedActionIds.add(call.id);
+        else executedActions.add(call);
+      }
       sendJson({ type: "tool_call", name, callId, turnId });
+      const toolArgs = { ...(call.args ?? {}) };
+      if (name === "planAccessibleRoute") delete toolArgs.startNavigation;
       const startedAt = Date.now();
       let ok = true;
       let response: Record<string, unknown>;
@@ -1260,21 +1262,8 @@ export async function createLiveBridge(
             ok: false,
             reason: "VOICE_SESSION_ENDING",
           });
-        } else if (
-          [
-            "startNavigation",
-            "stopNavigation",
-            "proposeNavigationCandidate",
-            "confirmNavigationCandidateSwitch",
-          ].includes(name) &&
-          (!authorized() ||
-            (name === "startNavigation" && intent.kind !== "start") ||
-            (name === "stopNavigation" && intent.kind !== "stop"))
-        ) {
-          result = JSON.stringify({
-            ok: false,
-            reason: "EXPLICIT_NAVIGATION_AUTHORIZATION_REQUIRED",
-          });
+        } else if (!requestCurrent()) {
+          result = JSON.stringify({ ok: false, reason: "STALE_SELECTION" });
         } else if (name === "proposeNavigationCandidate") {
           proposal = null;
           const candidates = registry?.candidates ?? [];
@@ -1284,14 +1273,10 @@ export async function createLiveBridge(
             (c) =>
               (ordinal === undefined || c.ordinal === ordinal) &&
               (id === undefined || c.id === id) &&
-              (intent.candidateNumber === undefined ||
-                c.ordinal === intent.candidateNumber) &&
               !registry?.used.has(c.ordinal) &&
               c.token !== activeNavigation?.routeToken,
           );
           if (
-            intent.kind !== "switch" ||
-            !authorization ||
             !activeNavigation ||
             !registry ||
             !candidate?.token ||
@@ -1308,9 +1293,6 @@ export async function createLiveBridge(
               planGeneration: registry.generation,
               navigationGeneration,
               armGeneration: armGen,
-              createdSeq: authorization.utteranceSeq,
-              expectedDecisionSeq: authorization.utteranceSeq + 1,
-              expiresAt: Date.now() + 120_000,
               consumed: false,
             };
             const current = (
@@ -1349,7 +1331,8 @@ export async function createLiveBridge(
                     }
                   : null,
               },
-              message: "請說明差異並等待下一句明確確認；缺資料不可猜測。",
+              message:
+                "依使用者語意決定是否確認切換；比較或意圖不明時才澄清，缺資料不可猜測。",
             });
           }
         } else if (name === "confirmNavigationCandidateSwitch") {
@@ -1358,11 +1341,7 @@ export async function createLiveBridge(
           if (
             !p ||
             p.consumed ||
-            !authorization ||
-            intent.kind !== "confirm" ||
             p.id !== call.args?.proposalId ||
-            p.expectedDecisionSeq !== authorization.utteranceSeq ||
-            Date.now() >= p.expiresAt ||
             p.planGeneration !== registry?.generation ||
             p.navigationGeneration !== navigationGeneration ||
             p.armGeneration !== armGen ||
@@ -1371,7 +1350,7 @@ export async function createLiveBridge(
           ) {
             result = JSON.stringify({
               ok: false,
-              reason: "PROPOSAL_NOT_AUTHORIZED",
+              reason: "PROPOSAL_STALE_OR_UNAVAILABLE",
             });
           } else {
             p.consumed = true;
@@ -1382,7 +1361,7 @@ export async function createLiveBridge(
               p.armGeneration === armGen;
             const isAuthorized = () =>
               voiceCurrent() &&
-              authorized() &&
+              requestCurrent() &&
               !cancelled() &&
               proposal === p &&
               p.consumed &&
@@ -1533,8 +1512,8 @@ export async function createLiveBridge(
           } else {
             result = JSON.stringify({
               ok: false,
-              reason: "EXPLICIT_END_REQUIRED",
-              message: "使用者沒有明確要求結束語音，請繼續對話，不要道別。",
+              reason: "STALE_SELECTION",
+              message: "結束要求已過時，請依目前狀態繼續對話。",
             });
           }
         } else if (name === "stopNavigation") {
@@ -1552,25 +1531,46 @@ export async function createLiveBridge(
           navigationGeneration++;
           pendingRouteArm = null;
           pendingReconciledOffRoute = null;
+          const stopGeneration = navigationGeneration;
+          const stopTarget = activeNavigation;
           const stopStatuses = await Promise.all(
             [...idsToDelete].map((navigationId) =>
               markNavigationStopped(navigationId, userId),
             ),
           );
+          // Once the durable stop was submitted, later speech/cancellation
+          // cannot undo it. Settle the matching local navigation, not a newer one.
+          if (
+            !disposed &&
+            navigationGeneration === stopGeneration &&
+            activeNavigation === stopTarget
+          ) {
+            const stopped = navSession.stop("user_voice");
+            const emittedStop = stopped.events.some(
+              (event) => event.type === "nav.stop",
+            );
+            // Stop was fenced before the await; do not invalidate newer lookups.
+            for (const event of stopped.events) sendJson(event);
+            if (!emittedStop && idsToDelete.size > 0) {
+              sendJson({ type: "nav.stop", reason: "user_voice" });
+            }
+            if (
+              pendingResumeNavigationId &&
+              idsToDelete.has(pendingResumeNavigationId)
+            )
+              pendingResumeNavigationId = null;
+            pruneRerouteState();
+            activeNavigation = null;
+            lastSnapshotPersistedAt = 0;
+            resetCorridorState();
+            for (const id of idsToDelete)
+              void Promise.resolve(deleteNavigationSnapshot(id, userId)).catch(
+                () => {},
+              );
+          }
           const stopPersisted = stopStatuses.every(
             (status) => status === "stopped",
           );
-          const stopped = navSession.stop("user_voice");
-          const emittedStop = stopped.events.some(
-            (event) => event.type === "nav.stop",
-          );
-          applyEffect(stopped);
-          if (!emittedStop && idsToDelete.size > 0) {
-            sendJson({ type: "nav.stop", reason: "user_voice" });
-          }
-          pendingResumeNavigationId = null;
-          pruneRerouteState();
-          activeNavigation = null;
           result = JSON.stringify({
             ok: idsToDelete.size === 0 || stopPersisted,
             ...(idsToDelete.size > 0 && !stopPersisted
@@ -1606,28 +1606,28 @@ export async function createLiveBridge(
             if (!voiceCurrent()) return;
             if (cancelled()) continue;
           }
-          if (name === "planAccessibleRoute" && !toolCurrent()) {
+          if (name === "planAccessibleRoute" && !requestCurrent()) {
             result = JSON.stringify({
               ok: false,
-              reason: "STALE_AUTHORIZATION",
+              reason: "STALE_SELECTION",
             });
           } else
             result = await executeVoiceTool(
               name,
-              (call.args ?? {}) as Record<string, unknown>,
+              toolArgs,
               latestPosition ?? userLocation,
               userId,
               {
                 language,
                 allowMemoryWrite: memoryEnabled,
                 isCurrent: () =>
-                  voiceCurrent() && toolCurrent() && !cancelled(),
+                  voiceCurrent() && requestCurrent() && !cancelled(),
               },
             );
           if (
             name === "planAccessibleRoute" &&
             voiceCurrent() &&
-            authorized() &&
+            requestCurrent() &&
             !cancelled() &&
             ownPlanGeneration === planGeneration &&
             ownNavigationGeneration === navigationGeneration &&
@@ -1649,16 +1649,11 @@ export async function createLiveBridge(
                 })),
                 used: new Set(),
               };
-              if (
-                intent.kind === "direct" &&
-                authorization &&
-                !consumedDirectUtterances.has(authorization)
-              ) {
-                consumedDirectUtterances.add(authorization);
+              if (startRequested && requestCurrent()) {
                 const first = registry.candidates[0];
                 const current = () =>
                   voiceCurrent() &&
-                  authorized() &&
+                  requestCurrent() &&
                   !cancelled() &&
                   ownPlanGeneration === planGeneration &&
                   ownNavigationGeneration === navigationGeneration &&
@@ -1793,7 +1788,7 @@ export async function createLiveBridge(
         args: call.args ?? {},
         summary: ok ? summarizeToolResult(toolResult) : "",
       });
-      if (name === "planAccessibleRoute" && intent.kind === "direct") {
+      if (startRequested) {
         const navigationStarted = directCommit?.() ?? false;
         let output: Record<string, unknown> = {};
         try {
@@ -1808,8 +1803,7 @@ export async function createLiveBridge(
             ...(navigationStarted
               ? {}
               : {
-                  navigationStartReason:
-                    "ROUTE_NOT_READY_OR_AUTHORIZATION_STALE",
+                  navigationStartReason: "ROUTE_NOT_READY_OR_REQUEST_STALE",
                 }),
           }),
         };
@@ -1836,20 +1830,6 @@ export async function createLiveBridge(
     userTranscriptBuffer = "";
     currentUtteranceId = null;
     if (!raw || !utteranceId) return;
-    lastFinalUserTranscript = raw;
-    finalizedUtterance = {
-      utteranceId,
-      utteranceSeq,
-      arrivalRevision: transcriptArrivalRevision,
-      text: raw,
-    };
-    if (
-      proposal &&
-      (utteranceSeq !== proposal.expectedDecisionSeq ||
-        classifyNavigationIntent(raw).kind !== "confirm" ||
-        Date.now() >= proposal.expiresAt)
-    )
-      proposal = null;
     conversationHistory.push({ role: "user", text: raw });
     if (conversationHistory.length > 20) conversationHistory.shift();
     sendJson({
@@ -1915,14 +1895,12 @@ export async function createLiveBridge(
         if (part.inlineData?.data) forwardAudio(part.inlineData.data);
       }
       if (content.inputTranscription) {
-        transcriptArrivalRevision = arrivalRevision;
-        if (content.inputTranscription.text) {
+        if (content.inputTranscription.text?.trim()) {
           liveState = "USER_INPUT";
           const piece = normalizeVoiceTranscript(
             content.inputTranscription.text,
           );
           if (!currentUtteranceId) {
-            lastFinalUserTranscript = null;
             currentUtteranceId = `u${++utteranceSeq}`;
             liveTurnId = randomUUID();
           }
@@ -1963,7 +1941,6 @@ export async function createLiveBridge(
         modelTranscriptBuffer = "";
         endTurnAudio("interrupted");
         if (userTranscriptBuffer.trim()) finalizeUserTranscript();
-        lastFinalUserTranscript = null;
         navSession.onInterrupted();
         navSpeaking = false;
         clearTurnTimeout();
@@ -2011,8 +1988,6 @@ export async function createLiveBridge(
       commitModelTranscript();
       endTurnAudio("turn-complete");
       if (userTranscriptBuffer.trim()) finalizeUserTranscript();
-      // A completed model turn cannot authorize ending a later user turn.
-      lastFinalUserTranscript = null;
       if (navSpeaking) navSession.onTurnComplete();
       navSpeaking = false;
       turnTimeoutStrikes = 0;
@@ -2108,7 +2083,34 @@ export async function createLiveBridge(
               }) + routeContext.prompt,
             ),
             tools: [
-              ...buildGeminiTools(userId, memoryEnabled),
+              ...buildGeminiTools(userId, memoryEnabled).map((tool) => ({
+                ...tool,
+                functionDeclarations: tool.functionDeclarations?.map(
+                  (declaration) => {
+                    if (declaration.name !== "planAccessibleRoute")
+                      return declaration;
+                    const schema = declaration.parametersJsonSchema as Record<
+                      string,
+                      unknown
+                    >;
+                    return {
+                      ...declaration,
+                      parametersJsonSchema: {
+                        ...schema,
+                        properties: {
+                          ...(schema.properties as Record<string, unknown>),
+                          startNavigation: {
+                            type: "boolean",
+                            description:
+                              "使用者確實要求實際帶路時設 true；僅詢問或比較路線時省略或 false，不需固定口令或重複確認。",
+                            default: false,
+                          },
+                        },
+                      },
+                    };
+                  },
+                ),
+              })),
               { functionDeclarations: NAV_FUNCTIONS },
             ],
           };
@@ -2143,8 +2145,10 @@ export async function createLiveBridge(
                 if (hasToolCalls) pendingToolMessages++;
                 const msgEpoch = expectedEpoch;
                 const msgToolGeneration = toolGeneration;
-                const arrivalRevision = message.serverContent
-                  ?.inputTranscription
+                const hasInputText = Boolean(
+                  message.serverContent?.inputTranscription?.text?.trim(),
+                );
+                const arrivalRevision = hasInputText
                   ? ++inputArrivalRevision
                   : inputArrivalRevision;
                 messageQueue = messageQueue
@@ -2262,10 +2266,10 @@ export async function createLiveBridge(
       pendingToolMessages = 0;
       toolGeneration++;
       cancelledCalls.clear();
+      executedActionIds.clear();
       modelTranscriptBuffer = "";
       userTranscriptBuffer = "";
       currentUtteranceId = null;
-      lastFinalUserTranscript = null;
       liveTurnId = randomUUID();
       navSession.onInterrupted();
       navSpeaking = false;
@@ -2293,14 +2297,6 @@ export async function createLiveBridge(
     },
     sendAudio(data: Buffer): void {
       if (disposed || !session || assistantEnding) return;
-      if (hasPcmVoiceActivity(data)) inputArrivalRevision++;
-      // Continuous silence preserves this utterance's final transcript, but
-      // audible new speech invalidates it even before its transcript arrives.
-      if (
-        liveState !== "USER_INPUT" ||
-        (lastFinalUserTranscript !== null && hasPcmVoiceActivity(data))
-      )
-        lastFinalUserTranscript = null;
       liveState = "USER_INPUT";
       session?.sendRealtimeInput({
         audio: {
@@ -2699,7 +2695,6 @@ export async function createLiveBridge(
     disposed = true;
     proposal = null;
     registry = null;
-    finalizedUtterance = null;
     pendingLocation?.finish();
     for (const cancel of pendingBootstraps) cancel();
     unsubscribeAlerts();
