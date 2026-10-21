@@ -12,9 +12,9 @@
 和本文件的詞彙表自行完成 i18n；後端不提供相容欄位或 fallback 文案。
 
 三個步行引擎（OTP、CSR `pedestrian-a11y`、Valhalla 步行備援）都經過同一個
-merge/split 正規化流程，因此輸出的 key 集合與值域一致。正規化在
+merge 正規化流程，因此輸出的 key 集合與值域一致。正規化在
 `planAccessibleRouteFromRequest()` 成功回傳前執行一次；HTTP wrapper 只附加
-`routeToken`，不會再次 merge/split。AI agent 路徑與 HTTP 路徑取得的 `steps` 必須逐字相同。
+`routeToken`，不會再次 merge。AI agent 路徑與 HTTP 路徑取得的 `steps` 必須逐字相同。
 
 ---
 
@@ -54,8 +54,9 @@ WALK step 明確移除 `instruction`、`maneuver`、`text`、`type`。這四個�
 這條禁令只針對 `route.legs[].steps[]`。逐步導航輸出
 （`POST /a11y/route/instructions` 的 `instructions[].maneuver`、reroute 的
 `instructions[].maneuver`、語音 WS 的 `steps[].maneuver`）另有 `maneuver` 欄位：
-步行步驟填入本表 4.1 的 `relativeDirection` token（長直線切段產生的進度點固定為
-`CONTINUE`），其他指引為 `null`。它與指引上同名的 `relativeDirection`（依使用者朝向
+步行步驟填入本表 4.1 的 `relativeDirection` token，其他指引為 `null`。後端不會把長直線
+切成多個進度點，同一條路的直行只有一步；行進中「再直行 N 公尺」的定期提示由前端依剩餘
+距離自行產生。它與指引上同名的 `relativeDirection`（依使用者朝向
 計算的「正前方／右側…」）意義不同，前端判斷直行或轉向應以 `maneuver` 為準。
 
 ---
@@ -107,7 +108,7 @@ CSR 的角度門檻為：`|Δ| < 20°` → `CONTINUE`；`< 45°` → `SLIGHTLY_*
 2. WALK step 序列化後不得出現 `"instruction"`、`"maneuver"`、`"text"` 或 `"type"`。
 3. `absoluteDirection` 僅可為 §4.2 的英文 token 或 `null`；CSR 案例必須明確證明不是中文字。
 4. `relativeDirection` 僅可為 §4.1 token；例如 OTP `FOLLOW_SIGNS` 必須正規化成 `CONTINUE`。
-5. 所有 step 必有布林 `steepSlope`，且 merge/split 後仍符合九欄契約。
+5. 所有 step 必有布林 `steepSlope`，且 merge 後仍符合九欄契約。
 6. 同一成功路線的 AI agent 路徑與 HTTP 路徑之 WALK `steps` 必須逐字相同。
 7. `/route/instructions` 必須接受新的無文案 WALK steps，省略 language 時維持既有中文 `instructions[].text`，指定 `en` 時產生英文。語言切換不得改變 WALK steps 的機器欄位。
 
