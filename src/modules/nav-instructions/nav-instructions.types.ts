@@ -45,7 +45,7 @@ export interface NavInstruction {
   bearing: number | null;
   relativeDirection: RelativeDirection | null;
   /**
-   * Routing-engine maneuver for WALK steps (CONTINUE for split checkpoints);
+   * Routing-engine maneuver for WALK steps;
    * null for every other instruction. Unlike `relativeDirection`, it never
    * depends on bearing or the caller's heading.
    */

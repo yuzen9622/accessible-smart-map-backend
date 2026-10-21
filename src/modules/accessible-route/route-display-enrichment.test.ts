@@ -370,13 +370,13 @@ describe("real route source enrichment", () => {
       "Source Road",
     );
   });
-  it("remaps validated source provenance through merging and splitting without widening WALK9", () => {
+  it("remaps validated source provenance through merging without widening WALK9", () => {
     const leg = walk();
     leg.steps![0] = { ...machineStep, distanceM: 800 };
     const steps = normalizeWalkLegSteps(leg, true);
     const names = normalizedStreetNames(leg, steps, "en");
-    expect(steps.length).toBeGreaterThan(1);
-    expect(names).toHaveLength(steps.length);
+    expect(steps).toHaveLength(1);
+    expect(names).toHaveLength(1);
     for (const step of steps) expect(Object.keys(step)).toHaveLength(9);
     const duplicateStreet = walk();
     duplicateStreet.steps = [

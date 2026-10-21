@@ -404,7 +404,7 @@ describe("generateNavInstructions", () => {
     ]);
   });
 
-  it("splits a long OTP step into polyline-grounded prompts no longer than 300 metres", () => {
+  it("keeps a long OTP step as one prompt; periodic distance prompts are the client's job", () => {
     const polyline = Array.from(
       { length: 7 },
       (_, index) => [121.5 + index * 0.002, 25] as [number, number],
@@ -444,32 +444,13 @@ describe("generateNavInstructions", () => {
     const prompts = result.data.instructions.filter(
       (instruction) => instruction.type !== "arrive",
     );
-    expect(prompts).toHaveLength(5);
-    expect(
-      prompts.every((instruction) => (instruction.distanceM ?? 0) <= 300),
-    ).toBe(true);
-    expect(
-      prompts.reduce(
-        (sum, instruction) => sum + (instruction.distanceM ?? 0),
-        0,
-      ),
-    ).toBe(1201);
-    expect(
-      prompts
-        .slice(1)
-        .every((instruction) => instruction.text.includes("繼續直行")),
-    ).toBe(true);
-    expect(prompts.every((instruction) => instruction.stairs)).toBe(true);
-    expect(
-      prompts.every((instruction) => instruction.text.includes("此路段含樓梯")),
-    ).toBe(true);
-    expect(prompts.map((instruction) => instruction.maneuver)).toEqual([
-      "DEPART",
-      "CONTINUE",
-      "CONTINUE",
-      "CONTINUE",
-      "CONTINUE",
-    ]);
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toMatchObject({
+      distanceM: 1201,
+      maneuver: "DEPART",
+      stairs: true,
+    });
+    expect(prompts[0].text).toContain("此路段含樓梯");
     expect(result.data.instructions.at(-1)?.maneuver).toBeNull();
   });
 

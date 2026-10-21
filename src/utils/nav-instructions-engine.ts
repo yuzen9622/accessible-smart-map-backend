@@ -117,7 +117,6 @@ export function normalizeAbsoluteDirection(
 }
 
 const BEARING_SAMPLE_DISTANCE_M = 20;
-const MAX_WALK_PROMPT_DISTANCE_M = 300;
 const STAIRS_NOTICE = "，此路段含樓梯";
 
 type PendingNavInstruction = Omit<
@@ -268,7 +267,7 @@ function inheritStep(step: WalkStep, source: WalkStep): WalkStep {
   return step;
 }
 
-/** Remap only validated source provenance through canonical merge/split operations. */
+/** Remap only validated source provenance through canonical merge operations. */
 export function normalizedStreetNames(
   leg: WalkLeg,
   steps: WalkStep[],
@@ -334,88 +333,6 @@ function mergeWalkSteps(steps: WalkStep[]): WalkStep[] {
   return merged;
 }
 
-function splitLongWalkSteps(
-  steps: WalkStep[],
-  polyline: [number, number][],
-): WalkStep[] {
-  const expanded: WalkStep[] = [];
-  let searchIndex = 0;
-  for (let index = 0; index < steps.length; index++) {
-    const step = steps[index];
-    const startIndex = nearestPolylineIndex(
-      polyline,
-      step.location,
-      searchIndex,
-    );
-    if (startIndex !== null) searchIndex = startIndex;
-    const nextLocation = steps[index + 1]?.location;
-    const endIndex = nextLocation
-      ? nearestPolylineIndex(polyline, nextLocation, startIndex ?? searchIndex)
-      : polyline.length - 1;
-    if (
-      step.distanceM <= MAX_WALK_PROMPT_DISTANCE_M ||
-      isFacilityDirection(step.relativeDirection) ||
-      startIndex === null ||
-      endIndex === null ||
-      endIndex <= startIndex
-    ) {
-      expanded.push(step);
-      continue;
-    }
-    const chunkCount = Math.ceil(step.distanceM / MAX_WALK_PROMPT_DISTANCE_M);
-    const cumulative = [0];
-    for (
-      let pointIndex = startIndex + 1;
-      pointIndex <= endIndex;
-      pointIndex++
-    ) {
-      cumulative.push(
-        cumulative.at(-1)! +
-          haversineCoords(polyline[pointIndex - 1], polyline[pointIndex]),
-      );
-    }
-    const geometryDistance = cumulative.at(-1)!;
-    if (geometryDistance <= 0) {
-      expanded.push(step);
-      continue;
-    }
-    const chunkDistance = step.distanceM / chunkCount;
-    expanded.push(
-      inheritStep({ ...step, distanceM: Math.round(chunkDistance) }, step),
-    );
-    let emitted = 1;
-    for (let chunk = 1; chunk < chunkCount; chunk++) {
-      const target = (geometryDistance * chunk) / chunkCount;
-      const offset = cumulative.findIndex((distance) => distance >= target);
-      if (offset <= 0) continue;
-      const location = polyline[startIndex + offset];
-      if (
-        location[0] === expanded.at(-1)!.location[0] &&
-        location[1] === expanded.at(-1)!.location[1]
-      )
-        continue;
-      expanded.push(
-        inheritStep(
-          {
-            ...step,
-            relativeDirection: "CONTINUE",
-            absoluteDirection: null,
-            distanceM: Math.round(chunkDistance),
-            location,
-          },
-          step,
-        ),
-      );
-      emitted++;
-    }
-    const emittedDistance = expanded
-      .slice(-emitted)
-      .reduce((sum, candidate) => sum + candidate.distanceM, 0);
-    expanded.at(-1)!.distanceM += Math.round(step.distanceM - emittedDistance);
-  }
-  return expanded;
-}
-
 function prepareWalkSteps(leg: WalkLeg, isFirstLeg: boolean): WalkStep[] {
   const steps = (leg.steps ?? []).map((step, index): WalkStep => {
     const initialDirection = normalizeRelativeDirection(step.relativeDirection);
@@ -440,11 +357,11 @@ function prepareWalkSteps(leg: WalkLeg, isFirstLeg: boolean): WalkStep[] {
     stepOrigins.set(prepared, [index]);
     return prepared;
   });
-  return splitLongWalkSteps(mergeWalkSteps(steps), leg.polyline ?? []);
+  return mergeWalkSteps(steps);
 }
 
 /**
- * Merges and splits one WALK leg while emitting only the public machine fields.
+ * Merges one WALK leg's steps while emitting only the public machine fields.
  * An empty result means the leg had no usable source steps.
  */
 export function normalizeWalkLegSteps(
@@ -616,7 +533,7 @@ interface BuiltWalkStep {
 }
 
 /**
- * Merges, splits, and turns one WALK leg's raw `steps` into a flat,
+ * Merges and turns one WALK leg's raw `steps` into a flat,
  * ordered list — the single computation shared by `walkLegToInstructions`
  * (feeding `POST /a11y/route/instructions` and the voice engine) and
  * `normalizeWalkLegSteps` (feeding `leg.steps` itself). Returns `[]` when the
