@@ -1,11 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-const { tdxFetch, findRoutesServingCanonicalPair, findVehiclesByPlate } =
-  vi.hoisted(() => ({
-    tdxFetch: vi.fn(),
-    findRoutesServingCanonicalPair: vi.fn(),
-    findVehiclesByPlate: vi.fn(),
-  }));
+const {
+  tdxFetch,
+  findRoutesServingCanonicalPair,
+  findVehiclesByPlate,
+  getPairTimetableTrips,
+} = vi.hoisted(() => ({
+  tdxFetch: vi.fn(),
+  findRoutesServingCanonicalPair: vi.fn(),
+  findVehiclesByPlate: vi.fn(),
+  getPairTimetableTrips: vi.fn(),
+}));
 vi.mock("../../config/fetch", () => ({ tdxFetch }));
+vi.mock("./bus-pair-timetable", () => ({ getPairTimetableTrips }));
 vi.mock("./bus.repository", () => ({
   findRoutesServingCanonicalPair,
   findVehiclesByPlate,
@@ -14,6 +20,7 @@ vi.mock("./bus.repository", () => ({
 import {
   createCandidateRequestBudget,
   getBusStopPairRealtime,
+  getBusVehicleStopTimes,
   getCanonicalBusPair,
 } from "./bus-stop-pair-eta.service";
 const now = Date.parse("2026-10-18T08:00:00+08:00");
@@ -45,6 +52,7 @@ const serve = (i: ReturnType<typeof input>, rows: object[]) =>
 beforeEach(() => {
   vi.resetAllMocks();
   findVehiclesByPlate.mockResolvedValue([]);
+  getPairTimetableTrips.mockResolvedValue([]);
 });
 afterEach(() => vi.useRealTimers());
 describe("bounded exact stop-pair provider", () => {
@@ -53,6 +61,28 @@ describe("bounded exact stop-pair provider", () => {
     serve(i, [row("A", 1), row("B", 10), row("B", 2, { PlateNumb: "OTHER" })]);
     expect(await getBusStopPairRealtime(i)).toEqual([
       { plateNumb: "BUS", boardingAt: now + 60000, alightingAt: now + 600000 },
+    ]);
+  });
+  it("finds a following bus listed only in a stop's Estimates", async () => {
+    const i = input();
+    const ahead = (stop: string, first: number) =>
+      row(stop, first, {
+        PlateNumb: "NEAR",
+        Estimates: [
+          { PlateNumb: "NEAR", EstimateTime: first * 60 },
+          { PlateNumb: "NEXT", EstimateTime: (first + 9) * 60 },
+        ],
+      });
+    serve(i, [ahead("A", 13), ahead("M", 20), ahead("B", 44)]);
+    const times = await getBusVehicleStopTimes({
+      ...i,
+      plateNumb: "NEXT",
+      stopIds: ["A", "M", "B"],
+    });
+    expect([...times]).toEqual([
+      ["A", now + 22 * 60000],
+      ["M", now + 29 * 60000],
+      ["B", now + 53 * 60000],
     ]);
   });
   it.each([
@@ -131,6 +161,7 @@ describe("bounded exact stop-pair provider", () => {
     "trip-overflow",
     "partial-failure",
     "vehicle-failure",
+    "timetable-failure",
   ])("propagates %s completeness and batches plate lookup", async (kind) => {
     const a = input(),
       b = input();
@@ -162,6 +193,8 @@ describe("bounded exact stop-pair provider", () => {
     });
     if (kind === "vehicle-failure")
       findVehiclesByPlate.mockRejectedValue(Error("vehicle offline"));
+    if (kind === "timetable-failure")
+      getPairTimetableTrips.mockRejectedValue(Error("OTP offline"));
     const budget = createCandidateRequestBudget();
     try {
       const result = await getCanonicalBusPair(

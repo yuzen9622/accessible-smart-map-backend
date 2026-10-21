@@ -5,6 +5,10 @@ import {
   type BusPairRoute,
 } from "./bus.repository";
 import { tdxFetch } from "../../config/fetch";
+import {
+  getPairTimetableTrips,
+  type PairTimetableTrip,
+} from "./bus-pair-timetable";
 
 export async function getCanonicalBusPair(
   input: {
@@ -17,6 +21,8 @@ export async function getCanonicalBusPair(
 ): Promise<{
   routes: Array<{ route: BusPairRoute; eta: PairEta[] }>;
   vehicles: Awaited<ReturnType<typeof findVehiclesByPlate>>;
+  /** Timetable trips of these routes between the same two stops. */
+  trips: PairTimetableTrip[];
   complete: boolean;
 }> {
   let complete = true;
@@ -54,6 +60,22 @@ export async function getCanonicalBusPair(
       }
     }),
   );
+  const ids = (pick: (route: BusPairRoute) => string | undefined) =>
+    found.routes.flatMap((route) => pick(route) ?? []);
+  const trips = await budget
+    .run(() =>
+      getPairTimetableTrips({
+        boards: [input.canonicalBoardStopId, ...ids((r) => r.board.stopUID)],
+        alights: [input.canonicalAlightStopId, ...ids((r) => r.alight.stopUID)],
+        now: input.now,
+        perPattern: MAX_TRIPS_PER_ROUTE,
+        signal: budget.signal,
+      }),
+    )
+    .catch(() => {
+      complete = false;
+      return [];
+    });
   let vehicles: Awaited<ReturnType<typeof findVehiclesByPlate>> = [];
   const plates = [
     ...new Set(
@@ -69,7 +91,7 @@ export async function getCanonicalBusPair(
       complete = false;
     }
   }
-  return { routes, vehicles, complete };
+  return { routes, vehicles, trips, complete };
 }
 import { busUrl } from "../../config/transit";
 import {
@@ -86,6 +108,7 @@ interface PairEtaRow extends BusEtaTiming {
   Direction?: number;
   PlateNumb?: string;
   NextBusTime?: string;
+  Estimates?: { PlateNumb?: string; EstimateTime?: number }[];
 }
 export interface PairEta {
   plateNumb?: string;
@@ -239,6 +262,16 @@ export async function getBusStopPairRealtime(
     ];
   });
 }
+/** TDX names only the nearest bus in a stop's top-level PlateNumb; the buses
+ * behind it are listed in Estimates with the same stop timing fields. */
+function vehicleRows(row: PairEtaRow): PairEtaRow[] {
+  if (!row.Estimates?.length) return [row];
+  return row.Estimates.map((e) => ({
+    ...row,
+    PlateNumb: e.PlateNumb,
+    EstimateTime: e.EstimateTime,
+  }));
+}
 /** Per-stop arrival of one identified vehicle; a stop without exactly one row for it is omitted. */
 export async function getBusVehicleStopTimes(
   input: RouteEtaQuery & { plateNumb: string; stopIds: string[] },
@@ -246,9 +279,10 @@ export async function getBusVehicleStopTimes(
   const scoped = await routeEtaRows(input);
   const times = new Map<string, number>();
   for (const stopId of input.stopIds) {
-    const rows = scoped.filter(
-      (r) => r.StopUID === stopId && r.PlateNumb === input.plateNumb,
-    );
+    const rows = scoped
+      .filter((r) => r.StopUID === stopId)
+      .flatMap(vehicleRows)
+      .filter((r) => r.PlateNumb === input.plateNumb);
     const at = rows.length === 1 ? timeOf(rows[0], input.now) : null;
     if (at !== null) times.set(stopId, at);
   }

@@ -11,6 +11,7 @@ import {
   getCanonicalBusPair,
   type CandidateRequestBudget,
 } from "../transit/bus-stop-pair-eta.service";
+import type { BusPairRoute } from "../transit/bus.repository";
 
 export interface ScheduledCandidateSeed {
   candidate: BusDepartureCandidate;
@@ -131,6 +132,72 @@ function seedOf(leg: BusLeg, now: number): ScheduledCandidateSeed | null {
     },
   };
 }
+/** Margin for a tracked bus running ahead of its timetable. */
+const SAME_TRIP_SLACK_MS = 5 * 60000;
+/** Live ETA rows name the next bus at the boarding stop, so a timetable trip
+ * of the same run boarding before that bus (or within the slack after it) is
+ * that bus. It replaces the timetable copy only when it also has a live
+ * alighting time; otherwise the copy is what the journey chain can trust.
+ * A row without a plate is only a predicted first-stop departure: it twins a
+ * trip within the slack either way, and the timetable copy is the one that
+ * carries per-stop times. */
+function sameTrip(
+  live: BusDepartureCandidate,
+  seed: BusDepartureCandidate,
+): boolean {
+  if (
+    live.subRouteUid !== seed.subRouteUid ||
+    live.direction !== seed.direction
+  )
+    return false;
+  const gap =
+    candidateEpoch(seed.boardingTime) - candidateEpoch(live.boardingTime);
+  return live.plateNumb
+    ? gap <= SAME_TRIP_SLACK_MS
+    : Math.abs(gap) <= SAME_TRIP_SLACK_MS;
+}
+/** The planned leg re-pointed at another service between the same stops,
+ * with geometry from that route's own ordered stops. A different service
+ * must never inherit the planned line's trip, plate or vehicle. */
+function pairLeg(base: BusLeg, route: BusPairRoute): BusLeg | null {
+  const stops = (route.stops ?? [])
+    .filter((s) => s.seq >= route.board.seq && s.seq <= route.alight.seq)
+    .sort((a, b) => a.seq - b.seq);
+  if (
+    !route.board.stopUID ||
+    !route.alight.stopUID ||
+    stops.length < 2 ||
+    stops.some((s) => !Number.isFinite(s.lat) || !Number.isFinite(s.lng))
+  )
+    return null;
+  const routeName = route.routeName?.Zh_tw ?? base.routeName;
+  const leg = copyWithDescriptors(base, {
+    geometrySource: "route_stops",
+    routeName,
+    subRouteUid: route.subRouteUid,
+    subRouteName: route.subRouteName?.Zh_tw ?? routeName,
+    direction: route.direction === 1 ? 1 : 0,
+    departureStopId: route.board.stopUID,
+    arrivalStopId: route.alight.stopUID,
+    departureStop: route.board.stopName?.Zh_tw ?? base.departureStop,
+    arrivalStop: route.alight.stopName?.Zh_tw ?? base.arrivalStop,
+    polyline: stops.map((s) => [s.lng, s.lat] as [number, number]),
+    intermediateStops: stops.slice(1, -1).map((s) => ({
+      name: s.stopName?.Zh_tw ?? "",
+      stationUid: s.stopUID,
+      location: [s.lng, s.lat] as [number, number],
+    })),
+  });
+  delete leg.routeNameEn;
+  delete leg.routeDisplayName;
+  delete leg.alerts;
+  delete leg.scheduledTrip;
+  delete leg.plateNumb;
+  delete leg.isLowFloor;
+  delete leg.hasLiftOrRamp;
+  delete leg.lowFloorAlternative;
+  return leg;
+}
 export type PairSearchMemo = Map<
   string,
   ReturnType<typeof getCanonicalBusPair>
@@ -228,52 +295,49 @@ export async function collectBusCandidates({
           selected: false,
         };
         candidates.push(candidate);
-        const stops = (route.stops ?? [])
-          .filter((s) => s.seq >= route.board.seq && s.seq <= route.alight.seq)
-          .sort((a, b) => a.seq - b.seq);
-        if (
-          stops.length < 2 ||
-          stops.some((s) => !Number.isFinite(s.lat) || !Number.isFinite(s.lng))
-        ) {
+        const leg = pairLeg(base, route);
+        if (!leg) {
           complete = false;
           continue;
         }
-        const leg = copyWithDescriptors(base, {
-          geometrySource: "route_stops",
-          routeName: candidate.routeName,
-          subRouteUid: candidate.subRouteUid,
-          subRouteName: candidate.subRouteName ?? candidate.routeName,
-          direction: candidate.direction,
-          departureStopId: candidate.departureStopId,
-          arrivalStopId: candidate.arrivalStopId,
-          departureStop: route.board.stopName?.Zh_tw ?? base.departureStop,
-          arrivalStop: route.alight.stopName?.Zh_tw ?? base.arrivalStop,
-          polyline: stops.map((s) => [s.lng, s.lat] as [number, number]),
-          intermediateStops: stops.slice(1, -1).map((s) => ({
-            name: s.stopName?.Zh_tw ?? "",
-            stationUid: s.stopUID,
-            location: [s.lng, s.lat] as [number, number],
-          })),
-        });
-        // A live route must never inherit another line's immutable trip or plate.
-        delete leg.routeNameEn;
-        delete leg.routeDisplayName;
-        delete leg.alerts;
-        delete leg.scheduledTrip;
-        delete leg.plateNumb;
-        delete leg.isLowFloor;
-        delete leg.hasLiftOrRamp;
-        delete leg.lowFloorAlternative;
         materialized.set(candidate.candidateId, leg);
       }
     }
-    for (const seed of seeds) {
-      // A live vehicle for this route may already have passed the dynamically
-      // reachable transfer time while a later scheduled trip is still valid.
-      // Keep both; candidate identity de-duplication happens before selection.
+    const timetable = [...seeds];
+    for (const trip of data.trips ?? []) {
+      if (timetable.some((s) => s.candidate.tripId === trip.tripId)) continue;
+      const route = data.routes.find(
+        ({ route: r }) =>
+          r.subRouteUid === trip.subRouteUid && r.direction === trip.direction,
+      )?.route;
+      const leg = route && pairLeg(base, route);
+      if (!leg) continue;
+      leg.scheduledTrip = {
+        tripId: trip.tripId,
+        boardingReadyAt: base.scheduledTrip?.boardingReadyAt ?? now,
+        stops: trip.stops,
+      };
+      const seed = seedOf(leg, now);
+      if (seed) timetable.push(seed);
+    }
+    // A live vehicle may already have passed the dynamically reachable
+    // transfer time while a later scheduled trip is still valid, so only the
+    // timetable copy of a live vehicle is dropped, never the next trip.
+    const live = candidates.filter((c) => materialized.has(c.candidateId));
+    const twins = new Set<string>();
+    for (const seed of timetable) {
+      const twin = live.find((l) => sameTrip(l, seed.candidate));
+      if (twin?.plateNumb && twin.alightingTimeSource === "realtime") continue;
+      if (twin && !twin.plateNumb) twins.add(twin.candidateId);
       candidates.push(seed.candidate);
       materialized.set(seed.candidate.candidateId, seed.leg);
     }
+    for (const id of twins) materialized.delete(id);
+    return {
+      candidates: candidates.filter((c) => !twins.has(c.candidateId)),
+      materialized,
+      complete,
+    };
   } catch {
     complete = false;
     for (const seed of seeds) {
