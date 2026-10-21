@@ -123,7 +123,7 @@ describe("Apple sign-in with the shipping iOS audience and real MongoDB", () => 
       expect(String(result.user._id)).toBe(String(original._id));
       expect(result.user.name).toBe("Existing User");
       expect(result.user.authProviders).toEqual([provider, "apple"]);
-      expect(String(result.config?._id)).toBe(String(config._id));
+      expect(result.config).toHaveProperty("_id", config._id);
       expect(result.config?.language).toBe("en");
       expect(result.accessToken).toBeTruthy();
       expect(result.refreshToken).toBeTruthy();
