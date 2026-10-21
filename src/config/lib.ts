@@ -71,6 +71,22 @@ export const clearAuthCookie = (res: Response) => {
   });
 };
 
+export const buildResponsePayload = <T = unknown>(
+  ok: boolean,
+  status: "success" | "error",
+  code: ResponseCode,
+  message: string,
+  data?: T,
+  accessToken?: string,
+): ApiResponse<T> => ({
+  ok,
+  status,
+  code,
+  message,
+  data: data !== undefined ? stripRedundancies(data) : undefined,
+  accessToken,
+});
+
 export const sendResponse = <T = unknown>(
   res: Response<ApiResponse<T>>,
   ok: boolean,
@@ -91,16 +107,14 @@ export const sendResponse = <T = unknown>(
     });
   }
 
-  const cleanedData = data !== undefined ? stripRedundancies(data) : undefined;
-
-  const responsePayload: ApiResponse<T> = {
+  const responsePayload = buildResponsePayload(
     ok,
     status,
     code,
     message,
-    data: cleanedData,
+    data,
     accessToken,
-  };
+  );
 
   if (mode === "mobile" && refreshToken) {
     responsePayload.refreshToken = refreshToken;

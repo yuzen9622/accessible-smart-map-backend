@@ -30,6 +30,7 @@ import {
 } from "./modules/traffic/traffic-geometry.runtime";
 import { startTrafficLiveRefreshJob } from "./modules/traffic/traffic-live.worker";
 import { startValhallaTrafficTarWorker } from "./modules/traffic/valhalla-traffic.worker";
+import { HTTP_CONFIG } from "./config/http";
 import { getRetentionConfig } from "./config/retention";
 import {
   getLiveVoiceName,
@@ -58,6 +59,10 @@ let hazardReviewNotificationWorker:
   ReturnType<typeof startHazardReviewNotificationWorker> | undefined;
 
 const server = http.createServer(app);
+// Node's 5 s default closes idle sockets before cloudflared stops reusing them;
+// a write sent on such a socket fails with a reset (502) and is not retried.
+server.keepAliveTimeout = HTTP_CONFIG.keepAliveTimeoutMs;
+server.headersTimeout = HTTP_CONFIG.keepAliveTimeoutMs + 1_000;
 attachVoiceWebSocket(server);
 attachAlertWebSocket(server);
 server.listen(PORT, () => {

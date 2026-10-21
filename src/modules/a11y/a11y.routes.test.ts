@@ -45,6 +45,7 @@ import {
 } from "../../config/coverage";
 import type { ServiceCoverageConfig } from "../../config/coverage";
 import { ERROR_MESSAGE } from "../../constants/messages";
+import { HTTP_CONFIG } from "../../config/http";
 
 let app: Awaited<ReturnType<typeof startTestServer>>;
 const BASE = "/api/v1/a11y";
@@ -61,11 +62,17 @@ const coverage: ServiceCoverageConfig = {
 
 beforeAll(async () => {
   app = await startTestServer();
+  vi.useFakeTimers({ toFake: ["Date"] });
 });
 
 afterAll(async () => {
+  vi.useRealTimers();
   await stopTestServer(app);
 });
+
+function passFacilityListReuseWindow() {
+  vi.setSystemTime(Date.now() + HTTP_CONFIG.facilityListCacheTtlMs + 1);
+}
 
 const facility = (id: string, source: string): any => ({
   _id: id,
@@ -80,6 +87,12 @@ beforeEach(() => {
 });
 
 describe("a11y facility list routes", () => {
+  // These cases vary the service output between requests, so each one starts
+  // past the reuse window of the previous one; body reuse has its own suite.
+  beforeEach(() => {
+    passFacilityListReuseWindow();
+  });
+
   const cases = [
     { path: "/all-facilities", fn: "findAllFacilities", source: "metro" },
     {
@@ -238,6 +251,73 @@ describe("a11y facility list routes", () => {
   it("GET /all-places is removed and returns 404", async () => {
     const res = await request(app).get(`${BASE}/all-places`);
     expect(res.status).toBe(404);
+  });
+});
+
+describe("GET /all-facilities body reuse", () => {
+  it("serves a repeated request from the encoded body without rebuilding it", async () => {
+    vi.mocked(orchestration.findAllFacilities).mockResolvedValue([
+      facility("C1", "metro"),
+    ] as any);
+
+    const first = await request(app).get(
+      `${BASE}/all-facilities?category=ramp,elevator&lang=en`,
+    );
+    const second = await request(app).get(
+      `${BASE}/all-facilities?category=elevator,ramp&lang=en`,
+    );
+
+    expect(first.status).toBe(200);
+    expect(second.body).toEqual(first.body);
+    expect(first.body.data[0]._id).toBe("C1");
+    expect(vi.mocked(orchestration.findAllFacilities)).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers 304 when the client already holds the current body", async () => {
+    vi.mocked(orchestration.findAllFacilities).mockResolvedValue([
+      facility("C2", "metro"),
+    ] as any);
+
+    const first = await request(app).get(
+      `${BASE}/all-facilities?category=toilet&lang=en`,
+    );
+    const revalidated = await request(app)
+      .get(`${BASE}/all-facilities?category=toilet&lang=en`)
+      .set("If-None-Match", first.headers.etag);
+
+    expect(first.headers.etag).toBeTruthy();
+    expect(revalidated.status).toBe(304);
+  });
+
+  it("does not keep a failed build, so the next request retries", async () => {
+    vi.mocked(orchestration.findAllFacilities)
+      .mockRejectedValueOnce(new Error("db down"))
+      .mockResolvedValueOnce([facility("C3", "metro")] as any);
+
+    const failed = await request(app).get(
+      `${BASE}/all-facilities?category=parking&lang=en`,
+    );
+    const retried = await request(app).get(
+      `${BASE}/all-facilities?category=parking&lang=en`,
+    );
+
+    expect(failed.status).toBe(500);
+    expect(retried.status).toBe(200);
+    expect(retried.body.data[0]._id).toBe("C3");
+  });
+
+  it("rebuilds once the reuse window has passed", async () => {
+    vi.mocked(orchestration.findAllFacilities)
+      .mockResolvedValueOnce([facility("old", "metro")] as any)
+      .mockResolvedValueOnce([facility("new", "metro")] as any);
+
+    await request(app).get(`${BASE}/all-facilities?category=other&lang=en`);
+    passFacilityListReuseWindow();
+    const later = await request(app).get(
+      `${BASE}/all-facilities?category=other&lang=en`,
+    );
+
+    expect(later.body.data[0]._id).toBe("new");
   });
 });
 

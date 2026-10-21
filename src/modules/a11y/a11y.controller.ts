@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import { normalizeLang, type SupportedLang } from "../../types/lang";
 import type { Request, Response } from "express";
 import type { ServiceCoverageConfig } from "../../config/coverage";
-import { sendResponse } from "../../config/lib";
+import { HTTP_CONFIG } from "../../config/http";
+import { buildResponsePayload, sendResponse } from "../../config/lib";
 import type { ApiResponse } from "../../types/response";
 import { ResponseCode } from "../../types/code";
 import { MSG, ERROR_MESSAGE } from "../../constants/messages";
@@ -9,19 +11,47 @@ import * as a11yService from "./a11y.service";
 import * as a11yOrchestration from "./a11y.orchestration";
 import type { A11yCategory, A11yFacility } from "./a11y.service";
 
-async function getAllFacilities(
-  req: Request,
-  res: Response<ApiResponse<A11yFacility[]>>,
+// Every map open fetches this ~1 MB list. Rebuilding and re-serializing it per
+// request saturated the event loop under load, so the encoded body is reused.
+const allFacilitiesBodies = new Map<
+  string,
+  { expiresAt: number; body: Promise<{ json: string; etag: string }> }
+>();
+
+function allFacilitiesBody(
+  category: A11yCategory[] | undefined,
+  langArgs: [] | [SupportedLang],
 ) {
+  const key = `${[...new Set(category ?? [])].sort().join(",")}|${langArgs[0] ?? ""}`;
+  const hit = allFacilitiesBodies.get(key);
+  if (hit && Date.now() < hit.expiresAt) return hit.body;
+  const body = a11yOrchestration
+    .findAllFacilities(category, ...langArgs)
+    .then((data) => {
+      const json = JSON.stringify(
+        buildResponsePayload(true, "success", ResponseCode.OK, MSG.OK, data),
+      );
+      const hash = createHash("sha1").update(json).digest("base64url");
+      return { json, etag: `W/"${hash}"` };
+    });
+  allFacilitiesBodies.set(key, {
+    expiresAt: Date.now() + HTTP_CONFIG.facilityListCacheTtlMs,
+    body,
+  });
+  body.catch(() => allFacilitiesBodies.delete(key));
+  return body;
+}
+
+async function getAllFacilities(req: Request, res: Response) {
   try {
     const { category } = (req.validated?.query ?? {}) as {
       category?: A11yCategory[];
     };
-    const data = await a11yOrchestration.findAllFacilities(
+    const { json, etag } = await allFacilitiesBody(
       category,
-      ...readLanguageArgs(req),
+      readLanguageArgs(req),
     );
-    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, data);
+    res.status(ResponseCode.OK).type("json").set("ETag", etag).send(json);
   } catch {
     return sendResponse(
       res,
