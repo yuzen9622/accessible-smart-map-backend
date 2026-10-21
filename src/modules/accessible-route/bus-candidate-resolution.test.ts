@@ -231,6 +231,12 @@ describe("all-candidate materialization and chain integration", () => {
         minutesEst: 4,
         polyline: [],
         a11yFacilities: [],
+        maxSlopePercent: null,
+        crossings: null,
+        crossingsWithCurbRamp: null,
+        minPathWidthCm: null,
+        surfaceType: "unknown",
+        restPoints: [],
       },
       second,
     ];
