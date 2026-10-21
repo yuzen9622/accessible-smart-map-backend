@@ -100,9 +100,13 @@ async function notify() {
       (c) =>
         c.type === "button" &&
         c.action.type === "postback" &&
-        c.action.data.startsWith(`action=${action}&`),
+        c.action.data?.startsWith(`action=${action}&`),
     );
-    if (control?.type !== "button" || control.action.type !== "postback") {
+    if (
+      control?.type !== "button" ||
+      control.action.type !== "postback" ||
+      typeof control.action.data !== "string"
+    ) {
       throw new Error("Missing actual notification action");
     }
     return control.action.data;
@@ -110,7 +114,11 @@ async function notify() {
   const tracking = controls.find(
     (c) => c.type === "button" && c.action.type === "uri",
   );
-  if (tracking?.type !== "button" || tracking.action.type !== "uri") {
+  if (
+    tracking?.type !== "button" ||
+    tracking.action.type !== "uri" ||
+    typeof tracking.action.uri !== "string"
+  ) {
     throw new Error("Missing actual tracking link");
   }
   const legacyToken = new URLSearchParams(
@@ -118,7 +126,12 @@ async function notify() {
   ).get("token");
   expect(legacyToken).toBe(session.shareToken);
   expect(legacyToken).toMatch(/^[a-f0-9]{32}$/);
-  return { session, contactId: contact.insertedId, legacyToken, button };
+  return {
+    session,
+    contactId: String(contact.insertedId),
+    legacyToken,
+    button,
+  };
 }
 
 async function click(data: string, lineUserId = "L1") {
@@ -232,7 +245,8 @@ describe("real SOS notification buttons through signed LINE webhook and Mongo", 
         .flatMap((m) => m.quickReply?.items ?? [])
         .map((item) => item.action)
         .filter(
-          (a): a is messagingApi.PostbackAction => a?.type === "postback",
+          (a): a is messagingApi.PostbackAction & { data: string } =>
+            a?.type === "postback" && typeof a.data === "string",
         );
       expect(controls).toHaveLength(3);
       for (const action of controls) {

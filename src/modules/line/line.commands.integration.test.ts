@@ -100,7 +100,7 @@ async function fixture(index: number, lineUserId = "L1") {
     acknowledgements: [],
     timeline: [],
   });
-  return { owner, contactId: contact.insertedId, session };
+  return { owner, contactId: String(contact.insertedId), session };
 }
 
 describe("LINE text actions with real binding, authorization and SOS persistence", () => {
