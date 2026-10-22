@@ -137,10 +137,10 @@ const SAME_TRIP_SLACK_MS = 5 * 60000;
 /** Live ETA rows name the next bus at the boarding stop, so a timetable trip
  * of the same run boarding before that bus (or within the slack after it) is
  * that bus. It replaces the timetable copy only when it also has a live
- * alighting time; otherwise the copy is what the journey chain can trust.
+ * alighting time; otherwise the copy keeps the trip and its per-stop times
+ * and takes the live boarding time (see {@link withLiveBoarding}).
  * A row without a plate is only a predicted first-stop departure: it twins a
- * trip within the slack either way, and the timetable copy is the one that
- * carries per-stop times. */
+ * trip within the slack either way. */
 function sameTrip(
   live: BusDepartureCandidate,
   seed: BusDepartureCandidate,
@@ -155,6 +155,26 @@ function sameTrip(
   return live.plateNumb
     ? gap <= SAME_TRIP_SLACK_MS
     : Math.abs(gap) <= SAME_TRIP_SLACK_MS;
+}
+/** Realtime wins over the timetable for the boarding time. The scheduled
+ * alighting stays, labelled as such, so the journey chain can still use it. */
+function withLiveBoarding(
+  seed: BusDepartureCandidate,
+  live: BusDepartureCandidate,
+): BusDepartureCandidate {
+  return {
+    ...seed,
+    ...(live.plateNumb ? { plateNumb: live.plateNumb } : {}),
+    estimatedWaitMinutes: live.estimatedWaitMinutes,
+    boardingTime: live.boardingTime,
+    boardingTimeSource: "realtime",
+    ...(live.vehicleAccessibility === "unknown"
+      ? {}
+      : {
+          vehicleAccessibility: live.vehicleAccessibility,
+          hasLiftOrRamp: live.hasLiftOrRamp,
+        }),
+  };
 }
 /** The planned leg re-pointed at another service between the same stops,
  * with geometry from that route's own ordered stops. A different service
@@ -324,13 +344,43 @@ export async function collectBusCandidates({
     // transfer time while a later scheduled trip is still valid, so only the
     // timetable copy of a live vehicle is dropped, never the next trip.
     const live = candidates.filter((c) => materialized.has(c.candidateId));
+    const gap = (a: BusDepartureCandidate, b: BusDepartureCandidate) =>
+      Math.abs(candidateEpoch(a.boardingTime) - candidateEpoch(b.boardingTime));
+    const tracked = (l: BusDepartureCandidate) =>
+      Boolean(l.plateNumb) && l.alightingTimeSource === "realtime";
+    // Skeleton members can carry the same trip; it is still one departure.
+    const trips = [
+      ...new Map(timetable.map((s) => [s.candidate.candidateId, s])).values(),
+    ].filter((s) => !live.some((l) => tracked(l) && sameTrip(l, s.candidate)));
+    // Every other twin lends its live boarding time to one trip, closest pairs
+    // first, never to a trip it would board after that trip's alighting.
+    const pairs = live
+      .filter((l) => !tracked(l))
+      .flatMap((l) =>
+        trips
+          .filter(
+            (s) =>
+              sameTrip(l, s.candidate) &&
+              candidateEpoch(l.boardingTime) <
+                candidateEpoch(s.candidate.alightingTime),
+          )
+          .map((s) => ({ l, s })),
+      )
+      .sort((a, b) => gap(a.l, a.s.candidate) - gap(b.l, b.s.candidate));
+    const lent = new Map<ScheduledCandidateSeed, BusDepartureCandidate>();
     const twins = new Set<string>();
-    for (const seed of timetable) {
-      const twin = live.find((l) => sameTrip(l, seed.candidate));
-      if (twin?.plateNumb && twin.alightingTimeSource === "realtime") continue;
-      if (twin && !twin.plateNumb) twins.add(twin.candidateId);
-      candidates.push(seed.candidate);
-      materialized.set(seed.candidate.candidateId, seed.leg);
+    for (const { l, s } of pairs) {
+      if (twins.has(l.candidateId) || lent.has(s)) continue;
+      twins.add(l.candidateId);
+      lent.set(s, l);
+    }
+    for (const seed of trips) {
+      const twin = lent.get(seed);
+      const candidate = twin
+        ? withLiveBoarding(seed.candidate, twin)
+        : seed.candidate;
+      candidates.push(candidate);
+      materialized.set(candidate.candidateId, seed.leg);
     }
     for (const id of twins) materialized.delete(id);
     return {
@@ -356,6 +406,9 @@ export function selectedBusLeg(
 ): BusLeg {
   const board = candidateEpoch(c.boardingTime),
     end = candidateEpoch(c.alightingTime);
+  // Trip matching compares TDX's ScheduledTime, not a live boarding time.
+  const first = source.scheduledTrip?.stops[0];
+  const scheduledBoard = first?.departureAt ?? first?.arrivalAt ?? board;
   const descriptors = Object.getOwnPropertyDescriptors(source);
   for (const key of [
     "_scheduledDepartureTime",
@@ -366,7 +419,7 @@ export function selectedBusLeg(
     delete descriptors[key];
   const leg = Object.defineProperties({ ...source }, descriptors);
   Object.defineProperties(leg, {
-    _scheduledDepartureTime: { value: board, writable: true },
+    _scheduledDepartureTime: { value: scheduledBoard, writable: true },
     _scheduledArrivalTime: { value: end, writable: true },
     _boardingReadyTime: { value: ready, writable: true },
     ...(c.tripId ? { _scheduledTripId: { value: c.tripId } } : {}),

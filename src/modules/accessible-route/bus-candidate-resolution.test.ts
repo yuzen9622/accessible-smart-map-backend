@@ -122,7 +122,7 @@ describe("all-candidate materialization and chain integration", () => {
     });
     expect(getCanonicalBusPair.mock.calls.at(-1)?.[0].now).toBe(start);
   });
-  it("keeps boarding-only realtime visible but uses a trustworthy schedule chain when downstream realtime is missing", async () => {
+  it("shows boarding-only realtime on the timetable trip, whose schedule chain still decides arrival", async () => {
     const route = base(),
       leg = route.legs[0] as BusLeg;
     leg._scheduledDepartureTime = start + 120000;
@@ -144,11 +144,6 @@ describe("all-candidate materialization and chain integration", () => {
     expect(bus.departureCandidates).toMatchObject([
       {
         boardingTimeSource: "realtime",
-        alightingTimeSource: "unknown",
-        selected: false,
-      },
-      {
-        boardingTimeSource: "schedule",
         alightingTimeSource: "schedule",
         selected: true,
       },

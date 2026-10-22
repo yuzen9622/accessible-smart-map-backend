@@ -6,7 +6,10 @@ vi.mock("../transit/bus-stop-pair-eta.service", async (original) => ({
   ...(await original<typeof import("../transit/bus-stop-pair-eta.service")>()),
   getCanonicalBusPair,
 }));
-import { collectBusCandidates } from "./bus-stop-pair-candidates";
+import {
+  collectBusCandidates,
+  selectedBusLeg,
+} from "./bus-stop-pair-candidates";
 import { createCandidateRequestBudget } from "../transit/bus-stop-pair-eta.service";
 import type { BusDepartureCandidate, BusLeg } from "../../types/route";
 
@@ -100,7 +103,7 @@ const serveLive = (
     ],
   });
 };
-const collect = async (seeds: ReturnType<typeof seed>[]) => {
+const collectRaw = async (seeds: ReturnType<typeof seed>[]) => {
   const budget = createCandidateRequestBudget();
   try {
     const result = await collectBusCandidates({
@@ -115,14 +118,16 @@ const collect = async (seeds: ReturnType<typeof seed>[]) => {
     expect(
       result.candidates.every((c) => result.materialized.has(c.candidateId)),
     ).toBe(true);
-    return result.candidates.map(
-      (c) =>
-        `${c.subRouteUid === "TXG73" ? "" : `${c.routeName} `}${c.boardingTimeSource}@${c.estimatedWaitMinutes}`,
-    );
+    return result;
   } finally {
     budget.close();
   }
 };
+const collect = async (seeds: ReturnType<typeof seed>[]) =>
+  (await collectRaw(seeds)).candidates.map(
+    (c) =>
+      `${c.subRouteUid === "TXG73" ? "" : `${c.routeName} `}${c.boardingTimeSource}@${c.estimatedWaitMinutes}`,
+  );
 
 describe("timetable copies of live buses", () => {
   it("shows a tracked bus once, not again as its timetable trip", async () => {
@@ -143,14 +148,77 @@ describe("timetable copies of live buses", () => {
     ]);
   });
 
-  it("keeps the timetable trip a boarding-only bus cannot replace in the chain", async () => {
-    serveLive([{ plate: "788-U5", minute: 22, alights: false }]);
-    expect(await collect([seed(22)])).toEqual(["realtime@22", "schedule@22"]);
+  it("lists a boarding-only bus once, as its trip with the live boarding time", async () => {
+    serveLive([{ plate: "788-U5", minute: 24, alights: false }]);
+    const { candidates } = await collectRaw([seed(22)]);
+    expect(candidates).toEqual([
+      expect.objectContaining({
+        candidateId: seed(22).candidate.candidateId,
+        tripId: "trip-22",
+        plateNumb: "788-U5",
+        estimatedWaitMinutes: 24,
+        boardingTimeSource: "realtime",
+        alightingTime: iso(52),
+        alightingTimeSource: "schedule",
+      }),
+    ]);
+    expect(Date.parse(candidates[0].boardingTime ?? "")).toBe(at(24));
   });
 
-  it("keeps the timetable trip over an untracked first-stop prediction", async () => {
-    serveLive([{ minute: 36 }]);
-    expect(await collect([seed(36)])).toEqual(["schedule@36"]);
+  it("keeps matching a live-boarding trip by its timetable departure", async () => {
+    serveLive([{ plate: "788-U5", minute: 24, alights: false }]);
+    const tripLeg: BusLeg = {
+      ...leg,
+      scheduledTrip: {
+        tripId: "trip-22",
+        boardingReadyAt: now,
+        stops: [
+          { stopUid: "S1", name: "S1", departureAt: at(22) },
+          { stopUid: "S2", name: "S2", arrivalAt: at(52) },
+        ],
+      },
+    };
+    const { candidates } = await collectRaw([{ ...seed(22), leg: tripLeg }]);
+    const selected = selectedBusLeg(tripLeg, candidates[0], now);
+    expect(selected._scheduledDepartureTime).toBe(at(22));
+    expect(selected.waitInfo).toEqual({ time: 24, source: "realtime" });
+  });
+
+  it("never drops a bunched bus whose trip another bus already took", async () => {
+    serveLive([
+      { plate: "W", minute: 20, alights: false },
+      { plate: "X", minute: 23, alights: false },
+    ]);
+    expect(await collect([seed(22), seed(27)])).toEqual([
+      "realtime@20",
+      "realtime@23",
+      "schedule@27",
+    ]);
+  });
+
+  it("does not lend a bus later than the trip's alighting to that trip", async () => {
+    serveLive([{ plate: "788-U5", minute: 30, alights: false }]);
+    const short = seed(22);
+    short.candidate = { ...short.candidate, alightingTime: iso(28) };
+    expect(await collect([short])).toEqual(["realtime@30", "schedule@22"]);
+  });
+
+  it("lists a trip shared by skeleton members once, with its live time", async () => {
+    serveLive([{ plate: "788-U5", minute: 24, alights: false }]);
+    expect(await collect([seed(22), seed(22)])).toEqual(["realtime@24"]);
+  });
+
+  it("prefers an untracked first-stop prediction over the timetable time", async () => {
+    serveLive([{ minute: 38 }]);
+    expect(await collect([seed(36)])).toEqual(["realtime@38"]);
+  });
+
+  it("gives one bus's live time only to the closest of the trips it twins", async () => {
+    serveLive([{ plate: "788-U5", minute: 23, alights: false }]);
+    expect(await collect([seed(18), seed(22)])).toEqual([
+      "schedule@18",
+      "realtime@23",
+    ]);
   });
 });
 
