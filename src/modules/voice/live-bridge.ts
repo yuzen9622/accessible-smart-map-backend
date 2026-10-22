@@ -878,7 +878,11 @@ export async function createLiveBridge(
       navigationId: navigation.navigationId,
       routeVersion: navigation.routeVersion,
     };
+    const currentLegIndex = navSession.getCurrentLegIndex();
     const rerouteRequest = {
+      ...(currentLegIndex !== undefined && currentLegIndex > 0
+        ? { completedLegIndex: currentLegIndex - 1 }
+        : {}),
       routeToken: navigation.routeToken,
       currentPosition: triggerPosition,
       previousRouteVersion: navigation.routeVersion,

@@ -468,6 +468,11 @@ export class NavigationSession {
   }
 
   /** Progress worth persisting, or null when there is nothing to resume. */
+  getCurrentLegIndex(): number | undefined {
+    if (this.disposed || !this.active) return undefined;
+    return this.steps[Math.max(0, this.announcedIndex)]?.legIndex;
+  }
+
   getSnapshotState(): { currentStepIndex: number; onVehicle: boolean } | null {
     if (this.disposed || !this.active) return null;
     return {
