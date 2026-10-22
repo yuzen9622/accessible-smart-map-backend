@@ -94,6 +94,93 @@ describe("rerouteAccessibleRoute", () => {
     });
   });
 
+  it("reroutes a completed bus journey's remaining walk without introducing another bus", async () => {
+    readNavigationTokenStrict.mockResolvedValue({
+      status: "ok",
+      value: {
+        ...envelope,
+        canonicalRequest: { ...canonicalRequest, travelMode: "transit" },
+        route: {
+          ...envelope.route,
+          legs: [
+            { type: "BUS", selectedDeparture: { candidateId: "chosen" } },
+            ...route("tail").legs,
+          ],
+        },
+      },
+    });
+    const result = await rerouteAccessibleRoute({
+      ...request,
+      completedLegIndex: 0,
+    });
+    expect(result.ok).toBe(true);
+    expect(planAccessibleRouteFromRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ travelMode: "walk", maxTransfers: 0 }),
+    );
+    expect(finalizeReroute.mock.calls[0][3]).toMatchObject({
+      canonicalRequest: { travelMode: "walk", maxTransfers: 0 },
+    });
+  });
+  it("rejects an unexpected transit result when rerouting the walking tail", async () => {
+    readNavigationTokenStrict.mockResolvedValue({
+      status: "ok",
+      value: {
+        ...envelope,
+        route: {
+          ...envelope.route,
+          legs: [
+            { type: "BUS", selectedDeparture: { candidateId: "chosen" } },
+            ...route("tail").legs,
+          ],
+        },
+      },
+    });
+    planAccessibleRouteFromRequest.mockResolvedValue({
+      ok: true,
+      data: { routes: [{ ...route("wrong"), legs: [{ type: "BUS" }] }] },
+    });
+    expect(
+      await rerouteAccessibleRoute({ ...request, completedLegIndex: 0 }),
+    ).toMatchObject({ ok: false, status: 422 });
+    expect(finalizeReroute).not.toHaveBeenCalled();
+  });
+  it("does not unlock a future selected bus using completion of an earlier walking leg", async () => {
+    readNavigationTokenStrict.mockResolvedValue({
+      status: "ok",
+      value: {
+        ...envelope,
+        route: {
+          ...envelope.route,
+          legs: [
+            ...route("head").legs,
+            { type: "BUS", selectedDeparture: { candidateId: "chosen" } },
+            ...route("tail").legs,
+          ],
+        },
+      },
+    });
+    expect(
+      await rerouteAccessibleRoute({ ...request, completedLegIndex: 0 }),
+    ).toMatchObject({
+      ok: false,
+      status: 409,
+      data: { reason: "BUS_SELECTION_REQUIRES_REPLAN" },
+    });
+    expect(planAccessibleRouteFromRequest).not.toHaveBeenCalled();
+  });
+  it.each([-1, 0.5, 99])(
+    "rejects invalid completed leg progress %s",
+    async (completedLegIndex) => {
+      expect(
+        await rerouteAccessibleRoute({ ...request, completedLegIndex }),
+      ).toMatchObject({
+        ok: false,
+        status: 400,
+        data: { reason: "NAVIGATION_PROGRESS_INVALID" },
+      });
+      expect(planAccessibleRouteFromRequest).not.toHaveBeenCalled();
+    },
+  );
   it.each(["en", "zh-TW", undefined] as const)(
     "provides a stable reason if finalization is unavailable (%s)",
     async (language) => {
@@ -334,3 +421,24 @@ it.each(["rail", "metro"] as const)(
     );
   },
 );
+
+it("never drops an adopted bus identity by replanning the canonical request", async () => {
+  vi.clearAllMocks();
+  readNavigationTokenStrict.mockResolvedValue({
+    status: "ok",
+    value: {
+      ...envelope,
+      route: {
+        ...envelope.route,
+        legs: [{ type: "BUS", selectedDeparture: { candidateId: "chosen" } }],
+      },
+    },
+  });
+  expect(await rerouteAccessibleRoute(request)).toMatchObject({
+    ok: false,
+    status: 409,
+    data: { reason: "BUS_SELECTION_REQUIRES_REPLAN" },
+  });
+  expect(beginReroute).not.toHaveBeenCalled();
+  expect(planAccessibleRouteFromRequest).not.toHaveBeenCalled();
+});

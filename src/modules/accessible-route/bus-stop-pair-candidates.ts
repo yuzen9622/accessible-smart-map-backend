@@ -30,6 +30,7 @@ export interface BusRouteCandidateContext {
       scheduledSeeds: ScheduledCandidateSeed[];
       effectiveBoardingReadyAt: number;
       selectedCandidateId?: string;
+      lockedCandidate?: BusDepartureCandidate;
       candidateSearchComplete: boolean;
     }
   >;

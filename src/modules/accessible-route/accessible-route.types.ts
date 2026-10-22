@@ -209,6 +209,7 @@ export interface NavigationRouteEnvelope {
 }
 
 export interface RerouteRequest {
+  completedLegIndex?: number;
   language?: SupportedLang;
   routeToken: string;
   currentPosition: {

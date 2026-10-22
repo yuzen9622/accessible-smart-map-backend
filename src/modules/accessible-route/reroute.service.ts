@@ -4,6 +4,7 @@ import { ResponseCode } from "../../types/code";
 import { DEFAULT_LANG } from "../../types/lang";
 import {
   REROUTE_MSG,
+  BUS_SELECTION_MSG,
   REROUTE_MSG_EN,
   ROUTE_MSG,
 } from "../../constants/messages";
@@ -81,6 +82,49 @@ export async function rerouteAccessibleRoute(
   if (previous.routeVersion !== request.previousRouteVersion) {
     return conflict(messages.CONFLICT);
   }
+  const completed = request.completedLegIndex;
+  if (
+    completed !== undefined &&
+    (!Number.isInteger(completed) ||
+      completed < 0 ||
+      completed >= previous.route.legs.length - 1)
+  ) {
+    return {
+      ok: false,
+      status: ResponseCode.INVALID_INPUT,
+      error: messages.CONFLICT,
+      data: { reason: "NAVIGATION_PROGRESS_INVALID" },
+    };
+  }
+  const selectedBusIndices = previous.route.legs.flatMap((leg, index) =>
+    leg.type === "BUS" && leg.selectedDeparture ? [index] : [],
+  );
+  const walkingTail =
+    selectedBusIndices.length > 0 &&
+    completed !== undefined &&
+    selectedBusIndices.every((index) => index <= completed) &&
+    previous.route.legs
+      .slice(completed + 1)
+      .every((leg) => leg.type === "WALK");
+  if (selectedBusIndices.length && !walkingTail) {
+    return {
+      ok: false,
+      status: ResponseCode.CONFLICT,
+      error:
+        language === "en"
+          ? BUS_SELECTION_MSG.REROUTE_EN
+          : BUS_SELECTION_MSG.REROUTE,
+      data: { reason: "BUS_SELECTION_REQUIRES_REPLAN" },
+    };
+  }
+  const canonicalRequest = walkingTail
+    ? {
+        ...previous.canonicalRequest,
+        travelMode: "walk" as const,
+        maxTransfers: 0,
+        transitPreference: "none" as const,
+      }
+    : previous.canonicalRequest;
   const begun = await beginReroute(
     previous.navigationId,
     request.previousRouteVersion,
@@ -110,7 +154,7 @@ export async function rerouteAccessibleRoute(
       longitude: request.currentPosition.longitude,
     };
     const planned = await planAccessibleRouteFromRequest({
-      ...previous.canonicalRequest,
+      ...canonicalRequest,
       language,
       origin: currentOrigin,
       userLocation: currentOrigin,
@@ -131,7 +175,9 @@ export async function rerouteAccessibleRoute(
           : { ...(existingData ?? {}), reason: "REROUTE_PLANNING_FAILED" },
       };
     }
-    const selected = planned.data.routes[0];
+    const selected = planned.data.routes.find(
+      (route) => !walkingTail || route.legs.every((leg) => leg.type === "WALK"),
+    );
     if (!selected) {
       await release();
       return {
@@ -207,7 +253,7 @@ export async function rerouteAccessibleRoute(
       navigationId: previous.navigationId,
       routeVersion,
       canonicalRequest: {
-        ...previous.canonicalRequest,
+        ...canonicalRequest,
         origin: currentOrigin,
         userLocation: currentOrigin,
         language,

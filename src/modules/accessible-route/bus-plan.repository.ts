@@ -1,5 +1,10 @@
 import { redisGet, redisSet } from "../../config/redis";
-import type { AccessibleRoute, BusLeg } from "../../types/route";
+import { createHash } from "crypto";
+import type {
+  AccessibleRoute,
+  BusLeg,
+  BusDepartureCandidate,
+} from "../../types/route";
 import {
   getBusCandidateContext,
   type BusRouteCandidateContext,
@@ -91,5 +96,45 @@ export async function readBusPlan(
       : null;
   } catch {
     return null;
+  }
+}
+
+function offeredCandidateKey(
+  token: string,
+  legIndex: number,
+  candidateId: string,
+): string {
+  return `bus-candidate:${token}:${legIndex}:${createHash("sha256").update(candidateId).digest("hex")}`;
+}
+
+/** Keep the identity actually shown to the caller across a subsequent ETA change. */
+export async function storeOfferedBusCandidates(
+  token: string,
+  legIndex: number,
+  candidates: BusDepartureCandidate[],
+): Promise<void> {
+  await Promise.all(
+    candidates.map((candidate) =>
+      redisSet(
+        offeredCandidateKey(token, legIndex, candidate.candidateId),
+        JSON.stringify(candidate),
+        30 * 60,
+      ),
+    ),
+  );
+}
+
+export async function readOfferedBusCandidate(
+  token: string,
+  legIndex: number,
+  candidateId: string,
+): Promise<BusDepartureCandidate | undefined> {
+  const raw = await redisGet(offeredCandidateKey(token, legIndex, candidateId));
+  if (!raw) return undefined;
+  try {
+    const candidate = JSON.parse(raw) as BusDepartureCandidate;
+    return candidate.candidateId === candidateId ? candidate : undefined;
+  } catch {
+    return undefined;
   }
 }

@@ -12,7 +12,11 @@ import {
   getBusVehicleStopTimes,
   type CandidateRequestBudget,
 } from "../transit/bus-stop-pair-eta.service";
-import { readBusPlan, type BusPlanSnapshotV2 } from "./bus-plan.repository";
+import {
+  readBusPlan,
+  storeOfferedBusCandidates,
+  type BusPlanSnapshotV2,
+} from "./bus-plan.repository";
 import { getRouteByToken } from "./route-token.service";
 import { attachBusSchedule } from "./route-schedule";
 import {
@@ -47,15 +51,21 @@ async function rideDetail(
   budget: CandidateRequestBudget,
   now: number,
 ): Promise<BusRouteDetailResult> {
-  if (leg.scheduledTrip) return getPlannedBusRouteDetail(leg, city);
+  if (leg.scheduledTrip && (!leg.selectedDeparture || !leg.plateNumb))
+    return getPlannedBusRouteDetail(leg, city);
   const providerCity = leg.tdxCity ?? leg.cityCode;
   if (!leg.plateNumb || !providerCity)
     return getCandidateBusRouteDetail(leg, city);
   const stopIds = [
-    leg.departureStopId,
-    ...(leg.intermediateStops ?? []).map((s) => s.stationUid),
-    leg.arrivalStopId,
-  ].filter((id): id is string => Boolean(id));
+    ...new Set(
+      [
+        leg.departureStopId,
+        ...(leg.intermediateStops ?? []).map((s) => s.stationUid),
+        leg.arrivalStopId,
+        ...(leg.scheduledTrip?.stops.map((s) => s.stopUid) ?? []),
+      ].filter((id): id is string => Boolean(id)),
+    ),
+  ];
   const { plateNumb, subRouteUid, direction, routeName } = leg;
   const times = await budget
     .run(() =>
@@ -83,6 +93,36 @@ async function refreshPair(
   if (!stored) return missing();
   const city = await resolveBusCity(stored.leg.tdxCity ?? stored.leg.cityCode);
   if (!city) return missing();
+  if (stored.lockedCandidate) {
+    const budget = createCandidateRequestBudget();
+    try {
+      const leg = withStoredSchedule({
+        ...stored.leg,
+        selectedDeparture: stored.lockedCandidate,
+      });
+      if (stored.lockedCandidate.plateNumb)
+        leg.plateNumb = stored.lockedCandidate.plateNumb;
+      const detail = await rideDetail(leg, city, budget, now);
+      if (!detail.ok) return detail;
+      const selected =
+        detail.departureCandidates?.[0] ?? stored.lockedCandidate;
+      return {
+        ...detail,
+        departureCandidates: [
+          { ...selected, selected: true },
+          ...(stored.leg.departureCandidates ?? [])
+            .filter(
+              (candidate) =>
+                candidate.candidateId !== stored.lockedCandidate?.candidateId,
+            )
+            .map((candidate) => ({ ...candidate, selected: false })),
+        ].slice(0, 5),
+        candidateSearchComplete: false,
+      };
+    } finally {
+      budget.close();
+    }
+  }
   const first = snapshot.timeline.findIndex(
     (l) => l.type === "BUS" && l.legIndex === legIndex,
   );
@@ -143,8 +183,17 @@ async function refreshPair(
       selected && source
         ? selectedBusLeg(source, selected, ready)
         : withStoredSchedule(stored.leg);
+    if (selected && source) leg.selectedDeparture = selected;
     const detail = await rideDetail(leg, city, budget, now);
     if (!detail.ok) return detail;
+    const timing = detail.departureCandidates?.[0];
+    const sameRide = detail.directions.some(
+      (direction) =>
+        direction.subRouteUid === selected?.subRouteUid &&
+        direction.direction === selected?.direction &&
+        direction.stops[0]?.stopUid === selected?.departureStopId &&
+        direction.stops.at(-1)?.stopUid === selected?.arrivalStopId,
+    );
     return {
       ...detail,
       departureCandidates: projectPublicCandidates(
@@ -152,6 +201,25 @@ async function refreshPair(
         snapshot.mode,
         selected?.candidateId,
         ready,
+      ).map((candidate) =>
+        sameRide && timing?.candidateId === candidate.candidateId
+          ? {
+              ...candidate,
+              ...(timing.boardingTimeSource === "realtime"
+                ? {
+                    boardingTime: timing.boardingTime,
+                    boardingTimeSource: timing.boardingTimeSource,
+                    estimatedWaitMinutes: timing.estimatedWaitMinutes,
+                  }
+                : {}),
+              ...(timing.alightingTimeSource === "realtime"
+                ? {
+                    alightingTime: timing.alightingTime,
+                    alightingTimeSource: timing.alightingTimeSource,
+                  }
+                : {}),
+            }
+          : candidate,
       ),
       candidateSearchComplete: complete,
     };
@@ -176,8 +244,16 @@ export async function getPlannedBusArrivals(
       status: ResponseCode.NOT_FOUND,
       error: TRANSIT_MSG.PLAN_EXPIRED,
     };
-  if (busPlan && "schemaVersion" in busPlan && busPlan.schemaVersion === 2)
-    return refreshPair(busPlan, legIndex, Date.now());
+  if (busPlan && "schemaVersion" in busPlan && busPlan.schemaVersion === 2) {
+    const result = await refreshPair(busPlan, legIndex, Date.now());
+    if (result.ok && result.departureCandidates)
+      await storeOfferedBusCandidates(
+        routeToken,
+        legIndex,
+        result.departureCandidates,
+      );
+    return result;
+  }
   const cachedLeg = busPlan?.legs[legIndex];
   const leg =
     route?.legs[legIndex] ??

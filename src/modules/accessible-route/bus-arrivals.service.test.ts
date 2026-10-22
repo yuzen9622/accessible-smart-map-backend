@@ -418,7 +418,9 @@ describe("v2 suffix replay from trusted context", () => {
         candidateSearchComplete: false,
         departureCandidates: [{ routeName: "first", selected: true }],
       });
-      expect(redisSet).not.toHaveBeenCalled();
+      expect(
+        redisSet.mock.calls.every(([key]) => key.startsWith("bus-candidate:")),
+      ).toBe(true);
     },
   );
   it.each([true, false])(
@@ -629,6 +631,163 @@ describe("stop-by-stop arrivals for the adopted departure candidate", () => {
       ["B", null, "10:10"],
       ["C", 25, "正常"],
     ]);
+  });
+
+  it("prefers the same trip's matched live endpoints without changing candidate order or selection", async () => {
+    const first = scheduledSeed();
+    const later = {
+      leg: plan("10:04").legs[1],
+      candidate: {
+        ...first.candidate,
+        candidateId: "later",
+        tripId: "trip-later",
+        boardingTime: "2030-01-01T10:04:00+08:00",
+        alightingTime: "2030-01-01T10:24:00+08:00",
+      },
+    };
+    v2([first, later]);
+    getCanonicalBusPair.mockResolvedValue(noLiveVehicles);
+    tdxFetch.mockResolvedValue({
+      ok: true,
+      json: async () => [eta(1, 12), eta(3, 30)],
+    });
+    const result = await getPlannedBusArrivals("plan", 1);
+    expect(result).toMatchObject({
+      ok: true,
+      departureCandidates: [
+        {
+          candidateId: first.candidate.candidateId,
+          selected: true,
+          boardingTime: "2030-01-01T10:07:00.000+08:00",
+          boardingTimeSource: "realtime",
+          estimatedWaitMinutes: 12,
+          alightingTime: "2030-01-01T10:25:00.000+08:00",
+          alightingTimeSource: "realtime",
+        },
+        {
+          candidateId: "later",
+          selected: false,
+          boardingTimeSource: "schedule",
+        },
+      ],
+    });
+  });
+
+  it("keeps boarding and alighting sources separate and falls back only while matched live data is absent", async () => {
+    const first = scheduledSeed();
+    v2([first]);
+    getCanonicalBusPair.mockResolvedValue(noLiveVehicles);
+    const polls = [];
+    for (const minutes of [8, null, 7]) {
+      tdxFetch.mockResolvedValue({
+        ok: true,
+        json: async () => (minutes === null ? [] : [eta(1, minutes)]),
+      });
+      const result = await getPlannedBusArrivals("plan", 1);
+      if (!result.ok) throw new Error(result.error);
+      polls.push(result.departureCandidates?.[0]);
+    }
+    expect(polls).toEqual([
+      expect.objectContaining({
+        candidateId: first.candidate.candidateId,
+        selected: true,
+        boardingTimeSource: "realtime",
+        estimatedWaitMinutes: 8,
+        alightingTimeSource: "schedule",
+      }),
+      expect.objectContaining({
+        candidateId: first.candidate.candidateId,
+        selected: true,
+        boardingTimeSource: "schedule",
+        estimatedWaitMinutes: 5,
+        alightingTimeSource: "schedule",
+      }),
+      expect.objectContaining({
+        candidateId: first.candidate.candidateId,
+        selected: true,
+        boardingTimeSource: "realtime",
+        estimatedWaitMinutes: 7,
+        alightingTimeSource: "schedule",
+      }),
+    ]);
+  });
+
+  it.each([
+    { SubRouteUID: "OTHER" },
+    { Direction: 1 },
+    { StopUID: "OTHER" },
+    { ScheduledTime: "10:10" },
+  ])(
+    "does not promote live data for a different service: %j",
+    async (mismatch) => {
+      v2([scheduledSeed()]);
+      getCanonicalBusPair.mockResolvedValue(noLiveVehicles);
+      tdxFetch.mockResolvedValue({
+        ok: true,
+        json: async () => [{ ...eta(1, 8), ...mismatch }],
+      });
+      expect(await getPlannedBusArrivals("plan", 1)).toMatchObject({
+        ok: true,
+        departureCandidates: [
+          {
+            selected: true,
+            boardingTimeSource: "schedule",
+            estimatedWaitMinutes: 5,
+          },
+        ],
+      });
+    },
+  );
+
+  it("keeps freshly collected live candidate times when stop detail has no live data", async () => {
+    v2();
+    getCanonicalBusPair.mockResolvedValue(
+      pairResult("fresh-live", at("10:01"), at("10:10")),
+    );
+    tdxFetch.mockResolvedValue({ ok: true, json: async () => [] });
+    expect(await getPlannedBusArrivals("plan", 1)).toMatchObject({
+      ok: true,
+      departureCandidates: [
+        {
+          selected: true,
+          boardingTime: "2030-01-01T10:01:00.000+08:00",
+          boardingTimeSource: "realtime",
+          estimatedWaitMinutes: 6,
+          alightingTime: "2030-01-01T10:10:00.000+08:00",
+          alightingTimeSource: "realtime",
+        },
+      ],
+    });
+  });
+
+  it("does not borrow another vehicle's ETA when the candidate already identifies a plate", async () => {
+    const first = scheduledSeed();
+    v2([
+      {
+        leg: { ...first.leg, subRouteUid: "known-plate" },
+        candidate: {
+          ...first.candidate,
+          subRouteUid: "known-plate",
+          plateNumb: "CHOSEN",
+        },
+      },
+    ]);
+    getCanonicalBusPair.mockResolvedValue(noLiveVehicles);
+    tdxFetch.mockResolvedValue({
+      ok: true,
+      json: async () => [{ ...eta(1, 8, "OTHER"), SubRouteUID: "known-plate" }],
+    });
+    expect(await getPlannedBusArrivals("plan", 1)).toMatchObject({
+      ok: true,
+      departureCandidates: [
+        {
+          selected: true,
+          plateNumb: "CHOSEN",
+          boardingTimeSource: "schedule",
+          estimatedWaitMinutes: 5,
+        },
+      ],
+    });
   });
 
   it("still matches the planned bus live when no candidate can be adopted", async () => {

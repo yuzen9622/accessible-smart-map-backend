@@ -13,7 +13,44 @@ import {
 import { rerouteAccessibleRoute } from "./reroute.service";
 import type { RerouteRequest } from "./accessible-route.types";
 import { getPlannedBusArrivals } from "./bus-arrivals.service";
+import { selectBusDeparture } from "./bus-selection.service";
 import { localizeRouteReason } from "../../utils/route-messages";
+
+export async function selectBusDepartureHttp(
+  req: Request,
+  res: Response<ApiResponse<unknown>>,
+) {
+  res.setHeader("Cache-Control", "private, no-store");
+  try {
+    const result = await selectBusDeparture(
+      req.validated?.body as {
+        routeToken: string;
+        legIndex: number;
+        candidateId: string;
+      },
+    );
+    if (!result.ok)
+      return sendResponse(
+        res,
+        false,
+        "error",
+        result.status,
+        result.error,
+        result.data,
+      );
+    return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, {
+      route: result.route,
+    });
+  } catch {
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      ERROR_MESSAGE.INTERNAL,
+    );
+  }
+}
 
 export async function plannedBusArrivalsHttp(
   req: Request,

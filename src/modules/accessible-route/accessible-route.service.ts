@@ -3580,3 +3580,31 @@ export async function findAccessibleRoutesDetailed(
     ? { status: "ok", routes, walkingBetter: true }
     : { status: "ok", routes };
 }
+
+/** Apply the planner's replacement-leg constraints before adopting a bus. */
+export async function isBusSelectionAccessible(
+  base: AccessibleRoute,
+  route: AccessibleRoute,
+  request: CanonicalPlanRouteRequest,
+): Promise<boolean> {
+  await enrichTopRoutes(
+    [route],
+    { lat: request.origin.latitude, lng: request.origin.longitude },
+    { lat: request.destination.latitude, lng: request.destination.longitude },
+    request.mode,
+  ).catch((err) =>
+    console.warn("[accessible-route] candidate a11y enrichment failed", err),
+  );
+  const [community, government] = await Promise.all([
+    loadConfirmedHazards([route], defaultConfirmedHazardLookup),
+    loadGovernmentHazards([route]),
+  ]);
+  const hazards = combineHazards(community, government);
+  if (hazards !== undefined) planWithConfirmedHazards([route], hazards);
+  return !(
+    (isRouteExcluded(route, resolveA11yConstraints(request.mode, request)) &&
+      !base.degraded) ||
+    (route.hazardAdvisory?.blockingOnRoute ?? 0) >
+      (base.hazardAdvisory?.blockingOnRoute ?? 0)
+  );
+}

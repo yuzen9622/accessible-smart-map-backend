@@ -190,6 +190,10 @@ export const AccessibleRouteRerouteBodySchema = z
         accuracy: z.number().finite().min(0).max(10_000).optional(),
       })
       .strict(),
+    completedLegIndex: z.number().int().nonnegative().optional().openapi({
+      description:
+        "導航進度已完成的最後路段索引。只有已採用公車全部完成且剩餘路段全為 WALK 時，才允許尾段純步行重新規劃；省略保持保守，不能用 GPS 最近點推定下車。",
+    }),
     previousRouteVersion: z.number().int().positive(),
     reason: z.enum([
       "OFF_ROUTE",
@@ -580,10 +584,11 @@ const LowFloorAlternativeSchema = z
 
 const BusLegSchema = z
   .object({
-    geometrySource: z.literal("route_stops").optional().openapi({
+    geometrySource: z.enum(["route_stops", "route_shape"]).optional().openapi({
       description:
-        "Geometry materialized from validated ordered route-stop coordinates, not a measured shape",
+        "route_shape 為對應子路線與方向、裁切至上下車站的道路線形；缺少可信線形時以 route_stops 表示依站序連線。",
     }),
+    selectedDeparture: BusDepartureCandidateSchema.optional(),
     departureCandidates: z.array(BusDepartureCandidateSchema).max(5).optional(),
     candidateSearchComplete: z.boolean().optional(),
     ...RouteSourceNameFields,
@@ -1551,7 +1556,8 @@ registry.registerPath({
     401: { description: "帶了 Bearer token 但已過期" },
     403: { description: "Bearer token 無效" },
     409: {
-      description: "stale route version 或已有 reroute in flight",
+      description:
+        "stale route version、已有 reroute in flight，或已採用的公車班次無法保留（BUS_SELECTION_REQUIRES_REPLAN）",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     410: {
@@ -1606,6 +1612,66 @@ registry.registerPath({
     200: {
       description: "規劃班次逐站資訊",
       content: { "application/json": { schema: BusRouteDetailResponseSchema } },
+    },
+  },
+});
+
+export const BusSelectionBodySchema = z
+  .object({
+    routeToken: z.string().trim().min(1).max(256),
+    legIndex: z.number().int().nonnegative(),
+    candidateId: z.string().trim().min(1).max(512),
+  })
+  .strict();
+
+export const BusSelectionResponseSchema = z
+  .object({
+    ok: z.literal(true),
+    status: z.literal("success"),
+    code: z.literal(200),
+    message: z.string(),
+    data: z.object({ route: AccessibleRouteSchema }),
+    accessToken: z.string().optional(),
+  })
+  .openapi("BusSelectionResponse");
+
+registry.registerPath({
+  method: "post",
+  path: "/a11y/accessible-route/bus-selection",
+  tags: ["Accessibility"],
+  summary: "採用公車候選班次並建立獨立導航行程",
+  description:
+    "重新驗證班次身份、後續轉乘與無障礙限制；成功回傳新 routeToken，原行程不變。已採用班次的到站資訊固定追蹤相同車輛或時刻表班次。",
+  request: {
+    body: {
+      required: true,
+      content: { "application/json": { schema: BusSelectionBodySchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "新導航行程",
+      content: {
+        "application/json": {
+          schema: BusSelectionResponseSchema,
+        },
+      },
+    },
+    400: {
+      description: "參數或公車路段無效",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    409: {
+      description: "候選班次已失效、身份不明或無可行轉乘",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    410: {
+      description: "行程識別已過期",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    503: {
+      description: "導航狀態暫時無法儲存或讀取",
+      content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
 });

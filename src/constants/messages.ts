@@ -482,3 +482,13 @@ export const AUTH_MSG = {
   INVALID_CLIENT_HEADER: "無效的 X-Client 標頭",
   MIXED_TOKEN_SOURCES: "不可同時混合多種權杖來源",
 } as const;
+
+export const BUS_SELECTION_MSG = {
+  UNAVAILABLE: "目前無法儲存公車班次，請稍後重試。",
+  STALE: "此班次已無法確認或無法銜接後續路線，請更新候選班次。",
+  EXPIRED: "行程識別已過期，請重新規劃。",
+  INVALID_LEG: "指定路段不是公車路段。",
+  REROUTE: "重新規劃無法保留已選班次，請重新選擇行程。",
+  REROUTE_EN:
+    "Your selected bus cannot be kept when rerouting. Please plan a new journey.",
+} as const;

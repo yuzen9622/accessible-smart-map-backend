@@ -293,8 +293,9 @@ export interface TransitAbsoluteSchedule {
 }
 
 export interface BusLeg extends RouteSourceNames, TransitAbsoluteSchedule {
-  /** Live identity geometry from validated ordered route-stop coordinates. */
-  geometrySource?: "route_stops";
+  /** Ordered route stops, or a verified branch shape trimmed to these stops. */
+  geometrySource?: "route_stops" | "route_shape";
+  selectedDeparture?: BusDepartureCandidate;
   departureCandidates?: BusDepartureCandidate[];
   candidateSearchComplete?: boolean;
   _canonicalDepartureStopId?: string;
