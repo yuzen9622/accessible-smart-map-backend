@@ -311,7 +311,7 @@ async function main(): Promise<number> {
   printPlan(steps);
 
   const blockers = steps.flatMap((step) =>
-    findStepBlockers(step, process.env, fileExists).map(
+    findStepBlockers(step, process.env, fileExists, hasCommand).map(
       (reason) => `${step.id}: ${reason}`,
     ),
   );

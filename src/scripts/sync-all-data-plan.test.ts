@@ -35,9 +35,10 @@ describe("SYNC_STEPS registry", () => {
     });
   });
 
-  it("imports GTFS as four separate steps, not via gtfs-all", () => {
+  it("downloads the feed, then imports GTFS as four separate steps, not via gtfs-all", () => {
     const gtfs = ids(SYNC_STEPS).filter((id) => id.startsWith("gtfs-"));
     expect(gtfs).toEqual([
+      "gtfs-feed",
       "gtfs-levels",
       "gtfs-stops",
       "gtfs-trips",
@@ -56,6 +57,22 @@ describe("SYNC_STEPS registry", () => {
     expect(order.indexOf("traffic-map")).toBeLessThan(
       order.indexOf("traffic-tar"),
     );
+  });
+
+  it("fetches public datasets online instead of requiring local copies", () => {
+    for (const id of [
+      "gtfs-levels",
+      "gtfs-stops",
+      "gtfs-trips",
+      "gtfs-pathways",
+      "a11y-metro",
+      "bathrooms",
+      "welfare",
+    ]) {
+      expect(
+        SYNC_STEPS.find((s) => s.id === id)?.requiredFiles,
+      ).toBeUndefined();
+    }
   });
 
   it("keeps every collection-wiping step out of the default group", () => {
@@ -172,9 +189,15 @@ describe("venue import step", () => {
     const env = Object.fromEntries(
       (venue?.requiredEnv ?? []).map((name) => [name, "set"]),
     );
-    expect(venue && findStepBlockers(venue, env, () => false)).toEqual([
-      "missing data/venues/nutc-sanmin.osm",
-    ]);
+    expect(
+      venue &&
+        findStepBlockers(
+          venue,
+          env,
+          () => false,
+          () => true,
+        ),
+    ).toEqual(["missing data/venues/nutc-sanmin.osm"]);
   });
 });
 
@@ -186,17 +209,33 @@ describe("findStepBlockers", () => {
     backends: [],
     requiredEnv: ["A", "B"],
     requiredFiles: ["data/x.csv"],
+    requiredCommands: ["unzip"],
   };
 
-  it("reports every missing env var and file", () => {
-    expect(findStepBlockers(step, { A: "1", B: "" }, () => false)).toEqual([
+  it("reports every missing env var, file and command", () => {
+    expect(
+      findStepBlockers(
+        step,
+        { A: "1", B: "" },
+        () => false,
+        () => false,
+      ),
+    ).toEqual([
       "env B is not set",
       "missing data/x.csv",
+      "unzip is not installed",
     ]);
   });
 
   it("returns nothing when all preconditions hold", () => {
-    expect(findStepBlockers(step, { A: "1", B: "2" }, () => true)).toEqual([]);
+    expect(
+      findStepBlockers(
+        step,
+        { A: "1", B: "2" },
+        () => true,
+        () => true,
+      ),
+    ).toEqual([]);
   });
 });
 

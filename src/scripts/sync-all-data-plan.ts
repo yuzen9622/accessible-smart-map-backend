@@ -25,6 +25,8 @@ export interface SyncStep {
   requiredEnv?: readonly string[];
   /** Paths relative to the project root that must exist. */
   requiredFiles?: readonly string[];
+  /** Executables that must be on PATH. */
+  requiredCommands?: readonly string[];
   /** Calls TDX — consecutive TDX steps are spaced by `--tdx-gap`. */
   tdx?: boolean;
   /**
@@ -154,12 +156,22 @@ export const SYNC_STEPS: readonly SyncStep[] = [
     requiredEnv: [...MONGO_ENV],
   },
   {
+    // Re-downloads the national feed (~470 MB) into data/gtfs every run.
+    id: "gtfs-feed",
+    group: "base",
+    command: pnpmScript("fetch:gtfs"),
+    backends: [],
+    requiredEnv: [...TDX_ENV],
+    requiredCommands: ["unzip"],
+    tdx: true,
+  },
+  {
     id: "gtfs-levels",
     group: "base",
     command: gtfsScript("import-gtfs-levels.ts"),
     backends: ["mongo"],
+    dependsOn: ["gtfs-feed"],
     requiredEnv: [...MONGO_ENV],
-    requiredFiles: ["data/gtfs/levels.txt"],
   },
   {
     id: "gtfs-stops",
@@ -168,15 +180,14 @@ export const SYNC_STEPS: readonly SyncStep[] = [
     backends: ["mongo"],
     dependsOn: ["gtfs-levels"],
     requiredEnv: [...MONGO_ENV],
-    requiredFiles: ["data/gtfs/stops.txt"],
   },
   {
     id: "gtfs-trips",
     group: "base",
     command: gtfsScript("import-gtfs-trips.ts"),
     backends: ["mongo"],
+    dependsOn: ["gtfs-feed"],
     requiredEnv: [...MONGO_ENV],
-    requiredFiles: ["data/gtfs/trips.txt"],
   },
   {
     id: "gtfs-pathways",
@@ -185,7 +196,6 @@ export const SYNC_STEPS: readonly SyncStep[] = [
     backends: ["mongo"],
     dependsOn: ["gtfs-stops"],
     requiredEnv: [...MONGO_ENV],
-    requiredFiles: ["data/gtfs/pathways.txt"],
   },
   {
     id: "taipei-ramps",
@@ -202,17 +212,13 @@ export const SYNC_STEPS: readonly SyncStep[] = [
     command: pnpmScript("import:a11y-metro"),
     backends: ["mongo"],
     requiredEnv: [...MONGO_ENV],
-    requiredFiles: [
-      "data/metro-a11y/捷運車站出入口無障礙電梯、無障礙坡道GPS座標.csv",
-    ],
   },
   {
     id: "bathrooms",
     group: "snapshot",
     command: pnpmScript("import:bathrooms"),
     backends: ["mongo"],
-    requiredEnv: [...MONGO_ENV],
-    requiredFiles: ["data/bathrooms/無障礙廁所.csv"],
+    requiredEnv: [...MONGO_ENV, "MOENV_API_KEY"],
   },
 
   // --- valhalla: new tile release + restart, then re-derive the traffic edge map ---
@@ -303,9 +309,7 @@ export const SYNC_STEPS: readonly SyncStep[] = [
     command: pnpmScript("import:welfare"),
     backends: ["mongo"],
     requiredEnv: [...MONGO_ENV, "GOOGLE_MAPS_API_KEY"],
-    requiredFiles: ["data/welfare/全國身心障礙福利機構一覽表.csv"],
-    partialFailureNote:
-      "wipes the collection first; rows that fail to geocode are dropped",
+    partialFailureNote: "rows that fail to geocode are kept without a location",
   },
   {
     id: "rag",
@@ -427,12 +431,14 @@ export function selectSteps(
  * @param step The step to check.
  * @param env Environment variables.
  * @param fileExists Existence check for project-root-relative paths.
+ * @param commandExists Whether an executable is on PATH.
  * @returns Human-readable unmet preconditions (empty = runnable).
  */
 export function findStepBlockers(
   step: SyncStep,
   env: Readonly<Record<string, string | undefined>>,
   fileExists: (relativePath: string) => boolean,
+  commandExists: (name: string) => boolean,
 ): string[] {
   const blockers: string[] = [];
   for (const name of step.requiredEnv ?? []) {
@@ -440,6 +446,9 @@ export function findStepBlockers(
   }
   for (const file of step.requiredFiles ?? []) {
     if (!fileExists(file)) blockers.push(`missing ${file}`);
+  }
+  for (const command of step.requiredCommands ?? []) {
+    if (!commandExists(command)) blockers.push(`${command} is not installed`);
   }
   return blockers;
 }
