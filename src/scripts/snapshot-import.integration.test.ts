@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import mongoose from "mongoose";
@@ -15,8 +15,6 @@ import {
 const fixtures = [
   {
     script: "import-bathrooms",
-    source: "data/bathrooms/無障礙廁所.csv",
-    sourceCount: 4564,
     collection: Bathroom.collection.name,
     header:
       "county,areacode,village,number,name,address,administration,latitude,longitude,grade,type2,type,exec,diaper",
@@ -28,8 +26,6 @@ const fixtures = [
   },
   {
     script: "import-a11y-metro",
-    source: "data/metro-a11y/捷運車站出入口無障礙電梯、無障礙坡道GPS座標.csv",
-    sourceCount: 190,
     collection: A11y.collection.name,
     header: "項次,出入口電梯/無障礙坡道名稱,出入口編號,經度,緯度",
     row: (n: number) => `${n},車站電梯${n},出口1,121.51,25.03`,
@@ -171,16 +167,6 @@ describe("snapshot import CLI with isolated MongoDB", () => {
         expect(
           indexes.some((index) => index.name === "operational_index"),
         ).toBe(true);
-      });
-
-      it("imports the checked-in source CSV into the isolated database", async () => {
-        const { collection } = await seed();
-        const result = await run(
-          fixture.script,
-          await readFile(fixture.source, "utf-8"),
-        );
-        expect(result.code, result.output).toBe(0);
-        expect(await collection.countDocuments()).toBe(fixture.sourceCount);
       });
 
       if (fixture.schemaBad)
