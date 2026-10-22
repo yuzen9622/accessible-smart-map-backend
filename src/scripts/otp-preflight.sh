@@ -134,7 +134,7 @@ fi
 if python3 -c 'import osmium' 2>/dev/null; then
   ok "pyosmium is importable (pedestrian access hardening)"
 else
-  fail "python3 cannot import osmium — pedestrian access hardening (fatal step) would fail; pip install osmium"
+  fail "python3 cannot import osmium — pedestrian access hardening (fatal step) would fail; pip install osmium or sudo apt install  python3-pyosmium"
 fi
 
 if python3 -c 'import rasterio' 2>/dev/null; then
