@@ -1,27 +1,27 @@
 /**
- * One-shot import: national disability welfare institutions (CSV) → MongoDB.
+ * Snapshot import: national disability welfare institutions → MongoDB.
  *
- * Source CSV has no coordinates, only addresses, so each row is forward-geocoded
- * via the existing Google adapter (`getCoordinates`). The CSV is committed as
- * UTF-8 under data/welfare/ (converted from Big5 at copy time).
+ * Downloads 衛福部社家署「全國身心障礙福利機構一覽表」 (see
+ * mohw-welfare.adapter.ts) unless a UTF-8 CSV path is passed for an offline
+ * re-run. The CSV has no coordinates, only addresses, so each row is
+ * forward-geocoded via the existing Google adapter (`getCoordinates`).
  *
- * Run: npm run import:welfare [path-to-csv]
+ * Run: pnpm import:welfare [path-to-csv]
  */
 
 import "dotenv/config";
 import fs from "fs";
-import path from "path";
 import mongoose from "mongoose";
 import WelfareModel from "../model/welfare.model";
 import { IWelfare } from "../types";
 import { parseCsvLine } from "../utils/csv";
 import { rowToWelfare } from "./welfare-parse";
 import { getCoordinates } from "../adapters/google.adapter";
+import { fetchWelfareCsv } from "../adapters/mohw-welfare.adapter";
+import { replaceSnapshot } from "./replace-snapshot";
 
-const DEFAULT_CSV = path.resolve(
-  __dirname,
-  "../../data/welfare/全國身心障礙福利機構一覽表.csv",
-);
+const EXPECTED_HEADER =
+  "機構名稱,縣市,鄉鎮市區,地址,連絡電話,機構類型,核定服務人數(住宿),核定服務人數(夜間),核定服務人數(日間),實際服務人數(住宿),實際服務人數(夜間),實際服務人數(日間),評鑑屆次,最近1次評鑑等第";
 
 function sleep(ms: number) {
   return new Promise<void>((r) => setTimeout(r, ms));
@@ -34,9 +34,16 @@ async function main() {
     throw new Error("GOOGLE_MAPS_API_KEY env var is required for geocoding");
   }
 
-  const csvPath = process.argv[2] ?? DEFAULT_CSV;
-  const raw = fs.readFileSync(csvPath, "utf-8").replace(/^﻿/, "");
+  const csvPath = process.argv[2];
+  const raw = (
+    csvPath ? fs.readFileSync(csvPath, "utf-8") : await fetchWelfareCsv()
+  ).replace(/^\uFEFF/, "");
   const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (parseCsvLine(lines[0] ?? "").join(",") !== EXPECTED_HEADER) {
+    throw new Error(
+      "Unexpected welfare CSV header; existing snapshot preserved",
+    );
+  }
   const dataLines = lines.slice(1);
 
   const bases = [];
@@ -47,6 +54,10 @@ async function main() {
     else skipped++;
   }
   console.log(`Parsed ${bases.length} rows, skipped ${skipped}`);
+  if (!bases.length)
+    throw new Error(
+      "Refusing to import zero valid rows; existing snapshot preserved",
+    );
 
   const docs: Omit<IWelfare, "_id">[] = [];
   let geocoded = 0;
@@ -78,16 +89,13 @@ async function main() {
   }
   console.log(`Geocoding done — ok ${geocoded}, failed ${failed}`);
 
-  await mongoose.connect(dbUrl);
-  console.log("Connected to MongoDB");
-
-  const del = await WelfareModel.deleteMany({});
-  console.log(`Cleared ${del.deletedCount} existing rows`);
-
-  const inserted = await WelfareModel.insertMany(docs, { ordered: false });
-  console.log(`✓ Inserted ${inserted.length} welfare rows`);
-
-  await mongoose.disconnect();
+  try {
+    await mongoose.connect(dbUrl);
+    const inserted = await replaceSnapshot(WelfareModel, docs);
+    console.log(`✓ Inserted ${inserted} welfare rows`);
+  } finally {
+    await mongoose.disconnect();
+  }
 }
 
 main().catch((err) => {
