@@ -1,18 +1,27 @@
+/**
+ * Snapshot import: accessible toilets → MongoDB.
+ *
+ * Downloads 環境部「全國公廁建檔資料」 (see moenv-toilet.adapter.ts) unless a CSV
+ * with the same columns is passed for an offline re-run.
+ *
+ * Run: pnpm import:bathrooms [path-to-csv]
+ */
+
 import "dotenv/config";
 import fs from "fs";
 import { parseCsvLine } from "../utils/csv";
-import path from "path";
 import mongoose from "mongoose";
 import { replaceSnapshot } from "./replace-snapshot";
 import BathroomModel from "../model/bathroom.model";
+import {
+  fetchAccessibleToilets,
+  isAccessibleToilet,
+  MOENV_TOILET_FIELDS,
+  type MoenvToiletRow,
+} from "../adapters/moenv-toilet.adapter";
 
-const DEFAULT_CSV = path.resolve(
-  __dirname,
-  "../../data/bathrooms/無障礙廁所.csv",
-);
-
-function rowToDoc(fields: string[]) {
-  const [
+function rowToDoc(row: MoenvToiletRow) {
+  const {
     county,
     areacode,
     village,
@@ -20,14 +29,14 @@ function rowToDoc(fields: string[]) {
     name,
     address,
     administration,
-    latStr,
-    lngStr,
+    latitude: latStr,
+    longitude: lngStr,
     grade,
     type2,
     type,
     exec,
     diaper,
-  ] = fields;
+  } = row;
 
   let latitude = parseFloat(latStr);
   let longitude = parseFloat(lngStr);
@@ -56,26 +65,43 @@ function rowToDoc(fields: string[]) {
   };
 }
 
-export async function main() {
-  const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) throw new Error("DATABASE_URL env var is required");
-
-  const csvPath = process.argv[2] ?? DEFAULT_CSV;
-  const raw = fs.readFileSync(csvPath, "utf-8").replace(/^﻿/, "");
+function readCsvRows(csvPath: string): MoenvToiletRow[] {
+  const raw = fs.readFileSync(csvPath, "utf-8").replace(/^\uFEFF/, "");
   const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
-  const expectedHeader =
-    "county,areacode,village,number,name,address,administration,latitude,longitude,grade,type2,type,exec,diaper";
-  if (parseCsvLine(lines[0] ?? "").join(",") !== expectedHeader) {
+  if (
+    parseCsvLine(lines[0] ?? "").join(",") !== MOENV_TOILET_FIELDS.join(",")
+  ) {
     throw new Error(
       "Unexpected bathroom CSV header; existing snapshot preserved",
     );
   }
-  const dataLines = lines.slice(1);
+  return lines.slice(1).map((line) => {
+    const fields = parseCsvLine(line);
+    return Object.fromEntries(
+      MOENV_TOILET_FIELDS.map((key, i) => [key, fields[i] ?? ""]),
+    ) as MoenvToiletRow;
+  });
+}
+
+export async function main() {
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl) throw new Error("DATABASE_URL env var is required");
+
+  const csvPath = process.argv[2];
+  let rows: MoenvToiletRow[];
+  if (csvPath) {
+    rows = readCsvRows(csvPath).filter(isAccessibleToilet);
+  } else {
+    const apiKey = process.env.MOENV_API_KEY;
+    if (!apiKey) throw new Error("MOENV_API_KEY env var is required");
+    rows = await fetchAccessibleToilets(apiKey);
+  }
+  console.log(`Fetched ${rows.length} accessible toilets`);
 
   const docs: NonNullable<ReturnType<typeof rowToDoc>>[] = [];
   let skipped = 0;
-  for (const line of dataLines) {
-    const doc = rowToDoc(parseCsvLine(line));
+  for (const row of rows) {
+    const doc = rowToDoc(row);
     if (doc) docs.push(doc);
     else skipped++;
   }
