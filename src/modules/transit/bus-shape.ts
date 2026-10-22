@@ -114,3 +114,74 @@ export function matchBusShape(
   );
   return byRoute.length === 1 ? byRoute[0].path : null;
 }
+
+/** Project ordered stops onto the same directed shape, retaining road bends. */
+export function trimBusShape(
+  path: BusShapePath,
+  stops: BusShapePath,
+  range: { from: number; to: number } = { from: 0, to: stops.length - 1 },
+): BusShapePath | null {
+  if (path.length < 2 || stops.length < 2) return null;
+  const positions: {
+    segment: number;
+    fraction: number;
+    point: [number, number];
+  }[] = [];
+  let previous = 0;
+  for (const stop of stops) {
+    let best:
+      | {
+          segment: number;
+          fraction: number;
+          point: [number, number];
+          distance: number;
+        }
+      | undefined;
+    const scale = Math.cos((stop[1] * Math.PI) / 180);
+    for (
+      let segment = Math.floor(previous);
+      segment < path.length - 1;
+      segment++
+    ) {
+      const a = path[segment],
+        b = path[segment + 1];
+      const dx = (b[0] - a[0]) * scale,
+        dy = b[1] - a[1];
+      const length = dx * dx + dy * dy;
+      if (!length) continue;
+      const fraction = Math.max(
+        segment === Math.floor(previous) ? previous - segment : 0,
+        Math.min(
+          1,
+          ((stop[0] - a[0]) * scale * dx + (stop[1] - a[1]) * dy) / length,
+        ),
+      );
+      const point: [number, number] = [
+        a[0] + fraction * (b[0] - a[0]),
+        a[1] + fraction * (b[1] - a[1]),
+      ];
+      const distance = haversineMeters(stop[1], stop[0], point[1], point[0]);
+      if (!best || distance < best.distance)
+        best = { segment, fraction, point, distance };
+    }
+    // Stops can sit on the pavement beside the road, but not a different street.
+    if (!best || best.distance > 75) return null;
+    positions.push(best);
+    previous = best.segment + best.fraction;
+  }
+  const first = positions[range.from],
+    last = positions[range.to];
+  if (!first || !last) return null;
+  if (last.segment + last.fraction <= first.segment + first.fraction)
+    return null;
+  return [
+    first.point,
+    ...path.slice(first.segment + 1, last.segment + 1),
+    last.point,
+  ].filter(
+    (point, index, all) =>
+      index === 0 ||
+      point[0] !== all[index - 1][0] ||
+      point[1] !== all[index - 1][1],
+  );
+}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   matchBusShape,
+  trimBusShape,
   normalizeBusShapes,
   shapeWktToPath,
   type BusShape,
@@ -124,5 +125,58 @@ describe("matchBusShape", () => {
     ];
     const target = { routeUid: "TXG99", subRouteUid: "TXG991", direction: 0 };
     expect(matchBusShape(target, shapes, [target])).toBeNull();
+  });
+});
+
+describe("trimBusShape", () => {
+  const road: [number, number][] = [
+    [121, 25],
+    [121.01, 25],
+    [121.01, 25.01],
+    [121.02, 25.01],
+  ];
+  it("preserves both road turns while trimming the unused prefix and suffix", () => {
+    const result = trimBusShape(road, [
+      [121.005, 25.00001],
+      [121.01, 25.005],
+      [121.015, 25.01001],
+    ]);
+    expect(result).not.toBeNull();
+    expect(result!.slice(1, -1)).toEqual([
+      [121.01, 25],
+      [121.01, 25.01],
+    ]);
+    expect(result![0][0]).toBeCloseTo(121.005);
+    expect(result!.at(-1)![0]).toBeCloseTo(121.015);
+  });
+  it("rejects reversed stops or distant branch geometry", () => {
+    expect(
+      trimBusShape(road, [
+        [121.015, 25.01],
+        [121.005, 25],
+      ]),
+    ).toBeNull();
+    expect(
+      trimBusShape(road, [
+        [120, 24],
+        [120.1, 24.1],
+      ]),
+    ).toBeNull();
+  });
+  it("passes an intermediate loop stop before the repeated terminus", () => {
+    const loop: [number, number][] = [
+      [121, 25],
+      [121.01, 25],
+      [121.01, 25.01],
+      [121, 25],
+    ];
+    expect(
+      trimBusShape(loop, [
+        [121, 25],
+        [121.01, 25],
+        [121.01, 25.01],
+        [121, 25],
+      ]),
+    ).toEqual(loop);
   });
 });

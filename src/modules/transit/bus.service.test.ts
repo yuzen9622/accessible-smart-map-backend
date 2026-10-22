@@ -22,6 +22,7 @@ import BusRouteModel from "../../model/bus-route.model";
 import BusStopModel from "../../model/bus-stop.model";
 import {
   getBusRouteDetail,
+  getSelectedBusGeometry,
   getBusRealtimeOnRoute,
   getBusArrivalAtStop,
   getBusStopArrivals,
@@ -1366,5 +1367,118 @@ describe("TDX ETA source time and circular direction integration", () => {
       directionLabel: "循環線",
       stops: [{ estimateMinutes: 3 }],
     });
+  });
+});
+
+describe("selected bus leg road geometry", () => {
+  const stop = (seq: number, id: string, lng: number, lat: number) => ({
+    seq,
+    stopUID: id,
+    stopName: { Zh_tw: id },
+    lng,
+    lat,
+  });
+  const selectedLeg = {
+    type: "BUS" as const,
+    routeName: "307",
+    subRouteUid: "chosen-branch",
+    subRouteName: "307",
+    direction: 0 as const,
+    tdxCity: "Taipei",
+    departureStop: "A",
+    departureStopId: "A",
+    arrivalStop: "C",
+    arrivalStopId: "C",
+    polyline: [
+      [121.005, 25],
+      [121.015, 25.01],
+    ] as [number, number][],
+    intermediateStops: [
+      {
+        name: "B",
+        stationUid: "B",
+        location: [121.01, 25.005] as [number, number],
+      },
+    ],
+    departureStopA11y: [],
+    arrivalStopA11y: [],
+    waitInfo: { time: null, source: "unavailable" as const },
+  };
+  const branch = {
+    routeUid: "307",
+    subRouteUid: "chosen-branch",
+    routeName: { Zh_tw: "307" },
+    direction: 0,
+    stops: [
+      stop(1, "A", 121.005, 25),
+      stop(2, "B", 121.01, 25.005),
+      stop(3, "C", 121.015, 25.01),
+    ],
+  };
+  const road = {
+    SubRouteUID: "chosen-branch",
+    Direction: 0,
+    Geometry: "LINESTRING (121 25, 121.01 25, 121.01 25.01, 121.02 25.01)",
+  };
+  it("keeps road bends and uses the selected subroute instead of a sibling direction", async () => {
+    mockRouteMap([
+      branch,
+      { ...branch, subRouteUid: "other-branch", direction: 1 },
+    ]);
+    mockTdxJson([
+      {
+        ...road,
+        SubRouteUID: "other-branch",
+        Direction: 1,
+        Geometry: "LINESTRING (122 26, 122.1 26.1)",
+      },
+      road,
+    ]);
+    expect(await getSelectedBusGeometry(selectedLeg)).toEqual([
+      [121.005, 25],
+      [121.01, 25],
+      [121.01, 25.01],
+      [121.015, 25.01],
+    ]);
+  });
+  it("starts at the second occurrence of a coordinate after the route loops back", async () => {
+    mockRouteMap([
+      {
+        ...branch,
+        stops: [
+          stop(1, "A1", 121, 25),
+          stop(2, "B", 121.01, 25),
+          stop(3, "A2", 121, 25),
+          stop(4, "C", 121, 25.01),
+        ],
+      },
+    ]);
+    mockTdxJson([
+      {
+        ...road,
+        Geometry: "LINESTRING (121 25, 121.01 25, 121 25, 121 25.01)",
+      },
+    ]);
+    expect(
+      await getSelectedBusGeometry({
+        ...selectedLeg,
+        departureStopId: "A2",
+        intermediateStops: [],
+      }),
+    ).toEqual([
+      [121, 25],
+      [121, 25.01],
+    ]);
+  });
+  it("declines a shape for a different branch, ambiguous loop stops, or ambiguous exact shapes", async () => {
+    mockRouteMap([branch]);
+    mockTdxJson([{ ...road, SubRouteUID: "other-branch" }]);
+    expect(await getSelectedBusGeometry(selectedLeg)).toBeNull();
+    mockTdxJson([road]);
+    mockRouteMap([{ ...branch, stops: [...branch.stops, ...branch.stops] }]);
+    expect(await getSelectedBusGeometry(selectedLeg)).toBeNull();
+    mockRouteMap([branch]);
+    mockTdxJson([road, road]);
+    expect(await getSelectedBusGeometry(selectedLeg)).toBeNull();
   });
 });

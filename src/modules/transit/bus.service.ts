@@ -1,3 +1,4 @@
+import { taipeiIsoOffset } from "../../config/taipei-time";
 import type { SupportedLang } from "../../types/lang";
 import { selectDisplayText } from "../../utils/source-display";
 /**
@@ -60,7 +61,12 @@ import {
 } from "../../constants/bus";
 import { haversineMeters } from "../../utils/geo";
 import { redisGet, redisSet } from "../../config/redis";
-import { matchBusShape, normalizeBusShapes, type BusShape } from "./bus-shape";
+import {
+  matchBusShape,
+  normalizeBusShapes,
+  trimBusShape,
+  type BusShape,
+} from "./bus-shape";
 import type { BusLeg } from "../../types/route";
 import type { BusPlannedEtaRecord } from "../../types/transit";
 import { canMatchBusTrip, matchPlannedBus } from "./bus-trip-match";
@@ -725,30 +731,85 @@ export async function getBusArrivalAtStop(params: {
 /** Identity-consistent detail for a newly selected pair service; intermediate
  * geometry does not imply intermediate stop-time measurements, so only
  * `vehicleStopTimes` measured for this leg's own plate fill a stop's ETA. */
+function selectedDepartureTimes(
+  leg: BusLeg,
+  times: ReadonlyMap<string, number>,
+  now: number,
+) {
+  if (!leg.selectedDeparture) return undefined;
+  const stops = leg.scheduledTrip?.stops ?? [];
+  const first = stops[0],
+    last = stops[stops.length - 1];
+  const boardLive = leg.departureStopId
+    ? times.get(leg.departureStopId)
+    : undefined;
+  const alightLive = leg.arrivalStopId
+    ? times.get(leg.arrivalStopId)
+    : undefined;
+  const board = boardLive ?? first?.departureAt ?? first?.arrivalAt;
+  const alight = alightLive ?? last?.arrivalAt ?? last?.departureAt;
+  return [
+    {
+      ...leg.selectedDeparture,
+      boardingTime: board === undefined ? null : taipeiIsoOffset(board),
+      alightingTime: alight === undefined ? null : taipeiIsoOffset(alight),
+      boardingTimeSource:
+        boardLive !== undefined
+          ? ("realtime" as const)
+          : board !== undefined
+            ? ("schedule" as const)
+            : ("unknown" as const),
+      alightingTimeSource:
+        alightLive !== undefined
+          ? ("realtime" as const)
+          : alight !== undefined
+            ? ("schedule" as const)
+            : ("unknown" as const),
+      estimatedWaitMinutes:
+        board === undefined
+          ? null
+          : Math.max(0, Math.round((board - now) / 60000)),
+      selected: true,
+    },
+  ];
+}
+
 export function getCandidateBusRouteDetail(
   leg: BusLeg,
   city: TaiwanCityEn | "InterCity",
   vehicleStopTimes: ReadonlyMap<string, number> = new Map(),
   now = Date.now(),
 ): BusRouteDetailResult {
-  const stops = [
-    {
-      name: leg.departureStop,
-      stationUid: leg.departureStopId,
-      location: leg.polyline[0],
-    },
-    ...(leg.intermediateStops ?? []),
-    {
-      name: leg.arrivalStop,
-      stationUid: leg.arrivalStopId,
-      location: leg.polyline[leg.polyline.length - 1],
-    },
-  ];
+  // Timetables may omit untimed stops; retain the materialized ride's stop order.
+  const stops =
+    leg.intermediateStops === undefined && leg.scheduledTrip?.stops.length
+      ? leg.scheduledTrip.stops.map((stop) => ({
+          name: stop.name,
+          stationUid: stop.stopUid,
+          location:
+            stop.lng !== undefined && stop.lat !== undefined
+              ? ([stop.lng, stop.lat] as [number, number])
+              : undefined,
+        }))
+      : [
+          {
+            name: leg.departureStop,
+            stationUid: leg.departureStopId,
+            location: leg.polyline[0],
+          },
+          ...(leg.intermediateStops ?? []),
+          {
+            name: leg.arrivalStop,
+            stationUid: leg.arrivalStopId,
+            location: leg.polyline[leg.polyline.length - 1],
+          },
+        ];
   return {
     ok: true,
     routeName: leg.routeName,
     city,
     operators: [],
+    departureCandidates: selectedDepartureTimes(leg, vehicleStopTimes, now),
     directions: [
       {
         subRouteUid: leg.subRouteUid,
@@ -777,15 +838,28 @@ export function getCandidateBusRouteDetail(
               statusLabel: "正常",
               plateNumb: leg.plateNumb,
             };
+          const scheduled = leg.scheduledTrip?.stops.find(
+            (planned) => planned.stopUid === s.stationUid,
+          );
+          const plannedAt =
+            i === 0
+              ? (scheduled?.departureAt ?? scheduled?.arrivalAt)
+              : (scheduled?.arrivalAt ?? scheduled?.departureAt);
           return {
             ...stop,
             estimateMinutes: null,
             statusLabel:
-              i === 0
-                ? (leg.departureTime ?? "")
-                : i === stops.length - 1
-                  ? (leg.arrivalTime ?? "")
-                  : "",
+              plannedAt !== undefined
+                ? new Date(plannedAt).toLocaleTimeString("en-GB", {
+                    timeZone: "Asia/Taipei",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })
+                : i === 0
+                  ? (leg.departureTime ?? "")
+                  : i === stops.length - 1
+                    ? (leg.arrivalTime ?? "")
+                    : "",
           };
         }),
       },
@@ -816,6 +890,8 @@ export async function getPlannedBusRouteDetail(
     }
   }
   const match = matchPlannedBus(leg, records);
+  const times = new Map<string, number>();
+  const now = Date.now();
   const stops = planned.map((stop, index): BusRouteDetailStop => {
     const candidates =
       match &&
@@ -833,6 +909,8 @@ export async function getPlannedBusRouteDetail(
         : [];
     const seconds =
       candidates.length === 1 ? busEtaSeconds(candidates[0]) : null;
+    if (seconds !== null && stop.stopUid)
+      times.set(stop.stopUid, now + seconds * 1000);
     const instant =
       index === 0
         ? (stop.departureAt ?? stop.arrivalAt)
@@ -861,6 +939,7 @@ export async function getPlannedBusRouteDetail(
     routeName: leg.routeName,
     city,
     operators: [],
+    departureCandidates: selectedDepartureTimes(leg, times, now),
     directions: [
       {
         subRouteUid: leg.subRouteUid,
@@ -2114,4 +2193,66 @@ function display<K extends string>(
         K,
         string
       >);
+}
+
+/** Select geometry only when route, branch, direction and stop order agree. */
+export async function getSelectedBusGeometry(
+  leg: BusLeg,
+): Promise<[number, number][] | null> {
+  const city = await resolveBusCity(leg.tdxCity ?? leg.cityCode);
+  if (!city) return null;
+  const [info, shapes] = await Promise.all([
+    getBusRouteInfo({ routeName: leg.routeName, city }),
+    getBusRouteShapes(leg.routeName, city),
+  ]);
+  if (!info.ok) return null;
+  const target = info.directions.find(
+    (direction) =>
+      direction.subRouteUid === leg.subRouteUid &&
+      direction.direction === leg.direction,
+  );
+  if (!target) return null;
+  const stopIds = [
+    leg.departureStopId,
+    ...(leg.intermediateStops ?? []).map((stop) => stop.stationUid),
+    leg.arrivalStopId,
+  ];
+  if (stopIds.some((id) => !id)) return null;
+  const spans = target.stops.flatMap((stop, board) => {
+    if (stop.stopUid !== leg.departureStopId) return [];
+    return target.stops.flatMap((end, alight) => {
+      if (alight <= board || end.stopUid !== leg.arrivalStopId) return [];
+      const span = target.stops.slice(board, alight + 1);
+      return leg.intermediateStops &&
+        (span.length !== stopIds.length ||
+          !span.every((item, index) => item.stopUid === stopIds[index]))
+        ? []
+        : [{ from: board, to: alight }];
+    });
+  });
+  if (spans.length !== 1) return null;
+  const stops = target.stops;
+  if (
+    stops.some(
+      (stop) => !Number.isFinite(stop.lng) || !Number.isFinite(stop.lat),
+    )
+  )
+    return null;
+  if (
+    shapes.filter(
+      (shape) =>
+        shape.subRouteUid === leg.subRouteUid &&
+        shape.direction === leg.direction,
+    ).length > 1
+  )
+    return null;
+  const shape = matchBusShape(target, shapes, info.directions);
+  return (
+    shape &&
+    trimBusShape(
+      shape,
+      stops.map((stop) => [stop.lng!, stop.lat!]),
+      spans[0],
+    )
+  );
 }
