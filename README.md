@@ -246,9 +246,9 @@ CHROMA_URL=http://localhost:8100
 
 ### 4. 匯入空間與大眾運輸數據
 
-系統依賴 MongoDB、PostGIS、Chroma 與 Valhalla 地磚內的數據。資料來源包含本地預存檔案（`data/`，不在 git 內，需另外複製）與第三方 API。所有匯入腳本自動讀取 `.env`。
+系統依賴 MongoDB、PostGIS、Chroma 與 Valhalla 地磚內的數據。公開資料（GTFS、捷運無障礙出入口、無障礙廁所、身障福利機構等）在同步時直接從官方來源下載；只有 RAG 文件與校園室內圖資需要本地檔案（`data/`，不在 git 內）。所有匯入腳本自動讀取 `.env`。
 
-**一鍵同步（建議）**：`pnpm data:sync` 依相依順序執行下列所有匯入，執行前會先檢查 env、`data/` 檔案與各服務連線，不符就整批中止：
+**一鍵同步（建議）**：`pnpm data:sync` 依相依順序執行下列所有匯入，執行前會先檢查 env、必要指令、本地檔案與各服務連線，不符就整批中止：
 
 ```bash
 pnpm data:sync --all --plan   # 只列出步驟並做前置檢查，不執行
@@ -276,14 +276,15 @@ pnpm import:tdx-metro
 pnpm import:tdx-thsr
 pnpm import:tdx-tra
 
-# 匯入 GTFS 室內跨樓層網絡（站內通道、電梯、月台關聯）
+# 下載 TDX 全國 GTFS 並匯入室內跨樓層網絡（站內通道、電梯、月台關聯）
+pnpm fetch:gtfs
 pnpm import:gtfs-all
 ```
 
 **補充擴充數據**：
 
 ```bash
-# 台北市無障礙廁所資料
+# 全國無障礙廁所資料（環境部公廁 API，需要 MOENV_API_KEY）
 pnpm import:bathrooms
 
 # 全台身障停車格與停車場資料（TDX）
