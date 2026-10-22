@@ -30,13 +30,14 @@ worse — builds a graph that crashes on load (self-loop pathways):
 
 Usage: clean-gtfs-feed.py <feed.zip>   (rewrites the zip in place)
 """
-from collections import Counter
 import csv
 import io
+import os
 import re
 import sys
 import tempfile
 import zipfile
+from collections import Counter
 
 HMS = re.compile(r"^\d{1,2}:\d{2}:\d{2}$")
 HM = re.compile(r"^\d{1,2}:\d{2}$")
@@ -54,7 +55,9 @@ def col_ids(rows, col):
 
 
 def main(zip_path: str) -> None:
-    log = lambda *a: print("[clean-gtfs-feed]", *a)
+    def log(*args):
+        print("[clean-gtfs-feed]", *args)
+
     with zipfile.ZipFile(zip_path) as zf:
         names = set(zf.namelist())
         tables = {}
@@ -199,7 +202,7 @@ def main(zip_path: str) -> None:
         if dropped_files:
             log(f"dropping fare files: {', '.join(sorted(dropped_files))}")
 
-        with tempfile.NamedTemporaryFile(dir=".", suffix=".zip", delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(dir=os.path.dirname(os.path.abspath(zip_path)), suffix=".zip", delete=False) as tmp:
             with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as out:
                 for name in zf.namelist():
                     if name in dropped_files:
@@ -215,7 +218,6 @@ def main(zip_path: str) -> None:
                         out.writestr(name, zf.read(name))
             tmp_path = tmp.name
 
-    import os
     os.replace(tmp_path, zip_path)
     log(f"rewrote {zip_path}")
 
