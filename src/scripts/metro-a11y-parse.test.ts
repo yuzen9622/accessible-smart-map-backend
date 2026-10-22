@@ -48,4 +48,18 @@ describe("rowToMetroA11yDoc", () => {
       rowToMetroA11yDoc(parseCsvLine("9,某站出口電梯,出口1,121.5,40.0")),
     ).toBeNull();
   });
+
+  it("restores the decimal point upstream dropped from a coordinate", () => {
+    const doc = rowToMetroA11yDoc(
+      parseCsvLine("50,圓山站出口無障礙坡道2,出口2,121.5201211,250717908"),
+    );
+    expect(doc?.緯度).toBeCloseTo(25.0717908, 7);
+    expect(doc?.location.coordinates).toEqual([121.5201211, doc?.緯度]);
+  });
+
+  it("does not rescale an integer that is out of range either way", () => {
+    expect(
+      rowToMetroA11yDoc(parseCsvLine("10,某站出口電梯,出口1,121.5,99")),
+    ).toBeNull();
+  });
 });

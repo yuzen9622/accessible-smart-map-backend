@@ -1,39 +1,44 @@
 import "dotenv/config";
 import fs from "fs";
-import path from "path";
 import mongoose from "mongoose";
 import { replaceSnapshot } from "./replace-snapshot";
 import A11y from "../model/a11y.model";
 import { parseCsvLine } from "../utils/csv";
 import { rowToMetroA11yDoc } from "./metro-a11y-parse";
+import { fetchMetroA11yCsv } from "../adapters/taipei-metro-a11y.adapter";
 
 /**
- * One-shot import: Taipei Metro exit accessibility facilities (elevators /
+ * Snapshot import: Taipei Metro exit accessibility facilities (elevators /
  * ramps with GPS coordinates) → the legacy Accessibility collection, which
  * powers the `metro` source of /a11y nearby & all-facilities endpoints.
  *
- * Source: 臺北市資料大平臺「臺北捷運車站出入口無障礙電梯、無障礙坡道GPS座標」
- * (upstream CSV is Big5; the copy under data/metro-a11y/ is UTF-8 — see
- * metro-a11y-parse.ts header for URLs). Snapshot import: validates a staging
- * collection before atomically replacing the previous snapshot.
+ * Downloads 臺北市資料大平臺「臺北捷運車站出入口無障礙電梯、無障礙坡道GPS座標」
+ * (see taipei-metro-a11y.adapter.ts) unless a UTF-8 CSV path is passed for an
+ * offline re-run. Validates a staging collection before atomically replacing
+ * the previous snapshot.
  *
- * Run: pnpm import:a11y-metro
+ * Run: pnpm import:a11y-metro [path-to-csv]
  */
 
-const DEFAULT_CSV = path.resolve(
-  __dirname,
-  "../../data/metro-a11y/捷運車站出入口無障礙電梯、無障礙坡道GPS座標.csv",
-);
+/** Upstream rows carry trailing empty columns; drop them. */
+function parseRow(line: string): string[] {
+  const fields = parseCsvLine(line);
+  while (fields.length > 0 && fields[fields.length - 1].trim() === "")
+    fields.pop();
+  return fields;
+}
 
 export async function main() {
   const dbUrl = process.env.DATABASE_URL;
   if (!dbUrl) throw new Error("DATABASE_URL env var is required");
 
-  const csvPath = process.argv[2] ?? DEFAULT_CSV;
-  const raw = fs.readFileSync(csvPath, "utf-8").replace(/^\uFEFF/, "");
+  const csvPath = process.argv[2];
+  const raw = (
+    csvPath ? fs.readFileSync(csvPath, "utf-8") : await fetchMetroA11yCsv()
+  ).replace(/^\uFEFF/, "");
   const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
   if (
-    parseCsvLine(lines[0] ?? "").join(",") !==
+    parseRow(lines[0] ?? "").join(",") !==
     "項次,出入口電梯/無障礙坡道名稱,出入口編號,經度,緯度"
   ) {
     throw new Error("Unexpected metro CSV header; existing snapshot preserved");
@@ -43,7 +48,7 @@ export async function main() {
   const docs: NonNullable<ReturnType<typeof rowToMetroA11yDoc>>[] = [];
   let skipped = 0;
   for (const line of dataLines) {
-    const doc = rowToMetroA11yDoc(parseCsvLine(line));
+    const doc = rowToMetroA11yDoc(parseRow(line));
     if (doc) docs.push(doc);
     else skipped++;
   }
