@@ -206,7 +206,18 @@ pnpm data:sync                # 日常更新：只跑 upsert 類步驟（不清�
 - 仍需本地檔案的只有非公開資料：`data/rag`（paid）與 `data/venues/nutc-sanmin.osm`（snapshot）。缺檔時 preflight 會擋下，什麼都不執行。
 - Valhalla 的 PBF 只在檔案不存在時下載；要更新 OSM 就先刪掉舊的 PBF 再跑。
 - `traffic-tar` 和 `traffic-map` 即使沒產出也可能 exit 0，結束時摘要會列出提醒，請看該步驟的 Result 行。
-- `import:taipei-ramps` 需要 PostGIS 已有 ped graph（`ped_graph_version` 表）；還沒建就加 `--skip=taipei-ramps`。
+- 全台人行道 `sidewalks` 是 base 步驟，只需 `PED_GRAPH_DATABASE_URL` 指向可用的 PostGIS，首次匯入不需 `ped_graph_version`。預設每次從[內政部官方 ZIP](https://opdadm.moi.gov.tw/api/v1/no-auth/resource/api/dataset/11D38E3D-F980-40BF-B714-4E0DB8AA1252/resource/673E16B8-66BC-4DD6-BA39-767BE3324F5C/download) 下載；可用 `SIDEWALK_SOURCE_URL` 或 `--url <URL>` 指定來源。
+
+  ```bash
+  pnpm import:sidewalks --dry-run       # 驗證 ZIP／22 縣市／清洗與 PostGIS 幾何，不發布
+  pnpm import:sidewalks --zip <path>    # 本地 ZIP 重現匯入，不改原檔
+  pnpm data:sync --only=sidewalks       # 網路下載並原子發布來源快照
+  ```
+
+  資料庫連線只從 `.env`／環境變數 `PED_GRAPH_DATABASE_URL` 讀取，不支援 `--db-url`；不要將含密碼的 URI 放進命令列，pnpm 可能回顯參數。`--url` 也只應填不含憑證的公開網址。
+
+  清洗保留有效人行道存在幾何與原始屬性；無效／矛盾淨寬是未知證據，不代表可通行。報告列出 SHA256、原始／接受／隔離筆數與原因，相同 ZIP 不重複建立版本；明確重匯歷史 ZIP 時，會驗證並原子切換回該來源快照，但不切換路由圖。`ped_sidewalk_source_version`／`ped_sidewalk_polygon` 是獨立、版本化的參考來源；失敗保留舊 ACTIVE 快照。這**不會改變無障礙智慧地圖現有路線**：全台 OSM 接路網、選路及階梯政策仍需後續建圖、驗證與明確的 graph promotion，匯入不自動啟用路由圖。
+- `import:taipei-ramps` 仍需要 PostGIS 已有 ped graph（`ped_graph_version` 表）；還沒建就加 `--skip=taipei-ramps`。
 - 在 host 上跑時，`.env` 的 `DATABASE_URL`／`PED_GRAPH_DATABASE_URL` 要指向 compose 對外的埠（Mongo `27018`、PostGIS `5434`）。
 
 ---

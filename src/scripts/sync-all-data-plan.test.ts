@@ -67,12 +67,43 @@ describe("SYNC_STEPS registry", () => {
       "gtfs-pathways",
       "a11y-metro",
       "bathrooms",
+      "sidewalks",
       "welfare",
     ]) {
       expect(
         SYNC_STEPS.find((s) => s.id === id)?.requiredFiles,
       ).toBeUndefined();
     }
+  });
+
+  it("registers graph-independent nationwide sidewalks as a PostGIS base step", () => {
+    const step = SYNC_STEPS.find((s) => s.id === "sidewalks");
+    expect(step).toMatchObject({
+      group: "base",
+      backends: ["postgis"],
+      requiredEnv: ["PED_GRAPH_DATABASE_URL"],
+    });
+    expect(step?.command).toContain("import:sidewalks");
+    expect(step?.dependsOn).toBeUndefined();
+    expect(select(["--only=sidewalks"])).toEqual(["sidewalks"]);
+    expect(
+      step &&
+        findStepBlockers(
+          step,
+          { PED_GRAPH_DATABASE_URL: "isolated" },
+          () => false,
+          () => true,
+        ),
+    ).toEqual([]);
+    expect(
+      step &&
+        findStepBlockers(
+          step,
+          {},
+          () => true,
+          () => true,
+        ),
+    ).toEqual(["env PED_GRAPH_DATABASE_URL is not set"]);
   });
 
   it("keeps every collection-wiping step out of the default group", () => {

@@ -198,6 +198,13 @@ export const SYNC_STEPS: readonly SyncStep[] = [
     requiredEnv: [...MONGO_ENV],
   },
   {
+    id: "sidewalks",
+    group: "base",
+    command: pnpmScript("import:sidewalks"),
+    backends: ["postgis"],
+    requiredEnv: ["PED_GRAPH_DATABASE_URL"],
+  },
+  {
     id: "taipei-ramps",
     group: "base",
     command: pnpmScript("import:taipei-ramps"),

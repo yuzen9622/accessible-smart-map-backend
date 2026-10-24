@@ -141,13 +141,16 @@ async function checkBackends(steps: readonly SyncStep[]): Promise<string[]> {
     });
     try {
       await client.connect();
-      const { rows } = await client.query<{ exists: boolean }>(
-        "SELECT to_regclass('public.ped_graph_version') IS NOT NULL AS exists",
-      );
-      if (!rows[0]?.exists) {
-        problems.push(
-          "PostGIS has no ped_graph_version table — build the ped graph first (pnpm build:ped-graph) or --skip=taipei-ramps",
+      await client.query("SELECT PostGIS_Version()");
+      if (steps.some((step) => step.id === "taipei-ramps")) {
+        const { rows } = await client.query<{ exists: boolean }>(
+          "SELECT to_regclass('public.ped_graph_version') IS NOT NULL AS exists",
         );
+        if (!rows[0]?.exists) {
+          problems.push(
+            "PostGIS has no ped_graph_version table — build the ped graph first (pnpm build:ped-graph) or --skip=taipei-ramps",
+          );
+        }
       }
     } catch (err) {
       problems.push(
