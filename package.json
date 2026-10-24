@@ -109,6 +109,7 @@
     "express": "^5.2.1",
     "express-rate-limit": "^8.6.2",
     "flatbush": "^4.6.2",
+    "geotiff": "3.0.5",
     "google-auth-library": "^11.0.2",
     "helmet": "^8.3.0",
     "ioredis": "^6.0.0",
@@ -130,6 +131,7 @@
     "rimraf": "^6.0.1",
     "sharp": "0.35.5",
     "ws": "^8.21.3",
+    "yauzl": "^3.4.0",
     "zod": "^4.4.3"
   },
   "pnpm": {
@@ -164,6 +166,7 @@
     "@types/pg": "^8.23.1",
     "@types/supertest": "^7.2.0",
     "@types/ws": "^8.18.1",
+    "@types/yauzl": "^3.4.0",
     "@typescript/native": "npm:typescript@^7.0.2",
     "@vitest/coverage-v8": "^4.1.12",
     "eslint": "^9.39.5",
