@@ -347,6 +347,7 @@ export interface AutocompleteSuggestion {
   placeId: string;
   primaryText: string;
   secondaryText: string | null;
+  types: string[];
 }
 
 /**
@@ -402,6 +403,12 @@ export async function autocompletePlaces(
           "") as string,
         secondaryText: (p.structuredFormat?.secondaryText?.text ?? null) as
           string | null,
+        types: Array.isArray(p.types)
+          ? p.types.filter(
+              (type: unknown): type is string =>
+                typeof type === "string" && type.length > 0,
+            )
+          : [],
       }));
   } catch {
     return [];

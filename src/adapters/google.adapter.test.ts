@@ -154,6 +154,67 @@ describe("searchPlaces distance ordering", () => {
   });
 });
 
+describe("autocomplete prediction types", () => {
+  it("preserves place types without fetching Details and drops query predictions", async () => {
+    mockPost.mockResolvedValue({
+      data: {
+        suggestions: [
+          {
+            placePrediction: {
+              placeId: "station-id",
+              structuredFormat: {
+                mainText: { text: "台中車站" },
+                secondaryText: { text: "台中市中區" },
+              },
+              types: ["train_station", "point_of_interest"],
+            },
+          },
+          { queryPrediction: { text: { text: "台中車站附近餐廳" } } },
+        ],
+      },
+    });
+
+    expect(await autocompletePlaces("台中")).toEqual([
+      {
+        placeId: "station-id",
+        primaryText: "台中車站",
+        secondaryText: "台中市中區",
+        types: ["train_station", "point_of_interest"],
+      },
+    ]);
+    expect(mockGet).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { raw: undefined, expected: [] },
+    { raw: null, expected: [] },
+    { raw: "train_station", expected: [] },
+    { raw: [null, 42, "", "train_station"], expected: ["train_station"] },
+  ])("normalizes malformed types ($raw)", async ({ raw, expected }) => {
+    mockPost.mockResolvedValue({
+      data: {
+        suggestions: [
+          {
+            placePrediction: {
+              placeId: "p1",
+              text: { text: "台中" },
+              types: raw,
+            },
+          },
+        ],
+      },
+    });
+    expect(await autocompletePlaces("台中")).toEqual([
+      {
+        placeId: "p1",
+        primaryText: "台中",
+        secondaryText: null,
+        types: expected,
+      },
+    ]);
+  });
+});
+
 describe("place language", () => {
   it.each(["en", "zh-TW"] as const)(
     "uses the requested %s language for Text Search",

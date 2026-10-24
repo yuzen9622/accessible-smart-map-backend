@@ -45,8 +45,6 @@ const autocompleteItem = (): service.AutocompleteItem => ({
   placeClass: "tourism",
   placeType: "attraction",
   typeLabel: "景點",
-  location: { type: "Point", coordinates: [121.5645, 25.0339] },
-  distanceMeters: 1200,
 });
 
 const placeResult = (): service.PlaceResult => ({

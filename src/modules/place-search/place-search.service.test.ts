@@ -111,7 +111,12 @@ describe("autocomplete", () => {
   it("merges both sources, OSM first, and caches the merged list", async () => {
     vi.mocked(searchOsmPlaces).mockResolvedValue([osmPlace()] as any);
     vi.mocked(autocompletePlaces).mockResolvedValue([
-      { placeId: "p2", primaryText: "台北車站", secondaryText: "中正區" },
+      {
+        placeId: "p2",
+        primaryText: "台北車站",
+        secondaryText: "中正區",
+        types: ["train_station"],
+      },
     ]);
 
     const items = await service.autocomplete({
@@ -128,13 +133,12 @@ describe("autocomplete", () => {
       placeClass: "tourism",
       placeType: "attraction",
       typeLabel: "景點",
-      location: { type: "Point", coordinates: [121.5645, 25.0339] },
     });
     expect(items[1]).toMatchObject({
       source: "google",
-      location: null,
-      distanceMeters: null,
-      typeLabel: null,
+      placeClass: "railway",
+      placeType: "station",
+      typeLabel: "車站",
     });
     expect(autocompletePlaces).toHaveBeenCalledWith("台北", {
       sessionToken: "tok",
@@ -169,8 +173,8 @@ describe("autocomplete", () => {
     await service.autocomplete({ q: "台北", lang: "en" });
 
     const keys = vi.mocked(redisGet).mock.calls.map(([key]) => key);
-    expect(keys.some((k) => k.startsWith("ps:ac:zh-TW:"))).toBe(true);
-    expect(keys.some((k) => k.startsWith("ps:ac:en:"))).toBe(true);
+    expect(keys.some((k) => k.startsWith("ps:ac:v2:zh-TW:"))).toBe(true);
+    expect(keys.some((k) => k.startsWith("ps:ac:v2:en:"))).toBe(true);
     expect(keys.some((k) => k.startsWith("ps:osm:zh-TW:"))).toBe(true);
     expect(keys.some((k) => k.startsWith("ps:osm:en:"))).toBe(true);
   });
@@ -178,7 +182,12 @@ describe("autocomplete", () => {
   it("drops the Google entry when both sources return the same normalized name", async () => {
     vi.mocked(searchOsmPlaces).mockResolvedValue([osmPlace()] as any);
     vi.mocked(autocompletePlaces).mockResolvedValue([
-      { placeId: "p1", primaryText: "臺北 101", secondaryText: "信義區" },
+      {
+        placeId: "p1",
+        primaryText: "臺北 101",
+        secondaryText: "信義區",
+        types: [],
+      },
     ]);
 
     const items = await service.autocomplete({ q: "台北" });
@@ -194,6 +203,7 @@ describe("autocomplete", () => {
         placeId: "p1",
         primaryText: "台北101購物中心",
         secondaryText: "信義區",
+        types: ["shopping_mall"],
       },
     ]);
 
@@ -207,7 +217,7 @@ describe("autocomplete", () => {
       osmPlace({ osmId: "1", name: "大安森林公園" }),
     ] as any);
     vi.mocked(autocompletePlaces).mockResolvedValue([
-      { placeId: "p1", primaryText: "台北101", secondaryText: null },
+      { placeId: "p1", primaryText: "台北101", secondaryText: null, types: [] },
     ]);
 
     const items = await service.autocomplete({ q: "台北" });
@@ -241,7 +251,7 @@ describe("autocomplete", () => {
 
   it("skips Nominatim entirely when sources excludes it", async () => {
     vi.mocked(autocompletePlaces).mockResolvedValue([
-      { placeId: "p1", primaryText: "台北101", secondaryText: null },
+      { placeId: "p1", primaryText: "台北101", secondaryText: null, types: [] },
     ]);
 
     const items = await service.autocomplete({
@@ -256,7 +266,7 @@ describe("autocomplete", () => {
   it("keeps the surviving source when the other one throws", async () => {
     vi.mocked(searchOsmPlaces).mockRejectedValue(new Error("nominatim down"));
     vi.mocked(autocompletePlaces).mockResolvedValue([
-      { placeId: "p1", primaryText: "台北101", secondaryText: null },
+      { placeId: "p1", primaryText: "台北101", secondaryText: null, types: [] },
     ]);
 
     const items = await service.autocomplete({ q: "台北" });

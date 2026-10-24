@@ -99,20 +99,16 @@ export const AutocompleteItemSchema = z
     }),
     placeClass: z.string().nullable().openapi({
       example: "tourism",
-      description: "OSM 字彙的 class，供前端選圖示",
-    }),
-    placeType: z.string().nullable().openapi({ example: "attraction" }),
-    typeLabel: z
-      .string()
-      .nullable()
-      .openapi({ example: "景點", description: "中文類型標籤" }),
-    location: PlaceGeoPointSchema.nullable().openapi({
-      description: "OSM 有座標；Google 預測階段恆為 null",
-    }),
-    distanceMeters: z.number().nullable().openapi({
-      example: 1200,
       description:
-        "直線距離（haversine 公式計算，非實際行走距離），相對於查詢參數 lat/lng 計算；未帶 lat/lng 或地點本身無座標時為 null。",
+        "共用 OSM 分類字彙；Google types 轉換為相同 class，未知為 null",
+    }),
+    placeType: z.string().nullable().openapi({
+      example: "attraction",
+      description: "共用地點類型；無對照的 Google 類型保留原值，未知為 null",
+    }),
+    typeLabel: z.string().nullable().openapi({
+      example: "景點",
+      description: "依 lang 回傳共用類型標籤，未知為 null",
     }),
   })
   .strict()
@@ -319,7 +315,7 @@ registry.registerPath({
   tags: ["Accessibility"],
   summary: "地點搜尋自動完成",
   description:
-    "逐字輸入時呼叫，合併 OSM（Nominatim）與 Google Places 兩路預測並去重。不含無障礙資訊；OSM 筆帶座標，Google 筆的 location 恆為 null。帶 sessiontoken 與後續 details 綁成一次 Google 計費。`lang=en` 時 Google 預測與 typeLabel 回英文，OSM 名稱取決於該物件是否有 name:en tag，沒有則回退原名。",
+    "逐字輸入時呼叫，合併 OSM（Photon）與 Google Places 兩路預測，依正規化名稱去重、同名優先保留 OSM（非地理實體比對）。兩來源統一回傳 id、source、primaryText、secondaryText、placeClass、placeType、typeLabel，不含座標、距離或無障礙資訊，也不額外查詢 Google Details。lat/lng 僅用於搜尋位置偏好。帶 sessiontoken 與後續 details 綁定 Google 搜尋工作階段。`lang=en` 時 Google 預測與 typeLabel 回英文，OSM 名稱依來源語言資料回退原名。",
   request: { query: AutocompleteQuerySchema },
   responses: {
     200: {

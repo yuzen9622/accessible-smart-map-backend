@@ -30,7 +30,7 @@ import {
 } from "./place-search.types";
 import { DEFAULT_LANG, type SupportedLang } from "../../types/lang";
 
-const AC_CACHE_PREFIX = "ps:ac:";
+const AC_CACHE_PREFIX = "ps:ac:v2:";
 const AC_CACHE_TTL_SEC = 120;
 const OSM_SEARCH_CACHE_PREFIX = "ps:osm:";
 const OSM_SEARCH_CACHE_TTL_SEC = 300;
@@ -54,8 +54,6 @@ export interface AutocompleteItem {
   placeClass: string | null;
   placeType: string | null;
   typeLabel: string | null;
-  location: GeoPoint | null;
-  distanceMeters: number | null;
 }
 
 export interface PlaceAccessibility {
@@ -176,12 +174,7 @@ async function cachedOsmSearch(
   return places;
 }
 
-function osmToItem(
-  place: OsmPlace,
-  lang: SupportedLang,
-  lat?: number,
-  lng?: number,
-): AutocompleteItem {
+function osmToItem(place: OsmPlace, lang: SupportedLang): AutocompleteItem {
   return {
     id: buildOsmPlaceId(place.osmType, place.osmId),
     source: "osm",
@@ -190,8 +183,6 @@ function osmToItem(
     placeClass: place.placeClass,
     placeType: place.placeType,
     typeLabel: typeLabelOf(place.placeType, place.placeClass, lang),
-    location: toGeoPoint(place.latitude, place.longitude),
-    distanceMeters: distanceFrom(lat, lng, place.latitude, place.longitude),
   };
 }
 
@@ -201,8 +192,7 @@ function osmToItem(
  * Cross-source de-duplication can only compare normalized names: Google's
  * autocomplete carries no coordinates, so there is nothing else to match on.
  * Differently-worded names for one place therefore still yield two entries.
- * When names do collide the OSM entry wins — it has coordinates, a distance and
- * a permalink, and costs nothing.
+ * When names collide the OSM entry wins, avoiding a paid Google Details lookup.
  */
 function mergeItems(
   osmItems: AutocompleteItem[],
@@ -283,21 +273,22 @@ export async function autocomplete(params: {
 
   const osmItems =
     osmResult.status === "fulfilled"
-      ? osmResult.value.map((p) => osmToItem(p, lang, lat, lng))
+      ? osmResult.value.map((p) => osmToItem(p, lang))
       : [];
   const googleItems: AutocompleteItem[] =
     googleResult.status === "fulfilled"
-      ? googleResult.value.slice(0, PER_SOURCE_LIMIT).map((s) => ({
-          id: buildGooglePlaceId(s.placeId),
-          source: "google" as const,
-          primaryText: s.primaryText,
-          secondaryText: s.secondaryText,
-          placeClass: null,
-          placeType: null,
-          typeLabel: null,
-          location: null,
-          distanceMeters: null,
-        }))
+      ? googleResult.value.slice(0, PER_SOURCE_LIMIT).map((s) => {
+          const { placeClass, placeType } = googleTypesToClassType(s.types);
+          return {
+            id: buildGooglePlaceId(s.placeId),
+            source: "google" as const,
+            primaryText: s.primaryText,
+            secondaryText: s.secondaryText,
+            placeClass,
+            placeType,
+            typeLabel: typeLabelOf(placeType, placeClass, lang),
+          };
+        })
       : [];
 
   const items = mergeItems(osmItems, googleItems, q, limit);
