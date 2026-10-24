@@ -61,7 +61,7 @@ export class RouteConversationContext {
     return { ...this.defaults, ...this.tripPreferences };
   }
   get prompt(): string {
-    return `\n\n【目前查看的路線】${JSON.stringify(this.failure ? { ok: false, reason: this.failure, message: AGENT_ROUTE_ERRORS[this.failure] } : this.selected ? projectRouteForModel({ route: this.selected, effectivePreferences: this.tripPreferences }) : { selected: false })}\n只有 selected=true 或 route 存在才有目前查看的路線；無選擇或讀取失敗時不得把歷史摘要冒充目前選擇。目前查看與正在導航可能不同；若目前有提供 getActiveNavigationContext 工具，導航中的問題須先查其脈絡；未提供時不可推測導航進度。工具的新規劃結果會更新目前查看的路線；詳細步驟只能查已選路線，不能重新規劃。\n【規劃預設】${JSON.stringify(this.preferences)}；只在使用者未明示時採用，勿用一般模式覆蓋已確認的無障礙需求。`;
+    return `\n\n【目前查看的路線】${JSON.stringify(this.failure ? { ok: false, reason: this.failure, message: AGENT_ROUTE_ERRORS[this.failure] } : this.selected ? projectRouteForModel({ selected: true, route: this.selected, effectivePreferences: this.tripPreferences }) : { selected: false })}\n只有 selected=true 或 route 存在才有目前查看的路線；無選擇或讀取失敗時不得把歷史摘要冒充目前選擇。本區塊是 App 此刻的可信選擇，優先於先前對話中的無路線狀態、舊目的地與目的地提問，不可沿用歷史問題而要求使用者重講已選路線。\n目前查看與正在導航可能不同；若目前有提供 getActiveNavigationContext 工具，導航中的問題須先查其脈絡；未提供時不可推測導航進度。工具的新規劃結果會更新目前查看的路線；詳細步驟只能查已選路線，不能重新規劃。\n【規劃預設】${JSON.stringify(this.preferences)}；只在使用者未明示時採用，勿用一般模式覆蓋已確認的無障礙需求。`;
   }
   error(language?: AgentLanguage): string {
     const reason =

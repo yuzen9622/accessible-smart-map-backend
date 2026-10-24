@@ -78,6 +78,17 @@ describe("trusted route context and projections", () => {
       JSON.parse(summarizeToolResult(result)).routes[0].legs[0],
     ).toMatchObject({ type: "BUS", routeName: "99" });
   });
+  it("marks the current selection explicitly without leaking its bearer token or geometry", async () => {
+    const ctx = new RouteConversationContext();
+    ctx.adopt(result);
+    expect(ctx.prompt).toContain('"selected":true');
+    expect(ctx.prompt).toContain('"routeId":"bus-a"');
+    expect(ctx.prompt).not.toMatch(/polyline|capability-secret|routeToken/);
+    await ctx.set(null);
+    expect(ctx.prompt).toContain('"selected":false');
+    expect(ctx.prompt).not.toContain('"routeId":"bus-a"');
+  });
+
   it("does not replan instructions without a selection, and invalid selection clears the previous one", async () => {
     const ctx = new RouteConversationContext();
     const raw = vi.fn();
