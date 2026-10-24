@@ -368,3 +368,70 @@ WALK **仍只有既有九個 step 機器欄位**。CSR 來源英文路名放在 
 切語言不可自動 reroute。可用既有來源欄位重新呈現名稱，或取得同 token 的新語言導航；沒有來源就保留原文。舊 route 的 display 欄位屬原請求語言，不能直接當成新語言結果。相同 reroute `clientRequestId` 仍重播首次結果，即使重試時換語言也不會重新規劃。
 
 CSR 英文可用率取決於 `ped_osm_way_name.name_en` 是否已有資料。程式可讀舊版沒有 `name_en` 的表，但不會憑空產生英文。名稱回填屬獨立資料維運操作；更新 lookup 後需重新載入記憶體 graph（例如重啟使用該 graph 的 backend process），只等 ACTIVE version 檢查不會重載同版本名稱。單純更新來源名稱不需重建 graph 拓樸或成本。
+
+## 十、純步行路線的 DTM 高程剖面
+
+`POST /api/v1/a11y/accessible-route` 的 resolved `travelMode: "walk"` 會在每個
+`data.routes[]` 加上 `elevationProfile`；standard／compact 相同。沿用既有起終點名稱或座標輸入：
+
+```json
+{
+  "origin": { "latitude": 25.1368, "longitude": 121.5065 },
+  "destination": { "latitude": 25.1377, "longitude": 121.5145 },
+  "travelMode": "walk"
+}
+```
+
+剖面採 **最終選出的戶外 WALK 線形**（CSR／OTP／Valhalla），不為高程重新規劃。
+`transit`（即使 fallback 結果全為 WALK）、開車、機車及其步行接駁段都省略此欄位。
+`venueLeg` 的室內段不納入；步行重新規劃會依新線形重算。高程不改變排名、步行時間或
+`data.slopeConstraint.enforced`。
+
+### 前端繪圖
+
+- `status: "complete" | "partial"`：`samples` 依行進方向排列，含起終點及每 20 公尺的樣點。
+  橫軸用 `samples[].distanceM`，縱軸用 `elevationM`；`coordinates` 是 `[lng, lat]`，可連動地圖游標。
+  `distanceM` 由線形各段測地距離加總，可能與引擎提供的路段距離略有差異。
+- `summary` 提供 `minElevationM`、`maxElevationM`、`ascentM`、`descentM`、`netElevationM`、
+  `validSamples`、`sampleCount`。距離和高程皆以公尺為單位。累積升降分別加總所有正／負高差，
+  不是只用終點減起點；`netElevationM` 才是起終點淨高差。
+- `partial` 的缺值是 `null`，曲線應斷線，**不可補成 0 或跨缺口連線**；全程累積升降與淨高差皆為
+  `null`，最高／最低僅代表已知樣點。有效的 0 或負高程不可當成缺值。
+- `source` 固定標示 `dataset: "MOI_DTM_20M"`、`kind: "terrain"`、`resolutionM: 20`、
+  `samplingIntervalM: 20`、`interpolation: "bilinear"`、`smoothing: "none"`。
+  高程沿用圖資儲存的垂直基準，不宣稱為 WGS84 橢球高。
+
+資料不可用時，路線仍回傳正常 200／原有 envelope，只有剖面變成：
+
+```json
+{ "status": "unavailable", "reason": "data_unavailable" }
+```
+
+`reason` 為封閉機器碼，前端自行 i18n：`not_configured`（明確停用）、`data_unavailable`
+（缺檔、檔案讀取／worker 失敗）、`unsupported_dtm`（圖資格式／投影不符）、`no_coverage`
+（沒有任何有效高程）、`invalid_geometry`（缺／無效／不連續線形）、`route_too_long`
+（超過 50 公里）、`resource_limit`（超過候選／取樣／讀取範圍上限）、`busy`（讀取槽已滿）、
+`timeout`（超過本次高程讀取預算）。此狀態沒有假造的全零曲線或統計數字。
+
+### 圖資準備與效能邊界
+
+本機預設檔案為 `otp-data/dem/taiwan-dtm-20m.tif`；可用
+`ROUTE_ELEVATION_DTM_PATH` 改路徑，明確空字串停用。既有下載器可準備資料：
+
+```bash
+python3 src/scripts/fetch-otp-dem.py ./otp-data/dem
+```
+
+下載器會下載官方全臺 DTM 並轉為 EPSG:4326 GeoTIFF。執行下載器的環境需有 `rasterio`，
+但 API runtime 不需要 Python。自備檔案須為單波段、PixelIsArea、north-up、EPSG:4326、
+無旋轉且 tile 不超過 256×256 的 tiled GeoTIFF。缺檔不阻擋 API 啟動，不會逐請求下載。
+Compose 的唯讀掛載與容器路徑以根目錄 `docker-compose.yml` 為準；來源目錄沿用
+`OTP_DEM_DIR` 或 `OTP_DATA_DIR/dem`，不將圖資打包進映像。
+
+單次僅處理前 3 條候選、每條最多 50 公里／2501 樣點；一個 request 的候選共用一次
+DTM worker，總預算 1500ms，逾時終止。每個 API process 最多 2 個同時讀取的 worker，
+額外請求回 `busy` 而非無限排隊。採局部視窗讀取，不整張載入全臺 raster。
+
+**這是地形估計，不是路面量測或無障礙通行保證。** 20 公尺圖資內插不會增加真實解析度；
+累積升降未去噪，可能受高程誤差影響。不能用它判定橋面、地下道、短坡道、緣石或平整度，
+也不能由曲線看似平坦就推論輪椅安全或任意坡度限制已生效。

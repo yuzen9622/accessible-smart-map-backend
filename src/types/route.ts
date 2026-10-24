@@ -9,6 +9,7 @@
 
 import type { HazardSeverity, HazardType, IOsmA11y } from "./index";
 import type { RoadIncident } from "./traffic";
+import type { ElevationProfile } from "./elevation";
 import type { MatchedAlert, MetroAlert } from "./transit";
 import type {
   RouteMessageDescriptor,
@@ -555,6 +556,8 @@ export interface AccessibleRoute {
   factors?: ScoreFactor[];
   accessibilitySummary?: string;
   hazardAdvisory?: RouteHazardAdvisory;
+  /** Pure-walk terrain estimate; not a road-surface or slope-compliance measurement. */
+  elevationProfile?: ElevationProfile;
   attribution?: string;
   /** Short-lived bearer capability for arming voice navigation. */
   routeToken?: string;

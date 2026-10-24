@@ -1071,6 +1071,94 @@ const RouteMessageDetailSchema = z
   })
   .strict();
 
+const ElevationSampleSchema = z
+  .object({
+    distanceM: z.number().finite().nonnegative().openapi({
+      description: "沿最終路線累積距離（公尺），非起終點直線距離。",
+    }),
+    coordinates: z
+      .tuple([z.number().finite(), z.number().finite()])
+      .openapi({ description: "WGS84 [lng, lat]。" }),
+    elevationM: z.number().finite().nullable().openapi({
+      description:
+        "DTM 儲存基準下的高程（公尺），非橢球高；null 表示缺值，不能補 0 或跨缺口連線。",
+    }),
+  })
+  .strict();
+const ElevationSummarySchema = z
+  .object({
+    minElevationM: z.number().finite(),
+    maxElevationM: z.number().finite(),
+    validSamples: z.number().int().positive().max(2501),
+    sampleCount: z.number().int().min(2).max(2501),
+  })
+  .strict();
+const ElevationAvailableFields = {
+  source: z
+    .object({
+      dataset: z.literal("MOI_DTM_20M"),
+      kind: z.literal("terrain"),
+      resolutionM: z.literal(20),
+      samplingIntervalM: z.literal(20),
+      interpolation: z.literal("bilinear"),
+      smoothing: z.literal("none"),
+    })
+    .strict(),
+  distanceM: z.number().finite().positive().max(50000),
+};
+export const ElevationProfileSchema = z
+  .discriminatedUnion("status", [
+    z
+      .object({
+        ...ElevationAvailableFields,
+        status: z.literal("complete"),
+        samples: z
+          .array(
+            ElevationSampleSchema.extend({ elevationM: z.number().finite() }),
+          )
+          .min(2)
+          .max(2501),
+        summary: ElevationSummarySchema.extend({
+          ascentM: z.number().finite().nonnegative(),
+          descentM: z.number().finite().nonnegative(),
+          netElevationM: z.number().finite(),
+        }),
+      })
+      .strict(),
+    z
+      .object({
+        ...ElevationAvailableFields,
+        status: z.literal("partial"),
+        samples: z.array(ElevationSampleSchema).min(2).max(2501),
+        summary: ElevationSummarySchema.extend({
+          ascentM: z.null(),
+          descentM: z.null(),
+          netElevationM: z.null(),
+        }),
+      })
+      .strict(),
+    z
+      .object({
+        status: z.literal("unavailable"),
+        reason: z.enum([
+          "not_configured",
+          "data_unavailable",
+          "unsupported_dtm",
+          "no_coverage",
+          "invalid_geometry",
+          "route_too_long",
+          "resource_limit",
+          "busy",
+          "timeout",
+        ]),
+      })
+      .strict(),
+  ])
+  .openapi("ElevationProfile", {
+    description:
+      "純步行 travelMode=walk 的地形高程估計。complete/partial 含每20公尺及兩端樣點；partial 的全程累積升降/淨高差為null，無任何有效樣點或讀取失敗則unavailable。名目20公尺DTM雙線性內插、未去噪，不代表新增精度或路面實測；不能判斷橋面、地下道、短坡道、緣石、平整度或輪椅安全，亦不改選路/坡度限制。累積升降可能受高程雜訊影響。僅處理前3候選、每條50公里以內；高程讀取總預算1500ms，失敗仍回傳原路線。",
+  });
+
 export const AccessibleRouteSchema = z
   .object({
     departureTime: z.string().datetime({ offset: true }).optional().openapi({
@@ -1207,6 +1295,10 @@ export const AccessibleRouteSchema = z
         description:
           "影響分數可信度或需提醒使用者的訊息（如資料不足、步行過長）",
       }),
+    elevationProfile: ElevationProfileSchema.optional().openapi({
+      description:
+        "僅 resolved travelMode=walk 提供；transit（含純步行fallback）、drive/motorcycle及其步行接駁段不提供。standard/compact格式相同，資料不可用時只回傳unavailable與reason。",
+    }),
     totalWalkDistanceM: z.number().optional().openapi({
       example: 736,
       description: "全程步行距離（公尺），供前端顯示與排序透明度",

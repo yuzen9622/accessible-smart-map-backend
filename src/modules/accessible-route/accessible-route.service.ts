@@ -55,6 +55,7 @@ export type {
 import type { IOsmA11y } from "../../types";
 import type { TaiwanCityEn } from "../../types/transit";
 import { slimRoutes, compactRoutes } from "./facility-slim";
+import { attachWalkElevationProfiles } from "./route-elevation-enrichment";
 import { slimRouteGeometry } from "./geometry-slim";
 import { getRoutingConfig } from "../../config/routing";
 import { restoreRouteStopIds } from "./stop-aliases";
@@ -2480,6 +2481,7 @@ export async function planAccessibleRouteFromRequest(
       route.arrivalTime = taipeiIsoOffset(start + route.totalMinutes * 60000);
     }
   }
+  await attachWalkElevationProfiles(routes, travelMode);
   const displayRoutes = await enrichRouteDisplayNames(routes, body.language);
   const normalizedRoutes = displayRoutes.map((route) => {
     const normalized = normalizeWalkSteps(route, body.language);

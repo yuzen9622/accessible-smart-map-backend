@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Multi-stage build for the Node API.
-# Runtime needs only dist/ + production deps — the app reads no files from disk
-# at runtime (a11y data lives in MongoDB, transit in the OTP sidecar).
+# Runtime uses dist/ + production deps; optional terrain DTM is mounted read-only.
+# Accessibility data lives in MongoDB, transit in the OTP sidecar.
 
 # ── builder: full deps + compile TS → dist ──────────────────────────────────
 FROM node:22-bookworm-slim AS builder

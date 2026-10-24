@@ -4798,3 +4798,152 @@ describe("venue destinations (destinationVenuePlace)", () => {
     ).toBe(6);
   });
 });
+
+describe("FROZEN walking terrain elevation API", () => {
+  const fixture = (name: string) =>
+    `${process.cwd()}/src/modules/accessible-route/fixtures/elevation-${name}.tif`;
+  const app = express();
+  app.use(express.json());
+  app.use("/api/v1/a11y", createAccessibleRouteRouter());
+  const url = "/api/v1/a11y/accessible-route";
+
+  beforeEach(() => {
+    vi.stubEnv("ROUTE_ELEVATION_DTM_PATH", fixture("plane"));
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "ok",
+      routes: [walkRoute()] as any,
+    });
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it.each(["standard", "compact"])(
+    "returns exact real-raster heights through the real HTTP pipeline (%s)",
+    async (format) => {
+      const res = await requestHttp(app)
+        .post(url)
+        .send({ ...walkRequest, format });
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      const route = res.body.data.routes[0];
+      expect(route.routeId).toBe("walk-walk-0");
+      expect(route.legs[0].polyline).toEqual(walkRoute().legs[0].polyline);
+      expect(route.elevationProfile).toMatchObject({
+        status: "complete",
+        source: {
+          dataset: "MOI_DTM_20M",
+          kind: "terrain",
+          resolutionM: 20,
+          samplingIntervalM: 20,
+          interpolation: "bilinear",
+          smoothing: "none",
+        },
+      });
+      const { samples, summary, distanceM } = route.elevationProfile;
+      expect(samples[0]).toMatchObject({
+        distanceM: 0,
+        coordinates: [121.56, 25.04],
+      });
+      expect(samples[0].elevationM).toBeCloseTo(49.85, 3);
+      expect(samples.at(-1).elevationM).toBeCloseTo(44.85, 3);
+      expect(samples.at(-1).distanceM).toBe(distanceM);
+      expect(samples.at(-1).coordinates).toEqual([121.55, 25.03]);
+      for (let i = 1; i < samples.length; i++) {
+        expect(samples[i].distanceM).toBeGreaterThan(samples[i - 1].distanceM);
+        expect(
+          samples[i].distanceM - samples[i - 1].distanceM,
+        ).toBeLessThanOrEqual(20.000001);
+      }
+      expect(summary.netElevationM).toBeCloseTo(-5, 3);
+      expect(summary.ascentM).toBeCloseTo(0, 3);
+      expect(summary.descentM).toBeCloseTo(5, 3);
+      expect(summary.validSamples).toBe(samples.length);
+      expect(AccessibleRouteSchema.safeParse(route).success).toBe(true);
+      expect(planOtpWalkDetailed).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("preserves nodata gaps and never reports partial totals as whole-route totals", async () => {
+    vi.stubEnv("ROUTE_ELEVATION_DTM_PATH", fixture("nodata"));
+    const res = await requestHttp(app).post(url).send(walkRequest);
+    expect(res.status).toBe(200);
+    const profile = res.body.data.routes[0].elevationProfile;
+    expect(profile?.status).toBe("partial");
+    expect(
+      profile.samples.some(
+        (p: { elevationM: unknown }) => p.elevationM === null,
+      ),
+    ).toBe(true);
+    expect(profile.samples[0].elevationM).toBeCloseTo(49.85, 3);
+    expect(profile.summary).toMatchObject({
+      ascentM: null,
+      descentM: null,
+      netElevationM: null,
+    });
+  });
+
+  it("keeps an otherwise valid route when the DTM file is missing", async () => {
+    vi.stubEnv("ROUTE_ELEVATION_DTM_PATH", fixture("missing"));
+    const res = await requestHttp(app).post(url).send(walkRequest);
+    expect(res.status).toBe(200);
+    expect(res.body.data.routes[0]).toMatchObject({
+      routeId: "walk-walk-0",
+      elevationProfile: { status: "unavailable", reason: "data_unavailable" },
+    });
+    expect(res.body.data.routes[0].legs[0].polyline).toEqual(
+      walkRoute().legs[0].polyline,
+    );
+  });
+
+  it("reports no coverage rather than a fictitious zero-height profile", async () => {
+    const route = walkRoute();
+    route.legs[0].polyline = [
+      [120.1, 24],
+      [120.11, 24.01],
+    ];
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "ok",
+      routes: [route] as any,
+    });
+    const res = await requestHttp(app).post(url).send(walkRequest);
+    expect(res.status).toBe(200);
+    expect(res.body.data.routes[0].elevationProfile).toEqual({
+      status: "unavailable",
+      reason: "no_coverage",
+    });
+  });
+
+  it("does not invent an elevation connector between disconnected walk legs", async () => {
+    const route = walkRoute();
+    route.legs.push({
+      ...route.legs[0],
+      polyline: [
+        [121.54, 25.02],
+        [121.55, 25.03],
+      ],
+    });
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "ok",
+      routes: [route] as any,
+    });
+    const res = await requestHttp(app).post(url).send(walkRequest);
+    expect(res.status).toBe(200);
+    expect(res.body.data.routes[0].elevationProfile).toEqual({
+      status: "unavailable",
+      reason: "invalid_geometry",
+    });
+  });
+
+  it("omits the profile for a transit request even when the answer is all WALK", async () => {
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue(
+      otpTransitOk([walkRoute()]) as any,
+    );
+    const res = await requestHttp(app)
+      .post(url)
+      .send({ ...walkRequest, travelMode: "transit" });
+    expect(res.status).toBe(200);
+    expect(res.body.data.travelMode).toBe("transit");
+    expect(res.body.data.routes).not.toHaveLength(0);
+    for (const route of res.body.data.routes)
+      expect(route).not.toHaveProperty("elevationProfile");
+  });
+});

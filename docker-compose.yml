@@ -17,6 +17,7 @@ services:
     env_file: .env
     environment:
       OTP_BASE_URL: http://otp:8080
+      ROUTE_ELEVATION_DTM_PATH: /data/dtm/taiwan-dtm-20m.tif
       VALHALLA_BASE_URL: http://valhalla:8002
       DATABASE_URL: >-
         mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongo:27017/accessible_map?authSource=admin&replicaSet=rs0
@@ -39,6 +40,7 @@ services:
       # Bind the service-account JSON (host path from .env) read-only.
       - ${GCS_KEY_FILE}:/secrets/gcs-key.json:ro
       - ${VALHALLA_DATA_DIR:-./valhalla-data}:/app/valhalla-data
+      - ${OTP_DEM_DIR:-${OTP_DATA_DIR:-./otp-data}/dem}:/data/dtm:ro
     ports:
       # Publish the API. Prefix 127.0.0.1: to keep it host-only.
       - "127.0.0.1:${PORT:-8000}:${PORT:-8000}"
