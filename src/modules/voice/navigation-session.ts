@@ -417,6 +417,8 @@ export class NavigationSession {
     ];
     const seed = seedPosition ?? this.latestPosition;
     if (seed) events.push(...this.onPosition(seed).events);
+    if (this.speechQueue.length === 0)
+      this.enqueueSpeech(this.messages.started);
     return { ok: true, events };
   }
 

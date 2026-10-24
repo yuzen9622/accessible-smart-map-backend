@@ -198,6 +198,47 @@ describe("natural-language voice actions — frozen user acceptance", () => {
     },
   );
 
+  it("does not treat continuous raw microphone frames as detected speech that blocks navigation audio", async () => {
+    await bridge.armRouteToken(route.routeToken);
+    bridge.sendAudio(Buffer.alloc(3200));
+    bridge.startNavigation();
+    expect(frames().some((frame) => frame.type === "nav.start")).toBe(true);
+    expect(session.sendRealtimeInput).toHaveBeenCalled();
+    expect(session.sendClientContent).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts a new detected user command while the startup acknowledgement is speaking", async () => {
+    await bridge.armRouteToken(route.routeToken);
+    bridge.startNavigation();
+    expect(session.sendClientContent).toHaveBeenCalledTimes(1);
+    await transcript("停止導航");
+    callbacks.onmessage({
+      toolCall: {
+        functionCalls: [
+          { id: "stop-during-start", name: "stopNavigation", args: {} },
+        ],
+      },
+    });
+    await vi.waitFor(() =>
+      expect(io.stop).toHaveBeenCalledWith(
+        route.navigationId,
+        "natural-actions",
+      ),
+    );
+    expect(frames().some((frame) => frame.type === "nav.stop")).toBe(true);
+  });
+
+  it("waits for a detected user turn before narrating navigation", async () => {
+    await bridge.armRouteToken(route.routeToken);
+    await transcript("我正在說話，請稍等一下");
+    bridge.startNavigation();
+    expect(session.sendClientContent).not.toHaveBeenCalled();
+    callbacks.onmessage({ serverContent: { turnComplete: true } });
+    await vi.waitFor(() =>
+      expect(session.sendClientContent).toHaveBeenCalledTimes(1),
+    );
+  });
+
   it("does not require ASR text to precede a start tool decision", async () => {
     await bridge.armRouteToken(route.routeToken);
     expect(await tool("startNavigation")).toMatchObject({ ok: true });

@@ -1900,6 +1900,15 @@ export async function createLiveBridge(
       }
       if (content.inputTranscription) {
         if (content.inputTranscription.text?.trim()) {
+          if (navSpeaking && !content.interrupted) {
+            endTurnAudio("interrupted");
+            generationFinished = false;
+            modelTranscriptBuffer = "";
+            navSession.onInterrupted();
+            navSpeaking = false;
+            clearTurnTimeout();
+            sendJson({ type: "interrupted" });
+          }
           liveState = "USER_INPUT";
           const piece = normalizeVoiceTranscript(
             content.inputTranscription.text,
@@ -2301,7 +2310,6 @@ export async function createLiveBridge(
     },
     sendAudio(data: Buffer): void {
       if (disposed || !session || assistantEnding) return;
-      liveState = "USER_INPUT";
       session?.sendRealtimeInput({
         audio: {
           data: data.toString("base64"),

@@ -146,7 +146,23 @@ describe("NavigationSession pure domain state", () => {
     ]);
   });
 
-  it("emits the public nav.start DTO only and waits for a geofence before speaking", () => {
+  it.each([undefined, pos(coord(122))])(
+    "acknowledges a successful start without inventing progress when the position is %j",
+    (position) => {
+      const nav = new NavigationSession();
+      nav.armRoute(route([walkLeg([coord(121), coord(121.001)])]));
+      const effect = nav.start(position);
+      expect(effect.ok).toBe(true);
+      expect(
+        effect.events.some(
+          (event) => event.type === "nav.step" || event.type === "nav.arrived",
+        ),
+      ).toBe(false);
+      expect(nav.takeNextSpeech()).toBe("已開始導航");
+    },
+  );
+
+  it("acknowledges the public start DTO but waits for a geofence before directional instructions", () => {
     const start = coord(121);
     const end = coord(121.001);
     const nav = new NavigationSession();
@@ -173,7 +189,8 @@ describe("NavigationSession pure domain state", () => {
       ].sort(),
     );
     expect(firstStep.maneuver).toBe("DEPART");
-    expect(nav.takeNextSpeech()).toBeNull();
+    expect(nav.takeNextSpeech()).toBe("已開始導航");
+    nav.onTurnComplete();
     nav.onPosition(pos(start));
     expect(nav.takeNextSpeech()).toBe(
       "沿「道路0」出發，續行約 20 公尺，方位約 90 度（東）",
@@ -1236,6 +1253,10 @@ describe("NavigationSession language", () => {
         expect(event.steps.map((s) => s.instruction).join(" ")).not.toMatch(
           /\p{Script=Han}/u,
         );
+      expect(session.takeNextSpeech()).toBe(
+        language === "en" ? "Navigation has started." : "已開始導航",
+      );
+      session.onTurnComplete();
       session.start();
       expect(session.takeNextSpeech()).toBe(
         language === "en" ? "Navigation is already in progress." : "導航進行中",
@@ -1292,6 +1313,8 @@ describe("NavigationSession language", () => {
       route([walkLeg([coord(121), coord(121.01)], false, "A", "B")]),
     );
     session.start();
+    expect(session.takeNextSpeech()).toBe("Navigation has started.");
+    session.onTurnComplete();
     for (let i = 0; i < 3; i++)
       session.onPosition({ latitude: 26, longitude: 122 });
     expect(session.takeNextSpeech()).toBe(
