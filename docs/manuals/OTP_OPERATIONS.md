@@ -1,8 +1,126 @@
-# OTP2 維運手冊 — 資料更新、建圖、Docker 部署
+# OTP2 維運手冊 — 資料匯入、建圖與部署
 
-> 適用版本：OpenTripPlanner **2.9.0**（pin 於 `docker-compose.yml` 與 `build-otp-graph.sh`，2026-06-12 起）
+適用版本為 OpenTripPlanner **2.9.0**。`pnpm import:sidewalks` 只負責人行道下載、驗證與匯入 PostGIS；`pnpm otp:rebuild` 負責建圖預檢、完整 OTP 建圖、候選驗證及載入。建圖檔案由後者管理，不必手動準備 graph、manifest 或資料目錄環境變數。
 
-本文件涵蓋 OTP sidecar 的完整生命週期：GTFS 資料取得 → 清理 → 台鐵班表注入 → graph 建置 → Docker 配置與啟動 → 驗證 → 故障排查。
+## 新環境啟用
+
+從 repository 根目錄執行。需要 Node **22 以上**、專案指定的 pnpm、Python **3.12 以上**、Docker Engine／Docker Desktop 與 Compose，以及 `curl`、`zip`、`unzip`、`git`。依 `.env.example` 填妥 TDX 憑證、MongoDB、PostGIS 與原有應用程式設定；主機腳本的資料庫位址須使用主機可連到的埠，Compose 預設 Mongo 為 **27018**、PostGIS 為 **5434**。
+
+安裝主機上的專案與 Python 相依套件：
+
+```bash
+pnpm install --frozen-lockfile
+python3 -m venv otp-data/python-venv
+source otp-data/python-venv/bin/activate
+python -m pip install -r requirements-test.txt psycopg2-binary
+```
+
+`requirements-test.txt` 包含建圖使用的 osmium、Shapely 與 rasterio；psycopg2 用於讀取 PostGIS。Ubuntu 需先安裝 `python3-venv`。以下建圖指令請在已啟用這個 Python 環境的終端機執行。
+
+已有 Conda 環境時可沿用，不必另建 venv。Conda 的 `psycopg2` 與 pip 的 `psycopg2-binary` 都提供程式需要的 `psycopg2` 模組，已安裝前者不需再裝後者。建圖與預檢使用同一個終端機 `PATH` 中的 `python3`；先啟用已裝齊相依套件的環境（將佔位符換成自己的名稱或路徑）：
+
+```bash
+conda activate <環境名稱或絕對路徑>
+python3 -c 'import sys; print(sys.executable); print(sys.version)'
+pnpm otp:preflight
+```
+
+預檢會顯示實際 Python 路徑及個別載入失敗的套件。若路徑仍指向系統／Homebrew Python，先修正環境啟用；若路徑正確，依列出的缺項補齊。只有 psycopg2 安裝成功，仍不代表 osmium、Shapely、rasterio、numpy 或 Python 版本均已符合要求。
+
+啟動資料庫，並依[一般部署手冊](./DEPLOY_UBUNTU.md)完成 Mongo 基礎資料準備：
+
+```bash
+docker network inspect accessible-shared >/dev/null 2>&1 || docker network create accessible-shared
+docker compose up -d --wait mongo postgis redis
+```
+
+Mongo 補強、站牌對照表及交通品質驗證仍需要原有資料。Valhalla 路網與 `GCS_KEY_FILE` 等設定屬於其他後端功能的部署要求，不是人行道匯入或 OTP 建圖的必要條件；這個指令不會代替所有應用程式資料匯入或建立雲端憑證。
+
+服務與工具就緒後，依序執行，前一個指令成功後才執行下一個：
+
+```bash
+pnpm import:sidewalks
+pnpm otp:rebuild
+```
+
+第一個指令下載並匯入官方人行道來源，完成後就結束；它不執行 OTP 預檢、建圖或重啟服務。第二個指令讀取已匯入的來源，檢查建圖必要條件並完成 OTP 重建；候選驗證與載入失敗都回傳非零狀態。只匯入人行道不需要 Python 建圖套件、TDX 憑證或 MongoDB。首次建圖及完整交通班表處理可能耗時較長，請預留磁碟與主機／Docker VM 記憶體，並安排維護時段。
+
+成功後部署後端：
+
+```bash
+docker compose up -d --build backend
+```
+
+`docker compose up` 本身只載入已建好的 OTP release，不會在服務啟動時下載資料或重建路網。若後端以主機 Node／systemd 執行，依一般部署手冊編譯並啟動該服務。
+
+## 指令與來源選項
+
+| 指令 | 行為 |
+| --- | --- |
+| `pnpm import:sidewalks` | 下載、驗證並匯入官方人行道來源；不建圖或切換 OTP。 |
+| `pnpm import:sidewalks --zip <path>` | 使用既有原始 ZIP 匯入；不修改原始 ZIP。 |
+| `pnpm import:sidewalks --url <URL>` | 從指定公開網址下載並匯入人行道來源。 |
+| `pnpm import:sidewalks --dry-run` | 檢查來源、清洗與 PostGIS 幾何，不發布來源、不建圖。 |
+| `pnpm otp:rebuild` | 使用已匯入的 ACTIVE 來源，重跑既有完整 OTP 建圖、驗證及載入。 |
+| `pnpm build:otp` | 與 `pnpm otp:rebuild` 相同的建圖流程。 |
+
+`--zip` 與 `--url` 不可同時使用。資料庫連線只從環境設定讀取，不支援 `--db-url`；公開來源網址也不應夾帶憑證。`pnpm data:sync` 的 `sidewalks` 步驟使用同一個純匯入指令；同步後要套用新來源時執行 `pnpm otp:rebuild`。
+
+## 建圖與檔案位置
+
+既有完整建圖流程包含以下工作：
+
+1. 下載完整 TDX GTFS，清理交通資料，補強公車班表、台鐵／捷運與無障礙屬性。
+2. 保留 Mongo 中的北捷設施補強、重複站牌合併及對照表匯入。
+3. 準備台灣 OSM 與官方 DEM，套用行人禁行標記，再將已匯入的政府人行道編入路網。
+4. 固定建圖輸入及政策封裝，使用 native OTP 映像建圖，產生同一份圖的來源 manifest。
+5. 執行既有交通品質驗證，再追加來源／政策身分核對，以及一般、輪椅各自的直接步行與中途點試排，通過後載入服務。
+
+GTFS 必須通過鐵路／捷運服務窗口檢查。`pnpm fetch:gtfs` 是供 Mongo 匯入使用的流程，不能取代 OTP 使用的完整 feed。建圖會使用暫時的 Docker 建圖／候選容器，這些不是額外常駐服務。
+
+資料固定放在專案的 `otp-data/`，release、指標與高程檔由腳本管理：
+
+```text
+otp-data/
+├── active-release
+├── dem/
+│   └── taiwan-dtm-20m.tif
+└── releases/
+    └── <release>/
+        ├── inputs/            # graph.obj、完整 GTFS、PBF、DEM 與設定
+        ├── evidence/          # build-manifest.json 與建圖檢查資料
+        └── ...                # 原始來源與建圖封裝
+```
+
+OTP 以唯讀方式掛載 `otp-data/`，由 `active-release` 取得同一個 release 的圖與 manifest。後端從固定的 `./otp-data/dem` 唯讀掛載高程。不需手動建立目錄指標、填寫 graph 路徑、manifest SHA-256 或政策 JSON；核定政策清單隨程式封裝。原生程式仍核對實際 graph 位元組、來源與政策，不能混用不同版本的檔案。
+
+## 更新與失敗處理
+
+日常更新官方人行道並套用路網，先執行 `pnpm import:sidewalks`，成功後再執行 `pnpm otp:rebuild`。只更新交通圖或套用程式變更而沿用目前來源時，執行 `pnpm otp:rebuild`；後端程式有變更時再依部署方式重建／重啟後端。既有 `scheduled-otp-rebuild.sh` 先更新部署 checkout，再呼叫建圖流程，應只用在已設定妥當的部署主機。
+
+**匯入會切換 ACTIVE 來源，建圖須另行執行。** 從來源切換到新圖載入完成之間，包含兩個指令之間的時間，後端可能因舊圖與來源不符回傳 503。`pnpm otp:rebuild` 也會在建圖與候選驗證期間暫停現有 OTP，以保留記憶體空間，因此須安排維護時段。相同 archive 重匯會保留原有來源版本 ID。
+
+建圖失敗會保留舊圖與 release 檔案，但不代表來源已回復或所有服務均已恢復。若匯入已完成而後續建圖／載入失敗，先核對目前 ACTIVE 來源、服務圖及錯誤 log，修正後執行 `pnpm otp:rebuild`。不要只重啟後端，也不要手動補造 manifest、改來源 ID 或移動指標略過驗證。
+
+候選驗證的完整輸出保存在該 release 的 `evidence/transport-verification-*.log` 與 `evidence/native-verification-*.log`，失敗訊息會列出檔案路徑。交通行程失敗時另列出 OTP 的 `routingErrors`、起點或終點欄位及說明；例如 `NO_STOPS_IN_RANGE` 應檢查步行路網與站點的連通性，不能只靠重新下載班表判斷已修復。
+
+備份及搬遷須保留整個 `otp-data/`、對應 PostGIS 來源、程式與映像；來源版本 ID、批次及 archive SHA-256 必須一致。僅搬移 `graph.obj` 不足以恢復服務。`promote-otp-graph.sh` 是重建流程內部使用的整個 release 驗證與發布步驟，不接受單一 graph；日常操作使用上述主要指令。
+
+## 直接步行的資料與回應契約
+
+`travelMode: "walk"`、`mode: "normal"` 或 `"wheelchair"` 預設使用 native OTP，包含依序經過中途點的直接步行，不需要額外的功能啟用環境變數。後端必須先取得目前人行道來源版本，再核對 OTP 實際載入的圖、建圖 manifest、已核定政策身分與選中路段證據；缺少所需資料時回傳 503。其他輔助模式、大眾運輸接駁與停車行程中的步行段仍沿用既有 CSR 政策流程。
+
+一般模式的 `avoidStairs: true` 會使用 `stairsReluctance: 12` 作為避梯偏好；它仍是一般步行，不等於輪椅模式或保證無階梯。未知的淨寬、坡度與設施資料不會被補成已確認無障礙。來源版本無法確認、身分不符、路段證據不完整，或實際選中幾何的端點／接續缺口超過 **0.25 公尺**時，後端會拒絕該候選，不用直線補洞或改用未驗證的步行路線。服務可啟動、TCP 可連線或 GraphQL 有回應，均不能代替這些檢查。
+
+輪椅模式以 0.8 m/s 搜尋，先排除階梯。只有所有中途點分段的嚴格搜尋均已完成，且確有分段無路可走時，才對該段啟用明示需協助的階梯備援；每段仍使用前段實際抵達時間。兩種輪椅搜尋均拒絕已知淨寬不足 0.9 公尺、不可通行路面、電扶梯與票閘。階梯協助只放寬階梯本身的輪椅旗標與坡度，非階梯的已知禁止輪椅通行或超過 12% 坡度仍被排除。此固定政策不等於已套用使用者任意指定的坡度上限。
+
+原生請求若確認本次端點連接因已知寬度或非階梯坡度受限，API 回傳 `422 ENDPOINT_CONSTRAINT_BLOCKED`，`data.endpointConstraint.pointIndex` 指出起點、中途點、終點序列中的位置（從 0 起算）。這表示目前端點連接不符合輪椅條件，不是整個區域都無路可走的證明，也不會啟用樓梯備援。無法完成這項確認、搜尋受限或逾時時，仍回傳 503。
+
+本版後端需要提供 search schema 2 與端點限制欄位的核定 OTP 映像。保留舊證據解析不代表舊映像能接受新查詢；更新時須一起核對後端、政策映像、建圖 manifest 與核定清單。
+
+空的 itinerary 不能單獨證明無路。後端要求原生搜尋確實耗盡可搜尋路徑的證據；逾時、搜尋距離上限或時間剪枝會回報 503，不觸發階梯備援。新增端點接線須有政府有效面完整覆蓋、來源、樓層及局部寬度證據，且是 OTP 真正走過、計入距離與時間的邊。接線的 `parentOsmWayId` 只識別接入目標，不能計為政府原生路段的使用證據。
+
+此版本新增圖內來源與端點證據，必須重新建圖。舊圖會在反序列化前被明確拒絕；回復舊版本時須使用舊圖原本對應的執行映像，不可只修改格式標記或 manifest。
 
 ## 後端搜尋範圍與品質回歸
 
@@ -27,13 +145,13 @@ OTP 依「步速＋輪椅旗標（＋其他步行偏好）」快取站間轉乘�
 
 `build-config.json` 的 `transferRequests` 另含輪椅一筆：OTP 預設只替一般行人預算轉乘，沒有這筆時輪椅使用者的站間轉乘沒有保證無階梯的路徑（改動要重建圖）。
 
-### 重複站牌合併（建圖步驟 1g）
+### 重複站牌合併
 
-TDX 每條路線各有一個站牌，同一根站牌被多條路線停靠時會出現多筆座標相同的站牌。`merge-gtfs-duplicate-stops.py` 只合併「座標（小數 7 位）、站名、城市代碼都相同，只有公車停靠、無 parent station，且不會讓同一條路線的兩個站牌合在一起」的站牌，並重寫 `stop_times`、`pathways`、`stop_areas`、站名翻譯。合併後每條路線原本的站牌 ID 由 `import-gtfs-stop-aliases.ts` 寫入 Mongo `gtfsstopaliases`，後端在 OTP 回傳後換回，所以 API 的 `departureStopId`／`arrivalStopId` 與警示比對不變。合併失敗時建圖照常（未合併）；合併成功但對照表寫入失敗時中止建圖、保留舊圖。
+TDX 每條路線各有一個站牌，同一根站牌被多條路線停靠時會出現多筆座標相同的站牌。`merge-gtfs-duplicate-stops.py` 只合併「座標（小數 7 位）、站名、城市代碼都相同，只有公車停靠、無 parent station，且不會讓同一條路線的兩個站牌合在一起」的站牌，並重寫 `stop_times`、`pathways`、`stop_areas`、站名翻譯。合併後每條路線原本的站牌 ID 由 `import-gtfs-stop-aliases.ts` 寫入 Mongo `gtfsstopaliases`，後端在 OTP 回傳後換回，所以 API 的 `departureStopId`／`arrivalStopId` 與警示比對不變。完整建圖流程會執行合併與對照表匯入；合併後若對照表寫入失敗，必須中止建圖，避免 API 回傳錯誤的站牌 ID。
 
 ### 公車班次的無障礙旗標與路線低底盤歷史
 
-步驟 1f 不會推論 `wheelchair_accessible=2`，但保留上游 feed 自己發布的 2。路線的低底盤比例（台中、新竹的城市派車資料，以及即時到站資料中看到的車牌）存在 Mongo `busfleetsightings`，只當作後端排序訊號，不寫成 GTFS 班次旗標：GTFS 的旗標是「這一班」的事實，路線比例只說明這條路線多常派低底盤車。
+`inject-tdx-bus-trips-a11y.ts` 不會推論 `wheelchair_accessible=2`，但保留上游 feed 自己發布的 2。路線的低底盤比例（台中、新竹的城市派車資料，以及即時到站資料中看到的車牌）存在 Mongo `busfleetsightings`，只當作後端排序訊號，不寫成 GTFS 班次旗標：GTFS 的旗標是「這一班」的事實，路線比例只說明這條路線多常派低底盤車。
 
 ### 基準與比較
 
@@ -64,527 +182,40 @@ Oracle 的短窗口空結果只能表示該次沒有找到候選，不能證明�
 
 ---
 
-## ⭐ 全套重建 SOP（自助版 — 2026-07-29 實跑驗證，要重建整份圖資看這段就夠）
+## 交通資料品質
 
-下面幾節（§0–§5）是沿用現有 feed 的局部更新流程，檔名與埠號有部分過時（現在主 feed 叫 `feed-1.gtfs.zip`、對外埠是 **18080**、GraphQL 路徑是 `/otp/routers/default/index/graphql`）。**要從 TDX 重抓全台資料、重建整份 graph，只走這一段。**
+建圖流程保留完整上游交通資料；目前直接步行的驗收範圍為台灣本島 **19 縣市**，離島暫緩。`build-config.json` 的 `islandPruning` 指路網不連通分量，不是地理上的離島開關，不可用它代替地理範圍設定。
 
-### 一、開跑前必檢（自動，`pnpm otp:preflight`，幾秒）
+原生政策映像在兩個 pruning 門檻均為零時，保留步行路段及原有通行權限，同時重新連接符合上游孤立判準的站點；無可用替代連接時保留原連接。大眾運輸的座標起終點會略過已完整確認沒有站點的小型孤立路網，直接步行仍保留原本端點規則。這兩種規劃共用路網，因此修改步行建圖設定後仍須通過交通路線驗證。
 
-`build-otp-graph.sh` 第 0 步會自動跑 `src/scripts/otp-preflight.sh`。任何一項 **FAIL** 都會在打 TDX 之前就停下，什麼都不會建。也可以單獨跑：
+- `patch_gtfs.py` 會移除原有公車班次，再依完整城市清單與公路客運來源重建。不要為了縮短建圖時間刪減 `CITIES`，否則其他城市的公車會消失。
+- `inject-tra-gtfs.py` 優先保留有效的上游逐日台鐵班表，補充車種名、來源明示的輪椅旗標及軌道幾何；原生班表不足時才使用一般班表注入。注入的週期班表仍有假日與上游快照限制，不能當成即時營運保證。
+- 官方 TRTC feed 在捷運缺班補強之前處理，避免同一路線重複注入。交通輸入用 ZIP 不得另放進 `inputs/`，OTP 會將其中每個 ZIP 當作獨立 feed 載入。
+- DEM 必須成功準備，不能省略高程後宣稱輪椅坡度限制已生效。它是地形估計，不是現場路面量測。
+- 未知的站點或班次無障礙資料維持未知；路線的低底盤歷史不能改寫成每一班車均可供輪椅使用。
 
-```bash
-pnpm otp:preflight
-```
+## 故障排查
 
-| 檢查 | FAIL 代表什麼 |
+| 現象 | 檢查與處置 |
 | --- | --- |
-| `TDX_CLIENT_ID/SECRET`、`OTP_GTFS_URLS`、`OTP_DATA_DIR` 三個 config | 缺環境變數或 config 檔 |
-| checkout 落後 upstream | **要先 `git pull`**：建圖用的是本機 checkout 的 patch/inject 腳本，舊 code 也會「建成功」，只是修正沒進圖（07-30 白跑 50 分鐘） |
-| `src/scripts`、`otp-data` 有未 commit 改動 | 建出來的圖跟版本對不上。確定要用本地改動就加 `OTP_PREFLIGHT_ALLOW_DIRTY=1`（降成 WARN） |
-| 磁碟空間 | 資料目錄要 3 GiB＋現有 graph 大小（換圖會留一份 `graph.obj.prev`），暫存區要 5 GiB；同一顆碟就相加（約 8–10 GiB）。**寫滿會弄壞 Docker 儲存區** |
-| Docker daemon、記憶體 ≥ build heap + 2 GiB | daemon 沒回應時，腳本可能誤判 otp 沒在跑，把 12g build 疊在 12g serve 上 |
-| `import osmium` | 行人路權強化（致命步驟）會失敗 |
-| `node_modules/.bin/ts-node` | 1e–1g 注入步驟會失敗，要先 `pnpm install` |
-| MongoDB（`DATABASE_URL`）連得上 | 1e 只印 WARN，**北捷車站的輪椅旗標會靜默消失** |
-| `patch_gtfs.py` 的 `CITIES` = 22、`CALENDAR_VALID_DAYS` ≥ 180 | patch 會先刪光全部公車，再依 CITIES 重建；名單少一個縣市，那個縣市的公車就沒了 |
+| 建圖預檢失敗 | 依終端輸出補齊主機工具、設定或服務，再執行 `pnpm otp:rebuild`；已完成的人行道匯入不會因此回復。 |
+| 下載失敗或 TDX 回 429 | 確認憑證、網路與上游狀態，等待限流冷卻；人行道下載失敗重跑 `pnpm import:sidewalks`，建圖資料下載失敗重跑 `pnpm otp:rebuild`。 |
+| 建圖或 OTP 以 137 結束 | 檢查主機／Docker VM 記憶體與並行服務用量，增加容量或安排維護時段。 |
+| 班表服務窗口檢查失敗 | 檢查上游 GTFS 與注入資料，不改日期或縮短門檻讓舊 feed 通過。 |
+| 首次部署找不到 graph 或 manifest | 先完成 `pnpm import:sidewalks`，再執行 `pnpm otp:rebuild`；Docker 啟動不會補建這些檔案。 |
+| 來源匯入成功，但建圖／載入失敗 | 來源可能已切換，舊圖即使仍在也可能被後端拒絕；修正原因後執行 `pnpm otp:rebuild`。 |
+| OTP 反覆重啟、回報圖格式或身分不符 | 確認程式、native 映像、active release 與 PostGIS 來源相配，再重建。 |
+| API 直接步行回 503 | 檢查 OTP、PostGIS 來源及實際路段證據；GraphQL 可連線不代表資料合格。 |
+| API 輪椅步行回 `422 ENDPOINT_CONSTRAINT_BLOCKED` | 端點連接不符合已知輪椅條件，依回傳的 `pointIndex` 調整位置。 |
+| 交通路線缺少台鐵／捷運 | 檢查 graph 的 feed 是否包含有效班表，重新建圖並載入。 |
 
-WARN 不會擋（例如沒裝 gtfs-validator 就跳過驗證）。
+人行道匯入失敗會標示 `options`（參數）、`download`（官方 ZIP 下載）、`local-zip`（本機 ZIP 讀取）或 `store`（來源驗證與 PostGIS 入庫）階段，並顯示可安全輸出的 HTTP／連線／資料庫錯誤代碼。每次下載逾時上限為 180 秒；暫時斷線、逾時或 HTTP 408／429／5xx 最多嘗試三次，每次重新下載，不沿用未完成檔案。資料驗證及入庫失敗不會自動重試；若失敗在 `store`，先核對來源快照狀態再重試。輸出不包含資料庫密碼或原始資料列。
 
-**高程（DEM）**：建圖會用 `fetch-otp-dem.py` 把內政部全台 20 m DTM 下載、轉成 EPSG:4326 的 `taiwan-dtm-20m.tif`，快取在 `OTP_DEM_DIR`（預設 `$OTP_DATA_DIR/dem`，約 250 MiB；上游 ETag 沒變就不重下），再複製進建圖目錄給 OTP 原生讀取。需要 `rasterio`。下載失敗只會 WARN 並沿用快取；**沒有 DEM 時圖照樣建成，但完全沒有高程**，輪椅 `maxSlope` 與坡度修正的步行時間都失效。驗證方式：查一段山坡步行路線的 `elevationGained`，應大於 0。高程那一步全台約 5 分鐘；graph 大小約 +18%。`router-config.json` 的 `slopeExceededReluctance: 0.1` 不可拿掉：有 DEM 後，預設值 1 會讓山區輪椅查詢整數溢位（GraphQL 回 `Negative value not expected`）。
-
-**內建碟空間不夠時**，把暫存區放到別顆碟：`OTP_WORK_ROOT=/Volumes/<外接碟>/otp-work`。
-
-- macOS 要先允許 Docker 存取卸除式卷宗（系統設定 → 隱私權與安全性 → 檔案與檔案夾 → Docker → 卸除式卷宗）。沒授權時，`docker run -v /Volumes/...` 會卡在 `Created` 不動。
-- exFAT 碟會產生 `._*` 的 AppleDouble 檔，腳本在建圖前會自動清掉。不清的話，`._feed-1.gtfs.zip` 會被 OTP 當成一份 feed 吃進去。
-
-### 二、跑
+匯入與建圖各自的終端輸出顯示執行結果與進度；服務狀態可另查：
 
 ```bash
-cd /Users/yuen/project/taipei-accessible-backend
-caffeinate -dims pnpm otp:rebuild 2>&1 | tee ~/otp-backup/rebuild-$(date +%m%d).log
+docker compose logs --tail 100 otp backend
+docker compose ps -a otp backend postgis mongo
 ```
 
-（等同 `set -a; . ./.env; set +a; bash src/scripts/build-otp-graph.sh`。排程請用 §7 的 `scheduled-otp-rebuild.sh`。）
-
-- **`caffeinate -dims` 不可省。** 電腦睡眠會讓 build 凍死。症狀是 log 停住、出現 `Network error: read operation timed out`，**而且 otp 容器會一起 `Exited(137)`，線上服務會靜悄悄中斷好幾個小時**。判別法：`ps -o etime,time -p <pid>`，elapsed 兩小時但 cputime 只有一分鐘，就是被凍住，不是還在算。
-- 全程約 **25–50 分鐘**：patch 10–30 分 → 各項注入 3 分 → 驗證 0.5 分 → graph build 7–10 分 → 載入候選圖＋驗收 3–5 分 → 換圖＋healthcheck 2 分。
-- **不要看 `$?` 判斷成功**：`| tee` 會把腳本的退出碼蓋成 tee 的 0。要看 log 最後一行。
-
-### 三、跑的時候看這幾行
-
-| log 行                                                | 意義                                                             |
-| ----------------------------------------------------- | ---------------------------------------------------------------- |
-| `[otp-preflight] 0 FAIL`                              | 第 0 步通過                                                       |
-| `Route matching: ... 0 unmatched`                     | **`unmatched` 必須是 0**，非 0 表示有班次被丟掉                  |
-| `Shape assignment: ...`                               | `rejected as unfit` 幾百個是正常的（守門攔下不貼合的幾何），上千個就要查 |
-| `stopping otp container for graph build`              | 線上服務從這裡開始中斷，要到換圖完成才恢復（約 15 分鐘）          |
-| `[promote-otp-graph] ... verifying candidate graph`   | 新圖在 18081 埠載入，開始跑驗收閘門                              |
-| `RESULT PASS` / `RESULT FAIL`                         | 驗收結果。FAIL 就**不換圖**，舊圖會被拉回來繼續服務              |
-| `OTP healthy — new graph promoted` → `build complete` | **成功。** 沒有這兩行就是沒成功                                    |
-
-### 四、驗收（自動，`verify-otp-graph.py`）
-
-舊流程是換圖之後才用眼睛看三個指令。現在 `promote-otp-graph.sh` 會先把新圖載到**備用埠 18081**跑驗收，**全部通過才換圖**；任何一項 FAIL 都會保留舊圖，並把線上 otp 拉回舊圖。這台機器的記憶體不夠同時跑兩份 12g，所以驗收期間線上 otp 會停著。
-
-| 檢查 | 門檻 | 擋的是哪次事故 |
-| --- | --- | --- |
-| `feeds` | 只載入 `feed-*.gtfs.zip` 的數量（通常 1） | 07-29 注入用的 zip 被當成第二份 feed，整個北捷重複一份、且沒有幾何 |
-| `geometry` | 各運具「幾何點數 ≤ 站數」（畫成站到站直線）的 pattern 比例：BUS ≤ 5%、RAIL ≤ 10%、SUBWAY ≤ 10%；FERRY/AIRPLANE 不計 | 07-29 公車 shape 掛錯子路線，14.5% 變直線 |
-| `coverage` | 公車 route_id 縣市前綴 ≥ 20 個 | `CITIES` 被縮短，只剩 TPE/NWT/THB |
-| `freshness` | THSR/TRA/TRTC/KRTC/NTMC/TYMC 今天都有班次 | 軌道行事曆過期，只剩公車 |
-| `trip` | 天母→北車要有 BUS（且 polyline > 10 點）、南港→北車要有捷運或台鐵、北車→左營要有 THSR、台中→豐原要有 TRA、板橋→101（輪椅）要有捷運 | 端到端規劃壞掉 |
-| `audit` | `audit-gtfs-feed.py` 跟目前線上的 `feed-1.gtfs.zip` 比，不能有 REGRESSION（掉 20% 或歸零） | 某縣市公車整批消失 |
-
-隨時可以對**線上的圖**跑同一套檢查（唯讀，不影響服務）：
-
-```bash
-pnpm otp:verify
-# 加上 audit：
-python3 src/scripts/verify-otp-graph.py --otp http://127.0.0.1:18080 \
-  --feed otp-data/feed-1.gtfs.zip --baseline ~/otp-backup/feed-1.<上次成功那份>.gtfs.zip
-```
-
-**`audit` 報 REGRESSION 時要先判斷是不是指標假象**，再決定要不要放行（見下方說明）。確認是假象後，用 `OTP_VERIFY_SKIP_AUDIT=1` 重跑。其他項目沒有跳過開關，FAIL 就是圖有問題。
-
-後端 API 層的端到端試排（驗收不包含，因為後端連的是 `otp:8080`；換圖後可以手動跑）：
-
-```bash
-curl -s -X POST http://127.0.0.1:8000/api/v1/a11y/accessible-route \
-  -H 'Content-Type: application/json' \
-  -d '{"origin":{"latitude":25.1176,"longitude":121.5316},"destination":{"latitude":25.0478,"longitude":121.5170},"travelMode":"transit"}' \
-| python3 -c "
-import json,sys
-d=json.load(sys.stdin); print('ok=',d.get('ok'))
-for i,r in enumerate(d.get('data',{}).get('routes',[])[:3]):
-    print(f'  路線{i+1}:', [(l['type'], len(l.get('polyline') or [])) for l in r['legs']])"
-```
-
-2026-07-30 重建後的實際輸出（可當對照基準）：
-
-```
-幾何退化:   BUS 155/6790 (2.3%)  RAIL 2/663 (0.3%)  SUBWAY 4/100 (4.0%)
-           FERRY/AIRPLANE 100% 是已知議題（本該排除，不影響規劃）
-feeds:     只有 feed 1（404 agencies）—— 出現 feed 2 就是有雜 zip 被吃進去，見下方
-audit:     （07-29 數字，07-30 這次未重跑）bus routes=8,615  with service=6,700 (77%)  usable>=6/day=3,528 (40%)
-端到端:     （07-29）路線1: [('WALK',22),('BUS',41),('WALK',7),('METRO',18),('WALK',20)]
-```
-
-⚠️ `**{feeds{feedId}}` 只該回一個 feed。** 2026-07-29 那次重建，注入用的 `trtc-official.gtfs.zip` 放在建圖目錄裡被 OTP 當成獨立 feed 吃進去 = 整個北捷重複一份、且那份沒有 shapes.txt，捷運腿隨機變站到站直線。當時記錄的 `SUBWAY 95/189 (50.3%)` 就是這個重複 feed，不是「合成捷運無 shape」。修法：注入輸入改放 `AUX_DIR`，並在建圖前斷言 WORK_DIR 只有 `feed-*.gtfs.zip`（腳本已內建，遞迴檢查）。
-
-已知仍退化的 SUBWAY pattern（4 條，皆為 shape 與站序不吻合被 OTP 丟棄）：`KRTC_R_R_0`（高雄紅線 dir 0）、`TRTC_G_G-3`（小碧潭支線兩向，2 站接駁本來就近似直線）。
-
-`**audit` 報 REGRESSION 不代表一定要回滾。** `usable>=6/day` 這個指標會因為「班次正確分散到各子路線」而下降 —— 2026-07-29 就出現 `TNN 5→0`、`PEN 13→2`，但實測 TNN 總班次 560→560、PEN 191→191 完全沒變，純粹是分布改變。**判別法：比對該縣市的總班次數**，總量沒掉就是指標假象。更誠實的指標是 audit 開頭的 `with service`（有班次的路線數）。
-
-### 五、失敗了怎麼辦
-
-**先確認你不需要做什麼。** 腳本任何失敗路徑（preflight、建圖、驗收）都會做三件事，所以 build 失敗後線上服務會自己恢復：
-
-- 保留舊 graph，`otp-data/` 不動。
-- 把停掉的 otp 自動拉回來。
-- 清掉暫存目錄和 `otp-candidate` 容器。
-
-**驗收 FAIL（`RESULT FAIL`）**：log 裡會列出是哪幾項失敗。
-
-- 圖有問題：修好資料或腳本後重建。
-- 只有 `audit` 失敗，而且確認是指標假象（見 §四）：用 `OTP_VERIFY_SKIP_AUDIT=1 pnpm otp:rebuild` 重建。
-
-只有這兩種情況要手動處理：
-
-```bash
-# graph 換上去了但 healthcheck 沒過（腳本已自動回滾，若仍異常）
-mv otp-data/graph.obj.prev otp-data/graph.obj && docker compose restart otp
-
-# Docker 儲存區被磁碟寫滿弄壞（症狀:input/output error、image blob 讀不出來）
-# → 先清出空間,再重啟 Docker Desktop,然後 docker compose up -d otp
-```
-
-### 六、失敗模式對照表（都是實際踩過的）
-
-| 症狀                                                    | 真因                                                       | 處理                                            |
-| ------------------------------------------------------- | ---------------------------------------------------------- | ----------------------------------------------- |
-| log 凍住、CPU 時間遠小於 elapsed、otp 變 `Exited(137)`  | 電腦睡眠                                                   | 用 `caffeinate -dims` 包住                      |
-| `IncompleteRead` 後整個 patch 失敗                      | TDX 回應被截斷                                             | 已修（納入重試白名單），若重試 5 次耗盡才會致命 |
-| `missing required entity: Agency`                       | gtfs-validator 報告目錄寫在 OTP 資料目錄裡被當成 GTFS feed | 已修（報告改寫到獨立 temp 目錄）                |
-| `No space left on device` + Docker `input/output error` | 磁碟寫滿                                                   | 開跑前檢查 ≥8 GiB                               |
-| graph build 被 OOM 殺掉                                 | serve 12g + build 12g &gt; Docker VM 15.6GB                | 已修（腳本會在建圖前停 otp）                    |
-| 只剩 TPE/NWT/THB 三個縣市有公車                         | `CITIES` 被縮短                                            | 還原成 22 縣市重跑                              |
-| 公車大量畫直線                                          | shape 配錯子路線                                           | 看 `Route matching` 的 `prefix` 是否非 0；驗收的 `geometry` 會擋 |
-| 建了 50 分鐘，修正卻沒進圖                              | 建圖機 checkout 沒 `git pull`                              | preflight 會擋（落後 upstream 即 FAIL）          |
-| 北捷車站輪椅旗標消失、log 只有一行 WARN                 | step 1e 連不到 Mongo                                       | preflight 會擋（Mongo 連不上即 FAIL）            |
-| `docker run -v /Volumes/...` 卡在 `Created`             | macOS 沒授權 Docker 存取卸除式卷宗                         | 系統設定授權（見 §一）                           |
-| `unexpected zip in the build directory: ._feed-1...`    | exFAT 的 AppleDouble 檔                                    | 已修（建圖前自動刪 `._*`）                       |
-
-### 七、成功後做一件事
-
-驗收的 `audit` 會自動拿 `otp-data/feed-1.gtfs.zip`（也就是被換掉的那份）當 baseline，所以不需要手動準備。另外留一份到 `~/otp-backup/`，之後要跨好幾版比較，或要手動對線上的圖跑 audit 時才有東西可比：
-
-```bash
-cp otp-data/feed-1.gtfs.zip ~/otp-backup/feed-1.$(date +%Y%m%d).gtfs.zip
-```
-
----
-
-## 0. 指令大全（複製貼上即用）
-
-### 0.1 一鍵更新（沿用現有主 feed：更新 TRA 班表 → 重建 → 部署 → 驗證）
-
-在專案根目錄整段貼上（subshell 包裹，中途失敗不會動到正在服務的資料；全程約 10–12 分鐘）：
-
-```bash
-( set -e
-  BUILD_DIR=/tmp/otp-build
-  rm -rf $BUILD_DIR && mkdir -p $BUILD_DIR
-
-  # 1) 複製現有資料到建圖目錄（不動 otp-data 正本）
-  cp otp-data/{otp-config.json,build-config.json,router-config.json,taiwan-gtfs.zip,taiwan-otp.osm.pbf} $BUILD_DIR/
-
-  # 2) 抓最新 TRA 班表並注入（2 個 TDX 呼叫）
-  TOKEN=$(npx dotenvx run -q -- sh -c 'curl -fsS -X POST "https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token" -H "Content-Type: application/x-www-form-urlencoded" -d "grant_type=client_credentials&client_id=$TDX_CLIENT_ID&client_secret=$TDX_CLIENT_SECRET"' | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
-  curl -fsSL --compressed -H "Authorization: Bearer $TOKEN" -o /tmp/tra-timetable.json "https://tdx.transportdata.tw/api/basic/v3/Rail/TRA/GeneralTrainTimetable?%24format=JSON"
-  python3 src/scripts/inject-tra-gtfs.py $BUILD_DIR/taiwan-gtfs.zip /tmp/tra-timetable.json
-
-  # 3) 停服務容器釋放記憶體（必要！否則建圖 OOM）→ 離線建圖（~9 分鐘）
-  docker stop otp
-  docker run --rm -e JAVA_TOOL_OPTIONS="-Xmx12g" -v $BUILD_DIR:/var/opentripplanner opentripplanner/opentripplanner:2.9.0 --build --save
-
-  # 4) 建圖成功才換檔（舊 graph 留 .prev 可回滾）→ 重啟
-  cp otp-data/graph.obj otp-data/graph.obj.prev
-  cp $BUILD_DIR/taiwan-gtfs.zip otp-data/taiwan-gtfs.zip
-  mv $BUILD_DIR/graph.obj otp-data/graph.obj
-  OTP_DATA_DIR=$PWD/otp-data docker compose up -d otp
-
-  # 5) 等就緒（~40 秒）→ 驗證 TRA 在 graph 裡
-  until curl -fsS -m 3 http://localhost:8080/otp/gtfs/v1 -X POST -H 'Content-Type: application/json' -d '{"query":"{feeds{feedId}}"}' 2>/dev/null | grep -q feedId; do sleep 5; done
-  curl -s http://localhost:8080/otp/gtfs/v1 -X POST -H 'Content-Type: application/json' -d '{"query":"{ agency(id: \"1:TRA\") { routes { shortName } } }"}'
-  echo "✅ OTP 更新完成"
-)
-```
-
-> 主 feed（公車/捷運/高鐵）也要換新時，先手動從 TDX 平台下載新的全國 GTFS zip 覆蓋 `otp-data/taiwan-gtfs.zip` 並跑 `python3 src/scripts/clean-gtfs-feed.py otp-data/taiwan-gtfs.zip`，再執行上面整段。未來 `OTP_GTFS_URLS` 確認後改用 §2.1 的一鍵腳本。
-
-### 0.2 日常啟停
-
-```bash
-OTP_DATA_DIR=$PWD/otp-data docker compose up -d otp    # 啟動
-docker stop otp                                         # 停止
-docker logs otp --tail 20                               # 看載入進度
-```
-
-### 0.3 健康檢查（一行）
-
-```bash
-curl -s http://localhost:8080/otp/gtfs/v1 -X POST -H 'Content-Type: application/json' -d '{"query":"{feeds{feedId}}"}' && echo " ← 有 feedId 即正常"
-```
-
-### 0.4 故障急救
-
-```bash
-# API 每次 30 秒才回 → 十之八九是 Mongo 掛了
-brew services restart mongodb-community@7.0
-
-# Docker daemon 整個沒反應
-pkill -9 -f "Docker.app" ; sleep 3 ; open -a Docker
-
-# graph 換壞了 → 回滾上一版
-mv otp-data/graph.obj.prev otp-data/graph.obj && OTP_DATA_DIR=$PWD/otp-data docker compose up -d otp
-```
-
----
-
-## 1. 架構與檔案位置
-
-```
-TDX 全國 GTFS feed ──┐
-                     ├─ clean-gtfs-feed.py（去髒資料、移除票價）
-TRA 班表 JSON ───────┤
-                     ├─ inject-tra-gtfs.py（台鐵：保留原生班表或注入）
-Geofabrik 台灣 OSM ──┤
-                     └─► otp --build --save ──► graph.obj
-                                                  │
-                              docker compose up ──┴─► localhost:8080（GraphQL）
-                                                        ▲
-                              otp-routing.service.ts ───┘（Node 後端唯一消費者）
-```
-
-| 路徑                             | 內容                                                          |
-| -------------------------------- | ------------------------------------------------------------- |
-| `otp-data/`                      | OTP 資料目錄（容器 mount 到 `/var/opentripplanner`）          |
-| `otp-data/graph.obj`             | 序列化路網圖（~1.8 GB，**與 OTP 版本綁定**）                  |
-| `otp-data/taiwan-gtfs.zip`       | 清理＋注入後的全國 GTFS feed                                  |
-| `otp-data/taiwan-otp.osm.pbf`    | 台灣 OSM 街道圖（Geofabrik，~324 MB）                         |
-| `otp-data/build-config.json`     | 建圖設定（transitService 區間、OSM tag mapping）              |
-| `otp-data/router-config.json`    | 查詢設定（輪椅成本、searchWindow、street timeout）            |
-| `otp-data/otp-config.json`       | 功能開關（`ActuatorAPI: true`，healthcheck 用過、現已改 TCP） |
-| `src/scripts/build-otp-graph.sh` | 一鍵更新 pipeline（`pnpm otp:rebuild`；排程用 `scheduled-otp-rebuild.sh`，見 §7） |
-| `src/scripts/otp-preflight.sh`   | 第 0 步：建圖前檢查（`pnpm otp:preflight`，見 SOP §一）       |
-| `src/scripts/promote-otp-graph.sh` | 第 5 步：候選圖載到 18081 → 驗收 → 通過才換圖               |
-| `src/scripts/verify-otp-graph.py` | 驗收閘門本體；也能對線上圖跑（`pnpm otp:verify`，見 SOP §四） |
-| `src/scripts/clean-gtfs-feed.py` | TDX feed 髒資料修復（見檔頭註解的完整清單）                   |
-| `src/scripts/inject-tra-gtfs.py` | 台鐵班表注入（TDX 無官方 TRA GTFS，見 §3）                    |
-
-### 必要環境變數
-
-| 變數                                  | 用途                                     | 範例            |
-| ------------------------------------- | ---------------------------------------- | --------------- |
-| `TDX_CLIENT_ID` / `TDX_CLIENT_SECRET` | TDX OAuth2 憑證（`.env` 已有）           | —               |
-| `OTP_GTFS_URLS`                       | 全國 GTFS zip 下載 URL（空白分隔可多個） | 見 §2.1         |
-| `OTP_DATA_DIR`                        | 資料目錄絕對路徑                         | `$PWD/otp-data` |
-| `OTP_JAVA_XMX`                        | 建圖 heap（選填，預設 12g）              | `12g`           |
-| `OTP_SERVE_XMX`                       | 服務 heap（選填，預設 6g）               | `6g`            |
-| `OTP_OSM_BBOX`                        | OSM 裁切範圍（選填，**不設 = 全台**）    | —               |
-| `OTP_WORK_ROOT`                       | 建圖暫存區（選填，預設 `/tmp`；內建碟不夠時指到別顆碟） | `/Volumes/X/otp-work` |
-| `OTP_CANDIDATE_PORT`                  | 驗收用候選圖的埠（選填，預設 18081）     | `18081`         |
-| `OTP_PREFLIGHT_ALLOW_DIRTY`           | `1` = 有未 commit 改動也照建（選填）     | `1`             |
-| `OTP_VERIFY_SKIP_AUDIT`               | `1` = 驗收跳過 audit（確認是指標假象才用） | `1`           |
-
----
-
-## 2. 資料更新
-
-### 2.1 路徑 A：一鍵完整更新（建議走法）
-
-```bash
-export OTP_DATA_DIR="$PWD/otp-data"
-export OTP_GTFS_URLS="<全國 GTFS zip 的下載 URL>"
-src/scripts/build-otp-graph.sh
-```
-
-腳本自動執行：**preflight** → 抓 feed → 清理 → **抓 TRA 班表並注入** → OSM 月度更新 → gtfs-validator 驗證 → 離線建圖 → **候選圖驗收（不過就不換）** → 原子換檔 → 重啟容器 → healthcheck（失敗自動回滾舊 graph）。
-
-> **⚠️ 全國 feed URL 注意事項**
-> 目前 repo 內的 `taiwan-gtfs.zip` 來自 TDX「GTFS 服務（Beta）」的全國靜態資料集，當初為手動下載。TDX 的軌道 GTFS API 端點（`/api/gtfs/V3/Map/GTFS/Static/Rail/*`）**只提供北捷 TRTC**（實測 400：「目前只提供北捷(TRTC)的GTFS資料」），v2 premium 端點已棄用。設定 `OTP_GTFS_URLS` 前先到 [TDX 平台](https://tdx.transportdata.tw/) 會員中心的 GTFS 服務頁確認現行下載端點。
-
-> **⚠️ 建圖前務必停掉服務容器**
-> 本機 Docker VM 僅 15.6 GB，服務中的 otp 容器實際吃 ~12 GB，與 12g 建圖 heap 同時跑**必定 OOM（exit 137）**。`build-otp-graph.sh` 會在建圖前自己停掉 otp，驗收和換圖完成後再拉起來。不過 daemon 回應慢時，「查不到容器」可能被誤判成「沒在跑」（2026-07-30 因此把 12g build 疊在 12g serve 上，整台 Docker 掛掉），所以保險做法還是先手動 `docker stop otp`，確認停了再執行。
-
-### 2.2 路徑 B：沿用現有 feed 重建（升級版本、改 build-config、僅更新 TRA）
-
-不重新下載主 feed，直接用 `otp-data/` 裡的現有檔案：
-
-```bash
-# 1. 準備建圖目錄（複製、不動正在服務的資料）
-BUILD_DIR=/tmp/otp-build
-mkdir -p $BUILD_DIR
-cp otp-data/{otp-config.json,build-config.json,router-config.json,taiwan-gtfs.zip,taiwan-otp.osm.pbf} $BUILD_DIR/
-
-# 2.（選擇性）更新台鐵班表 — 見 §3
-# 3. 停服務容器（釋放記憶體）
-docker stop otp
-
-# 4. 離線建圖（~9 分鐘）
-docker run --rm -e JAVA_TOOL_OPTIONS="-Xmx12g" \
-  -v $BUILD_DIR:/var/opentripplanner \
-  opentripplanner/opentripplanner:2.9.0 --build --save
-
-# 5. 換檔並重啟
-cp otp-data/graph.obj otp-data/graph.obj.prev   # 留回滾備份
-cp $BUILD_DIR/graph.obj otp-data/graph.obj.new && mv otp-data/graph.obj.new otp-data/graph.obj
-OTP_DATA_DIR=$PWD/otp-data docker compose up -d otp
-```
-
----
-
-## 3. 台鐵（TRA）班表注入
-
-> **2026-10 起現況**：TDX 全國 feed 已自帶逐日台鐵班表（每車次每服務日一個 trip，約 59 天，含軌道 shape）。`inject-tra-gtfs.py` 會先判斷原生班表是否涵蓋至少 `NATIVE_MIN_DAYS`（14）天：
->
-> - **native 模式**（有）：原樣保留，只補 `route_long_name` 車種名、`WheelChairFlag=1` 車次的 `wheelchair_accessible=1`，並以台鐵軌道幾何修復離 shape 超過 500 m 的站序；修不好就中止且不覆寫輸入 zip。下方「下載 GeneralTrainTimetable」步驟與 45 天效期限制都不適用。
-> - **inject 模式**（沒有）：退回下述舊流程。
->
-> 以下為 inject 模式的原始說明。
-
-**背景（inject 模式）**：舊版 TDX 全國 feed 只有 TRA 的站點與 agency，**沒有班表**（routes/trips/calendar 為 0），官方也沒有 TRA 的 GTFS 端點。沒有注入的 graph 永遠排不出台鐵腿，台鐵覆蓋將完全依賴有 429 限流的 TDX MaaS API。
-
-`inject-tra-gtfs.py` 把 TDX v3 `GeneralTrainTimetable` JSON 轉成 GTFS 列注入主 feed，引用 feed 既有的 `TRA_<StationID>` 站點（239 站全對齊、零新增）。路徑 A 已自動包含；手動執行：
-
-```bash
-# 1. 取 token 並下載班表（1 個 TDX 呼叫）
-TOKEN=$(curl -fsS -X POST \
-  "https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token" \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "grant_type=client_credentials&client_id=$TDX_CLIENT_ID&client_secret=$TDX_CLIENT_SECRET" \
-  | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
-
-curl -fsSL --compressed -H "Authorization: Bearer $TOKEN" \
-  -o /tmp/tra-timetable.json \
-  "https://tdx.transportdata.tw/api/basic/v3/Rail/TRA/GeneralTrainTimetable?%24format=JSON"
-
-# 2. 注入（冪等：重跑會先剝掉舊注入）
-python3 src/scripts/inject-tra-gtfs.py otp-data/taiwan-gtfs.zip /tmp/tra-timetable.json
-# inject 模式預期輸出類似：injecting: routes=7 trips=943 services=15 stop_times=21622 ...（數字隨 TDX 快照變動）
-
-# 3. 注入只改 zip，必須重建 graph 才生效 → 回 §2.2 步驟 3
-```
-
-### 已知限制（inject 模式；設計取捨，非 bug）
-
-- **班表效期**：TDX 以「快照」發布（EffectiveDate == ExpireDate），注入時 calendar 設為生效日 +45 天，靠每週 rebuild 滾動。超過 45 天不更新，台鐵班次會從 OTP 消失。
-- **假日班表**：`NationalHolidays`／`DayBeforeHoliday` 等旗標 GTFS calendar 無法表達，國定假日的加開/停駛不會反映——與 MaaS 班表漂移同級別誤差，誤點由 realtime overlay 修正。
-- **輪椅標記**：`WheelChairFlag=1` 的 164 班標 `wheelchair_accessible=1`，其餘留「未知」。**不要改成 2（不可及）**——router-config 的 3600 秒 inaccessibleCost 會把輪椅查詢全部擠到那 164 班。
-
----
-
-## 4. Docker 配置
-
-`docker-compose.yml` 重點逐項：
-
-```yaml
-services:
-  otp:
-    image: opentripplanner/opentripplanner:2.9.0 # 永遠 pin 版本，不用 latest
-    command:
-      ["--load"] # 只給 flags！entrypoint 寫死 /var/opentripplanner，
-      # 多給路徑會報 "must supply a single directory name"
-    ports:
-      - "127.0.0.1:8080:8080" # 只綁 localhost，永不對外
-    volumes:
-      - ${OTP_DATA_DIR:-/var/otp}:/var/opentripplanner
-    environment:
-      JAVA_TOOL_OPTIONS: "-Xmx${OTP_SERVE_XMX:-6g}" # 全台 graph 服務 heap
-    healthcheck:
-      # 2.9 image 沒帶 curl/wget；bash /dev/tcp 等價 —— Grizzly 在 graph
-      # 載入完成後才綁 8080，TCP 通 = ready for routing
-      test: ["CMD", "bash", "-c", "</dev/tcp/localhost/8080"]
-```
-
-**版本升級 SOP**：`graph.obj` 序列化與 OTP 版本綁定，**升級＝必須重建**。順序：改 compose 與 build script 的 pin → 走 §2.2 用新 image 建圖 → 換檔 → `docker compose up -d otp`（compose 會用新 image 重建容器）。舊 graph 留 `graph.obj.prev` 可配舊 image 回滾。
-
----
-
-## 5. 啟動與驗證
-
-```bash
-OTP_DATA_DIR=$PWD/otp-data docker compose up -d otp
-```
-
-載入 1.8 GB graph 約 30–60 秒。**判斷健康打 GraphQL，別只看 actuator**：
-
-```bash
-# ready 檢查（回 {"data":{"feeds":[{"feedId":"1"}]}} 即就緒）
-curl -s http://localhost:8080/otp/gtfs/v1 -X POST \
-  -H 'Content-Type: application/json' -d '{"query":"{feeds{feedId}}"}'
-
-# TRA 注入驗證（應回 7 種車種）
-curl -s http://localhost:8080/otp/gtfs/v1 -X POST \
-  -H 'Content-Type: application/json' \
-  -d '{"query":"{ agency(id: \"1:TRA\") { routes { shortName } } }"}'
-
-# 端對端試排（台中→豐原，應出現 RAIL 腿；locale 影響站名語言）
-curl -s http://localhost:8080/otp/gtfs/v1 -X POST \
-  -H 'Content-Type: application/json' \
-  -d '{"query":"{ plan(from:{lat:24.137288,lon:120.6869251}, to:{lat:24.254204,lon:120.723735}, transportModes:[{mode:TRANSIT},{mode:WALK}], numItineraries:3, locale:\"zh-TW\") { itineraries { duration legs { mode from { name } } } } }"}'
-```
-
-Node 端固定使用 OTP 作為唯一路徑規劃引擎；設定 `OTP_BASE_URL` 指向 GraphQL 服務即可。
-
----
-
-## 6. 故障排查
-
-| 症狀                             | 原因                                                     | 處置                                                                          |
-| -------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| 建圖 exit 137（Killed）          | Docker VM 記憶體不足（服務容器 ~12 GB + 建圖 12g heap）  | 先 `docker stop otp` 再建                                                     |
-| 容器無限重啟、載入 NPE           | feed 有自迴圈電梯 pathway（from==to）                    | 確認 feed 過了 `clean-gtfs-feed.py`                                           |
-| 查詢 20 秒以上                   | feed 帶 384 萬行票價，OTP 每條 itinerary 掃票價          | cleaner 已整包移除 `fare_*.txt`，確認沒用未清理的 zip                         |
-| plan 全回空陣列（連純步行都空）  | 起訖點 snap 到斷裂街道孤島（2.5 的台中車站正門案例）     | 2.9 已大幅改善；Node 端有 snap-to-stop fallback 防禦                          |
-| API 回應每次都 ~30 秒            | 不是 OTP——通常是 **MongoDB 掛了**，mongoose 連線逾時疊加 | `brew services restart mongodb-community@7.0`                                 |
-| healthcheck unhealthy 但查詢正常 | healthcheck 用了 image 沒有的指令（如 curl）             | 用 bash `/dev/tcp` TCP 檢查（現行配置）                                       |
-| `/otp/actuators/health` 404      | ActuatorAPI 是 sandbox 功能預設關                        | `otp-config.json` 開 `{"otpFeatures":{"ActuatorAPI":true}}`，或直接打 GraphQL |
-| 排不出台鐵腿                     | TRA 注入後沒重建 graph；或 calendar 過期（+45 天）       | 重走 §3 + §2.2；檢查 `agency(id:"1:TRA")` 的 routes 數                        |
-| 站名變英文                       | plan 預設 locale=en，feed 的 translations.txt 只有英譯   | 查詢帶 `locale:"zh-TW"`（`otp-routing.service.ts` 已內建）                    |
-| 文湖線/環狀線/台中捷運排不到     | OTP graph 沒含該路線有效班表                             | 比照 TRA 注入或修補 feed 後重建 graph                                         |
-| TDX 下載 429                     | quota 限流（burst 4–6 呼叫即觸發）                       | 等冷卻重試；pipeline 每次 build 僅 2–3 個呼叫，正常不會撞                     |
-
----
-
-## 7. 例行排程（必裝，不是建議）
-
-軌道班表只涵蓋 TDX 發布的 4–8 週（TRA `CALENDAR_DAYS=45`、捷運 60 天、高鐵與北捷官方依 TDX 區間），**不每週重建，圖資約一個月後就會靜默腐爛成只剩公車**（2026-10 實際發生：dev 捷運/鐵路全數過期、正式機高鐵過期）。
-
-用 `src/scripts/scheduled-otp-rebuild.sh`，不要直接把 `build-otp-graph.sh` 塞進 cron：wrapper 會上鎖防重疊、先 `git pull --ff-only`（建圖吃的是主機 checkout）、讀 `.env`、每次一個 log（`logs/otp-rebuild/`，保留 8 份）、只跑一輪、失敗回非 0。
-
-cron（每週日 04:00）：
-
-```cron
-0 4 * * 0  /path/to/repo/src/scripts/scheduled-otp-rebuild.sh
-```
-
-systemd timer（Ubuntu 建議，失敗可接 `OnFailure=` 通知）：
-
-```ini
-# /etc/systemd/system/otp-rebuild.service
-[Service]
-Type=oneshot
-User=<部署帳號>
-ExecStart=/path/to/repo/src/scripts/scheduled-otp-rebuild.sh
-
-# /etc/systemd/system/otp-rebuild.timer
-[Timer]
-OnCalendar=Sun 04:00 Asia/Taipei
-Persistent=true
-[Install]
-WantedBy=timers.target
-```
-
-```bash
-sudo systemctl daemon-reload && sudo systemctl enable --now otp-rebuild.timer
-```
-
-兩道防線確認排程真的有效：
-
-- **建圖門檻**：`check-feed-service-window.py` 要求 THSR/TRA/TRTC/KRTC/NTMC/TYMC 在「今天+14 天起的 7 天」內都有班次，否則不換圖（注入步驟是 fail-soft，沒有這道門檻，TDX 掛掉時會靜默換上沒有台鐵的圖）。
-- **執行期偵測**：後端每 30 分鐘問 OTP 各軌道業者今天與 7 天後的班次數；過期會 `console.error("[otp-freshness] ... expired")`，`GET /health` 的 `transitData.expired` / `expiring` 會列出業者。看到非空就代表排程沒在跑或建圖失敗。
-
----
-
-## 8. 市區公車班表 patch（`patch_gtfs.py`）與重建後驗證
-
-> 2026-07-20 新增。`build-otp-graph.sh` 在「清理 feed」之後、「TRA 注入」之前，會對 `feed-1.gtfs.zip` 跑 `src/scripts/patch_gtfs.py`，用 TDX 班表把市區公車 + 公路客運補成 180 天週期日曆的班次。本節是 §2.1 pipeline 沒細講的一環。
-
-### 8.1 patch_gtfs.py 做什麼（務必先懂它的破壞性語意）
-
-- **會先刪光 base feed 內所有 `route_type==3`（公車）班次，再只從 `CITIES` 名單（+ InterCity 公路客運）用 TDX `Bus/Schedule` 重建**，日曆改為 `CALENDAR_VALID_DAYS`（180）天週期。
-- 對「只有起站時刻（origin-only）」的路線，再抓 `Bus/DailyTimeTable` 補逐站；TDX 已把 **Taipei/NewTaipei/Tainan/Kinmen/Lienchiang 的 DailyTimeTable 下架（v2 400、v3 僅 Tainan 且為 origin-only）**，這些市自動級聯降級：v2→v3→`StopOfRoute` 合成（每站 +2 分近似）。其餘 17 市走 v2 真實 daily。
-- 純班距（`Frequencys`）路線本就 skip（`freq_only`），由 base feed 的 `frequencies.txt` 涵蓋。
-
-### 8.2 ⚠️ 最大的坑：不要縮短 `CITIES`
-
-因為是「先刪全部再只重建名單內」，**把 `patch_gtfs.py` 的 `CITIES` 改短 = 靜默刪掉其他縣市的公車**，而且建置仍會「成功」。2026-07-20 就發生過 `CITIES` 被改成只剩 `["Taipei","NewTaipei"]`，重建後 OTP 只剩台北/新北/公路客運三種公車、其餘 20 縣市全消失。**改 `CITIES` 前務必記得此語意；正常應維持完整 22 縣市。**
-
-```bash
-# 重建前自我檢查
-python3 -c "import sys;sys.path.insert(0,'src/scripts');import patch_gtfs as p;print(len(p.CITIES),'cities, CAL',p.CALENDAR_VALID_DAYS)"
-# 期望：22 cities, CAL 180
-```
-
-patch 成功時 log 會列出 **22 個縣市各自的 `schedule=…` 摘要** 與 `Generated 十萬+ new bus trips`。
-
-### 8.3 重建後兩層驗證（公車專用，補充 §5）
-
-對外埠是 **127.0.0.1:18080**（容器內 8080），backend 在 8000。
-
-```bash
-# (a) OTP 圖層：公車應涵蓋 ~22 縣市、~4000+ 條（只剩 TPE/NWT/THB 3 個 = CITIES 被縮了）
-curl -s -X POST http://localhost:18080/otp/routers/default/index/graphql \
-  -H "Content-Type: application/json" \
-  -d '{"query":"{ routes(transportModes:[BUS]){ gtfsId } }"}' \
-  | python3 -c "import sys,json;from collections import Counter;r=json.load(sys.stdin)['data']['routes'];c=Counter(x['gtfsId'].split(':')[1][:3] for x in r);print(len(c),'縣市 /',len(r),'條',dict(c))"
-
-# (b) 後端 API 層：用無捷運區（天母）強迫排公車，legs 應含 BUS
-curl -s -X POST http://localhost:8000/api/v1/a11y/accessible-route \
-  -H "Content-Type: application/json" \
-  -d '{"origin":{"latitude":25.1176,"longitude":121.5316},"destination":{"latitude":25.0478,"longitude":121.5170},"mode":"normal","travelMode":"transit"}' \
-  | python3 -c "import sys,json;print([l.get('type') for l in json.load(sys.stdin)['data']['routes'][0]['legs']])"
-```
-
-### 8.4 OTP 沒起來（exit 137）
-
-重建腳本結尾會原子換圖 + 重啟 otp 並等 healthcheck。但 otp 服務曾 `Exited(137)`（記憶體/被殺，serve `-Xmx` 見 `OTP_SERVE_XMX`）。若重建後 `docker ps` 沒有 otp：
-
-```bash
-docker ps -a | grep otp                 # 看是否 Exited(137)
-docker compose up -d otp                 # 重新拉起
-docker inspect otp --format '{{.State.Status}} {{.State.Health.Status}}'  # 等 running healthy
-```
-
-> TDX 資料處理細節見 `src/scripts/patch_gtfs.py` 檔頭。
+部署後仍須使用實際 API 驗證一般步行、輪椅步行、中途點與主要交通行程；安全拒絕不是所有地點均能通行的保證。

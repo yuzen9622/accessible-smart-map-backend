@@ -416,7 +416,8 @@ CSR 英文可用率取決於 `ped_osm_way_name.name_en` 是否已有資料。程
 ### 圖資準備與效能邊界
 
 本機預設檔案為 `otp-data/dem/taiwan-dtm-20m.tif`；可用
-`ROUTE_ELEVATION_DTM_PATH` 改路徑，明確空字串停用。既有下載器可準備資料：
+`ROUTE_ELEVATION_DTM_PATH` 改路徑，明確空字串停用。`pnpm otp:rebuild` 的建圖流程會準備資料；
+只需要高程檔時，也可單獨執行既有下載器：
 
 ```bash
 python3 src/scripts/fetch-otp-dem.py ./otp-data/dem
@@ -425,8 +426,8 @@ python3 src/scripts/fetch-otp-dem.py ./otp-data/dem
 下載器會下載官方全臺 DTM 並轉為 EPSG:4326 GeoTIFF。執行下載器的環境需有 `rasterio`，
 但 API runtime 不需要 Python。自備檔案須為單波段、PixelIsArea、north-up、EPSG:4326、
 無旋轉且 tile 不超過 256×256 的 tiled GeoTIFF。缺檔不阻擋 API 啟動，不會逐請求下載。
-Compose 的唯讀掛載與容器路徑以根目錄 `docker-compose.yml` 為準；來源目錄沿用
-`OTP_DEM_DIR` 或 `OTP_DATA_DIR/dem`，不將圖資打包進映像。
+Compose 從固定的 `./otp-data/dem` 唯讀掛載到後端 `/data/dtm`；設定以根目錄
+`docker-compose.yml` 為準，不將圖資打包進映像。
 
 單次僅處理前 3 條候選、每條最多 50 公里／2501 樣點；一個 request 的候選共用一次
 DTM worker，總預算 1500ms，逾時終止。每個 API process 最多 2 個同時讀取的 worker，

@@ -56,14 +56,14 @@
 
 本專案為基於 Node.js、TypeScript 與 Express.js 建構的後端 REST API 與即時串流服務。系統深度整合多來源空間與動態交通數據：
 
-- **靜態拓撲層**：導入 OpenStreetMap (OSM) 無障礙路網拓撲、捷運站體內部 GTFS-pathways 階層式路徑網絡、無障礙廁所、身障專用停車位與校園無障礙數據。
+- **靜態拓撲層**：結合政府人行道面幾何、OpenStreetMap (OSM) 通行與障礙資料、站體 GTFS-pathways／levels，建立來源與版本可追查的 PostGIS／CSR 步行路網；另提供無障礙廁所、身障停車位及校園圖資。資料未記載不代表現場沒有障礙。
 - **即時動態層**：對接交通部 TDX 平台，即時串接公車動態定位、軌道運輸（捷運、台鐵、高鐵）車次與電梯妥善率，並整合全台大眾運輸即時通阻警報（Transit Alerts）。
 - **環境感知層**：聚合中央氣象署（CWA）天氣警報、環境部空氣品質指標（AQI）及路口監視器（CCTV）即時影像，提供行前與途中環境風險評估。
 - **智能互動層**：基於大型語言模型（Gemini）建構支援工具呼叫（Tool Calling）的串流對話代理人、即時語音雙向橋接（Gemini Live WebSocket）以及向量化無障礙知識檢索庫（RAG）。
 
 ### 核心技術特色
 
-- **多模態混合路徑規劃**：整合捷運、台鐵、高鐵、公車與步行路網，針對輪椅與行動不便者提供無階梯、坡度受控之連續無障礙路徑。
+- **多模態混合路徑規劃**：整合捷運、台鐵、高鐵、公車與合格步行路網。輪椅先搜尋無階梯路徑；確定不通才回傳明示需協助的階梯備援，不宣稱可獨立通過。未知坡度、淨寬與現場通行狀況不當作已驗證安全。
 - **站體內部跨樓層導航**：支援 GTFS-pathways 與 levels 標準，建立捷運站內部「出入口 - 閘門 - 電梯 - 月台」的精準三維導引。
 - **即時運輸通阻告警融合**：自動比對規劃路徑中的公車、台鐵、高鐵與捷運路段，注入即時延誤、停駛或路況異常通報。
 - **AI 代理人與工具循環**：透過 Server-Sent Events (SSE) 提供對話串流，結合意圖解析、工具呼叫循環（Tool Loop）、記憶注入與路徑自然語言解說。
@@ -112,7 +112,8 @@ graph TD
   Service -->|向量資料庫檢索| Chroma[ChromaDB Adapter]
   Service -->|外部系統整合| Adapter[adapters/ *.adapter.ts]
   Adapter -->|GraphQL 查詢| OTP[OpenTripPlanner 2.x]
-  Adapter -->|步行路網計算| Valhalla[Valhalla Routing Engine]
+  Adapter -->|車輛路線| Valhalla[Valhalla Routing Engine]
+  Service -->|來源合格的步行路線| PedestrianCSR[PostGIS / CSR pedestrian planner]
   Adapter -->|即時交通數據| TDX[TDX 交通部 API]
   Adapter -->|地理編碼與地點資訊| Google[Google Maps API]
   Adapter -->|氣象與空品資料| Sensors[CWA / MOENV API]
@@ -126,10 +127,11 @@ graph TD
 
 ### 1. 多模態無障礙路徑規劃引擎 (OTP2 & Valhalla)
 
-路徑規劃模組位於 `src/modules/accessible-route/`，整合 OpenTripPlanner 2.x (OTP2) 與 Valhalla 雙引擎：
+路徑規劃模組位於 `src/modules/accessible-route/`，由 OTP2 提供大眾運輸候選、Valhalla 提供車輛路線。設定核定政策清單後，一般與輪椅的直接步行由含政府人行道圖層的 OTP 規劃；其他模式與接駁步行仍由 PostGIS／CSR 提供：
 
-- **GraphQL 行程查詢**：向 OTP2 GraphQL 端點查詢符合無障礙條件的多模態路徑（公車、捷運、台鐵、高鐵與步行）。
-- **Snap 站點投影演算法**：設定 500 公尺半徑近鄰搜尋，將真實坐標投影匹配至最近的捷運站、火車站或公車站點實體入口。
+- **步行來源驗證**：每個 WALK 都須通過所用路網的來源、版本、政策與幾何檢查；不退回未驗證的 OTP／Valhalla 步行線。接駁使用實際步行秒數檢查能否趕上班次。
+- **合法端點接線**：只以相容樓層的已知原生路徑或裁切後可通行面連接；最近距離不能單獨證明可通行，不跨越洞、建物、封閉區或不同樓層補直線。已知月台以 GTFS stop 身分接線，票閘權限只來自相鄰軌道行程，不接受 client 自授權。
+- **階梯與資料不足**：一般步行可走合法階梯；輪椅完整無階梯搜尋不通後才採需協助的備援，僅放寬階梯本身的輪椅旗標與坡度，仍保留已知封閉、淨寬與非階梯通行限制。資料／預算不足回 503，不據以宣稱無路。回應的 `walkingPolicy` 識別路網來源、版本與室外階梯備援；欄位與錯誤分類以 OpenAPI 為準。
 - **無障礙權重評分機制**：透過 `scoring.ts` 針對階梯、坡道坡度、轉乘次數、電梯可用性進行綜合評分與路徑排序。
 - **電路熔斷器保護 (Circuit Breaker)**：針對外部 OTP2 服務設計狀態熔斷機制。連續失敗達 3 次即觸發熔斷並進入 60 秒冷卻期，直接回傳友善錯誤，防止阻塞伺服器執行緒。
 
@@ -281,6 +283,8 @@ pnpm fetch:gtfs
 pnpm import:gtfs-all
 ```
 
+MongoDB 設施匯入或 OTP／Valhalla 地磚完成，不等於步行服務已就緒。Native 直接步行需政府來源、合併 PBF、綁定建圖來源的 manifest 與核定政策映像；CSR 步行另需完成 GTFS 注入且通過檢查的 PostGIS 圖版本。未就緒時規劃會回 503，而不是改用未驗證路線。建圖與啟用流程見 [部署手冊](docs/manuals/DEPLOY_UBUNTU.md)。
+
 **補充擴充數據**：
 
 ```bash
@@ -386,7 +390,7 @@ HTTP API 的 request／response schema 以 `/api/v1/openapi.json` 為準；非�
 | `/api/v1/sos/*`                     | `sos.controller.ts`               | 緊急求助廣播與即時通報觸發                    | 公開 / 選擇性 JWT             |
 | `/api/v1/transit/*`                 | `transit.controller.ts`           | TDX 公車/軌道即時動態、預估到站、即時通阻警報 | 公開                          |
 | `/api/v1/a11y/accessible-route`     | `accessible-route.controller.ts`  | 多模態無障礙路徑規劃、評分與篩選              | 公開                          |
-| `/api/v1/a11y/nav-instructions`     | `nav-instructions.controller.ts`  | 導航逐步轉彎指引與語意提示解析                | 公開                          |
+| `/api/v1/a11y/route/instructions`   | `nav-instructions.controller.ts`  | 導航逐步轉彎指引與語意提示解析                | 公開                          |
 | `/api/v1/a11y/hazard/*`             | `hazard-report.controller.ts`     | 道路障礙回報、社群確認與狀態更新              | 混合（回報需 Bearer JWT）     |
 | `/api/v1/a11y/environment`          | `environment.controller.ts`       | 即時路口 CCTV 影像串流與氣象警報              | 公開                          |
 | `/api/v1/a11y/reviews`              | `review.controller.ts`            | 地點無障礙評論、評分與回饋機制                | 混合（評論需 Bearer JWT）     |
