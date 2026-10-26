@@ -315,6 +315,27 @@ python3 "$SCRIPT_DIR/deny-foot-on-expressways.py" \
   die "pedestrian access hardening produced no PBF — keeping old graph"
 mv "$OSM_WALK_SAFE" "$OSM_CLIPPED"
 
+# ── 2c. Government sidewalks (pnpm import:sidewalks) as preferred footways ──
+# Each MOI sidewalk polygon becomes a footway=sidewalk beside its road, joined
+# to the road at its ends and junctions; the lined road piece gets
+# foot=use_sidepath so OTP prefers the sidewalk but can still walk the road.
+# Runs on the host while the old OTP still serves (2026-10-26 national run:
+# 23 min, 1.8 GB peak RSS).
+SIDEWALK_EXPORT="$AUX_DIR/sidewalks.ndjson"
+OSM_SIDEWALKS="${OSM_CLIPPED%.osm.pbf}.sidewalks.osm.pbf"
+log "exporting the ACTIVE government sidewalk source from PostGIS"
+docker exec postgis psql -U "$PED_PG_USER" -d ped_graph -At -v ON_ERROR_STOP=1 -c "
+  SELECT json_build_object('id', p.source_id, 'geometry', ST_AsGeoJSON(p.geom)::json)
+  FROM ped_sidewalk_polygon p
+  JOIN ped_sidewalk_source_version v ON v.id = p.source_version_id
+  WHERE v.lifecycle_status = 'ACTIVE'" > "$SIDEWALK_EXPORT" ||
+  die "sidewalk export failed — keeping old graph"
+log "adding $(wc -l < "$SIDEWALK_EXPORT" | tr -d ' ') sidewalk polygons as OTP footways"
+python3 "$SCRIPT_DIR/otp-sidewalk-ways.py" \
+  "$OSM_CLIPPED" "$SIDEWALK_EXPORT" "$OSM_SIDEWALKS" ||
+  die "sidewalk footway compilation failed — keeping old graph"
+mv "$OSM_SIDEWALKS" "$OSM_CLIPPED"
+
 # ── 3. Feed validation gate (red light = abort, old graph keeps serving) ──
 # Reports MUST land outside WORK_DIR: OTP scans its data directory and classifies
 # anything named *.gtfs as a transit bundle, so a `validation-feed-1.gtfs` report
