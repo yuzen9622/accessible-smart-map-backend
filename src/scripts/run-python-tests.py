@@ -9,6 +9,7 @@ TEST_FILES = (
     "src/scripts/test_eval_route_quality.py",
     "src/scripts/test_deny_foot_on_expressways.py",
     "src/scripts/test_otp_sidewalk_ways.py",
+    "src/scripts/test_audit_gtfs_feed.py",
     "src/scripts/test_serviceday_values.py",
     "src/scripts/test_inject_trtc_official_gtfs.py",
     "src/scripts/test_patch_gtfs.py",

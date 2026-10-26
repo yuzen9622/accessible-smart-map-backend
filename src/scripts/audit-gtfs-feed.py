@@ -43,6 +43,12 @@ SMALL_GROUP = 5
 # median was 1 trip a day.
 USABLE_TRIPS_PER_DAY = 6
 
+# GTFS route_types for the OTP modes the planner requests
+# (SUPPORTED_TRANSIT_MODES in otp-routing.ts): tram, subway, rail, bus,
+# trolleybus, monorail. Airplane and ferry routes are never boarded, so their
+# timetable changes must not block a rebuild.
+SERVED_ROUTE_TYPES = {"0", "1", "2", "3", "11", "12"}
+
 
 def read_rows(zf, name):
     """Stream a GTFS table as dicts, tolerating a UTF-8 BOM."""
@@ -72,13 +78,17 @@ def measure(path, on_date):
 
     route_type, route_agency = {}, {}
     for r in read_rows(zf, "routes.txt"):
-        route_type[r["route_id"]] = r.get("route_type", "")
+        if r.get("route_type", "") not in SERVED_ROUTE_TYPES:
+            continue
+        route_type[r["route_id"]] = r["route_type"]
         route_agency[r["route_id"]] = r.get("agency_id", "") or "?"
 
     trips_per_route = collections.Counter()
     total_trips = 0
     backfill = collections.Counter()
     for r in read_rows(zf, "trips.txt"):
+        if r["route_id"] not in route_type:
+            continue
         trips_per_route[r["route_id"]] += 1
         total_trips += 1
         backfill[provenance_of(r["trip_id"])] += 1
