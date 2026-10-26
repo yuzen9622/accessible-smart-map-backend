@@ -216,7 +216,7 @@ pnpm data:sync                # 日常更新：只跑 upsert 類步驟（不清�
 
   資料庫連線只從 `.env`／環境變數 `PED_GRAPH_DATABASE_URL` 讀取，不支援 `--db-url`；不要將含密碼的 URI 放進命令列，pnpm 可能回顯參數。`--url` 也只應填不含憑證的公開網址。
 
-  清洗保留有效人行道存在幾何與原始屬性；無效／矛盾淨寬是未知證據，不代表可通行。報告列出 SHA256、原始／接受／隔離筆數與原因，相同 ZIP 不重複建立版本；明確重匯歷史 ZIP 時，會驗證並原子切換回該來源快照，但不切換路由圖。`ped_sidewalk_source_version`／`ped_sidewalk_polygon` 是獨立、版本化的參考來源；失敗保留舊 ACTIVE 快照。這**不會改變無障礙智慧地圖現有路線**：全台 OSM 接路網、選路及階梯政策仍需後續建圖、驗證與明確的 graph promotion，匯入不自動啟用路由圖。
+  清洗保留有效人行道存在幾何與原始屬性；無效／矛盾淨寬是未知證據，不代表可通行。報告列出 SHA256、原始／接受／隔離筆數與原因，相同 ZIP 不重複建立版本；明確重匯歷史 ZIP 時，會驗證並原子切換回該來源快照，但不切換路由圖。`ped_sidewalk_source_version`／`ped_sidewalk_polygon` 是獨立、版本化的參考來源；失敗保留舊 ACTIVE 快照。匯入本身不改變路線；下次 `pnpm otp:rebuild` 會把 ACTIVE 來源的人行道加進 OTP 步行路網：人行道接在旁邊道路的路口與端點上，有人行道的那段車道標成 `foot=use_sidepath`，OTP 會優先走人行道，車道仍可步行。建圖時讀不到 ACTIVE 人行道來源會中止並保留舊圖，所以第一次建圖前要先匯入。
 - `import:taipei-ramps` 仍需要 PostGIS 已有 ped graph（`ped_graph_version` 表）；還沒建就加 `--skip=taipei-ramps`。
 - 在 host 上跑時，`.env` 的 `DATABASE_URL`／`PED_GRAPH_DATABASE_URL` 要指向 compose 對外的埠（Mongo `27018`、PostGIS `5434`）。
 
