@@ -47,10 +47,35 @@ function keysetPage(
     .slice(0, pageSize);
 }
 
+function qualifiedVersionNotes() {
+  return {
+    pedestrian_policy_version: "sidewalk-v1",
+    walk_surface_schema_version: 1,
+    sidewalk_network: {
+      source_width_policy: {
+        version: "compatible-source-minimum-v1",
+        rules_sha256: "d".repeat(64),
+      },
+    },
+    extent: [121, 24, 122, 26],
+    input_manifest: {
+      sidewalk_source_version_id: "1",
+      sidewalk_archive_sha256: "a".repeat(64),
+      osm_sha256: "b".repeat(64),
+      osm: { sha256: "b".repeat(64) },
+    },
+  };
+}
+
 function createQueryable(fixture: GraphFixture): {
   client: PedGraphQueryable;
   calls: QueryCall[];
 } {
+  const versions: FakeRow[] = fixture.versions.map((row) => ({
+    notes: qualifiedVersionNotes(),
+    source_hash: "b".repeat(64),
+    ...row,
+  }));
   const calls: QueryCall[] = [];
   const client: PedGraphQueryable = {
     async query<R>(sql: string, params?: unknown[]): Promise<{ rows: R[] }> {
@@ -79,13 +104,13 @@ function createQueryable(fixture: GraphFixture): {
       if (sql.includes("FROM ped_graph_version")) {
         if (sql.includes("WHERE lifecycle_status = 'ACTIVE'")) {
           return {
-            rows: fixture.versions.filter(
+            rows: versions.filter(
               (row) => row.lifecycle_status === "ACTIVE",
             ) as R[],
           };
         }
         return {
-          rows: fixture.versions.filter((row) => row.id === params?.[0]) as R[],
+          rows: versions.filter((row) => row.id === params?.[0]) as R[],
         };
       }
       if (sql.includes("FROM ped_node")) {
@@ -883,4 +908,35 @@ it("does not let an unqualified sidewalk match hide a qualified count in either 
   expect(graph.edgeSidewalkId[0]).toBe(-1);
   expect(sumSidewalkRampCount(graph, Int32Array.from([0, 1]))).toBe(3);
   expect(sumSidewalkRampCount(graph, Int32Array.from([1, 0]))).toBe(3);
+});
+
+describe("source-width graph qualification", () => {
+  it.each([
+    undefined,
+    null,
+    { version: "legacy", rules_sha256: "d".repeat(64) },
+    { version: "compatible-source-minimum-v1", rules_sha256: "invalid" },
+  ])(
+    "refuses absent or incompatible proof before reading graph rows: %j",
+    async (proof) => {
+      const fixture = coreFixture();
+      const notes = qualifiedVersionNotes();
+      fixture.versions[0].notes = {
+        ...notes,
+        sidewalk_network: { source_width_policy: proof },
+      };
+      const { client, calls } = createQueryable(fixture);
+      await expect(loadPedGraph(client)).rejects.toThrow("qualification");
+      expect(calls.some(({ sql }) => sql.includes("FROM ped_node"))).toBe(
+        false,
+      );
+    },
+  );
+  it("refuses notes-free pre-policy graphs", async () => {
+    const fixture = coreFixture();
+    fixture.versions[0].notes = null;
+    await expect(loadPedGraph(createQueryable(fixture).client)).rejects.toThrow(
+      "qualification",
+    );
+  });
 });

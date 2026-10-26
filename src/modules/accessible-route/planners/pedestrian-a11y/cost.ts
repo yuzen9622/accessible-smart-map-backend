@@ -79,12 +79,10 @@ export interface CostProfile {
    * {@link stepsPenalty} already makes unramped stairs infeasible.
    */
   stairsAvoidanceMultiplier?: number;
-  /**
-   * Explicit venue policy: bar steps, stairs and escalators while preserving
-   * this profile's name, walking speed and other cost rules. Absent by default
-   * in the outdoor CSR planner.
-   */
+  /** Bar steps, stairs and escalators before costing, including ramp-tagged stairs. */
   forbidStairs?: boolean;
+  /** Explicit assisted-stair pass; unrelated access, width and surface limits remain. */
+  stairsFallback?: boolean;
 }
 
 /**
@@ -388,10 +386,10 @@ function applyAdditivePenalty(cost: number, penaltyM: number): number {
  * visual-impairment edge attribute exists in the graph yet. The one exception
  * is an explicit `profile.stairsAvoidanceMultiplier`, applied to STEPS and
  * INDOOR_STAIRS. An explicit `profile.forbidStairs` bars steps, stairs and
- * escalators before costing; venue elderly / visual_impaired profiles set it,
- * while outdoor CSR profiles stay shortest-path. The fare-gate policy still applies
- * to all four modes because it is enforced in the search, not in this cost
- * model.
+ * escalators before costing. Outdoor wheelchair first-pass profiles forbid
+ * them; only the explicit assisted pass admits genuine stairs, without
+ * relabelling them. Fare-gate policy remains independent and is enforced in
+ * the search for all four modes.
  *
  * All multipliers are checked before application to remain at least 1.0 and all
  * additive penalties are checked to remain non-negative. Those invariants keep
@@ -418,6 +416,12 @@ export function edgeCost(
     return INFEASIBLE;
   }
   const edgeType = graph.edgeType[attrIdx];
+  const isStairs =
+    edgeType === EDGE_TYPE.STEPS || edgeType === EDGE_TYPE.INDOOR_STAIRS;
+  const assistedStairs =
+    profile.name === "wheelchair" &&
+    profile.stairsFallback === true &&
+    isStairs;
   if (
     profile.forbidStairs &&
     (edgeType === EDGE_TYPE.STEPS ||
@@ -426,13 +430,18 @@ export function edgeCost(
   ) {
     return INFEASIBLE;
   }
+  if (
+    profile.name === "wheelchair" &&
+    profile.stairsFallback &&
+    edgeType === EDGE_TYPE.INDOOR_ESCALATOR
+  ) {
+    return INFEASIBLE;
+  }
   const unpenalizedCost = baseCost(graph, attrIdx, profile);
   if (unpenalizedCost === INFEASIBLE) {
     return INFEASIBLE;
   }
   if (profile.name !== "wheelchair") {
-    const isStairs =
-      edgeType === EDGE_TYPE.STEPS || edgeType === EDGE_TYPE.INDOOR_STAIRS;
     const cost = isStairs
       ? applyMultiplier(
           unpenalizedCost,
@@ -442,12 +451,18 @@ export function edgeCost(
     return applyAdditivePenalty(cost, MINIMUM_ADDITIVE_PENALTY_M);
   }
   const multipliers = [
-    slopePenalty(graph, attrIdx, profile),
+    assistedStairs
+      ? MINIMUM_PENALTY_MULTIPLIER
+      : slopePenalty(graph, attrIdx, profile),
     widthPenalty(graph, attrIdx, profile),
     surfacePenalty(graph, attrIdx),
     smoothnessPenalty(graph, attrIdx),
-    wheelchairTagPenalty(graph, attrIdx),
-    stepsPenalty(graph, attrIdx, profile),
+    assistedStairs
+      ? MINIMUM_PENALTY_MULTIPLIER
+      : wheelchairTagPenalty(graph, attrIdx),
+    assistedStairs
+      ? WHEELCHAIR_RELAXED_STEPS_PENALTY_MULTIPLIER
+      : stepsPenalty(graph, attrIdx, profile),
     escalatorPenalty(graph, attrIdx),
     kerbRampPenalty(graph, attrIdx, fromNode, toNode),
   ];

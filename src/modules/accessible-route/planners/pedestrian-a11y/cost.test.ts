@@ -116,6 +116,95 @@ function wheelchairProfile(
   return { name: "wheelchair", walkSpeedMps, relaxationLevel };
 }
 
+describe("explicit wheelchair stair tiers", () => {
+  it.each([EDGE_TYPE.STEPS, EDGE_TYPE.INDOOR_STAIRS])(
+    "keeps ramp-tagged staircase type %i out of the step-free pass",
+    (edgeType) => {
+      const graph = createGraph({ edgeType, flags: EDGE_FLAG.HAS_RAMP });
+      expect(
+        edgeCost(
+          graph,
+          0,
+          { ...wheelchairProfile(), forbidStairs: true },
+          0,
+          1,
+        ),
+      ).toBe(INFEASIBLE);
+    },
+  );
+
+  it.each([EDGE_TYPE.STEPS, EDGE_TYPE.INDOOR_STAIRS])(
+    "admits intrinsic staircase restrictions only in the assisted tier, type %i",
+    (edgeType) => {
+      const graph = createGraph({
+        edgeType,
+        wheelchair: WHEELCHAIR.NO,
+        slopeRatio: 0.6,
+        widthM: 2,
+      });
+      expect(edgeCost(graph, 0, wheelchairProfile(), 0, 1)).toBe(INFEASIBLE);
+      expect(
+        Number.isFinite(
+          edgeCost(
+            graph,
+            0,
+            {
+              ...wheelchairProfile(),
+              forbidStairs: false,
+              stairsFallback: true,
+            },
+            0,
+            1,
+          ),
+        ),
+      ).toBe(true);
+      expect(graph.edgeWheelchair[0]).toBe(WHEELCHAIR.NO);
+      expect(graph.edgeSlope[0]).toBeCloseTo(0.6);
+      expect(graph.edgeType[0]).toBe(edgeType);
+    },
+  );
+
+  it.each([
+    { wheelchair: WHEELCHAIR.NO },
+    { slopeRatio: 0.2 },
+    { widthM: 0.5 },
+  ])("does not relax another known edge restriction %o", (restriction) => {
+    expect(
+      edgeCost(
+        createGraph(restriction),
+        0,
+        { ...wheelchairProfile(), stairsFallback: true },
+        0,
+        1,
+      ),
+    ).toBe(INFEASIBLE);
+  });
+
+  it("does not extend the staircase exception to an escalator", () => {
+    expect(
+      edgeCost(
+        createGraph({ edgeType: EDGE_TYPE.INDOOR_ESCALATOR }),
+        0,
+        { ...wheelchairProfile(), stairsFallback: true },
+        0,
+        1,
+      ),
+    ).toBe(INFEASIBLE);
+  });
+
+  it("keeps an explicit forbid authoritative even on a contradictory profile", () => {
+    expect(
+      edgeCost(
+        createGraph({ edgeType: EDGE_TYPE.STEPS }),
+        0,
+        { ...wheelchairProfile(), forbidStairs: true, stairsFallback: true },
+        0,
+        1,
+      ),
+    ).toBe(INFEASIBLE);
+  });
+});
+
 describe("edgeCost", () => {
   it("rejects invalid edge indices", () => {
     const graph = createGraph();

@@ -78,6 +78,22 @@ export const VenueRouteSchema = z
       .openapi({ description: "預估時間（秒，含電梯等候）" }),
     elevatorRides: z.number().int(),
     stairFlights: z.number().int(),
+    stairsFallback: z.boolean().optional().openapi({
+      description: "輪椅無階梯搜尋確認無路後的階梯備援；不能視為輪椅可自行通過",
+    }),
+    warnings: z.array(z.string()).optional(),
+    warningDetails: z
+      .array(
+        z.object({
+          index: z.number().int(),
+          code: z.string(),
+          message: z.string(),
+          params: z
+            .record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
+            .optional(),
+        }),
+      )
+      .optional(),
     path: z.object({
       coordinates: z
         .array(z.tuple([z.number(), z.number(), z.number()]))

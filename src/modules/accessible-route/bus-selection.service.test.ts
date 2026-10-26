@@ -17,7 +17,8 @@ const {
   redisSet: vi.fn(),
 }));
 vi.mock("../../config/redis", () => ({ redisGet, redisSet }));
-vi.mock("./navigation-state.repository", () => ({
+vi.mock("./navigation-state.repository", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./navigation-state.repository")>()),
   readNavigationTokenStrict,
   storeInitialNavigationEnvelope,
   navigationTokenKey: (token: string) => `voice-nav:route:${token}`,

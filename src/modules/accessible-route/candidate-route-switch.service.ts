@@ -9,7 +9,7 @@ import type {
   NavigationRouteEnvelope,
   RerouteData,
 } from "./accessible-route.types";
-import { isNavigationEnvelope } from "./route-token.service";
+import { resolveNavigationEnvelope } from "./route-token.service";
 import { storeBusPlan } from "./bus-plan.repository";
 import {
   beginReroute,
@@ -107,21 +107,25 @@ export async function switchNavigationCandidate(
   if (!isCurrent()) return failed("STALE_AUTHORIZATION");
   const candidate = await readNavigationTokenStrict(input.candidateToken);
   if (!isCurrent()) return failed("STALE_AUTHORIZATION");
-  if (
-    active.status !== "ok" ||
-    candidate.status !== "ok" ||
-    !isNavigationEnvelope(active.value) ||
-    !isNavigationEnvelope(candidate.value)
-  )
+  const previous =
+    active.status === "ok"
+      ? await resolveNavigationEnvelope(active.value)
+      : null;
+  if (!isCurrent()) return failed("STALE_AUTHORIZATION");
+  const candidateEnvelope =
+    candidate.status === "ok"
+      ? await resolveNavigationEnvelope(candidate.value)
+      : null;
+  if (!isCurrent()) return failed("STALE_AUTHORIZATION");
+  if (!previous || !candidateEnvelope)
     return failed("ROUTE_TOKEN_EXPIRED_OR_UNSUPPORTED");
-  const previous = active.value;
   if (
     previous.routeVersion !== input.previousVersion ||
     previous.navigationId !== input.snapshot.navigationId
   )
     return failed("STALE_NAVIGATION");
   if (
-    [previous, candidate.value].some(
+    [previous, candidateEnvelope].some(
       (e) =>
         e.route.navigationId !== e.navigationId ||
         e.route.routeVersion !== e.routeVersion ||
@@ -160,7 +164,7 @@ export async function switchNavigationCandidate(
     const routeVersion = previous.routeVersion + 1;
     const routeToken = randomBytes(32).toString("base64url");
     const route = {
-      ...candidate.value.route,
+      ...candidateEnvelope.route,
       navigationId: previous.navigationId,
       routeVersion,
       routeToken,
@@ -203,7 +207,7 @@ export async function switchNavigationCandidate(
       navigationId: previous.navigationId,
       routeVersion,
       route,
-      canonicalRequest: candidate.value.canonicalRequest,
+      canonicalRequest: candidateEnvelope.canonicalRequest,
     };
     if (!input.prepare(data, envelope) || !isCurrent()) {
       await release();

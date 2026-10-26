@@ -1,3 +1,4 @@
+import { sealNavigationEnvelope } from "./navigation-state.repository";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   read: vi.fn(),
@@ -9,7 +10,8 @@ const mocks = vi.hoisted(() => ({
   instructions: vi.fn(),
   steps: vi.fn(),
 }));
-vi.mock("./navigation-state.repository", () => ({
+vi.mock("./navigation-state.repository", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./navigation-state.repository")>()),
   readNavigationTokenStrict: mocks.read,
   beginReroute: mocks.begin,
   finalizeReroute: mocks.finalize,
@@ -33,13 +35,26 @@ const route = {
   legs: [],
   accessibilityHighlights: [],
 };
-const envelope = {
+const envelope = sealNavigationEnvelope({
   schemaVersion: 1,
   navigationId: "n",
   routeVersion: 1,
   route,
-  canonicalRequest: { requireElevator: true },
-};
+  canonicalRequest: {
+    origin: { latitude: 25, longitude: 121 },
+    destination: { latitude: 25.1, longitude: 121.1 },
+    userLocation: { latitude: 25, longitude: 121 },
+    travelMode: "walk",
+    mode: "normal",
+    maxTransfers: 2,
+    format: "standard",
+    waypoints: [],
+    avoidStairs: false,
+    requireElevator: true,
+    needsAccessibleToilet: false,
+    needsHandrail: false,
+  },
+});
 const snapshot = {
   navigationId: "n",
   routeToken: "old",
@@ -111,11 +126,11 @@ describe("candidate switch transaction", () => {
   it("exhausted retries release the local gate and a later operation recovers", async () => {
     vi.useFakeTimers();
     try {
-      const retryEnvelope = {
+      const retryEnvelope = sealNavigationEnvelope({
         ...envelope,
         navigationId: "retry-nav",
         route: { ...route, navigationId: "retry-nav" },
-      };
+      });
       mocks.read.mockResolvedValue({ status: "ok", value: retryEnvelope });
       const retrySnapshot = { ...snapshot, navigationId: "retry-nav" };
       mocks.begin.mockResolvedValue({ status: "reconciling" });
@@ -137,11 +152,11 @@ describe("candidate switch transaction", () => {
   it("notifies every bridge waiting on the same reconciliation", async () => {
     vi.useFakeTimers();
     try {
-      const waiterEnvelope = {
+      const waiterEnvelope = sealNavigationEnvelope({
         ...envelope,
         navigationId: "waiters-nav",
         route: { ...route, navigationId: "waiters-nav" },
-      };
+      });
       const waiterSnapshot = { ...snapshot, navigationId: "waiters-nav" };
       mocks.read.mockResolvedValue({ status: "ok", value: waiterEnvelope });
       mocks.begin.mockResolvedValue({ status: "reconciling" });

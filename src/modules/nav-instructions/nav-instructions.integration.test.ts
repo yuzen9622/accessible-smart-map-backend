@@ -73,7 +73,7 @@ describe("POST /api/v1/a11y/route/instructions route contracts", () => {
         routeToken: "fixture-capability",
         route: { routeId: "walk-0", legs: [{ type: "WALK", polyline: [] }] },
       });
-    expect(response.status).toBe(400);
+    expect(response.status, JSON.stringify(response.body)).toBe(400);
     expect(generate).not.toHaveBeenCalled();
   });
 });

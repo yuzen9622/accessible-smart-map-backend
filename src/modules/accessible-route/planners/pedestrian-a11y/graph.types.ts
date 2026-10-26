@@ -1,3 +1,5 @@
+import type { WalkPolicySourceIdentity } from "../../../../types/route";
+
 /**
  * The values below are the TypeScript expression of the enum source of truth
  * in src/scripts/ped-graph-schema.sql COMMENT ON COLUMN declarations.
@@ -182,7 +184,12 @@ export function isGtfsIndoorEdge(sourceRef: string | null): boolean {
   );
 }
 
+export interface PedGraphQualification extends WalkPolicySourceIdentity {
+  extent: readonly [number, number, number, number];
+}
+
 export interface PedGraph {
+  qualification?: PedGraphQualification;
   versionId: number;
   nodeCount: number;
   directedEdgeCount: number;
@@ -212,6 +219,7 @@ export interface PedGraph {
   edgeSurface: Uint8Array;
   edgeSmoothness: Uint8Array;
   edgeWidthM: Float32Array;
+  edgePhysicalWidthM?: Float32Array;
   edgeWheelchair: Uint8Array;
   edgeStairCount: Uint16Array;
   edgeTraversalTimeS: Float32Array;

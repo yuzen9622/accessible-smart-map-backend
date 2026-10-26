@@ -19,12 +19,13 @@ import type {
 } from "./accessible-route.types";
 import {
   beginReroute,
+  sealNavigationEnvelope,
   finalizeReroute,
   readNavigationTokenStrict,
   releaseReroute,
 } from "./navigation-state.repository";
 import { planAccessibleRouteFromRequest } from "./accessible-route.service";
-import { isNavigationEnvelope } from "./route-token.service";
+import { resolveNavigationEnvelope } from "./route-token.service";
 import { venueArrivalPlanner } from "./venue-arrival.port";
 
 export type RerouteResult =
@@ -53,10 +54,11 @@ export async function rerouteAccessibleRoute(
       data: { reason: "NAVIGATION_STATE_UNAVAILABLE" },
     };
   }
-  if (
-    tokenRead.status === "missing" ||
-    !isNavigationEnvelope(tokenRead.value)
-  ) {
+  const previous =
+    tokenRead.status === "ok"
+      ? await resolveNavigationEnvelope(tokenRead.value)
+      : null;
+  if (!previous) {
     return {
       ok: false,
       status: ResponseCode.GONE,
@@ -64,7 +66,6 @@ export async function rerouteAccessibleRoute(
       data: { reason: "ROUTE_TOKEN_EXPIRED_OR_UNSUPPORTED" },
     };
   }
-  const previous = tokenRead.value;
   // A venue trip keeps its gate for good: if the venue was re-imported and
   // that gate is gone or moved, the token no longer supports rerouting.
   const storedVenueArrival = previous.canonicalRequest.venueArrival;
@@ -247,7 +248,7 @@ export async function rerouteAccessibleRoute(
           }
         : {}),
     };
-    const envelope: NavigationRouteEnvelope = {
+    const envelope: NavigationRouteEnvelope = sealNavigationEnvelope({
       schemaVersion: 1,
       route,
       navigationId: previous.navigationId,
@@ -262,7 +263,7 @@ export async function rerouteAccessibleRoute(
           ? { venueArrival: planned.data.venueArrival }
           : {}),
       },
-    };
+    });
     const finalized = await finalizeReroute(
       request.previousRouteVersion,
       request.clientRequestId,

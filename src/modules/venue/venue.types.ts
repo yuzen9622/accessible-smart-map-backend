@@ -139,6 +139,10 @@ export interface VenueEdge extends VenueProvenance {
   /** Floors travelled by an elevator edge. */
   levelSpan?: number;
   wheelchair: VenueWheelchairTag;
+  /** Explicit pedestrian prohibition on the source way or a touched node. */
+  accessDenied?: boolean;
+  /** Separate node/ramp barrier, not intrinsic staircase wheelchair metadata. */
+  wheelchairBarrier?: boolean;
   /** OSM surface / smoothness values, lower-case, as tagged. */
   surface?: string;
   smoothness?: string;

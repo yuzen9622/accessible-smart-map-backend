@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { sealNavigationEnvelope } from "./navigation-state.repository";
 import { ResponseCode } from "../../types/code";
+import type { AccessibleRoute, BusLeg } from "../../types/route";
 
 const {
   readNavigationTokenStrict,
@@ -15,7 +17,8 @@ const {
   planAccessibleRouteFromRequest: vi.fn(),
 }));
 
-vi.mock("./navigation-state.repository", () => ({
+vi.mock("./navigation-state.repository", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./navigation-state.repository")>()),
   readNavigationTokenStrict,
   beginReroute,
   finalizeReroute,
@@ -25,9 +28,15 @@ vi.mock("./accessible-route.service", () => ({
   planAccessibleRouteFromRequest,
 }));
 
+vi.mock("./walking-policy.service", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./walking-policy.service")>()),
+  hasCurrentWalkingPolicy: vi.fn(async () => true),
+}));
+
+import { hasCurrentWalkingPolicy } from "./walking-policy.service";
 import { rerouteAccessibleRoute } from "./reroute.service";
 
-const route = (routeId: string) => ({
+const route = (routeId: string): AccessibleRoute => ({
   routeId,
   routeName: routeId,
   totalMinutes: 2,
@@ -39,6 +48,15 @@ const route = (routeId: string) => ({
       from: "起點",
       to: "終點",
       distanceM: 10,
+      minutesEst: 1,
+      a11yFacilities: [],
+      maxSlopePercent: null,
+      crossings: null,
+      crossingsWithCurbRamp: null,
+      minPathWidthCm: null,
+      surfaceType: "unknown",
+      restPoints: [],
+      exitInfo: null,
       polyline: [
         [121, 25],
         [121.001, 25],
@@ -46,6 +64,36 @@ const route = (routeId: string) => ({
     },
   ],
 });
+
+const selectedBus: BusLeg = {
+  type: "BUS",
+  routeName: "bus",
+  subRouteUid: "bus-1",
+  subRouteName: "bus",
+  departureStop: "origin",
+  arrivalStop: "destination",
+  direction: 0,
+  waitInfo: { time: 0, source: "unavailable" },
+  polyline: [],
+  departureStopA11y: [],
+  arrivalStopA11y: [],
+  selectedDeparture: {
+    candidateId: "chosen",
+    routeName: "bus",
+    subRouteUid: "bus-1",
+    direction: 0,
+    departureStopId: "from",
+    arrivalStopId: "to",
+    estimatedWaitMinutes: null,
+    boardingTime: null,
+    alightingTime: null,
+    boardingTimeSource: "unknown",
+    alightingTimeSource: "unknown",
+    vehicleAccessibility: "unknown",
+    hasLiftOrRamp: null,
+    selected: true,
+  },
+};
 
 const canonicalRequest = {
   origin: { latitude: 25, longitude: 121 },
@@ -62,13 +110,13 @@ const canonicalRequest = {
   needsHandrail: false,
 };
 
-const envelope = {
+const envelope = sealNavigationEnvelope({
   schemaVersion: 1 as const,
   route: { ...route("old"), navigationId: "nav-1", routeVersion: 1 },
   navigationId: "nav-1",
   routeVersion: 1,
   canonicalRequest,
-};
+});
 
 const request = {
   routeToken: "old-token",
@@ -81,6 +129,7 @@ const request = {
 describe("rerouteAccessibleRoute", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(hasCurrentWalkingPolicy).mockResolvedValue(true);
     readNavigationTokenStrict.mockResolvedValue({
       status: "ok",
       value: envelope,
@@ -94,20 +143,29 @@ describe("rerouteAccessibleRoute", () => {
     });
   });
 
+  it("rejects a withdrawn walking qualification before acquiring or replanning", async () => {
+    vi.mocked(hasCurrentWalkingPolicy).mockResolvedValue(false);
+    expect(await rerouteAccessibleRoute(request)).toMatchObject({
+      ok: false,
+      status: ResponseCode.GONE,
+      data: { reason: "ROUTE_TOKEN_EXPIRED_OR_UNSUPPORTED" },
+    });
+    expect(beginReroute).not.toHaveBeenCalled();
+    expect(planAccessibleRouteFromRequest).not.toHaveBeenCalled();
+    expect(finalizeReroute).not.toHaveBeenCalled();
+  });
+
   it("reroutes a completed bus journey's remaining walk without introducing another bus", async () => {
     readNavigationTokenStrict.mockResolvedValue({
       status: "ok",
-      value: {
+      value: sealNavigationEnvelope({
         ...envelope,
         canonicalRequest: { ...canonicalRequest, travelMode: "transit" },
         route: {
           ...envelope.route,
-          legs: [
-            { type: "BUS", selectedDeparture: { candidateId: "chosen" } },
-            ...route("tail").legs,
-          ],
+          legs: [selectedBus, ...route("tail").legs],
         },
-      },
+      }),
     });
     const result = await rerouteAccessibleRoute({
       ...request,
@@ -124,16 +182,13 @@ describe("rerouteAccessibleRoute", () => {
   it("rejects an unexpected transit result when rerouting the walking tail", async () => {
     readNavigationTokenStrict.mockResolvedValue({
       status: "ok",
-      value: {
+      value: sealNavigationEnvelope({
         ...envelope,
         route: {
           ...envelope.route,
-          legs: [
-            { type: "BUS", selectedDeparture: { candidateId: "chosen" } },
-            ...route("tail").legs,
-          ],
+          legs: [selectedBus, ...route("tail").legs],
         },
-      },
+      }),
     });
     planAccessibleRouteFromRequest.mockResolvedValue({
       ok: true,
@@ -147,17 +202,13 @@ describe("rerouteAccessibleRoute", () => {
   it("does not unlock a future selected bus using completion of an earlier walking leg", async () => {
     readNavigationTokenStrict.mockResolvedValue({
       status: "ok",
-      value: {
+      value: sealNavigationEnvelope({
         ...envelope,
         route: {
           ...envelope.route,
-          legs: [
-            ...route("head").legs,
-            { type: "BUS", selectedDeparture: { candidateId: "chosen" } },
-            ...route("tail").legs,
-          ],
+          legs: [...route("head").legs, selectedBus, ...route("tail").legs],
         },
-      },
+      }),
     });
     expect(
       await rerouteAccessibleRoute({ ...request, completedLegIndex: 0 }),
@@ -396,14 +447,14 @@ it.each(["rail", "metro"] as const)(
   async (transitPreference) => {
     readNavigationTokenStrict.mockResolvedValue({
       status: "ok",
-      value: {
+      value: sealNavigationEnvelope({
         ...envelope,
         canonicalRequest: {
           ...canonicalRequest,
           travelMode: "transit",
           transitPreference,
         },
-      },
+      }),
     });
     beginReroute.mockResolvedValue({ status: "acquired" });
     planAccessibleRouteFromRequest.mockResolvedValue({
@@ -426,13 +477,13 @@ it("never drops an adopted bus identity by replanning the canonical request", as
   vi.clearAllMocks();
   readNavigationTokenStrict.mockResolvedValue({
     status: "ok",
-    value: {
+    value: sealNavigationEnvelope({
       ...envelope,
       route: {
         ...envelope.route,
-        legs: [{ type: "BUS", selectedDeparture: { candidateId: "chosen" } }],
+        legs: [selectedBus],
       },
-    },
+    }),
   });
   expect(await rerouteAccessibleRoute(request)).toMatchObject({
     ok: false,

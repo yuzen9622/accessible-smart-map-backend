@@ -22,6 +22,14 @@ export interface ResolveVenueArrivalInput {
   origin: { lat: number; lng: number };
   mode: AccessibilityMode;
   lang: SupportedLang;
+  deadlineMs?: number;
+  planOutdoorApproach?: (candidate: {
+    venueArrival: VenueArrival;
+    venueLeg: VenueRoute;
+    allowStairsFallback: boolean;
+  }) => Promise<
+    { status: "ok"; durationS: number } | { status: "no_route" | "unavailable" }
+  >;
 }
 
 export type VenueArrivalResult =
@@ -43,6 +51,7 @@ export interface VenueArrivalPlanner {
   replanVenueLeg(
     arrival: VenueArrival,
     lang: SupportedLang,
+    deadlineMs?: number,
   ): Promise<ReplanVenueLegResult>;
   /** Whether the stored gate and place are still valid for the trip's mode. */
   isVenueArrivalCurrent(arrival: VenueArrival): Promise<boolean>;

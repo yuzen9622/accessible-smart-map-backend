@@ -1,0 +1,28 @@
+Accessible Smart Map OTP modifications
+
+Based on OpenTripPlanner 2.9.0, commit
+9babe45ffc9327933129f705c648137ecd96cdbe
+https://github.com/opentripplanner/OpenTripPlanner
+
+The policy and API trees contain modified upstream Java source and new
+policy metadata, source/build evidence, selected geometry and request identity
+classes. The observer tree adds verification of loaded policy classes.
+Original author and copyright notices in source and LICENSE are retained.
+These modifications are provided under LGPL-3.0-or-later.
+
+Changes add exact source metadata to native edges, direct-WALK restrictions,
+per-request stairs preference, source/graph/runtime identity and ordered native
+geometry evidence. Diagnostic path metadata is logged only at DEBUG level.
+The direct-WALK implementation does not qualify transit access, egress or
+transfers. Source absence and missing observations remain unknown.
+
+Transit linking retains upstream island-selection criteria while preserving
+isolated walking geometry. Coordinate transit requests exclude only small
+street components proven to contain no transit stops.
+
+COPYING and COPYING.LESSER include GPL-3.0-or-later and LGPL-3.0-or-later
+texts from https://github.com/spdx/license-list-data/tree/main/text.
+
+The root Dockerfile contains build and startup wiring. reviewed-lock.json
+records the exact upstream application, sources and reviewed class bytes.
+It is an artifact identity record, not a runtime configuration source.

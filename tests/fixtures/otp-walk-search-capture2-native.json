@@ -1,0 +1,1060 @@
+{
+  "scope": "Actual isolated native search-completion proofs. Root and leg graph/source identity not qualified by this fixture.",
+  "source": ".pi/tmp/otp-wheelchair-profile-9y2hy_s1/profile-format-checks/results.json",
+  "sourceSha256": "870056f37f87ba91178e6ccddfaf9cc9321d52c8144844f6d33a31a0af7898d0",
+  "cases": [
+    {
+      "case": "unknown:NORMAL",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "FOUND",
+        "nativeOutcome": "TARGET_REACHED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "NORMAL",
+          "wheelchairEnabled": false,
+          "walkSpeedMps": 1.3,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": null,
+          "maximumKnownNonStairSlopeRatio": null,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.0,
+        "fromLon": 121.0002,
+        "toLat": 25.0,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "unknown:WHEELCHAIR_STRICT",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "FOUND",
+        "nativeOutcome": "TARGET_REACHED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "WHEELCHAIR_STRICT",
+          "wheelchairEnabled": true,
+          "walkSpeedMps": 0.8,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": 0.9,
+          "maximumKnownNonStairSlopeRatio": 0.12,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.0,
+        "fromLon": 121.0002,
+        "toLat": 25.0,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "unknown:WHEELCHAIR_STAIRS_ASSISTED",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "FOUND",
+        "nativeOutcome": "TARGET_REACHED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "WHEELCHAIR_STAIRS_ASSISTED",
+          "wheelchairEnabled": true,
+          "walkSpeedMps": 0.8,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": 0.9,
+          "maximumKnownNonStairSlopeRatio": 0.12,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.0,
+        "fromLon": 121.0002,
+        "toLat": 25.0,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "stairs:NORMAL",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "FOUND",
+        "nativeOutcome": "TARGET_REACHED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "NORMAL",
+          "wheelchairEnabled": false,
+          "walkSpeedMps": 1.3,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": null,
+          "maximumKnownNonStairSlopeRatio": null,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.01,
+        "fromLon": 121.0002,
+        "toLat": 25.01,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "stairs:WHEELCHAIR_STRICT",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "COMPLETED_NO_ROUTE",
+        "nativeOutcome": "EXHAUSTED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "WHEELCHAIR_STRICT",
+          "wheelchairEnabled": true,
+          "walkSpeedMps": 0.8,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": 0.9,
+          "maximumKnownNonStairSlopeRatio": 0.12,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.01,
+        "fromLon": 121.0002,
+        "toLat": 25.01,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "stairs:WHEELCHAIR_STAIRS_ASSISTED",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "FOUND",
+        "nativeOutcome": "TARGET_REACHED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "WHEELCHAIR_STAIRS_ASSISTED",
+          "wheelchairEnabled": true,
+          "walkSpeedMps": 0.8,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": 0.9,
+          "maximumKnownNonStairSlopeRatio": 0.12,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.01,
+        "fromLon": 121.0002,
+        "toLat": 25.01,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "stairs_no:NORMAL",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "FOUND",
+        "nativeOutcome": "TARGET_REACHED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "NORMAL",
+          "wheelchairEnabled": false,
+          "walkSpeedMps": 1.3,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": null,
+          "maximumKnownNonStairSlopeRatio": null,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.02,
+        "fromLon": 121.0002,
+        "toLat": 25.02,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "stairs_no:WHEELCHAIR_STRICT",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "COMPLETED_NO_ROUTE",
+        "nativeOutcome": "EXHAUSTED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "WHEELCHAIR_STRICT",
+          "wheelchairEnabled": true,
+          "walkSpeedMps": 0.8,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": 0.9,
+          "maximumKnownNonStairSlopeRatio": 0.12,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.02,
+        "fromLon": 121.0002,
+        "toLat": 25.02,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "stairs_no:WHEELCHAIR_STAIRS_ASSISTED",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "FOUND",
+        "nativeOutcome": "TARGET_REACHED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "WHEELCHAIR_STAIRS_ASSISTED",
+          "wheelchairEnabled": true,
+          "walkSpeedMps": 0.8,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": 0.9,
+          "maximumKnownNonStairSlopeRatio": 0.12,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.02,
+        "fromLon": 121.0002,
+        "toLat": 25.02,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "narrow:NORMAL",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "FOUND",
+        "nativeOutcome": "TARGET_REACHED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "NORMAL",
+          "wheelchairEnabled": false,
+          "walkSpeedMps": 1.3,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": null,
+          "maximumKnownNonStairSlopeRatio": null,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.03,
+        "fromLon": 121.0002,
+        "toLat": 25.03,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "narrow:WHEELCHAIR_STRICT",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "COMPLETED_NO_ROUTE",
+        "nativeOutcome": "EXHAUSTED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "WHEELCHAIR_STRICT",
+          "wheelchairEnabled": true,
+          "walkSpeedMps": 0.8,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": 0.9,
+          "maximumKnownNonStairSlopeRatio": 0.12,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.03,
+        "fromLon": 121.0002,
+        "toLat": 25.03,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "narrow:WHEELCHAIR_STAIRS_ASSISTED",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "COMPLETED_NO_ROUTE",
+        "nativeOutcome": "EXHAUSTED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "WHEELCHAIR_STAIRS_ASSISTED",
+          "wheelchairEnabled": true,
+          "walkSpeedMps": 0.8,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": 0.9,
+          "maximumKnownNonStairSlopeRatio": 0.12,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.03,
+        "fromLon": 121.0002,
+        "toLat": 25.03,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "stairs_narrow:NORMAL",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "FOUND",
+        "nativeOutcome": "TARGET_REACHED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "NORMAL",
+          "wheelchairEnabled": false,
+          "walkSpeedMps": 1.3,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": null,
+          "maximumKnownNonStairSlopeRatio": null,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.04,
+        "fromLon": 121.0002,
+        "toLat": 25.04,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "stairs_narrow:WHEELCHAIR_STRICT",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "COMPLETED_NO_ROUTE",
+        "nativeOutcome": "EXHAUSTED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "WHEELCHAIR_STRICT",
+          "wheelchairEnabled": true,
+          "walkSpeedMps": 0.8,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": 0.9,
+          "maximumKnownNonStairSlopeRatio": 0.12,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.04,
+        "fromLon": 121.0002,
+        "toLat": 25.04,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "stairs_narrow:WHEELCHAIR_STAIRS_ASSISTED",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "COMPLETED_NO_ROUTE",
+        "nativeOutcome": "EXHAUSTED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "WHEELCHAIR_STAIRS_ASSISTED",
+          "wheelchairEnabled": true,
+          "walkSpeedMps": 0.8,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": 0.9,
+          "maximumKnownNonStairSlopeRatio": 0.12,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.04,
+        "fromLon": 121.0002,
+        "toLat": 25.04,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "denied:NORMAL",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "FOUND",
+        "nativeOutcome": "TARGET_REACHED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "NORMAL",
+          "wheelchairEnabled": false,
+          "walkSpeedMps": 1.3,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": null,
+          "maximumKnownNonStairSlopeRatio": null,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.05,
+        "fromLon": 121.0002,
+        "toLat": 25.05,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "denied:WHEELCHAIR_STRICT",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "COMPLETED_NO_ROUTE",
+        "nativeOutcome": "EXHAUSTED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "WHEELCHAIR_STRICT",
+          "wheelchairEnabled": true,
+          "walkSpeedMps": 0.8,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": 0.9,
+          "maximumKnownNonStairSlopeRatio": 0.12,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.05,
+        "fromLon": 121.0002,
+        "toLat": 25.05,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "denied:WHEELCHAIR_STAIRS_ASSISTED",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "COMPLETED_NO_ROUTE",
+        "nativeOutcome": "EXHAUSTED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "WHEELCHAIR_STAIRS_ASSISTED",
+          "wheelchairEnabled": true,
+          "walkSpeedMps": 0.8,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": 0.9,
+          "maximumKnownNonStairSlopeRatio": 0.12,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.05,
+        "fromLon": 121.0002,
+        "toLat": 25.05,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "impassable:NORMAL",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "FOUND",
+        "nativeOutcome": "TARGET_REACHED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "NORMAL",
+          "wheelchairEnabled": false,
+          "walkSpeedMps": 1.3,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": null,
+          "maximumKnownNonStairSlopeRatio": null,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.06,
+        "fromLon": 121.0002,
+        "toLat": 25.06,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "impassable:WHEELCHAIR_STRICT",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "COMPLETED_NO_ROUTE",
+        "nativeOutcome": "EXHAUSTED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "WHEELCHAIR_STRICT",
+          "wheelchairEnabled": true,
+          "walkSpeedMps": 0.8,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": 0.9,
+          "maximumKnownNonStairSlopeRatio": 0.12,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.06,
+        "fromLon": 121.0002,
+        "toLat": 25.06,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "impassable:WHEELCHAIR_STAIRS_ASSISTED",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "COMPLETED_NO_ROUTE",
+        "nativeOutcome": "EXHAUSTED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "WHEELCHAIR_STAIRS_ASSISTED",
+          "wheelchairEnabled": true,
+          "walkSpeedMps": 0.8,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": 0.9,
+          "maximumKnownNonStairSlopeRatio": 0.12,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.06,
+        "fromLon": 121.0002,
+        "toLat": 25.06,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "stairs_choice:NORMAL",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "FOUND",
+        "nativeOutcome": "TARGET_REACHED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "NORMAL",
+          "wheelchairEnabled": false,
+          "walkSpeedMps": 1.3,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": null,
+          "maximumKnownNonStairSlopeRatio": null,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.07,
+        "fromLon": 121.0002,
+        "toLat": 25.07,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "stairs_choice:WHEELCHAIR_STRICT",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "FOUND",
+        "nativeOutcome": "TARGET_REACHED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "WHEELCHAIR_STRICT",
+          "wheelchairEnabled": true,
+          "walkSpeedMps": 0.8,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": 0.9,
+          "maximumKnownNonStairSlopeRatio": 0.12,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.07,
+        "fromLon": 121.0002,
+        "toLat": 25.07,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "stairs_choice:WHEELCHAIR_STAIRS_ASSISTED",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "FOUND",
+        "nativeOutcome": "TARGET_REACHED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "WHEELCHAIR_STAIRS_ASSISTED",
+          "wheelchairEnabled": true,
+          "walkSpeedMps": 0.8,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": 0.9,
+          "maximumKnownNonStairSlopeRatio": 0.12,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.07,
+        "fromLon": 121.0002,
+        "toLat": 25.07,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "within-cap-disconnected",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "COMPLETED_NO_ROUTE",
+        "nativeOutcome": "EXHAUSTED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "WHEELCHAIR_STRICT",
+          "wheelchairEnabled": true,
+          "walkSpeedMps": 0.8,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": 0.9,
+          "maximumKnownNonStairSlopeRatio": 0.12,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.0,
+        "fromLon": 121.0002,
+        "toLat": 25.01,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "alias-strict",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "COMPLETED_NO_ROUTE",
+        "nativeOutcome": "EXHAUSTED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "WHEELCHAIR_STRICT",
+          "wheelchairEnabled": true,
+          "walkSpeedMps": 0.8,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": 0.9,
+          "maximumKnownNonStairSlopeRatio": 0.12,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.01,
+        "fromLon": 121.0002,
+        "toLat": 25.01,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "alias-assisted",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "FOUND",
+        "nativeOutcome": "TARGET_REACHED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "WHEELCHAIR_STAIRS_ASSISTED",
+          "wheelchairEnabled": true,
+          "walkSpeedMps": 0.8,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": 0.9,
+          "maximumKnownNonStairSlopeRatio": 0.12,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.01,
+        "fromLon": 121.0002,
+        "toLat": 25.01,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "concurrent-0",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "FOUND",
+        "nativeOutcome": "TARGET_REACHED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "NORMAL",
+          "wheelchairEnabled": false,
+          "walkSpeedMps": 1.3,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": null,
+          "maximumKnownNonStairSlopeRatio": null,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.01,
+        "fromLon": 121.0002,
+        "toLat": 25.01,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "concurrent-1",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "COMPLETED_NO_ROUTE",
+        "nativeOutcome": "EXHAUSTED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "WHEELCHAIR_STRICT",
+          "wheelchairEnabled": true,
+          "walkSpeedMps": 0.8,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": 0.9,
+          "maximumKnownNonStairSlopeRatio": 0.12,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.01,
+        "fromLon": 121.0002,
+        "toLat": 25.01,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "concurrent-2",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "FOUND",
+        "nativeOutcome": "TARGET_REACHED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "WHEELCHAIR_STAIRS_ASSISTED",
+          "wheelchairEnabled": true,
+          "walkSpeedMps": 0.8,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": 0.9,
+          "maximumKnownNonStairSlopeRatio": 0.12,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.01,
+        "fromLon": 121.0002,
+        "toLat": 25.01,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "concurrent-3",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "FOUND",
+        "nativeOutcome": "TARGET_REACHED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "NORMAL",
+          "wheelchairEnabled": false,
+          "walkSpeedMps": 1.3,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": null,
+          "maximumKnownNonStairSlopeRatio": null,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.01,
+        "fromLon": 121.0002,
+        "toLat": 25.01,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "concurrent-4",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "COMPLETED_NO_ROUTE",
+        "nativeOutcome": "EXHAUSTED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "WHEELCHAIR_STRICT",
+          "wheelchairEnabled": true,
+          "walkSpeedMps": 0.8,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": 0.9,
+          "maximumKnownNonStairSlopeRatio": 0.12,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.01,
+        "fromLon": 121.0002,
+        "toLat": 25.01,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "concurrent-5",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "FOUND",
+        "nativeOutcome": "TARGET_REACHED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "WHEELCHAIR_STAIRS_ASSISTED",
+          "wheelchairEnabled": true,
+          "walkSpeedMps": 0.8,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": 0.9,
+          "maximumKnownNonStairSlopeRatio": 0.12,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.01,
+        "fromLon": 121.0002,
+        "toLat": 25.01,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "concurrent-6",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "FOUND",
+        "nativeOutcome": "TARGET_REACHED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "NORMAL",
+          "wheelchairEnabled": false,
+          "walkSpeedMps": 1.3,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": null,
+          "maximumKnownNonStairSlopeRatio": null,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.01,
+        "fromLon": 121.0002,
+        "toLat": 25.01,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "concurrent-7",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "COMPLETED_NO_ROUTE",
+        "nativeOutcome": "EXHAUSTED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "WHEELCHAIR_STRICT",
+          "wheelchairEnabled": true,
+          "walkSpeedMps": 0.8,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": 0.9,
+          "maximumKnownNonStairSlopeRatio": 0.12,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.01,
+        "fromLon": 121.0002,
+        "toLat": 25.01,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "concurrent-8",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "FOUND",
+        "nativeOutcome": "TARGET_REACHED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "WHEELCHAIR_STAIRS_ASSISTED",
+          "wheelchairEnabled": true,
+          "walkSpeedMps": 0.8,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": 0.9,
+          "maximumKnownNonStairSlopeRatio": 0.12,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.01,
+        "fromLon": 121.0002,
+        "toLat": 25.01,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "distance-cap-is-not-no-route",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "NOT_EXECUTED_LIMIT",
+        "nativeOutcome": "DISTANCE_LIMIT",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "WHEELCHAIR_STRICT",
+          "wheelchairEnabled": true,
+          "walkSpeedMps": 0.8,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": 0.9,
+          "maximumKnownNonStairSlopeRatio": 0.12,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.0,
+        "fromLon": 121.0002,
+        "toLat": 25.0,
+        "toLon": 121.0028,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 30.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": false
+      }
+    },
+    {
+      "case": "duration-pruning-is-not-no-route",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "INCOMPLETE",
+        "nativeOutcome": "EXHAUSTED",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "WHEELCHAIR_STRICT",
+          "wheelchairEnabled": true,
+          "walkSpeedMps": 0.8,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": 0.9,
+          "maximumKnownNonStairSlopeRatio": 0.12,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.2,
+        "fromLon": 121.0,
+        "toLat": 25.2,
+        "toLon": 121.0002,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 30.0,
+        "streetSearchTimeoutS": 2.0,
+        "durationLimitPruned": true
+      }
+    },
+    {
+      "case": "native-timeout-is-not-no-route",
+      "proof": {
+        "schemaVersion": "1",
+        "status": "TIMEOUT",
+        "nativeOutcome": "TIMEOUT",
+        "executedPolicy": {
+          "schemaVersion": "1",
+          "scope": "DIRECT_WALK_ONLY",
+          "profile": "WHEELCHAIR_STRICT",
+          "wheelchairEnabled": true,
+          "walkSpeedMps": 0.8,
+          "stairsReluctance": 12.0,
+          "minimumKnownWidthM": 0.9,
+          "maximumKnownNonStairSlopeRatio": 0.12,
+          "fareAccess": "FORBID"
+        },
+        "fromLat": 25.1,
+        "fromLon": 121.00002,
+        "toLat": 25.1,
+        "toLon": 121.03998,
+        "departureTimeMs": 1793008807000,
+        "maximumSearchDurationS": 10800.0,
+        "streetSearchTimeoutS": 0.001,
+        "durationLimitPruned": false
+      }
+    }
+  ]
+}

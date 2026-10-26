@@ -5,13 +5,42 @@ const redis = vi.hoisted(() => ({
   store: vi.fn(),
 }));
 vi.mock("../../config/redis", () => ({ redisGet: redis.get }));
-vi.mock("../accessible-route/navigation-state.repository", () => ({
-  navigationTokenKey: (token: string) => token,
-  storeInitialNavigationEnvelope: redis.store,
-}));
+vi.mock(
+  "../accessible-route/navigation-state.repository",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../accessible-route/navigation-state.repository")
+    >()),
+    navigationTokenKey: (token: string) => token,
+    storeInitialNavigationEnvelope: redis.store,
+  }),
+);
 vi.mock("../accessible-route/bus-plan.repository", () => ({
   storeBusPlan: vi.fn(),
 }));
+vi.mock("../accessible-route/planners/pedestrian-a11y/graph-runtime", () => ({
+  isPedGraphSnapshotCurrent: vi.fn(async () => true),
+  getPedGraphRuntime: vi.fn(async () => ({
+    status: "ready",
+    snapshot: { graph: { versionId: 7, qualification: sourcePolicy } },
+  })),
+}));
+const sourcePolicy = {
+  version: "sidewalk-v1" as const,
+  schemaVersion: 1 as const,
+  sourceVersionId: "1",
+  sourceArchiveSha256: "a".repeat(64),
+  osmSha256: "b".repeat(64),
+  extent: [118, 21, 123, 27] as const,
+};
+const walkingPolicy = {
+  ...sourcePolicy,
+  graphVersionId: 7,
+  mode: "normal" as const,
+  avoidStairs: false,
+  stairsFallback: false,
+  selectedEdgeIds: ["701"],
+};
 import { attachRouteTokens } from "../accessible-route/route-token.service";
 import {
   generateNavInstructionsFromInput,
@@ -91,6 +120,8 @@ const walk: WalkLeg = {
   toNameEn: "Walk Destination",
   distanceM: 70,
   minutesEst: 2,
+  durationS: 120,
+  walkingPolicy,
   polyline: [
     [121, 25],
     [121.001, 25],
@@ -131,6 +162,7 @@ const sample: AccessibleRoute = {
   transferCount: 3,
   accessibilityHighlights: [],
   legs: [walk, bus, metro, rail("TRA"), rail("THSR")],
+  walkingPolicy,
 };
 const canonicalRequest = {
   origin: { latitude: 25, longitude: 121 },
@@ -204,7 +236,7 @@ describe("saved source names in real token navigation", () => {
       );
     expect(Object.keys(walk.steps![0])).toHaveLength(9);
   });
-  it("legacy tokens missing sources retain original canonical names", async () => {
+  it("sealed routes missing optional source names retain original canonical names", async () => {
     const old = structuredClone(sample);
     for (const leg of old.legs) {
       for (const key of [
@@ -218,11 +250,13 @@ describe("saved source names in real token navigation", () => {
       ])
         delete (leg as unknown as Record<string, unknown>)[key];
     }
-    redis.values.set("legacy", JSON.stringify(old));
+    const [saved] = await attachRouteTokens([old], canonicalRequest);
+    const routeToken = saved.routeToken;
+    if (!routeToken) throw new Error("Trusted fixture was not persisted");
     expect(
       text(
         await generateNavInstructionsFromInput({
-          routeToken: "legacy",
+          routeToken,
           language: "en",
         }),
       ),
@@ -230,11 +264,25 @@ describe("saved source names in real token navigation", () => {
     expect(
       text(
         await generateNavInstructionsFromInput({
-          routeToken: "legacy",
+          routeToken,
           language: "en",
         }),
       ),
     ).toContain("同名站");
+  });
+  it("rejects a legacy WALK token without routing-policy evidence", async () => {
+    const unqualified = structuredClone(sample);
+    delete unqualified.walkingPolicy;
+    for (const leg of unqualified.legs) {
+      if (leg.type === "WALK") delete leg.walkingPolicy;
+    }
+    redis.values.set("unqualified", JSON.stringify(unqualified));
+    const result = await generateNavInstructionsFromInput({
+      routeToken: "unqualified",
+      language: "en",
+    });
+    expect(result.ok).toBe(false);
+    expect(redis.store).not.toHaveBeenCalled();
   });
   it.each([
     [{ index: 1, streetName: "中山路", nameEn: "wrong", displayName: "wrong" }],

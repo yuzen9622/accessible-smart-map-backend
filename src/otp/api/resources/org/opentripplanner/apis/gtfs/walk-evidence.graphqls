@@ -1,0 +1,217 @@
+extend type Leg {
+  """Ordered actual leg-state edge occurrences. Null for non-WALK legs or unmapped legs."""
+  walkEvidence: WalkEvidence
+}
+type WalkEvidence {
+  executedPolicy: DirectWalkExecutedPolicy
+  schemaVersion: String!
+  captureScope: String!
+  """VERIFIED_LOADED_BYTES covers graph bytes only; provenance and runtime policy are separate."""
+  graphIdentityStatus: String!
+  graphByteIdentity: LoadedGraphByteIdentity
+  buildManifestIdentity: TrustedBuildManifestIdentity
+  sourceManifestIdentityStatus: String!
+  runtimePolicyIdentityStatus: String!
+  edgeOccurrenceCount: Int!
+  nonStreetEdgeCount: Int!
+  unknownMetadataEdgeCount: Int!
+  edges: [WalkEdgeOccurrence!]!
+  selectedPath: SelectedWalkPath
+}
+type WalkEdgeOccurrence {
+  policyEvaluation: DirectWalkEdgePolicy
+  """Zero-based order within this leg; not a persistent selected-edge ID."""
+  occurrenceIndex: Int!
+  edgeKind: String!
+  distanceM: Float!
+  metadataStatus: String!
+  """True for a native TemporaryPartialStreetEdge; source lineage is the parent segment."""
+  partial: Boolean!
+  osmWayId: String
+  sourceSegmentIndex: Int
+  reverse: Boolean
+  knownWidthM: Float
+  sourceRefs: [String!]!
+  widthSourceRefs: [String!]!
+  sourceBatch: String
+  sourceVersion: String
+  sourceSha256: String
+  areaSources: [WalkAreaSource!]!
+  pathway: WalkPathwaySource
+  attachment: GovernmentEndpointAttachment
+  unknownReason: String
+}
+type WalkAreaSource {
+  knownSmoothness: String
+  osmId: String!
+  knownWidthM: Float
+  stairs: Boolean!
+  wheelchairAccessible: Boolean!
+  sourceRefs: [String!]!
+  widthSourceRefs: [String!]!
+  sourceBatch: String
+  sourceVersion: String
+  sourceSha256: String
+}
+type WalkPathwaySource {
+  pathwayId: String
+  sourceFromStopId: String
+  sourceToStopId: String
+  mode: String
+  knownMinWidthM: Float
+  knownSlopeRatio: Float
+  knownWheelchairAccessible: Boolean
+}
+
+type LoadedGraphByteIdentity {
+  sha256: String!
+  byteCount: Long!
+}
+
+type TrustedBuildManifestIdentity {
+  manifestSha256: String!
+  buildInputMode: String!
+  graphSha256: String!
+  graphByteCount: Long!
+  sourceVersion: String!
+  sourceBatch: String!
+  sourceArchiveSha256: String!
+  mergedPbfSha256: String!
+  layerReportSha256: String!
+  declaredBuildPolicyJarSha256: String!
+  inputs: [BuildManifestArtifact!]!
+  compilerArtifacts: [BuildManifestArtifact!]!
+}
+type BuildManifestArtifact {
+  path: String!
+  role: String!
+  sha256: String!
+  byteCount: Long!
+}
+
+
+extend type QueryType {
+  """Immutable graph, trusted build source, and runtime policy identities captured for this request, including requests with no itinerary."""
+  requestIdentity: RequestIdentity!
+}
+type RequestIdentity {
+  schemaVersion: String!
+  graphIdentityStatus: String!
+  graphByteIdentity: LoadedGraphByteIdentity
+  sourceManifestIdentityStatus: String!
+  buildManifestIdentity: TrustedBuildManifestIdentity
+  runtimePolicyIdentityStatus: String!
+  runtimePolicyIdentity: ObservedRuntimePolicyIdentity
+}
+type ObservedRuntimePolicyIdentity {
+  status: String!
+  reason: String!
+  artifactSha256: String
+  manifestSha256: String
+  observedClassDigestSha256: String
+  classCount: Int!
+}
+
+
+type ExactNativeCoordinate { lat: Float! lon: Float! }
+type SelectedWalkPath {
+  geometryCoverageStatus: String!
+  coordinateEncoding: String!
+  gapMetric: String!
+  endpointReachabilityStatus: String!
+  startsSearchPath: Boolean!
+  endsSearchPath: Boolean!
+  requestFrom: ExactNativeCoordinate
+  requestTo: ExactNativeCoordinate
+  startState: ExactNativeCoordinate
+  endState: ExactNativeCoordinate
+  firstGeometryPoint: ExactNativeCoordinate
+  lastGeometryPoint: ExactNativeCoordinate
+  requestFromToStartStateGapM: Float
+  requestToToEndStateGapM: Float
+  requestFromToFirstGeometryGapM: Float
+  requestToToLastGeometryGapM: Float
+  missingGeometryCount: Int!
+  positiveDistanceMissingGeometryCount: Int!
+  stateChainMismatchCount: Int!
+  representedGeometryLengthM: Float!
+  occurrences: [SelectedGeometryOccurrence!]!
+}
+type SelectedGeometryOccurrence {
+  occurrenceIndex: Int!
+  edgeKind: String!
+  distanceM: Float!
+  partial: Boolean!
+  traversalFrom: ExactNativeCoordinate
+  traversalTo: ExactNativeCoordinate
+  traversalDirection: String!
+  geometryStatus: String!
+  geometrySource: String!
+  coordinates: [ExactNativeCoordinate!]!
+  vertexGapM: Float
+  geometryStartToTraversalFromGapM: Float
+  geometryEndToTraversalToGapM: Float
+  gapFromPreviousGeometryM: Float
+  geometryLengthM: Float!
+}
+
+enum DirectWalkPolicyProfile { UNSPECIFIED NORMAL WHEELCHAIR_STRICT WHEELCHAIR_STAIRS_ASSISTED }
+type DirectWalkExecutedPolicy {
+  schemaVersion: String!
+  scope: String!
+  profile: DirectWalkPolicyProfile!
+  wheelchairEnabled: Boolean!
+  walkSpeedMps: Float!
+  stairsReluctance: Float!
+  minimumKnownWidthM: Float
+  maximumKnownNonStairSlopeRatio: Float
+  fareAccess: String!
+}
+type DirectWalkEdgePolicy {
+  captureSchemaVersion: Int
+  stairs: Boolean
+  escalator: Boolean
+  nativeWheelchairAccessible: Boolean
+  knownMaxSlopeRatio: Float
+  knownWidthM: Float
+  knownSmoothness: String
+  assistedStairs: Boolean!
+}
+extend type Plan { directWalkSearch: DirectWalkSearchEvidence }
+type DirectWalkSearchEvidence {
+  schemaVersion: String!
+  status: String!
+  nativeOutcome: String!
+  executedPolicy: DirectWalkExecutedPolicy!
+  fromLat: Float
+  fromLon: Float
+  toLat: Float
+  toLon: Float
+  departureTimeMs: Long
+  maximumSearchDurationS: Float
+  streetSearchTimeoutS: Float
+  durationLimitPruned: Boolean!
+  endpointConstraint: EndpointConstraintEvidence
+}
+type EndpointConstraintEvidence {
+  scope: String!
+  endpoint: String!
+  phase: String!
+  reasons: [String!]!
+  blockedCandidateCount: Int!
+}
+
+type GovernmentEndpointAttachment {
+  ruleVersion: String!
+  regionId: String!
+  surfaceSha256: String!
+  grade: [String!]!
+  parentOsmWayId: String!
+  parentSegmentIndex: Int!
+  parentReverse: Boolean!
+  exactCoverage: String!
+  widthObservationGeometrySha256: [String!]!
+  widthCoverageStatus: String!
+  slopeStatus: String!
+}
+

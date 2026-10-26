@@ -210,7 +210,10 @@ describe("POST /api/v1/a11y/route/instructions", () => {
       "ahead-right",
     );
     const operation = res.body.paths["/a11y/route/instructions"].post;
-    expect(operation.description).toContain("台北 CSR-primary");
+    expect(operation.description).toContain("全國PostGIS/CSR");
+    expect(operation.description).toContain(
+      "不以未驗證的OTP2或Valhalla步行替代",
+    );
     expect(operation.description).toContain("OTP2");
     expect(operation.description).not.toContain("所有正常步行段源自 OTP");
     expect(

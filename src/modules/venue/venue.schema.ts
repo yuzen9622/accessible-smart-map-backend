@@ -37,7 +37,7 @@ export const VenueRouteBodySchema = z
     mode: z.enum(MODES).default("wheelchair").openapi({
       example: "wheelchair",
       description:
-        "通行模式：wheelchair / elderly / visual_impaired 均禁止樓梯、階梯及手扶梯，跨樓層使用可通行的電梯或坡道；normal 最短路線。各模式保留自己的步速與其他通行限制，不接受自訂 profile。",
+        "通行模式：wheelchair 先完整搜尋無階梯路徑，確認不可達才提供 stairsFallback=true、含明確警告的階梯備援；不是輪椅可自行通行的保證。elderly / visual_impaired 維持原本避開樓梯及手扶梯限制；normal 可走樓梯。各模式仍保留已知封閉、門寬等其他限制，不接受自訂 profile。",
     }),
     language: z.enum(SUPPORTED_LANGS).default(DEFAULT_LANG).openapi({
       example: "zh-TW",
@@ -426,7 +426,7 @@ registry.registerPath({
   tags: ["Venue"],
   summary: "場域內無障礙路線",
   description:
-    "規劃同一場域兩個地點之間的路線，回傳帶樓板高度的路徑與跨樓層步驟（電梯、樓梯、坡道、進出建築）。輪椅、長者與視障模式均禁止樓梯、階梯及手扶梯，保留各模式原有其他限制；一般為最短路線。",
+    "規劃同一場域的樓層感知路徑與步驟。輪椅先完整搜尋無階梯路；確實不可達才提供含警告的階梯備援，stairsFallback=true 不代表輪椅可自行通過。一般步行可走樓梯；長者／視障仍保留原有限制。封閉、禁止通行、已知門寬及其他非階梯限制不會因備援而放寬。搜尋預算耗盡回503，不會被當作無階梯路不存在。",
   request: {
     params: VenueParamsSchema,
     body: { content: { "application/json": { schema: VenueRouteBodySchema } } },
@@ -440,7 +440,14 @@ registry.registerPath({
     404: { description: "查無此場域或地點" },
     422: {
       description:
-        "NO_ACCESSIBLE_ROUTE：目的地可步行到達，但沒有符合所選模式限制的路線（附 venueAccessibility）；NO_ROUTE：路網未連通",
+        "NO_ACCESSIBLE_ROUTE：目的地可步行到達，但仍受非階梯通行限制阻擋（附 venueAccessibility）；NO_ROUTE：路網未連通，包含已知禁止通行後無替代路徑",
+      content: {
+        "application/json": { schema: VenueRouteFailureResponseSchema },
+      },
+    },
+    503: {
+      description:
+        "搜尋預算耗盡或路由暫時不可用；不是確認不可達，不會因此啟用階梯備援",
       content: {
         "application/json": { schema: VenueRouteFailureResponseSchema },
       },

@@ -54,6 +54,11 @@ export function routeCandidateTimeline(
       timeline.push({
         type: "WALK",
         durationMs:
+          (leg.durationS !== undefined &&
+          Number.isFinite(leg.durationS) &&
+          leg.durationS >= 0
+            ? leg.durationS * 1000
+            : undefined) ??
           Object.getOwnPropertyDescriptor(leg, "_durationMs")?.value ??
           leg.minutesEst * 60000,
       });
@@ -470,6 +475,11 @@ export async function resolveCandidateGroup({
     const timeline = routeCandidateTimeline(base);
     const busLegs = base.legs.filter((l): l is BusLeg => l.type === "BUS");
     if (!busLegs.length) {
+      const containsRail = base.legs.some(
+        (leg) =>
+          leg.type === "METRO" || leg.type === "TRA" || leg.type === "THSR",
+      );
+      if (containsRail && !timeline) continue;
       const hasRail = timeline?.some((l) => l.type === "FIXED_TRANSIT");
       const chain =
         hasRail && timeline
@@ -478,7 +488,13 @@ export async function resolveCandidateGroup({
       if (hasRail && !chain) continue;
       // A legacy rail route without absolute evidence retains its planned
       // duration; no BUS identity or guessed candidate is selected here.
-      const end = chain?.arrivalAt ?? start + base.totalMinutes * 60000;
+      const walkDuration = timeline?.reduce(
+        (sum, leg) => sum + (leg.type === "WALK" ? leg.durationMs : 0),
+        0,
+      );
+      const end =
+        chain?.arrivalAt ?? start + (walkDuration ?? base.totalMinutes * 60000);
+      base._scheduledEndTime = end;
       base.departureTime = taipeiIsoOffset(start);
       base.arrivalTime = taipeiIsoOffset(end);
       base.totalMinutes = Math.round((end - start) / 60000);
@@ -569,6 +585,7 @@ export async function resolveCandidateGroup({
         selectedCandidateId: selected.candidateId,
       };
     }
+    route._scheduledEndTime = chain.arrivalAt;
     contexts.set(route, context);
     Object.defineProperty(route, "_busCandidateContext", { value: context });
     Object.defineProperty(route, "_vehicleEligibilityTier", {

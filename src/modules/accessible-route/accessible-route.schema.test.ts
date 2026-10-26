@@ -5,9 +5,47 @@ import {
   AccessibleRouteRerouteBodySchema,
   AccessibleRouteRerouteDataSchema,
   AccessibleRouteSchema,
+  RouteFailureDataSchema,
 } from "./accessible-route.schema";
 import { ROUTE_WARNING } from "../../constants/messages";
 import { TaiwanCityEn } from "../../types/transit";
+
+describe("endpoint constraint failure contract", () => {
+  const detail = { pointIndex: 2, reasons: ["KNOWN_WIDTH"] };
+  it("preserves the affected waypoint and known restriction", () => {
+    expect(
+      RouteFailureDataSchema.parse({
+        reason: "ENDPOINT_CONSTRAINT_BLOCKED",
+        endpointConstraint: detail,
+      }),
+    ).toEqual({
+      reason: "ENDPOINT_CONSTRAINT_BLOCKED",
+      endpointConstraint: detail,
+    });
+  });
+  it.each([
+    { reason: "ENDPOINT_CONSTRAINT_BLOCKED" },
+    { reason: "NO_ROUTE", endpointConstraint: detail },
+    { reason: "UPSTREAM_TIMEOUT", endpointConstraint: detail },
+    {
+      reason: "ENDPOINT_CONSTRAINT_BLOCKED",
+      endpointConstraint: {
+        ...detail,
+        reasons: ["KNOWN_WIDTH", "KNOWN_WIDTH"],
+      },
+    },
+    {
+      reason: "ENDPOINT_CONSTRAINT_BLOCKED",
+      endpointConstraint: { ...detail, pointIndex: 7 },
+    },
+    {
+      reason: "ENDPOINT_CONSTRAINT_BLOCKED",
+      endpointConstraint: { ...detail, guessed: true },
+    },
+  ])("rejects misleading endpoint metadata: %j", (value) => {
+    expect(RouteFailureDataSchema.safeParse(value).success).toBe(false);
+  });
+});
 
 it("preserves additive offset route timestamps", () => {
   const parsed = AccessibleRouteSchema.parse({
@@ -91,6 +129,60 @@ const route = {
   legs: [walkLeg],
   accessibilityHighlights: [],
 };
+
+describe("planned rail fare evidence is response-only", () => {
+  const policy = {
+    version: "sidewalk-v1",
+    schemaVersion: 1,
+    graphVersionId: 42,
+    sourceVersionId: "1",
+    sourceArchiveSha256: "a".repeat(64),
+    osmSha256: "b".repeat(64),
+    mode: "normal",
+    avoidStairs: false,
+    stairsFallback: false,
+    selectedEdgeIds: ["123"],
+    fareAccess: {
+      mode: "transit_authorized",
+      authorizedStationIds: ["station-A"],
+    },
+  };
+  it("preserves additive leg and route evidence", () => {
+    const parsed = AccessibleRouteSchema.parse({
+      ...route,
+      walkingPolicy: policy,
+      legs: [{ ...walkLeg, walkingPolicy: policy }],
+    });
+    expect(parsed.walkingPolicy?.fareAccess).toEqual(policy.fareAccess);
+    expect(parsed.legs[0]).toHaveProperty(
+      "walkingPolicy.fareAccess",
+      policy.fareAccess,
+    );
+  });
+  it("excludes diagnostic mode from public response evidence", () => {
+    expect(
+      AccessibleRouteSchema.safeParse({
+        ...route,
+        walkingPolicy: {
+          ...policy,
+          fareAccess: { mode: "diagnostic_allow_all" },
+        },
+      }).success,
+    ).toBe(false);
+  });
+  it.each(["fareAccess", "authorizedStationIds", "stopId"])(
+    "does not grant public request field %s",
+    (key) => {
+      expect(
+        AccessibleRouteBodySchema.safeParse({
+          origin: { latitude: 25, longitude: 121.5 },
+          destination: { latitude: 25, longitude: 121.51 },
+          [key]: policy.fareAccess,
+        }).success,
+      ).toBe(false);
+    },
+  );
+});
 
 const metroLeg = {
   type: "METRO" as const,

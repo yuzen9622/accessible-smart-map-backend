@@ -14,7 +14,7 @@ export const NavInstructionsRequestSchema = z
   .object({
     routeToken: z.string().trim().min(1).max(256).openapi({
       description:
-        "由 /accessible-route 回傳、30 分鐘內有效的 routeToken；導航指引一律以伺服器端保存的路線產生，不接受前端回傳整包 route。",
+        "由 /accessible-route 回傳、最多30分鐘有效的 routeToken；導航指引只採用伺服器保存且完整性驗證通過的路線，不接受前端回傳整包 route。含步行時即時查證ACTIVE圖與來源資格，不因快取TTL沿用已退役路線；舊格式、損壞或資格失效須重新規劃。",
       example: "M2F1...short-lived-capability",
     }),
     userHeading: z.number().min(0).max(359).optional().openapi({
@@ -50,7 +50,7 @@ registry.registerPath({
   tags: ["Accessibility"],
   summary: "路線逐步導航指引產生",
   description:
-    "以 /accessible-route 回傳的 routeToken 取出伺服器端路線，轉為可語音朗讀的逐步指引；不再接受前端傳入完整 route。台北 CSR-primary 的純步行路線由圖上選定的邊與設施型別（電梯／手扶梯／電動步道／閘門／進出站）推導出 turn-by-turn steps，但不含路名；transit itinerary 的 WALK legs 與 CSR fallback 的 OTP2 步行仍可帶 OTP steps，OTP2 不可用後的 Valhalla 步行也支援相同輸出。步行指引以 stairs 標示該段含樓梯並在 text 加入定性提示，不代表整段 distanceM 都是樓梯；steepSlope 以同樣方式標示坡度較陡的段落。若缺少 steps 仍回傳 200 概略指引。WALK 過渡期同時回 WALK_STEPS_UNAVAILABLE 與 legacy ORS_STEPS_UNAVAILABLE，車行回 ROAD_STEPS_UNAVAILABLE。",
+    "以 /accessible-route 回傳的 routeToken 讀取完整性及來源資格仍有效的伺服器路線，轉為可語音朗讀的逐步指引；不接受前端傳入完整 route。所有 WALK（包含大眾運輸接駁）皆依來源合格的全國PostGIS/CSR圖選定邊與設施產生指引，不以未驗證的OTP2或Valhalla步行替代。保留圖內實際選中的電梯、階梯、手扶梯、電動步道、閘門及進出站語義，未知資料不推定安全。stairs表示該段含階梯，不代表整段distanceM都是階梯；輪椅階梯備援仍保留需協助警告，不宣稱可獨立通行。steepSlope標示較陡坡段；已合格路線若缺少steps仍回200概略指引，WALK同時保留WALK_STEPS_UNAVAILABLE與legacy ORS_STEPS_UNAVAILABLE，車行回ROAD_STEPS_UNAVAILABLE。另回傳的場域venueLeg不屬此戶外導航指引。",
   request: {
     body: {
       content: { "application/json": { schema: NavInstructionsRequestSchema } },
@@ -66,7 +66,7 @@ registry.registerPath({
     },
     400: {
       description:
-        "routeToken 缺漏、無效或已過期，或路線含未支援的 leg 型別（例如 FERRY）",
+        "routeToken缺漏、無效、過期、舊格式或保存內容損壞；步行圖已退役／來源資格無法即時查證；或路線含未支援的leg型別（例如FERRY）。須重新規劃，不信任缺少必經WALK的快取。",
       content: { "application/json": { schema: NavErrorResponseSchema } },
     },
     500: {

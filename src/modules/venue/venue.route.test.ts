@@ -48,7 +48,7 @@ const types = (from: string, to: string, mode: AccessibilityMode) => {
 };
 
 describe("venueProfileFor", () => {
-  it("preserves each mode's profile and bars stairs only for venue elderly and visual_impaired", () => {
+  it("preserves strict wheelchair exclusion and existing elderly/visual stair restrictions", () => {
     for (const mode of [
       "wheelchair",
       "normal",
@@ -61,7 +61,9 @@ describe("venueProfileFor", () => {
           ? { ...outdoorProfile, forbidStairs: true }
           : outdoorProfile;
       expect(venueProfileFor(mode, CONFIG)).toEqual(expected);
-      expect(outdoorProfile.forbidStairs).toBeUndefined();
+      expect(outdoorProfile.forbidStairs).toBe(
+        mode === "wheelchair" ? true : undefined,
+      );
       expect(outdoorProfile.stairsAvoidanceMultiplier).toBeUndefined();
       expect(
         venueProfileFor(mode, CONFIG).stairsAvoidanceMultiplier,
@@ -169,13 +171,14 @@ describe("planVenueRoute on the fictional fixture", () => {
     },
   );
 
-  it("reports NO_ACCESSIBLE_ROUTE for a wheelchair when the floor is reachable only by stairs", () => {
+  it("returns a warned wheelchair backup when only stairs reach the floor", () => {
     const r = plan("gate-main", "b-lab", "wheelchair");
-    expect(r).toEqual({
-      ok: false,
-      reason: "NO_ACCESSIBLE_ROUTE",
-      levelRef: "2F",
-    });
+    expect(r).toMatchObject({ ok: true, route: { stairsFallback: true } });
+    if (!r.ok) throw new Error(r.reason);
+    expect(r.route.steps.some((step) => step.type === "stairs")).toBe(true);
+    expect(r.route.warningDetails).toContainEqual(
+      expect.objectContaining({ code: "ROUTE_WHEELCHAIR_STAIRS_FALLBACK" }),
+    );
   });
 
   it("enters and leaves buildings with floor-aware instructions and 3D coordinates", () => {
@@ -326,17 +329,17 @@ describe("wheelchair hard limits where the barred element is the only way", () =
     });
   });
 
-  it("never takes a way tagged wheelchair=no", () => {
+  it("avoids a non-stair wheelchair=no way using the warned stairs backup", () => {
     // the ramp to B is closed; only the steps shortcut is left
     const v = variant(
       /<tag k='ramp:wheelchair' v='yes' \/>/,
       "<tag k='wheelchair' v='no' />",
     );
-    expect(v.plan("a-room06@3F", "bldg-b@1F", "wheelchair")).toEqual({
-      ok: false,
-      reason: "NO_ACCESSIBLE_ROUTE",
-      levelRef: "1F",
-    });
+    const result = v.plan("a-room06@3F", "bldg-b@1F", "wheelchair");
+    expect(result).toMatchObject({ ok: true, route: { stairsFallback: true } });
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.route.steps.some((step) => step.type === "ramp")).toBe(false);
+    expect(result.route.steps.some((step) => step.type === "steps")).toBe(true);
     expect(v.plan("a-room06@3F", "bldg-b@1F", "normal").ok).toBe(true);
   });
 
@@ -775,13 +778,12 @@ describe("multiple source-backed arrival nodes", () => {
       0,
     ]);
   });
-  it("classifies failure using every legal pair rather than the disconnected primary", () => {
+  it("finds a stairs backup using every legal pair rather than the disconnected primary", () => {
     const data = alternatives();
     data.edges = [{ ...data.edges[1], kind: "steps" }];
-    expect(attempt(data, "wheelchair")).toEqual({
-      ok: false,
-      reason: "NO_ACCESSIBLE_ROUTE",
-      levelRef: "1F",
+    expect(attempt(data, "wheelchair")).toMatchObject({
+      ok: true,
+      route: { stairsFallback: true, distanceM: 30 },
     });
     data.edges = [];
     expect(attempt(data, "wheelchair")).toEqual({

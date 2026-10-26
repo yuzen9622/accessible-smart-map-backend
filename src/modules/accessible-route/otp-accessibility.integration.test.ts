@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import captured from "./planners/fixtures/otp-next-day-elderly.json";
-import { TaiwanCityEn } from "../../types/transit";
 
 const { post, busLean } = vi.hoisted(() => ({
   post: vi.fn(),
@@ -47,7 +46,7 @@ vi.mock("./planners/realtime-transit", () => ({
   overlayRealtimeTransit: vi.fn(async () => {}),
 }));
 
-import { findAccessibleRoutesDetailed } from "./accessible-route.service";
+import { planOtpRouteDetailed } from "./planners/otp-routing";
 
 const fixture = captured.cases[0];
 function response(stairs: boolean) {
@@ -96,10 +95,9 @@ describe("OTP candidates satisfy stairs constraints before stopping search", () 
       post
         .mockResolvedValueOnce(walkResponse(false, delayMs))
         .mockResolvedValue(empty);
-      const result = await findAccessibleRoutesDetailed(
+      const result = await planOtpRouteDetailed(
         fixture.origin,
         fixture.destination,
-        TaiwanCityEn.Tainan,
         {
           mode: "wheelchair",
           departureTime: new Date(fixture.departure),
@@ -129,10 +127,9 @@ describe("OTP candidates satisfy stairs constraints before stopping search", () 
       post
         .mockResolvedValueOnce(walkResponse(firstStairs))
         .mockResolvedValue(walkResponse(false, 3600000));
-      const result = await findAccessibleRoutesDetailed(
+      const result = await planOtpRouteDetailed(
         fixture.origin,
         fixture.destination,
-        TaiwanCityEn.Tainan,
         {
           mode: "normal",
           avoidStairs,
@@ -156,10 +153,9 @@ describe("OTP candidates satisfy stairs constraints before stopping search", () 
           return response(true);
         })
         .mockResolvedValue(response(false));
-      const result = await findAccessibleRoutesDetailed(
+      const result = await planOtpRouteDetailed(
         fixture.origin,
         fixture.destination,
-        TaiwanCityEn.Tainan,
         {
           mode,
           avoidStairs: true,
@@ -183,10 +179,9 @@ describe("OTP candidates satisfy stairs constraints before stopping search", () 
     post.mockImplementation(async (_url, { variables }) =>
       response(variables.searchWindow < 28800),
     );
-    const result = await findAccessibleRoutesDetailed(
+    const result = await planOtpRouteDetailed(
       fixture.origin,
       fixture.destination,
-      TaiwanCityEn.Tainan,
       {
         mode: "wheelchair",
         departureTime: new Date(fixture.departure),
@@ -208,10 +203,9 @@ describe("OTP candidates satisfy stairs constraints before stopping search", () 
 
   it("preserves the explicit degraded route when all searched candidates have stairs", async () => {
     post.mockResolvedValue(response(true));
-    const result = await findAccessibleRoutesDetailed(
+    const result = await planOtpRouteDetailed(
       fixture.origin,
       fixture.destination,
-      TaiwanCityEn.Tainan,
       {
         mode: "wheelchair",
         departureTime: new Date(fixture.departure),
@@ -219,10 +213,13 @@ describe("OTP candidates satisfy stairs constraints before stopping search", () 
       },
     );
     expect(result.status).toBe("ok");
-    expect(result.routes[0].degraded).toBe(true);
-    expect(result.routes[0].warnings).toContain(
-      "目前候選路線仍包含無坡道樓梯，無法完全滿足避開樓梯條件",
-    );
+    expect(
+      result.routes[0].legs
+        .filter((leg) => leg.type === "WALK")
+        .flatMap((leg) => leg.steps ?? [])
+        .some((step) => step.stairs),
+    ).toBe(true);
+    expect(result.routes[0].walkingPolicy).toBeUndefined();
     expect(post.mock.calls.at(-1)![1].variables).toMatchObject({
       time: "06:30",
       searchWindow: 21600,
@@ -233,10 +230,9 @@ describe("OTP candidates satisfy stairs constraints before stopping search", () 
     post.mockResolvedValueOnce(response(true)).mockResolvedValue({
       data: { data: { plan: { itineraries: [], routingErrors: [] } } },
     });
-    const result = await findAccessibleRoutesDetailed(
+    const result = await planOtpRouteDetailed(
       fixture.origin,
       fixture.destination,
-      TaiwanCityEn.Tainan,
       {
         mode: "wheelchair",
         departureTime: new Date(fixture.departure),
@@ -244,7 +240,12 @@ describe("OTP candidates satisfy stairs constraints before stopping search", () 
       },
     );
     expect(result.status).toBe("ok");
-    expect(result.routes[0].degraded).toBe(true);
+    expect(
+      result.routes[0].legs
+        .filter((leg) => leg.type === "WALK")
+        .flatMap((leg) => leg.steps ?? [])
+        .some((step) => step.stairs),
+    ).toBe(true);
     expect(post).toHaveBeenCalledTimes(5);
   });
 
@@ -253,10 +254,9 @@ describe("OTP candidates satisfy stairs constraints before stopping search", () 
       vi.setSystemTime(Date.now() + 7000);
       return response(true);
     });
-    const result = await findAccessibleRoutesDetailed(
+    const result = await planOtpRouteDetailed(
       fixture.origin,
       fixture.destination,
-      TaiwanCityEn.Tainan,
       {
         mode: "wheelchair",
         avoidStairs: false,
@@ -281,10 +281,9 @@ describe("OTP candidates satisfy stairs constraints before stopping search", () 
       .mockResolvedValueOnce(noRoute)
       .mockResolvedValueOnce(response(true))
       .mockResolvedValue(noRoute);
-    const result = await findAccessibleRoutesDetailed(
+    const result = await planOtpRouteDetailed(
       fixture.origin,
       fixture.destination,
-      TaiwanCityEn.Tainan,
       {
         mode: "wheelchair",
         departureTime: new Date(fixture.departure),
@@ -293,7 +292,12 @@ describe("OTP candidates satisfy stairs constraints before stopping search", () 
     );
     expect(result.status).toBe("ok");
     const original = fixture.response.data.plan.itineraries[0];
-    expect(result.routes[0].degraded).toBe(true);
+    expect(
+      result.routes[0].legs
+        .filter((leg) => leg.type === "WALK")
+        .flatMap((leg) => leg.steps ?? [])
+        .some((step) => step.stairs),
+    ).toBe(true);
     expect(result.routes[0].legs).toHaveLength(original.legs.length);
     expect(result.routes[0].legs[0]).toMatchObject({
       type: "WALK",

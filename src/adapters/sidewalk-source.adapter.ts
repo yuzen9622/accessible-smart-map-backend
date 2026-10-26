@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { setTimeout as delay } from "node:timers/promises";
 import yauzl, { type Entry, type ZipFile } from "yauzl";
 
 export const SIDEWALK_COUNTIES = [
@@ -61,10 +62,70 @@ export interface SidewalkArchive {
   cleanup(): Promise<void>;
 }
 
-export async function acquireSidewalkArchive(source: {
+interface SidewalkArchiveSource {
   zip?: string;
   url?: string;
-}): Promise<SidewalkArchive> {
+}
+
+function isTransientDownloadError(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current = error;
+  for (
+    let depth = 0;
+    depth < 5 && current && typeof current === "object" && !seen.has(current);
+    depth++
+  ) {
+    seen.add(current);
+    const failure = current as {
+      code?: unknown;
+      name?: unknown;
+      message?: unknown;
+      cause?: unknown;
+    };
+    if (
+      [
+        "ECONNRESET",
+        "ETIMEDOUT",
+        "EAI_AGAIN",
+        "UND_ERR_SOCKET",
+        "UND_ERR_CONNECT_TIMEOUT",
+        "UND_ERR_HEADERS_TIMEOUT",
+        "UND_ERR_BODY_TIMEOUT",
+      ].includes(String(failure.code))
+    )
+      return true;
+    if (failure.name === "TimeoutError" || failure.name === "AbortError")
+      return true;
+    if (
+      typeof failure.message === "string" &&
+      /^source download HTTP (408|429|5\d{2})$/.test(failure.message)
+    )
+      return true;
+    current = failure.cause;
+  }
+  return false;
+}
+
+export async function acquireSidewalkArchive(
+  source: SidewalkArchiveSource,
+): Promise<SidewalkArchive> {
+  const attempts = source.zip ? 1 : 3;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await acquireSidewalkArchiveOnce(source);
+    } catch (error) {
+      if (attempt >= attempts || !isTransientDownloadError(error)) throw error;
+      console.warn(
+        `[sidewalk-source] Download interrupted or temporarily unavailable; retrying (${attempt + 1}/${attempts}).`,
+      );
+      await delay(attempt * 1_000);
+    }
+  }
+}
+
+async function acquireSidewalkArchiveOnce(
+  source: SidewalkArchiveSource,
+): Promise<SidewalkArchive> {
   const dir = await mkdtemp(path.join(os.tmpdir(), "sidewalk-source-"));
   const file = path.join(dir, "source.zip");
   const cleanup = () => rm(dir, { recursive: true, force: true });
@@ -78,13 +139,15 @@ export async function acquireSidewalkArchive(source: {
       const response = await fetch(url, {
         signal: AbortSignal.timeout(180_000),
       });
-      if (!response.ok || !response.body)
+      if (!response.ok || !response.body) {
+        await response.body?.cancel().catch(() => undefined);
         throw new Error(`source download HTTP ${response.status}`);
+      }
       if (
         Number(response.headers.get("content-length")) >
         SIDEWALK_ARCHIVE_LIMITS.compressedBytes
       ) {
-        await response.body.cancel();
+        await response.body.cancel().catch(() => undefined);
         throw new Error("archive compressed size exceeds limit");
       }
       input = Readable.fromWeb(
@@ -108,7 +171,9 @@ export async function acquireSidewalkArchive(source: {
     );
     return { file, sha256: hash.digest("hex"), cleanup };
   } catch (error) {
-    await cleanup();
+    await cleanup().catch(() => {
+      console.warn("Could not remove temporary sidewalk source files.");
+    });
     throw error;
   }
 }

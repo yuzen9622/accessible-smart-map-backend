@@ -1,91 +1,119 @@
 #!/usr/bin/env bash
-#
-# Phase 16 OTP2 graph build pipeline (spec §5) — cron-driven, weekly:
-#   0. preflight: checkout, disk, Mongo, Docker, Python deps (otp-preflight.sh)
-#   1. fetch the TDX GTFS static feed(s)        (every run)
-#   2. refresh + clip the Taiwan OSM extract    (only when older than 30 days)
-#      + the MOI national 20 m DTM for slopes   (only when upstream changed)
-#   3. gate on gtfs-validator errors            (abort keeps the old graph)
-#   4. stop serving briefly; otp --build --save offline in a temp dir
-#   5. load the candidate on a side port, verify its quality, and only then
-#      swap it in + restart + healthcheck (promote-otp-graph.sh)
-#
-# Required env:
-#   TDX_CLIENT_ID / TDX_CLIENT_SECRET   TDX OAuth2 client credentials
-#   OTP_GTFS_URLS                       space-separated GTFS zip URLs (TDX)
-# Optional env:
-#   OTP_DATA_DIR     (default /var/otp)
-#   OTP_WORK_ROOT    where the build's temp dirs go (default /tmp); point it at
-#                    another disk when the data disk lacks ~5 GiB of headroom
-#   OTP_OSM_PBF_URL  (default Geofabrik Taiwan)
-#   OTP_DEM_DIR      DTM cache (default $OTP_DATA_DIR/dem; ~250 MiB GeoTIFF)
-#   OTP_OSM_BBOX     osmium extract bbox "minLng,minLat,maxLng,maxLat".
-#                    UNSET (default) = no clipping, full Taiwan coverage.
-#                    Taichung-only example: 120.40,23.95,121.05,24.45
-#   OTP_JAVA_XMX     build heap (default 12g — national feed + full Taiwan OSM;
-#                    a single-city clip builds fine with 8g)
-#   OTP_METRO_SYSTEMS  space-separated TDX metro systems to gap-fill (default
-#                    "TRTC NTMC TMRT TYMC" — the feed's 0-trips systems that the
-#                    TDX Metro S2STravelTime API actually serves). Deliberately
-#                    dropped — no usable TDX data, so they stay 0-trips and the
-#                    MaaS planner covers the leg: 貓空纜車 (TRTCMG — has no
-#                    S2STravelTime/Frequency, only static endpoints) and 淡海/安坑
-#                    輕軌 (feed prefix NTDLRT/NTALRT are not valid Metro RailSystem
-#                    codes). See inject-metro-gtfs.py.
-#
-# Suggested cron (spec §9):  0 4 * * 0  /path/to/build-otp-graph.sh
+# Complete transport enrichment + government sidewalk compilation, followed by
+# native OTP build, candidate verification and atomic active-release publication.
+# Persistent data is always repository-local otp-data; no data-path env setup.
 set -euo pipefail
-
-OTP_DATA_DIR="${OTP_DATA_DIR:-/var/otp}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$REPO_DIR"
+DATA_ROOT="$REPO_DIR/otp-data"
+OTP_JAVA_XMX="${OTP_JAVA_XMX:-6g}"
 OTP_OSM_PBF_URL="${OTP_OSM_PBF_URL:-https://download.geofabrik.de/asia/taiwan-latest.osm.pbf}"
-OTP_OSM_BBOX="${OTP_OSM_BBOX:-}" # empty = full Taiwan (no clipping)
-OTP_JAVA_XMX="${OTP_JAVA_XMX:-12g}"
-OTP_IMAGE="opentripplanner/opentripplanner:2.9.0"
+OTP_OSM_BBOX="${OTP_OSM_BBOX:-}"
+OTP_GTFS_URLS="${OTP_GTFS_URLS:-https://tdx.transportdata.tw/api/gtfs/V3/Map/GTFS/Static}"
+export OTP_GTFS_URLS OTP_JAVA_XMX
 OSM_MAX_AGE_DAYS=30
-
-OTP_WORK_ROOT="${OTP_WORK_ROOT:-/tmp}"
-WORK_DIR="$(mktemp -d "$OTP_WORK_ROOT/otp-build.XXXXXX")"
-VALIDATION_DIR="$(mktemp -d "$OTP_WORK_ROOT/otp-validation.XXXXXX")"
-# Injection *inputs* (raw upstream bundles that are read, grafted into feed-1 and
-# then thrown away) MUST live outside WORK_DIR: OTP scans its data directory and
-# ingests every *.zip it finds there as a transit feed of its own. A raw bundle
-# left beside feed-1 therefore loads as a full duplicate network — and since those
-# bundles carry no shapes.txt, whichever trip the planner picks from the duplicate
-# renders as station-to-station straight lines.
-AUX_DIR="$(mktemp -d "$OTP_WORK_ROOT/otp-aux.XXXXXX")"
 log() { echo "[build-otp-graph] $(date '+%F %T') $*"; }
-die() {
-  log "FATAL: $*"
-  exit 1
-}
+die() { log "FATAL: $*"; exit 1; }
 
+# A separate session lock serializes the whole build without blocking the source
+# importer's (724193,1) transaction. Signals reach the owned shell and its cleanup.
+if [ "${1:-}" != "--under-build-lock" ]; then
+  [ "$#" -eq 0 ] || die "usage: build-otp-graph.sh"
+  bash "$SCRIPT_DIR/otp-preflight.sh" || die "preflight failed — nothing was built"
+  exec python3 - "$SCRIPT_DIR/build-otp-graph.sh" <<'BUILD_LOCK'
+import os, signal, subprocess, sys, time
+import psycopg2
+child = None
+connection = None
+def stop(signum, _frame):
+    if child is not None:
+        try: os.killpg(child.pid, signum)
+        except ProcessLookupError: pass
+        try: child.wait(timeout=30)
+        except subprocess.TimeoutExpired: os.killpg(child.pid, signal.SIGKILL)
+    raise SystemExit(128 + signum)
+signal.signal(signal.SIGINT, stop)
+signal.signal(signal.SIGTERM, stop)
+try:
+    connection = psycopg2.connect(os.environ['PED_GRAPH_DATABASE_URL'], connect_timeout=10)
+    connection.autocommit = True
+    with connection.cursor() as cursor:
+        cursor.execute("SET statement_timeout='10s'")
+        cursor.execute('SELECT pg_try_advisory_lock(724193,2)')
+        if not cursor.fetchone()[0]: raise RuntimeError('another OTP build is running')
+    child = subprocess.Popen(['bash', sys.argv[1], '--under-build-lock'], start_new_session=True)
+    until = time.monotonic() + 6 * 60 * 60
+    while child.poll() is None:
+        with connection.cursor() as cursor: cursor.execute('SELECT 1')
+        if time.monotonic() >= until: raise TimeoutError('build exceeded six hours')
+        time.sleep(5)
+    raise SystemExit(child.wait())
+except Exception:
+    if child is not None and child.poll() is None:
+        os.killpg(child.pid, signal.SIGTERM)
+        try: child.wait(timeout=30)
+        except subprocess.TimeoutExpired: os.killpg(child.pid, signal.SIGKILL)
+    print('[build-otp-graph] Cannot acquire or retain the OTP build lock; verify PostGIS and other builds.', file=sys.stderr)
+    raise SystemExit(1)
+finally:
+    if connection is not None: connection.close()
+BUILD_LOCK
+fi
+shift
+[ "$#" -eq 0 ] || die "unexpected build arguments"
+mkdir -p "$DATA_ROOT/releases"
+RELEASE_DIR="$(mktemp -d "$DATA_ROOT/releases/release-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")"
+WORK_DIR="$RELEASE_DIR/inputs"
+EVIDENCE_DIR="$RELEASE_DIR/evidence"
+AUX_DIR="$RELEASE_DIR/sources"
+ARTIFACT_DIR="$RELEASE_DIR/artifacts"
+VALIDATION_DIR="$EVIDENCE_DIR/validation"
+mkdir "$WORK_DIR" "$EVIDENCE_DIR" "$AUX_DIR" "$ARTIFACT_DIR" "$VALIDATION_DIR"
+RELEASE_NAME="$(basename "$RELEASE_DIR")"
+BUILD_CONTAINER="otp-build-$RELEASE_NAME"
+EXPORT_CONTAINER="otp-artifacts-$RELEASE_NAME"
 OTP_STOPPED_BY_SCRIPT=0
 OTP_RESTART_HANDLED=0
-
 cleanup() {
   exit_status=$?
   trap - EXIT INT TERM
+  docker rm -f "$BUILD_CONTAINER" "$EXPORT_CONTAINER" >/dev/null 2>&1 || true
   if [ "$OTP_STOPPED_BY_SCRIPT" -eq 1 ] && [ "$OTP_RESTART_HANDLED" -eq 0 ]; then
-    log "restarting otp container during cleanup"
-    docker compose restart otp || docker restart otp || true
+    log "attempting to restart the previous serving container"
+    docker start otp >/dev/null 2>&1 || log "WARN: OTP could not be restarted; release files are retained"
   fi
-  rm -rf "$WORK_DIR" "$VALIDATION_DIR" "$AUX_DIR" || true
+  log "release retained at $RELEASE_DIR"
   exit "$exit_status"
 }
-
-on_signal() {
-  exit "$1"
-}
-
 trap cleanup EXIT
-trap 'on_signal 130' INT
-trap 'on_signal 143' TERM
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SOURCE_VERSION="$(python3 - <<'SOURCE'
+import os, sys, psycopg2
+try:
+    with psycopg2.connect(os.environ['PED_GRAPH_DATABASE_URL'], connect_timeout=10) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SET statement_timeout='10s'")
+            cursor.execute("SELECT id::text FROM ped_sidewalk_source_version WHERE lifecycle_status='ACTIVE'")
+            rows=cursor.fetchall()
+            if len(rows)!=1: raise ValueError('expected one ACTIVE source')
+            print(rows[0][0])
+except Exception:
+    print('Cannot read the unique ACTIVE sidewalk source; run pnpm import:sidewalks first.', file=sys.stderr)
+    sys.exit(1)
+SOURCE
+)" || die "cannot select government sidewalk source"
 
-# ── 0. Preflight — fail in seconds, not after a 25–50 minute build ──
-OTP_DATA_DIR="$OTP_DATA_DIR" OTP_WORK_ROOT="$OTP_WORK_ROOT" OTP_JAVA_XMX="$OTP_JAVA_XMX" \
-  bash "$SCRIPT_DIR/otp-preflight.sh" || die "preflight failed — nothing was built"
+log "building the reviewed native OTP image"
+docker compose build otp || die "native OTP image build failed"
+OTP_IMAGE="$(docker image inspect accessible-smart-map-otp:local --format '{{.Id}}')"
+printf '%s\n' "$OTP_IMAGE" > "$EVIDENCE_DIR/runtime-image-id.txt"
+docker create --name "$EXPORT_CONTAINER" "$OTP_IMAGE" >/dev/null
+docker cp "$EXPORT_CONTAINER:/opt/otp-policy/." "$ARTIFACT_DIR/"
+docker rm "$EXPORT_CONTAINER" >/dev/null
+cmp "$REPO_DIR/src/otp/reviewed-policies.json" "$ARTIFACT_DIR/reviewed-policies.json" || die "native image differs from backend reviewed policies"
 
 # ── 1. GTFS feeds (TDX OAuth2 client_credentials, same flow as TdxTokenManger) ──
 log "fetching TDX access token"
@@ -122,22 +150,22 @@ done
 # a build without TRA legs (MaaS planner covers them) beats no build at all.
 log "fetching TRA general timetable"
 if curl -fsSL --compressed -H "Authorization: Bearer $TOKEN" \
-  -o "$WORK_DIR/tra-timetable.json" \
+  -o "$AUX_DIR/tra-timetable.json" \
   "https://tdx.transportdata.tw/api/basic/v3/Rail/TRA/GeneralTrainTimetable?%24format=JSON"; then
   # Track geometry (Rail/TRA/Shape — WKT LINESTRING per line) so injected TRA
   # trips follow the rails instead of drawing station-to-station straight lines.
   # Fail-soft: a missing/failed Shape just leaves trips shapeless (legacy).
   sleep 3 # TDX 429s on bursts
-  TRA_SHAPE_ARG=""
+  TRA_SHAPE_ARGS=()
   if curl -fsSL --compressed -H "Authorization: Bearer $TOKEN" \
-    -o "$WORK_DIR/tra-shape.json" \
+    -o "$AUX_DIR/tra-shape.json" \
     "https://tdx.transportdata.tw/api/basic/v3/Rail/TRA/Shape?%24format=JSON"; then
-    TRA_SHAPE_ARG="$WORK_DIR/tra-shape.json"
+    TRA_SHAPE_ARGS=("$AUX_DIR/tra-shape.json")
   else
     log "WARN: TRA Shape download failed — injecting TRA without track geometry"
   fi
   python3 "$SCRIPT_DIR/inject-tra-gtfs.py" \
-    "$WORK_DIR/feed-1.gtfs.zip" "$WORK_DIR/tra-timetable.json" $TRA_SHAPE_ARG ||
+    "$WORK_DIR/feed-1.gtfs.zip" "$AUX_DIR/tra-timetable.json" "${TRA_SHAPE_ARGS[@]}" ||
     log "WARN: TRA injection failed — continuing without TRA legs"
 else
   log "WARN: TRA timetable download failed — continuing without TRA legs"
@@ -187,7 +215,7 @@ fi
 # the MaaS fallback — the injector still lists them under "skipped". Calls are
 # spaced (TDX 429s on bursts); each is fail-soft and the injector skips any line
 # whose TDX data is absent — a build missing some metro lines beats no build.
-METRO_DIR="$WORK_DIR/metro"
+METRO_DIR="$AUX_DIR/metro"
 mkdir -p "$METRO_DIR"
 METRO_SYSTEMS="${OTP_METRO_SYSTEMS:-TRTC NTMC TMRT TYMC}"
 METRO_BASE="https://tdx.transportdata.tw/api/basic/v2/Rail/Metro"
@@ -227,7 +255,7 @@ python3 "$SCRIPT_DIR/inject-metro-gtfs.py" \
 # OTP_METRO_SYSTEMS, which is only the 0-trips gap-fill set and omits KRTC).
 # Fail-soft: a build without these flags (today's behaviour) beats no build at all.
 FACILITY_SYSTEMS="${OTP_FACILITY_SYSTEMS:-TRTC KRTC TYMC TMRT NTMC}"
-FACILITY_DIR="$WORK_DIR/facility"
+FACILITY_DIR="$AUX_DIR/facility"
 mkdir -p "$FACILITY_DIR"
 log "fetching Metro StationFacility (wheelchair): $FACILITY_SYSTEMS"
 for sys in $FACILITY_SYSTEMS; do
@@ -243,7 +271,7 @@ python3 "$SCRIPT_DIR/inject-station-wheelchair.py" \
 
 # ── 1e. TRTC local database wheelchair injection ──
 log "injecting TRTC station wheelchair flags from local MongoDB accessibilities"
-npx dotenvx run -- ts-node "$SCRIPT_DIR/inject-db-a11y-stops.ts" "$WORK_DIR/feed-1.gtfs.zip" ||
+pnpm exec ts-node "$SCRIPT_DIR/inject-db-a11y-stops.ts" "$WORK_DIR/feed-1.gtfs.zip" ||
   log "WARN: TRTC local database injection failed — continuing"
 
 # ── 1f. Trip wheelchair accessibility injection ──
@@ -255,8 +283,8 @@ npx dotenvx run -- ts-node "$SCRIPT_DIR/inject-db-a11y-stops.ts" "$WORK_DIR/feed
 # low-floor history is a ranking signal in the backend, not a trip flag here.
 # Pure CSV transform; no MongoDB needed.
 log "injecting trip wheelchair accessibility flags (route_type based)"
-npx dotenvx run -- ts-node "$SCRIPT_DIR/inject-tdx-bus-trips-a11y.ts" "$WORK_DIR/feed-1.gtfs.zip" ||
-  log "WARN: trip accessibility injection failed — continuing"
+pnpm exec ts-node "$SCRIPT_DIR/inject-tdx-bus-trips-a11y.ts" "$WORK_DIR/feed-1.gtfs.zip" ||
+  die "trip accessibility injection failed — keeping the previous release"
 
 # ── 1g. Merge co-located duplicate bus stops ──
 # TDX ships one stop per route at a shared pole (~156k boarding stops at ~66k
@@ -266,18 +294,18 @@ npx dotenvx run -- ts-node "$SCRIPT_DIR/inject-tdx-bus-trips-a11y.ts" "$WORK_DIR
 # map each route back to its own TDX StopUID MUST be stored, or the backend
 # would return merged ids — so an alias import failure aborts the build and
 # keeps the old graph. See merge-gtfs-duplicate-stops.py.
-STOP_ALIASES="$WORK_DIR/stop-aliases.json"
+STOP_ALIASES="$EVIDENCE_DIR/stop-aliases.json"
 log "merging co-located duplicate bus stops"
 if python3 "$SCRIPT_DIR/merge-gtfs-duplicate-stops.py" "$WORK_DIR/feed-1.gtfs.zip" "$STOP_ALIASES"; then
-  npx dotenvx run -- ts-node "$SCRIPT_DIR/import-gtfs-stop-aliases.ts" "$STOP_ALIASES" ||
+  pnpm exec ts-node "$SCRIPT_DIR/import-gtfs-stop-aliases.ts" "$STOP_ALIASES" ||
     die "stop alias import failed — a merged graph without aliases would return wrong stop ids; keeping the old graph"
 else
   log "WARN: duplicate stop merge failed — continuing with the unmerged feed"
 fi
 
 # ── 2. OSM extract (monthly refresh, spec §5) ──
-OSM_CACHE="$OTP_DATA_DIR/taiwan-latest.osm.pbf"
-OSM_CLIPPED="$WORK_DIR/taiwan-clipped.osm.pbf"
+OSM_CACHE="$DATA_ROOT/taiwan-latest.osm.pbf"
+OSM_CLIPPED="$AUX_DIR/taiwan-clipped.osm.pbf"
 OSM_WALK_SAFE="${OSM_CLIPPED%.osm.pbf}.walk-safe.osm.pbf"
 if [ ! -f "$OSM_CACHE" ] || [ -n "$(find "$OSM_CACHE" -mtime +$OSM_MAX_AGE_DAYS 2>/dev/null)" ]; then
   log "refreshing OSM pbf from Geofabrik"
@@ -302,7 +330,7 @@ fi
 # OTP derives street slopes only from GeoTIFFs in its build directory (OSM
 # `incline` tags are ignored), and without them wheelchair maxSlope and the
 # slope-aware walk time are inert. The copy into WORK_DIR happens in step 4.
-DEM_DIR="${OTP_DEM_DIR:-$OTP_DATA_DIR/dem}"
+DEM_DIR="$DATA_ROOT/dem"
 log "refreshing the national 20 m DTM in $DEM_DIR"
 python3 "$SCRIPT_DIR/fetch-otp-dem.py" "$DEM_DIR" ||
   log "WARN: DTM refresh failed — building with whatever DEM is already in $DEM_DIR"
@@ -341,74 +369,79 @@ for zip in "$WORK_DIR"/feed-*.gtfs.zip; do
     die "rail/metro timetables in $(basename "$zip") are missing or end within ${OTP_MIN_RAIL_DAYS:-14} days — keeping old graph"
 done
 
-# ── 4. Brief service interruption: stop OTP for the offline temp-dir build ──
-cp "$OTP_DATA_DIR"/otp-config.json "$OTP_DATA_DIR"/build-config.json \
-  "$OTP_DATA_DIR"/router-config.json "$WORK_DIR/" 2>/dev/null ||
-  die "OTP config files missing in $OTP_DATA_DIR"
-mv "$OSM_CLIPPED" "$WORK_DIR/taiwan-otp.osm.pbf"
-# Only the staged national DTM: OTP treats every *.tif as elevation, so a stray
-# tile in another CRS left in DEM_DIR would silently corrupt slopes.
-if [ -f "$DEM_DIR/taiwan-dtm-20m.tif" ]; then
-  cp "$DEM_DIR/taiwan-dtm-20m.tif" "$WORK_DIR/"
-  log "staged DEM for elevation: $DEM_DIR/taiwan-dtm-20m.tif"
-else
-  log "WARN: no taiwan-dtm-20m.tif in $DEM_DIR — the graph will carry no elevation, so wheelchair slope limits stay inert"
-fi
 
-# On FAT/exFAT work roots (OTP_WORK_ROOT on a USB disk) macOS writes AppleDouble
-# "._<name>" companions for any file carrying extended attributes, so a
-# "._feed-1.gtfs.zip" appears beside the feed. They hold only metadata; drop
-# them before the scan assertion below (and OTP) sees them as zips.
+# ── 4. Freeze the exact native inputs before Java sees them ──
+cp "$DATA_ROOT/otp-config.json" "$DATA_ROOT/router-config.json" "$WORK_DIR/"
+python3 - "$DATA_ROOT/build-config.json" "$WORK_DIR/build-config.json" <<'CONFIG'
+import json, sys
+from pathlib import Path
+config=json.loads(Path(sys.argv[1]).read_text())
+config.update(readCachedElevations=False, writeCachedElevations=False,
+              islandPruning={'islandWithStopsMaxSize':0,'islandWithoutStopsMaxSize':0})
+Path(sys.argv[2]).write_text(json.dumps(config,ensure_ascii=False,indent=2)+'\n')
+CONFIG
+[ -f "$DEM_DIR/taiwan-dtm-20m.tif" ] || die "national DEM is required for wheelchair slope evaluation"
+python3 - "$DEM_DIR/taiwan-dtm-20m.tif" <<'DEM'
+import rasterio, sys
+with rasterio.open(sys.argv[1]) as raster:
+    assert raster.crs.to_epsg()==4326 and raster.count==1 and raster.width>0 and raster.height>0
+DEM
+cp "$DEM_DIR/taiwan-dtm-20m.tif" "$WORK_DIR/"
+log "compiling government sidewalk source $SOURCE_VERSION into the OTP PBF"
+python3 "$SCRIPT_DIR/otp-sidewalk-layer.py" --pbf "$OSM_CLIPPED" \
+  --db-url-env PED_GRAPH_DATABASE_URL --source-version "$SOURCE_VERSION" \
+  --output "$WORK_DIR/merged.osm.pbf" --report "$EVIDENCE_DIR/layer-report.json" ||
+  die "government sidewalk compilation failed"
+
+# macOS can create AppleDouble metadata on exFAT; only candidate-owned metadata
+# is removed, before the manifest freezes the complete input inventory.
 find "$WORK_DIR" -name '._*' -type f -delete
-
-# Nothing but the feeds we validated may be visible to the scanner: OTP loads
-# every *.zip in the data directory as its own transit feed, so a stray bundle
-# silently duplicates a whole network (and duplicates without shapes.txt draw
-# straight lines). Assert positively rather than trusting each download site.
-# Recursive on purpose: the injection steps write working files into WORK_DIR
-# subdirectories, so a future zip-producing step there must trip this too.
 while IFS= read -r zip; do
   case "${zip#"$WORK_DIR"/}" in
-  feed-*.gtfs.zip) ;;
-  *) die "unexpected zip in the build directory: ${zip#"$WORK_DIR"/} — OTP would ingest it as a duplicate transit feed; injection inputs belong in AUX_DIR" ;;
+    feed-*.gtfs.zip) ;;
+    *) die "unexpected ZIP in OTP inputs: ${zip#"$WORK_DIR"/}" ;;
   esac
 done < <(find "$WORK_DIR" -type f -name '*.zip')
+POLICY_MANIFEST_PIN="$(python3 - "$ARTIFACT_DIR/reviewed-policies.json" <<'PIN'
+import json,sys
+print(json.load(open(sys.argv[1]))[0]['manifestSha256'])
+PIN
+)"
+python3 "$SCRIPT_DIR/otp-build-manifest.py" prepare --inputs "$WORK_DIR" \
+  --report "$EVIDENCE_DIR/layer-report.json" --compiler-root "$SCRIPT_DIR" \
+  --policy-manifest "$ARTIFACT_DIR/policy-manifest.json" \
+  --policy-manifest-sha256 "$POLICY_MANIFEST_PIN" \
+  --out "$EVIDENCE_DIR/prepared-build-manifest.json" > "$EVIDENCE_DIR/prepare-result.json"
+PREPARED_PIN="$(python3 - "$EVIDENCE_DIR/prepare-result.json" <<'PIN'
+import json,sys
+print(json.load(open(sys.argv[1]))['sha256'])
+PIN
+)"
 
-# The official image's entrypoint hardcodes /var/opentripplanner as the data
-# directory — mount there and pass flags only, never a path.
-log "building graph (this takes a while; heap ${OTP_JAVA_XMX})"
-# An absent container (fresh machine, or after `docker compose down`) is not an
-# error — there is simply no serving heap to reclaim before the build. An
-# unresponsive daemon is: treating "no answer" as "absent" once started a 12g
-# build next to a running 12g serve container and took the whole machine down.
-docker info >/dev/null 2>&1 ||
-  die "docker daemon is not responding — refusing to build next to a possibly running otp"
+# Keep the existing service interruption for memory headroom. The old graph and
+# active pointer remain untouched until both candidate verification gates pass.
+docker info >/dev/null 2>&1 || die "Docker daemon is unavailable"
 if docker container inspect otp >/dev/null 2>&1; then
-  OTP_WAS_RUNNING="$(docker container inspect -f '{{.State.Running}}' otp)" ||
-    die "cannot read otp container state — refusing to build"
+  OTP_WAS_RUNNING="$(docker container inspect -f '{{.State.Running}}' otp)"
 else
   OTP_WAS_RUNNING=absent
 fi
-if [ "$OTP_WAS_RUNNING" = "true" ]; then
-  log "stopping otp container for graph build"
-  # Claim responsibility BEFORE stopping: `docker stop` takes seconds (graceful
-  # SIGTERM), and a signal arriving during it would otherwise reach cleanup with
-  # the flag still unset, leaving the service stopped with nobody to restart it.
-  # A failed stop then costs one harmless restart of an already-running container.
+if [ "$OTP_WAS_RUNNING" = true ]; then
   OTP_STOPPED_BY_SCRIPT=1
-  docker stop otp || die "failed to stop otp before graph build — keeping old graph"
+  docker stop otp >/dev/null || die "failed to stop OTP before building"
 fi
-docker run --rm \
+log "building native graph with pinned image $OTP_IMAGE (heap $OTP_JAVA_XMX)"
+docker run --rm --name "$BUILD_CONTAINER" --pull=never --network=none \
   -e JAVA_TOOL_OPTIONS="-Xmx${OTP_JAVA_XMX}" \
   -v "$WORK_DIR:/var/opentripplanner" \
-  "$OTP_IMAGE" --build --save ||
-  die "otp --build failed — keeping old graph"
-[ -f "$WORK_DIR/graph.obj" ] || die "build produced no graph.obj — keeping old graph"
+  "$OTP_IMAGE" --build --save --abortOnUnknownConfig || die "native OTP graph build failed"
+[ -f "$WORK_DIR/graph.obj" ] || die "build produced no graph.obj"
+python3 "$SCRIPT_DIR/otp-build-manifest.py" finish \
+  --prepared "$EVIDENCE_DIR/prepared-build-manifest.json" --expected-pin "$PREPARED_PIN" \
+  --out "$EVIDENCE_DIR/build-manifest.json" > "$EVIDENCE_DIR/finish-result.json"
 
-# ── 5. Verify the candidate on a side port; promote only if it passes ──
-# The healthcheck alone only proves OTP started — every graph that broke
-# production started fine. See promote-otp-graph.sh / verify-otp-graph.py.
-OTP_DATA_DIR="$OTP_DATA_DIR" bash "$SCRIPT_DIR/promote-otp-graph.sh" "$WORK_DIR" ||
-  die "candidate graph was not promoted — the old graph keeps serving"
+# ── 5. Existing transit gates + real backend native walk gates, then publish ──
+bash "$SCRIPT_DIR/promote-otp-graph.sh" "$RELEASE_DIR" "$OTP_IMAGE" --under-build-lock ||
+  die "candidate could not be promoted; previous release files are retained"
 OTP_RESTART_HANDLED=1
-log "build complete"
+log "native OTP release is serving"

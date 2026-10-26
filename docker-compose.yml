@@ -1,8 +1,10 @@
 # Full stack: Node API + MongoDB + OTP2 transit-engine sidecar.
 #
-#   docker compose up -d            # build + start everything
-#   docker compose up -d otp        # OTP only (serve prebuilt graph)
-#   src/scripts/build-otp-graph.sh  # weekly graph rebuild (cron, spec §5)
+#   docker compose up -d --wait mongo postgis redis
+#   pnpm import:sidewalks          # import sidewalk data only
+#   pnpm otp:rebuild               # build, validate and load OTP
+#   docker compose up -d --build backend
+#   Native graph preparation: docs/manuals/OTP_OPERATIONS.md
 #
 # Services reach each other by name on the default compose network:
 #   backend → mongo:27017, otp:8080 (OTP_BASE_URL/DATABASE_URL below override
@@ -21,7 +23,7 @@ services:
       VALHALLA_BASE_URL: http://valhalla:8002
       DATABASE_URL: >-
         mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongo:27017/accessible_map?authSource=admin&replicaSet=rs0
-      # 容器內走服務名；.env 的 127.0.0.1:5433 是給 host 腳本與測試用
+      # 容器內走服務名；.env 的 127.0.0.1:5434 是給 host 腳本與測試用
       PED_GRAPH_DATABASE_URL: >-
         postgresql://${PED_PG_USER}:${PED_PG_PASSWORD}@postgis:5432/ped_graph
       # .env's CHROMA_URL is host-centric (localhost:8100); inside the container
@@ -40,7 +42,7 @@ services:
       # Bind the service-account JSON (host path from .env) read-only.
       - ${GCS_KEY_FILE}:/secrets/gcs-key.json:ro
       - ${VALHALLA_DATA_DIR:-./valhalla-data}:/app/valhalla-data
-      - ${OTP_DEM_DIR:-${OTP_DATA_DIR:-./otp-data}/dem}:/data/dtm:ro
+      - ./otp-data/dem:/data/dtm:ro
     ports:
       # Publish the API. Prefix 127.0.0.1: to keep it host-only.
       - "127.0.0.1:${PORT:-8000}:${PORT:-8000}"
@@ -50,7 +52,7 @@ services:
       redis:
         condition: service_healthy
       otp:
-        condition: service_started
+        condition: service_healthy
       valhalla:
         condition: service_started
     restart: unless-stopped
@@ -132,20 +134,21 @@ services:
     restart: unless-stopped
 
   otp:
-    # Pin the minor version (spec §4.1) — never `latest`.
-    # 2.9.0 (Java 25): planConnection supports stop-location origins, which
-    # bypasses broken street linking at station plazas (e.g. 台中車站 island).
-    image: opentripplanner/opentripplanner:2.9.0
+    # Reviewed native extensions; the Dockerfile pins upstream and class bytes.
+    build:
+      context: .
+      target: otp-runtime
+    image: accessible-smart-map-otp:local
     container_name: otp
-    # The official image's entrypoint hardcodes /var/opentripplanner as the
-    # data directory — pass flags only, never a path.
+    # The inline trusted launcher fixes the data directory; pass OTP flags only.
     command: ["--load"]
     ports:
       # "主機埠:容器埠" — 主機 8080 已被佔用，改用 18080 對外；容器內仍是
       # 8080，backend 走內網 otp:8080 連，不受影響。
       - "127.0.0.1:18080:8080"
     volumes:
-      - ${OTP_DATA_DIR:-/var/otp}:/var/opentripplanner
+      # Resolve one release inside the container; never bind a moving child path.
+      - ./otp-data:/var/otp-data:ro
     environment:
       # Serve heap: national feed + full Taiwan OSM needs ~6–8 GB; a
       # single-city clip runs in 2–4 GB.

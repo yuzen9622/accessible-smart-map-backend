@@ -76,14 +76,19 @@ describe("SYNC_STEPS registry", () => {
     }
   });
 
-  it("registers graph-independent nationwide sidewalks as a PostGIS base step", () => {
+  it("keeps nationwide sidewalk sync import-only without triggering OTP builds", () => {
     const step = SYNC_STEPS.find((s) => s.id === "sidewalks");
     expect(step).toMatchObject({
       group: "base",
       backends: ["postgis"],
       requiredEnv: ["PED_GRAPH_DATABASE_URL"],
     });
-    expect(step?.command).toContain("import:sidewalks");
+    expect(step?.command).toEqual([
+      "pnpm",
+      "run",
+      "--silent",
+      "import:sidewalks",
+    ]);
     expect(step?.dependsOn).toBeUndefined();
     expect(select(["--only=sidewalks"])).toEqual(["sidewalks"]);
     expect(

@@ -149,6 +149,8 @@ export interface PlanVenueRouteInput {
   toPlaceId: string;
   mode: AccessibilityMode;
   lang: SupportedLang;
+  /** Absolute internal search deadline, including venue snapshot acquisition. */
+  deadlineMs?: number;
 }
 
 export type PlanVenueRouteResult =
@@ -161,13 +163,15 @@ export type PlanVenueRouteResult =
  *
  * @returns The route; 404 for an unknown venue or place; 422
  * `NO_ACCESSIBLE_ROUTE` (with `venueAccessibility`) when the destination is
- * reachable on foot but not within the mode's limits (stairs, escalators,
+ * reachable on foot but not within the mode's limits (escalators,
  * narrow or steep ways, `wheelchair=no`), or `NO_ROUTE` when it is not
  * connected at all.
  */
 export async function planVenueRoute(
   input: PlanVenueRouteInput,
 ): Promise<PlanVenueRouteResult> {
+  const deadlineMs =
+    input.deadlineMs ?? Date.now() + getRoutingConfig().planBudgetMs;
   const entry = await getCompiledVenue(input.venueId);
   if (!entry) {
     return {
@@ -194,8 +198,11 @@ export async function planVenueRoute(
     input.mode,
     getRoutingConfig().venue,
     input.lang,
+    { deadlineMs },
   );
   if (outcome.ok) return { ok: true, route: outcome.route };
+  if (outcome.reason === "UNAVAILABLE")
+    return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT, {}, input.lang);
   if (outcome.reason === "NO_ACCESSIBLE_ROUTE") {
     return routeFailure(
       ROUTE_REASON.NO_ACCESSIBLE_ROUTE,
@@ -230,14 +237,15 @@ function gateServes(gate: VenuePlace, mode: AccessibilityMode): boolean {
  * serves the mode reaches the place, the whole request fails (422) instead
  * of routing to a gate anyway.
  *
- * The choice is a heuristic, not the true outdoor optimum: the weighted
- * indoor cost from each gate (so a mode's stairs penalty counts) plus the
- * straight-line distance from the origin to that gate, both in metres. Only
- * the chosen gate is then planned outdoors, once.
+ * With an outdoor callback, compare completed whole-trip durations within
+ * the best reachable policy tier. Standalone callers retain the indoor plus
+ * straight-line heuristic.
  */
 export async function resolveVenueArrival(
   input: ResolveVenueArrivalInput,
 ): Promise<VenueArrivalResult> {
+  const deadlineMs =
+    input.deadlineMs ?? Date.now() + getRoutingConfig().planBudgetMs;
   const entry = await getCompiledVenue(input.venueId);
   if (!entry) {
     return {
@@ -257,47 +265,81 @@ export async function resolveVenueArrival(
   const config = getRoutingConfig().venue;
   const gates = entry.venue.places.filter((p) => p.kind === "gate");
   let best: { gate: VenuePlace; leg: VenueRoute; score: number } | null = null;
-  let stairsOnly = false;
-  for (const gate of gates.filter((g) => gateServes(g, input.mode))) {
-    const outcome = planOnGraph(
-      entry.graph,
-      entry.venue,
-      gate,
-      target,
-      input.mode,
-      config,
-      input.lang,
-    );
-    if (!outcome.ok) {
-      stairsOnly ||= outcome.reason === "NO_ACCESSIBLE_ROUTE";
-      continue;
+  let inaccessible = false;
+  const eligible = gates.filter((g) => gateServes(g, input.mode));
+  const tiers = input.mode === "wheelchair" ? [false, true] : [false];
+  for (const allowStairsFallback of tiers) {
+    let unavailable = false;
+    for (const gate of eligible) {
+      const outcome = planOnGraph(
+        entry.graph,
+        entry.venue,
+        gate,
+        target,
+        input.mode,
+        config,
+        input.lang,
+        { deadlineMs, allowStairsFallback },
+      );
+      if (!outcome.ok) {
+        if (outcome.reason === "UNAVAILABLE") unavailable = true;
+        inaccessible ||= outcome.reason === "NO_ACCESSIBLE_ROUTE";
+        continue;
+      }
+      let score: number;
+      if (input.planOutdoorApproach) {
+        const approach = await input.planOutdoorApproach({
+          venueArrival: {
+            venueId: input.venueId,
+            placeId: target.id,
+            gateId: gate.id,
+            gateLocation: { lat: gate.location[1], lng: gate.location[0] },
+            mode: input.mode,
+            venueVersion: entry.version,
+          },
+          venueLeg: outcome.route,
+          allowStairsFallback,
+        });
+        if (approach.status !== "ok") {
+          unavailable ||= approach.status === "unavailable";
+          continue;
+        }
+        if (!Number.isFinite(approach.durationS) || approach.durationS < 0) {
+          unavailable = true;
+          continue;
+        }
+        score = approach.durationS + outcome.route.durationS;
+      } else {
+        score =
+          outcome.costM +
+          haversineM([input.origin.lng, input.origin.lat], gate.location);
+      }
+      if (!best || score < best.score)
+        best = { gate, leg: outcome.route, score };
     }
-    const approachM = haversineM(
-      [input.origin.lng, input.origin.lat],
-      gate.location,
-    );
-    const score = outcome.costM + approachM;
-    if (!best || score < best.score) best = { gate, leg: outcome.route, score };
+    if (best) break;
+    if (unavailable)
+      return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT, {}, input.lang);
   }
-  // reachable only through a gate this mode may not use counts as no
-  // accessible route, not as a disconnected place
-  stairsOnly ||=
-    !best &&
-    gates.some(
-      (g) =>
-        !gateServes(g, input.mode) &&
-        planOnGraph(
-          entry.graph,
-          entry.venue,
-          g,
-          target,
-          "normal",
-          config,
-          input.lang,
-        ).ok,
-    );
   if (!best) {
-    return stairsOnly
+    for (const gate of gates.filter((g) => !gateServes(g, input.mode))) {
+      const outcome = planOnGraph(
+        entry.graph,
+        entry.venue,
+        gate,
+        target,
+        "normal",
+        config,
+        input.lang,
+        { deadlineMs },
+      );
+      if (!outcome.ok && outcome.reason === "UNAVAILABLE")
+        return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT, {}, input.lang);
+      inaccessible ||= outcome.ok;
+    }
+  }
+  if (!best) {
+    return inaccessible
       ? routeFailure(
           ROUTE_REASON.NO_ACCESSIBLE_ROUTE,
           {
@@ -328,9 +370,8 @@ export async function resolveVenueArrival(
 
 /**
  * @param arrival Stored hand-over from a route token.
- * @returns Whether the stored gate still exists, unmoved and still usable in
- * the trip's mode, and the destination place still exists in the current
- * venue.
+ * @returns Whether the stored venue version is current, the gate still exists
+ * unmoved and usable in the trip's mode, and the destination still exists.
  */
 export async function isVenueArrivalCurrent(
   arrival: VenueArrival,
@@ -339,6 +380,8 @@ export async function isVenueArrivalCurrent(
   const places = entry?.venue.places ?? [];
   const gate = places.find((p) => p.id === arrival.gateId && p.kind === "gate");
   if (
+    !entry ||
+    entry.version !== arrival.venueVersion ||
     !gate ||
     !gateServes(gate, arrival.mode) ||
     !places.some((p) => p.id === arrival.placeId)
@@ -363,6 +406,7 @@ export async function isVenueArrivalCurrent(
 export async function replanVenueLeg(
   arrival: VenueArrival,
   lang: SupportedLang,
+  deadlineMs = Date.now() + getRoutingConfig().planBudgetMs,
 ): Promise<ReplanVenueLegResult> {
   const entry = await getCompiledVenue(arrival.venueId);
   const places = entry?.venue.places ?? [];
@@ -385,8 +429,11 @@ export async function replanVenueLeg(
     arrival.mode,
     getRoutingConfig().venue,
     lang,
+    { deadlineMs },
   );
   if (!outcome.ok) {
+    if (outcome.reason === "UNAVAILABLE")
+      return routeFailure(ROUTE_REASON.UPSTREAM_TIMEOUT, {}, lang);
     return outcome.reason === "NO_ACCESSIBLE_ROUTE"
       ? routeFailure(
           ROUTE_REASON.NO_ACCESSIBLE_ROUTE,

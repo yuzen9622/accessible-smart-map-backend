@@ -10,6 +10,7 @@ import {
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 import { TaiwanCityEn } from "../../types/transit";
+import { OtpWalkingPolicyEvidenceSchema } from "../../types/otp-walking-policy";
 import { TransitPreferenceSchema } from "../../schemas/transit-preference.schema";
 import { registry } from "../../openapi/registry";
 import { VenueArrivalSchema, VenueRouteSchema } from "./venue-leg.schema";
@@ -88,12 +89,12 @@ export const AccessibleRouteBodySchema = z
       }),
     avoidStairs: z.boolean().optional().openapi({
       description:
-        "硬性條件：要求無階梯路徑。true 時向路徑引擎索取 step-free 路線，並排除經過純樓梯障礙（highway=steps 且無輪椅坡道）的步行段。未填時：若帶有效 token 且已儲存的偏好有明確設定 canUseStairs，則據此推導（不能上下階梯→true，能上下階梯→false）；否則預設為 mode==='wheelchair'，故舊有請求行為不變。",
+        "避開樓梯偏好。輪椅一律先完整搜尋無階梯路線，確定不可達才提供明確警告的含階梯備援；逾時或服務不可用不會被當成無路。一般步行可使用樓梯，true 時先嘗試避開。坡道標籤不會抹除樓梯身分，也不會放寬封閉、禁止通行、淨寬或非階梯坡度等其他限制。未填時沿用已儲存 canUseStairs 偏好，再退回 mode==='wheelchair'。",
       example: true,
     }),
     requireElevator: z.boolean().optional().openapi({
       description:
-        "硬性條件：要求車站有可用電梯。true 時排除「有設施資料但查無電梯」或「電梯維修／故障／暫停」的捷運／台鐵／高鐵路段；設施資料為空的車站視為未知而保留。未填時：若帶有效 token 且已儲存的偏好有明確設定 needsElevator，則直接套用該值；否則預設為 mode==='wheelchair'。當所有候選路線都被排除時仍會回傳原候選（有路線優於 404），並以較低的無障礙分數與 warnings 標示風險。",
+        "要求車站有可用電梯。true 時排除「有設施資料但查無電梯」或「電梯維修／故障／暫停」的捷運／台鐵／高鐵路段；空資料仍為未知。未填時沿用 needsElevator 偏好，再退回 mode==='wheelchair'。階梯備援不會放行已知封閉電梯或其他非階梯硬限制。",
       example: true,
     }),
     needsAccessibleToilet: z.boolean().optional().openapi({
@@ -108,7 +109,7 @@ export const AccessibleRouteBodySchema = z
     }),
     maxSlopePercent: z.number().min(0).max(100).optional().openapi({
       description:
-        "偏好的最大坡度百分比。⚠️ 目前無法保證這個任意值是硬性篩選：台北 bbox 內且啟用的純步行 CSR 會回傳選定邊的觀測坡度，但不依本欄位篩選，因此 data.slopeConstraint.enforced 會是 false；大眾運輸與台北範圍外／停用 CSR 的純步行由 OTP2 規劃，僅輪椅模式可使用伺服器固定 8.3% 上限；開車／騎車（Valhalla）沒有地形高程資料。未填時：若帶有效 token 且已儲存的偏好設定，則套用該值。",
+        "偏好的最大坡度百分比。目前合格 CSR 與已啟用的原生 OTP 直接步行會保留模式原有已知坡度限制並回傳已選邊的觀測值，但不依本欄位任意數值篩選，data.slopeConstraint.enforced 為 false；未知坡度不是平坦。車行引擎沒有地形高程篩選。未填時沿用已儲存偏好。",
       example: 5,
     }),
     maxTransfers: z.number().int().min(0).max(2).optional().openapi({
@@ -136,7 +137,7 @@ export const AccessibleRouteBodySchema = z
       .default("transit")
       .openapi({
         description:
-          "交通工具（與無障礙 mode 正交）：transit（預設，大眾運輸及其 WALK legs 均走 OTP2）、drive（開車）、motorcycle（騎車）、walk（純步行）。純步行在台北 CSR bbox 內且功能啟用時優先走 CSR；bbox 外、功能停用或 CSR 無法選路時改走 OTP2，CSR fallback 本身不附 warning。僅當 OTP2 不可用才由 Valhalla 作停機備援。車行時間為自由流估計，不含即時路況。",
+          "交通工具（與無障礙 mode 正交）：transit（預設，OTP 提供班次候選，每個必經 WALK 另以合格路網重新規劃並核對轉乘時間）、drive、motorcycle、walk。所有回傳 WALK 均須具有合法幾何及來源證據；CSR 不可用不會改送未驗證的 OTP／Valhalla 步行線。純步行使用路網記錄的全國範圍，實際缺漏或不連通不會捏造路線。",
         example: "drive",
       }),
     waypoints: z
@@ -157,7 +158,7 @@ export const AccessibleRouteBodySchema = z
       .optional()
       .openapi({
         description:
-          "目的地為室內場域（校園）中的地點，取自 GET /a11y/venues/{venueId} 的 places。需搭配 origin，不可同時提供 destination 或 query。系統挑選一個校門：戶外路線終點為該校門（destination），data.venueLeg 為校門到地點的校內路線；校內不可達時整個請求回 422，不會只導到校門。",
+          "目的地為室內場域（校園）中的地點，取自 GET /a11y/venues/{venueId} 的 places。需搭配 origin，不可同時提供 destination 或 query。系統驗證候選校門的完整戶外及校內路線，共用來源快照與規劃預算；輪椅先比較完整無階梯候選，再於確定不通後考慮需協助的階梯備援，不以最近門或逾時當作無階梯路不存在。戶外終點為選中校門（destination），data.venueLeg 為校內路線；確定不可達回422，搜尋不確定或逾時回503，不會省略必經步行後宣稱抵達。",
         example: { venueId: "nutc-sanmin", placeId: "zk@3F" },
       }),
   })
@@ -261,10 +262,66 @@ const RouteSourceNameFields = {
   routeDisplayName: z.string().optional(),
 };
 
+const CsrWalkingPolicyEvidenceSchema = z
+  .object({
+    fareAccess: z
+      .discriminatedUnion("mode", [
+        z.object({ mode: z.literal("forbid") }),
+        z.object({
+          mode: z.literal("transit_authorized"),
+          authorizedStationIds: z.array(z.string().min(1)),
+        }),
+      ])
+      .optional()
+      .openapi({
+        description:
+          "伺服器依相鄰鐵路乘車站點與當版 GTFS 節點推導的規劃授權；站點清單已排序去重。不是已付費、持票或現場可通行證明，也不是請求端可提供的權限。",
+      }),
+    version: z.literal("sidewalk-v1"),
+    schemaVersion: z.literal(1),
+    graphVersionId: z.number().int().positive(),
+    sourceVersionId: z.string().regex(/^[1-9]\d*$/),
+    sourceArchiveSha256: z.string().regex(/^[a-f0-9]{64}$/),
+    osmSha256: z.string().regex(/^[a-f0-9]{64}$/),
+    extent: z
+      .tuple([z.number(), z.number(), z.number(), z.number()])
+      .optional(),
+    mode: z.enum(["normal", "wheelchair", "elderly", "visual_impaired"]),
+    avoidStairs: z.boolean(),
+    stairsFallback: z.boolean(),
+    selectedEdgeIds: z.array(z.string().regex(/^[1-9]\d*$/)),
+    hasKnownOmissions: z.boolean().optional(),
+    omittedAreaCount: z.number().int().nonnegative().optional(),
+    omissionPolicyVersion: z.string().optional(),
+    omissionPolicySha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
+  })
+  .openapi("CsrWalkingPolicyEvidence", {
+    description:
+      "本次步行使用的不可變路網／來源／政策識別與選中邊。stairsFallback 表示已完成無階梯搜尋仍不可達後使用的含階梯備援，不代表輪椅可自行通行。hasKnownOmissions 只揭露來源排除紀錄，缺席為未知；即使 false 也不保證現場或障礙資料完整。",
+  });
+
+const WalkingPolicyEvidenceSchema = z
+  .discriminatedUnion("version", [
+    CsrWalkingPolicyEvidenceSchema,
+    OtpWalkingPolicyEvidenceSchema.clone().openapi("OtpWalkingPolicyEvidence", {
+      description:
+        "一般或輪椅直接步行的 OTP 圖檔、來源與實際執行政策識別。segments 保留原生搜尋結果、選中邊順序、重複通行、精確幾何與未知欄位；階梯協助段另附相同端點及出發時間的嚴格搜尋無路證據。occurrenceIndex 不是永久 edge ID；端點接線的 parentOsmWayId 是接入目標，不是該接線的 OSM 身分。未知資料不代表現場無障礙；不適用轉乘接駁步行。",
+    }),
+  ])
+  .openapi("WalkingPolicyEvidence");
+
 const WalkLegSchema = z
   .object({
     ...RouteSourceNameFields,
     type: z.literal("WALK").openapi({ example: "WALK" }),
+    durationS: z.number().nonnegative().optional().openapi({
+      description:
+        "合格路網選定路徑（含合法端點銜接）的精確秒數；轉乘可行性使用此值，而非顯示用取整分鐘。",
+    }),
+    walkingPolicy: WalkingPolicyEvidenceSchema.optional(),
     a11yRefs: A11yRefsSchema,
     stepStreetNames: z
       .array(
@@ -1170,6 +1227,10 @@ export const AccessibleRouteSchema = z
         "Feasible full-chain destination arrival, full ISO date and timezone (+08:00 for Taiwan)",
     }),
     routeId: z.string().openapi({ example: "route-001" }),
+    walkingPolicy: WalkingPolicyEvidenceSchema.optional().openapi({
+      description:
+        "路線中所有 WALK leg 共用的來源與圖版本。sidewalk-v1 的 selectedEdgeIds 為依序去重的 CSR 選中邊；otp-sidewalk-v1 保留每段原生 OTP 選中邊的順序、重複通行與幾何，以及已審查的執行政策身分。stairsFallback 為這些圖內步行段的階梯備援狀態。另回傳的場域 venueLeg 有自己的版本與協助標記，不能只由此旗標推定整趟含校內路線可獨立通行。",
+    }),
     navigationId: z.string().uuid().optional().openapi({
       description: "同一次導航的穩定 UUID；只有成功 tokenized 的路線提供。",
     }),
@@ -1179,7 +1240,7 @@ export const AccessibleRouteSchema = z
     routeToken: z.string().optional().openapi({
       example: "M2F1...short-lived-capability",
       description:
-        "30 分鐘內可用於語音 WS nav.setRoute 與 POST /a11y/accessible-route/reroute 的高熵 bearer capability；Redis 不可用時省略。",
+        "最多30分鐘內可用於語音WS nav.setRoute與POST /a11y/accessible-route/reroute的高熵bearer capability；Redis不可用時省略。重用須通過完整性及即時步行圖／來源資格查證，退役路線或舊格式／損壞的保存內容即使未到期也須重新規劃。",
     }),
     routeName: z.string().openapi({ example: "信義幹線" }),
     totalMinutes: z.number().openapi({
@@ -1204,7 +1265,7 @@ export const AccessibleRouteSchema = z
       )
       .openapi({
         description:
-          "依序的路段：步行 → 大眾運輸 → 步行；運輸段類型為 BUS、METRO、THSR、TRA；開車／騎車路線主體為 DRIVE／MOTORCYCLE，且可能於頭、尾、以及各中途點含 WALK leg（步行銜接至/自可行車道路；中途點若只能步行抵達會出現一進一出兩段 WALK）。前端須依 leg.type 分派繪製。步行銜接段採真實行人幾何、絕不畫直線；其端點與相鄰車行段端點可能有至多約 25 公尺的網路層自然偏移（前端如需可自行視覺化銜接）。偵測到落差但無法建立可信步行路徑時不補 WALK leg，改於 accessibilityHighlights 給文字警示。",
+          "依序的步行、運輸或車行路段。所有 WALK（含中途點、停車接駁及轉乘）須依 walkingPolicy 的版本與合法路網幾何通行，端點銜接計入距離／秒數。不可自行用直線補洞、跨層或跨水銜接；缺少必經步行路徑時不會省略該段後宣稱到達。",
       }),
     accessibilityHighlights: z
       .array(z.string())
@@ -1216,15 +1277,18 @@ export const AccessibleRouteSchema = z
         description:
           "後端自有 highlight 的穩定訊息碼與安全參數；index 對應最終 accessibilityHighlights。來源名稱不會編碼。",
       }),
-    engine: z.enum(["pedestrian-a11y", "otp-fallback"]).optional().openapi({
-      example: "pedestrian-a11y",
-      description:
-        "純步行路線的選路來源：pedestrian-a11y 表示由 CSR 無障礙行人圖選路；otp-fallback 表示 CSR 未決定該路線，後續可能由 OTP2 或 OTP2 不可用後的 Valhalla 規劃。大眾運輸與開車／機車路線省略。",
-    }),
+    engine: z
+      .enum(["pedestrian-a11y", "otp", "otp-fallback"])
+      .optional()
+      .openapi({
+        example: "pedestrian-a11y",
+        description:
+          "純步行路線的選路來源：pedestrian-a11y 為 CSR；otp 為具當前來源、圖檔與已審查政策證據的原生 OTP 一般或輪椅直接步行。otp-fallback 僅保留舊資料相容性，不會作為新的未驗證步行備援回傳。運輸／車行路線可省略，請逐 WALK leg 檢查 walkingPolicy。",
+      }),
     degraded: z.boolean().optional().openapi({
       example: true,
       description:
-        "硬性無障礙條件未完全滿足，或台北 CSR 本應保護但無法選路而改用 OTP2 時為 true。CSR fallback 本身不附 warning。",
+        "保留的降級資訊，不可視為無障礙保證。輪椅階梯備援另由 walkingPolicy.stairsFallback 與穩定警告碼明示；圖資／搜尋服務不可用不會產生未驗證步行路線。",
     }),
     warningDetails: z.array(RouteMessageDetailSchema).optional().openapi({
       description:
@@ -1371,7 +1435,7 @@ export const AccessibleRouteDataSchema = z
     }),
     venueLeg: VenueRouteSchema.optional().openapi({
       description:
-        "僅 destinationVenuePlace 請求出現：校門到目的地的校內路線（含跨樓層步驟）。語音／nav-instructions 只涵蓋戶外段。",
+        "僅 destinationVenuePlace 請求出現：校門到目的地的校內路線（含跨樓層步驟）。需階梯協助時另以 stairsFallback/warnings/warningDetails 揭露，整條路線也會帶協助警告，室外 walkingPolicy 仍保留其真實圖內證據。語音／nav-instructions 只涵蓋戶外段。",
     }),
     routes: z.array(AccessibleRouteSchema),
     intent: RouteIntentSchema.optional().openapi({
@@ -1404,7 +1468,7 @@ export const AccessibleRouteDataSchema = z
       .optional()
       .openapi({
         description:
-          "僅當 travelMode=transit 卻以步行路線回應時出現（routes 全為 WALK leg）。WALKING_BETTER：規劃引擎判定步行優於任何大眾運輸；NO_TRANSIT_ROUTE：起訖點直線距離（含中途點）在 1500 公尺內，且查無大眾運輸、規劃服務無法使用，或 5 秒內未完成大眾運輸規劃，改以步行規劃（輪椅模式同樣套用無階梯限制）。",
+          "僅當 travelMode=transit 的成功候選最後全為來源合格的 WALK 時出現。WALKING_BETTER 只使用 OTP 自己的步行較佳判定；NO_TRANSIT_ROUTE 表示此回應採用純步行候選而沒有搭乘大眾運輸。每個 WALK 仍須通過相同路網與階梯政策；不是規劃服務不可用或等候5秒後就退回未驗證步行，無合格結果／服務逾時仍回既有錯誤。",
         example: { travelMode: "walk", reason: "WALKING_BETTER" },
       }),
     metroAlerts: z.array(MetroAlertResultSchema).optional().openapi({
@@ -1437,6 +1501,7 @@ export const RouteFailureDataSchema = z
         ROUTE_REASON.OUT_OF_COVERAGE,
         ROUTE_REASON.NO_ACCESSIBLE_ROUTE,
         ROUTE_REASON.NO_ROUTE,
+        ROUTE_REASON.ENDPOINT_CONSTRAINT_BLOCKED,
         ROUTE_REASON.UPSTREAM_TIMEOUT,
       ])
       .openapi({
@@ -1445,6 +1510,7 @@ export const RouteFailureDataSchema = z
           `${ROUTE_REASON.OUT_OF_COVERAGE}: ${ROUTE_MSG.OUT_OF_COVERAGE}；` +
           `${ROUTE_REASON.NO_ACCESSIBLE_ROUTE}: ${ROUTE_MSG.NO_ACCESSIBLE_ROUTE}；` +
           `${ROUTE_REASON.NO_ROUTE}: ${ROUTE_MSG.NO_ROUTE}；` +
+          `${ROUTE_REASON.ENDPOINT_CONSTRAINT_BLOCKED}: ${ROUTE_MSG.ENDPOINT_CONSTRAINT_BLOCKED}；` +
           `${ROUTE_REASON.UPSTREAM_TIMEOUT}: ${ROUTE_MSG.UPSTREAM_TIMEOUT}。`,
       }),
     maxDistanceKm: z.number().optional().openapi({
@@ -1452,6 +1518,23 @@ export const RouteFailureDataSchema = z
       description:
         "僅 reason=OUT_OF_RANGE 時出現；此次請求允許的相鄰點總距離上限（公里）。",
     }),
+    endpointConstraint: z
+      .strictObject({
+        pointIndex: z.number().int().min(0).max(6).openapi({
+          description:
+            "受限位置在完整路線點列的索引，從 0 起算：起點、中途點依序排列，最後為終點。",
+        }),
+        reasons: z
+          .array(z.enum(["KNOWN_WIDTH", "KNOWN_NON_STAIR_SLOPE"]))
+          .min(1)
+          .max(2)
+          .refine((reasons) => new Set(reasons).size === reasons.length),
+      })
+      .optional()
+      .openapi({
+        description:
+          "僅 ENDPOINT_CONSTRAINT_BLOCKED 時出現。已知寬度或非階梯坡度使本次端點連接不符合輪椅限制；不是整個區域均無可行路線的證明，也不會啟用樓梯備援。",
+      }),
     venueAccessibility: z
       .object({
         venueId: z.string(),
@@ -1467,6 +1550,11 @@ export const RouteFailureDataSchema = z
       }),
   })
   .strict()
+  .refine(
+    (failure) =>
+      (failure.reason === ROUTE_REASON.ENDPOINT_CONSTRAINT_BLOCKED) ===
+      (failure.endpointConstraint !== undefined),
+  )
   .openapi("RouteFailureData");
 
 export const ErrorResponseSchema = z
@@ -1575,7 +1663,7 @@ registry.registerPath({
   tags: ["Accessibility"],
   summary: "無障礙路線規劃",
   description:
-    "規劃起訖點間無障礙路線。travelMode=transit（預設）並行搜尋公車、捷運、高鐵與台鐵，且 transit itinerary 的 WALK legs 維持 OTP2；純 walk 在台北 CSR bbox 內且啟用時以 CSR 為 primary，CSR 在範圍內無法選路時改走 OTP2 fallback，且不附 CSR fallback warning；bbox 外或 CSR 停用時 OTP2 本來就是 primary。只有 OTP2 步行不可用時才降級至 Valhalla pedestrian。drive／motorcycle 主體走自架 Valhalla（自由流時間、不含即時路況）。支援最多 5 個中途點（waypoints），回傳最多 3 筆。選填帶 Bearer token：帶時，未明確傳入的 mode/avoidStairs/requireElevator/needsAccessibleToilet/needsHandrail/maxSlopePercent 會從登入者已儲存的 a11y-profile 推導；不帶則完全公開不受影響；帶但無效/過期回 401/403。",
+    "規劃起訖點間無障礙路線並回傳 walkingPolicy；步行範圍依全國圖資的實際涵蓋與連通性判定。設定已審查 OTP 政策時，travelMode=walk 且 mode=normal 或 wheelchair 的直接步行使用具有當前來源、載入圖檔與執行政策證據的原生 OTP；一般模式的避免樓梯為選路偏好，不啟用輪椅限制。其他輔助模式、轉乘接駁與停車步行使用來源合格的 CSR 路網。transit 由 OTP 提供班次候選，每段 WALK 另以合格路網規劃並核對精確接車時間。無合格路網或逾時回503，確定不連通回422；不以未驗證步行線作備援。輪椅先完整搜尋無階梯路，確實不可達才出含階梯且明確警告的備援；不放寬其他已知通行限制。drive／motorcycle 主體使用自架 Valhalla，必經步行銜接亦須驗證。支援最多5個中途點、最多3個結果。選填 Bearer token：未明示的無障礙條件沿用登入者偏好；無 token 仍公開，無效或過期回401／403。",
   security: [{ bearerAuth: [] }, {}],
   request: {
     body: {
@@ -1601,7 +1689,8 @@ registry.registerPath({
       description:
         `${ROUTE_REASON.OUT_OF_RANGE}（${ROUTE_MSG.OUT_OF_RANGE}）、` +
         `${ROUTE_REASON.OUT_OF_COVERAGE}（${ROUTE_MSG.OUT_OF_COVERAGE}）、` +
-        `${ROUTE_REASON.NO_ACCESSIBLE_ROUTE}（${ROUTE_MSG.NO_ACCESSIBLE_ROUTE}）或 ` +
+        `${ROUTE_REASON.NO_ACCESSIBLE_ROUTE}（${ROUTE_MSG.NO_ACCESSIBLE_ROUTE}）、` +
+        `${ROUTE_REASON.ENDPOINT_CONSTRAINT_BLOCKED}（${ROUTE_MSG.ENDPOINT_CONSTRAINT_BLOCKED}）或 ` +
         `${ROUTE_REASON.NO_ROUTE}（${ROUTE_MSG.NO_ROUTE}）`,
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
@@ -1654,7 +1743,7 @@ registry.registerPath({
     },
     410: {
       description:
-        "routeToken 過期、token 是 legacy raw-route 格式，或目的地場域已更新且原校門已移除／移位（需重新規劃，不會自動換校門）",
+        "routeToken過期、legacy raw-route／未附完整性證據／保存內容損壞、步行圖已退役或來源資格失效；或目的地場域已更新且原校門已移除／移位（須重新規劃，不會自動換校門）",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     422: {

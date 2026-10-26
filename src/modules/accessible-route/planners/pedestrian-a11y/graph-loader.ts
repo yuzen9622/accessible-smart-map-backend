@@ -4,6 +4,7 @@ import {
   NODE_FLAG,
   NODE_TYPE,
   type PedGraph,
+  type PedGraphQualification,
 } from "./graph.types";
 
 const RAMP_NODE_TABLE_EXISTS_QUERY = `
@@ -22,7 +23,7 @@ const MAX_INT32 = 2_147_483_647;
 const MAX_UINT16 = 65_535;
 
 const LATEST_VERSION_QUERY = `
-  SELECT id, node_count, directed_edge_count
+  SELECT id, node_count, directed_edge_count, source_hash, notes
   FROM ped_graph_version
   WHERE lifecycle_status = 'ACTIVE'
   ORDER BY built_at DESC, id DESC
@@ -30,7 +31,7 @@ const LATEST_VERSION_QUERY = `
 `;
 
 const VERSION_QUERY = `
-  SELECT id, node_count, directed_edge_count
+  SELECT id, node_count, directed_edge_count, source_hash, notes
   FROM ped_graph_version
   WHERE id = $1
 `;
@@ -128,6 +129,7 @@ const EDGE_PAGE_QUERY = `
     surface,
     smoothness,
     effective_width_m AS width_m,
+    ped_edge.width_m AS physical_width_m,
     wheelchair,
     stair_count,
     traversal_time_s,
@@ -166,6 +168,7 @@ const EDGE_PAGE_QUERY_WITH_STREET_NAME = `
     surface,
     smoothness,
     effective_width_m AS width_m,
+    ped_edge.width_m AS physical_width_m,
     wheelchair,
     stair_count,
     traversal_time_s,
@@ -193,6 +196,8 @@ export interface PedGraphQueryable {
 }
 
 interface GraphVersionRow {
+  source_hash?: unknown;
+  notes?: unknown;
   id: unknown;
   node_count: unknown;
   directed_edge_count: unknown;
@@ -222,6 +227,7 @@ interface EdgeRow extends EdgeCountRow {
   surface: unknown;
   smoothness: unknown;
   width_m: unknown;
+  physical_width_m?: unknown;
   wheelchair: unknown;
   stair_count: unknown;
   traversal_time_s: unknown;
@@ -272,6 +278,7 @@ interface EdgeStorage {
   edgeSurface: Uint8Array;
   edgeSmoothness: Uint8Array;
   edgeWidthM: Float32Array;
+  edgePhysicalWidthM: Float32Array;
   edgeWheelchair: Uint8Array;
   edgeStairCount: Uint16Array;
   edgeTraversalTimeS: Float32Array;
@@ -483,6 +490,9 @@ function createEdgeStorage(directedEdgeCount: number): EdgeStorage {
   const edgeLengthM = new Float32Array(directedEdgeCount);
   const edgeSlope = new Float32Array(directedEdgeCount);
   const edgeWidthM = new Float32Array(directedEdgeCount);
+  const edgePhysicalWidthM = new Float32Array(directedEdgeCount).fill(
+    Number.NaN,
+  );
   const edgeTraversalTimeS = new Float32Array(directedEdgeCount);
   edgeLengthM.fill(Number.NaN);
   edgeSlope.fill(Number.NaN);
@@ -504,6 +514,7 @@ function createEdgeStorage(directedEdgeCount: number): EdgeStorage {
     edgeSurface: new Uint8Array(directedEdgeCount),
     edgeSmoothness: new Uint8Array(directedEdgeCount),
     edgeWidthM,
+    edgePhysicalWidthM,
     edgeWheelchair: new Uint8Array(directedEdgeCount),
     edgeStairCount: new Uint16Array(directedEdgeCount),
     edgeTraversalTimeS,
@@ -651,6 +662,7 @@ async function loadGraphVersion(
   versionId: number;
   nodeCount: number;
   directedEdgeCount: number;
+  qualification?: PedGraphQualification;
 }> {
   const result =
     versionId === undefined
@@ -669,7 +681,18 @@ async function loadGraphVersion(
   if (nodeCount > MAX_INT32 || directedEdgeCount > MAX_INT32) {
     throw new Error("pedestrian graph exceeds Int32 CSR capacity");
   }
-  return { versionId: resolvedVersionId, nodeCount, directedEdgeCount };
+  const qualification = parseGraphQualification(row.notes, row.source_hash);
+  if (!qualification) {
+    throw new Error(
+      "pedestrian graph source qualification is missing or incompatible",
+    );
+  }
+  return {
+    versionId: resolvedVersionId,
+    nodeCount,
+    directedEdgeCount,
+    qualification,
+  };
 }
 
 /**
@@ -961,6 +984,10 @@ async function fillEdges(
         "smoothness",
       );
       storage.edgeWidthM[edgeIndex] = nullableNumber(row.width_m, "width_m");
+      storage.edgePhysicalWidthM[edgeIndex] = nullableNumber(
+        row.physical_width_m ?? null,
+        "physical_width_m",
+      );
       storage.edgeWheelchair[edgeIndex] = nullableUint8(
         row.wheelchair,
         "wheelchair",
@@ -1130,6 +1157,7 @@ export async function loadPedGraph(
   }
 
   return {
+    qualification: version.qualification,
     versionId: version.versionId,
     nodeCount: version.nodeCount,
     directedEdgeCount: version.directedEdgeCount,
@@ -1151,6 +1179,7 @@ export async function loadPedGraph(
     edgeSurface: edgeStorage.edgeSurface,
     edgeSmoothness: edgeStorage.edgeSmoothness,
     edgeWidthM: edgeStorage.edgeWidthM,
+    edgePhysicalWidthM: edgeStorage.edgePhysicalWidthM,
     edgeWheelchair: edgeStorage.edgeWheelchair,
     edgeStairCount: edgeStorage.edgeStairCount,
     edgeTraversalTimeS: edgeStorage.edgeTraversalTimeS,
@@ -1164,4 +1193,118 @@ export async function loadPedGraph(
     streetNamesEn,
     edgeRampPoints,
   };
+}
+
+function record(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function validExtent(
+  value: unknown,
+): value is [number, number, number, number] {
+  if (
+    !Array.isArray(value) ||
+    value.length !== 4 ||
+    !value.every((v) => typeof v === "number" && Number.isFinite(v))
+  )
+    return false;
+  return (
+    value[0] >= -180 &&
+    value[2] <= 180 &&
+    value[1] >= -90 &&
+    value[3] <= 90 &&
+    value[0] < value[2] &&
+    value[1] < value[3]
+  );
+}
+
+function sha256(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+
+export function isPedGraphQualification(
+  value: unknown,
+): value is PedGraphQualification {
+  return (
+    record(value) &&
+    value.version === "sidewalk-v1" &&
+    value.schemaVersion === 1 &&
+    typeof value.sourceVersionId === "string" &&
+    /^[1-9]\d*$/.test(value.sourceVersionId) &&
+    sha256(value.sourceArchiveSha256) &&
+    sha256(value.osmSha256) &&
+    validExtent(value.extent) &&
+    (value.hasKnownOmissions === undefined ||
+      typeof value.hasKnownOmissions === "boolean") &&
+    (value.omittedAreaCount === undefined ||
+      (Number.isSafeInteger(value.omittedAreaCount) &&
+        Number(value.omittedAreaCount) >= 0)) &&
+    (value.omissionPolicyVersion === undefined ||
+      (typeof value.omissionPolicyVersion === "string" &&
+        /^osm-area-omissions-v\d+$/.test(value.omissionPolicyVersion))) &&
+    (value.omissionPolicySha256 === undefined ||
+      sha256(value.omissionPolicySha256)) &&
+    (value.hasKnownOmissions === undefined ||
+      (Number.isSafeInteger(value.omittedAreaCount) &&
+        value.hasKnownOmissions === Number(value.omittedAreaCount) > 0 &&
+        typeof value.omissionPolicyVersion === "string" &&
+        sha256(value.omissionPolicySha256)))
+  );
+}
+
+export function parseGraphQualification(
+  raw: unknown,
+  sourceHash: unknown,
+): PedGraphQualification | undefined {
+  try {
+    const notes: unknown = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (
+      !record(notes) ||
+      notes.pedestrian_policy_version !== "sidewalk-v1" ||
+      notes.walk_surface_schema_version !== 1
+    )
+      return undefined;
+    const network = notes.sidewalk_network;
+    if (
+      !record(network) ||
+      !record(network.source_width_policy) ||
+      network.source_width_policy.version !== "compatible-source-minimum-v1" ||
+      !sha256(network.source_width_policy.rules_sha256)
+    )
+      return undefined;
+    const manifest = notes.input_manifest;
+    const extent = notes.extent;
+    if (
+      !record(manifest) ||
+      !validExtent(extent) ||
+      !record(manifest.osm) ||
+      manifest.osm.sha256 !== sourceHash ||
+      manifest.osm_sha256 !== sourceHash
+    )
+      return undefined;
+    const candidate = {
+      version: "sidewalk-v1",
+      schemaVersion: 1,
+      sourceVersionId: manifest.sidewalk_source_version_id,
+      sourceArchiveSha256: manifest.sidewalk_archive_sha256,
+      osmSha256: manifest.osm_sha256,
+      extent,
+      hasKnownOmissions: manifest.osm_area_has_known_omissions,
+      omittedAreaCount: manifest.osm_area_omitted_count,
+      omissionPolicyVersion: manifest.osm_area_omission_policy_version,
+      omissionPolicySha256: manifest.osm_area_omission_policy_sha256,
+    };
+    if (!isPedGraphQualification(candidate)) return undefined;
+    return Object.freeze({
+      ...candidate,
+      extent: Object.freeze([
+        extent[0],
+        extent[1],
+        extent[2],
+        extent[3],
+      ] as const),
+    });
+  } catch {
+    return undefined;
+  }
 }

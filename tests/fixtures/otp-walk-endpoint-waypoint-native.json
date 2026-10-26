@@ -1,0 +1,637 @@
+{
+  "captureKind": "Actual sequential native HTTP on a controlled synthetic graph, not national-source acceptance. Native graph uses UTC; replay checks epoch proof and backend Asia/Taipei conversion separately.",
+  "sourceFiles": [
+    {
+      "path": ".pi/tmp/otp-endpoint-constraint-v2-nvb4yjn7/http-waypoint-chain-3/fixtures.json",
+      "sha256": "e88aa7dbbdf80b07284b38ba3b21c49cf8a7d077df01e9de75bbfe2c9f162c33"
+    }
+  ],
+  "scope": "Actual sequential native HTTP waypoint fixture; points lie on original ordinary OSM way20 from longitude121.003 to121.004; final government point lies in width.65 effective region; no national acceptance point changed",
+  "chain": {
+    "coordinates": [
+      {
+        "lat": 25,
+        "lon": 121.0039
+      },
+      {
+        "lat": 25,
+        "lon": 121.0038
+      },
+      {
+        "lat": 25.00001,
+        "lon": 121.002
+      }
+    ],
+    "segment0ArrivalTimeMs": 1793008820000,
+    "segment1DepartureTimeMs": 1793008820000,
+    "profile": "WHEELCHAIR_STRICT",
+    "nativeRequestTimeZone": "UTC (no GTFS transit timezone in fixture graph)"
+  },
+  "cases": [
+    {
+      "case": "waypoint_segment_0_ready",
+      "variables": {
+        "fromLat": 25,
+        "fromLon": 121.0039,
+        "toLat": 25,
+        "toLon": 121.0038,
+        "date": "2026-10-26",
+        "time": "10:00:07",
+        "stairs": 12,
+        "profile": "WHEELCHAIR_STRICT",
+        "wheelchair": true,
+        "speed": 0.8
+      },
+      "response": {
+        "data": {
+          "requestIdentity": {
+            "schemaVersion": "1",
+            "graphIdentityStatus": "VERIFIED_LOADED_BYTES",
+            "graphByteIdentity": {
+              "sha256": "34b2e1769ac6fc7a8922a5ff74be879a20d908b05ee56381f12f82a2da821dbe",
+              "byteCount": 5324
+            },
+            "sourceManifestIdentityStatus": "VERIFIED_TRUSTED_BUILD_MANIFEST",
+            "buildManifestIdentity": {
+              "manifestSha256": "ed5845282d06f14c468123ae0c265ac97d77e89c89809fe18c8c36d7eabfb8d1",
+              "buildInputMode": "LOCAL_AUTO_DISCOVERY_NO_CACHE",
+              "graphSha256": "34b2e1769ac6fc7a8922a5ff74be879a20d908b05ee56381f12f82a2da821dbe",
+              "graphByteCount": 5324,
+              "sourceVersion": "7",
+              "sourceBatch": "202606",
+              "sourceArchiveSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "mergedPbfSha256": "0fc823e996ab2fbb15016fc09abf322ac80aa92014c5452888a03532721c63a3",
+              "layerReportSha256": "2aeb76909a5893589018f6bb81ee1dd4fa9f078a853874091050d82b827505b7",
+              "declaredBuildPolicyJarSha256": "d128c6445b129e7db4633c863ba82b6702ba6c2d7694055e70dfbe8f5518cd1a",
+              "inputs": [
+                {
+                  "path": "build-config.json",
+                  "role": "CONFIG",
+                  "sha256": "6c49fe5db9dad6df164983a4b7b8542ee71be4e2007af7f6cb9e1cdcd243d22e",
+                  "byteCount": 218
+                },
+                {
+                  "path": "merged.osm.pbf",
+                  "role": "OSM",
+                  "sha256": "0fc823e996ab2fbb15016fc09abf322ac80aa92014c5452888a03532721c63a3",
+                  "byteCount": 1156
+                },
+                {
+                  "path": "router-config.json",
+                  "role": "CONFIG",
+                  "sha256": "b1996f4f5478f6a1cd768a196ac5ddbaf0163e0613c5c64847660d9433541d02",
+                  "byteCount": 131
+                }
+              ],
+              "compilerArtifacts": [
+                {
+                  "path": "build-ped-graph.py",
+                  "role": "DEPENDENCY",
+                  "sha256": "0a3d15e6214b10b4339afbdefdfdb2a5f177c5e319ec260af42b4d26fa08777b",
+                  "byteCount": 74699
+                },
+                {
+                  "path": "osm-area-polygon-features.json",
+                  "role": "DEPENDENCY",
+                  "sha256": "cf81018ba820557c59c2c27de7ea6b314009abed040cd11249e94ed1a3a10583",
+                  "byteCount": 2753
+                },
+                {
+                  "path": "otp-sidewalk-layer.py",
+                  "role": "COMPILER",
+                  "sha256": "68c3629d4f4a3a3270beada7399bb0551e918c01fc502138cf065a8592ff9d61",
+                  "byteCount": 107045
+                },
+                {
+                  "path": "otp-sidewalk-topology.py",
+                  "role": "TOPOLOGY",
+                  "sha256": "8e73550643752a2a09d2217fab0962fca96e2e0c37b15e86019062e9f72f6af1",
+                  "byteCount": 7728
+                },
+                {
+                  "path": "ped-osm-areas.py",
+                  "role": "DEPENDENCY",
+                  "sha256": "365fdfe73e5c48b4cea3e54dafa801517f857d1474098f1341c552f9f7dc5167",
+                  "byteCount": 19272
+                },
+                {
+                  "path": "ped-sidewalk-network.py",
+                  "role": "DEPENDENCY",
+                  "sha256": "6958b609cc65208a2b83ff1aaf676bc632b2c3350db3a5e43bbaad45df567f23",
+                  "byteCount": 56319
+                }
+              ]
+            },
+            "runtimePolicyIdentityStatus": "VERIFIED_OBSERVED_POLICY_CLASSES",
+            "runtimePolicyIdentity": {
+              "status": "VERIFIED_OBSERVED_POLICY_CLASSES",
+              "reason": "TRUSTED_LAUNCHER_BOUNDARY",
+              "artifactSha256": "d128c6445b129e7db4633c863ba82b6702ba6c2d7694055e70dfbe8f5518cd1a",
+              "manifestSha256": "575fb0fa67619c7a841f6cca894488e43a8cf0dc728f0c3d9dc969d3c82dd998",
+              "observedClassDigestSha256": "7536d89585cab099734efeceef68fc81a38fe1bf7b43e5346711f67daa4f522d",
+              "classCount": 61
+            }
+          },
+          "plan": {
+            "directWalkSearch": {
+              "schemaVersion": "2",
+              "status": "FOUND",
+              "nativeOutcome": "TARGET_REACHED",
+              "executedPolicy": {
+                "schemaVersion": "1",
+                "scope": "DIRECT_WALK_ONLY",
+                "profile": "WHEELCHAIR_STRICT",
+                "wheelchairEnabled": true,
+                "walkSpeedMps": 0.8,
+                "stairsReluctance": 12.0,
+                "minimumKnownWidthM": 0.9,
+                "maximumKnownNonStairSlopeRatio": 0.12,
+                "fareAccess": "FORBID"
+              },
+              "fromLat": 25.0,
+              "fromLon": 121.0039,
+              "toLat": 25.0,
+              "toLon": 121.0038,
+              "departureTimeMs": 1793008807000,
+              "maximumSearchDurationS": 14400.0,
+              "streetSearchTimeoutS": 5.0,
+              "durationLimitPruned": false,
+              "endpointConstraint": null
+            },
+            "routingErrors": [],
+            "itineraries": [
+              {
+                "legs": [
+                  {
+                    "mode": "WALK",
+                    "distance": 10.08,
+                    "duration": 13.0,
+                    "startTime": 1793008807000,
+                    "endTime": 1793008820000,
+                    "walkEvidence": {
+                      "schemaVersion": "7",
+                      "executedPolicy": {
+                        "schemaVersion": "1",
+                        "scope": "DIRECT_WALK_ONLY",
+                        "profile": "WHEELCHAIR_STRICT",
+                        "wheelchairEnabled": true,
+                        "walkSpeedMps": 0.8,
+                        "stairsReluctance": 12.0,
+                        "minimumKnownWidthM": 0.9,
+                        "maximumKnownNonStairSlopeRatio": 0.12,
+                        "fareAccess": "FORBID"
+                      },
+                      "captureScope": "LEG_STATES_BACK_EDGES",
+                      "graphIdentityStatus": "VERIFIED_LOADED_BYTES",
+                      "graphByteIdentity": {
+                        "sha256": "34b2e1769ac6fc7a8922a5ff74be879a20d908b05ee56381f12f82a2da821dbe",
+                        "byteCount": 5324
+                      },
+                      "buildManifestIdentity": {
+                        "manifestSha256": "ed5845282d06f14c468123ae0c265ac97d77e89c89809fe18c8c36d7eabfb8d1",
+                        "buildInputMode": "LOCAL_AUTO_DISCOVERY_NO_CACHE",
+                        "graphSha256": "34b2e1769ac6fc7a8922a5ff74be879a20d908b05ee56381f12f82a2da821dbe",
+                        "graphByteCount": 5324,
+                        "sourceVersion": "7",
+                        "sourceBatch": "202606",
+                        "sourceArchiveSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                        "mergedPbfSha256": "0fc823e996ab2fbb15016fc09abf322ac80aa92014c5452888a03532721c63a3",
+                        "layerReportSha256": "2aeb76909a5893589018f6bb81ee1dd4fa9f078a853874091050d82b827505b7",
+                        "declaredBuildPolicyJarSha256": "d128c6445b129e7db4633c863ba82b6702ba6c2d7694055e70dfbe8f5518cd1a",
+                        "inputs": [
+                          {
+                            "path": "build-config.json",
+                            "role": "CONFIG",
+                            "sha256": "6c49fe5db9dad6df164983a4b7b8542ee71be4e2007af7f6cb9e1cdcd243d22e",
+                            "byteCount": 218
+                          },
+                          {
+                            "path": "merged.osm.pbf",
+                            "role": "OSM",
+                            "sha256": "0fc823e996ab2fbb15016fc09abf322ac80aa92014c5452888a03532721c63a3",
+                            "byteCount": 1156
+                          },
+                          {
+                            "path": "router-config.json",
+                            "role": "CONFIG",
+                            "sha256": "b1996f4f5478f6a1cd768a196ac5ddbaf0163e0613c5c64847660d9433541d02",
+                            "byteCount": 131
+                          }
+                        ],
+                        "compilerArtifacts": [
+                          {
+                            "path": "build-ped-graph.py",
+                            "role": "DEPENDENCY",
+                            "sha256": "0a3d15e6214b10b4339afbdefdfdb2a5f177c5e319ec260af42b4d26fa08777b",
+                            "byteCount": 74699
+                          },
+                          {
+                            "path": "osm-area-polygon-features.json",
+                            "role": "DEPENDENCY",
+                            "sha256": "cf81018ba820557c59c2c27de7ea6b314009abed040cd11249e94ed1a3a10583",
+                            "byteCount": 2753
+                          },
+                          {
+                            "path": "otp-sidewalk-layer.py",
+                            "role": "COMPILER",
+                            "sha256": "68c3629d4f4a3a3270beada7399bb0551e918c01fc502138cf065a8592ff9d61",
+                            "byteCount": 107045
+                          },
+                          {
+                            "path": "otp-sidewalk-topology.py",
+                            "role": "TOPOLOGY",
+                            "sha256": "8e73550643752a2a09d2217fab0962fca96e2e0c37b15e86019062e9f72f6af1",
+                            "byteCount": 7728
+                          },
+                          {
+                            "path": "ped-osm-areas.py",
+                            "role": "DEPENDENCY",
+                            "sha256": "365fdfe73e5c48b4cea3e54dafa801517f857d1474098f1341c552f9f7dc5167",
+                            "byteCount": 19272
+                          },
+                          {
+                            "path": "ped-sidewalk-network.py",
+                            "role": "DEPENDENCY",
+                            "sha256": "6958b609cc65208a2b83ff1aaf676bc632b2c3350db3a5e43bbaad45df567f23",
+                            "byteCount": 56319
+                          }
+                        ]
+                      },
+                      "sourceManifestIdentityStatus": "VERIFIED_TRUSTED_BUILD_MANIFEST",
+                      "runtimePolicyIdentityStatus": "VERIFIED_OBSERVED_POLICY_CLASSES",
+                      "edgeOccurrenceCount": 3,
+                      "nonStreetEdgeCount": 2,
+                      "unknownMetadataEdgeCount": 2,
+                      "edges": [
+                        {
+                          "policyEvaluation": {
+                            "captureSchemaVersion": null,
+                            "stairs": null,
+                            "escalator": null,
+                            "nativeWheelchairAccessible": null,
+                            "knownMaxSlopeRatio": null,
+                            "knownWidthM": null,
+                            "knownSmoothness": null,
+                            "assistedStairs": false
+                          },
+                          "occurrenceIndex": 0,
+                          "edgeKind": "TemporaryFreeEdge",
+                          "distanceM": 0.0,
+                          "metadataStatus": "UNKNOWN",
+                          "partial": false,
+                          "osmWayId": null,
+                          "sourceSegmentIndex": null,
+                          "reverse": null,
+                          "knownWidthM": null,
+                          "sourceRefs": [],
+                          "widthSourceRefs": [],
+                          "sourceBatch": null,
+                          "sourceVersion": null,
+                          "sourceSha256": null,
+                          "areaSources": [],
+                          "pathway": null,
+                          "unknownReason": "NON_STREET_METADATA_UNAVAILABLE",
+                          "attachment": null
+                        },
+                        {
+                          "policyEvaluation": {
+                            "captureSchemaVersion": 2,
+                            "stairs": false,
+                            "escalator": false,
+                            "nativeWheelchairAccessible": true,
+                            "knownMaxSlopeRatio": null,
+                            "knownWidthM": null,
+                            "knownSmoothness": null,
+                            "assistedStairs": false
+                          },
+                          "occurrenceIndex": 1,
+                          "edgeKind": "TemporaryPartialStreetEdge",
+                          "distanceM": 10.077,
+                          "metadataStatus": "OSM_WAY",
+                          "partial": true,
+                          "osmWayId": "20",
+                          "sourceSegmentIndex": 0,
+                          "reverse": true,
+                          "knownWidthM": null,
+                          "sourceRefs": [],
+                          "widthSourceRefs": [],
+                          "sourceBatch": null,
+                          "sourceVersion": null,
+                          "sourceSha256": null,
+                          "areaSources": [],
+                          "pathway": null,
+                          "unknownReason": null,
+                          "attachment": null
+                        },
+                        {
+                          "policyEvaluation": {
+                            "captureSchemaVersion": null,
+                            "stairs": null,
+                            "escalator": null,
+                            "nativeWheelchairAccessible": null,
+                            "knownMaxSlopeRatio": null,
+                            "knownWidthM": null,
+                            "knownSmoothness": null,
+                            "assistedStairs": false
+                          },
+                          "occurrenceIndex": 2,
+                          "edgeKind": "TemporaryFreeEdge",
+                          "distanceM": 0.0,
+                          "metadataStatus": "UNKNOWN",
+                          "partial": false,
+                          "osmWayId": null,
+                          "sourceSegmentIndex": null,
+                          "reverse": null,
+                          "knownWidthM": null,
+                          "sourceRefs": [],
+                          "widthSourceRefs": [],
+                          "sourceBatch": null,
+                          "sourceVersion": null,
+                          "sourceSha256": null,
+                          "areaSources": [],
+                          "pathway": null,
+                          "unknownReason": "NON_STREET_METADATA_UNAVAILABLE",
+                          "attachment": null
+                        }
+                      ],
+                      "selectedPath": {
+                        "geometryCoverageStatus": "NATIVE_GEOMETRY_GAPS",
+                        "coordinateEncoding": "FLOAT64_NATIVE_NO_ADDITIONAL_QUANTIZATION",
+                        "gapMetric": "HAVERSINE_R6371000_METERS",
+                        "endpointReachabilityStatus": "NOT_PROVEN_BY_GEOMETRY",
+                        "startsSearchPath": true,
+                        "endsSearchPath": true,
+                        "requestFrom": {
+                          "lat": 25.0,
+                          "lon": 121.0039
+                        },
+                        "requestTo": {
+                          "lat": 25.0,
+                          "lon": 121.0038
+                        },
+                        "startState": {
+                          "lat": 25.0,
+                          "lon": 121.0039
+                        },
+                        "endState": {
+                          "lat": 25.0,
+                          "lon": 121.0038
+                        },
+                        "firstGeometryPoint": {
+                          "lat": 25.0,
+                          "lon": 121.00389999999999
+                        },
+                        "lastGeometryPoint": {
+                          "lat": 25.0,
+                          "lon": 121.0038
+                        },
+                        "requestFromToStartStateGapM": 0.0,
+                        "requestToToEndStateGapM": 0.0,
+                        "requestFromToFirstGeometryGapM": 1.4321248599022264e-09,
+                        "requestToToLastGeometryGapM": 0.0,
+                        "missingGeometryCount": 2,
+                        "positiveDistanceMissingGeometryCount": 0,
+                        "stateChainMismatchCount": 0,
+                        "representedGeometryLengthM": 10.077682788595455,
+                        "occurrences": [
+                          {
+                            "occurrenceIndex": 0,
+                            "edgeKind": "TemporaryFreeEdge",
+                            "distanceM": 0.0,
+                            "partial": false,
+                            "traversalFrom": {
+                              "lat": 25.0,
+                              "lon": 121.0039
+                            },
+                            "traversalTo": {
+                              "lat": 25.0,
+                              "lon": 121.00389999999999
+                            },
+                            "traversalDirection": "EDGE_FORWARD",
+                            "geometryStatus": "NULL",
+                            "geometrySource": "NATIVE_EDGE_GET_GEOMETRY",
+                            "coordinates": [],
+                            "vertexGapM": 1.4321248599022264e-09,
+                            "geometryStartToTraversalFromGapM": null,
+                            "geometryEndToTraversalToGapM": null,
+                            "gapFromPreviousGeometryM": null,
+                            "geometryLengthM": 0.0
+                          },
+                          {
+                            "occurrenceIndex": 1,
+                            "edgeKind": "TemporaryPartialStreetEdge",
+                            "distanceM": 10.077,
+                            "partial": true,
+                            "traversalFrom": {
+                              "lat": 25.0,
+                              "lon": 121.00389999999999
+                            },
+                            "traversalTo": {
+                              "lat": 25.0,
+                              "lon": 121.0038
+                            },
+                            "traversalDirection": "EDGE_FORWARD",
+                            "geometryStatus": "PRESENT",
+                            "geometrySource": "NATIVE_STREET_COMPACT_E6_INTERMEDIATES",
+                            "coordinates": [
+                              {
+                                "lat": 25.0,
+                                "lon": 121.00389999999999
+                              },
+                              {
+                                "lat": 25.0,
+                                "lon": 121.0038
+                              }
+                            ],
+                            "vertexGapM": 10.077682788595455,
+                            "geometryStartToTraversalFromGapM": 0.0,
+                            "geometryEndToTraversalToGapM": 0.0,
+                            "gapFromPreviousGeometryM": null,
+                            "geometryLengthM": 10.077682788595455
+                          },
+                          {
+                            "occurrenceIndex": 2,
+                            "edgeKind": "TemporaryFreeEdge",
+                            "distanceM": 0.0,
+                            "partial": false,
+                            "traversalFrom": {
+                              "lat": 25.0,
+                              "lon": 121.0038
+                            },
+                            "traversalTo": {
+                              "lat": 25.0,
+                              "lon": 121.0038
+                            },
+                            "traversalDirection": "EDGE_FORWARD",
+                            "geometryStatus": "NULL",
+                            "geometrySource": "NATIVE_EDGE_GET_GEOMETRY",
+                            "coordinates": [],
+                            "vertexGapM": 0.0,
+                            "geometryStartToTraversalFromGapM": null,
+                            "geometryEndToTraversalToGapM": null,
+                            "gapFromPreviousGeometryM": null,
+                            "geometryLengthM": 0.0
+                          }
+                        ]
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "passed": true
+    },
+    {
+      "case": "waypoint_segment_1_to_blocked",
+      "variables": {
+        "fromLat": 25,
+        "fromLon": 121.0038,
+        "toLat": 25.00001,
+        "toLon": 121.002,
+        "date": "2026-10-26",
+        "time": "10:00:20",
+        "stairs": 12,
+        "profile": "WHEELCHAIR_STRICT",
+        "wheelchair": true,
+        "speed": 0.8
+      },
+      "response": {
+        "data": {
+          "requestIdentity": {
+            "schemaVersion": "1",
+            "graphIdentityStatus": "VERIFIED_LOADED_BYTES",
+            "graphByteIdentity": {
+              "sha256": "34b2e1769ac6fc7a8922a5ff74be879a20d908b05ee56381f12f82a2da821dbe",
+              "byteCount": 5324
+            },
+            "sourceManifestIdentityStatus": "VERIFIED_TRUSTED_BUILD_MANIFEST",
+            "buildManifestIdentity": {
+              "manifestSha256": "ed5845282d06f14c468123ae0c265ac97d77e89c89809fe18c8c36d7eabfb8d1",
+              "buildInputMode": "LOCAL_AUTO_DISCOVERY_NO_CACHE",
+              "graphSha256": "34b2e1769ac6fc7a8922a5ff74be879a20d908b05ee56381f12f82a2da821dbe",
+              "graphByteCount": 5324,
+              "sourceVersion": "7",
+              "sourceBatch": "202606",
+              "sourceArchiveSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "mergedPbfSha256": "0fc823e996ab2fbb15016fc09abf322ac80aa92014c5452888a03532721c63a3",
+              "layerReportSha256": "2aeb76909a5893589018f6bb81ee1dd4fa9f078a853874091050d82b827505b7",
+              "declaredBuildPolicyJarSha256": "d128c6445b129e7db4633c863ba82b6702ba6c2d7694055e70dfbe8f5518cd1a",
+              "inputs": [
+                {
+                  "path": "build-config.json",
+                  "role": "CONFIG",
+                  "sha256": "6c49fe5db9dad6df164983a4b7b8542ee71be4e2007af7f6cb9e1cdcd243d22e",
+                  "byteCount": 218
+                },
+                {
+                  "path": "merged.osm.pbf",
+                  "role": "OSM",
+                  "sha256": "0fc823e996ab2fbb15016fc09abf322ac80aa92014c5452888a03532721c63a3",
+                  "byteCount": 1156
+                },
+                {
+                  "path": "router-config.json",
+                  "role": "CONFIG",
+                  "sha256": "b1996f4f5478f6a1cd768a196ac5ddbaf0163e0613c5c64847660d9433541d02",
+                  "byteCount": 131
+                }
+              ],
+              "compilerArtifacts": [
+                {
+                  "path": "build-ped-graph.py",
+                  "role": "DEPENDENCY",
+                  "sha256": "0a3d15e6214b10b4339afbdefdfdb2a5f177c5e319ec260af42b4d26fa08777b",
+                  "byteCount": 74699
+                },
+                {
+                  "path": "osm-area-polygon-features.json",
+                  "role": "DEPENDENCY",
+                  "sha256": "cf81018ba820557c59c2c27de7ea6b314009abed040cd11249e94ed1a3a10583",
+                  "byteCount": 2753
+                },
+                {
+                  "path": "otp-sidewalk-layer.py",
+                  "role": "COMPILER",
+                  "sha256": "68c3629d4f4a3a3270beada7399bb0551e918c01fc502138cf065a8592ff9d61",
+                  "byteCount": 107045
+                },
+                {
+                  "path": "otp-sidewalk-topology.py",
+                  "role": "TOPOLOGY",
+                  "sha256": "8e73550643752a2a09d2217fab0962fca96e2e0c37b15e86019062e9f72f6af1",
+                  "byteCount": 7728
+                },
+                {
+                  "path": "ped-osm-areas.py",
+                  "role": "DEPENDENCY",
+                  "sha256": "365fdfe73e5c48b4cea3e54dafa801517f857d1474098f1341c552f9f7dc5167",
+                  "byteCount": 19272
+                },
+                {
+                  "path": "ped-sidewalk-network.py",
+                  "role": "DEPENDENCY",
+                  "sha256": "6958b609cc65208a2b83ff1aaf676bc632b2c3350db3a5e43bbaad45df567f23",
+                  "byteCount": 56319
+                }
+              ]
+            },
+            "runtimePolicyIdentityStatus": "VERIFIED_OBSERVED_POLICY_CLASSES",
+            "runtimePolicyIdentity": {
+              "status": "VERIFIED_OBSERVED_POLICY_CLASSES",
+              "reason": "TRUSTED_LAUNCHER_BOUNDARY",
+              "artifactSha256": "d128c6445b129e7db4633c863ba82b6702ba6c2d7694055e70dfbe8f5518cd1a",
+              "manifestSha256": "575fb0fa67619c7a841f6cca894488e43a8cf0dc728f0c3d9dc969d3c82dd998",
+              "observedClassDigestSha256": "7536d89585cab099734efeceef68fc81a38fe1bf7b43e5346711f67daa4f522d",
+              "classCount": 61
+            }
+          },
+          "plan": {
+            "directWalkSearch": {
+              "schemaVersion": "2",
+              "status": "ENDPOINT_CONSTRAINT_BLOCKED",
+              "nativeOutcome": "NOT_STARTED",
+              "executedPolicy": {
+                "schemaVersion": "1",
+                "scope": "DIRECT_WALK_ONLY",
+                "profile": "WHEELCHAIR_STRICT",
+                "wheelchairEnabled": true,
+                "walkSpeedMps": 0.8,
+                "stairsReluctance": 12.0,
+                "minimumKnownWidthM": 0.9,
+                "maximumKnownNonStairSlopeRatio": 0.12,
+                "fareAccess": "FORBID"
+              },
+              "fromLat": 25.0,
+              "fromLon": 121.0038,
+              "toLat": 25.00001,
+              "toLon": 121.002,
+              "departureTimeMs": 1793008820000,
+              "maximumSearchDurationS": 14400.0,
+              "streetSearchTimeoutS": 5.0,
+              "durationLimitPruned": false,
+              "endpointConstraint": {
+                "scope": "SELECTED_ENDPOINT_ATTACHMENT",
+                "endpoint": "TO",
+                "phase": "LINK",
+                "reasons": [
+                  "KNOWN_WIDTH"
+                ],
+                "blockedCandidateCount": 2
+              }
+            },
+            "routingErrors": [
+              {
+                "code": "LOCATION_NOT_FOUND"
+              }
+            ],
+            "itineraries": []
+          }
+        }
+      },
+      "passed": true
+    }
+  ]
+}

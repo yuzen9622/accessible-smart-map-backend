@@ -20,7 +20,7 @@
 import "dotenv/config";
 import fs from "fs";
 import path from "path";
-import { execSync, execFileSync } from "child_process";
+import { execFileSync } from "child_process";
 
 function parseCSV(csvText: string): {
   headers: string[];
@@ -204,10 +204,11 @@ async function main() {
 
   console.log("Injecting updated trips.txt back into GTFS zip...");
   try {
-    execSync(`zip -ju "${zipPath}" "${tempFilePath}"`);
+    execFileSync("zip", ["-j", zipPath, tempFilePath]);
     console.log("Successfully injected updated trips.txt back into the zip.");
   } catch (err) {
     console.error("Failed to inject trips.txt into zip:", err);
+    throw err;
   } finally {
     if (fs.existsSync(tempFilePath)) {
       fs.unlinkSync(tempFilePath);

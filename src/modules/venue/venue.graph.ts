@@ -1,6 +1,6 @@
 /**
  * Builds the in-memory CSR {@link PedGraph} for one venue so the existing
- * pedestrian `dijkstra` + `edgeCost` wheelchair model route it unchanged.
+ * pedestrian search and `edgeCost` model can route it.
  *
  * Every venue edge is bidirectional and becomes two directed attributes.
  * Elevator rides carry a positive `edgeTraversalTimeS` (wait + per-floor ride

@@ -15,16 +15,17 @@ import os
 import random
 import re
 import sys
-from collections import Counter, defaultdict, deque
-from collections.abc import Mapping, Sequence
+from array import array
+from collections import Counter, deque
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from operator import methodcaller
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 TAIPEI_BBOX = (121.43, 24.95, 121.68, 25.22)
-BBOXES = {"taipei": TAIPEI_BBOX}
+BBOXES = {"taipei": TAIPEI_BBOX, "taiwan": (117.0, 20.0, 123.0, 27.0)}
 INCLUDED_HIGHWAYS = frozenset(
     {
         "footway",
@@ -162,7 +163,7 @@ KERB_CODES = {
 }
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class WayNode:
     """One referenced OSM node with its resolved WGS84 coordinate."""
 
@@ -171,7 +172,7 @@ class WayNode:
     lat: float
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class WalkWay:
     """An eligible OSM way whose geometry intersects the requested bbox."""
 
@@ -180,13 +181,14 @@ class WalkWay:
     nodes: tuple[WayNode, ...]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Segment:
     """One undirected OSM-way segment between graph vertices."""
 
     osm_way_id: int
     tags: Mapping[str, str]
     nodes: tuple[WayNode, ...]
+    source_width_constraint: dict[str, Any] | None = None
 
     @property
     def from_osm_node(self) -> int:
@@ -241,7 +243,7 @@ class SidewalkIndex:
     geometry_indexes: dict[int, int]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class NodeRecord:
     """One graph vertex with values ready for PostGIS serialization."""
 
@@ -257,7 +259,7 @@ class NodeRecord:
     attr_meta: dict[str, dict[str, Any]]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class EdgeRecord:
     """One directed graph edge with values ready for PostGIS serialization."""
 
@@ -279,15 +281,23 @@ class EdgeRecord:
     attr_meta: dict[str, dict[str, Any]]
 
 
+class EdgeRecords(Protocol):
+    def __len__(self) -> int: ...
+
+    def __iter__(self) -> Iterator[EdgeRecord]: ...
+
+
 @dataclass(frozen=True)
 class GraphBuild:
-    """The in-memory result of extracting and enriching a pedestrian graph."""
+    """Extracted graph with replayable edges owned by the build caller."""
 
-    nodes: dict[int, NodeRecord]
-    edges: list[EdgeRecord]
+    nodes: Mapping[int, NodeRecord]
+    edges: EdgeRecords
     undirected_segment_count: int
     invalid_way_location_count: int
     sidewalk_matched_segment_count: int
+    surface_cells: tuple[Any, ...] = ()
+    policy_statistics: dict[str, Any] | None = None
 
 
 def load_local_module(module_name: str, filename: str) -> Any:
@@ -976,58 +986,55 @@ def build_directed_edges(
     dem_updated_at: str | None = None,
 ) -> list[EdgeRecord]:
     """Turn segmented ways into pedestrian-directed edges with all edge attributes."""
-    if sidewalk_matches is None:
-        sidewalk_matches = [None] * len(segments)
-    if len(sidewalk_matches) != len(segments):
+    return list(
+        iter_directed_edges(
+            segments, sidewalk_matches, dem_reader, osm_updated_at, dem_updated_at
+        )
+    )
+
+
+def iter_directed_edges(
+    segments: Sequence[Segment],
+    sidewalk_matches: Sequence[SidewalkMatch | None] | None = None,
+    dem_reader: Any = None,
+    osm_updated_at: str = "1970-01-01",
+    dem_updated_at: str | None = None,
+) -> Iterator[EdgeRecord]:
+    if sidewalk_matches is not None and len(sidewalk_matches) != len(segments):
         raise ValueError("Each segment requires exactly one sidewalk match slot")
-    edges: list[EdgeRecord] = []
-    for segment, sidewalk_match in zip(segments, sidewalk_matches, strict=False):
+    for index, segment in enumerate(segments):
+        sidewalk_match = (
+            sidewalk_matches[index] if sidewalk_matches is not None else None
+        )
         attributes = make_edge_attributes(segment.tags, osm_updated_at, sidewalk_match)
+        if segment.source_width_constraint is not None:
+            constraint = segment.source_width_constraint
+            known = [
+                attributes[name]
+                for name in ("width_m", "effective_width_m")
+                if attributes[name] is not None
+            ]
+            if not known or constraint["value"] <= min(known):
+                attributes["effective_width_m"] = constraint["value"]
+                attributes["attr_meta"]["effective_width_m"] = constraint
+            attributes["attr_meta"]["source_width_constraint"] = constraint
         direction = pedestrian_oneway_direction(segment.tags)
-        if direction == -1:
-            edges.append(
-                edge_record_for_direction(
-                    segment,
-                    attributes,
-                    reverse=True,
-                    is_bidirectional=False,
-                    dem_reader=dem_reader,
-                    dem_updated_at=dem_updated_at,
-                )
+        reversals = (
+            (True,)
+            if direction == -1
+            else (False,)
+            if direction == 1
+            else (False, True)
+        )
+        for reverse in reversals:
+            yield edge_record_for_direction(
+                segment,
+                attributes,
+                reverse=reverse,
+                is_bidirectional=direction == 0,
+                dem_reader=dem_reader,
+                dem_updated_at=dem_updated_at,
             )
-        elif direction == 1:
-            edges.append(
-                edge_record_for_direction(
-                    segment,
-                    attributes,
-                    reverse=False,
-                    is_bidirectional=False,
-                    dem_reader=dem_reader,
-                    dem_updated_at=dem_updated_at,
-                )
-            )
-        else:
-            edges.append(
-                edge_record_for_direction(
-                    segment,
-                    attributes,
-                    reverse=False,
-                    is_bidirectional=True,
-                    dem_reader=dem_reader,
-                    dem_updated_at=dem_updated_at,
-                )
-            )
-            edges.append(
-                edge_record_for_direction(
-                    segment,
-                    attributes,
-                    reverse=True,
-                    is_bidirectional=True,
-                    dem_reader=dem_reader,
-                    dem_updated_at=dem_updated_at,
-                )
-            )
-    return edges
 
 
 def node_type_for(
@@ -1182,7 +1189,10 @@ def apply_with_locations(osmium: Any, handler: Any, pbf_path: Path) -> None:
 
 
 def collect_walk_ways(
-    pbf_path: Path, bbox: tuple[float, float, float, float]
+    pbf_path: Path,
+    bbox: tuple[float, float, float, float],
+    include_observations: bool = False,
+    include_building_outlines: bool = True,
 ) -> tuple[list[WalkWay], int]:
     """Read eligible OSM ways with resolved geometry intersecting the requested city bbox."""
     osmium = import_osmium()
@@ -1195,7 +1205,18 @@ def collect_walk_ways(
 
         def way(self, way: Any) -> None:
             tags = dict(way.tags)
-            if not should_include_way(tags):
+            observed = include_observations and (
+                bool(tags.get("highway"))
+                or tags.get("barrier")
+                in {"wall", "fence", "retaining_wall", "city_wall"}
+                or tags.get("footway") == "sidewalk"
+                or (
+                    include_building_outlines
+                    and tags.get("building") not in (None, "no")
+                )
+                or pedestrian_access_is_denied(tags)
+            )
+            if not should_include_way(tags) and not observed:
                 return
             resolved_nodes_list: list[WayNode] = []
             try:
@@ -1366,18 +1387,142 @@ def is_reachable(
     return False
 
 
+def edge_endpoints(edges: EdgeRecords) -> Iterable[tuple[int, int]]:
+    stream = getattr(edges, "iter_endpoints", None)
+    return (
+        stream()
+        if stream is not None
+        else ((edge.from_osm_node, edge.to_osm_node) for edge in edges)
+    )
+
+
+def node_index(nodes: Mapping[int, NodeRecord]) -> Mapping[int, int] | array:
+    maximum = max(nodes, default=0)
+    if nodes and min(nodes) >= 0 and maximum <= 2 * len(nodes):
+        indexes = array("q", [-1]) * (maximum + 1)
+        for index, node_id in enumerate(nodes):
+            indexes[node_id] = index
+        return indexes
+    return {node_id: index for index, node_id in enumerate(nodes)}
+
+
+class CompactDirectedGraph:
+    def __init__(self, nodes: Mapping[int, NodeRecord], edges: EdgeRecords):
+        self.indexes = node_index(nodes)
+        self.offsets = array("Q", [0]) * (len(nodes) + 1)
+        for start, _ in edge_endpoints(edges):
+            self.offsets[self.indexes[start] + 1] += 1
+        for index in range(len(nodes)):
+            self.offsets[index + 1] += self.offsets[index]
+        self.targets = array("Q", [0]) * self.offsets[-1]
+        positions = self.offsets[:]
+        for start, end in edge_endpoints(edges):
+            index = self.indexes[start]
+            self.targets[positions[index]] = self.indexes[end]
+            positions[index] += 1
+        del positions
+        self.components, component_count = self._strong_components()
+        self.component_offsets = array("Q", [0]) * (component_count + 1)
+        for node in range(len(nodes)):
+            component = self.components[node]
+            for offset in range(self.offsets[node], self.offsets[node + 1]):
+                if component != self.components[self.targets[offset]]:
+                    self.component_offsets[component + 1] += 1
+        for component in range(component_count):
+            self.component_offsets[component + 1] += self.component_offsets[component]
+        self.component_targets = array("Q", [0]) * self.component_offsets[-1]
+        positions = self.component_offsets[:]
+        for node in range(len(nodes)):
+            component = self.components[node]
+            for offset in range(self.offsets[node], self.offsets[node + 1]):
+                target = self.components[self.targets[offset]]
+                if component != target:
+                    self.component_targets[positions[component]] = target
+                    positions[component] += 1
+
+    def _strong_components(self) -> tuple[array, int]:
+        """Iterative Tarjan with sink-first topological component identifiers."""
+        count = len(self.offsets) - 1
+        discovery = array("q", [-1]) * count
+        low = array("Q", [0]) * count
+        components = array("q", [-1]) * count
+        active = array("Q")
+        frames = array("Q")
+        cursors = array("Q")
+        sequence = component_count = 0
+        for root in range(count):
+            if discovery[root] != -1:
+                continue
+            discovery[root] = low[root] = sequence
+            sequence += 1
+            active.append(root)
+            frames.append(root)
+            cursors.append(self.offsets[root])
+            while frames:
+                node = frames[-1]
+                cursor = cursors[-1]
+                if cursor < self.offsets[node + 1]:
+                    cursors[-1] = cursor + 1
+                    target = self.targets[cursor]
+                    if discovery[target] == -1:
+                        discovery[target] = low[target] = sequence
+                        sequence += 1
+                        active.append(target)
+                        frames.append(target)
+                        cursors.append(self.offsets[target])
+                    elif components[target] == -1:
+                        low[node] = min(low[node], discovery[target])
+                    continue
+                frames.pop()
+                cursors.pop()
+                if low[node] == discovery[node]:
+                    while True:
+                        member = active.pop()
+                        components[member] = component_count
+                        if member == node:
+                            break
+                    component_count += 1
+                if frames:
+                    parent = frames[-1]
+                    low[parent] = min(low[parent], low[node])
+        return components, component_count
+
+    def is_reachable(self, start: int, target: int) -> bool:
+        start_index = self.components[self.indexes[start]]
+        target_index = self.components[self.indexes[target]]
+        if start_index == target_index:
+            return True
+        if start_index < target_index:
+            return False
+        visited = bytearray(len(self.component_offsets) - 1)
+        visited[start_index] = 1
+        queue = array("Q", [start_index])
+        position = 0
+        while position < len(queue):
+            current = queue[position]
+            position += 1
+            for offset in range(
+                self.component_offsets[current], self.component_offsets[current + 1]
+            ):
+                neighbour = self.component_targets[offset]
+                if neighbour == target_index:
+                    return True
+                if neighbour > target_index and not visited[neighbour]:
+                    visited[neighbour] = 1
+                    queue.append(neighbour)
+        return False
+
+
 def connectivity_sample(
     nodes: Mapping[int, NodeRecord],
-    edges: Sequence[EdgeRecord],
+    edges: EdgeRecords,
     sample_size: int = CONNECTIVITY_SAMPLE_SIZE,
     min_distance_m: float = CONNECTIVITY_MIN_DISTANCE_M,
     max_distance_m: float = CONNECTIVITY_MAX_DISTANCE_M,
     seed: int = CONNECTIVITY_SEED,
 ) -> dict[str, Any]:
     """Sample geographically separated node pairs and report their directed reachability."""
-    adjacency: dict[int, list[int]] = defaultdict(list)
-    for edge in edges:
-        adjacency[edge.from_osm_node].append(edge.to_osm_node)
+    adjacency = CompactDirectedGraph(nodes, edges)
     node_ids = tuple(nodes)
     randomizer = random.Random(seed)
     sampled_pairs: set[tuple[int, int]] = set()
@@ -1400,7 +1545,7 @@ def connectivity_sample(
             continue
         sampled_pairs.add((start, target))
         distances.append(distance_m)
-        if is_reachable(adjacency, start, target):
+        if adjacency.is_reachable(start, target):
             reachable_count += 1
     sampled_count = len(sampled_pairs)
     return {
@@ -1426,26 +1571,30 @@ def coverage_pct(values: Sequence[Any]) -> float:
 
 def graph_report(graph: GraphBuild, connectivity: Mapping[str, Any]) -> dict[str, Any]:
     """Produce the reproducibility metrics stored in ped_graph_version.notes."""
-    edge_type_distribution = dict(
-        sorted(Counter(edge.edge_type for edge in graph.edges).items())
+    coverage_fields = (
+        "slope_longitudinal",
+        "surface",
+        "smoothness",
+        "width_m",
+        "effective_width_m",
+        "wheelchair",
     )
+    known = dict.fromkeys(coverage_fields, 0)
+    edge_types = Counter()
+    for edge in graph.edges:
+        edge_types[edge.edge_type] += 1
+        for name in coverage_fields:
+            known[name] += getattr(edge, name) is not None
+    count = len(graph.edges)
     return {
         "node_count": len(graph.nodes),
         "undirected_segment_count": graph.undirected_segment_count,
-        "directed_edge_count": len(graph.edges),
+        "directed_edge_count": count,
         "invalid_way_location_count": graph.invalid_way_location_count,
-        "edge_type_distribution": edge_type_distribution,
+        "edge_type_distribution": dict(sorted(edge_types.items())),
         "coverage_pct": {
-            "slope_longitudinal": coverage_pct(
-                [edge.slope_longitudinal for edge in graph.edges]
-            ),
-            "surface": coverage_pct([edge.surface for edge in graph.edges]),
-            "smoothness": coverage_pct([edge.smoothness for edge in graph.edges]),
-            "width_m": coverage_pct([edge.width_m for edge in graph.edges]),
-            "effective_width_m": coverage_pct(
-                [edge.effective_width_m for edge in graph.edges]
-            ),
-            "wheelchair": coverage_pct([edge.wheelchair for edge in graph.edges]),
+            name: round(value / count * 100.0, 3) if count else 0.0
+            for name, value in known.items()
         },
         "sidewalk_overlay": {
             "matched_undirected_segments": graph.sidewalk_matched_segment_count,
@@ -1479,6 +1628,25 @@ def scoped_identifier(version_id: int, source_id: int, scale: int, label: str) -
     if scoped >= 2**63:
         raise ValueError(f"{label} id {scoped} exceeds Postgres BIGINT")
     return scoped
+
+
+class ScopedNodeIdentifiers(Mapping[int, int]):
+    def __init__(self, version_id: int, nodes: Mapping[int, NodeRecord]):
+        self.version_id = version_id
+        self.nodes = nodes
+        for source_id in nodes:
+            scoped_identifier(version_id, source_id, NODE_ID_SCALE, "node")
+
+    def __len__(self) -> int:
+        return len(self.nodes)
+
+    def __iter__(self) -> Iterator[int]:
+        return iter(self.nodes)
+
+    def __getitem__(self, source_id: int) -> int:
+        if source_id not in self.nodes:
+            raise KeyError(source_id)
+        return scoped_identifier(self.version_id, source_id, NODE_ID_SCALE, "node")
 
 
 def line_wkt(coordinates: Sequence[tuple[float, float]]) -> str:
@@ -1574,12 +1742,28 @@ def write_graph_to_postgis(
             version_id = safe_int(version_row[0])
             if version_id is None:
                 raise RuntimeError("PostGIS returned an invalid graph version id")
-            node_id_map = {
-                osm_node_id: scoped_identifier(
-                    version_id, osm_node_id, NODE_ID_SCALE, "node"
+            if report.get("pedestrian_policy_version") == "sidewalk-v1":
+                outdoor_limit = 4_000_000_000_000_000_000
+                if (
+                    max(
+                        version_id * NODE_ID_SCALE + max(graph.nodes, default=0),
+                        version_id * EDGE_ID_SCALE + len(graph.edges),
+                    )
+                    >= outdoor_limit
+                ):
+                    raise ValueError(
+                        "Policy graph IDs would overlap the reserved indoor namespace"
+                    )
+                network = load_local_module(
+                    "ped_sidewalk_network_writer", "ped-sidewalk-network.py"
                 )
-                for osm_node_id in graph.nodes
-            }
+                network.write_cells(
+                    cursor,
+                    version_id,
+                    report["input_manifest"]["sidewalk_source_version_id"],
+                    graph.surface_cells,
+                )
+            node_id_map = ScopedNodeIdentifiers(version_id, graph.nodes)
             node_rows = (
                 (
                     node_id_map[node.osm_node_id],
@@ -1720,6 +1904,21 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--bbox", choices=tuple(BBOXES), required=True)
     parser.add_argument(
+        "--sidewalk-source-version",
+        type=int,
+        help="Pinned positive PostGIS sidewalk source version; generates sidewalk-v1 surface topology",
+    )
+    parser.add_argument(
+        "--exclude-invalid-osm-areas",
+        action="store_true",
+        help="Exclude and record individually invalid OSM area entities in a qualified source build",
+    )
+    parser.add_argument(
+        "--disk-stage-edges",
+        action="store_true",
+        help="Stage qualified source edges in private temporary SQLite instead of memory",
+    )
+    parser.add_argument(
         "--db-url",
         default=os.environ.get("PED_GRAPH_DATABASE_URL"),
         help="PostGIS URL; defaults to PED_GRAPH_DATABASE_URL",
@@ -1729,6 +1928,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error(f"PBF not found: {args.pbf}")
     if not args.db_url:
         parser.error("--db-url or PED_GRAPH_DATABASE_URL is required")
+    if args.disk_stage_edges and args.sidewalk_source_version is None:
+        parser.error("--disk-stage-edges requires --sidewalk-source-version")
+    if args.exclude_invalid_osm_areas and args.sidewalk_source_version is None:
+        parser.error("--exclude-invalid-osm-areas requires --sidewalk-source-version")
+    if args.sidewalk_source_version is not None:
+        if not 0 < args.sidewalk_source_version < 2**63:
+            parser.error("--sidewalk-source-version must be a positive BIGINT")
+        if args.sidewalk_geojson is not None:
+            parser.error(
+                "Pinned source and legacy --sidewalk-geojson are mutually exclusive"
+            )
     return args
 
 
@@ -1737,28 +1947,89 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     bbox = BBOXES[args.bbox]
     print(f"[build-ped-graph] collecting OSM ways from {args.pbf}")
-    graph = build_graph(
-        args.pbf,
-        bbox,
-        dem_file=args.dem_file,
-        sidewalk_geojson=args.sidewalk_geojson,
-    )
-    print("[build-ped-graph] checking connectivity", flush=True)
-    connectivity = connectivity_sample(graph.nodes, graph.edges)
-    if connectivity["sampled"] != CONNECTIVITY_SAMPLE_SIZE:
-        raise SystemExit(
-            "Unable to obtain 100 node pairs within 300 m–3 km for connectivity sampling"
+    snapshot = None
+    network = None
+    if args.sidewalk_source_version is not None:
+        network = load_local_module("ped_sidewalk_network", "ped-sidewalk-network.py")
+        snapshot = network.load_source(args.db_url, args.sidewalk_source_version)
+        graph = network.build_network(
+            sys.modules[__name__],
+            args.pbf,
+            bbox,
+            snapshot,
+            args.dem_file,
+            exclude_invalid_areas=args.exclude_invalid_osm_areas,
+            stage_edges=args.disk_stage_edges,
         )
-    report = graph_report(graph, connectivity)
-    report["input_manifest"] = {
-        key: {"filename": path.name, "sha256": sha256_file(path)}
-        for key, path in (("osm", args.pbf), ("dem", args.dem_file), ("sidewalk", args.sidewalk_geojson))
-        if path is not None and path.is_file()
-    }
-    source_hash = sha256_file(args.pbf)
-    version_id = write_graph_to_postgis(graph, source_hash, bbox, report, args.db_url)
-    print_report(version_id, source_hash, report)
-    return 0
+    else:
+        graph = build_graph(
+            args.pbf,
+            bbox,
+            dem_file=args.dem_file,
+            sidewalk_geojson=args.sidewalk_geojson,
+        )
+    try:
+        print("[build-ped-graph] checking connectivity", flush=True)
+        connectivity = connectivity_sample(graph.nodes, graph.edges)
+        if connectivity["sampled"] != CONNECTIVITY_SAMPLE_SIZE:
+            raise SystemExit(
+                "Unable to obtain 100 node pairs within 300 m–3 km for connectivity sampling"
+            )
+        report = graph_report(graph, connectivity)
+        report["input_manifest"] = {
+            key: {"filename": path.name, "sha256": sha256_file(path)}
+            for key, path in (
+                ("osm", args.pbf),
+                ("dem", args.dem_file),
+                ("sidewalk", args.sidewalk_geojson),
+            )
+            if path is not None and path.is_file()
+        }
+        source_hash = sha256_file(args.pbf)
+        if snapshot is not None and network is not None:
+            if graph.policy_statistics is None:
+                raise ValueError("Qualified graph lacks area policy statistics")
+            report["pedestrian_policy_version"] = "sidewalk-v1"
+            report["input_manifest"] = {
+                **report["input_manifest"],
+                "sidewalk_source_version_id": snapshot.version_id,
+                "sidewalk_archive_sha256": snapshot.archive_sha256,
+                "osm_sha256": source_hash,
+                "osm_area_policy_version": graph.policy_statistics[
+                    "osm_area_policy_version"
+                ],
+                "osm_area_rules_sha256": graph.policy_statistics[
+                    "osm_area_rules_sha256"
+                ],
+                **{
+                    key: graph.policy_statistics[key]
+                    for key in (
+                        "osm_area_omission_policy_version",
+                        "osm_area_omission_policy_sha256",
+                        "osm_area_omitted_count",
+                        "osm_area_has_known_omissions",
+                        "osm_area_exclude_invalid",
+                    )
+                },
+            }
+            report["extent"] = list(bbox)
+            report["walk_surface_schema_version"] = 1
+            report["component_statistics"] = network.component_statistics(graph)
+            report["sidewalk_network"] = graph.policy_statistics
+            report["builder"] = {
+                "python": sys.version,
+                "surface_cells": len(graph.surface_cells),
+                **network.geometry_environment(),
+            }
+        version_id = write_graph_to_postgis(
+            graph, source_hash, bbox, report, args.db_url
+        )
+        print_report(version_id, source_hash, report)
+        return 0
+    finally:
+        close = getattr(graph.edges, "close", None)
+        if close is not None:
+            close()
 
 
 if __name__ == "__main__":

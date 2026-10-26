@@ -18,6 +18,10 @@ const CATALOG: Record<string, { "zh-TW": string; en: string }> = {
     en: "No route matching the accessibility requirements was found.",
   },
   NO_ROUTE: { "zh-TW": "找不到可行路線", en: "No viable route was found." },
+  ENDPOINT_CONSTRAINT_BLOCKED: {
+    "zh-TW": "目前圖資無法將指定位置連接到符合輪椅通行條件的路網，請調整位置",
+    en: "The available map cannot connect the specified location to a route meeting wheelchair access limits. Please adjust the location.",
+  },
   UPSTREAM_TIMEOUT: {
     "zh-TW": "路線規劃服務逾時，請稍後再試",
     en: "The route planning service timed out. Please try again later.",
@@ -97,10 +101,19 @@ const CATALOG: Record<string, { "zh-TW": string; en: string }> = {
     "zh-TW": "路線包含樓梯段落，OSM 資料未確認此處是否有扶手，請自行確認",
     en: "This route includes stairs, and OSM data does not confirm whether handrails are present. Please check on site.",
   },
+  ROUTE_SLOPE_NORMAL_WALK: {
+    "zh-TW": "一般步行未套用坡度上限；避免樓梯偏好不代表已啟用輪椅通行限制",
+    en: "Normal walking applies no slope limit; preferring to avoid stairs does not enable wheelchair restrictions.",
+  },
+  ROUTE_SLOPE_OTP_WHEELCHAIR: {
+    "zh-TW":
+      "輪椅步行會排除已知坡度超過 12% 的非階梯路段；未知坡度仍可能存在，階梯協助段另行標示。您的自訂坡度上限未單獨套用",
+    en: "Wheelchair walking excludes non-stair segments with a known slope above 12%. Unknown slopes may remain, and stairs requiring assistance are marked separately. Your custom slope limit is not applied independently.",
+  },
   ROUTE_SLOPE_CSR: {
     "zh-TW":
-      "台北 CSR 無障礙行人圖目前不會依您設定的任意坡度上限篩選路徑；回傳的坡度僅為已選路段的觀測值，您的坡度上限未被實際執行",
-    en: "The Taipei CSR pedestrian network does not filter routes by a custom slope limit; reported slopes are observations for the selected segments only.",
+      "CSR 無障礙行人圖目前不會依您設定的任意坡度上限篩選路徑；回傳的坡度僅為已選路段的觀測值，您的坡度上限未被實際執行",
+    en: "The CSR pedestrian network does not filter routes by a custom slope limit; reported slopes are observations for the selected segments only.",
   },
   ROUTE_SLOPE_NO_ELEVATION: {
     "zh-TW":
@@ -120,6 +133,15 @@ const CATALOG: Record<string, { "zh-TW": string; en: string }> = {
   ROUTE_SLOPE_SERVER_LIMIT: {
     "zh-TW": "伺服器已套用 {serverMaxPercent}% 上限（等於或寬於您的設定）",
     en: "The server applied a {serverMaxPercent}% limit (equal to or less restrictive than your setting).",
+  },
+  ROUTE_WHEELCHAIR_STAIRS_FALLBACK_SUMMARY: {
+    "zh-TW": "此路線含樓梯，輪椅無法自行通過，請安排協助並確認現場狀況。",
+    en: "This route includes stairs and cannot be used independently in a wheelchair. Arrange assistance and check conditions on site.",
+  },
+  ROUTE_WHEELCHAIR_STAIRS_FALLBACK: {
+    "zh-TW":
+      "找不到可達的無階梯路線，此備援路線包含樓梯，輪椅無法自行通過，請安排協助並確認現場狀況。",
+    en: "No reachable step-free route was found. This fallback includes stairs and cannot be used independently in a wheelchair. Arrange assistance and check conditions on site.",
   },
   ROUTE_STAIRS_CONSTRAINT_UNSATISFIED: {
     "zh-TW": "目前候選路線仍包含無坡道樓梯，無法完全滿足避開樓梯條件",

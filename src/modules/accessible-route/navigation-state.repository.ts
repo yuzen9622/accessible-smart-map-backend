@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { redisClient, redisReady } from "../../config/redis";
 import type {
   NavigationRouteEnvelope,
@@ -148,6 +149,44 @@ redis.call("SET", KEYS[1], ARGV[1], "EX", ARGV[2])
 return 1
 `;
 
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function envelopeIntegrity(envelope: NavigationRouteEnvelope): string {
+  const { integrity: _integrity, ...payload } = envelope;
+  const wire: unknown = JSON.parse(JSON.stringify(payload));
+  return createHash("sha256").update(canonicalJson(wire)).digest("hex");
+}
+
+export function sealNavigationEnvelope(
+  envelope: NavigationRouteEnvelope,
+): NavigationRouteEnvelope {
+  return { ...envelope, integrity: envelopeIntegrity(envelope) };
+}
+
+export function verifyNavigationEnvelopeIntegrity(
+  envelope: NavigationRouteEnvelope,
+): boolean {
+  try {
+    return (
+      typeof envelope.integrity === "string" &&
+      /^[a-f0-9]{64}$/.test(envelope.integrity) &&
+      envelope.integrity === envelopeIntegrity(envelope)
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function navigationTokenKey(token: string): string {
   return `${TOKEN_PREFIX}${token}`;
 }
@@ -181,7 +220,7 @@ export async function storeInitialNavigationEnvelope(
       2,
       navigationTokenKey(token),
       headKey(envelope.navigationId),
-      JSON.stringify(envelope),
+      JSON.stringify(sealNavigationEnvelope(envelope)),
       String(ROUTE_TOKEN_TTL_SEC),
     );
     return true;
@@ -286,7 +325,7 @@ export async function finalizeReroute(
       resumeLockKey(envelope.navigationId),
       clientRequestId,
       String(previousVersion),
-      JSON.stringify(envelope),
+      JSON.stringify(sealNavigationEnvelope(envelope)),
       String(ROUTE_TOKEN_TTL_SEC),
       String(envelope.routeVersion),
       JSON.stringify(data),
@@ -603,7 +642,7 @@ export async function resolveCandidateDecision(
       snapshotKey(decision.navigationId),
       `voice-nav:stopped:${decision.navigationId}`,
       JSON.stringify(decision),
-      JSON.stringify(envelope),
+      JSON.stringify(sealNavigationEnvelope(envelope)),
       JSON.stringify(data),
       action,
       JSON.stringify(snapshot ?? null),

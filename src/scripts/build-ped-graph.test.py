@@ -38,6 +38,73 @@ def segment(tags=None):
     )
 
 
+class NegativeRoadObservationTests(unittest.TestCase):
+    def test_policy_retains_prohibited_road_evidence_without_allowing_traversal(self):
+        import osmium
+        from osmium.osm.mutable import Node, Way
+
+        variants = (
+            ("residential", {"foot": "no"}),
+            ("residential", {"access": "no"}),
+            ("motorway", {}),
+            ("trunk", {}),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            for index, (highway, restriction) in enumerate(variants):
+                with self.subTest(highway=highway, restriction=restriction):
+                    source = Path(directory) / f"road-{index}.osm.pbf"
+                    writer = osmium.SimpleWriter(str(source))
+                    writer.add_node(Node(id=1, location=(121.55, 25.05)))
+                    writer.add_node(Node(id=2, location=(121.551, 25.05)))
+                    tags = {"highway": highway, **restriction}
+                    writer.add_way(Way(id=10, nodes=[1, 2], tags=tags))
+                    writer.close()
+                    legacy, _ = MODULE.collect_walk_ways(source, MODULE.TAIPEI_BBOX)
+                    self.assertEqual(legacy, [])
+                    observed, invalid = MODULE.collect_walk_ways(
+                        source, MODULE.TAIPEI_BBOX, include_observations=True
+                    )
+                    self.assertEqual(invalid, 0)
+                    self.assertEqual([way.osm_id for way in observed], [10])
+                    self.assertEqual(observed[0].tags, tags)
+                    self.assertFalse(MODULE.should_include_way(observed[0].tags))
+
+
+class BuildingOutlineRetentionTests(unittest.TestCase):
+    def test_internal_optimization_preserves_public_default_and_negative_evidence(self):
+        import osmium
+        from osmium.osm.mutable import Node, Way
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "outlines.osm.pbf"
+            writer = osmium.SimpleWriter(str(path))
+            for i, point in enumerate(
+                ((121.55, 25.05), (121.551, 25.05), (121.551, 25.051)), 1
+            ):
+                writer.add_node(Node(id=i, location=point))
+            variants = (
+                {"building": "yes"},
+                {"building:part": "yes"},
+                {"building": "yes", "access": "no"},
+                {"building": "yes", "highway": "footway"},
+                {"building": "yes", "barrier": "wall"},
+            )
+            for i, tags in enumerate(variants, 1):
+                writer.add_way(Way(id=i, nodes=[1, 2, 3, 1], tags=tags))
+            writer.close()
+            default, _ = MODULE.collect_walk_ways(
+                path, MODULE.TAIPEI_BBOX, include_observations=True
+            )
+            compact, _ = MODULE.collect_walk_ways(
+                path,
+                MODULE.TAIPEI_BBOX,
+                include_observations=True,
+                include_building_outlines=False,
+            )
+            self.assertEqual([w.osm_id for w in default], [1, 3, 4, 5])
+            self.assertEqual([w.osm_id for w in compact], [3, 4, 5])
+
+
 class EligibleWayTests(unittest.TestCase):
     def test_includes_all_documented_walkable_highways(self):
         for highway in MODULE.INCLUDED_HIGHWAYS:
@@ -79,6 +146,50 @@ class EligibleWayTests(unittest.TestCase):
         self.assertFalse(
             MODULE.should_include_way({"highway": "motorway", "name": "人行道"})
         )
+
+
+class ObservationCollectorTests(unittest.TestCase):
+    def test_collects_excluded_negative_geometry_only_for_qualified_build(self):
+        import osmium
+        from osmium.osm.mutable import Node, Way
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "negative.osm.pbf"
+            writer = osmium.SimpleWriter(str(path))
+            for node_id, coordinate in enumerate(
+                (
+                    (121.55, 25.05),
+                    (121.551, 25.05),
+                    (121.551, 25.051),
+                    (121.55, 25.051),
+                ),
+                1,
+            ):
+                writer.add_node(Node(id=node_id, location=coordinate))
+            for way_id, tags in enumerate(
+                (
+                    {"building": "yes"},
+                    {"highway": "footway", "area": "yes", "access": "no"},
+                    {"highway": "path", "foot": "no", "width": "6"},
+                    {"barrier": "wall"},
+                    {"highway": "footway", "foot": "yes"},
+                ),
+                101,
+            ):
+                writer.add_way(Way(id=way_id, nodes=[1, 2, 3, 4, 1], tags=tags))
+            writer.close()
+            legacy, invalid = MODULE.collect_walk_ways(path, MODULE.BBOXES["taiwan"])
+            observed, observed_invalid = MODULE.collect_walk_ways(
+                path, MODULE.BBOXES["taiwan"], include_observations=True
+            )
+            self.assertEqual(invalid + observed_invalid, 0)
+            self.assertEqual([way.osm_id for way in legacy], [105])
+            self.assertEqual(
+                [way.osm_id for way in observed], [101, 102, 103, 104, 105]
+            )
+            self.assertTrue(
+                all(not MODULE.should_include_way(way.tags) for way in observed[:4])
+            )
 
 
 class AttributeExtractionTests(unittest.TestCase):
@@ -188,8 +299,8 @@ class GeometryAndDirectionTests(unittest.TestCase):
 class DemAndSidewalkTests(unittest.TestCase):
     def test_dem_injection_cli_preserves_tags_and_only_enriches_supported_ground_spans(self):
         import numpy as np
-        import rasterio
         import osmium
+        import rasterio
         from rasterio.transform import from_origin
 
         with tempfile.TemporaryDirectory() as directory:
@@ -242,9 +353,13 @@ class DemAndSidewalkTests(unittest.TestCase):
                 dataset.write(pixels, 1)
             reader = MODULE.DEM_HELPER.DemReader(str(path))
             try:
-                xs, ys = transform("EPSG:3826", "EPSG:4326", [300010, 300030, 300010, 300070],
-                                   [2769990, 2769990, 2769970, 2769990])
-                points = tuple(zip(xs, ys))
+                projected = transform(
+                    "EPSG:3826",
+                    "EPSG:4326",
+                    [300010, 300030, 300010, 300070],
+                    [2769990, 2769990, 2769970, 2769990],
+                )
+                points = tuple(zip(projected[0], projected[1], strict=True))
                 self.assertEqual(reader.get_elevation(*points[0]), 0)
                 self.assertIsNone(reader.get_elevation(*points[1]))
                 self.assertIsNone(reader.get_elevation(*points[2]))
@@ -463,6 +578,41 @@ class GraphLifecycleTests(unittest.TestCase):
 
 
 class GraphUtilityTests(unittest.TestCase):
+    def test_public_cli_supports_national_extent_and_explicit_source_pin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pbf = Path(directory) / "test.osm.pbf"
+            pbf.touch()
+            with patch.dict(
+                "os.environ", {"PED_GRAPH_DATABASE_URL": "postgresql://isolated"}
+            ):
+                args = MODULE.parse_args(
+                    [
+                        "--pbf",
+                        str(pbf),
+                        "--bbox",
+                        "taiwan",
+                        "--sidewalk-source-version",
+                        "9223372036854775806",
+                    ]
+                )
+            self.assertEqual(MODULE.BBOXES[args.bbox], (117, 20, 123, 27))
+            self.assertEqual(args.sidewalk_source_version, 9223372036854775806)
+            self.assertEqual(args.db_url, "postgresql://isolated")
+            for value in ("0", "-1", "9223372036854775808"):
+                with self.subTest(value=value), self.assertRaises(SystemExit):
+                    MODULE.parse_args(
+                        [
+                            "--pbf",
+                            str(pbf),
+                            "--bbox",
+                            "taiwan",
+                            "--db-url",
+                            "postgresql://isolated",
+                            "--sidewalk-source-version",
+                            value,
+                        ]
+                    )
+
     def test_bbox_and_reachability_helpers(self):
         bbox = (121.43, 24.95, 121.68, 25.22)
         self.assertTrue(
@@ -479,6 +629,97 @@ class GraphUtilityTests(unittest.TestCase):
             MODULE.scoped_identifier(1, 123, MODULE.NODE_ID_SCALE, "node"),
             MODULE.scoped_identifier(2, 123, MODULE.NODE_ID_SCALE, "node"),
         )
+
+
+class CompactDirectedGraphTests(unittest.TestCase):
+    @staticmethod
+    def graph(ids, pairs):
+        edges = types.SimpleNamespace(iter_endpoints=lambda: iter(pairs))
+        return MODULE.CompactDirectedGraph(dict.fromkeys(ids), edges)
+
+    def test_random_directed_graphs_match_independent_search(self):
+        import random
+
+        rng = random.Random(702)
+        for size in range(1, 35):
+            ids = [10**12 + 13 * index for index in range(size)]
+            rng.shuffle(ids)
+            pairs = [
+                (start, target)
+                for start in ids
+                for target in ids
+                if rng.random() < 0.06
+            ]
+            pairs += pairs[:5]
+            graph = self.graph(ids, pairs)
+            adjacency = {node: [] for node in ids}
+            for start, target in pairs:
+                adjacency[start].append(target)
+            for start in ids:
+                visited = {start}
+                pending = [start]
+                while pending:
+                    for target in adjacency[pending.pop()]:
+                        if target not in visited:
+                            visited.add(target)
+                            pending.append(target)
+                for target in ids:
+                    self.assertEqual(
+                        graph.is_reachable(start, target),
+                        target in visited,
+                        (size, start, target),
+                    )
+
+    def test_diamond_condensation_preserves_direction_and_duplicates(self):
+        pairs = [(0, 1), (1, 0), (1, 2), (1, 3), (2, 4), (3, 4),
+                 (4, 5), (5, 4), (0, 2), (0, 2), (6, 3)]
+        graph = self.graph(range(8), pairs)
+        self.assertTrue(graph.is_reachable(0, 5))
+        self.assertTrue(graph.is_reachable(6, 4))
+        self.assertFalse(graph.is_reachable(2, 3))
+        self.assertFalse(graph.is_reachable(3, 2))
+        self.assertFalse(graph.is_reachable(5, 0))
+        self.assertFalse(graph.is_reachable(7, 0))
+        self.assertTrue(graph.is_reachable(7, 7))
+
+    def test_empty_and_long_acyclic_graph(self):
+        self.assertEqual(list(self.graph([], []).offsets), [0])
+        size = 15000
+        graph = self.graph(range(size), [(i, i + 1) for i in range(size - 1)])
+        self.assertTrue(graph.is_reachable(0, size - 1))
+        self.assertFalse(graph.is_reachable(size - 1, 0))
+
+
+class SourceWidthConstraintTests(unittest.TestCase):
+    def test_both_directions_keep_governing_source_and_original_native_tags(self):
+        from dataclasses import replace
+
+        constraint = MODULE.attribute_meta(
+            0.4, "gov_sidewalk", "batch-7", source_id="narrow", source_version_id="7"
+        )
+        for native in ({}, {"width": "2"}, {"width": "0.3"}):
+            original = segment(native)
+            bounded = replace(original, source_width_constraint=constraint)
+            edges = list(MODULE.iter_directed_edges([bounded]))
+            self.assertEqual(len(edges), 2)
+            for edge in edges:
+                if native.get("width") == "0.3":
+                    self.assertEqual(edge.width_m, 0.3)
+                    self.assertIsNone(edge.effective_width_m)
+                else:
+                    self.assertEqual(edge.effective_width_m, 0.4)
+                    self.assertEqual(
+                        edge.attr_meta["effective_width_m"]["source"], "gov_sidewalk"
+                    )
+                self.assertEqual(
+                    edge.attr_meta["source_width_constraint"]["source_id"], "narrow"
+                )
+                if "width" in native:
+                    self.assertEqual(
+                        edge.attr_meta["width_m"]["raw_value"], native["width"]
+                    )
+                    self.assertEqual(edge.attr_meta["width_m"]["source"], "osm")
+            self.assertEqual(dict(bounded.tags), dict(original.tags))
 
 
 if __name__ == "__main__":

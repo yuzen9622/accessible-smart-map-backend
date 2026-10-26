@@ -1,21 +1,26 @@
 #!/usr/bin/env python3
-"""Inject a Taipei GTFS pathways subgraph into an existing pedestrian graph."""
+"""Inject selected Taipei or Taiwan GTFS pathways into a pinned pedestrian graph."""
 
 from __future__ import annotations
 
 import argparse
+import csv
+import hashlib
 import json
 import math
 import os
+import sys
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from importlib import import_module
+from pathlib import Path
 from typing import Any
 
 TAIPEI_BBOX = (121.43, 24.95, 121.68, 25.22)
-BBOXES = {"taipei": TAIPEI_BBOX}
+TAIWAN_BBOX = (117.0, 20.0, 123.0, 27.0)
+BBOXES = {"taipei": TAIPEI_BBOX, "taiwan": TAIWAN_BBOX}
 GTFS_SOURCE = "gtfs_pathways"
 GENERATED_SOURCE_PREFIX = f"{GTFS_SOURCE}:"
 GENERATED_ID_SCALE = 1_000_000_000_000
@@ -88,13 +93,14 @@ class EdgeDraft:
     source_ref: str
     from_ref: NodeReference
     to_ref: NodeReference
-    geometry: tuple[Coordinate, Coordinate] | None
+    geometry: tuple[Coordinate, ...] | None
     length_m: float | None
     edge_type: int
     stair_count: int | None
     traversal_time_s: float | None
     is_bidirectional: bool
-    attr_meta: dict[str, dict[str, Any]]
+    attr_meta: dict[str, Any]
+    outdoor_attributes: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -112,6 +118,11 @@ class NearestOutdoorEdge:
     from_distance_m: float
     to_distance_m: float
     is_bidirectional: bool
+    from_geometry: tuple[Coordinate, ...] | None = None
+    to_geometry: tuple[Coordinate, ...] | None = None
+    outdoor_attributes: dict[str, Any] | None = None
+    qualification: dict[str, Any] | None = None
+    surface_attributes: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -129,6 +140,8 @@ class PreparedIndoorGraph:
     skipped_boundary_pathway_count: int
     skipped_cross_group_pathway_count: int
     parent_group_types: dict[str, int]
+    selected_extent: tuple[float, float, float, float] = TAIPEI_BBOX
+    source_manifest: Mapping[str, Any] | None = None
 
 
 def finite_float(value: Any) -> float | None:
@@ -379,6 +392,83 @@ def parse_pathway(document: Mapping[str, Any]) -> PathwayRecord:
         traversal_time_s=nonnegative_float(document.get("traversalTime")),
         stair_count=nonnegative_int(document.get("stairCount")),
     )
+
+
+def load_gtfs_csv_records(
+    directory: str | os.PathLike[str], *, exclude_invalid: bool = False,
+) -> tuple[list[StopRecord], list[PathwayRecord], dict[str, Any]]:
+    directory = Path(directory)
+    policy = {
+        "version": "gtfs-invalid-pathway-v1",
+        "invalid_pathway_mode": "not an integer from 1 through 7",
+        "invalid_direction": "not integer 0 or 1",
+        "scope": "source record only; preserve independent stops and valid pathways",
+    }
+    manifest: dict[str, Any] = {
+        "source_kind": "gtfs_directory", "files": {}, "omissions": [],
+        "omission_count": 0, "exclude_invalid": exclude_invalid,
+        "omission_policy_version": policy["version"],
+        "omission_policy_sha256": hashlib.sha256(json.dumps(policy, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+    }
+
+    def file_hash(path: Path) -> str:
+        with path.open("rb") as stream:
+            return hashlib.file_digest(stream, "sha256").hexdigest()
+
+    def rows(name: str, required: set[str]) -> Iterable[dict[str, str]]:
+        path = directory / name
+        before = file_hash(path)
+        manifest["files"][name] = {"sha256": before, "rows": 0}
+        count = 0
+        with path.open(encoding="utf-8-sig", newline="") as stream:
+            reader = csv.DictReader(stream)
+            if not required.issubset(reader.fieldnames or []):
+                raise ValueError(f"{name} lacks required GTFS columns")
+            for number, row in enumerate(reader, start=2):
+                if None in row or any(value is None for value in row.values()):
+                    raise ValueError(f"{name}:{number} has malformed CSV columns")
+                count += 1
+                yield row
+        if file_hash(path) != before:
+            raise ValueError(f"{name} changed during source loading")
+        manifest["files"][name] = {"sha256": before, "rows": count}
+
+    stops = []
+    for row in rows("stops.txt", {"stop_id", "stop_lat", "stop_lon"}):
+        stop = parse_stop({
+            "stopId": row["stop_id"], "locationType": row.get("location_type") or "0",
+            "parentStation": row.get("parent_station"),
+            "stopLat": row["stop_lat"], "stopLon": row["stop_lon"],
+        })
+        if stop.location_type not in LOCATION_TYPE_NODE_TYPES:
+            raise ValueError(f"GTFS stop {stop.stop_id} has unsupported location_type")
+        stops.append(stop)
+    pathways = []
+    for row in rows("pathways.txt", {"pathway_id", "from_stop_id", "to_stop_id", "pathway_mode", "is_bidirectional"}):
+        pathway = parse_pathway({
+            "pathwayId": row["pathway_id"], "fromStopId": row["from_stop_id"],
+            "toStopId": row["to_stop_id"], "pathwayMode": row["pathway_mode"],
+            "isBidirectional": row["is_bidirectional"],
+            "traversalTime": row.get("traversal_time"), "stairCount": row.get("stair_count"),
+        })
+        if pathway.pathway_mode not in PATHWAY_MODE_EDGE_TYPES or pathway.is_bidirectional not in (0, 1):
+            if not exclude_invalid:
+                raise ValueError(f"GTFS pathway {pathway.pathway_id} has invalid mode/direction")
+            omitted = {
+                "source_file": "pathways.txt",
+                "source_sha256": manifest["files"]["pathways.txt"]["sha256"],
+                "source_record_id": pathway.pathway_id,
+                "reason": "invalid_mode_or_direction", "raw": dict(row),
+            }
+            manifest["omissions"].append(omitted)
+            manifest["omission_count"] += 1
+            print("[inject-ped-indoor-graph] omitted_gtfs_record=" + json.dumps(omitted, sort_keys=True), file=sys.stderr, flush=True)
+            continue
+        pathways.append(pathway)
+    levels = directory / "levels.txt"
+    if levels.is_file():
+        manifest["files"]["levels.txt"] = {"sha256": file_hash(levels), "consumed": False}
+    return stops, pathways, manifest
 
 
 def load_gtfs_records(mongo_uri: str) -> tuple[list[StopRecord], list[PathwayRecord]]:
@@ -746,6 +836,7 @@ def prepare_indoor_graph(
         skipped_boundary_pathway_count=boundary_count,
         skipped_cross_group_pathway_count=cross_group_count,
         parent_group_types=parent_group_type_counts(groups),
+        selected_extent=bbox,
     )
 
 
@@ -841,6 +932,186 @@ def nearest_outdoor_edge(
     )
 
 
+OUTDOOR_COLUMNS = (
+    "slope_longitudinal", "slope_cross", "surface", "smoothness", "width_m",
+    "effective_width_m", "wheelchair", "has_ramp",
+)
+
+
+def qualified_version_notes(notes: Mapping[str, Any]) -> bool:
+    """Only pinned sidewalk-v1 graphs may authorize serving connectors."""
+    manifest = notes.get("input_manifest", {})
+    return (
+        notes.get("pedestrian_policy_version") == "sidewalk-v1"
+        and notes.get("walk_surface_schema_version") == 1
+        and isinstance(manifest, Mapping)
+        and bool(manifest.get("sidewalk_source_version_id"))
+        and all(isinstance(manifest.get(key), str)
+                and len(manifest[key]) == 64
+                and all(c in "0123456789abcdef" for c in manifest[key])
+                for key in ("sidewalk_archive_sha256", "osm_sha256"))
+    )
+
+
+def require_qualified_scope(notes: Mapping[str, Any], extent: Sequence[float]) -> None:
+    """Check the selected source scope against the locked candidate, not CLI labels."""
+    stored = notes.get("extent")
+    if (not qualified_version_notes(notes) or not isinstance(stored, (list, tuple))
+            or len(stored) != 4
+            or not all(finite_float(v) is not None for v in stored)
+            or not (stored[0] <= extent[0] < extent[2] <= stored[2]
+                    and stored[1] <= extent[1] < extent[3] <= stored[3])):
+        raise SystemExit("indoor scope requires a pinned qualified graph covering selected extent")
+
+
+def match_plane(attributes: Mapping[str, Any]) -> tuple[Any, ...]:
+    """Keep unknown planes source-specific; never turn unknown into shared ground."""
+    meta = attributes.get("attr_meta") or {}
+    witness = meta.get("surface_witness")
+    if isinstance(witness, Mapping):
+        plane = witness.get("grade")
+    else:
+        tags = meta.get("osm_tags")
+        if not isinstance(tags, Mapping):
+            plane = None
+        else:
+            values = []
+            for key in ("layer", "level"):
+                raw = str(tags.get(key, "0")).strip()
+                number = finite_float(raw)
+                values.append(format(number, ".15g") if number is not None else None)
+            values.extend("no" if tags.get(key) in (None, "no", "0", "false")
+                          else "yes" for key in ("bridge", "tunnel"))
+            plane = values
+    if (not isinstance(plane, (list, tuple)) or len(plane) != 4
+            or any(v is None or str(v).startswith("opaque:") for v in plane)):
+        if isinstance(witness, Mapping):
+            return ("unknown-surface-source", str(witness.get("source_version_id")),
+                    witness.get("source_id"), json.dumps(plane, sort_keys=True))
+        return ("unknown-osm-source", attributes.get("source_ref"),
+                json.dumps(plane, sort_keys=True))
+    return tuple(plane)
+
+
+def qualified_outdoor_edge(
+    cursor: Any, version_id: int, entrance: StopRecord,
+    diagnostics: list[dict[str, str]] | None = None,
+) -> NearestOutdoorEdge | None:
+    """Prove a native XY coincidence or a complete same-cell chord in PostGIS.
+
+    Search all nearby alternatives before choosing; a distance cutoff is only a
+    bounded search window, never permission to cross negative geometry or grades.
+    """
+    def reject(reason: str) -> None:
+        if diagnostics is not None:
+            diagnostics.append({"stop_id": entrance.stop_id, "reason": reason})
+
+    longitude, latitude = require_real_coordinate(entrance, "qualified outdoor matching")
+    cursor.execute("SELECT notes FROM ped_graph_version WHERE id = %s", (version_id,))
+    row = cursor.fetchone()
+    try:
+        notes = json.loads(row[0]) if row and isinstance(row[0], str) else (row[0] if row else {})
+    except (TypeError, json.JSONDecodeError) as error:
+        raise SystemExit("qualified graph notes are not valid JSON") from error
+    if not isinstance(notes, Mapping):
+        raise SystemExit("qualified graph notes must be a JSON object")
+    if not qualified_version_notes(notes):
+        return reject("unqualified_or_unpinned_graph")
+    extent = notes.get("extent")
+    if not isinstance(extent, (list, tuple)) or len(extent) != 4:
+        return reject("missing_graph_extent")
+    if not point_in_bbox((longitude, latitude), tuple(extent)):
+        return reject("outside_graph_extent")
+    cursor.execute(
+        """
+        WITH target AS (SELECT ST_SetSRID(ST_MakePoint(%s,%s),4326) geom),
+        nearby AS (
+          SELECT e.*, t.geom AS entrance,
+            ST_ClosestPoint(e.geom,t.geom) AS snap,
+            ST_LineLocatePoint(e.geom,t.geom) AS fraction,
+            ST_Distance(e.geom::geography,t.geom::geography) AS distance
+          FROM ped_edge e CROSS JOIN target t
+          WHERE e.version_id=%s AND e.geom IS NOT NULL
+            AND NOT starts_with(COALESCE(e.source_ref,''),%s)
+            AND e.geom && ST_Expand(t.geom,0.001)
+            AND ST_DWithin(e.geom::geography,t.geom::geography,50)
+            AND EXISTS (SELECT 1 FROM ped_node n WHERE n.version_id=e.version_id
+                        AND n.node_id=e.from_node AND ST_Equals(n.geom,ST_StartPoint(e.geom)))
+            AND EXISTS (SELECT 1 FROM ped_node n WHERE n.version_id=e.version_id
+                        AND n.node_id=e.to_node AND ST_Equals(n.geom,ST_EndPoint(e.geom)))
+        )
+        SELECT to_jsonb(e) - 'geom' - 'entrance' - 'snap',
+          ST_AsGeoJSON(ST_LineSubstring(e.geom,0,e.fraction),15),
+          ST_AsGeoJSON(ST_LineSubstring(e.geom,e.fraction,1),15),
+          ST_Length(ST_LineSubstring(e.geom,0,e.fraction)::geography),
+          ST_Length(ST_LineSubstring(e.geom,e.fraction,1)::geography),
+          ST_X(e.snap),ST_Y(e.snap), c.witness,
+          c.cell_id,c.source_id,c.grade
+        FROM nearby e
+        LEFT JOIN LATERAL (
+          SELECT c.* FROM ped_walk_surface_cell c
+          WHERE c.version_id=e.version_id
+            AND c.sidewalk_source_version_id::text=%s
+            AND c.cell_id::text=e.attr_meta->'surface_witness'->>'cell_id'
+            AND c.source_id=e.attr_meta->'surface_witness'->>'source_id'
+            AND c.sidewalk_source_version_id::text=e.attr_meta->'surface_witness'->>'source_version_id'
+            AND c.grade=e.attr_meta->'surface_witness'->'grade'
+            AND jsonb_typeof(c.grade)='array' AND jsonb_array_length(c.grade)=4
+            AND ST_Covers(c.geom,ST_MakeLine(e.entrance,e.snap))
+            AND ST_Covers(c.geom,e.geom)
+          ORDER BY c.cell_id LIMIT 1
+        ) c ON TRUE
+        WHERE (e.distance<=0.25 AND e.source_ref ~ '^osm:way[/:]')
+           OR c.cell_id IS NOT NULL
+        ORDER BY e.distance,e.edge_id
+        """,
+        (longitude, latitude, version_id, GENERATED_SOURCE_PREFIX,
+         str(notes["input_manifest"]["sidewalk_source_version_id"])),
+    )
+    rows = cursor.fetchall()
+    if not rows:
+        return reject("no_qualified_native_coincidence_or_full_cell_chord_within_search_window")
+    if len({match_plane(r[0]) for r in rows}) != 1:
+        return reject("ambiguous_grade_or_independent_unknown_source_planes")
+    attributes, before, after, before_m, after_m, x, y, cell, cell_id, source_id, grade = rows[0]
+
+    def coordinates(raw: str) -> tuple[Coordinate, ...]:
+        try:
+            geometry = json.loads(raw)
+        except (TypeError, json.JSONDecodeError) as error:
+            raise SystemExit("PostGIS returned invalid native substring GeoJSON") from error
+        points = geometry["coordinates"]
+        # An endpoint substring is a Point. Retain a zero-length LineString.
+        if geometry["type"] == "Point":
+            points = [points, points]
+        return tuple((required_float(p[0], "native substring longitude"),
+                      required_float(p[1], "native substring latitude")) for p in points)
+
+    first, last = coordinates(before), coordinates(after)
+    proof = {"kind": "surface_cell" if cell_id is not None else "native_coincidence",
+             "version_id": version_id, "native_source_ref": attributes["source_ref"],
+             "native_edge_id": attributes["edge_id"],
+             "cell_id": cell_id, "source_id": source_id, "grade": grade,
+             "source_version_id": notes["input_manifest"]["sidewalk_source_version_id"]}
+    # Only same-source surface width observations describe the new chord. Other
+    # native-part constraints (steps/slope/wheelchair) do NOT describe that chord.
+    surface: dict[str, Any] | None = None
+    if cell_id is not None:
+        surface = {key: finite_float((cell or {}).get(key))
+                   for key in ("width_m", "effective_width_m")}
+        surface["attr_meta"] = {
+            key: {"value": value, "source": "gov_sidewalk", "source_id": source_id,
+                  "source_version_id": proof["source_version_id"], "cell_id": cell_id}
+            for key, value in surface.items() if value is not None
+        }
+        surface["cell_witness"] = cell
+    return NearestOutdoorEdge(
+        entrance.stop_id, attributes["edge_id"], attributes["from_node"], attributes["to_node"],
+        first[0], last[-1], (x,y), attributes["distance"], before_m, after_m,
+        attributes["is_bidirectional"], first, last, attributes, proof, surface,
+    )
+
+
 def connector_metadata(
     match: NearestOutdoorEdge,
     updated_at: str,
@@ -864,6 +1135,10 @@ def connector_metadata(
         "matched_outdoor_edge_id": source_meta(match.edge_id, updated_at),
         "match_distance_m": source_meta(match.entrance_distance_m, updated_at),
     }
+    if match.qualification is not None:
+        values["qualification"] = source_meta(match.qualification, updated_at)
+    else:
+        values["diagnostic_only"] = source_meta(True, updated_at)
     if length_m is None:
         if station_group is None:
             raise ValueError("connector node requires a parentStation group")
@@ -914,19 +1189,60 @@ def connector_edge(
     @param updated_at UTC source-processing date.
     @returns Connector edge draft.
     """
+    geometry = (start, end)
+    attributes = None
+    metadata = connector_metadata(match, updated_at, length_m, kind, is_bidirectional)
+    edge_type, stair_count, traversal_time = CONNECTOR_EDGE_TYPE, None, None
+    if match.qualification is not None:
+        metadata["qualification"] = source_meta(match.qualification, updated_at)
+        if "outdoor" in kind:
+            if match.from_geometry is None or match.to_geometry is None or match.outdoor_attributes is None:
+                raise ValueError("qualified native partial requires exact geometry and attributes")
+            if kind in ("outdoor_from_to_snap", "snap_to_outdoor_from"):
+                geometry = match.from_geometry
+            else:
+                geometry = match.to_geometry
+            if kind in ("snap_to_outdoor_from", "outdoor_to_to_snap"):
+                geometry = tuple(reversed(geometry))
+            attributes = dict(match.outdoor_attributes)
+            if kind in ("snap_to_outdoor_from", "outdoor_to_to_snap"):
+                slope = attributes.get("slope_longitudinal")
+                if slope is not None:
+                    attributes["slope_longitudinal"] = -slope
+            edge_type = attributes["edge_type"]
+            stair_count = attributes.get("stair_count")
+            # Retain known traversal evidence proportionally, not a full-edge time
+            # on each partial. Native metadata remains verbatim for traceability.
+            native_time = attributes.get("traversal_time_s")
+            native_length = attributes.get("length_m")
+            if native_time is not None and native_length and native_length > 0:
+                traversal_time = native_time * length_m / native_length
+            metadata = {**(attributes.get("attr_meta") or {}), **metadata}
+            metadata["native_attributes"] = source_meta(match.outdoor_attributes, updated_at)
+            metadata["slope_longitudinal"] = source_meta(
+                attributes.get("slope_longitudinal"), updated_at,
+                native_source_ref=attributes["source_ref"],
+                direction="reverse" if kind in ("snap_to_outdoor_from", "outdoor_to_to_snap") else "native",
+            )
+            metadata["traversal_time_s"] = source_meta(
+                traversal_time, updated_at, native_source_ref=attributes["source_ref"],
+                method="native_time_length_fraction", native_time_s=native_time,
+            )
+        else:
+            attributes = match.surface_attributes
+            if attributes:
+                metadata = {**attributes.get("attr_meta", {}), **metadata}
+                metadata["surface_observation"] = source_meta(attributes, updated_at)
+        metadata["edge_type"] = source_meta(edge_type, updated_at,
+                                           native_source_ref=match.qualification["native_source_ref"])
+    else:
+        metadata["diagnostic_only"] = source_meta(True, updated_at)
     return EdgeDraft(
-        source_ref=source_ref,
-        from_ref=from_ref,
-        to_ref=to_ref,
-        geometry=(start, end),
-        length_m=length_m,
-        edge_type=CONNECTOR_EDGE_TYPE,
-        stair_count=None,
-        traversal_time_s=None,
-        is_bidirectional=is_bidirectional,
-        attr_meta=connector_metadata(
-            match, updated_at, length_m, kind, is_bidirectional
-        ),
+        source_ref=source_ref, from_ref=from_ref, to_ref=to_ref,
+        geometry=geometry, length_m=length_m, edge_type=edge_type,
+        stair_count=stair_count, traversal_time_s=traversal_time,
+        is_bidirectional=is_bidirectional, attr_meta=metadata,
+        outdoor_attributes=attributes,
     )
 
 
@@ -938,7 +1254,7 @@ def build_connectors(
 ) -> tuple[list[NodeDraft], list[EdgeDraft]]:
     """Create entrance nodes plus directional partial-edge links without changing outdoor rows.
 
-    @param matches Accepted 50 m outdoor matches.
+    @param matches Proven qualified matches (or explicitly unservable diagnostic drafts).
     @param entrances_by_id Taipei entrance index.
     @param station_groups Raw parentStation groups.
     @param updated_at UTC source-processing date.
@@ -1111,7 +1427,7 @@ def point_wkt(point: Coordinate | None) -> str | None:
     return None if point is None else f"POINT ({point[0]:.12f} {point[1]:.12f})"
 
 
-def line_wkt(line: tuple[Coordinate, Coordinate] | None) -> str | None:
+def line_wkt(line: tuple[Coordinate, ...] | None) -> str | None:
     """Serialize an optional two-point line for PostGIS.
 
     @param line Optional WGS84 line.
@@ -1119,10 +1435,7 @@ def line_wkt(line: tuple[Coordinate, Coordinate] | None) -> str | None:
     """
     if line is None:
         return None
-    return (
-        f"LINESTRING ({line[0][0]:.12f} {line[0][1]:.12f}, "
-        f"{line[1][0]:.12f} {line[1][1]:.12f})"
-    )
+    return "LINESTRING (" + ", ".join(f"{x:.15f} {y:.15f}" for x, y in line) + ")"
 
 
 def resolve_node_reference(
@@ -1302,6 +1615,7 @@ def build_notes(
             "skipped_cross_group_pathway_count": prepared.skipped_cross_group_pathway_count,
         },
         "entrance_matching": {
+            "mode": "distance_only_diagnostic_not_servable",
             "primary_taipei_50m": {
                 "success": accepted_count,
                 "denominator": taipei_total,
@@ -1484,6 +1798,12 @@ def count_invalid_edge_metadata(cursor: Any, version_id: int, prefix: str) -> in
               LATERAL jsonb_each(attr_meta) AS attribute
             WHERE version_id = %s AND starts_with(source_ref, %s)
               AND COALESCE(attribute.value->>'source', '') <> %s
+              AND NOT (
+                attr_meta ? 'qualification' AND (
+                  attr_meta->'native_attributes'->'value'->'attr_meta'->attribute.key = attribute.value
+                  OR attr_meta->'surface_observation'->'value'->'attr_meta'->attribute.key = attribute.value
+                ) IS TRUE
+              )
             """,
             (version_id, prefix, GTFS_SOURCE),
         )
@@ -1638,6 +1958,7 @@ def insert_edges(
             edge.is_bidirectional,
             edge.source_ref,
             json.dumps(edge.attr_meta, ensure_ascii=False, separators=(",", ":")),
+            *((edge.outdoor_attributes or {}).get(key) for key in OUTDOOR_COLUMNS),
         )
         for ordinal, edge in enumerate(edges, start=1)
     ]
@@ -1648,11 +1969,13 @@ def insert_edges(
             """
             INSERT INTO ped_edge (
               edge_id, version_id, from_node, to_node, geom, length_m, edge_type,
-              stair_count, traversal_time_s, is_bidirectional, source_ref, attr_meta
+              stair_count, traversal_time_s, is_bidirectional, source_ref, attr_meta,
+              slope_longitudinal, slope_cross, surface, smoothness, width_m,
+              effective_width_m, wheelchair, has_ramp
             ) VALUES %s
             """,
             rows,
-            template="(%s,%s,%s,%s,ST_GeomFromText(%s,4326),%s,%s,%s,%s,%s,%s,%s::jsonb)",
+            template="(%s,%s,%s,%s,ST_GeomFromText(%s,4326),%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,%s,%s)",
             page_size=1_000,
         )
     except Exception as error:
@@ -1693,15 +2016,14 @@ def inject_prepared_graph(
             outdoor_nodes, outdoor_edges, existing_notes = replace_generated_rows(
                 cursor, version_id
             )
-            all_matches = [
-                nearest_outdoor_edge(cursor, version_id, entrance)
-                for entrance in prepared.taipei_entrances
-            ]
-            accepted_matches = [
-                match
-                for match in all_matches
-                if match.entrance_distance_m <= PRIMARY_MATCH_TOLERANCE_M
-            ]
+            require_qualified_scope(existing_notes, prepared.selected_extent)
+            all_matches = []
+            unmatched = []
+            for entrance in prepared.taipei_entrances:
+                match = qualified_outdoor_edge(cursor, version_id, entrance, unmatched)
+                if match is not None:
+                    all_matches.append(match)
+            accepted_matches = all_matches
             entrance_index = {
                 entrance.stop_id: entrance for entrance in prepared.taipei_entrances
             }
@@ -1735,7 +2057,27 @@ def inject_prepared_graph(
                 len(connector_nodes),
                 connector_edges,
             )
+            report["entrance_matching"] = {
+                "mode": "qualified", "selected_extent": list(prepared.selected_extent),
+                "scope_entrance_count": len(prepared.taipei_entrances),
+                "source_national_entrance_count": prepared.national_entrance_count,
+                "out_of_scope_count": prepared.national_entrance_count - len(prepared.taipei_entrances),
+                "accepted_count": len(accepted_matches), "unmatched_count": len(unmatched),
+                "unmatched": unmatched,
+                "accepted": [{"stop_id": m.entrance_stop_id, "distance_m": m.entrance_distance_m,
+                              "proof": m.qualification} for m in accepted_matches],
+                "coverage_claim": "selected-source connectors only; not physical or national route completeness",
+            }
+            if count_outdoor_nodes(cursor, version_id, GENERATED_SOURCE_PREFIX) != outdoor_nodes:
+                raise SystemExit("injection changed native node count")
+            if count_outdoor_edges(cursor, version_id, GENERATED_SOURCE_PREFIX) != outdoor_edges:
+                raise SystemExit("injection changed native edge count")
             notes = {**existing_notes, **report}
+            if prepared.source_manifest is not None:
+                notes["input_manifest"] = {
+                    **existing_notes.get("input_manifest", {}),
+                    "gtfs": prepared.source_manifest,
+                }
             total_nodes = count_total_nodes(cursor, version_id)
             total_edges = count_total_edges(cursor, version_id)
             if (
@@ -1783,6 +2125,15 @@ def print_report(version_id: int, notes: Mapping[str, Any]) -> None:
     @returns Nothing.
     """
     matching = notes["entrance_matching"]
+    if matching.get("mode") == "qualified":
+        print(f"[inject-ped-indoor-graph] version_id={version_id} "
+              f"qualified_scope={matching['selected_extent']} "
+              f"accepted={matching['accepted_count']} unmatched={matching['unmatched_count']} "
+              f"scope_entrances={matching['scope_entrance_count']}")
+        for item in matching["unmatched"]:
+            print("[inject-ped-indoor-graph] unmatched_connector=" + json.dumps(item, sort_keys=True))
+        print("[inject-ped-indoor-graph] " + matching["coverage_claim"])
+        return
     taipei = matching["primary_taipei_50m"]
     national = matching["national_context"]
     distance = matching["distance_distribution_m"]
@@ -1845,16 +2196,23 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version-id", type=int, required=True)
     parser.add_argument("--bbox", choices=tuple(BBOXES), required=True)
-    parser.add_argument(
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument(
         "--mongo-uri",
         default=os.environ.get("MONGO_URI") or os.environ.get("DATABASE_URL"),
     )
+    source.add_argument("--gtfs-dir", type=Path, help="Standard local GTFS stops.txt/pathways.txt; no MongoDB client needed")
+    parser.add_argument("--exclude-invalid-gtfs", action="store_true", help="Exclude invalid GTFS mode/direction records with persisted raw omission evidence; requires --gtfs-dir")
     parser.add_argument("--db-url", default=os.environ.get("PED_GRAPH_DATABASE_URL"))
     args = parser.parse_args(argv)
     if args.version_id <= 0:
         parser.error("--version-id must be positive")
-    if not args.mongo_uri:
-        parser.error("--mongo-uri or MONGO_URI/DATABASE_URL is required")
+    if args.gtfs_dir is None and not args.mongo_uri:
+        parser.error("--gtfs-dir or --mongo-uri / MONGO_URI / DATABASE_URL is required")
+    if args.gtfs_dir is not None and not args.gtfs_dir.is_dir():
+        parser.error("--gtfs-dir must be an existing directory")
+    if args.exclude_invalid_gtfs and args.gtfs_dir is None:
+        parser.error("--exclude-invalid-gtfs requires --gtfs-dir")
     if not args.db_url:
         parser.error("--db-url or PED_GRAPH_DATABASE_URL is required")
     return args
@@ -1868,8 +2226,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     """
     args = parse_args(argv)
     updated_at = datetime.now(timezone.utc).date().isoformat()
-    stops, pathways = load_gtfs_records(args.mongo_uri)
-    prepared = prepare_indoor_graph(stops, pathways, BBOXES[args.bbox], updated_at)
+    if args.gtfs_dir is not None:
+        stops, pathways, source_manifest = load_gtfs_csv_records(args.gtfs_dir, exclude_invalid=args.exclude_invalid_gtfs)
+    else:
+        stops, pathways = load_gtfs_records(args.mongo_uri)
+        source_manifest = None
+    prepared = replace(
+        prepare_indoor_graph(stops, pathways, BBOXES[args.bbox], updated_at),
+        source_manifest=source_manifest,
+    )
     notes = inject_prepared_graph(prepared, args.version_id, args.db_url, updated_at)
     print_report(args.version_id, notes)
     return 0

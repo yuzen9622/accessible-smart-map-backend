@@ -42,16 +42,22 @@ const {
 vi.mock("../../config/ai", () => ({ googleGenAi: { live: { connect } } }));
 vi.mock("../agent/tool-catalog", () => ({ buildGeminiTools: vi.fn(() => []) }));
 vi.mock("../ai/agent-tools", () => ({ executeLocalTool: vi.fn() }));
-vi.mock("../accessible-route/route-token.service", () => ({
-  getRouteByToken,
-  getNavigationEnvelopeByToken,
-  isNavigationEnvelope: (v: any) =>
+vi.mock("../accessible-route/route-token.service", () => {
+  const trustedEnvelope = (v: any) =>
     v?.schemaVersion === 1 &&
     typeof v.navigationId === "string" &&
     Number.isInteger(v.routeVersion) &&
     Boolean(v.route) &&
-    Boolean(v.canonicalRequest),
-}));
+    Boolean(v.canonicalRequest);
+  return {
+    getRouteByToken,
+    getNavigationEnvelopeByToken,
+    isNavigationEnvelope: trustedEnvelope,
+    resolveNavigationEnvelope: vi.fn(async (value: unknown) =>
+      trustedEnvelope(value) ? value : null,
+    ),
+  };
+});
 vi.mock("../accessible-route/reroute.service", () => ({
   rerouteAccessibleRoute,
 }));
@@ -75,6 +81,7 @@ vi.mock("./transcript-corrector", () => ({
 }));
 
 import { createLiveBridge } from "./live-bridge";
+import { resolveNavigationEnvelope } from "../accessible-route/route-token.service";
 import {
   NavProgressSchema,
   NavResumeFailedMessageSchema,
@@ -4462,6 +4469,35 @@ describe("candidate control server guards", () => {
     await bridge.voiceReady;
   });
   afterEach(() => bridge.close());
+  it("does not directly start a route rejected by current qualification", async () => {
+    vi.mocked(resolveNavigationEnvelope).mockResolvedValueOnce(null);
+    utter("帶我去醫院");
+    tool("planAccessibleRoute");
+    await settle();
+    expect(resolveNavigationEnvelope).toHaveBeenCalledWith(envelope);
+    expect(messages().some((message) => message.type === "nav.start")).toBe(
+      false,
+    );
+  });
+
+  it("does not commit after closing while current qualification is pending", async () => {
+    const pending = deferred<any>();
+    vi.mocked(resolveNavigationEnvelope).mockImplementationOnce(
+      () => pending.promise,
+    );
+    utter("帶我去醫院");
+    tool("planAccessibleRoute");
+    await vi.waitFor(() =>
+      expect(resolveNavigationEnvelope).toHaveBeenCalled(),
+    );
+    bridge.close();
+    pending.resolve(envelope);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(messages().some((message) => message.type === "nav.start")).toBe(
+      false,
+    );
+  });
+
   it("direct plans emit tool_result before real nav.start before model response, same-token echo is inert", async () => {
     const order: string[] = [];
     vi.mocked(ws.send).mockImplementation(((raw: any) => {

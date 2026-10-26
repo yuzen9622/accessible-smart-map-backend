@@ -48,6 +48,10 @@ export interface CsrWalkDiagnostics {
 
 /** One planned walking segment produced by the CSR pedestrian graph. */
 export interface CsrWalkPlan {
+  fareAccess?: import("../../../../types/route").WalkingFareAccess;
+  stairsFallback: boolean;
+  selectedEdgeIds: string[];
+  policy: import("./graph.types").PedGraphQualification;
   /** Ordered [longitude, latitude] pairs, including counted straight snap connectors. */
   polyline: LngLat[];
   /** Selected-edge ground distance plus accepted endpoint connectors, in metres. */
@@ -104,6 +108,7 @@ export interface CsrWalkPlan {
  * profiles cannot represent faithfully, which is a real loss of protection.
  */
 export type CsrWalkFailureReason =
+  | "budget_exhausted"
   | "outside_coverage"
   | "unsupported_constraints"
   | "unavailable"
@@ -113,6 +118,7 @@ export type CsrWalkFailureReason =
 
 export type CsrWalkResult =
   | { status: "ok"; plans: CsrWalkPlan[] }
+  | { status: "budget_exhausted" }
   | { status: "outside_coverage" }
   | { status: "unsupported_constraints" }
   | { status: "unavailable"; reason: string }
@@ -121,6 +127,10 @@ export type CsrWalkResult =
   | { status: "accessibility_blocked" };
 
 export interface CsrWalkOptions {
+  allowStairsFallback?: boolean;
+  fareAccess?: import("../../../../types/route").WalkingFareAccess;
+  context?: import("./graph-runtime").PedGraphSnapshot;
+  deadlineMs?: number;
   mode: AccessibilityMode;
   /** Resolved request constraint; omitted callers retain the mode default. */
   avoidStairs?: boolean;

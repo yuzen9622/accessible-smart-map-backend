@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -105,8 +106,10 @@ describe("bounded verified county ZIP reader", () => {
   });
   it("streams HTTP responses and rejects declared oversized downloads", async () => {
     const bytes = await readFile(path.join(dir, "valid.zip"));
+    let oversizedRequests = 0;
     const server = http.createServer((req, res) => {
       if (req.url === "/large") {
+        oversizedRequests++;
         res.writeHead(200, { "content-length": 300 * 1024 * 1024 });
         res.end();
       } else {
@@ -128,8 +131,87 @@ describe("bounded verified county ZIP reader", () => {
       await expect(
         acquireSidewalkArchive({ url: `${url}/large` }),
       ).rejects.toThrow(/size/);
+      expect(oversizedRequests).toBe(1);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+  it.each([false, true])(
+    "retries interrupted bodies without reusing partial bytes; persistent failure=%s",
+    async (persistentFailure) => {
+      const bytes = await readFile(path.join(dir, "valid.zip"));
+      let requests = 0;
+      const server = http.createServer((_req, res) => {
+        requests++;
+        res.writeHead(200, { "content-length": bytes.length });
+        if (persistentFailure || requests < 3) {
+          res.write(bytes.subarray(0, Math.floor(bytes.length / 2)));
+          setTimeout(() => res.destroy(), 30);
+        } else {
+          res.end(bytes);
+        }
+      });
+      await new Promise<void>((resolve) =>
+        server.listen(0, "127.0.0.1", resolve),
+      );
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string")
+          throw new Error("no HTTP port");
+        const source = { url: `http://127.0.0.1:${address.port}/source.zip` };
+        if (persistentFailure) {
+          await expect(acquireSidewalkArchive(source)).rejects.toThrow();
+        } else {
+          const archive = await acquireSidewalkArchive(source);
+          try {
+            expect(await readFile(archive.file)).toEqual(bytes);
+            expect(archive.sha256).toBe(
+              createHash("sha256").update(bytes).digest("hex"),
+            );
+            const counties: string[] = [];
+            for await (const entry of readSidewalkCounties(archive.file))
+              counties.push(entry.county);
+            expect(counties).toEqual(SIDEWALK_COUNTIES);
+          } finally {
+            await archive.cleanup();
+          }
+        }
+        expect(requests).toBe(3);
+      } finally {
+        server.closeAllConnections();
+        await new Promise<void>((resolve, reject) =>
+          server.close((error) => (error ? reject(error) : resolve())),
+        );
+      }
+    },
+    15_000,
+  );
+
+  it("does not retry a permanent HTTP error", async () => {
+    let requests = 0;
+    const server = http.createServer((_req, res) => {
+      requests++;
+      res.writeHead(404);
+      res.end("not found");
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string")
+        throw new Error("no HTTP port");
+      await expect(
+        acquireSidewalkArchive({
+          url: `http://127.0.0.1:${address.port}/missing.zip`,
+        }),
+      ).rejects.toThrow("source download HTTP 404");
+      expect(requests).toBe(1);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
     }
   });
 });

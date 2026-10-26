@@ -258,7 +258,7 @@ describe("planVenueRoute", () => {
   });
 
   it.each(["wheelchair", "elderly", "visual_impaired"] as const)(
-    "maps a stairs-only destination to 422 NO_ACCESSIBLE_ROUTE for %s with venueAccessibility",
+    "applies the stairs-only destination policy for %s",
     async (mode) => {
       const r = await planVenueRoute({
         venueId: "mini",
@@ -267,6 +267,13 @@ describe("planVenueRoute", () => {
         mode,
         lang: "zh-TW",
       });
+      if (mode === "wheelchair") {
+        expect(r).toMatchObject({
+          ok: true,
+          route: { stairsFallback: true, stairFlights: 1 },
+        });
+        return;
+      }
       expect(r).toMatchObject({
         ok: false,
         status: 422,
@@ -328,7 +335,7 @@ describe("venue arrival for outdoor routes", () => {
     expect(r.ok && r.venueLeg.steps.map((s) => s.type)).toContain("elevator");
   });
 
-  it("fails closed: 404 for unknown ids, 422 when no gate reaches the place step-free", async () => {
+  it("returns 404 for unknown ids and warned wheelchair stairs-only arrivals", async () => {
     expect(
       await resolveVenueArrival({
         venueId: "mini",
@@ -347,12 +354,8 @@ describe("venue arrival for outdoor routes", () => {
         lang: "zh-TW",
       }),
     ).toMatchObject({
-      ok: false,
-      status: 422,
-      data: {
-        reason: "NO_ACCESSIBLE_ROUTE",
-        venueAccessibility: { placeId: "b-lab", levelRef: "2F" },
-      },
+      ok: true,
+      venueLeg: { stairsFallback: true, toPlaceId: "b-lab" },
     });
   });
 
@@ -362,12 +365,15 @@ describe("venue arrival for outdoor routes", () => {
     gateId: "gate-main",
     gateLocation,
     mode: "wheelchair" as const,
-    venueVersion: 1,
+    venueVersion: 3,
     ...overrides,
   });
 
   it("treats a missing or moved gate as stale and an unchanged gate as current", async () => {
     expect(await isVenueArrivalCurrent(arrival())).toBe(true);
+    expect(await isVenueArrivalCurrent(arrival({ venueVersion: 1 }))).toBe(
+      false,
+    );
     expect(
       await isVenueArrivalCurrent(
         arrival({
@@ -398,7 +404,7 @@ describe("venue arrival for outdoor routes", () => {
     });
     expect(
       await replanVenueLeg(arrival({ placeId: "b-lab" }), "zh-TW"),
-    ).toMatchObject({ ok: false, status: 422 });
+    ).toMatchObject({ ok: true, venueLeg: { stairsFallback: true } });
   });
 });
 
@@ -447,6 +453,117 @@ describe("gate choice", () => {
     });
     return r.ok ? r.venueArrival.gateId : r;
   };
+
+  const wholeTripInput = {
+    venueId: "mini",
+    placeId: "bldg-b@1F",
+    origin,
+    mode: "wheelchair" as const,
+    lang: "zh-TW" as const,
+  };
+  const twoAccessibleGates = () =>
+    useVenue(
+      withSideGate(
+        "<tag k='wheelchair' v='yes' />",
+        "<tag k='highway' v='footway' />",
+      ),
+    );
+
+  it.each(["gate-main", "gate-side"])(
+    "keeps a proven strict gate when %s is inconclusive",
+    async (unavailableGate) => {
+      twoAccessibleGates();
+      const passes: boolean[] = [];
+      const result = await resolveVenueArrival({
+        ...wholeTripInput,
+        planOutdoorApproach: async ({ venueArrival, allowStairsFallback }) => {
+          passes.push(allowStairsFallback);
+          return venueArrival.gateId === unavailableGate
+            ? { status: "unavailable" }
+            : { status: "ok", durationS: 50 };
+        },
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        venueArrival: {
+          gateId: unavailableGate === "gate-main" ? "gate-side" : "gate-main",
+        },
+      });
+      expect(passes).toEqual([false, false]);
+    },
+  );
+
+  it("never enables assisted fallback after an incomplete strict gate", async () => {
+    twoAccessibleGates();
+    const passes: boolean[] = [];
+    const result = await resolveVenueArrival({
+      ...wholeTripInput,
+      planOutdoorApproach: async ({ venueArrival, allowStairsFallback }) => {
+        passes.push(allowStairsFallback);
+        return {
+          status:
+            venueArrival.gateId === "gate-main" ? "no_route" : "unavailable",
+        };
+      },
+    });
+    expect(result).toMatchObject({ ok: false, status: 503 });
+    expect(passes).toEqual([false, false]);
+  });
+
+  it("uses actual whole-trip duration rather than the nearest indoor gate and reads one venue snapshot", async () => {
+    twoAccessibleGates();
+    const result = await resolveVenueArrival({
+      ...wholeTripInput,
+      planOutdoorApproach: async ({ venueArrival }) => ({
+        status: "ok",
+        durationS: venueArrival.gateId === "gate-main" ? 1 : 10000,
+      }),
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      venueArrival: { gateId: "gate-main" },
+    });
+    expect(repository.findVenueVersion).toHaveBeenCalledTimes(1);
+    expect(repository.findVenue).toHaveBeenCalledTimes(1);
+  });
+
+  it("exhausts the strict gate pass before enabling the assisted pass", async () => {
+    twoAccessibleGates();
+    const passes: boolean[] = [];
+    const result = await resolveVenueArrival({
+      ...wholeTripInput,
+      planOutdoorApproach: async ({ allowStairsFallback }) => {
+        passes.push(allowStairsFallback);
+        return allowStairsFallback
+          ? { status: "ok", durationS: 100 }
+          : { status: "no_route" };
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(passes).toEqual([false, false, true, true]);
+    expect(repository.findVenueVersion).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the supplied deadline across gates instead of refreshing it after callback I/O", async () => {
+    twoAccessibleGates();
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const callback = vi.fn(async () => {
+      clock.mockReturnValue(now + 1000);
+      return { status: "no_route" as const };
+    });
+    try {
+      const result = await resolveVenueArrival({
+        ...wholeTripInput,
+        deadlineMs: now + 500,
+        planOutdoorApproach: callback,
+      });
+      expect(result).toMatchObject({ ok: false, status: 503 });
+      expect(callback).toHaveBeenCalledTimes(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
 
   it("uses a gate without wheelchair=yes only for normal walkers", async () => {
     useVenue(withSideGate("", "<tag k='highway' v='footway' />"));
@@ -520,6 +637,13 @@ describe("gate eligibility on reroute", () => {
       ok: false,
       stale: true,
     });
-    expect(await isVenueArrivalCurrent(arrival("normal"))).toBe(true);
+    expect(await isVenueArrivalCurrent(arrival("normal"))).toBe(false);
+    expect(
+      await isVenueArrivalCurrent({ ...arrival("normal"), venueVersion: 2 }),
+    ).toBe(true);
+    expect(await replanVenueLeg(arrival("normal"), "zh-TW")).toMatchObject({
+      ok: true,
+      venueArrival: { gateId: "gate-main", venueVersion: 2 },
+    });
   });
 });

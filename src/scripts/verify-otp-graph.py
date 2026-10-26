@@ -38,7 +38,6 @@ import re
 import subprocess
 import sys
 import time
-import urllib.request
 import zipfile
 
 from tra_shape_geometry import (
@@ -69,6 +68,8 @@ TRIP_CASES = [
 def load_probe():
     """Reuse probe-otp-routing.py's GraphQL client and freshness semantics."""
     spec = importlib.util.spec_from_file_location("probe", os.path.join(SCRIPT_DIR, "probe-otp-routing.py"))
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Unable to load OTP routing probe")
     probe = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(probe)
     return probe
@@ -87,17 +88,20 @@ def wait_ready(probe, otp, timeout_s):
             time.sleep(10)
 
 
-def plan_legs(probe, otp, frm, to, wheelchair, date, at, timeout):
+def plan_legs(probe, otp, frm, to, wheelchair, date, at, timeout, *, routing_errors=None):
     speed = "0.8" if wheelchair == "true" else "1.3"
-    tm = ",".join("{mode:%s}" % m for m in probe.MODES.split(","))
-    q = ('{ plan(from:{lat:%f,lon:%f}, to:{lat:%f,lon:%f}, date:"%s", time:"%s",'
-         ' wheelchair:%s, walkSpeed:%s, numItineraries:8, searchWindow:3600, transportModes:[%s])'
-         ' { itineraries{ legs{ mode legGeometry{ length } route{ agency{ gtfsId } } } } } }'
-         % (frm[0], frm[1], to[0], to[1], date, at, wheelchair, speed, tm))
+    tm = ",".join(f"{{mode:{m}}}" for m in probe.MODES.split(","))
+    q = (f'{{ plan(from:{{lat:{frm[0]:f},lon:{frm[1]:f}}}, to:{{lat:{to[0]:f},lon:{to[1]:f}}}, date:"{date}", time:"{at}",'
+         f' wheelchair:{wheelchair}, walkSpeed:{speed}, numItineraries:8, searchWindow:3600, transportModes:[{tm}])'
+         ' { routingErrors{ code inputField description }'
+         ' itineraries{ legs{ mode legGeometry{ length } route{ agency{ gtfsId } } } } } }')
     body = probe.post(otp, q, timeout)
     if "errors" in body:
         raise RuntimeError(body["errors"][0].get("message", "graphql error"))
-    return [leg for it in body["data"]["plan"]["itineraries"] for leg in it["legs"]]
+    plan = body["data"]["plan"]
+    if routing_errors is not None:
+        routing_errors.extend(plan.get("routingErrors") or [])
+    return [leg for it in plan["itineraries"] for leg in it["legs"]]
 
 
 class Gate:
@@ -169,7 +173,7 @@ def check_bus_coverage(gate, probe, otp, min_cities, timeout):
 
 def check_freshness(gate, probe, otp, required, ymd, timeout):
     body = probe.post(otp, '{ routes(transportModes:[RAIL,SUBWAY,TRAM,MONORAIL]) { agency { gtfsId }'
-                           ' patterns { tripsForDate(serviceDate:"%s") { gtfsId } } } }' % ymd, timeout)
+                           f' patterns {{ tripsForDate(serviceDate:"{ymd}") {{ gtfsId }} }} }} }}', timeout)
     trips = collections.Counter()
     for route in body["data"]["routes"]:
         agency = route["agency"]["gtfsId"].split(":", 1)[-1]
@@ -178,8 +182,7 @@ def check_freshness(gate, probe, otp, required, ymd, timeout):
         n = trips.get(agency, 0)
         if n == 0:
             # tripsForDate omits headway (frequencies.txt) trips.
-            recount = probe.post(otp, '{ agency(id:"1:%s") { routes { patterns { trips { activeDates } } } } }'
-                                 % agency, timeout)
+            recount = probe.post(otp, f'{{ agency(id:"1:{agency}") {{ routes {{ patterns {{ trips {{ activeDates }} }} }} }} }}', timeout)
             data = (recount.get("data") or {}).get("agency") or {}
             n = sum(1 for r in data.get("routes", []) for p in r["patterns"]
                     for t in p["trips"] if ymd in t["activeDates"])
@@ -188,8 +191,10 @@ def check_freshness(gate, probe, otp, required, ymd, timeout):
 
 def check_trips(gate, probe, otp, date, at, timeout):
     for label, frm, to, wheelchair, want_modes, want_agency, geom in TRIP_CASES:
+        routing_errors = []
         try:
-            legs = plan_legs(probe, otp, frm, to, wheelchair, date, at, timeout)
+            legs = plan_legs(probe, otp, frm, to, wheelchair, date, at, timeout,
+                             routing_errors=routing_errors)
         except Exception as e:  # noqa: BLE001
             gate.check(False, "trip", f"{label}: request failed: {e}")
             continue
@@ -207,6 +212,10 @@ def check_trips(gate, probe, otp, date, at, timeout):
             if points and max(points) <= min_points:
                 problems.append(f"{mode} legs drawn straight (max {max(points)} points)")
         detail = f"{label}: modes={sorted(modes)}"
+        if problems:
+            diagnostics = [{key: error.get(key) for key in ("code", "inputField", "description")}
+                           for error in routing_errors]
+            problems.append("routingErrors=" + json.dumps(diagnostics, ensure_ascii=False))
         gate.check(not problems, "trip", detail + (f" — {'; '.join(problems)}" if problems else ""))
 
 
