@@ -22,12 +22,11 @@
 - **樓層資料**：`buildings[].levels[].coverage` 的 `hasAnchor` 表示該層有可選樓層錨點；`hasRouteData` 表示該層有路網邊；`hasDisplayGeometry` 表示該層有顯示圖形。三者只描述資料存在，均不表示已完整描繪、現場核實或輪椅可達。選擇目的地以實際 `places` 為準，可達性以 route 結果為準。
 - **待核實資訊**：建築、features、walls、walkways 與 connections 保留 `heightPending`、`note`、`fixme`。`heightPending=true` 代表高度待確認，不能依估計 z 生成實測樓梯；`note`／`fixme` 可能包含電梯停靠表等通行資訊尚待現場核實的條件，不能只用 `heightStatus` 取代這些條件。
 - **`mode`**（預設 `wheelchair`），伺服器依模式決定成本，不接受自訂 profile：
-  - `wheelchair`：先完整搜尋不走樓梯／階梯／手扶梯的路；確認無無階梯路徑後，才提供 `stairsFallback=true`、明確警告需協助的樓梯／階梯備援，**不代表輪椅可自行通過**，也不放寬手扶梯。非階梯通道的坡度 > 12%、寬度 < 0.9 m、`wheelchair=no` 等已知限制仍保留，備援也不能越過過窄門位、封閉或禁止通行。沒標 `width` 是未知，不因此一律拒絕，也不能當成已量測足夠；坡道沒標寬度時匯入會警告。
+  - `wheelchair`：不走樓梯／階梯／手扶梯，坡度 > 12%、寬度 < 0.9 m、`wheelchair=no` 不可通行。沒標 `width` 的路以可通過計算（與戶外步行路網相同）；坡道沒標寬度時匯入會警告。
   - `elderly`、`visual_impaired`：禁止樓梯／階梯／手扶梯，跨層需有可通行電梯或坡道；找不到時回 `NO_ACCESSIBLE_ROUTE`，不降級走樓梯。兩者保留各自步速與其他通行限制，不換成輪椅模式。舊 `VENUE_STAIRS_AVOIDANCE_MULTIPLIER` 仍接受設定以相容既有環境，但不會解除此禁行規則。
   - `normal`：最短路線。
 - **回應**：`path.coordinates` 為 `[lng, lat, z]`，`z` 是該點高度（公尺，相對場域基準）：平面上的點是樓板高度，樓梯／坡道中間點可能是內插值；`path.levelRefs`、`segments[]` 與 `steps[].pathStart/pathEnd` 對應同一索引。`segments` 依建築與樓層切開路線（戶外段的 `buildingId`／`levelRef` 為 null），相鄰兩段共用交界索引，供前端逐層畫線、切換樓層。步驟類型 `depart / walk / enter / exit / elevator / escalator / stairs / steps / ramp / arrive`，`walk` 可帶 `maneuver: left | right | uturn`。索引範圍兩端均包含；零長度 `enter/exit` 可在跨棟邊的前一點觸發，step 的建築是指令目標，與該點實際建築可能不同。顯示歸屬以 `path.buildingIds/levelRefs` 逐點資料為準，不以 step 覆寫。
 - **路線設施與未知高度**：設施步驟的 `connectionId` 與 detail ID 相同；只有坡度推導、沒有可識別來源設施的坡道可為 null。`heightPending` 保留來源待確認旗標，即使該坡道兩端暫時都是 z=0，仍不能當作已確認平地；未標旗標也不等於現場核實。
-- **階梯協助警告**：`stairsFallback=true` 時須顯示 `warningDetails` 的 `ROUTE_WHEELCHAIR_STAIRS_FALLBACK` 與 `warnings`，不能只看成功狀態就標為無階梯或可獨立通行。一般步行可用合法階梯，不會因此標成輪椅協助備援。
 - **距離與時間**：`distanceM` 為步行距離（不含電梯）；`durationS` 依模式步速計算，電梯每趟以 `VENUE_ELEVATOR_WAIT_S` + 每層 `VENUE_ELEVATOR_PER_FLOOR_S` 計（一趟只等一次）。坡道步驟除非資料標 `a11ymap:height_status=measured`，否則文字會註明「未實測」。
 
 | HTTP | 情況 |
@@ -35,16 +34,14 @@
 | 200 | 路線 |
 | 400 | 參數格式錯誤、帶了未知欄位（例如 `profile`）或未知 `mode` |
 | 404 | 查無場域或地點 |
-| 422 | `NO_ACCESSIBLE_ROUTE`：目的地可步行到達，但仍受所選模式的已知通行限制阻擋，附 `data.venueAccessibility = { venueId, placeId, levelRef, stepFreeReachable: false }`；`NO_ROUTE`：路網未連通或已知禁行後無路。單純樓梯不再直接代表輪椅無路，先依上述完整搜尋／協助備援政策處理 |
-| 503 | 搜尋預算耗盡或路由暫時不可用；不等於已完成搜尋且無無階梯路，不據以開啟階梯備援 |
+| 422 | `NO_ACCESSIBLE_ROUTE`：目的地可步行到達，但沒有符合所選模式限制的路線（輪椅遇到樓梯、手扶梯、過窄、過陡或 `wheelchair=no`），`data.venueAccessibility = { venueId, placeId, levelRef, stepFreeReachable: false }`；`NO_ROUTE`：路網未連通 |
 
 ## 從校外導到校內
 
 既有 `POST /api/v1/a11y/accessible-route` 可用 `destinationVenuePlace: { venueId, placeId }` 取代 `destination`（需搭配 `origin`，不可同時給 `destination` 或 `query`）。
 
-- 候選校門：`normal` 可用所有校門；其他模式只用標 `wheelchair=yes` 的校門（沒標視為不可用）。每個候選都必須同時有真實可達的戶外路線與合法校內路線；不再只用直線距離先選死一個門。同一政策層比較完整路線時間；輪椅先檢查各門的完整無階梯路，不能因較近門需要樓梯就跳過另一個可無階梯抵達的門。
-- 所有候選與嚴格／備援搜尋共用同一規劃預算及版本快照。已有完整無階梯路線可用時，另一門的不確定不會把它取消；若嚴格候選仍有未完成／逾時且沒有已證實可用的完整路線，回 503，不把它當成無路並開啟階梯備援。車輛停車接駁、中途點與大眾運輸接駁仍須走合格步行路網，不補未驗證直線。
-- 回應 `data.destination` 為校門，`data.venueArrival` 記錄校門與場域版本，`data.venueLeg` 為校內路線（同場域路線格式）。校內需階梯協助時，整條回傳路線也會帶協助警告與摘要；室外 `walkingPolicy` 仍只描述室外圖版本與所選邊，不偽稱室內階梯屬於室外圖。語音與 `nav-instructions` 只涵蓋戶外段。
+- 候選校門：`normal` 可用所有校門；其他模式只用標 `wheelchair=yes` 的校門（沒標視為不可用）。系統對每個候選校門算「校門 → 地點」的符合該模式限制的校內加權成本，加上起點到校門的直線距離，選總和最小的校門；戶外路線只規劃到該校門一次。這是啟發式，不是實際戶外最短路。
+- 回應 `data.destination` 為校門，`data.venueArrival` 記錄校門與場域版本，`data.venueLeg` 為校內路線（同場域路線格式）。語音與 `nav-instructions` 只涵蓋戶外段。
 - 使用者要求無階梯（`avoidStairs`）時，校內段一律採輪椅規則。
 - 校內不可達時整個請求回 422（`NO_ACCESSIBLE_ROUTE` 附 `venueAccessibility`，或 `NO_ROUTE`），不會只導到校門；場域或地點不存在回 400 `VENUE_PLACE_NOT_FOUND`（此端點不回 404）。
 - 重新規劃（reroute）固定使用原校門：校門仍在原位（≤ 1 m）就以目前場域版本重算 `venueLeg`，並把實際使用的版本寫回 token；校門被移除、移位或不再符合該模式（例如拿掉了 `wheelchair=yes`）、或目的地地點被移除，則回 410 `ROUTE_TOKEN_EXPIRED_OR_UNSUPPORTED`（訊息「場域資料已更新」），需重新規劃，不會自動換校門。

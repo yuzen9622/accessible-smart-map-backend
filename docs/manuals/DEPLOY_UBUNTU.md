@@ -5,14 +5,13 @@
 
 ## 架構總覽
 
-本手冊使用主機 Node 與 MongoDB，OTP 和政府人行道來源資料庫由 Compose 管理：
+這個後端有三個必須一起跑的元件：
 
 ```
                 ┌─────────────────────────────────────────┐
    client ───►  │  Node API (systemd, :8000)               │
                 │   ├─► MongoDB        (localhost:27017)    │  ← a11y/bus/metro 資料
-                │   ├─► OTP sidecar    (127.0.0.1:18080)    │  ← 交通與直接步行路網
-                │   └─► PostGIS        (127.0.0.1:5434)     │  ← 政府人行道來源
+                │   └─► OTP sidecar    (127.0.0.1:8080)     │  ← 大眾運輸路網 graph
                 └─────────────────────────────────────────┘
 ```
 
@@ -20,8 +19,7 @@
 | ----------- | -------------------------- | --------------------------------------- |
 | Node API    | systemd service            | ✅                                      |
 | MongoDB 8.0 | apt 安裝、systemd          | ✅（存 a11y/公車站/捷運站等）           |
-| OTP 2.9.0   | Docker（`docker compose`） | ✅（大眾運輸與 native 直接步行） |
-| PostGIS     | Docker（`docker compose`） | ✅（政府人行道來源及來源版本核對） |
+| OTP 2.9.0   | Docker（`docker compose`） | ✅（路徑規劃唯一引擎）                  |
 | Redis       | —                          | ❌ 選用（`REDIS_URL` 沒設就全程 no-op） |
 
 > ⚠️ 重點：`src/server.ts` **不會自己讀 `.env`**（只有 `dev` 腳本用 dotenvx）。生產環境靠 systemd 用 `node -r dotenv/config` 載入 `.env`（`dotenv` 已是正式依賴）。
@@ -130,16 +128,14 @@ TDX_CLIENT_ID=...
 TDX_CLIENT_SECRET=...
 
 # OTP 路徑規劃引擎
-OTP_BASE_URL=http://127.0.0.1:18080
-OTP_SERVE_XMX=6g
+OTP_BASE_URL=http://localhost:8080
 
-# Compose PostGIS；主機 Node／匯入腳本走 5434
-PED_PG_USER=<資料庫使用者>
-PED_PG_PASSWORD=<資料庫密碼>
-PED_GRAPH_DATABASE_URL=postgresql://<資料庫使用者>:<資料庫密碼>@127.0.0.1:5434/ped_graph
+# 給 docker compose 用（OTP 資料目錄）
+OTP_DATA_DIR=/opt/accessible-smart-map-backend/otp-data
+OTP_SERVE_XMX=8g          # 125GB RAM，給足
 ```
 
-> OTP 資料固定放在專案的 `otp-data/`，由主機建圖腳本產生，不必設定資料目錄環境變數。`OTP_SERVE_XMX` 控制服務 heap，請依主機與其他服務的記憶體用量設定。使用 Compose 後端時，內部 OTP 與 PostGIS 位址會由 Compose 覆寫。
+> `docker compose` 會讀同目錄的 `.env` 來替換 `${OTP_DATA_DIR}` / `${OTP_SERVE_XMX}`，所以這兩個放 `.env` 即可。
 
 ---
 
@@ -214,65 +210,55 @@ pnpm data:sync                # 日常更新：只跑 upsert 類步驟（不清�
 
   ```bash
   pnpm import:sidewalks --dry-run       # 驗證 ZIP／22 縣市／清洗與 PostGIS 幾何，不發布
-  pnpm import:sidewalks --zip <path>    # 本地 ZIP 匯入，不改原檔、不建圖
-  pnpm data:sync --only=sidewalks       # 網路下載並發布來源快照，不建圖
+  pnpm import:sidewalks --zip <path>    # 本地 ZIP 重現匯入，不改原檔
+  pnpm data:sync --only=sidewalks       # 網路下載並原子發布來源快照
   ```
 
   資料庫連線只從 `.env`／環境變數 `PED_GRAPH_DATABASE_URL` 讀取，不支援 `--db-url`；不要將含密碼的 URI 放進命令列，pnpm 可能回顯參數。`--url` 也只應填不含憑證的公開網址。
 
-  清洗保留有效人行道存在幾何與原始屬性；無效／矛盾淨寬是未知證據，不代表可通行。報告列出 SHA256、原始／接受／隔離筆數與原因，相同 ZIP 不重複建立版本；重匯歷史 ZIP 時會驗證並切換來源快照。`ped_sidewalk_source_version`／`ped_sidewalk_polygon` 是獨立、版本化的參考來源，來源本身不是路網。`pnpm import:sidewalks` 與 `data:sync` 的人行道步驟都只匯入來源；套用路網須另行執行 `pnpm otp:rebuild`。新來源先切 ACTIVE，在新圖載入前，舊圖可能因來源不符而回傳 503，須安排維護時段。
+  清洗保留有效人行道存在幾何與原始屬性；無效／矛盾淨寬是未知證據，不代表可通行。報告列出 SHA256、原始／接受／隔離筆數與原因，相同 ZIP 不重複建立版本；明確重匯歷史 ZIP 時，會驗證並原子切換回該來源快照，但不切換路由圖。`ped_sidewalk_source_version`／`ped_sidewalk_polygon` 是獨立、版本化的參考來源；失敗保留舊 ACTIVE 快照。這**不會改變無障礙智慧地圖現有路線**：全台 OSM 接路網、選路及階梯政策仍需後續建圖、驗證與明確的 graph promotion，匯入不自動啟用路由圖。
 - `import:taipei-ramps` 仍需要 PostGIS 已有 ped graph（`ped_graph_version` 表）；還沒建就加 `--skip=taipei-ramps`。
 - 在 host 上跑時，`.env` 的 `DATABASE_URL`／`PED_GRAPH_DATABASE_URL` 要指向 compose 對外的埠（Mongo `27018`、PostGIS `5434`）。
-
-#### 全國步行圖（PostGIS／CSR）
-
-先備妥原始全國 PBF、已匯入的人行道來源版本及 GTFS。建圖主機需要 Python 的 osmium、Shapely、psycopg2；API 的 Node 程序不會在請求時替你建圖。以下 `<SOURCE_ID>` 為匯入產生的不可變來源版本，`<GRAPH_ID>` 為建圖輸出的候選版本：
-
-```bash
-pnpm build:ped-graph --pbf otp-data/taiwan-latest.osm.pbf --bbox taiwan --sidewalk-source-version <SOURCE_ID> --exclude-invalid-osm-areas --disk-stage-edges
-pnpm inject:ped-indoor --version-id <GRAPH_ID> --bbox taiwan --gtfs-dir data/gtfs --exclude-invalid-gtfs
-```
-
-- `--disk-stage-edges` 將邊資料暫存至私人 SQLite，降低邊的常駐記憶體；面網格、節點與後續載入仍需要 RAM，並非固定記憶體上限。`TMPDIR` 應指向有足夠可寫空間的磁碟；全國建圖和資料庫索引均須預留容量。
-- 兩個 `--exclude-invalid-*` 都是**明確選用**。省略時保留嚴格診斷；選用時只隔離可識別的壞來源記錄，警告及候選 notes 保存原始識別、內容、原因、政策與輸入雜湊。不能靠排除有效資料或吞掉程式／I/O／資源錯誤完成建圖。未匹配的 GTFS 接線不會靠距離補直線，獨立有效的站內通道仍保留。
-- CSV 模式直接讀標準 GTFS `stops.txt`／`pathways.txt`（有 `levels.txt` 時一併保留來源），不需要 PyMongo。未指定 `--gtfs-dir` 可沿用 Mongo 來源；排除 GTFS 壞記錄的選項僅適用 CSV 模式。
-- 新圖保持 `CANDIDATE`，完成站內注入也不會自動啟用。先核對來源雜湊、22 縣市與離島的代表路線、合法接線／禁行反例、實際 CSR 載入與冷／暖／並行請求資源，並審閱缺漏。不可將建圖 exit 0、面資料匯入或少數範例成功當成路線驗收。
-- 完成自己的驗收後，操作人員才明確執行 `pnpm promote:ped-graph --version-id <GRAPH_ID>`；不要直接 UPDATE lifecycle 繞過檢查，也不要讓兩個資料庫程序共用同一 PGDATA。本文範例不會自動執行 promotion。
-- 舊圖只有 `sidewalk-v1` 標籤並不足以證明已處理同層來源淨寬衝突；需用新 builder 重建，產生 `source_width_policy` 的版本／規則雜湊證據。不得直接補寫舊 notes 假裝重建。局部寬度限制須同時保留在面、原生邊與站內接線，不靠較寬或未知資料繞過已知較窄的同層範圍。
-- 涉及 WALK 的 API 會拒絕未合格、來源不符、未完成注入或無法合法接線的路網；不改走未驗證的 OTP／Valhalla 步行線。缺失或不確定的坡度、淨寬、障礙與電梯狀態不等於現場無障礙，保留的來源缺漏亦不代表已補齊。
 
 ---
 
 ## Phase 5 — OTP sidecar
 
-在主機上分別執行政府人行道匯入與 OTP 建圖。建圖前依 [OTP 維運手冊](./OTP_OPERATIONS.md#新環境啟用) 安裝 Python 建圖套件（osmium、Shapely、rasterio、psycopg2）、啟用虛擬環境，並確認 Node／pnpm、Docker Compose、`curl`、`zip`、`unzip`、`git` 可用。
+OTP 容器只需要 `otp-data/`（內含 `graph.obj` + 3 個 config）。`graph.obj` 與 OTP 版本綁定，務必都用 `2.9.0`。
 
-完成 `.env` 中的 TDX、PostGIS、Mongo 設定，並依 Phase 4 備妥 Mongo 基礎資料。主機腳本須連到實際對外埠；本手冊採主機 Mongo，PostGIS 則使用 Compose 的 **5434**。Valhalla 路網屬於其他後端功能的部署要求，不是本步驟的建圖前提。
+### 路徑 A（推薦）：把本機建好的 graph 搬上去
 
-```bash
-docker network inspect accessible-shared >/dev/null 2>&1 || docker network create accessible-shared
-docker compose up -d --wait postgis
-pnpm import:sidewalks
-pnpm otp:rebuild
-```
-
-`import:sidewalks` 只下載、驗證並匯入官方人行道來源，成功後才執行 `otp:rebuild`。後者負責建圖預檢、完整 GTFS 下載／清理、台鐵及捷運補強、Mongo 設施補強、站牌合併及對照表匯入、OSM／DEM 與政府人行道編圖。既有交通驗證和新增的一般／輪椅／中途點試排都通過後，才載入 OTP。各指令失敗會回傳非零狀態，請先修正原因，再繼續下一步。
-
-所有產物由腳本放進固定的 `otp-data/`，不需手動建立 graph、manifest、release 指標或設定資料目錄環境變數。`docker compose up` 只載入已建好的圖，不會在啟動時下載或建圖。第一次全國資料處理可能耗時較長，請預留主機／Docker VM 記憶體與磁碟，並安排維護時段。
-
-來源會先切換為 ACTIVE；建圖或載入失敗後，即使舊圖檔仍保留，後端也可能因來源不符回傳 503。不要把保留舊檔解讀為已完整復原；修正後可用 `pnpm otp:rebuild` 重建目前來源。
-
-本手冊的主機 Node 服務依 Phase 6 啟動。若採用 Compose 後端，建圖成功後執行：
+本機這次已建好含**文湖線/環狀線**的新 graph，直接搬：
 
 ```bash
-docker compose up -d --build backend
+# 本機 → 伺服器（~2GB，含 graph.obj + feed + osm + configs）
+rsync -avz --progress otp-data/ deploy@<伺服器>:/home/nutcai/1111131042/accessible-smart-map-backend/otp-data/
 ```
 
-Compose 內後端使用 `http://otp:8080`；主機 Node 使用 `http://127.0.0.1:18080`。不要同時啟動兩種後端部署方式占用相同埠。
+```bash
+# 伺服器啟動（compose 已把 8080 綁 127.0.0.1，不對外）
+cd /home/nutcai/1111131042/accessible-smart-map-backend
+docker compose up -d otp
+docker logs otp --tail 20          # 看 "Graph loaded" / "Started listener"
+# 健康檢查（載入 graph 約需 30–60 秒）
+curl -s http://localhost:8080/otp/gtfs/v1 -X POST -H 'Content-Type: application/json' \
+  -d '{"query":"{feeds{feedId}}"}' && echo "  ← 有 feedId 即正常"
+```
 
-日後更新人行道並套用圖，先執行 `pnpm import:sidewalks`，成功後再執行 `pnpm otp:rebuild`。只沿用目前來源重建時，執行 `pnpm otp:rebuild`（`pnpm build:otp` 為同流程別名）。匯入指令的 `--dry-run` 不發布來源；`data:sync` 的人行道步驟也只負責匯入。完整選項、備份與失敗處理見 [OTP 維運手冊](./OTP_OPERATIONS.md#指令與來源選項)。
+### 路徑 B：在伺服器自己建圖（RAM 夠，可行）
 
-目前直接步行驗收範圍為本島 19 縣市，離島暫緩。其他輔助模式、大眾運輸接駁與停車步行仍需既有 CSR 資料。雲端憑證、Valhalla 與其他後端功能仍依原有部署要求準備。
+需要 `otp-data/` 裡有 `taiwan-gtfs.zip` + `taiwan-otp.osm.pbf`（先 rsync 這兩個，或讓 `build-otp-graph.sh` 重抓）。
+
+```bash
+cd /opt/accessible-smart-map-backend
+export OTP_DATA_DIR="$PWD/otp-data"
+export OTP_GTFS_URLS="<全國 GTFS zip 下載 URL>"   # 見 OTP_OPERATIONS.md §2.1 的注意事項
+# 這台 RAM 125GB，建圖(12g) 與服務(8g) 同時跑不會 OOM，不必先停容器
+bash src/scripts/build-otp-graph.sh
+```
+
+> `build-otp-graph.sh` 會自動：preflight（checkout／磁碟／Mongo／依賴，失敗就不建）→ 抓 feed → 清理 → 注入 TRA → **注入捷運(本次新增)** → 建圖 → 候選圖驗收（`verify-otp-graph.py`，不過就不換）→ 原子換檔 → 重啟 → healthcheck。
+> 驗證碼可選裝 `gtfs-validator`、`osmium-tool`（`sudo apt install osmium-tool`）；沒裝腳本會跳過驗證 gate。
 
 ---
 
@@ -312,7 +298,7 @@ journalctl -u accessible-backend -f      # 看 log
 ## Phase 7 — 防火牆 + 冒煙測試
 
 ```bash
-# 只開 SSH；MongoDB(27017)、OTP(18080)、PostGIS(5434) 只綁 127.0.0.1，不需開
+# 只開 SSH；MongoDB(27017) 與 OTP(8080) 都只綁 127.0.0.1，不需開
 sudo ufw allow OpenSSH
 # 若 API 要給「內網其他機器」連，才開該埠（否則連這條都不用）：
 # sudo ufw allow from <內網網段> to any port 8000 proto tcp
@@ -339,17 +325,23 @@ curl -s -X POST http://localhost:8000/api/v1/a11y/accessible-route \
 
 ## 日常維運
 
-| 工作 | 指令 |
-| --- | --- |
-| 看主機 API log | `journalctl -u accessible-backend -f` |
-| 重啟主機 API | `sudo systemctl restart accessible-backend` |
-| 更新程式碼 | `git pull && pnpm install --frozen-lockfile && sudo systemctl restart accessible-backend` |
-| OTP 啟停 | `docker compose up -d otp` / `docker compose stop otp` |
-| OTP log | `docker compose logs --tail 100 otp` |
-| 更新人行道來源 | `pnpm import:sidewalks` |
-| 使用已匯入來源建圖及載入 OTP | `pnpm otp:rebuild` |
+| 工作           | 指令                                                                                      |
+| -------------- | ----------------------------------------------------------------------------------------- |
+| 看 API log     | `journalctl -u accessible-backend -f`                                                     |
+| 重啟 API       | `sudo systemctl restart accessible-backend`                                               |
+| 更新程式碼     | `git pull && pnpm install --frozen-lockfile && sudo systemctl restart accessible-backend` |
+| OTP 啟停       | `docker compose up -d otp` / `docker stop otp`                                            |
+| OTP log        | `docker logs otp --tail 30`                                                               |
+| 每週重建 graph | **必裝**：`scheduled-otp-rebuild.sh`（cron 或 systemd timer），見下                         |
 
-交通班表有期限，應定期執行 `pnpm otp:rebuild`，完成建圖、驗證及載入。`scheduled-otp-rebuild.sh` 會先更新部署 checkout，再呼叫同一流程；主機的 Python 環境、設定及服務也必須可用。來源更新與失敗處理以 [OTP 維運手冊](./OTP_OPERATIONS.md) 為準。
+每週日 04:00 自動重建 OTP graph（含捷運/台鐵/高鐵班表更新）。**這不是選配**：軌道班表只涵蓋 4–8 週，沒排程圖資約一個月後就只剩公車。
+
+```bash
+crontab -e
+0 4 * * 0 /opt/accessible-smart-map-backend/src/scripts/scheduled-otp-rebuild.sh
+```
+
+systemd timer 寫法、建圖門檻與 `/health` 的 `transitData` 偵測見 `OTP_OPERATIONS.md` §7。
 
 ## 疑難排解
 
@@ -358,5 +350,5 @@ curl -s -X POST http://localhost:8000/api/v1/a11y/accessible-route \
 | API 啟動即崩、env 都 undefined | systemd 沒載到 `.env` → 確認 `WorkingDirectory` 正確、`.env` 在該目錄、用了 `-r dotenv/config` |
 | 路由都沒捷運/台鐵              | OTP 沒起來或 graph 沒含注入 → `docker logs otp`、確認 `OTP_BASE_URL` 可連                      |
 | API 每次卡 ~30 秒才回          | MongoDB 連不上 → `systemctl status mongod`、檢查 `DATABASE_URL` 帳密/authSource                |
-| 建圖 `exit 137` | 檢查主機／Docker VM 記憶體與並行服務，增加容量或安排維護時段；不要假定大型主機不會 OOM。 |
-| 圖或來源身分不符 | 檢查匯入與建圖 log，確認 release 與 PostGIS 來源、程式／映像一致，再執行 `pnpm otp:rebuild`；不要只替換單一 graph。 |
+| 建圖 `exit 137`                | OOM（這台不會發生；若在小機器則先 `docker stop otp` 釋放記憶體）                               |
+| graph 換壞                     | 回滾：`mv otp-data/graph.obj.prev otp-data/graph.obj && docker compose up -d otp`              |
