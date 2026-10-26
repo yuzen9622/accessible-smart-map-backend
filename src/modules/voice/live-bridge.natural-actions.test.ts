@@ -18,9 +18,6 @@ vi.mock("../ai/agent-tools", () => ({ executeLocalTool: io.execute }));
 vi.mock("../accessible-route/route-token.service", () => ({
   getRouteByToken: io.route,
   getNavigationEnvelopeByToken: io.envelope,
-  resolveNavigationEnvelope: vi.fn(async (v: any) =>
-    v?.schemaVersion === 1 && !!v.route && !!v.canonicalRequest ? v : null,
-  ),
   isNavigationEnvelope: (v: any) =>
     v?.schemaVersion === 1 && !!v.route && !!v.canonicalRequest,
 }));

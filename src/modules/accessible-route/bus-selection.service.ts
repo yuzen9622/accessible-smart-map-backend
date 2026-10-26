@@ -10,10 +10,7 @@ import { copyWithDescriptors } from "../../utils/route-source-names";
 import { createCandidateRequestBudget } from "../transit/bus-stop-pair-eta.service";
 import { getSelectedBusGeometry } from "../transit/bus.service";
 import { readNavigationTokenStrict } from "./navigation-state.repository";
-import {
-  attachRouteTokens,
-  resolveNavigationEnvelope,
-} from "./route-token.service";
+import { attachRouteTokens, isNavigationEnvelope } from "./route-token.service";
 import { readBusPlan, readOfferedBusCandidate } from "./bus-plan.repository";
 import { isBusSelectionAccessible } from "./accessible-route.service";
 import {
@@ -90,15 +87,14 @@ export async function selectBusDeparture(request: {
 }): Promise<SelectionResult> {
   const token = await readNavigationTokenStrict(request.routeToken);
   if (token.status === "unavailable") return unavailable();
-  const previous =
-    token.status === "ok" ? await resolveNavigationEnvelope(token.value) : null;
-  if (!previous)
+  if (token.status === "missing" || !isNavigationEnvelope(token.value))
     return {
       ok: false,
       status: ResponseCode.GONE,
       error: BUS_SELECTION_MSG.EXPIRED,
       data: { reason: "ROUTE_TOKEN_EXPIRED_OR_UNSUPPORTED" },
     };
+  const previous = token.value;
   const baseLeg = previous.route.legs[request.legIndex];
   if (!baseLeg || baseLeg.type !== "BUS")
     return {

@@ -1,5 +1,4 @@
 import { copyWithDescriptors } from "../../utils/route-source-names";
-import { hasCurrentWalkingPolicy } from "./walking-policy.service";
 import { randomBytes, randomUUID } from "crypto";
 import { storeBusPlan } from "./bus-plan.repository";
 import { redisGet } from "../../config/redis";
@@ -10,8 +9,6 @@ import type {
 } from "./accessible-route.types";
 import {
   navigationTokenKey,
-  sealNavigationEnvelope,
-  verifyNavigationEnvelopeIntegrity,
   storeInitialNavigationEnvelope,
 } from "./navigation-state.repository";
 
@@ -29,16 +26,13 @@ export async function attachRouteTokens(
         navigationId,
         routeVersion,
       });
-      const stored = await storeInitialNavigationEnvelope(
-        routeToken,
-        sealNavigationEnvelope({
-          schemaVersion: 1,
-          route: navigationRoute,
-          navigationId,
-          routeVersion,
-          canonicalRequest,
-        }),
-      );
+      const stored = await storeInitialNavigationEnvelope(routeToken, {
+        schemaVersion: 1,
+        route: navigationRoute,
+        navigationId,
+        routeVersion,
+        canonicalRequest,
+      });
       if (!stored) {
         console.warn("[accessible-route] route token cache unavailable");
         return route;
@@ -53,7 +47,14 @@ export async function attachRouteTokens(
 export async function getRouteByToken(
   routeToken: string,
 ): Promise<AccessibleRoute | null> {
-  return (await getNavigationEnvelopeByToken(routeToken))?.route ?? null;
+  const raw = await redisGet(navigationTokenKey(routeToken));
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as AccessibleRoute | NavigationRouteEnvelope;
+    return isNavigationEnvelope(parsed) ? parsed.route : parsed;
+  } catch {
+    return null;
+  }
 }
 
 export function isNavigationEnvelope(
@@ -65,37 +66,9 @@ export function isNavigationEnvelope(
     candidate.schemaVersion === 1 &&
     typeof candidate.navigationId === "string" &&
     Number.isInteger(candidate.routeVersion) &&
-    Number(candidate.routeVersion) >= 1 &&
-    !!candidate.route &&
-    typeof candidate.route === "object" &&
-    Array.isArray(candidate.route.legs) &&
-    candidate.route.legs.every(
-      (leg) => !!leg && typeof leg === "object" && typeof leg.type === "string",
-    ) &&
-    candidate.route.navigationId === candidate.navigationId &&
-    candidate.route.routeVersion === candidate.routeVersion &&
-    !!candidate.canonicalRequest &&
-    typeof candidate.canonicalRequest === "object" &&
-    verifyNavigationEnvelopeIntegrity(candidate as NavigationRouteEnvelope)
+    Boolean(candidate.route) &&
+    Boolean(candidate.canonicalRequest)
   );
-}
-
-export async function resolveNavigationEnvelope(
-  value: unknown,
-): Promise<NavigationRouteEnvelope | null> {
-  if (
-    !isNavigationEnvelope(value) ||
-    !(await hasCurrentWalkingPolicy(value.route))
-  )
-    return null;
-  const policy = value.route.walkingPolicy;
-  if (
-    policy &&
-    (policy.mode !== value.canonicalRequest.mode ||
-      policy.avoidStairs !== value.canonicalRequest.avoidStairs)
-  )
-    return null;
-  return value;
 }
 
 export async function getNavigationEnvelopeByToken(
@@ -104,7 +77,8 @@ export async function getNavigationEnvelopeByToken(
   const raw = await redisGet(navigationTokenKey(routeToken));
   if (!raw) return null;
   try {
-    return await resolveNavigationEnvelope(JSON.parse(raw));
+    const parsed: unknown = JSON.parse(raw);
+    return isNavigationEnvelope(parsed) ? parsed : null;
   } catch {
     return null;
   }

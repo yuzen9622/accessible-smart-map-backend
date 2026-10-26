@@ -188,7 +188,7 @@ describe("getPedGraphRuntime", () => {
     expect(loadPedGraph).toHaveBeenCalledTimes(2);
   });
 
-  it("fails closed when a freshness check fails", async () => {
+  it("keeps serving the cached graph when a freshness check fails", async () => {
     process.env.PED_GRAPH_REFRESH_INTERVAL_MS = "1";
     vi.mocked(loadPedGraph).mockResolvedValue(fakeGraph(4));
     let freshnessChecks = 0;
@@ -209,10 +209,9 @@ describe("getPedGraphRuntime", () => {
 
     expect(freshnessChecks).toBe(1);
 
-    expect(second).toEqual({
-      status: "unavailable",
-      reason: "connection terminated",
-    });
+    expect(second.status).toBe("ready");
+    if (second.status !== "ready") return;
+    expect(second.snapshot.graph.versionId).toBe(4);
   });
 
   it("reloads after the cache is reset", async () => {

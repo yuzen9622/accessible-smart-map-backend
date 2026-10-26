@@ -10,29 +10,6 @@ vi.mock("./planners/otp-routing", () => ({
   isOtpCircuitOpen: vi.fn(() => false),
 }));
 
-vi.mock("./planners/pedestrian-a11y/graph-runtime", () => ({
-  getPedGraphRuntime: vi.fn(async () => ({
-    status: "ready",
-    snapshot: {
-      graph: { versionId: 7, qualification: sourcePolicy },
-      loadedAtMs: 0,
-    },
-  })),
-}));
-vi.mock("./planners/pedestrian-a11y/csr-walk-planner", () => ({
-  planCsrWalkRoute: vi.fn(),
-}));
-import { planCsrWalkRoute } from "./planners/pedestrian-a11y/csr-walk-planner";
-const sourcePolicy = {
-  version: "sidewalk-v1" as const,
-  schemaVersion: 1 as const,
-  sourceVersionId: "1",
-  sourceArchiveSha256: "a".repeat(64),
-  osmSha256: "b".repeat(64),
-  extent: [118, 21, 123, 27] as const,
-};
-const fixtureWalkSeconds: number[] = [];
-
 vi.mock("../environment/environment.service", () => ({
   getWeatherAndAirQuality: vi.fn().mockResolvedValue({}),
 }));
@@ -61,7 +38,6 @@ function walkOnlySegment(
   scheduledEndTime = scheduledDepartureTime + minutes * 60_000,
   departureDate?: string,
 ): AccessibleRoute {
-  fixtureWalkSeconds.push((scheduledEndTime - scheduledDepartureTime) / 1000);
   return {
     routeId: id,
     routeName: id,
@@ -95,43 +71,6 @@ function walkOnlySegment(
 
 beforeEach(() => {
   vi.resetAllMocks();
-  fixtureWalkSeconds.length = 0;
-  vi.mocked(planCsrWalkRoute).mockImplementation(async (points) => ({
-    status: "ok",
-    plans: points.slice(1).map((point, index) => ({
-      policy: sourcePolicy,
-      graphVersionId: 7,
-      stairsFallback: false,
-      selectedEdgeIds: ["701"],
-      polyline: [
-        [points[index].lng, points[index].lat],
-        [point.lng, point.lat],
-      ],
-      distanceM: 100,
-      durationS: fixtureWalkSeconds.shift() ?? 300,
-      approximateIndoorSegmentCount: 0,
-      a11ySegments: [],
-      a11yPoints: [],
-      steps: [],
-      sidewalkRampCount: 0,
-      accessibility: {
-        maxSlopePercent: null,
-        crossings: null,
-        crossingsWithCurbRamp: null,
-        minPathWidthCm: null,
-        surfaceType: "unknown",
-      },
-      diagnostics: {
-        expandedNodes: 2,
-        reopenedNodes: 0,
-        edgeCount: 1,
-        totalCostM: 100,
-        relaxationLevel: 0,
-        originSnapDistanceM: 0,
-        destinationSnapDistanceM: 0,
-      },
-    })),
-  }));
   vi.mocked(otp.isOtpCircuitOpen).mockReturnValue(false);
   vi.mocked(getWeatherAndAirQuality).mockResolvedValue({});
 });
@@ -165,14 +104,7 @@ describe("findAccessibleRoutes transit waypoint chaining", () => {
     expect(mockPlan.mock.calls[0][1]).toEqual(waypoint);
     expect(mockPlan.mock.calls[1][0]).toEqual(waypoint);
     expect(mockPlan.mock.calls[1][1]).toEqual(destination);
-    // Keep the original candidate pipeline; qualification precedes selection.
-    expect(mockPlan.mock.calls[0][2]).not.toHaveProperty("limit");
-    expect(mockPlan.mock.calls[0][2]).toMatchObject({
-      mode: "normal",
-      avoidStairs: false,
-      maxTransfers: 1,
-    });
-    expect(mockPlan.mock.calls[0][2]?.deadline).toEqual(expect.any(Number));
+    expect(mockPlan.mock.calls[0][2]).toMatchObject({ limit: 1 });
 
     // segment 1 departs at the requested time; segment 2 departs 10 min later
     // (seg1.totalMinutes) — NOT at the origin time.

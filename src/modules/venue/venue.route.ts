@@ -1,15 +1,22 @@
-/** Venue routing shares the pedestrian search policy and reports raw path metrics. */
-import {
-  getRoutingConfig,
-  type VenueRoutingConfig,
-} from "../../config/routing";
+/**
+ * Plans a route between two venue places on the compiled venue graph and
+ * turns the selected path into floor-aware steps.
+ *
+ * Routing reuses the CSR `dijkstra` and `edgeCost` unchanged. The profile is
+ * resolved on the server from the requested mode only (strict
+ * `relaxationLevel: 0`): wheelchair never takes stairs; elderly and
+ * visual_impaired explicitly forbid steps, stairs and escalators while
+ * retaining their own profiles; normal stays neutral.
+ *
+ * `distanceM` / `durationS` are summed from the raw edge length and time, never
+ * from Dijkstra's weighted cost.
+ */
+import type { VenueRoutingConfig } from "../../config/routing";
 import type { SupportedLang } from "../../types/lang";
 import type { AccessibilityMode } from "../../types/route";
 import type { CostProfile } from "../accessible-route/planners/pedestrian-a11y/cost";
 import { profileFor } from "../accessible-route/planners/pedestrian-a11y/csr-walk-planner";
-import { searchPedGraph } from "../accessible-route/planners/pedestrian-a11y/astar";
-import { ROUTE_WARNING } from "../../constants/messages";
-import { presentRouteMessages } from "../../utils/route-messages";
+import { dijkstra } from "../accessible-route/planners/pedestrian-a11y/dijkstra";
 import { levelRefOf } from "./venue.compile";
 import { MAX_ARRIVAL_NODES } from "./venue.arrivals";
 import { leastCertain } from "./venue.connections";
@@ -49,7 +56,7 @@ export type VenuePlanOutcome =
   /** `costM` is the weighted path cost (metres-equivalent), for ranking only. */
   | { ok: true; route: VenueRoute; costM: number }
   | { ok: false; reason: "NO_ACCESSIBLE_ROUTE"; levelRef: string | null }
-  | { ok: false; reason: "NO_ROUTE" | "UNAVAILABLE" };
+  | { ok: false; reason: "NO_ROUTE" };
 
 /**
  * @param mode Requested accessibility mode.
@@ -129,64 +136,30 @@ export function planVenueRoute(
   mode: AccessibilityMode,
   config: VenueRoutingConfig,
   lang: SupportedLang,
-  options: { deadlineMs?: number; allowStairsFallback?: boolean } = {},
 ): VenuePlanOutcome {
-  const deadlineMs =
-    options.deadlineMs ?? Date.now() + getRoutingConfig().planBudgetMs;
-  if (!Number.isFinite(deadlineMs) || Date.now() >= deadlineMs)
-    return { ok: false, reason: "UNAVAILABLE" };
   const sources = arrivalIndices(vg, from);
   const destinations = arrivalIndices(vg, to);
   if (!sources || !destinations) return { ok: false, reason: "NO_ROUTE" };
 
-  let profile = venueProfileFor(mode, config);
+  const profile = venueProfileFor(mode, config);
   const bestPath = (costProfile: CostProfile) => {
-    const excludedEdges = new Set<number>();
-    vg.edgeOfAttr.forEach((edge, attr) => {
-      if (
-        edge.accessDenied ||
-        (costProfile.name === "wheelchair" && edge.wheelchairBarrier)
-      )
-        excludedEdges.add(attr);
-    });
-    return searchPedGraph(vg.graph, sources[0], destinations[0], costProfile, {
-      deadlineMs,
-      sources: sources.map((node) => ({ node, cost: 0 })),
-      targets: destinations.map((node) => ({ node, cost: 0 })),
-      excludedEdges,
-    });
+    let best: ReturnType<typeof dijkstra> = null;
+    for (const src of sources)
+      for (const dst of destinations) {
+        const candidate = dijkstra(vg.graph, src, dst, costProfile);
+        if (candidate && (!best || candidate.totalCost < best.totalCost))
+          best = candidate;
+      }
+    return best;
   };
-  let search = bestPath(profile);
-  let stairsFallback = false;
-  if (
-    search.status === "unreachable" &&
-    mode === "wheelchair" &&
-    options.allowStairsFallback !== false
-  ) {
-    profile = profileFor(mode, "stairs-fallback");
-    search = bestPath(profile);
-    stairsFallback = search.status === "found";
-  }
-  if (search.status !== "found") {
-    if (search.status !== "unreachable")
-      return { ok: false, reason: "UNAVAILABLE" };
+  const result = bestPath(profile);
+  if (!result) {
     const anyRoute =
-      mode === "normal" ? search : bestPath(venueProfileFor("normal", config));
-    if (anyRoute.status !== "found" && anyRoute.status !== "unreachable")
-      return { ok: false, reason: "UNAVAILABLE" };
-    return anyRoute.status === "found"
+      mode === "normal" ? null : bestPath(venueProfileFor("normal", config));
+    return anyRoute
       ? { ok: false, reason: "NO_ACCESSIBLE_ROUTE", levelRef: to.levelRef }
       : { ok: false, reason: "NO_ROUTE" };
   }
-  const result = search.route;
-  const warning = ROUTE_WARNING.WHEELCHAIR_STAIRS_FALLBACK;
-  const warnings = presentRouteMessages(
-    stairsFallback ? [warning] : [],
-    stairsFallback
-      ? [{ code: "ROUTE_WHEELCHAIR_STAIRS_FALLBACK", legacyMessage: warning }]
-      : [],
-    lang,
-  );
   const pathNodes = Array.from(result.nodePath, (i) => vg.nodes[i]);
   const pathEdges: PathEdge[] = Array.from(result.edgeAttrPath, (attr, i) => {
     const edge = vg.edgeOfAttr[attr];
@@ -224,9 +197,6 @@ export function planVenueRoute(
       venueId: venue.venueId,
       venueVersion: vg.version,
       mode,
-      stairsFallback,
-      warnings: warnings.messages,
-      warningDetails: warnings.details ?? [],
       fromPlaceId: from.id,
       toPlaceId: to.id,
       distanceM: Math.round(distanceM),

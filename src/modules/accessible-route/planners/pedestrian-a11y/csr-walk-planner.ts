@@ -8,28 +8,20 @@
  * escalating to an unprotected Valhalla route when OTP2 is unavailable.
  */
 
-import { isWithinPedGraphCoverage } from "../../../../config/ped-graph";
-import { getRoutingConfig } from "../../../../config/routing";
+import {
+  PED_GRAPH_MAX_SNAP_TOLERANCE_M,
+  isWithinPedGraphCoverage,
+} from "../../../../config/ped-graph";
 import type { AccessibilityMode } from "../../../../types/route";
 import { haversineMeters } from "../../../../utils/geo";
 import { walkSpeedMps } from "../../scoring";
-import {
-  resolveEndpointPart,
-  stopEndpointPart,
-  searchAttachedRoute,
-  type AttachedRoute,
-  type EndpointPart,
-} from "./endpoint-routing";
+import { aStar, type RouteResult } from "./astar";
 import type { CostProfile } from "./cost";
 import {
   DIAGNOSTIC_ALLOW_ALL_FARE_ACCESS,
   FORBID_FARE_ACCESS,
-  createTransitAuthorizedFareAccess,
 } from "./fare-access";
-import {
-  isPedGraphQualification,
-  type PedGraphQueryable,
-} from "./graph-loader";
+import type { PedGraphQueryable } from "./graph-loader";
 import { getPedGraphClient, getPedGraphRuntime } from "./graph-runtime";
 import { findHazardEdgeIndexes } from "./hazard-edges.repository";
 import {
@@ -41,8 +33,6 @@ import {
 } from "./graph.types";
 import {
   findPedEdgeGeometries,
-  findPedEndpointAttachments,
-  findPedStopNodeId,
   type LngLat,
   type PedEdgeGeometry,
 } from "./ped-graph-geometry.repository";
@@ -56,6 +46,7 @@ import { buildA11ySegments, type EdgeGeometrySpan } from "./a11y-segments";
 import { buildCsrStepStreetNames, buildCsrWalkSteps } from "./csr-steps";
 import { collectRampPoints } from "./ramp-points";
 import { sumSidewalkRampCount } from "./sidewalk-ramp-count";
+import { snapToGraph, type EdgeIndex, type SnapResult } from "./spatial-index";
 
 /**
  * Longitude/latitude tolerance for treating the last vertex of one edge and the
@@ -110,33 +101,20 @@ const FIRM_SURFACES: ReadonlySet<number> = new Set([
 ]);
 
 export interface CsrWalkPoint {
-  /** Internal exact GTFS identity; missing explicit identities fail closed. */
-  stopId?: string;
   lat: number;
   lng: number;
 }
 
 /**
  * @param mode Requested accessibility mode.
- * @param pass Wheelchair search tier; normal walking retains stair eligibility.
- * @returns A profile that never relaxes unrelated known limits.
+ * @returns The cost profile for that mode at the strict relaxation level.
  */
-export function profileFor(
-  mode: AccessibilityMode,
-  pass: "step-free" | "stairs-fallback" = "step-free",
-): CostProfile {
-  const profile: CostProfile = {
+export function profileFor(mode: AccessibilityMode): CostProfile {
+  return {
     name: mode,
     walkSpeedMps: walkSpeedMps(mode),
     relaxationLevel: 0,
   };
-  return mode === "wheelchair"
-    ? {
-        ...profile,
-        forbidStairs: pass === "step-free",
-        stairsFallback: pass === "stairs-fallback",
-      }
-    : profile;
 }
 
 /**
@@ -274,6 +252,34 @@ function assembleGeometry(
     polyline.push(nodeCoordinate(graph, nodePath[0]));
   }
   return { status: "ok", polyline, spans, approximateIndoorSegmentCount };
+}
+
+/**
+ * @param polyline Selected graph geometry.
+ * @param from Requested segment origin.
+ * @param to Requested segment destination.
+ * @returns Geometry with the counted straight snap connectors at both ends,
+ * plus the index shift an unshifted origin connector applies to `polyline`.
+ */
+function addSnapConnectors(
+  polyline: readonly LngLat[],
+  from: CsrWalkPoint,
+  to: CsrWalkPoint,
+): { polyline: LngLat[]; indexOffset: number } {
+  const connected = [...polyline];
+  const origin: LngLat = [from.lng, from.lat];
+  const destination: LngLat = [to.lng, to.lat];
+  let indexOffset = 0;
+  const first = connected[0];
+  if (first === undefined || !isSameVertex(origin, first)) {
+    connected.unshift(origin);
+    indexOffset = 1;
+  }
+  const last = connected[connected.length - 1];
+  if (last === undefined || !isSameVertex(last, destination)) {
+    connected.push(destination);
+  }
+  return { polyline: connected, indexOffset };
 }
 
 /**
@@ -449,376 +455,323 @@ function measurePath(
   return { status: "ok", distanceM, durationS };
 }
 
-interface SelectedPiece {
-  attr: number;
-  from: number;
-  to: number;
-  geometry: PedEdgeGeometry;
-  distanceM: number;
-  durationS: number;
-}
+/** Why one segment of a CSR walking request produced no path. */
+type SegmentBlock =
+  | { status: "unavailable"; reason: string }
+  | { status: "topology_disconnected" }
+  | { status: "fare_policy_blocked" }
+  | { status: "accessibility_blocked" };
 
-class RequestBudgetExhausted extends Error {}
+type SegmentOutcome =
+  | {
+      status: "ok";
+      route: RouteResult;
+      origin: SnapResult;
+      destination: SnapResult;
+      from: CsrWalkPoint;
+      to: CsrWalkPoint;
+    }
+  | SegmentBlock;
 
-async function beforeDeadline<T>(
-  deadlineMs: number,
-  work: () => Promise<T>,
-): Promise<T> {
-  const remaining = deadlineMs - Date.now();
-  if (remaining <= 0) throw new RequestBudgetExhausted();
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      work(),
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(
-          () => reject(new RequestBudgetExhausted()),
-          remaining,
-        );
-        timer.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
-async function selectedPieces(
-  client: PedGraphQueryable,
+/**
+ * Plan and classify exactly one origin/destination pair.
+ *
+ * The classification order is load-bearing: the fare-gate probe runs before any
+ * other explanation is considered, so a path that only a fare gate blocked can
+ * never be misreported as an accessibility or topology problem (which would
+ * license an OTP fallback straight through the paid area).
+ *
+ * @param graph CSR pedestrian graph.
+ * @param index Flatbush-backed physical edge index.
+ * @param from Segment origin coordinate.
+ * @param to Segment destination coordinate.
+ * @param profile Cost profile for the requested mode.
+ * @returns The selected path, or the reason there is none.
+ */
+function planSegment(
   graph: PedGraph,
-  selected: AttachedRoute,
+  index: EdgeIndex,
+  from: CsrWalkPoint,
+  to: CsrWalkPoint,
   profile: CostProfile,
-  deadlineMs: number,
-): Promise<SelectedPiece[]> {
-  const pieces: SelectedPiece[] = [];
-  const addPartial = (part: EndpointPart | undefined) => {
-    if (!part || part.distanceM === 0) return;
-    const time = graph.edgeTraversalTimeS[part.attr];
-    pieces.push({
-      attr: part.attr,
-      from: part.from,
-      to: part.to,
-      geometry: { status: "line", points: part.points },
-      distanceM: part.distanceM,
-      durationS:
-        (graph.edgeFlags[part.attr] & EDGE_FLAG.INDOOR) !== 0 &&
-        Number.isFinite(time) &&
-        time >= 0
-          ? time * part.fraction
-          : part.distanceM / profile.walkSpeedMps,
-    });
-  };
-  if (selected.direct) {
-    addPartial(selected.direct);
-    return pieces;
-  }
-  addPartial(selected.origin);
-  const route = selected.route;
-  const geometries = await beforeDeadline(deadlineMs, () =>
-    findPedEdgeGeometries(
-      client,
-      graph.versionId,
-      Array.from(route.edgeAttrPath, (attr) => graph.edgeOriginalId[attr]),
-    ),
+  excludedEdges: ReadonlySet<number>,
+): SegmentOutcome {
+  const origin = snapToGraph(
+    index,
+    from.lat,
+    from.lng,
+    PED_GRAPH_MAX_SNAP_TOLERANCE_M,
   );
-  for (let i = 0; i < route.edgeAttrPath.length; i++) {
-    const attr = route.edgeAttrPath[i];
-    const nodes = Int32Array.of(route.nodePath[i], route.nodePath[i + 1]);
-    const measurement = measurePath(
-      graph,
-      nodes,
-      Int32Array.of(attr),
-      [geometries[i]],
-      profile,
-    );
-    if (measurement.status !== "ok") throw new Error(measurement.reason);
-    pieces.push({
-      attr,
-      from: nodes[0],
-      to: nodes[1],
-      geometry: geometries[i],
-      distanceM: measurement.distanceM,
-      durationS: measurement.durationS,
-    });
+  if (origin === null) {
+    return {
+      status: "unavailable",
+      reason: `origin has no graph edge within ${PED_GRAPH_MAX_SNAP_TOLERANCE_M}m`,
+    };
   }
-  addPartial(selected.destination);
-  return pieces;
+  const destination = snapToGraph(
+    index,
+    to.lat,
+    to.lng,
+    PED_GRAPH_MAX_SNAP_TOLERANCE_M,
+  );
+  if (destination === null) {
+    return {
+      status: "unavailable",
+      reason: `destination has no graph edge within ${PED_GRAPH_MAX_SNAP_TOLERANCE_M}m`,
+    };
+  }
+
+  const constrained = aStar(
+    graph,
+    origin.nodeId,
+    destination.nodeId,
+    profile,
+    FORBID_FARE_ACCESS,
+    excludedEdges,
+  );
+  if (constrained !== null) {
+    return { status: "ok", route: constrained, origin, destination, from, to };
+  }
+
+  // Gate probe: same profile and graph, but a planner-local diagnostic policy
+  // opens every gate. This remains separate from served authorization: it only
+  // answers whether a gate was binding, and its route is discarded. It also
+  // catches a malformed gate whose endpoint station IDs are blank or mismatched
+  // (which must stay fail-closed for normal traversal) so it can never be
+  // misreported as an accessibility block.
+  const gateProbe = aStar(
+    graph,
+    origin.nodeId,
+    destination.nodeId,
+    profile,
+    DIAGNOSTIC_ALLOW_ALL_FARE_ACCESS,
+    excludedEdges,
+  );
+  if (gateProbe !== null) return { status: "fare_policy_blocked" };
+
+  return isTopologyReachable(graph, origin.nodeId, destination.nodeId)
+    ? { status: "accessibility_blocked" }
+    : { status: "topology_disconnected" };
 }
 
+/**
+ * Blocking reasons in decreasing precedence.
+ *
+ * A deliberate policy "no" on any segment outranks a can't-answer on another:
+ * if one segment is fare-blocked, replanning the whole route with OTP2 would
+ * route that segment through the paid shortcut the policy just refused.
+ */
+const BLOCK_PRECEDENCE = [
+  "fare_policy_blocked",
+  "accessibility_blocked",
+  "topology_disconnected",
+  "unavailable",
+] as const;
+
+/**
+ * @param blocks Every blocking segment outcome for the request.
+ * @returns The single outcome that must be reported for the whole request.
+ */
+function highestPrecedenceBlock(blocks: readonly SegmentBlock[]): SegmentBlock {
+  for (const status of BLOCK_PRECEDENCE) {
+    const match = blocks.find((block) => block.status === status);
+    if (match !== undefined) return match;
+  }
+  return blocks[0];
+}
+
+/**
+ * Plan a pure-walking route across ordered points on the CSR pedestrian graph.
+ *
+ * Each adjacent pair of `points` becomes one plan, and `plans` is returned in
+ * exactly the requested order, so the caller can map waypoints to legs without
+ * re-sorting. The whole request resolves to a single status: any segment that
+ * cannot be served decides the outcome for all of them, because a partially
+ * CSR-planned route would claim protection it did not apply end to end.
+ *
+ * @param points Ordered origin, waypoint, and destination coordinates.
+ * @param options Requested accessibility mode.
+ * @returns Ordered plans, or the structured reason there are none.
+ */
 export async function planCsrWalkRoute(
   points: readonly CsrWalkPoint[],
   options: CsrWalkOptions,
 ): Promise<CsrWalkResult> {
-  const deadlineMs =
-    options.deadlineMs ?? Date.now() + getRoutingConfig().planBudgetMs;
-  if (!Number.isFinite(deadlineMs) || Date.now() >= deadlineMs)
-    return { status: "budget_exhausted" };
-  if (
-    points.length < 2 ||
-    !points.every((p) => Number.isFinite(p.lng) && Number.isFinite(p.lat))
-  )
+  if (points.length < 2) {
     return { status: "outside_coverage" };
-  try {
-    if (
-      options.fareAccess &&
-      options.fareAccess.mode !== "forbid" &&
-      options.fareAccess.mode !== "transit_authorized"
-    )
-      return {
-        status: "unavailable",
-        reason: "invalid served fare access mode",
-      };
-    const fareAccess =
-      options.fareAccess?.mode === "transit_authorized"
-        ? createTransitAuthorizedFareAccess(
-            options.fareAccess.authorizedStationIds,
-          )
-        : FORBID_FARE_ACCESS;
-    const runtime = options.context
-      ? { status: "ready" as const, snapshot: options.context }
-      : await beforeDeadline(deadlineMs, getPedGraphRuntime);
-    if (Date.now() >= deadlineMs) return { status: "budget_exhausted" };
-    if (runtime.status !== "ready") return runtime;
-    const { graph } = runtime.snapshot;
-    const policy = graph.qualification;
-    if (!isPedGraphQualification(policy))
-      return {
-        status: "unavailable",
-        reason: "graph lacks persisted sidewalk-v1 qualification",
-      };
-    if (!points.every((p) => isWithinPedGraphCoverage(p, policy.extent)))
-      return { status: "outside_coverage" };
-    const client = await beforeDeadline(deadlineMs, getPedGraphClient);
-    const avoidPoints = options.avoidPoints;
-    const excluded = avoidPoints?.length
-      ? await beforeDeadline(deadlineMs, () =>
-          findHazardEdgeIndexes(client, graph, avoidPoints),
-        )
-      : new Set<number>();
-    const identityParts = await Promise.all(
-      points.map(async (point) => {
-        const stopId = point.stopId;
-        if (stopId === undefined) return undefined;
-        const nodeId = await beforeDeadline(deadlineMs, () =>
-          findPedStopNodeId(client, graph.versionId, stopId),
-        );
-        if (nodeId === undefined)
-          throw new Error("explicit GTFS stop absent from pinned graph");
-        return stopEndpointPart(graph, nodeId);
-      }),
-    );
-    const attachments = [];
-    let missingAttachment = false;
-    for (let i = 0; i < points.length - 1; i++) {
-      if (Date.now() >= deadlineMs) return { status: "budget_exhausted" };
-      const found = await beforeDeadline(deadlineMs, () =>
-        findPedEndpointAttachments(
-          client,
-          graph.versionId,
-          policy.sourceVersionId,
-          [points[i].lng, points[i].lat],
-          [points[i + 1].lng, points[i + 1].lat],
-        ),
-      );
-      const origin = identityParts[i];
-      const destination = identityParts[i + 1];
-      const attached = {
-        origins: origin
-          ? [origin]
-          : found.origins.map((p) => resolveEndpointPart(graph, p)),
-        destinations: destination
-          ? [destination]
-          : found.destinations.map((p) => resolveEndpointPart(graph, p)),
-        direct:
-          origin || destination
-            ? []
-            : found.direct.map((p) => resolveEndpointPart(graph, p)),
-      };
-      if (!attached.origins.length || !attached.destinations.length)
-        missingAttachment = true;
-      attachments.push(attached);
-    }
-    const strictProfile = profileFor(options.mode);
-    if (options.mode !== "wheelchair" && options.avoidStairs)
-      strictProfile.stairsAvoidanceMultiplier = 12;
-    const strict = attachments.map((a) =>
-      searchAttachedRoute(
+  }
+
+  if (!points.every((point) => isWithinPedGraphCoverage(point))) {
+    return { status: "outside_coverage" };
+  }
+
+  // Evaluate representability only after the deployment and geographic gates:
+  // an explicit combination outside Taipei (or while CSR is disabled) remains
+  // an ordinary OTP-primary request, not a degraded CSR failure.
+  const avoidStairs = options.avoidStairs ?? options.mode === "wheelchair";
+  if (avoidStairs !== (options.mode === "wheelchair")) {
+    return { status: "unsupported_constraints" };
+  }
+
+  const runtime = await getPedGraphRuntime();
+  if (runtime.status !== "ready") {
+    return { status: "unavailable", reason: runtime.reason };
+  }
+
+  const { graph, index } = runtime.snapshot;
+  const profile = profileFor(options.mode);
+  let excludedEdges: ReadonlySet<number> = new Set();
+  if (options.avoidPoints?.length) {
+    try {
+      excludedEdges = await findHazardEdgeIndexes(
+        await getPedGraphClient(),
         graph,
-        a,
-        strictProfile,
-        excluded,
-        deadlineMs,
-        fareAccess,
-      ),
-    );
-    if (strict.some((r) => r.status === "budget_exhausted"))
-      return { status: "budget_exhausted" };
-    if (missingAttachment) {
-      for (let i = 0; i < strict.length; i++) {
-        if (strict[i].status !== "unreachable") continue;
-        const gate = searchAttachedRoute(
-          graph,
-          attachments[i],
-          strictProfile,
-          excluded,
-          deadlineMs,
-          DIAGNOSTIC_ALLOW_ALL_FARE_ACCESS,
-        );
-        if (gate.status === "budget_exhausted")
-          return { status: "budget_exhausted" };
-        if (gate.status === "found") return { status: "fare_policy_blocked" };
-      }
+        options.avoidPoints,
+      );
+    } catch (error) {
       return {
         status: "unavailable",
         reason:
-          "origin or destination has no unambiguous qualified surface or mapped-edge attachment",
+          error instanceof Error ? error.message : "hazard edge lookup failed",
       };
     }
-    const plans: CsrWalkPlan[] = [];
-    for (let i = 0; i < attachments.length; i++) {
-      let result = strict[i];
-      let profile = strictProfile;
-      let stairsFallback = false;
-      if (
-        result.status === "unreachable" &&
-        options.mode === "wheelchair" &&
-        options.allowStairsFallback !== false
-      ) {
-        profile = profileFor(options.mode, "stairs-fallback");
-        result = searchAttachedRoute(
-          graph,
-          attachments[i],
-          profile,
-          excluded,
-          deadlineMs,
-          fareAccess,
-        );
-        stairsFallback = result.status === "found";
-      }
-      if (result.status === "budget_exhausted")
-        return { status: "budget_exhausted" };
-      if (result.status === "unreachable") {
-        const gate = searchAttachedRoute(
-          graph,
-          attachments[i],
-          profile,
-          excluded,
-          deadlineMs,
-          DIAGNOSTIC_ALLOW_ALL_FARE_ACCESS,
-        );
-        if (gate.status === "budget_exhausted")
-          return { status: "budget_exhausted" };
-        if (gate.status === "found") return { status: "fare_policy_blocked" };
-        const topology = searchAttachedRoute(
-          graph,
-          attachments[i],
-          profile,
-          excluded,
-          deadlineMs,
-          fareAccess,
-          true,
-        );
-        if (topology.status === "budget_exhausted")
-          return { status: "budget_exhausted" };
-        return {
-          status:
-            topology.status === "found"
-              ? "accessibility_blocked"
-              : "topology_disconnected",
-        };
-      }
-      const { selected } = result;
-      const pieces = await selectedPieces(
-        client,
-        graph,
-        selected,
-        profile,
-        deadlineMs,
-      );
-      const attrs = Int32Array.from(pieces.map((p) => p.attr));
-      const nodes = Int32Array.from(
-        pieces.length
-          ? [pieces[0].from, ...pieces.map((p) => p.to)]
-          : [selected.route.nodePath[0]],
-      );
-      const geometry = assembleGeometry(
-        graph,
-        nodes,
-        attrs,
-        pieces.map((p) => p.geometry),
-      );
-      if (geometry.status !== "ok") return geometry;
-      if (!pieces.length && !identityParts[i] && !identityParts[i + 1])
-        geometry.polyline = [
-          [points[i].lng, points[i].lat],
-          [points[i + 1].lng, points[i + 1].lat],
-        ];
-      const steps = buildCsrWalkSteps(
-        graph,
-        nodes,
-        attrs,
-        geometry.spans,
-        geometry.polyline,
-        0,
-        options.mode,
-      );
-      steps.forEach((step, index) => {
-        step.distanceM = pieces[index].distanceM;
-      });
-      const a11ySegments = buildA11ySegments(graph, attrs, geometry.spans, 0);
-      for (const segment of a11ySegments) {
-        if (segment.distanceM === null) continue;
-        const distance = pieces.reduce((sum, piece, index) => {
-          const span = geometry.spans[index];
-          return span.startIndex >= segment.startIndex &&
-            span.endIndex <= segment.endIndex
-            ? sum + piece.distanceM
-            : sum;
-        }, 0);
-        segment.distanceM = Math.round(distance * 10) / 10;
-      }
-      const stepStreetNames = buildCsrStepStreetNames(graph, attrs, steps);
-      plans.push({
-        policy,
-        fareAccess,
-        stairsFallback,
-        selectedEdgeIds: Array.from(attrs, (attr) =>
-          graph.edgeOriginalId[attr].toString(),
-        ),
-        polyline: geometry.polyline,
-        distanceM: pieces.reduce((sum, p) => sum + p.distanceM, 0),
-        durationS: pieces.reduce((sum, p) => sum + p.durationS, 0),
-        graphVersionId: graph.versionId,
-        approximateIndoorSegmentCount: geometry.approximateIndoorSegmentCount,
-        accessibility: summarizeAccessibility(graph, nodes, attrs),
-        a11ySegments,
-        steps,
-        ...(stepStreetNames.length ? { stepStreetNames } : {}),
-        sidewalkRampCount: sumSidewalkRampCount(graph, attrs),
-        a11yPoints: collectRampPoints(graph, attrs),
-        diagnostics: {
-          expandedNodes: selected.route.expandedNodes,
-          reopenedNodes: selected.route.reopenedNodes,
-          edgeCount: attrs.length,
-          totalCostM: selected.route.totalCost,
-          relaxationLevel: profile.relaxationLevel,
-          originSnapDistanceM: selected.origin?.distanceM ?? 0,
-          destinationSnapDistanceM: selected.destination?.distanceM ?? 0,
-        },
-      });
-    }
-    return Date.now() >= deadlineMs
-      ? { status: "budget_exhausted" }
-      : { status: "ok", plans };
-  } catch (error) {
-    return error instanceof RequestBudgetExhausted || Date.now() >= deadlineMs
-      ? { status: "budget_exhausted" }
-      : {
-          status: "unavailable",
-          reason:
-            error instanceof Error
-              ? error.message
-              : "pedestrian route evidence unavailable",
-        };
   }
+
+  const outcomes = points
+    .slice(0, -1)
+    .map((from, segmentIndex) =>
+      planSegment(
+        graph,
+        index,
+        from,
+        points[segmentIndex + 1],
+        profile,
+        excludedEdges,
+      ),
+    );
+
+  const blocks = outcomes.filter(
+    (outcome): outcome is SegmentBlock => outcome.status !== "ok",
+  );
+  if (blocks.length > 0) {
+    const block = highestPrecedenceBlock(blocks);
+    return block.status === "unavailable"
+      ? { status: "unavailable", reason: block.reason }
+      : { status: block.status };
+  }
+
+  const served = outcomes.filter(
+    (outcome): outcome is Extract<SegmentOutcome, { status: "ok" }> =>
+      outcome.status === "ok",
+  );
+
+  let client: PedGraphQueryable;
+  try {
+    client = await getPedGraphClient();
+  } catch (error: unknown) {
+    return {
+      status: "unavailable",
+      reason:
+        error instanceof Error
+          ? error.message
+          : "pedestrian graph client unavailable",
+    };
+  }
+
+  const plans: CsrWalkPlan[] = [];
+  for (const segment of served) {
+    const { route, origin, destination, from, to } = segment;
+    const edgeIds = Array.from(
+      route.edgeAttrPath,
+      (attrIdx) => graph.edgeOriginalId[attrIdx],
+    );
+
+    let geometries: PedEdgeGeometry[];
+    try {
+      geometries = await findPedEdgeGeometries(
+        client,
+        graph.versionId,
+        edgeIds,
+      );
+    } catch (error: unknown) {
+      return {
+        status: "unavailable",
+        reason:
+          error instanceof Error
+            ? error.message
+            : "selected edge geometry read failed",
+      };
+    }
+
+    const geometry = assembleGeometry(
+      graph,
+      route.nodePath,
+      route.edgeAttrPath,
+      geometries,
+    );
+    if (geometry.status === "unavailable") {
+      return { status: "unavailable", reason: geometry.reason };
+    }
+    const pathMeasurement = measurePath(
+      graph,
+      route.nodePath,
+      route.edgeAttrPath,
+      geometries,
+      profile,
+    );
+    if (pathMeasurement.status === "unavailable") {
+      return { status: "unavailable", reason: pathMeasurement.reason };
+    }
+    const connectorDistanceM = origin.distanceM + destination.distanceM;
+    const connectorDurationS = connectorDistanceM / profile.walkSpeedMps;
+    const connectors = addSnapConnectors(geometry.polyline, from, to);
+    const steps = buildCsrWalkSteps(
+      graph,
+      route.nodePath,
+      route.edgeAttrPath,
+      geometry.spans,
+      connectors.polyline,
+      connectors.indexOffset,
+      options.mode,
+    );
+    const stepStreetNames = buildCsrStepStreetNames(
+      graph,
+      route.edgeAttrPath,
+      steps,
+    );
+
+    plans.push({
+      polyline: connectors.polyline,
+      distanceM: pathMeasurement.distanceM + connectorDistanceM,
+      durationS: pathMeasurement.durationS + connectorDurationS,
+      graphVersionId: graph.versionId,
+      approximateIndoorSegmentCount: geometry.approximateIndoorSegmentCount,
+      accessibility: summarizeAccessibility(
+        graph,
+        route.nodePath,
+        route.edgeAttrPath,
+      ),
+      a11ySegments: buildA11ySegments(
+        graph,
+        route.edgeAttrPath,
+        geometry.spans,
+        connectors.indexOffset,
+      ),
+      steps,
+      ...(stepStreetNames.length > 0 ? { stepStreetNames } : {}),
+      sidewalkRampCount: sumSidewalkRampCount(graph, route.edgeAttrPath),
+      a11yPoints: collectRampPoints(graph, route.edgeAttrPath),
+      diagnostics: {
+        expandedNodes: route.expandedNodes,
+        reopenedNodes: route.reopenedNodes,
+        edgeCount: route.edgeAttrPath.length,
+        totalCostM: route.totalCost,
+        relaxationLevel: profile.relaxationLevel,
+        originSnapDistanceM: origin.distanceM,
+        destinationSnapDistanceM: destination.distanceM,
+      },
+    });
+  }
+
+  return { status: "ok", plans };
 }

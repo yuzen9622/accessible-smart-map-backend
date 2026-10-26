@@ -7,7 +7,7 @@
   "scripts": {
     "backfill:way-names": "npx dotenvx run -- python3 src/scripts/backfill-osm-way-names.py",
     "build": "pnpm run lint:arch && tsc",
-    "build:otp": "pnpm run otp:rebuild",
+    "build:otp": "pnpm run generate:gtfs-parents && docker compose run --rm otp --build --save",
     "otp:preflight": "npx dotenvx run -- bash src/scripts/otp-preflight.sh",
     "otp:rebuild": "npx dotenvx run -- bash src/scripts/build-otp-graph.sh",
     "otp:verify": "python3 src/scripts/verify-otp-graph.py --otp http://127.0.0.1:18080",

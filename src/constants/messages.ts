@@ -40,10 +40,6 @@ export const ERROR_MESSAGE = {
 } as const;
 
 export const ROUTE_WARNING = {
-  WHEELCHAIR_STAIRS_FALLBACK:
-    "找不到可達的無階梯路線，此備援路線包含樓梯，輪椅無法自行通過，請安排協助並確認現場狀況。",
-  WHEELCHAIR_STAIRS_FALLBACK_SUMMARY:
-    "此路線含樓梯，輪椅無法自行通過，請安排協助並確認現場狀況。",
   STAIRS_CONSTRAINT_UNSATISFIED:
     "目前候選路線仍包含無坡道樓梯，無法完全滿足避開樓梯條件",
   NO_ACCESSIBLE_TOILET_NEARBY:
@@ -54,12 +50,8 @@ export const ROUTE_WARNING = {
     "開車/機車路線引擎目前無地形高程資料，無法依坡度篩選路徑，您設定的坡度上限未被實際執行",
   SLOPE_LIMIT_STRICTER_THAN_SERVER_DEFAULT:
     "大眾運輸/步行路線引擎目前固定以 8.3% 作為輪椅模式上限，無法套用您要求的更嚴格數值；且受限於 OSM 坡度標記稀疏，實際執行範圍有限",
-  NORMAL_WALK_SLOPE_NOT_ENFORCED:
-    "一般步行未套用坡度上限；避免樓梯偏好不代表已啟用輪椅通行限制",
-  OTP_WHEELCHAIR_SLOPE_NOT_ENFORCED:
-    "輪椅步行會排除已知坡度超過 12% 的非階梯路段；未知坡度仍可能存在，階梯協助段另行標示。您的自訂坡度上限未單獨套用",
   CSR_SLOPE_LIMIT_NOT_ENFORCED:
-    "CSR 無障礙行人圖目前不會依您設定的任意坡度上限篩選路徑；回傳的坡度僅為已選路段的觀測值，您的坡度上限未被實際執行",
+    "台北 CSR 無障礙行人圖目前不會依您設定的任意坡度上限篩選路徑；回傳的坡度僅為已選路段的觀測值，您的坡度上限未被實際執行",
   HAZARD_DATA_UNAVAILABLE: "部分路段的障礙資料暫時無法更新，請留意現場狀況。",
   HAZARD_ON_ROUTE:
     "此路線經過已確認的路況障礙或道路施工封閉（hazardAdvisory.onRoute），請留意或改採其他候選路線",
@@ -80,7 +72,6 @@ export const ROUTE_REASON = {
   OUT_OF_COVERAGE: "OUT_OF_COVERAGE",
   NO_ACCESSIBLE_ROUTE: "NO_ACCESSIBLE_ROUTE",
   NO_ROUTE: "NO_ROUTE",
-  ENDPOINT_CONSTRAINT_BLOCKED: "ENDPOINT_CONSTRAINT_BLOCKED",
   UPSTREAM_TIMEOUT: "UPSTREAM_TIMEOUT",
 } as const;
 
@@ -89,8 +80,6 @@ export const ROUTE_MSG = {
   OUT_OF_COVERAGE: "本服務目前涵蓋台灣",
   NO_ACCESSIBLE_ROUTE: "找不到符合無障礙需求的路線",
   NO_ROUTE: "找不到可行路線",
-  ENDPOINT_CONSTRAINT_BLOCKED:
-    "目前圖資無法將指定位置連接到符合輪椅通行條件的路網，請調整位置",
   UPSTREAM_TIMEOUT: "路線規劃服務逾時，請稍後再試",
 } as const satisfies Record<keyof typeof ROUTE_REASON, string>;
 

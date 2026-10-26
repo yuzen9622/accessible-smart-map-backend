@@ -67,7 +67,7 @@ status=$?
 if [[ $status -eq 0 ]]; then
   log "rebuild succeeded"
 else
-  log "FATAL: rebuild failed with exit $status — check the active source, release and OTP service status"
+  log "FATAL: rebuild failed with exit $status — the previous graph is still serving"
 fi
 
 ls -1t "$LOG_DIR"/otp-rebuild-*.log 2>/dev/null | tail -n +9 | xargs -r rm -f

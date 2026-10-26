@@ -15,9 +15,6 @@ Two modes:
   audit-gtfs-feed.py NEW.zip --baseline OLD.zip|OLD.json
       Compare against the currently deployed feed and exit non-zero if any
       dimension regressed past the tolerance. This is the gate.
-
-JSON baselines must use the current metrics version. Regenerate older reports
-from their original GTFS zip, or pass that zip directly as --baseline.
 """
 
 import argparse
@@ -45,9 +42,6 @@ SMALL_GROUP = 5
 # backfill produced usable service"; Tainan showed 308 routes with service whose
 # median was 1 trip a day.
 USABLE_TRIPS_PER_DAY = 6
-
-# Version 2 excludes aviation from the legacy non-bus "rail" counters.
-METRICS_VERSION = 2
 
 
 def read_rows(zf, name):
@@ -105,8 +99,7 @@ def measure(path, on_date):
                 bus_live[city_of(rid)] += 1
             if trips >= USABLE_TRIPS_PER_DAY:
                 bus_usable[city_of(rid)] += 1
-        elif not (rtype.isdigit() and 1100 <= int(rtype) <= 1199):
-            # Air service is not routed; its timetable must not count as rail.
+        else:
             rail_trips[route_agency[rid]] += trips
             if trips:
                 rail_live[route_agency[rid]] += 1
@@ -137,7 +130,6 @@ def measure(path, on_date):
             return max(sum(1 for _ in fh) - 1, 0)
 
     return {
-        "metrics_version": METRICS_VERSION,
         "date": on_date.isoformat(),
         "total_trips": total_trips,
         "active_services": active_services,
@@ -178,7 +170,7 @@ def report(m):
         got = m["bus_routes_live"].get(city, 0)
         use = m["bus_routes_usable"].get(city, 0)
         print(f"  {city:6s} {tot:6d} {got:6d} {use:6d} {got - use:13d}")
-    print("\nnon-bus trips excluding aviation, by agency:")
+    print("\nnon-bus trips, by agency:")
     for agency, trips in sorted(m["rail_trips"].items(), key=lambda kv: -kv[1]):
         if trips:
             print(f"  {agency:12s} trips={trips:6d}  routes_with_service={m['rail_routes_live'].get(agency, 0)}")
@@ -228,14 +220,7 @@ def load_baseline(path, on_date):
     """A baseline may be a previously saved metrics JSON or another feed zip."""
     if path.endswith(".json"):
         with open(path, encoding="utf-8") as fh:
-            metrics = json.load(fh)
-        if not isinstance(metrics, dict) or metrics.get("metrics_version") != METRICS_VERSION:
-            raise ValueError(
-                f"Baseline JSON must use metrics version {METRICS_VERSION}; older reports may "
-                "include aviation in rail trips. Regenerate it from the original GTFS ZIP "
-                "with --json, or pass that ZIP directly as --baseline."
-            )
-        return metrics
+            return json.load(fh)
     return measure(path, on_date)
 
 
@@ -261,11 +246,7 @@ def main():
     if not args.baseline:
         return 0
 
-    try:
-        baseline = load_baseline(args.baseline, on_date)
-    except ValueError as exc:
-        ap.error(str(exc))
-    regressions = compare(metrics, baseline, args.tolerance)
+    regressions = compare(metrics, load_baseline(args.baseline, on_date), args.tolerance)
     print(f"\n=== regression check vs {args.baseline} (tolerance {args.tolerance:.0%}) ===")
     if not regressions:
         print("PASS — no dimension regressed")

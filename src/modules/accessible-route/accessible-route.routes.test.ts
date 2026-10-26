@@ -701,16 +701,15 @@ describe("POST /api/v1/a11y/accessible-route travel modes + waypoints", () => {
 });
 
 describe("accessible-route OpenAPI", () => {
-  it("publishes route failures and the nationwide source-qualified walking contract", async () => {
+  it("publishes route failures and the Taipei CSR-primary walking contract", async () => {
     const res = await request(app).get("/api/v1/openapi.json");
 
     expect(res.status).toBe(200);
     const operation = res.body.paths["/a11y/accessible-route"].post;
     const responses = operation.responses;
-    expect(operation.description).toContain("全國");
-    expect(operation.description).toContain("來源");
-    expect(operation.description).not.toContain("台北 CSR bbox");
-    expect(operation.description).not.toContain("OTP2 本來就是 primary");
+    expect(operation.description).toContain("台北 CSR bbox");
+    expect(operation.description).toContain("OTP2 fallback");
+    expect(operation.description).toContain("OTP2 本來就是 primary");
     expect(operation.description).not.toContain("walk 與所有步行銜接走 OTP");
     for (const reason of [
       ROUTE_REASON.OUT_OF_RANGE,
@@ -787,18 +786,11 @@ describe("accessible-route OpenAPI", () => {
       properties: {
         engine: {
           type: "string",
-          enum: ["pedestrian-a11y", "otp", "otp-fallback"],
+          enum: ["pedestrian-a11y", "otp-fallback"],
           example: "pedestrian-a11y",
           description: expect.stringContaining("純步行路線的選路來源"),
         },
       },
-    });
-    expect(res.body.components.schemas.WalkingPolicyEvidence).toMatchObject({
-      oneOf: [
-        { $ref: "#/components/schemas/CsrWalkingPolicyEvidence" },
-        { $ref: "#/components/schemas/OtpWalkingPolicyEvidence" },
-      ],
-      discriminator: { propertyName: "version" },
     });
     expect(res.body.components.schemas.WalkLeg.properties).toEqual(
       expect.objectContaining({

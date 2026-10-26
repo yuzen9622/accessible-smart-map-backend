@@ -108,14 +108,6 @@ function graphFromEdges(input: GraphDefinition): PedGraph {
   }
 
   return {
-    qualification: {
-      version: "sidewalk-v1",
-      schemaVersion: 1,
-      sourceVersionId: "1",
-      sourceArchiveSha256: "a".repeat(64),
-      osmSha256: "b".repeat(64),
-      extent: [121.43, 24.95, 121.68, 25.22],
-    },
     versionId: input.versionId ?? 7,
     nodeCount,
     directedEdgeCount,
@@ -162,14 +154,7 @@ function graphFromEdges(input: GraphDefinition): PedGraph {
  * @param graph Graph to serve as the ready ACTIVE snapshot.
  * @returns Nothing.
  */
-let servedGraph: PedGraph;
-let surfaceConnectors: {
-  point: { lng: number; lat: number };
-  node: number;
-  edge?: number;
-}[] = [];
 function serveGraph(graph: PedGraph): void {
-  servedGraph = graph;
   vi.mocked(getPedGraphRuntime).mockResolvedValue({
     status: "ready",
     snapshot: { graph, index: buildEdgeIndex(graph), loadedAtMs: 0 },
@@ -193,65 +178,6 @@ function geometryClient(
 ): PedGraphQueryable {
   return {
     query: <R>(_sql: string, params?: unknown[]) => {
-      if (_sql.includes("WITH p AS")) {
-        const rows = ["origin", "destination"].flatMap((side, i) => {
-          const lng = Number(params?.[2 + i * 2]);
-          const lat = Number(params?.[3 + i * 2]);
-          let node = Array.from(servedGraph.nodeLon).findIndex(
-            (x, n) => x === lng && servedGraph.nodeLat[n] === lat,
-          );
-          const surface = surfaceConnectors.find(
-            (c) => c.point.lng === lng && c.point.lat === lat,
-          );
-          if (surface) node = surface.node;
-          if (node < 0) return [];
-          let attr = -1,
-            from = -1,
-            to = -1;
-          for (let n = 0; n < servedGraph.nodeCount; n++)
-            for (
-              let j = servedGraph.adjOffset[n];
-              j < servedGraph.adjOffset[n + 1];
-              j++
-            ) {
-              if (n === node || servedGraph.adjTarget[j] === node) {
-                attr = servedGraph.adjAttr[j];
-                from = n;
-                to = servedGraph.adjTarget[j];
-              }
-            }
-          if (surface?.edge !== undefined) {
-            attr = surface.edge;
-            from = node;
-            to = node;
-          }
-          if (attr < 0) return [];
-          const actual: [number, number] = [
-            servedGraph.nodeLon[node],
-            servedGraph.nodeLat[node],
-          ];
-          const point: [number, number] = [lng, lat];
-          return [
-            {
-              edge_id: String(servedGraph.edgeOriginalId[attr]),
-              from_node: String(from),
-              to_node: String(to),
-              node_id: String(node),
-              plane: JSON.stringify(["0", "0", "no", "no"]),
-              side,
-              geojson: lineString(
-                side === "origin" ? [point, actual] : [actual, point],
-              ),
-              distance_m: surface ? Math.abs(lat - actual[1]) * 111195 : 0,
-              fraction: surface
-                ? (Math.abs(lat - actual[1]) * 111195) /
-                  servedGraph.edgeLengthM[attr]
-                : 0,
-            },
-          ];
-        });
-        return Promise.resolve({ rows: rows as R[] });
-      }
       const requestedIds = (params?.[1] ?? []) as string[];
       const rows = [...requestedIds]
         .reverse()
@@ -335,7 +261,6 @@ function oneEdgeGraph(flags = 0, indoorTraversalTimeS = 80): PedGraph {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  surfaceConnectors = [];
   vi.mocked(getPedGraphClient).mockResolvedValue(geometryClient({}));
 });
 
@@ -353,10 +278,10 @@ describe("planCsrWalkRoute coverage and enablement", () => {
     );
 
     expect(result).toEqual({ status: "outside_coverage" });
-    expect(getPedGraphRuntime).toHaveBeenCalled();
+    expect(getPedGraphRuntime).not.toHaveBeenCalled();
   });
 
-  it("accepts explicit normal stair avoidance as a preference", async () => {
+  it("reports unsupported constraints only after Taipei coverage passes", async () => {
     serveGraph(corridorGraph());
 
     const result = await planCsrWalkRoute([originPoint, destinationPoint], {
@@ -364,9 +289,8 @@ describe("planCsrWalkRoute coverage and enablement", () => {
       avoidStairs: true,
     });
 
-    expect(result.status).toBe("unavailable");
-    expect(result).not.toMatchObject({ status: "unsupported_constraints" });
-    expect(getPedGraphRuntime).toHaveBeenCalled();
+    expect(result).toEqual({ status: "unsupported_constraints" });
+    expect(getPedGraphRuntime).not.toHaveBeenCalled();
   });
 
   it("reports unavailable when the runtime graph is not ready", async () => {
@@ -443,10 +367,6 @@ describe("planCsrWalkRoute geometry assembly", () => {
       lat: C_LAT + 7 / 111_195,
       lng: TAIPEI_LNG,
     };
-    surfaceConnectors = [
-      { point: connectorOrigin, node: 0 },
-      { point: connectorDestination, node: 2 },
-    ];
     vi.mocked(getPedGraphClient).mockResolvedValue(
       geometryClient({
         "1000": lineString([
@@ -902,7 +822,6 @@ describe("planCsrWalkRoute geometry assembly", () => {
       nodeLon: [TAIPEI_LNG, TAIPEI_LNG],
       nodeLat: [A_LAT, C_LAT],
       edges: [
-        { from: 0, to: 0, lengthM: 5, edgeType: EDGE_TYPE.SIDEWALK },
         {
           from: 0,
           to: 1,
@@ -922,14 +841,13 @@ describe("planCsrWalkRoute geometry assembly", () => {
     serveGraph(graph);
     vi.mocked(getPedGraphClient).mockResolvedValue(
       geometryClient({
-        "1001": lineString([
+        "1000": lineString([
           [TAIPEI_LNG, A_LAT],
           [TAIPEI_LNG, C_LAT],
         ]),
       }),
     );
     const connectorOrigin = { lat: A_LAT - 5 / 111_195, lng: TAIPEI_LNG };
-    surfaceConnectors = [{ point: connectorOrigin, node: 0, edge: 0 }];
 
     const result = await planCsrWalkRoute([connectorOrigin, destinationPoint], {
       mode: "normal",
@@ -1050,50 +968,14 @@ describe("planCsrWalkRoute mode profiles", () => {
     });
   }
 
-  it("allows a caller to complete strict-only search without triggering assisted stairs fallback", async () => {
+  it("blocks wheelchair routing on ramp-less steps", async () => {
     serveGraph(stepsCorridor());
-    vi.mocked(getPedGraphClient).mockResolvedValue(
-      geometryClient({
-        "1000": lineString([
-          [TAIPEI_LNG, A_LAT],
-          [TAIPEI_LNG, C_LAT],
-        ]),
-      }),
-    );
-    const strict = await planCsrWalkRoute([originPoint, destinationPoint], {
-      mode: "wheelchair",
-      allowStairsFallback: false,
-    });
-    expect(strict.status).toBe("accessibility_blocked");
-    const assisted = await planCsrWalkRoute([originPoint, destinationPoint], {
-      mode: "wheelchair",
-      allowStairsFallback: true,
-    });
-    expect(assisted.status).toBe("ok");
-    if (assisted.status === "ok")
-      expect(assisted.plans[0].stairsFallback).toBe(true);
-  });
-
-  it("returns a truthful wheelchair stairs fallback on ramp-less steps", async () => {
-    serveGraph(stepsCorridor());
-    vi.mocked(getPedGraphClient).mockResolvedValue(
-      geometryClient({
-        "1000": lineString([
-          [TAIPEI_LNG, A_LAT],
-          [TAIPEI_LNG, C_LAT],
-        ]),
-      }),
-    );
 
     const result = await planCsrWalkRoute([originPoint, destinationPoint], {
       mode: "wheelchair",
     });
 
-    expect(result.status).toBe("ok");
-    if (result.status === "ok") {
-      expect(result.plans[0].stairsFallback).toBe(true);
-      expect(result.plans[0].steps[0].stairs).toBe(true);
-    }
+    expect(result).toEqual({ status: "accessibility_blocked" });
   });
 
   it.each(["normal", "elderly", "visual_impaired"] as const)(
@@ -1332,78 +1214,6 @@ describe("planCsrWalkRoute blocking classification", () => {
       ],
     });
   }
-
-  it("binds exact GTFS identity, preserves fare authorization through stairs fallback and emits no sentinel edges", async () => {
-    const graph = fareGateGraph(["R01"]);
-    graph.edgeType[2] = EDGE_TYPE.STEPS;
-    graph.edgeLengthM[2] = 20;
-    serveGraph(graph);
-    const geometry = geometryClient({
-      "1000": lineString([
-        [graph.nodeLon[0], graph.nodeLat[0]],
-        [graph.nodeLon[1], graph.nodeLat[1]],
-      ]),
-    });
-    vi.mocked(getPedGraphClient).mockResolvedValue({
-      query: <R>(sql: string, params?: unknown[]) =>
-        sql.includes("FROM ped_node")
-          ? Promise.resolve({
-              rows: (params?.[1] === "gtfs_pathways:stop:platform"
-                ? [{ node_id: "3" }]
-                : []) as R[],
-            })
-          : geometry.query<R>(sql, params),
-    });
-    const points = [originPoint, { ...originPoint, stopId: "platform" }]; // Deliberately identical outdoor XY.
-    const result = await planCsrWalkRoute(points, {
-      mode: "wheelchair",
-      fareAccess: {
-        mode: "transit_authorized",
-        authorizedStationIds: [" R01 ", "R01"],
-      },
-    });
-    expect(result.status).toBe("ok");
-    if (result.status !== "ok") return;
-    expect(result.plans[0].stairsFallback).toBe(true);
-    expect(result.plans[0].selectedEdgeIds).toContain("1003");
-    expect(result.plans[0].selectedEdgeIds).not.toContain("0");
-    expect(result.plans[0].selectedEdgeIds).not.toContain("");
-    expect(result.plans[0].fareAccess).toEqual({
-      mode: "transit_authorized",
-      authorizedStationIds: ["R01"],
-    });
-    expect(
-      (
-        await planCsrWalkRoute(points, {
-          mode: "wheelchair",
-          fareAccess: {
-            mode: "transit_authorized",
-            authorizedStationIds: ["WRONG"],
-          },
-        })
-      ).status,
-    ).toBe("fare_policy_blocked");
-    expect(
-      (
-        await planCsrWalkRoute(
-          [originPoint, { ...originPoint, stopId: "missing" }],
-          { mode: "normal" },
-        )
-      ).status,
-    ).toBe("unavailable");
-    const same = await planCsrWalkRoute([points[1], points[1]], {
-      mode: "normal",
-    });
-    expect(same.status).toBe("ok");
-    if (same.status === "ok") {
-      expect(same.plans[0].selectedEdgeIds).toEqual([]);
-      expect(same.plans[0].distanceM).toBe(0);
-      expect(same.plans[0].durationS).toBe(0);
-      expect(same.plans[0].polyline).toEqual([
-        [graph.nodeLon[3], graph.nodeLat[3]],
-      ]);
-    }
-  });
 
   it("classifies a gate-only obstruction as fare_policy_blocked", async () => {
     serveGraph(fareGateGraph(["R01"]));

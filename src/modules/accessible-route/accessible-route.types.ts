@@ -1,4 +1,3 @@
-import type { PedGraphSnapshot } from "./planners/pedestrian-a11y/graph-runtime";
 import type { SupportedLang } from "../../types/lang";
 /**
  * accessible-route module type declarations — the shapes used across the
@@ -93,9 +92,6 @@ export type LatLng = { lat: number; lng: number };
 export type RoadTravelMode = Exclude<TravelMode, "transit">;
 
 export interface FindAccessibleRoutesOptions {
-  planningNow?: number;
-  allowStairsFallback?: boolean;
-  getSnapshot?: () => Promise<PedGraphSnapshot | undefined>;
   /** Presentation only; never forwarded as an OTP routing/locale option. */
   language?: SupportedLang;
   transitPreference?: TransitPreference;
@@ -118,11 +114,7 @@ export interface FindAccessibleRoutesOptions {
  */
 export type FindAccessibleRoutesResult =
   | { status: "ok"; routes: AccessibleRoute[]; walkingBetter?: boolean }
-  | {
-      status: "no_route" | "unavailable";
-      routes: [];
-      blockedByAccessibility?: boolean;
-    };
+  | { status: "no_route" | "unavailable"; routes: [] };
 
 export interface PlanRoadRouteOptions {
   travelMode: RoadTravelMode;
@@ -137,11 +129,6 @@ export interface PlanRoadRouteOptions {
 }
 
 export interface FindDrivingRoutesOptions {
-  allowStairsFallback?: boolean;
-  getSnapshot?: () => Promise<PedGraphSnapshot | undefined>;
-  deadlineMs?: number;
-  departureTimeMs?: number;
-  language?: SupportedLang;
   travelMode: RoadTravelMode;
   waypoints?: LatLng[];
   departureTime?: Date;
@@ -214,7 +201,6 @@ export type RerouteReason =
   | "MANUAL";
 
 export interface NavigationRouteEnvelope {
-  integrity?: string;
   schemaVersion: 1;
   route: AccessibleRoute;
   navigationId: string;

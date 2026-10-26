@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { sealNavigationEnvelope } from "./navigation-state.repository";
 
 const { redisGet, storeInitialNavigationEnvelope, storeBusPlan } = vi.hoisted(
   () => ({
@@ -10,8 +9,7 @@ const { redisGet, storeInitialNavigationEnvelope, storeBusPlan } = vi.hoisted(
 );
 vi.mock("./bus-plan.repository", () => ({ storeBusPlan }));
 vi.mock("../../config/redis", () => ({ redisGet }));
-vi.mock("./navigation-state.repository", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./navigation-state.repository")>()),
+vi.mock("./navigation-state.repository", () => ({
   navigationTokenKey: (token: string) => `voice-nav:route:${token}`,
   storeInitialNavigationEnvelope,
 }));
@@ -105,23 +103,23 @@ describe("route token cache", () => {
     });
   });
 
-  it("rejects raw routes and treats misses or malformed values as expired", async () => {
+  it("resolves valid cached JSON and treats misses or malformed values as expired", async () => {
     redisGet.mockResolvedValueOnce(JSON.stringify(sampleRoute));
-    await expect(getRouteByToken("cap")).resolves.toBeNull();
+    await expect(getRouteByToken("cap")).resolves.toEqual(sampleRoute);
     redisGet.mockResolvedValueOnce(null);
     await expect(getRouteByToken("missing")).resolves.toBeNull();
     redisGet.mockResolvedValueOnce("not-json");
     await expect(getRouteByToken("bad")).resolves.toBeNull();
   });
 
-  it("reads sealed schemaVersion=1 envelopes and rejects legacy raw routes", async () => {
-    const storedEnvelope = sealNavigationEnvelope({
+  it("reads schemaVersion=1 envelopes while retaining legacy raw-route compatibility", async () => {
+    const storedEnvelope = {
       schemaVersion: 1,
       route: { ...sampleRoute, navigationId: "nav", routeVersion: 1 },
       navigationId: "nav",
       routeVersion: 1,
       canonicalRequest,
-    });
+    };
     redisGet.mockResolvedValueOnce(JSON.stringify(storedEnvelope));
     await expect(getRouteByToken("v1")).resolves.toMatchObject({
       routeId: "route-1",

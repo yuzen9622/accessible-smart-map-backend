@@ -48,7 +48,7 @@ import {
   retryCandidateSwitchReconciliation,
   switchNavigationCandidate,
 } from "../accessible-route/candidate-route-switch.service";
-import { resolveNavigationEnvelope } from "../accessible-route/route-token.service";
+import { isNavigationEnvelope } from "../accessible-route/route-token.service";
 import type { RerouteData } from "../accessible-route/accessible-route.types";
 import { correctUserTranscript } from "./transcript-corrector";
 import { withCurrentDate } from "../../config/ai/chat-prompt";
@@ -1664,21 +1664,22 @@ export async function createLiveBridge(
                   ownArmGeneration === armGen;
                 if (first?.token && current()) {
                   pendingDirectToken = first.token;
-                  const stored = await readNavigationTokenStrict(first.token);
-                  const canonical =
-                    stored.status === "ok"
-                      ? await resolveNavigationEnvelope(stored.value)
-                      : null;
+                  const canonical = await readNavigationTokenStrict(
+                    first.token,
+                  );
                   if (
                     current() &&
-                    canonical &&
-                    canonical.route.routeId === first.route.routeId &&
-                    canonical.navigationId === first.route.navigationId &&
-                    canonical.routeVersion === first.route.routeVersion &&
-                    canonical.route.navigationId === canonical.navigationId &&
-                    canonical.route.routeVersion === canonical.routeVersion
+                    canonical.status === "ok" &&
+                    isNavigationEnvelope(canonical.value) &&
+                    canonical.value.route.routeId === first.route.routeId &&
+                    canonical.value.navigationId === first.route.navigationId &&
+                    canonical.value.routeVersion === first.route.routeVersion &&
+                    canonical.value.route.navigationId ===
+                      canonical.value.navigationId &&
+                    canonical.value.route.routeVersion ===
+                      canonical.value.routeVersion
                   ) {
-                    const envelope = canonical;
+                    const envelope = canonical.value;
                     const prepared = prepareSession(envelope.route);
                     if (prepared)
                       directCommit = () => {

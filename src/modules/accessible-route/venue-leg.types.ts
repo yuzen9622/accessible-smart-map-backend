@@ -5,7 +5,6 @@
  * never has to import the venue module (module dependencies stay one-way:
  * venue -> accessible-route).
  */
-import type { RouteMessageDetail } from "../../types/route-message";
 import type { AccessibilityMode } from "../../types/route";
 
 /** `[lng, lat, z]`, z in metres above the venue datum. */
@@ -72,10 +71,6 @@ export interface VenueRoute {
   durationS: number;
   elevatorRides: number;
   stairFlights: number;
-  /** Completed strict wheelchair search was unreachable; assistance is required on stairs. */
-  stairsFallback?: boolean;
-  warnings?: string[];
-  warningDetails?: RouteMessageDetail[];
   path: {
     coordinates: LngLatZ[];
     buildingIds: (string | null)[];

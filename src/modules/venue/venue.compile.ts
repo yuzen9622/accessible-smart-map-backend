@@ -1116,14 +1116,6 @@ export function compileVenue(
   }
 
   // ---- edges -------------------------------------------------------------
-  const pedestrianDenied = (tags: Record<string, string>) =>
-    ["no", "private"].includes(tags.foot ?? "") ||
-    (["no", "private"].includes(tags.access ?? "") &&
-      !["yes", "designated", "permissive"].includes(tags.foot ?? "")) ||
-    tags.locked === "yes" ||
-    (["wall", "fence", "retaining_wall"].includes(tags.barrier ?? "") &&
-      !hasAuthoredDoor(tags) &&
-      !(tags.entrance && tags.entrance !== "no"));
   const edges: VenueEdge[] = [];
   const kindOf = (w: OsmWay, indoor: boolean): VenueEdgeKind => {
     const hw = w.tags.highway;
@@ -1177,10 +1169,6 @@ export function compileVenue(
         from: a.id,
         to: b.id,
         kind,
-        ...(pedestrianDenied(w.tags) ? { accessDenied: true } : {}),
-        ...(kind !== "steps" && inclined && w.tags["ramp:wheelchair"] === "no"
-          ? { wheelchairBarrier: true }
-          : {}),
         indoor: inst.indoor,
         lengthM,
         ...(slopeRatio !== undefined ? { slopeRatio, slopeStatus } : {}),
@@ -1207,11 +1195,7 @@ export function compileVenue(
   for (const e of edges) {
     for (const key of [e.from, e.to]) {
       const tags = node(key.split("@")[0])?.tags;
-      if (tags && pedestrianDenied(tags)) e.accessDenied = true;
-      if (tags?.wheelchair === "no") {
-        e.wheelchair = "no";
-        e.wheelchairBarrier = true;
-      }
+      if (tags?.wheelchair === "no") e.wheelchair = "no";
       const doorWidth =
         tags && hasAuthoredDoor(tags) ? parseWidth(tags.width) : undefined;
       if (doorWidth !== undefined) {
@@ -1261,7 +1245,6 @@ export function compileVenue(
           from: keys[i].key,
           to: keys[j].key,
           kind: "elevator",
-          ...(pedestrianDenied(n.tags) ? { accessDenied: true } : {}),
           indoor: true,
           lengthM: 0,
           levelSpan: Math.abs(keys[j].ordinal - keys[i].ordinal),
@@ -1793,13 +1776,7 @@ export function compileVenue(
  * @returns Whether a wheelchair could traverse it at the strict level.
  */
 function wheelchairPassable(e: VenueEdge): boolean {
-  if (
-    e.accessDenied ||
-    e.wheelchairBarrier ||
-    e.kind === "steps" ||
-    e.kind === "escalator" ||
-    e.wheelchair === "no"
-  ) {
+  if (e.kind === "steps" || e.kind === "escalator" || e.wheelchair === "no") {
     return false;
   }
   if (e.slopeRatio !== undefined && e.slopeRatio > 0.12) return false;
@@ -1846,7 +1823,7 @@ function connectivityWarnings(
     }
     return seen;
   };
-  const any = reach((e) => !e.accessDenied);
+  const any = reach(() => true);
   const stepFree = reach(wheelchairPassable);
   const out: string[] = [];
   const nameOf = new Map(buildings.map((b) => [b.id, b.name]));

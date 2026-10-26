@@ -10,7 +10,6 @@
 import type { HazardSeverity, HazardType, IOsmA11y } from "./index";
 import type { RoadIncident } from "./traffic";
 import type { ElevationProfile } from "./elevation";
-import type { OtpWalkingPolicyEvidence } from "./otp-walking-policy";
 import type { MatchedAlert, MetroAlert } from "./transit";
 import type {
   RouteMessageDescriptor,
@@ -30,10 +29,11 @@ export type TransitPreference = "none" | "bus" | "rail" | "metro";
 export type TravelMode = "transit" | "drive" | "motorcycle" | "walk";
 
 /**
- * Pure-walk provider provenance. Native OTP requires current source, graph and
- * reviewed runtime policy evidence. `otp-fallback` is a legacy stored value.
+ * Pure-walk route selection provenance. `otp-fallback` means the CSR pedestrian
+ * graph did not choose the route; when OTP2 itself is unavailable, the route's
+ * warnings identify the final Valhalla recovery without widening this contract.
  */
-type PureWalkRouteEngine = "pedestrian-a11y" | "otp" | "otp-fallback";
+type PureWalkRouteEngine = "pedestrian-a11y" | "otp-fallback";
 
 export interface SlimA11y {
   displayName?: string;
@@ -222,43 +222,8 @@ export interface IntermediateStop {
   location?: [number, number];
 }
 
-export interface WalkPolicySourceIdentity {
-  version: "sidewalk-v1";
-  schemaVersion: 1;
-  sourceVersionId: string;
-  sourceArchiveSha256: string;
-  osmSha256: string;
-  extent?: readonly [number, number, number, number];
-  hasKnownOmissions?: boolean;
-  omittedAreaCount?: number;
-  omissionPolicyVersion?: string;
-  omissionPolicySha256?: string;
-}
-
-/** Planned rail context, not proof of payment or physical accessibility. */
-export type WalkingFareAccess =
-  | { readonly mode: "forbid" }
-  | {
-      readonly mode: "transit_authorized";
-      readonly authorizedStationIds: readonly string[];
-    };
-
-export interface CsrWalkingPolicyEvidence extends WalkPolicySourceIdentity {
-  fareAccess?: WalkingFareAccess;
-  graphVersionId: number;
-  mode: AccessibilityMode;
-  avoidStairs: boolean;
-  stairsFallback: boolean;
-  selectedEdgeIds: string[];
-}
-
-export type WalkingPolicyEvidence =
-  CsrWalkingPolicyEvidence | OtpWalkingPolicyEvidence;
-
 export interface WalkLeg extends WalkA11yDetails, RouteSourceNames {
   type: "WALK";
-  durationS?: number;
-  walkingPolicy?: WalkingPolicyEvidence;
   a11yRefs?: string[];
   from: string;
   to: string;
@@ -536,24 +501,10 @@ export interface ScoreFactor {
   impact: number;
 }
 
-/** Private road mapper requests; never permission to serve an unfulfilled walk. */
-export interface WalkAccessRequest {
-  beforeLegIndex: number;
-  fromAnchor: { lat: number; lng: number };
-  toAnchor: { lat: number; lng: number };
-  from: string;
-  to: string;
-  role: "origin" | "destination" | "waypoint";
-  waypointIndex?: number;
-}
-
 export interface AccessibleRoute {
-  /** Internal unfulfilled walking obligations. Must be consumed before finalization/cache. */
-  _walkAccessRequests?: WalkAccessRequest[];
   departureTime?: string;
   arrivalTime?: string;
   routeId: string;
-  walkingPolicy?: WalkingPolicyEvidence;
   /** Stable identity shared by every replacement route in one navigation. */
   navigationId?: string;
   /** Monotonic navigation route version; initial tokenized routes start at 1. */
@@ -570,8 +521,10 @@ export interface AccessibleRoute {
   accessibilityHighlights: string[];
   accessibilityHighlightDetails?: RouteMessageDetail[];
   /**
-   * Pure-walk provider: qualified CSR or native OTP. The walkingPolicy variant
-   * carries the actual evidence; otp-fallback remains for legacy stored data.
+   * Pure-walk planner provenance. `pedestrian-a11y` is a CSR-selected route;
+   * `otp-fallback` states plainly that CSR did not decide it, so its
+   * stair/slope/width/fare-gate protection was not applied. Transit and driving
+   * routes omit this optional field.
    */
   engine?: PureWalkRouteEngine;
   degraded?: boolean;

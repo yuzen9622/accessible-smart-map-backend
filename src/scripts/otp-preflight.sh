@@ -1,107 +1,179 @@
 #!/usr/bin/env bash
-# Read-only prerequisite checks for OTP rebuild, also available as otp:preflight.
-# Prerequisites can be checked before import; the rebuild requires an ACTIVE source.
+#
+# Pre-build checks for build-otp-graph.sh. Every check here guards a failure
+# that has already cost a full 25–50 minute rebuild, and each one can be
+# answered in seconds before any TDX call is made:
+#
+#   - a stale checkout builds "successfully" without the fixes (the patch and
+#     inject scripts run from this checkout, not from an image)
+#   - an unreachable Mongo only WARNs at step 1e, silently dropping the
+#     wheelchair flags of every TRTC station
+#   - a full disk kills the build at the very end and can corrupt Docker's
+#     content store
+#   - a missing pyosmium or node_modules fails the build half way through
+#
+# Runs standalone (`pnpm otp:preflight`) or as step 0 of build-otp-graph.sh.
+# Exits non-zero when any check FAILs; WARNs never block.
+#
+# Optional env:
+#   OTP_DATA_DIR                 (default /var/otp)
+#   OTP_WORK_ROOT                where the build's temp dirs go (default /tmp)
+#   OTP_JAVA_XMX                 build heap (default 12g)
+#   OTP_DEM_DIR                  DEM GeoTIFF dir (default $OTP_DATA_DIR/dem)
+#   OTP_PREFLIGHT_ALLOW_DIRTY=1  downgrade an uncommitted pipeline change to WARN
 set -uo pipefail
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-DATA_ROOT="$REPO_DIR/otp-data"
-OTP_JAVA_XMX="${OTP_JAVA_XMX:-6g}"
+OTP_DATA_DIR="${OTP_DATA_DIR:-/var/otp}"
+OTP_WORK_ROOT="${OTP_WORK_ROOT:-/tmp}"
+OTP_JAVA_XMX="${OTP_JAVA_XMX:-12g}"
+OTP_DEM_DIR="${OTP_DEM_DIR:-$OTP_DATA_DIR/dem}"
+OTP_IMAGE="opentripplanner/opentripplanner:2.9.0"
+EXPECTED_CITIES=22
+MIN_CALENDAR_DAYS=180
+
 FAILS=0
 WARNS=0
 ok() { printf '[otp-preflight] ok    %s\n' "$*"; }
-warn() { printf '[otp-preflight] WARN  %s\n' "$*"; WARNS=$((WARNS + 1)); }
-fail() { printf '[otp-preflight] FAIL  %s\n' "$*"; FAILS=$((FAILS + 1)); }
+warn() {
+  printf '[otp-preflight] WARN  %s\n' "$*"
+  WARNS=$((WARNS + 1))
+}
+fail() {
+  printf '[otp-preflight] FAIL  %s\n' "$*"
+  FAILS=$((FAILS + 1))
+}
+
+free_gib() { df -Pk "$1" 2>/dev/null | awk 'NR==2 {printf "%.1f", $4 / 1048576}'; }
+device_of() { df -P "$1" 2>/dev/null | awk 'NR==2 {print $1}'; }
 gib_ge() { awk -v a="$1" -v b="$2" 'BEGIN {exit !(a >= b)}'; }
 
-for tool in docker python3 node pnpm curl unzip zip git; do
-  if command -v "$tool" >/dev/null 2>&1; then ok "$tool is available"; else fail "required tool missing: $tool"; fi
+for var in TDX_CLIENT_ID TDX_CLIENT_SECRET OTP_GTFS_URLS; do
+  if [ -n "${!var:-}" ]; then ok "$var is set"; else fail "$var is not set"; fi
 done
-for variable in TDX_CLIENT_ID TDX_CLIENT_SECRET PED_GRAPH_DATABASE_URL DATABASE_URL; do
-  if [ -n "${!variable:-}" ]; then ok "$variable is set"; else fail "$variable is not set"; fi
-done
-if [ -d "$DATA_ROOT" ] && [ -w "$DATA_ROOT" ] && [ ! -L "$DATA_ROOT" ]; then
-  for config in otp-config.json build-config.json router-config.json; do
-    if [ -f "$DATA_ROOT/$config" ] && [ ! -L "$DATA_ROOT/$config" ]; then ok "$config is available"; else fail "missing or linked config: $config"; fi
+
+if [ -d "$OTP_DATA_DIR" ]; then
+  missing=""
+  for f in otp-config.json build-config.json router-config.json; do
+    [ -f "$OTP_DATA_DIR/$f" ] || missing="$missing $f"
   done
-  free_gib="$(df -Pk "$DATA_ROOT" 2>/dev/null | awk 'NR==2 {printf "%.1f", $4 / 1048576}')"
-  if gib_ge "${free_gib:-0}" 10; then ok "disk: $free_gib GiB free for a new release"; else fail "at least 10 GiB free required in otp-data; found ${free_gib:-0}"; fi
+  if [ -z "$missing" ]; then ok "OTP_DATA_DIR $OTP_DATA_DIR has the OTP config files"; else fail "OTP_DATA_DIR is missing:$missing"; fi
 else
-  fail "repository otp-data must be a writable regular directory"
+  fail "OTP_DATA_DIR $OTP_DATA_DIR does not exist"
 fi
+[ -d "$OTP_WORK_ROOT" ] && [ -w "$OTP_WORK_ROOT" ] || fail "OTP_WORK_ROOT $OTP_WORK_ROOT is not a writable directory"
 
-# Hashes in the native manifest bind the actual checkout; do not fetch Git or
-# require a commit merely to use local implementation changes.
+# The pipeline runs this checkout's patch/inject scripts, so building from a
+# checkout that is behind origin silently ships a graph without the fixes.
 if git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1; then
-  if [ -n "$(git -C "$REPO_DIR" status --porcelain -- src/scripts src/otp otp-data Dockerfile)" ]; then
-    warn "local pipeline changes will be built and bound to this release's manifest"
+  head="$(git -C "$REPO_DIR" rev-parse --short HEAD)"
+  if GIT_TERMINAL_PROMPT=0 git -C "$REPO_DIR" fetch --quiet 2>/dev/null; then
+    if upstream="$(git -C "$REPO_DIR" rev-parse --short '@{u}' 2>/dev/null)"; then
+      behind="$(git -C "$REPO_DIR" rev-list --count 'HEAD..@{u}')"
+      if [ "$behind" -gt 0 ]; then
+        fail "checkout $head is $behind commit(s) behind upstream $upstream — git pull first"
+      else
+        ok "checkout $head is up to date with upstream $upstream"
+      fi
+    else
+      warn "branch has no upstream — cannot tell whether checkout $head is stale"
+    fi
   else
-    ok "pipeline checkout is clean"
+    warn "git fetch failed — cannot tell whether checkout $head is stale"
+  fi
+  dirty="$(git -C "$REPO_DIR" status --porcelain -- src/scripts otp-data | head -5)"
+  if [ -n "$dirty" ]; then
+    msg="uncommitted changes in the build pipeline: $(echo "$dirty" | tr '\n' ' ')"
+    if [ "${OTP_PREFLIGHT_ALLOW_DIRTY:-0}" = "1" ]; then warn "$msg"; else fail "$msg(set OTP_PREFLIGHT_ALLOW_DIRTY=1 to build anyway)"; fi
+  else
+    ok "build pipeline has no uncommitted changes"
+  fi
+else
+  warn "$REPO_DIR is not a git checkout — cannot verify the pipeline version"
+fi
+
+# Free space. Work dir peak: feed + three pbf copies + new graph (~5 GiB).
+# Data dir: OSM cache + promoted feed/pbf/graph, plus graph.obj.prev — a copy
+# of the graph being replaced.
+if [ -d "$OTP_DATA_DIR" ] && [ -d "$OTP_WORK_ROOT" ]; then
+  graph_gib=0
+  [ -f "$OTP_DATA_DIR/graph.obj" ] &&
+    graph_gib="$(du -k "$OTP_DATA_DIR/graph.obj" | awk '{printf "%.1f", $1 / 1048576}')"
+  need_data="$(awk -v g="$graph_gib" 'BEGIN {printf "%.1f", 3 + g}')"
+  need_work=5
+  data_free="$(free_gib "$OTP_DATA_DIR")"
+  work_free="$(free_gib "$OTP_WORK_ROOT")"
+  if [ "$(device_of "$OTP_DATA_DIR")" = "$(device_of "$OTP_WORK_ROOT")" ]; then
+    need="$(awk -v a="$need_data" -v b="$need_work" 'BEGIN {printf "%.1f", a + b}')"
+    if gib_ge "$data_free" "$need"; then
+      ok "disk: ${data_free} GiB free (need ${need} GiB, data and work share a disk)"
+    else
+      fail "disk: only ${data_free} GiB free, need ${need} GiB — a full disk can corrupt Docker's store; free space or point OTP_WORK_ROOT at another disk"
+    fi
+  else
+    if gib_ge "$data_free" "$need_data"; then ok "disk (data): ${data_free} GiB free (need ${need_data})"; else fail "disk (data): only ${data_free} GiB free on $OTP_DATA_DIR, need ${need_data}"; fi
+    if gib_ge "$work_free" "$need_work"; then ok "disk (work): ${work_free} GiB free (need ${need_work})"; else fail "disk (work): only ${work_free} GiB free on $OTP_WORK_ROOT, need ${need_work}"; fi
   fi
 fi
+
 if docker info >/dev/null 2>&1; then
-  ok "Docker daemon is responding"
-  if (cd "$REPO_DIR" && docker compose config --quiet) >/dev/null 2>&1; then ok "Compose configuration is valid"; else fail "Compose configuration is invalid; check existing deployment settings"; fi
+  ok "docker daemon is responding"
   mem_gib="$(docker info --format '{{.MemTotal}}' | awk '{printf "%.1f", $1 / 1073741824}')"
-  xmx_gib="$(printf '%s\n' "$OTP_JAVA_XMX" | awk '/^[0-9]+[gG]$/ {print $0+0; next} /^[0-9]+[mM]$/ {print ($0+0)/1024; next} {print 0}')"
-  if gib_ge "$xmx_gib" 1 && gib_ge "$mem_gib" "$(awk -v x="$xmx_gib" 'BEGIN {print x+2}')"; then
-    ok "Docker memory $mem_gib GiB fits build heap $OTP_JAVA_XMX plus overhead"
+  xmx_gib="$(echo "$OTP_JAVA_XMX" | awk '/[gG]$/ {print $0 + 0; next} /[mM]$/ {print ($0 + 0) / 1024; next} {print 0}')"
+  if gib_ge "$mem_gib" "$(awk -v x="$xmx_gib" 'BEGIN {print x + 2}')"; then
+    ok "docker memory ${mem_gib} GiB fits build heap ${OTP_JAVA_XMX}"
   else
-    fail "Docker memory $mem_gib GiB does not fit heap $OTP_JAVA_XMX plus overhead"
+    fail "docker memory ${mem_gib} GiB cannot hold build heap ${OTP_JAVA_XMX} plus overhead — lower OTP_JAVA_XMX"
   fi
+  if docker image inspect "$OTP_IMAGE" >/dev/null 2>&1; then ok "image $OTP_IMAGE is present"; else warn "image $OTP_IMAGE is not pulled yet — the build will pull it"; fi
 else
-  fail "Docker daemon is unavailable"
+  fail "docker daemon is not responding"
 fi
 
-if node -e 'if(Number(process.versions.node.split(".")[0])<22)process.exit(1)' >/dev/null 2>&1; then ok "Node >=22"; else fail "Node 22 or newer is required"; fi
-if python3 - <<'PYTHON'
-import importlib, sys
-
-print(f'[otp-preflight] Python {sys.version.split()[0]}: {sys.executable}')
-errors = []
-if sys.version_info < (3, 12):
-    errors.append('Python 3.12 or newer is required')
-for name in ('osmium', 'shapely', 'rasterio', 'numpy', 'psycopg2'):
-    try:
-        importlib.import_module(name)
-        if name == 'shapely':
-            from shapely import constrained_delaunay_triangles
-    except Exception as error:
-        errors.append(f'{name}: {type(error).__name__}: {error}')
-for error in errors:
-    print(f'[otp-preflight]       {error}')
-sys.exit(1 if errors else 0)
-PYTHON
-then
-  ok "Python >=3.12 with osmium, Shapely, rasterio, numpy and psycopg2"
+if python3 -c 'import osmium' 2>/dev/null; then
+  ok "pyosmium is importable (pedestrian access hardening)"
 else
-  fail "Python prerequisites failed above; activate the intended Conda/venv environment and install missing dependencies in that environment"
+  fail "python3 cannot import osmium — pedestrian access hardening (fatal step) would fail; pip install osmium or sudo apt install  python3-pyosmium"
 fi
-if [ -x "$REPO_DIR/node_modules/.bin/ts-node" ]; then ok "project Node dependencies are installed"; else fail "run pnpm install --frozen-lockfile first"; fi
-if command -v gtfs-validator >/dev/null 2>&1; then ok "gtfs-validator is installed"; else warn "optional gtfs-validator absent; mandatory feed/shape/service-window and runtime gates still run"; fi
 
-if ! python3 -c 'import psycopg2' >/dev/null 2>&1; then
-  warn "PostGIS check skipped: python3 cannot import psycopg2; Conda psycopg2 or pip psycopg2-binary can provide it"
-elif python3 - <<'POSTGIS' >/dev/null 2>&1
-import os, psycopg2
-with psycopg2.connect(os.environ['PED_GRAPH_DATABASE_URL'],connect_timeout=5) as connection:
-    with connection.cursor() as cursor:
-        cursor.execute("SET statement_timeout='5s'")
-        cursor.execute('SELECT PostGIS_Version()')
-        assert cursor.fetchone()[0]
-POSTGIS
-then ok "PostGIS is reachable (source tables may be initialized by import)"; else fail "PED_GRAPH_DATABASE_URL must reach a database with PostGIS enabled"; fi
-if (cd "$REPO_DIR" && node - <<'MONGO'
-const mongoose = require('mongoose');
-mongoose.connect(process.env.DATABASE_URL,{serverSelectionTimeoutMS:5000})
- .then(() => mongoose.connection.db.admin().ping())
- .then(() => mongoose.disconnect())
- .then(() => process.exit(0), () => process.exit(1));
-MONGO
-) >/dev/null 2>&1; then ok "MongoDB is reachable for wheelchair flags and stop aliases"; else fail "DATABASE_URL must reach MongoDB before transport enrichment"; fi
+if python3 -c 'import rasterio' 2>/dev/null; then
+  ok "rasterio is importable (national DTM reprojection)"
+elif ls "$OTP_DEM_DIR"/*.tif >/dev/null 2>&1; then
+  warn "python3 cannot import rasterio — the DTM cannot be refreshed; building with the cached $OTP_DEM_DIR"
+else
+  warn "python3 cannot import rasterio and $OTP_DEM_DIR has no DEM — the graph will carry no elevation (wheelchair slope limits inert); pip install rasterio"
+fi
 
+if command -v gtfs-validator >/dev/null 2>&1; then ok "gtfs-validator is installed"; else warn "gtfs-validator not installed — the validation gate will be skipped"; fi
+
+if [ -x "$REPO_DIR/node_modules/.bin/ts-node" ]; then
+  ok "node_modules has ts-node (steps 1e–1g)"
+else
+  fail "node_modules/.bin/ts-node missing — run pnpm install"
+fi
+
+# Step 1e connects exactly like this (dotenvx in the caller's cwd), so a
+# reachable Mongo here means the TRTC wheelchair flags will be injected.
+if [ -x "$REPO_DIR/node_modules/.bin/ts-node" ]; then
+  if (cd "$REPO_DIR" && npx dotenvx run --quiet -- node -e '
+    require("mongoose")
+      .connect(process.env.DATABASE_URL, { serverSelectionTimeoutMS: 5000 })
+      .then((m) => m.connection.db.admin().ping().then(() => m.disconnect()))
+      .then(() => process.exit(0), (e) => { console.error(e.message); process.exit(1); });
+  ') >/dev/null 2>&1; then
+    ok "MongoDB at DATABASE_URL is reachable (step 1e wheelchair flags)"
+  else
+    fail "MongoDB at DATABASE_URL is unreachable — step 1e would silently drop the TRTC wheelchair flags"
+  fi
+fi
+
+# patch_gtfs deletes every bus trip in the base feed and rebuilds only CITIES,
+# so a shortened list silently deletes whole counties.
 cities="$(sed -n '/^CITIES = \[/,/^\]/p' "$SCRIPT_DIR/patch_gtfs.py" | grep -o '"[A-Za-z]*"' | wc -l | tr -d ' ')"
-if [ "$cities" -eq 22 ]; then ok "bus timetable patch retains all 22 upstream city datasets"; else fail "patch_gtfs.py CITIES must retain all 22 source datasets"; fi
-calendar_days="$(sed -n 's/^CALENDAR_VALID_DAYS = \([0-9]*\).*/\1/p' "$SCRIPT_DIR/patch_gtfs.py")"
-if [ "${calendar_days:-0}" -ge 180 ]; then ok "bus calendar window is at least 180 days"; else fail "patch_gtfs.py CALENDAR_VALID_DAYS must be >=180"; fi
-printf '[otp-preflight] %s FAIL, %s WARN\n' "$FAILS" "$WARNS"
+if [ "$cities" -eq "$EXPECTED_CITIES" ]; then ok "patch_gtfs.py CITIES lists $cities cities"; else fail "patch_gtfs.py CITIES lists $cities cities, expected $EXPECTED_CITIES — a shorter list deletes those counties' buses"; fi
+cal_days="$(sed -n 's/^CALENDAR_VALID_DAYS = \([0-9]*\).*/\1/p' "$SCRIPT_DIR/patch_gtfs.py")"
+if [ "${cal_days:-0}" -ge "$MIN_CALENDAR_DAYS" ]; then ok "patch_gtfs.py CALENDAR_VALID_DAYS = $cal_days"; else fail "patch_gtfs.py CALENDAR_VALID_DAYS = ${cal_days:-unset}, expected >= $MIN_CALENDAR_DAYS"; fi
+
+echo "[otp-preflight] $FAILS FAIL, $WARNS WARN"
 [ "$FAILS" -eq 0 ]

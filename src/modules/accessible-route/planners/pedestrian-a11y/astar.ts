@@ -1,9 +1,4 @@
-import {
-  edgeCost,
-  WHEELCHAIR_MIN_EFFECTIVE_WIDTH_M,
-  WHEELCHAIR_RELAX_NARROW_WIDTH_LEVEL,
-  type CostProfile,
-} from "./cost";
+import { edgeCost, type CostProfile } from "./cost";
 import {
   FORBID_FARE_ACCESS,
   canTraverseFareGate,
@@ -13,7 +8,6 @@ import {
 import type { PedGraph } from "./graph.types";
 
 const INITIAL_HEAP_CAPACITY = 64;
-const BUDGET_CHECK_INTERVAL = 256;
 
 export interface RouteResult {
   nodePath: Int32Array;
@@ -24,28 +18,10 @@ export interface RouteResult {
    * which edge — and therefore which geometry and attributes — was chosen.
    */
   edgeAttrPath: Int32Array;
-  sourceIndex?: number;
-  targetIndex?: number;
   totalCost: number;
   expandedNodes: number;
   reopenedNodes: number;
 }
-
-export interface PedGraphSearchOptions {
-  /** Absolute epoch-millisecond deadline, checked inside the synchronous search. */
-  deadlineMs?: number;
-  fareAccess?: FareAccessPolicy;
-  excludedEdges?: ReadonlySet<number>;
-  sources?: readonly { node: number; cost: number }[];
-  targets?: readonly { node: number; cost: number }[];
-  topologyOnly?: boolean;
-}
-
-export type PedGraphSearchOutcome =
-  | { status: "found"; route: RouteResult }
-  | { status: "unreachable" }
-  | { status: "budget_exhausted" }
-  | { status: "invalid_input" };
 
 /**
  * @param keyA First queue key.
@@ -274,54 +250,19 @@ export function aStar(
   fareAccess: FareAccessPolicy = FORBID_FARE_ACCESS,
   excludedEdges: ReadonlySet<number> = new Set(),
 ): RouteResult | null {
-  const outcome = searchPedGraph(graph, from, to, profile, {
-    fareAccess,
-    excludedEdges,
-  });
-  return outcome.status === "found" ? outcome.route : null;
-}
-
-export function searchPedGraph(
-  graph: PedGraph,
-  from: number,
-  to: number,
-  profile: CostProfile,
-  options: PedGraphSearchOptions = {},
-): PedGraphSearchOutcome {
-  const deadline = options.deadlineMs;
-  const sources = options.sources ?? [{ node: from, cost: 0 }];
-  const targets = options.targets ?? [{ node: to, cost: 0 }];
-  if (
-    sources.length === 0 ||
-    targets.length === 0 ||
-    [...sources, ...targets].some(
-      (entry) =>
-        !isValidNode(graph, entry.node) ||
-        !Number.isFinite(entry.cost) ||
-        entry.cost < 0,
-    ) ||
-    (deadline !== undefined && !Number.isFinite(deadline))
-  ) {
-    return { status: "invalid_input" };
+  const normalizedFareAccess = normalizeFareAccessPolicy(fareAccess);
+  if (!isValidNode(graph, from) || !isValidNode(graph, to)) {
+    return null;
   }
-  if (deadline !== undefined && Date.now() >= deadline) {
-    return { status: "budget_exhausted" };
-  }
-  const normalizedFareAccess = normalizeFareAccessPolicy(
-    options.fareAccess ?? FORBID_FARE_ACCESS,
-  );
-  const excludedEdges = options.excludedEdges ?? new Set<number>();
-  if (!options.sources && !options.targets && from === to)
+  if (from === to) {
     return {
-      status: "found",
-      route: {
-        nodePath: Int32Array.of(from),
-        edgeAttrPath: new Int32Array(0),
-        totalCost: 0,
-        expandedNodes: 0,
-        reopenedNodes: 0,
-      },
+      nodePath: Int32Array.of(from),
+      edgeAttrPath: new Int32Array(0),
+      totalCost: 0,
+      expandedNodes: 0,
+      reopenedNodes: 0,
     };
+  }
   const gScore = new Float64Array(graph.nodeCount);
   gScore.fill(Number.POSITIVE_INFINITY);
   const parent = new Int32Array(graph.nodeCount);
@@ -330,28 +271,12 @@ export function searchPedGraph(
   parentEdgeAttr.fill(-1);
   const closed = new Uint8Array(graph.nodeCount);
   const open = new BinaryMinHeap();
-  const roots = new Int32Array(graph.nodeCount);
-  roots.fill(-1);
-  sources.forEach((source, index) => {
-    if (source.cost >= gScore[source.node]) return;
-    gScore[source.node] = source.cost;
-    roots[source.node] = index;
-    open.push(source.node, source.cost);
-  });
-  const targetByNode = new Map<number, number>();
-  targets.forEach((target, index) => {
-    const previous = targetByNode.get(target.node);
-    if (previous === undefined || target.cost < targets[previous].cost)
-      targetByNode.set(target.node, index);
-  });
-  let best: RouteResult | undefined;
+  gScore[from] = 0;
+  open.push(from, heuristicCost(graph, from, to));
   let expandedNodes = 0;
   let reopenedNodes = 0;
 
   while (open.size > 0) {
-    if (deadline !== undefined && Date.now() >= deadline) {
-      return { status: "budget_exhausted" };
-    }
     const node = open.pop();
     const priority = open.lastKey;
     if (node === -1) {
@@ -363,53 +288,31 @@ export function searchPedGraph(
     }
     closed[node] = 1;
     expandedNodes += 1;
-    if (best && priority >= best.totalCost) break;
-    const targetIndex = targetByNode.get(node);
-    if (targetIndex !== undefined) {
-      const totalCost = gScore[node] + targets[targetIndex].cost;
-      if (!best || totalCost < best.totalCost) {
-        const sourceIndex = roots[node];
-        best = {
-          ...buildRouteResult(
-            parent,
-            parentEdgeAttr,
-            sources[sourceIndex].node,
-            node,
-            totalCost,
-            expandedNodes,
-            reopenedNodes,
-          ),
-          sourceIndex,
-          targetIndex,
-        };
-      }
+    if (node === to) {
+      return buildRouteResult(
+        parent,
+        parentEdgeAttr,
+        from,
+        to,
+        gScore[to],
+        expandedNodes,
+        reopenedNodes,
+      );
     }
     for (
       let adjacencyIndex = graph.adjOffset[node];
       adjacencyIndex < graph.adjOffset[node + 1];
       adjacencyIndex += 1
     ) {
-      if (
-        adjacencyIndex % BUDGET_CHECK_INTERVAL === 0 &&
-        deadline !== undefined &&
-        Date.now() >= deadline
-      ) {
-        return { status: "budget_exhausted" };
-      }
       const attrIdx = graph.adjAttr[adjacencyIndex];
       const target = graph.adjTarget[adjacencyIndex];
       if (
-        !options.topologyOnly &&
         !canTraverseFareGate(graph, node, target, attrIdx, normalizedFareAccess)
       ) {
         continue;
       }
-      if (!options.topologyOnly && excludedEdges.has(attrIdx)) continue;
-      const edgeCostM = options.topologyOnly
-        ? 0
-        : physicalWidthAllows(graph, attrIdx, profile)
-          ? edgeCost(graph, attrIdx, profile, node, target)
-          : Infinity;
+      if (excludedEdges.has(attrIdx)) continue;
+      const edgeCostM = edgeCost(graph, attrIdx, profile, node, target);
       if (!Number.isFinite(edgeCostM)) {
         continue;
       }
@@ -422,7 +325,6 @@ export function searchPedGraph(
         reopenedNodes += 1;
       }
       gScore[target] = tentativeCost;
-      roots[target] = roots[node];
       parent[target] = node;
       parentEdgeAttr[target] = attrIdx;
       const priorityKey = tentativeCost + heuristicCost(graph, target, to);
@@ -432,25 +334,5 @@ export function searchPedGraph(
       open.push(target, priorityKey);
     }
   }
-  return deadline !== undefined && Date.now() >= deadline
-    ? { status: "budget_exhausted" }
-    : best
-      ? { status: "found", route: { ...best, expandedNodes, reopenedNodes } }
-      : { status: "unreachable" };
-}
-
-export function physicalWidthAllows(
-  graph: PedGraph,
-  attr: number,
-  profile: CostProfile,
-): boolean {
-  const width = graph.edgePhysicalWidthM?.[attr];
-  return (
-    profile.name !== "wheelchair" ||
-    profile.relaxationLevel >= WHEELCHAIR_RELAX_NARROW_WIDTH_LEVEL ||
-    width === undefined ||
-    !Number.isFinite(width) ||
-    Math.round(width * 1_000_000) / 1_000_000 >=
-      WHEELCHAIR_MIN_EFFECTIVE_WIDTH_M
-  );
+  return null;
 }

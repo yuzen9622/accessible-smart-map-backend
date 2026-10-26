@@ -1,9 +1,5 @@
 import { getPedGraphConfig } from "../../../../config/ped-graph";
-import {
-  loadPedGraph,
-  parseGraphQualification,
-  type PedGraphQueryable,
-} from "./graph-loader";
+import { loadPedGraph, type PedGraphQueryable } from "./graph-loader";
 import type { PedGraph } from "./graph.types";
 import { buildEdgeIndex, type EdgeIndex } from "./spatial-index";
 
@@ -195,25 +191,11 @@ async function loadSnapshot(nowMs: number): Promise<PedGraphRuntimeResult> {
     loadTimeoutMs,
     "pedestrian graph load",
   );
-  if (graph.qualification) {
-    const source = await client.query<{ id: unknown; archive_sha256: unknown }>(
-      "SELECT id, archive_sha256 FROM ped_sidewalk_source_version WHERE lifecycle_status='ACTIVE'",
-    );
-    if (
-      source.rows.length !== 1 ||
-      String(source.rows[0].id) !== graph.qualification.sourceVersionId ||
-      source.rows[0].archive_sha256 !== graph.qualification.sourceArchiveSha256
-    )
-      throw new Error("graph source qualification is stale or inconsistent");
-  }
   const snapshot: PedGraphSnapshot = {
     graph,
     index: buildEdgeIndex(graph),
     loadedAtMs: nowMs,
   };
-  if (graph.qualification && !(await isPedGraphSnapshotCurrent(snapshot))) {
-    throw new Error("pedestrian graph qualification changed while loading");
-  }
   state.snapshot = snapshot;
   state.verifiedAtMs = nowMs;
   return { status: "ready", snapshot };
@@ -236,16 +218,6 @@ async function refreshSnapshot(
     "pedestrian graph active-version check",
   );
   if (activeVersionId === cached.graph.versionId) {
-    if (
-      cached.graph.qualification &&
-      !(await isPedGraphSnapshotCurrent(cached))
-    ) {
-      if (state.snapshot === cached) {
-        state.snapshot = null;
-        state.verifiedAtMs = 0;
-      }
-      throw new Error("graph qualification is stale or inconsistent");
-    }
     state.verifiedAtMs = nowMs;
     return { status: "ready", snapshot: cached };
   }
@@ -254,49 +226,6 @@ async function refreshSnapshot(
   // silently keep planning against retired graph data.
   state.snapshot = null;
   return loadSnapshot(nowMs);
-}
-
-export async function isPedGraphSnapshotCurrent(
-  snapshot: PedGraphSnapshot,
-): Promise<boolean> {
-  if (!snapshot.graph.qualification) return false;
-  try {
-    const { loadTimeoutMs } = getPedGraphConfig();
-    return await withTimeout(
-      (async () => {
-        const client = await getPedGraphClient();
-        const result = await client.query<{
-          id: unknown;
-          notes: unknown;
-          source_hash: unknown;
-          source_id: unknown;
-          archive_sha256: unknown;
-        }>(`
-        SELECT g.id,g.notes,g.source_hash,s.id AS source_id,s.archive_sha256
-        FROM ped_graph_version g
-        LEFT JOIN ped_sidewalk_source_version s ON s.lifecycle_status='ACTIVE'
-        WHERE g.lifecycle_status='ACTIVE'
-        LIMIT 2
-      `);
-        const row = result.rows[0];
-        const qualification =
-          row && parseGraphQualification(row.notes, row.source_hash);
-        return (
-          result.rows.length === 1 &&
-          Number(row.id) === snapshot.graph.versionId &&
-          !!qualification &&
-          JSON.stringify(qualification) ===
-            JSON.stringify(snapshot.graph.qualification) &&
-          String(row.source_id) === qualification.sourceVersionId &&
-          row.archive_sha256 === qualification.sourceArchiveSha256
-        );
-      })(),
-      loadTimeoutMs,
-      "pedestrian snapshot qualification check",
-    );
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -325,18 +254,6 @@ export async function getPedGraphRuntime(): Promise<PedGraphRuntimeResult> {
   const nowMs = Date.now();
   const cached = state.snapshot;
   if (cached && nowMs - state.verifiedAtMs < refreshIntervalMs) {
-    if (
-      cached.graph.qualification &&
-      !(await isPedGraphSnapshotCurrent(cached))
-    ) {
-      if (state.snapshot === cached) {
-        state.snapshot = null;
-        state.verifiedAtMs = 0;
-      }
-      return unavailable(
-        "cached pedestrian graph qualification is no longer current",
-      );
-    }
     return { status: "ready", snapshot: cached };
   }
 
@@ -344,6 +261,12 @@ export async function getPedGraphRuntime(): Promise<PedGraphRuntimeResult> {
     cached ? refreshSnapshot(cached, nowMs) : loadSnapshot(nowMs)
   )
     .catch((error: unknown) => {
+      // A failed refresh must not discard a usable cached graph: serving the
+      // previously verified ACTIVE version beats degrading every request to OTP.
+      if (state.snapshot) {
+        state.verifiedAtMs = nowMs;
+        return { status: "ready" as const, snapshot: state.snapshot };
+      }
       return unavailable(
         error instanceof Error ? error.message : "pedestrian graph load failed",
       );

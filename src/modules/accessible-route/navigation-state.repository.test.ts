@@ -32,8 +32,6 @@ vi.mock("../../config/redis", () => ({
 
 import {
   beginNavigationResume,
-  sealNavigationEnvelope,
-  verifyNavigationEnvelopeIntegrity,
   beginReroute,
   commitNavigationResume,
   deleteNavigationSnapshot,
@@ -63,7 +61,7 @@ const snapshot: NavigationSessionSnapshot = {
   updatedAt: 1_700_000_000_000,
 };
 
-const envelope = sealNavigationEnvelope({
+const envelope = {
   schemaVersion: 1 as const,
   route: {
     routeId: "route",
@@ -89,41 +87,7 @@ const envelope = sealNavigationEnvelope({
     needsAccessibleToilet: false,
     needsHandrail: false,
   },
-});
-
-describe("navigation envelope wire integrity", () => {
-  it("is idempotent and independent of object key order and omitted wire fields", () => {
-    const input = {
-      ...envelope,
-      route: { ...envelope.route, warnings: undefined },
-    };
-    Object.defineProperty(input.route, "privateState", {
-      value: "not-on-wire",
-    });
-    const sealed = sealNavigationEnvelope(input);
-    expect(sealNavigationEnvelope(sealed)).toEqual(sealed);
-    const wire = JSON.parse(JSON.stringify(sealed));
-    wire.route = Object.fromEntries(Object.entries(wire.route).reverse());
-    expect(verifyNavigationEnvelopeIntegrity(wire)).toBe(true);
-    expect(
-      verifyNavigationEnvelopeIntegrity({ ...wire, integrity: undefined }),
-    ).toBe(false);
-  });
-
-  it.each([
-    "route",
-    "navigationId",
-    "routeVersion",
-    "canonicalRequest",
-    "schemaVersion",
-  ])("detects damage to protected field %s", (key) => {
-    const damaged = JSON.parse(
-      JSON.stringify(sealNavigationEnvelope(envelope)),
-    );
-    delete damaged[key];
-    expect(verifyNavigationEnvelopeIntegrity(damaged)).toBe(false);
-  });
-});
+};
 
 describe("navigation-state repository Lua tri-state", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -144,7 +108,7 @@ describe("navigation-state repository Lua tri-state", () => {
       2,
       "voice-nav:route:token",
       "voice-nav:head:nav",
-      JSON.stringify(sealNavigationEnvelope(envelope)),
+      JSON.stringify(envelope),
       "1800",
     );
   });
@@ -206,7 +170,7 @@ describe("navigation-state repository Lua tri-state", () => {
       "voice-nav:resume-lock:nav",
       "request",
       "1",
-      JSON.stringify(sealNavigationEnvelope(nextEnvelope)),
+      JSON.stringify(nextEnvelope),
       "1800",
       "2",
       JSON.stringify(data),
@@ -386,11 +350,11 @@ describe.runIf(Boolean(process.env.CANDIDATE_REDIS_TEST_URL))(
   "candidate decision real Redis Lua",
   () => {
     let client: Redis;
-    const nextEnvelope = sealNavigationEnvelope({
+    const nextEnvelope = {
       ...envelope,
       routeVersion: 2,
       route: { ...envelope.route, navigationId: "nav", routeVersion: 2 },
-    });
+    };
     const data = {
       navigationId: "nav",
       previousRouteVersion: 1,

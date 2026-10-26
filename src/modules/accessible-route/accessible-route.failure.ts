@@ -30,10 +30,6 @@ export interface RouteFailureData<
   reason: Reason;
   maxDistanceKm?: number;
   venueAccessibility?: VenueAccessibility;
-  endpointConstraint?: {
-    pointIndex: number;
-    reasons: ("KNOWN_WIDTH" | "KNOWN_NON_STAIR_SLOPE")[];
-  };
 }
 
 type RouteFailureStatus<Reason extends RouteFailureReason> =

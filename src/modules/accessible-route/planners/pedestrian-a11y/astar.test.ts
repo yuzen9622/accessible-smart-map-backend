@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { BinaryMinHeap, aStar, heuristicCost, searchPedGraph } from "./astar";
+import { describe, expect, it } from "vitest";
+import { BinaryMinHeap, aStar, heuristicCost } from "./astar";
 import {
   WHEELCHAIR_MAX_RELAXATION_LEVEL,
   WHEELCHAIR_WALK_SPEED_MPS,
@@ -7,8 +7,6 @@ import {
 } from "./cost";
 import { dijkstra } from "./dijkstra";
 import { EDGE_FLAG, EDGE_TYPE, NODE_FLAG, type PedGraph } from "./graph.types";
-
-afterEach(() => vi.restoreAllMocks());
 
 const METRES_PER_DEGREE_LATITUDE = 111_195;
 
@@ -540,71 +538,5 @@ describe("request-local hazard exclusions", () => {
     expect(
       Array.from(aStar(graph, 0, 2, wheelchairProfile())!.edgeAttrPath),
     ).toEqual([0]);
-  });
-});
-
-describe("budget-aware pedestrian search", () => {
-  it("distinguishes completed unreachability from expiry and a found route", () => {
-    const graph = graphFromEdges({
-      nodeLon: [121.5, 121.501, 121.502],
-      nodeLat: [25, 25, 25],
-      edges: [{ from: 0, to: 1, lengthM: 10 }],
-    });
-    expect(searchPedGraph(graph, 0, 2, wheelchairProfile())).toEqual({
-      status: "unreachable",
-    });
-    expect(
-      searchPedGraph(graph, 0, 1, wheelchairProfile(), { deadlineMs: -1 }),
-    ).toEqual({ status: "budget_exhausted" });
-    expect(
-      searchPedGraph(graph, 0, 1, wheelchairProfile(), {
-        deadlineMs: Date.now() + 60_000,
-      }),
-    ).toMatchObject({ status: "found", route: { totalCost: 10 } });
-    expect(aStar(graph, 0, 1, wheelchairProfile())).not.toBeNull();
-  });
-
-  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
-    "rejects invalid deadline %s rather than pretending no path exists",
-    (deadlineMs) => {
-      const graph = graphFromEdges({
-        nodeLon: [121.5, 121.501],
-        nodeLat: [25, 25],
-        edges: [{ from: 0, to: 1, lengthM: 10 }],
-      });
-      expect(
-        searchPedGraph(graph, 0, 1, wheelchairProfile(), { deadlineMs }),
-      ).toEqual({ status: "invalid_input" });
-    },
-  );
-
-  it("observes expiry inside a high-degree node before scanning its whole adjacency", () => {
-    const graph = graphFromEdges({
-      nodeLon: Array.from({ length: 601 }, (_, i) => 121.5 + i * 0.000001),
-      nodeLat: new Array(601).fill(25),
-      edges: Array.from({ length: 600 }, (_, i) => ({
-        from: 0,
-        to: i + 1,
-        lengthM: 1,
-      })),
-    });
-    let now = 0;
-    let reads = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    graph.edgeLengthM = new Proxy(graph.edgeLengthM, {
-      get(target, property) {
-        if (typeof property === "string" && /^\d+$/.test(property)) {
-          reads += 1;
-          now = 10;
-        }
-        return Reflect.get(target, property, target);
-      },
-    });
-    expect(
-      searchPedGraph(graph, 0, 600, wheelchairProfile(), { deadlineMs: 5 }),
-    ).toEqual({ status: "budget_exhausted" });
-    expect(reads).toBeGreaterThan(0);
-    expect(reads).toBeLessThanOrEqual(300);
-    expect(aStar(graph, 0, 1, wheelchairProfile())).not.toBeNull();
   });
 });
