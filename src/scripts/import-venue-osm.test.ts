@@ -6,7 +6,7 @@ import {
 import { SYNC_STEPS } from "./sync-all-data-plan";
 
 describe("venue import publication scope", () => {
-  it("publishes the same four-building default for direct import and data sync", () => {
+  it("publishes the same default buildings for direct import and data sync", () => {
     expect(parseVenueImportArgs([]).buildingIds).toEqual(
       DEFAULT_NUTC_BUILDING_IDS,
     );

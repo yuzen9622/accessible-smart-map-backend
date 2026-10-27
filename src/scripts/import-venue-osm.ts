@@ -10,7 +10,7 @@
  * which the API's venue graph cache keys on.
  *
  * Run: pnpm import:venue -- --file data/venues/nutc-sanmin.osm \
- *        --venue nutc-sanmin --name "國立臺中科技大學 三民校區" [--buildings info,zk,changming,hanying] [--dry-run]
+ *        --venue nutc-sanmin --name "國立臺中科技大學 三民校區" [--buildings info,zk,changming,hanying,activity] [--dry-run]
  */
 
 import "dotenv/config";
@@ -32,6 +32,7 @@ export const DEFAULT_NUTC_BUILDING_IDS = [
   "zk",
   "changming",
   "hanying",
+  "activity",
 ] as const;
 
 /** Parse before reading data or opening a database connection. */
