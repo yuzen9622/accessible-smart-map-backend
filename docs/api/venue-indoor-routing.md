@@ -75,15 +75,15 @@
 ## 匯入
 
 ```bash
-pnpm import:venue -- --file data/venues/nutc-sanmin.osm --venue nutc-sanmin --name "國立臺中科技大學 三民校區" --buildings info,zk,changming,hanying --dry-run
+pnpm import:venue -- --file data/venues/nutc-sanmin.osm --venue nutc-sanmin --name "國立臺中科技大學 三民校區" --buildings info,zk,changming,hanying,activity --dry-run
 ```
 
-- `nutc-sanmin` 預設只發布 `info`、`zk`、`changming`、`hanying` 四棟；一般場域預設完整來源。`--buildings id-a,id-b` 可明確指定發布範圍；空白、重複、無效或來源不存在的 id 會失敗。`--all-buildings` 明確要求完整來源驗證，不能與 `--buildings` 同用。
+- `nutc-sanmin` 預設只發布 `info`、`zk`、`changming`、`hanying`、`activity` 五棟；一般場域預設完整來源。`--buildings id-a,id-b` 可明確指定發布範圍；空白、重複、無效或來源不存在的 id 會失敗。`--all-buildings` 明確要求完整來源驗證，不能與 `--buildings` 同用。
 - 範圍外建築及其室內地點、路網、顯示圖形不會發布；外框仍留在原始 OSM。排除在樓層數等內部驗證前生效，但無法辨識排除建築的外框時仍拒絕發布，避免將未完成建築誤當戶外捷徑。跨棟連通道、校門與未穿過排除建築的校園步道保留，不刪改來源檔案。
 - 先完整編譯與驗證；任何錯誤都不寫入（`--venue` 也必須是小寫英數、`-`、`_`，與 API 路徑規則相同）。警告會列出「從校門走不到」或「輪椅無法抵達」的地點、缺錨點的樓層，以及離其他線不到 0.5 公尺卻沒共用節點的端點（多半是漏接），供補資料。
 - 拿掉 `--dry-run` 後以單一文件覆寫該場域並遞增 `version`；API 依版本自動重建路網，不需重啟。
 - 新的 tags、關聯、到達點與牆線由來源編譯保存。舊文件缺少這些資料時維持未知／省略，`walls` 回空陣列；需重新匯入才能補齊，API 不讀私有 OSM sidecar 補資料。原始檔 SHA 相同也仍需使用新的數值版本，不能把不同發布內容視為同一版。
-- `pnpm data:sync --with-snapshot` 會一併執行（步驟 `venue-nutc-sanmin`，使用相同四棟預設，預設同步不含）。
+- `pnpm data:sync --with-snapshot` 會一併執行（步驟 `venue-nutc-sanmin`，使用相同五棟預設，預設同步不含）。
 
 ## 隱私
 
