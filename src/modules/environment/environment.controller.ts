@@ -38,3 +38,33 @@ export async function getEnvironmentInfo(req: Request, res: Response) {
     );
   }
 }
+
+/**
+ * Handles `GET /a11y/cctv`: nearby CCTV only, so map clients skip the
+ * weather/air lookups. An unavailable upstream is reported in the block's
+ * `status`/`reason` with a still-200 envelope, matching `/a11y/environment`.
+ */
+export async function getNearbyCctv(req: Request, res: Response) {
+  try {
+    const { lat, lng, radius } = req.validated?.query as {
+      lat: number;
+      lng: number;
+      radius: number;
+    };
+
+    const data = await service.getNearbyCctv(lat, lng, radius);
+    const message =
+      data.status === "ok" ? ENV_MSG.CCTV_OK : ENV_MSG.CCTV_UNAVAILABLE;
+
+    return sendResponse(res, true, "success", ResponseCode.OK, message, data);
+  } catch (error) {
+    console.error(error);
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INTERNAL_ERROR,
+      ERROR_MESSAGE.INTERNAL,
+    );
+  }
+}

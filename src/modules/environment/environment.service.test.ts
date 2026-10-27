@@ -24,9 +24,11 @@ import {
   fetchNearestObservation,
   fetchNearestWeather,
 } from "../../adapters/cwa.adapter";
+import { fetchCamList } from "../../adapters/twipcam.adapter";
 import { getAirData } from "../air/air.service";
 import {
   getEnvironmentInfo,
+  getNearbyCctv,
   getWeatherAndAirQuality,
 } from "./environment.service";
 import type { CwaLocation, CwaObservationStation } from "./environment.types";
@@ -177,5 +179,41 @@ describe("getEnvironmentInfo dual-track resilience", () => {
 
     const info = await getEnvironmentInfo(25.033, 121.565, 500);
     expect(info.weather.status).toBe("unavailable");
+  });
+});
+
+describe("getNearbyCctv", () => {
+  it("returns the nearest cleaned cameras without touching weather or air", async () => {
+    vi.mocked(fetchCamList).mockResolvedValue([
+      {
+        id: "txg-000046",
+        name: "台中市道路 [04028]三民路/五權路/崇德路(右側車流往北屯路),Sanmin Rd/Wuquan Rd/Chongde Rd",
+        lat: 24.1545,
+        lon: 120.6859,
+      },
+      { id: "far", name: "遠", lat: 25.2, lon: 121.7 },
+    ]);
+
+    const block = await getNearbyCctv(24.1544, 120.686, 500);
+
+    expect(block.status).toBe("ok");
+    expect(block.cameras).toHaveLength(1);
+    expect(block.cameras?.[0]).toMatchObject({
+      id: "txg-000046",
+      name: "三民路/五權路/崇德路(右側車流往北屯路)",
+      snapshotUrl: "https://c01.twipcam.com/cam/snapshot/txg-000046.jpg",
+    });
+    expect(getAirData).not.toHaveBeenCalled();
+    expect(fetchNearestWeather).not.toHaveBeenCalled();
+  });
+
+  it("reports unavailable instead of throwing when twipcam fails", async () => {
+    vi.mocked(fetchCamList).mockRejectedValue(new Error("twipcam down"));
+
+    const block = await getNearbyCctv(24.1544, 120.686, 500);
+
+    expect(block.status).toBe("unavailable");
+    expect(block.cameras).toBeUndefined();
+    expect(block.reason).toEqual(expect.any(String));
   });
 });

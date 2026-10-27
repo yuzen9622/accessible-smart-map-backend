@@ -148,6 +148,8 @@ export const MEMORY_MSG = {
  */
 export const ENV_MSG = {
   OK: "環境資訊查詢成功",
+  CCTV_OK: "附近監視器查詢成功",
+  CCTV_UNAVAILABLE: "監視器來源暫時無法使用",
   partial: (unavailableCount: number): string =>
     `環境資訊部分查詢成功（${unavailableCount} 項來源不可用）`,
 } as const;

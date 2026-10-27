@@ -13,6 +13,7 @@ import request from "supertest";
 // degradation-count → message mapping and the always-200 envelope.
 vi.mock("./environment.service", () => ({
   getEnvironmentInfo: vi.fn(),
+  getNearbyCctv: vi.fn(),
 }));
 
 import {
@@ -182,5 +183,53 @@ describe("GET /api/v1/a11y/environment", () => {
       code: ResponseCode.INTERNAL_ERROR,
       message: ERROR_MESSAGE.INTERNAL,
     });
+  });
+});
+
+describe("GET /api/v1/a11y/cctv", () => {
+  const CCTV_URL = "/api/v1/a11y/cctv";
+
+  it("returns the camera block alone with the CCTV message", async () => {
+    const data = { status: "ok", cameras: [] };
+    vi.mocked(service.getNearbyCctv).mockResolvedValue(data as any);
+
+    const res = await request(app)
+      .get(CCTV_URL)
+      .query({ lat: 24.1545, lng: 120.6859 });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      ok: true,
+      status: "success",
+      code: ResponseCode.OK,
+      message: ENV_MSG.CCTV_OK,
+      data,
+    });
+    expect(vi.mocked(service.getNearbyCctv)).toHaveBeenCalledWith(
+      24.1545,
+      120.6859,
+      500,
+    );
+    expect(vi.mocked(service.getEnvironmentInfo)).not.toHaveBeenCalled();
+  });
+
+  it("keeps a 200 envelope with the unavailable message when the source is down", async () => {
+    vi.mocked(service.getNearbyCctv).mockResolvedValue({
+      status: "unavailable",
+      reason: "UPSTREAM_TIMEOUT",
+    } as any);
+
+    const res = await request(app).get(CCTV_URL).query({ lat: 25, lng: 121 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.message).toBe(ENV_MSG.CCTV_UNAVAILABLE);
+    expect(res.body.data.status).toBe("unavailable");
+  });
+
+  it("rejects a missing lat with 400 (schema)", async () => {
+    const res = await request(app).get(CCTV_URL).query({ lng: 121 });
+
+    expect(res.status).toBe(ResponseCode.INVALID_INPUT);
+    expect(vi.mocked(service.getNearbyCctv)).not.toHaveBeenCalled();
   });
 });

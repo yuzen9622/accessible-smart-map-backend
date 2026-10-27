@@ -102,3 +102,44 @@ registry.registerPath({
     500: { description: "伺服器錯誤" },
   },
 });
+
+const CctvResponseSchema = z
+  .object({
+    ok: z.boolean().openapi({ example: true }),
+    status: z.enum(["success", "error"]).openapi({ example: "success" }),
+    code: z.number().openapi({ example: 200 }),
+    message: z.string().openapi({ example: "附近監視器查詢成功" }),
+    data: CctvBlockSchema.optional(),
+  })
+  .openapi("CctvResponse");
+
+registry.registerPath({
+  method: "get",
+  path: "/a11y/cctv",
+  tags: ["Environment"],
+  summary: "鄰近監視器查詢",
+  description:
+    "依座標查詢半徑內的路口／道路監視器（twipcam），由近到遠最多 5 支；來源失敗時 data.status 為 unavailable。",
+  request: {
+    query: z.object({
+      lat: z
+        .union([z.string(), z.number()])
+        .openapi({ example: 24.1545, description: "目標地點緯度。" }),
+      lng: z
+        .union([z.string(), z.number()])
+        .openapi({ example: 120.6859, description: "目標地點經度。" }),
+      radius: z.union([z.string(), z.number()]).optional().openapi({
+        example: 500,
+        description: "搜尋半徑（公尺），100–2000，預設 500。",
+      }),
+    }),
+  },
+  responses: {
+    200: {
+      description: "鄰近監視器（來源失敗時為 unavailable 區塊）",
+      content: { "application/json": { schema: CctvResponseSchema } },
+    },
+    400: { description: "參數驗證失敗" },
+    500: { description: "伺服器錯誤" },
+  },
+});

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { validateRequest } from "../../middleware/validate-request.middleware";
-import { getEnvironmentInfo } from "./environment.controller";
+import { getEnvironmentInfo, getNearbyCctv } from "./environment.controller";
 import { EnvironmentQuerySchema } from "./environment.schema";
 
 export function createEnvironmentRouter(): Router {
@@ -10,6 +10,12 @@ export function createEnvironmentRouter(): Router {
     "/environment",
     validateRequest({ query: EnvironmentQuerySchema }),
     getEnvironmentInfo,
+  );
+
+  router.get(
+    "/cctv",
+    validateRequest({ query: EnvironmentQuerySchema }),
+    getNearbyCctv,
   );
 
   return router;

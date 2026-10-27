@@ -136,6 +136,28 @@ async function loadNearbyCctv(
 }
 
 /**
+ * Nearby CCTV only — the same camera block `getEnvironmentInfo` embeds, for
+ * clients that need no weather/air. A failing upstream yields an `unavailable`
+ * block rather than throwing.
+ *
+ * @param lat Query latitude.
+ * @param lng Query longitude.
+ * @param radius CCTV search radius in metres.
+ * @returns The camera block, nearest first.
+ */
+export async function getNearbyCctv(
+  lat: number,
+  lng: number,
+  radius: number,
+): Promise<CctvBlock> {
+  try {
+    return await loadNearbyCctv(lat, lng, radius);
+  } catch (err) {
+    return unavailable(err);
+  }
+}
+
+/**
  * Lightweight weather + air-quality lookup for consumers that need only the
  * conditions (e.g. route scoring's environment factor) — runs the same cached
  * weather/air branches as `getEnvironmentInfo` but skips the uncached CCTV
