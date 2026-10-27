@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  cleanCameraName,
   degreesToCardinal,
   mergeWeather,
   parseCameras,
@@ -306,5 +307,38 @@ describe("parseCameras", () => {
   it("skips cameras with invalid coordinates", () => {
     const bad: RawCamera[] = [{ id: "bad", name: "壞", lat: NaN, lon: 121.5 }];
     expect(parseCameras(bad, 25.0478, 121.5318, 1000, 5)).toEqual([]);
+  });
+});
+
+describe("cleanCameraName", () => {
+  it("drops the source prefix, device code and English transliteration", () => {
+    expect(
+      cleanCameraName(
+        "台中市道路 [04028]三民路/五權路/崇德路(右側車流往北屯路),Sanmin Rd/Wuquan Rd/Chongde Rd(Right side Traffic flow to Beitun Rd)",
+      ),
+    ).toBe("三民路/五權路/崇德路(右側車流往北屯路)");
+    expect(
+      cleanCameraName(
+        "台中市道路 [04273]進化北路/學士路(右側車流往崇德路) Jinhua N. Rd./Xueshi Rd. (Right side Traffic flow to Chongde Rd.)",
+      ),
+    ).toBe("進化北路/學士路(右側車流往崇德路)");
+    expect(
+      cleanCameraName("台南市道路 新市區 西拉雅大道與復興路口西桿(向西)-廣角"),
+    ).toBe("新市區 西拉雅大道與復興路口西桿(向西)-廣角");
+  });
+
+  it("leaves highway mileposts and agency cameras untouched", () => {
+    for (const name of [
+      "台17線 55K+800",
+      "國道三號 197K+930 南向 彰化系統交流道到快官交流道",
+      "水利署水資源 屏東縣政府水利處 萬金滯洪池#1",
+      "環境部空氣品質監測站 板橋",
+    ]) {
+      expect(cleanCameraName(name)).toBe(name);
+    }
+  });
+
+  it("keeps the raw name when cleaning would empty it", () => {
+    expect(cleanCameraName("Sanmin Rd. Camera")).toBe("Sanmin Rd. Camera");
   });
 });

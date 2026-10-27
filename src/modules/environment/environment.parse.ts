@@ -189,6 +189,29 @@ export function mergeWeather(
   };
 }
 
+const ROAD_SOURCE_PREFIX = /^\S{2,3}[市縣]道路\s+/;
+const CAMERA_CODE = /\[\s*\d+\s*\]\s*/g;
+const TRAILING_ENGLISH = /[,，]?\s*[A-Z][a-z]+[\s./].*$/;
+
+/**
+ * Strips twipcam's bookkeeping from a road-camera name — the "台中市道路"
+ * source prefix, the "[04028]" device code and the duplicated English
+ * transliteration — leaving the intersection label users see on the source site.
+ * Names that carry none of these (highway mileposts, water-resources cameras)
+ * pass through unchanged.
+ *
+ * @param name The raw twipcam camera name.
+ * @returns The display name, or the trimmed raw name if cleaning empties it.
+ */
+export function cleanCameraName(name: string): string {
+  const cleaned = name
+    .replace(ROAD_SOURCE_PREFIX, "")
+    .replace(CAMERA_CODE, "")
+    .replace(TRAILING_ENGLISH, "")
+    .trim();
+  return cleaned || name.trim();
+}
+
 /**
  * Filters the nationwide camera list to those within `radius` of the query
  * point, sorted by ascending distance and capped at `limit`.
@@ -218,7 +241,7 @@ export function parseCameras(
     .slice(0, limit)
     .map(({ cam, distanceM }) => ({
       id: cam.id,
-      name: cam.name,
+      name: cleanCameraName(cam.name),
       location: { lat: cam.lat, lng: cam.lon },
       distanceM,
       snapshotUrl: cam.id ? `${TWIPCAM_SNAPSHOT_BASE_URL}/${cam.id}.jpg` : null,
