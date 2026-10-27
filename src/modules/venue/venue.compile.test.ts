@@ -154,6 +154,24 @@ describe("compileVenue validation", () => {
     );
   });
 
+  it("accepts places on a basement level", () => {
+    const xml = mutate(
+      "<tag k='building:levels' v='3' />",
+      "<tag k='building:levels' v='3' />\n    <tag k='building:levels:underground' v='1' />",
+    )
+      .replace(
+        /(<nd ref='-15' \/>\n(?:\s*<tag [^>]*\/>\n)*?\s*)<tag k='repeat_on' v='1;2' \/>/,
+        "$1<tag k='repeat_on' v='-1;1;2' />",
+      )
+      .replace(
+        "<tag k='repeat_on' v='1;2' />\n    <tag k='a11ymap:id' v='a-room06' />",
+        "<tag k='repeat_on' v='-1;1;2' />\n    <tag k='a11ymap:id' v='a-room06' />",
+      );
+    const { venue, errors } = compileFixture(xml);
+    expect(errors).toEqual([]);
+    expect(venue.places.map((p) => p.id)).toContain("a-room06@B1");
+  });
+
   it("requires single-level end nodes on stairs that span levels", () => {
     const noLevel = FIXTURE.replace(
       /(<node id='-17'[^>]*>\n)\s*<tag k='level' v='1' \/>\n/,

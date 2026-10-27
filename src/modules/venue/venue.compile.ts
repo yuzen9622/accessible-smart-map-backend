@@ -65,7 +65,7 @@ const MAX_ABS_HEIGHT_M = 1000;
 /** Widest `level` / `repeat_on` range accepted, in floors. */
 const MAX_LEVEL_RANGE = 200;
 const ID_RE = VENUE_ID_RE;
-const LEVEL_REF_RE = /^(B[1-9]\d*|[1-9]\d*)F$|^RF$/;
+const LEVEL_REF_RE = /^(B[1-9]\d*|[1-9]\d*F|RF)$/;
 const ROUTABLE_HIGHWAYS = new Set([
   "corridor",
   "footway",
