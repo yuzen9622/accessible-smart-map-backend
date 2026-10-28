@@ -138,12 +138,21 @@ const SNAP_RADIUS_M = 2000;
 
 const METRO_SYSTEMS = new Set(["TRTC", "KRTC", "TMRT", "NTMC", "KLRT", "TYMC"]);
 
-const TRTC_LINE_NAMES: ReadonlyMap<string, string> = new Map([
-  ["BL", "板南線"],
-  ["R", "淡水信義線"],
-  ["G", "松山新店線"],
-  ["O", "中和新蘆線"],
-  ["BR", "文湖線"],
+const GREATER_TAIPEI_METRO_LINE_NAMES: ReadonlyMap<string, string> = new Map([
+  ["TRTC_BL", "板南線"],
+  ["TRTC_R", "淡水信義線"],
+  ["TRTC_G", "松山新店線"],
+  ["TRTC_O", "中和新蘆線"],
+  ["TRTC_BR", "文湖線"],
+  ["TRTC_R_R-3", "新北投支線"],
+  ["TRTC_G_G-3", "小碧潭支線"],
+  ["NTMC_Y", "環狀線"],
+  ["NTMC_LB", "三鶯線"],
+  ["TYMC_A", "桃園機場捷運"],
+  ["NTDLRT_V", "淡海輕軌"],
+  ["NTDLRT_V_V-1", "淡海輕軌綠山線"],
+  ["NTDLRT_V_V-2", "淡海輕軌藍海線"],
+  ["NTALRT_K", "安坑輕軌"],
 ]);
 
 export const SUPPORTED_TRANSIT_MODES = new Set([
@@ -1141,9 +1150,9 @@ function transitLegFrom(
       railSystem: system,
       lineId,
       lineName:
-        system === "TRTC"
-          ? (TRTC_LINE_NAMES.get(lineId) ?? routeName)
-          : routeName,
+        GREATER_TAIPEI_METRO_LINE_NAMES.get(routeId.replace(/_[01]$/, "")) ??
+        GREATER_TAIPEI_METRO_LINE_NAMES.get(`${system}_${lineId}`) ??
+        routeName,
       lineUid: routeId,
       departureStation: fromName,
       arrivalStation: toName,

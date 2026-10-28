@@ -156,6 +156,29 @@ describe("OTP metro line names", () => {
     ["TRTC_G_G-1_0", "松山－新店", "G", "松山新店線", 0],
     ["TRTC_O_O-1_0", "南勢角－迴龍", "O", "中和新蘆線", 0],
     ["TRTC_BR_BR-1_0", "動物園－南港展覽館", "BR", "文湖線", 0],
+    ["TRTC_R_R-3_0", "北投－新北投", "R", "新北投支線", 0],
+    ["TRTC_R_R-3_1", "新北投－北投", "R", "新北投支線", 1],
+    ["TRTC_G_G-3_0", "七張－小碧潭", "G", "小碧潭支線", 0],
+    ["TRTC_G_G-3_1", "小碧潭－七張", "G", "小碧潭支線", 1],
+    ["NTMC_Y_Y-1_0", "大坪林－新北產業園區", "Y", "環狀線", 0],
+    ["NTMC_Y_Y-1_1", "新北產業園區－大坪林", "Y", "環狀線", 1],
+    ["NTMC_LB", "原始三鶯路線名稱", "LB", "三鶯線", 0],
+    ["TYMC_A_A-1_0", "台北車站－老街溪站", "A", "桃園機場捷運", 0],
+    ["TYMC_A_A-2_1", "機場第二航廈站－台北車站", "A", "桃園機場捷運", 1],
+    ["TYMC_A_A-3_1", "老街溪站－機場第一航廈站", "A", "桃園機場捷運", 1],
+    ["NTDLRT_V_V-1_0", "紅樹林－崁頂", "V", "淡海輕軌綠山線", 0],
+    ["NTDLRT_V_V-1_1", "崁頂－紅樹林", "V", "淡海輕軌綠山線", 1],
+    ["NTDLRT_V_V-2_0", "紅樹林－淡水漁人碼頭", "V", "淡海輕軌藍海線", 0],
+    ["NTDLRT_V_V-2_1", "淡水漁人碼頭－紅樹林", "V", "淡海輕軌藍海線", 1],
+    ["NTDLRT_V", "原始淡海路線名稱", "V", "淡海輕軌", 0],
+    ["NTALRT_K_K-1_0", "雙城－十四張", "K", "安坑輕軌", 0],
+    ["NTALRT_K_K-1_1", "十四張－雙城", "K", "安坑輕軌", 1],
+    ["NTALRT_K_K-2_0", "安康－十四張", "K", "安坑輕軌", 0],
+    ["TRTC_BL_BL-1_1", "", "BL", "板南線", 1],
+    ["NTMC_X_X-1_0", "未知新北路線名稱", "X", "未知新北路線名稱", 0],
+    ["TMRT_G_G-1_0", "烏日文心北屯線", "G", "烏日文心北屯線", 0],
+    ["KLRT_C_C_0", "高雄環狀輕軌", "C", "高雄環狀輕軌", 0],
+    ["TRTCMG_MK_MK-1_0", "動物園－貓空", "MK", "動物園－貓空", 0],
     ["TRTC_X_X-1_0", "原始路線名稱", "X", "原始路線名稱", 0],
     ["KRTC_R_R-1_0", "高雄紅線原始名稱", "R", "高雄紅線原始名稱", 0],
   ])(
@@ -163,7 +186,10 @@ describe("OTP metro line names", () => {
     async (routeId, sourceName, lineId, lineName, direction) => {
       const itinerary = transitItinerary(sourceName);
       const leg = itinerary.legs[0];
-      leg.mode = "SUBWAY";
+      leg.mode =
+        routeId.startsWith("NTDLRT_") || routeId.startsWith("NTALRT_")
+          ? "TRAM"
+          : "SUBWAY";
       leg.route.gtfsId = `1:${routeId}`;
       leg.trip.gtfsId = `1:${routeId}_trip`;
       tripLean.mockResolvedValue([
@@ -187,6 +213,30 @@ describe("OTP metro line names", () => {
       });
     },
   );
+
+  it("uses branch and main line names in the transfer summary", async () => {
+    const branch = transitItinerary("新北投－北投");
+    const main = transitItinerary("北投－象山", 661_000);
+    branch.legs[0].mode = "SUBWAY";
+    branch.legs[0].route.gtfsId = "1:TRTC_R_R-3_1";
+    main.legs[0].mode = "SUBWAY";
+    main.legs[0].route.gtfsId = "1:TRTC_R_R-1_1";
+    post.mockResolvedValue(
+      okResp([
+        { ...branch, duration: 1_260, legs: [...branch.legs, ...main.legs] },
+      ]),
+    );
+
+    const routes = await planOtpRoute(origin, destination, { limit: 1 });
+
+    expect(routes[0].routeName).toBe("新北投支線 → 淡水信義線");
+    expect(routes[0].transferCount).toBe(1);
+    expect(routes[0].totalMinutes).toBe(21);
+    expect(routes[0].legs).toMatchObject([
+      { type: "METRO", lineName: "新北投支線", lineUid: "TRTC_R_R-3_1" },
+      { type: "METRO", lineName: "淡水信義線", lineUid: "TRTC_R_R-1_1" },
+    ]);
+  });
 
   it("keeps bus route names unchanged", async () => {
     post.mockResolvedValue(okResp([transitItinerary("307")]));
