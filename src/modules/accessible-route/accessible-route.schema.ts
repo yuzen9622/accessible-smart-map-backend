@@ -742,12 +742,30 @@ const MetroLegSchema = z
       description:
         "路線代碼，前端用來上色/標示（紅線 R、藍線 BL、綠線 G、橘線 O、棕線 BR…）",
     }),
-    lineName: z.string().openapi({ example: "TRTC-R" }),
-    lineUid: z.string().openapi({ example: "TRTC-R" }),
+    lineName: z.string().openapi({
+      example: "板南線",
+      description:
+        "路線名稱（含支線，如新北投支線）；不含起訖站。列車終點見 terminalStation。",
+    }),
+    lineUid: z.string().openapi({ example: "TRTC_BL_BL-1_1" }),
     departureStation: z.string().openapi({ example: "市政府站" }),
-    arrivalStation: z.string().openapi({ example: "台北車站" }),
+    arrivalStation: z.string().openapi({
+      example: "台北車站",
+      description: "旅客下車站，不是列車終點。",
+    }),
     departureStationUid: z.string().openapi({ example: "TRTC-R10" }),
     arrivalStationUid: z.string().openapi({ example: "TRTC-R02" }),
+    terminalStation: z.string().optional().openapi({
+      example: "頂埔",
+      description:
+        "規劃選中班次的終點站（列車開往的站），用於「往○○」。取自該班次站序最後一站；查無時省略，不以下車站或方向推測。",
+    }),
+    terminalStationUid: z.string().optional().openapi({ example: "TRTC_BL01" }),
+    terminalNameEn: z.string().optional().openapi({ example: "Dingpu" }),
+    terminalDisplayName: z.string().optional().openapi({
+      example: "頂埔",
+      description: "依請求語言選出的終點站顯示名稱；缺英文來源時為原文。",
+    }),
     direction: z.union([z.literal(0), z.literal(1)]).openapi({ example: 0 }),
     stopsCount: z.number().openapi({ example: 5 }),
     rideMinutes: z.number().openapi({ example: 10 }),

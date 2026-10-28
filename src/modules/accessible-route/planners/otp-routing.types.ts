@@ -32,7 +32,12 @@ export interface OtpLeg {
     type?: number;
     agency?: { gtfsId?: string };
   } | null;
-  trip?: { gtfsId?: string; wheelchairAccessible?: string } | null;
+  trip?: {
+    gtfsId?: string;
+    wheelchairAccessible?: string;
+    /** The trip's scheduled stop pattern; the last entry is its terminal. */
+    stops?: { gtfsId?: string; name?: string }[] | null;
+  } | null;
   legGeometry?: { points?: string } | null;
   intermediatePlaces?:
     | {

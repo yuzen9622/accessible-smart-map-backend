@@ -1276,7 +1276,24 @@ describe("LINE SOS tools", () => {
         destination: { lat: 25.0478, lng: 121.5171 },
         city: "Taipei",
         routes: [
-          { routeName: "route1", totalMinutes: 12, legs: [{ type: "WALK" }] },
+          {
+            routeName: "route1",
+            totalMinutes: 12,
+            legs: [
+              { type: "WALK" },
+              {
+                type: "METRO",
+                railSystem: "TRTC",
+                lineId: "BL",
+                lineName: "板南線",
+                terminalStation: "頂埔",
+                terminalDisplayName: "Dingpu",
+                departureStation: "市政府",
+                arrivalStation: "台北車站",
+                rideMinutes: 10,
+              },
+            ],
+          },
         ],
       },
     });
@@ -1284,6 +1301,13 @@ describe("LINE SOS tools", () => {
     const raw = await planRouteToSosVictim({ sessionId: "s1" }, "line-1");
     const result = JSON.parse(raw);
     expect(result.ok).toBe(true);
+    expect(result.routes[0].legs[1]).toMatchObject({
+      type: "METRO",
+      lineName: "板南線",
+      terminalStation: "頂埔",
+      terminalDisplayName: "Dingpu",
+      arrivalStation: "台北車站",
+    });
     expect(mockPlanRoute).toHaveBeenCalledWith(
       expect.objectContaining({
         origin: { latitude: 25.03, longitude: 121.56 },

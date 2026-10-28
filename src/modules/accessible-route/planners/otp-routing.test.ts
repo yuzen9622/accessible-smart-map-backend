@@ -178,7 +178,7 @@ describe("OTP metro line names", () => {
     ["NTMC_X_X-1_0", "未知新北路線名稱", "X", "未知新北路線名稱", 0],
     ["TMRT_G_G-1_0", "烏日文心北屯線", "G", "烏日文心北屯線", 0],
     ["KLRT_C_C_0", "高雄環狀輕軌", "C", "高雄環狀輕軌", 0],
-    ["TRTCMG_MK_MK-1_0", "動物園－貓空", "MK", "動物園－貓空", 0],
+    ["TRTCMG_MK_MK-1_0", "動物園－貓空", "MK", "貓空纜車", 0],
     ["TRTC_X_X-1_0", "原始路線名稱", "X", "原始路線名稱", 0],
     ["KRTC_R_R-1_0", "高雄紅線原始名稱", "R", "高雄紅線原始名稱", 0],
   ])(
@@ -235,6 +235,112 @@ describe("OTP metro line names", () => {
     expect(routes[0].legs).toMatchObject([
       { type: "METRO", lineName: "新北投支線", lineUid: "TRTC_R_R-3_1" },
       { type: "METRO", lineName: "淡水信義線", lineUid: "TRTC_R_R-1_1" },
+    ]);
+  });
+
+  const metroItinerary = (
+    routeId: string,
+    stops: { gtfsId?: string; name?: string }[] | null | undefined,
+    startTime = 1_000,
+  ) => {
+    const itinerary = transitItinerary("南港展覽館－頂埔", startTime);
+    const leg = itinerary.legs[0] as (typeof itinerary.legs)[number] & {
+      trip: { stops?: unknown };
+    };
+    leg.mode = "SUBWAY";
+    leg.route.gtfsId = `1:${routeId}`;
+    leg.trip.gtfsId = `1:${routeId}_trip`;
+    leg.from = { name: "市政府", stop: { ...leg.from.stop, gtfsId: "1:TRTC_BL18" } };
+    leg.to = { name: "台北車站", stop: { ...leg.to.stop, gtfsId: "1:TRTC_BL12" } };
+    if (stops !== undefined) leg.trip.stops = stops;
+    return itinerary;
+  };
+
+  it("requests the trip stop list so the terminal comes from the selected trip", () => {
+    expect(PLAN_QUERY).toContain(
+      "trip { gtfsId wheelchairAccessible stops { gtfsId name } }",
+    );
+  });
+
+  it.each([
+    ["full-length train", "TRTC_BL_BL-1_1", "板南線", "TRTC_BL01", "頂埔"],
+    ["short-turn train", "TRTC_BL_BL-2_1", "板南線", "TRTC_BL05", "亞東醫院"],
+    ["reverse direction", "TRTC_BL_BL-1_0", "板南線", "TRTC_BL23", "南港展覽館"],
+    ["main-line short turn", "TRTC_R_R-2_0", "淡水信義線", "TRTC_R28", "北投"],
+    ["branch line", "TRTC_R_R-3_1", "新北投支線", "TRTC_R22", "北投"],
+    ["cable car", "TRTCMG_MK_MK-1_0", "貓空纜車", "TRTCMG_MK04", "貓空"],
+  ])(
+    "keeps line name, trip terminal and alighting station apart (%s)",
+    async (_case, routeId, lineName, terminalId, terminal) => {
+      post.mockResolvedValue(
+        okResp([
+          metroItinerary(routeId, [
+            { gtfsId: "1:TRTC_BL18", name: "市政府" },
+            { gtfsId: "1:TRTC_BL12", name: "台北車站" },
+            { gtfsId: `1:${terminalId}`, name: ` ${terminal} ` },
+          ]),
+        ]),
+      );
+
+      const [route] = await planOtpRoute(origin, destination, { limit: 1 });
+
+      expect(route.legs[0]).toMatchObject({
+        type: "METRO",
+        lineName,
+        terminalStation: terminal,
+        terminalStationUid: terminalId,
+        arrivalStation: "台北車站",
+        arrivalStationUid: "TRTC_BL12",
+      });
+      expect(JSON.parse(JSON.stringify(route.legs[0]))).toMatchObject({
+        terminalStation: terminal,
+      });
+    },
+  );
+
+  it.each([
+    ["stop list missing", undefined],
+    ["stop list null", null],
+    ["stop list empty", []],
+    ["terminal without a name", [{ gtfsId: "1:TRTC_BL01", name: "  " }]],
+  ])("omits the terminal instead of guessing when %s", async (_case, stops) => {
+    post.mockResolvedValue(okResp([metroItinerary("TRTC_BL_BL-1_1", stops)]));
+
+    const [route] = await planOtpRoute(origin, destination, { limit: 1 });
+
+    expect(route.legs[0]).toMatchObject({
+      type: "METRO",
+      lineName: "板南線",
+      arrivalStation: "台北車站",
+    });
+    expect(route.legs[0]).not.toHaveProperty("terminalStation");
+    expect(route.legs[0]).not.toHaveProperty("terminalStationUid");
+  });
+
+  it("gives each metro leg of a transfer its own trip terminal", async () => {
+    const first = metroItinerary("TRTC_BL_BL-2_1", [
+      { gtfsId: "1:TRTC_BL12", name: "台北車站" },
+      { gtfsId: "1:TRTC_BL05", name: "亞東醫院" },
+    ]);
+    const second = metroItinerary(
+      "TRTC_R_R-1_1",
+      [
+        { gtfsId: "1:TRTC_R10", name: "台北車站" },
+        { gtfsId: "1:TRTC_R28", name: "淡水" },
+      ],
+      661_000,
+    );
+    post.mockResolvedValue(
+      okResp([
+        { ...first, duration: 1_260, legs: [...first.legs, ...second.legs] },
+      ]),
+    );
+
+    const [route] = await planOtpRoute(origin, destination, { limit: 1 });
+
+    expect(route.legs).toMatchObject([
+      { lineName: "板南線", terminalStation: "亞東醫院" },
+      { lineName: "淡水信義線", terminalStation: "淡水" },
     ]);
   });
 

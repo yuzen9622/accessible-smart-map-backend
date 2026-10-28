@@ -153,8 +153,10 @@ IDisabledParking = { _id; city; district; quantity; placeName;
 WALK  = { type:"WALK",  from; to; distanceM; minutesEst }
 BUS   = { type:"BUS",   routeName; departureStop; arrivalStop; direction;
           waitMinutes; departureTime|null; arrivalTime|null }
-METRO = { type:"METRO", railSystem; lineId; lineName; departureStation;
+METRO = { type:"METRO", railSystem; lineId; lineName; terminalStation?; departureStation;
           arrivalStation; rideMinutes; waitMinutes; departureTime|null; arrivalTime|null }
+          // lineName 為線名（板南線）；terminalStation 為列車終點（往頂埔），查無時省略；
+          // arrivalStation 為旅客下車站
 THSR  = { type:"THSR", trainNo; departureStation; arrivalStation;
           departureTime; arrivalTime; rideMinutes }
 TRA   = { type:"TRA",  trainNo; trainTypeName; departureStation;

@@ -19,6 +19,7 @@ import { enrichRouteDisplayNames } from "./route-display-enrichment";
 import type {
   AccessibleRoute,
   BusLeg,
+  MetroLeg,
   WalkLeg,
   WalkStep,
 } from "../../types/route";
@@ -278,6 +279,60 @@ describe("real route source enrichment", () => {
       railSystem: "THSR",
     });
   });
+  it("localizes the metro trip terminal by its own station ID, separately from the alighting station", async () => {
+    query(io.metro, [
+      { stationUid: "TRTC_BL01", stationName: { En: "Dingpu" } },
+      { stationUid: "TRTC_BL12", stationName: { En: "Taipei Main Station" } },
+    ]);
+    const metro = (patch: Partial<MetroLeg>) =>
+      ({
+        type: "METRO",
+        railSystem: "TRTC",
+        lineId: "BL",
+        lineUid: "TRTC_BL_BL-1_1",
+        lineName: "板南線",
+        departureStation: "市政府",
+        arrivalStation: "台北車站",
+        departureStationUid: "TRTC_BL18",
+        arrivalStationUid: "TRTC_BL12",
+        direction: 1,
+        stopsCount: 6,
+        rideMinutes: 10,
+        waitInfo: { time: 0, source: "schedule" },
+        polyline: [],
+        departureStationA11y: [],
+        arrivalStationA11y: [],
+        facilityHighlights: [],
+        ...patch,
+      }) as MetroLeg;
+    const legs = [
+      metro({ terminalStation: "頂埔", terminalStationUid: "TRTC_BL01" }),
+      metro({ terminalStation: "亞東醫院", terminalStationUid: "TRTC_BL05" }),
+      metro({}),
+    ];
+
+    const [en] = await enrichRouteDisplayNames([route(legs)], "en");
+    const [zh] = await enrichRouteDisplayNames([route(legs)], "zh-TW");
+
+    expect(io.metro.mock.calls[0][0].stationUid.$in).toEqual(
+      expect.arrayContaining(["TRTC_BL01", "TRTC_BL05"]),
+    );
+    expect(JSON.parse(JSON.stringify(en.legs))).toMatchObject([
+      {
+        terminalStation: "頂埔",
+        terminalNameEn: "Dingpu",
+        terminalDisplayName: "Dingpu",
+        toDisplayName: "Taipei Main Station",
+      },
+      { terminalStation: "亞東醫院", terminalDisplayName: "亞東醫院" },
+      { toDisplayName: "Taipei Main Station" },
+    ]);
+    expect(en.legs[1]).not.toHaveProperty("terminalNameEn");
+    expect(en.legs[2]).not.toHaveProperty("terminalStation");
+    expect(en.legs[2]).not.toHaveProperty("terminalDisplayName");
+    expect(zh.legs[0]).toMatchObject({ terminalDisplayName: "頂埔" });
+  });
+
   it("blank/missing English and conflicting same-ID route records fall back without guessing", async () => {
     query(io.bus, [
       { stopUid: "TPE1", stopName: { En: "  " } },

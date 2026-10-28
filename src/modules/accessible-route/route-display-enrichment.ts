@@ -45,6 +45,7 @@ export async function enrichRouteDisplayNames(
         keys.metroStations.push(
           leg.departureStationUid,
           leg.arrivalStationUid,
+          leg.terminalStationUid ?? "",
           ...(leg.intermediateStops ?? []).flatMap((s) =>
             s.stationUid ? [s.stationUid] : [],
           ),
@@ -153,6 +154,17 @@ export async function enrichRouteDisplayNames(
             }
           : {}),
       });
+      if (copy.type === "METRO" && copy.terminalStation) {
+        const terminalEn =
+          sourceFor(copy.terminalStationUid)?.trim() ||
+          copy.terminalNameEn?.trim();
+        if (terminalEn) copy.terminalNameEn = terminalEn;
+        copy.terminalDisplayName = selectDisplayText(
+          copy.terminalStation,
+          terminalEn,
+          language,
+        );
+      }
       if (copy.type === "WALK") {
         if (copy.stepStreetNames)
           copy.stepStreetNames = presentStreetNames(copy as WalkLeg, language);

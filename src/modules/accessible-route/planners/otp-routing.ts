@@ -146,6 +146,7 @@ const GREATER_TAIPEI_METRO_LINE_NAMES: ReadonlyMap<string, string> = new Map([
   ["TRTC_BR", "文湖線"],
   ["TRTC_R_R-3", "新北投支線"],
   ["TRTC_G_G-3", "小碧潭支線"],
+  ["TRTCMG_MK", "貓空纜車"],
   ["NTMC_Y", "環狀線"],
   ["NTMC_LB", "三鶯線"],
   ["TYMC_A", "桃園機場捷運"],
@@ -351,7 +352,7 @@ query Plan(
         from { name stop { gtfsId code lat lon } }
         to { name stop { gtfsId code lat lon } }
         route { gtfsId shortName longName type agency { gtfsId } }
-        trip { gtfsId wheelchairAccessible }
+        trip { gtfsId wheelchairAccessible stops { gtfsId name } }
         legGeometry { points }
         intermediatePlaces { name lat lon arrivalTime departureTime stop { gtfsId code lat lon } }
         steps {
@@ -1145,6 +1146,9 @@ function transitLegFrom(
 
   if (isMetro) {
     const lineId = metroLineCode(system, routeId);
+    const terminal = leg.trip?.stops?.at(-1);
+    const terminalStation = terminal?.name?.trim();
+    const terminalStationUid = stripFeedId(terminal?.gtfsId);
     return {
       type: "METRO",
       railSystem: system,
@@ -1158,6 +1162,12 @@ function transitLegFrom(
       arrivalStation: toName,
       departureStationUid: fromStopId,
       arrivalStationUid: toStopId,
+      ...(terminalStation
+        ? {
+            terminalStation,
+            ...(terminalStationUid ? { terminalStationUid } : {}),
+          }
+        : {}),
       direction,
       stopsCount: (leg.intermediatePlaces?.length ?? 0) + 1,
       rideMinutes,

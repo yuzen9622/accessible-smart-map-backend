@@ -222,6 +222,60 @@ const roadLeg = (
   modeFallback,
 });
 
+describe("metro boarding text", () => {
+  const boardAndAlight = (leg: Partial<MetroLeg>) => {
+    const result = generateNavInstructions({
+      legs: [{ ...metroLeg(), ...leg } as MetroLeg],
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.message);
+    return result.data.instructions
+      .filter((step) => step.legType === "METRO")
+      .map((step) => step.text);
+  };
+
+  it.each([
+    ["板南線", "頂埔", "台北車站"],
+    ["板南線", "亞東醫院", "台北車站"],
+    ["淡水信義線", "大安", "台北車站"],
+    ["新北投支線", "北投", "新北投"],
+  ])(
+    "搭乘%s往「%s」的列車，在「%s」下車",
+    (lineName, terminalStation, arrivalStation) => {
+      const [board, alight] = boardAndAlight({
+        lineName,
+        terminalStation,
+        arrivalStation,
+      });
+      expect(board).toBe(
+        `請搭乘台北捷運「${lineName}」往「${terminalStation}」的列車，在「台北車站」站上車，於「${arrivalStation}」站下車，行駛約 8 分鐘。請優先使用電梯進站。`,
+      );
+      expect(alight).toBe(`請在「${arrivalStation}」站下車。`);
+    },
+  );
+
+  it("省略「往…」而不是拿下車站充當終點", () => {
+    const [board] = boardAndAlight({
+      lineName: "板南線",
+      arrivalStation: "忠孝復興",
+    });
+    expect(board).toBe(
+      "請搭乘台北捷運「板南線」，在「台北車站」站上車，於「忠孝復興」站下車，行駛約 8 分鐘。請優先使用電梯進站。",
+    );
+    expect(board).not.toContain("往");
+  });
+
+  it("names the cable car operator instead of its raw system code", () => {
+    const [board] = boardAndAlight({
+      railSystem: "TRTCMG",
+      lineName: "貓空纜車",
+      terminalStation: "貓空",
+      arrivalStation: "貓空",
+    });
+    expect(board).toContain("請搭乘台北捷運「貓空纜車」往「貓空」的列車");
+  });
+});
+
 describe("generateNavInstructions", () => {
   it("voice helper preserves source legIndex while public output stays identical", () => {
     const route = { legs: [walkWithSteps(), metroLeg(), walkWithSteps()] };

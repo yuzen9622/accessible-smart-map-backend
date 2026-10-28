@@ -159,6 +159,7 @@ const RAIL_SYSTEM_NAMES: Record<string, string> = {
   NTMC: "新北捷運",
   KLRT: "高雄輕軌",
   TYMC: "桃園捷運",
+  TRTCMG: "台北捷運",
 };
 
 /**
@@ -732,9 +733,12 @@ function metroInstructions(
     )
       ? " Use the elevator to enter the station."
       : " Check the station's accessible facilities before entering.";
+    const terminal = leg.terminalStation?.trim()
+      ? ` toward ${selectDisplayText(leg.terminalStation, leg.terminalNameEn, language)}`
+      : "";
     return [
       transitInstruction(
-        `Take ${system} ${selectDisplayText(leg.lineName, leg.routeNameEn, language)} from ${selectDisplayText(leg.departureStation, leg.fromNameEn, language)} toward ${selectDisplayText(leg.arrivalStation, leg.toNameEn, language)}.${ride}${facility}`,
+        `Take ${system} ${selectDisplayText(leg.lineName, leg.routeNameEn, language)}${terminal} from ${selectDisplayText(leg.departureStation, leg.fromNameEn, language)}, and get off at ${selectDisplayText(leg.arrivalStation, leg.toNameEn, language)}.${ride}${facility}`,
         "transit_board",
         "METRO",
       ),
@@ -750,7 +754,10 @@ function metroInstructions(
   const facility = leg.facilityHighlights?.some((f) => f.includes("電梯"))
     ? "請優先使用電梯進站。"
     : "請留意進站無障礙設施狀況。";
-  const board = `請搭乘${system}「${selectDisplayText(leg.lineName, leg.routeNameEn, language)}」，在「${selectDisplayText(leg.departureStation, leg.fromNameEn, language)}」站上車，往「${selectDisplayText(leg.arrivalStation, leg.toNameEn, language)}」方向${ride}。${facility}`;
+  const terminal = leg.terminalStation?.trim()
+    ? `往「${selectDisplayText(leg.terminalStation, leg.terminalNameEn, language)}」的列車`
+    : "";
+  const board = `請搭乘${system}「${selectDisplayText(leg.lineName, leg.routeNameEn, language)}」${terminal}，在「${selectDisplayText(leg.departureStation, leg.fromNameEn, language)}」站上車，於「${selectDisplayText(leg.arrivalStation, leg.toNameEn, language)}」站下車${ride}。${facility}`;
   const alight = `請在「${selectDisplayText(leg.arrivalStation, leg.toNameEn, language)}」站下車。`;
   return [
     transitInstruction(board, "transit_board", "METRO"),

@@ -125,7 +125,7 @@ function describeRouteLegs(legs: unknown): string | undefined {
       if (type === "BUS")
         return `公車${asString(leg.routeName) ? ` ${asString(leg.routeName)}` : ""}`;
       if (type === "METRO")
-        return `捷運${asString(leg.lineName) ? ` ${asString(leg.lineName)}` : ""}`;
+        return `捷運${asString(leg.lineName) ? ` ${asString(leg.lineName)}` : ""}${asString(leg.terminalStation) ? `・往${asString(leg.terminalStation)}` : ""}`;
       if (type === "THSR") return "高鐵";
       if (type === "TRA") return "台鐵";
       if (type === "DRIVE") return "汽車";

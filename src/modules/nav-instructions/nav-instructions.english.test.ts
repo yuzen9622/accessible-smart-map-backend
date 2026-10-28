@@ -52,6 +52,29 @@ function instructions(legs: unknown[]) {
 }
 
 describe("English navigation", () => {
+  it("says toward the train terminal, not toward the alighting station", () => {
+    const result = instructions([
+      {
+        type: "METRO",
+        railSystem: "TRTC",
+        lineName: "板南線",
+        routeNameEn: "Bannan Line",
+        departureStation: "市政府",
+        fromNameEn: "Taipei City Hall",
+        arrivalStation: "台北車站",
+        toNameEn: "Taipei Main Station",
+        terminalStation: "頂埔",
+        terminalNameEn: "Dingpu",
+        rideMinutes: 8,
+        facilityHighlights: [],
+      },
+    ]);
+    expect(result.instructions.slice(0, 2).map((s) => s.text)).toEqual([
+      "Take Taipei Metro Bannan Line toward Dingpu from Taipei City Hall, and get off at Taipei Main Station. The ride takes about 8 minutes. Check the station's accessible facilities before entering.",
+      "Get off at Taipei Main Station.",
+    ]);
+  });
+
   it.each([
     ["DEPART", "Head along Main Road"],
     ["CONTINUE", "Continue straight"],
@@ -285,7 +308,7 @@ describe("English navigation", () => {
     expect(result.instructions.map((s) => s.text)).toEqual([
       "Wait at City Hall and board bus 307. Estimated wait: about 3 minutes.",
       "Get off at Central Station.",
-      "Take Taipei Metro Blue Line from Central Station toward Nangang. The ride takes about 8 minutes. Use the elevator to enter the station.",
+      "Take Taipei Metro Blue Line from Central Station, and get off at Nangang. The ride takes about 8 minutes. Use the elevator to enter the station.",
       "Get off at Nangang.",
       "Take Taiwan High Speed Rail train 123 from Nangang at 23:55 to Taipei, arriving at 00:05.",
       "Get off at Taipei.",

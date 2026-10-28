@@ -82,7 +82,14 @@ export type NavServerEvent =
     }
   | {
       type: "nav.transit";
-      leg: { mode: NavLegType; from: string; to: string; routeName?: string };
+      leg: {
+        mode: NavLegType;
+        from: string;
+        to: string;
+        routeName?: string;
+        /** METRO only: the train's terminal (往…); `to` stays the alighting station. */
+        terminalStation?: string;
+      };
     }
   | { type: "nav.arrived" }
   | { type: "nav.stop"; reason: StopReason }
@@ -108,6 +115,8 @@ export interface NavigationTransitContext {
   relation: "current" | "upcoming";
   mode: Extract<NavLegType, "BUS" | "METRO" | "THSR" | "TRA">;
   routeName?: string;
+  /** METRO only: the train's terminal (往…); `to` stays the alighting station. */
+  terminalStation?: string;
   from: string;
   to: string;
   direction?: 0 | 1;
@@ -1234,6 +1243,9 @@ export class NavigationSession {
         from: leg.departureStation,
         to: leg.arrivalStation,
         routeName: leg.lineName,
+        ...(leg.terminalStation
+          ? { terminalStation: leg.terminalStation }
+          : {}),
       };
     }
     if (leg.type === "THSR" || leg.type === "TRA") {
@@ -1267,6 +1279,9 @@ export class NavigationSession {
         relation,
         mode: "METRO",
         routeName: leg.lineName,
+        ...(leg.terminalStation
+          ? { terminalStation: leg.terminalStation }
+          : {}),
         from: leg.departureStation,
         to: leg.arrivalStation,
         direction: leg.direction,

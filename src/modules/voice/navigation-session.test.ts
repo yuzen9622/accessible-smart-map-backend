@@ -243,6 +243,45 @@ describe("NavigationSession pure domain state", () => {
     );
   });
 
+  it("tells the client the metro train terminal while `to` stays the alighting station", () => {
+    const a = coord(121);
+    const b = coord(121.01);
+    const nav = new NavigationSession();
+    nav.armRoute(
+      route([{ ...metro([a, b], "市政府", "台北車站"), terminalStation: "頂埔" }]),
+    );
+    const start = nav.start(pos(a));
+    const transit = start.events.find(
+      (event) => event.type === "nav.transit",
+    ) as Extract<(typeof start.events)[number], { type: "nav.transit" }>;
+    expect(transit.leg).toEqual({
+      mode: "METRO",
+      from: "市政府",
+      to: "台北車站",
+      routeName: "板南線",
+      terminalStation: "頂埔",
+    });
+    expect(nav.getConversationContext().transit).toMatchObject({
+      mode: "METRO",
+      routeName: "板南線",
+      terminalStation: "頂埔",
+      to: "台北車站",
+    });
+  });
+
+  it("omits the metro terminal from nav.transit when the trip had none", () => {
+    const a = coord(121);
+    const b = coord(121.01);
+    const nav = new NavigationSession();
+    nav.armRoute(route([metro([a, b], "市政府", "台北車站")]));
+    const start = nav.start(pos(a));
+    const transit = start.events.find(
+      (event) => event.type === "nav.transit",
+    ) as Extract<(typeof start.events)[number], { type: "nav.transit" }>;
+    expect(transit.leg).not.toHaveProperty("terminalStation");
+    expect(transit.leg.to).toBe("台北車站");
+  });
+
   it("announces consecutive BUS to METRO at the real transfer point", () => {
     const a = coord(121);
     const transfer = coord(121.01);

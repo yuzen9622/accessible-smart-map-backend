@@ -149,4 +149,5 @@ export const ENGLISH_RAIL_SYSTEMS: Record<string, string> = {
   NTMC: "New Taipei Metro",
   KLRT: "Kaohsiung Light Rail",
   TYMC: "Taoyuan Metro",
+  TRTCMG: "Taipei Metro",
 };

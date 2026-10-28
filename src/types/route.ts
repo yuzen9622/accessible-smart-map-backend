@@ -367,6 +367,14 @@ export interface MetroLeg extends RouteSourceNames, TransitAbsoluteSchedule {
   arrivalStation: string;
   departureStationUid: string;
   arrivalStationUid: string;
+  /**
+   * Final stop of the selected trip (the train's destination, e.g. 頂埔), not
+   * where the rider alights. Absent when the trip's stop list was unavailable.
+   */
+  terminalStation?: string;
+  terminalStationUid?: string;
+  terminalNameEn?: string;
+  terminalDisplayName?: string;
   direction: 0 | 1;
   stopsCount: number;
   rideMinutes: number;
