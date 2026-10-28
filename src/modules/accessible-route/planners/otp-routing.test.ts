@@ -147,6 +147,57 @@ beforeEach(() => {
   tripLean.mockResolvedValue([]);
 });
 
+describe("OTP metro line names", () => {
+  it.each([
+    ["TRTC_BL_BL-1_1", "南港展覽館－頂埔", "BL", "板南線", 1],
+    ["TRTC_BL_BL-1_0", "頂埔－南港展覽館", "BL", "板南線", 0],
+    ["TRTC_R_R-1_0", "淡水－象山", "R", "淡水信義線", 0],
+    ["TRTC_R_R-2_1", "大安－北投", "R", "淡水信義線", 1],
+    ["TRTC_G_G-1_0", "松山－新店", "G", "松山新店線", 0],
+    ["TRTC_O_O-1_0", "南勢角－迴龍", "O", "中和新蘆線", 0],
+    ["TRTC_BR_BR-1_0", "動物園－南港展覽館", "BR", "文湖線", 0],
+    ["TRTC_X_X-1_0", "原始路線名稱", "X", "原始路線名稱", 0],
+    ["KRTC_R_R-1_0", "高雄紅線原始名稱", "R", "高雄紅線原始名稱", 0],
+  ])(
+    "uses the line name for %s without changing trip details",
+    async (routeId, sourceName, lineId, lineName, direction) => {
+      const itinerary = transitItinerary(sourceName);
+      const leg = itinerary.legs[0];
+      leg.mode = "SUBWAY";
+      leg.route.gtfsId = `1:${routeId}`;
+      leg.trip.gtfsId = `1:${routeId}_trip`;
+      tripLean.mockResolvedValue([
+        { tripId: `${routeId}_trip`, directionId: direction },
+      ]);
+      post.mockResolvedValue(okResp([itinerary]));
+
+      const routes = await planOtpRoute(origin, destination, { limit: 1 });
+
+      expect(routes).toHaveLength(1);
+      expect(routes[0].routeName).toBe(lineName);
+      expect(routes[0].legs[0]).toMatchObject({
+        type: "METRO",
+        lineId,
+        lineName,
+        lineUid: routeId,
+        direction,
+        departureStation: "起站",
+        arrivalStation: "終站",
+        rideMinutes: 10,
+      });
+    },
+  );
+
+  it("keeps bus route names unchanged", async () => {
+    post.mockResolvedValue(okResp([transitItinerary("307")]));
+
+    const routes = await planOtpRoute(origin, destination, { limit: 1 });
+
+    expect(routes[0].routeName).toBe("307");
+    expect(routes[0].legs[0]).toMatchObject({ type: "BUS", routeName: "307" });
+  });
+});
+
 // The OTP plan query must request an explicit mode allowlist (not the broad
 // `TRANSIT` composite) so OTP never returns AIRPLANE/FERRY / offshore-island legs.
 describe("OTP PLAN_QUERY transportModes allowlist", () => {

@@ -138,6 +138,14 @@ const SNAP_RADIUS_M = 2000;
 
 const METRO_SYSTEMS = new Set(["TRTC", "KRTC", "TMRT", "NTMC", "KLRT", "TYMC"]);
 
+const TRTC_LINE_NAMES: ReadonlyMap<string, string> = new Map([
+  ["BL", "板南線"],
+  ["R", "淡水信義線"],
+  ["G", "松山新店線"],
+  ["O", "中和新蘆線"],
+  ["BR", "文湖線"],
+]);
+
 export const SUPPORTED_TRANSIT_MODES = new Set([
   "BUS",
   "TROLLEYBUS",
@@ -1127,11 +1135,15 @@ function transitLegFrom(
   });
 
   if (isMetro) {
+    const lineId = metroLineCode(system, routeId);
     return {
       type: "METRO",
       railSystem: system,
-      lineId: metroLineCode(system, routeId),
-      lineName: routeName,
+      lineId,
+      lineName:
+        system === "TRTC"
+          ? (TRTC_LINE_NAMES.get(lineId) ?? routeName)
+          : routeName,
       lineUid: routeId,
       departureStation: fromName,
       arrivalStation: toName,
