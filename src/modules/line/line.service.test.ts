@@ -661,7 +661,21 @@ describe("line.service — text message (agent loop)", () => {
               {
                 routeName: "無障礙路線",
                 totalMinutes: 12,
-                legs: [{ type: "WALK" }, { type: "BUS", routeName: "307" }],
+                legs: [
+                  {
+                    type: "METRO",
+                    railSystem: "TRTCMG",
+                    lineName: "貓空纜車",
+                    terminalStation: "貓空站",
+                  },
+                  { type: "BUS", routeName: "307" },
+                  {
+                    type: "METRO",
+                    lineName: "板南線",
+                    terminalStation: "頂埔",
+                    arrivalStation: "台北車站",
+                  },
+                ],
               },
             ],
           },
@@ -681,7 +695,7 @@ describe("line.service — text message (agent loop)", () => {
           {
             label: "無障礙路線",
             time: "約 12 分鐘",
-            detail: "步行 → 公車 307",
+            detail: "貓空纜車・往貓空站 → 公車 307 → 捷運 板南線・往頂埔",
           },
         ],
         liffUrl:

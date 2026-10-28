@@ -124,8 +124,18 @@ function describeRouteLegs(legs: unknown): string | undefined {
       if (type === "WALK") return "步行";
       if (type === "BUS")
         return `公車${asString(leg.routeName) ? ` ${asString(leg.routeName)}` : ""}`;
-      if (type === "METRO")
-        return `捷運${asString(leg.lineName) ? ` ${asString(leg.lineName)}` : ""}`;
+      if (type === "METRO") {
+        // Gondola and light-rail line names already say what they are (貓空纜車、淡海輕軌).
+        const prefix = /^(TRTCMG|NTDLRT|NTALRT|KLRT)$/i.test(
+          asString(leg.railSystem) ?? "",
+        )
+          ? ""
+          : "捷運 ";
+        return (
+          `${prefix}${asString(leg.lineName) ?? ""}${asString(leg.terminalStation) ? `・往${asString(leg.terminalStation)}` : ""}`.trim() ||
+          "捷運"
+        );
+      }
       if (type === "THSR") return "高鐵";
       if (type === "TRA") return "台鐵";
       if (type === "DRIVE") return "汽車";
