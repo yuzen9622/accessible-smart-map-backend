@@ -36,6 +36,7 @@ import {
   ENGLISH_RAIL_SYSTEMS,
 } from "./nav-instructions-english";
 import { NAV_API_MSG, NAV_MSG } from "../constants/messages";
+import { METRO_LINES } from "../config/metro-lines";
 
 /**
  * Pure route-step normalization and route-to-instructions engine shared by
@@ -159,6 +160,8 @@ const RAIL_SYSTEM_NAMES: Record<string, string> = {
   NTMC: "新北捷運",
   KLRT: "高雄輕軌",
   TYMC: "桃園捷運",
+  NTDLRT: "新北捷運",
+  NTALRT: "新北捷運",
 };
 
 /**
@@ -665,6 +668,11 @@ function transitInstruction(
   };
 }
 
+/** 「X」站 — without doubling 站 when the name already ends with it (台北車站、貓空站). */
+function stationRef(name: string): string {
+  return name.endsWith("站") ? `「${name}」` : `「${name}」站`;
+}
+
 function railSystemName(code: string): string {
   return RAIL_SYSTEM_NAMES[code?.toUpperCase()] ?? code ?? "捷運";
 }
@@ -707,8 +715,9 @@ function busInstructions(
     typeof leg.estimatedWaitMinutes === "number" && leg.estimatedWaitMinutes > 0
       ? `，預估等候約 ${leg.estimatedWaitMinutes} 分鐘`
       : "";
-  const board = `請在「${selectDisplayText(leg.departureStop, leg.fromNameEn, language)}」站牌等候，搭乘公車「${selectDisplayText(leg.routeName, leg.routeNameEn, language)}」${waitText}。`;
-  const alight = `抵達「${selectDisplayText(leg.arrivalStop, leg.toNameEn, language)}」站後請下車。`;
+  const stop = selectDisplayText(leg.departureStop, leg.fromNameEn, language);
+  const board = `請在「${stop}」${stop.endsWith("站") ? "的站牌" : "站牌"}等候，搭乘公車「${selectDisplayText(leg.routeName, leg.routeNameEn, language)}」${waitText}。`;
+  const alight = `抵達${stationRef(selectDisplayText(leg.arrivalStop, leg.toNameEn, language))}後請下車。`;
   return [
     transitInstruction(board, "transit_board", "BUS"),
     transitInstruction(alight, "transit_alight", "BUS"),
@@ -719,11 +728,27 @@ function metroInstructions(
   leg: MetroLeg,
   language: SupportedLang,
 ): PendingNavInstruction[] {
+  const gondola = leg.railSystem?.toUpperCase() === "TRTCMG";
+  const line = selectDisplayText(
+    leg.lineName,
+    leg.routeNameEn ?? (leg.lineKey && METRO_LINES.get(leg.lineKey)?.en),
+    language,
+  );
+  const from = selectDisplayText(
+    leg.departureStation,
+    leg.fromNameEn,
+    language,
+  );
+  const to = selectDisplayText(leg.arrivalStation, leg.toNameEn, language);
+  const terminal = leg.terminalStation?.trim()
+    ? selectDisplayText(leg.terminalStation, leg.terminalNameEn, language)
+    : "";
   if (language === "en") {
-    const system =
-      ENGLISH_RAIL_SYSTEMS[leg.railSystem?.toUpperCase()] ??
-      leg.railSystem ??
-      "Metro";
+    const system = gondola
+      ? "the"
+      : (ENGLISH_RAIL_SYSTEMS[leg.railSystem?.toUpperCase()] ??
+        leg.railSystem ??
+        "Metro");
     const ride = leg.rideMinutes
       ? ` The ride takes about ${leg.rideMinutes} minutes.`
       : "";
@@ -734,24 +759,25 @@ function metroInstructions(
       : " Check the station's accessible facilities before entering.";
     return [
       transitInstruction(
-        `Take ${system} ${selectDisplayText(leg.lineName, leg.routeNameEn, language)} from ${selectDisplayText(leg.departureStation, leg.fromNameEn, language)} toward ${selectDisplayText(leg.arrivalStation, leg.toNameEn, language)}.${ride}${facility}`,
+        `Take ${system} ${line}${terminal ? ` toward ${terminal}` : ""} from ${from}, and get off at ${to}.${ride}${facility}`,
         "transit_board",
         "METRO",
       ),
-      transitInstruction(
-        `Get off at ${selectDisplayText(leg.arrivalStation, leg.toNameEn, language)}.`,
-        "transit_alight",
-        "METRO",
-      ),
+      transitInstruction(`Get off at ${to}.`, "transit_alight", "METRO"),
     ];
   }
-  const system = railSystemName(leg.railSystem);
+  const system = gondola ? "" : railSystemName(leg.railSystem);
   const ride = leg.rideMinutes ? `，行駛約 ${leg.rideMinutes} 分鐘` : "";
   const facility = leg.facilityHighlights?.some((f) => f.includes("電梯"))
     ? "請優先使用電梯進站。"
     : "請留意進站無障礙設施狀況。";
-  const board = `請搭乘${system}「${selectDisplayText(leg.lineName, leg.routeNameEn, language)}」，在「${selectDisplayText(leg.departureStation, leg.fromNameEn, language)}」站上車，往「${selectDisplayText(leg.arrivalStation, leg.toNameEn, language)}」方向${ride}。${facility}`;
-  const alight = `請在「${selectDisplayText(leg.arrivalStation, leg.toNameEn, language)}」站下車。`;
+  const toward = terminal
+    ? gondola
+      ? `往「${terminal}」方向`
+      : `往「${terminal}」的列車`
+    : "";
+  const board = `請搭乘${system}「${line}」${toward}，在${stationRef(from)}上車，於${stationRef(to)}下車${ride}。${facility}`;
+  const alight = `請在${stationRef(to)}下車。`;
   return [
     transitInstruction(board, "transit_board", "METRO"),
     transitInstruction(alight, "transit_alight", "METRO"),
@@ -781,7 +807,7 @@ function thsrInstructions(
   const depText = dep ? `預計 ${dep} ` : "";
   const arrText = arr ? `，${arr} 抵達` : "，抵達";
   const board = `請搭乘高鐵 ${leg.trainNo} 次列車，${depText}由「${selectDisplayText(leg.departureStation, leg.fromNameEn, language)}」出發${arrText}「${selectDisplayText(leg.arrivalStation, leg.toNameEn, language)}」。`;
-  const alight = `請在「${selectDisplayText(leg.arrivalStation, leg.toNameEn, language)}」站下車。`;
+  const alight = `請在${stationRef(selectDisplayText(leg.arrivalStation, leg.toNameEn, language))}下車。`;
   return [
     transitInstruction(board, "transit_board", "THSR"),
     transitInstruction(alight, "transit_alight", "THSR"),
@@ -818,7 +844,7 @@ function traInstructions(
     ? `${selectDisplayText(leg.trainTypeName, leg.routeNameEn, language)} `
     : "";
   const board = `請搭乘台鐵${trainType}${leg.trainNo} 次，${depText}由「${selectDisplayText(leg.departureStation, leg.fromNameEn, language)}」出發${arrText}「${selectDisplayText(leg.arrivalStation, leg.toNameEn, language)}」。`;
-  const alight = `請在「${selectDisplayText(leg.arrivalStation, leg.toNameEn, language)}」站下車。`;
+  const alight = `請在${stationRef(selectDisplayText(leg.arrivalStation, leg.toNameEn, language))}下車。`;
   return [
     transitInstruction(board, "transit_board", "TRA"),
     transitInstruction(alight, "transit_alight", "TRA"),

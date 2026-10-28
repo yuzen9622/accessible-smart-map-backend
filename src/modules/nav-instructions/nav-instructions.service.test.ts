@@ -222,6 +222,176 @@ const roadLeg = (
   modeFallback,
 });
 
+describe("metro boarding text", () => {
+  const boardAndAlight = (leg: Partial<MetroLeg>) => {
+    const result = generateNavInstructions({
+      legs: [{ ...metroLeg(), ...leg } as MetroLeg],
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.message);
+    return result.data.instructions
+      .filter((step) => step.legType === "METRO")
+      .map((step) => step.text);
+  };
+
+  it.each([
+    [
+      "板南線",
+      "頂埔",
+      "市政府",
+      "台北車站",
+      "在「市政府」站上車，於「台北車站」下車",
+    ],
+    [
+      "板南線",
+      "亞東醫院",
+      "台北車站",
+      "府中",
+      "在「台北車站」上車，於「府中」站下車",
+    ],
+    [
+      "淡水信義線",
+      "大安",
+      "中山",
+      "台北車站",
+      "在「中山」站上車，於「台北車站」下車",
+    ],
+    [
+      "新北投支線",
+      "北投",
+      "新北投",
+      "北投",
+      "在「新北投」站上車，於「北投」站下車",
+    ],
+  ])(
+    "搭乘%s往「%s」的列車（%s → %s）",
+    (lineName, terminalStation, departureStation, arrivalStation, stations) => {
+      const [board, alight] = boardAndAlight({
+        lineName,
+        terminalStation,
+        departureStation,
+        arrivalStation,
+      });
+      expect(board).toBe(
+        `請搭乘台北捷運「${lineName}」往「${terminalStation}」的列車，${stations}，行駛約 8 分鐘。請優先使用電梯進站。`,
+      );
+      expect(board).not.toContain("站站");
+      expect(alight).not.toContain("站站");
+    },
+  );
+
+  it("省略「往…」而不是拿下車站充當終點", () => {
+    const [board, alight] = boardAndAlight({
+      lineName: "板南線",
+      arrivalStation: "忠孝復興",
+    });
+    expect(board).toBe(
+      "請搭乘台北捷運「板南線」，在「台北車站」上車，於「忠孝復興」站下車，行駛約 8 分鐘。請優先使用電梯進站。",
+    );
+    expect(board).not.toContain("往");
+    expect(alight).toBe("請在「忠孝復興」站下車。");
+  });
+
+  it("describes the Maokong Gondola as a gondola without a metro prefix", () => {
+    const gondola = {
+      railSystem: "TRTCMG",
+      lineKey: "TRTCMG_MK",
+      lineName: "貓空纜車",
+      departureStation: "動物園站",
+      fromNameEn: "Taipei Zoo Station",
+      arrivalStation: "貓空站",
+      toNameEn: "Maokong Station",
+      terminalStation: "貓空站",
+      terminalNameEn: "Maokong Station",
+    };
+    expect(boardAndAlight(gondola).slice(0, 2)).toEqual([
+      "請搭乘「貓空纜車」往「貓空站」方向，在「動物園站」上車，於「貓空站」下車，行駛約 8 分鐘。請優先使用電梯進站。",
+      "請在「貓空站」下車。",
+    ]);
+    const en = generateNavInstructions(
+      { legs: [{ ...metroLeg(), ...gondola } as MetroLeg] },
+      0,
+      "en",
+    );
+    if (!en.ok) throw new Error(en.message);
+    expect(en.data.instructions.slice(0, 2).map((s) => s.text)).toEqual([
+      "Take the Maokong Gondola toward Maokong Station from Taipei Zoo Station, and get off at Maokong Station. The ride takes about 8 minutes. Use the elevator to enter the station.",
+      "Get off at Maokong Station.",
+    ]);
+  });
+
+  it.each([
+    ["NTDLRT", "淡海輕軌綠山線", "崁頂"],
+    ["NTALRT", "安坑輕軌", "十四張"],
+  ])(
+    "names the %s operator instead of its raw system code",
+    (railSystem, lineName, terminalStation) => {
+      const [board] = boardAndAlight({
+        railSystem,
+        lineName,
+        terminalStation,
+      });
+      expect(board).toContain(
+        `請搭乘新北捷運「${lineName}」往「${terminalStation}」的列車`,
+      );
+      expect(board).not.toContain(railSystem);
+    },
+  );
+
+  it.each([
+    ["THSR", "台北站"],
+    ["TRA", "臺北車站"],
+    ["TRA", "板橋"],
+  ])("does not double 站 when a %s station is named %s", (type, station) => {
+    const result = generateNavInstructions({
+      legs: [
+        {
+          type,
+          trainNo: "123",
+          trainTypeName: "自強",
+          departureStation: "南港",
+          arrivalStation: station,
+          departureTime: "10:00",
+          arrivalTime: "10:30",
+        } as unknown as MetroLeg,
+      ],
+    });
+    if (!result.ok) throw new Error(result.message);
+    const alight = result.data.instructions.find(
+      (step) => step.type === "transit_alight",
+    );
+    expect(alight?.text).toBe(
+      station.endsWith("站")
+        ? `請在「${station}」下車。`
+        : `請在「${station}」站下車。`,
+    );
+  });
+
+  it("does not double 站 for bus stops whose name already ends with it", () => {
+    const result = generateNavInstructions({
+      legs: [
+        {
+          type: "BUS",
+          routeName: "307",
+          departureStop: "捷運市政府站",
+          arrivalStop: "台北車站",
+          estimatedWaitMinutes: 0,
+        } as unknown as MetroLeg,
+      ],
+    });
+    if (!result.ok) throw new Error(result.message);
+    expect(
+      result.data.instructions
+        .filter((step) => step.legType === "BUS")
+        .map((step) => step.text)
+        .slice(0, 2),
+    ).toEqual([
+      "請在「捷運市政府站」的站牌等候，搭乘公車「307」。",
+      "抵達「台北車站」後請下車。",
+    ]);
+  });
+});
+
 describe("generateNavInstructions", () => {
   it("voice helper preserves source legIndex while public output stays identical", () => {
     const route = { legs: [walkWithSteps(), metroLeg(), walkWithSteps()] };
