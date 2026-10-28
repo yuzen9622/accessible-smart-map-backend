@@ -150,6 +150,29 @@ describe("all-candidate materialization and chain integration", () => {
     ]);
     expect(resolved.arrivalTime).toBe("2026-10-18T08:20:00.000+08:00");
   });
+  it("offers a late-running live bus that leaves before the timetable trip OTP shifted the route start to", async () => {
+    const route = base(),
+      leg = route.legs[0] as BusLeg;
+    route._scheduledDepartureTime = start + 40 * 60000;
+    leg._scheduledDepartureTime = start + 41 * 60000;
+    leg._scheduledArrivalTime = start + 51 * 60000;
+    const late = live("14", 8, 18);
+    late.route.direction = 0;
+    getCanonicalBusPair.mockResolvedValue({
+      complete: true,
+      vehicles: [],
+      routes: [late],
+    });
+    const [resolved] = await resolve({ members: [route] });
+    expect(resolved.legs[0]).toMatchObject({
+      plateNumb: "14",
+      departureCandidates: [
+        { plateNumb: "14", boardingTimeSource: "realtime", selected: true },
+        { boardingTimeSource: "schedule", selected: false },
+      ],
+    });
+    expect(resolved.arrivalTime).toBe("2026-10-18T08:18:00.000+08:00");
+  });
   it("selects a non-OTP sixth service with only two trustworthy realtime endpoints, retains its geometry/identity, and persists no-schedule v2", async () => {
     getCanonicalBusPair.mockResolvedValue({
       complete: true,

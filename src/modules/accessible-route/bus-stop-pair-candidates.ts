@@ -466,9 +466,15 @@ export async function resolveCandidateGroup({
 }): Promise<AccessibleRoute[]> {
   const resolved: AccessibleRoute[] = [];
   for (const base of members) {
-    const start = base._scheduledDepartureTime ?? planningNow;
     const timeline = routeCandidateTimeline(base);
     const busLegs = base.legs.filter((l): l is BusLeg => l.type === "BUS");
+    // OTP shifts an itinerary to leave just in time for its own timetable
+    // trip. A bus search starts when the traveller can leave, or a late bus
+    // due before that trip is never offered.
+    const start =
+      busLegs.length && !base._isFutureScheduled
+        ? planningNow
+        : (base._scheduledDepartureTime ?? planningNow);
     if (!busLegs.length) {
       const hasRail = timeline?.some((l) => l.type === "FIXED_TRANSIT");
       const chain =
