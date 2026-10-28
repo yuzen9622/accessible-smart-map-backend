@@ -26,6 +26,19 @@ describe("single evidence policy", () => {
         .decision,
     ).toBe("supported");
   });
+  it("accepts supported partly-blocked construction despite a wider_view hedge", () => {
+    expect(
+      decideHazardEvidence(
+        "construction",
+        observation({
+          visibleHazards: ["construction", "blocked_path"],
+          pathImpact: "partly_blocked",
+          requiredEvidence: ["wider_view"],
+        }),
+        safe,
+      ).decision,
+    ).toBe("supported");
+  });
   it.each([
     { scene: "unclear" as const },
     { imageQuality: "insufficient" as const },
@@ -33,7 +46,6 @@ describe("single evidence policy", () => {
     { pathImpact: "unclear" as const },
     { claimMatch: "insufficient" as const },
     { visibleHazards: [] },
-    { requiredEvidence: ["wider_view" as const] },
   ])("does not upgrade missing evidence using 0.95 confidence: %j", (extra) => {
     expect(
       decideHazardEvidence("obstacle", observation(extra), safe).decision,

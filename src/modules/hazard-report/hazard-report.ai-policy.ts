@@ -75,14 +75,15 @@ export function decideHazardEvidence(
     observation.visibleHazards.length === 0;
   if (clearContradiction) return result("unsupported", "CLAIM_NOT_SUPPORTED");
 
+  // The model hedges with requiredEvidence (usually wider_view) even when it
+  // judges the claim supported, so it never vetoes an otherwise matching photo.
   const supports =
     observation.scene === "street" &&
     observation.imageQuality === "usable" &&
     observation.claimMatch === "supported" &&
     matchingHazard &&
     (observation.pathImpact === "blocked" ||
-      observation.pathImpact === "partly_blocked") &&
-    observation.requiredEvidence.length === 0;
+      observation.pathImpact === "partly_blocked");
   if (supports) return result("supported", "PHOTO_SUPPORTS_CLAIM");
   const evidence: HazardRequiredEvidence[] =
     observation.imageQuality === "insufficient"
