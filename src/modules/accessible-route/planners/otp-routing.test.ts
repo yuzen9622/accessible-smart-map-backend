@@ -241,7 +241,8 @@ describe("OTP metro line names", () => {
 
   const metroItinerary = (
     routeId: string,
-    stops: { gtfsId?: string; name?: string }[] | null | undefined,
+    stops:
+      { gtfsId?: string; name?: string; nameEn?: string }[] | null | undefined,
     startTime = 1_000,
   ) => {
     const itinerary = transitItinerary("南港展覽館－頂埔", startTime);
