@@ -409,9 +409,12 @@ function summarizeLeg(
   const displayFields = Object.fromEntries(
     Object.entries(leg).filter(
       ([key, value]) =>
-        ["fromDisplayName", "toDisplayName", "routeDisplayName"].includes(
-          key,
-        ) && typeof value === "string",
+        [
+          "fromDisplayName",
+          "toDisplayName",
+          "routeDisplayName",
+          "terminalDisplayName",
+        ].includes(key) && typeof value === "string",
     ),
   );
   if (leg.type === "DRIVE" || leg.type === "MOTORCYCLE") {
@@ -457,6 +460,7 @@ function summarizeLeg(
       railSystem: leg.railSystem,
       lineId: leg.lineId,
       lineName: leg.lineName,
+      ...(leg.terminalStation ? { terminalStation: leg.terminalStation } : {}),
       departureStation: leg.departureStation,
       arrivalStation: leg.arrivalStation,
       rideMinutes: leg.rideMinutes,

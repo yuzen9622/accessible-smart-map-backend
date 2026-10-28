@@ -112,4 +112,40 @@ describe("source name route projections", () => {
     expect(summary).not.toContain("stepStreetNames");
     expect(summary).not.toContain("private-capability");
   });
+
+  it("keeps the metro line, train terminal and alighting station in model summaries", () => {
+    const summary = summarizeRouteResult(
+      {
+        routes: [
+          {
+            routeId: "metro",
+            legs: [
+              {
+                type: "METRO",
+                lineName: "板南線",
+                terminalStation: "頂埔",
+                terminalDisplayName: "Dingpu",
+                arrivalStation: "台北車站",
+              },
+            ],
+          },
+        ],
+      },
+      4000,
+    );
+    expect(JSON.parse(summary ?? "null")).toMatchObject({
+      routes: [
+        {
+          legs: [
+            {
+              lineName: "板南線",
+              terminalStation: "頂埔",
+              terminalDisplayName: "Dingpu",
+              arrivalStation: "台北車站",
+            },
+          ],
+        },
+      ],
+    });
+  });
 });

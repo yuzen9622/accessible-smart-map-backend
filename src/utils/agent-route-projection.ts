@@ -99,6 +99,8 @@ export function summarizeRouteResult(
                   "toDisplayName",
                   "routeDisplayName",
                   "lineName",
+                  "terminalStation",
+                  "terminalDisplayName",
                   "trainNo",
                   "departureStop",
                   "arrivalStop",
