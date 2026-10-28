@@ -122,7 +122,7 @@
     "mongoose": "^9.9.2",
     "morgan": "^1.10.0",
     "mqtt": "^5.15.2",
-    "multer": "^2.3.0",
+    "multer": "^2.5.0",
     "openai": "^7.4.0",
     "opencc-js": "^1.4.0",
     "pdf-parse": "^2.4.5",
@@ -133,7 +133,7 @@
     "sharp": "0.35.5",
     "ws": "^8.21.3",
     "yauzl": "^3.4.0",
-    "zod": "^4.4.3"
+    "zod": "^4.6.7"
   },
   "pnpm": {
     "auditConfig": {
@@ -147,7 +147,8 @@
       "@types/express": "^5.0.6",
       "@xmldom/xmldom": ">=0.8.15",
       "js-yaml": ">=4.3.2",
-      "multer": ">=2.3.0",
+      "multer": ">=2.5.0",
+      "body-parser@>=2.0.0 <2.4.0": "^2.4.0",
       "brace-expansion@<1.1.20": "^1.1.20",
       "brace-expansion@>=4.0.0 <5.0.11": "^5.0.11",
       "@grpc/grpc-js@>=1.14.0 <1.14.5": "^1.14.5",
