@@ -181,6 +181,7 @@ describe("NavigationSession pure domain state", () => {
         "index",
         "instruction",
         "isTransit",
+        "legIndex",
         "legType",
         "maneuver",
         "relativeDirection",
@@ -241,6 +242,83 @@ describe("NavigationSession pure domain state", () => {
     expect(walkEffect.events.some((event) => event.type === "nav.step")).toBe(
       true,
     );
+  });
+
+  it("tells the client the metro train terminal while `to` stays the alighting station", () => {
+    const a = coord(121);
+    const b = coord(121.01);
+    const nav = new NavigationSession();
+    nav.armRoute(
+      route([
+        {
+          ...metro([a, b], "市政府", "台北車站"),
+          lineKey: "TRTC_BL",
+          fromNameEn: "Taipei City Hall",
+          toNameEn: "Taipei Main Station",
+          terminalStation: "頂埔",
+          terminalNameEn: "Dingpu",
+        },
+      ]),
+    );
+    const start = nav.start(pos(a));
+    const transit = start.events.find(
+      (event) => event.type === "nav.transit",
+    ) as Extract<(typeof start.events)[number], { type: "nav.transit" }>;
+    expect(transit.leg).toEqual({
+      mode: "METRO",
+      from: "市政府",
+      to: "台北車站",
+      routeName: "板南線",
+      terminalStation: "頂埔",
+      lineKey: "TRTC_BL",
+      fromNameEn: "Taipei City Hall",
+      toNameEn: "Taipei Main Station",
+      terminalNameEn: "Dingpu",
+    });
+    expect(nav.getConversationContext().transit).toMatchObject({
+      mode: "METRO",
+      routeName: "板南線",
+      lineKey: "TRTC_BL",
+      terminalStation: "頂埔",
+      terminalNameEn: "Dingpu",
+      to: "台北車站",
+    });
+  });
+
+  it("tells the client which route leg each step belongs to, so resume can rebuild transit", () => {
+    const a = coord(121);
+    const board = coord(121.01);
+    const c = coord(121.02);
+    const nav = new NavigationSession();
+    nav.armRoute(route([walkLeg([a, board]), metro([board, c])]));
+    const start = nav.start(pos(a));
+    const steps = (
+      start.events.find((event) => event.type === "nav.start") as {
+        steps: { legIndex: number; legType: string; type?: string }[];
+      }
+    ).steps;
+    expect(steps.find((s) => s.type === "transit_board")).toMatchObject({
+      legIndex: 1,
+      legType: "METRO",
+    });
+    expect(
+      steps.filter((s) => s.legType === "WALK").every((s) => s.legIndex === 0),
+    ).toBe(true);
+  });
+
+  it("omits the metro terminal from nav.transit when the trip had none", () => {
+    const a = coord(121);
+    const b = coord(121.01);
+    const nav = new NavigationSession();
+    nav.armRoute(route([metro([a, b], "市政府", "台北車站")]));
+    const start = nav.start(pos(a));
+    const transit = start.events.find(
+      (event) => event.type === "nav.transit",
+    ) as Extract<(typeof start.events)[number], { type: "nav.transit" }>;
+    expect(transit.leg).not.toHaveProperty("terminalStation");
+    expect(transit.leg).not.toHaveProperty("terminalNameEn");
+    expect(transit.leg).not.toHaveProperty("lineKey");
+    expect(transit.leg.to).toBe("台北車站");
   });
 
   it("announces consecutive BUS to METRO at the real transfer point", () => {

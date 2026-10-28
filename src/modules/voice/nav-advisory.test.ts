@@ -98,6 +98,25 @@ describe("classifyCorridorFinding", () => {
     });
   });
 
+  it.each([
+    ["忠孝復興", "忠孝復興站電梯維修中"],
+    ["台北車站", "台北車站電梯維修中"],
+  ])(
+    "titles the %s facility outage without doubling 站",
+    (stationName, title) => {
+      const finding: CorridorFinding = {
+        category: "facility",
+        railSystem: "TRTC",
+        stationId: "BL12",
+        stationName,
+        elevatorKey: "elevator-1",
+        keyword: "維修",
+        description: "電梯維修中",
+      };
+      expect(classifyCorridorFinding(finding, ctxNormal).title).toBe(title);
+    },
+  );
+
   it("classifies facility outage as warning when requireElevator is false (F2)", () => {
     const finding: CorridorFinding = {
       category: "facility",

@@ -147,6 +147,7 @@ const NavStepDtoSchema = z
   .object({
     index: z.number().int().nonnegative(),
     instruction: z.string(),
+    legIndex: z.number().int().nonnegative(),
     legType: z.enum([
       "WALK",
       "DRIVE",

@@ -213,6 +213,7 @@ describe("nav.resume outbound schemas", () => {
       {
         index: 0,
         instruction: "向前走",
+        legIndex: 0,
         legType: "WALK",
         distanceM: 50,
         isTransit: false,
@@ -236,6 +237,16 @@ describe("nav.resume outbound schemas", () => {
     }
     expect(
       NavResumeOkMessageSchema.safeParse(withManeuver("TURN_RIGHT")).success,
+    ).toBe(false);
+  });
+
+  it("requires each step's route leg index so clients can rebuild transit on resume", () => {
+    const { legIndex: _omit, ...withoutLegIndex } = okPayload.steps[0];
+    expect(
+      NavResumeOkMessageSchema.safeParse({
+        ...okPayload,
+        steps: [withoutLegIndex],
+      }).success,
     ).toBe(false);
   });
 

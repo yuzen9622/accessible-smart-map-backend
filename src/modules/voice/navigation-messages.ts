@@ -34,7 +34,7 @@ export const NAVIGATION_MESSAGES = {
         : `前方有${label}回報`;
     },
     facility: (station: string, keyword: string) =>
-      `${station}站電梯${keyword}中`,
+      `${station.endsWith("站") ? station : `${station}站`}電梯${keyword}中`,
     advisory: (title: string, rerouting: boolean, alternative = false) =>
       `注意，${title}${rerouting ? "，正在為你重新規劃路線" : alternative ? "，可查看替代路線" : ""}`,
     transitAlert: (title: string, rerouting: boolean) =>
@@ -71,7 +71,7 @@ export const NAVIGATION_MESSAGES = {
       return `${label} has been reported ${distance > 0 ? `${Math.round(distance)} metres ahead` : "ahead"}`;
     },
     facility: (station: string, _keyword: string) =>
-      `An elevator at ${station} station is unavailable`,
+      `An elevator at ${/station$/i.test(station) ? station : `${station} station`} is unavailable`,
     advisory: (title: string, rerouting: boolean, alternative = false) =>
       `Caution: ${title}.${rerouting ? " Replanning your route." : alternative ? " You can view alternative routes." : ""}`,
     transitAlert: (title: string, rerouting: boolean) =>

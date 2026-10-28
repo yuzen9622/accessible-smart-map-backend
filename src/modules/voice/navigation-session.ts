@@ -1,6 +1,6 @@
 import { DEFAULT_LANG, type SupportedLang } from "../../types/lang";
 import { NAVIGATION_MESSAGES } from "./navigation-messages";
-import type { AccessibleRoute } from "../../types/route";
+import type { AccessibleRoute, MetroLeg } from "../../types/route";
 import { taipeiSecondsOfDay } from "../../config/taipei-time";
 import type { MatchedAlert, TaiwanCityEn } from "../../types/transit";
 import type { TransitContext } from "../transit/alert.service";
@@ -57,6 +57,8 @@ type StepKind = NavInstructionType | "leg_end";
 export interface NavStepDto {
   index: number;
   instruction: string;
+  /** Index into the armed route's `legs`, so clients rebuild transit state on resume. */
+  legIndex: number;
   legType: NavLegType;
   distanceM: number | null;
   isTransit: boolean;
@@ -82,7 +84,14 @@ export type NavServerEvent =
     }
   | {
       type: "nav.transit";
-      leg: { mode: NavLegType; from: string; to: string; routeName?: string };
+      leg: {
+        mode: NavLegType;
+        from: string;
+        to: string;
+        routeName?: string;
+        /** METRO only: the train's terminal (往…); `to` stays the alighting station. */
+        terminalStation?: string;
+      } & TransitLegLabels;
     }
   | { type: "nav.arrived" }
   | { type: "nav.stop"; reason: StopReason }
@@ -104,10 +113,39 @@ export interface NavEffect {
   events: NavServerEvent[];
 }
 
-export interface NavigationTransitContext {
+/**
+ * METRO labels and source English names so clients render the leg in their
+ * current UI language (`metroLines.<lineKey>`), never from a stale display string.
+ */
+export interface TransitLegLabels {
+  lineKey?: string;
+  fromNameEn?: string;
+  toNameEn?: string;
+  terminalNameEn?: string;
+}
+
+function metroLegLabels(leg: MetroLeg): TransitLegLabels {
+  return Object.fromEntries(
+    (
+      [
+        ["lineKey", leg.lineKey],
+        ["fromNameEn", leg.fromNameEn],
+        ["toNameEn", leg.toNameEn],
+        [
+          "terminalNameEn",
+          leg.terminalStation ? leg.terminalNameEn : undefined,
+        ],
+      ] as const
+    ).filter(([, value]) => value?.trim()),
+  );
+}
+
+export interface NavigationTransitContext extends TransitLegLabels {
   relation: "current" | "upcoming";
   mode: Extract<NavLegType, "BUS" | "METRO" | "THSR" | "TRA">;
   routeName?: string;
+  /** METRO only: the train's terminal (往…); `to` stays the alighting station. */
+  terminalStation?: string;
   from: string;
   to: string;
   direction?: 0 | 1;
@@ -820,6 +858,7 @@ export class NavigationSession {
     return this.steps.map((step, index) => ({
       index,
       instruction: step.instruction,
+      legIndex: step.legIndex,
       legType: step.legType,
       distanceM: step.distanceM,
       isTransit: step.isTransit,
@@ -1234,6 +1273,10 @@ export class NavigationSession {
         from: leg.departureStation,
         to: leg.arrivalStation,
         routeName: leg.lineName,
+        ...(leg.terminalStation
+          ? { terminalStation: leg.terminalStation }
+          : {}),
+        ...metroLegLabels(leg),
       };
     }
     if (leg.type === "THSR" || leg.type === "TRA") {
@@ -1267,6 +1310,10 @@ export class NavigationSession {
         relation,
         mode: "METRO",
         routeName: leg.lineName,
+        ...(leg.terminalStation
+          ? { terminalStation: leg.terminalStation }
+          : {}),
+        ...metroLegLabels(leg),
         from: leg.departureStation,
         to: leg.arrivalStation,
         direction: leg.direction,
