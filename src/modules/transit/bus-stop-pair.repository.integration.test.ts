@@ -40,6 +40,28 @@ const query = () =>
     canonicalAlightStopId: "B",
   });
 describe("real Mongo ordered pair discovery and alias evidence", () => {
+  it("flags a boarding stop that a sibling sub-route of the same route and direction also serves", async () => {
+    const branch = (
+      id: string,
+      stops: ReturnType<typeof stop>[],
+      direction = 0,
+    ) => ({
+      ...doc(id, stops, direction),
+      routeUid: "R",
+    });
+    await BusRouteModel.insertMany([
+      branch("main", [stop("A", 1), stop("B", 2)]),
+      branch("short", [stop("A", 1), stop("X", 2)]),
+      branch("reverse", [stop("A", 1), stop("Y", 2)], 1),
+      doc("solo", [stop("A", 1), stop("B", 2)]),
+    ]);
+    const result = await query();
+    expect(
+      Object.fromEntries(
+        result.routes.map((r) => [r.subRouteUid, r.boardSharedBySibling]),
+      ),
+    ).toEqual({ main: true, solo: false });
+  });
   it("excludes 24 earlier invalid routes before the cap, including reverse/loop/one-stop, and admits route-relative direction 1", async () => {
     await BusRouteModel.insertMany([
       ...Array.from({ length: 24 }, (_, n) =>

@@ -39,7 +39,9 @@ export async function getCanonicalBusPair(
           getBusStopPairRealtime({
             city: input.city,
             routeName: route.routeName?.Zh_tw ?? "",
+            routeUid: route.routeUid,
             subRouteUid: route.subRouteUid,
+            boardStopExclusive: !route.boardSharedBySibling,
             direction: route.direction === 1 ? 1 : 0,
             departureStopId: departureStopId,
             arrivalStopId: arrivalStopId,
@@ -104,6 +106,7 @@ import type { BusEtaTiming } from "../../types/transit";
 interface PairEtaRow extends BusEtaTiming {
   StopSequence?: number;
   StopUID?: string;
+  RouteUID?: string;
   SubRouteUID?: string;
   Direction?: number;
   PlateNumb?: string;
@@ -189,13 +192,19 @@ function timeOf(row: PairEtaRow, now: number): number | null {
 interface RouteEtaQuery {
   city: string;
   routeName: string;
+  /** Also accept rows that name only this route: Taipei and New Taipei ETA
+   * rows carry RouteUID but never SubRouteUID. */
+  routeUid?: string;
   subRouteUid: string;
   direction: 0 | 1;
   signal: AbortSignal;
   now: number;
 }
 async function routeEtaRows(input: RouteEtaQuery): Promise<PairEtaRow[]> {
-  const key = `${input.city}|${input.subRouteUid}|${input.direction}`;
+  const scope = input.routeUid
+    ? `RouteUID eq '${input.routeUid.replace(/'/g, "''")}'`
+    : `SubRouteUID eq '${input.subRouteUid.replace(/'/g, "''")}'`;
+  const key = `${input.city}|${scope}|${input.direction}`;
   const cached = cache.get(key);
   let rows = cached && cached.until > input.now ? cached.rows : undefined;
   if (!rows) {
@@ -206,7 +215,7 @@ async function routeEtaRows(input: RouteEtaQuery): Promise<PairEtaRow[]> {
           input.city === "InterCity"
             ? busUrl.interCityEstimatedTimeOfArrivalUrl
             : `${busUrl.cityEstimatedTimeOfArrivalUrl}/${input.city}`;
-        const filter = `SubRouteUID eq '${input.subRouteUid.replace(/'/g, "''")}' and Direction eq ${input.direction}`;
+        const filter = `${scope} and Direction eq ${input.direction}`;
         const res = await tdxFetch(
           `${base}/${encodeURIComponent(input.routeName)}?$format=JSON&$filter=${encodeURIComponent(filter)}`,
           { signal: input.signal },
@@ -231,15 +240,30 @@ async function routeEtaRows(input: RouteEtaQuery): Promise<PairEtaRow[]> {
   }
   return rows.filter(
     (r) =>
-      r.SubRouteUID === input.subRouteUid && r.Direction === input.direction,
+      r.Direction === input.direction &&
+      (r.SubRouteUID === input.subRouteUid ||
+        (r.SubRouteUID == null &&
+          input.routeUid !== undefined &&
+          r.RouteUID === input.routeUid)),
   );
 }
 /** Exactly one route-scoped ETA read; downstream vehicle identity must be unique. */
 export async function getBusStopPairRealtime(
-  input: RouteEtaQuery & { departureStopId: string; arrivalStopId: string },
+  input: RouteEtaQuery & {
+    departureStopId: string;
+    arrivalStopId: string;
+    /** No sibling sub-route stops at the boarding stop. */
+    boardStopExclusive?: boolean;
+  },
 ): Promise<PairEta[]> {
   const scoped = await routeEtaRows(input);
-  const board = scoped.filter((r) => r.StopUID === input.departureStopId);
+  // A row without SubRouteUID at a stop sibling sub-routes share may be
+  // either branch's bus, so it is not this sub-route's departure.
+  const board = scoped.filter(
+    (r) =>
+      r.StopUID === input.departureStopId &&
+      (r.SubRouteUID != null || input.boardStopExclusive === true),
+  );
   const alight = scoped.filter((r) => r.StopUID === input.arrivalStopId);
   return board.flatMap((row) => {
     const boardingAt = timeOf(row, input.now);

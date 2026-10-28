@@ -442,3 +442,42 @@ it("rejects conflicting timetable trips even when the vehicle plate agrees", () 
     sameBusDeparture(identity, { ...identity, plateNumb: "DIFFERENT" }),
   ).toBe(false);
 });
+
+it("tells apart plate-less departures that share one frequency template trip", () => {
+  const departure = (start: string, boardingTime: string) => ({
+    candidateId: `TPE10332|0|freqpatched_TPE10332_0|${Date.parse(start)}`,
+    routeName: "松江新生幹線",
+    subRouteUid: "TPE10332",
+    direction: 0 as const,
+    departureStopId: "A",
+    arrivalStopId: "C",
+    tripId: "freqpatched_TPE10332_0",
+    boardingTime,
+    alightingTime: null,
+    boardingTimeSource: "schedule" as const,
+    alightingTimeSource: "schedule" as const,
+    estimatedWaitMinutes: 5,
+    vehicleAccessibility: "unknown" as const,
+    hasLiftOrRamp: null,
+    selected: false,
+  });
+  const offered = departure(
+    "2030-01-01T10:00:00+08:00",
+    "2030-01-01T10:00:00+08:00",
+  );
+  const refreshed = [
+    // Same scheduled start, live ETA moved the boarding time.
+    departure("2030-01-01T10:00:00+08:00", "2030-01-01T10:03:00+08:00"),
+    departure("2030-01-01T10:02:00+08:00", "2030-01-01T10:02:00+08:00"),
+    departure("2030-01-01T10:06:00+08:00", "2030-01-01T10:06:00+08:00"),
+  ];
+  expect(refreshed.filter((c) => sameBusDeparture(offered, c))).toEqual([
+    refreshed[0],
+  ]);
+  expect(
+    sameBusDeparture(
+      { ...offered, tripId: "run-A", candidateId: "a" },
+      { ...offered, tripId: "run-A", candidateId: "b" },
+    ),
+  ).toBe(true);
+});

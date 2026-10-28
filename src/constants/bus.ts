@@ -171,3 +171,8 @@ export const STOP_STATUS_LABEL: Record<number, string> = {
   3: "末班車已過",
   4: "今日未營運",
 };
+
+/** GTFS frequency templates written by patch_gtfs.py: one trip id stands for
+ * every departure of its headway band, so it never identifies a single bus. */
+export const isFrequencyTemplateTrip = (tripId?: string): boolean =>
+  tripId?.startsWith("freqpatched_") === true;

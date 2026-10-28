@@ -1,4 +1,5 @@
 import { BUS_SELECTION_MSG } from "../../constants/messages";
+import { isFrequencyTemplateTrip } from "../../constants/bus";
 import { ResponseCode } from "../../types/code";
 import type {
   AccessibleRoute,
@@ -51,7 +52,9 @@ function serviceDay(time: string | null): string | undefined {
     : undefined;
 }
 
-/** ETA timestamps can change; a plate or a timetable trip must still be unique. */
+/** ETA timestamps can change; a plate or a timetable trip must still be
+ * unique. A frequency template's trip id is shared by its whole headway band,
+ * so without a plate the scheduled start in the candidate id tells them apart. */
 export function sameBusDeparture(
   a: BusDepartureCandidate,
   b: BusDepartureCandidate,
@@ -66,7 +69,8 @@ export function sameBusDeparture(
     serviceDay(a.boardingTime) === serviceDay(b.boardingTime) &&
     (a.plateNumb
       ? a.plateNumb === b.plateNumb
-      : Boolean(a.tripId && a.tripId === b.tripId))
+      : Boolean(a.tripId && a.tripId === b.tripId) &&
+        (!isFrequencyTemplateTrip(a.tripId) || a.candidateId === b.candidateId))
   );
 }
 

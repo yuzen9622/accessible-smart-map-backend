@@ -114,6 +114,44 @@ describe("bounded exact stop-pair provider", () => {
       expect(found).toEqual([]);
     else expect(found.every((r) => r.alightingAt === null)).toBe(true);
   });
+  it.each([
+    [true, 1],
+    [false, 0],
+  ])(
+    "reads route-level rows without SubRouteUID only at an unshared boarding stop (exclusive=%s)",
+    async (boardStopExclusive, expected) => {
+      const i = { ...input(), routeUid: `R-${serial++}`, boardStopExclusive };
+      tdxFetch.mockResolvedValue({
+        ok: true,
+        json: async () =>
+          [
+            row("A", 6, { RouteUID: i.routeUid }),
+            row("B", 15, { RouteUID: i.routeUid }),
+            row("A", 2, { RouteUID: "OTHER" }),
+            row("A", 3, { RouteUID: i.routeUid, Direction: 1 }),
+          ].map((r) => ({
+            ...r,
+            SubRouteUID: undefined,
+            PlateNumb: undefined,
+          })),
+      });
+      const found = await getBusStopPairRealtime(i);
+      expect(decodeURIComponent(tdxFetch.mock.calls[0][0])).toContain(
+        `RouteUID eq '${i.routeUid}' and Direction eq 0`,
+      );
+      expect(found).toEqual(
+        expected
+          ? [
+              {
+                plateNumb: undefined,
+                boardingAt: now + 6 * 60000,
+                alightingAt: null,
+              },
+            ]
+          : [],
+      );
+    },
+  );
   it("reuses one bounded cache/inflight fetch for identical route requests", async () => {
     const i = input();
     serve(i, [row("A", 1), row("B", 2)]);

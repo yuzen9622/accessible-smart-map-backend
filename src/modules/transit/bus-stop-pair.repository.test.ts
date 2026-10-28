@@ -9,7 +9,9 @@ vi.mock("mongoose", () => ({
     ConnectionStates: { connected: 1 },
   },
 }));
-vi.mock("../../model/bus-route.model", () => ({ default: { aggregate } }));
+vi.mock("../../model/bus-route.model", () => ({
+  default: { aggregate, collection: { name: "busroutes" } },
+}));
 vi.mock("../../model/bus-vehicle.model", () => ({ default: {} }));
 vi.mock("../../model/bus-stop.model", () => ({ default: {} }));
 vi.mock("./stop-alias.repository", () => ({

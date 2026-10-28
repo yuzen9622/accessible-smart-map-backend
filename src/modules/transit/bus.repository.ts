@@ -11,6 +11,9 @@ export const MAX_TRIPS_PER_ROUTE = 4;
 export interface BusPairRoute extends BusRouteDoc {
   board: NonNullable<BusRouteDoc["stops"]>[number];
   alight: NonNullable<BusRouteDoc["stops"]>[number];
+  /** Another sub-route of the same route and direction also stops at
+   * `board`, so an ETA row naming only the RouteUID there is ambiguous. */
+  boardSharedBySibling: boolean;
 }
 /** Validity is evaluated inside Mongo BEFORE the overflow sentinel limit. */
 export async function findRoutesServingCanonicalPair(input: {
@@ -88,7 +91,37 @@ export async function findRoutesServingCanonicalPair(input: {
       },
     },
     { $limit: cap + 1 },
-    { $unset: ["_boards", "_alights"] },
+    {
+      $lookup: {
+        from: BusRouteModel.collection.name,
+        localField: "board.stopUID",
+        foreignField: "stops.stopUID",
+        let: { route: "$routeUid", dir: "$direction", sub: "$subRouteUid" },
+        pipeline: [
+          { $match: { city: input.city } },
+          {
+            $match: {
+              $expr: {
+                $and: [
+                  { $eq: ["$routeUid", "$$route"] },
+                  { $eq: ["$direction", "$$dir"] },
+                  { $ne: ["$subRouteUid", "$$sub"] },
+                ],
+              },
+            },
+          },
+          { $limit: 1 },
+          { $project: { _id: 1 } },
+        ],
+        as: "_boardSiblings",
+      },
+    },
+    {
+      $set: {
+        boardSharedBySibling: { $gt: [{ $size: "$_boardSiblings" }, 0] },
+      },
+    },
+    { $unset: ["_boards", "_alights", "_boardSiblings"] },
   ]).option({ maxTimeMS: 1500 });
   return {
     routes: routes.slice(0, cap),

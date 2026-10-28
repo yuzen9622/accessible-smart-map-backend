@@ -1,6 +1,6 @@
 import type { BusLeg } from "../../types/route";
 import { taipeiYmdDash } from "../../config/taipei-time";
-import { BUS_DIRECTIONS } from "../../constants/bus";
+import { BUS_DIRECTIONS, isFrequencyTemplateTrip } from "../../constants/bus";
 import { busEtaSeconds } from "../../utils/tdx-bus-eta";
 import type { BusPlannedEtaRecord as TdxEtaRecord } from "../../types/transit";
 
@@ -22,7 +22,7 @@ export function canMatchBusTrip(
     Number.isFinite(leg._boardingReadyTime) &&
     Boolean(leg._scheduledTripId) &&
     // A frequency template is not an identified scheduled departure.
-    !leg._scheduledTripId?.startsWith("freqpatched_") &&
+    !isFrequencyTemplateTrip(leg._scheduledTripId) &&
     Boolean(leg.subRouteUid && leg.departureStopId) &&
     departure <= now + BOARDING_LIVE_WINDOW_MS &&
     taipeiYmdDash(new Date(departure)) === taipeiYmdDash(new Date(now))
