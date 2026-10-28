@@ -12,6 +12,9 @@ export interface OtpStop {
   code?: string;
   lat?: number;
   lon?: number;
+  /** Stop name in English from the feed's translations; equals the source name when untranslated. */
+  name?: string;
+  nameEn?: string;
 }
 export interface OtpPlace {
   name?: string;
@@ -32,7 +35,12 @@ export interface OtpLeg {
     type?: number;
     agency?: { gtfsId?: string };
   } | null;
-  trip?: { gtfsId?: string; wheelchairAccessible?: string } | null;
+  trip?: {
+    gtfsId?: string;
+    wheelchairAccessible?: string;
+    /** The trip's scheduled stop pattern; the last entry is its terminal. */
+    stops?: { gtfsId?: string; name?: string; nameEn?: string }[] | null;
+  } | null;
   legGeometry?: { points?: string } | null;
   intermediatePlaces?:
     | {

@@ -254,6 +254,30 @@ describe("AccessibleRouteSchema METRO alerts", () => {
     ).toBe(true);
   });
 
+  it("accepts and keeps the trip terminal fields on a strict METRO leg", () => {
+    const leg = {
+      ...metroLeg,
+      lineKey: "TRTC_R",
+      terminalStation: "象山",
+      terminalStationUid: "TRTC_R02",
+      terminalNameEn: "Xiangshan",
+      terminalDisplayName: "Xiangshan",
+    };
+    const parsed = AccessibleRouteSchema.safeParse({
+      ...metroRoute,
+      legs: [leg],
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.legs[0]).toMatchObject({
+      lineKey: "TRTC_R",
+      terminalStation: "象山",
+      terminalStationUid: "TRTC_R02",
+      terminalNameEn: "Xiangshan",
+      terminalDisplayName: "Xiangshan",
+      arrivalStation: "台北車站",
+    });
+  });
+
   it("keeps the alert shape typed", () => {
     expect(
       AccessibleRouteSchema.safeParse({

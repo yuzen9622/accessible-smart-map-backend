@@ -361,12 +361,27 @@ export interface MetroLeg extends RouteSourceNames, TransitAbsoluteSchedule {
   a11yRefs?: string[];
   railSystem: string;
   lineId: string;
+  /**
+   * Stable line label for client i18n (`metroLines.<lineKey>`), e.g. TRTC_BL,
+   * TRTC_R_R-3. Absent for lines outside config/metro-lines.ts; clients then
+   * fall back to `lineName`.
+   */
+  lineKey?: string;
+  /** Canonical Chinese line name (matching, AI, alerts); not a client display string. */
   lineName: string;
   lineUid: string;
   departureStation: string;
   arrivalStation: string;
   departureStationUid: string;
   arrivalStationUid: string;
+  /**
+   * Final stop of the selected trip (the train's destination, e.g. 頂埔), not
+   * where the rider alights. Absent when the trip's stop list was unavailable.
+   */
+  terminalStation?: string;
+  terminalStationUid?: string;
+  terminalNameEn?: string;
+  terminalDisplayName?: string;
   direction: 0 | 1;
   stopsCount: number;
   rideMinutes: number;

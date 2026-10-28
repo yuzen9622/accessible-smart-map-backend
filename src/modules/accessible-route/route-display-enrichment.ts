@@ -8,6 +8,7 @@ import type {
 } from "../../types/route";
 import type { SupportedLang } from "../../types/lang";
 import { selectDisplayText } from "../../utils/source-display";
+import { METRO_LINES } from "../../config/metro-lines";
 import {
   copyWithDescriptors,
   presentStreetNames,
@@ -45,6 +46,7 @@ export async function enrichRouteDisplayNames(
         keys.metroStations.push(
           leg.departureStationUid,
           leg.arrivalStationUid,
+          leg.terminalStationUid ?? "",
           ...(leg.intermediateStops ?? []).flatMap((s) =>
             s.stationUid ? [s.stationUid] : [],
           ),
@@ -140,6 +142,8 @@ export async function enrichRouteDisplayNames(
             : leg.type === "TRA"
               ? leg.trainTypeName
               : undefined;
+        if (leg.type === "METRO" && leg.lineKey)
+          routeEn = METRO_LINES.get(leg.lineKey)?.en ?? routeEn;
       }
       const copy = copyWithDescriptors(leg, {
         ...(fromEn?.trim() ? { fromNameEn: fromEn.trim() } : {}),
@@ -153,6 +157,17 @@ export async function enrichRouteDisplayNames(
             }
           : {}),
       });
+      if (copy.type === "METRO" && copy.terminalStation) {
+        const terminalEn =
+          sourceFor(copy.terminalStationUid)?.trim() ||
+          copy.terminalNameEn?.trim();
+        if (terminalEn) copy.terminalNameEn = terminalEn;
+        copy.terminalDisplayName = selectDisplayText(
+          copy.terminalStation,
+          terminalEn,
+          language,
+        );
+      }
       if (copy.type === "WALK") {
         if (copy.stepStreetNames)
           copy.stepStreetNames = presentStreetNames(copy as WalkLeg, language);

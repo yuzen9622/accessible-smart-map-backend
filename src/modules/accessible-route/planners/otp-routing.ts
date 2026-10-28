@@ -29,6 +29,7 @@ import {
 } from "../../../utils/nav-instructions-engine";
 import { taipeiHHmm, taipeiYmdDash } from "../../../config/taipei-time";
 import { metroLineCode } from "../../../config/transit";
+import { METRO_LINES, metroLineKey } from "../../../config/metro-lines";
 import { ROUTE_WARNING } from "../../../constants/messages";
 import { routeMessage } from "../../../utils/route-messages";
 import {
@@ -138,23 +139,6 @@ const SNAP_RADIUS_M = 2000;
 
 const METRO_SYSTEMS = new Set(["TRTC", "KRTC", "TMRT", "NTMC", "KLRT", "TYMC"]);
 
-const GREATER_TAIPEI_METRO_LINE_NAMES: ReadonlyMap<string, string> = new Map([
-  ["TRTC_BL", "板南線"],
-  ["TRTC_R", "淡水信義線"],
-  ["TRTC_G", "松山新店線"],
-  ["TRTC_O", "中和新蘆線"],
-  ["TRTC_BR", "文湖線"],
-  ["TRTC_R_R-3", "新北投支線"],
-  ["TRTC_G_G-3", "小碧潭支線"],
-  ["NTMC_Y", "環狀線"],
-  ["NTMC_LB", "三鶯線"],
-  ["TYMC_A", "桃園機場捷運"],
-  ["NTDLRT_V", "淡海輕軌"],
-  ["NTDLRT_V_V-1", "淡海輕軌綠山線"],
-  ["NTDLRT_V_V-2", "淡海輕軌藍海線"],
-  ["NTALRT_K", "安坑輕軌"],
-]);
-
 export const SUPPORTED_TRANSIT_MODES = new Set([
   "BUS",
   "TROLLEYBUS",
@@ -229,6 +213,18 @@ function hhmm(epochMs: number): string {
   return taipeiHHmm(new Date(epochMs));
 }
 const ymdDash = taipeiYmdDash;
+
+/**
+ * The feed's own English stop name (GTFS translations.txt via OTP). OTP falls
+ * back to the source name when no translation exists, so an unchanged name
+ * means there is none.
+ */
+function feedEnglishName(
+  stop: { name?: string; nameEn?: string } | null | undefined,
+): string | undefined {
+  const en = stop?.nameEn?.trim();
+  return en && en !== stop?.name?.trim() ? en : undefined;
+}
 
 /**
  * "1:TXG123" → "TXG123" — restore the TDX id the overlay keys on.
@@ -348,10 +344,10 @@ query Plan(
         endTime
         duration
         distance
-        from { name stop { gtfsId code lat lon } }
-        to { name stop { gtfsId code lat lon } }
+        from { name stop { gtfsId code lat lon name nameEn: name(language: "en") } }
+        to { name stop { gtfsId code lat lon name nameEn: name(language: "en") } }
         route { gtfsId shortName longName type agency { gtfsId } }
-        trip { gtfsId wheelchairAccessible }
+        trip { gtfsId wheelchairAccessible stops { gtfsId name nameEn: name(language: "en") } }
         legGeometry { points }
         intermediatePlaces { name lat lon arrivalTime departureTime stop { gtfsId code lat lon } }
         steps {
@@ -1145,19 +1141,33 @@ function transitLegFrom(
 
   if (isMetro) {
     const lineId = metroLineCode(system, routeId);
+    const terminal = leg.trip?.stops?.at(-1);
+    const terminalStation = terminal?.name?.trim();
+    const terminalStationUid = stripFeedId(terminal?.gtfsId);
+    const terminalNameEn = feedEnglishName(terminal);
+    const fromNameEn = feedEnglishName(leg.from.stop);
+    const toNameEn = feedEnglishName(leg.to.stop);
+    const lineKey = metroLineKey(routeId, system, lineId);
     return {
       type: "METRO",
       railSystem: system,
       lineId,
-      lineName:
-        GREATER_TAIPEI_METRO_LINE_NAMES.get(routeId.replace(/_[01]$/, "")) ??
-        GREATER_TAIPEI_METRO_LINE_NAMES.get(`${system}_${lineId}`) ??
-        routeName,
+      ...(lineKey ? { lineKey } : {}),
+      lineName: (lineKey && METRO_LINES.get(lineKey)?.zh) || routeName,
       lineUid: routeId,
+      ...(fromNameEn ? { fromNameEn } : {}),
+      ...(toNameEn ? { toNameEn } : {}),
       departureStation: fromName,
       arrivalStation: toName,
       departureStationUid: fromStopId,
       arrivalStationUid: toStopId,
+      ...(terminalStation
+        ? {
+            terminalStation,
+            ...(terminalStationUid ? { terminalStationUid } : {}),
+            ...(terminalNameEn ? { terminalNameEn } : {}),
+          }
+        : {}),
       direction,
       stopsCount: (leg.intermediatePlaces?.length ?? 0) + 1,
       rideMinutes,
