@@ -131,7 +131,7 @@ const CATALOG: Record<string, { "zh-TW": string; en: string }> = {
   },
   ROUTE_HAZARD_ON_ROUTE: {
     "zh-TW":
-      "此路線經過已確認的路況障礙或道路施工封閉（hazardAdvisory.onRoute），請留意或改採其他候選路線",
+      "此路線經過已確認的路況障礙或道路施工封閉，請留意或改採其他候選路線",
     en: "This route passes a confirmed hazard or road closure. Please take care or choose another route.",
   },
   ROUTE_CLOSURE_BYPASS_FAILED: {
