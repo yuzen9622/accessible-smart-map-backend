@@ -14,6 +14,7 @@ import {
   type DeletedAccountEntry,
 } from "./user.account.repository";
 import { deleteMemoryVectors } from "./user.account.service";
+import { purgeUserAvatars } from "./user.avatar.service";
 import type { RetentionContext, RetentionTask } from "../../types/retention";
 
 /**
@@ -33,6 +34,10 @@ async function sweepAccount(userId: string): Promise<number> {
   // Idempotent; covers vectors whose delete failed earlier. A failure counts
   // as residue so the entry is kept until Chroma confirms.
   if (!(await deleteMemoryVectors(userId))) found += 1;
+  // Also catches an avatar uploaded concurrently with the deletion. A storage
+  // failure counts as residue so the entry is kept for the next sweep.
+  const avatars = await purgeUserAvatars(userId);
+  found += avatars < 0 ? 1 : avatars;
   return found;
 }
 

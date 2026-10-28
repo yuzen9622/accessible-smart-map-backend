@@ -23,9 +23,11 @@ import {
   resetPassword,
   changePassword,
 } from "./user.auth.controller";
+import { updateAvatar } from "./user.avatar.controller";
 import { validateRequest } from "../../middleware/validate-request.middleware";
 import {
   authCacheControl,
+  avatarUploadLimiter,
   csrfProtection,
   forgotLimiter,
   loginLimiter,
@@ -36,6 +38,7 @@ import {
   resendLimiter,
   resetLimiter,
   resolveClientMode,
+  uploadAvatarFile,
   validateLogoutTransport,
   validateRefreshTransport,
 } from "./user.middleware";
@@ -138,6 +141,7 @@ export function createUserRouter(): Router {
     validateRequest({ body: UpdateConfigBodySchema }),
     updateConfig,
   );
+  router.patch("/avatar", avatarUploadLimiter, uploadAvatarFile, updateAvatar);
   router.get("/a11y-profile", getA11yProfile);
   router.put(
     "/a11y-profile",

@@ -16,7 +16,11 @@ const chroma = vi.hoisted(() => ({
   docs: new Map<string, Record<string, unknown>>(),
   failDeletes: false,
 }));
-const gcs = vi.hoisted(() => ({ fail: false, deleted: [] as string[] }));
+const gcs = vi.hoisted(() => ({
+  fail: false,
+  deleted: [] as string[],
+  avatarsPurged: [] as string[],
+}));
 const line = vi.hoisted(() => ({
   impl: (async () => {}) as (...args: unknown[]) => Promise<void>,
 }));
@@ -65,6 +69,10 @@ vi.mock("../../adapters/gcs.adapter", () => ({
   deleteHazardPhoto: vi.fn(async (path: string) => {
     if (gcs.fail) throw new Error("gcs down");
     gcs.deleted.push(path);
+  }),
+  deleteAvatarObjects: vi.fn(async (userId: string) => {
+    gcs.avatarsPurged.push(userId);
+    return 0;
   }),
 }));
 vi.mock("../../adapters/line.adapter", () => ({
@@ -740,6 +748,7 @@ describe("deleted-account sweep", () => {
     });
     await deletedAccountSweepTask.runBatch(ctx);
     expect(await DeletedAccount.exists({ userId })).toBeNull();
+    expect(gcs.avatarsPurged).toContain(userId);
   });
 });
 

@@ -1,9 +1,10 @@
 import type { NextFunction, Request, Response } from "express";
+import multer from "multer";
 import { rateLimit } from "express-rate-limit";
 import { RedisStore } from "rate-limit-redis";
 import { sendResponse } from "../../config/lib";
 import { ResponseCode, ResponseMessage } from "../../types/code";
-import { AUTH_MSG, ERROR_MESSAGE } from "../../constants/messages";
+import { AUTH_MSG, AVATAR_MSG, ERROR_MESSAGE } from "../../constants/messages";
 import { redisClient, redisReady } from "../../config/redis";
 import { MobileRefreshBodySchema, WebRefreshBodySchema } from "./user.schema";
 
@@ -88,6 +89,69 @@ export const refreshLimiter = makeLimiter(
 );
 
 export const logoutLimiter = makeLimiter("auth-logout-rl:", 30, 15 * 60 * 1000);
+
+export const avatarUploadLimiter = makeLimiter(
+  "avatar-upload-rl:",
+  20,
+  60 * 60 * 1000,
+);
+
+export const avatarReadLimiter = makeLimiter(
+  "avatar-read-rl:",
+  300,
+  15 * 60 * 1000,
+);
+
+const AVATAR_MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
+
+const singleAvatar = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: AVATAR_MAX_UPLOAD_BYTES,
+    files: 1,
+    fields: 0,
+    parts: 1,
+  },
+}).single("avatar");
+
+/**
+ * Parses the `avatar` field of a multipart/form-data request into `req.file`.
+ * The image type is checked from the bytes by the service, not the MIME here.
+ */
+export function uploadAvatarFile(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  singleAvatar(req, res, (err: unknown) => {
+    if (!err) return next();
+    const tooLarge =
+      err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE";
+    return sendResponse(
+      res,
+      false,
+      "error",
+      ResponseCode.INVALID_INPUT,
+      tooLarge ? AVATAR_MSG.TOO_LARGE : AVATAR_MSG.INVALID,
+      { reason: tooLarge ? "AVATAR_TOO_LARGE" : "AVATAR_INVALID" },
+    );
+  });
+}
+
+/**
+ * Errors and rate-limit answers must never be cached; the controller marks
+ * only a successful image as cacheable.
+ */
+export function avatarHeaders(
+  _req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+  next();
+}
 
 /**
  * Resolves the client transport mode from the X-Client header at the edge.

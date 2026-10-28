@@ -257,3 +257,113 @@ export async function deleteHazardPhoto(storagePath: string): Promise<void> {
     clearTimeout(timer);
   }
 }
+
+const AVATAR_PATH = /^avatars\/[0-9a-f]{24}\/[0-9a-f]{16}\.jpg$/;
+const AVATAR_MAX_BYTES = 1024 * 1024;
+
+function avatarPrefix(userId: string): string {
+  if (!/^[0-9a-f]{24}$/.test(userId))
+    throw new HazardPhotoStorageError("GCS_INVALID_PATH");
+  return `avatars/${userId}/`;
+}
+
+/**
+ * @param userId The owner's ObjectId string.
+ * @param hash Content hash naming this avatar version (16 hex chars).
+ * @returns The bucket-internal path of that avatar version.
+ */
+export function getAvatarStoragePath(userId: string, hash: string): string {
+  const storagePath = `${avatarPrefix(userId)}${hash}.jpg`;
+  if (!AVATAR_PATH.test(storagePath))
+    throw new HazardPhotoStorageError("GCS_INVALID_PATH");
+  return storagePath;
+}
+
+/**
+ * Uploads a normalized JPEG avatar. Paths are content-addressed, so an
+ * object never changes once written.
+ *
+ * @param buffer Normalized JPEG bytes.
+ * @param storagePath Path from `getAvatarStoragePath`.
+ */
+export async function uploadAvatarObject(
+  buffer: Buffer,
+  storagePath: string,
+): Promise<void> {
+  if (!AVATAR_PATH.test(storagePath))
+    throw new HazardPhotoStorageError("GCS_INVALID_PATH");
+  if (buffer.length > AVATAR_MAX_BYTES)
+    throw new HazardPhotoStorageError("GCS_IMAGE_TOO_LARGE");
+  const stream = client()
+    .bucket(process.env.GCS_BUCKET_NAME ?? "")
+    .file(storagePath)
+    .createWriteStream({
+      contentType: "image/jpeg",
+      resumable: false,
+      timeout: HAZARD_AI.uploadTimeoutMs,
+      metadata: { cacheControl: "private, no-store" },
+    });
+  const completion = streamDone(
+    stream,
+    "finish",
+    { timeoutMs: HAZARD_AI.uploadTimeoutMs },
+    () => undefined,
+  );
+  stream.end(buffer);
+  await completion;
+}
+
+/** Read an avatar by its canonical key only; never an arbitrary path. */
+export async function readAvatarObject(storagePath: string): Promise<Buffer> {
+  if (!AVATAR_PATH.test(storagePath))
+    throw new HazardPhotoStorageError("GCS_INVALID_PATH");
+  const stream = client()
+    .bucket(process.env.GCS_BUCKET_NAME ?? "")
+    .file(storagePath)
+    .createReadStream({ decompress: false, validation: "crc32c" });
+  let length = 0;
+  const chunks: Buffer[] = [];
+  const result = streamDone(stream, "end", {}, () =>
+    Buffer.concat(chunks, length),
+  );
+  stream.on("data", (chunk: Buffer) => {
+    length += chunk.length;
+    if (length > AVATAR_MAX_BYTES)
+      stream.destroy(new HazardPhotoStorageError("GCS_IMAGE_TOO_LARGE"));
+    else chunks.push(chunk);
+  });
+  return result;
+}
+
+/** Deletes one avatar version. No-op if the object is gone. */
+export async function deleteAvatarObject(storagePath: string): Promise<void> {
+  if (!AVATAR_PATH.test(storagePath))
+    throw new HazardPhotoStorageError("GCS_INVALID_PATH");
+  try {
+    await client()
+      .bucket(process.env.GCS_BUCKET_NAME ?? "")
+      .file(storagePath)
+      .delete({ ignoreNotFound: true });
+  } catch (error) {
+    throw storageFailure(error);
+  }
+}
+
+/**
+ * Deletes every avatar object of a user.
+ *
+ * @param userId The owner's ObjectId string.
+ * @returns How many objects were deleted.
+ */
+export async function deleteAvatarObjects(userId: string): Promise<number> {
+  const bucket = client().bucket(process.env.GCS_BUCKET_NAME ?? "");
+  try {
+    const [files] = await bucket.getFiles({ prefix: avatarPrefix(userId) });
+    await Promise.all(
+      files.map((file) => file.delete({ ignoreNotFound: true })),
+    );
+    return files.length;
+  } catch (error) {
+    throw storageFailure(error);
+  }
+}

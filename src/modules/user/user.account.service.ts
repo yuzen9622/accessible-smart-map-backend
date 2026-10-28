@@ -21,6 +21,7 @@ import {
   revokeAppleRefreshToken,
 } from "../../adapters/apple-auth.adapter";
 import { getAppleSigningConfig } from "../../config/apple";
+import { purgeUserAvatars } from "./user.avatar.service";
 import { redisDel } from "../../config/redis";
 import { MEMORY_CACHE_PREFIX, MEMORY_COLLECTION } from "../../constants/memory";
 
@@ -148,6 +149,7 @@ export async function deleteAccount(input: {
   await tombstoneUserMemories(userId);
   await anonymizeHazardReports(userId, `deleted:${crypto.randomUUID()}`);
   await deleteMemoryVectors(userId);
+  await purgeUserAvatars(userId);
   await redisDel(MEMORY_CACHE_PREFIX + userId);
 
   await deleteUserAndSessions(userId);

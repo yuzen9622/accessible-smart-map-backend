@@ -145,3 +145,33 @@ export async function upsertLineLinkCode(
     { upsert: true, returnDocument: "after" },
   );
 }
+
+/**
+ * Atomically swaps the user's avatar.
+ *
+ * @param userId Owner's user id
+ * @param avatar The new avatar URL
+ * @returns The replaced avatar (null when unset), or undefined when the user no longer exists
+ */
+export async function swapUserAvatar(
+  userId: string,
+  avatar: string,
+): Promise<string | null | undefined> {
+  const before = await User.findOneAndUpdate(
+    { _id: userId },
+    { $set: { avatar } },
+    { projection: { avatar: 1 }, returnDocument: "before" },
+  ).lean<{ avatar?: string } | null>();
+  return before ? (before.avatar ?? null) : undefined;
+}
+
+/**
+ * @param userId Owner's user id
+ * @returns The user's avatar URL, or null when unset or the user is gone
+ */
+export async function findUserAvatar(userId: string): Promise<string | null> {
+  const user = await User.findById(userId, { avatar: 1 }).lean<{
+    avatar?: string;
+  } | null>();
+  return user?.avatar ?? null;
+}

@@ -1010,3 +1010,91 @@ registry.registerPath({
     ),
   },
 });
+
+export const AvatarParamsSchema = z.object({
+  userId: z
+    .string()
+    .regex(/^[0-9a-f]{24}$/)
+    .openapi({ example: "65f1c0ffee0000000000abcd" }),
+  file: z
+    .string()
+    .regex(/^[0-9a-f]{16}\.jpg$/)
+    .openapi({ example: "9f86d081884c7d65.jpg" }),
+});
+
+export const UpdateAvatarResponseSchema = apiResponse(
+  z.object({
+    avatarUrl: z.string().openapi({
+      description: "相對於 API origin 的頭像網址；每次更新都會換新網址",
+      example: "/api/v1/avatars/65f1c0ffee0000000000abcd/9f86d081884c7d65.jpg",
+    }),
+  }),
+).openapi("UpdateAvatarResponse");
+
+registry.registerPath({
+  method: "patch",
+  path: "/user/avatar",
+  tags: ["User"],
+  summary: "更換頭像",
+  description:
+    "上傳一張 JPEG／PNG／WebP（最多 5 MB），後端置中裁成 512×512 JPEG 並移除所有中繼資料後存到 GCS，" +
+    "把 `user.avatar` 換成新網址並刪除舊頭像。新網址會在下次 refresh 後出現在 access token 的 user 內。" +
+    "Content-Type 為 multipart/form-data。",
+  security: [{ bearerAuth: [] }],
+  request: {
+    body: {
+      content: {
+        "multipart/form-data": {
+          schema: z.object({
+            avatar: z.string().openapi({
+              type: "string",
+              format: "binary",
+              description: "頭像圖片（JPEG、PNG、WebP）",
+            }),
+          }),
+        },
+      },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      description: "已更新",
+      content: { "application/json": { schema: UpdateAvatarResponseSchema } },
+    },
+    400: {
+      description:
+        "未附圖片（AVATAR_MISSING）、無法解碼或格式不支援（AVATAR_INVALID／AVATAR_UNSUPPORTED）、超過大小（AVATAR_TOO_LARGE）",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    401: { description: "未提供或已過期的 token" },
+    403: { description: "token 無效" },
+    429: { description: "上傳太頻繁" },
+    503: {
+      description: "儲存服務暫時無法使用（AVATAR_UNAVAILABLE）",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/avatars/{userId}/{file}",
+  tags: ["User"],
+  summary: "取得頭像圖片",
+  description:
+    "公開讀取使用者目前的頭像（免登入）。只有 `user.avatar` 目前指向的版本可讀，換頭像或刪除帳號後舊網址回 404。",
+  request: { params: AvatarParamsSchema },
+  responses: {
+    200: {
+      description: "512×512 JPEG",
+      content: {
+        "image/jpeg": { schema: { type: "string", format: "binary" } },
+      },
+    },
+    400: { description: "路徑格式不合法" },
+    404: { description: "不是該使用者目前的頭像" },
+    429: { description: "請求太頻繁" },
+    503: { description: "儲存服務暫時無法使用" },
+  },
+});

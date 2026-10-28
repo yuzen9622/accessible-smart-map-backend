@@ -317,6 +317,14 @@ export const ACCOUNT_MSG = {
   APPLE_REVOKE_UNAVAILABLE: "暫時無法解除 Apple 授權，請稍後再試",
 } as const;
 
+export const AVATAR_MSG = {
+  UPDATED: "頭像已更新",
+  MISSING: "請選擇要上傳的頭像圖片",
+  INVALID: "無法讀取這張圖片，請改用 JPEG、PNG 或 WebP",
+  TOO_LARGE: "頭像圖片不可超過 5 MB",
+  UNAVAILABLE: "暫時無法更新頭像，請稍後再試",
+} as const;
+
 export const PUSH_MSG = {
   REGISTERED: "已註冊推播裝置",
   UNREGISTERED: "已註銷推播裝置",
