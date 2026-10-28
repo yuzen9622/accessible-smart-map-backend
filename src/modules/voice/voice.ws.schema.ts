@@ -112,6 +112,15 @@ export const NavStartMessageSchema = z.object({
 });
 
 /**
+ * Asks the assistant to read one step while previewing a route the user is
+ * far from. Ignored once GPS is driving the steps.
+ */
+export const NavPreviewStepMessageSchema = z.object({
+  type: z.literal("nav.previewStep"),
+  index: z.number().int().nonnegative().max(10_000),
+});
+
+/**
  * Re-arms an interrupted navigation from the server-side progress snapshot.
  *
  * `lastKnownStepIndex` is what the client believes it reached; the server
@@ -133,6 +142,7 @@ export const VoiceControlMessageSchema = z.discriminatedUnion("type", [
   NavSetRouteMessageSchema,
   NavPositionMessageSchema,
   NavStartMessageSchema,
+  NavPreviewStepMessageSchema,
   NavCancelMessageSchema,
   NavResumeMessageSchema,
   RouteContextSetMessageSchema,

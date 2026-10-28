@@ -155,12 +155,135 @@ describe("NavigationSession pure domain state", () => {
       expect(effect.ok).toBe(true);
       expect(
         effect.events.some(
-          (event) => event.type === "nav.step" || event.type === "nav.arrived",
+          (event) =>
+            event.type === "nav.step" ||
+            event.type === "nav.arrived" ||
+            event.type === "nav.progress",
         ),
       ).toBe(false);
-      expect(nav.takeNextSpeech()).toBe("已開始導航");
     },
   );
+
+  describe("previewing a route the user is far from", () => {
+    const farAway = pos(coord(122));
+    const startFar = () => {
+      const nav = new NavigationSession();
+      nav.armRoute(
+        route([walkLeg([coord(121), coord(121.001), coord(121.002)])]),
+      );
+      const effect = nav.start(farAway);
+      return { nav, effect };
+    };
+
+    it("reads the first step instead of measuring progress from the far fix", () => {
+      const { nav, effect } = startFar();
+      const start = effect.events.find((event) => event.type === "nav.start");
+      if (start?.type !== "nav.start") throw new Error("missing start");
+      expect(effect.events.map((event) => event.type)).toEqual(["nav.start"]);
+      expect(nav.takeNextSpeech()).toBe(start.steps[0].instruction);
+      nav.onTurnComplete();
+      for (let i = 0; i < 3; i++)
+        expect(nav.onPosition(farAway).events).toEqual([]);
+      expect(nav.takeNextSpeech()).toBeNull();
+    });
+
+    it("reads only the newest step the user browsed to", () => {
+      const { nav, effect } = startFar();
+      const start = effect.events.find((event) => event.type === "nav.start");
+      if (start?.type !== "nav.start") throw new Error("missing start");
+      nav.takeNextSpeech();
+      nav.onTurnComplete();
+      expect(nav.previewStep(1).ok).toBe(true);
+      expect(nav.previewStep(2).ok).toBe(true);
+      expect(nav.takeNextSpeech()).toBe(start.steps[2].instruction);
+      nav.onTurnComplete();
+      expect(nav.takeNextSpeech()).toBeNull();
+      expect(nav.previewStep(start.steps.length).ok).toBe(false);
+      nav.repeatCurrent();
+      expect(nav.takeNextSpeech()).toBe(start.steps[2].instruction);
+    });
+
+    it("hands over to live guidance from the first step once a fix comes near", () => {
+      const { nav, effect } = startFar();
+      const start = effect.events.find((event) => event.type === "nav.start");
+      if (start?.type !== "nav.start") throw new Error("missing start");
+      nav.previewStep(2);
+      const near = nav.onPosition(pos([121.0005, 25.002]));
+      expect(near.events[0]).toEqual({
+        type: "nav.step",
+        currentStepIndex: 0,
+        instruction: start.steps[0].instruction,
+        remainingM: start.steps[0].distanceM,
+      });
+      expect(nav.previewStep(1).ok).toBe(false);
+      const offroute = [1, 2, 3].flatMap(() => nav.onPosition(farAway).events);
+      expect(offroute.some((event) => event.type === "nav.offroute")).toBe(
+        true,
+      );
+    });
+
+    it("realigns a step picked before the first fix once GPS takes over", () => {
+      const nav = new NavigationSession();
+      nav.armRoute(
+        route([walkLeg([coord(121), coord(121.001), coord(121.002)])]),
+      );
+      const start = nav.start().events.find((e) => e.type === "nav.start");
+      if (start?.type !== "nav.start") throw new Error("missing start");
+      expect(nav.previewStep(2).ok).toBe(true);
+      expect(nav.takeNextSpeech()).toBe("已開始導航");
+      nav.onTurnComplete();
+      expect(nav.takeNextSpeech()).toBe(start.steps[2].instruction);
+      nav.onTurnComplete();
+      expect(nav.onPosition(pos([121.0005, 25.002])).events[0]).toMatchObject({
+        type: "nav.step",
+        currentStepIndex: 0,
+      });
+    });
+
+    it("drops only the earlier pick, not other queued speech", () => {
+      const nav = new NavigationSession();
+      nav.armRoute(
+        route([walkLeg([coord(121), coord(121.001), coord(121.002)])]),
+      );
+      const start = nav.start().events.find((e) => e.type === "nav.start");
+      if (start?.type !== "nav.start") throw new Error("missing start");
+      nav.previewStep(1);
+      nav.previewStep(2);
+      const spoken: string[] = [];
+      for (let text = nav.takeNextSpeech(); text; text = nav.takeNextSpeech()) {
+        spoken.push(text);
+        nav.onTurnComplete();
+      }
+      expect(spoken).toEqual(["已開始導航", start.steps[2].instruction]);
+    });
+
+    it("stops measuring progress once a live user is beyond the follow distance", () => {
+      const nav = new NavigationSession();
+      nav.armRoute({
+        ...route([walkLeg([coord(121), coord(121.001)])]),
+        navigationId: "33333333-3333-4333-8333-333333333333",
+        routeVersion: 1,
+      });
+      nav.start(pos(coord(121.0005)));
+      expect(
+        nav
+          .onPosition(pos(coord(121.0005)))
+          .events.some((event) => event.type === "nav.progress"),
+      ).toBe(true);
+      expect(
+        nav
+          .onPosition(farAway)
+          .events.some((event) => event.type === "nav.progress"),
+      ).toBe(false);
+    });
+
+    it("starts live without a preview step when the first fix is on the route", () => {
+      const nav = new NavigationSession();
+      nav.armRoute(route([walkLeg([coord(121), coord(121.001)])]));
+      nav.start(pos(coord(121.0005)));
+      expect(nav.previewStep(1).ok).toBe(false);
+    });
+  });
 
   it("acknowledges the public start DTO but waits for a geofence before directional instructions", () => {
     const start = coord(121);
@@ -1199,7 +1322,23 @@ describe("NavigationSession resume from snapshot", () => {
     expect(nav.getSnapshotState()).toEqual({
       currentStepIndex: 1,
       onVehicle: false,
+      liveGuidance: false,
     });
+  });
+
+  it("keeps live guidance when a live navigation resumes far from the route", () => {
+    const nav = new NavigationSession();
+    nav.resume(
+      identified(route([walkLeg(points)])),
+      snapshotOf({ liveGuidance: true }),
+      pos(coord(122)),
+    );
+    expect(nav.isLiveGuidance).toBe(true);
+    expect(nav.previewStep(0).ok).toBe(false);
+    const events = [1, 2, 3].flatMap(
+      () => nav.onPosition(pos([121.0005, 25.002])).events,
+    );
+    expect(events.some((event) => event.type === "nav.offroute")).toBe(true);
   });
 
   it("does not replay already-announced steps", () => {
@@ -1394,7 +1533,7 @@ describe("NavigationSession language", () => {
     expect(session.takeNextSpeech()).toBe("Navigation has started.");
     session.onTurnComplete();
     for (let i = 0; i < 3; i++)
-      session.onPosition({ latitude: 26, longitude: 122 });
+      session.onPosition({ latitude: 25.002, longitude: 121.005 });
     expect(session.takeNextSpeech()).toBe(
       "You appear to be off route. Please check your location.",
     );

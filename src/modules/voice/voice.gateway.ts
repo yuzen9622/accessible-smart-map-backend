@@ -14,6 +14,7 @@ import { type NavPosition } from "./navigation.schema";
 import {
   NavCancelMessageSchema,
   NavPositionMessageSchema,
+  NavPreviewStepMessageSchema,
   NavResumeMessageSchema,
   NavSetRouteMessageSchema,
   NavStartMessageSchema,
@@ -575,6 +576,18 @@ function handleConnection(
       }
       if (bridge) queueNavStart(bridge);
       else pendingNavStart = true;
+      return;
+    }
+    if (parsed?.type === "nav.previewStep") {
+      if (!controlBucket.take()) return;
+      const result = NavPreviewStepMessageSchema.safeParse(parsed);
+      if (!result.success) {
+        console.warn(
+          `[voice] ignoring nav.previewStep: ${describeIssues(result.error)}`,
+        );
+        return;
+      }
+      bridge?.previewNavStep(result.data.index);
       return;
     }
     if (parsed?.type === "nav.resume") {

@@ -38,6 +38,11 @@ const OFFROUTE_RECOVER_CONSECUTIVE = 2;
 const ACCURACY_CAP_M = 30;
 export const MAX_LOOKAHEAD_STEPS = 2;
 const MAX_SKIP_DIST_M = 60;
+/**
+ * Beyond this distance from the route a fix cannot drive progress, so the
+ * session previews the steps instead. Mirrors the app's `FOLLOW_GPS_MAX_M`.
+ */
+const FOLLOW_ROUTE_MAX_M = 500;
 const TRANSFER_SNAP_M = 15;
 export const SPEECH_QUEUE_MAX = 8;
 const DEFAULT_WALK_SPEED_MPS = 1;
@@ -75,6 +80,8 @@ export type NavServerEvent =
       steps: NavStepDto[];
       currentStepIndex: 0;
       totalSteps: number;
+      /** The started route, so the App selects it when voice chose a candidate. */
+      routeToken?: string;
     }
   | {
       type: "nav.step";
@@ -377,6 +384,15 @@ export class NavigationSession {
   private disposed = false;
   private steps: ResolvedStep[] = [];
   private announcedIndex = -1;
+  /**
+   * Who drives the steps. The first fix decides: within `FOLLOW_ROUTE_MAX_M`
+   * of the route GPS drives them (`live`); farther away the client browses
+   * them via `previewStep` (`preview`) until a fix comes near. Live never falls
+   * back to preview; leaving the route after that is off-route handling.
+   */
+  private guidance: "awaiting_fix" | "preview" | "live" = "awaiting_fix";
+  private previewIndex = 0;
+  private previewSpeech: string | null = null;
   private onVehicle = false;
   private offrouteWarned = false;
   private offrouteCount = 0;
@@ -395,6 +411,16 @@ export class NavigationSession {
 
   private get messages() {
     return NAVIGATION_MESSAGES[this.language];
+  }
+
+  /** True between a successful `start()`/resume and stop, arrival or cancel. */
+  get isActive(): boolean {
+    return this.active;
+  }
+
+  /** False while previewing or before the first fix: nothing may act on the user's position. */
+  get isLiveGuidance(): boolean {
+    return this.guidance === "live";
   }
 
   armRoute(route: AccessibleRoute): NavEffect {
@@ -453,6 +479,9 @@ export class NavigationSession {
         totalSteps: this.steps.length,
       },
     ];
+    this.guidance = "awaiting_fix";
+    this.previewIndex = 0;
+    this.previewSpeech = null;
     const seed = seedPosition ?? this.latestPosition;
     if (seed) events.push(...this.onPosition(seed).events);
     if (this.speechQueue.length === 0)
@@ -502,6 +531,9 @@ export class NavigationSession {
         steps: this.stepDtos(),
       },
     ];
+    this.guidance = snapshot.liveGuidance ? "live" : "awaiting_fix";
+    this.previewIndex = Math.max(0, this.announcedIndex);
+    this.previewSpeech = null;
     const seed = currentPosition ?? this.latestPosition;
     if (seed) events.push(...this.onPosition(seed).events);
     return { ok: true, events };
@@ -513,25 +545,54 @@ export class NavigationSession {
     return this.steps[Math.max(0, this.announcedIndex)]?.legIndex;
   }
 
-  getSnapshotState(): { currentStepIndex: number; onVehicle: boolean } | null {
+  getSnapshotState(): {
+    currentStepIndex: number;
+    onVehicle: boolean;
+    liveGuidance: boolean;
+  } | null {
     if (this.disposed || !this.active) return null;
     return {
       currentStepIndex: Math.max(0, this.announcedIndex),
       onVehicle: this.onVehicle,
+      liveGuidance: this.guidance === "live",
     };
   }
 
   onPosition(position: NavPosition): NavEffect {
     this.latestPosition = position;
     if (this.disposed || !this.active) return emptyEffect();
+    const promoted: NavServerEvent[] = [];
+    const far = this.distanceFromRouteM(position) > FOLLOW_ROUTE_MAX_M;
+    if (this.guidance !== "live") {
+      if (far) {
+        if (this.guidance === "awaiting_fix") {
+          this.guidance = "preview";
+          this.enqueueSpeech(this.steps[this.previewIndex].instruction);
+        }
+        return emptyEffect();
+      }
+      const liveIndex = Math.max(0, this.announcedIndex);
+      this.guidance = "live";
+      if (this.previewIndex !== liveIndex) {
+        const step = this.steps[liveIndex];
+        promoted.push({
+          type: "nav.step",
+          currentStepIndex: liveIndex,
+          instruction: step.instruction,
+          remainingM: step.distanceM,
+        });
+      }
+    }
     const advanced = this.advanceFrom(position);
     const offroute = this.checkOffRoute(position);
     const speech = [...advanced.speech, ...offroute.speech]
       .filter(Boolean)
       .join(" ");
     if (speech) this.enqueueSpeech(speech);
-    const events = [...advanced.events, ...offroute.events];
-    const progress = this.active ? this.progressEvent(position) : null;
+    const events = [...promoted, ...advanced.events, ...offroute.events];
+    // Past the follow distance the remaining distance would be measured from a
+    // point off the route entirely; off-route handling replans instead.
+    const progress = this.active && !far ? this.progressEvent(position) : null;
     if (progress) events.push(progress);
     return { ok: true, events };
   }
@@ -554,9 +615,32 @@ export class NavigationSession {
   }
 
   repeatCurrent(): NavEffect {
-    if (this.active && this.announcedIndex >= 0) {
+    if (this.active && this.guidance !== "live") {
+      this.enqueueSpeech(this.steps[this.previewIndex].instruction);
+    } else if (this.active && this.announcedIndex >= 0) {
       this.enqueueSpeech(this.steps[this.announcedIndex].instruction);
     }
+    return emptyEffect();
+  }
+
+  /**
+   * Reads the step the user browsed to before GPS drives the steps. Only the
+   * newest pick stays queued, so flipping through several steps does not read
+   * them all; other queued speech such as advisories is kept.
+   */
+  previewStep(index: number): NavEffect {
+    if (this.disposed || !this.active || this.guidance === "live")
+      return emptyEffect(false);
+    const step = this.steps[index];
+    if (!step) return emptyEffect(false);
+    this.previewIndex = index;
+    const queued =
+      this.previewSpeech === null
+        ? -1
+        : this.speechQueue.indexOf(this.previewSpeech);
+    if (queued >= 0) this.speechQueue.splice(queued, 1);
+    this.previewSpeech = step.instruction;
+    this.enqueueSpeech(step.instruction);
     return emptyEffect();
   }
 
@@ -565,7 +649,11 @@ export class NavigationSession {
     if (this.disposed || !this.active || !this.activeRoute)
       return { active: false };
     const currentIndex =
-      this.announcedIndex >= 0 ? this.announcedIndex : this.nextCoordIndex(0);
+      this.guidance === "preview"
+        ? this.previewIndex
+        : this.announcedIndex >= 0
+          ? this.announcedIndex
+          : this.nextCoordIndex(0);
     const current =
       currentIndex === null ? undefined : this.steps[currentIndex];
     const currentTransitIndex =
@@ -1346,6 +1434,14 @@ export class NavigationSession {
       return lastLeg.arrivalStation;
     }
     return undefined;
+  }
+
+  private distanceFromRouteM(position: NavPosition): number {
+    const point: Coord = [position.longitude, position.latitude];
+    let min = Number.POSITIVE_INFINITY;
+    for (const leg of this.activeRoute?.legs ?? [])
+      min = Math.min(min, distanceToPolylineM(point, leg.polyline));
+    return min;
   }
 
   private checkOffRoute(position: NavPosition): {

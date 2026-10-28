@@ -539,7 +539,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
           },
         });
         await vi.advanceTimersByTimeAsync(0);
-        const far = { latitude: 26, longitude: 122 };
+        const far = { latitude: 25.002, longitude: 121.0005 };
         for (let i = 0; i < 3; i++) {
           bridge.updatePosition(far);
           await vi.advanceTimersByTimeAsync(500);
@@ -641,7 +641,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
         },
       });
       await vi.advanceTimersByTimeAsync(0);
-      const far = { latitude: 26, longitude: 122 };
+      const far = { latitude: 25.002, longitude: 121.0005 };
       for (let i = 0; i < 3; i++) {
         bridge.updatePosition(far);
         await vi.advanceTimersByTimeAsync(500);
@@ -720,7 +720,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
         },
       });
       await vi.advanceTimersByTimeAsync(0);
-      const far = { latitude: 26, longitude: 122 };
+      const far = { latitude: 25.002, longitude: 121.0005 };
       for (let i = 0; i < 3; i++) {
         bridge.updatePosition(far);
         await vi.advanceTimersByTimeAsync(500);
@@ -836,7 +836,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
       });
       await vi.advanceTimersByTimeAsync(0);
 
-      const far = { latitude: 26, longitude: 122 };
+      const far = { latitude: 25.002, longitude: 121.0005 };
       for (let i = 0; i < 3; i++) {
         bridge.updatePosition(far);
         await vi.advanceTimersByTimeAsync(500);
@@ -941,7 +941,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
       await vi.advanceTimersByTimeAsync(0);
 
       const pendingNewArm = bridge.armRouteToken("newer");
-      const far = { latitude: 26, longitude: 122 };
+      const far = { latitude: 25.002, longitude: 121.0005 };
       for (let i = 0; i < 3; i++) {
         bridge.updatePosition(far);
         await vi.advanceTimersByTimeAsync(500);
@@ -1146,7 +1146,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
         },
       });
       await vi.advanceTimersByTimeAsync(0);
-      const far = { latitude: 26, longitude: 122 };
+      const far = { latitude: 25.002, longitude: 121.0005 };
       for (let i = 0; i < 3; i++) {
         bridge.updatePosition(far);
         await vi.advanceTimersByTimeAsync(500);
@@ -2173,7 +2173,7 @@ describe("createLiveBridge user memory integration", () => {
 describe("createLiveBridge reroute generation ownership", () => {
   const NAV_OLD = "11111111-1111-4111-8111-111111111111";
   const NAV_NEW = "22222222-2222-4222-8222-222222222222";
-  const FAR = { latitude: 26, longitude: 122 };
+  const FAR = { latitude: 25.002, longitude: 121.0005 };
   const ON_ROUTE = { latitude: 25, longitude: 121 };
 
   beforeEach(() => {
@@ -4664,6 +4664,146 @@ describe("candidate control server guards", () => {
       "CANDIDATE_UNAVAILABLE",
     );
   });
+  describe("choosing a candidate before navigation", () => {
+    const second = {
+      ...tokenRoute,
+      routeId: "r2",
+      routeToken: "second-token",
+      navigationId: "second-nav",
+    };
+    const output = () =>
+      JSON.parse(
+        session.sendToolResponse.mock.calls[0][0].functionResponses[0].response
+          .output,
+      );
+    beforeEach(async () => {
+      utter("有哪些路線");
+      tool("planAccessibleRoute", {});
+      await settle();
+      getRouteByToken.mockResolvedValue(tokenRoute);
+      getNavigationEnvelopeByToken.mockResolvedValue(envelope);
+      // The App echoes its default selection (the first candidate).
+      await bridge.armRouteToken("first-token");
+    });
+    it("numbers the planned routes for the model", () => {
+      expect(
+        output().routes.map(
+          (r: { candidateNumber?: number }) => r.candidateNumber,
+        ),
+      ).toEqual([1, 2]);
+    });
+    it("startNavigation with a candidate arms it and names the started route", async () => {
+      getRouteByToken.mockResolvedValue(second);
+      getNavigationEnvelopeByToken.mockResolvedValue({
+        ...envelope,
+        navigationId: "second-nav",
+        route: second,
+      });
+      session.sendToolResponse.mockClear();
+      utter("導航第二條");
+      tool("startNavigation", { candidateNumber: 2 });
+      await settle();
+      expect(output()).toMatchObject({ ok: true });
+      expect(getRouteByToken).toHaveBeenLastCalledWith("second-token");
+      const starts = messages().filter((m) => m.type === "nav.start");
+      expect(starts).toHaveLength(1);
+      expect(starts[0].routeToken).toBe("second-token");
+    });
+    it("an unknown candidate starts nothing and lists the real ones", async () => {
+      session.sendToolResponse.mockClear();
+      utter("導航三十號公車");
+      tool("startNavigation", { candidateNumber: 30 });
+      await settle();
+      expect(output()).toMatchObject({
+        ok: false,
+        reason: "CANDIDATE_UNAVAILABLE",
+        candidates: [{ candidateNumber: 1 }, { candidateNumber: 2 }],
+      });
+      expect(messages().some((m) => m.type === "nav.start")).toBe(false);
+    });
+    it("a switch proposal is refused, so no unseen backend navigation starts", async () => {
+      session.sendToolResponse.mockClear();
+      utter("換第二條");
+      tool("proposeNavigationCandidate", { candidateNumber: 2 });
+      await settle();
+      expect(output()).toMatchObject({ ok: false, reason: "NOT_NAVIGATING" });
+      expect(
+        messages().some(
+          (m) => m.type === "nav.start" || m.type === "nav.route_replaced",
+        ),
+      ).toBe(false);
+    });
+    it("during navigation another candidate is refused instead of restarting", async () => {
+      bridge.startNavigation();
+      session.sendToolResponse.mockClear();
+      utter("改導航第二條");
+      tool("startNavigation", { candidateId: "r2" });
+      await settle();
+      expect(output()).toMatchObject({
+        ok: false,
+        reason: "ALREADY_NAVIGATING",
+      });
+      expect(messages().filter((m) => m.type === "nav.start")).toHaveLength(1);
+    });
+    it("a UI start during the candidate lookup wins and the candidate stays unarmed", async () => {
+      const lookup = deferred<typeof second>();
+      getRouteByToken.mockReturnValueOnce(lookup.promise);
+      session.sendToolResponse.mockClear();
+      utter("導航第二條");
+      tool("startNavigation", { candidateNumber: 2 });
+      await vi.waitFor(() =>
+        expect(getRouteByToken).toHaveBeenLastCalledWith("second-token"),
+      );
+      bridge.startNavigation();
+      lookup.resolve(second);
+      await settle();
+      expect(output()).toMatchObject({
+        ok: false,
+        reason: "ALREADY_NAVIGATING",
+      });
+      const starts = messages().filter((m) => m.type === "nav.start");
+      expect(starts).toHaveLength(1);
+      expect(starts[0].routeToken).toBe("first-token");
+      // Still navigating the first route, so the second is a valid switch.
+      session.sendToolResponse.mockClear();
+      utter("換第二條");
+      tool("proposeNavigationCandidate", { candidateNumber: 2 });
+      await settle();
+      expect(output()).toMatchObject({ ok: true, candidateNumber: 2 });
+    });
+    it("an expired candidate keeps the App-selected route armed", async () => {
+      getRouteByToken.mockResolvedValueOnce(null);
+      session.sendToolResponse.mockClear();
+      utter("導航第二條");
+      tool("startNavigation", { candidateNumber: 2 });
+      await settle();
+      expect(output()).toMatchObject({
+        ok: false,
+        reason: "CANDIDATE_UNAVAILABLE",
+      });
+      expect(messages().some((m) => m.type === "nav.error")).toBe(false);
+      session.sendToolResponse.mockClear();
+      utter("那就導航目前這條");
+      tool("startNavigation");
+      await settle();
+      expect(output()).toMatchObject({ ok: true });
+      expect(messages().find((m) => m.type === "nav.start")?.routeToken).toBe(
+        "first-token",
+      );
+    });
+    it("a selection outside the voice plan drops its candidates", async () => {
+      await bridge.setRouteContext({ routeToken: "ui-replanned-token" });
+      session.sendToolResponse.mockClear();
+      utter("導航第二條");
+      tool("startNavigation", { candidateNumber: 2 });
+      await settle();
+      expect(output()).toMatchObject({
+        ok: false,
+        reason: "CANDIDATE_UNAVAILABLE",
+        candidates: [],
+      });
+    });
+  });
   it("UI arming updates used candidates and excludes its active token", async () => {
     utter("有哪些路線");
     tool("planAccessibleRoute");
@@ -4845,7 +4985,7 @@ describe("candidate control server guards", () => {
 
     vi.useFakeTimers();
     try {
-      const far = { latitude: 26, longitude: 122 };
+      const far = { latitude: 25.002, longitude: 121.0005 };
       for (let index = 0; index < 3; index++) {
         bridge.updatePosition(far);
         await vi.advanceTimersByTimeAsync(500);

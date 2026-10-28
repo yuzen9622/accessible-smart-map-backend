@@ -333,6 +333,8 @@ export interface NavigationSessionSnapshot {
   routeVersion: number;
   currentStepIndex: number;
   onVehicle: boolean;
+  /** GPS was already driving the steps, so a far resume is off-route, not a preview. */
+  liveGuidance?: boolean;
   latestPosition: {
     latitude: number;
     longitude: number;

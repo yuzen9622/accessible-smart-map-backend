@@ -25,6 +25,7 @@ vi.mock("./live-bridge", () => ({
     resumeNavigation: vi.fn(async () => {}),
     startNavigation: vi.fn(),
     updatePosition: vi.fn(),
+    previewNavStep: vi.fn(),
     cancelNav: vi.fn(),
     endSession: vi.fn(),
     close: vi.fn(),
@@ -336,6 +337,21 @@ describe("voice gateway", () => {
       accuracy: 5,
     });
     expect(bridge.cancelNav).toHaveBeenCalledOnce();
+  });
+
+  it("forwards a valid nav.previewStep and drops a malformed one", async () => {
+    const ws = connect();
+    await waitForOpen(ws);
+    const ready = waitForJson(ws);
+    sendSessionStart(ws, "voice-user-nav-preview");
+    await ready;
+    const bridge = await mockCreateLiveBridge.mock.results.at(-1)!.value;
+    ws.send(JSON.stringify({ type: "nav.previewStep", index: -1 }));
+    ws.send(JSON.stringify({ type: "nav.previewStep", index: 2 }));
+    await vi.waitFor(() =>
+      expect(bridge.previewNavStep).toHaveBeenCalledWith(2),
+    );
+    expect(bridge.previewNavStep).toHaveBeenCalledOnce();
   });
 
   it("forwards nav.start to the bridge", async () => {

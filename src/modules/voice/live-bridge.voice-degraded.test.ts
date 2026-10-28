@@ -282,6 +282,28 @@ describe("live bridge navigation with degraded or absent voice", () => {
     bridge.close();
   });
 
+  it("suggests instead of replanning a blocking alert while the user previews from afar", async () => {
+    connect.mockRejectedValue(new Error("gemini down"));
+    getTransitAlerts.mockResolvedValue(alertsResult([blockingAlert]));
+    const ws = makeWs();
+
+    const bridge = await createLiveBridge({
+      ws,
+      userId: "u",
+      userLocation: { latitude: 24.15, longitude: 120.68 },
+    });
+    await bridge.voiceReady;
+    await bridge.armRouteToken("cap");
+    bridge.updatePosition({ latitude: 24.15, longitude: 120.68 });
+    bridge.startNavigation();
+    await vi.waitFor(() => expect(advisoriesOf(ws)).toHaveLength(1));
+
+    expect(rerouteAccessibleRoute).not.toHaveBeenCalled();
+    expect(framesOf(ws).some((f) => f.type === "nav.progress")).toBe(false);
+    expect(advisoriesOf(ws)[0].advisories[0].action).toBe("reroute_suggested");
+    bridge.close();
+  });
+
   it("downgrades reroute_applied to reroute_suggested when the reroute fails", async () => {
     connect.mockRejectedValue(new Error("gemini down"));
     getTransitAlerts.mockResolvedValue(alertsResult([blockingAlert]));

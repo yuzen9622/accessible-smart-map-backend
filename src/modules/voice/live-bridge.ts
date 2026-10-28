@@ -155,7 +155,8 @@ type LiveTurnState =
 const NAV_FUNCTIONS: FunctionDeclaration[] = [
   {
     name: "proposeNavigationCandidate",
-    description: "使用者要求換線時提案；只比較候選，不切換。",
+    description:
+      "導航進行中使用者要求換線時提案；只比較候選，不切換。尚未開始導航時改用 startNavigation 帶候選。",
     parametersJsonSchema: {
       type: "object",
       properties: {
@@ -178,10 +179,14 @@ const NAV_FUNCTIONS: FunctionDeclaration[] = [
   },
   {
     name: "startNavigation",
-    description: "開始已由使用者在畫面選定的無障礙路線導航",
+    description:
+      "尚未導航時開始逐步導航。使用者指定某條候選路線（第幾條、某號公車那條）時帶 candidateNumber 或 candidateId，App 會一併切到該路線；未指定時沿用畫面選定的路線。導航中換線改用 proposeNavigationCandidate。",
     parametersJsonSchema: {
       type: "object",
-      properties: {},
+      properties: {
+        candidateNumber: { type: "integer" },
+        candidateId: { type: "string" },
+      },
       additionalProperties: false,
     },
   },
@@ -300,6 +305,8 @@ export interface LiveBridge {
   resumeNavigation(message: NavResumeMessage): Promise<void>;
   startNavigation(): void;
   updatePosition(position: NavPosition): void;
+  /** Reads one step aloud while the user previews a route they are far from. */
+  previewNavStep(index: number): void;
   cancelNav(): void;
   endSession(): void;
   close(): void;
@@ -468,6 +475,38 @@ export async function createLiveBridge(
   let navSession = new NavigationSession(undefined, language);
   let activeNavigation: ActiveNavigation | null = null;
   let navigationGeneration = 0;
+  /**
+   * Model-facing list of the last voice plan's candidates. A reconnect only
+   * re-grounds the model on the selected route, so without this list it cannot
+   * map "the route 30 one" back to a candidate. Tokens never reach the model.
+   */
+  const candidateSummaries = () =>
+    (registry?.candidates ?? []).map((c) => ({
+      candidateNumber: c.ordinal,
+      candidateId: c.id,
+      totalMinutes: c.route.totalMinutes ?? null,
+      transferCount: c.route.transferCount ?? null,
+      transit: c.route.legs.flatMap((leg): { mode: string; line: string }[] => {
+        switch (leg.type) {
+          case "BUS":
+            return [{ mode: leg.type, line: leg.routeName }];
+          case "METRO":
+            return [{ mode: leg.type, line: leg.lineName }];
+          case "TRA":
+          case "THSR":
+            return [{ mode: leg.type, line: leg.trainNo }];
+          default:
+            return [];
+        }
+      }),
+      navigating:
+        navSession.isActive && c.token === activeNavigation?.routeToken,
+    }));
+  const candidatePrompt = (): string => {
+    const candidates = candidateSummaries();
+    if (!candidates.length) return "";
+    return `\n\n【本次語音規劃的候選路線】${JSON.stringify(candidates)}\ncandidateNumber 是候選順序（第一條=1），不是公車或捷運路線號碼；使用者說「30 號公車那條」時，依 transit.line 找出對應候選再帶入 candidateNumber 或 candidateId。`;
+  };
   let lastSnapshotPersistedAt = 0;
   const rerouteStateByGeneration = new Map<number, RerouteGenerationState>();
   let corridorScanInFlight = false;
@@ -592,6 +631,7 @@ export async function createLiveBridge(
       routeVersion: navigation.routeVersion,
       currentStepIndex: state.currentStepIndex,
       onVehicle: state.onVehicle,
+      liveGuidance: state.liveGuidance,
       latestPosition: latestPosition
         ? {
             latitude: latestPosition.latitude,
@@ -826,6 +866,9 @@ export async function createLiveBridge(
     reason: RerouteReason,
     triggerPosition: NavPosition | null = latestPosition,
   ): Promise<boolean> => {
+    // A preview's position is not on the route; replanning from it would
+    // silently swap the route the user is looking at.
+    if (!navSession.isLiveGuidance) return false;
     const navigation = activeNavigation;
     const now = Date.now();
     if (
@@ -1006,7 +1049,17 @@ export async function createLiveBridge(
       positionTimer = null;
     }
     const effect = navSession.start(latestPosition ?? undefined);
-    applyEffect(effect);
+    const routeToken = activeNavigation?.routeToken;
+    applyEffect(
+      routeToken
+        ? {
+            ...effect,
+            events: effect.events.map((event) =>
+              event.type === "nav.start" ? { ...event, routeToken } : event,
+            ),
+          }
+        : effect,
+    );
     if (effect.ok) {
       persistNavigationSnapshot(true);
       void checkCurrentTransitAlerts();
@@ -1289,6 +1342,18 @@ export async function createLiveBridge(
             result = JSON.stringify({
               ok: false,
               reason: "CANDIDATE_UNAVAILABLE",
+              candidates: candidateSummaries(),
+            });
+          } else if (!navSession.isActive) {
+            // Switching an armed-but-not-started route would start a backend
+            // session the App never enters; pre-navigation choice belongs to
+            // startNavigation, which the App mirrors as nav.start.
+            result = JSON.stringify({
+              ok: false,
+              reason: "NOT_NAVIGATING",
+              message:
+                "尚未開始導航；要用指定候選導航請呼叫 startNavigation 並帶 candidateNumber 或 candidateId。",
+              candidates: candidateSummaries(),
             });
           } else {
             proposal = {
@@ -1350,6 +1415,7 @@ export async function createLiveBridge(
             p.navigationGeneration !== navigationGeneration ||
             p.armGeneration !== armGen ||
             !navigation ||
+            !navSession.isActive ||
             reconcilingNavigations.has(navigation.navigationId)
           ) {
             result = JSON.stringify({
@@ -1499,11 +1565,73 @@ export async function createLiveBridge(
             });
           }
         } else if (name === "startNavigation") {
-          const { ok: started } = startNavigation();
-          result = JSON.stringify({
-            ok: started,
-            message: started ? messages.started : messages.noRoute,
-          });
+          const ordinal = call.args?.candidateNumber;
+          const id = call.args?.candidateId;
+          const requested =
+            ordinal === undefined && id === undefined
+              ? null
+              : (registry?.candidates.find(
+                  (c) =>
+                    (ordinal === undefined || c.ordinal === ordinal) &&
+                    (id === undefined || c.id === id),
+                ) ?? null);
+          if (
+            requested === null &&
+            (ordinal !== undefined || id !== undefined)
+          ) {
+            result = JSON.stringify({
+              ok: false,
+              reason: "CANDIDATE_UNAVAILABLE",
+              candidates: candidateSummaries(),
+            });
+          } else if (requested && navSession.isActive) {
+            result = JSON.stringify(
+              requested.token === activeNavigation?.routeToken
+                ? { ok: true, alreadyNavigating: true }
+                : {
+                    ok: false,
+                    reason: "ALREADY_NAVIGATING",
+                    message:
+                      "導航進行中；換線請呼叫 proposeNavigationCandidate 再 confirmNavigationCandidateSwitch。",
+                  },
+            );
+          } else {
+            // The lookup awaits: a UI start, a newer utterance or a cancel in
+            // that window must win, and must not find this candidate armed.
+            const stillWanted = () =>
+              !navSession.isActive &&
+              voiceCurrent() &&
+              requestCurrent() &&
+              !cancelled();
+            const armed =
+              !requested ||
+              (requested.token !== undefined &&
+                (requested.token === activeNavigation?.routeToken ||
+                  (await armRouteToken(requested.token, stillWanted))));
+            if (!voiceCurrent()) return;
+            if (cancelled()) continue;
+            if (requested && !requestCurrent()) {
+              result = JSON.stringify({ ok: false, reason: "STALE_SELECTION" });
+            } else if (requested && navSession.isActive) {
+              result = JSON.stringify({
+                ok: false,
+                reason: "ALREADY_NAVIGATING",
+                message: "App 已開始導航目前選定的路線。",
+              });
+            } else if (!armed) {
+              result = JSON.stringify({
+                ok: false,
+                reason: "CANDIDATE_UNAVAILABLE",
+                candidates: candidateSummaries(),
+              });
+            } else {
+              const { ok: started } = startNavigation();
+              result = JSON.stringify({
+                ok: started,
+                message: started ? messages.started : messages.noRoute,
+              });
+            }
+          }
         } else if (name === "endVoiceSession") {
           if (call === acceptedEndCall) {
             acceptedEndCall = undefined;
@@ -1729,6 +1857,30 @@ export async function createLiveBridge(
         } else {
           toolResult = result.clientResult;
           modelResult = result.modelResult;
+        }
+        if (
+          name === "planAccessibleRoute" &&
+          registry &&
+          modelResult !== null &&
+          typeof modelResult === "object" &&
+          "routes" in modelResult &&
+          Array.isArray(modelResult.routes)
+        ) {
+          const numbered = registry.candidates;
+          modelResult = {
+            ...modelResult,
+            routes: modelResult.routes.map((route: unknown) => {
+              const match =
+                route !== null &&
+                typeof route === "object" &&
+                "routeId" in route
+                  ? numbered.find((c) => c.id === route.routeId)
+                  : undefined;
+              return match && typeof route === "object"
+                ? { candidateNumber: match.ordinal, ...route }
+                : route;
+            }),
+          };
         }
         response = { output: JSON.stringify(modelResult) };
       } catch (err) {
@@ -2093,7 +2245,9 @@ export async function createLiveBridge(
                 language: options.language,
                 memoryEnabled,
                 history: conversationHistory,
-              }) + routeContext.prompt,
+              }) +
+                routeContext.prompt +
+                candidatePrompt(),
             ),
             tools: [
               ...buildGeminiTools(userId, memoryEnabled).map((tool) => ({
@@ -2253,6 +2407,101 @@ export async function createLiveBridge(
 
   const voiceReady = bootstrapVoice();
 
+  /**
+   * Arms a route for voice navigation; true only when it is ready to start.
+   * `tentative` is the model choosing a candidate: it commits only while that
+   * check still holds after the lookup, and a missing route leaves the
+   * App-selected arm untouched instead of disarming it.
+   */
+  const armRouteToken = async (
+    routeToken: string,
+    tentative?: () => boolean,
+  ): Promise<boolean> => {
+    if (
+      !disposed &&
+      (routeToken === activeNavigation?.routeToken ||
+        routeToken === pendingDirectToken)
+    ) {
+      const selected = registry?.candidates.find(
+        (candidate) => candidate.token === routeToken,
+      );
+      if (selected && registry) {
+        registry.selectedOrdinal = selected.ordinal;
+        registry.used.add(selected.ordinal);
+      }
+      return true;
+    }
+    proposal = null;
+    const generation = ++armGen;
+    const arm = { armGeneration: generation };
+    pendingRouteArm = arm;
+    const isCurrentArm = (): boolean =>
+      !disposed && arm.armGeneration === armGen && pendingRouteArm === arm;
+    try {
+      const [route, envelope] = await Promise.all([
+        getRouteByToken(routeToken),
+        getNavigationEnvelopeByToken(routeToken),
+      ]);
+      if (!isCurrentArm()) return false;
+      if (tentative && (!route || !tentative())) {
+        pendingRouteArm = null;
+        return false;
+      }
+      if (!route) {
+        pendingRouteArm = null;
+        // The client asked to replace the route and the replacement is gone.
+        // Leaving the previous one armed would let a later nav.start run a
+        // route the user already navigated away from, so drop it. cancel()
+        // only clears a *started* session, hence the fresh NavigationSession
+        // for the armed-but-not-started case.
+        applyEffect(navSession.cancel());
+        navSession.dispose();
+        navSession = new NavigationSession(undefined, language);
+        activeNavigation = null;
+        navigationGeneration++;
+        pruneRerouteState();
+        resetCorridorState();
+        applyEffect({
+          ok: false,
+          events: [
+            {
+              type: "nav.error",
+              code: "NAV_ROUTE_INVALID",
+              message: messages.routeExpired,
+            },
+          ],
+        });
+        return false;
+      }
+      const committedGeneration = ++navigationGeneration;
+      pruneRerouteState();
+      pendingRouteArm = null;
+      applyEffect(navSession.armRoute(route));
+      activeNavigation = envelope
+        ? {
+            routeToken,
+            navigationId: envelope.navigationId,
+            routeVersion: envelope.routeVersion,
+            generation: committedGeneration,
+            requireElevator:
+              envelope.canonicalRequest?.requireElevator ?? false,
+          }
+        : null;
+      const selected = registry?.candidates.find(
+        (candidate) => candidate.token === routeToken,
+      );
+      if (selected && registry) {
+        registry.selectedOrdinal = selected.ordinal;
+        registry.used.add(selected.ordinal);
+      }
+      resetCorridorState();
+      return true;
+    } catch (err) {
+      if (isCurrentArm()) pendingRouteArm = null;
+      throw err;
+    }
+  };
+
   return {
     async setRouteContext(
       input: RouteContextInput,
@@ -2270,6 +2519,16 @@ export async function createLiveBridge(
         input.routeToken === routeContext.token
       )
         return routeContext.identity;
+      // A selection outside the voice plan (a UI re-plan) makes its candidates
+      // stale; keep them only for the plan's own routes and the live route.
+      if (
+        registry &&
+        input?.routeToken !== activeNavigation?.routeToken &&
+        !registry.candidates.some((c) => c.token === input?.routeToken)
+      ) {
+        registry = null;
+        proposal = null;
+      }
       const epoch = ++voiceEpoch;
       for (const cancel of pendingBootstraps) cancel();
       const ending = session;
@@ -2317,87 +2576,7 @@ export async function createLiveBridge(
         },
       });
     },
-    async armRouteToken(routeToken: string): Promise<boolean> {
-      if (
-        !disposed &&
-        (routeToken === activeNavigation?.routeToken ||
-          routeToken === pendingDirectToken)
-      ) {
-        const selected = registry?.candidates.find(
-          (candidate) => candidate.token === routeToken,
-        );
-        if (selected && registry) {
-          registry.selectedOrdinal = selected.ordinal;
-          registry.used.add(selected.ordinal);
-        }
-        return true;
-      }
-      proposal = null;
-      const generation = ++armGen;
-      const arm = { armGeneration: generation };
-      pendingRouteArm = arm;
-      const isCurrentArm = (): boolean =>
-        !disposed && arm.armGeneration === armGen && pendingRouteArm === arm;
-      try {
-        const [route, envelope] = await Promise.all([
-          getRouteByToken(routeToken),
-          getNavigationEnvelopeByToken(routeToken),
-        ]);
-        if (!isCurrentArm()) return false;
-        if (!route) {
-          pendingRouteArm = null;
-          // The client asked to replace the route and the replacement is gone.
-          // Leaving the previous one armed would let a later nav.start run a
-          // route the user already navigated away from, so drop it. cancel()
-          // only clears a *started* session, hence the fresh NavigationSession
-          // for the armed-but-not-started case.
-          applyEffect(navSession.cancel());
-          navSession.dispose();
-          navSession = new NavigationSession(undefined, language);
-          activeNavigation = null;
-          navigationGeneration++;
-          pruneRerouteState();
-          resetCorridorState();
-          applyEffect({
-            ok: false,
-            events: [
-              {
-                type: "nav.error",
-                code: "NAV_ROUTE_INVALID",
-                message: messages.routeExpired,
-              },
-            ],
-          });
-          return false;
-        }
-        const committedGeneration = ++navigationGeneration;
-        pruneRerouteState();
-        pendingRouteArm = null;
-        applyEffect(navSession.armRoute(route));
-        activeNavigation = envelope
-          ? {
-              routeToken,
-              navigationId: envelope.navigationId,
-              routeVersion: envelope.routeVersion,
-              generation: committedGeneration,
-              requireElevator:
-                envelope.canonicalRequest?.requireElevator ?? false,
-            }
-          : null;
-        const selected = registry?.candidates.find(
-          (candidate) => candidate.token === routeToken,
-        );
-        if (selected && registry) {
-          registry.selectedOrdinal = selected.ordinal;
-          registry.used.add(selected.ordinal);
-        }
-        resetCorridorState();
-        return true;
-      } catch (err) {
-        if (isCurrentArm()) pendingRouteArm = null;
-        throw err;
-      }
-    },
+    armRouteToken: (routeToken: string) => armRouteToken(routeToken),
     startNavigation(): void {
       startNavigation();
     },
@@ -2646,6 +2825,11 @@ export async function createLiveBridge(
           POSITION_MIN_INTERVAL_MS - elapsed,
         );
       }
+    },
+    previewNavStep(index: number): void {
+      if (disposed) return;
+      applyEffect(navSession.previewStep(index));
+      driveNavigationSpeech();
     },
     cancelNav(): void {
       proposal = null;
