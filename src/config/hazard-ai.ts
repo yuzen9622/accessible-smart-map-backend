@@ -11,7 +11,9 @@ export const HAZARD_AI = {
   convergenceMs: 5_000,
   concurrency: 2,
   maxAttempts: 3,
-  attemptTimeoutMs: 40_000,
+  // Must fit photo read + Vision (providerTimeoutMs each) + modelTimeoutMs;
+  // 3 attempts plus backoff must fit deadlineMs, and leaseMs must exceed it.
+  attemptTimeoutMs: 60_000,
   leaseMs: 90_000,
   deadlineMs: 5 * 60_000,
   intakeDeadlineMs: 5 * 60_000,
@@ -21,6 +23,8 @@ export const HAZARD_AI = {
   maxJitterMs: 1_000,
   dbTimeoutMs: 5_000,
   providerTimeoutMs: 10_000,
+  // Gemini with thinking measured 8.5–11 s per hazard photo (2026-10-28).
+  modelTimeoutMs: 30_000,
   uploadMaxBytes: uploadMaxMb * 1024 * 1024,
   imageMaxBytes: 10 * 1024 * 1024,
   imageMaxPixels: 20_000_000,

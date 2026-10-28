@@ -60,12 +60,12 @@ export async function verifyImageWithGemini(
             systemInstruction: hazardVerifySystemInstruction,
             abortSignal: options.signal,
             httpOptions: {
-              timeout: HAZARD_AI.providerTimeoutMs,
+              timeout: HAZARD_AI.modelTimeoutMs,
               retryOptions: { attempts: 1 },
             },
           },
         }),
-      { signal: options.signal, timeoutMs: HAZARD_AI.providerTimeoutMs },
+      { signal: options.signal, timeoutMs: HAZARD_AI.modelTimeoutMs },
       () => new GeminiImageError("GEMINI_TIMEOUT", true),
     );
     const candidate = response.candidates?.[0];

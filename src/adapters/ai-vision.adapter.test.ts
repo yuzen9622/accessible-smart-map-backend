@@ -6,6 +6,7 @@ vi.mock("../config/ai", () => ({
 }));
 import { verifyImageWithGemini } from "./ai-vision.adapter";
 import { hazardObservationJsonSchema } from "../config/ai/hazard-observation";
+import { HAZARD_AI } from "../config/hazard-ai";
 const call = (signal?: AbortSignal) =>
   verifyImageWithGemini(
     Buffer.from("bytes"),
@@ -36,7 +37,7 @@ describe("bounded observation-only Gemini adapter", () => {
       hazardObservationJsonSchema,
     );
     expect(request.config.httpOptions).toEqual({
-      timeout: 10000,
+      timeout: HAZARD_AI.modelTimeoutMs,
       retryOptions: { attempts: 1 },
     });
     expect(request.config.abortSignal).toBe(signal);
@@ -106,7 +107,7 @@ describe("bounded observation-only Gemini adapter", () => {
       code: "GEMINI_TIMEOUT",
       retryable: true,
     });
-    await vi.advanceTimersByTimeAsync(10000);
+    await vi.advanceTimersByTimeAsync(HAZARD_AI.modelTimeoutMs);
     await assertion;
     expect(mock.generate).toHaveBeenCalledTimes(1);
   });
