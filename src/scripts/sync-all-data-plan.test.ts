@@ -107,7 +107,7 @@ describe("SYNC_STEPS registry", () => {
   });
 
   it("keeps every collection-wiping step out of the default group", () => {
-    for (const id of ["a11y-metro", "bathrooms", "campus-a11y", "welfare"]) {
+    for (const id of ["a11y-metro", "bathrooms", "welfare"]) {
       expect(SYNC_STEPS.find((s) => s.id === id)?.group).not.toBe("base");
     }
   });

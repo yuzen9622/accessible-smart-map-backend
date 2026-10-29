@@ -8,13 +8,15 @@
  * ASP.NET anti-forgery token + cookie pair captured from the index page; no
  * login is needed.
  *
- * Run: npm run import:campus-a11y                (full crawl, wipes collection)
- *      npm run import:campus-a11y -- --limit 5   (first N schools, upsert only)
+ * Run: pnpm import:campus-a11y                (full crawl, upsert complete campuses)
+ *      pnpm import:campus-a11y --limit 5      (first N schools)
+ * Existing details are retained by facility UID; failed/unvisited campuses remain intact.
  */
 
 import "dotenv/config";
 import mongoose from "mongoose";
-import CampusA11yModel from "../model/campus-a11y.model";
+import { fetchCampusMapLocations } from "../adapters/campus-map.adapter";
+import { syncCampusDocuments } from "./campus-a11y-sync";
 import { ICampusA11y } from "../types";
 import { parseFacilityResultHtml } from "./campus-a11y-parse";
 import {
@@ -101,8 +103,8 @@ async function main() {
   const limitFlag = process.argv.indexOf("--limit");
   const limit =
     limitFlag >= 0 ? parseInt(process.argv[limitFlag + 1], 10) : Infinity;
-  if (limitFlag >= 0 && !Number.isInteger(limit)) {
-    throw new Error("--limit requires an integer value");
+  if (limitFlag >= 0 && (!Number.isInteger(limit) || limit < 1)) {
+    throw new Error("--limit requires a positive integer value");
   }
 
   let session = await createSession();
@@ -166,6 +168,9 @@ async function main() {
           emptyCampuses++;
           continue;
         }
+        if (!parsed.complete)
+          throw new Error(`Incomplete facility list for campus ${branch.ID}`);
+        const locations = await fetchCampusMapLocations(branch.ID);
         docs.push({
           schoolId: inst.ID,
           schoolName: inst.NAME,
@@ -185,6 +190,7 @@ async function main() {
             buildingUid: f.buildingUid ?? undefined,
             floors: f.floors,
             floorIds: f.floorIds,
+            location: locations.get(f.facUid),
           })),
           location: parsed.campusGeo
             ? {
@@ -216,35 +222,25 @@ async function main() {
       `${failedSchools} schools failed, ${totalFacilities} facilities`,
   );
 
+  if (docs.length === 0) throw new Error("No complete campus data to write");
   await mongoose.connect(dbUrl);
-  console.log("Connected to MongoDB");
-
-  if (!Number.isFinite(limit)) {
-    const del = await CampusA11yModel.deleteMany({});
-    console.log(`Cleared ${del.deletedCount} existing campuses`);
-  }
-  if (docs.length > 0) {
-    const res = await CampusA11yModel.bulkWrite(
-      docs.map((d) => ({
-        replaceOne: {
-          filter: { branchId: d.branchId },
-          replacement: d,
-          upsert: true,
-        },
-      })),
-      { ordered: false },
-    );
+  try {
+    const res = await syncCampusDocuments(docs);
     console.log(
       `✓ Wrote ${docs.length} campuses (${res.upsertedCount} inserted, ${res.modifiedCount} updated)`,
     );
-  } else {
-    console.log("No campus data to write");
+  } finally {
+    await mongoose.disconnect();
   }
-
-  await mongoose.disconnect();
+  if (failedSchools > 0)
+    throw new Error(
+      `${failedSchools} schools failed; their stored data was retained`,
+    );
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
+  });
+}

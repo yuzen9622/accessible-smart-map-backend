@@ -1,0 +1,67 @@
+{
+  "_source": "https://cam.moe.gov.tw/api/Map/MapInfo?INSTITUTION_BRANCH_ID=-2147483619",
+  "_capturedOn": "2026-10-29",
+  "_note": "Selected original MAP_FACINFO rows; derived verification-only wgs84 field omitted. Full response had 153 facilities.",
+  "MAP_FACINFO": [
+    {
+      "UID": "e391e1ad-ca08-4bd8-aa81-009160aece24",
+      "FACILITY_ID": -2146237124,
+      "INSTITUTION_BRANCH_ID": -2147483619,
+      "INSTITUTION_BRANCH_NAME": "三民校區",
+      "GEO": "POINT (13434385.08 2771769.053)",
+      "X": 13434385.08,
+      "Y": 2771769.053,
+      "NAME": "無障礙電梯",
+      "FAC_TYPE_ID": 8,
+      "FAC_TYPE_NAME": "無障礙電梯",
+      "BUILDING_ID": -2147483056,
+      "BUILDING_NAME": "昌明樓",
+      "FLOOR": "B1, 1F, 2F, 3F, 4F, 5F"
+    },
+    {
+      "UID": "6bb048b6-807a-498a-abbf-334d37d5808b",
+      "FACILITY_ID": -2147463411,
+      "INSTITUTION_BRANCH_ID": -2147483619,
+      "INSTITUTION_BRANCH_NAME": "三民校區",
+      "GEO": "POINT (13434363.301111 2771749.390919)",
+      "X": 13434363.301111,
+      "Y": 2771749.390919,
+      "NAME": "坡道及扶手",
+      "FAC_TYPE_ID": 2,
+      "FAC_TYPE_NAME": "無障礙坡道",
+      "BUILDING_ID": -2147483056,
+      "BUILDING_NAME": "昌明樓",
+      "FLOOR": "1F"
+    },
+    {
+      "UID": "b9f278c7-682d-4819-aebe-355b1263aa21",
+      "FACILITY_ID": -2146237117,
+      "INSTITUTION_BRANCH_ID": -2147483619,
+      "INSTITUTION_BRANCH_NAME": "三民校區",
+      "GEO": "POINT (13434366.87 2771706.361)",
+      "X": 13434366.87,
+      "Y": 2771706.361,
+      "NAME": "無障礙廁所",
+      "FAC_TYPE_ID": 6,
+      "FAC_TYPE_NAME": "無障礙廁所",
+      "BUILDING_ID": -2147483056,
+      "BUILDING_NAME": "昌明樓",
+      "FLOOR": "1F"
+    },
+    {
+      "UID": "dc8f050e-fce0-4a86-ad3c-1b35036ac4bf",
+      "FACILITY_ID": -2146862795,
+      "INSTITUTION_BRANCH_ID": -2147483619,
+      "INSTITUTION_BRANCH_NAME": "三民校區",
+      "GEO": "POINT (13434367.369638 2771684.638291)",
+      "X": 13434367.369638,
+      "Y": 2771684.638291,
+      "NAME": "室內出入口",
+      "FAC_TYPE_ID": 4,
+      "FAC_TYPE_NAME": "室內外出入口",
+      "BUILDING_ID": -2147464830,
+      "BUILDING_NAME": "3101資源教室",
+      "FLOOR": "1F"
+    }
+  ]
+}

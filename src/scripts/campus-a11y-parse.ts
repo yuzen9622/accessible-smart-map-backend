@@ -7,6 +7,9 @@
  * importer needs. Kept I/O-free so they can be unit-tested.
  */
 
+import { parseGeoPoint } from "../utils/campus-geo";
+export { mercatorToWgs84, parseGeoPoint } from "../utils/campus-geo";
+
 const NAMED_ENTITIES: Record<string, string> = {
   amp: "&",
   lt: "<",
@@ -32,34 +35,6 @@ export function decodeHtmlEntities(s: string): string {
   );
 }
 
-/**
- * Converts Web Mercator (EPSG:3857) meters to WGS84 lat/lng.
- * @param x easting in meters
- * @param y northing in meters
- * @returns latitude / longitude rounded to 7 decimals
- */
-export function mercatorToWgs84(
-  x: number,
-  y: number,
-): { lat: number; lng: number } {
-  const lng = (x / 20037508.34) * 180;
-  const lat =
-    (Math.atan(Math.exp((y / 20037508.34) * Math.PI)) * 2 - Math.PI / 2) *
-    (180 / Math.PI);
-  return { lat: +lat.toFixed(7), lng: +lng.toFixed(7) };
-}
-
-/**
- * Parses a `POINT (x y)` WKT string (EPSG:3857) into WGS84 coordinates.
- * @param s WKT point string, e.g. "POINT (13529069.669 2877830.512)"
- * @returns lat/lng or null when the string is not a WKT point
- */
-export function parseGeoPoint(s: string): { lat: number; lng: number } | null {
-  const m = /POINT \(([-\d.]+) ([-\d.]+)\)/.exec(s);
-  if (!m) return null;
-  return mercatorToWgs84(parseFloat(m[1]), parseFloat(m[2]));
-}
-
 export interface ParsedCampusFacility {
   facUid: string;
   facTypeId: number | null;
@@ -72,6 +47,7 @@ export interface ParsedCampusFacility {
 }
 
 export interface ParsedCampusResult {
+  complete: boolean;
   noResult: boolean;
   campusGeo: { lat: number; lng: number } | null;
   address: string | null;
@@ -99,6 +75,7 @@ export function parseFacilityResultHtml(rawHtml: string): ParsedCampusResult {
   const raw = rawHtml.replace(/data:image\/[a-z]+;base64,[A-Za-z0-9+/=]+/g, "");
 
   const result: ParsedCampusResult = {
+    complete: false,
     noResult: raw.includes('id="noResult"'),
     campusGeo: null,
     address: null,
@@ -188,6 +165,11 @@ export function parseFacilityResultHtml(rawHtml: string): ParsedCampusResult {
     }
   }
   result.facilities = [...byUid.values()];
+  result.complete =
+    Boolean(countMatch) &&
+    articles.length > 0 &&
+    result.facilityCount > 0 &&
+    result.facilityCount === result.facilities.length;
   return result;
 }
 

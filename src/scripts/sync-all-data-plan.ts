@@ -298,7 +298,7 @@ export const SYNC_STEPS: readonly SyncStep[] = [
     backends: ["mongo"],
     requiredEnv: [...MONGO_ENV],
     partialFailureNote:
-      "schools that fail to crawl are skipped, then the collection is still wiped and rewritten",
+      "complete campuses are upserted with existing facility details retained; failed or unvisited campuses remain unchanged",
   },
   {
     id: "campus-facility-detail",

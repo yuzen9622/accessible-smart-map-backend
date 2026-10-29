@@ -1,23 +1,16 @@
 /**
- * Stage-2 enrichment: fetch each campus facility's own coordinate + accessibility
- * specs from MOE `POST /Facility/FacilityResult` and store them on the facility
- * subdocument. The main import (`import:campus-a11y`) only captures campus-level
- * geo + building/floor; this backfills per-facility `location` / `specs`.
+ * Backfill each facility's own coordinates from MOE MapInfo (one request per campus).
+ * Only facilities with valid coordinates are skipped. FacilityResult HTML is used
+ * when a point is absent from MapInfo; it can also supply accessibility specs.
+ * Existing details and valid locations are retained when a source has no point.
  *
- * Resumable & idempotent: by default skips facilities that already have
- * `location`. One request per deduplicated facility (~2 MB each, base64 photos
- * stripped by the parser), throttled by REQUEST_DELAY_MS.
- *
- * Run: npm run import:campus-facility-detail                 (all campuses)
- *      npm run import:campus-facility-detail -- --limit 1    (first N campuses)
- *      npm run import:campus-facility-detail -- --force      (re-fetch all)
+ * Run: pnpm import:campus-facility-detail [--limit 1] [--force]
  */
 
 import "dotenv/config";
 import mongoose from "mongoose";
-import CampusA11yModel from "../model/campus-a11y.model";
-import { ICampusA11y } from "../types";
-import { parseFacilityDetailHtml } from "./campus-a11y-parse";
+import { fetchCampusMapLocations } from "../adapters/campus-map.adapter";
+import { enrichCampusFacilities } from "./campus-a11y-sync";
 
 const BASE_URL = "https://cam.moe.gov.tw";
 const USER_AGENT =
@@ -80,92 +73,44 @@ async function main() {
   const limitFlag = process.argv.indexOf("--limit");
   const limit =
     limitFlag >= 0 ? parseInt(process.argv[limitFlag + 1], 10) : Infinity;
-  if (limitFlag >= 0 && !Number.isInteger(limit)) {
-    throw new Error("--limit requires an integer value");
+  if (limitFlag >= 0 && (!Number.isInteger(limit) || limit < 1)) {
+    throw new Error("--limit requires a positive integer value");
   }
 
   await mongoose.connect(dbUrl);
-  console.log("Connected to MongoDB");
-
-  let session = await createSession();
-
-  const campuses = (await CampusA11yModel.find({}).lean()) as ICampusA11y[];
-  const targets = Number.isFinite(limit) ? campuses.slice(0, limit) : campuses;
-  console.log(
-    `Campuses: ${campuses.length}` +
-      (Number.isFinite(limit) ? ` (limited to first ${targets.length})` : ""),
-  );
-
-  let enriched = 0;
-  let skipped = 0;
-  let failed = 0;
-
-  for (let i = 0; i < targets.length; i++) {
-    const campus = targets[i];
-    let changed = 0;
-    for (const fac of campus.facilities ?? []) {
-      if (fac.location && !force) {
-        skipped++;
-        continue;
-      }
-      const floorId = fac.floorIds?.[0];
-      if (!fac.buildingUid || !floorId) {
-        skipped++;
-        continue;
-      }
-      const payload = {
-        INSTITUTION_ID: String(campus.schoolId),
-        INSTITUTION_BRANCH_ID: String(campus.branchId),
-        BUILDING_UID: fac.buildingUid,
-        FACILITY_UID: fac.facUid,
-        FLOOR_ID: floorId,
-      };
-      try {
-        let html: string;
+  try {
+    let session: Session | undefined;
+    const stats = await enrichCampusFacilities({
+      force,
+      limit,
+      loadMap: async (branchId) => {
+        await sleep(REQUEST_DELAY_MS);
+        return fetchCampusMapLocations(branchId);
+      },
+      loadDetail: async (payload) => {
+        session ??= await createSession();
         try {
-          html = await postFacilityResult(session, payload);
+          return await postFacilityResult(session, payload);
         } catch {
           session = await createSession();
-          html = await postFacilityResult(session, payload);
+          return postFacilityResult(session, payload);
         }
-        const parsed = parseFacilityDetailHtml(html);
-        if (parsed.geo) {
-          fac.location = {
-            type: "Point",
-            coordinates: [parsed.geo.lng, parsed.geo.lat],
-          };
-        }
-        fac.specs = parsed.specs;
-        fac.detailFetchedAt = new Date();
-        enriched++;
-        changed++;
-      } catch (err) {
-        failed++;
-        console.error(
-          `  ${campus.schoolName} ${campus.branchName} / ${fac.facUid}:`,
-          err instanceof Error ? err.message : err,
-        );
-      }
-    }
-
-    if (changed > 0) {
-      await CampusA11yModel.updateOne(
-        { _id: campus._id },
-        { $set: { facilities: campus.facilities } },
-      );
-    }
+      },
+    });
     console.log(
-      `[${i + 1}/${targets.length}] ${campus.schoolName} ${campus.branchName}: ${changed} enriched`,
+      `Done — ${stats.located} facilities located, ${stats.skipped} already located, ` +
+        `${stats.missingCoordinates} without source coordinates, ${stats.failed} failed requests`,
     );
+    if (stats.failed > 0)
+      throw new Error("Campus coordinate enrichment had failed requests");
+  } finally {
+    await mongoose.disconnect();
   }
-
-  console.log(
-    `Done — ${enriched} facilities enriched, ${skipped} skipped, ${failed} failed`,
-  );
-  await mongoose.disconnect();
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
+  });
+}
