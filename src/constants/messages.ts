@@ -232,7 +232,8 @@ export const VENUE_INSPECT_MSG = {
       "場域名稱沒有精確對上：若使用者問的就是 candidates 裡的場域，改用它的 id 重查；candidates 都不是才代表該校區沒有室內圖資",
     BUILDING_NOT_FOUND: "找不到唯一符合的建築，請從 candidates 選擇",
     LEVEL_NOT_FOUND: "這棟沒有這個樓層，可用樓層見 candidates",
-    PLACE_NOT_FOUND: "查無此起點地點，請先用 inspectVenue 取得 placeId",
+    PLACE_NOT_FOUND:
+      "查無此地點 placeId，請先用 inspectVenue 取得正確的 placeId",
     INVALID_ARGUMENTS: "查詢參數格式錯誤",
     FAILED: "室內圖資查詢失敗",
   },
@@ -242,7 +243,7 @@ export const VENUE_INSPECT_MSG = {
     BUILDING_NOT_FOUND: "No single matching building; pick one from candidates",
     LEVEL_NOT_FOUND: "That floor does not exist here; see candidates",
     PLACE_NOT_FOUND:
-      "Unknown origin place; get a placeId from inspectVenue first",
+      "Unknown placeId; get the exact placeId from inspectVenue first",
     INVALID_ARGUMENTS: "Invalid query arguments",
     FAILED: "Indoor map lookup failed",
   },

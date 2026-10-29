@@ -128,6 +128,7 @@ it("never offers the indoor venue lookup on LINE, typed or spoken", async () => 
   }
   for (const call of runToolLoop.mock.calls) {
     expect(call[11].toolAllowList).not.toContain("inspectVenue");
+    expect(call[11].toolAllowList).not.toContain("planIndoorRoute");
     expect(call[11].toolAllowList).toContain("findCampusAccessibility");
   }
 });

@@ -18,7 +18,7 @@ import {
 } from "./line-memory";
 
 /** Shared-catalogue tools LINE does not offer; indoor venue lookups stay app-only. */
-export const LINE_EXCLUDED_TOOLS = new Set(["inspectVenue"]);
+export const LINE_EXCLUDED_TOOLS = new Set(["inspectVenue", "planIndoorRoute"]);
 
 /**
  * Tool names a family LINE user may execute: the general read-only query tools

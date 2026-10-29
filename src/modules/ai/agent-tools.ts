@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { AgentLanguage } from "../../types/agent";
 import { apiErrorMessage } from "../../constants/api-errors";
 import {
@@ -35,7 +36,12 @@ import {
   bindLineAccountCode as bindAccountCode,
   getConfig,
 } from "../user/user.service";
-import { inspectVenueByQuery } from "../venue/venue.service";
+import {
+  inspectVenueByQuery,
+  planVenueRoute,
+  resolveVenueQuery,
+} from "../venue/venue.service";
+import type { VenueRoute } from "../accessible-route/venue-leg.types";
 import { InspectVenueArgsSchema } from "../venue/venue.inspect";
 import { planAccessibleRouteFromRequest } from "../accessible-route/accessible-route.service";
 import { generateNavInstructionsFromInput } from "../nav-instructions/nav-instructions.service";
@@ -458,6 +464,88 @@ export async function inspectVenue(args: {
     );
   } catch (error) {
     console.error("[agent-tool:inspectVenue]", error);
+    return JSON.stringify({ ok: false, error: messages.FAILED });
+  }
+}
+
+const PlanIndoorRouteArgsSchema = z.object({
+  venue: z.string().trim().min(1).max(100).optional(),
+  fromPlaceId: z.string().trim().min(1).max(200),
+  toPlaceId: z.string().trim().min(1).max(200),
+  mode: z
+    .enum(["wheelchair", "elderly", "visual_impaired", "normal"])
+    .optional(),
+});
+
+/** What the model needs to speak an indoor route: steps, never geometry. */
+function indoorRouteForModel(route: VenueRoute) {
+  return {
+    venueId: route.venueId,
+    fromPlaceId: route.fromPlaceId,
+    toPlaceId: route.toPlaceId,
+    mode: route.mode,
+    distanceM: Math.round(route.distanceM),
+    minutes: Math.max(1, Math.round(route.durationS / 60)),
+    elevatorRides: route.elevatorRides,
+    stairFlights: route.stairFlights,
+    steps: route.steps.map((step) => ({
+      type: step.type,
+      instruction: step.instruction,
+      ...(step.fromLevelRef && step.toLevelRef
+        ? { floors: `${step.fromLevelRef}→${step.toLevelRef}` }
+        : step.levelRef
+          ? { floor: step.levelRef }
+          : {}),
+      ...(step.heightPending ? { heightPending: true } : {}),
+    })),
+  };
+}
+
+/**
+ * Plans a route between two places of one indoor venue with the venue
+ * planner, so the assistant never has to describe indoor directions itself.
+ */
+export async function planIndoorRoute(args: {
+  raw: Record<string, unknown>;
+  language?: AgentLanguage;
+  userId?: string;
+}): Promise<string> {
+  const messages = VENUE_INSPECT_MSG[args.language === "en" ? "en" : "zh-TW"];
+  const parsed = PlanIndoorRouteArgsSchema.safeParse(args.raw);
+  if (!parsed.success)
+    return JSON.stringify({
+      ok: false,
+      reason: "INVALID_ARGUMENTS",
+      error: messages.INVALID_ARGUMENTS,
+    });
+  try {
+    const venue = await resolveVenueQuery(parsed.data.venue);
+    if (!venue.ok)
+      return JSON.stringify({ ...venue, error: messages.VENUE_NOT_FOUND });
+    const mode = await inspectVenueMode(parsed.data.mode, args.userId);
+    const result = await planVenueRoute({
+      venueId: venue.venueId,
+      fromPlaceId: parsed.data.fromPlaceId,
+      toPlaceId: parsed.data.toPlaceId,
+      mode,
+      lang: args.language === "en" ? "en" : "zh-TW",
+    });
+    if (result.ok)
+      return JSON.stringify({ ok: true, ...indoorRouteForModel(result.route) });
+    if (!("data" in result))
+      return JSON.stringify({
+        ok: false,
+        reason: "PLACE_NOT_FOUND",
+        error: messages.PLACE_NOT_FOUND,
+      });
+    return JSON.stringify({
+      ok: false,
+      mode,
+      error: result.error,
+      ...result.data,
+    });
+  } catch (error) {
+    console.error("[agent-tool:planIndoorRoute]", error);
     return JSON.stringify({ ok: false, error: messages.FAILED });
   }
 }
@@ -2205,6 +2293,13 @@ export async function executeLocalTool(
 
     case "inspectVenue":
       return inspectVenue({
+        raw: args,
+        language: options.language,
+        userId,
+      });
+
+    case "planIndoorRoute":
+      return planIndoorRoute({
         raw: args,
         language: options.language,
         userId,

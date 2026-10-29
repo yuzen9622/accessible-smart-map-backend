@@ -188,6 +188,38 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "planIndoorRoute",
+      description:
+        "規劃同一個室內圖資場域（目前台中科大三民校區）內兩個地點之間的室內路線，回傳逐步指引（搭哪一部電梯、從幾樓到幾樓、走哪個坡道或出入口）、距離、時間、電梯次數與樓梯段數。起訖 placeId 都必須取自 inspectVenue 結果（例如先用 room 查到教室）。使用者要在校內／館內從某間教室到另一間時用它；沒有呼叫它就不可以自己描述室內怎麼走。不可達時回 ok:false 與 reason（NO_ACCESSIBLE_ROUTE 表示所選通行模式到不了）。",
+      parameters: {
+        type: "object",
+        properties: {
+          venue: {
+            type: "string",
+            description: "場域 id；目前只有 nutc-sanmin，可省略",
+          },
+          fromPlaceId: {
+            type: "string",
+            description: "起點 placeId，取自 inspectVenue 結果",
+          },
+          toPlaceId: {
+            type: "string",
+            description: "終點 placeId，取自 inspectVenue 結果",
+          },
+          mode: {
+            type: "string",
+            enum: ["wheelchair", "elderly", "visual_impaired", "normal"],
+            description:
+              "通行模式；使用者明示（例如坐輪椅）時才傳，省略沿用個人設定，再省略為 normal",
+          },
+        },
+        required: ["fromPlaceId", "toPlaceId"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "planAccessibleRoute",
       description:
         "規劃無障礙混合式交通路線（公車/捷運/步行/高鐵/台鐵），回傳路線**摘要**：候選路線、包含哪些公車/捷運班次、轉乘次數、預估時間、無障礙評分。用於「怎麼去/有哪些走法」的整段路線建議；也可作為「兩地間有哪些公車」的候選路線來源（之後再用公車工具查各線到站時間）。要逐步指引（每一步怎麼走）用 getNavInstructions。",
