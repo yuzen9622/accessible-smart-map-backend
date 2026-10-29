@@ -29,6 +29,21 @@ export type VenueArrivalResult =
   | { ok: false; status: ResponseCode.NOT_FOUND; error: string }
   | RouteFailureResult;
 
+export interface ResolveVenueDepartureInput {
+  venueId: string;
+  placeId: string;
+  /** Trip destination, for the straight-line part of the gate choice. */
+  destination: { lat: number; lng: number };
+  mode: AccessibilityMode;
+  lang: SupportedLang;
+}
+
+/** The gate a trip leaves the venue by and the indoor leg place → gate. */
+export type VenueDepartureResult =
+  | { ok: true; venueDeparture: VenueArrival; venueDepartureLeg: VenueRoute }
+  | { ok: false; status: ResponseCode.NOT_FOUND; error: string }
+  | RouteFailureResult;
+
 export type ReplanVenueLegResult =
   | { ok: true; venueArrival: VenueArrival; venueLeg: VenueRoute }
   | { ok: false; stale: true }
@@ -39,6 +54,10 @@ export interface VenueArrivalPlanner {
   resolveVenueArrival(
     input: ResolveVenueArrivalInput,
   ): Promise<VenueArrivalResult>;
+  /** Chooses the gate a trip leaves by and plans the indoor leg to it; fail-closed. */
+  resolveVenueDeparture(
+    input: ResolveVenueDepartureInput,
+  ): Promise<VenueDepartureResult>;
   /** Rebuilds the indoor leg from the stored gate on the current venue. */
   replanVenueLeg(
     arrival: VenueArrival,

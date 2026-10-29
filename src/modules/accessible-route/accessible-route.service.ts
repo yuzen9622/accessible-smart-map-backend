@@ -2127,6 +2127,57 @@ export async function planAccessibleRouteFromRequest(
     venueLeg = replanned.venueLeg;
   }
 
+  // A trip leaving a venue starts outdoors at one chosen gate; the indoor
+  // leg from the place to that gate travels alongside the routes.
+  let venueDeparture: VenueArrival | undefined;
+  let venueDepartureLeg: VenueRoute | undefined;
+  if (body.originVenuePlace && destination) {
+    const destinationPoint =
+      typeof destination === "string"
+        ? await getCoordinates(destination)
+        : (destination as { latitude: number; longitude: number });
+    if (!destinationPoint) {
+      return {
+        ok: false,
+        status: ResponseCode.INVALID_INPUT,
+        error:
+          localizeRouteReason("COORDINATE_LOOKUP_FAILED", body.language) ??
+          "無法解析出發地或目的地座標",
+        data: { reason: "COORDINATE_LOOKUP_FAILED" },
+      };
+    }
+    const resolved = await venueArrivalPlanner().resolveVenueDeparture({
+      venueId: body.originVenuePlace.venueId,
+      placeId: body.originVenuePlace.placeId,
+      destination: {
+        lat: destinationPoint.latitude,
+        lng: destinationPoint.longitude,
+      },
+      mode: venueModeFor(mode, avoidStairs),
+      lang: venueLang,
+    });
+    if (!resolved.ok) {
+      if (resolved.status === ResponseCode.NOT_FOUND) {
+        return {
+          ok: false,
+          status: ResponseCode.INVALID_INPUT,
+          error:
+            localizeRouteReason("VENUE_PLACE_NOT_FOUND", body.language) ??
+            resolved.error,
+          data: { reason: "VENUE_PLACE_NOT_FOUND" },
+        };
+      }
+      return resolved;
+    }
+    venueDeparture = resolved.venueDeparture;
+    venueDepartureLeg = resolved.venueDepartureLeg;
+    origin = {
+      latitude: venueDeparture.gateLocation.lat,
+      longitude: venueDeparture.gateLocation.lng,
+    };
+    destination = destinationPoint;
+  }
+
   if (!origin || !destination) {
     return {
       ok: false,
@@ -2587,6 +2638,7 @@ export async function planAccessibleRouteFromRequest(
     ...(waypoints.length ? { waypoints } : {}),
     ...(arrivalEntrance ? { arrivalEntrance } : {}),
     ...(venueArrival ? { venueArrival, venueLeg } : {}),
+    ...(venueDeparture ? { venueDeparture, venueDepartureLeg } : {}),
     routes: normalizedRoutes,
     ...(intent ? { intent } : {}),
     ...(slopeConstraint ? { slopeConstraint } : {}),

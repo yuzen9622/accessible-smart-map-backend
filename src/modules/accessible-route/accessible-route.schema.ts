@@ -160,19 +160,36 @@ export const AccessibleRouteBodySchema = z
           "目的地為室內場域（校園）中的地點，取自 GET /a11y/venues/{venueId} 的 places。需搭配 origin，不可同時提供 destination 或 query。系統挑選一個校門：戶外路線終點為該校門（destination），data.venueLeg 為校門到地點的校內路線；校內不可達時整個請求回 422，不會只導到校門。",
         example: { venueId: "nutc-sanmin", placeId: "zk@3F" },
       }),
+    originVenuePlace: z
+      .object({
+        venueId: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/),
+        placeId: z.string().min(1).max(200),
+      })
+      .strict()
+      .optional()
+      .openapi({
+        description:
+          "出發地為室內場域（校園）中的地點，取自 GET /a11y/venues/{venueId} 的 places。需搭配 destination，不可同時提供 origin、destinationVenuePlace 或 query（同場域兩地點請用 POST /a11y/venues/{venueId}/route）。系統挑選一個校門：data.venueDepartureLeg 為地點到校門的校內路線，戶外路線起點為該校門（origin）；校內不可達時整個請求回 422。",
+        example: { venueId: "nutc-sanmin", placeId: "info@4F" },
+      }),
   })
   .strict()
   .refine(
     (b) =>
-      b.destinationVenuePlace
-        ? // presence, not truthiness: an empty destination is still a destination
-          Boolean(b.origin) &&
-          b.destination === undefined &&
+      // presence, not truthiness: an empty origin/destination still counts
+      b.originVenuePlace
+        ? Boolean(b.destination) &&
+          b.origin === undefined &&
+          b.destinationVenuePlace === undefined &&
           b.query === undefined
-        : Boolean((b.origin && b.destination) || b.query),
+        : b.destinationVenuePlace
+          ? Boolean(b.origin) &&
+            b.destination === undefined &&
+            b.query === undefined
+          : Boolean((b.origin && b.destination) || b.query),
     {
       message:
-        "請提供 origin+destination、origin+destinationVenuePlace，或自然語言 query",
+        "請提供 origin+destination、origin+destinationVenuePlace、originVenuePlace+destination，或自然語言 query",
     },
   );
 
@@ -1395,6 +1412,14 @@ export const AccessibleRouteDataSchema = z
     venueLeg: VenueRouteSchema.optional().openapi({
       description:
         "僅 destinationVenuePlace 請求出現：校門到目的地的校內路線（含跨樓層步驟）。語音／nav-instructions 只涵蓋戶外段。",
+    }),
+    venueDeparture: VenueArrivalSchema.optional().openapi({
+      description:
+        "僅 originVenuePlace 請求出現：所有 routes 的起點校門（origin 即此校門）。",
+    }),
+    venueDepartureLeg: VenueRouteSchema.optional().openapi({
+      description:
+        "僅 originVenuePlace 請求出現：出發地點到校門的校內路線（含跨樓層步驟）。",
     }),
     routes: z.array(AccessibleRouteSchema),
     intent: RouteIntentSchema.optional().openapi({

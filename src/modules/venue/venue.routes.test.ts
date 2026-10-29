@@ -15,6 +15,7 @@ vi.mock("./venue.service", () => ({
   planVenueRoute: vi.fn(),
   // registered into accessible-route by the app; unused by these routes
   resolveVenueArrival: vi.fn(),
+  resolveVenueDeparture: vi.fn(),
   replanVenueLeg: vi.fn(),
   isVenueArrivalCurrent: vi.fn(),
 }));
@@ -47,6 +48,7 @@ describe("composition root", () => {
   it("plugs the venue planner into accessible-route when the app starts", () => {
     const planner = venueArrivalPlanner();
     expect(planner.resolveVenueArrival).toBe(service.resolveVenueArrival);
+    expect(planner.resolveVenueDeparture).toBe(service.resolveVenueDeparture);
     expect(planner.replanVenueLeg).toBe(service.replanVenueLeg);
     expect(planner.isVenueArrivalCurrent).toBe(service.isVenueArrivalCurrent);
   });

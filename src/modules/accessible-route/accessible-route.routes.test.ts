@@ -501,6 +501,44 @@ describe("POST /api/v1/a11y/accessible-route travel modes + waypoints", () => {
     expect(mockPlan).not.toHaveBeenCalled();
   });
 
+  it("accepts originVenuePlace + destination and passes it to the service", async () => {
+    mockPlan.mockResolvedValue({
+      ok: false,
+      status: ResponseCode.INVALID_INPUT,
+      error: "查無此場域或場域地點",
+      data: { reason: "VENUE_PLACE_NOT_FOUND" },
+    });
+    const venuePlace = { venueId: "nutc-sanmin", placeId: "info@4F" };
+    const res = await request(app)
+      .post(URL)
+      .send({ originVenuePlace: venuePlace, destination: "臺中車站" });
+    expect(res.status).toBe(400);
+    expect(mockPlan.mock.calls[0][0].originVenuePlace).toEqual(venuePlace);
+  });
+
+  it.each([
+    [
+      "with origin",
+      { origin: { latitude: 24.1, longitude: 120.6 }, destination: "臺中車站" },
+    ],
+    ["with query", { destination: "臺中車站", query: "從資訊館到車站" }],
+    [
+      "with destinationVenuePlace",
+      { destinationVenuePlace: { venueId: "nutc-sanmin", placeId: "zk@3F" } },
+    ],
+    ["without destination", {}],
+    ["with an empty destination", { destination: "" }],
+  ])("rejects originVenuePlace %s with 400", async (_label, extra) => {
+    const res = await request(app)
+      .post(URL)
+      .send({
+        ...extra,
+        originVenuePlace: { venueId: "nutc-sanmin", placeId: "info@4F" },
+      });
+    expect(res.status).toBe(400);
+    expect(mockPlan).not.toHaveBeenCalled();
+  });
+
   it("never accepts a client-supplied venueArrival", async () => {
     const res = await request(app)
       .post(URL)

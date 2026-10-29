@@ -20,6 +20,7 @@ import {
   planVenueRoute,
   replanVenueLeg,
   resolveVenueArrival,
+  resolveVenueDeparture,
 } from "./venue.service";
 import type { VenueDocument } from "./venue.types";
 
@@ -327,6 +328,52 @@ describe("venue arrival for outdoor routes", () => {
       },
     });
     expect(r.ok && r.venueLeg.steps.map((s) => s.type)).toContain("elevator");
+  });
+
+  it("plans a departure from the place out to the chosen gate", async () => {
+    const r = await resolveVenueDeparture({
+      venueId: "mini",
+      placeId: "a-room06@2F",
+      destination: origin,
+      mode: "wheelchair",
+      lang: "zh-TW",
+    });
+    expect(r).toMatchObject({
+      ok: true,
+      venueDeparture: {
+        venueId: "mini",
+        placeId: "a-room06@2F",
+        gateId: "gate-main",
+        mode: "wheelchair",
+        venueVersion: 3,
+        gateLocation,
+      },
+    });
+    if (!r.ok) throw new Error("expected a departure");
+    expect(r.venueDepartureLeg.fromPlaceId).toBe("a-room06@2F");
+    expect(r.venueDepartureLeg.toPlaceId).toBe("gate-main");
+    expect(r.venueDepartureLeg.steps.map((s) => s.type)).toContain("elevator");
+  });
+
+  it("fails a departure closed like an arrival", async () => {
+    expect(
+      await resolveVenueDeparture({
+        venueId: "mini",
+        placeId: "nowhere",
+        destination: origin,
+        mode: "normal",
+        lang: "zh-TW",
+      }),
+    ).toMatchObject({ ok: false, status: 404 });
+    expect(
+      await resolveVenueDeparture({
+        venueId: "mini",
+        placeId: "b-lab",
+        destination: origin,
+        mode: "wheelchair",
+        lang: "zh-TW",
+      }),
+    ).toMatchObject({ ok: false, data: { reason: "NO_ACCESSIBLE_ROUTE" } });
   });
 
   it("fails closed: 404 for unknown ids, 422 when no gate reaches the place step-free", async () => {

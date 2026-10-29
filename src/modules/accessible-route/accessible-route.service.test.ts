@@ -132,6 +132,7 @@ vi.mock("./navigation-state.repository", async (importActual) => {
 
 vi.mock("../venue/venue.service", () => ({
   resolveVenueArrival: vi.fn(),
+  resolveVenueDeparture: vi.fn(),
   replanVenueLeg: vi.fn(),
   isVenueArrivalCurrent: vi.fn(),
 }));
@@ -140,11 +141,13 @@ import {
   isVenueArrivalCurrent,
   replanVenueLeg,
   resolveVenueArrival,
+  resolveVenueDeparture,
 } from "../venue/venue.service";
 import { registerVenueArrivalPlanner } from "./venue-arrival.port";
 
 registerVenueArrivalPlanner({
   resolveVenueArrival,
+  resolveVenueDeparture,
   replanVenueLeg,
   isVenueArrivalCurrent,
 });
@@ -4507,6 +4510,130 @@ describe("confirmed blocking hazard CSR alternatives", () => {
     expect(route.hazardAdvisory?.onRoute.map((h) => h.id)).toContain(hazard.id);
     expect(route.hazardAdvisory?.avoided ?? []).toEqual([]);
     expect(route.degraded).toBe(true);
+  });
+});
+
+describe("venue origins (originVenuePlace)", () => {
+  const destination = { latitude: 24.137, longitude: 120.686 };
+  const gate = { lat: 24.1498, lng: 120.684 };
+  const place = { venueId: "nutc-sanmin", placeId: "info@4F" };
+  const venueDeparture = {
+    ...place,
+    gateId: "gate-main",
+    gateLocation: gate,
+    mode: "wheelchair" as const,
+    venueVersion: 4,
+  };
+  const venueDepartureLeg: VenueRoute = {
+    venueId: "nutc-sanmin",
+    venueVersion: 4,
+    mode: "wheelchair",
+    fromPlaceId: "info@4F",
+    toPlaceId: "gate-main",
+    distanceM: 90,
+    durationS: 150,
+    elevatorRides: 1,
+    stairFlights: 0,
+    path: { coordinates: [], buildingIds: [], levelRefs: [] },
+    segments: [],
+    steps: [],
+  };
+
+  beforeEach(() => {
+    vi.mocked(planOtpRouteDetailed).mockImplementation(async () =>
+      otpTransitOk([
+        {
+          routeId: "from-gate",
+          routeName: "步行",
+          totalMinutes: 20,
+          transferCount: 0,
+          accessibilityHighlights: [],
+          legs: [
+            {
+              type: "WALK",
+              polyline: [
+                [gate.lng, gate.lat],
+                [destination.longitude, destination.latitude],
+              ],
+              distanceM: 1500,
+              durationMinutes: 20,
+              a11yFacilities: [],
+            },
+          ],
+        },
+      ]),
+    );
+  });
+
+  it("starts every outdoor route at the chosen gate and attaches the leg out of the venue", async () => {
+    vi.mocked(resolveVenueDeparture).mockResolvedValue({
+      ok: true,
+      venueDeparture,
+      venueDepartureLeg,
+    });
+    const res = await planAccessibleRouteFromRequest({
+      originVenuePlace: place,
+      destination,
+      mode: "wheelchair",
+    });
+    expect(res.ok).toBe(true);
+    const data = okData(res);
+    expect(data.origin).toEqual(gate);
+    expect(data.venueDeparture).toEqual(venueDeparture);
+    expect(data.venueDepartureLeg).toBe(venueDepartureLeg);
+    expect(resolveVenueDeparture).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ...place,
+        mode: "wheelchair",
+        destination: { lat: destination.latitude, lng: destination.longitude },
+      }),
+    );
+    expect(planOtpRouteDetailed).toHaveBeenCalled();
+    for (const call of vi.mocked(planOtpRouteDetailed).mock.calls)
+      expect(call[0]).toEqual(gate);
+    // a reroute replans from the current position, outdoors, so the
+    // canonical intent keeps only the gate as origin
+    expect(data._canonicalRequest).toMatchObject({
+      origin: { latitude: gate.lat, longitude: gate.lng },
+    });
+    expect(data._canonicalRequest).not.toHaveProperty("originVenuePlace");
+    expect(resolveVenueArrival).not.toHaveBeenCalled();
+  });
+
+  it("answers an unknown venue place with 400 and an unreachable one with the venue's 422", async () => {
+    vi.mocked(resolveVenueDeparture).mockResolvedValueOnce({
+      ok: false,
+      status: ResponseCode.NOT_FOUND,
+      error: "查無此場域地點",
+    });
+    expect(
+      await planAccessibleRouteFromRequest({
+        originVenuePlace: place,
+        destination,
+      }),
+    ).toMatchObject({
+      ok: false,
+      status: ResponseCode.INVALID_INPUT,
+      data: { reason: "VENUE_PLACE_NOT_FOUND" },
+    });
+    vi.mocked(resolveVenueDeparture).mockResolvedValueOnce({
+      ok: false,
+      status: ResponseCode.UNPROCESSABLE_ENTITY,
+      error: "找不到符合無障礙需求的路線",
+      data: { reason: "NO_ACCESSIBLE_ROUTE" },
+    } as never);
+    expect(
+      await planAccessibleRouteFromRequest({
+        originVenuePlace: place,
+        destination,
+        mode: "wheelchair",
+      }),
+    ).toMatchObject({
+      ok: false,
+      status: ResponseCode.UNPROCESSABLE_ENTITY,
+      data: { reason: "NO_ACCESSIBLE_ROUTE" },
+    });
+    expect(planOtpRouteDetailed).not.toHaveBeenCalled();
   });
 });
 

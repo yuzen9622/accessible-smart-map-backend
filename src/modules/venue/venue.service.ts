@@ -26,7 +26,9 @@ import { haversineM } from "./venue.compile";
 import type {
   ReplanVenueLegResult,
   ResolveVenueArrivalInput,
+  ResolveVenueDepartureInput,
   VenueArrivalResult,
+  VenueDepartureResult,
 } from "../accessible-route/venue-arrival.port";
 import type { VenueArrival, VenueDocument, VenuePlace } from "./venue.types";
 
@@ -276,20 +278,34 @@ function gateServes(gate: VenuePlace, mode: AccessibilityMode): boolean {
   return mode === "normal" || gate.wheelchair === "yes";
 }
 
+type GateHandover =
+  | { ok: true; handover: VenueArrival; leg: VenueRoute }
+  | { ok: false; status: ResponseCode.NOT_FOUND; error: string }
+  | RouteFailureResult;
+
 /**
- * Chooses the gate an outdoor route should lead to and plans the indoor leg
- * from it. Fail-closed: an unknown venue or place is 404; when no gate that
- * serves the mode reaches the place, the whole request fails (422) instead
- * of routing to a gate anyway.
+ * Chooses the venue gate an outdoor route meets and plans the indoor leg
+ * between that gate and the place: gate → place when arriving, place → gate
+ * when departing. Fail-closed: an unknown venue or place is 404; when no gate
+ * that serves the mode connects to the place, the whole request fails (422)
+ * instead of routing through a gate anyway.
  *
  * The choice is a heuristic, not the true outdoor optimum: the weighted
- * indoor cost from each gate (so a mode's stairs penalty counts) plus the
- * straight-line distance from the origin to that gate, both in metres. Only
+ * indoor cost (so a mode's stairs penalty counts) plus the straight-line
+ * distance between the gate and the far end of the trip, both in metres. Only
  * the chosen gate is then planned outdoors, once.
  */
-export async function resolveVenueArrival(
-  input: ResolveVenueArrivalInput,
-): Promise<VenueArrivalResult> {
+async function resolveGateHandover(
+  input: {
+    venueId: string;
+    placeId: string;
+    /** The outdoor end of the trip: its origin when arriving, destination when departing. */
+    farEnd: { lat: number; lng: number };
+    mode: AccessibilityMode;
+    lang: SupportedLang;
+  },
+  direction: "arrive" | "depart",
+): Promise<GateHandover> {
   const entry = await getCompiledVenue(input.venueId);
   if (!entry) {
     return {
@@ -307,47 +323,45 @@ export async function resolveVenueArrival(
     };
   }
   const config = getRoutingConfig().venue;
+  const plan = (gate: VenuePlace, mode: AccessibilityMode) =>
+    direction === "arrive"
+      ? planOnGraph(
+          entry.graph,
+          entry.venue,
+          gate,
+          target,
+          mode,
+          config,
+          input.lang,
+        )
+      : planOnGraph(
+          entry.graph,
+          entry.venue,
+          target,
+          gate,
+          mode,
+          config,
+          input.lang,
+        );
   const gates = entry.venue.places.filter((p) => p.kind === "gate");
   let best: { gate: VenuePlace; leg: VenueRoute; score: number } | null = null;
   let stairsOnly = false;
   for (const gate of gates.filter((g) => gateServes(g, input.mode))) {
-    const outcome = planOnGraph(
-      entry.graph,
-      entry.venue,
-      gate,
-      target,
-      input.mode,
-      config,
-      input.lang,
-    );
+    const outcome = plan(gate, input.mode);
     if (!outcome.ok) {
       stairsOnly ||= outcome.reason === "NO_ACCESSIBLE_ROUTE";
       continue;
     }
-    const approachM = haversineM(
-      [input.origin.lng, input.origin.lat],
-      gate.location,
-    );
-    const score = outcome.costM + approachM;
+    const score =
+      outcome.costM +
+      haversineM([input.farEnd.lng, input.farEnd.lat], gate.location);
     if (!best || score < best.score) best = { gate, leg: outcome.route, score };
   }
   // reachable only through a gate this mode may not use counts as no
   // accessible route, not as a disconnected place
   stairsOnly ||=
     !best &&
-    gates.some(
-      (g) =>
-        !gateServes(g, input.mode) &&
-        planOnGraph(
-          entry.graph,
-          entry.venue,
-          g,
-          target,
-          "normal",
-          config,
-          input.lang,
-        ).ok,
-    );
+    gates.some((g) => !gateServes(g, input.mode) && plan(g, "normal").ok);
   if (!best) {
     return stairsOnly
       ? routeFailure(
@@ -366,7 +380,7 @@ export async function resolveVenueArrival(
   }
   return {
     ok: true,
-    venueArrival: {
+    handover: {
       venueId: input.venueId,
       placeId: target.id,
       gateId: best.gate.id,
@@ -374,8 +388,38 @@ export async function resolveVenueArrival(
       mode: input.mode,
       venueVersion: entry.version,
     },
-    venueLeg: best.leg,
+    leg: best.leg,
   };
+}
+
+/** Chooses the gate an outdoor route leads to and plans gate → place. */
+export async function resolveVenueArrival(
+  input: ResolveVenueArrivalInput,
+): Promise<VenueArrivalResult> {
+  const resolved = await resolveGateHandover(
+    { ...input, farEnd: input.origin },
+    "arrive",
+  );
+  return resolved.ok
+    ? { ok: true, venueArrival: resolved.handover, venueLeg: resolved.leg }
+    : resolved;
+}
+
+/** Chooses the gate a trip leaves the venue by and plans place → gate. */
+export async function resolveVenueDeparture(
+  input: ResolveVenueDepartureInput,
+): Promise<VenueDepartureResult> {
+  const resolved = await resolveGateHandover(
+    { ...input, farEnd: input.destination },
+    "depart",
+  );
+  return resolved.ok
+    ? {
+        ok: true,
+        venueDeparture: resolved.handover,
+        venueDepartureLeg: resolved.leg,
+      }
+    : resolved;
 }
 
 /**

@@ -172,6 +172,13 @@ export interface PlanRouteRequest {
    */
   destinationVenuePlace?: { venueId: string; placeId: string };
   /**
+   * A place inside an indoor venue the trip starts from. Mutually exclusive
+   * with `origin`, `destinationVenuePlace` and `query`; requires
+   * `destination`. `venueDepartureLeg` leads from the place to the chosen
+   * gate, where the outdoor route starts.
+   */
+  originVenuePlace?: { venueId: string; placeId: string };
+  /**
    * Internal, never client-supplied: the venue hand-over stored on a route
    * token. A reroute plans outdoors to its fixed gate and rebuilds the leg.
    */
@@ -297,6 +304,10 @@ export type PlanRouteResult =
         venueArrival?: VenueArrival;
         /** Present only for `destinationVenuePlace`: the indoor route from the gate to the place. */
         venueLeg?: VenueRoute;
+        /** Present only for `originVenuePlace`: the venue gate every route starts at; `origin` is that gate. */
+        venueDeparture?: VenueArrival;
+        /** Present only for `originVenuePlace`: the indoor route from the place to the gate. */
+        venueDepartureLeg?: VenueRoute;
         routes: AccessibleRoute[];
         intent?: RouteIntent;
         /** Present only when the caller (or their profile) requested a maxSlopePercent; tells them whether it could actually be enforced. */
