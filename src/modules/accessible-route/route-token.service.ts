@@ -5,7 +5,6 @@ import { redisGet } from "../../config/redis";
 import type { AccessibleRoute } from "../../types/route";
 import type {
   CanonicalPlanRouteRequest,
-  NavigationRoute,
   NavigationRouteEnvelope,
   NavigationVenueLegs,
 } from "./accessible-route.types";
@@ -42,7 +41,8 @@ export async function attachRouteTokens(
       });
       const stored = await storeInitialNavigationEnvelope(routeToken, {
         schemaVersion: 1,
-        route: legs ? { ...navigationRoute, venueLegs: legs } : navigationRoute,
+        route: navigationRoute,
+        ...(legs ? { venueLegs: legs } : {}),
         navigationId,
         routeVersion,
         canonicalRequest,
@@ -60,7 +60,7 @@ export async function attachRouteTokens(
 /** Resolve a short-lived bearer capability to a server-produced route. */
 export async function getRouteByToken(
   routeToken: string,
-): Promise<NavigationRoute | null> {
+): Promise<AccessibleRoute | null> {
   const raw = await redisGet(navigationTokenKey(routeToken));
   if (!raw) return null;
   try {

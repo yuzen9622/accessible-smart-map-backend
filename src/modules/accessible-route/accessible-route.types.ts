@@ -208,24 +208,26 @@ export type RerouteReason =
   | "MANUAL";
 
 /**
- * Indoor venue legs a tokenized route carries for voice navigation. Stored
- * with the route token only, never sent in HTTP route responses. `departure`
- * is walked before the outdoor legs (a trip leaving a venue, or a trip that
- * never leaves it, whose route then has no outdoor legs); `arrival` after.
+ * Indoor venue legs of a tokenized trip, for voice navigation. Stored beside
+ * the route in the token envelope, never on the route itself, so no route
+ * forwarded to a client can carry them. `departure` is walked before the
+ * outdoor legs (a trip leaving a venue, or one that never leaves it, whose
+ * route then has no outdoor legs); `arrival` after.
  */
 export interface NavigationVenueLegs {
   departure?: VenueRoute;
   arrival?: VenueRoute;
 }
 
-/** A route as stored behind a route token. */
+/** A route joined with its venue legs, as navigation consumes it. */
 export type NavigationRoute = AccessibleRoute & {
   venueLegs?: NavigationVenueLegs;
 };
 
 export interface NavigationRouteEnvelope {
   schemaVersion: 1;
-  route: NavigationRoute;
+  route: AccessibleRoute;
+  venueLegs?: NavigationVenueLegs;
   navigationId: string;
   routeVersion: number;
   canonicalRequest: CanonicalPlanRouteRequest;

@@ -76,24 +76,20 @@ describe("route token cache", () => {
       arrival,
     });
     expect(stored).not.toHaveProperty("venueLegs");
-    expect(storeInitialNavigationEnvelope.mock.calls[0][1].route).toMatchObject(
-      {
-        routeId: sampleRoute.routeId,
-        venueLegs: { arrival },
-      },
-    );
-    expect(
-      storeInitialNavigationEnvelope.mock.calls[0][1].route.venueLegs,
-    ).not.toHaveProperty("departure");
+    const envelope = storeInitialNavigationEnvelope.mock.calls[0][1];
+    expect(envelope.venueLegs).toEqual({ arrival });
+    // the stored route itself never carries them, so no route read back
+    // from the token and forwarded to a client can leak them
+    expect(envelope.route).not.toHaveProperty("venueLegs");
     expect(storeBusPlan.mock.calls[0][1]).not.toHaveProperty("venueLegs");
   });
 
   it("stores no venue legs for an outdoor-only trip", async () => {
     storeInitialNavigationEnvelope.mockResolvedValue(true);
     await attachRouteTokens([sampleRoute], canonicalRequest, {});
-    expect(
-      storeInitialNavigationEnvelope.mock.calls[0][1].route,
-    ).not.toHaveProperty("venueLegs");
+    expect(storeInitialNavigationEnvelope.mock.calls[0][1]).not.toHaveProperty(
+      "venueLegs",
+    );
   });
 
   it("omits routeToken when Redis is unavailable instead of returning an invalid token", async () => {

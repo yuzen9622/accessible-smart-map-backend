@@ -188,6 +188,24 @@ describe("candidate switch transaction", () => {
     );
     expect(adopt).toHaveBeenCalledOnce();
   });
+  it("carries the candidate's venue legs in the new token, not on its route", async () => {
+    const venueLegs = { arrival: { venueId: "nutc-sanmin", steps: [] } };
+    mocks.read.mockResolvedValue({
+      status: "ok",
+      value: { ...envelope, venueLegs },
+    });
+    const prepare = vi.fn(() => true);
+    await run({ prepare });
+    const [, , , next] = mocks.finalize.mock.calls[0];
+    expect(next.venueLegs).toEqual(venueLegs);
+    expect(next.route).not.toHaveProperty("venueLegs");
+    expect(prepare).toHaveBeenCalledWith(
+      expect.objectContaining({
+        route: expect.not.objectContaining({ venueLegs }),
+      }),
+      expect.objectContaining({ venueLegs }),
+    );
+  });
   it("stale preparation releases without finalizing", async () => {
     let current = true;
     await run({

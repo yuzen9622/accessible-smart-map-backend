@@ -266,7 +266,7 @@ export async function selectBusDeparture(request: {
     const [stored] = await attachRouteTokens(
       [route],
       previous.canonicalRequest,
-      previous.route.venueLegs,
+      previous.venueLegs,
     );
     if (!stored.routeToken || stored.routeToken === request.routeToken)
       return unavailable();

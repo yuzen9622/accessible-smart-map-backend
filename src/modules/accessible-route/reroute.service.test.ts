@@ -110,12 +110,9 @@ describe("rerouteAccessibleRoute", () => {
       status: "ok",
       value: {
         ...envelope,
-        route: {
-          ...envelope.route,
-          venueLegs: {
-            departure: { venueId: "nutc-sanmin" },
-            arrival: venueLeg,
-          },
+        venueLegs: {
+          departure: { venueId: "nutc-sanmin" },
+          arrival: venueLeg,
         },
       },
     });
@@ -124,9 +121,12 @@ describe("rerouteAccessibleRoute", () => {
       data: { routes: [route("top-ranked")], venueLeg },
     });
     expect((await rerouteAccessibleRoute(request)).ok).toBe(true);
-    expect(finalizeReroute.mock.calls[0][3].route.venueLegs).toEqual({
+    expect(finalizeReroute.mock.calls[0][3].venueLegs).toEqual({
       arrival: venueLeg,
     });
+    expect(finalizeReroute.mock.calls[0][3].route).not.toHaveProperty(
+      "venueLegs",
+    );
   });
 
   it("reroutes a completed bus journey's remaining walk without introducing another bus", async () => {

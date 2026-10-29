@@ -204,6 +204,9 @@ export async function switchNavigationCandidate(
       routeVersion,
       route,
       canonicalRequest: candidate.value.canonicalRequest,
+      ...(candidate.value.venueLegs
+        ? { venueLegs: candidate.value.venueLegs }
+        : {}),
     };
     if (!input.prepare(data, envelope) || !isCurrent()) {
       await release();
