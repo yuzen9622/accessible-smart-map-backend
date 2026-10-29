@@ -474,6 +474,7 @@ describe("createLiveBridge Live config", () => {
       "confirmNavigationCandidateSwitch",
       "startNavigation",
       "stopNavigation",
+      "advanceNavStep",
       "repeatNavStep",
       "getActiveNavigationContext",
       "endVoiceSession",
@@ -1197,6 +1198,114 @@ describe("createLiveBridge navigation turn arbiter", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("guides an indoor-only trip step by step on the user's confirmations", async () => {
+    let onmessage: ((message: unknown) => void) | undefined;
+    const session = makeSession();
+    const ws = makeWs();
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      return session;
+    });
+    const step = (type: string, instruction: string) => ({
+      type,
+      instruction,
+      distanceM: 10,
+      durationS: 10,
+      buildingId: "info",
+      levelRef: "6F",
+      pathStart: 0,
+      pathEnd: 0,
+    });
+    getRouteByToken.mockResolvedValue({
+      routeId: "indoor",
+      routeName: "室內路線",
+      totalMinutes: 2,
+      transferCount: 0,
+      accessibilityHighlights: [],
+      legs: [],
+      navigationId: "55555555-5555-4555-8555-555555555555",
+      routeVersion: 1,
+      venueLegs: {
+        departure: {
+          venueId: "nutc-sanmin",
+          venueVersion: 1,
+          mode: "wheelchair",
+          fromPlaceId: "info-2606",
+          toPlaceId: "info-2301",
+          distanceM: 60,
+          durationS: 120,
+          elevatorRides: 1,
+          stairFlights: 0,
+          path: { coordinates: [], buildingIds: [], levelRefs: [] },
+          segments: [],
+          steps: [
+            step("depart", "從 2606 出發"),
+            step("elevator", "搭電梯到 3F"),
+            step("arrive", "抵達 2301"),
+          ],
+        },
+      },
+    });
+    const bridge = await createLiveBridge({ ws, userId: "u" });
+    await bridge.voiceReady;
+    await bridge.armRouteToken("indoor-token");
+    const call = (id: string, name: string) =>
+      onmessage?.({
+        serverContent: { inputTranscription: { text: name, finished: true } },
+        toolCall: { functionCalls: [{ id, name, args: {} }] },
+      });
+    const responses = () =>
+      session.sendToolResponse.mock.calls.flatMap(
+        ([payload]) => payload.functionResponses,
+      );
+    const sent = () =>
+      vi
+        .mocked(ws.send)
+        .mock.calls.map(([value]) => value)
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => JSON.parse(value));
+
+    call("start", "startNavigation");
+    await vi.waitFor(() => expect(responses()).toHaveLength(1));
+    const navStart = sent().find((message) => message.type === "nav.start");
+    expect(navStart.steps.map((s: any) => [s.legType, s.driver])).toEqual([
+      ["VENUE", "manual"],
+      ["VENUE", "manual"],
+      ["VENUE", "manual"],
+    ]);
+    bridge.updatePosition({ latitude: 25, longitude: 121 });
+    expect(sent().some((message) => message.type === "nav.progress")).toBe(
+      false,
+    );
+
+    call("next-1", "advanceNavStep");
+    await vi.waitFor(() => expect(responses()).toHaveLength(2));
+    expect(JSON.parse(responses()[1].response.output)).toEqual({ ok: true });
+    expect(
+      sent()
+        .filter((message) => message.type === "nav.step")
+        .at(-1),
+    ).toMatchObject({
+      type: "nav.step",
+      currentStepIndex: 1,
+      instruction: "搭電梯到 3F",
+    });
+
+    call("next-2", "advanceNavStep");
+    await vi.waitFor(() => expect(responses()).toHaveLength(3));
+    const navTypes = sent()
+      .map((message) => message.type)
+      .filter((type) => type.startsWith("nav."));
+    expect(navTypes.slice(-3)).toEqual(["nav.step", "nav.arrived", "nav.stop"]);
+
+    call("next-3", "advanceNavStep");
+    await vi.waitFor(() => expect(responses()).toHaveLength(4));
+    expect(JSON.parse(responses()[3].response.output)).toEqual({
+      ok: false,
+      reason: "NOT_AN_INDOOR_STEP",
+    });
   });
 
   it("forwards schema-valid nav.progress frames produced by the session", async () => {

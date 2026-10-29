@@ -18,6 +18,12 @@ vi.mock("../venue/venue.service", () => ({
   planVenueRoute,
   resolveVenueQuery,
 }));
+const { attachRouteTokens } = vi.hoisted(() => ({
+  attachRouteTokens: vi.fn(),
+}));
+vi.mock("../accessible-route/route-token.service", () => ({
+  attachRouteTokens,
+}));
 vi.mock("../user/user.service", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../user/user.service")>()),
   getConfig,
@@ -25,6 +31,7 @@ vi.mock("../user/user.service", async (importOriginal) => ({
 }));
 
 import { executeLocalTool } from "./agent-tools";
+import { projectToolResult } from "../../utils/agent-route-projection";
 
 const OK = {
   ok: true,
@@ -184,6 +191,9 @@ describe("planIndoorRoute agent tool", () => {
 
   beforeEach(() => {
     resolveVenueQuery.mockResolvedValue({ ok: true, venueId: "nutc-sanmin" });
+    attachRouteTokens.mockImplementation(async (routes) =>
+      routes.map((r: object) => ({ ...r, routeToken: "token-1" })),
+    );
   });
 
   it("plans with the venue planner and returns spoken steps without geometry", async () => {
@@ -200,21 +210,32 @@ describe("planIndoorRoute agent tool", () => {
       mode: "wheelchair",
       lang: "zh-TW",
     });
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: true,
       venueId: "nutc-sanmin",
-      fromPlaceId: "info-2606",
-      toPlaceId: "info-2301",
-      mode: "wheelchair",
-      distanceM: 61,
-      minutes: 3,
-      elevatorRides: 1,
-      stairFlights: 0,
-      steps: [
-        { type: "depart", instruction: "從 2606 出發", floor: "6F" },
-        { type: "elevator", instruction: "搭電梯 A 到 3F", floors: "6F→3F" },
-      ],
+      venueLeg: route,
+      routes: [{ routeToken: "token-1", legs: [] }],
     });
+    expect(attachRouteTokens).toHaveBeenCalledWith(
+      [expect.objectContaining({ legs: [] })],
+      expect.objectContaining({ mode: "wheelchair", travelMode: "walk" }),
+      { departure: route },
+    );
+    const { modelResult } = projectToolResult(result);
+    expect(modelResult).toMatchObject({
+      venueLeg: {
+        fromPlaceId: "info-2606",
+        toPlaceId: "info-2301",
+        distanceM: 61,
+        minutes: 3,
+        elevatorRides: 1,
+        steps: [
+          { type: "depart", instruction: "從 2606 出發", floor: "6F" },
+          { type: "elevator", instruction: "搭電梯 A 到 3F", floors: "6F→3F" },
+        ],
+      },
+    });
+    expect(JSON.stringify(modelResult)).not.toMatch(/token-1|"path"/);
   });
 
   it("derives the mode from the stored profile when none is given", async () => {

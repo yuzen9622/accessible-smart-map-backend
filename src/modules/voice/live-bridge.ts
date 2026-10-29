@@ -152,6 +152,12 @@ type NavSnapshot = {
 type LiveTurnState =
   "IDLE" | "USER_INPUT" | "TOOL_PENDING" | "AWAIT_MODEL" | "MODEL_OUTPUT";
 
+/** Tools whose result is a set of startable route candidates. */
+const ROUTE_PLANNING_TOOLS = new Set([
+  "planAccessibleRoute",
+  "planIndoorRoute",
+]);
+
 const NAV_FUNCTIONS: FunctionDeclaration[] = [
   {
     name: "proposeNavigationCandidate",
@@ -193,6 +199,16 @@ const NAV_FUNCTIONS: FunctionDeclaration[] = [
   {
     name: "stopNavigation",
     description: "停止目前的逐步導航",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "advanceNavStep",
+    description:
+      "室內段導航中，使用者表示已完成目前這一步（例如：到了、出電梯了、下一步、我到三樓了）時呼叫，推進並播報下一步。室內沒有定位，只能靠使用者回報；不要在使用者沒表示完成時呼叫。只在目前步驟需要手動推進時有效，否則回 ok:false。",
     parametersJsonSchema: {
       type: "object",
       properties: {},
@@ -1275,12 +1291,13 @@ export async function createLiveBridge(
         continue;
       }
       const startRequested =
-        name === "planAccessibleRoute" && call.args?.startNavigation === true;
+        ROUTE_PLANNING_TOOLS.has(name) && call.args?.startNavigation === true;
       const action =
         startRequested ||
         [
           "startNavigation",
           "stopNavigation",
+          "advanceNavStep",
           "proposeNavigationCandidate",
           "confirmNavigationCandidateSwitch",
         ].includes(name);
@@ -1306,7 +1323,7 @@ export async function createLiveBridge(
       }
       sendJson({ type: "tool_call", name, callId, turnId });
       const toolArgs = { ...(call.args ?? {}) };
-      if (name === "planAccessibleRoute") delete toolArgs.startNavigation;
+      if (ROUTE_PLANNING_TOOLS.has(name)) delete toolArgs.startNavigation;
       const startedAt = Date.now();
       let ok = true;
       let response: Record<string, unknown>;
@@ -1715,13 +1732,22 @@ export async function createLiveBridge(
                   : "已停止目前連線的導航，但無法保存停止狀態；重新連線前請稍後再試。"
                 : messages.stopped,
           });
+        } else if (name === "advanceNavStep") {
+          const effect = navSession.advance();
+          applyEffect(effect);
+          if (effect.ok) persistNavigationSnapshot(true);
+          result = JSON.stringify(
+            effect.ok
+              ? { ok: true }
+              : { ok: false, reason: "NOT_AN_INDOOR_STEP" },
+          );
         } else if (name === "repeatNavStep") {
           applyEffect(navSession.repeatCurrent());
           result = JSON.stringify({ ok: true, message: messages.repeat });
         } else if (name === "getActiveNavigationContext") {
           result = JSON.stringify(navSession.getConversationContext());
         } else {
-          if (name === "planAccessibleRoute") {
+          if (ROUTE_PLANNING_TOOLS.has(name)) {
             proposal = null;
             registry = null;
             planGeneration++;
@@ -1738,7 +1764,7 @@ export async function createLiveBridge(
             if (!voiceCurrent()) return;
             if (cancelled()) continue;
           }
-          if (name === "planAccessibleRoute" && !requestCurrent()) {
+          if (ROUTE_PLANNING_TOOLS.has(name) && !requestCurrent()) {
             result = JSON.stringify({
               ok: false,
               reason: "STALE_SELECTION",
@@ -1757,7 +1783,7 @@ export async function createLiveBridge(
               },
             );
           if (
-            name === "planAccessibleRoute" &&
+            ROUTE_PLANNING_TOOLS.has(name) &&
             voiceCurrent() &&
             requestCurrent() &&
             !cancelled() &&
@@ -1859,7 +1885,7 @@ export async function createLiveBridge(
           modelResult = result.modelResult;
         }
         if (
-          name === "planAccessibleRoute" &&
+          ROUTE_PLANNING_TOOLS.has(name) &&
           registry &&
           modelResult !== null &&
           typeof modelResult === "object" &&
@@ -2254,7 +2280,7 @@ export async function createLiveBridge(
                 ...tool,
                 functionDeclarations: tool.functionDeclarations?.map(
                   (declaration) => {
-                    if (declaration.name !== "planAccessibleRoute")
+                    if (!ROUTE_PLANNING_TOOLS.has(declaration.name ?? ""))
                       return declaration;
                     const schema = declaration.parametersJsonSchema as Record<
                       string,

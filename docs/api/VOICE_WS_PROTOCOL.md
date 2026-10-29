@@ -198,7 +198,7 @@ interface NavStepDto {
   index: number;
   instruction: string;
   legIndex: number; // 對應已 arm 路線的 route.legs 索引；resume 時前端以此找回乘車中的 leg
-  legType: "WALK" | "BUS" | "METRO" | "THSR" | "TRA";
+  legType: "WALK" | "BUS" | "METRO" | "THSR" | "TRA" | "VENUE";
   distanceM: number | null;
   isTransit: boolean;
   type?: string;
@@ -206,8 +206,18 @@ interface NavStepDto {
   maneuver?: WalkRelativeDirection | null;
   streetName?: string | null;
   bearing?: number | null;
+  // 以下只出現在室內步驟（legType "VENUE"）
+  driver?: "manual";
+  venueStepType?: "depart" | "walk" | "enter" | "exit" | "elevator" | "escalator" | "stairs" | "steps" | "ramp" | "arrive";
+  levelRef?: string | null;
+  fromLevelRef?: string;
+  toLevelRef?: string;
 }
 ```
+
+**室內步驟（2026-10-29）。** 行程起點或終點在室內場域（例如台中科大三民校區某間教室），或整趟都在場域內時，`steps` 會在戶外步驟前後帶入室內步驟：`legType: "VENUE"`、`driver: "manual"`，樓層在 `levelRef`／`fromLevelRef`／`toLevelRef`，室內語意在 `venueStepType`。`type` 仍給舊值（電梯、坡道、樓梯為 `facility`，進出建築與走廊為 `turn`，另有 `depart`／`arrive`），舊前端可照常顯示。室內步驟的 `legIndex` 指向最近的戶外 leg（整趟在室內時為 0），前端不可用它取室內幾何。
+
+室內沒有樓層定位，所以室內步驟只由使用者推進：使用者說「到了」「出電梯了」「下一步」時，助理呼叫 Live 工具 `advanceNavStep`，後端送出下一步的 `nav.step`。室內段期間 `nav.position` 照常上傳但不推進步驟、不送 `nav.progress`、不判偏航。從場域出發時，最後一個室內步驟完成後改由 GPS 推進戶外步驟；到達場域時，GPS 到達校門會接著送第一個室內步驟的 `nav.step`，而不是 `nav.arrived`，最後一個室內步驟完成才送 `nav.arrived` 與 `nav.stop`。整趟在室內的行程不支援重新規劃（`/accessible-route/reroute` 回 410）。
 
 `maneuver` 與 `/a11y/route/instructions` 的 `instructions[].maneuver` 同義：步行步驟為路線引擎動作
 （`CONTINUE`／`STRAIGHT` 表示沿路直行，含長直線切段的進度點），其他步驟為 `null`。

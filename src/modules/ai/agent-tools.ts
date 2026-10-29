@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { projectVenueLegForModel } from "../../utils/agent-route-projection";
+import type { VenueRoute } from "../accessible-route/venue-leg.types";
 import type { AgentLanguage } from "../../types/agent";
 import { apiErrorMessage } from "../../constants/api-errors";
 import {
@@ -478,6 +478,46 @@ const PlanIndoorRouteArgsSchema = z.object({
 });
 
 /**
+ * An indoor-only trip as a navigable route: no outdoor legs, the venue leg
+ * travels in the token, so voice navigation can start it like any route.
+ */
+function indoorOnlyRoute(
+  venueRoute: VenueRoute,
+  language?: AgentLanguage,
+): AccessibleRoute {
+  return {
+    routeId: `indoor:${venueRoute.fromPlaceId}>${venueRoute.toPlaceId}`,
+    routeName: language === "en" ? "Indoor route" : "室內路線",
+    totalMinutes: Math.max(1, Math.round(venueRoute.durationS / 60)),
+    transferCount: 0,
+    legs: [],
+    accessibilityHighlights: [],
+  };
+}
+
+function indoorOnlyCanonical(
+  venueRoute: VenueRoute,
+): CanonicalPlanRouteRequest {
+  const [startLng, startLat] = venueRoute.path.coordinates[0] ?? [0, 0];
+  const [endLng, endLat] = venueRoute.path.coordinates.at(-1) ?? [0, 0];
+  const stepFree = venueRoute.mode !== "normal";
+  return {
+    origin: { latitude: startLat, longitude: startLng },
+    destination: { latitude: endLat, longitude: endLng },
+    userLocation: { latitude: startLat, longitude: startLng },
+    travelMode: "walk",
+    mode: venueRoute.mode,
+    maxTransfers: 0,
+    format: "standard",
+    waypoints: [],
+    avoidStairs: stepFree,
+    requireElevator: false,
+    needsAccessibleToilet: false,
+    needsHandrail: false,
+  };
+}
+
+/**
  * Plans a route between two places of one indoor venue with the venue
  * planner, so the assistant never has to describe indoor directions itself.
  */
@@ -506,12 +546,22 @@ export async function planIndoorRoute(args: {
       mode,
       lang: args.language === "en" ? "en" : "zh-TW",
     });
-    if (result.ok)
+    if (result.ok) {
+      const [route] = await attachRouteTokens(
+        [indoorOnlyRoute(result.route, args.language)],
+        indoorOnlyCanonical(result.route),
+        { departure: result.route },
+      );
       return JSON.stringify({
         ok: true,
         venueId: result.route.venueId,
-        ...(projectVenueLegForModel(result.route) as object),
+        mode: result.route.mode,
+        // the full leg for clients to draw; the model sees it as steps only
+        venueLeg: result.route,
+        selectedRouteId: route.routeId,
+        routes: [route],
       });
+    }
     if (!("data" in result))
       return JSON.stringify({
         ok: false,
@@ -822,7 +872,10 @@ export async function planAccessibleRoute(args: {
         reason: "ROUTE_CONTEXT_UNAVAILABLE",
         error: agentRouteError("ROUTE_CONTEXT_UNAVAILABLE", args.language),
       });
-    const routes = await attachRouteTokens(result.data.routes, canonical);
+    const routes = await attachRouteTokens(result.data.routes, canonical, {
+      departure: result.data.venueDepartureLeg,
+      arrival: result.data.venueLeg,
+    });
     const effectivePreferences = agentEffectivePreferences(canonical);
     return JSON.stringify({
       ...publicData,

@@ -23,7 +23,14 @@ import {
   type CorridorFinding,
   type NavAdvisory,
 } from "./nav-advisory";
-import type { RerouteReason } from "../accessible-route/accessible-route.types";
+import type {
+  NavigationRoute,
+  RerouteReason,
+} from "../accessible-route/accessible-route.types";
+import type {
+  VenueRoute,
+  VenueStepType,
+} from "../accessible-route/venue-leg.types";
 import type { NavProgressEvent, NavResumeOkEvent } from "./voice.ws.schema";
 import type { NavigationSessionSnapshot } from "../accessible-route/navigation-state.repository";
 
@@ -57,14 +64,17 @@ const DEFAULT_MOTORCYCLE_SPEED_MPS = 9.7;
 
 type Coord = [number, number];
 type StopReason = "user_voice" | "user_ui" | "arrived" | "session_end";
-type StepKind = NavInstructionType | "leg_end";
+/** `venue`: an indoor step the user advances by saying they completed it. */
+type StepKind = NavInstructionType | "leg_end" | "venue";
+/** Indoor venue steps ride the same list as outdoor ones. */
+type StepLegType = NavLegType | "VENUE";
 
 export interface NavStepDto {
   index: number;
   instruction: string;
   /** Index into the armed route's `legs`, so clients rebuild transit state on resume. */
   legIndex: number;
-  legType: NavLegType;
+  legType: StepLegType;
   distanceM: number | null;
   isTransit: boolean;
   type?: string;
@@ -72,6 +82,12 @@ export interface NavStepDto {
   maneuver?: NavInstruction["maneuver"];
   streetName?: string | null;
   bearing?: number | null;
+  /** Indoor steps only: advanced by the user, never by GPS. */
+  driver?: "manual";
+  venueStepType?: VenueStepType;
+  levelRef?: string | null;
+  fromLevelRef?: string;
+  toLevelRef?: string;
 }
 
 export type NavServerEvent =
@@ -163,7 +179,7 @@ export interface NavigationConversationContext {
   currentStep?: {
     index: number;
     instruction: string;
-    legType: NavLegType;
+    legType: StepLegType;
   };
   destination?: string;
   transit?: NavigationTransitContext;
@@ -195,7 +211,7 @@ export interface RemainingCorridor {
 export interface ResolvedStep {
   instruction: string;
   legIndex: number;
-  legType: NavLegType;
+  legType: StepLegType;
   polylineIndex: number | null;
   coord: Coord | null;
   isTransit: boolean;
@@ -206,6 +222,58 @@ export interface ResolvedStep {
   maneuver?: NavInstruction["maneuver"];
   streetName?: string | null;
   bearing?: number | null;
+  venue?: {
+    stepType: VenueStepType;
+    levelRef: string | null;
+    fromLevelRef?: string;
+    toLevelRef?: string;
+  };
+}
+
+/** Old clients only know these step types; indoor detail rides `venueStepType`. */
+const VENUE_LEGACY_TYPE: Record<VenueStepType, NavInstructionType> = {
+  depart: "depart",
+  walk: "turn",
+  enter: "turn",
+  exit: "turn",
+  elevator: "facility",
+  escalator: "facility",
+  stairs: "facility",
+  steps: "facility",
+  ramp: "facility",
+  arrive: "arrive",
+};
+
+/**
+ * Indoor steps of a venue leg. They carry no geofence point: GPS cannot tell
+ * floors apart, so the user advances them.
+ */
+function venueSteps(
+  leg: VenueRoute | undefined,
+  legIndex: number,
+  polylineIndex: number,
+): ResolvedStep[] {
+  return (leg?.steps ?? []).map((step) => ({
+    instruction: step.instruction,
+    legIndex,
+    legType: "VENUE",
+    polylineIndex,
+    coord: null,
+    isTransit: false,
+    distanceM: step.distanceM > 0 ? Math.round(step.distanceM) : null,
+    kind: "venue",
+    type: VENUE_LEGACY_TYPE[step.type],
+    relativeDirection: null,
+    maneuver: null,
+    streetName: null,
+    bearing: null,
+    venue: {
+      stepType: step.type,
+      levelRef: step.levelRef,
+      ...(step.fromLevelRef ? { fromLevelRef: step.fromLevelRef } : {}),
+      ...(step.toLevelRef ? { toLevelRef: step.toLevelRef } : {}),
+    },
+  }));
 }
 
 type StepGenerator = (
@@ -214,9 +282,15 @@ type StepGenerator = (
 ) => GenerateVoiceNavStepsResult;
 
 const emptyEffect = (ok = true): NavEffect => ({ ok, events: [] });
-const isTransitType = (type: NavLegType): boolean =>
+/** Outdoor legs, or an indoor-only trip carried as a departure venue leg. */
+const isNavigable = (route: NavigationRoute | null | undefined): boolean =>
+  Boolean(route) &&
+  Array.isArray(route!.legs) &&
+  (route!.legs.length > 0 ||
+    Boolean(route!.venueLegs?.departure?.steps.length));
+const isTransitType = (type: StepLegType): boolean =>
   type === "BUS" || type === "METRO" || type === "THSR" || type === "TRA";
-const isRoadType = (type: NavLegType): boolean =>
+const isRoadType = (type: StepLegType): boolean =>
   type === "DRIVE" || type === "MOTORCYCLE";
 const sameCoord = (a: Coord, b: Coord): boolean =>
   a[0] === b[0] && a[1] === b[1];
@@ -378,8 +452,8 @@ const emptySpan = (): StepSpan => ({
 });
 
 export class NavigationSession {
-  private armedRoute: AccessibleRoute | null = null;
-  private activeRoute: AccessibleRoute | null = null;
+  private armedRoute: NavigationRoute | null = null;
+  private activeRoute: NavigationRoute | null = null;
   private active = false;
   private disposed = false;
   private steps: ResolvedStep[] = [];
@@ -423,15 +497,8 @@ export class NavigationSession {
     return this.guidance === "live";
   }
 
-  armRoute(route: AccessibleRoute): NavEffect {
-    if (
-      this.disposed ||
-      !route ||
-      !Array.isArray(route.legs) ||
-      route.legs.length === 0
-    ) {
-      return this.invalidRoute();
-    }
+  armRoute(route: NavigationRoute): NavEffect {
+    if (this.disposed || !isNavigable(route)) return this.invalidRoute();
     this.armedRoute = route;
     this.advisoryDeduper.clear();
     return emptyEffect();
@@ -482,6 +549,7 @@ export class NavigationSession {
     this.guidance = "awaiting_fix";
     this.previewIndex = 0;
     this.previewSpeech = null;
+    if (this.steps[0].kind === "venue") events.push(...this.announce(0));
     const seed = seedPosition ?? this.latestPosition;
     if (seed) events.push(...this.onPosition(seed).events);
     if (this.speechQueue.length === 0)
@@ -498,14 +566,12 @@ export class NavigationSession {
    * resuming past the end.
    */
   resume(
-    route: AccessibleRoute,
+    route: NavigationRoute,
     snapshot: NavigationSessionSnapshot,
     currentPosition?: NavPosition,
   ): NavEffect {
     if (this.disposed) return emptyEffect(false);
-    if (!route || !Array.isArray(route.legs) || route.legs.length === 0) {
-      return this.invalidRoute();
-    }
+    if (!isNavigable(route)) return this.invalidRoute();
     if (!this.loadRoute(route)) return this.invalidRoute();
     this.armedRoute = route;
     this.active = true;
@@ -534,6 +600,8 @@ export class NavigationSession {
     this.guidance = snapshot.liveGuidance ? "live" : "awaiting_fix";
     this.previewIndex = Math.max(0, this.announcedIndex);
     this.previewSpeech = null;
+    if (this.manualIndex() !== null)
+      this.enqueueSpeech(this.steps[this.announcedIndex].instruction);
     const seed = currentPosition ?? this.latestPosition;
     if (seed) events.push(...this.onPosition(seed).events);
     return { ok: true, events };
@@ -561,6 +629,9 @@ export class NavigationSession {
   onPosition(position: NavPosition): NavEffect {
     this.latestPosition = position;
     if (this.disposed || !this.active) return emptyEffect();
+    // Indoors GPS knows no floor: it neither advances, measures progress nor
+    // calls the user off route until they complete the indoor steps.
+    if (this.manualIndex() !== null) return emptyEffect();
     const promoted: NavServerEvent[] = [];
     const far = this.distanceFromRouteM(position) > FOLLOW_ROUTE_MAX_M;
     if (this.guidance !== "live") {
@@ -592,7 +663,10 @@ export class NavigationSession {
     const events = [...promoted, ...advanced.events, ...offroute.events];
     // Past the follow distance the remaining distance would be measured from a
     // point off the route entirely; off-route handling replans instead.
-    const progress = this.active && !far ? this.progressEvent(position) : null;
+    const progress =
+      this.active && !far && this.manualIndex() === null
+        ? this.progressEvent(position)
+        : null;
     if (progress) events.push(progress);
     return { ok: true, events };
   }
@@ -615,7 +689,10 @@ export class NavigationSession {
   }
 
   repeatCurrent(): NavEffect {
-    if (this.active && this.guidance !== "live") {
+    const manual = this.manualIndex();
+    if (manual !== null) {
+      this.enqueueSpeech(this.steps[manual].instruction);
+    } else if (this.active && this.guidance !== "live") {
       this.enqueueSpeech(this.steps[this.previewIndex].instruction);
     } else if (this.active && this.announcedIndex >= 0) {
       this.enqueueSpeech(this.steps[this.announcedIndex].instruction);
@@ -629,7 +706,12 @@ export class NavigationSession {
    * them all; other queued speech such as advisories is kept.
    */
   previewStep(index: number): NavEffect {
-    if (this.disposed || !this.active || this.guidance === "live")
+    if (
+      this.disposed ||
+      !this.active ||
+      this.guidance === "live" ||
+      this.manualIndex() !== null
+    )
       return emptyEffect(false);
     const step = this.steps[index];
     if (!step) return emptyEffect(false);
@@ -642,6 +724,85 @@ export class NavigationSession {
     this.previewSpeech = step.instruction;
     this.enqueueSpeech(step.instruction);
     return emptyEffect();
+  }
+
+  /**
+   * The user completed the indoor step they were on. Moves to the next step;
+   * after the last indoor step of a departure, GPS takes over the outdoor
+   * steps; the last indoor step of the trip ends navigation.
+   *
+   * @returns ok:false when the current step is not an indoor one.
+   */
+  advance(): NavEffect {
+    if (this.disposed || !this.active) return emptyEffect(false);
+    const current = this.manualIndex();
+    if (current === null) return emptyEffect(false);
+    const next = current + 1;
+    if (next >= this.steps.length) return this.finish();
+    if (this.steps[next].kind === "venue") {
+      const events = this.announce(next);
+      return {
+        ok: true,
+        events:
+          next === this.steps.length - 1
+            ? [...events, ...this.finish().events]
+            : events,
+      };
+    }
+    const outdoor = this.processThrough(next);
+    this.enqueueSpeech(outdoor.speech.join(" "));
+    const events = [...outdoor.events];
+    if (this.active && this.latestPosition)
+      events.push(...this.onPosition(this.latestPosition).events);
+    return { ok: true, events };
+  }
+
+  /** The indoor step the user is on, or null while GPS drives the steps. */
+  private manualIndex(): number | null {
+    if (this.disposed || !this.active) return null;
+    return this.steps[this.announcedIndex]?.kind === "venue"
+      ? this.announcedIndex
+      : null;
+  }
+
+  /** Makes `index` the current step, speaks it and reports it. */
+  private announce(index: number): NavServerEvent[] {
+    this.announcedIndex = index;
+    const step = this.steps[index];
+    this.enqueueSpeech(step.instruction);
+    return [
+      {
+        type: "nav.step",
+        currentStepIndex: index,
+        instruction: step.instruction,
+        remainingM: step.distanceM,
+      },
+    ];
+  }
+
+  /** Like announce, but leaves speaking to the caller's batched speech. */
+  private announceQuietly(index: number): NavServerEvent[] {
+    this.announcedIndex = index;
+    const step = this.steps[index];
+    return [
+      {
+        type: "nav.step",
+        currentStepIndex: index,
+        instruction: step.instruction,
+        remainingM: step.distanceM,
+      },
+    ];
+  }
+
+  private finish(): NavEffect {
+    this.active = false;
+    return {
+      ok: true,
+      events: [
+        { type: "nav.arrived" },
+        { type: "nav.stop", reason: "arrived" },
+      ],
+    };
   }
 
   /** Minimal trusted route context exposed to the Live conversation tool. */
@@ -930,9 +1091,28 @@ export class NavigationSession {
   }
 
   /** Builds the step/span tables for a route and installs it as active. */
-  private loadRoute(route: AccessibleRoute): boolean {
-    const built = this.buildResolvedSteps(route);
-    if (!built) return false;
+  private loadRoute(route: NavigationRoute): boolean {
+    const outdoor = route.legs.length ? this.buildResolvedSteps(route) : [];
+    if (!outdoor) return false;
+    const lastLeg = route.legs.at(-1);
+    const built = [
+      ...venueSteps(route.venueLegs?.departure, 0, 0),
+      ...outdoor,
+      ...venueSteps(
+        route.venueLegs?.arrival,
+        Math.max(0, route.legs.length - 1),
+        Math.max(0, (lastLeg?.polyline.length ?? 1) - 1),
+      ),
+    ];
+    if (!built.length) return false;
+    // the outdoor leg ends at the venue gate, not at the trip's destination
+    let gate = -1;
+    if (route.venueLegs?.arrival)
+      built.forEach((step, index) => {
+        if (step.kind !== "venue" && step.coord) gate = index;
+      });
+    if (gate >= 0)
+      built[gate] = { ...built[gate], instruction: this.messages.venueGate };
     this.activeRoute = route;
     this.steps = built;
     this.spans = this.buildSpans(route, built);
@@ -955,6 +1135,19 @@ export class NavigationSession {
       maneuver: step.maneuver ?? null,
       streetName: step.streetName ?? null,
       bearing: step.bearing ?? null,
+      ...(step.venue
+        ? {
+            driver: "manual" as const,
+            venueStepType: step.venue.stepType,
+            levelRef: step.venue.levelRef,
+            ...(step.venue.fromLevelRef
+              ? { fromLevelRef: step.venue.fromLevelRef }
+              : {}),
+            ...(step.venue.toLevelRef
+              ? { toLevelRef: step.venue.toLevelRef }
+              : {}),
+          }
+        : {}),
     }));
   }
 
@@ -1181,7 +1374,18 @@ export class NavigationSession {
       instruction: target.instruction,
       remainingM: target.distanceM,
     });
-    if (targetIndex === this.terminalCoordIndex) {
+    const indoorAfter =
+      targetIndex === this.terminalCoordIndex
+        ? this.steps.findIndex(
+            (step, i) => i > targetIndex && step.kind === "venue",
+          )
+        : -1;
+    if (indoorAfter >= 0) {
+      // reaching the venue gate starts the indoor leg instead of arriving; the
+      // outdoor arrival line would announce an arrival that has not happened
+      events.push(...this.announceQuietly(indoorAfter));
+      speech.push(this.steps[indoorAfter].instruction);
+    } else if (targetIndex === this.terminalCoordIndex) {
       for (
         let i = targetIndex + 1;
         i < this.steps.length && !this.steps[i].coord;

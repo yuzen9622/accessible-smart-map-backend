@@ -6,6 +6,11 @@ import {
   type NavProgressEvent,
 } from "./voice.ws.schema";
 import type { NavigationSessionSnapshot } from "../accessible-route/navigation-state.repository";
+import type { NavigationRoute } from "../accessible-route/accessible-route.types";
+import type {
+  VenueRoute,
+  VenueStepType,
+} from "../accessible-route/venue-leg.types";
 import { generateNavStepsWithLegIndex } from "../nav-instructions/nav-instructions.service";
 import {
   NavigationSession,
@@ -1560,5 +1565,202 @@ describe("NavigationSession language", () => {
         },
       ],
     });
+  });
+});
+
+describe("NavigationSession indoor venue legs", () => {
+  const A = coord(121);
+  const B = coord(121.005);
+  const G = coord(121.01);
+  const venueLeg = (
+    from: string,
+    to: string,
+    types: VenueStepType[],
+  ): VenueRoute => ({
+    venueId: "nutc-sanmin",
+    venueVersion: 1,
+    mode: "wheelchair",
+    fromPlaceId: from,
+    toPlaceId: to,
+    distanceM: 60,
+    durationS: 90,
+    elevatorRides: 1,
+    stairFlights: 0,
+    path: { coordinates: [], buildingIds: [], levelRefs: [] },
+    segments: [],
+    steps: types.map((type, index) => ({
+      type,
+      instruction: `室內${index}:${type}`,
+      distanceM: type === "elevator" ? 0 : 10,
+      durationS: 10,
+      buildingId: "info",
+      levelRef: type === "elevator" ? null : "4F",
+      ...(type === "elevator" ? { fromLevelRef: "4F", toLevelRef: "1F" } : {}),
+      pathStart: 0,
+      pathEnd: 0,
+    })),
+  });
+  const drain = (nav: NavigationSession): string => {
+    const spoken: string[] = [];
+    for (let next = nav.takeNextSpeech(); next; next = nav.takeNextSpeech()) {
+      spoken.push(next);
+      nav.onTurnComplete();
+    }
+    return spoken.join(" ");
+  };
+  const types = (effect: { events: { type: string }[] }) =>
+    effect.events.map((event) => event.type);
+
+  it("starts a trip out of a venue on the first indoor step and ignores GPS until it is done", () => {
+    const nav = new NavigationSession();
+    const trip: NavigationRoute = {
+      ...route([walkLeg([G, B, A])]),
+      venueLegs: {
+        departure: venueLeg("info-2401", "gate", [
+          "depart",
+          "elevator",
+          "exit",
+        ]),
+      },
+    };
+    expect(nav.armRoute(trip).ok).toBe(true);
+    const started = nav.start(pos(A));
+    const start = started.events[0];
+    if (start.type !== "nav.start") throw new Error("expected nav.start");
+    expect(start.steps.slice(0, 3)).toEqual([
+      expect.objectContaining({
+        legType: "VENUE",
+        type: "depart",
+        driver: "manual",
+        venueStepType: "depart",
+        levelRef: "4F",
+      }),
+      expect.objectContaining({
+        type: "facility",
+        venueStepType: "elevator",
+        fromLevelRef: "4F",
+        toLevelRef: "1F",
+      }),
+      expect.objectContaining({ type: "turn", venueStepType: "exit" }),
+    ]);
+    expect(start.steps[3]).not.toHaveProperty("driver");
+    expect(
+      NavResumeOkMessageSchema.shape.steps.safeParse(start.steps).success,
+    ).toBe(true);
+    expect(started.events).toContainEqual(
+      expect.objectContaining({ type: "nav.step", currentStepIndex: 0 }),
+    );
+    expect(drain(nav)).toContain("室內0:depart");
+
+    // a fix far down the outdoor route is not progress, arrival or off-route
+    expect(nav.onPosition(pos(A)).events).toEqual([]);
+    expect(nav.previewStep(4).ok).toBe(false);
+
+    nav.repeatCurrent();
+    expect(drain(nav)).toBe("室內0:depart");
+    expect(nav.advance().events).toEqual([
+      expect.objectContaining({ type: "nav.step", currentStepIndex: 1 }),
+    ]);
+    expect(drain(nav)).toBe("室內1:elevator");
+    nav.advance();
+    drain(nav);
+
+    // the last indoor step hands over to GPS on the first outdoor step
+    const out = nav.advance();
+    expect(out.ok).toBe(true);
+    expect(out.events).toContainEqual(
+      expect.objectContaining({ type: "nav.step", currentStepIndex: 3 }),
+    );
+    expect(nav.advance().ok).toBe(false);
+    nav.onPosition(pos(B));
+    expect(types(nav.onPosition(pos(A)))).toContain("nav.arrived");
+  });
+
+  it("continues indoors at the gate instead of arriving, and arrives on the last indoor step", () => {
+    const nav = new NavigationSession();
+    nav.armRoute({
+      ...route([walkLeg([A, B, G])]),
+      venueLegs: {
+        arrival: venueLeg("gate", "info-2301", ["enter", "elevator", "arrive"]),
+      },
+    });
+    nav.start(pos(A));
+    drain(nav);
+    nav.onPosition(pos(B));
+    const atGate = nav.onPosition(pos(G));
+    expect(types(atGate)).not.toContain("nav.arrived");
+    const stepEvents = atGate.events.filter(
+      (event) => event.type === "nav.step",
+    );
+    expect(stepEvents.at(-1)).toMatchObject({ instruction: "室內0:enter" });
+    expect(stepEvents.at(-2)).toMatchObject({
+      instruction: "已到達校門，接下來是校內路線",
+    });
+    expect(nav.isActive).toBe(true);
+    expect(nav.getSnapshotState()?.currentStepIndex).toBe(
+      (stepEvents.at(-1) as { currentStepIndex: number }).currentStepIndex,
+    );
+    expect(nav.onPosition(pos(A)).events).toEqual([]);
+
+    expect(types(nav.advance())).toEqual(["nav.step"]);
+    const last = nav.advance();
+    expect(types(last)).toEqual(["nav.step", "nav.arrived", "nav.stop"]);
+    expect(nav.isActive).toBe(false);
+  });
+
+  it("navigates an indoor-only trip entirely by the user's confirmations", () => {
+    const nav = new NavigationSession();
+    expect(
+      nav.armRoute({
+        ...route([]),
+        venueLegs: {
+          departure: venueLeg("info-2606", "info-2301", [
+            "depart",
+            "elevator",
+            "arrive",
+          ]),
+        },
+      }).ok,
+    ).toBe(true);
+    const started = nav.start(pos(A));
+    expect(started.ok).toBe(true);
+    expect(nav.onPosition(pos(G)).events).toEqual([]);
+    nav.advance();
+    expect(types(nav.advance())).toEqual([
+      "nav.step",
+      "nav.arrived",
+      "nav.stop",
+    ]);
+    expect(nav.armRoute(route([])).ok).toBe(false);
+  });
+
+  it("resumes on the indoor step it stopped at and speaks it again", () => {
+    const trip: NavigationRoute = {
+      ...route([]),
+      venueLegs: {
+        departure: venueLeg("a", "b", ["depart", "elevator", "arrive"]),
+      },
+    };
+    const nav = new NavigationSession();
+    const resumed = nav.resume(trip, {
+      navigationId: "n",
+      userId: "u",
+      routeToken: "t",
+      routeVersion: 1,
+      currentStepIndex: 1,
+      onVehicle: false,
+      latestPosition: null,
+      updatedAt: 0,
+    });
+    expect(resumed.events[0]).toMatchObject({
+      type: "nav.resume_ok",
+      currentStepIndex: 1,
+    });
+    expect(drain(nav)).toBe("室內1:elevator");
+    expect(types(nav.advance())).toEqual([
+      "nav.step",
+      "nav.arrived",
+      "nav.stop",
+    ]);
   });
 });

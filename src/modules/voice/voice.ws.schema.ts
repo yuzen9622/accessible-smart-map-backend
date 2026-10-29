@@ -166,6 +166,7 @@ const NavStepDtoSchema = z
       "METRO",
       "THSR",
       "TRA",
+      "VENUE",
     ]),
     distanceM: z.number().nonnegative().nullable(),
     isTransit: z.boolean(),
@@ -174,6 +175,24 @@ const NavStepDtoSchema = z
     maneuver: NavManeuverSchema.optional(),
     streetName: z.string().nullable().optional(),
     bearing: z.number().nullable().optional(),
+    driver: z.literal("manual").optional(),
+    venueStepType: z
+      .enum([
+        "depart",
+        "walk",
+        "enter",
+        "exit",
+        "elevator",
+        "escalator",
+        "stairs",
+        "steps",
+        "ramp",
+        "arrive",
+      ])
+      .optional(),
+    levelRef: z.string().nullable().optional(),
+    fromLevelRef: z.string().optional(),
+    toLevelRef: z.string().optional(),
   })
   .strict();
 

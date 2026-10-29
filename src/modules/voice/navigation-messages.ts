@@ -12,6 +12,7 @@ export const NAVIGATION_MESSAGES = {
     invalidRoute: "路線資料無效，請重新規劃",
     roadLegEnd: "抵達車行路段終點，請停車",
     walkLegEnd: (destination: string) => `抵達「${destination}」`,
+    venueGate: "已到達校門，接下來是校內路線",
     offRoute: "您似乎偏離路線，請確認目前位置",
     replacementInvalid: "替代路線無法啟動",
     routeExpired: "路線已過期，請重新規劃",
@@ -49,6 +50,7 @@ export const NAVIGATION_MESSAGES = {
     roadLegEnd: "You have reached the end of the driving segment. Please park.",
     walkLegEnd: (destination: string) =>
       `Arrive at ${englishPlaceLabel(destination)}.`,
+    venueGate: "You have reached the campus gate. Indoor directions follow.",
     offRoute: "You appear to be off route. Please check your location.",
     replacementInvalid: "The alternative route could not be started.",
     routeExpired: "The route has expired. Please plan a new route.",

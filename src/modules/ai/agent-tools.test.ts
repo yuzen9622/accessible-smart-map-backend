@@ -2279,7 +2279,10 @@ describe("AI plan full route contract", () => {
     expect(mockPlanRoute).toHaveBeenCalledWith(
       expect.objectContaining({ userId: "private-user", mode: undefined }),
     );
-    expect(attachRouteTokens).toHaveBeenCalledWith(routes, canonical);
+    expect(attachRouteTokens).toHaveBeenCalledWith(routes, canonical, {
+      departure: undefined,
+      arrival: undefined,
+    });
     expect(result).toMatchObject({
       routeContractVersion: 1,
       selectedRouteId: "bus",
