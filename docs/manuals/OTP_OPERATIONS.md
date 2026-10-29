@@ -1,8 +1,12 @@
 # OTP2 維運手冊 — 資料更新、建圖、Docker 部署
 
-> 適用版本：OpenTripPlanner **2.9.0**（pin 於 `docker-compose.yml` 與 `build-otp-graph.sh`，2026-06-12 起）
+> 適用版本：OpenTripPlanner **2.9.0**（官方來源與修補固定於根 `Dockerfile`，使用映像由 `docker-compose.yml` 指定）
 
 本文件涵蓋 OTP sidecar 的完整生命週期：GTFS 資料取得 → 清理 → 台鐵班表注入 → graph 建置 → Docker 配置與啟動 → 驗證 → 故障排查。
+
+純步行使用 `sidewalk-priority-v1` 原生修補。輪椅能力與避樓梯分開處理；符合通行條件後，先最少沿車道的規劃成本，再比較原有時間與距離成本。必要車道仍可用，合法過街不視為沿車道縱向行走。大眾運輸內的步行段不在這項純步行政策範圍。
+
+首次使用或更新修補時先執行 `docker compose build otp`，再使用既有建圖流程重建候選圖。修補保留邊角色，因此不能直接沿用未含角色的舊 `graph.obj`。建圖、預檢與候選載入腳本都讀取根 Compose 的同一映像；不要另用官方原映像建圖。後端不接受未執行同等政策的純步行備援，這類服務不可用時回 503。
 
 ## 後端搜尋範圍與品質回歸
 
@@ -245,7 +249,7 @@ cp otp-data/feed-1.gtfs.zip ~/otp-backup/feed-1.$(date +%Y%m%d).gtfs.zip
 
   # 3) 停服務容器釋放記憶體（必要！否則建圖 OOM）→ 離線建圖（~9 分鐘）
   docker stop otp
-  docker run --rm -e JAVA_TOOL_OPTIONS="-Xmx12g" -v $BUILD_DIR:/var/opentripplanner opentripplanner/opentripplanner:2.9.0 --build --save
+  OTP_DATA_DIR="$BUILD_DIR" OTP_SERVE_XMX=12g docker compose run --rm --no-deps otp --build --save
 
   # 4) 建圖成功才換檔（舊 graph 留 .prev 可回滾）→ 重啟
   cp otp-data/graph.obj otp-data/graph.obj.prev
@@ -372,9 +376,7 @@ cp otp-data/{otp-config.json,build-config.json,router-config.json,taiwan-gtfs.zi
 docker stop otp
 
 # 4. 離線建圖（~9 分鐘）
-docker run --rm -e JAVA_TOOL_OPTIONS="-Xmx12g" \
-  -v $BUILD_DIR:/var/opentripplanner \
-  opentripplanner/opentripplanner:2.9.0 --build --save
+OTP_DATA_DIR="$BUILD_DIR" OTP_SERVE_XMX=12g docker compose run --rm --no-deps otp --build --save
 
 # 5. 換檔並重啟
 cp otp-data/graph.obj otp-data/graph.obj.prev   # 留回滾備份
@@ -426,28 +428,9 @@ python3 src/scripts/inject-tra-gtfs.py otp-data/taiwan-gtfs.zip /tmp/tra-timetab
 
 ## 4. Docker 配置
 
-`docker-compose.yml` 重點逐項：
+映像建置、啟動參數、埠、掛載與健康檢查以根 [`docker-compose.yml`](../../docker-compose.yml) 為準。
 
-```yaml
-services:
-  otp:
-    image: opentripplanner/opentripplanner:2.9.0 # 永遠 pin 版本，不用 latest
-    command:
-      ["--load"] # 只給 flags！entrypoint 寫死 /var/opentripplanner，
-      # 多給路徑會報 "must supply a single directory name"
-    ports:
-      - "127.0.0.1:8080:8080" # 只綁 localhost，永不對外
-    volumes:
-      - ${OTP_DATA_DIR:-/var/otp}:/var/opentripplanner
-    environment:
-      JAVA_TOOL_OPTIONS: "-Xmx${OTP_SERVE_XMX:-6g}" # 全台 graph 服務 heap
-    healthcheck:
-      # 2.9 image 沒帶 curl/wget；bash /dev/tcp 等價 —— Grizzly 在 graph
-      # 載入完成後才綁 8080，TCP 通 = ready for routing
-      test: ["CMD", "bash", "-c", "</dev/tcp/localhost/8080"]
-```
-
-**版本升級 SOP**：`graph.obj` 序列化與 OTP 版本綁定，**升級＝必須重建**。順序：改 compose 與 build script 的 pin → 走 §2.2 用新 image 建圖 → 換檔 → `docker compose up -d otp`（compose 會用新 image 重建容器）。舊 graph 留 `graph.obj.prev` 可配舊 image 回滾。
+**版本升級 SOP**：`graph.obj` 序列化與 OTP 版本綁定，**升級＝必須重建**。順序：更新根 Dockerfile 的固定來源／修補並執行 `docker compose build otp` → 走 §2.2 用 Compose 指定映像建圖 → 換檔 → `docker compose up -d otp`（compose 會用新 image 重建容器）。舊 graph 留 `graph.obj.prev` 可配舊 image 回滾。
 
 ---
 

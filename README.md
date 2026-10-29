@@ -112,7 +112,7 @@ graph TD
   Service -->|向量資料庫檢索| Chroma[ChromaDB Adapter]
   Service -->|外部系統整合| Adapter[adapters/ *.adapter.ts]
   Adapter -->|GraphQL 查詢| OTP[OpenTripPlanner 2.x]
-  Adapter -->|步行路網計算| Valhalla[Valhalla Routing Engine]
+  Adapter -->|車行路網計算| Valhalla[Valhalla Routing Engine]
   Adapter -->|即時交通數據| TDX[TDX 交通部 API]
   Adapter -->|地理編碼與地點資訊| Google[Google Maps API]
   Adapter -->|氣象與空品資料| Sensors[CWA / MOENV API]

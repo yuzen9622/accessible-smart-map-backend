@@ -11,7 +11,7 @@
 `leg.steps` 是純機器資料，不承載任何可直接顯示或朗讀的文案。前端必須以封閉 enum
 和本文件的詞彙表自行完成 i18n；後端不提供相容欄位或 fallback 文案。
 
-三個步行引擎（OTP、CSR `pedestrian-a11y`、Valhalla 步行備援）都經過同一個
+步行指示來源（OTP、CSR `pedestrian-a11y`，以及舊 Valhalla 資料）都經過同一個
 merge 正規化流程，因此輸出的 key 集合與值域一致。正規化在
 `planAccessibleRouteFromRequest()` 成功回傳前執行一次；HTTP wrapper 只附加
 `routeToken`，不會再次 merge。AI agent 路徑與 HTTP 路徑取得的 `steps` 必須逐字相同。
@@ -129,6 +129,8 @@ CSR 的角度門檻為：`|Δ| < 20°` → `CONTINUE`；`< 45°` → `SLIGHTLY_*
 | WALK leg | `exitInfo.type` | `elevator` \| `ramp` | `src/types/route.ts:187` |
 | `/route/instructions` | `instructions[].type` | `depart` \| `turn` \| `facility` \| `transit_board` \| `transit_alight` \| `arrive`（步行只會出現前三個） | `nav-instructions.types.ts:18-24` |
 | `/route/instructions` | `warnings[]` | `WALK_STEPS_UNAVAILABLE` \| `ORS_STEPS_UNAVAILABLE` \| `ROAD_STEPS_UNAVAILABLE` | `nav-instructions.types.ts:29-30` |
+
+純步行回應可帶 `walkPolicy`，包含 `version: "sidewalk-priority-v1"`、`profile: "normal" | "wheelchair"`、`avoidStairs`、`maxSlopePercent`、`carriagewayMillimetres` 與 `generalizedCost`。引擎先套用通行條件，再最少化沿車道的規劃成本，最後比較原有成本；合法過街不算沿車道縱向行走。這些值是圖資搜尋成本，未知角色採保守分類，不是現場量測或無障礙認證。舊路線未帶此欄位，不代表已執行新政策。輪椅能力與避樓梯分別執行；不支援此政策的純步行備援不可用時回 `503`，不回傳未經同等政策選路的車道路線。`walkPolicy.maxSlopePercent` 只有引擎實際執行且選中邊具有所需高程證據時才提供數值，否則為 null；未知高程不能標成已執行坡度限制。此項 metadata 不需要新增使用者操作。
 
 ⚠️ 兩個容易寫錯的欄位名稱已在表中標注：純步行引擎欄位是 `engine`、無障礙設施分類欄位是
 `category`——本文件早期版本兩者都寫錯過。
@@ -382,7 +384,7 @@ CSR 英文可用率取決於 `ped_osm_way_name.name_en` 是否已有資料。程
 }
 ```
 
-剖面採 **最終選出的戶外 WALK 線形**（CSR／OTP／Valhalla），不為高程重新規劃。
+剖面採 **最終選出的戶外 WALK 線形**，不為高程重新規劃。
 `transit`（即使 fallback 結果全為 WALK）、開車、機車及其步行接駁段都省略此欄位。
 `venueLeg` 的室內段不納入；步行重新規劃會依新線形重算。高程不改變排名、步行時間或
 `data.slopeConstraint.enforced`。
