@@ -40,7 +40,6 @@ OTP_DATA_DIR="${OTP_DATA_DIR:-/var/otp}"
 OTP_OSM_PBF_URL="${OTP_OSM_PBF_URL:-https://download.geofabrik.de/asia/taiwan-latest.osm.pbf}"
 OTP_OSM_BBOX="${OTP_OSM_BBOX:-}" # empty = full Taiwan (no clipping)
 OTP_JAVA_XMX="${OTP_JAVA_XMX:-12g}"
-OTP_IMAGE="opentripplanner/opentripplanner:2.9.0"
 OSM_MAX_AGE_DAYS=30
 
 OTP_WORK_ROOT="${OTP_WORK_ROOT:-/tmp}"
@@ -82,6 +81,9 @@ trap 'on_signal 130' INT
 trap 'on_signal 143' TERM
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+OTP_IMAGE="$(docker compose --project-directory "$REPO_DIR" config --format json |
+  python3 -c 'import json, sys; print(json.load(sys.stdin)["services"]["otp"]["image"])')"
 
 # ── 0. Preflight — fail in seconds, not after a 25–50 minute build ──
 OTP_DATA_DIR="$OTP_DATA_DIR" OTP_WORK_ROOT="$OTP_WORK_ROOT" OTP_JAVA_XMX="$OTP_JAVA_XMX" \

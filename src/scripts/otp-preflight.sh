@@ -25,11 +25,12 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+OTP_IMAGE="$(docker compose --project-directory "$REPO_DIR" config --format json |
+  python3 -c 'import json, sys; print(json.load(sys.stdin)["services"]["otp"]["image"])')"
 OTP_DATA_DIR="${OTP_DATA_DIR:-/var/otp}"
 OTP_WORK_ROOT="${OTP_WORK_ROOT:-/tmp}"
 OTP_JAVA_XMX="${OTP_JAVA_XMX:-12g}"
 OTP_DEM_DIR="${OTP_DEM_DIR:-$OTP_DATA_DIR/dem}"
-OTP_IMAGE="opentripplanner/opentripplanner:2.9.0"
 EXPECTED_CITIES=22
 MIN_CALENDAR_DAYS=180
 
@@ -126,7 +127,7 @@ if docker info >/dev/null 2>&1; then
   else
     fail "docker memory ${mem_gib} GiB cannot hold build heap ${OTP_JAVA_XMX} plus overhead — lower OTP_JAVA_XMX"
   fi
-  if docker image inspect "$OTP_IMAGE" >/dev/null 2>&1; then ok "image $OTP_IMAGE is present"; else warn "image $OTP_IMAGE is not pulled yet — the build will pull it"; fi
+  if docker image inspect "$OTP_IMAGE" >/dev/null 2>&1; then ok "image $OTP_IMAGE is present"; else fail "image $OTP_IMAGE is missing — run docker compose build otp first"; fi
 else
   fail "docker daemon is not responding"
 fi

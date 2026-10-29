@@ -30,10 +30,11 @@ CANDIDATE_DIR="${1:?usage: promote-otp-graph.sh CANDIDATE_DIR}"
 CANDIDATE_DIR="$(cd "$CANDIDATE_DIR" && pwd)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+OTP_IMAGE="$(docker compose --project-directory "$REPO_DIR" config --format json |
+  python3 -c 'import json, sys; print(json.load(sys.stdin)["services"]["otp"]["image"])')"
 OTP_DATA_DIR="${OTP_DATA_DIR:-/var/otp}"
 OTP_SERVE_XMX="${OTP_SERVE_XMX:-12g}"
 OTP_CANDIDATE_PORT="${OTP_CANDIDATE_PORT:-18081}"
-OTP_IMAGE="opentripplanner/opentripplanner:2.9.0"
 CANDIDATE_NAME="otp-candidate"
 
 log() { echo "[promote-otp-graph] $(date '+%F %T') $*"; }
