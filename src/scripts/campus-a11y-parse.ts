@@ -167,8 +167,7 @@ export function parseFacilityResultHtml(rawHtml: string): ParsedCampusResult {
   result.facilities = [...byUid.values()];
   result.complete =
     Boolean(countMatch) &&
-    articles.length > 0 &&
-    result.facilityCount > 0 &&
+    /class="[^"]*\bresult-area\b/.test(raw) &&
     result.facilityCount === result.facilities.length;
   return result;
 }

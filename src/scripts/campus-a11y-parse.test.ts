@@ -85,6 +85,18 @@ describe("mercatorToWgs84 / parseGeoPoint", () => {
 });
 
 describe("parseFacilityResultHtml", () => {
+  it("rejects error pages and incomplete lists before replacing stored facilities", () => {
+    expect(
+      parseFacilityResultHtml("<html>upstream error</html>").complete,
+    ).toBe(false);
+    expect(parseFacilityResultHtml(NO_RESULT_HTML).complete).toBe(false);
+    expect(
+      parseFacilityResultHtml(
+        SAMPLE_HTML.replace('data-fac-uid="fac-2"', 'data-missing-uid="fac-2"'),
+      ).complete,
+    ).toBe(false);
+  });
+
   it("detects the no-result page", () => {
     const r = parseFacilityResultHtml(NO_RESULT_HTML);
     expect(r.noResult).toBe(true);
@@ -94,6 +106,7 @@ describe("parseFacilityResultHtml", () => {
   it("extracts campus header info", () => {
     const r = parseFacilityResultHtml(SAMPLE_HTML);
     expect(r.noResult).toBe(false);
+    expect(r.complete).toBe(true);
     expect(r.campusGeo?.lat).toBeCloseTo(25.0169811, 5);
     expect(r.address).toBe("106 臺北市大安區測試路1號");
     expect(r.phone).toBe("02-12345678");

@@ -1,7 +1,7 @@
 /**
  * One-shot import: MOE Campus Accessibility Map (cam.moe.gov.tw) → MongoDB.
  *
- * The site has no public JSON API for facilities — the list endpoint returns
+ * MapInfo supplies public per-facility coordinates. The detailed list returns
  * server-rendered HTML (with base64-inlined photos, 20+ MB per campus), so the
  * crawl walks City → Institution → Branch, POSTs the facility search per
  * campus, and parses the HTML via campus-a11y-parse. POST endpoints require an
@@ -15,7 +15,7 @@
 
 import "dotenv/config";
 import mongoose from "mongoose";
-import { fetchCampusMapLocations } from "../adapters/campus-map.adapter";
+import { fetchCampusMapData } from "../adapters/campus-map.adapter";
 import { syncCampusDocuments } from "./campus-a11y-sync";
 import { ICampusA11y } from "../types";
 import { parseFacilityResultHtml } from "./campus-a11y-parse";
@@ -96,6 +96,94 @@ async function postFacilityResultList(
   return await res.text();
 }
 
+interface BranchCrawlOptions {
+  school: IdName;
+  branches: IdName[];
+  city?: string;
+  facTypeQuery: string;
+  loadList: (payload: Record<string, string>) => Promise<string>;
+  loadMap: typeof fetchCampusMapData;
+}
+
+/** A failed branch must not prevent the remaining branches from being visited. */
+export async function crawlCampusBranches({
+  school,
+  branches,
+  city,
+  facTypeQuery,
+  loadList,
+  loadMap,
+}: BranchCrawlOptions) {
+  const docs: Omit<ICampusA11y, "_id">[] = [];
+  let empty = 0;
+  let failed = 0;
+  for (const branch of branches) {
+    try {
+      const parsed = parseFacilityResultHtml(
+        await loadList({
+          INSTITUTION: String(school.ID),
+          INSTITUTION_BRANCH_ID: String(branch.ID),
+          CITY: "",
+          FacType: facTypeQuery,
+        }),
+      );
+      if (!parsed.noResult && !parsed.complete)
+        throw new Error("Incomplete facility list");
+      const { locations, facilityUids } = await loadMap(branch.ID);
+      if (parsed.noResult || parsed.facilityCount === 0) {
+        if (facilityUids.size > 0)
+          throw new Error("Empty list conflicts with MapInfo");
+        // Directory entries with no facilities have nothing to import; retain any stored data.
+        empty++;
+        continue;
+      }
+
+      const listedUids = new Set(parsed.facilities.map((f) => f.facUid));
+      if ([...facilityUids].some((uid) => !listedUids.has(uid))) {
+        throw new Error("MapInfo has facilities absent from the campus list");
+      }
+      docs.push({
+        schoolId: school.ID,
+        schoolName: school.NAME,
+        branchId: branch.ID,
+        branchName: branch.NAME,
+        city,
+        address: parsed.address ?? undefined,
+        phone: parsed.phone ?? undefined,
+        buildingCount: parsed.buildingCount,
+        facilityCount: parsed.facilityCount,
+        facilities: parsed.facilities.map((f) => ({
+          facUid: f.facUid,
+          facTypeId: f.facTypeId ?? undefined,
+          facType: f.facType ?? undefined,
+          name: f.name,
+          building: f.building ?? undefined,
+          buildingUid: f.buildingUid ?? undefined,
+          floors: f.floors,
+          floorIds: f.floorIds,
+          location: locations.get(f.facUid),
+        })),
+        location: parsed.campusGeo
+          ? {
+              type: "Point",
+              coordinates: [parsed.campusGeo.lng, parsed.campusGeo.lat],
+            }
+          : undefined,
+        searchName: buildSearchName(school.NAME, branch.NAME),
+        aliasNames: buildAliasNames(school.NAME),
+        importedAt: new Date(),
+      });
+    } catch (error) {
+      failed++;
+      console.error(
+        `Campus ${school.NAME} / ${branch.NAME} (${branch.ID}) failed:`,
+        error,
+      );
+    }
+  }
+  return { docs, empty, failed };
+}
+
 async function main() {
   const dbUrl = process.env.DATABASE_URL;
   if (!dbUrl) throw new Error("DATABASE_URL env var is required");
@@ -141,6 +229,7 @@ async function main() {
   const docs: Omit<ICampusA11y, "_id">[] = [];
   let emptyCampuses = 0;
   let failedSchools = 0;
+  let failedBranches = 0;
   for (let i = 0; i < targets.length; i++) {
     const inst = targets[i];
     try {
@@ -148,62 +237,28 @@ async function main() {
         session,
         `/api/Base/InstitutionBranch?INSTITUTION_ID=${inst.ID}`,
       );
-      let facilityTotal = 0;
-      for (const branch of branches) {
-        const payload = {
-          INSTITUTION: String(inst.ID),
-          INSTITUTION_BRANCH_ID: String(branch.ID),
-          CITY: "",
-          FacType: facTypeQuery,
-        };
-        let html: string;
-        try {
-          html = await postFacilityResultList(session, payload);
-        } catch {
-          session = await createSession();
-          html = await postFacilityResultList(session, payload);
-        }
-        const parsed = parseFacilityResultHtml(html);
-        if (parsed.noResult) {
-          emptyCampuses++;
-          continue;
-        }
-        if (!parsed.complete)
-          throw new Error(`Incomplete facility list for campus ${branch.ID}`);
-        const locations = await fetchCampusMapLocations(branch.ID);
-        docs.push({
-          schoolId: inst.ID,
-          schoolName: inst.NAME,
-          branchId: branch.ID,
-          branchName: branch.NAME,
-          city: cityBySchool.get(inst.ID),
-          address: parsed.address ?? undefined,
-          phone: parsed.phone ?? undefined,
-          buildingCount: parsed.buildingCount,
-          facilityCount: parsed.facilityCount,
-          facilities: parsed.facilities.map((f) => ({
-            facUid: f.facUid,
-            facTypeId: f.facTypeId ?? undefined,
-            facType: f.facType ?? undefined,
-            name: f.name,
-            building: f.building ?? undefined,
-            buildingUid: f.buildingUid ?? undefined,
-            floors: f.floors,
-            floorIds: f.floorIds,
-            location: locations.get(f.facUid),
-          })),
-          location: parsed.campusGeo
-            ? {
-                type: "Point",
-                coordinates: [parsed.campusGeo.lng, parsed.campusGeo.lat],
-              }
-            : undefined,
-          searchName: buildSearchName(inst.NAME, branch.NAME),
-          aliasNames: buildAliasNames(inst.NAME),
-          importedAt: new Date(),
-        });
-        facilityTotal += parsed.facilities.length;
-      }
+      const result = await crawlCampusBranches({
+        school: inst,
+        branches,
+        city: cityBySchool.get(inst.ID),
+        facTypeQuery,
+        loadMap: fetchCampusMapData,
+        loadList: async (payload) => {
+          try {
+            return await postFacilityResultList(session, payload);
+          } catch {
+            session = await createSession();
+            return postFacilityResultList(session, payload);
+          }
+        },
+      });
+      docs.push(...result.docs);
+      emptyCampuses += result.empty;
+      failedBranches += result.failed;
+      const facilityTotal = result.docs.reduce(
+        (n, doc) => n + doc.facilities.length,
+        0,
+      );
       console.log(
         `[${i + 1}/${targets.length}] ${inst.NAME}: ${branches.length} campuses, ${facilityTotal} facilities`,
       );
@@ -216,7 +271,16 @@ async function main() {
     }
   }
 
+  console.log("Failed campus requests:", failedBranches);
   const totalFacilities = docs.reduce((n, d) => n + d.facilities.length, 0);
+  const locatedFacilities = docs.reduce(
+    (n, d) => n + d.facilities.filter((f) => f.location !== undefined).length,
+    0,
+  );
+  console.log("Facility coordinates:", {
+    located: locatedFacilities,
+    missing: totalFacilities - locatedFacilities,
+  });
   console.log(
     `Crawl done — ${docs.length} campuses with data, ${emptyCampuses} empty, ` +
       `${failedSchools} schools failed, ${totalFacilities} facilities`,
@@ -232,10 +296,15 @@ async function main() {
   } finally {
     await mongoose.disconnect();
   }
-  if (failedSchools > 0)
+  if (failedSchools > 0 || failedBranches > 0) {
     throw new Error(
-      `${failedSchools} schools failed; their stored data was retained`,
+      "Campus crawl incomplete: " +
+        failedSchools +
+        " school list failures, " +
+        failedBranches +
+        " campus failures; stored data retained",
     );
+  }
 }
 
 if (require.main === module) {

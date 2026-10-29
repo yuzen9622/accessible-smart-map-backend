@@ -1,0 +1,39 @@
+{
+  "_source": "https://cam.moe.gov.tw/Facility/FacilityResult",
+  "_capturedOn": "2026-10-29",
+  "results": [
+    {
+      "facUid": "fcaa6251-78e1-4948-ab45-6cf38030297a",
+      "payload": {
+        "INSTITUTION_ID": "-2147483502",
+        "INSTITUTION_BRANCH_ID": "-2147483510",
+        "BUILDING_UID": "ef90764f-2549-4488-b4e2-afe0177b7c3b",
+        "FACILITY_UID": "fcaa6251-78e1-4948-ab45-6cf38030297a",
+        "FLOOR_ID": "-2147475690"
+      },
+      "detailMinimalSnippet": "<input type=\"hidden\" id=\"geo_info\" data-building-geo=\"POLYGON ((13468590.981867438 2859009.506455189, 13468578.209168157 2858987.089064616, 13468583.943849467 2858984.7430586256, 13468570.38914819 2858961.543666056, 13468564.65446688 2858964.6716740425, 13468556.313112248 2858947.728297447, 13468562.829795554 2858946.164293453, 13468548.753759613 2858920.6188948927, 13468543.540412968 2858922.704233551, 13468531.810383018 2858904.1968529616, 13468553.706438925 2858890.902819017, 13468559.180452904 2858900.0261756456, 13468557.095114246 2858904.4575202935, 13468602.190562723 2858982.1363853035, 13468608.185911365 2858980.0510466453, 13468618.09126999 2858997.515757906, 13468594.631210089 2859013.1557978406, 13468590.981867438 2859009.506455189))\" data-facility-geo=\"\" data-facility-name=\"&#x5EC1;&#x6240;&#x76E5;&#x6D17;&#x5BA4;\" data-facility-color=\"#d63384\" data-facility-class=\"fa-solid fa-restroom-simple\" data-facility-uid=\"fcaa6251-78e1-4948-ab45-6cf38030297a\" data-facility-name=\"&#x5EC1;&#x6240;&#x76E5;&#x6D17;&#x5BA4;\">"
+    },
+    {
+      "facUid": "5957d99a-91cf-4540-bb2b-6898d1ed9c8d",
+      "payload": {
+        "INSTITUTION_ID": "-2147483502",
+        "INSTITUTION_BRANCH_ID": "-2147483510",
+        "BUILDING_UID": "7a82f4ba-1bc6-4a60-84b5-e9458d68ac3c",
+        "FACILITY_UID": "5957d99a-91cf-4540-bb2b-6898d1ed9c8d",
+        "FLOOR_ID": "-2147475666"
+      },
+      "detailMinimalSnippet": "<input type=\"hidden\" id=\"geo_info\" data-building-geo=\"POLYGON ((13468423.929475842 2859049.400214115, 13468420.047908 2859042.0849516424, 13468428.109625828 2859038.2033838, 13468415.867758015 2859016.5561785237, 13468412.284772314 2859018.9448356577, 13468405.715965196 2859006.8522589174, 13468409.74682411 2859004.762183925, 13468395.71346345 2858979.8305750904, 13468407.65674912 2858972.216730476, 13468444.97951684 2859037.755510586, 13468423.929475842 2859049.400214115))\" data-facility-geo=\"\" data-facility-name=\"&#x5EC1;&#x6240;&#x76E5;&#x6D17;&#x5BA4;\" data-facility-color=\"#d63384\" data-facility-class=\"fa-solid fa-restroom-simple\" data-facility-uid=\"5957d99a-91cf-4540-bb2b-6898d1ed9c8d\" data-facility-name=\"&#x5EC1;&#x6240;&#x76E5;&#x6D17;&#x5BA4;\">"
+    },
+    {
+      "facUid": "60a5a218-5a6b-49a9-850c-fe0997c8a7f2",
+      "payload": {
+        "INSTITUTION_ID": "-2147483502",
+        "INSTITUTION_BRANCH_ID": "-2147483510",
+        "BUILDING_UID": "c0d9ea8c-665a-4050-b7fc-71ac05eed3c5",
+        "FACILITY_UID": "60a5a218-5a6b-49a9-850c-fe0997c8a7f2",
+        "FLOOR_ID": "-2147475650"
+      },
+      "detailMinimalSnippet": "<input type=\"hidden\" id=\"geo_info\" data-building-geo=\"POLYGON ((13468658.613045005 2859014.9959961087, 13468686.082602045 2858999.3204336674, 13468675.035062801 2858980.211176596, 13468647.864087902 2858995.8867390375, 13468658.613045005 2859014.9959961087))\" data-facility-geo=\"\" data-facility-name=\"&#x5EC1;&#x6240;&#x76E5;&#x6D17;&#x5BA4;\" data-facility-color=\"#d63384\" data-facility-class=\"fa-solid fa-restroom-simple\" data-facility-uid=\"60a5a218-5a6b-49a9-850c-fe0997c8a7f2\" data-facility-name=\"&#x5EC1;&#x6240;&#x76E5;&#x6D17;&#x5BA4;\">"
+    }
+  ]
+}

@@ -125,7 +125,7 @@ export async function enrichCampusFacilities({
           type: "Point",
           coordinates: [detail.geo.lng, detail.geo.lat],
         };
-        facility.specs = detail.specs;
+        if (detail.specs.length > 0) facility.specs = detail.specs;
         facility.detailFetchedAt = new Date();
         stats.located++;
         changed++;
