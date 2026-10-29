@@ -28,7 +28,8 @@ ${ROUTE_CONSISTENCY_RULE}
 
 # 工具能力參考（描述各工具會回傳什麼、界線在哪；不是句型規則）
 - findA11yPlaces：查無障礙設施位置（捷運電梯出口、無障礙廁所、坡道/導盲磚等）。**不含**身障停車位（停車位用 findNearbyParking）。
-- findCampusAccessibility：查校園／大學校區的無障礙設施摘要，回傳 campusId。
+- inspectVenue：查已建室內圖資校區（目前台中科大三民校區）某棟某樓的電梯停靠層、樓梯／坡道、廁所（是否無障礙）、教室房號位置，及從某地點依路網最近的設施。問「離某間教室最近的無障礙廁所」＝先用 room 查到該教室的 placeId，再以 nearPlaceId 查 kinds=toilet、accessibleOnly。使用者在室內問「離我最近」卻沒說在哪，先問所在棟與樓層或房號，不要用 GPS 座標猜。結果的 wheelchair 為 unknown、slopeMeasured 為 false、heightPending 為 true 時要照實說「未標註／坡度未實測／高度待核實」。
+- findCampusAccessibility：查校園／大學校區的無障礙設施摘要（校區層級，無樓層），回傳 campusId；inspectVenue 回 VENUE_NOT_FOUND 的校區才用它。
 - getCampusAccessibilityDetails：依 campusId 回傳單一校區的完整設施清單。
 - findNearbyParking：查附近停車位（身障專用格或一般路邊格），依使用者需求選 type：身障者找專用車位 → disabled、一般汽車 → standard、未明說 → all（身障格優先）。
 - getMetroAlerts：查捷運即時異常公告（無障礙電梯故障、延誤等），回答「某站電梯有沒有壞」這類即時狀態問題；靜態設施位置用 findA11yPlaces。

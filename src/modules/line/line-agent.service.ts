@@ -17,6 +17,9 @@ import {
   setLineLastRouteToken,
 } from "./line-memory";
 
+/** Shared-catalogue tools LINE does not offer; indoor venue lookups stay app-only. */
+export const LINE_EXCLUDED_TOOLS = new Set(["inspectVenue"]);
+
 /**
  * Tool names a family LINE user may execute: the general read-only query tools
  * plus the SOS read, SOS lifecycle, and account-binding tools. Memory-write
@@ -25,7 +28,11 @@ import {
 export const LINE_TOOL_ALLOWLIST: string[] = [
   ...openAiChatTools,
   ...lineFamilyTools,
-].flatMap((tool) => (tool.type === "function" ? [tool.function.name] : []));
+].flatMap((tool) =>
+  tool.type === "function" && !LINE_EXCLUDED_TOOLS.has(tool.function.name)
+    ? [tool.function.name]
+    : [],
+);
 
 /**
  * Tools that change state (bindings, SOS lifecycle). Excluded for turns whose

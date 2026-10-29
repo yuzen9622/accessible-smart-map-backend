@@ -30,7 +30,13 @@ import { ThinkingLevel, type GroundingChunk } from "@google/genai";
 import { getWebSearchTimeoutMs, googleGenAi, model } from "../../config/ai";
 import { getCoordinates, searchPlaces } from "../../adapters/google.adapter";
 import { bindEmergencyContactCode as bindEmergencyCode } from "../emergency-contact/emergency-contact.service";
-import { bindLineAccountCode as bindAccountCode } from "../user/user.service";
+import {
+  accessibilityModeFromProfile,
+  bindLineAccountCode as bindAccountCode,
+  getConfig,
+} from "../user/user.service";
+import { inspectVenueByQuery } from "../venue/venue.service";
+import { InspectVenueArgsSchema } from "../venue/venue.inspect";
 import { planAccessibleRouteFromRequest } from "../accessible-route/accessible-route.service";
 import { generateNavInstructionsFromInput } from "../nav-instructions/nav-instructions.service";
 import {
@@ -55,9 +61,17 @@ import type {
   ThsrLeg,
   TraLeg,
 } from "../accessible-route/accessible-route.service";
-import { ERROR_MESSAGE, LINE_MSG } from "../../constants/messages";
+import {
+  ERROR_MESSAGE,
+  LINE_MSG,
+  VENUE_INSPECT_MSG,
+} from "../../constants/messages";
 import { TransitPreferenceSchema } from "../../schemas/transit-preference.schema";
-import type { DriveLeg, TravelMode } from "../../types/route";
+import type {
+  AccessibilityMode,
+  DriveLeg,
+  TravelMode,
+} from "../../types/route";
 import { forLineExternalOpen, sosTrackingUrl } from "../../config/public-links";
 import type { TaiwanCityEn } from "../../types/transit";
 
@@ -400,6 +414,51 @@ export async function getCampusAccessibilityDetails(args: {
   } catch (error: any) {
     console.error("[agent-tool:getCampusAccessibilityDetails]", error);
     return JSON.stringify({ ok: false, error: "校區無障礙設施詳情查詢失敗" });
+  }
+}
+
+/**
+ * Mode for `inspectVenue` route costs: the explicit one, else the one the
+ * caller's stored profile implies, else `normal`. Read-only: never creates a
+ * Config document.
+ */
+async function inspectVenueMode(
+  explicit: AccessibilityMode | undefined,
+  userId: string | undefined,
+): Promise<AccessibilityMode> {
+  if (explicit) return explicit;
+  if (!userId) return "normal";
+  try {
+    const config = await getConfig(userId);
+    return accessibilityModeFromProfile(config?.accessibility) ?? "normal";
+  } catch (error) {
+    console.error("[agent-tool:inspectVenue] profile read failed", error);
+    return "normal";
+  }
+}
+
+export async function inspectVenue(args: {
+  raw: Record<string, unknown>;
+  language?: AgentLanguage;
+  userId?: string;
+}): Promise<string> {
+  const messages = VENUE_INSPECT_MSG[args.language === "en" ? "en" : "zh-TW"];
+  const parsed = InspectVenueArgsSchema.safeParse(args.raw);
+  if (!parsed.success)
+    return JSON.stringify({
+      ok: false,
+      reason: "INVALID_ARGUMENTS",
+      error: messages.INVALID_ARGUMENTS,
+    });
+  try {
+    const mode = await inspectVenueMode(parsed.data.mode, args.userId);
+    const result = await inspectVenueByQuery(parsed.data, mode);
+    return JSON.stringify(
+      result.ok ? result : { ...result, error: messages[result.reason] },
+    );
+  } catch (error) {
+    console.error("[agent-tool:inspectVenue]", error);
+    return JSON.stringify({ ok: false, error: messages.FAILED });
   }
 }
 
@@ -2143,6 +2202,13 @@ export async function executeLocalTool(
         limit: args.limit,
         language: options.language,
       } as Parameters<typeof getCampusAccessibilityDetails>[0]);
+
+    case "inspectVenue":
+      return inspectVenue({
+        raw: args,
+        language: options.language,
+        userId,
+      });
 
     case "planAccessibleRoute": {
       const accessibility = AgentAccessibilityOptionsSchema.safeParse({

@@ -116,3 +116,18 @@ it("keeps write tools for typed turns", async () => {
     "claimSosEvent",
   );
 });
+
+it("never offers the indoor venue lookup on LINE, typed or spoken", async () => {
+  runToolLoop.mockResolvedValue({ text: "ok", toolResults: [] });
+  for (const readOnly of [false, true]) {
+    await runLineAgent({
+      lineUserId: "line-user",
+      messages: [{ role: "user", content: "資訊館電梯停幾樓" }],
+      readOnly,
+    });
+  }
+  for (const call of runToolLoop.mock.calls) {
+    expect(call[11].toolAllowList).not.toContain("inspectVenue");
+    expect(call[11].toolAllowList).toContain("findCampusAccessibility");
+  }
+});

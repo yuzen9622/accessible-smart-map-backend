@@ -225,6 +225,29 @@ export const VENUE_MSG = {
   PLACE_NOT_FOUND: "查無此場域地點",
 } as const;
 
+/** `inspectVenue` agent-tool failures, keyed by reason, zh-TW and en. */
+export const VENUE_INSPECT_MSG = {
+  "zh-TW": {
+    VENUE_NOT_FOUND:
+      "場域名稱沒有精確對上：若使用者問的就是 candidates 裡的場域，改用它的 id 重查；candidates 都不是才代表該校區沒有室內圖資",
+    BUILDING_NOT_FOUND: "找不到唯一符合的建築，請從 candidates 選擇",
+    LEVEL_NOT_FOUND: "這棟沒有這個樓層，可用樓層見 candidates",
+    PLACE_NOT_FOUND: "查無此起點地點，請先用 inspectVenue 取得 placeId",
+    INVALID_ARGUMENTS: "查詢參數格式錯誤",
+    FAILED: "室內圖資查詢失敗",
+  },
+  en: {
+    VENUE_NOT_FOUND:
+      "Venue name did not match exactly: if the user means a venue in candidates, retry with its id; only when none fits does the campus lack an indoor map",
+    BUILDING_NOT_FOUND: "No single matching building; pick one from candidates",
+    LEVEL_NOT_FOUND: "That floor does not exist here; see candidates",
+    PLACE_NOT_FOUND:
+      "Unknown origin place; get a placeId from inspectVenue first",
+    INVALID_ARGUMENTS: "Invalid query arguments",
+    FAILED: "Indoor map lookup failed",
+  },
+} as const;
+
 export const REVIEW_MSG = {
   CREATED: "評價已建立",
   UPDATED: "評價已更新",

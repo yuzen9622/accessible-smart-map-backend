@@ -31,7 +31,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "findA11yPlaces",
       description:
-        "查詢無障礙設施資料庫，回傳捷運電梯出口、無障礙廁所、OSM 坡道/導盲磚等設施的位置。涵蓋一般公共空間的無障礙設施；不含身障停車位（停車位用 findNearbyParking），不含校園內設施（校園用 findCampusAccessibility）。",
+        "查詢無障礙設施資料庫，回傳捷運電梯出口、無障礙廁所、OSM 坡道/導盲磚等設施的位置。涵蓋一般公共空間的無障礙設施；不含身障停車位（停車位用 findNearbyParking），不含校園內設施（校園用 findCampusAccessibility；有 inspectVenue 工具時，已建室內圖資校區的某棟某樓改用 inspectVenue）。",
       parameters: {
         type: "object",
         properties: {
@@ -55,7 +55,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "findCampusAccessibility",
       description:
-        "查詢教育部校園無障礙資料庫，回傳學校/大學/校區內無障礙設施（電梯、廁所、坡道、輪椅通道）的校區摘要與 campusId。可用校名/校區關鍵字（支援簡稱如「中科大」與臺台通用）、城市、設施類型搜尋，或用座標/目前位置找附近校區。要看某校區完整設施清單再用 getCampusAccessibilityDetails。",
+        "查詢教育部校園無障礙資料庫，回傳學校/大學/校區內無障礙設施（電梯、廁所、坡道、輪椅通道）的校區摘要與 campusId。只有校區層級摘要，沒有樓層與室內路網；有 inspectVenue 工具且該校區已建室內圖資時，問某棟某樓改用 inspectVenue。可用校名/校區關鍵字（支援簡稱如「中科大」與臺台通用）、城市、設施類型搜尋，或用座標/目前位置找附近校區。要看某校區完整設施清單再用 getCampusAccessibilityDetails。",
       parameters: {
         type: "object",
         properties: {
@@ -111,6 +111,77 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           },
         },
         required: ["campusId"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "inspectVenue",
+      description:
+        "查已建室內圖資的場域（目前為台中科大三民校區）各棟各樓的設施：電梯停靠哪幾層、哪裡有樓梯／坡道（坡度、階數）、廁所位置與是否無障礙、教室房號在哪棟哪樓，以及從某個地點出發依路網最近的設施。回傳 facts（levelRefs、wheelchair、slopeMeasured、heightPending、landmarks 鄰近房號、placeId）。建築、樓層對不上或有多個符合時回 ok:false 與 candidates，請改用 candidates 的 id 重查或向使用者確認，不要自己猜。回 VENUE_NOT_FOUND 表示該校區沒有室內圖資，再改用 findCampusAccessibility。",
+      parameters: {
+        type: "object",
+        properties: {
+          venue: {
+            type: "string",
+            description:
+              "場域 id。目前只有台中科大三民校區（id: nutc-sanmin），問這個校區時省略或填 nutc-sanmin，不要填校名；其他校區填校名會回 VENUE_NOT_FOUND",
+          },
+          building: {
+            type: "string",
+            description:
+              "建築 id 或名稱，例如「資訊館」「中科大樓」；不限建築時省略",
+          },
+          level: {
+            type: "string",
+            description:
+              "樓層，照使用者說法填，例如「4樓」「四樓」「B1」「地下一樓」",
+          },
+          room: {
+            type: "string",
+            description: "房號，例如「2108」；只找這間時填",
+          },
+          kinds: {
+            type: "array",
+            items: {
+              type: "string",
+              enum: [
+                "room",
+                "toilet",
+                "entrance",
+                "gate",
+                "parking",
+                "elevator",
+                "stairs",
+                "ramp",
+                "escalator",
+                "other",
+              ],
+            },
+            description: "只要哪些種類；省略為全部",
+          },
+          accessibleOnly: {
+            type: "boolean",
+            description:
+              "只回輪椅可用（wheelchair=yes）的設施，例如「無障礙廁所」",
+          },
+          nearPlaceId: {
+            type: "string",
+            description:
+              "找「離某地點最近」時的起點 placeId，必須取自先前 inspectVenue 結果的 placeId（例如先用 room 查到教室）；不要自己編。只回室內路網一定範圍內可達的結果，空結果代表附近找不到，不代表整個校區沒有",
+          },
+          mode: {
+            type: "string",
+            enum: ["wheelchair", "elderly", "visual_impaired", "normal"],
+            description:
+              "只影響 nearPlaceId 的路網成本；使用者明示時才傳，省略沿用個人設定",
+          },
+          limit: {
+            type: "number",
+            description: "最多回傳筆數，預設 8，最大 20",
+          },
+        },
       },
     },
   },
