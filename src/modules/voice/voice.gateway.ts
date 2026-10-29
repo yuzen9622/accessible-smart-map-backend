@@ -15,6 +15,7 @@ import {
   NavCancelMessageSchema,
   NavPositionMessageSchema,
   NavPreviewStepMessageSchema,
+  NavAdvanceMessageSchema,
   NavResumeMessageSchema,
   NavSetRouteMessageSchema,
   NavStartMessageSchema,
@@ -588,6 +589,18 @@ function handleConnection(
         return;
       }
       bridge?.previewNavStep(result.data.index);
+      return;
+    }
+    if (parsed?.type === "nav.advance") {
+      if (!controlBucket.take()) return;
+      const result = NavAdvanceMessageSchema.safeParse(parsed);
+      if (!result.success) {
+        console.warn(
+          `[voice] ignoring nav.advance: ${describeIssues(result.error)}`,
+        );
+        return;
+      }
+      bridge?.advanceNavStep(result.data.fromStepIndex);
       return;
     }
     if (parsed?.type === "nav.resume") {

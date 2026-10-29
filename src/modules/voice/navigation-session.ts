@@ -733,10 +733,15 @@ export class NavigationSession {
    *
    * @returns ok:false when the current step is not an indoor one.
    */
-  advance(): NavEffect {
+  advance(fromStepIndex?: number): NavEffect {
     if (this.disposed || !this.active) return emptyEffect(false);
     const current = this.manualIndex();
-    if (current === null) return emptyEffect(false);
+    // a confirmation for a step already left behind must not skip the next one
+    if (
+      current === null ||
+      (fromStepIndex !== undefined && fromStepIndex !== current)
+    )
+      return emptyEffect(false);
     const next = current + 1;
     if (next >= this.steps.length) return this.finish();
     if (this.steps[next].kind === "venue") {
@@ -750,11 +755,26 @@ export class NavigationSession {
       };
     }
     const outdoor = this.processThrough(next);
+    this.previewIndex = next;
     this.enqueueSpeech(outdoor.speech.join(" "));
     const events = [...outdoor.events];
     if (this.active && this.latestPosition)
       events.push(...this.onPosition(this.latestPosition).events);
     return { ok: true, events };
+  }
+
+  /** True while the user is on an indoor step GPS cannot place them on. */
+  isOnManualStep(): boolean {
+    return this.manualIndex() !== null;
+  }
+
+  /** True while the user is still on the indoor leg a trip starts with. */
+  isInDeparture(): boolean {
+    const current = this.manualIndex();
+    return (
+      current !== null &&
+      this.steps.slice(0, current + 1).every((step) => step.kind === "venue")
+    );
   }
 
   /** The indoor step the user is on, or null while GPS drives the steps. */
@@ -768,6 +788,7 @@ export class NavigationSession {
   /** Makes `index` the current step, speaks it and reports it. */
   private announce(index: number): NavServerEvent[] {
     this.announcedIndex = index;
+    this.previewIndex = index;
     const step = this.steps[index];
     this.enqueueSpeech(step.instruction);
     return [
@@ -783,6 +804,7 @@ export class NavigationSession {
   /** Like announce, but leaves speaking to the caller's batched speech. */
   private announceQuietly(index: number): NavServerEvent[] {
     this.announcedIndex = index;
+    this.previewIndex = index;
     const step = this.steps[index];
     return [
       {
@@ -1385,6 +1407,8 @@ export class NavigationSession {
       // outdoor arrival line would announce an arrival that has not happened
       events.push(...this.announceQuietly(indoorAfter));
       speech.push(this.steps[indoorAfter].instruction);
+      if (indoorAfter === this.steps.length - 1)
+        events.push(...this.finish().events);
     } else if (targetIndex === this.terminalCoordIndex) {
       for (
         let i = targetIndex + 1;

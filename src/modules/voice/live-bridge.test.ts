@@ -1308,6 +1308,224 @@ describe("createLiveBridge navigation turn arbiter", () => {
     });
   });
 
+  describe("venue legs around outdoor guidance", () => {
+    const venueLeg = {
+      venueId: "nutc-sanmin",
+      venueVersion: 1,
+      mode: "wheelchair",
+      fromPlaceId: "gate",
+      toPlaceId: "zk-3314",
+      distanceM: 40,
+      durationS: 60,
+      elevatorRides: 1,
+      stairFlights: 0,
+      path: { coordinates: [], buildingIds: [], levelRefs: [] },
+      segments: [],
+      steps: ["enter", "elevator", "arrive"].map((type) => ({
+        type,
+        instruction: `室內:${type}`,
+        distanceM: 10,
+        durationS: 10,
+        buildingId: "zk",
+        levelRef: "1F",
+        pathStart: 0,
+        pathEnd: 0,
+      })),
+    };
+    const envelopeWithArrival = {
+      navigationId: "66666666-6666-4666-8666-666666666666",
+      routeVersion: 1,
+      canonicalRequest: { requireElevator: false },
+      venueLegs: { arrival: venueLeg },
+    };
+    const sent = (ws: WebSocket) =>
+      vi
+        .mocked(ws.send)
+        .mock.calls.map(([value]) => value)
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => JSON.parse(value));
+
+    it("keeps the indoor leg into the destination when a reroute replaces the route", async () => {
+      vi.useFakeTimers();
+      try {
+        let onmessage: ((message: unknown) => void) | undefined;
+        const session = makeSession();
+        const ws = makeWs();
+        connect.mockImplementation(async ({ callbacks }) => {
+          onmessage = callbacks.onmessage;
+          return session;
+        });
+        getRouteByToken.mockResolvedValue(walkRoute);
+        getNavigationEnvelopeByToken.mockResolvedValue(envelopeWithArrival);
+        rerouteAccessibleRoute.mockResolvedValue({
+          ok: true,
+          data: {
+            navigationId: envelopeWithArrival.navigationId,
+            previousRouteVersion: 1,
+            routeVersion: 2,
+            routeToken: "replacement",
+            route: walkRoute,
+            instructions: [],
+            steps: [],
+            warnings: [],
+            currentStepIndex: 0,
+            replayed: false,
+            venueLeg,
+          },
+        });
+        const bridge = await createLiveBridge({
+          ws,
+          userId: "u",
+          userLocation: { latitude: 25, longitude: 121 },
+        });
+        await bridge.voiceReady;
+        await bridge.armRouteToken("initial");
+        onmessage?.({
+          serverContent: {
+            inputTranscription: { text: "開始導航", finished: true },
+          },
+          toolCall: {
+            functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
+          },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        const start = sent(ws).find((message) => message.type === "nav.start");
+        expect(start.steps.at(-1)).toMatchObject({ legType: "VENUE" });
+        const far = { latitude: 25.002, longitude: 121.0005 };
+        for (let i = 0; i < 3; i++) {
+          bridge.updatePosition(far);
+          await vi.advanceTimersByTimeAsync(500);
+        }
+        expect(rerouteAccessibleRoute).toHaveBeenCalledOnce();
+        await vi.advanceTimersByTimeAsync(0);
+        const replaced = sent(ws).find(
+          (message) => message.type === "nav.route_replaced",
+        );
+        expect(replaced.steps.map((step: any) => step.legType)).toContain(
+          "VENUE",
+        );
+        expect(replaced.route).not.toHaveProperty("venueLegs");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("never reroutes while the user is on the indoor leg of the destination", async () => {
+      vi.useFakeTimers();
+      try {
+        let onmessage: ((message: unknown) => void) | undefined;
+        const session = makeSession();
+        const ws = makeWs();
+        connect.mockImplementation(async ({ callbacks }) => {
+          onmessage = callbacks.onmessage;
+          return session;
+        });
+        getRouteByToken.mockResolvedValue(walkRoute);
+        getNavigationEnvelopeByToken.mockResolvedValue(envelopeWithArrival);
+        const bridge = await createLiveBridge({ ws, userId: "u" });
+        await bridge.voiceReady;
+        await bridge.armRouteToken("initial");
+        onmessage?.({
+          serverContent: {
+            inputTranscription: { text: "開始導航", finished: true },
+          },
+          toolCall: {
+            functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
+          },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        bridge.updatePosition({ latitude: start[1], longitude: start[0] });
+        await vi.advanceTimersByTimeAsync(500);
+        bridge.updatePosition({ latitude: end[1], longitude: end[0] });
+        await vi.advanceTimersByTimeAsync(500);
+        const steps = sent(ws).filter((message) => message.type === "nav.step");
+        expect(steps.at(-1)).toMatchObject({ instruction: "室內:enter" });
+        const far = { latitude: 25.002, longitude: 121.0005 };
+        for (let i = 0; i < 4; i++) {
+          bridge.updatePosition(far);
+          await vi.advanceTimersByTimeAsync(500);
+        }
+        expect(rerouteAccessibleRoute).not.toHaveBeenCalled();
+        expect(
+          sent(ws).some((message) => message.type === "nav.offroute"),
+        ).toBe(false);
+
+        // a stale tap is ignored; the current one advances
+        const index = steps.at(-1).currentStepIndex;
+        bridge.advanceNavStep(index - 1);
+        bridge.advanceNavStep(index);
+        bridge.advanceNavStep(index);
+        expect(
+          sent(ws)
+            .filter((message) => message.type === "nav.step")
+            .at(-1),
+        ).toMatchObject({
+          currentStepIndex: index + 1,
+          instruction: "室內:elevator",
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("advances one step per model turn however often the tool is called", async () => {
+      let onmessage: ((message: unknown) => void) | undefined;
+      const session = makeSession();
+      const ws = makeWs();
+      connect.mockImplementation(async ({ callbacks }) => {
+        onmessage = callbacks.onmessage;
+        return session;
+      });
+      getRouteByToken.mockResolvedValue({
+        ...walkRoute,
+        legs: [],
+      });
+      getNavigationEnvelopeByToken.mockResolvedValue({
+        ...envelopeWithArrival,
+        venueLegs: { departure: venueLeg },
+      });
+      const bridge = await createLiveBridge({ ws, userId: "u" });
+      await bridge.voiceReady;
+      await bridge.armRouteToken("indoor");
+      onmessage?.({
+        serverContent: {
+          inputTranscription: { text: "開始導航", finished: true },
+        },
+        toolCall: {
+          functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
+        },
+      });
+      await vi.waitFor(() =>
+        expect(session.sendToolResponse).toHaveBeenCalledOnce(),
+      );
+      onmessage?.({
+        serverContent: { inputTranscription: { text: "到了", finished: true } },
+        toolCall: {
+          functionCalls: [
+            { id: "a1", name: "advanceNavStep", args: {} },
+            { id: "a2", name: "advanceNavStep", args: {} },
+          ],
+        },
+      });
+      await vi.waitFor(() =>
+        expect(session.sendToolResponse).toHaveBeenCalledTimes(2),
+      );
+      const outputs =
+        session.sendToolResponse.mock.calls[1][0].functionResponses.map(
+          (response: any) => JSON.parse(response.response.output),
+        );
+      expect(outputs).toEqual([
+        { ok: true },
+        { ok: false, reason: "ALREADY_ADVANCED" },
+      ]);
+      expect(
+        sent(ws)
+          .filter((message) => message.type === "nav.step")
+          .at(-1),
+      ).toMatchObject({ currentStepIndex: 1 });
+    });
+  });
+
   it("forwards schema-valid nav.progress frames produced by the session", async () => {
     let onmessage: ((message: unknown) => void) | undefined;
     const session = makeSession();

@@ -131,6 +131,7 @@ curl -X POST https://<host>/api/v1/user/login \
 | `nav.start`  | `type`                                                                                                   | 在已 `nav.setRoute` arm 的路線上開始導航；回應為下行 `nav.start`                                       |
 | `nav.resume` | `type`, `navigationId`, `routeVersion`, `routeToken`, `lastKnownStepIndex`, `currentPosition?`           | 斷線重連後從伺服器端進度快照恢復；`lastKnownStepIndex` 只是提示，以回應 `nav.resume_ok` 的值為準       |
 | `nav.previewStep` | `type`, `index` | 預覽中使用者切到第 `index` 步：助理念這一步的後端指令文字。只在預覽中有效，沒有下行回應 |
+| `nav.advance` | `type`, `fromStepIndex` | 室內步驟（`driver: "manual"`）完成時推進到下一步；`fromStepIndex` 不是目前室內步驟時忽略。回應為下行 `nav.step` |
 
 **預覽與實際導航（2026-10-28）。** 導航開始（或 `nav.resume`）後的第一個位置決定誰推進步驟：離路線 500 公尺內由 GPS 推進（geofence、`nav.progress`、偏航）；更遠就是預覽，位置不推進步驟、不送 `nav.progress`、不判偏航，助理先念第一步，之後由前端以 `nav.previewStep` 選步驟。預覽中的位置一旦進到 500 公尺內就轉成實際導航；若使用者預覽時選的步驟和實際進度不同，後端先送一個 `nav.step` 把前端拉回實際步驟。實際導航不會退回預覽，之後走遠屬於偏航。
 
@@ -217,7 +218,7 @@ interface NavStepDto {
 
 **室內步驟（2026-10-29）。** 行程起點或終點在室內場域（例如台中科大三民校區某間教室），或整趟都在場域內時，`steps` 會在戶外步驟前後帶入室內步驟：`legType: "VENUE"`、`driver: "manual"`，樓層在 `levelRef`／`fromLevelRef`／`toLevelRef`，室內語意在 `venueStepType`。`type` 仍給舊值（電梯、坡道、樓梯為 `facility`，進出建築與走廊為 `turn`，另有 `depart`／`arrive`），舊前端可照常顯示。室內步驟的 `legIndex` 指向最近的戶外 leg（整趟在室內時為 0），前端不可用它取室內幾何。
 
-室內沒有樓層定位，所以室內步驟只由使用者推進：使用者說「到了」「出電梯了」「下一步」時，助理呼叫 Live 工具 `advanceNavStep`，後端送出下一步的 `nav.step`。室內段期間 `nav.position` 照常上傳但不推進步驟、不送 `nav.progress`、不判偏航。從場域出發時，最後一個室內步驟完成後改由 GPS 推進戶外步驟；到達場域時，GPS 到達校門會接著送第一個室內步驟的 `nav.step`，而不是 `nav.arrived`，最後一個室內步驟完成才送 `nav.arrived` 與 `nav.stop`。整趟在室內的行程不支援重新規劃（`/accessible-route/reroute` 回 410）。
+室內沒有樓層定位，所以室內步驟只由使用者推進：使用者說「到了」「出電梯了」「下一步」時，助理呼叫 Live 工具 `advanceNavStep`（同一回合只推進一步），後端送出下一步的 `nav.step`。前端也可以送 `{"type":"nav.advance","fromStepIndex":<目前步驟>}`（例如使用者點「下一步」），只有 `fromStepIndex` 仍是目前的室內步驟才會推進，晚到或重複的點擊不會跳步。使用者在室內時不會因路況或運輸警報重新規劃：出發段的重大原因延到走出建築後處理，抵達段直接略過。室內段期間 `nav.position` 照常上傳但不推進步驟、不送 `nav.progress`、不判偏航。從場域出發時，最後一個室內步驟完成後改由 GPS 推進戶外步驟；到達場域時，GPS 到達校門會接著送第一個室內步驟的 `nav.step`，而不是 `nav.arrived`，最後一個室內步驟完成才送 `nav.arrived` 與 `nav.stop`。整趟在室內的行程不支援重新規劃（`/accessible-route/reroute` 回 410）。
 
 `maneuver` 與 `/a11y/route/instructions` 的 `instructions[].maneuver` 同義：步行步驟為路線引擎動作
 （`CONTINUE`／`STRAIGHT` 表示沿路直行，含長直線切段的進度點），其他步驟為 `null`。

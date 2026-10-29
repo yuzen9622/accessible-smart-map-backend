@@ -1764,3 +1764,98 @@ describe("NavigationSession indoor venue legs", () => {
     ]);
   });
 });
+
+describe("NavigationSession indoor venue legs, review fixes", () => {
+  const A = coord(121);
+  const B = coord(121.005);
+  const G = coord(121.01);
+  const leg = (types: VenueStepType[]): VenueRoute => ({
+    venueId: "v",
+    venueVersion: 1,
+    mode: "normal",
+    fromPlaceId: "a",
+    toPlaceId: "b",
+    distanceM: 10,
+    durationS: 10,
+    elevatorRides: 0,
+    stairFlights: 0,
+    path: { coordinates: [], buildingIds: [], levelRefs: [] },
+    segments: [],
+    steps: types.map((type, index) => ({
+      type,
+      instruction: `室內${index}`,
+      distanceM: 5,
+      durationS: 5,
+      buildingId: "b1",
+      levelRef: "1F",
+      pathStart: 0,
+      pathEnd: 0,
+    })),
+  });
+  const drain = (nav: NavigationSession): string => {
+    const spoken: string[] = [];
+    for (let next = nav.takeNextSpeech(); next; next = nav.takeNextSpeech()) {
+      spoken.push(next);
+      nav.onTurnComplete();
+    }
+    return spoken.join(" ");
+  };
+
+  it("repeats the outdoor step, not the first indoor one, after leaving the venue", () => {
+    const nav = new NavigationSession();
+    nav.armRoute({
+      ...route([walkLeg([G, B, A])]),
+      venueLegs: { departure: leg(["depart", "exit"]) },
+    });
+    nav.start();
+    expect(nav.isInDeparture()).toBe(true);
+    nav.advance();
+    nav.advance();
+    drain(nav);
+    expect(nav.isOnManualStep()).toBe(false);
+    expect(nav.isInDeparture()).toBe(false);
+    nav.repeatCurrent();
+    expect(drain(nav)).not.toContain("室內");
+  });
+
+  it("ignores a confirmation for a step already left behind", () => {
+    const nav = new NavigationSession();
+    nav.armRoute({
+      ...route([]),
+      venueLegs: { departure: leg(["depart", "walk", "arrive"]) },
+    });
+    nav.start();
+    expect(nav.advance(0).ok).toBe(true);
+    expect(nav.advance(0).ok).toBe(false);
+    expect(nav.getSnapshotState()?.currentStepIndex).toBe(1);
+    expect(nav.advance(1).ok).toBe(true);
+  });
+
+  it("arrives at once when the gate leads to a single indoor step", () => {
+    const nav = new NavigationSession();
+    nav.armRoute({
+      ...route([walkLeg([A, B, G])]),
+      venueLegs: { arrival: leg(["arrive"]) },
+    });
+    nav.start(pos(A));
+    nav.onPosition(pos(B));
+    const atGate = nav.onPosition(pos(G));
+    expect(atGate.events.map((event) => event.type)).toEqual(
+      expect.arrayContaining(["nav.arrived", "nav.stop"]),
+    );
+    expect(nav.isActive).toBe(false);
+  });
+
+  it("is not in a departure while on the indoor leg of an arrival", () => {
+    const nav = new NavigationSession();
+    nav.armRoute({
+      ...route([walkLeg([A, B, G])]),
+      venueLegs: { arrival: leg(["enter", "arrive"]) },
+    });
+    nav.start(pos(A));
+    nav.onPosition(pos(B));
+    nav.onPosition(pos(G));
+    expect(nav.isOnManualStep()).toBe(true);
+    expect(nav.isInDeparture()).toBe(false);
+  });
+});

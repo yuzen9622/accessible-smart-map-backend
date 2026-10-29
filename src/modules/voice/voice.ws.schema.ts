@@ -121,6 +121,16 @@ export const NavPreviewStepMessageSchema = z.object({
 });
 
 /**
+ * The user completed the indoor step `fromStepIndex` (e.g. tapped 下一步).
+ * Ignored unless that is still the current indoor step, so a late or
+ * repeated tap never skips a step.
+ */
+export const NavAdvanceMessageSchema = z.object({
+  type: z.literal("nav.advance"),
+  fromStepIndex: z.number().int().nonnegative().max(10_000),
+});
+
+/**
  * Re-arms an interrupted navigation from the server-side progress snapshot.
  *
  * `lastKnownStepIndex` is what the client believes it reached; the server
@@ -143,6 +153,7 @@ export const VoiceControlMessageSchema = z.discriminatedUnion("type", [
   NavPositionMessageSchema,
   NavStartMessageSchema,
   NavPreviewStepMessageSchema,
+  NavAdvanceMessageSchema,
   NavCancelMessageSchema,
   NavResumeMessageSchema,
   RouteContextSetMessageSchema,

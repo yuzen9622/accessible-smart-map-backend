@@ -49,7 +49,11 @@ import {
   switchNavigationCandidate,
 } from "../accessible-route/candidate-route-switch.service";
 import { isNavigationEnvelope } from "../accessible-route/route-token.service";
-import type { RerouteData } from "../accessible-route/accessible-route.types";
+import type {
+  NavigationRoute,
+  NavigationVenueLegs,
+  RerouteData,
+} from "../accessible-route/accessible-route.types";
 import { correctUserTranscript } from "./transcript-corrector";
 import { withCurrentDate } from "../../config/ai/chat-prompt";
 import {
@@ -323,6 +327,8 @@ export interface LiveBridge {
   updatePosition(position: NavPosition): void;
   /** Reads one step aloud while the user previews a route they are far from. */
   previewNavStep(index: number): void;
+  /** The user completed indoor step `fromStepIndex` (a client tap). */
+  advanceNavStep(fromStepIndex: number): void;
   cancelNav(): void;
   endSession(): void;
   close(): void;
@@ -532,6 +538,8 @@ export async function createLiveBridge(
   let lastCorridorScanAt = 0;
   let corridorScanTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingCriticalRerouteReason: RerouteReason | null = null;
+  /** The model turn that last advanced an indoor step. */
+  let advancedInTurn: string | null = null;
   let pendingReconciledOffRoute: {
     navigationId: string;
     generation: number;
@@ -882,6 +890,15 @@ export async function createLiveBridge(
     reason: RerouteReason,
     triggerPosition: NavPosition | null = latestPosition,
   ): Promise<boolean> => {
+    // Indoors GPS cannot place the user: an outdoor replan from that fix
+    // would restart the trip from wherever the building happens to be. On
+    // the way out, a critical reason waits until the user is outdoors; on
+    // the way in, the outdoor route is already behind them.
+    if (navSession.isOnManualStep()) {
+      if (reason !== "OFF_ROUTE" && navSession.isInDeparture())
+        pendingCriticalRerouteReason = reason;
+      return false;
+    }
     // A preview's position is not on the route; replanning from it would
     // silently swap the route the user is looking at.
     if (!navSession.isLiveGuidance) return false;
@@ -971,7 +988,12 @@ export async function createLiveBridge(
         return false;
       }
       const replacement = new NavigationSession(undefined, language);
-      const armed = replacement.armRoute(result.data.route);
+      const armed = replacement.armRoute(
+        navigable(
+          result.data.route,
+          result.data.venueLeg ? { arrival: result.data.venueLeg } : undefined,
+        ),
+      );
       const started = replacement.start(latestPosition ?? undefined);
       const startEvent = started.events.find(
         (event) => event.type === "nav.start",
@@ -1195,9 +1217,36 @@ export async function createLiveBridge(
     if (assistantEnding) assistantEnding.audioBytes += decoded.length;
   };
 
-  const prepareSession = (route: AccessibleRoute) => {
+  /**
+   * Joins a route with its venue legs for navigation only; routes sent to
+   * clients never carry them.
+   */
+  const navigable = (
+    route: AccessibleRoute,
+    legs?: NavigationVenueLegs,
+  ): NavigationRoute =>
+    legs?.departure || legs?.arrival ? { ...route, venueLegs: legs } : route;
+
+  /**
+   * Venue legs a replacement route keeps: the departure leg only while the
+   * user is still walking it, otherwise just the leg into the destination.
+   */
+  const remainingVenueLegs = (
+    legs?: NavigationVenueLegs,
+  ): NavigationVenueLegs | undefined =>
+    legs &&
+    (navSession.isInDeparture()
+      ? legs
+      : legs.arrival
+        ? { arrival: legs.arrival }
+        : undefined);
+
+  const prepareSession = (
+    route: AccessibleRoute,
+    legs?: NavigationVenueLegs,
+  ) => {
     const prepared = new NavigationSession(undefined, language);
-    const armed = prepared.armRoute(route);
+    const armed = prepared.armRoute(navigable(route, legs));
     const effect = prepared.start(latestPosition ?? undefined);
     const startEvent = effect.events.find((e) => e.type === "nav.start");
     if (
@@ -1520,8 +1569,11 @@ export async function createLiveBridge(
               },
               isAuthorized,
               isNavigationCurrent,
-              prepare: (data) => {
-                prepared = prepareSession(data.route);
+              prepare: (data, envelope) => {
+                prepared = prepareSession(
+                  data.route,
+                  remainingVenueLegs(envelope.venueLegs),
+                );
                 if (!prepared) return false;
                 try {
                   VoiceRerouteOutboundMessageSchema.parse(
@@ -1733,14 +1785,22 @@ export async function createLiveBridge(
                 : messages.stopped,
           });
         } else if (name === "advanceNavStep") {
-          const effect = navSession.advance();
-          applyEffect(effect);
-          if (effect.ok) persistNavigationSnapshot(true);
-          result = JSON.stringify(
-            effect.ok
-              ? { ok: true }
-              : { ok: false, reason: "NOT_AN_INDOOR_STEP" },
-          );
+          // one spoken "到了" is one step, however many calls the model makes
+          if (advancedInTurn === turnId) {
+            result = JSON.stringify({ ok: false, reason: "ALREADY_ADVANCED" });
+          } else {
+            const effect = navSession.advance();
+            applyEffect(effect);
+            if (effect.ok) {
+              advancedInTurn = turnId;
+              persistNavigationSnapshot(true);
+            }
+            result = JSON.stringify(
+              effect.ok
+                ? { ok: true }
+                : { ok: false, reason: "NOT_AN_INDOOR_STEP" },
+            );
+          }
         } else if (name === "repeatNavStep") {
           applyEffect(navSession.repeatCurrent());
           result = JSON.stringify({ ok: true, message: messages.repeat });
@@ -1758,6 +1818,7 @@ export async function createLiveBridge(
           if (
             name === "planAccessibleRoute" &&
             call.args?.origin === "current_location" &&
+            !call.args?.originPlaceId &&
             !latestPosition
           ) {
             await requestClientLocation();
@@ -1834,7 +1895,10 @@ export async function createLiveBridge(
                       canonical.value.routeVersion
                   ) {
                     const envelope = canonical.value;
-                    const prepared = prepareSession(envelope.route);
+                    const prepared = prepareSession(
+                      envelope.route,
+                      envelope.venueLegs,
+                    );
                     if (prepared)
                       directCommit = () => {
                         if (!current()) {
@@ -2502,7 +2566,7 @@ export async function createLiveBridge(
       const committedGeneration = ++navigationGeneration;
       pruneRerouteState();
       pendingRouteArm = null;
-      applyEffect(navSession.armRoute(route));
+      applyEffect(navSession.armRoute(navigable(route, envelope?.venueLegs)));
       activeNavigation = envelope
         ? {
             routeToken,
@@ -2682,7 +2746,7 @@ export async function createLiveBridge(
         let resumeReplacement: ReturnType<typeof replacementEvent> | null =
           null;
         if (adoptedReplacement) {
-          const prepared = prepareSession(route);
+          const prepared = prepareSession(route, envelope.venueLegs);
           if (!prepared) {
             fail("ROUTE_EXPIRED", messages.routeExpired);
             return;
@@ -2756,7 +2820,11 @@ export async function createLiveBridge(
           clearTimeout(positionTimer);
           positionTimer = null;
         }
-        const effect = navSession.resume(route, snapshot, resumePosition);
+        const effect = navSession.resume(
+          navigable(route, envelope.venueLegs),
+          snapshot,
+          resumePosition,
+        );
         if (!effect.ok) {
           activeNavigation = null;
           applyEffect(effect);
@@ -2855,6 +2923,13 @@ export async function createLiveBridge(
     previewNavStep(index: number): void {
       if (disposed) return;
       applyEffect(navSession.previewStep(index));
+      driveNavigationSpeech();
+    },
+    advanceNavStep(fromStepIndex: number): void {
+      if (disposed) return;
+      const effect = navSession.advance(fromStepIndex);
+      applyEffect(effect);
+      if (effect.ok) persistNavigationSnapshot(true);
       driveNavigationSpeech();
     },
     cancelNav(): void {
