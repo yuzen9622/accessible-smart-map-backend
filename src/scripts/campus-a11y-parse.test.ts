@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import moeNames from "./__fixtures__/moe-facility-names.json";
 import {
   decodeHtmlEntities,
   mercatorToWgs84,
@@ -187,5 +188,59 @@ describe("parseFacilityDetailHtml", () => {
     const r = parseFacilityDetailHtml(html);
     expect(r.geo).toBeNull();
     expect(r.specs).toEqual([]);
+  });
+});
+
+describe("current MOE facility naming markup", () => {
+  it("reads the original data-name/data-category and h4 building headings", () => {
+    const facilities = moeNames.excerpts.flatMap(
+      (row) => parseFacilityResultHtml(row.html).facilities,
+    );
+    expect(facilities).toHaveLength(2);
+    expect(
+      facilities.find(
+        (f) => f.facUid === "5c1cfb58-30f0-4946-aa16-bdf77587ecd3",
+      ),
+    ).toMatchObject({
+      name: "無障礙坡道",
+      facType: "無障礙坡道",
+      building: "7-11",
+      floors: ["1F"],
+    });
+    expect(
+      facilities.find(
+        (f) => f.facUid === "5957d99a-91cf-4540-bb2b-6898d1ed9c8d",
+      ),
+    ).toMatchObject({
+      name: "廁所盥洗室",
+      facType: "無障礙廁所",
+      building: "電子館",
+      floors: ["1F"],
+    });
+  });
+
+  it("prefers structured names and retains all floors for the same UID", () => {
+    const withAttributes = SAMPLE_HTML.replace(
+      /data-fac-uid="fac-1"/g,
+      'data-fac-uid="fac-1" data-name="北側電梯（2號）" data-category="無障礙電梯"',
+    );
+    const result = parseFacilityResultHtml(withAttributes);
+    expect(result.facilities.find((f) => f.facUid === "fac-1")).toMatchObject({
+      name: "北側電梯（2號）",
+      facType: "無障礙電梯",
+      building: "綜合體育館",
+      floors: ["B1", "1F"],
+    });
+  });
+
+  it("also cleans current aria labels when structured names are unavailable", () => {
+    const row = moeNames.excerpts[0];
+    const withoutAttributes = row.html.replace(
+      /\sdata-(?:name|category)="[^"]*"/g,
+      "",
+    );
+    const facility = parseFacilityResultHtml(withoutAttributes).facilities[0];
+    expect(facility.name).toBe("無障礙坡道");
+    expect(facility.facType).toBe("無障礙坡道");
   });
 });

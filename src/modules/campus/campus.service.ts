@@ -1,4 +1,9 @@
 import type { SupportedLang } from "../../types/lang";
+import {
+  normalizeCampusFacilityName,
+  normalizeCampusBuilding,
+  normalizeCampusFloors,
+} from "../../utils/campus-facility-name";
 import { selectDisplayText } from "../../utils/source-display";
 import {
   aggregateSchoolPage,
@@ -220,10 +225,14 @@ function toDetail(doc: ICampusA11y): CampusDetail {
       facTypeId: f.facTypeId,
       type: resolveFacType(f.facTypeId, f.facType)?.code,
       facType: f.facType,
-      name: f.name,
-      building: f.building,
+      name:
+        normalizeCampusFacilityName(
+          f.name,
+          f.facType || resolveFacType(f.facTypeId)?.label,
+        ) || undefined,
+      building: normalizeCampusBuilding(f.building) || undefined,
       buildingUid: f.buildingUid,
-      floors: f.floors,
+      floors: normalizeCampusFloors(f.floors),
       floorIds: f.floorIds,
       location: f.location,
       specs: f.specs,
@@ -319,9 +328,13 @@ function toFacilityPlace(
     facTypeId: f.facTypeId,
     type: resolveFacType(f.facTypeId, f.facType)?.code,
     facType: f.facType,
-    name: f.name,
-    building: f.building,
-    floors: f.floors,
+    name:
+      normalizeCampusFacilityName(
+        f.name,
+        f.facType || resolveFacType(f.facTypeId)?.label,
+      ) || undefined,
+    building: normalizeCampusBuilding(f.building) || undefined,
+    floors: normalizeCampusFloors(f.floors),
     location: f.location as { type: "Point"; coordinates: [number, number] },
   };
 }

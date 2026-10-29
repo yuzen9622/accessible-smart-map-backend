@@ -18,7 +18,13 @@ export function displayFacility<T extends object>(
   const name = row.name ?? row["出入口電梯/無障礙坡道名稱"] ?? row.placeName;
   const tags = row.tags as Record<string, unknown> | undefined;
   const displayName = selectDisplayText(
-    typeof name === "string" ? name : "",
+    row.source === "campus" &&
+      typeof row.displayName === "string" &&
+      row.displayName.trim()
+      ? row.displayName
+      : typeof name === "string"
+        ? name
+        : "",
     english ?? tags?.["name:en"],
     lang,
   );

@@ -134,7 +134,11 @@ describe("campusToA11yPlace", () => {
     expect(labelled["出入口電梯/無障礙坡道名稱"]).toBe("無障礙電梯");
 
     const generic = campusToA11yPlace(
-      makeCampusFacility({ name: undefined, facType: undefined }),
+      makeCampusFacility({
+        name: undefined,
+        facType: undefined,
+        facTypeId: undefined,
+      }),
     );
     expect(generic["出入口電梯/無障礙坡道名稱"]).toBe("校園無障礙設施");
   });

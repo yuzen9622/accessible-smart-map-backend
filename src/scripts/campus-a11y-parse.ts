@@ -8,6 +8,10 @@
  */
 
 import { parseGeoPoint } from "../utils/campus-geo";
+import {
+  normalizeCampusFacilityName,
+  normalizeCampusBuilding,
+} from "../utils/campus-facility-name";
 export { mercatorToWgs84, parseGeoPoint } from "../utils/campus-geo";
 
 const NAMED_ENTITIES: Record<string, string> = {
@@ -109,11 +113,14 @@ export function parseFacilityResultHtml(rawHtml: string): ParsedCampusResult {
   const byUid = new Map<string, ParsedCampusFacility>();
   const articles = raw.split('<article class="result-all-item"').slice(1);
   for (const article of articles) {
-    const buildingMatch = /<h2 id="[^"]*"[^>]*aria-label="([^"]*)"/.exec(
-      article,
-    );
+    const buildingMatch = /<h[24]\b([^>]*)>([\s\S]*?)<\/h[24]>/.exec(article);
+    const headingText = buildingMatch?.[2].replace(/<[^>]*>/g, "").trim();
     const building = buildingMatch
-      ? decodeHtmlEntities(buildingMatch[1])
+      ? normalizeCampusBuilding(
+          decodeHtmlEntities(
+            headingText || extractAttr(buildingMatch[1], "aria-label") || "",
+          ),
+        ) || null
       : null;
 
     const levelRe =
@@ -138,15 +145,25 @@ export function parseFacilityResultHtml(rawHtml: string): ParsedCampusResult {
         let fac = byUid.get(facUid);
         if (!fac) {
           const label = extractAttr(attrs, "aria-label") ?? "";
-          const labelMatch = /^查看詳情：([^，]+)，(.+?)\s*\(開啟視窗\)/.exec(
-            label,
-          );
+          const labelMatch =
+            /^(?:查看詳情\s*[：:]\s*)?([^，,]+)[，,](.+?)\s*[（(](?:開啟視窗|開啟詳細資訊)[)）]\s*$/.exec(
+              label,
+            );
+          const category =
+            extractAttr(attrs, "data-category")?.trim() ||
+            labelMatch?.[1]?.trim() ||
+            null;
+          const sourceName =
+            extractAttr(attrs, "data-name")?.trim() || labelMatch?.[2] || label;
           const typeIdRaw = extractAttr(attrs, "data-type");
           fac = {
             facUid,
             facTypeId: typeIdRaw ? parseInt(typeIdRaw, 10) : null,
-            facType: labelMatch ? labelMatch[1] : null,
-            name: labelMatch ? labelMatch[2] : label,
+            facType: category,
+            name: normalizeCampusFacilityName(
+              sourceName,
+              category ?? undefined,
+            ),
             building,
             buildingUid: extractAttr(attrs, "data-building-uid"),
             floors: [],

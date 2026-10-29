@@ -1,4 +1,9 @@
 import type { SupportedLang } from "../../types/lang";
+import {
+  formatCampusFacilityLabel,
+  normalizeCampusFacilityName,
+} from "../../utils/campus-facility-name";
+import { resolveFacType } from "../campus/campus.fac-type";
 import { displayFacility } from "./a11y.display";
 import { fetchTaipeiMetroNotices } from "../../adapters/taipei-metro-notice.adapter";
 import {
@@ -60,10 +65,25 @@ function mapCampusCategory(code?: string): A11yCategory {
  * Normalizes a flattened campus facility into the A11y (metro) response shape
  * so campus facilities render through the same frontend layer as metro/OSM.
  */
-export function campusToA11yPlace(f: CampusFacilityPlace): A11yPlace {
+export function campusToA11yPlace(
+  f: CampusFacilityPlace,
+  lang?: SupportedLang,
+): A11yPlace {
+  const category = f.facType || resolveFacType(f.facTypeId)?.label;
+  const name =
+    normalizeCampusFacilityName(f.name, category) || "校園無障礙設施";
   return {
     項次: f.facUid,
-    "出入口電梯/無障礙坡道名稱": f.name ?? f.facType ?? "校園無障礙設施",
+    "出入口電梯/無障礙坡道名稱": name,
+    ...(lang !== undefined
+      ? {
+          displayName: formatCampusFacilityLabel({
+            ...f,
+            name,
+            facType: category,
+          }),
+        }
+      : {}),
     location: f.location,
     source: "campus",
     campusId: f.campusId,
@@ -74,10 +94,25 @@ export function campusToA11yPlace(f: CampusFacilityPlace): A11yPlace {
   };
 }
 
-function campusToFacility(f: CampusFacilityPlace): A11yFacility {
+function campusToFacility(
+  f: CampusFacilityPlace,
+  lang?: SupportedLang,
+): A11yFacility {
+  const category = f.facType || resolveFacType(f.facTypeId)?.label;
+  const name =
+    normalizeCampusFacilityName(f.name, category) || "校園無障礙設施";
   return {
     _id: f.facUid,
-    name: f.name ?? f.facType ?? "校園無障礙設施",
+    name,
+    ...(lang !== undefined
+      ? {
+          displayName: formatCampusFacilityLabel({
+            ...f,
+            name,
+            facType: category,
+          }),
+        }
+      : {}),
     location: f.location,
     category: mapCampusCategory(f.type),
     source: "campus",
@@ -138,7 +173,7 @@ export async function findAllFacilities(
     ...own.osm,
     ...campus
       .slice(0, A11Y_MAX_RESULTS)
-      .map((f) => displayFacility(campusToFacility(f), lang)),
+      .map((f) => displayFacility(campusToFacility(f, lang), lang)),
     ...own.bathroom,
     ...own.parking,
   ];
@@ -162,7 +197,7 @@ export async function findElevatorFacilities(
     ...campus
       .filter((f) => f.type === "elevator")
       .slice(0, A11Y_MAX_RESULTS)
-      .map((f) => displayFacility(campusToFacility(f), lang)),
+      .map((f) => displayFacility(campusToFacility(f, lang), lang)),
   ];
 }
 
@@ -182,7 +217,7 @@ export async function findRampFacilities(
     ...campus
       .filter((f) => f.type === "ramp")
       .slice(0, A11Y_MAX_RESULTS)
-      .map((f) => displayFacility(campusToFacility(f), lang)),
+      .map((f) => displayFacility(campusToFacility(f, lang), lang)),
   ];
 }
 
@@ -202,7 +237,7 @@ export async function findBathroomFacilities(
     ...campus
       .filter((f) => f.type === "accessible_toilet")
       .slice(0, A11Y_MAX_RESULTS)
-      .map((f) => displayFacility(campusToFacility(f), lang)),
+      .map((f) => displayFacility(campusToFacility(f, lang), lang)),
   ];
 }
 
@@ -231,7 +266,7 @@ export async function findNearby(
       mergeA11yPlaces(
         rows.metro,
         rows.osm as IOsmA11y[],
-        nearbyCampus.map(campusToA11yPlace),
+        nearbyCampus.map((f) => campusToA11yPlace(f, lang)),
         lang,
       ),
       notices,
@@ -266,7 +301,7 @@ export async function findNearbyLimited(
       mergeA11yPlaces(
         rows.metro,
         rows.osm as IOsmA11y[],
-        nearbyCampus.slice(0, 15).map(campusToA11yPlace),
+        nearbyCampus.slice(0, 15).map((f) => campusToA11yPlace(f, lang)),
         lang,
       ),
       notices,
