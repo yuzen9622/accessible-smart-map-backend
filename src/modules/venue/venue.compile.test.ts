@@ -811,6 +811,9 @@ describe("round-10: bounds, untagged buildings, open outlines, grade status", ()
     expect(venue.places.find((p) => p.id === "parking-a")?.kind).toBe(
       "parking",
     );
+    expect(venue.places.find((p) => p.id === "parking-a")).not.toHaveProperty(
+      "amenity",
+    );
   });
 
   it("rejects a room outline that does not close", () => {

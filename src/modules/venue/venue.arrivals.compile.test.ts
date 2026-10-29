@@ -297,6 +297,7 @@ describe("source-backed selectable feature arrivals", () => {
     ).toMatchObject({
       id: "arrival:relation/toilets@0",
       kind: "amenity",
+      amenity: "toilets",
       name: "廁所",
       nodeId: "landing0@0",
       arrivalKind: "door",
@@ -328,6 +329,7 @@ describe("source-backed selectable feature arrivals", () => {
     const tagged = byFeature("way/toilet-accessible@0");
     expect(tagged.feature?.tags?.wheelchair).toBe("yes");
     expect(tagged.place?.wheelchair).toBe("yes");
+    expect(tagged.place?.amenity).toBe("toilets");
     const untagged = byFeature("way/toilet-untagged@0");
     expect(untagged.feature?.tags).not.toHaveProperty("wheelchair");
     expect(untagged.place).not.toHaveProperty("wheelchair");
@@ -358,6 +360,7 @@ describe("source-backed selectable feature arrivals", () => {
     const { venue, errors } = f.compile();
     expect(errors).toEqual([]);
     expect(venue.places.find((x) => x.id === "wc-a")?.wheelchair).toBe("no");
+    expect(venue.places.find((x) => x.id === "wc-a")?.amenity).toBe("toilets");
     expect(venue.places.find((x) => x.id === "wc-b")).not.toHaveProperty(
       "wheelchair",
     );

@@ -68,6 +68,8 @@ export interface VenuePlace {
   name: string;
   ref?: string;
   kind: VenuePlaceKind;
+  /** `kind: "amenity"` only: the source `amenity` tag value, e.g. `toilets`. */
+  amenity?: string;
   buildingId: string | null;
   levelRef: string | null;
   /** Graph node this place routes from / to. */

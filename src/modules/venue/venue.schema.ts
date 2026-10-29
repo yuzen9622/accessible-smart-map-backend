@@ -117,6 +117,11 @@ const PlaceSchema = z
       "anchor",
       "poi",
     ]),
+    amenity: z.string().optional().openapi({
+      example: "toilets",
+      description:
+        "僅 kind=amenity：來源 amenity 標籤值（例如 toilets）；舊匯入資料可能沒有此欄位",
+    }),
     buildingId: z.string().nullable(),
     levelRef: z.string().nullable(),
     nodeId: z.string(),

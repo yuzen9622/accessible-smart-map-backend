@@ -1368,6 +1368,9 @@ export function compileVenue(
             name: applyLevelTemplate(n.tags.name ?? n.tags.ref ?? rawId, o),
             ...(n.tags.ref ? { ref: applyLevelTemplate(n.tags.ref, o) } : {}),
             kind: placeKindOf(n.tags),
+            ...(placeKindOf(n.tags) === "amenity"
+              ? { amenity: n.tags.amenity }
+              : {}),
             buildingId: b?.id ?? null,
             levelRef,
             nodeId: key,

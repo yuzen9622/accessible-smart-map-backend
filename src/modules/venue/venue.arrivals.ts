@@ -202,6 +202,9 @@ export function compileFeatureArrivals(
           : feature.tags?.amenity
             ? "amenity"
             : "poi",
+      ...(feature.kind !== "room" && feature.tags?.amenity
+        ? { amenity: feature.tags.amenity }
+        : {}),
       buildingId: feature.buildingId,
       levelRef: feature.levelRef,
       nodeId: primary.id,
