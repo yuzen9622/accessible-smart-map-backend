@@ -200,7 +200,7 @@ pnpm data:sync:all            # 新環境完整灌一次
 pnpm data:sync                # 日常更新：只跑 upsert 類步驟（不清空集合、不重啟 Valhalla、不花錢）
 ```
 
-- 加選群組：`--with-snapshot`（a11y-metro／bathrooms，staging 驗證後整批替換）、`--with-valhalla`（缺 PBF 才下載 → 建地磚並重啟 Valhalla → 重建 traffic map／tar）、`--with-slow`（停車場全台掃描、校園爬蟲，校園會先清空）、`--with-paid`（welfare Geocoding 後整批替換、RAG embedding）。
+- 加選群組：`--with-snapshot`（a11y-metro／bathrooms，staging 驗證後整批替換）、`--with-valhalla`（缺 PBF 才下載 → 建地磚並重啟 Valhalla → 重建 traffic map／tar）、`--with-slow`（停車場全台掃描、校園爬蟲，校園只更新完整校區並保留既有設施詳情，不清空集合）、`--with-paid`（welfare Geocoding 後整批替換、RAG embedding）。
 - `--skip=<id,...>` 排除步驟；`--only=<id,...>` 只跑指定步驟（忽略群組旗標）；前置步驟沒選到會直接報錯。另有 `--fail-fast`（第一個失敗就停）、`--tdx-gap=<秒>`（TDX 步驟間隔，預設 10）。
 - 公開資料每次同步都直接從官方來源下載，不需要預先放檔案：GTFS（`gtfs-feed` 步驟，TDX 全國 feed 約 470 MB，需要 `unzip`；只解出 levels／stops／trips／pathways 到 `data/gtfs`）、捷運無障礙出入口（data.taipei）、無障礙廁所（環境部 `fac_p_07`，需要 `MOENV_API_KEY`）、身障福利機構（衛福部）。下載或驗證失敗時保留舊資料。
 - 仍需本地檔案的只有非公開資料：`data/rag`（paid）與 `data/venues/nutc-sanmin.osm`（snapshot）。缺檔時 preflight 會擋下，什麼都不執行。
