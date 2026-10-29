@@ -29,7 +29,10 @@ import type {
 } from "../../types/transit";
 import type { RouteFailureData } from "./accessible-route.failure";
 import type { VenueArrival, VenueRoute } from "./venue-leg.types";
-import type { TRANSIT_FALLBACK_REASON } from "../../constants/messages";
+import type {
+  ROUTE_REASON,
+  TRANSIT_FALLBACK_REASON,
+} from "../../constants/messages";
 
 export type TagWeightMap = Record<string, Record<string, number>>;
 
@@ -107,14 +110,18 @@ export interface FindAccessibleRoutesOptions {
 }
 
 /**
- * Detailed transit planner outcome for callers that must distinguish no route
- * from an unavailable upstream. `walkingBetter` is set when OTP itself
- * reported walking beats transit (WALKING_BETTER_THAN_TRANSIT), as opposed to
- * finding no transit at all.
+ * Detailed transit planner outcome, retaining a known accessibility failure.
+ * `walkingBetter` applies only when OTP's compared walk candidate is unchanged
+ * after policy validation, rather than to a replacement sidewalk route.
  */
 export type FindAccessibleRoutesResult =
   | { status: "ok"; routes: AccessibleRoute[]; walkingBetter?: boolean }
-  | { status: "no_route" | "unavailable"; routes: [] };
+  | {
+      status: "no_route";
+      routes: [];
+      reason?: typeof ROUTE_REASON.NO_ACCESSIBLE_ROUTE;
+    }
+  | { status: "unavailable"; routes: [] };
 
 export interface PlanRoadRouteOptions {
   travelMode: RoadTravelMode;

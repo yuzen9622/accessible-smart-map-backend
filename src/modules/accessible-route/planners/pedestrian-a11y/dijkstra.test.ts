@@ -154,6 +154,7 @@ describe("dijkstra", () => {
       nodePath: Int32Array.of(1),
       edgeAttrPath: new Int32Array(0),
       totalCost: 0,
+      carriagewayMillimetres: 0,
       expandedNodes: 0,
       reopenedNodes: 0,
     });

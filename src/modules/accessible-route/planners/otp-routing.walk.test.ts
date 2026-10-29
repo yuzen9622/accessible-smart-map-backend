@@ -24,6 +24,14 @@ const walkItin = () => ({
   legs: [
     {
       mode: "WALK",
+      walkPolicy: {
+        version: "sidewalk-priority-v1",
+        profile: "NORMAL",
+        avoidStairs: false,
+        maxSlopePercent: null,
+        carriagewayMillimetres: 0,
+        generalizedCost: 823,
+      },
       distance: 823,
       duration: 713,
       startTime: 0,
@@ -60,6 +68,70 @@ beforeEach(() => {
 });
 
 describe("planOtpWalk", () => {
+  it("keeps wheelchair capability enabled when stairs are explicitly allowed", async () => {
+    post.mockResolvedValue(okResp([]));
+    await planOtpWalkDetailed(origin, destination, {
+      mode: "wheelchair",
+      avoidStairs: false,
+    });
+    expect(post.mock.calls[0][1].variables).toMatchObject({
+      wheelchair: true,
+      directWalkProfile: "WHEELCHAIR",
+      avoidStairs: false,
+    });
+  });
+
+  it("does not replan walking after the shared transit deadline is spent", async () => {
+    expect(
+      await planOtpWalkDetailed(origin, destination, {
+        deadline: Date.now() - 1,
+      }),
+    ).toEqual({ status: "unavailable", routes: [] });
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("caps the policy walk query at the remaining transit request budget", async () => {
+    post.mockResolvedValue(okResp([]));
+    await planOtpWalkDetailed(origin, destination, {
+      deadline: Date.now() + 5000,
+    });
+    expect(post.mock.calls[0][2]?.timeout).toBeGreaterThan(0);
+    expect(post.mock.calls[0][2]?.timeout).toBeLessThanOrEqual(5000);
+  });
+
+  it("rejects an itinerary that did not execute the sidewalk policy", async () => {
+    const legacy = walkItin();
+    Reflect.deleteProperty(legacy.legs[0], "walkPolicy");
+    post.mockResolvedValue(okResp([legacy]));
+    expect(await planOtpWalkDetailed(origin, destination)).toEqual({
+      status: "unavailable",
+      routes: [],
+    });
+  });
+
+  it("rejects mismatched policy conditions and invalid search costs", async () => {
+    for (const changed of [
+      { version: "legacy" },
+      { profile: "WHEELCHAIR" },
+      { avoidStairs: true },
+      { maxSlopePercent: null, carriagewayMillimetres: -1 },
+      { maxSlopePercent: null, carriagewayMillimetres: 1.5 },
+      { generalizedCost: Infinity },
+    ]) {
+      const invalid = walkItin();
+      Object.assign(invalid.legs[0].walkPolicy, changed);
+      post.mockResolvedValueOnce(okResp([invalid]));
+      expect(await planOtpWalkDetailed(origin, destination)).toEqual({
+        status: "unavailable",
+        routes: [],
+      });
+      post.mockResolvedValueOnce(okResp([walkItin()]));
+      expect((await planOtpWalkDetailed(origin, destination)).status).toBe(
+        "ok",
+      );
+    }
+  });
+
   it("maps a walk itinerary into an AccessibleRoute", async () => {
     post.mockResolvedValue(okResp([walkItin()]));
 
@@ -105,46 +177,20 @@ describe("planOtpWalk", () => {
     expect(query).not.toContain("TRANSIT");
   });
 
-  it("maps StairsUse and degrades to the candidate with the fewest stairs", async () => {
-    const twoStairs = walkItin() as any;
-    twoStairs.duration = 600;
-    twoStairs.legs[0].steps = [
-      { ...twoStairs.legs[0].steps[0], feature: { __typename: "StairsUse" } },
-      {
-        ...twoStairs.legs[0].steps[0],
-        lon: 121.564,
-        feature: { __typename: "StairsUse" },
-      },
-    ];
-    const oneStair = walkItin() as any;
-    oneStair.duration = 800;
-    oneStair.legs[0].steps[0].feature = { __typename: "StairsUse" };
-    post.mockResolvedValue(okResp([twoStairs, oneStair]));
-
-    const result = await planOtpWalkDetailed(origin, destination, {
-      avoidStairs: true,
+  it("rejects native output that violates its executed stair condition", async () => {
+    const itinerary = walkItin();
+    itinerary.legs[0].walkPolicy.avoidStairs = true;
+    Object.assign(itinerary.legs[0].steps[0], {
+      feature: { __typename: "StairsUse" },
     });
-
-    expect(result.status).toBe("ok");
-    if (result.status !== "ok") return;
-    expect(result.routes).toHaveLength(1);
-    expect(result.routes[0].totalMinutes).toBe(13);
-    expect(result.routes[0].degraded).toBe(true);
-    expect(result.routes[0].warnings).toContain(
-      "目前候選路線仍包含無坡道樓梯，無法完全滿足避開樓梯條件",
-    );
-    const step =
-      result.routes[0].legs[0].type === "WALK"
-        ? result.routes[0].legs[0].steps?.[0]
-        : undefined;
-    expect(step?.stairs).toBe(true);
-    expect(step?.steepSlope).toBe(false);
-    expect(step).not.toHaveProperty("instruction");
-    expect(post.mock.calls[0][1].variables.numItineraries).toBe(8);
+    post.mockResolvedValue(okResp([itinerary]));
+    expect(
+      await planOtpWalkDetailed(origin, destination, { avoidStairs: true }),
+    ).toEqual({ status: "unavailable", routes: [] });
   });
 
   it("normalizes an OTP relative-direction token outside the public vocabulary", async () => {
-    const itinerary = walkItin() as any;
+    const itinerary = walkItin();
     itinerary.legs[0].steps[0].relativeDirection = "FOLLOW_SIGNS";
     post.mockResolvedValue(okResp([itinerary]));
 
@@ -157,23 +203,20 @@ describe("planOtpWalk", () => {
     expect(step?.relativeDirection).toBe("CONTINUE");
   });
 
-  it("prefers every stair-free candidate when avoidStairs is active", async () => {
-    const stairs = walkItin() as any;
-    stairs.duration = 500;
-    stairs.legs[0].steps[0].feature = { __typename: "StairsUse" };
-    const stepFree = walkItin() as any;
-    stepFree.duration = 900;
-    post.mockResolvedValue(okResp([stairs, stepFree]));
-
+  it("accepts independent wheelchair and stair conditions acknowledged by the engine", async () => {
+    const itinerary = walkItin();
+    itinerary.legs[0].walkPolicy.profile = "WHEELCHAIR";
+    itinerary.legs[0].walkPolicy.avoidStairs = true;
+    post.mockResolvedValue(okResp([itinerary]));
     const result = await planOtpWalkDetailed(origin, destination, {
       mode: "wheelchair",
     });
-
     expect(result.status).toBe("ok");
-    if (result.status !== "ok") return;
-    expect(result.routes).toHaveLength(1);
-    expect(result.routes[0].totalMinutes).toBe(15);
-    expect(result.routes[0].degraded).toBeUndefined();
+    if (result.status === "ok")
+      expect(result.routes[0].walkPolicy).toMatchObject({
+        profile: "wheelchair",
+        avoidStairs: true,
+      });
   });
 
   it("drops an itinerary with no legs", async () => {

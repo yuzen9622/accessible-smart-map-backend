@@ -12,7 +12,10 @@ import {
   PED_GRAPH_MAX_SNAP_TOLERANCE_M,
   isWithinPedGraphCoverage,
 } from "../../../../config/ped-graph";
-import type { AccessibilityMode } from "../../../../types/route";
+import {
+  WALK_POLICY_VERSION,
+  type AccessibilityMode,
+} from "../../../../types/route";
 import { haversineMeters } from "../../../../utils/geo";
 import { walkSpeedMps } from "../../scoring";
 import { aStar, type RouteResult } from "./astar";
@@ -605,13 +608,7 @@ export async function planCsrWalkRoute(
     return { status: "outside_coverage" };
   }
 
-  // Evaluate representability only after the deployment and geographic gates:
-  // an explicit combination outside Taipei (or while CSR is disabled) remains
-  // an ordinary OTP-primary request, not a degraded CSR failure.
   const avoidStairs = options.avoidStairs ?? options.mode === "wheelchair";
-  if (avoidStairs !== (options.mode === "wheelchair")) {
-    return { status: "unsupported_constraints" };
-  }
 
   const runtime = await getPedGraphRuntime();
   if (runtime.status !== "ready") {
@@ -619,7 +616,11 @@ export async function planCsrWalkRoute(
   }
 
   const { graph, index } = runtime.snapshot;
-  const profile = profileFor(options.mode);
+  const profile: CostProfile = {
+    ...profileFor(options.mode),
+    forbidStairs: avoidStairs,
+    preferSidewalks: true,
+  };
   let excludedEdges: ReadonlySet<number> = new Set();
   if (options.avoidPoints?.length) {
     try {
@@ -761,6 +762,15 @@ export async function planCsrWalkRoute(
       ...(stepStreetNames.length > 0 ? { stepStreetNames } : {}),
       sidewalkRampCount: sumSidewalkRampCount(graph, route.edgeAttrPath),
       a11yPoints: collectRampPoints(graph, route.edgeAttrPath),
+      walkPolicy: {
+        version: WALK_POLICY_VERSION,
+        profile: options.mode === "wheelchair" ? "wheelchair" : "normal",
+        avoidStairs,
+        maxSlopePercent: null,
+        carriagewayMillimetres:
+          route.carriagewayMillimetres + Math.round(connectorDistanceM * 1000),
+        generalizedCost: route.totalCost + connectorDistanceM,
+      },
       diagnostics: {
         expandedNodes: route.expandedNodes,
         reopenedNodes: route.reopenedNodes,

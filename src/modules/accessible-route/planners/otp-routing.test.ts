@@ -1135,16 +1135,16 @@ describe("planOtpRoute search windows and timeouts", () => {
     expect(post.mock.calls[1][1].variables.searchWindow).toBe(7200);
   });
 
-  it("settles on the walk itinerary when OTP reports walking is better", async () => {
-    busLean.mockResolvedValue([
-      {
-        location: { coordinates: [121.565, 25.041] },
-        stopName: { Zh_tw: "公車站" },
-      },
-    ]);
-    post.mockResolvedValue(
-      okResp([walkOnlyItinerary()], [{ code: "WALKING_BETTER_THAN_TRANSIT" }]),
+  it("continues searching when a legacy walk verdict cannot compare the new sidewalk route", async () => {
+    const legacyWalk = okResp(
+      [walkOnlyItinerary()],
+      [{ code: "WALKING_BETTER_THAN_TRANSIT" }],
     );
+    busLean.mockResolvedValue([]);
+    post
+      .mockResolvedValueOnce(legacyWalk)
+      .mockResolvedValueOnce(legacyWalk)
+      .mockResolvedValueOnce(okResp(threeDistinctTransitItineraries()));
 
     const result = await planOtpRouteDetailed(origin, destination, {
       mode: "wheelchair",
@@ -1152,8 +1152,21 @@ describe("planOtpRoute search windows and timeouts", () => {
 
     expect(result.status).toBe("ok");
     if (result.status !== "ok") return;
-    expect(result.routes.map((route) => route.routeName)).toEqual(["步行路線"]);
-    expect(post).toHaveBeenCalledTimes(1);
+    expect(
+      result.routes.some((route) =>
+        route.legs.some((leg) => leg.type !== "WALK"),
+      ),
+    ).toBe(true);
+    expect(result).not.toHaveProperty("walkingBetter");
+    expect(
+      result.routes.find((route) => route.routeName === "步行路線"),
+    ).toMatchObject({
+      _scheduledDepartureTime: 1000,
+      _isFutureScheduled: false,
+      legs: [{ type: "WALK" }],
+    });
+    expect(post).toHaveBeenCalledTimes(3);
+    expect(post.mock.calls[2][1].variables.searchWindow).toBeGreaterThan(7200);
   });
 
   it("skips every optional stage once the request budget is spent", async () => {

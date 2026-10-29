@@ -201,7 +201,7 @@ import { getTransitAlerts } from "../transit/alert.service";
 import type { PlanRouteResult } from "./accessible-route.types";
 import type { OtpRoutePlanResult } from "./planners/otp-routing";
 import type { CsrWalkPlan } from "./planners/pedestrian-a11y/csr-walk.types";
-import type { WalkStep } from "../../types/route";
+import type { AccessibleRoute, WalkStep } from "../../types/route";
 import type { VenueRoute } from "./venue-leg.types";
 
 /**
@@ -233,6 +233,16 @@ const otpTransitOk = (routes: unknown[]) => ({
       {},
       Object.getOwnPropertyDescriptors(input),
     ) as import("../../types/route").AccessibleRoute;
+    if (input.legs.every((leg) => leg.type === "WALK") && !route.walkPolicy) {
+      route.walkPolicy = {
+        version: "sidewalk-priority-v1",
+        profile: "normal",
+        avoidStairs: false,
+        maxSlopePercent: null,
+        carriagewayMillimetres: 0,
+        generalizedCost: input.totalMinutes,
+      };
+    }
     route.legs = input.legs.map(
       (leg) =>
         Object.defineProperties(
@@ -849,11 +859,19 @@ const walkRequest = {
   destination: { latitude: 25.03, longitude: 121.55 },
 };
 
-const walkRoute = () => ({
+const walkRoute = (): AccessibleRoute => ({
   routeId: "walk-0",
   routeName: "步行",
   totalMinutes: 10,
   transferCount: 0,
+  walkPolicy: {
+    version: "sidewalk-priority-v1",
+    profile: "normal",
+    avoidStairs: false,
+    maxSlopePercent: null,
+    carriagewayMillimetres: 0,
+    generalizedCost: 800,
+  },
   totalWalkDistanceM: 800,
   legs: [
     {
@@ -867,6 +885,12 @@ const walkRoute = () => ({
         [121.55, 25.03],
       ],
       a11yFacilities: [],
+      maxSlopePercent: null,
+      crossings: null,
+      crossingsWithCurbRamp: null,
+      minPathWidthCm: null,
+      surfaceType: "unknown",
+      restPoints: [],
       steps: [
         {
           relativeDirection: "DEPART",
@@ -949,6 +973,14 @@ const csrWalkPlan = (
   distanceM: 800,
   durationS: 600,
   graphVersionId: 7,
+  walkPolicy: {
+    version: "sidewalk-priority-v1",
+    profile: "normal",
+    avoidStairs: false,
+    maxSlopePercent: null,
+    carriagewayMillimetres: 0,
+    generalizedCost: 800,
+  },
   approximateIndoorSegmentCount: 0,
   accessibility: {
     maxSlopePercent: 4,
@@ -1542,6 +1574,234 @@ describe("walk-step normalization", () => {
 });
 
 describe("planAccessibleRouteFromRequest walk mode OTP", () => {
+  it("does not bypass sidewalk policy with an unchecked Valhalla route", async () => {
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "unavailable",
+      routes: [],
+    });
+    vi.mocked(planValhallaRoute).mockResolvedValue([driveRoute([])] as any);
+    const result = await planAccessibleRouteFromRequest(walkRequest);
+    expect(result).toMatchObject({
+      ok: false,
+      status: ResponseCode.SERVICE_UNAVAILABLE,
+    });
+    expect(planValhallaRoute).not.toHaveBeenCalled();
+  });
+  it("keeps a longer sidewalk ahead of a shorter carriageway in the final response", async () => {
+    const road: AccessibleRoute = {
+      ...walkRoute(),
+      routeId: "road",
+      totalMinutes: 2,
+      walkPolicy: {
+        version: "sidewalk-priority-v1",
+        profile: "normal",
+        avoidStairs: false,
+        maxSlopePercent: null,
+        carriagewayMillimetres: 150000,
+        generalizedCost: 150,
+      },
+    };
+    const sidewalk: AccessibleRoute = {
+      ...walkRoute(),
+      routeId: "sidewalk",
+      totalMinutes: 5,
+      walkPolicy: {
+        version: "sidewalk-priority-v1",
+        profile: "normal",
+        avoidStairs: false,
+        maxSlopePercent: null,
+        carriagewayMillimetres: 0,
+        generalizedCost: 300,
+      },
+    };
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "ok",
+      routes: [road, sidewalk],
+    });
+    const result = await planAccessibleRouteFromRequest(walkRequest);
+    expect(result.ok).toBe(true);
+    expect(okData(result).routes).toHaveLength(1);
+    expect(okData(result).routes[0].walkPolicy?.carriagewayMillimetres).toBe(0);
+    expect(okData(result).routes[0].totalMinutes).toBe(5);
+  });
+  it.each([
+    ["normal", true, false],
+    ["wheelchair", false, true],
+  ] as const)(
+    "reports actual slope enforcement for %s with avoidStairs=%s",
+    async (mode, avoidStairs, enforced) => {
+      vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+        status: "ok",
+        routes: [
+          {
+            ...walkRoute(),
+            walkPolicy: {
+              version: "sidewalk-priority-v1",
+              profile: mode,
+              avoidStairs,
+              maxSlopePercent: mode === "wheelchair" ? 8.3 : null,
+              carriagewayMillimetres: 0,
+              generalizedCost: 800,
+            },
+          },
+        ],
+      });
+      const result = await planAccessibleRouteFromRequest({
+        ...walkRequest,
+        mode,
+        avoidStairs,
+        maxSlopePercent: 10,
+      });
+      expect(result.ok).toBe(true);
+      expect(okData(result).slopeConstraint?.enforced).toBe(enforced);
+    },
+  );
+  it("keeps the lower carriageway cost when duplicate geometry has equal time and distance", async () => {
+    const road = walkRoute();
+    road.walkPolicy = {
+      version: "sidewalk-priority-v1",
+      profile: "normal",
+      avoidStairs: false,
+      maxSlopePercent: null,
+      carriagewayMillimetres: 1000,
+      generalizedCost: 100,
+    };
+    const sidewalk = {
+      ...walkRoute(),
+      walkPolicy: {
+        ...road.walkPolicy,
+        carriagewayMillimetres: 0,
+        generalizedCost: 500,
+      },
+    };
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "ok",
+      routes: [road, sidewalk],
+    });
+    const result = await planAccessibleRouteFromRequest(walkRequest);
+    expect(okData(result).routes).toHaveLength(1);
+    expect(okData(result).routes[0].walkPolicy).toMatchObject({
+      carriagewayMillimetres: 0,
+      generalizedCost: 500,
+    });
+  });
+
+  it("does not report a slope ceiling when the executed wheelchair path has unknown elevation", async () => {
+    const route = walkRoute();
+    route.walkPolicy = {
+      version: "sidewalk-priority-v1",
+      profile: "wheelchair",
+      avoidStairs: true,
+      maxSlopePercent: null,
+      carriagewayMillimetres: 0,
+      generalizedCost: 800,
+    };
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "ok",
+      routes: [route],
+    });
+    const result = await planAccessibleRouteFromRequest({
+      ...walkRequest,
+      mode: "wheelchair",
+      maxSlopePercent: 10,
+    });
+    expect(okData(result).slopeConstraint).toMatchObject({
+      enforced: false,
+      note: ROUTE_WARNING.SLOPE_LIMIT_NOT_ENFORCED_NO_ELEVATION,
+    });
+  });
+
+  it("sums waypoint search costs and retains unknown slope evidence", async () => {
+    const first = walkRoute();
+    first.walkPolicy = {
+      version: "sidewalk-priority-v1",
+      profile: "wheelchair",
+      avoidStairs: false,
+      maxSlopePercent: 8.3,
+      carriagewayMillimetres: 1200,
+      generalizedCost: 10,
+    };
+    const second = {
+      ...walkRoute(),
+      walkPolicy: {
+        ...first.walkPolicy,
+        maxSlopePercent: null,
+        carriagewayMillimetres: 2300,
+        generalizedCost: 20,
+      },
+    };
+    vi.mocked(planOtpWalkDetailed)
+      .mockResolvedValueOnce({ status: "ok", routes: [first] })
+      .mockResolvedValueOnce({ status: "ok", routes: [second] });
+    const result = await planAccessibleRouteFromRequest({
+      ...walkRequest,
+      mode: "wheelchair",
+      avoidStairs: false,
+      maxSlopePercent: 10,
+      waypoints: [{ latitude: 25.035, longitude: 121.555 }],
+    });
+    expect(okData(result).routes[0].walkPolicy).toEqual({
+      version: "sidewalk-priority-v1",
+      profile: "wheelchair",
+      avoidStairs: false,
+      maxSlopePercent: null,
+      carriagewayMillimetres: 3500,
+      generalizedCost: 30,
+    });
+    expect(okData(result).slopeConstraint?.enforced).toBe(false);
+  });
+
+  it.each(["blocking", "difficult", "minor"] as const)(
+    "keeps existing %s hazard precedence without promoting a short carriageway",
+    async (severity) => {
+      const sidewalk = walkRoute();
+      sidewalk.totalMinutes = 5;
+      sidewalk.legs[0].polyline = [
+        [121.56, 25.04],
+        [121.561, 25.04],
+      ];
+      sidewalk.walkPolicy = {
+        version: "sidewalk-priority-v1",
+        profile: "normal",
+        avoidStairs: false,
+        maxSlopePercent: null,
+        carriagewayMillimetres: 0,
+        generalizedCost: 500,
+      };
+      const road = walkRoute();
+      road.totalMinutes = 2;
+      road.legs[0].polyline = [
+        [121.56, 25.042],
+        [121.561, 25.042],
+      ];
+      road.walkPolicy = {
+        ...sidewalk.walkPolicy,
+        carriagewayMillimetres: 1000,
+        generalizedCost: 100,
+      };
+      vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+        status: "ok",
+        routes: [road, sidewalk],
+      });
+      vi.mocked(findConfirmedHazardsWithin).mockResolvedValue([
+        {
+          id: "policy-hazard",
+          hazardType: "construction",
+          severity,
+          coordinates: [121.5605, 25.04005],
+          description: "confirmed sidewalk report",
+        },
+      ]);
+      const result = await planAccessibleRouteFromRequest(walkRequest);
+      expect(result.ok).toBe(true);
+      expect(okData(result).routes[0].walkPolicy?.carriagewayMillimetres).toBe(
+        severity === "blocking" ? 1000 : 0,
+      );
+      if (severity !== "blocking")
+        expect(okData(result).routes).toHaveLength(1);
+    },
+  );
+
   it("uses the OTP walk route and does not call Valhalla", async () => {
     vi.mocked(planOtpWalkDetailed).mockResolvedValue({
       status: "ok",
@@ -1642,69 +1902,20 @@ describe("planAccessibleRouteFromRequest walk mode OTP", () => {
     });
   });
 
-  it("returns structured failures when the OTP-unavailable Valhalla fallback cannot route", async () => {
+  it("returns 503 without invoking an unchecked walk fallback", async () => {
     vi.mocked(planOtpWalkDetailed).mockResolvedValue({
       status: "unavailable",
       routes: [],
     });
-    vi.mocked(planValhallaRoute)
-      .mockRejectedValueOnce(new ValhallaRoutingError("upstream"))
-      .mockResolvedValueOnce([] as any);
-
-    await expect(planAccessibleRouteFromRequest(walkRequest)).resolves.toEqual({
+    vi.mocked(planValhallaRoute).mockResolvedValue([driveRoute([])] as any);
+    const result = await planAccessibleRouteFromRequest(walkRequest);
+    expect(result).toMatchObject({
       ok: false,
       status: ResponseCode.SERVICE_UNAVAILABLE,
-      error: ROUTE_MSG.UPSTREAM_TIMEOUT,
       data: { reason: ROUTE_REASON.UPSTREAM_TIMEOUT },
     });
-    await expect(planAccessibleRouteFromRequest(walkRequest)).resolves.toEqual({
-      ok: false,
-      status: ResponseCode.UNPROCESSABLE_ENTITY,
-      error: ROUTE_MSG.NO_ROUTE,
-      data: { reason: ROUTE_REASON.NO_ROUTE },
-    });
+    expect(planValhallaRoute).not.toHaveBeenCalled();
   });
-
-  it("falls back to marked Valhalla when OTP is unavailable", async () => {
-    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
-      status: "unavailable",
-      routes: [],
-    });
-    vi.mocked(planValhallaRoute).mockResolvedValue([driveRoute([])] as any);
-
-    const res = await planAccessibleRouteFromRequest(walkRequest);
-
-    expect(res.ok).toBe(true);
-    expect(vi.mocked(planValhallaRoute).mock.calls.length).toBeGreaterThan(0);
-    expect(okData(res).routes[0].engine).toBe("otp-fallback");
-    expect(okData(res).routes[0].warnings).toBeUndefined();
-  });
-
-  it("reports slopeConstraint enforced=false when a nominal walk request actually fell back to Valhalla", async () => {
-    // travelMode stays "walk" on the request, but the route was actually
-    // produced by Valhalla (no elevation data) via the OTP-unavailable
-    // fallback above -- the slope report must reflect the real engine, not
-    // the nominal travelMode.
-    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
-      status: "unavailable",
-      routes: [],
-    });
-    vi.mocked(planValhallaRoute).mockResolvedValue([driveRoute([])] as any);
-
-    const res = await planAccessibleRouteFromRequest({
-      ...walkRequest,
-      maxSlopePercent: 10,
-      avoidStairs: true,
-    });
-
-    expect(res.ok).toBe(true);
-    expect(okData(res).slopeConstraint).toEqual({
-      requestedMaxPercent: 10,
-      enforced: false,
-      note: ROUTE_WARNING.SLOPE_LIMIT_NOT_ENFORCED_NO_ELEVATION,
-    });
-  });
-
   it("plans walk + waypoints as bounded OTP segments and preserves leg boundaries", async () => {
     vi.mocked(planOtpWalkDetailed).mockResolvedValue({
       status: "ok",
@@ -2066,10 +2277,25 @@ describe("planAccessibleRouteFromRequest — needsHandrail", () => {
 
 describe("planAccessibleRouteFromRequest — maxSlopePercent honesty check", () => {
   beforeEach(() => {
-    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
-      status: "ok",
-      routes: [walkRoute()] as any,
-    });
+    vi.mocked(planOtpWalkDetailed).mockImplementation(
+      async (_from, _to, options) => ({
+        status: "ok",
+        routes: [
+          {
+            ...walkRoute(),
+            walkPolicy: {
+              version: "sidewalk-priority-v1",
+              profile: options?.mode === "wheelchair" ? "wheelchair" : "normal",
+              avoidStairs:
+                options?.avoidStairs ?? options?.mode === "wheelchair",
+              maxSlopePercent: options?.mode === "wheelchair" ? 8.3 : null,
+              carriagewayMillimetres: 0,
+              generalizedCost: 800,
+            },
+          },
+        ],
+      }),
+    );
     vi.mocked(planValhallaRoute).mockResolvedValue([driveRoute([])] as any);
     vi.mocked(findNearbyParking).mockResolvedValue([] as any);
   });
@@ -2081,8 +2307,16 @@ describe("planAccessibleRouteFromRequest — maxSlopePercent honesty check", () 
       5,
       "ROUTE_SLOPE_WHEELCHAIR_DISABLED",
     ],
-    [{ ...walkRequest, avoidStairs: true }, 3, "ROUTE_SLOPE_SERVER_DEFAULT"],
-    [{ ...walkRequest, avoidStairs: true }, 10, "ROUTE_SLOPE_SERVER_LIMIT"],
+    [
+      { ...walkRequest, mode: "wheelchair", avoidStairs: true },
+      3,
+      "ROUTE_SLOPE_SERVER_DEFAULT",
+    ],
+    [
+      { ...walkRequest, mode: "wheelchair", avoidStairs: true },
+      10,
+      "ROUTE_SLOPE_SERVER_LIMIT",
+    ],
   ] as const)(
     "keeps the slope note consistent with its English warning (%j)",
     async (request, maxSlopePercent, code) => {
@@ -2135,6 +2369,7 @@ describe("planAccessibleRouteFromRequest — maxSlopePercent honesty check", () 
     const res = await planAccessibleRouteFromRequest({
       ...walkRequest,
       maxSlopePercent: 10,
+      mode: "wheelchair",
       avoidStairs: true,
     });
 
@@ -2146,6 +2381,7 @@ describe("planAccessibleRouteFromRequest — maxSlopePercent honesty check", () 
     const res = await planAccessibleRouteFromRequest({
       ...walkRequest,
       maxSlopePercent: 3,
+      mode: "wheelchair",
       avoidStairs: true,
     });
 
@@ -2559,6 +2795,14 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
         routeName: "步行路線",
         totalMinutes: minutes,
         transferCount: 0,
+        walkPolicy: {
+          version: "sidewalk-priority-v1",
+          profile: "normal",
+          avoidStairs: false,
+          maxSlopePercent: null,
+          carriagewayMillimetres: 0,
+          generalizedCost: minutes,
+        },
         legs: [
           {
             type: "WALK",
@@ -2591,6 +2835,126 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
         reason: TRANSIT_FALLBACK_REASON.WALKING_BETTER,
       });
     });
+
+    it("does not retain an old walking-better verdict after the sidewalk route becomes longer", async () => {
+      vi.mocked(planOtpRouteDetailed).mockResolvedValue({
+        status: "ok",
+        routes: [otpWalkOnly(12)],
+        walkingBetter: true,
+      });
+      const sidewalk = csrWalkPlan();
+      sidewalk.durationS = 3600;
+      vi.mocked(planCsrWalkRoute).mockResolvedValue({
+        status: "ok",
+        plans: [sidewalk],
+      });
+
+      const res = await planAccessibleRouteFromRequest({
+        travelMode: "transit",
+        origin: taipeiStation,
+        destination: nationalMuseum,
+      });
+
+      expect(okData(res).routes[0].totalMinutes).toBe(60);
+      expect(okData(res).fallback).toEqual({
+        travelMode: "walk",
+        reason: TRANSIT_FALLBACK_REASON.NO_TRANSIT_ROUTE,
+      });
+    });
+
+    it("compares a replacement sidewalk arrival with the retained transit arrival", async () => {
+      vi.mocked(planOtpRouteDetailed).mockResolvedValue(
+        otpTransitOk([
+          { ...rooseveltBusRoute, totalMinutes: 30 },
+          otpWalkOnly(12),
+        ]),
+      );
+      const sidewalk = csrWalkPlan();
+      sidewalk.durationS = 3600;
+      vi.mocked(planCsrWalkRoute).mockResolvedValue({
+        status: "ok",
+        plans: [sidewalk],
+      });
+
+      const res = await planAccessibleRouteFromRequest({
+        travelMode: "transit",
+        origin: taipeiStation,
+        destination: nationalMuseum,
+      });
+
+      const routes = okData(res).routes;
+      expect(routes[0].routeName).toBe("羅斯福路幹線");
+      const walk = routes.find((route) =>
+        route.legs.every((leg) => leg.type === "WALK"),
+      );
+      expect(walk?.totalMinutes).toBe(60);
+      expect(
+        Date.parse(walk?.arrivalTime ?? "") -
+          Date.parse(walk?.departureTime ?? ""),
+      ).toBe(60 * 60000);
+      expect(okData(res).fallback).toBeUndefined();
+    });
+
+    for (const engine of ["csr", "otp"] as const) {
+      it(`keeps clear transit ahead of a newly blocked ${engine} walk option`, async () => {
+        const original = otpTransitOk([
+          { ...rooseveltBusRoute, totalMinutes: 30 },
+          otpWalkOnly(12),
+        ]);
+        for (const route of original.routes)
+          if (route.legs.every((leg) => leg.type === "WALK"))
+            delete route.walkPolicy;
+        vi.mocked(planOtpRouteDetailed).mockResolvedValue(original);
+        const from: [number, number] = [121.56, 25.04];
+        const to: [number, number] = [121.561, 25.04];
+        vi.mocked(findConfirmedHazardsWithin).mockResolvedValue([
+          {
+            id: "new-walk-blocked",
+            hazardType: "construction",
+            severity: "blocking",
+            description: "人行道施工中",
+            coordinates: [121.5605, 25.04005],
+          },
+        ]);
+        if (engine === "csr") {
+          const sidewalk = csrWalkPlan(from, to);
+          sidewalk.durationS = 120;
+          vi.mocked(planCsrWalkRoute).mockResolvedValue({
+            status: "ok",
+            plans: [sidewalk],
+          });
+        } else {
+          const sidewalk = walkRoute();
+          sidewalk.totalMinutes = 2;
+          Object.assign(sidewalk.legs[0], {
+            minutesEst: 2,
+            polyline: [from, to],
+          });
+          vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+            status: "ok",
+            routes: [sidewalk],
+          });
+        }
+
+        const res = await planAccessibleRouteFromRequest({
+          travelMode: "transit",
+          origin: taipeiStation,
+          destination: nationalMuseum,
+        });
+
+        const routes = okData(res).routes;
+        expect(routes[0].routeName).toBe("羅斯福路幹線");
+        const walk = routes.find((route) =>
+          route.legs.every((leg) => leg.type === "WALK"),
+        );
+        expect(walk).toMatchObject({
+          totalMinutes: 2,
+          hazardAdvisory: { blockingOnRoute: 1 },
+        });
+        expect(walk?.arrivalTime).toBeDefined();
+        expect(walk?.departureTime).toBeDefined();
+      });
+    }
 
     it("labels a walk-only answer NO_TRANSIT_ROUTE when OTP found no transit", async () => {
       vi.mocked(planOtpRouteDetailed).mockResolvedValue(
@@ -2726,7 +3090,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
       }
     });
 
-    it("re-plans the Taipei walk option with CSR and ranks it by the same cost", async () => {
+    it("re-plans the Taipei walk option with CSR before the shared arrival ranking", async () => {
       const oldWalk = otpWalkOnly(30);
       Object.assign(oldWalk.legs[0], {
         stepStreetNames: [
@@ -2763,7 +3127,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
       expect(okData(res).fallback).toBeUndefined();
     });
 
-    it("keeps OTP's walk option when CSR has no route", async () => {
+    it("drops an unverified OTP walk option when CSR and the policy planner have no route", async () => {
       vi.mocked(planOtpRouteDetailed).mockResolvedValue(
         otpTransitOk([rooseveltBusRoute, otpWalkOnly(30)] as any),
       );
@@ -2777,7 +3141,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
 
       expect(vi.mocked(planCsrWalkRoute)).toHaveBeenCalledTimes(1);
       expect(okData(res).routes.some((r) => r.routeName === "步行路線")).toBe(
-        true,
+        false,
       );
     });
   });
@@ -3203,6 +3567,14 @@ describe("planAccessibleRouteFromRequest — avoidStairs / requireElevator const
   it("does not treat a 1201m step mislabeled as steps as a stairs barrier", async () => {
     const mislabeledSidewalk = {
       ...otpStepsWalkRoute,
+      walkPolicy: {
+        version: "sidewalk-priority-v1",
+        profile: "normal",
+        avoidStairs: true,
+        maxSlopePercent: null,
+        carriagewayMillimetres: 0,
+        generalizedCost: 1201,
+      },
       routeId: "otp-mislabeled-sidewalk",
       routeName: "1201m 人行道",
       legs: [
@@ -3261,18 +3633,14 @@ describe("planAccessibleRouteFromRequest — avoidStairs / requireElevator const
       avoidStairs: true,
     });
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.data.routes).toHaveLength(1);
-    expect(result.data.routes[0].routeName).toBe("OTP steps 樓梯線");
-    expect(result.data.routes[0].degraded).toBe(true);
-    expect(result.data.routes[0].warnings).toContain(
-      "目前候選路線仍包含無坡道樓梯，無法完全滿足避開樓梯條件",
-    );
+    expect(result).toMatchObject({
+      ok: false,
+      data: { reason: ROUTE_REASON.NO_ACCESSIBLE_ROUTE },
+    });
   });
 
   it.each(["ramp:wheelchair", "wheelchair"] as const)(
-    "preserves the %s=yes exception for a confirmed stairs feature",
+    "does not let a %s=yes tag bypass independent avoidStairs on a whole-walk answer",
     async (tag) => {
       const accessibleSteps = {
         ...otpStepsWalkRoute,
@@ -3295,13 +3663,16 @@ describe("planAccessibleRouteFromRequest — avoidStairs / requireElevator const
         otpTransitOk([accessibleSteps] as any),
       );
 
-      const names = await routeNames({
+      const result = await planAccessibleRouteFromRequest({
         ...transitRequest,
         mode: "elderly",
         avoidStairs: true,
       });
 
-      expect(names).toEqual(["有輪椅坡道階梯"]);
+      expect(result).toMatchObject({
+        ok: false,
+        data: { reason: ROUTE_REASON.NO_ACCESSIBLE_ROUTE },
+      });
     },
   );
 
@@ -4540,28 +4911,38 @@ describe("venue origins (originVenuePlace)", () => {
   };
 
   beforeEach(() => {
-    vi.mocked(planOtpRouteDetailed).mockImplementation(async () =>
-      otpTransitOk([
-        {
-          routeId: "from-gate",
-          routeName: "步行",
-          totalMinutes: 20,
-          transferCount: 0,
-          accessibilityHighlights: [],
-          legs: [
-            {
-              type: "WALK",
-              polyline: [
-                [gate.lng, gate.lat],
-                [destination.longitude, destination.latitude],
-              ],
-              distanceM: 1500,
-              durationMinutes: 20,
-              a11yFacilities: [],
+    vi.mocked(planOtpRouteDetailed).mockImplementation(
+      async (_origin, _destination, options) =>
+        otpTransitOk([
+          {
+            routeId: "from-gate",
+            walkPolicy: {
+              version: "sidewalk-priority-v1",
+              profile: options?.mode === "wheelchair" ? "wheelchair" : "normal",
+              avoidStairs:
+                options?.avoidStairs ?? options?.mode === "wheelchair",
+              maxSlopePercent: null,
+              carriagewayMillimetres: 0,
+              generalizedCost: 1500,
             },
-          ],
-        },
-      ]),
+            routeName: "步行",
+            totalMinutes: 20,
+            transferCount: 0,
+            accessibilityHighlights: [],
+            legs: [
+              {
+                type: "WALK",
+                polyline: [
+                  [gate.lng, gate.lat],
+                  [destination.longitude, destination.latitude],
+                ],
+                distanceM: 1500,
+                durationMinutes: 20,
+                a11yFacilities: [],
+              },
+            ],
+          },
+        ]),
     );
   });
 

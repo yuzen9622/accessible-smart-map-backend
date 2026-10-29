@@ -188,7 +188,26 @@ describe("OTP plan result cache", () => {
     if (result.status !== "ok") return;
     expect(result.routes.map((route) => route.routeName)).toEqual(["步行路線"]);
     expect(result.routes[0]._scheduledDepartureTime).toBe(departure.getTime());
-    expect(post).toHaveBeenCalledTimes(1);
+    const queries = post.mock.calls.map((call) => call[1].variables);
+    expect(queries.map((query) => query.searchWindow)).toEqual([
+      3600, 7200, 28800, 28800, 21600,
+    ]);
+    expect(queries.map((query) => `${query.date}T${query.time}`)).toEqual([
+      "2026-10-01T09:00",
+      "2026-10-01T09:00",
+      "2026-10-01T11:00",
+      "2026-10-01T19:00",
+      "2026-10-02T03:00",
+    ]);
+    expect(store.size).toBe(queries.length);
+
+    const again = await planOtpRouteDetailed(origin, destination, {
+      departureTime: departure,
+      mode: "wheelchair",
+    });
+    expect(again.status).toBe("ok");
+    expect(again.routes[0]._scheduledDepartureTime).toBe(departure.getTime());
+    expect(post).toHaveBeenCalledTimes(queries.length);
   });
 
   it("does not cache a failed query", async () => {

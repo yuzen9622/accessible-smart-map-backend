@@ -43,6 +43,14 @@ function walkOnlySegment(
     routeName: id,
     totalMinutes: minutes,
     transferCount: 1,
+    walkPolicy: {
+      version: "sidewalk-priority-v1",
+      profile: "normal",
+      avoidStairs: false,
+      maxSlopePercent: null,
+      carriagewayMillimetres: 0,
+      generalizedCost: 100,
+    },
     legs: [
       {
         type: "WALK",
@@ -115,6 +123,11 @@ describe("findAccessibleRoutes transit waypoint chaining", () => {
 
     expect(routes).toHaveLength(1);
     expect(routes[0].totalMinutes).toBe(22); // 10 + 12
+    expect(routes[0].walkPolicy).toMatchObject({
+      version: "sidewalk-priority-v1",
+      carriagewayMillimetres: 0,
+      generalizedCost: 200,
+    });
     expect(routes[0].transferCount).toBe(2); // 1 + 1
     // the two boundary WALK legs are merged into one (no double-walk seam)
     expect(routes[0].legs).toHaveLength(1);

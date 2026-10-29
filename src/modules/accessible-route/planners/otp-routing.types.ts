@@ -5,6 +5,7 @@
 import type {
   AccessibilityMode,
   TransitPreference,
+  WalkPolicy,
 } from "../../../types/route";
 
 export interface OtpStop {
@@ -53,6 +54,7 @@ export interface OtpLeg {
       }[]
     | null;
   steps?: OtpStep[] | null;
+  walkPolicy?: WalkPolicy;
 }
 export interface OtpStep {
   distance?: number;

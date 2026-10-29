@@ -6,7 +6,14 @@ import {
   type CostProfile,
 } from "./cost";
 import { dijkstra } from "./dijkstra";
-import { EDGE_FLAG, EDGE_TYPE, NODE_FLAG, type PedGraph } from "./graph.types";
+import {
+  EDGE_FLAG,
+  EDGE_TYPE,
+  NODE_FLAG,
+  WHEELCHAIR,
+  isGtfsIndoorEdge,
+  type PedGraph,
+} from "./graph.types";
 
 const METRES_PER_DEGREE_LATITUDE = 111_195;
 
@@ -312,6 +319,20 @@ describe("BinaryMinHeap", () => {
   });
 });
 
+describe("BinaryMinHeap sidewalk priority", () => {
+  it("orders less carriageway before shorter distance while growing", () => {
+    const heap = new BinaryMinHeap(1);
+    heap.push(1, 100, 0);
+    heap.push(2, 1, 1);
+    heap.push(3, 5, 0);
+    heap.push(4, 0, 2);
+    expect([heap.pop(), heap.pop(), heap.pop(), heap.pop()]).toEqual([
+      3, 1, 2, 4,
+    ]);
+    expect(heap.lastCarriagewayMillimetres).toBe(2);
+  });
+});
+
 describe("aStar", () => {
   it("returns null for invalid or unreachable endpoints", () => {
     const graph = graphFromEdges({
@@ -327,6 +348,7 @@ describe("aStar", () => {
       nodePath: Int32Array.of(1),
       edgeAttrPath: new Int32Array(0),
       totalCost: 0,
+      carriagewayMillimetres: 0,
       expandedNodes: 0,
       reopenedNodes: 0,
     });
@@ -538,5 +560,192 @@ describe("request-local hazard exclusions", () => {
     expect(
       Array.from(aStar(graph, 0, 2, wheelchairProfile())!.edgeAttrPath),
     ).toEqual([0]);
+  });
+});
+
+describe("outdoor sidewalk priority", () => {
+  const profiles: CostProfile[] = [
+    {
+      name: "normal",
+      walkSpeedMps: 1.3,
+      relaxationLevel: 0,
+      preferSidewalks: true,
+    },
+    {
+      name: "normal",
+      walkSpeedMps: 1.3,
+      relaxationLevel: 0,
+      preferSidewalks: true,
+      forbidStairs: true,
+    },
+    { ...wheelchairProfile(), preferSidewalks: true, forbidStairs: true },
+    { ...wheelchairProfile(), preferSidewalks: true, forbidStairs: false },
+  ];
+
+  it.each(profiles)(
+    "keeps the longer connected sidewalk for $name, stairs=$forbidStairs",
+    (profile) => {
+      const graph = graphFromEdges({
+        nodeLon: [121.5, 121.5001, 121.5002, 121.5003],
+        nodeLat: [25.05, 25.05, 25.05, 25.05],
+        edges: [
+          { from: 0, to: 1, lengthM: 5, edgeType: EDGE_TYPE.ROAD },
+          { from: 1, to: 3, lengthM: 10, edgeType: EDGE_TYPE.ROAD },
+          { from: 1, to: 2, lengthM: 500, edgeType: EDGE_TYPE.SIDEWALK },
+          { from: 2, to: 3, lengthM: 500, edgeType: EDGE_TYPE.CROSSING },
+        ],
+      });
+      for (const search of [aStar, dijkstra]) {
+        const route = search(graph, 0, 3, profile);
+        expect(Array.from(route?.nodePath ?? [])).toEqual([0, 1, 2, 3]);
+        expect(route?.carriagewayMillimetres).toBe(5000);
+      }
+    },
+  );
+
+  it("preserves necessary road travel when a sidewalk branch is disconnected", () => {
+    const graph = graphFromEdges({
+      nodeLon: [121.5, 121.5001, 121.5002, 121.5003],
+      nodeLat: [25.05, 25.05, 25.05, 25.05],
+      edges: [
+        { from: 0, to: 1, lengthM: 5, edgeType: EDGE_TYPE.ROAD },
+        { from: 1, to: 3, lengthM: 10, edgeType: EDGE_TYPE.ROAD },
+        { from: 1, to: 2, lengthM: 500, edgeType: EDGE_TYPE.SIDEWALK },
+      ],
+    });
+    const route = aStar(graph, 0, 3, profiles[0]);
+    expect(Array.from(route?.nodePath ?? [])).toEqual([0, 1, 3]);
+    expect(route?.carriagewayMillimetres).toBe(15000);
+  });
+
+  it("does not give an unknown connector zero-carriageway priority", () => {
+    const graph = graphFromEdges({
+      nodeLon: [121.5, 121.5001, 121.5002],
+      nodeLat: [25.05, 25.05, 25.05],
+      edges: [
+        { from: 0, to: 2, lengthM: 1, edgeType: EDGE_TYPE.UNKNOWN },
+        { from: 0, to: 1, lengthM: 100, edgeType: EDGE_TYPE.FOOTWAY },
+        { from: 1, to: 2, lengthM: 100, edgeType: EDGE_TYPE.SIDEWALK },
+      ],
+    });
+    expect(Array.from(aStar(graph, 0, 2, profiles[0])?.nodePath ?? [])).toEqual(
+      [0, 1, 2],
+    );
+  });
+
+  it("applies stairs and wheelchair exclusions before sidewalk preference", () => {
+    const graph = graphFromEdges({
+      nodeLon: [121.5, 121.5001, 121.5002],
+      nodeLat: [25.05, 25.05, 25.05],
+      edges: [
+        { from: 0, to: 2, lengthM: 10, edgeType: EDGE_TYPE.ROAD },
+        { from: 0, to: 1, lengthM: 1, edgeType: EDGE_TYPE.STEPS },
+        { from: 1, to: 2, lengthM: 1, edgeType: EDGE_TYPE.SIDEWALK },
+      ],
+    });
+    expect(Array.from(aStar(graph, 0, 2, profiles[1])?.nodePath ?? [])).toEqual(
+      [0, 2],
+    );
+    graph.edgeType[1] = EDGE_TYPE.SIDEWALK;
+    graph.edgeWheelchair[1] = WHEELCHAIR.NO;
+    expect(Array.from(aStar(graph, 0, 2, profiles[3])?.nodePath ?? [])).toEqual(
+      [0, 2],
+    );
+  });
+
+  it("keeps scalar shortest-path behavior for existing venue callers", () => {
+    const graph = graphFromEdges({
+      nodeLon: [121.5, 121.5001, 121.5002],
+      nodeLat: [25.05, 25.05, 25.05],
+      edges: [
+        { from: 0, to: 2, lengthM: 10, edgeType: EDGE_TYPE.ROAD },
+        { from: 0, to: 1, lengthM: 100, edgeType: EDGE_TYPE.SIDEWALK },
+        { from: 1, to: 2, lengthM: 100, edgeType: EDGE_TYPE.SIDEWALK },
+      ],
+    });
+    expect(
+      Array.from(aStar(graph, 0, 2, wheelchairProfile())?.nodePath ?? []),
+    ).toEqual([0, 2]);
+  });
+  it.each(profiles)(
+    "counts GTFS-generated road partial links for $name, stairs=$forbidStairs",
+    (profile) => {
+      const flags = isGtfsIndoorEdge(
+        "gtfs_pathways:connector-edge:entrance:from-to-snap",
+      )
+        ? EDGE_FLAG.INDOOR
+        : 0;
+      const graph = graphFromEdges({
+        nodeLon: [121.5, 121.5001, 121.50005, 121.50005],
+        nodeLat: [25.05, 25.05, 25.05, 25.051],
+        edges: [
+          { from: 0, to: 1, lengthM: 10, edgeType: EDGE_TYPE.ROAD },
+          { from: 0, to: 2, lengthM: 5, edgeType: EDGE_TYPE.FOOTWAY, flags },
+          { from: 2, to: 1, lengthM: 5, edgeType: EDGE_TYPE.FOOTWAY, flags },
+          { from: 0, to: 3, lengthM: 100, edgeType: EDGE_TYPE.SIDEWALK },
+          { from: 3, to: 1, lengthM: 100, edgeType: EDGE_TYPE.FOOTWAY },
+        ],
+      });
+      for (const search of [aStar, dijkstra]) {
+        const route = search(graph, 0, 1, profile);
+        expect(Array.from(route?.nodePath ?? [])).toEqual([0, 3, 1]);
+        expect(route?.carriagewayMillimetres).toBe(0);
+      }
+    },
+  );
+
+  it("retains necessary GTFS connectors with nonzero priority cost", () => {
+    const graph = graphFromEdges({
+      nodeLon: [121.5, 121.50005, 121.5001],
+      nodeLat: [25.05, 25.05, 25.05],
+      edges: [
+        {
+          from: 0,
+          to: 1,
+          lengthM: 5,
+          edgeType: EDGE_TYPE.FOOTWAY,
+          flags: EDGE_FLAG.INDOOR,
+        },
+        {
+          from: 1,
+          to: 2,
+          lengthM: 5,
+          edgeType: EDGE_TYPE.FOOTWAY,
+          flags: EDGE_FLAG.INDOOR,
+        },
+      ],
+    });
+    for (const search of [aStar, dijkstra]) {
+      const route = search(graph, 0, 2, profiles[0]);
+      expect(Array.from(route?.nodePath ?? [])).toEqual([0, 1, 2]);
+      expect(route?.carriagewayMillimetres).toBe(10000);
+    }
+  });
+
+  it("keeps explicit GTFS indoor walkway roles at zero priority cost", () => {
+    const graph = graphFromEdges({
+      nodeLon: [121.5, 121.50005, 121.5001],
+      nodeLat: [25.05, 25.05, 25.05],
+      edges: [
+        { from: 0, to: 2, lengthM: 1, edgeType: EDGE_TYPE.ROAD },
+        {
+          from: 0,
+          to: 1,
+          lengthM: 100,
+          edgeType: EDGE_TYPE.INDOOR_WALKWAY,
+          flags: EDGE_FLAG.INDOOR,
+        },
+        {
+          from: 1,
+          to: 2,
+          lengthM: 100,
+          edgeType: EDGE_TYPE.INDOOR_WALKWAY,
+          flags: EDGE_FLAG.INDOOR,
+        },
+      ],
+    });
+    const route = aStar(graph, 0, 2, profiles[0]);
+    expect(Array.from(route?.nodePath ?? [])).toEqual([0, 1, 2]);
+    expect(route?.carriagewayMillimetres).toBe(0);
   });
 });

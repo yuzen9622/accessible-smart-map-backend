@@ -127,6 +127,31 @@ describe("route token cache", () => {
     });
   });
 
+  it("preserves executed walk policy through the existing navigation envelope", async () => {
+    storeInitialNavigationEnvelope.mockResolvedValue(true);
+    const route: AccessibleRoute = {
+      ...sampleRoute,
+      walkPolicy: {
+        version: "sidewalk-priority-v1",
+        profile: "wheelchair",
+        avoidStairs: false,
+        maxSlopePercent: 8.3,
+        carriagewayMillimetres: 1200,
+        generalizedCost: 235,
+      },
+    };
+    const [stored] = await attachRouteTokens([route], canonicalRequest);
+    const [, envelope] = storeInitialNavigationEnvelope.mock.calls[0];
+    expect(envelope.route.walkPolicy).toEqual(route.walkPolicy);
+    redisGet.mockResolvedValueOnce(JSON.stringify(envelope));
+    if (!stored.routeToken) throw new Error("Expected a stored route token");
+    expect((await getRouteByToken(stored.routeToken))?.walkPolicy).toEqual(
+      route.walkPolicy,
+    );
+    redisGet.mockResolvedValueOnce(JSON.stringify(sampleRoute));
+    expect(await getRouteByToken("legacy")).not.toHaveProperty("walkPolicy");
+  });
+
   it("resolves valid cached JSON and treats misses or malformed values as expired", async () => {
     redisGet.mockResolvedValueOnce(JSON.stringify(sampleRoute));
     await expect(getRouteByToken("cap")).resolves.toEqual(sampleRoute);

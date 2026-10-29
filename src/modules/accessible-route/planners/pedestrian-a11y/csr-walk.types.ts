@@ -5,6 +5,7 @@ import type {
   WalkA11ySegment,
   WalkStep,
   WalkStepStreetName,
+  WalkPolicy,
 } from "../../../../types/route";
 import type { LngLat } from "./ped-graph-geometry.repository";
 
@@ -88,6 +89,7 @@ export interface CsrWalkPlan {
    * this plan travels along. See `sumSidewalkRampCount`.
    */
   sidewalkRampCount: number;
+  walkPolicy: WalkPolicy;
   diagnostics: CsrWalkDiagnostics;
 }
 

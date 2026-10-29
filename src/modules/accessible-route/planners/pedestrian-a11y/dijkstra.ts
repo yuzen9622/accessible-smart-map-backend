@@ -1,5 +1,5 @@
 import { BinaryMinHeap, buildRouteResult, type RouteResult } from "./astar";
-import { edgeCost, type CostProfile } from "./cost";
+import { edgeCarriagewayMillimetres, edgeCost, type CostProfile } from "./cost";
 import {
   FORBID_FARE_ACCESS,
   canTraverseFareGate,
@@ -41,12 +41,16 @@ export function dijkstra(
       nodePath: Int32Array.of(from),
       edgeAttrPath: new Int32Array(0),
       totalCost: 0,
+      carriagewayMillimetres: 0,
       expandedNodes: 0,
       reopenedNodes: 0,
     };
   }
   const gScore = new Float64Array(graph.nodeCount);
   gScore.fill(Number.POSITIVE_INFINITY);
+  const carriagewayScore = new Float64Array(graph.nodeCount);
+  carriagewayScore.fill(Number.POSITIVE_INFINITY);
+  carriagewayScore[from] = 0;
   const parent = new Int32Array(graph.nodeCount);
   parent.fill(-1);
   const parentEdgeAttr = new Int32Array(graph.nodeCount);
@@ -64,7 +68,11 @@ export function dijkstra(
     if (node === -1) {
       break;
     }
-    if (priority !== gScore[node] || closed[node] !== 0) {
+    if (
+      priority !== gScore[node] ||
+      open.lastCarriagewayMillimetres !== carriagewayScore[node] ||
+      closed[node] !== 0
+    ) {
       continue;
     }
     closed[node] = 1;
@@ -78,6 +86,7 @@ export function dijkstra(
         gScore[to],
         expandedNodes,
         reopenedNodes,
+        carriagewayScore[to],
       );
     }
     for (
@@ -97,7 +106,18 @@ export function dijkstra(
         continue;
       }
       const tentativeCost = gScore[node] + edgeCostM;
-      if (!Number.isFinite(tentativeCost) || tentativeCost >= gScore[target]) {
+      const tentativeCarriageway =
+        carriagewayScore[node] +
+        (profile.preferSidewalks
+          ? edgeCarriagewayMillimetres(graph, attrIdx, profile)
+          : 0);
+      if (
+        !Number.isFinite(tentativeCost) ||
+        !Number.isFinite(tentativeCarriageway) ||
+        tentativeCarriageway > carriagewayScore[target] ||
+        (tentativeCarriageway === carriagewayScore[target] &&
+          tentativeCost >= gScore[target])
+      ) {
         continue;
       }
       if (closed[target] !== 0) {
@@ -105,9 +125,10 @@ export function dijkstra(
         reopenedNodes += 1;
       }
       gScore[target] = tentativeCost;
+      carriagewayScore[target] = tentativeCarriageway;
       parent[target] = node;
       parentEdgeAttr[target] = attrIdx;
-      open.push(target, tentativeCost);
+      open.push(target, tentativeCost, tentativeCarriageway);
     }
   }
   return null;

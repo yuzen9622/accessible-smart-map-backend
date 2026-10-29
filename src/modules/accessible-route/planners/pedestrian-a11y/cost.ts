@@ -71,6 +71,8 @@ export interface CostProfile {
   name: "wheelchair" | "elderly" | "visual_impaired" | "normal";
   walkSpeedMps: number;
   relaxationLevel: number;
+  /** Prefer less non-exclusive/unknown ground before comparing normal cost. */
+  preferSidewalks?: boolean;
   /**
    * Multiplier on STEPS / INDOOR_STAIRS for a non-wheelchair profile that
    * should prefer elevators without being barred from stairs. Retained for
@@ -80,9 +82,8 @@ export interface CostProfile {
    */
   stairsAvoidanceMultiplier?: number;
   /**
-   * Explicit venue policy: bar steps, stairs and escalators while preserving
-   * this profile's name, walking speed and other cost rules. Absent by default
-   * in the outdoor CSR planner.
+   * Request policy: bar steps, stairs and escalators while preserving
+   * this profile's name, walking speed and other cost rules.
    */
   forbidStairs?: boolean;
 }
@@ -389,7 +390,7 @@ function applyAdditivePenalty(cost: number, penaltyM: number): number {
  * is an explicit `profile.stairsAvoidanceMultiplier`, applied to STEPS and
  * INDOOR_STAIRS. An explicit `profile.forbidStairs` bars steps, stairs and
  * escalators before costing; venue elderly / visual_impaired profiles set it,
- * while outdoor CSR profiles stay shortest-path. The fare-gate policy still applies
+ * including explicit outdoor requests. The fare-gate policy still applies
  * to all four modes because it is enforced in the search, not in this cost
  * model.
  *
@@ -459,4 +460,36 @@ export function edgeCost(
     cost = applyMultiplier(cost, multiplier);
   }
   return applyAdditivePenalty(cost, MINIMUM_ADDITIVE_PENALTY_M);
+}
+
+/**
+ * Conservative non-exclusive-ground priority cost, including unknown roles.
+ * This is a planning upper bound, not a surveyed carriageway measurement.
+ * Explicit pedestrian and indoor passage types are the only zero-cost roles.
+ */
+export function edgeCarriagewayMillimetres(
+  graph: PedGraph,
+  attrIdx: number,
+  profile: CostProfile,
+): number {
+  switch (graph.edgeType[attrIdx]) {
+    case EDGE_TYPE.FOOTWAY:
+      if ((graph.edgeFlags[attrIdx] & EDGE_FLAG.INDOOR) !== 0) break;
+      return 0;
+    case EDGE_TYPE.SIDEWALK:
+    case EDGE_TYPE.CROSSING:
+    case EDGE_TYPE.PATH:
+    case EDGE_TYPE.PEDESTRIAN:
+    case EDGE_TYPE.STEPS:
+    case EDGE_TYPE.OSM_ELEVATOR:
+    case EDGE_TYPE.INDOOR_WALKWAY:
+    case EDGE_TYPE.INDOOR_STAIRS:
+    case EDGE_TYPE.INDOOR_MOVING_WALKWAY:
+    case EDGE_TYPE.INDOOR_ESCALATOR:
+    case EDGE_TYPE.INDOOR_ELEVATOR:
+    case EDGE_TYPE.INDOOR_FARE_GATE:
+    case EDGE_TYPE.INDOOR_EXIT_GATE:
+      return 0;
+  }
+  return Math.round(baseCost(graph, attrIdx, profile) * 1000);
 }

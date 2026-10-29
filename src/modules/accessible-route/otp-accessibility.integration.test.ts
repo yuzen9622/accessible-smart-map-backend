@@ -38,6 +38,9 @@ vi.mock("../hazard-report/hazard-report.service", () => ({
 vi.mock("../traffic/road-incident.service", () => ({
   getActiveRoadIncidents: vi.fn(async () => []),
 }));
+vi.mock("../a11y/a11y.orchestration", () => ({
+  findNearby: vi.fn(async () => ({ nearbyOsm: [] })),
+}));
 vi.mock("./planners/facility-status", () => ({
   overlayFacilityStatus: vi.fn(async () => new Set()),
 }));
@@ -48,6 +51,7 @@ vi.mock("./planners/realtime-transit", () => ({
 }));
 
 import { findAccessibleRoutesDetailed } from "./accessible-route.service";
+import { planOtpRouteDetailed } from "./planners/otp-routing";
 
 const fixture = captured.cases[0];
 function response(stairs: boolean) {
@@ -96,10 +100,9 @@ describe("OTP candidates satisfy stairs constraints before stopping search", () 
       post
         .mockResolvedValueOnce(walkResponse(false, delayMs))
         .mockResolvedValue(empty);
-      const result = await findAccessibleRoutesDetailed(
+      const result = await planOtpRouteDetailed(
         fixture.origin,
         fixture.destination,
-        TaiwanCityEn.Tainan,
         {
           mode: "wheelchair",
           departureTime: new Date(fixture.departure),
@@ -129,10 +132,9 @@ describe("OTP candidates satisfy stairs constraints before stopping search", () 
       post
         .mockResolvedValueOnce(walkResponse(firstStairs))
         .mockResolvedValue(walkResponse(false, 3600000));
-      const result = await findAccessibleRoutesDetailed(
+      const result = await planOtpRouteDetailed(
         fixture.origin,
         fixture.destination,
-        TaiwanCityEn.Tainan,
         {
           mode: "normal",
           avoidStairs,
@@ -146,6 +148,79 @@ describe("OTP candidates satisfy stairs constraints before stopping search", () 
       );
     },
   );
+
+  it.each([
+    { mode: "normal", avoidStairs: true, profile: "NORMAL" },
+    { mode: "wheelchair", avoidStairs: false, profile: "WHEELCHAIR" },
+  ] as const)(
+    "validates a replacement sidewalk policy through the real service for $mode/$avoidStairs",
+    async ({ mode, avoidStairs, profile }) => {
+      post.mockImplementation(async (_url, { variables }) => {
+        const result = walkResponse(false);
+        if (variables.directWalkProfile)
+          Object.assign(result.data.data.plan.itineraries[0].legs[0], {
+            walkPolicy: {
+              version: "sidewalk-priority-v1",
+              profile,
+              avoidStairs,
+              maxSlopePercent: null,
+              carriagewayMillimetres: 0,
+              generalizedCost: 100,
+            },
+          });
+        return result;
+      });
+
+      const result = await findAccessibleRoutesDetailed(
+        fixture.origin,
+        fixture.destination,
+        TaiwanCityEn.Tainan,
+        {
+          mode,
+          avoidStairs,
+          departureTime: new Date(fixture.departure),
+          maxTransfers: 2,
+        },
+      );
+
+      expect(result.status).toBe("ok");
+      expect(result.routes[0].walkPolicy).toMatchObject({
+        version: "sidewalk-priority-v1",
+        profile: mode,
+        avoidStairs,
+      });
+      const policyQueries = post.mock.calls.filter(
+        (call) => call[1].variables.directWalkProfile,
+      );
+      expect(policyQueries).toHaveLength(1);
+      expect(policyQueries[0][1].variables).toMatchObject({
+        directWalkProfile: profile,
+        wheelchair: mode === "wheelchair",
+        avoidStairs,
+      });
+      expect(result.routes[0].departureTime).toBeDefined();
+      expect(result.routes[0].arrivalTime).toBeDefined();
+    },
+  );
+
+  it("rejects a legacy whole-walk answer without executed policy acknowledgment", async () => {
+    post.mockResolvedValue(walkResponse(false));
+    const result = await findAccessibleRoutesDetailed(
+      fixture.origin,
+      fixture.destination,
+      TaiwanCityEn.Tainan,
+      {
+        mode: "normal",
+        departureTime: new Date(fixture.departure),
+        maxTransfers: 2,
+      },
+    );
+
+    expect(result).toEqual({ status: "unavailable", routes: [] });
+    expect(
+      post.mock.calls.filter((call) => call[1].variables.directWalkProfile),
+    ).toHaveLength(1);
+  });
 
   it.each(["wheelchair", "elderly"] as const)(
     "does not settle a slow stairs-only first answer for %s",

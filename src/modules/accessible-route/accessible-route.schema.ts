@@ -24,6 +24,7 @@ import {
   TRANSIT_FALLBACK_REASON,
 } from "../../constants/messages";
 import { RouteIntentSchema } from "../../schemas/route-intent.schema";
+import { WALK_POLICY_VERSION } from "../../types/route";
 import {
   WALK_ABSOLUTE_DIRECTION_VALUES,
   WALK_RELATIVE_DIRECTION_VALUES,
@@ -136,7 +137,7 @@ export const AccessibleRouteBodySchema = z
       .default("transit")
       .openapi({
         description:
-          "交通工具（與無障礙 mode 正交）：transit（預設，大眾運輸及其 WALK legs 均走 OTP2）、drive（開車）、motorcycle（騎車）、walk（純步行）。純步行在台北 CSR bbox 內且功能啟用時優先走 CSR；bbox 外、功能停用或 CSR 無法選路時改走 OTP2，CSR fallback 本身不附 warning。僅當 OTP2 不可用才由 Valhalla 作停機備援。車行時間為自由流估計，不含即時路況。",
+          "交通工具（與無障礙 mode 正交）：transit（預設，大眾運輸及其 WALK legs 均走 OTP2）、drive（開車）、motorcycle（騎車）、walk（純步行）。純步行在台北 CSR bbox 內且功能啟用時優先走 CSR；bbox 外、功能停用或 CSR 無法選路時改走 OTP2，CSR fallback 本身不附 warning。OTP2 不可用且無同等人行道政策備援時回 503。車行時間為自由流估計，不含即時路況。",
         example: "drive",
       }),
     waypoints: z
@@ -456,7 +457,7 @@ const WalkLegSchema = z
             area: z.boolean(),
             stairs: z.boolean().openapi({
               description:
-                "OTP step.feature 為 StairsUse 時為 true；Valhalla 步行備援固定為 false；CSR 選出的純步行路線依 edgeType 為 STEPS/INDOOR_STAIRS 判定。僅代表合併 step 內含樓梯，不代表整個 distanceM 都是樓梯。",
+                "OTP step.feature 為 StairsUse 時為 true；CSR 選出的純步行路線依 edgeType 為 STEPS/INDOOR_STAIRS 判定。缺少階梯特徵不表示已現勘確認無階梯；true 僅代表合併 step 內含樓梯，不代表整個 distanceM 都是樓梯。",
             }),
             steepSlope: z.boolean().openapi({
               description:
@@ -1256,10 +1257,37 @@ export const AccessibleRouteSchema = z
         description:
           "後端自有 highlight 的穩定訊息碼與安全參數；index 對應最終 accessibilityHighlights。來源名稱不會編碼。",
       }),
+    walkPolicy: z
+      .object({
+        version: z.literal(WALK_POLICY_VERSION),
+        profile: z.enum(["normal", "wheelchair"]),
+        avoidStairs: z.boolean(),
+        maxSlopePercent: z
+          .number()
+          .finite()
+          .nonnegative()
+          .max(100)
+          .nullable()
+          .openapi({
+            description:
+              "引擎實際套用且選中邊具有所需高程證據的坡度上限；null 表示未確認執行。不是路面量測或無障礙認證。",
+          }),
+        carriagewayMillimetres: z
+          .number()
+          .int()
+          .nonnegative()
+          .max(Number.MAX_SAFE_INTEGER),
+        generalizedCost: z.number().finite().nonnegative(),
+      })
+      .optional()
+      .openapi({
+        description:
+          "純步行引擎實際執行的人行道優先政策與搜尋成本。先最少沿車道量，再比較既有成本；此為圖資規劃成本，未知角色採保守分類，不代表現場量測或無障礙認證。舊路線無此欄位，不能視為已執行本政策。",
+      }),
     engine: z.enum(["pedestrian-a11y", "otp-fallback"]).optional().openapi({
       example: "pedestrian-a11y",
       description:
-        "純步行路線的選路來源：pedestrian-a11y 表示由 CSR 無障礙行人圖選路；otp-fallback 表示 CSR 未決定該路線，後續可能由 OTP2 或 OTP2 不可用後的 Valhalla 規劃。大眾運輸與開車／機車路線省略。",
+        "純步行路線的選路來源：pedestrian-a11y 表示由 CSR 無障礙行人圖選路；otp-fallback 表示 CSR 未決定該路線，後續由已執行相同人行道優先政策的 OTP2 規劃。大眾運輸與開車／機車路線省略。",
     }),
     degraded: z.boolean().optional().openapi({
       example: true,
@@ -1623,7 +1651,7 @@ registry.registerPath({
   tags: ["Accessibility"],
   summary: "無障礙路線規劃",
   description:
-    "規劃起訖點間無障礙路線。travelMode=transit（預設）並行搜尋公車、捷運、高鐵與台鐵，且 transit itinerary 的 WALK legs 維持 OTP2；純 walk 在台北 CSR bbox 內且啟用時以 CSR 為 primary，CSR 在範圍內無法選路時改走 OTP2 fallback，且不附 CSR fallback warning；bbox 外或 CSR 停用時 OTP2 本來就是 primary。只有 OTP2 步行不可用時才降級至 Valhalla pedestrian。drive／motorcycle 主體走自架 Valhalla（自由流時間、不含即時路況）。支援最多 5 個中途點（waypoints），回傳最多 3 筆。選填帶 Bearer token：帶時，未明確傳入的 mode/avoidStairs/requireElevator/needsAccessibleToilet/needsHandrail/maxSlopePercent 會從登入者已儲存的 a11y-profile 推導；不帶則完全公開不受影響；帶但無效/過期回 401/403。",
+    "規劃起訖點間無障礙路線。travelMode=transit（預設）並行搜尋公車、捷運、高鐵與台鐵，且 transit itinerary 的 WALK legs 維持 OTP2；純 walk 在台北 CSR bbox 內且啟用時以 CSR 為 primary，CSR 在範圍內無法選路時改走 OTP2 fallback，且不附 CSR fallback warning；bbox 外或 CSR 停用時 OTP2 本來就是 primary。純步行須執行人行通路優先及獨立的輪椅／避樓梯條件；具同等政策的引擎不可用時回 503，不以 Valhalla pedestrian 繞過。drive／motorcycle 主體走自架 Valhalla（自由流時間、不含即時路況）。支援最多 5 個中途點（waypoints），回傳最多 3 筆。選填帶 Bearer token：帶時，未明確傳入的 mode/avoidStairs/requireElevator/needsAccessibleToilet/needsHandrail/maxSlopePercent 會從登入者已儲存的 a11y-profile 推導；不帶則完全公開不受影響；帶但無效/過期回 401/403。",
   security: [{ bearerAuth: [] }, {}],
   request: {
     body: {

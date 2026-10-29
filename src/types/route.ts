@@ -516,6 +516,19 @@ export interface ScoreFactor {
   impact: number;
 }
 
+export const WALK_POLICY_VERSION = "sidewalk-priority-v1";
+
+/** Search costs and executed conditions, not surveyed carriageway measurements. */
+export interface WalkPolicy {
+  version: typeof WALK_POLICY_VERSION;
+  profile: "normal" | "wheelchair";
+  avoidStairs: boolean;
+  /** Applied slope ceiling when selected edges have the required elevation evidence. */
+  maxSlopePercent: number | null;
+  carriagewayMillimetres: number;
+  generalizedCost: number;
+}
+
 export interface AccessibleRoute {
   departureTime?: string;
   arrivalTime?: string;
@@ -537,11 +550,12 @@ export interface AccessibleRoute {
   accessibilityHighlightDetails?: RouteMessageDetail[];
   /**
    * Pure-walk planner provenance. `pedestrian-a11y` is a CSR-selected route;
-   * `otp-fallback` states plainly that CSR did not decide it, so its
-   * stair/slope/width/fare-gate protection was not applied. Transit and driving
-   * routes omit this optional field.
+   * `otp-fallback` means OTP selected it outside or after CSR. `walkPolicy`
+   * records the executed walking policy independently of the engine. Transit
+   * and driving routes omit this optional field.
    */
   engine?: PureWalkRouteEngine;
+  walkPolicy?: WalkPolicy;
   degraded?: boolean;
   warnings?: string[];
   warningDetails?: RouteMessageDetail[];

@@ -1,0 +1,883 @@
+--- a/application/src/main/java/org/opentripplanner/apis/gtfs/SchemaFactory.java
++++ b/application/src/main/java/org/opentripplanner/apis/gtfs/SchemaFactory.java
+@@ -118,6 +118,8 @@
+     try {
+       URL url = Objects.requireNonNull(SchemaFactory.class.getResource("schema.graphqls"));
+       TypeDefinitionRegistry typeRegistry = new SchemaParser().parse(url.openStream());
++      typeRegistry.merge(new SchemaParser().parse(Objects.requireNonNull(
++        SchemaFactory.class.getResource("sidewalk-priority.graphqls")).openStream()));
+       IntrospectionTypeWiring typeWiring = new IntrospectionTypeWiring(typeRegistry);
+       RuntimeWiring runtimeWiring = RuntimeWiring.newRuntimeWiring()
+         // This is needed because we have our own implementation for the ID scalar
+--- a/application/src/main/java/org/opentripplanner/apis/gtfs/datafetchers/LegImpl.java
++++ b/application/src/main/java/org/opentripplanner/apis/gtfs/datafetchers/LegImpl.java
+@@ -40,6 +40,10 @@
+ 
+ public class LegImpl implements GraphQLDataFetchers.GraphQLLeg {
+ 
++  public DataFetcher<java.util.Map<String,Object>> walkPolicy() {
++    return environment -> getSource(environment) instanceof StreetLeg street ? street.getWalkPolicy() : null;
++  }
++
+   @Override
+   public DataFetcher<Agency> agency() {
+     return environment -> getSource(environment).agency();
+--- a/application/src/main/java/org/opentripplanner/apis/gtfs/mapping/routerequest/LegacyRouteRequestMapper.java
++++ b/application/src/main/java/org/opentripplanner/apis/gtfs/mapping/routerequest/LegacyRouteRequestMapper.java
+@@ -239,6 +239,17 @@
+       });
+     });
+ 
++    String profile = environment.getArgument("directWalkProfile");
++    if (profile != null) {
++      Boolean avoidStairs = environment.getArgument("avoidStairs");
++      Boolean wheelchair = environment.getArgument("wheelchair");
++      var modes = environment.<List<Map<String,String>>>getArgument("transportModes");
++      if (avoidStairs == null || wheelchair == null || wheelchair != "WHEELCHAIR".equals(profile)
++          || modes == null || modes.size() != 1 || !"WALK".equals(modes.getFirst().get("mode"))) {
++        throw new IllegalArgumentException("Direct walking policy requires matching profile, explicit avoidStairs and WALK-only modes");
++      }
++      request.withDirectWalkPolicy(org.opentripplanner.street.search.request.DirectWalkPolicy.of(profile, avoidStairs));
++    }
+     return request.buildRequest();
+   }
+ 
+--- a/application/src/main/java/org/opentripplanner/graph_builder/module/AddTransitEntitiesToGraph.java
++++ b/application/src/main/java/org/opentripplanner/graph_builder/module/AddTransitEntitiesToGraph.java
+@@ -198,7 +198,8 @@
+             distance,
+             pathway.getStairCount(),
+             pathway.getSlope(),
+-            pathway.isPathwayModeWheelchairAccessible()
++            pathway.isPathwayModeWheelchairAccessible(),
++            pathway.getPathwayMode() == PathwayMode.STAIRS || pathway.getPathwayMode() == PathwayMode.ESCALATOR
+           );
+           if (pathway.isBidirectional()) {
+             PathwayEdge.createPathwayEdge(
+@@ -209,7 +210,8 @@
+               distance,
+               -1 * pathway.getStairCount(),
+               -1 * pathway.getSlope(),
+-              pathway.isPathwayModeWheelchairAccessible()
++              pathway.isPathwayModeWheelchairAccessible(),
++            pathway.getPathwayMode() == PathwayMode.STAIRS || pathway.getPathwayMode() == PathwayMode.ESCALATOR
+             );
+           }
+         }
+--- a/application/src/main/java/org/opentripplanner/graph_builder/module/osm/OsmModule.java
++++ b/application/src/main/java/org/opentripplanner/graph_builder/module/osm/OsmModule.java
+@@ -728,7 +728,13 @@
+       .withSlopeOverride(way.getOsmProvider().getWayPropertySet().getSlopeOverride(way))
+       .withStairs(way.isStairs())
+       .withWheelchairAccessible(way.isWheelchairAccessible())
+-      .withBogusName(way.hasNoName());
++      .withBogusName(way.hasNoName())
++      .withPedestrianRole(
++        org.opentripplanner.street.model.edge.PedestrianEdgeRole.fromOsm(way.getTag("highway"), way.getTag("footway")),
++        way.getId(),
++        org.opentripplanner.street.model.edge.PedestrianEdgeRole.knownWidth(
++          way.getTag("highway"), way.getTag("width:effective"), way.getTag("width"))
++      );
+ 
+     return seb.buildAndConnect();
+   }
+--- a/application/src/main/java/org/opentripplanner/graph_builder/module/osm/WalkableAreaBuilder.java
++++ b/application/src/main/java/org/opentripplanner/graph_builder/module/osm/WalkableAreaBuilder.java
+@@ -473,6 +473,8 @@
+     WayProperties wayData = null;
+     StreetTraversalPermission areaPermissions = StreetTraversalPermission.ALL;
+     boolean wheelchairAccessible = true;
++    var areaRole = org.opentripplanner.street.model.edge.PedestrianEdgeRole.SIDEWALK;
++    double areaWidth = Double.NaN;
+ 
+     // combine properties of intersected areas
+     for (OsmArea area : areas) {
+@@ -483,6 +485,14 @@
+         wayData = findAreaProperties(parent);
+         areaPermissions = areaPermissions.intersection(wayData.getPermission());
+         wheelchairAccessible = wheelchairAccessible && parent.isWheelchairAccessible();
++        var role = org.opentripplanner.street.model.edge.PedestrianEdgeRole.fromOsm(parent.getTag("highway"), parent.getTag("footway"));
++        if (role != org.opentripplanner.street.model.edge.PedestrianEdgeRole.SIDEWALK
++            && role != org.opentripplanner.street.model.edge.PedestrianEdgeRole.CROSSING) {
++          areaRole = org.opentripplanner.street.model.edge.PedestrianEdgeRole.OTHER;
++        }
++        double width = org.opentripplanner.street.model.edge.PedestrianEdgeRole.knownWidth(
++          parent.getTag("highway"), parent.getTag("width:effective"), parent.getTag("width"));
++        if (Double.isFinite(width) && (!Double.isFinite(areaWidth) || width < areaWidth)) areaWidth = width;
+       }
+     }
+     if (parent == null) {
+@@ -514,7 +524,8 @@
+       .withCarSpeed(carSpeed)
+       .withBogusName(parent.hasNoName())
+       .withWheelchairAccessible(wheelchairAccessible)
+-      .withLink(parent.isLink());
++      .withLink(parent.isLink())
++      .withPedestrianRole(areaRole, 0, areaWidth);
+ 
+     label = String.format(LABEL_TEMPLATE, parent.getId(), vertex2.getLabel(), vertex1.getLabel());
+     name = namer.getName(parent, label);
+@@ -530,7 +541,8 @@
+       .withCarSpeed(carSpeed)
+       .withBogusName(parent.hasNoName())
+       .withWheelchairAccessible(wheelchairAccessible)
+-      .withLink(parent.isLink());
++      .withLink(parent.isLink())
++      .withPedestrianRole(areaRole, 0, areaWidth);
+ 
+     AreaEdge street = streetEdgeBuilder.buildAndConnect();
+     AreaEdge backStreet = backStreetEdgeBuilder.buildAndConnect();
+--- a/application/src/main/java/org/opentripplanner/model/plan/leg/StreetLeg.java
++++ b/application/src/main/java/org/opentripplanner/model/plan/leg/StreetLeg.java
+@@ -25,6 +25,7 @@
+  */
+ public class StreetLeg implements Leg {
+ 
++  private final java.util.Map<String,Object> walkPolicy;
+   private final TraverseMode mode;
+   private final ZonedDateTime startTime;
+   private final ZonedDateTime endTime;
+@@ -45,6 +46,7 @@
+ 
+   protected StreetLeg(StreetLegBuilder builder) {
+     this.mode = Objects.requireNonNull(builder.getMode());
++    this.walkPolicy = builder.getWalkPolicy();
+     this.startTime = TimeUtils.normalize(builder.getStartTime());
+     this.endTime = TimeUtils.normalize(builder.getEndTime());
+     this.distanceMeters = DoubleUtils.roundTo2Decimals(builder.getDistanceMeters());
+@@ -62,6 +64,8 @@
+     this.emissionPerPerson = builder.emissionPerPerson();
+   }
+ 
++  public java.util.Map<String,Object> getWalkPolicy() { return walkPolicy; }
++
+   public static StreetLegBuilder of() {
+     return new StreetLegBuilder();
+   }
+--- a/application/src/main/java/org/opentripplanner/model/plan/leg/StreetLegBuilder.java
++++ b/application/src/main/java/org/opentripplanner/model/plan/leg/StreetLegBuilder.java
+@@ -14,6 +14,7 @@
+ 
+ public class StreetLegBuilder {
+ 
++  private java.util.Map<String,Object> walkPolicy;
+   private TraverseMode mode;
+   private ZonedDateTime startTime;
+   private ZonedDateTime endTime;
+@@ -35,6 +36,7 @@
+ 
+   protected StreetLegBuilder(StreetLeg leg) {
+     this.mode = leg.getMode();
++    this.walkPolicy = leg.getWalkPolicy();
+     this.startTime = leg.startTime();
+     this.endTime = leg.endTime();
+     this.from = leg.from();
+@@ -52,6 +54,9 @@
+     this.emissionPerPerson = leg.emissionPerPerson();
+   }
+ 
++  public java.util.Map<String,Object> getWalkPolicy() { return walkPolicy; }
++  public StreetLegBuilder withWalkPolicy(java.util.Map<String,Object> policy) { this.walkPolicy = policy; return this; }
++
+   public StreetLeg build() {
+     return new StreetLeg(this);
+   }
+--- a/application/src/main/java/org/opentripplanner/routing/algorithm/mapping/GraphPathToItineraryMapper.java
++++ b/application/src/main/java/org/opentripplanner/routing/algorithm/mapping/GraphPathToItineraryMapper.java
+@@ -429,6 +429,8 @@
+       }
+     }
+ 
++    var policy = firstState.getExtensionRequestContext(org.opentripplanner.street.search.request.DirectWalkPolicy.class).orElse(null);
++    if (policy != null) leg.withWalkPolicy(policy.evidence(states));
+     addStreetNotes(leg, states);
+ 
+     return leg.build();
+--- a/application/src/main/java/org/opentripplanner/routing/algorithm/raptoradapter/router/street/DirectStreetRouter.java
++++ b/application/src/main/java/org/opentripplanner/routing/algorithm/raptoradapter/router/street/DirectStreetRouter.java
+@@ -93,6 +93,7 @@
+    * RouteRequest.
+    */
+   private static double calculateDistanceMaxLimit(RouteRequest request, float maxCarSpeed) {
++    if (request.directWalkPolicy() != null) return Double.POSITIVE_INFINITY;
+     var preferences = request.preferences();
+     double distanceLimit;
+     StreetMode mode = request.journey().direct().mode();
+--- a/application/src/main/java/org/opentripplanner/routing/api/request/RouteRequest.java
++++ b/application/src/main/java/org/opentripplanner/routing/api/request/RouteRequest.java
+@@ -68,6 +68,7 @@
+   private final RoutingPreferences preferences;
+   private final int numItineraries;
+   private final boolean defaultRequest;
++  private final org.opentripplanner.street.search.request.DirectWalkPolicy directWalkPolicy;
+ 
+   /* CONSTRUCTORS */
+ 
+@@ -87,6 +88,7 @@
+     this.preferences = RoutingPreferences.DEFAULT;
+     this.numItineraries = DEFAULT_NUM_ITINERARIES;
+     this.defaultRequest = true;
++    this.directWalkPolicy = null;
+   }
+ 
+   RouteRequest(RouteRequestBuilder builder) {
+@@ -111,6 +113,7 @@
+     this.preferences = builder.preferences;
+     this.numItineraries = builder.numItineraries;
+     this.defaultRequest = builder.defaultRequest;
++    this.directWalkPolicy = builder.directWalkPolicy;
+ 
+     validate();
+   }
+@@ -132,6 +135,8 @@
+   }
+ 
+   /* ACCESSOR/SETTER METHODS */
++
++  public org.opentripplanner.street.search.request.DirectWalkPolicy directWalkPolicy() { return directWalkPolicy; }
+ 
+   public JourneyRequest journey() {
+     return journey;
+@@ -442,7 +447,8 @@
+       Objects.equals(bookingTime, other.bookingTime) &&
+       Objects.equals(pageCursor, other.pageCursor) &&
+       Objects.equals(journey, other.journey) &&
+-      Objects.equals(preferences, other.preferences)
++      Objects.equals(preferences, other.preferences) &&
++      Objects.equals(directWalkPolicy, other.directWalkPolicy)
+     );
+   }
+ 
+@@ -461,7 +467,8 @@
+       pageCursor,
+       journey,
+       preferences,
+-      numItineraries
++      numItineraries,
++      directWalkPolicy
+     );
+   }
+ 
+--- a/application/src/main/java/org/opentripplanner/routing/api/request/RouteRequestBuilder.java
++++ b/application/src/main/java/org/opentripplanner/routing/api/request/RouteRequestBuilder.java
+@@ -42,6 +42,7 @@
+   RoutingPreferences preferences;
+   int numItineraries;
+   boolean defaultRequest;
++  org.opentripplanner.street.search.request.DirectWalkPolicy directWalkPolicy;
+ 
+   private final RouteRequest original;
+ 
+@@ -61,6 +62,12 @@
+     this.preferences = original.preferences();
+     this.numItineraries = original.numItineraries();
+     this.defaultRequest = original.isDefaultRequest();
++    this.directWalkPolicy = original.directWalkPolicy();
++  }
++
++  public RouteRequestBuilder withDirectWalkPolicy(org.opentripplanner.street.search.request.DirectWalkPolicy policy) {
++    this.directWalkPolicy = policy;
++    return this;
+   }
+ 
+   public RouteRequestBuilder withJourney(JourneyRequest journey) {
+--- a/application/src/main/java/org/opentripplanner/routing/impl/GraphPathFinder.java
++++ b/application/src/main/java/org/opentripplanner/routing/impl/GraphPathFinder.java
+@@ -84,20 +84,21 @@
+     Set<Vertex> to
+   ) {
+     StreetPreferences preferences = request.preferences().street();
++    var contexts = new java.util.ArrayList<>(extensionRequestContexts);
++    if (request.directWalkPolicy() != null) contexts.add(request.directWalkPolicy());
+ 
+     StreetSearchBuilder aStar = StreetSearchBuilder.of()
+       .withPreStartHook(OTPRequestTimeoutException::checkForTimeout)
+-      .withHeuristic(new EuclideanRemainingWeightHeuristic(maxCarSpeed))
+-      .withSkipEdgeStrategy(
+-        new DurationSkipEdgeStrategy(
+-          preferences.maxDirectDuration().valueOf(request.journey().direct().mode())
+-        )
+-      )
++      .withHeuristic(request.directWalkPolicy() == null ? new EuclideanRemainingWeightHeuristic(maxCarSpeed)
++        : org.opentripplanner.astar.spi.RemainingWeightHeuristic.TRIVIAL)
++      .withSkipEdgeStrategy(request.directWalkPolicy() == null
++        ? new DurationSkipEdgeStrategy(preferences.maxDirectDuration().valueOf(request.journey().direct().mode()))
++        : null)
+       // FORCING the dominance function to weight only
+       .withDominanceFunction(new DominanceFunctions.MinimumWeight())
+       .withRequest(
+         StreetSearchRequestMapper.map(request)
+-          .withExtensionRequestContexts(extensionRequestContexts)
++          .withExtensionRequestContexts(contexts)
+           .withMode(request.journey().direct().mode())
+           .build()
+       )
+@@ -119,7 +120,8 @@
+ 
+     LOG.debug("we have {} paths", paths.size());
+     LOG.debug("END SEARCH ({} msec)", System.currentTimeMillis() - searchBeginTime);
+-    paths.sort(new PathComparator(request.arriveBy()));
++    if (request.directWalkPolicy() == null) paths.sort(new PathComparator(request.arriveBy()));
++    else paths.sort((a, b) -> a.states.getLast().compareWeightTo(b.states.getLast()));
+     return paths;
+   }
+ 
+--- a/application/src/main/resources/org/opentripplanner/apis/gtfs/schema.graphqls
++++ b/application/src/main/resources/org/opentripplanner/apis/gtfs/schema.graphqls
+@@ -1253,6 +1253,8 @@
+   previousPosition: Int
+ }
+ 
++enum DirectWalkProfile { NORMAL WHEELCHAIR }
++
+ type QueryType {
+   "Get all agencies"
+   agencies: [Agency] @timingData
+@@ -1754,6 +1756,8 @@
+     walkSpeed: Float,
+     "Whether the itinerary must be wheelchair accessible. Default value: false"
+     wheelchair: Boolean
++    directWalkProfile: DirectWalkProfile
++    avoidStairs: Boolean
+   ): Plan @async @deprecated(reason : "Use `planConnection` instead.") @timingData
+   """
+   Plan (itinerary) search that follows
+--- /dev/null
++++ b/application/src/main/resources/org/opentripplanner/apis/gtfs/sidewalk-priority.graphqls
+@@ -0,0 +1,11 @@
++type WalkPolicyEdge { role: String! distanceMillimetres: Float! osmWayId: String! }
++type WalkPolicy {
++  version: String!
++  profile: DirectWalkProfile!
++  avoidStairs: Boolean!
++  carriagewayMillimetres: Float!
++  generalizedCost: Float!
++  maxSlopePercent: Float
++  edges: [WalkPolicyEdge!]!
++}
++extend type Leg { walkPolicy: WalkPolicy }
+--- a/astar/src/main/java/org/opentripplanner/astar/AStar.java
++++ b/astar/src/main/java/org/opentripplanner/astar/AStar.java
+@@ -45,6 +45,7 @@
+   private final SearchTerminationStrategy<State> terminationStrategy;
+   private final TraverseVisitor<State, Edge> traverseVisitor;
+   private final Duration timeout;
++  private final boolean primaryWeightPolicy;
+ 
+   private final ShortestPathTree<State, Edge, Vertex> spt;
+   private final BinHeap<State> pq;
+@@ -74,12 +75,13 @@
+     this.arriveBy = arriveBy;
+     this.terminationStrategy = terminationStrategy;
+     this.timeout = Objects.requireNonNull(timeout);
++    this.primaryWeightPolicy = initialStates.stream().anyMatch(State::hasPrimaryWeightPolicy);
+ 
+     this.spt = new ShortestPathTree<>(dominanceFunction);
+     this.preSearchHook = preSearchHook;
+ 
+     // Initialized with a reasonable size, see #4445
+-    this.pq = new BinHeap<>(1000);
++    this.pq = new BinHeap<>(1000, State::getPrimaryWeight);
+     this.nVisited = 0;
+     this.targetAcceptedStates = new ArrayList<>();
+ 
+@@ -198,6 +200,9 @@
+        */
+       if (timeout != null && nVisited % 100 == 0 && System.currentTimeMillis() > abortTime) {
+         LOG.warn("Search timeout. origin={} target={}", fromVertices, toVertices);
++        if (primaryWeightPolicy) {
++          throw new IllegalStateException("Sidewalk-priority search timed out before proving an optimum");
++        }
+         break;
+       }
+ 
+--- a/astar/src/main/java/org/opentripplanner/astar/model/BinHeap.java
++++ b/astar/src/main/java/org/opentripplanner/astar/model/BinHeap.java
+@@ -1,11 +1,13 @@
+ package org.opentripplanner.astar.model;
+ 
+ import java.util.Arrays;
++import java.util.function.ToLongFunction;
+ 
+ public class BinHeap<T> {
+ 
+   private static final double GROW_FACTOR = 2.0;
+ 
++  private final ToLongFunction<T> primary;
+   private double[] prio;
+   private T[] elem;
+   private int size;
+@@ -15,8 +17,11 @@
+     this(1000);
+   }
+ 
++  public BinHeap(int capacity) { this(capacity, value -> 0L); }
++
+   @SuppressWarnings("unchecked")
+-  public BinHeap(int capacity) {
++  public BinHeap(int capacity, ToLongFunction<T> primary) {
++    this.primary = primary;
+     if (capacity < 10) {
+       capacity = 10;
+     }
+@@ -28,6 +33,11 @@
+     size = 0;
+     // set sentinel
+     prio[0] = Double.NEGATIVE_INFINITY;
++  }
++
++  private int compare(T a, double secondaryA, T b, double secondaryB) {
++    int order = Long.compare(primary.applyAsLong(a), primary.applyAsLong(b));
++    return order != 0 ? order : Double.compare(secondaryA, secondaryB);
+   }
+ 
+   public int size() {
+@@ -69,14 +79,14 @@
+       return;
+     }
+     //System.out.printf("found element %s with key %f at %d\n", e, prio[i], i);
+-    if (p > prio[i]) {
++    if (compare(e, p, elem[i], prio[i]) > 0) {
+       // sift up (as in extract)
+       while (i * 2 <= size) {
+         int child = i * 2;
+-        if (child != size && prio[child + 1] < prio[child]) {
++        if (child != size && compare(elem[child + 1], prio[child + 1], elem[child], prio[child]) < 0) {
+           child++;
+         }
+-        if (p > prio[child]) {
++        if (compare(e, p, elem[child], prio[child]) > 0) {
+           elem[i] = elem[child];
+           prio[i] = prio[child];
+           i = child;
+@@ -86,7 +96,7 @@
+       }
+     } else {
+       // sift down (as in insert)
+-      while (prio[i / 2] > p) {
++      while (i > 1 && compare(elem[i / 2], prio[i / 2], e, p) > 0) {
+         elem[i] = elem[i / 2];
+         prio[i] = prio[i / 2];
+         i /= 2;
+@@ -107,7 +117,7 @@
+     if (size > capacity) {
+       resize((int) (capacity * GROW_FACTOR));
+     }
+-    for (i = size; prio[i / 2] > p; i /= 2) {
++    for (i = size; i > 1 && compare(elem[i / 2], prio[i / 2], e, p) > 0; i /= 2) {
+       elem[i] = elem[i / 2];
+       prio[i] = prio[i / 2];
+     }
+@@ -126,10 +136,10 @@
+     size -= 1;
+     for (i = 1; i * 2 <= size; i = child) {
+       child = i * 2;
+-      if (child != size && prio[child + 1] < prio[child]) {
++      if (child != size && compare(elem[child + 1], prio[child + 1], elem[child], prio[child]) < 0) {
+         child++;
+       }
+-      if (lastPrio > prio[child]) {
++      if (compare(lastElem, lastPrio, elem[child], prio[child]) > 0) {
+         elem[i] = elem[child];
+         prio[i] = prio[child];
+       } else {
+--- a/astar/src/main/java/org/opentripplanner/astar/model/ShortestPathTree.java
++++ b/astar/src/main/java/org/opentripplanner/astar/model/ShortestPathTree.java
+@@ -131,7 +131,7 @@
+     State ret = null;
+     // TODO are we only checking path parser acceptance when we fetch states via this specific method?
+     for (State s : states) {
+-      if ((ret == null || s.getWeight() < ret.getWeight()) && s.isFinal()) {
++      if ((ret == null || s.compareWeightTo(ret) < 0) && s.isFinal()) {
+         ret = s;
+       }
+     }
+--- a/astar/src/main/java/org/opentripplanner/astar/spi/AStarState.java
++++ b/astar/src/main/java/org/opentripplanner/astar/spi/AStarState.java
+@@ -19,6 +19,15 @@
+ 
+   double getWeight();
+ 
++  default long getPrimaryWeight() { return 0; }
++
++  default boolean hasPrimaryWeightPolicy() { return false; }
++
++  default int compareWeightTo(State other) {
++    int primary = Long.compare(getPrimaryWeight(), other.getPrimaryWeight());
++    return primary != 0 ? primary : Double.compare(getWeight(), other.getWeight());
++  }
++
+   Vertex getVertex();
+ 
+   long getElapsedTimeSeconds();
+--- a/street/src/main/java/org/opentripplanner/street/model/edge/ElevatorHopEdge.java
++++ b/street/src/main/java/org/opentripplanner/street/model/edge/ElevatorHopEdge.java
+@@ -161,6 +161,8 @@
+     return null;
+   }
+ 
++  public Accessibility getWheelchairAccessibility() { return wheelchairAccessibility; }
++
+   @Override
+   public boolean isWheelchairAccessible() {
+     return wheelchairAccessibility == Accessibility.POSSIBLE;
+--- a/street/src/main/java/org/opentripplanner/street/model/edge/PathwayEdge.java
++++ b/street/src/main/java/org/opentripplanner/street/model/edge/PathwayEdge.java
+@@ -29,6 +29,7 @@
+   private final double slope;
+ 
+   private final boolean wheelchairAccessible;
++  private final boolean stairsOrEscalator;
+ 
+   private PathwayEdge(
+     Vertex fromv,
+@@ -38,7 +39,8 @@
+     double distance,
+     int steps,
+     double slope,
+-    boolean wheelchairAccessible
++    boolean wheelchairAccessible,
++    boolean stairsOrEscalator
+   ) {
+     super(fromv, tov);
+     this.signpostedAs = signpostedAs;
+@@ -46,6 +48,7 @@
+     this.steps = steps;
+     this.slope = slope;
+     this.wheelchairAccessible = wheelchairAccessible;
++    this.stairsOrEscalator = stairsOrEscalator;
+     this.distance = distance;
+   }
+ 
+@@ -72,18 +75,16 @@
+     double slope,
+     boolean wheelchairAccessible
+   ) {
+-    return connectToGraph(
+-      new PathwayEdge(
+-        fromv,
+-        tov,
+-        signpostedAs,
+-        traversalTime,
+-        distance,
+-        steps,
+-        slope,
+-        wheelchairAccessible
+-      )
+-    );
++    return createPathwayEdge(fromv, tov, signpostedAs, traversalTime, distance, steps, slope,
++      wheelchairAccessible, steps != 0);
++  }
++
++  public static PathwayEdge createPathwayEdge(
++    Vertex fromv, Vertex tov, I18NString signpostedAs, int traversalTime, double distance,
++    int steps, double slope, boolean wheelchairAccessible, boolean stairsOrEscalator
++  ) {
++    return connectToGraph(new PathwayEdge(fromv, tov, signpostedAs, traversalTime,
++      distance, steps, slope, wheelchairAccessible, stairsOrEscalator));
+   }
+ 
+   @Override
+@@ -174,6 +175,9 @@
+     }
+   }
+ 
++  public boolean hasStairsOrEscalator() { return stairsOrEscalator; }
++  public double getSlope() { return slope; }
++
+   public int getSteps() {
+     return steps;
+   }
+--- /dev/null
++++ b/street/src/main/java/org/opentripplanner/street/model/edge/PedestrianEdgeRole.java
+@@ -0,0 +1,27 @@
++package org.opentripplanner.street.model.edge;
++
++public enum PedestrianEdgeRole {
++  CARRIAGEWAY, SIDEWALK, CROSSING, OTHER;
++
++  public static PedestrianEdgeRole fromOsm(String highway, String footway) {
++    if ("crossing".equals(footway) || "crossing".equals(highway)) return CROSSING;
++    if (highway == null) return OTHER;
++    return switch (highway) {
++      case "footway", "path", "pedestrian", "corridor", "steps" -> SIDEWALK;
++      case "motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link",
++        "secondary", "secondary_link", "tertiary", "tertiary_link", "unclassified",
++        "residential", "living_street", "service", "road" -> CARRIAGEWAY;
++      default -> OTHER;
++    };
++  }
++
++  public static double knownWidth(String highway, String effectiveWidth, String width) {
++    String value = effectiveWidth;
++    if (value == null && fromOsm(highway, null) == SIDEWALK) value = width;
++    if (value == null) return Double.NaN;
++    try {
++      double metres = Double.parseDouble(value.trim().replaceFirst("\\s*m$", ""));
++      return Double.isFinite(metres) && metres > 0 ? metres : Double.NaN;
++    } catch (NumberFormatException unknownUnit) { return Double.NaN; }
++  }
++}
+--- a/street/src/main/java/org/opentripplanner/street/model/edge/StreetEdge.java
++++ b/street/src/main/java/org/opentripplanner/street/model/edge/StreetEdge.java
+@@ -68,6 +68,9 @@
+ 
+   /** back, roundabout, stairs, ... */
+   private short flags;
++  private final PedestrianEdgeRole pedestrianRole;
++  private final long osmWayId;
++  private final double knownPedestrianWidth;
+ 
+   /**
+    * Length is stored internally as 32-bit fixed-point (millimeters). This allows edges of up to
+@@ -116,6 +119,9 @@
+   protected StreetEdge(StreetEdgeBuilder<?> builder) {
+     super(builder.fromVertex(), builder.toVertex());
+     this.flags = builder.getFlags();
++    this.pedestrianRole = builder.pedestrianRole();
++    this.osmWayId = builder.osmWayId();
++    this.knownPedestrianWidth = builder.knownPedestrianWidth();
+     this.setGeometry(builder.geometry());
+     this.length_mm = computeLength(builder);
+     this.setBicycleSafetyFactor(builder.bicycleSafetyFactor());
+@@ -128,6 +134,10 @@
+     outAngle = lineStringInOutAngles.outAngle();
+     elevationExtension = builder.streetElevationExtension();
+   }
++
++  public PedestrianEdgeRole getPedestrianRole() { return pedestrianRole; }
++  public long getOsmWayId() { return osmWayId; }
++  public double getKnownPedestrianWidth() { return knownPedestrianWidth; }
+ 
+   public StreetEdgeBuilder<?> toBuilder() {
+     return new StreetEdgeBuilder<>(this);
+@@ -762,6 +772,7 @@
+     double toDistance
+   ) {
+     seb.withFlags(flags);
++    seb.withPedestrianRole(pedestrianRole, osmWayId, knownPedestrianWidth);
+     seb.withBicycleSafetyFactor(bicycleSafetyFactor);
+     seb.withWalkSafetyFactor(walkSafetyFactor);
+     seb.withCarSpeed(carSpeed);
+--- a/street/src/main/java/org/opentripplanner/street/model/edge/StreetEdgeBuilder.java
++++ b/street/src/main/java/org/opentripplanner/street/model/edge/StreetEdgeBuilder.java
+@@ -38,6 +38,9 @@
+   private float walkSafetyFactor;
+   private float bicycleSafetyFactor;
+   private short flags;
++  private PedestrianEdgeRole pedestrianRole = PedestrianEdgeRole.OTHER;
++  private long osmWayId;
++  private double knownPedestrianWidth = Double.NaN;
+   private StreetElevationExtension streetElevationExtension;
+ 
+   public StreetEdgeBuilder() {
+@@ -60,6 +63,7 @@
+     this.walkSafetyFactor = original.getWalkSafetyFactor();
+     this.bicycleSafetyFactor = original.getBicycleSafetyFactor();
+     this.flags = original.getFlags();
++    withPedestrianRole(original.getPedestrianRole(), original.getOsmWayId(), original.getKnownPedestrianWidth());
+   }
+ 
+   public StreetEdge buildAndConnect() {
+@@ -133,6 +137,17 @@
+     this.permission = permission;
+     return instance();
+   }
++
++  public B withPedestrianRole(PedestrianEdgeRole role, long wayId, double width) {
++    this.pedestrianRole = role;
++    this.osmWayId = wayId;
++    this.knownPedestrianWidth = width;
++    return instance();
++  }
++
++  public PedestrianEdgeRole pedestrianRole() { return pedestrianRole; }
++  public long osmWayId() { return osmWayId; }
++  public double knownPedestrianWidth() { return knownPedestrianWidth; }
+ 
+   public float carSpeed() {
+     return carSpeed;
+--- a/street/src/main/java/org/opentripplanner/street/model/edge/StreetTransitEntityLink.java
++++ b/street/src/main/java/org/opentripplanner/street/model/edge/StreetTransitEntityLink.java
+@@ -155,6 +155,8 @@
+ 
+   protected abstract int getStreetToStopTime();
+ 
++  public Accessibility getWheelchairAccessibility() { return wheelchairAccessibility; }
++
+   protected T getTransitEntityVertex() {
+     return transitEntityVertex;
+   }
+--- a/street/src/main/java/org/opentripplanner/street/model/edge/TemporaryPartialStreetEdgeBuilder.java
++++ b/street/src/main/java/org/opentripplanner/street/model/edge/TemporaryPartialStreetEdgeBuilder.java
+@@ -17,6 +17,7 @@
+   public TemporaryPartialStreetEdgeBuilder withParentEdge(StreetEdge parentEdge) {
+     this.parentEdge = parentEdge;
+     withPermission(parentEdge.getPermission());
++    withPedestrianRole(parentEdge.getPedestrianRole(), parentEdge.getOsmWayId(), parentEdge.getKnownPedestrianWidth());
+     return this;
+   }
+ }
+--- /dev/null
++++ b/street/src/main/java/org/opentripplanner/street/search/request/DirectWalkPolicy.java
+@@ -0,0 +1,96 @@
++package org.opentripplanner.street.search.request;
++
++import java.util.Map;
++import org.opentripplanner.street.model.edge.*;
++import org.opentripplanner.street.search.state.State;
++
++public record DirectWalkPolicy(Profile profile, boolean avoidStairs) implements ExtensionRequestContext, java.io.Serializable {
++  public enum Profile { NORMAL, WHEELCHAIR }
++  public static final String VERSION = "sidewalk-priority-v1";
++
++  public static DirectWalkPolicy of(String profile, boolean avoidStairs) {
++    return new DirectWalkPolicy(Profile.valueOf(profile), avoidStairs);
++  }
++
++  public boolean allows(Edge edge, StreetSearchRequest request) {
++    if (edge instanceof StreetEdge street) {
++      if (street.getPedestrianRole() == null) throw new IllegalStateException("Sidewalk priority requires a rebuilt graph");
++      if (avoidStairs && street.isStairs()) return false;
++      if (profile == Profile.WHEELCHAIR && (!street.isWheelchairAccessible()
++          || street.getMaxSlope() > Math.nextUp((float) request.wheelchair().maxSlope())
++          || profileMaxSlope(street) > Math.nextUp((float) request.wheelchair().maxSlope())
++          || street.getKnownPedestrianWidth() < 0.9)) return false;
++    }
++    if (edge instanceof EscalatorEdge && (avoidStairs || profile == Profile.WHEELCHAIR)) return false;
++    if (edge instanceof PathwayEdge pathway) {
++      if (avoidStairs && (pathway.getSteps() != 0 || pathway.hasStairsOrEscalator())) return false;
++      if (profile == Profile.WHEELCHAIR && (!pathway.isWheelchairAccessible()
++          || Math.abs(pathway.getSlope()) > request.wheelchair().maxSlope())) return false;
++    }
++    if (profile == Profile.WHEELCHAIR) {
++      var forbidden = org.opentripplanner.core.model.accessibility.Accessibility.NOT_POSSIBLE;
++      if (edge instanceof ElevatorHopEdge elevator && elevator.getWheelchairAccessibility() == forbidden) return false;
++      if (edge instanceof StreetTransitEntityLink<?> link && link.getWheelchairAccessibility() == forbidden) return false;
++    }
++    return true;
++  }
++
++  public static double profileMaxSlope(StreetEdge street) {
++    var samples = street.getElevationProfile();
++    if (samples == null || samples.size() < 2) return Double.NaN;
++    double maximum = 0;
++    for (int i = 1; i < samples.size(); i++) {
++      double run = samples.getX(i) - samples.getX(i-1);
++      double rise = samples.getY(i) - samples.getY(i-1);
++      if (!Double.isFinite(run) || !Double.isFinite(rise) || run <= 0) return Double.NaN;
++      maximum = Math.max(maximum, Math.abs(rise/run));
++    }
++    return maximum;
++  }
++
++  public static PedestrianEdgeRole role(Edge edge) {
++    if (edge instanceof StreetEdge street) {
++      var role = street.getPedestrianRole();
++      if (role == null) throw new IllegalStateException("Sidewalk priority requires captured edge roles");
++      return role;
++    }
++    return edge instanceof PathwayEdge || edge instanceof ElevatorEdge || edge instanceof EscalatorEdge
++      ? PedestrianEdgeRole.SIDEWALK : PedestrianEdgeRole.OTHER;
++  }
++
++  public static long lengthMillimetres(Edge edge) {
++    double metres = edge.getDistanceMeters();
++    if (!(metres > 0)) {
++      var geometry = edge.getGeometry();
++      metres = geometry != null
++        ? org.opentripplanner.street.geometry.SphericalDistanceLibrary.length(geometry)
++        : org.opentripplanner.street.geometry.SphericalDistanceLibrary.distance(
++          edge.getFromVertex().getCoordinate(), edge.getToVertex().getCoordinate());
++    }
++    if (!Double.isFinite(metres) || metres < 0) throw new IllegalStateException("Unknown edge length");
++    return Math.round(metres * 1000);
++  }
++
++  public static long exposureMillimetres(Edge edge) {
++    var role = role(edge);
++    return role == PedestrianEdgeRole.CARRIAGEWAY || role == PedestrianEdgeRole.OTHER
++      ? lengthMillimetres(edge) : 0;
++  }
++
++  public Map<String,Object> evidence(java.util.List<State> states) {
++    var first = states.getFirst();
++    var last = states.getLast();
++    var edges = states.stream().skip(1).map(State::getBackEdge).map(e -> Map.<String,Object>of(
++        "role", role(e).name(), "distanceMillimetres", lengthMillimetres(e),
++        "osmWayId", e instanceof StreetEdge street ? Long.toString(street.getOsmWayId()) : "")).toList();
++    var result = new java.util.LinkedHashMap<String,Object>(Map.of("version",VERSION,"profile",profile.name(),"avoidStairs",avoidStairs,
++      "carriagewayMillimetres",last.getPrimaryWeight()-first.getPrimaryWeight(),
++      "generalizedCost",last.getWeight()-first.getWeight(),"edges",edges));
++    boolean knownElevation = states.stream().skip(1).map(State::getBackEdge).anyMatch(e -> e instanceof StreetEdge)
++      && states.stream().skip(1).map(State::getBackEdge).allMatch(e ->
++        e instanceof StreetEdge street ? !street.isElevationFlattened() && Double.isFinite(profileMaxSlope(street))
++          : e instanceof ElevatorEdge || lengthMillimetres(e) == 0);
++    result.put("maxSlopePercent", profile == Profile.WHEELCHAIR && knownElevation ? first.getRequest().wheelchair().maxSlope()*100 : null);
++    return java.util.Collections.unmodifiableMap(result);
++  }
++}
+--- a/street/src/main/java/org/opentripplanner/street/search/state/State.java
++++ b/street/src/main/java/org/opentripplanner/street/search/state/State.java
+@@ -33,6 +33,7 @@
+ 
+   // accumulated weight up to this state
+   public double weight;
++  protected long carriagewayMillimetres;
+ 
+   // associate this state with a vertex in the graph
+   protected Vertex vertex;
+@@ -275,6 +276,14 @@
+ 
+   public Vertex getVertex() {
+     return this.vertex;
++  }
++
++  @Override
++  public long getPrimaryWeight() { return carriagewayMillimetres; }
++
++  @Override
++  public boolean hasPrimaryWeightPolicy() {
++    return getExtensionRequestContext(org.opentripplanner.street.search.request.DirectWalkPolicy.class).isPresent();
+   }
+ 
+   public double getWeight() {
+--- a/street/src/main/java/org/opentripplanner/street/search/state/StateEditor.java
++++ b/street/src/main/java/org/opentripplanner/street/search/state/StateEditor.java
+@@ -131,6 +131,13 @@
+         );
+         return null;
+       }
++    }
++    var policy = child.getExtensionRequestContext(org.opentripplanner.street.search.request.DirectWalkPolicy.class).orElse(null);
++    if (policy != null && child.backEdge != null) {
++      if (!policy.allows(child.backEdge, child.getRequest())) return null;
++      child.carriagewayMillimetres = Math.addExact(
++        child.backState == null ? 0 : child.backState.getPrimaryWeight(),
++        org.opentripplanner.street.search.request.DirectWalkPolicy.exposureMillimetres(child.backEdge));
+     }
+     spawned = true;
+     return child;
+--- a/street/src/main/java/org/opentripplanner/street/search/strategy/DominanceFunctions.java
++++ b/street/src/main/java/org/opentripplanner/street/search/strategy/DominanceFunctions.java
+@@ -107,6 +107,11 @@
+     }
+ 
+     // These two states are comparable (they are on the same "plane" or "copy" of the graph).
++    if (a.hasPrimaryWeightPolicy() || b.hasPrimaryWeightPolicy()) {
++      if (a.getBackEdge() != b.getBackEdge()
++          && (a.getBackEdge() instanceof StreetEdge || b.getBackEdge() instanceof StreetEdge)) return false;
++      return a.compareWeightTo(b) <= 0;
++    }
+     return betterOrEqual(a, b);
+   }
+ 
+@@ -124,7 +129,7 @@
+     /** Return true if the first state has lower weight than the second state. */
+     @Override
+     public boolean betterOrEqual(State a, State b) {
+-      return a.weight <= b.weight;
++      return a.compareWeightTo(b) <= 0;
+     }
+   }
+ 

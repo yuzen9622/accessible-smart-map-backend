@@ -13,6 +13,7 @@ import {
   EDGE_TYPE,
   NODE_FLAG,
   SURFACE,
+  WHEELCHAIR,
   type PedGraph,
 } from "./graph.types";
 import { buildEdgeIndex } from "./spatial-index";
@@ -281,16 +282,35 @@ describe("planCsrWalkRoute coverage and enablement", () => {
     expect(getPedGraphRuntime).not.toHaveBeenCalled();
   });
 
-  it("reports unsupported constraints only after Taipei coverage passes", async () => {
+  it("keeps normal ability when stairs are explicitly avoided", async () => {
     serveGraph(corridorGraph());
+    vi.mocked(getPedGraphClient).mockResolvedValue(
+      geometryClient({
+        "1000": lineString([
+          [TAIPEI_LNG, A_LAT],
+          [TAIPEI_LNG, B_LAT],
+        ]),
+        "1002": lineString([
+          [TAIPEI_LNG, B_LAT],
+          [TAIPEI_LNG, C_LAT],
+        ]),
+      }),
+    );
 
     const result = await planCsrWalkRoute([originPoint, destinationPoint], {
       mode: "normal",
       avoidStairs: true,
     });
 
-    expect(result).toEqual({ status: "unsupported_constraints" });
-    expect(getPedGraphRuntime).not.toHaveBeenCalled();
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.plans[0].walkPolicy).toMatchObject({
+      version: "sidewalk-priority-v1",
+      profile: "normal",
+      avoidStairs: true,
+      maxSlopePercent: null,
+      carriagewayMillimetres: 0,
+    });
   });
 
   it("reports unavailable when the runtime graph is not ready", async () => {
@@ -1000,6 +1020,28 @@ describe("planCsrWalkRoute mode profiles", () => {
       expect(result.plans[0].diagnostics.relaxationLevel).toBe(0);
     },
   );
+
+  it("blocks steps for a normal user explicitly avoiding stairs", async () => {
+    serveGraph(stepsCorridor());
+    expect(
+      await planCsrWalkRoute([originPoint, destinationPoint], {
+        mode: "normal",
+        avoidStairs: true,
+      }),
+    ).toEqual({ status: "accessibility_blocked" });
+  });
+
+  it("keeps wheelchair access restrictions when stairs are allowed", async () => {
+    const graph = oneEdgeGraph();
+    graph.edgeWheelchair.fill(WHEELCHAIR.NO);
+    serveGraph(graph);
+    expect(
+      await planCsrWalkRoute([originPoint, destinationPoint], {
+        mode: "wheelchair",
+        avoidStairs: false,
+      }),
+    ).toEqual({ status: "accessibility_blocked" });
+  });
 
   it("blocks wheelchair routing on an extreme slope but serves normal mode", async () => {
     /**
