@@ -16,6 +16,12 @@ import {
 } from "./venue.presentation";
 import * as repository from "./venue.repository";
 import { planVenueRoute as planOnGraph, type VenueRoute } from "./venue.route";
+import {
+  inspectVenue,
+  selectVenue,
+  type InspectVenueArgs,
+  type InspectVenueResult,
+} from "./venue.inspect";
 import { haversineM } from "./venue.compile";
 import type {
   ReplanVenueLegResult,
@@ -211,6 +217,35 @@ export async function planVenueRoute(
     );
   }
   return routeFailure(ROUTE_REASON.NO_ROUTE, {}, input.lang);
+}
+
+/**
+ * Answers an `inspectVenue` query: picks the venue the query names (or the
+ * only one), then reads facts from its compiled data.
+ *
+ * @param args Validated tool arguments.
+ * @param mode Effective mode for costs from `args.nearPlaceId`.
+ */
+export async function inspectVenueByQuery(
+  args: InspectVenueArgs,
+  mode: AccessibilityMode,
+): Promise<InspectVenueResult> {
+  const venues = await listVenues();
+  const picked = selectVenue(venues, args.venue);
+  if (!picked.ok)
+    return {
+      ok: false,
+      reason: "VENUE_NOT_FOUND",
+      candidates: picked.candidates,
+    };
+  const entry = await getCompiledVenue(picked.venueId);
+  if (!entry)
+    return {
+      ok: false,
+      reason: "VENUE_NOT_FOUND",
+      candidates: venues.map((v) => ({ id: v.venueId, name: v.name })),
+    };
+  return inspectVenue(entry, args, mode, getRoutingConfig().venue);
 }
 
 /** A stored gate that moved further than this is treated as a different gate. */

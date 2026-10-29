@@ -15,6 +15,19 @@ export const WALK_SPEED_MPS: Readonly<Record<AccessibilityMode, number>> = {
   normal: 1.3,
 };
 
+/**
+ * Indoor venue fact lookups for the AI `inspectVenue` tool. Costs are the
+ * venue planner's weighted metres-equivalent, not walking distance: an
+ * elevator ride has zero length but a positive cost.
+ */
+export const VENUE_INSPECT_MAX_RESULTS = 20;
+export const VENUE_INSPECT_DEFAULT_RESULTS = 8;
+/** Candidates costlier than this from `nearPlaceId` are left out. */
+export const VENUE_INSPECT_NEAR_MAX_WEIGHTED_COST = 1500;
+/** Rooms within this cost of a facility on the same floor name it as landmarks. */
+export const VENUE_LANDMARK_MAX_WEIGHTED_COST = 40;
+export const VENUE_LANDMARK_MAX = 3;
+
 /** Route-level low-floor evidence, used only as a ranking signal. */
 export interface LowFloorEvidenceConfig {
   /** Distinct plates a route needs before its history counts at all. */

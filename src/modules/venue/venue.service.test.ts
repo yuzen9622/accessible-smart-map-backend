@@ -15,6 +15,7 @@ import {
   clearVenueCache,
   getCompiledVenue,
   getVenueDetail,
+  inspectVenueByQuery,
   isVenueArrivalCurrent,
   planVenueRoute,
   replanVenueLeg,
@@ -521,5 +522,42 @@ describe("gate eligibility on reroute", () => {
       stale: true,
     });
     expect(await isVenueArrivalCurrent(arrival("normal"))).toBe(true);
+  });
+});
+
+describe("inspectVenueByQuery", () => {
+  const summary = {
+    venueId: "mini",
+    name: "Mini",
+    center: [120.68, 24.15] as [number, number],
+    version: 3,
+    importedAt: new Date(0),
+    buildings: venue.buildings.map((b) => ({ id: b.id, name: b.name })),
+  };
+
+  it("uses the only venue when none is named and reads its compiled facts", async () => {
+    vi.mocked(repository.listVenueSummaries).mockResolvedValue([summary]);
+    vi.mocked(repository.findVenueVersion).mockResolvedValue(3);
+    vi.mocked(repository.findVenue).mockResolvedValue(doc(3));
+    const result = await inspectVenueByQuery(
+      { building: "測試館", kinds: ["elevator"] },
+      "normal",
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      venueId: "mini",
+      venueVersion: 3,
+      facts: [{ kind: "elevator", levelRefs: ["1F", "2F", "3F"] }],
+    });
+  });
+
+  it("returns the venues to choose from when the named one is unknown", async () => {
+    vi.mocked(repository.listVenueSummaries).mockResolvedValue([summary]);
+    expect(await inspectVenueByQuery({ venue: "別的學校" }, "normal")).toEqual({
+      ok: false,
+      reason: "VENUE_NOT_FOUND",
+      candidates: [{ id: "mini", name: "Mini" }],
+    });
+    expect(repository.findVenue).not.toHaveBeenCalled();
   });
 });

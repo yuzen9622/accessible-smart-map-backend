@@ -218,8 +218,16 @@ export function planVenueRoute(
   };
 }
 
-/** Legacy single-node places retain their original endpoint behavior. */
-function arrivalIndices(vg: VenueGraph, place: VenuePlace): number[] | null {
+/**
+ * Legacy single-node places retain their original endpoint behavior.
+ *
+ * @returns Dense graph indices of the place's real arrival nodes, or null when
+ * any listed node is missing, duplicated or on another building/floor.
+ */
+export function arrivalIndices(
+  vg: VenueGraph,
+  place: VenuePlace,
+): number[] | null {
   if (place.arrivalNodeIds === undefined) {
     const index = vg.nodeIndex.get(place.nodeId);
     return index === undefined ? null : [index];
