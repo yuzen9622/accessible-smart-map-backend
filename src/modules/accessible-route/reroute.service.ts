@@ -53,9 +53,12 @@ export async function rerouteAccessibleRoute(
       data: { reason: "NAVIGATION_STATE_UNAVAILABLE" },
     };
   }
+  // an indoor-only trip has no outdoor legs to replan; GPS cannot place the
+  // user indoors, so it is never rerouted
   if (
     tokenRead.status === "missing" ||
-    !isNavigationEnvelope(tokenRead.value)
+    !isNavigationEnvelope(tokenRead.value) ||
+    tokenRead.value.route.legs.length === 0
   ) {
     return {
       ok: false,
@@ -249,7 +252,11 @@ export async function rerouteAccessibleRoute(
     };
     const envelope: NavigationRouteEnvelope = {
       schemaVersion: 1,
-      route,
+      // a reroute starts from the user's position outdoors, so only the leg
+      // into the destination venue (rebuilt on this replan) still lies ahead
+      route: planned.data.venueLeg
+        ? { ...route, venueLegs: { arrival: planned.data.venueLeg } }
+        : route,
       navigationId: previous.navigationId,
       routeVersion,
       canonicalRequest: {

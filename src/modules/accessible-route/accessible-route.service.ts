@@ -2713,7 +2713,10 @@ export async function planAccessibleRouteForHttp(
     ...result,
     data: {
       ...result.data,
-      routes: await attachRouteTokens(result.data.routes, canonicalRequest),
+      routes: await attachRouteTokens(result.data.routes, canonicalRequest, {
+        departure: result.data.venueDepartureLeg,
+        arrival: result.data.venueLeg,
+      }),
     },
   };
 }

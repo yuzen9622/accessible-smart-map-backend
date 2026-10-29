@@ -207,9 +207,25 @@ export type RerouteReason =
   | "TRANSIT_DISRUPTION"
   | "MANUAL";
 
+/**
+ * Indoor venue legs a tokenized route carries for voice navigation. Stored
+ * with the route token only, never sent in HTTP route responses. `departure`
+ * is walked before the outdoor legs (a trip leaving a venue, or a trip that
+ * never leaves it, whose route then has no outdoor legs); `arrival` after.
+ */
+export interface NavigationVenueLegs {
+  departure?: VenueRoute;
+  arrival?: VenueRoute;
+}
+
+/** A route as stored behind a route token. */
+export type NavigationRoute = AccessibleRoute & {
+  venueLegs?: NavigationVenueLegs;
+};
+
 export interface NavigationRouteEnvelope {
   schemaVersion: 1;
-  route: AccessibleRoute;
+  route: NavigationRoute;
   navigationId: string;
   routeVersion: number;
   canonicalRequest: CanonicalPlanRouteRequest;

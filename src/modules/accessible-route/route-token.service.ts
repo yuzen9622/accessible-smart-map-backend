@@ -5,18 +5,32 @@ import { redisGet } from "../../config/redis";
 import type { AccessibleRoute } from "../../types/route";
 import type {
   CanonicalPlanRouteRequest,
+  NavigationRoute,
   NavigationRouteEnvelope,
+  NavigationVenueLegs,
 } from "./accessible-route.types";
 import {
   navigationTokenKey,
   storeInitialNavigationEnvelope,
 } from "./navigation-state.repository";
 
-/** Cache each trusted planner route and add a token only after Redis confirms it. */
+/**
+ * Cache each trusted planner route and add a token only after Redis confirms
+ * it. Indoor venue legs ride along in the token for voice navigation; the
+ * returned routes stay as they were, without them.
+ */
 export async function attachRouteTokens(
   routes: AccessibleRoute[],
   canonicalRequest: CanonicalPlanRouteRequest,
+  venueLegs?: NavigationVenueLegs,
 ): Promise<AccessibleRoute[]> {
+  const legs =
+    venueLegs?.departure || venueLegs?.arrival
+      ? {
+          ...(venueLegs.departure ? { departure: venueLegs.departure } : {}),
+          ...(venueLegs.arrival ? { arrival: venueLegs.arrival } : {}),
+        }
+      : undefined;
   return Promise.all(
     routes.map(async (route) => {
       const routeToken = randomBytes(32).toString("base64url");
@@ -28,7 +42,7 @@ export async function attachRouteTokens(
       });
       const stored = await storeInitialNavigationEnvelope(routeToken, {
         schemaVersion: 1,
-        route: navigationRoute,
+        route: legs ? { ...navigationRoute, venueLegs: legs } : navigationRoute,
         navigationId,
         routeVersion,
         canonicalRequest,
@@ -46,7 +60,7 @@ export async function attachRouteTokens(
 /** Resolve a short-lived bearer capability to a server-produced route. */
 export async function getRouteByToken(
   routeToken: string,
-): Promise<AccessibleRoute | null> {
+): Promise<NavigationRoute | null> {
   const raw = await redisGet(navigationTokenKey(routeToken));
   if (!raw) return null;
   try {

@@ -94,6 +94,41 @@ describe("rerouteAccessibleRoute", () => {
     });
   });
 
+  it("never reroutes an indoor-only trip and keeps only the venue leg still ahead", async () => {
+    readNavigationTokenStrict.mockResolvedValueOnce({
+      status: "ok",
+      value: { ...envelope, route: { ...envelope.route, legs: [] } },
+    });
+    expect(await rerouteAccessibleRoute(request)).toMatchObject({
+      ok: false,
+      data: { reason: "ROUTE_TOKEN_EXPIRED_OR_UNSUPPORTED" },
+    });
+    expect(planAccessibleRouteFromRequest).not.toHaveBeenCalled();
+
+    const venueLeg = { venueId: "nutc-sanmin", steps: [] };
+    readNavigationTokenStrict.mockResolvedValueOnce({
+      status: "ok",
+      value: {
+        ...envelope,
+        route: {
+          ...envelope.route,
+          venueLegs: {
+            departure: { venueId: "nutc-sanmin" },
+            arrival: venueLeg,
+          },
+        },
+      },
+    });
+    planAccessibleRouteFromRequest.mockResolvedValueOnce({
+      ok: true,
+      data: { routes: [route("top-ranked")], venueLeg },
+    });
+    expect((await rerouteAccessibleRoute(request)).ok).toBe(true);
+    expect(finalizeReroute.mock.calls[0][3].route.venueLegs).toEqual({
+      arrival: venueLeg,
+    });
+  });
+
   it("reroutes a completed bus journey's remaining walk without introducing another bus", async () => {
     readNavigationTokenStrict.mockResolvedValue({
       status: "ok",

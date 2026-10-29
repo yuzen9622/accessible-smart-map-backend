@@ -68,6 +68,34 @@ describe("route token cache", () => {
     );
   });
 
+  it("stores indoor venue legs with the token but never returns them", async () => {
+    storeInitialNavigationEnvelope.mockResolvedValue(true);
+    const arrival = { venueId: "nutc-sanmin", steps: [] } as never;
+    const [stored] = await attachRouteTokens([sampleRoute], canonicalRequest, {
+      departure: undefined,
+      arrival,
+    });
+    expect(stored).not.toHaveProperty("venueLegs");
+    expect(storeInitialNavigationEnvelope.mock.calls[0][1].route).toMatchObject(
+      {
+        routeId: sampleRoute.routeId,
+        venueLegs: { arrival },
+      },
+    );
+    expect(
+      storeInitialNavigationEnvelope.mock.calls[0][1].route.venueLegs,
+    ).not.toHaveProperty("departure");
+    expect(storeBusPlan.mock.calls[0][1]).not.toHaveProperty("venueLegs");
+  });
+
+  it("stores no venue legs for an outdoor-only trip", async () => {
+    storeInitialNavigationEnvelope.mockResolvedValue(true);
+    await attachRouteTokens([sampleRoute], canonicalRequest, {});
+    expect(
+      storeInitialNavigationEnvelope.mock.calls[0][1].route,
+    ).not.toHaveProperty("venueLegs");
+  });
+
   it("omits routeToken when Redis is unavailable instead of returning an invalid token", async () => {
     storeInitialNavigationEnvelope.mockResolvedValue(false);
     const [stored] = await attachRouteTokens([sampleRoute], canonicalRequest);
