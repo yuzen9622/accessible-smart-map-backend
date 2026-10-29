@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { projectVenueLegForModel } from "../../utils/agent-route-projection";
 import type { AgentLanguage } from "../../types/agent";
 import { apiErrorMessage } from "../../constants/api-errors";
 import {
@@ -41,7 +42,6 @@ import {
   planVenueRoute,
   resolveVenueQuery,
 } from "../venue/venue.service";
-import type { VenueRoute } from "../accessible-route/venue-leg.types";
 import { InspectVenueArgsSchema } from "../venue/venue.inspect";
 import { planAccessibleRouteFromRequest } from "../accessible-route/accessible-route.service";
 import { generateNavInstructionsFromInput } from "../nav-instructions/nav-instructions.service";
@@ -477,30 +477,6 @@ const PlanIndoorRouteArgsSchema = z.object({
     .optional(),
 });
 
-/** What the model needs to speak an indoor route: steps, never geometry. */
-function indoorRouteForModel(route: VenueRoute) {
-  return {
-    venueId: route.venueId,
-    fromPlaceId: route.fromPlaceId,
-    toPlaceId: route.toPlaceId,
-    mode: route.mode,
-    distanceM: Math.round(route.distanceM),
-    minutes: Math.max(1, Math.round(route.durationS / 60)),
-    elevatorRides: route.elevatorRides,
-    stairFlights: route.stairFlights,
-    steps: route.steps.map((step) => ({
-      type: step.type,
-      instruction: step.instruction,
-      ...(step.fromLevelRef && step.toLevelRef
-        ? { floors: `${step.fromLevelRef}→${step.toLevelRef}` }
-        : step.levelRef
-          ? { floor: step.levelRef }
-          : {}),
-      ...(step.heightPending ? { heightPending: true } : {}),
-    })),
-  };
-}
-
 /**
  * Plans a route between two places of one indoor venue with the venue
  * planner, so the assistant never has to describe indoor directions itself.
@@ -531,7 +507,11 @@ export async function planIndoorRoute(args: {
       lang: args.language === "en" ? "en" : "zh-TW",
     });
     if (result.ok)
-      return JSON.stringify({ ok: true, ...indoorRouteForModel(result.route) });
+      return JSON.stringify({
+        ok: true,
+        venueId: result.route.venueId,
+        ...(projectVenueLegForModel(result.route) as object),
+      });
     if (!("data" in result))
       return JSON.stringify({
         ok: false,
@@ -705,8 +685,13 @@ function agentEffectivePreferences(request: CanonicalPlanRouteRequest) {
 }
 
 export async function planAccessibleRoute(args: {
-  origin: string;
-  destination: string;
+  origin?: string;
+  destination?: string;
+  /** A place inside an indoor venue the trip starts from (from inspectVenue). */
+  originPlaceId?: string;
+  /** A place inside an indoor venue the trip ends at (from inspectVenue). */
+  destinationPlaceId?: string;
+  venue?: string;
   language?: AgentLanguage;
   mode?: string;
   travelMode?: string;
@@ -718,6 +703,24 @@ export async function planAccessibleRoute(args: {
   requireElevator?: boolean;
 }): Promise<string> {
   const { origin, destination, mode, departureTime } = args;
+  const originPlaceId = args.originPlaceId?.trim() || undefined;
+  const destinationPlaceId = args.destinationPlaceId?.trim() || undefined;
+  if (
+    (originPlaceId && destinationPlaceId) ||
+    (!originPlaceId && !origin) ||
+    (!destinationPlaceId && !destination)
+  ) {
+    return JSON.stringify({
+      ok: false,
+      reason: "INVALID_ROUTE_ARGUMENTS",
+      error:
+        originPlaceId && destinationPlaceId
+          ? args.language === "en"
+            ? "Both ends are inside the venue; use planIndoorRoute."
+            : "起訖都在校內，請改用 planIndoorRoute。"
+          : agentRouteError("INVALID_ROUTE_ARGUMENTS", args.language),
+    });
+  }
 
   const travelMode = parseTravelMode(args.travelMode);
   if (!travelMode.ok) {
@@ -757,7 +760,7 @@ export async function planAccessibleRoute(args: {
     // the agent and the HTTP endpoint from ever drifting on geocoding, city
     // resolution or the transfer limit again. maxTransfers is 2 because realistic
     // cross-city trips (e.g. 雙鐵/高鐵接駁) routinely need two transfers.
-    if (origin === "current_location" && !args.userLocation) {
+    if (!originPlaceId && origin === "current_location" && !args.userLocation) {
       return JSON.stringify({
         ok: false,
         reason: "LOCATION_REQUIRED",
@@ -766,10 +769,26 @@ export async function planAccessibleRoute(args: {
     }
     const originInput =
       origin === "current_location" ? args.userLocation : origin;
+    let venueId: string | undefined;
+    if (originPlaceId || destinationPlaceId) {
+      const venue = await resolveVenueQuery(args.venue);
+      if (!venue.ok)
+        return JSON.stringify({
+          ...venue,
+          error:
+            VENUE_INSPECT_MSG[args.language === "en" ? "en" : "zh-TW"]
+              .VENUE_NOT_FOUND,
+        });
+      venueId = venue.venueId;
+    }
 
     const result = await planAccessibleRouteFromRequest({
-      origin: originInput,
-      destination,
+      ...(originPlaceId && venueId
+        ? { originVenuePlace: { venueId, placeId: originPlaceId } }
+        : { origin: originInput }),
+      ...(destinationPlaceId && venueId
+        ? { destinationVenuePlace: { venueId, placeId: destinationPlaceId } }
+        : { destination }),
       userLocation: args.userLocation,
       mode: validMode,
       userId: args.userId,
@@ -814,13 +833,17 @@ export async function planAccessibleRoute(args: {
       origin: {
         ...result.data.origin,
         name:
-          origin === "current_location"
+          originPlaceId ??
+          (origin === "current_location"
             ? args.language === "en"
               ? "Current location"
               : "目前位置"
-            : origin,
+            : origin),
       },
-      destination: { ...result.data.destination, name: destination },
+      destination: {
+        ...result.data.destination,
+        name: destinationPlaceId ?? destination,
+      },
       mode: effectivePreferences.mode,
       transitPreference: effectivePreferences.transitPreference,
       effectivePreferences,
@@ -2319,6 +2342,15 @@ export async function executeLocalTool(
       return planAccessibleRoute({
         origin: args.origin,
         destination: args.destination,
+        originPlaceId:
+          typeof args.originPlaceId === "string"
+            ? args.originPlaceId
+            : undefined,
+        destinationPlaceId:
+          typeof args.destinationPlaceId === "string"
+            ? args.destinationPlaceId
+            : undefined,
+        venue: typeof args.venue === "string" ? args.venue : undefined,
         mode: args.mode,
         travelMode: args.travelMode,
         transitPreference: args.transitPreference,

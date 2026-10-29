@@ -33,6 +33,40 @@ export type ModelRouteValue =
   | ModelRouteValue[]
   | { [key: string]: ModelRouteValue };
 
+/** Response keys holding an indoor venue leg (place ↔ gate). */
+const VENUE_LEG_KEYS = new Set(["venueLeg", "venueDepartureLeg"]);
+
+/**
+ * An indoor venue leg as the model needs it to speak the route: totals and
+ * each step's instruction and floors, never the path geometry.
+ */
+export function projectVenueLegForModel(value: unknown): ModelRouteValue {
+  if (!record(value)) return null;
+  const steps = Array.isArray(value.steps) ? value.steps.filter(record) : [];
+  const durationS = typeof value.durationS === "number" ? value.durationS : 0;
+  return {
+    fromPlaceId: value.fromPlaceId as string,
+    toPlaceId: value.toPlaceId as string,
+    mode: value.mode as string,
+    distanceM:
+      typeof value.distanceM === "number" ? Math.round(value.distanceM) : null,
+    minutes: Math.max(1, Math.round(durationS / 60)),
+    elevatorRides: value.elevatorRides as number,
+    stairFlights: value.stairFlights as number,
+    steps: steps.map((step) => ({
+      type: step.type as string,
+      instruction: step.instruction as string,
+      ...(typeof step.fromLevelRef === "string" &&
+      typeof step.toLevelRef === "string"
+        ? { floors: `${step.fromLevelRef}→${step.toLevelRef}` }
+        : typeof step.levelRef === "string"
+          ? { floor: step.levelRef }
+          : {}),
+      ...(step.heightPending === true ? { heightPending: true } : {}),
+    })),
+  };
+}
+
 /** Removes only non-conversational route fields; preserves every leg and warning. */
 export function projectRouteForModel(value: unknown): ModelRouteValue {
   if (
@@ -51,7 +85,15 @@ export function projectRouteForModel(value: unknown): ModelRouteValue {
       .filter(
         ([key]) => !PRIVATE_OR_BULKY_KEYS.has(key) && !key.startsWith("_"),
       )
-      .map(([key, item]) => [key, projectRouteForModel(item)] as const),
+      .map(
+        ([key, item]) =>
+          [
+            key,
+            VENUE_LEG_KEYS.has(key)
+              ? projectVenueLegForModel(item)
+              : projectRouteForModel(item),
+          ] as const,
+      ),
   );
 }
 
@@ -124,9 +166,18 @@ export function summarizeRouteResult(
     (route) => route.routeId === value.selectedRouteId,
   );
   if (selected > 0) routes.unshift(...routes.splice(selected, 1));
+  const indoorPlace = (handover: unknown) =>
+    record(handover) && typeof handover.placeId === "string"
+      ? handover.placeId
+      : undefined;
+  const indoor = {
+    from: indoorPlace(value.venueDeparture),
+    to: indoorPlace(value.venueArrival),
+  };
   const summary = {
     planId: value.planId,
     selectedRouteId: value.selectedRouteId,
+    ...(indoor.from || indoor.to ? { indoor } : {}),
     routes,
     truncated: false,
   };

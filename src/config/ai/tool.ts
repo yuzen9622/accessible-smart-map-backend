@@ -229,12 +229,27 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           origin: {
             type: "string",
             description:
-              "起點名稱，請『完整照抄』使用者說的地名（含校區/分館/分店/路段等後綴，例如『台中科大三民校區』不可簡化成『台中科大』）；若說「這裡/目前位置」請填 'current_location'",
+              "起點名稱，請『完整照抄』使用者說的地名（含校區/分館/分店/路段等後綴，例如『台中科大三民校區』不可簡化成『台中科大』）；若說「這裡/目前位置」請填 'current_location'。起點是校內某間教室時改用 originPlaceId",
           },
           destination: {
             type: "string",
             description:
-              "終點名稱，請『完整照抄』使用者說的地名（含校區/分館/分店/路段等後綴，例如『台中科大三民校區』不可簡化成『台中科大』）",
+              "終點名稱，請『完整照抄』使用者說的地名（含校區/分館/分店/路段等後綴，例如『台中科大三民校區』不可簡化成『台中科大』）。終點是校內某間教室或某棟某樓時改用 destinationPlaceId",
+          },
+          originPlaceId: {
+            type: "string",
+            description:
+              "起點是室內圖資校區（台中科大三民校區）裡的教室或地點時，填 inspectVenue 結果的 placeId，並省略 origin。路線會從該地點走室內到校門再接戶外",
+          },
+          destinationPlaceId: {
+            type: "string",
+            description:
+              "終點是室內圖資校區裡的教室或地點時，填 inspectVenue 結果的 placeId，並省略 destination。戶外路線會到校門，再接室內路線（含搭哪部電梯）。起訖都在校內時不要用本工具，改用 planIndoorRoute",
+          },
+          venue: {
+            type: "string",
+            description:
+              "originPlaceId／destinationPlaceId 所屬場域 id；目前只有 nutc-sanmin，可省略",
           },
           mode: {
             type: "string",
@@ -266,7 +281,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
             description: "出發時間，ISO8601 字串或 HH:mm；不指定表示現在",
           },
         },
-        required: ["origin", "destination"],
+        required: [],
       },
     },
   },
