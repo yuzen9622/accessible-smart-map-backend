@@ -170,9 +170,15 @@ export function summarizeRouteResult(
     record(handover) && typeof handover.placeId === "string"
       ? handover.placeId
       : undefined;
+  // an indoor-only plan has no hand-overs; its one leg names both ends
+  const indoorOnly = record(value.venueLeg) && !value.venueArrival;
   const indoor = {
-    from: indoorPlace(value.venueDeparture),
-    to: indoorPlace(value.venueArrival),
+    from: indoorOnly
+      ? (value.venueLeg as { fromPlaceId?: string }).fromPlaceId
+      : indoorPlace(value.venueDeparture),
+    to: indoorOnly
+      ? (value.venueLeg as { toPlaceId?: string }).toPlaceId
+      : indoorPlace(value.venueArrival),
   };
   const summary = {
     planId: value.planId,

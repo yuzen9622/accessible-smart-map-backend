@@ -149,3 +149,32 @@ describe("source name route projections", () => {
     });
   });
 });
+
+describe("summarizeRouteResult indoor ends", () => {
+  it("names both ends of an indoor-only plan and the indoor end of a venue trip", () => {
+    const indoorOnly = summarizeRouteResult(
+      {
+        planId: "p",
+        selectedRouteId: "indoor:a>b",
+        venueLeg: { fromPlaceId: "info-2606", toPlaceId: "info-2301" },
+        routes: [{ routeId: "indoor:a>b", legs: [] }],
+      },
+      1200,
+    );
+    expect(JSON.parse(indoorOnly!).indoor).toEqual({
+      from: "info-2606",
+      to: "info-2301",
+    });
+    const intoVenue = summarizeRouteResult(
+      {
+        planId: "p",
+        selectedRouteId: "r",
+        venueArrival: { placeId: "zk-3314" },
+        venueLeg: { fromPlaceId: "gate", toPlaceId: "zk-3314" },
+        routes: [{ routeId: "r", legs: [] }],
+      },
+      1200,
+    );
+    expect(JSON.parse(intoVenue!).indoor).toEqual({ to: "zk-3314" });
+  });
+});
