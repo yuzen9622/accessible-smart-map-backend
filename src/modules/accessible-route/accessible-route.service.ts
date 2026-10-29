@@ -14,7 +14,10 @@ import { resolveCity } from "../geography/city.service";
 import { transitPreferencePenalty } from "./planners/transit-preference";
 import type { TransitPreference } from "../../types/route";
 import { parseRouteIntent } from "./route-intent.port";
-import { getA11yProfile } from "../user/user.service";
+import {
+  accessibilityModeFromProfile,
+  getA11yProfile,
+} from "../user/user.service";
 import type { RouteIntent } from "../../types/ai";
 import type {
   CsrWalkPlan,
@@ -2027,16 +2030,7 @@ export async function planAccessibleRouteFromRequest(
   ) {
     try {
       const profile = await getA11yProfile(body.userId);
-      if (mode === undefined) {
-        if (
-          profile.mobilityAid === "manual_wheelchair" ||
-          profile.mobilityAid === "power_wheelchair"
-        ) {
-          mode = "wheelchair";
-        } else if (profile.visualAssistance === true) {
-          mode = "visual_impaired";
-        }
-      }
+      if (mode === undefined) mode = accessibilityModeFromProfile(profile);
       if (avoidStairs === undefined && profile.canUseStairs !== null)
         avoidStairs = !profile.canUseStairs;
       if (requireElevator === undefined && profile.needsElevator !== null) {

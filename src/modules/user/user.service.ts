@@ -18,6 +18,7 @@ import { buildBindUrl } from "../../adapters/line.adapter";
 import { LINE_MSG } from "../../constants/messages";
 import crypto from "crypto";
 import type { IUser, IConfig, IA11yProfile } from "../../types";
+import type { AccessibilityMode } from "../../types/route";
 
 export async function hasUsableLineAccountCode(code: string): Promise<boolean> {
   const normalized = normalizeLineBindingCode(code);
@@ -173,6 +174,25 @@ const DEFAULT_A11Y_PROFILE: IA11yProfile = {
   visualAssistance: null,
   preferredFontScale: null,
 };
+
+/**
+ * The accessibility mode a profile implies: a wheelchair user routes as
+ * `wheelchair`, a user needing visual assistance as `visual_impaired`;
+ * otherwise the profile implies none.
+ *
+ * @param profile Stored accessibility profile, possibly partial or absent.
+ */
+export function accessibilityModeFromProfile(
+  profile: Partial<IA11yProfile> | null | undefined,
+): AccessibilityMode | undefined {
+  if (
+    profile?.mobilityAid === "manual_wheelchair" ||
+    profile?.mobilityAid === "power_wheelchair"
+  )
+    return "wheelchair";
+  if (profile?.visualAssistance === true) return "visual_impaired";
+  return undefined;
+}
 
 /**
  * Reads the caller's accessibility profile, creating an empty Config document

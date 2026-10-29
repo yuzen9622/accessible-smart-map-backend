@@ -70,7 +70,10 @@ vi.mock("./planners/pedestrian-a11y/csr-walk-planner", () => ({
   planCsrWalkRoute: vi.fn(),
 }));
 
-vi.mock("../user/user.service", () => ({
+vi.mock("../user/user.service", async (importOriginal) => ({
+  accessibilityModeFromProfile: (
+    await importOriginal<typeof import("../user/user.service")>()
+  ).accessibilityModeFromProfile,
   getA11yProfile: vi.fn(),
 }));
 
