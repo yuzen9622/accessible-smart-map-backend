@@ -113,6 +113,35 @@ describe("searchPlaces distance ordering", () => {
     );
   });
 
+  it("requests and normalizes the Google viewport", async () => {
+    mockPost.mockResolvedValue({
+      data: {
+        places: [
+          {
+            id: "station",
+            displayName: { text: "台北車站" },
+            formattedAddress: "station",
+            location: { latitude: 25.0478, longitude: 121.517 },
+            viewport: {
+              low: { latitude: 25.045, longitude: 121.515 },
+              high: { latitude: 25.05, longitude: 121.52 },
+            },
+          },
+        ],
+      },
+    });
+
+    const [place] = await searchPlaces("台北車站");
+
+    expect(place.viewport).toEqual({
+      low: { latitude: 25.045, longitude: 121.515 },
+      high: { latitude: 25.05, longitude: 121.52 },
+    });
+    expect(mockPost.mock.calls[0][2].headers["X-Goog-FieldMask"]).toContain(
+      "places.viewport",
+    );
+  });
+
   it("drops malformed coordinates without losing valid nearby candidates", async () => {
     mockPost.mockResolvedValue({
       data: {
@@ -273,7 +302,38 @@ describe("place language", () => {
         params: { languageCode: "en", sessionToken: "tok" },
       }),
     );
+    expect(mockGet.mock.calls[0][1].headers["X-Goog-FieldMask"]).toContain(
+      "viewport",
+    );
     expect(details?.name).toBe("Taipei 101");
+    expect(details?.viewport).toBeNull();
+  });
+
+  it.each([
+    {
+      label: "incomplete",
+      viewport: { low: { latitude: 25.03, longitude: 121.56 } },
+    },
+    {
+      label: "non-finite",
+      viewport: {
+        low: { latitude: 25.03, longitude: 121.56 },
+        high: { latitude: Number.NaN, longitude: 121.57 },
+      },
+    },
+  ])("normalizes $label viewport data to null", async ({ viewport }) => {
+    mockGet.mockResolvedValue({
+      data: {
+        id: "ChIJ123",
+        displayName: { text: "台北101" },
+        location: { latitude: 25.03, longitude: 121.56 },
+        viewport,
+      },
+    });
+
+    const details = await getPlaceDetails("ChIJ123");
+
+    expect(details?.viewport).toBeNull();
   });
 });
 

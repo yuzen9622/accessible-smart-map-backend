@@ -221,9 +221,49 @@ export interface GooglePlace {
   formatted_address: string;
   rating?: number;
   location: { latitude: number; longitude: number };
+  viewport: GoogleViewport | null;
   distanceMeters?: number;
   openNow?: boolean;
   openingHours?: string[];
+}
+
+export interface GoogleViewport {
+  low: { latitude: number; longitude: number };
+  high: { latitude: number; longitude: number };
+}
+
+function normalizeViewport(raw: unknown): GoogleViewport | null {
+  if (!raw || typeof raw !== "object") return null;
+  const value = raw as {
+    low?: { latitude?: unknown; longitude?: unknown };
+    high?: { latitude?: unknown; longitude?: unknown };
+  };
+  const low = value.low;
+  const high = value.high;
+  const coordinates = [
+    low?.latitude,
+    low?.longitude,
+    high?.latitude,
+    high?.longitude,
+  ];
+  if (
+    coordinates.some(
+      (coordinate) =>
+        typeof coordinate !== "number" || !Number.isFinite(coordinate),
+    )
+  ) {
+    return null;
+  }
+  return {
+    low: {
+      latitude: low!.latitude as number,
+      longitude: low!.longitude as number,
+    },
+    high: {
+      latitude: high!.latitude as number,
+      longitude: high!.longitude as number,
+    },
+  };
 }
 
 function haversineDistanceMeters(
@@ -302,7 +342,7 @@ export async function searchPlaces(
           "Content-Type": "application/json",
           "X-Goog-Api-Key": key,
           "X-Goog-FieldMask":
-            "places.id,places.displayName,places.formattedAddress,places.rating,places.location,places.currentOpeningHours.openNow,places.regularOpeningHours.weekdayDescriptions",
+            "places.id,places.displayName,places.formattedAddress,places.rating,places.location,places.viewport,places.currentOpeningHours.openNow,places.regularOpeningHours.weekdayDescriptions",
         },
       },
     );
@@ -314,6 +354,7 @@ export async function searchPlaces(
       formatted_address: p.formattedAddress,
       rating: p.rating,
       location: p.location,
+      viewport: normalizeViewport(p.viewport),
       openNow: p.currentOpeningHours?.openNow,
       openingHours: p.regularOpeningHours?.weekdayDescriptions,
     }));
@@ -427,6 +468,7 @@ export interface GooglePlaceDetails {
   name: string;
   formattedAddress: string | null;
   location: { latitude: number; longitude: number } | null;
+  viewport: GoogleViewport | null;
   rating: number | null;
   wheelchair: "yes" | "no" | null;
   wheelchairPartial: boolean;
@@ -496,7 +538,7 @@ export async function getPlaceDetails(
         headers: {
           "X-Goog-Api-Key": key,
           "X-Goog-FieldMask":
-            "id,displayName,formattedAddress,location,rating,accessibilityOptions,types,addressComponents",
+            "id,displayName,formattedAddress,location,viewport,rating,accessibilityOptions,types,addressComponents",
         },
       },
     );
@@ -512,6 +554,7 @@ export async function getPlaceDetails(
             longitude: rawLocation.longitude as number,
           }
         : null;
+    const viewport = normalizeViewport(p.viewport);
 
     const rawAccessibilityOptions = p.accessibilityOptions;
     const a11y =
@@ -543,6 +586,7 @@ export async function getPlaceDetails(
       name: (p.displayName?.text ?? "未知名稱") as string,
       formattedAddress: (p.formattedAddress ?? null) as string | null,
       location,
+      viewport,
       rating: typeof p.rating === "number" ? p.rating : null,
       wheelchair,
       wheelchairPartial,
