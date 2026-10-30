@@ -12,6 +12,7 @@ import {
   type MongoTestContext,
 } from "../../../tests/helpers/mongo-test-harness";
 import {
+  findNearbyA11yRowsInBounds,
   findNearbyA11yRowsLimited,
   findParkingLotsNear,
 } from "./a11y.repository";
@@ -135,5 +136,120 @@ describe("a11y repository with real MongoDB", () => {
     );
     expect(accessibleLots).toHaveLength(1);
     expect(accessibleLots[0]?.carParkId).toBe("lot-accessible");
+  });
+
+  it("queries all four sources inside the supplied polygon bounds", async () => {
+    const near = {
+      type: "Point" as const,
+      coordinates: [121.565, 25.033] as [number, number],
+    };
+    const outside = {
+      type: "Point" as const,
+      coordinates: [121.57, 25.04] as [number, number],
+    };
+
+    await A11y.create([
+      {
+        項次: "bbox-near",
+        "出入口電梯/無障礙坡道名稱": "電梯",
+        經度: near.coordinates[0],
+        緯度: near.coordinates[1],
+        location: near,
+      },
+      {
+        項次: "bbox-outside",
+        "出入口電梯/無障礙坡道名稱": "電梯",
+        經度: outside.coordinates[0],
+        緯度: outside.coordinates[1],
+        location: outside,
+      },
+    ]);
+    await BathroomModel.create([
+      {
+        county: "臺北市",
+        areacode: "100",
+        village: "中正",
+        number: "bbox-bathroom-near",
+        name: "可及廁所",
+        address: "臺北市中正區",
+        administration: "公有",
+        latitude: near.coordinates[1],
+        longitude: near.coordinates[0],
+        location: near,
+        grade: "A",
+        type2: "一般",
+        type: "無障礙廁所",
+        exec: "正常",
+        diaper: "否",
+      },
+      {
+        county: "臺北市",
+        areacode: "100",
+        village: "中正",
+        number: "bbox-bathroom-outside",
+        name: "可及廁所",
+        address: "臺北市中正區",
+        administration: "公有",
+        latitude: outside.coordinates[1],
+        longitude: outside.coordinates[0],
+        location: outside,
+        grade: "A",
+        type2: "一般",
+        type: "無障礙廁所",
+        exec: "正常",
+        diaper: "否",
+      },
+    ]);
+    await OsmA11y.create([
+      {
+        osmId: "bbox-osm-near",
+        name: "斜坡道",
+        category: "ramp",
+        wheelchair: "yes",
+        tags: { access: "yes" },
+        location: near,
+      },
+      {
+        osmId: "bbox-osm-outside",
+        name: "斜坡道",
+        category: "ramp",
+        wheelchair: "yes",
+        tags: { access: "yes" },
+        location: outside,
+      },
+    ]);
+    await DisabledParkingModel.create([
+      {
+        city: "臺北市",
+        district: "中正區",
+        quantity: 1,
+        placeName: "bbox-parking-near",
+        latitude: near.coordinates[1],
+        longitude: near.coordinates[0],
+        location: near,
+      },
+      {
+        city: "臺北市",
+        district: "中正區",
+        quantity: 1,
+        placeName: "bbox-parking-outside",
+        latitude: outside.coordinates[1],
+        longitude: outside.coordinates[0],
+        location: outside,
+      },
+    ]);
+
+    const rows = await findNearbyA11yRowsInBounds([
+      121.564, 25.032, 121.566, 25.034,
+    ]);
+
+    expect(rows.metro.map((row) => row.項次)).toEqual(["bbox-near"]);
+    expect(rows.bathroom.map((row) => row.number)).toEqual([
+      "bbox-bathroom-near",
+    ]);
+    expect(rows.osm.map((row) => row.osmId)).toEqual(["bbox-osm-near"]);
+    expect(rows.parking.map((row) => row.placeName)).toEqual([
+      "bbox-parking-near",
+    ]);
   });
 });

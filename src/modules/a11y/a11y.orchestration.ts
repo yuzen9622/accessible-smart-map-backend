@@ -1,4 +1,6 @@
 import type { SupportedLang } from "../../types/lang";
+import { haversineMeters } from "../../utils/geo";
+import { preparePlaceBounds, type PlaceBounds } from "../../utils/place-extent";
 import {
   formatCampusFacilityLabel,
   normalizeCampusFacilityName,
@@ -16,6 +18,8 @@ import type { CampusFacilityPlace } from "../campus/campus.service";
 import { countActiveHazardsNear } from "../hazard-report/hazard-report.service";
 import {
   bumpCategory,
+  classifyMetroCategory,
+  mapOsmCategory,
   computeVerdict,
   buildQuickAssessSummary,
   countOwnQuickAssess,
@@ -23,6 +27,7 @@ import {
   findOwnElevatorFacilities,
   findOwnFacilityGroups,
   findOwnNearby,
+  findOwnNearbyInBounds,
   findOwnNearbyLimited,
   findOwnRampFacilities,
   mergeA11yPlaces,
@@ -241,31 +246,163 @@ export async function findBathroomFacilities(
   ];
 }
 
-/**
- * Accessible places near a point, with campus facilities folded into the
- * unified metro/OSM list.
- *
- * @param lat Latitude of the search centre
- * @param lng Longitude of the search centre
- * @param radiusM Search radius in metres
- * @returns The nearby place groups
- */
+export type NearbyArea =
+  { kind: "radius"; radiusM: number } | { kind: "bbox"; bounds: PlaceBounds };
+
+type LocatedRow = { location: { coordinates: [number, number] } };
+
+export type NearbySummary = Record<
+  "elevator" | "ramp" | "toilet",
+  { count: number; nearestMeters: number | null }
+>;
+
+/** Summarizes the merged structure list plus the remaining OSM and bathroom rows. */
+export function summarizeNearby(
+  rows: {
+    nearbyMetroA11y: A11yPlace[];
+    nearbyOsm: IOsmA11y[];
+    nearbyBathroom: (LocatedRow & { _id?: unknown })[];
+  },
+  origin: { lat: number; lng: number },
+): NearbySummary {
+  const summary: NearbySummary = {
+    elevator: { count: 0, nearestMeters: null },
+    ramp: { count: 0, nearestMeters: null },
+    toilet: { count: 0, nearestMeters: null },
+  };
+  const metroMatches = new Map<string, number>();
+  const metroIds = new Set<string>();
+  const exactMatchKey = (
+    category: A11yCategory,
+    name: string | undefined,
+    row: LocatedRow,
+  ) => JSON.stringify([category, name, row.location.coordinates]);
+  for (const row of rows.nearbyMetroA11y) {
+    if (row.source !== "metro" || metroIds.has(row.項次)) continue;
+    metroIds.add(row.項次);
+    const name = row["出入口電梯/無障礙坡道名稱"];
+    const key = exactMatchKey(classifyMetroCategory(name), name, row);
+    metroMatches.set(key, (metroMatches.get(key) ?? 0) + 1);
+  }
+  const seen = new Set<string>();
+  const add = (category: A11yCategory, row: LocatedRow, identity?: string) => {
+    if (category === "other" || category === "parking") return;
+    if (identity) {
+      if (seen.has(identity)) return;
+      seen.add(identity);
+    }
+    const [lng, lat] = row.location.coordinates;
+    const distance = Math.round(
+      haversineMeters(origin.lat, origin.lng, lat, lng),
+    );
+    const bucket = summary[category];
+    bucket.count++;
+    bucket.nearestMeters =
+      bucket.nearestMeters === null
+        ? distance
+        : Math.min(bucket.nearestMeters, distance);
+  };
+  const addOsm = (
+    category: A11yCategory,
+    row: LocatedRow,
+    osmId: string,
+    name?: string,
+  ) => {
+    const identity = `osm:${osmId}`;
+    if (seen.has(identity)) return;
+    // Match only identical source names, categories and positions, one-to-one.
+    // Nearby facilities with distinct names or coordinates remain separate.
+    const key = exactMatchKey(category, name, row);
+    const matches = metroMatches.get(key) ?? 0;
+    if (matches > 0) {
+      metroMatches.set(key, matches - 1);
+      seen.add(identity);
+      return;
+    }
+    add(category, row, identity);
+  };
+  for (const row of rows.nearbyMetroA11y) {
+    if (row.source === "osm") {
+      addOsm(
+        mapOsmCategory(row.category!),
+        row,
+        row.osmId!,
+        row["出入口電梯/無障礙坡道名稱"],
+      );
+      continue;
+    }
+    const category =
+      row.source === "campus"
+        ? mapCampusCategory(row.facType)
+        : classifyMetroCategory(row["出入口電梯/無障礙坡道名稱"]);
+    const identity =
+      row.source === "campus"
+        ? `campus:${row.campusId}:${row.facUid}`
+        : `metro:${row.項次}`;
+    add(category, row, identity);
+  }
+  for (const row of rows.nearbyOsm) {
+    const category = mapOsmCategory(row.category);
+    // The same OSM feature also appears in the merged structure list.
+    addOsm(category, row, row.osmId, row.name);
+  }
+  for (const row of rows.nearbyBathroom) {
+    add("toilet", row, row._id == null ? undefined : `bathroom:${row._id}`);
+  }
+  return summary;
+}
+
+function withDistances<T extends LocatedRow>(
+  rows: T[],
+  lat: number,
+  lng: number,
+  sort: boolean,
+): (T & { distanceMeters: number })[] {
+  const result = rows.map((row) => {
+    const document = row as T & { toObject?: () => T };
+    const plain =
+      typeof document.toObject === "function" ? document.toObject() : row;
+    return {
+      ...plain,
+      distanceMeters: haversineMeters(
+        lat,
+        lng,
+        row.location.coordinates[1],
+        row.location.coordinates[0],
+      ),
+    };
+  });
+  return sort
+    ? result.sort((a, b) => a.distanceMeters - b.distanceMeters)
+    : result;
+}
+
+/** Nearby facilities in an optional place extent; existing numeric radii remain supported. */
 export async function findNearby(
   lat: number,
   lng: number,
-  radiusM = 150,
+  area: NearbyArea | number = { kind: "radius", radiusM: 150 },
   lang?: SupportedLang,
 ) {
+  const searchArea =
+    typeof area === "number"
+      ? { kind: "radius" as const, radiusM: area }
+      : area;
+  const bounds =
+    searchArea.kind === "bbox" ? preparePlaceBounds(searchArea.bounds) : null;
+  const radiusM = searchArea.kind === "radius" ? searchArea.radiusM : 150;
   const [rows, nearbyCampus, notices] = await Promise.all([
-    findOwnNearby(lat, lng, radiusM),
-    campusService.findFacilitiesNearby(lat, lng, radiusM),
+    bounds ? findOwnNearbyInBounds(bounds) : findOwnNearby(lat, lng, radiusM),
+    bounds
+      ? campusService.findFacilitiesInBounds(bounds)
+      : campusService.findFacilitiesNearby(lat, lng, radiusM),
     loadMetroNotices(),
   ]);
-  return {
+  const groups = {
     nearbyMetroA11y: withPlaceNotices(
       mergeA11yPlaces(
         rows.metro,
-        rows.osm as IOsmA11y[],
+        rows.osm,
         nearbyCampus.map((f) => campusToA11yPlace(f, lang)),
         lang,
       ),
@@ -274,6 +411,28 @@ export async function findNearby(
     nearbyBathroom: rows.bathroom.map((row) => displayFacility(row, lang)),
     nearbyOsm: rows.osm.map((row) => displayFacility(row, lang)),
     nearbyParking: rows.parking.map((row) => displayFacility(row, lang)),
+  };
+  return {
+    nearbyMetroA11y: withDistances(
+      groups.nearbyMetroA11y,
+      lat,
+      lng,
+      bounds !== null,
+    ),
+    nearbyBathroom: withDistances(
+      groups.nearbyBathroom,
+      lat,
+      lng,
+      bounds !== null,
+    ),
+    nearbyOsm: withDistances(groups.nearbyOsm, lat, lng, bounds !== null),
+    nearbyParking: withDistances(
+      groups.nearbyParking,
+      lat,
+      lng,
+      bounds !== null,
+    ),
+    summary: summarizeNearby(groups, { lat, lng }),
   };
 }
 

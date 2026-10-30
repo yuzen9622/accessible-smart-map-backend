@@ -15,6 +15,7 @@ import type {
   IParkingLot,
   IParkingSpace,
 } from "../../types";
+import { bboxPolygon, type PlaceBounds } from "../../utils/place-extent";
 
 /** Parking lots that advertise at least one accessible bay. */
 const DISABLED_CAPACITY_FILTER = {
@@ -26,6 +27,14 @@ function makeGeoQuery(lng: number, lat: number, radiusM: number) {
     $near: {
       $geometry: { type: "Point", coordinates: [lng, lat] },
       $maxDistance: radiusM,
+    },
+  };
+}
+
+function makeGeoWithinQuery(bounds: PlaceBounds) {
+  return {
+    $geoWithin: {
+      $geometry: bboxPolygon(bounds),
     },
   };
 }
@@ -236,6 +245,34 @@ export async function findNearbyA11yRows(
   radiusM: number,
 ): Promise<NearbyA11yRows> {
   const geoQuery = makeGeoQuery(lng, lat, radiusM);
+  const [metro, bathroom, osm, parking] = await Promise.all([
+    A11y.find({ location: geoQuery }).lean(),
+    BathroomModel.find({ type: "無障礙廁所", location: geoQuery }),
+    OsmA11y.find({ location: geoQuery }).lean(),
+    DisabledParkingModel.find({ location: geoQuery }),
+  ]);
+  return {
+    metro: metro as unknown as IA11y[],
+    bathroom: bathroom as unknown as IBathroom[],
+    osm: osm as unknown as IOsmA11y[],
+    parking: parking as unknown as IDisabledParking[],
+  };
+}
+
+/**
+ * Metro exits, bathrooms, OSM features and disabled parking inside a place
+ * bounding box.
+ *
+ * Each collection is queried directly by its own GeoJSON location field. The
+ * caller is responsible for preparing the extent before passing it here.
+ *
+ * @param bounds Bounding box in [minLng, minLat, maxLng, maxLat] order
+ * @returns The four raw result sets
+ */
+export async function findNearbyA11yRowsInBounds(
+  bounds: PlaceBounds,
+): Promise<NearbyA11yRows> {
+  const geoQuery = makeGeoWithinQuery(bounds);
   const [metro, bathroom, osm, parking] = await Promise.all([
     A11y.find({ location: geoQuery }).lean(),
     BathroomModel.find({ type: "無障礙廁所", location: geoQuery }),

@@ -1,4 +1,5 @@
 import { selectDisplayText } from "../../utils/source-display";
+import type { PlaceBounds } from "../../utils/place-extent";
 import type { SupportedLang } from "../../types/lang";
 import { displayFacility } from "./a11y.display";
 import { getServiceCoverageConfig } from "../../config/coverage";
@@ -15,6 +16,7 @@ import {
   findMetroElevators,
   findMetroRamps,
   findNearbyA11yRows,
+  findNearbyA11yRowsInBounds,
   findNearbyA11yRowsLimited,
   findOsmByCategory,
   findOsmByIds,
@@ -185,7 +187,7 @@ function idOf(doc: unknown): string {
  * @param name the metro `出入口電梯/無障礙坡道名稱` value
  * @returns the resolved facility category
  */
-function classifyMetroCategory(name: string): A11yCategory {
+export function classifyMetroCategory(name: string): A11yCategory {
   if (name.includes("電梯")) return "elevator";
   if (name.includes("坡道")) return "ramp";
   return "other";
@@ -219,7 +221,7 @@ const OSM_CATEGORIES_BY_FACILITY: Partial<
   other: ["kerb_cut", "wheelchair_accessible"],
 };
 
-function mapOsmCategory(category: IOsmA11y["category"]): A11yCategory {
+export function mapOsmCategory(category: IOsmA11y["category"]): A11yCategory {
   if (category === "elevator" || category === "ramp" || category === "toilet") {
     return category;
   }
@@ -583,6 +585,12 @@ export async function findOwnNearby(
   radiusM = 150,
 ): Promise<NearbyA11yRows> {
   return findNearbyA11yRows(lat, lng, radiusM);
+}
+
+export async function findOwnNearbyInBounds(
+  bounds: PlaceBounds,
+): Promise<NearbyA11yRows> {
+  return findNearbyA11yRowsInBounds(bounds);
 }
 
 /**

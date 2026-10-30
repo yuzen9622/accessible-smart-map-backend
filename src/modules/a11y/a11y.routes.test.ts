@@ -26,9 +26,11 @@ vi.mock("./a11y.orchestration", async () => {
   return {
     ...actual,
     findAllFacilities: vi.fn(),
+    findNearby: vi.fn(),
     findBathroomFacilities: vi.fn(),
     findRampFacilities: vi.fn(),
     findElevatorFacilities: vi.fn(),
+    findNearby: vi.fn(),
     assessQuickAccess: vi.fn(),
   };
 });
@@ -84,6 +86,121 @@ const facility = (id: string, source: string): any => ({
 
 beforeEach(() => {
   vi.resetAllMocks();
+});
+
+describe("GET /nearby-a11y", () => {
+  const data = {
+    nearbyMetroA11y: [],
+    nearbyBathroom: [],
+    nearbyOsm: [],
+    nearbyParking: [],
+    summary: {
+      elevator: { count: 0, nearestMeters: null },
+      ramp: { count: 0, nearestMeters: null },
+      toilet: { count: 0, nearestMeters: null },
+    },
+  };
+
+  it("preserves the omitted-bbox call and response envelope", async () => {
+    vi.mocked(orchestration.findNearby).mockResolvedValue(data);
+    const res = await request(app)
+      .get(`${BASE}/nearby-a11y`)
+      .query({ lat: "24.1372", lng: "120.6867" });
+    expect(res.status).toBe(200);
+    expect(orchestration.findNearby).toHaveBeenCalledExactlyOnceWith(
+      24.1372,
+      120.6867,
+      undefined,
+    );
+    expect(res.body).toMatchObject({
+      ok: true,
+      status: "success",
+      code: 200,
+      data,
+    });
+  });
+
+  it("passes parsed bbox and language to orchestration", async () => {
+    vi.mocked(orchestration.findNearby).mockResolvedValue(data);
+    const res = await request(app).get(`${BASE}/nearby-a11y`).query({
+      lat: "24.1355",
+      lng: "120.6855",
+      bbox: "120.6835,24.1350,120.6895,24.1395",
+      lang: "en",
+    });
+    expect(res.status).toBe(200);
+    expect(orchestration.findNearby).toHaveBeenCalledExactlyOnceWith(
+      24.1355,
+      120.6855,
+      {
+        kind: "bbox",
+        bounds: [120.6835, 24.135, 120.6895, 24.1395],
+      },
+      "en",
+    );
+  });
+
+  it.each([
+    "",
+    "120,24,121",
+    "120,24,121,25,26",
+    "120,,121,25",
+    "120,NaN,121,25",
+    "120,24,Infinity,25",
+    "west,24,121,25",
+    "121,24,120,25",
+    "120,25,121,24",
+    "120,24,120,25",
+    "120,24,121,24",
+    "-181,24,121,25",
+    "120,24,181,25",
+    "120,-91,121,25",
+    "120,24,121,91",
+  ])("rejects invalid bbox %s before orchestration", async (bbox) => {
+    const res = await request(app)
+      .get(`${BASE}/nearby-a11y`)
+      .query({ lat: "24.1372", lng: "120.6867", bbox });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      ok: false,
+      code: 400,
+      data: { errors: expect.any(Array) },
+    });
+    expect(orchestration.findNearby).not.toHaveBeenCalled();
+  });
+
+  it("documents bbox as a string and the additive response fields in OpenAPI", async () => {
+    const res = await request(app).get("/api/v1/openapi.json");
+    expect(res.status).toBe(200);
+    const operation = res.body.paths["/a11y/nearby-a11y"].get;
+    expect(
+      operation.parameters.find(
+        (parameter: { name: string }) => parameter.name === "bbox",
+      ),
+    ).toMatchObject({
+      in: "query",
+      required: false,
+      schema: { type: "string" },
+    });
+    const schema = res.body.components.schemas.NearbyA11yData;
+    expect(schema.required).toContain("summary");
+    expect(
+      schema.properties.nearbyMetroA11y.items.properties.source.enum,
+    ).toEqual(["metro", "osm", "campus"]);
+    expect(
+      schema.properties.summary.properties.elevator.properties,
+    ).toHaveProperty("nearestMeters");
+    for (const name of [
+      "nearbyMetroA11y",
+      "nearbyBathroom",
+      "nearbyOsm",
+      "nearbyParking",
+    ]) {
+      expect(JSON.stringify(schema.properties[name])).toContain(
+        "distanceMeters",
+      );
+    }
+  });
 });
 
 describe("a11y facility list routes", () => {
@@ -488,5 +605,79 @@ describe("GET /quick-assess", () => {
     const res = await request(app).get(`${BASE}/quick-assess`);
     expect(res.status).toBe(400);
     expect(vi.mocked(orchestration.assessQuickAccess)).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /nearby-a11y place bounds", () => {
+  const data = {
+    nearbyMetroA11y: [],
+    nearbyBathroom: [],
+    nearbyOsm: [],
+    nearbyParking: [],
+    summary: {
+      elevator: { count: 0, nearestMeters: null },
+      ramp: { count: 0, nearestMeters: null },
+      toilet: { count: 0, nearestMeters: null },
+    },
+  };
+
+  it("keeps the default radius call and response when bbox is absent", async () => {
+    vi.mocked(orchestration.findNearby).mockResolvedValue(data);
+    const res = await request(app)
+      .get(`${BASE}/nearby-a11y`)
+      .query({ lat: "24.1372", lng: "120.6867" });
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual(data);
+    expect(orchestration.findNearby).toHaveBeenCalledWith(
+      24.1372,
+      120.6867,
+      undefined,
+    );
+  });
+
+  it("passes the parsed bbox and language to the orchestration", async () => {
+    vi.mocked(orchestration.findNearby).mockResolvedValue(data);
+    const res = await request(app).get(`${BASE}/nearby-a11y`).query({
+      lat: "24.1372",
+      lng: "120.6867",
+      bbox: "120.6835,24.1350,120.6895,24.1395",
+      lang: "en",
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual(data);
+    expect(orchestration.findNearby).toHaveBeenCalledWith(
+      24.1372,
+      120.6867,
+      {
+        kind: "bbox",
+        bounds: [120.6835, 24.135, 120.6895, 24.1395],
+      },
+      "en",
+    );
+  });
+
+  it.each([
+    "",
+    "120,24,121",
+    "120,24,121,25,26",
+    "foo,24,121,25",
+    "120,,121,25",
+    "120,24,Infinity,25",
+    "120,24,NaN,25",
+    "121,24,120,25",
+    "120,25,121,24",
+    "120,24,120,25",
+    "120,24,121,24",
+    "-181,24,121,25",
+    "120,-91,121,25",
+    "120,24,181,25",
+    "120,24,121,91",
+  ])("rejects invalid bbox %s before calling the service", async (bbox) => {
+    const res = await request(app)
+      .get(`${BASE}/nearby-a11y`)
+      .query({ lat: "24.1372", lng: "120.6867", bbox });
+    expect(res.status).toBe(400);
+    expect(res.body.data.errors.length).toBeGreaterThan(0);
+    expect(orchestration.findNearby).not.toHaveBeenCalled();
   });
 });

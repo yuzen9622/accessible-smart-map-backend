@@ -12,9 +12,36 @@ export const FacilityReadQuerySchema = z
 
 export const ServiceCoverageQuerySchema = z.object({}).strict();
 
+const PlaceBoundsSchema = z
+  .tuple([
+    z.number().finite().min(-180).max(180),
+    z.number().finite().min(-90).max(90),
+    z.number().finite().min(-180).max(180),
+    z.number().finite().min(-90).max(90),
+  ])
+  .refine(
+    ([minLng, minLat, maxLng, maxLat]) => minLng < maxLng && minLat < maxLat,
+    "bbox minimums must be less than maximums",
+  );
+
 export const NearbyA11yQuerySchema = z
   .object({
     lang: SourceLangQuerySchema,
+    bbox: z
+      .string()
+      .transform((value) =>
+        value
+          .split(",")
+          .map((part) => (part.trim() === "" ? NaN : Number(part))),
+      )
+      .pipe(PlaceBoundsSchema)
+      .optional()
+      .openapi({
+        type: "string",
+        example: "120.6835,24.1350,120.6895,24.1395",
+        description:
+          "地點範圍 minLng,minLat,maxLng,maxLat；外擴 50 公尺後，各邊跨距最多 1200 公尺。省略時使用 150 公尺半徑。",
+      }),
     lat: z
       .string()
       .regex(/^-?\d+(\.\d+)?$/, "Must be a valid latitude")
@@ -395,12 +422,43 @@ export const AllElevatorsResponseSchema = ApiResponseSchema(
   "AllElevatorsResponse",
 );
 
+const NearbyDistanceSchema = z.number().finite().nonnegative().openapi({
+  description: "設施到請求 lat/lng 的直線距離（公尺）",
+});
+
+const NearbyCategorySummarySchema = z.object({
+  count: z.number().int().nonnegative(),
+  nearestMeters: z.number().int().nonnegative().nullable(),
+});
+
 export const NearbyA11yDataSchema = z
   .object({
-    nearbyMetroA11y: z.array(A11ySchema),
-    nearbyBathroom: z.array(BathroomSchema),
-    nearbyOsm: z.array(OsmA11ySchema),
-    nearbyParking: z.array(DisabledParkingSchema),
+    nearbyMetroA11y: z.array(
+      z.object({
+        ...A11ySchema.shape,
+        source: z.enum(["metro", "osm", "campus"]),
+        campusId: z.number().optional(),
+        schoolName: z.string().optional(),
+        facUid: z.string().optional(),
+        facType: z.string().optional(),
+        facTypeLabel: z.string().optional(),
+        distanceMeters: NearbyDistanceSchema,
+      }),
+    ),
+    nearbyBathroom: z.array(
+      BathroomSchema.extend({ distanceMeters: NearbyDistanceSchema }),
+    ),
+    nearbyOsm: z.array(
+      OsmA11ySchema.extend({ distanceMeters: NearbyDistanceSchema }),
+    ),
+    nearbyParking: z.array(
+      DisabledParkingSchema.extend({ distanceMeters: NearbyDistanceSchema }),
+    ),
+    summary: z.object({
+      elevator: NearbyCategorySummarySchema,
+      ramp: NearbyCategorySummarySchema,
+      toilet: NearbyCategorySummarySchema,
+    }),
   })
   .openapi("NearbyA11yData");
 
@@ -487,7 +545,7 @@ registry.registerPath({
   tags: ["Accessibility"],
   summary: "鄰近無障礙設施",
   description:
-    "回傳指定座標 150 公尺內的無障礙電梯/坡道（nearbyMetroA11y，北捷官方＋OSM 合併）、廁所、OSM 節點與身障停車格。",
+    "省略 bbox 時沿用指定座標 150 公尺內的查詢與原陣列順序；提供 bbox 時外擴 50 公尺、各軸跨距最多 1200 公尺，查詢範圍內的捷運、OSM、校園、廁所與身障停車格，各陣列依距離排序。每筆新增到 lat/lng 的直線距離 distanceMeters，summary 提供電梯、坡道與廁所的數量及四捨五入至整數的最近距離；無該類設施時 count 為 0、nearestMeters 為 null。",
   request: {
     query: NearbyA11yQuerySchema,
   },
@@ -496,7 +554,10 @@ registry.registerPath({
       description: "鄰近無障礙、廁所、OSM 與停車格資料",
       content: { "application/json": { schema: NearbyA11yResponseSchema } },
     },
-    400: { description: "缺少或無效的經緯度" },
+    400: {
+      description: "缺少或無效的經緯度、bbox 或未知 query 參數",
+      content: { "application/json": { schema: InvalidInputResponseSchema } },
+    },
     500: { description: "伺服器錯誤" },
   },
 });

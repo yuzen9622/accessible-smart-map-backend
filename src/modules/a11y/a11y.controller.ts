@@ -10,6 +10,7 @@ import { MSG, ERROR_MESSAGE } from "../../constants/messages";
 import * as a11yService from "./a11y.service";
 import * as a11yOrchestration from "./a11y.orchestration";
 import type { A11yCategory, A11yFacility } from "./a11y.service";
+import type { PlaceBounds } from "../../utils/place-extent";
 
 // Every map open fetches this ~1 MB list. Rebuilding and re-serializing it per
 // request saturated the event loop under load, so the encoded body is reused.
@@ -184,11 +185,15 @@ async function getA11yPlace(req: Request, res: Response<ApiResponse<any>>) {
 
 async function nearbyA11y(req: Request, res: Response<ApiResponse<any>>) {
   try {
-    const { lat, lng } = req.query;
+    const { lat, lng, bbox } = req.validated!.query as {
+      lat: string;
+      lng: string;
+      bbox?: PlaceBounds;
+    };
     const result = await a11yOrchestration.findNearby(
-      Number(lat as string),
-      Number(lng as string),
-      undefined,
+      Number(lat),
+      Number(lng),
+      bbox ? { kind: "bbox", bounds: bbox } : undefined,
       ...readLanguageArgs(req),
     );
     return sendResponse(res, true, "success", ResponseCode.OK, MSG.OK, result);
