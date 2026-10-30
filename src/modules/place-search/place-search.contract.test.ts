@@ -215,6 +215,7 @@ describe("compact autocomplete public contract", () => {
     );
     expect(schemas.AutocompleteItem.required.slice().sort()).toEqual(KEYS);
     expect(schemas.PlaceResult.properties).toHaveProperty("location");
+    expect(schemas.PlaceResult.properties).toHaveProperty("bounds");
     expect(schemas.PlaceResult.properties).toHaveProperty("distanceMeters");
     expect(
       AutocompleteItemSchema.safeParse({

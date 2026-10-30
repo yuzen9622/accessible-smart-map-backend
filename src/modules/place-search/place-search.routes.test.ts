@@ -59,6 +59,7 @@ const placeResult = (): service.PlaceResult => ({
     postcode: "110",
   },
   location: { type: "Point", coordinates: [121.5645, 25.0339] },
+  bounds: [121.564, 25.032, 121.566, 25.035],
   placeClass: "shop",
   placeType: "mall",
   typeLabel: "購物中心",

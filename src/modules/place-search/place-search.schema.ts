@@ -168,6 +168,14 @@ export const PlaceResultSchema = z
       .openapi({ example: "台北市信義區信義路五段7號" }),
     addressComponents: AddressComponentsSchema,
     location: PlaceGeoPointSchema,
+    bounds: z
+      .tuple([z.number(), z.number(), z.number(), z.number()])
+      .nullable()
+      .openapi({
+        example: [121.564, 25.032, 121.566, 25.035],
+        description:
+          "地點範圍 [minLng, minLat, maxLng, maxLat]；Google viewport 可用時提供，其他來源或資料缺少時為 null。",
+      }),
     placeClass: z.string().nullable().openapi({ example: "tourism" }),
     placeType: z.string().nullable().openapi({ example: "attraction" }),
     typeLabel: z.string().nullable().openapi({ example: "景點" }),

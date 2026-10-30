@@ -92,6 +92,7 @@ export interface PlaceResult {
     postcode: string | null;
   };
   location: GeoPoint;
+  bounds: [number, number, number, number] | null;
   placeClass: string | null;
   placeType: string | null;
   typeLabel: string | null;
@@ -516,6 +517,14 @@ function googleToResolved(
     fullAddress: d.formattedAddress,
     addressComponents: d.addressComponents,
     location: toGeoPoint(d.location.latitude, d.location.longitude),
+    bounds: d.viewport
+      ? [
+          d.viewport.low.longitude,
+          d.viewport.low.latitude,
+          d.viewport.high.longitude,
+          d.viewport.high.latitude,
+        ]
+      : null,
     placeClass,
     placeType,
     typeLabel: typeLabelOf(placeType, placeClass, lang),
@@ -541,6 +550,7 @@ function osmToResolved(
     fullAddress: p.displayName || null,
     addressComponents: p.address,
     location: toGeoPoint(p.latitude, p.longitude),
+    bounds: null,
     placeClass: p.placeClass,
     placeType: p.placeType,
     typeLabel: typeLabelOf(p.placeType, p.placeClass, lang),
