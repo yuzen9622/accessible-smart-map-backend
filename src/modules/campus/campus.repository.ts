@@ -9,6 +9,7 @@ import {
   toRawId,
 } from "./campus.util";
 import type { CampusSort } from "./campus.types";
+import { bboxPolygon, type PlaceBounds } from "../../utils/place-extent";
 
 const SUMMARY_FIELDS =
   "schoolId branchId schoolName branchName city address phone location buildingCount facilityCount facilities.facTypeId facilities.facType";
@@ -161,6 +162,28 @@ export async function findCampusesNearbyWithFacilities(
 ): Promise<CampusFacilityRow[]> {
   return CampusA11yModel.find({
     location: makeGeoQuery(lng, lat, radiusM),
+  })
+    .select(FACILITY_PLACE_FIELDS)
+    .lean<CampusFacilityRow[]>();
+}
+
+/**
+ * Campuses that contain at least one facility inside a bounding box.
+ *
+ * The geospatial predicate targets each embedded facility location. The
+ * caller still filters individual facilities after projection because the
+ * parent document contains the complete facilities array.
+ *
+ * @param bounds Bounding box in [minLng, minLat, maxLng, maxLat] order
+ * @returns Facility-projected campuses
+ */
+export async function findCampusesWithFacilitiesInBounds(
+  bounds: PlaceBounds,
+): Promise<CampusFacilityRow[]> {
+  return CampusA11yModel.find({
+    "facilities.location": {
+      $geoWithin: { $geometry: bboxPolygon(bounds) },
+    },
   })
     .select(FACILITY_PLACE_FIELDS)
     .lean<CampusFacilityRow[]>();

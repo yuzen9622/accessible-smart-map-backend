@@ -11,12 +11,14 @@ import {
   findCampusPage,
   findCampusesNearby,
   findCampusesNearbyWithFacilities,
+  findCampusesWithFacilitiesInBounds,
   findCampusesWithLocatedFacilities,
 } from "./campus.repository";
 import type { ICampusA11y, ICampusFacility } from "../../types";
 import type { CampusSort } from "./campus.types";
 import { resolveFacType } from "./campus.fac-type";
 import { toPublicId, toRawId } from "./campus.util";
+import type { PlaceBounds } from "../../utils/place-extent";
 
 function displayCampus<
   T extends {
@@ -311,6 +313,15 @@ function hasCoordinates(f: ICampusFacility): boolean {
   return (f.location?.coordinates?.length ?? 0) === 2;
 }
 
+function isWithinBounds(
+  coordinates: [number, number],
+  bounds: PlaceBounds,
+): boolean {
+  const [lng, lat] = coordinates;
+  const [minLng, minLat, maxLng, maxLat] = bounds;
+  return lng >= minLng && lng <= maxLng && lat >= minLat && lat <= maxLat;
+}
+
 /** Flattens one campus facility (known to have coordinates) into a standalone place. */
 function toFacilityPlace(
   campus: Pick<
@@ -394,6 +405,32 @@ export async function findFacilitiesNearby(
   return out
     .sort((a, b) => a.dist - b.dist)
     .map((x) => displayCampus(x.place, lang));
+}
+
+/**
+ * Campus accessibility facilities whose own coordinates fall within a place
+ * bounding box, flattened into standalone places.
+ *
+ * @param bounds Bounding box in [minLng, minLat, maxLng, maxLat] order
+ * @param lang Optional display language
+ * @returns Located facilities inside the bounds
+ */
+export async function findFacilitiesInBounds(
+  bounds: PlaceBounds,
+  lang?: SupportedLang,
+): Promise<CampusFacilityPlace[]> {
+  const docs = await findCampusesWithFacilitiesInBounds(bounds);
+  const out: CampusFacilityPlace[] = [];
+  for (const campus of docs) {
+    for (const f of campus.facilities ?? []) {
+      if (!hasCoordinates(f)) continue;
+      const coordinates = f.location!.coordinates as [number, number];
+      if (isWithinBounds(coordinates, bounds)) {
+        out.push(toFacilityPlace(campus, f));
+      }
+    }
+  }
+  return out.map((row) => displayCampus(row, lang));
 }
 
 /**

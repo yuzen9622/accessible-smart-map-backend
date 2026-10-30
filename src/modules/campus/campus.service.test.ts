@@ -7,7 +7,11 @@ vi.mock("../../model/campus-a11y.model", () => ({
 }));
 
 import CampusA11yModel from "../../model/campus-a11y.model";
-import { findAllFacilities, findFacilitiesNearby } from "./campus.service";
+import {
+  findAllFacilities,
+  findFacilitiesInBounds,
+  findFacilitiesNearby,
+} from "./campus.service";
 import { toPublicId } from "./campus.util";
 
 /** Builds the chainable `find().select().lean()` stub Mongoose exposes. */
@@ -97,6 +101,60 @@ describe("findFacilitiesNearby", () => {
       location: { $near: { $maxDistance: number } };
     };
     expect(query.location.$near.$maxDistance).toBe(150 + 800);
+  });
+});
+
+describe("findFacilitiesInBounds", () => {
+  it("filters flattened facilities by their own coordinates", async () => {
+    mockFind([
+      campusDoc([
+        {
+          facUid: "inside",
+          facTypeId: 8,
+          floors: [],
+          location: { type: "Point", coordinates: [120.685, 24.15] },
+        },
+        {
+          facUid: "outside",
+          facTypeId: 8,
+          floors: [],
+          location: { type: "Point", coordinates: [120.7, 24.15] },
+        },
+        { facUid: "unlocated", facTypeId: 8, floors: [] },
+      ]),
+    ]);
+
+    const places = await findFacilitiesInBounds([120.68, 24.14, 120.69, 24.16]);
+    expect(places.map((place) => place.facUid)).toEqual(["inside"]);
+  });
+
+  it("queries embedded facility locations with one geoWithin query", async () => {
+    mockFind([]);
+    const bounds: [number, number, number, number] = [
+      120.68, 24.14, 120.69, 24.16,
+    ];
+
+    await findFacilitiesInBounds(bounds);
+
+    expect(findMock).toHaveBeenCalledTimes(1);
+    expect(findMock).toHaveBeenCalledWith({
+      "facilities.location": {
+        $geoWithin: {
+          $geometry: {
+            type: "Polygon",
+            coordinates: [
+              [
+                [120.68, 24.14],
+                [120.69, 24.14],
+                [120.69, 24.16],
+                [120.68, 24.16],
+                [120.68, 24.14],
+              ],
+            ],
+          },
+        },
+      },
+    });
   });
 });
 

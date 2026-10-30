@@ -4,6 +4,7 @@ import {
   aggregateSchoolPage,
   findCampusPage,
   findCampusesNearby,
+  findCampusesWithFacilitiesInBounds,
 } from "./campus.repository";
 import {
   clearMongoTestDatabase,
@@ -93,5 +94,58 @@ describe("campus repository with real MongoDB", () => {
         facilityCount: 4,
       }),
     ]);
+  });
+
+  it("finds campuses by embedded facility coordinates rather than centroids", async () => {
+    const bounds: [number, number, number, number] = [
+      121.564, 25.032, 121.566, 25.034,
+    ];
+
+    await CampusA11yModel.create([
+      {
+        schoolId: 30,
+        schoolName: "Facility Location University",
+        branchId: 301,
+        branchName: "Remote Campus",
+        city: "臺北市",
+        facilityCount: 1,
+        facilities: [
+          {
+            facUid: "facility-inside",
+            facTypeId: 8,
+            facType: "無障礙電梯",
+            floors: ["1"],
+            location: { type: "Point", coordinates: [121.565, 25.033] },
+          },
+        ],
+        location: { type: "Point", coordinates: [121.6, 25.06] },
+      },
+      {
+        schoolId: 31,
+        schoolName: "Centroid Only University",
+        branchId: 311,
+        branchName: "Inside Campus",
+        city: "臺北市",
+        facilityCount: 1,
+        facilities: [
+          {
+            facUid: "facility-outside",
+            facTypeId: 8,
+            facType: "無障礙電梯",
+            floors: ["1"],
+            location: { type: "Point", coordinates: [121.57, 25.04] },
+          },
+        ],
+        location: { type: "Point", coordinates: [121.565, 25.033] },
+      },
+    ]);
+
+    const rows = await findCampusesWithFacilitiesInBounds(bounds);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      branchId: 301,
+      facilities: [expect.objectContaining({ facUid: "facility-inside" })],
+    });
   });
 });
