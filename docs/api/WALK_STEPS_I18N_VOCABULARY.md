@@ -1,5 +1,7 @@
 # 步行 `leg.steps` 對外契約與英文詞彙表（供前端 i18n）
 
+步行 leg 可附 `sidewalkSegments: [{ startIndex, endIndex }]`，用原 `polyline` 的含端點索引標示人行道圖資比對區間。區間依序且不重疊，`startIndex < endIndex < polyline.length`。前端可用綠色疊畫這些區間，其餘維持藍色。缺少欄位、空陣列或未列出的部分都表示未確認，不能當成沒有或不能走人行道。分類只接受明確人行道來源且排除幾何競爭；不改路線座標，也不代表現地安全／無障礙認證。重算與儲存預覽必須保留同一份線形與索引。
+
 適用於 `POST /api/v1/a11y/accessible-route` 所有 `type: "WALK"` leg 的
 `steps`。`POST /api/v1/a11y/route/instructions` 是另一個導航端點，可透過 `language: "en"` 回傳
 英文的 `instructions[].text`，省略時維持繁體中文，不會改變其回應形狀或文案責任。
@@ -130,7 +132,7 @@ CSR 的角度門檻為：`|Δ| < 20°` → `CONTINUE`；`< 45°` → `SLIGHTLY_*
 | `/route/instructions` | `instructions[].type` | `depart` \| `turn` \| `facility` \| `transit_board` \| `transit_alight` \| `arrive`（步行只會出現前三個） | `nav-instructions.types.ts:18-24` |
 | `/route/instructions` | `warnings[]` | `WALK_STEPS_UNAVAILABLE` \| `ORS_STEPS_UNAVAILABLE` \| `ROAD_STEPS_UNAVAILABLE` | `nav-instructions.types.ts:29-30` |
 
-純步行回應可帶 `walkPolicy`，包含 `version: "sidewalk-priority-v1"`、`profile: "normal" | "wheelchair"`、`avoidStairs`、`maxSlopePercent`、`carriagewayMillimetres` 與 `generalizedCost`。引擎先套用通行條件，再最少化沿車道的規劃成本，最後比較原有成本；合法過街不算沿車道縱向行走。這些值是圖資搜尋成本，未知角色採保守分類，不是現場量測或無障礙認證。舊路線未帶此欄位，不代表已執行新政策。輪椅能力與避樓梯分別執行；不支援此政策的純步行備援不可用時回 `503`，不回傳未經同等政策選路的車道路線。`walkPolicy.maxSlopePercent` 只有引擎實際執行且選中邊具有所需高程證據時才提供數值，否則為 null；未知高程不能標成已執行坡度限制。此項 metadata 不需要新增使用者操作。
+純步行回應可帶 `walkPolicy`，包含 `version: "sidewalk-priority-v1"`、`profile: "normal" | "wheelchair"`、`avoidStairs`、`maxSlopePercent`、`carriagewayMillimetres` 與 `generalizedCost`。引擎先套用通行條件，再最少化沿車道的規劃成本，最後比較原有成本；合法過街不算沿車道縱向行走。這些值是圖資搜尋成本，未知角色採保守分類，不是現場量測或無障礙認證。舊路線未帶此欄位，不代表已執行新政策。使用官方 OTP 的一般戶外、無中途點、非固定端點純步行會合併原模式查詢與同模式速度的一般行人探索候選，保留最多三條主要道路不同的路線；`avoidStairs` 為排序偏好，含樓梯候選仍保留 `steps.stairs`，不代表已確認輪椅可通行。探索候選不會偽造 `walkPolicy`。室內、精確端點、固定入口、有中途點及大眾運輸接駁維持原通行限制；CSR 仍維持其既有政策。`walkPolicy.maxSlopePercent` 只有引擎實際執行且選中邊具有所需高程證據時才提供數值，否則為 null；未知高程不能標成已執行坡度限制。此項 metadata 不需要新增使用者操作。
 
 ⚠️ 兩個容易寫錯的欄位名稱已在表中標注：純步行引擎欄位是 `engine`、無障礙設施分類欄位是
 `category`——本文件早期版本兩者都寫錯過。

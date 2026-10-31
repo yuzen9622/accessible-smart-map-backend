@@ -1,12 +1,20 @@
 # OTP2 維運手冊 — 資料更新、建圖、Docker 部署
 
-> 適用版本：OpenTripPlanner **2.9.0**（官方來源與修補固定於根 `Dockerfile`，使用映像由 `docker-compose.yml` 指定）
+> 適用版本：OpenTripPlanner **2.9.0**。目前 Compose 使用固定 digest 的官方映像；映像、服務與本機試用開關以根 `docker-compose.yml` 為準。
 
 本文件涵蓋 OTP sidecar 的完整生命週期：GTFS 資料取得 → 清理 → 台鐵班表注入 → graph 建置 → Docker 配置與啟動 → 驗證 → 故障排查。
 
-純步行使用 `sidewalk-priority-v1` 原生修補。輪椅能力與避樓梯分開處理；符合通行條件後，先最少沿車道的規劃成本，再比較原有時間與距離成本。必要車道仍可用，合法過街不視為沿車道縱向行走。大眾運輸內的步行段不在這項純步行政策範圍。
+綠藍步行分色使用同一 release 的人行道索引，不影響 OTP 選路。在切換新資料目錄前，以已安裝 pyosmium 的 Python 執行 `python3 src/scripts/export-otp-sidewalk-index.py <release>/taiwan-otp.osm.pbf <release>/sidewalk-index.json`。根 Compose 將同一 `OTP_DATA_DIR` 唯讀掛載到後端；後端核對索引與 PBF 的 SHA-256，缺少、損壞或版本不符時保留藍色，不猜測人行道。綠色是保守的圖資幾何比對，藍色包含未確認；不代表現地安全或無障礙認證。圖資與索引須作為同一個 release 切換，不能混用先前索引。
 
-首次使用或更新修補時先執行 `docker compose build otp`，再使用既有建圖流程重建候選圖。修補保留邊角色，因此不能直接沿用未含角色的舊 `graph.obj`。建圖、預檢與候選載入腳本都讀取根 Compose 的同一映像；不要另用官方原映像建圖。後端不接受未執行同等政策的純步行備援，這類服務不可用時回 503。
+目前 Compose 選擇 `ROUTE_WALK_PLANNER=otp`。一般戶外、無中途點且未固定精確端點的純步行，合併官方 OTP 與 Valhalla 的真實步行候選，去除高度重疊走廊後最多回傳三條。保留原模式的 OTP 主查詢，另以相同模式速度取得一般步行探索候選；探索路徑不代表已確認輪椅可通行。`avoidStairs` 在此範圍是排序偏好，含樓梯路線仍保留 `steps[].stairs`。人行道依來源證據標記，不保證全程人行道，沒有額外五分鐘的自動回退保護。
+
+室內場館、固定入口、精確救援端點、中途點及轉乘接駁保留原有流程與硬性條件。未標記的設施仍屬未知。坡度設定是選路成本，API 不會將官方輪椅坡度偏好宣稱為硬性上限。
+
+本機試用的不可通行道路成本設在既有 `otp-data/router-config.json` 的 `routingDefaults.wheelchairAccessibility.inaccessibleStreetReluctance`，目前為 5。這項參數同時影響來源真正標記不可通行的路段，不能只靠調低數值便宣稱安全。圖中的政策標記必須來自已確認有人行道連通的道路；目前新增輪椅偏好標記先涵蓋已驗證的台中區域，全臺其他圖資覆蓋保留。單改設定不會替未標記道路增加輪椅人行道偏好。
+
+目前 OTP 服務沒有 custom build，不需先執行 `docker compose build otp`。圖必須由根 Compose 所指定的官方映像建立與載入，不能沿用不相容的 Java 修補圖。後端程式保留預設 CSR 與原生修補相容路徑供回復，但啟用它需要同時恢復相符的映像、圖與 Compose 設定。官方回應不提供原生 `walkPolicy`，後端不會自行填出假的政策回執。 若直接以 `pnpm dev` 啟動後端並連到官方 sidecar，亦須明確設定 `ROUTE_WALK_PLANNER=otp`；程式預設 CSR 是供舊部署回復使用，不能只切換圖資路徑。
+
+本機試用暫設 `OTP_PLAN_CACHE_TTL_S=0`，以免換圖或換權重後讀到舊路線；不清除其他 Redis 對話資料。恢復快取前，應確認舊的 `otp:plan:*` 結果已失效。現有一般 `otp:rebuild` 流程只產生 `foot=use_sidepath`，未自動重套本機試用的輪椅政策標記；不要以未含相同標記的標準重建圖覆寫試用圖後，仍宣稱輪椅偏好相同。
 
 ## 後端搜尋範圍與品質回歸
 
@@ -27,7 +35,7 @@
 
 ### 轉乘快取必須涵蓋後端送出的每一組參數
 
-OTP 依「步速＋輪椅旗標（＋其他步行偏好）」快取站間轉乘。請求的組合不在 `router-config.json` 的 `transit.transferCacheRequests` 裡時，OTP 會在請求當下重建一份快取，實測卡住 40 秒以上，而且每次重啟後都會再發生。後端的步速表在 `src/config/routing.ts`（`WALK_SPEED_MPS`，不可用環境變數改），每個步速都可能以輪椅旗標開或關送出（勾選避梯、輪椅模式放寬），`src/config/routing.test.ts` 會檢查兩邊一致。新增步速或改步行偏好時，兩邊一起改。
+OTP 依「步速＋輪椅旗標（＋其他步行偏好）」快取站間轉乘。請求的組合不在 `router-config.json` 的 `transit.transferCacheRequests` 裡時，OTP 會在請求當下重建一份快取，實測卡住 40 秒以上，而且每次重啟後都會再發生。後端的步速表在 `src/config/routing.ts`（`WALK_SPEED_MPS`，不可用環境變數改），輪椅旗標只由模式決定，避樓梯不會切換它；現有快取仍預熱每個步速的兩種旗標組合，`src/config/routing.test.ts` 會檢查兩邊一致。新增步速或改步行偏好時，兩邊一起改。
 
 `build-config.json` 的 `transferRequests` 另含輪椅一筆：OTP 預設只替一般行人預算轉乘，沒有這筆時輪椅使用者的站間轉乘沒有保證無階梯的路徑（改動要重建圖）。
 
