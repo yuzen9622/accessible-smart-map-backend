@@ -9,6 +9,7 @@
 #   the localhost values in .env).
 services:
   backend:
+    cpus: 1.0
     build: .
     container_name: taipei-backend
     # env_file injects the whole .env into the container environment, so
@@ -17,6 +18,9 @@ services:
     env_file: .env
     environment:
       OTP_BASE_URL: http://otp:8080
+      ROUTE_WALK_PLANNER: otp
+      OTP_PLAN_CACHE_TTL_S: "0"
+      OTP_SIDEWALK_INDEX_PATH: /data/otp/sidewalk-index.json
       ROUTE_ELEVATION_DTM_PATH: /data/dtm/taiwan-dtm-20m.tif
       VALHALLA_BASE_URL: http://valhalla:8002
       DATABASE_URL: >-
@@ -41,6 +45,7 @@ services:
       - ${GCS_KEY_FILE}:/secrets/gcs-key.json:ro
       - ${VALHALLA_DATA_DIR:-./valhalla-data}:/app/valhalla-data
       - ${OTP_DEM_DIR:-${OTP_DATA_DIR:-./otp-data}/dem}:/data/dtm:ro
+      - ${OTP_DATA_DIR:-/var/otp}:/data/otp:ro
     ports:
       # Publish the API. Prefix 127.0.0.1: to keep it host-only.
       - "127.0.0.1:${PORT:-8000}:${PORT:-8000}"
@@ -71,6 +76,7 @@ services:
     restart: unless-stopped
 
   mongo:
+    cpus: 0.5
     image: mongo:7@sha256:9bdaeb6dac6e7e762e84e2f84103d1f9bb078fa1ba6bde8bb9d2274f655ad173 # yamllint disable-line rule:line-length
     container_name: mongo
     entrypoint: ["bash", "/opt/mongo/entrypoint.sh"]
@@ -132,13 +138,11 @@ services:
     restart: unless-stopped
 
   otp:
+    cpus: 1.0
     # Pin the minor version (spec §4.1) — never `latest`.
     # 2.9.0 (Java 25): planConnection supports stop-location origins, which
     # bypasses broken street linking at station plazas (e.g. 台中車站 island).
-    image: accessible-smart-map-otp:sidewalk-priority-v1
-    build:
-      context: .
-      target: otp-runtime
+    image: opentripplanner/opentripplanner:2.9.0@sha256:a7eac7da397faa9ec9dee407d4204895d24df4981500662fa6793aae0e71fd8f
     container_name: otp
     # The official image's entrypoint hardcodes /var/opentripplanner as the
     # data directory — pass flags only, never a path.
@@ -164,6 +168,7 @@ services:
     restart: unless-stopped
 
   valhalla:
+    cpus: 0.5
     image: ghcr.io/valhalla/valhalla:3.9.1@sha256:4fd114eb1d26b8fc2f43bcb3df234c1b63a0bf13c277405e5943d5361dc575de # yamllint disable-line rule:line-length
     container_name: valhalla
     command:

@@ -7,6 +7,7 @@
       "reluctance": 2.0
     },
     "wheelchairAccessibility": {
+      "inaccessibleStreetReluctance": 5,
       "trip": {
         "onlyConsiderAccessible": false,
         "unknownCost": 300,
@@ -28,7 +29,6 @@
     "accessEgress": {
       "maxDuration": "30m"
     },
-    "maxDirectStreetDuration": "3h",
     "streetRoutingTimeout": "2s"
   },
   "transit": {
