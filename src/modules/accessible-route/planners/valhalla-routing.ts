@@ -6,7 +6,10 @@ import {
   type NormalizedValhallaTrip,
   type ValhallaCosting,
 } from "../../../adapters/valhalla.adapter";
-import { VALHALLA_OSM_ATTRIBUTION } from "../../../config/valhalla";
+import {
+  VALHALLA_MAX_EXCLUDE_LOCATIONS,
+  VALHALLA_OSM_ATTRIBUTION,
+} from "../../../config/valhalla";
 import { TRAFFIC_MSG } from "../../../constants/messages";
 import type {
   AccessibleRoute,
@@ -26,6 +29,7 @@ import { normalizeRelativeDirection } from "../../../utils/nav-instructions-engi
 import { ValhallaRoutingError } from "./valhalla-routing.types";
 import { planOtpWalkDetailed } from "./otp-routing";
 import { unknownWalkA11yDetails } from "./walk-a11y";
+import { walkSpeedMps } from "../scoring";
 
 export { ValhallaRoutingError } from "./valhalla-routing.types";
 
@@ -35,14 +39,13 @@ const COSTING: Record<RoadTravelMode, ValhallaCosting> = {
   walk: "pedestrian",
 };
 
-/** Real point is treated as roadside (no walk connector) within this straight-line gap. */
-const WALK_ACCESS_MIN_GAP_M = 30;
-/** Max tolerated distance between a pedestrian polyline endpoint and its anchor. */
-const CONNECT_TOLERANCE_M = 25;
+/** Match the 5 m leg-continuity tolerance used for road-route geometry. */
+const CONNECT_TOLERANCE_M = 5;
 /** Decimal places used to build the connector cache key. */
 const SNAP_KEY_PRECISION = 6;
 /** Max pedestrian connector queries in flight per public request. */
 const MAX_CONNECTOR_CONCURRENCY = 4;
+const MAX_ALTERNATIVE_DISTANCE_RATIO = 2;
 
 /** A walk-connector body: a WALK leg without its display from/to labels. */
 type WalkConnector = Omit<WalkLeg, "from" | "to">;
@@ -349,10 +352,10 @@ async function planWalkConnector(
       mode,
       avoidStairs,
     });
-    const leg = otp.routes[0]?.legs.find(
-      (candidate) => candidate.type === "WALK",
-    );
-    if (leg?.type === "WALK" && leg.polyline.length >= 2) {
+    for (const route of otp.routes) {
+      if (route.legs.length !== 1) continue;
+      const leg = route.legs[0];
+      if (leg.type !== "WALK" || leg.polyline.length < 2) continue;
       const pStart = leg.polyline[0];
       const pEnd = leg.polyline.at(-1)!;
       if (
@@ -368,6 +371,8 @@ async function planWalkConnector(
   } catch (error) {
     console.warn("[valhalla-routing] OTP walk connector failed", error);
   }
+  // Pedestrian maneuvers do not prove that every traversed edge is step-free.
+  if (avoidStairs) return { body: null, degraded: true };
   console.warn(
     "[valhalla-routing] OTP walk connector unavailable; falling back to Valhalla",
     JSON.stringify({ fromAnchor, toAnchor }),
@@ -504,11 +509,9 @@ async function attachWalkAccessLegs(
         tailTarget.lng,
       );
       const headPending =
-        gapHead > WALK_ACCESS_MIN_GAP_M ? connector(origin, originSnap) : null;
+        gapHead > CONNECT_TOLERANCE_M ? connector(origin, originSnap) : null;
       const tailPending =
-        gapTail > WALK_ACCESS_MIN_GAP_M
-          ? connector(destSnap, tailTarget)
-          : null;
+        gapTail > CONNECT_TOLERANCE_M ? connector(destSnap, tailTarget) : null;
 
       const wpMatches = driveLegs.length - 1 === waypoints.length;
       if (waypoints.length && !wpMatches) {
@@ -533,7 +536,16 @@ async function attachWalkAccessLegs(
               departureSnap.lng,
             );
             const gap = Math.max(gapArrival, gapDeparture);
-            if (gap <= WALK_ACCESS_MIN_GAP_M) return [];
+            if (
+              gap <= CONNECT_TOLERANCE_M &&
+              haversineMeters(
+                arrivalSnap.lat,
+                arrivalSnap.lng,
+                departureSnap.lat,
+                departureSnap.lng,
+              ) <= CONNECT_TOLERANCE_M
+            )
+              return [];
             return [
               {
                 index: j,
@@ -606,7 +618,12 @@ async function attachWalkAccessLegs(
         const slot = wpByIndex.get(i);
         if (!slot) return;
         const label = `中途點 ${i + 1}`;
-        if (slot.in && slot.out) {
+        if (
+          slot.in &&
+          slot.out &&
+          haversineCoords(slot.in.polyline.at(-1)!, slot.out.polyline[0]) <=
+            CONNECT_TOLERANCE_M
+        ) {
           legs.push(toWalkLeg(slot.in, `${label} 停車處`, label));
           legs.push(toWalkLeg(slot.out, label, `${label} 停車處`));
           walkMinutes += slot.in.minutesEst + slot.out.minutesEst;
@@ -670,26 +687,91 @@ async function attachWalkAccessLegs(
   );
 }
 
+/** Select points on the routed roads away from requested stops, not artificial waypoints. */
+function alternativeExclusions(
+  trip: NormalizedValhallaTrip,
+  anchors: LatLng[],
+): LatLng[] {
+  const segments: { start: LatLng; end: LatLng; length: number }[] = [];
+  for (const leg of trip.legs) {
+    const points = decodeValhallaShape(leg.shapePolyline6);
+    for (let i = 1; i < points.length; i++) {
+      const start = { lat: points[i - 1][1], lng: points[i - 1][0] };
+      const end = { lat: points[i][1], lng: points[i][0] };
+      const length = haversineMeters(start.lat, start.lng, end.lat, end.lng);
+      if (length > 0) segments.push({ start, end, length });
+    }
+  }
+  const total = segments.reduce((sum, segment) => sum + segment.length, 0);
+  const exclusions: LatLng[] = [];
+  for (const fraction of [0.2, 0.4, 0.6, 0.8]) {
+    let remaining = total * fraction;
+    for (const segment of segments) {
+      if (remaining > segment.length) {
+        remaining -= segment.length;
+        continue;
+      }
+      const ratio = remaining / segment.length;
+      const point = {
+        lat: segment.start.lat + (segment.end.lat - segment.start.lat) * ratio,
+        lng: segment.start.lng + (segment.end.lng - segment.start.lng) * ratio,
+      };
+      if (
+        anchors.every(
+          (anchor) =>
+            haversineMeters(anchor.lat, anchor.lng, point.lat, point.lng) >=
+            100,
+        ) &&
+        exclusions.every(
+          (other) =>
+            haversineMeters(other.lat, other.lng, point.lat, point.lng) >= 50,
+        )
+      )
+        exclusions.push(point);
+      break;
+    }
+  }
+  return exclusions;
+}
+
+function tripShapeKey(trip: NormalizedValhallaTrip): string {
+  return JSON.stringify(trip.legs.map((leg) => leg.shapePolyline6));
+}
+
 export async function planValhallaRoute(
   origin: LatLng,
   destination: LatLng,
   opts: PlanRoadRouteOptions,
 ): Promise<AccessibleRoute[]> {
-  const callValhalla = (excludeLocations?: LatLng[]) => {
+  const callValhalla = (
+    excludeLocations?: LatLng[],
+    computeAlternatives = true,
+    distanceWeight?: 0.7,
+  ): ReturnType<typeof computeValhallaRoutes> => {
     const params: Parameters<typeof computeValhallaRoutes>[0] = {
       origin,
       destination,
       waypoints: opts.waypoints,
       costing: COSTING[opts.travelMode],
-      computeAlternatives: true,
+      computeAlternatives,
       wheelchair:
         opts.travelMode === "walk" &&
+        !opts.walkingCandidates &&
         (opts.avoidStairs ?? opts.mode === "wheelchair"),
       dateTime: { type: 0 },
     };
+    if (opts.walkingCandidates) {
+      params.walkingSpeedKmh = walkSpeedMps(opts.mode ?? "normal") * 3.6;
+    }
+    if (opts.deadline !== undefined) {
+      if (opts.deadline <= Date.now())
+        return Promise.resolve({ status: "NO_ROUTE", trips: [] });
+      params.timeoutMs = opts.deadline - Date.now();
+    }
     if (excludeLocations?.length) {
       params.excludeLocations = excludeLocations;
     }
+    if (distanceWeight !== undefined) params.distanceWeight = distanceWeight;
     return computeValhallaRoutes(params);
   };
 
@@ -712,11 +794,69 @@ export async function planValhallaRoute(
       result.httpStatus,
     );
   }
+  const trips = [...result.trips];
+  if (opts.travelMode !== "walk" && trips.length > 0) {
+    let exclusionPoints: LatLng[] = [];
+    const closures = bypassFailed ? [] : (requested ?? []);
+    if (closures.length < VALHALLA_MAX_EXCLUDE_LOCATIONS) {
+      try {
+        exclusionPoints = alternativeExclusions(trips[0], [
+          origin,
+          ...(opts.waypoints ?? []),
+          destination,
+        ]);
+      } catch {
+        // The original response is validated below; optional searches cannot hide it.
+      }
+    }
+    const alternatives = await Promise.all([
+      (async () => {
+        try {
+          return await callValhalla(closures, false, 0.7);
+        } catch {
+          return undefined;
+        }
+      })(),
+      ...exclusionPoints.map(async (point) => {
+        try {
+          return await callValhalla([...closures, point], false);
+        } catch {
+          return undefined;
+        }
+      }),
+    ]);
+    const seen = new Set(trips.map(tripShapeKey));
+    for (const alternative of alternatives) {
+      if (alternative?.status !== "OK") continue;
+      for (const trip of alternative.trips) {
+        if (
+          trip.summary.lengthKm >
+          trips[0].summary.lengthKm * MAX_ALTERNATIVE_DISTANCE_RATIO
+        )
+          continue;
+        const key = tripShapeKey(trip);
+        if (seen.has(key)) continue;
+        try {
+          // Ignore a malformed optional response instead of losing the original route.
+          mapTrip(trip, opts.travelMode, 0);
+        } catch {
+          continue;
+        }
+        seen.add(key);
+        trips.push(trip);
+      }
+    }
+  }
   let routes: AccessibleRoute[];
   try {
-    routes = result.trips.map((trip, index) =>
-      mapTrip(trip, opts.travelMode, index),
-    );
+    routes = trips
+      .filter(
+        (trip) =>
+          opts.travelMode === "walk" ||
+          !opts.waypoints?.length ||
+          trip.legs.length === opts.waypoints.length + 1,
+      )
+      .map((trip, index) => mapTrip(trip, opts.travelMode, index));
   } catch (error) {
     if (error instanceof ValhallaRoutingError) throw error;
     throw new ValhallaRoutingError("Malformed Valhalla response");
@@ -741,6 +881,6 @@ export async function planValhallaRoute(
     opts.waypoints ?? [],
     opts.finalWalkTarget,
     opts.mode,
-    opts.avoidStairs ?? opts.mode === "wheelchair",
+    opts.avoidStairs === true || opts.mode === "wheelchair",
   );
 }

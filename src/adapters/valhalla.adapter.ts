@@ -22,7 +22,7 @@ export interface NormalizedValhallaManeuver {
   endShapeIndex: number;
   streetNames?: string[];
   highway?: boolean;
-  stairs: false;
+  stairs: boolean;
 }
 
 export interface NormalizedValhallaLeg {
@@ -42,7 +42,13 @@ export interface ComputeValhallaRoutesParams {
   waypoints?: { lat: number; lng: number }[];
   costing: ValhallaCosting;
   computeAlternatives?: boolean;
+  /** Blend distance into road route costing without disabling other penalties. */
+  distanceWeight?: 0.7;
   wheelchair?: boolean;
+  /** Requested profile speed, in kilometres per hour, for walking candidates. */
+  walkingSpeedKmh?: number;
+  /** Remaining shared request budget. */
+  timeoutMs?: number;
   /** Points the route must not pass through, e.g. closed-road incidents. */
   excludeLocations?: { lat: number; lng: number }[];
   /**
@@ -107,7 +113,7 @@ function normalizeManeuver(value: unknown): NormalizedValhallaManeuver | null {
     timeSec: raw.time,
     beginShapeIndex: begin as number,
     endShapeIndex: end as number,
-    stairs: false,
+    stairs: raw.type === 40,
   };
   if (typeof raw.instruction === "string") {
     maneuver.instruction = raw.instruction;
@@ -164,9 +170,15 @@ export async function computeValhallaRoutes(
     exclude_ferries: true,
     use_ferry: 0,
   };
+  if (params.distanceWeight !== undefined && params.costing !== "pedestrian") {
+    costingOptions.use_distance = params.distanceWeight;
+  }
   if (params.costing === "pedestrian" && params.wheelchair) {
     costingOptions.type = "wheelchair";
     costingOptions.step_penalty = 600;
+  }
+  if (params.costing === "pedestrian" && params.walkingSpeedKmh !== undefined) {
+    costingOptions.walking_speed = params.walkingSpeedKmh;
   }
   const body: Record<string, unknown> = {
     locations,
@@ -202,7 +214,17 @@ export async function computeValhallaRoutes(
     const response = await axios.post(
       `${VALHALLA_BASE_URL}${VALHALLA_ROUTE_PATH}`,
       body,
-      { signal: AbortSignal.timeout(VALHALLA_TIMEOUT_MS) },
+      {
+        signal: AbortSignal.timeout(
+          Math.max(
+            1,
+            Math.min(
+              VALHALLA_TIMEOUT_MS,
+              params.timeoutMs ?? VALHALLA_TIMEOUT_MS,
+            ),
+          ),
+        ),
+      },
     );
     const data = response.data as Record<string, unknown>;
     const rawTrips: unknown[] = [data?.trip];

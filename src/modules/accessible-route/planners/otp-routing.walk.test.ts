@@ -1,5 +1,5 @@
 import { encode } from "@googlemaps/polyline-codec";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { WalkLeg } from "../../../types/route";
 
 const { post } = vi.hoisted(() => ({ post: vi.fn() }));
@@ -338,4 +338,280 @@ describe("planOtpWalk", () => {
     await planOtpWalk(origin, destination);
     expect(isOtpCircuitOpen()).toBe(false);
   });
+});
+
+describe("official OTP walking", () => {
+  beforeEach(() => {
+    vi.stubEnv("ROUTE_WALK_PLANNER", "otp");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.each([
+    { mode: "normal", avoidStairs: false, wheelchair: false },
+    { mode: "normal", avoidStairs: true, wheelchair: false },
+    { mode: "wheelchair", avoidStairs: false, wheelchair: true },
+    { mode: "wheelchair", avoidStairs: true, wheelchair: true },
+  ] as const)(
+    "keeps mobility independent from stairs for $mode / $avoidStairs",
+    async ({ mode, avoidStairs, wheelchair }) => {
+      post.mockResolvedValue(okResp([]));
+      await planOtpWalkDetailed(origin, destination, { mode, avoidStairs });
+      const { query, variables } = post.mock.calls[0][1];
+      expect(variables.wheelchair).toBe(wheelchair);
+      expect(variables).not.toHaveProperty("directWalkProfile");
+      expect(variables).not.toHaveProperty("avoidStairs");
+      expect(query).toContain("transportModes: [{ mode: WALK }]");
+      expect(query).not.toContain("DirectWalkProfile");
+      expect(query).not.toContain("walkPolicy");
+    },
+  );
+
+  it("accepts standard geometry without inventing a native policy receipt", async () => {
+    const itinerary = walkItin();
+    Reflect.deleteProperty(itinerary.legs[0], "walkPolicy");
+    post.mockResolvedValue(okResp([itinerary]));
+
+    const result = await planOtpWalkDetailed(origin, destination);
+
+    expect(result.status).toBe("ok");
+    expect(result.routes).toHaveLength(1);
+    expect(result.routes[0]).not.toHaveProperty("walkPolicy");
+    expect(result.routes[0].totalWalkDistanceM).toBe(823);
+  });
+
+  it("keeps the official candidate order instead of applying roadway lexicographic ranking", async () => {
+    const first = walkItin();
+    const faster = walkItin();
+    first.duration = 1200;
+    faster.duration = 600;
+    Reflect.deleteProperty(first.legs[0], "walkPolicy");
+    Reflect.deleteProperty(faster.legs[0], "walkPolicy");
+    post.mockResolvedValue(okResp([first, faster]));
+
+    const result = await planOtpWalk(origin, destination);
+
+    expect(result.map((route) => route.totalMinutes)).toEqual([20, 10]);
+  });
+
+  it("rejects known stairs and keeps a step-free alternative", async () => {
+    const stairs = walkItin();
+    const stepFree = walkItin();
+    Object.assign(stairs.legs[0].steps[0], {
+      feature: { __typename: "StairsUse" },
+    });
+    Reflect.deleteProperty(stairs.legs[0], "walkPolicy");
+    Reflect.deleteProperty(stepFree.legs[0], "walkPolicy");
+    stepFree.duration = 900;
+    post.mockResolvedValue(okResp([stairs, stepFree]));
+
+    const result = await planOtpWalkDetailed(origin, destination, {
+      mode: "normal",
+      avoidStairs: true,
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.routes).toHaveLength(1);
+    expect(result.routes[0].totalMinutes).toBe(15);
+    expect(post.mock.calls[0][1].variables.wheelchair).toBe(false);
+  });
+
+  it("reports no route when every official candidate has forbidden stairs", async () => {
+    const itinerary = walkItin();
+    Object.assign(itinerary.legs[0].steps[0], {
+      feature: { __typename: "StairsUse" },
+    });
+    Reflect.deleteProperty(itinerary.legs[0], "walkPolicy");
+    post.mockResolvedValue(okResp([itinerary]));
+
+    expect(
+      await planOtpWalkDetailed(origin, destination, { mode: "wheelchair" }),
+    ).toEqual({ status: "no_route", routes: [] });
+  });
+
+  it("retains wheelchair routing when stairs are explicitly permitted", async () => {
+    const itinerary = walkItin();
+    Object.assign(itinerary.legs[0].steps[0], {
+      feature: { __typename: "StairsUse" },
+    });
+    Reflect.deleteProperty(itinerary.legs[0], "walkPolicy");
+    post.mockResolvedValue(okResp([itinerary]));
+
+    expect(
+      (
+        await planOtpWalkDetailed(origin, destination, {
+          mode: "wheelchair",
+          avoidStairs: false,
+        })
+      ).status,
+    ).toBe("ok");
+    expect(post.mock.calls[0][1].variables.wheelchair).toBe(true);
+  });
+});
+
+describe("CSR fallback to the official OTP schema", () => {
+  const schemaMismatch = {
+    data: {
+      errors: [
+        "Validation error (UnknownType) : Unknown type 'DirectWalkProfile'",
+        "Validation error (UnknownArgument@[plan]) : Unknown field argument 'directWalkProfile'",
+        "Validation error (UnknownArgument@[plan]) : Unknown field argument 'avoidStairs'",
+        "Validation error (FieldUndefined@[plan/itineraries/legs/walkPolicy]) : Field 'walkPolicy' in type 'Leg' is undefined",
+      ].map((message) => ({
+        message,
+        extensions: { classification: "ValidationError" },
+      })),
+    },
+  };
+
+  beforeEach(() => {
+    vi.stubEnv("ROUTE_WALK_PLANNER", "csr");
+    post.mockReset();
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("uses official results after an exact schema mismatch, retaining the stair constraint without a policy receipt", async () => {
+    const stairs = walkItin();
+    const accessible = walkItin();
+    Reflect.deleteProperty(stairs.legs[0], "walkPolicy");
+    Reflect.deleteProperty(accessible.legs[0], "walkPolicy");
+    Object.assign(stairs.legs[0].steps[0], {
+      feature: { __typename: "StairsUse" },
+    });
+    post
+      .mockResolvedValueOnce(schemaMismatch)
+      .mockResolvedValueOnce(okResp([stairs, accessible]));
+
+    const result = await planOtpWalkDetailed(origin, destination, {
+      mode: "wheelchair",
+      avoidStairs: true,
+      deadline: Date.now() + 5000,
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.routes).toHaveLength(1);
+    expect(result.routes[0]).not.toHaveProperty("walkPolicy");
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(post.mock.calls[0][1].query).toContain("DirectWalkProfile");
+    expect(post.mock.calls[1][1].query).not.toContain("DirectWalkProfile");
+    expect(post.mock.calls[1][1].variables.wheelchair).toBe(true);
+    expect(post.mock.calls[1][2]?.timeout).toBeGreaterThan(0);
+    expect(post.mock.calls[1][2]?.timeout).toBeLessThanOrEqual(5000);
+  });
+
+  it("does not retry when schema errors include another validation failure", async () => {
+    post.mockResolvedValueOnce({
+      data: {
+        errors: [
+          ...schemaMismatch.data.errors,
+          {
+            message: "Validation error: another failure",
+            extensions: { classification: "ValidationError" },
+          },
+        ],
+      },
+    });
+    expect(await planOtpWalkDetailed(origin, destination)).toEqual({
+      status: "unavailable",
+      routes: [],
+    });
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry network or unrelated GraphQL failures", async () => {
+    post.mockRejectedValueOnce(new Error("offline"));
+    expect(await planOtpWalkDetailed(origin, destination)).toEqual({
+      status: "unavailable",
+      routes: [],
+    });
+    expect(post).toHaveBeenCalledTimes(1);
+    post.mockResolvedValueOnce(okResp([walkItin()]));
+    expect((await planOtpWalkDetailed(origin, destination)).status).toBe("ok");
+    post.mockClear();
+    post.mockResolvedValueOnce({ data: { errors: [{ message: "TIMEOUT!" }] } });
+    expect(await planOtpWalkDetailed(origin, destination)).toEqual({
+      status: "unavailable",
+      routes: [],
+    });
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("official walk response validation", () => {
+  const mismatch = {
+    data: {
+      errors: [
+        "Validation error (UnknownType) : Unknown type 'DirectWalkProfile'",
+        "Validation error (UnknownArgument@[plan]) : Unknown field argument 'directWalkProfile'",
+        "Validation error (UnknownArgument@[plan]) : Unknown field argument 'avoidStairs'",
+        "Validation error (FieldUndefined@[plan/itineraries/legs/walkPolicy]) : Field 'walkPolicy' in type 'Leg' is undefined",
+      ].map((message) => ({
+        message,
+        extensions: { classification: "ValidationError" },
+      })),
+    },
+  };
+  afterEach(() => vi.unstubAllEnvs());
+
+  it.each([
+    ["missing data", { data: {} }],
+    ["empty data", { data: { data: {} } }],
+    ["null plan", { data: { data: { plan: null } } }],
+    ["missing itineraries", { data: { data: { plan: {} } } }],
+    ["null itineraries", { data: { data: { plan: { itineraries: null } } } }],
+    ["invalid itineraries", { data: { data: { plan: { itineraries: {} } } } }],
+    ["null itinerary", { data: { data: { plan: { itineraries: [null] } } } }],
+    [
+      "itinerary missing legs",
+      { data: { data: { plan: { itineraries: [{ duration: 20 }] } } } },
+    ],
+    [
+      "null walking leg",
+      {
+        data: {
+          data: { plan: { itineraries: [{ duration: 20, legs: [null] }] } },
+        },
+      },
+    ],
+    [
+      "null walking step",
+      {
+        data: {
+          data: {
+            plan: {
+              itineraries: [
+                {
+                  ...walkItin(),
+                  legs: [{ ...walkItin().legs[0], steps: [null] }],
+                },
+              ],
+            },
+          },
+        },
+      },
+    ],
+  ])(
+    "treats %s as unavailable in official and fallback mode",
+    async (_label, malformed) => {
+      for (const planner of ["otp", "csr"] as const) {
+        vi.stubEnv("ROUTE_WALK_PLANNER", planner);
+        post.mockReset();
+        if (planner === "csr") post.mockResolvedValueOnce(mismatch);
+        post.mockResolvedValueOnce(malformed);
+        expect(await planOtpWalkDetailed(origin, destination)).toEqual({
+          status: "unavailable",
+          routes: [],
+        });
+        expect(post).toHaveBeenCalledTimes(planner === "csr" ? 2 : 1);
+        post.mockReset();
+        if (planner === "csr") post.mockResolvedValueOnce(mismatch);
+        post.mockResolvedValueOnce(okResp([]));
+        expect(await planOtpWalkDetailed(origin, destination)).toEqual({
+          status: "no_route",
+          routes: [],
+        });
+      }
+    },
+  );
 });

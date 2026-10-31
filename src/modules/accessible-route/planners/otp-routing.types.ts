@@ -81,6 +81,8 @@ export interface PlanOtpRouteOptions {
   limit?: number;
   /** Request step-free routing from OTP. Defaults to `mode === "wheelchair"`. */
   avoidStairs?: boolean;
+  /** Outdoor candidate browsing: retain stairs and add a same-speed walking reference. */
+  includeWalkingAlternatives?: boolean;
   /**
    * Epoch ms by which every OTP stage of this request must finish. Defaults to
    * now + ROUTE_PLAN_BUDGET_MS; optional stages are skipped once it passes.

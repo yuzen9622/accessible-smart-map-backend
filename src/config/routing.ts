@@ -53,6 +53,8 @@ export interface VenueRoutingConfig {
 }
 
 export interface RoutingConfig {
+  /** Outdoor walking planner selected by the deployment. */
+  walkPlanner: "csr" | "otp";
   /**
    * Total time one transit planning request may spend across every OTP stage
    * (primary, widening, stop snap, preferred mode, later service, the
@@ -70,6 +72,7 @@ export interface RoutingConfig {
 }
 
 const DEFAULTS: RoutingConfig = {
+  walkPlanner: "csr",
   planBudgetMs: 45_000,
   otpNumItineraries: 8,
   otpNumItinerariesWide: 15,
@@ -119,7 +122,12 @@ const VENUE_MAX_ELEVATOR_S = 600;
  */
 export function getRoutingConfig(): RoutingConfig {
   const d = DEFAULTS;
+  const walkPlanner = process.env.ROUTE_WALK_PLANNER ?? d.walkPlanner;
+  if (walkPlanner !== "csr" && walkPlanner !== "otp") {
+    throw new Error("Invalid ROUTE_WALK_PLANNER: expected csr or otp");
+  }
   return {
+    walkPlanner,
     planBudgetMs: readNumber(
       "ROUTE_PLAN_BUDGET_MS",
       d.planBudgetMs,

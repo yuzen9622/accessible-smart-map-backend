@@ -638,9 +638,7 @@ describe("OTP BUS leg sub-route identity", () => {
   });
 });
 
-// The OTP `wheelchair` flag is step-free routing, so it must follow the caller's
-// avoidStairs constraint — not the accessibility mode, which only tunes scoring.
-describe("planOtpRoute wheelchair flag follows avoidStairs", () => {
+describe("planOtpRoute keeps wheelchair and stairs independent", () => {
   beforeEach(() => {
     post.mockResolvedValue(okResp(threeDistinctTransitItineraries()));
   });
@@ -654,20 +652,86 @@ describe("planOtpRoute wheelchair flag follows avoidStairs", () => {
     expect(post.mock.calls[0][1].variables.wheelchair).toBe(false);
   });
 
-  it("turns step-free routing on for a non-wheelchair mode", async () => {
+  it("does not enable wheelchair routing for a non-wheelchair stairs constraint", async () => {
     await planOtpRoute(origin, destination, {
       mode: "elderly",
       avoidStairs: true,
     });
-    expect(post.mock.calls[0][1].variables.wheelchair).toBe(true);
+    expect(post.mock.calls[0][1].variables.wheelchair).toBe(false);
   });
 
-  it("lets an explicit false override wheelchair mode", async () => {
+  it("keeps wheelchair routing when stairs are explicitly allowed", async () => {
     await planOtpRoute(origin, destination, {
       mode: "wheelchair",
       avoidStairs: false,
     });
-    expect(post.mock.calls[0][1].variables.wheelchair).toBe(false);
+    expect(post.mock.calls[0][1].variables.wheelchair).toBe(true);
+  });
+
+  it("rejects a known stairs candidate without enabling wheelchair for another mode", async () => {
+    vi.stubEnv("ROUTE_WALK_PLANNER", "otp");
+    const base = transitItinerary("STAIRS");
+    const stairs = {
+      ...base,
+      legs: [
+        {
+          ...walkOnlyItinerary().legs[0],
+          steps: [{ feature: { __typename: "StairsUse" } }],
+        },
+        ...base.legs,
+      ],
+    };
+    post.mockResolvedValue(
+      okResp([stairs, ...threeDistinctTransitItineraries()]),
+    );
+    try {
+      const routes = await planOtpRoute(origin, destination, {
+        mode: "elderly",
+        avoidStairs: true,
+      });
+      expect(routes.map((route) => route.routeName)).toEqual([
+        "R1",
+        "R2",
+        "R3",
+      ]);
+      expect(post).toHaveBeenCalledTimes(1);
+      expect(post.mock.calls[0][1].variables.wheelchair).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("returns no route instead of a stairs-only answer in the official trial", async () => {
+    vi.stubEnv("ROUTE_WALK_PLANNER", "otp");
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const base = transitItinerary("STAIRS");
+    post.mockImplementationOnce(async () => {
+      now += 2_000;
+      return okResp([
+        {
+          ...base,
+          legs: [
+            {
+              ...walkOnlyItinerary().legs[0],
+              steps: [{ feature: { __typename: "StairsUse" } }],
+            },
+            ...base.legs,
+          ],
+        },
+      ]);
+    });
+    try {
+      const result = await planOtpRouteDetailed(origin, destination, {
+        mode: "wheelchair",
+        deadline: now + 1_000,
+      });
+      expect(result).toEqual({ status: "no_route", routes: [] });
+      expect(post.mock.calls[0][1].variables.wheelchair).toBe(true);
+    } finally {
+      clock.mockRestore();
+      vi.unstubAllEnvs();
+    }
   });
 });
 

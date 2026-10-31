@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 
 vi.mock("../../adapters/taipei-metro-notice.adapter", () => ({
@@ -30,6 +30,9 @@ vi.mock("./planners/otp-routing", async (importActual) => {
     isOtpCircuitOpen: vi.fn().mockReturnValue(false),
   };
 });
+vi.mock("./planners/valhalla-routing", () => ({
+  planValhallaRoute: vi.fn(async () => []),
+}));
 
 vi.mock("../a11y/a11y.service", async (importActual) => {
   const actual = await importActual<typeof import("../a11y/a11y.service")>();
@@ -81,12 +84,14 @@ vi.mock("../hazard-report/hazard-report.service", () => ({
 import { buildTestApp } from "../../../tests/helpers/test-helpers";
 import { planOtpWalkDetailed } from "./planners/otp-routing";
 import { findConfirmedHazardsWithin } from "../hazard-report/hazard-report.service";
+import { planAccessibleRouteFromRequest } from "./accessible-route.service";
 
 const app = buildTestApp();
 const URL = "/api/v1/a11y/accessible-route";
 const otpWalk = vi.mocked(planOtpWalkDetailed);
 
 beforeEach(() => {
+  vi.stubEnv("ROUTE_WALK_PLANNER", "otp");
   vi.clearAllMocks();
   vi.mocked(findConfirmedHazardsWithin).mockResolvedValue([]);
   otpWalk.mockResolvedValue({
@@ -138,9 +143,10 @@ beforeEach(() => {
     ],
   });
 });
+afterEach(() => vi.unstubAllEnvs());
 
-describe("POST /api/v1/a11y/accessible-route stairs degradation", () => {
-  it("carries wheelchair avoidStairs through the service and exposes degraded metadata", async () => {
+describe("POST /api/v1/a11y/accessible-route stairs restrictions", () => {
+  it("keeps labelled stairs when outdoor walking avoidance is a preference", async () => {
     const response = await request(app)
       .post(URL)
       .send({
@@ -155,13 +161,33 @@ describe("POST /api/v1/a11y/accessible-route stairs degradation", () => {
     expect(otpWalk).toHaveBeenCalledWith(
       { lat: 25.04, lng: 121.56 },
       { lat: 25.03, lng: 121.55 },
-      { mode: "wheelchair", avoidStairs: true },
+      expect.objectContaining({
+        mode: "wheelchair",
+        avoidStairs: false,
+        includeWalkingAlternatives: true,
+      }),
     );
-    expect(response.body.data.routes[0]).toMatchObject({
-      degraded: true,
-      warnings: ["目前候選路線仍包含無坡道樓梯，無法完全滿足避開樓梯條件"],
+    expect(
+      response.body.data.routes[0].legs[0].steps.some(
+        (step: { stairs?: boolean }) => step.stairs,
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps the hard condition for an internal exact destination", async () => {
+    const result = await planAccessibleRouteFromRequest({
+      origin: { latitude: 25.04, longitude: 121.56 },
+      destination: { latitude: 25.03, longitude: 121.55 },
+      travelMode: "walk",
+      mode: "wheelchair",
+      avoidStairs: true,
+      keepExactDestination: true,
     });
-    expect(response.body.data.routes[0].legs[0].steps[0].stairs).toBe(true);
+    expect(result).toMatchObject({
+      ok: false,
+      status: 422,
+      data: { reason: "NO_ACCESSIBLE_ROUTE" },
+    });
   });
 
   it("publishes degraded and stairs in the generated OpenAPI schemas", async () => {

@@ -583,6 +583,220 @@ function highestPrecedenceBlock(blocks: readonly SegmentBlock[]): SegmentBlock {
   return blocks[0];
 }
 
+function maxAlternativeDistance(base: number): number {
+  return Math.max(base * 1.6, base + 25);
+}
+
+function alternativeSegments(
+  graph: PedGraph,
+  served: Extract<SegmentOutcome, { status: "ok" }>[],
+  profile: CostProfile,
+  excludedEdges: ReadonlySet<number>,
+): Extract<SegmentOutcome, { status: "ok" }>[][] {
+  type ExclusionSearch = { segmentIndex: number; edges: number[] };
+  const alternatives: Extract<SegmentOutcome, { status: "ok" }>[][] = [];
+  const jobs: ExclusionSearch[] = [];
+  const searched = new Set<string>();
+  const found = new Set<string>();
+  const MAX_SEARCHES = 9;
+  const enqueue = (
+    segmentIndex: number,
+    route: RouteResult,
+    prefix: number[],
+    fractions: readonly number[] = [0.5, 0.25, 0.75, 0.1, 0.9],
+  ) => {
+    const edges = route.edgeAttrPath;
+    if (edges.length === 0) return;
+    const lengths = Array.from(edges, (edge, step) =>
+      edgeGroundDistanceM(graph, route.nodePath, edge, step),
+    );
+    const totalLength = lengths.reduce((sum, length) => sum + length, 0);
+    for (const fraction of fractions) {
+      const threshold = totalLength * fraction;
+      let cumulative = 0;
+      let position = 0;
+      while (
+        position < edges.length - 1 &&
+        cumulative + lengths[position] < threshold
+      ) {
+        cumulative += lengths[position];
+        position += 1;
+      }
+      const edge = edges[position];
+      const additions = [...new Set([...prefix, edge])].sort((a, b) => a - b);
+      const key = `${segmentIndex}:${additions.join(",")}`;
+      if (searched.has(key)) continue;
+      searched.add(key);
+      jobs.push({ segmentIndex, edges: additions });
+    }
+  };
+  for (const fraction of [0.5, 0.25, 0.75, 0.1, 0.9]) {
+    for (
+      let segmentIndex = 0;
+      segmentIndex < served.length;
+      segmentIndex += 1
+    ) {
+      enqueue(segmentIndex, served[segmentIndex].route, [], [fraction]);
+    }
+  }
+  const distance = (result: RouteResult) =>
+    result.edgeAttrPath.reduce(
+      (sum, attrIdx, step) =>
+        sum + edgeGroundDistanceM(graph, result.nodePath, attrIdx, step),
+      0,
+    );
+  const hasUnmeasuredIndoorDistance = (route: RouteResult) =>
+    route.edgeAttrPath.some((edge) => {
+      const length = graph.edgeLengthM[edge];
+      return (
+        (graph.edgeFlags[edge] & EDGE_FLAG.INDOOR) !== 0 &&
+        !(Number.isFinite(length) && length >= 0)
+      );
+    });
+  for (let i = 0; i < jobs.length && i < MAX_SEARCHES; i += 1) {
+    const { segmentIndex, edges } = jobs[i];
+    const segment = served[segmentIndex];
+    const excluded = new Set([...excludedEdges, ...edges]);
+    const route = aStar(
+      graph,
+      segment.origin.nodeId,
+      segment.destination.nodeId,
+      profile,
+      FORBID_FARE_ACCESS,
+      excluded,
+    );
+    if (route === null) continue;
+    const baseDistance = distance(segment.route);
+    if (
+      !hasUnmeasuredIndoorDistance(route) &&
+      !hasUnmeasuredIndoorDistance(segment.route) &&
+      distance(route) > maxAlternativeDistance(baseDistance)
+    )
+      continue;
+    const signature = `${segmentIndex}:${Array.from(route.edgeAttrPath).join(",")}`;
+    if (found.has(signature)) continue;
+    found.add(signature);
+    const candidate = [...served];
+    candidate[segmentIndex] = { ...segment, route };
+    alternatives.push(candidate);
+    enqueue(segmentIndex, route, edges);
+  }
+  const bySegment: (typeof served)[] = served.map(() => []);
+  for (const candidate of alternatives) {
+    const changed = candidate.findIndex(
+      (segment, index) => segment !== served[index],
+    );
+    if (changed >= 0) bySegment[changed].push(candidate[changed]);
+  }
+  const baseDistance = served.reduce(
+    (sum, segment) => sum + distance(segment.route),
+    0,
+  );
+  const totalDistanceLimit = maxAlternativeDistance(baseDistance);
+  const combinations: typeof alternatives = [];
+  const addCombination = (candidate: typeof served) => {
+    if (combinations.length >= 24) return;
+    const changed = candidate.filter(
+      (segment, index) => segment !== served[index],
+    ).length;
+    if (changed < 2) return;
+    if (
+      served.every((segment) => !hasUnmeasuredIndoorDistance(segment.route)) &&
+      candidate.every(
+        (segment) => !hasUnmeasuredIndoorDistance(segment.route),
+      ) &&
+      candidate.reduce((sum, segment) => sum + distance(segment.route), 0) >
+        totalDistanceLimit
+    )
+      return;
+    const signature = candidate
+      .map((segment) => Array.from(segment.route.edgeAttrPath).join(","))
+      .join("|");
+    if (combinationSignatures.has(signature)) return;
+    combinationSignatures.add(signature);
+    combinations.push(candidate);
+  };
+  const combinationSignatures = new Set<string>();
+  for (let offset = 0; offset < 3; offset++) {
+    addCombination(
+      served.map((segment, index) => {
+        const choices = bySegment[index];
+        return choices.length ? choices[offset % choices.length] : segment;
+      }),
+    );
+  }
+  for (let left = 0; left < bySegment.length; left++) {
+    for (let right = left + 1; right < bySegment.length; right++) {
+      for (const leftRoute of bySegment[left].slice(0, 2)) {
+        for (const rightRoute of bySegment[right].slice(0, 2)) {
+          const candidate = [...served];
+          candidate[left] = leftRoute;
+          candidate[right] = rightRoute;
+          addCombination(candidate);
+        }
+      }
+    }
+  }
+  alternatives.push(...combinations);
+  const signatureOf = (segments: typeof served) => {
+    const weights = new Map<string, number>();
+    segments.forEach((segment, segmentIndex) => {
+      segment.route.edgeAttrPath.forEach((edge, step) => {
+        const key = `${segmentIndex}:${edge}`;
+        const length = edgeGroundDistanceM(
+          graph,
+          segment.route.nodePath,
+          edge,
+          step,
+        );
+        weights.set(key, (weights.get(key) ?? 0) + length);
+      });
+    });
+    return weights;
+  };
+  const difference = (
+    left: Map<string, number>,
+    right: Map<string, number>,
+  ) => {
+    let leftLength = 0;
+    let rightLength = 0;
+    let sharedLength = 0;
+    for (const [key, length] of left) {
+      leftLength += length;
+      sharedLength += Math.min(length, right.get(key) ?? 0);
+    }
+    for (const length of right.values()) rightLength += length;
+    return Math.max(leftLength, rightLength) > 0
+      ? 1 - sharedLength / Math.max(leftLength, rightLength)
+      : 0;
+  };
+  const selected = [signatureOf(served)];
+  const remaining = alternatives.map((segments) => ({
+    segments,
+    signature: signatureOf(segments),
+  }));
+  const ranked: typeof alternatives = [];
+  while (remaining.length && ranked.length < 12) {
+    let bestIndex = 0;
+    let bestDifference = -1;
+    remaining.forEach((candidate, index) => {
+      const novelty = Math.min(
+        ...selected.map((existing) =>
+          difference(candidate.signature, existing),
+        ),
+      );
+      if (novelty > bestDifference) {
+        bestDifference = novelty;
+        bestIndex = index;
+      }
+    });
+    const [candidate] = remaining.splice(bestIndex, 1);
+    ranked.push(candidate.segments);
+    selected.push(candidate.signature);
+  }
+  return ranked;
+}
+
 /**
  * Plan a pure-walking route across ordered points on the CSR pedestrian graph.
  *
@@ -679,109 +893,169 @@ export async function planCsrWalkRoute(
     };
   }
 
-  const plans: CsrWalkPlan[] = [];
-  for (const segment of served) {
-    const { route, origin, destination, from, to } = segment;
-    const edgeIds = Array.from(
-      route.edgeAttrPath,
-      (attrIdx) => graph.edgeOriginalId[attrIdx],
-    );
-
-    let geometries: PedEdgeGeometry[];
-    try {
-      geometries = await findPedEdgeGeometries(
-        client,
-        graph.versionId,
-        edgeIds,
+  const materialized = new Map<(typeof served)[number], CsrWalkPlan>();
+  const materializePlans = async (
+    selected: typeof served,
+  ): Promise<CsrWalkResult> => {
+    const plans: CsrWalkPlan[] = [];
+    for (const segment of selected) {
+      const cached = materialized.get(segment);
+      if (cached) {
+        plans.push(cached);
+        continue;
+      }
+      const { route, origin, destination, from, to } = segment;
+      const edgeIds = Array.from(
+        route.edgeAttrPath,
+        (attrIdx) => graph.edgeOriginalId[attrIdx],
       );
-    } catch (error: unknown) {
-      return {
-        status: "unavailable",
-        reason:
-          error instanceof Error
-            ? error.message
-            : "selected edge geometry read failed",
-      };
-    }
 
-    const geometry = assembleGeometry(
-      graph,
-      route.nodePath,
-      route.edgeAttrPath,
-      geometries,
-    );
-    if (geometry.status === "unavailable") {
-      return { status: "unavailable", reason: geometry.reason };
-    }
-    const pathMeasurement = measurePath(
-      graph,
-      route.nodePath,
-      route.edgeAttrPath,
-      geometries,
-      profile,
-    );
-    if (pathMeasurement.status === "unavailable") {
-      return { status: "unavailable", reason: pathMeasurement.reason };
-    }
-    const connectorDistanceM = origin.distanceM + destination.distanceM;
-    const connectorDurationS = connectorDistanceM / profile.walkSpeedMps;
-    const connectors = addSnapConnectors(geometry.polyline, from, to);
-    const steps = buildCsrWalkSteps(
-      graph,
-      route.nodePath,
-      route.edgeAttrPath,
-      geometry.spans,
-      connectors.polyline,
-      connectors.indexOffset,
-      options.mode,
-    );
-    const stepStreetNames = buildCsrStepStreetNames(
-      graph,
-      route.edgeAttrPath,
-      steps,
-    );
+      let geometries: PedEdgeGeometry[];
+      try {
+        geometries = await findPedEdgeGeometries(
+          client,
+          graph.versionId,
+          edgeIds,
+        );
+      } catch (error: unknown) {
+        return {
+          status: "unavailable",
+          reason:
+            error instanceof Error
+              ? error.message
+              : "selected edge geometry read failed",
+        };
+      }
 
-    plans.push({
-      polyline: connectors.polyline,
-      distanceM: pathMeasurement.distanceM + connectorDistanceM,
-      durationS: pathMeasurement.durationS + connectorDurationS,
-      graphVersionId: graph.versionId,
-      approximateIndoorSegmentCount: geometry.approximateIndoorSegmentCount,
-      accessibility: summarizeAccessibility(
+      const geometry = assembleGeometry(
         graph,
         route.nodePath,
         route.edgeAttrPath,
-      ),
-      a11ySegments: buildA11ySegments(
+        geometries,
+      );
+      if (geometry.status === "unavailable") {
+        return { status: "unavailable", reason: geometry.reason };
+      }
+      const pathMeasurement = measurePath(
         graph,
+        route.nodePath,
+        route.edgeAttrPath,
+        geometries,
+        profile,
+      );
+      if (pathMeasurement.status === "unavailable") {
+        return { status: "unavailable", reason: pathMeasurement.reason };
+      }
+      const connectorDistanceM = origin.distanceM + destination.distanceM;
+      const connectorDurationS = connectorDistanceM / profile.walkSpeedMps;
+      const connectors = addSnapConnectors(geometry.polyline, from, to);
+      const steps = buildCsrWalkSteps(
+        graph,
+        route.nodePath,
         route.edgeAttrPath,
         geometry.spans,
+        connectors.polyline,
         connectors.indexOffset,
-      ),
-      steps,
-      ...(stepStreetNames.length > 0 ? { stepStreetNames } : {}),
-      sidewalkRampCount: sumSidewalkRampCount(graph, route.edgeAttrPath),
-      a11yPoints: collectRampPoints(graph, route.edgeAttrPath),
-      walkPolicy: {
-        version: WALK_POLICY_VERSION,
-        profile: options.mode === "wheelchair" ? "wheelchair" : "normal",
-        avoidStairs,
-        maxSlopePercent: null,
-        carriagewayMillimetres:
-          route.carriagewayMillimetres + Math.round(connectorDistanceM * 1000),
-        generalizedCost: route.totalCost + connectorDistanceM,
-      },
-      diagnostics: {
-        expandedNodes: route.expandedNodes,
-        reopenedNodes: route.reopenedNodes,
-        edgeCount: route.edgeAttrPath.length,
-        totalCostM: route.totalCost,
-        relaxationLevel: profile.relaxationLevel,
-        originSnapDistanceM: origin.distanceM,
-        destinationSnapDistanceM: destination.distanceM,
-      },
-    });
-  }
+        options.mode,
+      );
+      const stepStreetNames = buildCsrStepStreetNames(
+        graph,
+        route.edgeAttrPath,
+        steps,
+      );
 
-  return { status: "ok", plans };
+      const plan: CsrWalkPlan = {
+        polyline: connectors.polyline,
+        distanceM: pathMeasurement.distanceM + connectorDistanceM,
+        durationS: pathMeasurement.durationS + connectorDurationS,
+        graphVersionId: graph.versionId,
+        approximateIndoorSegmentCount: geometry.approximateIndoorSegmentCount,
+        accessibility: summarizeAccessibility(
+          graph,
+          route.nodePath,
+          route.edgeAttrPath,
+        ),
+        a11ySegments: buildA11ySegments(
+          graph,
+          route.edgeAttrPath,
+          geometry.spans,
+          connectors.indexOffset,
+        ),
+        steps,
+        ...(stepStreetNames.length > 0 ? { stepStreetNames } : {}),
+        sidewalkRampCount: sumSidewalkRampCount(graph, route.edgeAttrPath),
+        a11yPoints: collectRampPoints(graph, route.edgeAttrPath),
+        walkPolicy: {
+          version: WALK_POLICY_VERSION,
+          profile: options.mode === "wheelchair" ? "wheelchair" : "normal",
+          avoidStairs,
+          maxSlopePercent: null,
+          carriagewayMillimetres:
+            route.carriagewayMillimetres +
+            Math.round(connectorDistanceM * 1000),
+          generalizedCost: route.totalCost + connectorDistanceM,
+        },
+        diagnostics: {
+          expandedNodes: route.expandedNodes,
+          reopenedNodes: route.reopenedNodes,
+          edgeCount: route.edgeAttrPath.length,
+          totalCostM: route.totalCost,
+          relaxationLevel: profile.relaxationLevel,
+          originSnapDistanceM: origin.distanceM,
+          destinationSnapDistanceM: destination.distanceM,
+        },
+      };
+      materialized.set(segment, plan);
+      plans.push(plan);
+    }
+
+    return { status: "ok", plans };
+  };
+
+  const primary = await materializePlans(served);
+  if (primary.status !== "ok" || !options.includeAlternatives) return primary;
+  const alternatives: CsrWalkPlan[][] = [];
+  try {
+    const candidates = alternativeSegments(
+      graph,
+      served,
+      profile,
+      excludedEdges,
+    );
+    const primaryDistance = primary.plans.reduce(
+      (sum, plan) => sum + plan.distanceM,
+      0,
+    );
+    for (const candidate of candidates) {
+      if (alternatives.length >= 6) break;
+      try {
+        const result = await materializePlans(candidate);
+        if (result.status !== "ok") continue;
+        const candidateDistance = result.plans.reduce(
+          (sum, plan) => sum + plan.distanceM,
+          0,
+        );
+        if (
+          candidateDistance > maxAlternativeDistance(primaryDistance) ||
+          result.plans.some((plan, index) => {
+            const base = primary.plans[index];
+            return (
+              !base || plan.distanceM > maxAlternativeDistance(base.distanceM)
+            );
+          })
+        )
+          continue;
+        alternatives.push(result.plans);
+      } catch (error) {
+        console.warn(
+          "[csr-walk-planner] alternative materialization failed",
+          error,
+        );
+      }
+    }
+  } catch (error) {
+    // Alternative generation is best-effort and cannot invalidate the primary.
+    console.warn("[csr-walk-planner] alternative search failed", error);
+  }
+  return { ...primary, alternatives };
 }

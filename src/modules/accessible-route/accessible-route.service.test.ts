@@ -21,6 +21,13 @@ vi.mock("../environment/environment.service", () => ({
   getWeatherAndAirQuality: vi.fn().mockResolvedValue({}),
 }));
 
+vi.mock("../traffic/traffic-flow.service", () => ({
+  getLiveSectionsForBbox: vi.fn().mockResolvedValue(new Map()),
+}));
+vi.mock("../traffic/road-incident.service", () => ({
+  getActiveRoadIncidents: vi.fn().mockResolvedValue([]),
+}));
+
 // Mock the driving planner (dynamic-imported by the service) — override only
 // planValhallaRoute; keep ValhallaRoutingError so `instanceof` checks stay valid.
 vi.mock("./planners/valhalla-routing", () => ({
@@ -201,7 +208,7 @@ import { getTransitAlerts } from "../transit/alert.service";
 import type { PlanRouteResult } from "./accessible-route.types";
 import type { OtpRoutePlanResult } from "./planners/otp-routing";
 import type { CsrWalkPlan } from "./planners/pedestrian-a11y/csr-walk.types";
-import type { AccessibleRoute, WalkStep } from "../../types/route";
+import type { AccessibleRoute, WalkLeg, WalkStep } from "../../types/route";
 import type { VenueRoute } from "./venue-leg.types";
 
 /**
@@ -284,7 +291,10 @@ const otpTransitOk = (routes: unknown[]) => ({
     return route;
   }),
 });
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
+});
 const otpTransitNoRoute = (): OtpRoutePlanResult => ({
   status: "no_route" as const,
   routes: [],
@@ -346,6 +356,61 @@ beforeEach(() => {
     parksWithArea: [],
   });
   vi.mocked(findEntrancesOfParks).mockResolvedValue([]);
+});
+
+describe("road candidate diversity", () => {
+  it.each(["drive", "motorcycle"] as const)(
+    "keeps fast and short %s routes in the final response",
+    async (travelMode) => {
+      const alternatives = [
+        { id: "fast", minutes: 8, distance: 6000 },
+        { id: "ordinary", minutes: 10, distance: 5000 },
+        { id: "short", minutes: 18, distance: 3000 },
+        { id: "other", minutes: 20, distance: 7000 },
+      ].map((entry, index): AccessibleRoute => ({
+        routeId: entry.id,
+        routeName: travelMode === "drive" ? "開車" : "機車",
+        totalMinutes: entry.minutes,
+        transferCount: 0,
+        accessibilityHighlights: [],
+        legs: [
+          {
+            type: travelMode === "drive" ? "DRIVE" : "MOTORCYCLE",
+            from: { lat: 25.04, lng: 121.56 },
+            to: { lat: 25.03, lng: 121.55 },
+            distanceM: entry.distance,
+            durationMin: entry.minutes,
+            polyline: [
+              [121.56, 25.04],
+              [121.555 + index * 0.001, 25.035],
+              [121.55, 25.03],
+            ],
+          },
+        ],
+      }));
+      vi.mocked(planValhallaRoute).mockResolvedValue(alternatives);
+      const result = await planAccessibleRouteFromRequest({
+        ...driveRequest,
+        travelMode,
+      });
+      expect(result.ok).toBe(true);
+      expect(okData(result).routes).toHaveLength(3);
+      expect(okData(result).routes.map((route) => route.routeId)).toContain(
+        "fast",
+      );
+      expect(okData(result).routes.map((route) => route.routeId)).toContain(
+        "short",
+      );
+      expect(
+        okData(result).routes.every(
+          (route) =>
+            !route.accessibilityHighlights.some((text) =>
+              /最快|最短|最不塞/.test(text),
+            ),
+        ),
+      ).toBe(true);
+    },
+  );
 });
 
 describe("planAccessibleRouteFromRequest administrative city", () => {
@@ -859,7 +924,7 @@ const walkRequest = {
   destination: { latitude: 25.03, longitude: 121.55 },
 };
 
-const walkRoute = (): AccessibleRoute => ({
+const walkRoute = (): AccessibleRoute & { legs: WalkLeg[] } => ({
   routeId: "walk-0",
   routeName: "步行",
   totalMinutes: 10,
@@ -1013,6 +1078,525 @@ const csrWalkPlan = (
   },
 });
 
+describe("planAccessibleRouteFromRequest official OTP walking", () => {
+  beforeEach(() => {
+    vi.stubEnv("ROUTE_WALK_PLANNER", "otp");
+    vi.mocked(planValhallaRoute).mockResolvedValue([]);
+  });
+
+  it("uses official WALK without a native policy or a CSR fallback label", async () => {
+    const route = walkRoute();
+    delete route.walkPolicy;
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "ok",
+      routes: [route],
+    });
+    vi.mocked(planCsrWalkRoute).mockResolvedValue({
+      status: "ok",
+      plans: [csrWalkPlan()],
+    });
+
+    const result = await planAccessibleRouteFromRequest(walkRequest);
+
+    expect(result.ok).toBe(true);
+    expect(planCsrWalkRoute).not.toHaveBeenCalled();
+    expect(planOtpWalkDetailed).toHaveBeenCalledWith(
+      { lat: 25.04, lng: 121.56 },
+      { lat: 25.03, lng: 121.55 },
+      expect.objectContaining({
+        mode: "normal",
+        avoidStairs: false,
+        includeWalkingAlternatives: true,
+      }),
+    );
+    expect(okData(result).routes[0].walkPolicy).toBeUndefined();
+    expect(okData(result).routes[0].engine).toBeUndefined();
+    expect(okData(result).routes[0].degraded).toBeUndefined();
+  });
+
+  it("preserves the official preference order for an exact destination", async () => {
+    const preferred = walkRoute();
+    delete preferred.walkPolicy;
+    preferred.routeId = "preferred";
+    preferred.totalMinutes = 12;
+    const faster = walkRoute();
+    delete faster.walkPolicy;
+    faster.routeId = "faster";
+    faster.totalMinutes = 5;
+    faster.legs[0].polyline = [
+      [121.56, 25.04],
+      [121.56, 25.03],
+      [121.55, 25.03],
+    ];
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "ok",
+      routes: [preferred, faster],
+    });
+
+    const result = await planAccessibleRouteFromRequest({
+      ...walkRequest,
+      keepExactDestination: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(okData(result).routes.map((route) => route.totalMinutes)).toEqual([
+      12, 5,
+    ]);
+    expect(okData(result).routes.every((route) => !route.walkPolicy)).toBe(
+      true,
+    );
+  });
+
+  it("combines waypoint alternatives into distinct complete walking routes", async () => {
+    vi.mocked(planOtpWalkDetailed).mockImplementation(async (from, to) => {
+      const routes = [0, 1, 2].map((index) => {
+        const route = walkRoute();
+        delete route.walkPolicy;
+        route.routeId = `segment-${index}`;
+        route.legs[0].polyline = [
+          [from.lng, from.lat],
+          [(from.lng + to.lng) / 2 + index * 0.001, (from.lat + to.lat) / 2],
+          [to.lng, to.lat],
+        ];
+        return route;
+      });
+      return { status: "ok", routes };
+    });
+    const result = await planAccessibleRouteFromRequest({
+      ...walkRequest,
+      waypoints: [{ latitude: 25.035, longitude: 121.555 }],
+    });
+    expect(result.ok).toBe(true);
+    expect(okData(result).routes).toHaveLength(3);
+    expect(
+      okData(result).routes.every((route) => route.legs.length === 2),
+    ).toBe(true);
+    expect(
+      new Set(
+        okData(result).routes.map((route) =>
+          JSON.stringify(route.legs.map((leg) => leg.polyline)),
+        ),
+      ).size,
+    ).toBe(3);
+  });
+
+  it("filters routes with stairs before selecting the first three", async () => {
+    const routes = [0, 1, 2, 3].map((index) => {
+      const route = walkRoute();
+      delete route.walkPolicy;
+      route.legs[0].polyline = [
+        [121.56, 25.04],
+        [121.555 + index * 0.001, 25.035],
+        [121.55, 25.03],
+      ];
+      route.legs[0].steps = csrWalkStepsFixture(
+        [121.56, 25.04],
+        [121.55, 25.03],
+      );
+      if (index < 3) route.legs[0].steps[0].stairs = true;
+      return route;
+    });
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({ status: "ok", routes });
+    const result = await planAccessibleRouteFromRequest({
+      ...walkRequest,
+      avoidStairs: true,
+    });
+    expect(result.ok).toBe(true);
+    expect(okData(result).routes).toHaveLength(1);
+    const leg = okData(result).routes[0].legs[0];
+    expect(
+      leg.type === "WALK" && leg.steps?.every((step) => !step.stairs),
+    ).toBe(true);
+  });
+
+  it("does not let duplicate segment paths crowd out waypoint alternatives", async () => {
+    vi.mocked(planOtpWalkDetailed).mockImplementation(async (from, to) => {
+      const routes = [0, 0, 1].map((index) => {
+        const route = walkRoute();
+        delete route.walkPolicy;
+        route.legs[0].polyline = [
+          [from.lng, from.lat],
+          [(from.lng + to.lng) / 2 + index * 0.001, (from.lat + to.lat) / 2],
+          [to.lng, to.lat],
+        ];
+        return route;
+      });
+      return { status: "ok", routes };
+    });
+    const result = await planAccessibleRouteFromRequest({
+      ...walkRequest,
+      waypoints: [1, 2, 3, 4, 5].map((index) => ({
+        latitude: 25.04 - index / 600,
+        longitude: 121.56 - index / 600,
+      })),
+    });
+    expect(result.ok).toBe(true);
+    expect(okData(result).routes).toHaveLength(3);
+    expect(
+      okData(result).routes.every((route) => route.legs.length === 6),
+    ).toBe(true);
+  });
+
+  it("ranks segment hazards before limiting waypoint combinations", async () => {
+    const lngs = [121.56, 121.5567, 121.5533, 121.55];
+    const hazards = lngs.slice(0, -1).map((lng, index) => ({
+      id: `segment-hazard-${index}`,
+      hazardType: "obstacle" as const,
+      severity: "blocking" as const,
+      coordinates: [(lng + lngs[index + 1]) / 2, 25.03978] as [number, number],
+    }));
+    vi.mocked(findConfirmedHazardsWithin).mockResolvedValue(hazards);
+    vi.mocked(planOtpWalkDetailed).mockImplementation(async (from, to) => {
+      const blocked = walkRoute();
+      const clear = walkRoute();
+      delete blocked.walkPolicy;
+      delete clear.walkPolicy;
+      blocked.legs[0].polyline = [
+        [from.lng, from.lat],
+        [to.lng, to.lat],
+      ];
+      clear.legs[0].polyline = [
+        [from.lng, from.lat + 0.000009],
+        [to.lng, to.lat + 0.000009],
+      ];
+      return { status: "ok", routes: [blocked, clear] };
+    });
+    const result = await planAccessibleRouteFromRequest({
+      travelMode: "walk",
+      origin: { latitude: 25.04, longitude: lngs[0] },
+      destination: { latitude: 25.04, longitude: lngs[3] },
+      waypoints: [
+        { latitude: 25.04, longitude: lngs[1] },
+        { latitude: 25.04, longitude: lngs[2] },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    expect(okData(result).routes[0].legs).toHaveLength(3);
+    expect(
+      okData(result).routes[0].legs.every((leg) => leg.polyline[0][1] > 25.04),
+    ).toBe(true);
+    expect(okData(result).routes[0].hazardAdvisory?.blockingOnRoute ?? 0).toBe(
+      0,
+    );
+  });
+
+  it("keeps the waypoint combination with the fewest unique blocking hazards", async () => {
+    const at = (x: number, y: number): [number, number] => [
+      121.5 + x / (111195 * Math.cos((25 * Math.PI) / 180)),
+      25 + y / 111195,
+    ];
+    const p = at(0, 0);
+    const q = at(100, 0);
+    const hazards = [
+      {
+        id: "shared",
+        hazardType: "construction" as const,
+        severity: "blocking" as const,
+        coordinates: at(50, 0),
+      },
+      ...Array.from({ length: 6 }, (_, i) => ({
+        id: `separate-${i}`,
+        hazardType: "construction" as const,
+        severity: "blocking" as const,
+        coordinates: at(50, 40 + 60 * i),
+      })),
+    ];
+    vi.mocked(findConfirmedHazardsWithin).mockResolvedValue(hazards);
+    let segmentIndex = 0;
+    vi.mocked(planOtpWalkDetailed).mockImplementation(async () => {
+      const index = segmentIndex++;
+      const upper = walkRoute();
+      const direct = walkRoute();
+      delete upper.walkPolicy;
+      delete direct.walkPolicy;
+      const top = 40 + index * 60;
+      const upperPoints: [number, number][] = [p, at(0, top), at(100, top), q];
+      upper.legs[0].polyline = index % 2 ? upperPoints.reverse() : upperPoints;
+      direct.legs[0].polyline = index % 2 ? [q, p] : [p, q];
+      return { status: "ok", routes: [upper, direct] };
+    });
+    const latLng = ([longitude, latitude]: [number, number]) => ({
+      latitude,
+      longitude,
+    });
+    const result = await planAccessibleRouteFromRequest({
+      travelMode: "walk",
+      origin: latLng(p),
+      destination: latLng(p),
+      waypoints: [q, p, q, p, q].map(latLng),
+    });
+    expect(result.ok).toBe(true);
+    expect(okData(result).routes[0].hazardAdvisory?.blockingOnRoute).toBe(1);
+    expect(
+      okData(result).routes[0].hazardAdvisory?.onRoute.map(
+        (hazard) => hazard.id,
+      ),
+    ).toEqual(["shared"]);
+    expect(okData(result).routes[0].legs).toHaveLength(6);
+  });
+
+  it("preserves segment hazard evidence when the final refresh fails", async () => {
+    vi.stubEnv("ROUTE_WALK_PLANNER", "csr");
+    const hazard = {
+      id: "boundary-hazard",
+      hazardType: "obstacle" as const,
+      severity: "blocking" as const,
+      coordinates: [121.5575, 25.03978] as [number, number],
+    };
+    vi.mocked(findConfirmedHazardsWithin)
+      .mockResolvedValueOnce([hazard])
+      .mockRejectedValue(new Error("refresh unavailable"));
+    vi.mocked(planCsrWalkRoute).mockResolvedValue({
+      status: "outside_coverage",
+    });
+    vi.mocked(planOtpWalkDetailed).mockImplementation(async (from, to) => {
+      const blocked = walkRoute();
+      delete blocked.walkPolicy;
+      blocked.totalMinutes = 2;
+      blocked.legs[0].polyline = [
+        [from.lng, from.lat],
+        [to.lng, to.lat],
+      ];
+      if (from.lng < 121.556) return { status: "ok", routes: [blocked] };
+      const clear = walkRoute();
+      delete clear.walkPolicy;
+      clear.totalMinutes = 5;
+      clear.legs[0].polyline = [
+        [from.lng, from.lat + 0.000009],
+        [to.lng, to.lat + 0.000009],
+      ];
+      return { status: "ok", routes: [blocked, clear] };
+    });
+    const result = await planAccessibleRouteFromRequest({
+      travelMode: "walk",
+      origin: { latitude: 25.04, longitude: 121.56 },
+      destination: { latitude: 25.04, longitude: 121.55 },
+      waypoints: [{ latitude: 25.04, longitude: 121.555 }],
+    });
+    expect(result.ok).toBe(true);
+    expect(okData(result).routes[0].legs[0].polyline[0][1]).toBeGreaterThan(
+      25.04,
+    );
+    expect(okData(result).routes[0].hazardAdvisory?.blockingOnRoute ?? 0).toBe(
+      0,
+    );
+    expect(okData(result).routes[0].degraded).toBe(true);
+  });
+
+  it("retains the only step-free combination across multiple waypoint segments", async () => {
+    vi.mocked(planOtpWalkDetailed).mockImplementation(async (from, to) => {
+      const routes = [0, 1, 2].map((index) => {
+        const route = walkRoute();
+        delete route.walkPolicy;
+        route.legs[0].polyline = [
+          [from.lng, from.lat],
+          [to.lng, to.lat],
+        ];
+        route.legs[0].steps = csrWalkStepsFixture(
+          [from.lng, from.lat],
+          [to.lng, to.lat],
+        );
+        route.legs[0].steps[0].stairs = index < 2;
+        return route;
+      });
+      return { status: "ok", routes };
+    });
+    const result = await planAccessibleRouteFromRequest({
+      ...walkRequest,
+      avoidStairs: true,
+      waypoints: [
+        { latitude: 25.037, longitude: 121.557 },
+        { latitude: 25.033, longitude: 121.553 },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    expect(okData(result).routes).toHaveLength(1);
+    expect(okData(result).routes[0].legs).toHaveLength(3);
+    expect(
+      okData(result).routes[0].legs.every(
+        (leg) =>
+          leg.type === "WALK" && leg.steps?.every((step) => !step.stairs),
+      ),
+    ).toBe(true);
+  });
+
+  it("combines ordered waypoint segments without fabricating a policy", async () => {
+    vi.mocked(planOtpWalkDetailed).mockImplementation(async (from, to) => {
+      const route = walkRoute();
+      delete route.walkPolicy;
+      const leg = route.legs[0];
+      if (leg.type === "WALK")
+        leg.polyline = [
+          [from.lng, from.lat],
+          [to.lng, to.lat],
+        ];
+      return { status: "ok", routes: [route] };
+    });
+
+    const result = await planAccessibleRouteFromRequest({
+      ...walkRequest,
+      waypoints: [{ latitude: 25.035, longitude: 121.555 }],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(planCsrWalkRoute).not.toHaveBeenCalled();
+    expect(okData(result).routes[0].legs.map((leg) => leg.polyline)).toEqual([
+      [
+        [121.56, 25.04],
+        [121.555, 25.035],
+      ],
+      [
+        [121.555, 25.035],
+        [121.55, 25.03],
+      ],
+    ]);
+    expect(okData(result).routes[0].walkPolicy).toBeUndefined();
+  });
+
+  it.each([false, true])(
+    "rejects confirmed stairs for an exact destination (ramp tag %s)",
+    async (withRamp) => {
+      const route = walkRoute();
+      delete route.walkPolicy;
+      const leg = route.legs[0];
+      if (leg.type === "WALK") {
+        if (leg.steps?.[0]) leg.steps[0].stairs = true;
+        if (withRamp)
+          leg.a11yFacilities = [
+            {
+              osmId: "way/steps",
+              category: "ramp",
+              tags: { highway: "steps", "ramp:wheelchair": "yes" },
+              location: { type: "Point", coordinates: [121.56, 25.04] },
+              importedAt: new Date(FIXTURE_NOW),
+            },
+          ];
+      }
+      vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+        status: "ok",
+        routes: [route],
+      });
+
+      const result = await planAccessibleRouteFromRequest({
+        ...walkRequest,
+        keepExactDestination: true,
+        mode: "elderly",
+        avoidStairs: true,
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        data: { reason: ROUTE_REASON.NO_ACCESSIBLE_ROUTE },
+      });
+      expect(planCsrWalkRoute).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps an official transit WALK option without policy re-query or CSR replacement", async () => {
+    const route = walkRoute();
+    delete route.walkPolicy;
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue({
+      status: "ok",
+      routes: [route],
+    });
+
+    const result = await planAccessibleRouteFromRequest({
+      ...walkRequest,
+      travelMode: "transit",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(planCsrWalkRoute).not.toHaveBeenCalled();
+    expect(planOtpWalkDetailed).not.toHaveBeenCalled();
+    expect(okData(result).routes[0].walkPolicy).toBeUndefined();
+  });
+
+  it("does not restore a transit candidate with known stairs after hard exclusion", async () => {
+    const route = walkRoute();
+    delete route.walkPolicy;
+    const leg = route.legs[0];
+    if (leg.type === "WALK" && leg.steps?.[0]) leg.steps[0].stairs = true;
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue({
+      status: "ok",
+      routes: [route],
+    });
+
+    const result = await planAccessibleRouteFromRequest({
+      ...walkRequest,
+      travelMode: "transit",
+      mode: "elderly",
+      avoidStairs: true,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      data: { reason: ROUTE_REASON.NO_ACCESSIBLE_ROUTE },
+    });
+    expect(planCsrWalkRoute).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["wheelchair", false, 8.3, "ROUTE_SLOPE_SOFT_PREFERENCE"],
+    ["wheelchair", false, 10, "ROUTE_SLOPE_SOFT_PREFERENCE"],
+    ["wheelchair", true, 3, "ROUTE_SLOPE_SOFT_PREFERENCE"],
+    ["normal", true, 10, "ROUTE_SLOPE_WHEELCHAIR_DISABLED"],
+  ] as const)(
+    "reports %s mode independently of avoidStairs=%s without claiming a hard %s%% slope limit",
+    async (mode, avoidStairs, maxSlopePercent, code) => {
+      const route = walkRoute();
+      delete route.walkPolicy;
+      vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+        status: "ok",
+        routes: [route],
+      });
+
+      const result = await planAccessibleRouteFromRequest({
+        ...walkRequest,
+        mode,
+        avoidStairs,
+        maxSlopePercent,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(planOtpWalkDetailed).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({
+          mode,
+          avoidStairs: false,
+          includeWalkingAlternatives: true,
+        }),
+      );
+      expect(okData(result).routes[0].warningDetails).toEqual(
+        expect.arrayContaining([expect.objectContaining({ code })]),
+      );
+      expect(okData(result).slopeConstraint).toMatchObject({
+        requestedMaxPercent: maxSlopePercent,
+        enforced: false,
+      });
+      if (mode === "wheelchair")
+        expect(okData(result).slopeConstraint?.note).toBe(
+          ROUTE_WARNING.OTP_SOFT_SLOPE_LIMIT_NOT_ENFORCED,
+        );
+    },
+  );
+
+  it("preserves upstream unavailable as 503 without trying CSR", async () => {
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "unavailable",
+      routes: [],
+    });
+
+    const result = await planAccessibleRouteFromRequest(walkRequest);
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: ResponseCode.SERVICE_UNAVAILABLE,
+    });
+    expect(planCsrWalkRoute).not.toHaveBeenCalled();
+  });
+});
+
 describe("planAccessibleRouteFromRequest walk mode CSR selection", () => {
   it("uses a successful CSR plan, sets engine provenance, and preserves waypoint order", async () => {
     vi.mocked(planCsrWalkRoute).mockResolvedValue({
@@ -1035,7 +1619,7 @@ describe("planAccessibleRouteFromRequest walk mode CSR selection", () => {
         { lat: 25.035, lng: 121.555 },
         { lat: 25.03, lng: 121.55 },
       ],
-      { mode: "normal", avoidStairs: false },
+      { mode: "normal", avoidStairs: false, includeAlternatives: true },
     );
     expect(okData(res).routes[0].engine).toBe("pedestrian-a11y");
     expect(okData(res).routes[0].degraded).toBeUndefined();
@@ -1049,6 +1633,107 @@ describe("planAccessibleRouteFromRequest walk mode CSR selection", () => {
     ]);
     expect(vi.mocked(planOtpWalkDetailed)).not.toHaveBeenCalled();
     expect(vi.mocked(planValhallaRoute)).not.toHaveBeenCalled();
+  });
+
+  it("returns distinct CSR alternatives with lower-quality paths ranked after the primary", async () => {
+    const primary = csrWalkPlan();
+    const alternative = {
+      ...csrWalkPlan(),
+      polyline: [
+        [121.56, 25.04],
+        [121.56, 25.03],
+        [121.55, 25.03],
+      ] as [number, number][],
+      walkPolicy: { ...primary.walkPolicy, carriagewayMillimetres: 1000 },
+    };
+    const other = {
+      ...csrWalkPlan(),
+      polyline: [
+        [121.56, 25.04],
+        [121.55, 25.04],
+        [121.55, 25.03],
+      ] as [number, number][],
+      walkPolicy: { ...primary.walkPolicy, carriagewayMillimetres: 2000 },
+    };
+    vi.mocked(planCsrWalkRoute).mockResolvedValue({
+      status: "ok",
+      plans: [primary],
+      alternatives: [[other], [alternative]],
+    });
+
+    const result = await planAccessibleRouteFromRequest(walkRequest);
+
+    expect(result.ok).toBe(true);
+    expect(
+      okData(result).routes.map(
+        (route) => route.walkPolicy?.carriagewayMillimetres,
+      ),
+    ).toEqual([0, 1000, 2000]);
+    expect(
+      new Set(okData(result).routes.map((route) => route.routeId)).size,
+    ).toBe(3);
+  });
+
+  it("returns a different corridor instead of a short detour over the same walking route", async () => {
+    const start: [number, number] = [121.56, 25.04];
+    const end: [number, number] = [121.55, 25.04];
+    const primary = csrWalkPlan(start, end);
+    const smallDetour = {
+      ...csrWalkPlan(start, end),
+      polyline: [
+        start,
+        [121.557, 25.04],
+        [121.5569, 25.04005],
+        [121.5568, 25.04],
+        end,
+      ] as [number, number][],
+      walkPolicy: { ...primary.walkPolicy, generalizedCost: 810 },
+    };
+    const different = {
+      ...csrWalkPlan(start, end),
+      polyline: [start, [121.56, 25.042], [121.55, 25.042], end] as [
+        number,
+        number,
+      ][],
+      walkPolicy: { ...primary.walkPolicy, generalizedCost: 900 },
+    };
+    vi.mocked(planCsrWalkRoute).mockResolvedValue({
+      status: "ok",
+      plans: [primary],
+      alternatives: [[smallDetour], [different]],
+    });
+    const result = await planAccessibleRouteFromRequest(walkRequest);
+    expect(result.ok).toBe(true);
+    expect(okData(result).routes.map((route) => route.routeId)).toEqual([
+      "csr-walk-0",
+      "csr-walk-2",
+    ]);
+  });
+
+  it("returns one walking route without a count notice when the only alternative is very similar", async () => {
+    const start: [number, number] = [121.56, 25.04];
+    const end: [number, number] = [121.55, 25.04];
+    const primary = csrWalkPlan(start, end);
+    const similar = {
+      ...csrWalkPlan(start, end),
+      polyline: [
+        start,
+        [121.557, 25.04],
+        [121.5569, 25.04005],
+        [121.5568, 25.04],
+        end,
+      ] as [number, number][],
+    };
+    vi.mocked(planCsrWalkRoute).mockResolvedValue({
+      status: "ok",
+      plans: [primary],
+      alternatives: [[similar]],
+    });
+    const result = await planAccessibleRouteFromRequest(walkRequest);
+    expect(result.ok).toBe(true);
+    expect(okData(result).routes).toHaveLength(1);
+    expect(okData(result).routes[0].routeId).toBe("csr-walk-0");
+    expect(okData(result).routes[0].accessibilityHighlights).toEqual([]);
   });
 
   it("carries the CSR plan's a11ySegments onto the WalkLeg", async () => {
@@ -1291,6 +1976,30 @@ describe("planAccessibleRouteFromRequest walk mode CSR selection", () => {
     expect(steps?.every((step) => step.steepSlope === false)).toBe(true);
   });
 
+  it("reports an official OTP fallback wheelchair slope as a soft preference", async () => {
+    vi.mocked(planCsrWalkRoute).mockResolvedValue({
+      status: "unavailable",
+      reason: "graph unavailable",
+    });
+    const official = walkRoute();
+    delete official.walkPolicy;
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "ok",
+      routes: [official],
+    });
+    const result = await planAccessibleRouteFromRequest({
+      ...walkRequest,
+      mode: "wheelchair",
+      avoidStairs: true,
+      maxSlopePercent: 10,
+    });
+    expect(result.ok).toBe(true);
+    expect(okData(result).slopeConstraint).toMatchObject({
+      enforced: false,
+      note: ROUTE_WARNING.OTP_SOFT_SLOPE_LIMIT_NOT_ENFORCED,
+    });
+  });
+
   it("turns a CSR planner exception into an OTP fallback without a warning", async () => {
     vi.mocked(planCsrWalkRoute).mockRejectedValue(
       new Error("mock CSR planner failure"),
@@ -1332,47 +2041,27 @@ describe("planAccessibleRouteFromRequest walk mode CSR selection", () => {
     expect(vi.mocked(planValhallaRoute)).not.toHaveBeenCalled();
   });
 
-  for (const csrStatus of [
-    "fare_policy_blocked",
-    "accessibility_blocked",
-  ] as const) {
-    it(`falls back to OTP without a warning when CSR reports ${csrStatus}`, async () => {
-      vi.mocked(planCsrWalkRoute).mockResolvedValue({ status: csrStatus });
+  it.each([
+    ["fare_policy_blocked", ROUTE_REASON.NO_ROUTE],
+    ["accessibility_blocked", ROUTE_REASON.NO_ACCESSIBLE_ROUTE],
+  ] as const)(
+    "does not bypass CSR %s with another planner",
+    async (status, reason) => {
+      vi.mocked(planCsrWalkRoute).mockResolvedValue({ status });
       vi.mocked(planOtpWalkDetailed).mockResolvedValue({
         status: "ok",
-        routes: [walkRoute()] as any,
+        routes: [walkRoute()],
       });
-
-      const res = await planAccessibleRouteFromRequest(walkRequest);
-
-      expect(res.ok).toBe(true);
-      expect(okData(res).routes[0]).toMatchObject({
-        engine: "otp-fallback",
-        degraded: true,
-      });
-      expect(okData(res).routes[0].warnings).toBeUndefined();
-      expect(vi.mocked(planOtpWalkDetailed)).toHaveBeenCalledTimes(1);
-    });
-
-    it(`returns 422 NO_ROUTE when OTP also has no route after CSR ${csrStatus}`, async () => {
-      vi.mocked(planCsrWalkRoute).mockResolvedValue({ status: csrStatus });
-      vi.mocked(planOtpWalkDetailed).mockResolvedValue({
-        status: "no_route",
-        routes: [],
-      });
-
-      await expect(
-        planAccessibleRouteFromRequest(walkRequest),
-      ).resolves.toEqual({
+      const result = await planAccessibleRouteFromRequest(walkRequest);
+      expect(result).toMatchObject({
         ok: false,
         status: ResponseCode.UNPROCESSABLE_ENTITY,
-        error: ROUTE_MSG.NO_ROUTE,
-        data: { reason: ROUTE_REASON.NO_ROUTE },
+        data: { reason },
       });
-      expect(vi.mocked(planOtpWalkDetailed)).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(planValhallaRoute)).not.toHaveBeenCalled();
-    });
-  }
+      expect(planOtpWalkDetailed).not.toHaveBeenCalled();
+      expect(planValhallaRoute).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses a degraded OTP fallback without a warning for unsupported explicit constraints", async () => {
     vi.mocked(planCsrWalkRoute).mockResolvedValue({
@@ -1392,7 +2081,7 @@ describe("planAccessibleRouteFromRequest walk mode CSR selection", () => {
     expect(res.ok).toBe(true);
     expect(vi.mocked(planCsrWalkRoute)).toHaveBeenCalledWith(
       expect.any(Array),
-      { mode: "normal", avoidStairs: true },
+      { mode: "normal", avoidStairs: true, includeAlternatives: true },
     );
     expect(okData(res).routes[0]).toMatchObject({
       engine: "otp-fallback",
@@ -1797,8 +2486,7 @@ describe("planAccessibleRouteFromRequest walk mode OTP", () => {
       expect(okData(result).routes[0].walkPolicy?.carriagewayMillimetres).toBe(
         severity === "blocking" ? 1000 : 0,
       );
-      if (severity !== "blocking")
-        expect(okData(result).routes).toHaveLength(1);
+      expect(okData(result).routes).toHaveLength(2);
     },
   );
 
@@ -2816,6 +3504,98 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
         ],
         accessibilityHighlights: [],
       }) as any;
+
+    it.each([
+      ["fare_policy_blocked", ROUTE_REASON.NO_ROUTE],
+      ["accessibility_blocked", ROUTE_REASON.NO_ACCESSIBLE_ROUTE],
+    ] as const)(
+      "does not replace a %s walk-only answer through OTP",
+      async (status, reason) => {
+        vi.mocked(planOtpRouteDetailed).mockResolvedValue(
+          otpTransitOk([otpWalkOnly()]),
+        );
+        vi.mocked(planCsrWalkRoute).mockResolvedValue({ status });
+        const result = await planAccessibleRouteFromRequest({
+          travelMode: "transit",
+          origin: taipeiStation,
+          destination: nationalMuseum,
+        });
+        expect(result).toMatchObject({ ok: false, data: { reason } });
+        expect(planOtpWalkDetailed).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      ["fare_policy_blocked", ROUTE_REASON.NO_ROUTE],
+      ["accessibility_blocked", ROUTE_REASON.NO_ACCESSIBLE_ROUTE],
+    ] as const)(
+      "preserves %s for a walk-only journey with a waypoint",
+      async (status, reason) => {
+        vi.mocked(planOtpRouteDetailed).mockImplementation(async () =>
+          otpTransitOk([otpWalkOnly()]),
+        );
+        vi.mocked(planCsrWalkRoute).mockResolvedValue({ status });
+        const result = await planAccessibleRouteFromRequest({
+          travelMode: "transit",
+          origin: taipeiStation,
+          destination: nationalMuseum,
+          waypoints: [{ latitude: 25.045, longitude: 121.516 }],
+        });
+        expect(result).toMatchObject({ ok: false, data: { reason } });
+        expect(planOtpWalkDetailed).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(["fare_policy_blocked", "accessibility_blocked"] as const)(
+      "keeps transit when a walking candidate is %s",
+      async (status) => {
+        vi.mocked(planOtpRouteDetailed).mockResolvedValue(
+          otpTransitOk([rooseveltBusRoute, otpWalkOnly()]),
+        );
+        vi.mocked(planCsrWalkRoute).mockResolvedValue({ status });
+        const result = await planAccessibleRouteFromRequest({
+          travelMode: "transit",
+          origin: taipeiStation,
+          destination: nationalMuseum,
+        });
+        expect(result.ok).toBe(true);
+        expect(
+          okData(result).routes.every((route) =>
+            route.legs.some((leg) => leg.type !== "WALK"),
+          ),
+        ).toBe(true);
+        expect(planOtpWalkDetailed).not.toHaveBeenCalled();
+      },
+    );
+
+    it("retains official fallback provenance for a transit walk-only answer", async () => {
+      vi.mocked(planOtpRouteDetailed).mockResolvedValue(
+        otpTransitOk([otpWalkOnly()]),
+      );
+      vi.mocked(planCsrWalkRoute).mockResolvedValue({
+        status: "topology_disconnected",
+      });
+      const official = walkRoute();
+      delete official.walkPolicy;
+      vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+        status: "ok",
+        routes: [official],
+      });
+      const result = await planAccessibleRouteFromRequest({
+        travelMode: "transit",
+        origin: taipeiStation,
+        destination: nationalMuseum,
+        mode: "wheelchair",
+        avoidStairs: true,
+        maxSlopePercent: 10,
+      });
+      expect(result.ok).toBe(true);
+      expect(okData(result).routes[0].engine).toBe("otp-fallback");
+      expect(okData(result).slopeConstraint).toMatchObject({
+        enforced: false,
+        note: ROUTE_WARNING.OTP_SOFT_SLOPE_LIMIT_NOT_ENFORCED,
+      });
+    });
 
     it("labels a walk-only answer WALKING_BETTER only when OTP said so", async () => {
       vi.mocked(planOtpRouteDetailed).mockResolvedValue({
@@ -4119,6 +4899,31 @@ describe("confirmed hazard finalization", () => {
     ).toMatchObject({ value: departureTime, enumerable: false });
   });
 
+  it("keeps the safer representative when near-identical drive routes straddle a hazard boundary", async () => {
+    vi.mocked(findNearbyParking).mockResolvedValue([] as any);
+    vi.mocked(planValhallaRoute).mockResolvedValue([
+      groundDriveRoute("fast-but-blocked", 8, [
+        [121.56, 25.04027],
+        [121.561, 25.04027],
+      ]),
+      groundDriveRoute("slower-clear", 18, [
+        [121.56, 25.04028],
+        [121.561, 25.04028],
+      ]),
+    ] as any);
+    vi.mocked(findConfirmedHazardsWithin).mockResolvedValue([confirmedHazard]);
+
+    const result = await planAccessibleRouteFromRequest(driveRequest);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.routes).toHaveLength(1);
+    expect(result.data.routes[0]).toMatchObject({
+      routeId: "slower-clear",
+      hazardAdvisory: { onRoute: [] },
+    });
+  });
+
   it("applies the same pre-top-three hazard ranking to non-transit drive routes", async () => {
     vi.mocked(findNearbyParking).mockResolvedValue([] as any);
     vi.mocked(planValhallaRoute).mockResolvedValue([
@@ -4849,6 +5654,98 @@ describe("confirmed blocking hazard CSR alternatives", () => {
     expect(okData(res).routes[0].legs[0].polyline).toEqual(detour.polyline);
     expect(vi.mocked(planOtpWalkDetailed)).not.toHaveBeenCalled();
   });
+  it.each(["csr", "otp"] as const)(
+    "ranks a safer %s route before removing nearly identical paths",
+    async (engine) => {
+      const start: [number, number] = [121.56, 25.04];
+      const end: [number, number] = [121.55, 25.04];
+      const saferStart: [number, number] = [121.56, 25.040009];
+      const saferEnd: [number, number] = [121.55, 25.040009];
+      const nearHazard = {
+        id: "boundary-hazard",
+        hazardType: "obstacle" as const,
+        severity: "blocking" as const,
+        coordinates: [121.555, 25.03978] as [number, number],
+      };
+      vi.mocked(findConfirmedHazardsWithin).mockResolvedValue([nearHazard]);
+      if (engine === "csr") {
+        const blocked = csrWalkPlan(start, end);
+        const clear = csrWalkPlan(saferStart, saferEnd);
+        clear.walkPolicy = { ...blocked.walkPolicy, generalizedCost: 900 };
+        vi.mocked(planCsrWalkRoute)
+          .mockResolvedValueOnce({
+            status: "ok",
+            plans: [blocked],
+            alternatives: [[clear]],
+          })
+          .mockResolvedValueOnce({ status: "accessibility_blocked" });
+      } else {
+        const blocked = walkRoute();
+        const clear = walkRoute();
+        blocked.legs[0].polyline = [start, end];
+        clear.legs[0].polyline = [saferStart, saferEnd];
+        blocked.routeId = "blocked";
+        clear.routeId = "clear";
+        vi.mocked(planCsrWalkRoute).mockResolvedValue({
+          status: "outside_coverage",
+        });
+        vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+          status: "ok",
+          routes: [blocked, clear],
+        });
+      }
+      const result = await planAccessibleRouteFromRequest(walkRequest);
+      expect(result.ok).toBe(true);
+      expect(okData(result).routes).toHaveLength(1);
+      expect(okData(result).routes[0].legs[0].polyline).toEqual([
+        saferStart,
+        saferEnd,
+      ]);
+      expect(
+        okData(result).routes[0].hazardAdvisory?.blockingOnRoute ?? 0,
+      ).toBe(0);
+    },
+  );
+
+  it("keeps the clear route ahead of a similar route with a confirmed blocking hazard", async () => {
+    const start: [number, number] = [121.56, 25.04];
+    const end: [number, number] = [121.55, 25.04];
+    const base = csrWalkPlan(start, end);
+    const clear = {
+      ...csrWalkPlan(start, end),
+      polyline: [
+        start,
+        [121.5565, 25.04],
+        [121.5564, 25.0405],
+        [121.5556, 25.0405],
+        [121.5555, 25.04],
+        end,
+      ] as [number, number][],
+      walkPolicy: { ...base.walkPolicy, generalizedCost: 900 },
+    };
+    vi.mocked(findConfirmedHazardsWithin).mockResolvedValue([
+      {
+        id: "short-block",
+        hazardType: "obstacle",
+        severity: "blocking",
+        coordinates: [121.556, 25.04],
+      },
+    ]);
+    vi.mocked(planCsrWalkRoute)
+      .mockResolvedValueOnce({
+        status: "ok",
+        plans: [base],
+        alternatives: [[clear]],
+      })
+      .mockResolvedValueOnce({ status: "accessibility_blocked" });
+    const result = await planAccessibleRouteFromRequest(walkRequest);
+    expect(result.ok).toBe(true);
+    expect(okData(result).routes[0].routeId).toBe("csr-walk-1");
+    expect(okData(result).routes[0].hazardAdvisory?.blockingOnRoute ?? 0).toBe(
+      0,
+    );
+  });
+
   it("retains the original route and advisory if the alternative cannot be routed", async () => {
     vi.mocked(findConfirmedHazardsWithin).mockResolvedValue([hazard]);
     vi.mocked(planCsrWalkRoute)
@@ -5078,6 +5975,7 @@ describe("venue destinations (destinationVenuePlace)", () => {
   });
 
   it("routes outdoors to the chosen gate and attaches the indoor leg", async () => {
+    vi.stubEnv("ROUTE_WALK_PLANNER", "otp");
     vi.mocked(resolveVenueArrival).mockResolvedValue({
       ok: true,
       venueArrival,

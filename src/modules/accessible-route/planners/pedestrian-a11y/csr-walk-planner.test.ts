@@ -1385,3 +1385,538 @@ describe("isTopologyReachable", () => {
     expect(isTopologyReachable(corridorGraph(), 1, 1)).toBe(true);
   });
 });
+
+describe("CSR walking alternatives", () => {
+  it("finds distinct routes through the requested waypoint and keeps stair-free constraints", async () => {
+    const coords: [number, number][] = [
+      [TAIPEI_LNG, A_LAT],
+      [TAIPEI_LNG - 0.0003, B_LAT],
+      [TAIPEI_LNG, B_LAT],
+      [TAIPEI_LNG + 0.0003, B_LAT],
+      [TAIPEI_LNG, C_LAT],
+      [TAIPEI_LNG, C_LAT + 0.0005],
+      [TAIPEI_LNG + 0.0006, B_LAT],
+    ];
+    const edges: EdgeDefinition[] = [
+      { from: 0, to: 1, lengthM: 65 },
+      { from: 1, to: 4, lengthM: 65 },
+      { from: 0, to: 2, lengthM: 55 },
+      { from: 2, to: 4, lengthM: 55 },
+      { from: 0, to: 3, lengthM: 70 },
+      { from: 3, to: 4, lengthM: 70 },
+      { from: 4, to: 5, lengthM: 55 },
+      { from: 0, to: 6, lengthM: 75, edgeType: EDGE_TYPE.STEPS },
+      { from: 6, to: 4, lengthM: 75, edgeType: EDGE_TYPE.STEPS },
+    ];
+    const graph = graphFromEdges({
+      nodeLon: coords.map(([lng]) => lng),
+      nodeLat: coords.map(([, lat]) => lat),
+      edges,
+    });
+    serveGraph(graph);
+    const geometries = Object.fromEntries(
+      edges.map((edge, index) => [
+        String(1000 + index),
+        lineString([coords[edge.from], coords[edge.to]]),
+      ]),
+    );
+    const client = geometryClient(geometries);
+    const query = vi.spyOn(client, "query");
+    vi.mocked(getPedGraphClient).mockResolvedValue(client);
+    const result = await planCsrWalkRoute(
+      [originPoint, destinationPoint, { lat: coords[5][1], lng: coords[5][0] }],
+      { mode: "normal", avoidStairs: true, includeAlternatives: true },
+    );
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    const routes = [result.plans, ...(result.alternatives ?? [])];
+    expect(routes.length).toBeGreaterThanOrEqual(3);
+    expect(
+      new Set(routes.map((route) => JSON.stringify(route[0].polyline))).size,
+    ).toBe(routes.length);
+    for (const route of routes) {
+      expect(route).toHaveLength(2);
+      expect(route[0].polyline).not.toContainEqual(coords[6]);
+      expect(route[0].polyline.at(-1)).toEqual(coords[4]);
+      expect(route[1].polyline.at(-1)).toEqual(coords[5]);
+    }
+    const unchangedSegmentQueries = query.mock.calls.filter(([, params]) => {
+      const ids = params?.[1];
+      return Array.isArray(ids) && ids.includes("1006");
+    });
+    expect(unchangedSegmentQueries).toHaveLength(1);
+
+    const failingClient = geometryClient(geometries);
+    const originalQuery = failingClient.query;
+    vi.spyOn(failingClient, "query").mockImplementation((sql, params) => {
+      const ids = params?.[1];
+      if (Array.isArray(ids) && ids.includes("1000")) {
+        throw new Error("alternative geometry unavailable");
+      }
+      return originalQuery(sql, params);
+    });
+    vi.mocked(getPedGraphClient).mockResolvedValue(failingClient);
+    const partial = await planCsrWalkRoute(
+      [originPoint, destinationPoint, { lat: coords[5][1], lng: coords[5][0] }],
+      { mode: "normal", avoidStairs: true, includeAlternatives: true },
+    );
+    expect(partial.status).toBe("ok");
+    if (partial.status === "ok") {
+      expect(partial.plans).toHaveLength(2);
+      expect(partial.alternatives).toHaveLength(1);
+    }
+  });
+
+  it("finds a different long corridor when short edges dominate the primary path's edge count", async () => {
+    const coords: [number, number][] = Array.from({ length: 10 }, (_, i) => [
+      TAIPEI_LNG,
+      A_LAT + i * 0.00001,
+    ]);
+    coords.push([TAIPEI_LNG, C_LAT]);
+    const shortBypass = coords.length;
+    coords.push([TAIPEI_LNG - 0.0001, A_LAT + 0.00004]);
+    const longBypass = coords.length;
+    coords.push([TAIPEI_LNG + 0.0004, (coords[9][1] + C_LAT) / 2]);
+    const edges: EdgeDefinition[] = [
+      ...Array.from({ length: 9 }, (_, i) => ({
+        from: i,
+        to: i + 1,
+        lengthM: 1,
+      })),
+      { from: 9, to: 10, lengthM: 100 },
+      { from: 0, to: shortBypass, lengthM: 10 },
+      { from: shortBypass, to: 9, lengthM: 10 },
+      { from: 9, to: longBypass, lengthM: 60 },
+      { from: longBypass, to: 10, lengthM: 60 },
+    ];
+    const graph = graphFromEdges({
+      nodeLon: coords.map(([lng]) => lng),
+      nodeLat: coords.map(([, lat]) => lat),
+      edges,
+    });
+    serveGraph(graph);
+    vi.mocked(getPedGraphClient).mockResolvedValue(
+      geometryClient(
+        Object.fromEntries(
+          edges.map((edge, index) => [
+            String(1000 + index),
+            lineString([coords[edge.from], coords[edge.to]]),
+          ]),
+        ),
+      ),
+    );
+    const result = await planCsrWalkRoute([originPoint, destinationPoint], {
+      mode: "normal",
+      avoidStairs: true,
+      includeAlternatives: true,
+    });
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(
+      result.alternatives?.some((route) => {
+        const points = route[0].polyline;
+        return (
+          points.some(
+            ([lng, lat]) =>
+              lng === coords[longBypass][0] && lat === coords[longBypass][1],
+          ) &&
+          !points.some(
+            ([lng, lat]) =>
+              lng === coords[shortBypass][0] && lat === coords[shortBypass][1],
+          )
+        );
+      }),
+    ).toBe(true);
+  });
+
+  it("combines independently rerouted segments into a complete waypoint alternative", async () => {
+    const coords: [number, number][] = [
+      [TAIPEI_LNG, A_LAT],
+      [TAIPEI_LNG - 0.00015, (A_LAT + B_LAT) / 2],
+      [TAIPEI_LNG + 0.00015, (A_LAT + B_LAT) / 2],
+      [TAIPEI_LNG, B_LAT],
+      [TAIPEI_LNG - 0.00015, (B_LAT + C_LAT) / 2],
+      [TAIPEI_LNG + 0.00015, (B_LAT + C_LAT) / 2],
+      [TAIPEI_LNG, C_LAT],
+      [TAIPEI_LNG + 0.0003, (A_LAT + B_LAT) / 2],
+    ];
+    const edges: EdgeDefinition[] = [
+      { from: 0, to: 1, lengthM: 30 },
+      { from: 1, to: 3, lengthM: 30 },
+      { from: 0, to: 2, lengthM: 35 },
+      { from: 2, to: 3, lengthM: 35 },
+      { from: 3, to: 4, lengthM: 30 },
+      { from: 4, to: 6, lengthM: 30 },
+      { from: 3, to: 5, lengthM: 35 },
+      { from: 5, to: 6, lengthM: 35 },
+      { from: 0, to: 7, lengthM: 5, edgeType: EDGE_TYPE.STEPS },
+      { from: 7, to: 3, lengthM: 5, edgeType: EDGE_TYPE.STEPS },
+    ];
+    serveGraph(
+      graphFromEdges({
+        nodeLon: coords.map(([lng]) => lng),
+        nodeLat: coords.map(([, lat]) => lat),
+        edges,
+      }),
+    );
+    vi.mocked(getPedGraphClient).mockResolvedValue(
+      geometryClient(
+        Object.fromEntries(
+          edges.map((edge, index) => [
+            String(1000 + index),
+            lineString([coords[edge.from], coords[edge.to]]),
+          ]),
+        ),
+      ),
+    );
+    const result = await planCsrWalkRoute(
+      [originPoint, { lat: B_LAT, lng: TAIPEI_LNG }, destinationPoint],
+      { mode: "normal", avoidStairs: true, includeAlternatives: true },
+    );
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.plans[0].polyline).toContainEqual(coords[1]);
+    expect(result.plans[1].polyline).toContainEqual(coords[4]);
+    for (const route of [result.plans, ...(result.alternatives ?? [])]) {
+      expect(route[0].polyline).not.toContainEqual(coords[7]);
+      expect(route[0].steps.every((step) => !step.stairs)).toBe(true);
+      expect(route[1].steps.every((step) => !step.stairs)).toBe(true);
+    }
+    expect(
+      result.alternatives?.some(
+        (route) =>
+          route[0].polyline.some(
+            ([lng, lat]) => lng === coords[2][0] && lat === coords[2][1],
+          ) &&
+          route[1].polyline.some(
+            ([lng, lat]) => lng === coords[5][0] && lat === coords[5][1],
+          ),
+      ),
+    ).toBe(true);
+  });
+
+  it("limits the whole waypoint route even if each detoured segment is acceptable", async () => {
+    const coords: [number, number][] = [
+      [TAIPEI_LNG, A_LAT],
+      [TAIPEI_LNG - 0.00015, (A_LAT + B_LAT) / 2],
+      [TAIPEI_LNG + 0.00015, (A_LAT + B_LAT) / 2],
+      [TAIPEI_LNG, B_LAT],
+      [TAIPEI_LNG - 0.00015, (B_LAT + C_LAT) / 2],
+      [TAIPEI_LNG + 0.00015, (B_LAT + C_LAT) / 2],
+      [TAIPEI_LNG, C_LAT],
+    ];
+    const edges: EdgeDefinition[] = [
+      { from: 0, to: 1, lengthM: 5 },
+      { from: 1, to: 3, lengthM: 5 },
+      { from: 0, to: 2, lengthM: 15 },
+      { from: 2, to: 3, lengthM: 15 },
+      { from: 3, to: 4, lengthM: 5 },
+      { from: 4, to: 6, lengthM: 5 },
+      { from: 3, to: 5, lengthM: 15 },
+      { from: 5, to: 6, lengthM: 15 },
+    ];
+    serveGraph(
+      graphFromEdges({
+        nodeLon: coords.map(([lng]) => lng),
+        nodeLat: coords.map(([, lat]) => lat),
+        edges,
+      }),
+    );
+    vi.mocked(getPedGraphClient).mockResolvedValue(
+      geometryClient(
+        Object.fromEntries(
+          edges.map((edge, index) => [
+            String(1000 + index),
+            lineString([coords[edge.from], coords[edge.to]]),
+          ]),
+        ),
+      ),
+    );
+    const result = await planCsrWalkRoute(
+      [originPoint, { lat: B_LAT, lng: TAIPEI_LNG }, destinationPoint],
+      { mode: "normal", avoidStairs: true, includeAlternatives: true },
+    );
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.alternatives?.length).toBe(2);
+    expect(
+      result.alternatives?.every(
+        (route) =>
+          route.reduce((sum, segment) => sum + segment.distanceM, 0) <= 45,
+      ),
+    ).toBe(true);
+  });
+
+  it("checks the total visible distance of combined waypoint alternatives with indoor proxies", async () => {
+    const coords: [number, number][] = [
+      [TAIPEI_LNG, A_LAT],
+      [TAIPEI_LNG - 0.0001, (A_LAT + B_LAT) / 2],
+      [TAIPEI_LNG + 0.0001, (A_LAT + B_LAT) / 2],
+      [TAIPEI_LNG + 0.0001, (A_LAT + B_LAT) / 2],
+      [TAIPEI_LNG, B_LAT],
+      [TAIPEI_LNG - 0.0001, (B_LAT + C_LAT) / 2],
+      [TAIPEI_LNG + 0.0001, (B_LAT + C_LAT) / 2],
+      [TAIPEI_LNG, C_LAT],
+    ];
+    const edges: EdgeDefinition[] = [
+      { from: 0, to: 1, lengthM: 5 },
+      { from: 1, to: 4, lengthM: 5 },
+      { from: 0, to: 2, lengthM: 5 },
+      {
+        from: 2,
+        to: 3,
+        traversalTimeS: 20 / 1.3,
+        edgeType: EDGE_TYPE.INDOOR_WALKWAY,
+        flags: EDGE_FLAG.INDOOR,
+      },
+      { from: 3, to: 4, lengthM: 5 },
+      { from: 4, to: 5, lengthM: 5 },
+      { from: 5, to: 7, lengthM: 5 },
+      { from: 4, to: 6, lengthM: 15 },
+      { from: 6, to: 7, lengthM: 15 },
+    ];
+    serveGraph(
+      graphFromEdges({
+        nodeLon: coords.map(([lng]) => lng),
+        nodeLat: coords.map(([, lat]) => lat),
+        edges,
+      }),
+    );
+    vi.mocked(getPedGraphClient).mockResolvedValue(
+      geometryClient(
+        Object.fromEntries(
+          edges.map((edge, index) => [
+            String(1000 + index),
+            index === 3
+              ? null
+              : lineString([coords[edge.from], coords[edge.to]]),
+          ]),
+        ),
+      ),
+    );
+    const result = await planCsrWalkRoute(
+      [originPoint, { lat: B_LAT, lng: TAIPEI_LNG }, destinationPoint],
+      { mode: "normal", avoidStairs: true, includeAlternatives: true },
+    );
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.alternatives?.length).toBe(2);
+    expect(
+      result.alternatives?.some(
+        (route) => route[0].approximateIndoorSegmentCount === 1,
+      ),
+    ).toBe(true);
+    expect(
+      result.alternatives?.every(
+        (route) =>
+          route.reduce((sum, segment) => sum + segment.distanceM, 0) <= 45,
+      ),
+    ).toBe(true);
+  });
+
+  it("retains a reasonable alternate when the primary has a zero-geometry indoor proxy", async () => {
+    const coords: [number, number][] = [
+      [TAIPEI_LNG, A_LAT],
+      [TAIPEI_LNG, B_LAT],
+      [TAIPEI_LNG, B_LAT],
+      [TAIPEI_LNG, C_LAT],
+      [TAIPEI_LNG + 0.0002, B_LAT],
+    ];
+    const edges: EdgeDefinition[] = [
+      { from: 0, to: 1, lengthM: 5 },
+      {
+        from: 1,
+        to: 2,
+        traversalTimeS: 50,
+        edgeType: EDGE_TYPE.INDOOR_WALKWAY,
+        flags: EDGE_FLAG.INDOOR,
+      },
+      { from: 2, to: 3, lengthM: 5 },
+      { from: 0, to: 4, lengthM: 40 },
+      { from: 4, to: 3, lengthM: 40 },
+    ];
+    serveGraph(
+      graphFromEdges({
+        nodeLon: coords.map(([lng]) => lng),
+        nodeLat: coords.map(([, lat]) => lat),
+        edges,
+      }),
+    );
+    vi.mocked(getPedGraphClient).mockResolvedValue(
+      geometryClient(
+        Object.fromEntries(
+          edges.map((edge, index) => [
+            String(1000 + index),
+            index === 1
+              ? null
+              : lineString([coords[edge.from], coords[edge.to]]),
+          ]),
+        ),
+      ),
+    );
+    const result = await planCsrWalkRoute([originPoint, destinationPoint], {
+      mode: "normal",
+      avoidStairs: true,
+      includeAlternatives: true,
+    });
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.plans[0].distanceM).toBeCloseTo(75);
+    expect(
+      result.alternatives?.some((route) =>
+        route[0].polyline.some(
+          ([lng, lat]) => lng === coords[4][0] && lat === coords[4][1],
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects a long indoor proxy detour after measuring its visible distance", async () => {
+    const coords: [number, number][] = [
+      [TAIPEI_LNG, A_LAT],
+      [TAIPEI_LNG, B_LAT],
+      [TAIPEI_LNG + 0.0001, B_LAT],
+      [TAIPEI_LNG + 0.0001, B_LAT],
+      [TAIPEI_LNG, C_LAT],
+      [TAIPEI_LNG - 0.0001, B_LAT],
+    ];
+    const edges: EdgeDefinition[] = [
+      { from: 0, to: 1, lengthM: 30 },
+      { from: 1, to: 4, lengthM: 30 },
+      { from: 1, to: 5, lengthM: 20 },
+      { from: 5, to: 4, lengthM: 20 },
+      { from: 1, to: 2, lengthM: 5 },
+      {
+        from: 2,
+        to: 3,
+        traversalTimeS: 80,
+        edgeType: EDGE_TYPE.INDOOR_WALKWAY,
+        flags: EDGE_FLAG.INDOOR,
+      },
+      { from: 3, to: 4, lengthM: 5 },
+    ];
+    serveGraph(
+      graphFromEdges({
+        nodeLon: coords.map(([lng]) => lng),
+        nodeLat: coords.map(([, lat]) => lat),
+        edges,
+      }),
+    );
+    vi.mocked(getPedGraphClient).mockResolvedValue(
+      geometryClient(
+        Object.fromEntries(
+          edges.map((edge, index) => [
+            String(1000 + index),
+            index === 5
+              ? null
+              : lineString([coords[edge.from], coords[edge.to]]),
+          ]),
+        ),
+      ),
+    );
+    const result = await planCsrWalkRoute([originPoint, destinationPoint], {
+      mode: "normal",
+      avoidStairs: true,
+      includeAlternatives: true,
+    });
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.plans[0].distanceM).toBeCloseTo(60);
+    expect(
+      result.alternatives?.some((route) =>
+        route[0].polyline.some(
+          ([lng, lat]) => lng === coords[5][0] && lat === coords[5][1],
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      result.alternatives?.every((route) => route[0].distanceM <= 96),
+    ).toBe(true);
+    expect(
+      result.alternatives?.every(
+        (route) => route[0].approximateIndoorSegmentCount === 0,
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps a reasonable short-trip alternative without returning an excessive detour", async () => {
+    const coords: [number, number][] = [
+      [TAIPEI_LNG, A_LAT],
+      [TAIPEI_LNG - 0.0001, B_LAT],
+      [TAIPEI_LNG + 0.0001, B_LAT],
+      [TAIPEI_LNG + 0.0005, B_LAT],
+      [TAIPEI_LNG, C_LAT],
+    ];
+    const edges: EdgeDefinition[] = [
+      { from: 0, to: 1, lengthM: 35 },
+      { from: 1, to: 4, lengthM: 35 },
+      { from: 0, to: 2, lengthM: 50 },
+      { from: 2, to: 4, lengthM: 50 },
+      { from: 0, to: 3, lengthM: 110 },
+      { from: 3, to: 4, lengthM: 110 },
+    ];
+    serveGraph(
+      graphFromEdges({
+        nodeLon: coords.map(([lng]) => lng),
+        nodeLat: coords.map(([, lat]) => lat),
+        edges,
+      }),
+    );
+    vi.mocked(getPedGraphClient).mockResolvedValue(
+      geometryClient(
+        Object.fromEntries(
+          edges.map((edge, index) => [
+            String(1000 + index),
+            lineString([coords[edge.from], coords[edge.to]]),
+          ]),
+        ),
+      ),
+    );
+    const result = await planCsrWalkRoute([originPoint, destinationPoint], {
+      mode: "normal",
+      avoidStairs: true,
+      includeAlternatives: true,
+    });
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.plans[0].polyline).toContainEqual(coords[1]);
+    expect(
+      result.alternatives?.some((route) =>
+        route[0].polyline.some(
+          ([lng, lat]) => lng === coords[2][0] && lat === coords[2][1],
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      result.alternatives?.every((route) =>
+        route[0].polyline.every(
+          ([lng, lat]) => lng !== coords[3][0] || lat !== coords[3][1],
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps the original route when no alternative exists", async () => {
+    serveGraph(corridorGraph());
+    vi.mocked(getPedGraphClient).mockResolvedValue(
+      geometryClient({
+        "1000": lineString([
+          [TAIPEI_LNG, A_LAT],
+          [TAIPEI_LNG, B_LAT],
+        ]),
+        "1002": lineString([
+          [TAIPEI_LNG, B_LAT],
+          [TAIPEI_LNG, C_LAT],
+        ]),
+      }),
+    );
+    const result = await planCsrWalkRoute([originPoint, destinationPoint], {
+      mode: "normal",
+      includeAlternatives: true,
+    });
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    expect(result.plans).toHaveLength(1);
+    expect(result.alternatives).toEqual([]);
+  });
+});

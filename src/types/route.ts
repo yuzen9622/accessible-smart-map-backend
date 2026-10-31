@@ -231,6 +231,8 @@ export interface WalkLeg extends WalkA11yDetails, RouteSourceNames {
   minutesEst: number;
   polyline: [number, number][];
   a11yFacilities: IOsmA11y[];
+  /** Conservative matches to mapped sidewalks; omitted spans remain unclassified. */
+  sidewalkSegments?: { startIndex: number; endIndex: number }[];
   exitInfo?: {
     exitName: string;
     exitNumber: string;

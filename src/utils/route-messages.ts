@@ -112,10 +112,13 @@ const CATALOG: Record<string, { "zh-TW": string; en: string }> = {
       "大眾運輸/步行路線引擎目前固定以 8.3% 作為輪椅模式上限，無法套用您要求的更嚴格數值；且受限於 OSM 坡度標記稀疏，實際執行範圍有限",
     en: "The transit/walking engine uses a fixed 8.3% wheelchair slope limit, so it cannot apply a stricter requested value; sparse OSM slope data also limits enforcement.",
   },
+  ROUTE_SLOPE_SOFT_PREFERENCE: {
+    "zh-TW": "輪椅路線會考量坡度，但不保證符合您設定的坡度上限",
+    en: "Wheelchair routing considers slope, but does not guarantee your requested maximum slope.",
+  },
   ROUTE_SLOPE_WHEELCHAIR_DISABLED: {
-    "zh-TW":
-      "此路線未啟用輪椅模式（avoidStairs 為 false），伺服器未套用任何坡度限制",
-    en: "Wheelchair mode is not enabled for this route (avoidStairs is false), so the server applied no slope limit.",
+    "zh-TW": "此路線未啟用輪椅模式，伺服器未套用輪椅坡度限制",
+    en: "Wheelchair mode is not enabled for this route, so the server applied no wheelchair slope limit.",
   },
   ROUTE_SLOPE_SERVER_LIMIT: {
     "zh-TW": "伺服器已套用 {serverMaxPercent}% 上限（等於或寬於您的設定）",

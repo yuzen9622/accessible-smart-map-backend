@@ -19,9 +19,8 @@ const routerConfig = JSON.parse(
 describe("OTP transfer cache coverage", () => {
   const entries = routerConfig.transit.transferCacheRequests;
 
-  // The backend sends walkSpeed = WALK_SPEED_MPS[mode] and wheelchair = the
-  // resolved avoidStairs flag, which a profile or request can set either way
-  // for every mode. Any pair missing here blocks OTP for 40 s+ on first use.
+  // Keep both wheelchair flags warm for every supported walking speed.
+  // A cold speed/flag pair blocks OTP while its transfer cache is built.
   it.each(
     Object.entries(WALK_SPEED_MPS).flatMap(([mode, speed]) =>
       [true, false].map((wheelchair) => ({ mode, speed, wheelchair })),
@@ -55,6 +54,7 @@ describe("getRoutingConfig", () => {
 
   it("uses the documented defaults", () => {
     expect(getRoutingConfig()).toEqual({
+      walkPlanner: "csr",
       planBudgetMs: 45_000,
       otpNumItineraries: 8,
       otpNumItinerariesWide: 15,
@@ -72,6 +72,14 @@ describe("getRoutingConfig", () => {
     });
   });
 
+  it.each(["csr", "otp"] as const)(
+    "selects the %s walking planner",
+    (planner) => {
+      vi.stubEnv("ROUTE_WALK_PLANNER", planner);
+      expect(getRoutingConfig().walkPlanner).toBe(planner);
+    },
+  );
+
   it("reads overrides from the environment", () => {
     vi.stubEnv("ROUTE_PLAN_BUDGET_MS", "12000");
     vi.stubEnv("LOW_FLOOR_MIN_TYPE_COVERAGE", "0.5");
@@ -85,6 +93,7 @@ describe("getRoutingConfig", () => {
   });
 
   it.each([
+    ["ROUTE_WALK_PLANNER", "other"],
     ["ROUTE_PLAN_BUDGET_MS", "-1"],
     ["ROUTE_PLAN_BUDGET_MS", "fast"],
     ["OTP_NUM_ITINERARIES", "2.5"],

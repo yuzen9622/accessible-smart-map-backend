@@ -129,6 +129,9 @@ export interface PlanRoadRouteOptions {
   departureTime?: Date;
   mode?: AccessibilityMode;
   avoidStairs?: boolean;
+  /** General walking exploration, with the requested mode's speed. */
+  walkingCandidates?: boolean;
+  deadline?: number;
   /** True destination for the tail walk when the drive routes to a proxy arrival point (e.g. disabled parking). */
   finalWalkTarget?: LatLng;
   /** Closed-road points the route must avoid; dropped when no route survives them. */
@@ -193,6 +196,8 @@ export interface PlanRouteRequest {
 }
 
 export interface CanonicalPlanRouteRequest extends PlanRouteRequest {
+  /** Internal executed policy, retained by navigation and rerouting. */
+  walkStairsPreference?: boolean;
   origin: { latitude: number; longitude: number };
   destination: { latitude: number; longitude: number };
   userLocation: { latitude: number; longitude: number };

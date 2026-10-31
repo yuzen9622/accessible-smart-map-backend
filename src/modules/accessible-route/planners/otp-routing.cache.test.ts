@@ -316,12 +316,13 @@ describe("OTP transit preferences", () => {
     expect(mainCalls[1][1].query).toContain("modeWeight: $modeWeight");
   });
 
-  it("keeps the preference and wheelchair constraint across later search attempts", async () => {
+  it("keeps wheelchair routing across later attempts when stairs are allowed", async () => {
     post.mockResolvedValue(okResp([]));
     await planOtpRouteDetailed(origin, destination, {
       departureTime: departure,
       transitPreference: "rail",
       mode: "wheelchair",
+      avoidStairs: false,
     });
     const plans = post.mock.calls.filter(
       (call) => call[1].query === PLAN_QUERY,

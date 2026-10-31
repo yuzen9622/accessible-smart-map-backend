@@ -2,6 +2,7 @@ import { encode } from "@googlemaps/polyline-codec";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { computeValhallaRoutes } from "../../../adapters/valhalla.adapter";
 import { TRAFFIC_MSG } from "../../../constants/messages";
+import { VALHALLA_MAX_EXCLUDE_LOCATIONS } from "../../../config/valhalla";
 import { presentRouteMessages } from "../../../utils/route-messages";
 import { planOtpWalkDetailed } from "./otp-routing";
 import {
@@ -140,6 +141,50 @@ describe("planValhallaRoute", () => {
     ]);
     expect(step).not.toHaveProperty("instruction");
     expect(step).not.toHaveProperty("maneuver");
+  });
+
+  it("estimates exploratory walking candidates at the requested wheelchair speed", async () => {
+    compute.mockResolvedValue({ status: "OK", trips: [normalizedTrip] });
+    await planValhallaRoute(
+      { lat: 25, lng: 121 },
+      { lat: 25.1, lng: 121.1 },
+      {
+        travelMode: "walk",
+        mode: "wheelchair",
+        walkingCandidates: true,
+      },
+    );
+    expect(compute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        wheelchair: false,
+        walkingSpeedKmh: expect.closeTo(2.88),
+        computeAlternatives: true,
+      }),
+    );
+  });
+
+  it("marks stairs in Valhalla pedestrian guidance", async () => {
+    const stairManeuver = {
+      ...normalizedTrip.legs[0].maneuvers[0],
+      type: 40,
+      stairs: true,
+    };
+    compute.mockResolvedValue({
+      status: "OK",
+      trips: [
+        {
+          ...normalizedTrip,
+          legs: [{ ...normalizedTrip.legs[0], maneuvers: [stairManeuver] }],
+        },
+      ],
+    });
+    const [route] = await planValhallaRoute(
+      { lat: 25, lng: 121 },
+      { lat: 25.1, lng: 121.1 },
+      { travelMode: "walk" },
+    );
+    const leg = route.legs[0];
+    expect(leg.type === "WALK" && leg.steps?.[0].stairs).toBe(true);
   });
 
   it("omits whole-leg steps for out-of-bounds guidance", async () => {
@@ -317,29 +362,67 @@ describe("planValhallaRoute walk access legs", () => {
     expect(route.warnings).toBeUndefined();
   });
 
-  it("marks and wheelchair-costs a Valhalla connector fallback", async () => {
-    pedestrianRouter((origin, destination) => pedTripFrom(origin, destination));
+  it.each([
+    { mode: "wheelchair" as const, avoidStairs: true },
+    { mode: "wheelchair" as const, avoidStairs: false },
+    { mode: "normal" as const, avoidStairs: true },
+  ])(
+    "keeps the gap warning when step-free connector evidence is unavailable for $mode",
+    async (options) => {
+      pedestrianRouter((origin, destination) =>
+        pedTripFrom(origin, destination),
+      );
+
+      const [route] = await planValhallaRoute(ORIGIN, DSNAP, {
+        travelMode: "drive",
+        ...options,
+      });
+
+      expect(route.legs.map((leg) => leg.type)).toEqual(["DRIVE"]);
+      expect(route.accessibilityHighlights).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("無法建立可信步行路徑"),
+        ]),
+      );
+      expect(
+        compute.mock.calls.some(([params]) => params.costing === "pedestrian"),
+      ).toBe(false);
+    },
+  );
+
+  it("selects an OTP connector alternative that reaches both anchors", async () => {
+    otpWalk.mockImplementation(async (origin, destination) => {
+      const bad = otpTripFrom(origin, {
+        lat: destination.lat + 0.001,
+        lng: destination.lng,
+      });
+      const good = otpTripFrom(origin, destination);
+      return { status: "ok", routes: [bad.routes[0], good.routes[0]] };
+    });
+    compute.mockResolvedValue(
+      driveTrip([
+        [
+          [OSNAP.lat, OSNAP.lng],
+          [DSNAP.lat, DSNAP.lng],
+        ],
+      ]),
+    );
 
     const [route] = await planValhallaRoute(ORIGIN, DSNAP, {
       travelMode: "drive",
-      mode: "wheelchair",
       avoidStairs: true,
     });
 
-    const pedestrianCall = compute.mock.calls.find(
-      (call) => call[0].costing === "pedestrian",
+    expect(route.legs.map((leg) => leg.type)).toEqual(["WALK", "DRIVE"]);
+    const walk = route.legs[0];
+    expect(walk.type === "WALK" && near(walk.polyline.at(-1)!, OSNAP)).toBe(
+      true,
     );
-    expect(pedestrianCall?.[0].wheelchair).toBe(true);
-    expect(route.warnings).toBeUndefined();
-    expect(route.legs[0]).toMatchObject({
-      type: "WALK",
-      maxSlopePercent: null,
-      crossings: null,
-      crossingsWithCurbRamp: null,
-      minPathWidthCm: null,
-      surfaceType: "unknown",
-      restPoints: [],
-    });
+    expect(
+      route.accessibilityHighlights.some((h) =>
+        h.includes("無法建立可信步行路徑"),
+      ),
+    ).toBe(false);
   });
 
   it("prepends a head WALK when origin is off the drivable network", async () => {
@@ -434,9 +517,9 @@ describe("planValhallaRoute walk access legs", () => {
   });
 
   it("drops the connector when the pedestrian endpoint lands beyond tolerance", async () => {
-    // pedestrian path ends ~55m from the drive snap → out of the 25m gate
+    // Pedestrian path ends ~10 m from the drive snap, beyond the 5 m gate.
     pedestrianRouter((o) =>
-      pedTripFrom(o, { lat: OSNAP.lat + 0.0005, lng: OSNAP.lng }),
+      pedTripFrom(o, { lat: OSNAP.lat + 0.00009, lng: OSNAP.lng }),
     );
     const [route] = await planValhallaRoute(ORIGIN, DSNAP, {
       travelMode: "drive",
@@ -447,6 +530,58 @@ describe("planValhallaRoute walk access legs", () => {
         h.includes("無法建立可信步行路徑"),
       ),
     ).toBe(true);
+  });
+
+  it.each(["origin", "road"] as const)(
+    "rejects OTP geometry over 5 m from the %s anchor and retains its warning",
+    async (endpoint) => {
+      otpWalk.mockImplementation(async (origin, destination) =>
+        otpTripFrom(
+          endpoint === "origin"
+            ? { ...origin, lat: origin.lat + 0.00009 }
+            : origin,
+          endpoint === "road"
+            ? { ...destination, lat: destination.lat + 0.00009 }
+            : destination,
+        ),
+      );
+      pedestrianRouter(() => ({ status: "NO_ROUTE", trips: [] }));
+      const [route] = await planValhallaRoute(ORIGIN, DSNAP, {
+        travelMode: "drive",
+      });
+      expect(route.legs.map((leg) => leg.type)).toEqual(["DRIVE"]);
+      expect(route.accessibilityHighlights).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("無法建立可信步行路徑"),
+        ]),
+      );
+    },
+  );
+
+  it("accepts a genuine connector whose endpoints are within 5 m", async () => {
+    otpWalk.mockImplementation(async (origin, destination) =>
+      otpTripFrom(
+        { ...origin, lat: origin.lat + 0.00002 },
+        { ...destination, lat: destination.lat + 0.00002 },
+      ),
+    );
+    pedestrianRouter(() => ({ status: "NO_ROUTE", trips: [] }));
+    const [route] = await planValhallaRoute(ORIGIN, DSNAP, {
+      travelMode: "drive",
+    });
+    expect(route.legs.map((leg) => leg.type)).toEqual(["WALK", "DRIVE"]);
+  });
+
+  it("tries a connector for a road snap more than 5 m from the requested point", async () => {
+    const nearOrigin = { ...OSNAP, lat: OSNAP.lat + 0.00009 };
+    pedestrianRouter(() => ({ status: "NO_ROUTE", trips: [] }));
+    const [route] = await planValhallaRoute(nearOrigin, DSNAP, {
+      travelMode: "drive",
+    });
+    expect(route.legs.map((leg) => leg.type)).toEqual(["DRIVE"]);
+    expect(route.accessibilityHighlights).toEqual(
+      expect.arrayContaining([expect.stringContaining("無法建立可信步行路徑")]),
+    );
   });
 
   it("never emits a straight 2-point connector polyline (uses real pedestrian geometry only)", async () => {
@@ -569,6 +704,43 @@ describe("planValhallaRoute walk access legs", () => {
     ).toBe(true);
   });
 
+  it("warns when waypoint walks each approach the point but their endpoints are over 5 m apart", async () => {
+    const WP: LL = { lat: 25.03, lng: 121.03 };
+    const ARR: LL = { lat: 25.028, lng: 121.028 };
+    const DEP: LL = ARR;
+    otpWalk.mockImplementation(async (origin, destination) => {
+      if (Math.abs(destination.lat - WP.lat) < 1e-9) {
+        return otpTripFrom(origin, {
+          ...destination,
+          lat: destination.lat + 0.00004,
+        });
+      }
+      return otpTripFrom({ ...origin, lat: origin.lat - 0.00004 }, destination);
+    });
+    compute.mockResolvedValue(
+      driveTrip([
+        [
+          [OSNAP.lat, OSNAP.lng],
+          [ARR.lat, ARR.lng],
+        ],
+        [
+          [DEP.lat, DEP.lng],
+          [DSNAP.lat, DSNAP.lng],
+        ],
+      ]),
+    );
+    const [route] = await planValhallaRoute(OSNAP, DSNAP, {
+      travelMode: "drive",
+      waypoints: [WP],
+    });
+    expect(route.legs.map((leg) => leg.type)).toEqual(["DRIVE", "DRIVE"]);
+    expect(route.accessibilityHighlights).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("中途點 1 距可行車路段"),
+      ]),
+    );
+  });
+
   it("inserts neither waypoint WALK when the pair is not atomic (depart fails)", async () => {
     const WP: LL = { lat: 25.03, lng: 121.03 };
     const ARR: LL = { lat: 25.028, lng: 121.028 };
@@ -641,26 +813,49 @@ describe("planValhallaRoute walk access legs", () => {
     ).toBe(true);
   });
 
-  it("skips waypoint legs (head/tail only) when leg count does not match waypoint count", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    // 1 waypoint requested but Valhalla returns a single leg
-    compute.mockImplementation(async (p: any) =>
-      p.costing === "pedestrian"
-        ? pedTripFrom(p.origin, p.destination)
-        : driveTrip([
-            [
-              [OSNAP.lat, OSNAP.lng],
-              [DSNAP.lat, DSNAP.lng],
-            ],
-          ]),
+  it("rejects only candidates whose leg count does not match the requested waypoints", async () => {
+    const wp: LL = { lat: 25.03, lng: 121.03 };
+    const invalid = driveTrip([
+      [
+        [OSNAP.lat, OSNAP.lng],
+        [DSNAP.lat, DSNAP.lng],
+      ],
+    ]).trips[0];
+    const valid = driveTrip([
+      [
+        [OSNAP.lat, OSNAP.lng],
+        [wp.lat, wp.lng],
+      ],
+      [
+        [wp.lat, wp.lng],
+        [DSNAP.lat, DSNAP.lng],
+      ],
+    ]).trips[0];
+    compute.mockResolvedValue({ status: "OK", trips: [invalid, valid] });
+    const routes = await planValhallaRoute(OSNAP, DSNAP, {
+      travelMode: "drive",
+      waypoints: [wp],
+    });
+    expect(routes).toHaveLength(1);
+    expect(routes[0].legs.map((leg) => leg.type)).toEqual(["DRIVE", "DRIVE"]);
+    expect(routes[0].legs[0].polyline.at(-1)).toEqual([wp.lng, wp.lat]);
+    expect(routes[0].legs[1].polyline[0]).toEqual([wp.lng, wp.lat]);
+  });
+
+  it("returns no candidates when none contain all requested waypoint legs", async () => {
+    compute.mockResolvedValue(
+      driveTrip([
+        [
+          [OSNAP.lat, OSNAP.lng],
+          [DSNAP.lat, DSNAP.lng],
+        ],
+      ]),
     );
-    const [route] = await planValhallaRoute(ORIGIN, DEST, {
+    const routes = await planValhallaRoute(OSNAP, DSNAP, {
       travelMode: "drive",
       waypoints: [{ lat: 25.03, lng: 121.03 }],
     });
-    expect(route.legs.map((l) => l.type)).toEqual(["WALK", "DRIVE", "WALK"]);
-    expect(warn).toHaveBeenCalled();
-    warn.mockRestore();
+    expect(routes).toEqual([]);
   });
 
   it("keeps per-position labels correct when the same geometry is reused (no cache label bleed)", async () => {
@@ -777,8 +972,16 @@ describe("planValhallaRoute closed-road exclusions", () => {
         excludeLocations: CLOSURES,
       },
     );
-    expect(driveCalls()).toHaveLength(1);
+    expect(driveCalls()).toHaveLength(6);
     expect(driveCalls()[0][0]).toMatchObject({ excludeLocations: CLOSURES });
+    for (const [params] of driveCalls().slice(1)) {
+      expect(params.excludeLocations?.slice(0, CLOSURES.length)).toEqual(
+        CLOSURES,
+      );
+      expect(params.excludeLocations).toHaveLength(
+        params.distanceWeight ? CLOSURES.length : CLOSURES.length + 1,
+      );
+    }
   });
 
   it("retries without exclusions and warns when they remove every route", async () => {
@@ -790,7 +993,7 @@ describe("planValhallaRoute closed-road exclusions", () => {
       { lat: 25.1, lng: 121.1 },
       { travelMode: "drive", excludeLocations: CLOSURES },
     );
-    expect(driveCalls()).toHaveLength(2);
+    expect(driveCalls()).toHaveLength(7);
     expect(driveCalls()[1][0]).not.toHaveProperty("excludeLocations");
     expect(routes).not.toHaveLength(0);
     expect(routes[0].accessibilityHighlights).toContain(
@@ -825,5 +1028,179 @@ describe("planValhallaRoute closed-road exclusions", () => {
       ),
     ).resolves.toEqual([]);
     expect(driveCalls()).toHaveLength(2);
+  });
+});
+
+describe("road alternative searches", () => {
+  beforeEach(resetPlannerMocks);
+
+  it.each(["drive", "motorcycle"] as const)(
+    "keeps live traffic, waypoints and closures while finding distinct %s routes",
+    async (travelMode) => {
+      const origin = { lat: 25.041, lng: 121.567 };
+      const destination = { lat: 25.034, lng: 121.564 };
+      const waypoint = { lat: 25.04, lng: 121.565 };
+      const closures = [{ lat: 25.05, lng: 121.55 }];
+      const alternate = (offset: number) =>
+        driveTrip([
+          [points[0], [points[1][0] + offset, points[1][1]], points[1]],
+          [points[1], points[2]],
+        ]).trips[0];
+      const first = alternate(0);
+      const other = [alternate(0.002), alternate(-0.002)];
+      let roadCalls = 0;
+      compute.mockImplementation(async (params) => {
+        if (params.costing === "pedestrian")
+          return { status: "NO_ROUTE", trips: [] };
+        roadCalls++;
+        if (roadCalls === 1) return { status: "OK", trips: [first] };
+        if (roadCalls === 2) return { status: "OK", trips: [other[0]] };
+        if (roadCalls === 3) return { status: "OK", trips: [other[1]] };
+        return { status: "NO_ROUTE", trips: [] };
+      });
+
+      const routes = await planValhallaRoute(origin, destination, {
+        travelMode,
+        waypoints: [waypoint],
+        excludeLocations: closures,
+      });
+      expect(routes).toHaveLength(3);
+      expect(
+        new Set(routes.map((route) => JSON.stringify(route.legs))).size,
+      ).toBe(3);
+      const calls = compute.mock.calls.filter(
+        ([params]) => params.costing !== "pedestrian",
+      );
+      expect(calls.length).toBeGreaterThanOrEqual(3);
+      const distanceCalls = calls.filter(
+        ([params]) => params.distanceWeight === 0.7,
+      );
+      expect(distanceCalls).toHaveLength(1);
+      expect(distanceCalls[0][0].excludeLocations).toEqual(closures);
+      for (const [params] of calls.slice(1)) {
+        expect(params).toMatchObject({
+          dateTime: { type: 0 },
+          waypoints: [waypoint],
+          computeAlternatives: false,
+          costing: travelMode === "drive" ? "auto" : "motorcycle",
+        });
+        expect(params.excludeLocations?.[0]).toEqual(closures[0]);
+        expect(params.excludeLocations).toHaveLength(
+          params.distanceWeight ? 1 : 2,
+        );
+      }
+    },
+  );
+
+  it.each(["drive", "motorcycle"] as const)(
+    "retains a distance-weighted %s candidate even at the closure limit",
+    async (travelMode) => {
+      const closures = Array.from(
+        { length: VALHALLA_MAX_EXCLUDE_LOCATIONS },
+        (_, i) => ({
+          lat: 25.1 + i / 1000,
+          lng: 121.6,
+        }),
+      );
+      const shorter = {
+        ...normalizedTrip,
+        summary: { lengthKm: 1, timeSec: 140 },
+        legs: [
+          {
+            ...normalizedTrip.legs[0],
+            shapePolyline6: encode([points[0], [25.045, 121.56], points[2]], 6),
+          },
+        ],
+      };
+      compute.mockImplementation(async (params) => {
+        if (params.costing === "pedestrian")
+          return { status: "NO_ROUTE", trips: [] };
+        return {
+          status: "OK",
+          trips: [params.distanceWeight ? shorter : normalizedTrip],
+        };
+      });
+      const routes = await planValhallaRoute(
+        { lat: 25.041, lng: 121.567 },
+        { lat: 25.034, lng: 121.564 },
+        { travelMode, excludeLocations: closures },
+      );
+      expect(routes).toHaveLength(2);
+      const calls = compute.mock.calls.filter(
+        ([params]) => params.costing !== "pedestrian",
+      );
+      expect(calls).toHaveLength(2);
+      expect(calls[1][0]).toMatchObject({
+        distanceWeight: 0.7,
+        excludeLocations: closures,
+        dateTime: { type: 0 },
+      });
+    },
+  );
+
+  it("keeps the primary route when the distance-weighted request throws", async () => {
+    compute.mockImplementation(async (params) => {
+      if (params.costing === "pedestrian")
+        return { status: "NO_ROUTE", trips: [] };
+      if (params.distanceWeight) throw new Error("distance query failed");
+      if (params.excludeLocations?.length)
+        return { status: "NO_ROUTE", trips: [] };
+      return { status: "OK", trips: [normalizedTrip] };
+    });
+    const routes = await planValhallaRoute(
+      { lat: 25.041, lng: 121.567 },
+      { lat: 25.034, lng: 121.564 },
+      { travelMode: "drive" },
+    );
+    expect(routes).toHaveLength(1);
+  });
+
+  it("rejects an excessively long alternative", async () => {
+    let calls = 0;
+    const excessiveTrip = {
+      ...normalizedTrip,
+      summary: { ...normalizedTrip.summary, lengthKm: 4 },
+      legs: [
+        {
+          ...normalizedTrip.legs[0],
+          shapePolyline6: encode([points[0], [25.05, 121.55], points[2]], 6),
+        },
+      ],
+    };
+    compute.mockImplementation(async (params) => {
+      if (params.costing === "pedestrian")
+        return { status: "NO_ROUTE", trips: [] };
+      calls++;
+      return {
+        status: "OK",
+        trips: [calls === 1 ? normalizedTrip : excessiveTrip],
+      };
+    });
+    const routes = await planValhallaRoute(
+      { lat: 25.041, lng: 121.567 },
+      { lat: 25.034, lng: 121.564 },
+      { travelMode: "drive" },
+    );
+    expect(calls).toBeGreaterThan(1);
+    expect(routes).toHaveLength(1);
+  });
+
+  it("keeps the original route when optional searches fail or repeat it", async () => {
+    let calls = 0;
+    compute.mockImplementation(async (params) => {
+      if (params.costing === "pedestrian")
+        return { status: "NO_ROUTE", trips: [] };
+      calls++;
+      if (calls === 1 || calls === 2)
+        return { status: "OK", trips: [normalizedTrip] };
+      return { status: "UPSTREAM_ERROR", trips: [] };
+    });
+    const routes = await planValhallaRoute(
+      { lat: 25.041, lng: 121.567 },
+      { lat: 25.034, lng: 121.564 },
+      { travelMode: "drive" },
+    );
+    expect(calls).toBeGreaterThan(1);
+    expect(routes).toHaveLength(1);
   });
 });

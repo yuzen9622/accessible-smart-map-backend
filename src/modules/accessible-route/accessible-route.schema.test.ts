@@ -577,6 +577,39 @@ describe("AccessibleRouteSchema B12 WALK details", () => {
     expect(AccessibleRouteSchema.safeParse(route).success).toBe(true);
   });
 
+  it("preserves mapped sidewalk intervals through response validation", () => {
+    const parsed = AccessibleRouteSchema.parse({
+      ...route,
+      legs: [
+        { ...walkLeg, sidewalkSegments: [{ startIndex: 0, endIndex: 1 }] },
+      ],
+    });
+    expect(parsed.legs[0]).toHaveProperty("sidewalkSegments", [
+      { startIndex: 0, endIndex: 1 },
+    ]);
+  });
+
+  it.each([
+    { sidewalkSegments: [{ startIndex: 1, endIndex: 1 }] },
+    { sidewalkSegments: [{ startIndex: 0, endIndex: 2 }] },
+    {
+      sidewalkSegments: [
+        { startIndex: 0, endIndex: 1 },
+        { startIndex: 0, endIndex: 1 },
+      ],
+    },
+  ])(
+    "rejects sidewalk intervals outside or overlapping the original polyline",
+    ({ sidewalkSegments }) => {
+      expect(
+        AccessibleRouteSchema.safeParse({
+          ...route,
+          legs: [{ ...walkLeg, sidewalkSegments }],
+        }).success,
+      ).toBe(false);
+    },
+  );
+
   it("accepts a legal a11ySegments array on a WALK leg", () => {
     expect(
       AccessibleRouteSchema.safeParse({

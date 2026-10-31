@@ -50,6 +50,8 @@ export const ROUTE_WARNING = {
     "開車/機車路線引擎目前無地形高程資料，無法依坡度篩選路徑，您設定的坡度上限未被實際執行",
   SLOPE_LIMIT_STRICTER_THAN_SERVER_DEFAULT:
     "大眾運輸/步行路線引擎目前固定以 8.3% 作為輪椅模式上限，無法套用您要求的更嚴格數值；且受限於 OSM 坡度標記稀疏，實際執行範圍有限",
+  OTP_SOFT_SLOPE_LIMIT_NOT_ENFORCED:
+    "輪椅路線會考量坡度，但不保證符合您設定的坡度上限",
   CSR_SLOPE_LIMIT_NOT_ENFORCED:
     "台北 CSR 無障礙行人圖目前不會依您設定的任意坡度上限篩選路徑；回傳的坡度僅為已選路段的觀測值，您的坡度上限未被實際執行",
   HAZARD_DATA_UNAVAILABLE: "部分路段的障礙資料暫時無法更新，請留意現場狀況。",

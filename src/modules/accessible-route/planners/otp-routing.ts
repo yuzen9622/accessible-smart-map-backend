@@ -411,10 +411,53 @@ function otpGraphqlError(message: string | undefined): Error {
   return err;
 }
 
+const OfficialWalkItinerariesSchema = z.array(
+  z
+    .object({
+      duration: z.number().finite().nonnegative(),
+      walkDistance: z.number().finite().nonnegative().nullish(),
+      legs: z.array(
+        z
+          .object({
+            mode: z.string(),
+            startTime: z.number().finite(),
+            endTime: z.number().finite(),
+            duration: z.number().finite().nonnegative().nullish(),
+            distance: z.number().finite().nonnegative().nullish(),
+            from: z.object({ name: z.string().nullish() }).passthrough(),
+            to: z.object({ name: z.string().nullish() }).passthrough(),
+            legGeometry: z.object({ points: z.string().nullish() }).nullish(),
+            steps: z
+              .array(
+                z
+                  .object({
+                    distance: z.number().finite().nullish(),
+                    lat: z.number().finite().nullish(),
+                    lon: z.number().finite().nullish(),
+                    relativeDirection: z.string().nullish(),
+                    absoluteDirection: z.string().nullish(),
+                    streetName: z.string().nullish(),
+                    area: z.boolean().nullish(),
+                    bogusName: z.boolean().nullish(),
+                    feature: z
+                      .object({ __typename: z.string().nullish() })
+                      .nullish(),
+                  })
+                  .passthrough(),
+              )
+              .nullish(),
+          })
+          .passthrough(),
+      ),
+    })
+    .passthrough(),
+);
+
 async function postOtpPlan(
   variables: Record<string, unknown>,
   query = PLAN_QUERY,
   timeoutMs?: number,
+  requireWalkItineraries = false,
 ): Promise<OtpPlanResponse> {
   const baseUrl = process.env.OTP_BASE_URL ?? "http://localhost:8080";
   const capped = timeoutMs !== undefined && timeoutMs < OTP_TIMEOUT_MS;
@@ -451,6 +494,13 @@ async function postOtpPlan(
     errors?: { message?: string }[];
   };
   if (json.errors?.length) throw otpGraphqlError(json.errors[0]?.message);
+  if (
+    requireWalkItineraries &&
+    !OfficialWalkItinerariesSchema.safeParse(json.data?.plan?.itineraries)
+      .success
+  ) {
+    throw new Error("OTP walk response has invalid itineraries");
+  }
   return {
     itineraries: json.data?.plan?.itineraries ?? [],
     routingErrors: json.data?.plan?.routingErrors ?? [],
@@ -680,6 +730,38 @@ query Walk(
   }
 }`;
 
+type OtpWalkQueryResult =
+  | { source: "official"; itineraries: OtpItinerary[] }
+  | { source: "policy"; itineraries: OtpItinerary[] };
+
+const OFFICIAL_OTP_SCHEMA_ERRORS = [
+  "Unknown type 'DirectWalkProfile'",
+  "Unknown field argument 'directWalkProfile'",
+  "Unknown field argument 'avoidStairs'",
+  "Field 'walkPolicy' in type 'Leg' is undefined",
+] as const;
+
+function isOfficialOtpSchemaMismatch(
+  errors: { message?: string; extensions?: { classification?: string } }[],
+): boolean {
+  return (
+    OFFICIAL_OTP_SCHEMA_ERRORS.every((expected) =>
+      errors.some(
+        (error) =>
+          error.extensions?.classification === "ValidationError" &&
+          error.message?.includes(expected),
+      ),
+    ) &&
+    errors.every(
+      (error) =>
+        error.extensions?.classification === "ValidationError" &&
+        OFFICIAL_OTP_SCHEMA_ERRORS.some((expected) =>
+          error.message?.includes(expected),
+        ),
+    )
+  );
+}
+
 async function queryOtpWalk(
   origin: { lat: number; lng: number },
   destination: { lat: number; lng: number },
@@ -688,64 +770,96 @@ async function queryOtpWalk(
   walkSpeed: number,
   avoidStairs: boolean,
   timeoutMs?: number,
-): Promise<OtpItinerary[]> {
+): Promise<OtpWalkQueryResult> {
+  const variables = {
+    fromLat: origin.lat,
+    fromLon: origin.lng,
+    toLat: destination.lat,
+    toLon: destination.lng,
+    date: ymdDash(departure),
+    time: hhmm(departure.getTime()),
+    wheelchair,
+    walkSpeed,
+    numItineraries: OTP_NUM_ITINERARIES,
+  };
+  if (getRoutingConfig().walkPlanner === "otp") {
+    return {
+      source: "official",
+      itineraries: (
+        await postOtpPlan(variables, planQuery([]), timeoutMs, true)
+      ).itineraries,
+    };
+  }
+  const startedAt = Date.now();
   const baseUrl = process.env.OTP_BASE_URL ?? "http://localhost:8080";
   const response = await otpClient.post(
     `${baseUrl}/otp/routers/default/index/graphql`,
     {
       query: WALK_QUERY,
       variables: {
-        fromLat: origin.lat,
-        fromLon: origin.lng,
-        toLat: destination.lat,
-        toLon: destination.lng,
-        date: ymdDash(departure),
-        time: hhmm(departure.getTime()),
-        wheelchair,
+        ...variables,
         directWalkProfile: wheelchair ? "WHEELCHAIR" : "NORMAL",
         avoidStairs,
-        walkSpeed,
-        numItineraries: OTP_NUM_ITINERARIES,
       },
     },
     timeoutMs === undefined ? undefined : { timeout: timeoutMs },
   );
   const json = response.data as {
     data?: { plan?: { itineraries?: OtpItinerary[] } };
-    errors?: { message?: string }[];
+    errors?: { message?: string; extensions?: { classification?: string } }[];
   };
-  if (json.errors?.length) throw otpGraphqlError(json.errors[0]?.message);
+  if (json.errors?.length) {
+    if (!isOfficialOtpSchemaMismatch(json.errors)) {
+      throw otpGraphqlError(json.errors[0]?.message);
+    }
+    const remainingMs =
+      timeoutMs === undefined
+        ? undefined
+        : timeoutMs - (Date.now() - startedAt);
+    if (remainingMs !== undefined && remainingMs <= 0) {
+      throw new Error("OTP walk request exceeded its budget");
+    }
+    return {
+      source: "official",
+      itineraries: (
+        await postOtpPlan(variables, planQuery([]), remainingMs, true)
+      ).itineraries,
+    };
+  }
   if (!Array.isArray(json.data?.plan?.itineraries)) {
     throw new Error("OTP walk response omitted itineraries");
   }
-  return json.data.plan.itineraries.map((itinerary) => ({
-    ...itinerary,
-    legs: itinerary.legs.map((leg) => {
-      if (leg.mode !== "WALK") return leg;
-      const policy = NativeWalkPolicySchema.parse(leg.walkPolicy);
-      if (
-        policy.profile !== (wheelchair ? "wheelchair" : "normal") ||
-        policy.avoidStairs !== avoidStairs
-      ) {
-        throw new Error("OTP walk policy did not match requested conditions");
-      }
-      if (
-        avoidStairs &&
-        leg.steps?.some((step) => step.feature?.__typename === "StairsUse")
-      ) {
-        throw new Error("OTP walk violated its executed stair condition");
-      }
-      return { ...leg, walkPolicy: policy };
-    }),
-  }));
+  return {
+    source: "policy",
+    itineraries: json.data.plan.itineraries.map((itinerary) => ({
+      ...itinerary,
+      legs: itinerary.legs.map((leg) => {
+        if (leg.mode !== "WALK") return leg;
+        const policy = NativeWalkPolicySchema.parse(leg.walkPolicy);
+        if (
+          policy.profile !== (wheelchair ? "wheelchair" : "normal") ||
+          policy.avoidStairs !== avoidStairs
+        ) {
+          throw new Error("OTP walk policy did not match requested conditions");
+        }
+        if (
+          avoidStairs &&
+          leg.steps?.some((step) => step.feature?.__typename === "StairsUse")
+        ) {
+          throw new Error("OTP walk violated its executed stair condition");
+        }
+        return { ...leg, walkPolicy: policy };
+      }),
+    })),
+  };
 }
 
 /**
  * Plan a pure walking route via OTP2 (pedestrian), so `travelMode=walk` uses the
  * same street engine as the walking legs inside transit routing. Uses its own
  * circuit breaker, filters to genuinely walk-only itineraries with usable
- * geometry and executed sidewalk policy. Does
- * NOT run the transit stop-snap retry.
+ * geometry and the requested stairs condition. Does not run the transit
+ * stop-snap retry.
  *
  * @param origin The origin coordinate.
  * @param destination The destination coordinate.
@@ -756,7 +870,10 @@ async function queryOtpWalk(
 export async function planOtpWalk(
   origin: { lat: number; lng: number },
   destination: { lat: number; lng: number },
-  opts?: Pick<PlanOtpRouteOptions, "mode" | "avoidStairs" | "deadline">,
+  opts?: Pick<
+    PlanOtpRouteOptions,
+    "mode" | "avoidStairs" | "deadline" | "includeWalkingAlternatives"
+  >,
 ): Promise<AccessibleRoute[]> {
   return (await planOtpWalkDetailed(origin, destination, opts)).routes;
 }
@@ -801,7 +918,10 @@ export type OtpWalkPlanResult =
 export async function planOtpWalkDetailed(
   origin: { lat: number; lng: number },
   destination: { lat: number; lng: number },
-  opts?: Pick<PlanOtpRouteOptions, "mode" | "avoidStairs" | "deadline">,
+  opts?: Pick<
+    PlanOtpRouteOptions,
+    "mode" | "avoidStairs" | "deadline" | "includeWalkingAlternatives"
+  >,
 ): Promise<OtpWalkPlanResult> {
   if (
     walkPlanBreaker.isOpen() ||
@@ -811,17 +931,22 @@ export async function planOtpWalkDetailed(
   const mode = opts?.mode ?? "normal";
   const wheelchair = mode === "wheelchair";
   const avoidStairs = opts?.avoidStairs ?? wheelchair;
+  const browsing =
+    opts?.includeWalkingAlternatives === true &&
+    getRoutingConfig().walkPlanner === "otp";
+  const hardAvoidStairs = browsing ? false : avoidStairs;
   const walkSpeed = walkSpeedMps(mode);
+  const departure = new Date();
 
-  let itineraries: OtpItinerary[];
+  let queryResult: OtpWalkQueryResult;
   try {
-    itineraries = await queryOtpWalk(
+    queryResult = await queryOtpWalk(
       origin,
       destination,
-      new Date(),
+      departure,
       wheelchair,
       walkSpeed,
-      avoidStairs,
+      hardAvoidStairs,
       opts?.deadline === undefined
         ? undefined
         : Math.max(1, opts.deadline - Date.now()),
@@ -834,6 +959,35 @@ export async function planOtpWalkDetailed(
     return { status: "unavailable", routes: [] };
   }
 
+  const itineraries = [...queryResult.itineraries];
+  const primaryCount = itineraries.length;
+  const officialWalk = queryResult.source === "official";
+  if (
+    browsing &&
+    wheelchair &&
+    (opts?.deadline === undefined || Date.now() < opts.deadline)
+  ) {
+    try {
+      const reference = await queryOtpWalk(
+        origin,
+        destination,
+        departure,
+        false,
+        walkSpeed,
+        false,
+        opts?.deadline === undefined
+          ? undefined
+          : Math.max(1, opts.deadline - Date.now()),
+      );
+      if (reference.source === "official")
+        itineraries.push(...reference.itineraries);
+    } catch (error) {
+      console.warn(
+        "[otp-routing] optional walking reference unavailable",
+        error,
+      );
+    }
+  }
   if (!itineraries.length) {
     console.warn(
       "[otp-routing] walk query returned no itineraries (fail-soft to [])",
@@ -841,9 +995,10 @@ export async function planOtpWalkDetailed(
     );
   }
 
-  const out: (AccessibleRoute & { walkPolicy: WalkPolicy })[] = [];
-  for (const it of itineraries) {
+  const out: AccessibleRoute[] = [];
+  for (const [index, it] of itineraries.entries()) {
     if (!it.legs.length || !it.legs.every((l) => l.mode === "WALK")) continue;
+    if (!itineraryMeetsStairsConstraint(it, hardAvoidStairs)) continue;
     const legs = it.legs.map((l, i) =>
       walkLegFrom(l, i === 0, i === it.legs.length - 1),
     );
@@ -851,16 +1006,10 @@ export async function planOtpWalkDetailed(
     const totalWalkDistanceM = Number.isFinite(it.walkDistance)
       ? Math.round(it.walkDistance as number)
       : Math.round(legs.reduce((sum, l) => sum + l.distanceM, 0));
-    const policies = it.legs.map((leg) => leg.walkPolicy);
-    if (
-      !policies.every((policy): policy is WalkPolicy => policy !== undefined)
-    ) {
-      return { status: "unavailable", routes: [] };
-    }
-    const firstPolicy = policies[0];
-    if (!firstPolicy) return { status: "unavailable", routes: [] };
-    out.push({
-      routeId: `walk-${out.length}`,
+    const route: AccessibleRoute = {
+      routeId: browsing
+        ? `walk-${index < primaryCount ? "profile" : "reference"}-${index}`
+        : `walk-${out.length}`,
       routeName: "步行",
       totalMinutes: Math.max(1, Math.round(it.duration / 60)),
       transferCount: 0,
@@ -868,7 +1017,17 @@ export async function planOtpWalkDetailed(
       accessibilityHighlights: [],
       totalWalkDistanceM,
       attribution: WALK_OSM_ATTRIBUTION,
-      walkPolicy: {
+    };
+    if (!officialWalk) {
+      const policies = it.legs.map((leg) => leg.walkPolicy);
+      if (
+        !policies.every((policy): policy is WalkPolicy => policy !== undefined)
+      ) {
+        return { status: "unavailable", routes: [] };
+      }
+      const firstPolicy = policies[0];
+      if (!firstPolicy) return { status: "unavailable", routes: [] };
+      route.walkPolicy = {
         ...firstPolicy,
         carriagewayMillimetres: policies.reduce(
           (sum, policy) => sum + policy.carriagewayMillimetres,
@@ -878,17 +1037,21 @@ export async function planOtpWalkDetailed(
           (sum, policy) => sum + policy.generalizedCost,
           0,
         ),
-      },
-    });
+      };
+    }
+    out.push(route);
   }
-  const selected = out
-    .sort(
-      (a, b) =>
-        a.walkPolicy.carriagewayMillimetres -
-          b.walkPolicy.carriagewayMillimetres ||
-        a.walkPolicy.generalizedCost - b.walkPolicy.generalizedCost,
-    )
-    .slice(0, 3);
+  const selected = (
+    officialWalk
+      ? out
+      : out.sort(
+          (a, b) =>
+            (a.walkPolicy?.carriagewayMillimetres ?? Infinity) -
+              (b.walkPolicy?.carriagewayMillimetres ?? Infinity) ||
+            (a.walkPolicy?.generalizedCost ?? Infinity) -
+              (b.walkPolicy?.generalizedCost ?? Infinity),
+        )
+  ).slice(0, 3);
   return selected.length
     ? { status: "ok", routes: selected }
     : { status: "no_route", routes: [] };
@@ -1451,7 +1614,8 @@ export async function planOtpRoute(
  * route survives; a continuation failure may therefore preserve an existing
  * transit or walk-fallback route. Later searches cover an absolute departure
  * horizon, independent of the quick-search window sizes. A stairs-only answer
- * remains a fallback, but cannot stop the search for a step-free alternative.
+ * cannot stop the search for a step-free alternative; the official walk
+ * configuration rejects it when stairs are forbidden.
  *
  * @param origin The [lat, lng] origin.
  * @param destination The [lat, lng] destination.
@@ -1467,7 +1631,9 @@ export async function planOtpRouteDetailed(
 
   const departure = opts?.departureTime ?? new Date();
   const mode = opts?.mode ?? "normal";
-  const wheelchair = opts?.avoidStairs ?? mode === "wheelchair";
+  const wheelchair = mode === "wheelchair";
+  const avoidStairs = opts?.avoidStairs ?? wheelchair;
+  const officialWalk = getRoutingConfig().walkPlanner === "otp";
   const walkSpeed = walkSpeedMps(mode);
   const maxTransfers = opts?.maxTransfers;
   const initialWindowSec = Math.min(OTP_SEARCH_WINDOW_S, OTP_SEARCH_HORIZON_S);
@@ -1563,7 +1729,7 @@ export async function planOtpRouteDetailed(
       (it) =>
         it.legs.some(isTransitLeg) &&
         itineraryUsable(it, maxTransfers) &&
-        itineraryMeetsStairsConstraint(it, wheelchair),
+        itineraryMeetsStairsConstraint(it, avoidStairs),
     );
 
   // Keep a usable but stairs-only result for the existing degraded response
@@ -1591,9 +1757,9 @@ export async function planOtpRouteDetailed(
     // replacing an entirely stairs-only answer with a step-free one.
     if (
       walkFallbackItineraries.length &&
-      (!wheelchair ||
+      (!avoidStairs ||
         walkFallbackItineraries.some((it) =>
-          itineraryMeetsStairsConstraint(it, wheelchair),
+          itineraryMeetsStairsConstraint(it, avoidStairs),
         ))
     )
       return;
@@ -1603,7 +1769,7 @@ export async function planOtpRouteDetailed(
     if (!walkOnly.length) return;
     if (
       walkFallbackItineraries.length &&
-      !walkOnly.some((it) => itineraryMeetsStairsConstraint(it, wheelchair))
+      !walkOnly.some((it) => itineraryMeetsStairsConstraint(it, avoidStairs))
     )
       return;
     walkFallbackAttempt = attempt;
@@ -1639,7 +1805,7 @@ export async function planOtpRouteDetailed(
     !!preferredModes &&
     it.legs.some((leg) => preferredModes.includes(leg.mode)) &&
     itineraryUsable(it, maxTransfers) &&
-    itineraryMeetsStairsConstraint(it, wheelchair);
+    itineraryMeetsStairsConstraint(it, avoidStairs);
   let preferredSearch: Promise<OtpItinerary[]> | undefined;
   if (
     preferredModes &&
@@ -1681,7 +1847,7 @@ export async function planOtpRouteDetailed(
         .filter(
           (it) =>
             itineraryUsable(it, maxTransfers) &&
-            itineraryMeetsStairsConstraint(it, wheelchair),
+            itineraryMeetsStairsConstraint(it, avoidStairs),
         )
         .map((it) =>
           it.legs
@@ -2014,7 +2180,11 @@ export async function planOtpRouteDetailed(
   const isFutureScheduled =
     selectedAttempt.anchor.getTime() > departure.getTime();
   for (const [i, it] of itineraries.entries()) {
-    if (!itineraryUsable(it, maxTransfers)) continue;
+    if (
+      !itineraryUsable(it, maxTransfers) ||
+      (officialWalk && !itineraryMeetsStairsConstraint(it, avoidStairs))
+    )
+      continue;
     const transitOtpLegs = it.legs.filter(isTransitLeg);
     const preferredExtra = preferredExtras.has(it);
     const originalWalk = walkFallbackItineraries.includes(it);
@@ -2172,14 +2342,14 @@ export async function planOtpRouteDetailed(
       routes: out.length,
     }),
   );
-  const ordered = wheelchair ? rankByStairs(out) : out;
+  const ordered = avoidStairs ? rankByStairs(out) : out;
   const limit = opts?.limit ?? OTP_NUM_ITINERARIES_WIDE;
   const routes = reservePreferredRoute(
     retainEarliestFutureRoute(ordered, out, limit),
     ordered,
     limit,
     opts?.transitPreference,
-    (route) => !wheelchair || routeStairsCount(route) === 0,
+    (route) => !avoidStairs || routeStairsCount(route) === 0,
   );
   if (routes.length) {
     // Only OTP's own verdict means "walking is better"; a walk-only answer

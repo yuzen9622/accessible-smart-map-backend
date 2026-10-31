@@ -114,7 +114,7 @@ export type CsrWalkFailureReason =
   | "accessibility_blocked";
 
 export type CsrWalkResult =
-  | { status: "ok"; plans: CsrWalkPlan[] }
+  | { status: "ok"; plans: CsrWalkPlan[]; alternatives?: CsrWalkPlan[][] }
   | { status: "outside_coverage" }
   | { status: "unsupported_constraints" }
   | { status: "unavailable"; reason: string }
@@ -128,4 +128,6 @@ export interface CsrWalkOptions {
   avoidStairs?: boolean;
   /** Confirmed blocking observations for a request-local alternative search. */
   avoidPoints?: readonly LngLat[];
+  /** Request additional complete routes through the same ordered points. */
+  includeAlternatives?: boolean;
 }

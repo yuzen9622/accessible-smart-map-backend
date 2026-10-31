@@ -62,6 +62,61 @@ describe("computeValhallaRoutes", () => {
     }
   });
 
+  it("sends the requested walking speed without enabling wheelchair access for exploration", async () => {
+    post.mockResolvedValue({ data: { trip } });
+    await computeValhallaRoutes({
+      origin: { lat: 25, lng: 121 },
+      destination: { lat: 25.1, lng: 121.1 },
+      costing: "pedestrian",
+      walkingSpeedKmh: 2.88,
+      computeAlternatives: true,
+      timeoutMs: 1000,
+    });
+    expect(post.mock.calls[0][1]).toMatchObject({
+      costing_options: { pedestrian: { walking_speed: 2.88 } },
+      alternates: 2,
+    });
+    expect(post.mock.calls[0][1]).not.toMatchObject({
+      costing_options: { pedestrian: { type: "wheelchair" } },
+    });
+  });
+
+  it("preserves identifiable stair maneuvers from Valhalla", async () => {
+    const leg = trip.legs[0];
+    post.mockResolvedValue({
+      data: {
+        trip: {
+          ...trip,
+          legs: [
+            {
+              ...leg,
+              maneuvers: [
+                leg.maneuvers[0],
+                {
+                  ...leg.maneuvers[0],
+                  type: 40,
+                  instruction: "Take the stairs.",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+    const result = await computeValhallaRoutes({
+      origin: { lat: 25, lng: 121 },
+      destination: { lat: 25.1, lng: 121.1 },
+      costing: "pedestrian",
+    });
+    expect(result.status).toBe("OK");
+    if (result.status === "OK") {
+      expect(result.trips[0].legs[0].maneuvers?.map((m) => m.stairs)).toEqual([
+        false,
+        true,
+      ]);
+    }
+  });
+
   it.each(["pedestrian", "auto", "motorcycle"] as const)(
     "excludes ferries via costing_options for %s",
     async (costing) => {
@@ -80,6 +135,35 @@ describe("computeValhallaRoutes", () => {
       expect(body.costing_options[costing]).toEqual({
         exclude_ferries: true,
         use_ferry: 0,
+      });
+    },
+  );
+
+  it.each(["auto", "motorcycle"] as const)(
+    "requests a distance-weighted %s route while retaining live traffic and closures",
+    async (costing) => {
+      post.mockResolvedValue({ data: { trip } });
+      await computeValhallaRoutes({
+        origin: { lat: 25, lng: 121 },
+        destination: { lat: 25.1, lng: 121.1 },
+        waypoints: [{ lat: 25.05, lng: 121.05 }],
+        costing,
+        distanceWeight: 0.7,
+        dateTime: { type: 0 },
+        excludeLocations: [{ lat: 25.04, lng: 121.04 }],
+      });
+      expect(post.mock.calls[0][1]).toMatchObject({
+        costing,
+        date_time: { type: 0 },
+        costing_options: {
+          [costing]: { use_distance: 0.7, exclude_ferries: true, use_ferry: 0 },
+        },
+        exclude_locations: [{ lat: 25.04, lon: 121.04 }],
+        locations: [
+          { lat: 25, lon: 121, type: "break" },
+          { lat: 25.05, lon: 121.05, type: "break" },
+          { lat: 25.1, lon: 121.1, type: "break" },
+        ],
       });
     },
   );
