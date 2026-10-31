@@ -30,7 +30,6 @@ vi.mock("./a11y.orchestration", async () => {
     findBathroomFacilities: vi.fn(),
     findRampFacilities: vi.fn(),
     findElevatorFacilities: vi.fn(),
-    findNearby: vi.fn(),
     assessQuickAccess: vi.fn(),
   };
 });
