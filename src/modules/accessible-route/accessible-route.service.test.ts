@@ -3642,6 +3642,131 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
       });
     });
 
+    it.each([115, 10])(
+      "keeps transit ahead of a %i-minute walk when bus accessibility is unknown",
+      async (walkMinutes) => {
+        vi.mocked(planOtpRouteDetailed).mockResolvedValue(
+          otpTransitOk([
+            { ...rooseveltBusRoute, totalMinutes: 58 },
+            otpWalkOnly(walkMinutes),
+          ]),
+        );
+        const sidewalk = csrWalkPlan();
+        sidewalk.durationS = walkMinutes * 60;
+        sidewalk.distanceM = walkMinutes === 115 ? 5300 : 800;
+        vi.mocked(planCsrWalkRoute).mockResolvedValue({
+          status: "ok",
+          plans: [sidewalk],
+        });
+
+        const result = await planAccessibleRouteFromRequest({
+          travelMode: "transit",
+          mode: "wheelchair",
+          origin: taipeiStation,
+          destination: nationalMuseum,
+        });
+
+        const routes = okData(result).routes;
+        expect(routes).toHaveLength(2);
+        const bus = routes[0].legs.find((leg) => leg.type === "BUS");
+        expect(bus).toBeDefined();
+        expect(bus).not.toHaveProperty("isLowFloor");
+        expect(routes[0].totalMinutes).toBe(58);
+        expect(routes[1].legs.every((leg) => leg.type === "WALK")).toBe(true);
+        expect(routes[1].totalMinutes).toBe(walkMinutes);
+      },
+    );
+
+    it.each([false, true])(
+      "handles a walking alternative with three transit routes when blocked=%s",
+      async (blocked) => {
+        const buses = [20, 30, 40].map((minutes, index) => {
+          const route = structuredClone(rooseveltBusRoute);
+          route.routeId = `bus-${index}`;
+          route.routeName = `Bus ${index}`;
+          route.totalMinutes = minutes;
+          const bus = route.legs.find((leg) => leg.type === "BUS");
+          if (bus) bus.routeName = `Bus ${index}`;
+          return route;
+        });
+        vi.mocked(planOtpRouteDetailed).mockResolvedValue(
+          otpTransitOk([...buses, otpWalkOnly(115)]),
+        );
+        const sidewalk = csrWalkPlan([121.56, 25.04], [121.561, 25.04]);
+        sidewalk.durationS = 115 * 60;
+        if (blocked) {
+          vi.mocked(findConfirmedHazardsWithin).mockResolvedValue([
+            {
+              id: "walk-blocked",
+              hazardType: "construction",
+              severity: "blocking",
+              description: "人行道施工中",
+              coordinates: [121.5605, 25.04005],
+            },
+          ]);
+        }
+        vi.mocked(planCsrWalkRoute).mockResolvedValue({
+          status: "ok",
+          plans: [sidewalk],
+        });
+
+        const result = await planAccessibleRouteFromRequest({
+          travelMode: "transit",
+          mode: "wheelchair",
+          origin: taipeiStation,
+          destination: nationalMuseum,
+        });
+
+        const routes = okData(result).routes;
+        expect(routes).toHaveLength(3);
+        expect(
+          routes
+            .slice(0, 2)
+            .every((route) => route.legs.some((leg) => leg.type === "BUS")),
+        ).toBe(true);
+        if (blocked) {
+          expect(routes[2].legs.some((leg) => leg.type === "BUS")).toBe(true);
+          expect(routes.map((route) => route.totalMinutes)).toEqual([
+            20, 30, 40,
+          ]);
+        } else {
+          expect(routes[2].legs.every((leg) => leg.type === "WALK")).toBe(true);
+          expect(routes.slice(0, 2).map((route) => route.totalMinutes)).toEqual(
+            [20, 30],
+          );
+        }
+      },
+    );
+
+    it("keeps an unobstructed walk ahead of a blocked transit route", async () => {
+      vi.mocked(planOtpRouteDetailed).mockResolvedValue(
+        otpTransitOk([rooseveltBusRoute, otpWalkOnly(12)]),
+      );
+      vi.mocked(planCsrWalkRoute).mockResolvedValue({
+        status: "ok",
+        plans: [csrWalkPlan([121.56, 25.04], [121.561, 25.04])],
+      });
+      vi.mocked(findConfirmedHazardsWithin).mockResolvedValue([
+        {
+          id: "bus-blocked",
+          hazardType: "construction",
+          severity: "blocking",
+          description: "施工中",
+          coordinates: [121.5761, 24.98665],
+        },
+      ]);
+
+      const result = await planAccessibleRouteFromRequest({
+        travelMode: "transit",
+        origin: taipeiStation,
+        destination: nationalMuseum,
+      });
+
+      const routes = okData(result).routes;
+      expect(routes[0].legs.every((leg) => leg.type === "WALK")).toBe(true);
+      expect(routes[1].hazardAdvisory?.blockingOnRoute).toBe(1);
+    });
+
     it("compares a replacement sidewalk arrival with the retained transit arrival", async () => {
       vi.mocked(planOtpRouteDetailed).mockResolvedValue(
         otpTransitOk([

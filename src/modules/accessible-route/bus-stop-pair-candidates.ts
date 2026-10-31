@@ -784,7 +784,7 @@ export function groupRoutesByTransitSkeleton(
   }
   return [...groups.values()];
 }
-export function compareRoutesByArrival(
+export function compareRouteEligibility(
   a: AccessibleRoute,
   b: AccessibleRoute,
 ): number {
@@ -793,7 +793,18 @@ export function compareRoutesByArrival(
     (Object.getOwnPropertyDescriptor(a, "_advisoryEligibilityTier")?.value ??
       0) -
       (Object.getOwnPropertyDescriptor(b, "_advisoryEligibilityTier")?.value ??
-        0) ||
+        0)
+  );
+}
+
+export function compareRoutesByArrival(
+  a: AccessibleRoute,
+  b: AccessibleRoute,
+): number {
+  return (
+    compareRouteEligibility(a, b) ||
+    Number(a.legs.every((leg) => leg.type === "WALK")) -
+      Number(b.legs.every((leg) => leg.type === "WALK")) ||
     (Object.getOwnPropertyDescriptor(a, "_vehicleEligibilityTier")?.value ??
       0) -
       (Object.getOwnPropertyDescriptor(b, "_vehicleEligibilityTier")?.value ??

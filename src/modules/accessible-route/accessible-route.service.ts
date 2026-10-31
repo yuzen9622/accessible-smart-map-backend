@@ -2,6 +2,7 @@ import {
   groupRoutesByTransitSkeleton,
   resolveCandidateGroup,
   compareRoutesByArrival,
+  compareRouteEligibility,
   type PairSearchMemo,
 } from "./bus-stop-pair-candidates";
 import { createCandidateRequestBudget } from "../transit/bus-stop-pair-eta.service";
@@ -1323,10 +1324,22 @@ async function finalizeRoutes(
     env = undefined;
   }
   const scored = scoreAndRank(feasible, mode, env, transitPreference, language);
-  const top = groupRoutesByTransitSkeleton(scored.sort(compareRoutesByArrival))
-    .map((group) => group.members[0])
-    .slice(0, 3);
-  // Nothing after the arrival-first comparator may reorder routes.
+  const ordered = groupRoutesByTransitSkeleton(
+    scored.sort(compareRoutesByArrival),
+  ).map((group) => group.members[0]);
+  const top = ordered.slice(0, 3);
+  const isWalkOnly = (route: AccessibleRoute) =>
+    route.legs.every((leg) => leg.type === "WALK");
+  const walk = ordered.find(isWalkOnly);
+  if (
+    walk &&
+    top.length === 3 &&
+    !top.some(isWalkOnly) &&
+    compareRouteEligibility(walk, top[2]) === 0
+  ) {
+    top[2] = walk;
+  }
+  // Preserve safety tiers and the selected order through response projection.
   attachWalkA11yDetails(top);
   slimRoutes(top);
   slimRouteGeometry(top);
