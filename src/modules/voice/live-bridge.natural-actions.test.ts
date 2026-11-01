@@ -372,6 +372,13 @@ describe("natural-language voice actions — frozen user acceptance", () => {
       },
       destination: "臺大醫院",
     });
+    const ctx = (await tool("getActiveNavigationContext")) as Record<
+      string,
+      unknown
+    >;
+    expect(ctx.active).toBe(true);
+    expect(ctx).toHaveProperty("upcomingSteps");
+    expect(ctx).toHaveProperty("totalRemainingDistanceM");
     expect(session.sendClientContent).not.toHaveBeenCalled();
   });
 

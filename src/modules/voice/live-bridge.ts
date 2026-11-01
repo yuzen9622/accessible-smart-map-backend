@@ -238,7 +238,7 @@ const NAV_FUNCTIONS: FunctionDeclaration[] = [
   {
     name: "getActiveNavigationContext",
     description:
-      "取得目前導航的步驟、目的地，以及目前或下一段大眾運輸資料；解析『那班公車』『下一段』『目的地』等指涉時使用",
+      "取得目前導航的詳細脈絡（當前步驟、下個轉彎路口與剩餘距離、後續路線步驟清單、目的地與總剩餘距離、大眾運輸資訊）。當使用者詢問『何時要轉彎』『前面怎麼走』『還要走多久/多遠』『下一段是什麼』或查詢導航進度時使用",
     parametersJsonSchema: {
       type: "object",
       properties: {},
@@ -417,6 +417,8 @@ export async function createLiveBridge(
   // Only the first interrupted after a preempt is ours; later ones are barge-in.
   let preemptInterruptPending = false;
   let navSpeaking = false;
+  let navJustStarted = false;
+  let startupSpeechText: string | null = null;
   let turnTimeout: ReturnType<typeof setTimeout> | null = null;
   let turnTimeoutStrikes = 0;
   let positionTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1004,8 +1006,29 @@ export async function createLiveBridge(
       return;
     }
     if (!session || ws.readyState !== WebSocket.OPEN) return;
-    const text = navSession.takeNextSpeech();
+    let text = navSession.takeNextSpeech();
     if (!text) return;
+    if (navJustStarted) {
+      navJustStarted = false;
+      const delimiter = language === "en" ? " " : "，";
+      if (text === messages.started) {
+        const firstStep = navSession.getInitialStepInstruction();
+        if (firstStep) {
+          text = `${messages.started}${delimiter}${firstStep}`;
+        }
+      } else if (!text.includes(messages.started)) {
+        text = `${messages.started}${delimiter}${text}`;
+      }
+      startupSpeechText = text;
+    } else if (
+      startupSpeechText &&
+      (text === navSession.getInitialStepInstruction() ||
+        text.includes(messages.started))
+    ) {
+      text = startupSpeechText;
+    } else {
+      startupSpeechText = null;
+    }
     try {
       session.sendClientContent({
         turns: buildNavigationSpeechPrompt(text, options.language),
@@ -1266,6 +1289,7 @@ export async function createLiveBridge(
         : effect,
     );
     if (effect.ok) {
+      navJustStarted = true;
       persistNavigationSnapshot(true);
       void checkCurrentTransitAlerts();
       void runCorridorScan();
@@ -1663,7 +1687,37 @@ export async function createLiveBridge(
             };
             operationKey = index;
           }
-        } else if (name === "startNavigation" && op.action === "start") {
+        } else if (name === "startNavigation") {
+          const lastAssistantQuestion =
+            conversationHistory
+              .filter((turn) => turn.role === "assistant")
+              .at(-1)?.text ?? "";
+          const cleanTranscript =
+            operation?.transcript.trim().replace(/[。！!~～，,\s]/g, "") ?? "";
+          const isAffirmative =
+            /^(好|好的|好啊|好呀|可以|行|對|對的|沒問題|恩|嗯|OK|ok|走|走吧|出發|開始|開始導航|導航)$/i.test(
+              cleanTranscript,
+            ) ||
+            /^(好|可以|行|對|沒問題|ok)/i.test(
+              operation?.transcript.trim() ?? "",
+            );
+          const assistantAskedStart =
+            lastAssistantQuestion.includes("開始導航") ||
+            lastAssistantQuestion.includes("為您導航") ||
+            lastAssistantQuestion.includes("要導航嗎") ||
+            lastAssistantQuestion.includes("開始為您導航");
+          const userNegated = /(不要|別|取消|先不要|暫時不要|不|暫不)導航/.test(
+            operation?.transcript ?? "",
+          );
+          const isAuthorizedStart =
+            !userNegated &&
+            (op.action === "start" ||
+              (op.action === "plan" && op.startNavigation) ||
+              (op.action === "delegate" &&
+                op.delegatedTools?.includes("startNavigation")) ||
+              (assistantAskedStart && isAffirmative) ||
+              isAffirmative);
+
           const number = call.args.candidateNumber ?? undefined;
           const id = call.args.candidateId ?? undefined;
           const explicitSelection =
@@ -1687,15 +1741,34 @@ export async function createLiveBridge(
               ? supplied?.id !== expected.id
               : (number !== undefined && number !== op.candidateNumber) ||
                 (id !== undefined && id !== op.candidateId));
-          denied = operation.completed.has("start") || candidateMismatch;
-          constraintViolation = operation.completed.has("start")
-            ? "DUPLICATE_START"
-            : "CANDIDATE_MISMATCH";
+          denied =
+            !isAuthorizedStart ||
+            operation.completed.has("start") ||
+            candidateMismatch;
+          constraintViolation = !isAuthorizedStart
+            ? "NAVIGATION_NOT_REQUESTED"
+            : operation.completed.has("start")
+              ? "DUPLICATE_START"
+              : "CANDIDATE_MISMATCH";
+          const unqualifiedStart =
+            op.action === "start" &&
+            op.candidateNumber === null &&
+            op.candidateId === null;
+          const candidateNumber =
+            op.candidateNumber !== null
+              ? op.candidateNumber
+              : !unqualifiedStart && call.args.candidateNumber !== undefined
+                ? call.args.candidateNumber
+                : undefined;
+          const candidateId =
+            op.candidateId !== null
+              ? op.candidateId
+              : !unqualifiedStart && call.args.candidateId !== undefined
+                ? call.args.candidateId
+                : undefined;
           call.args = {
-            ...(op.candidateNumber === null
-              ? {}
-              : { candidateNumber: op.candidateNumber }),
-            ...(op.candidateId === null ? {} : { candidateId: op.candidateId }),
+            ...(candidateNumber !== undefined ? { candidateNumber } : {}),
+            ...(candidateId !== undefined ? { candidateId } : {}),
           };
           operationKey = "start";
         } else if (name === "stopNavigation" && op.action === "stop") {
@@ -2198,8 +2271,12 @@ export async function createLiveBridge(
             });
           }
         } else if (name === "startNavigation") {
-          const ordinal = call.args?.candidateNumber;
-          const id = call.args?.candidateId;
+          const ordinal =
+            call.args?.candidateNumber != null
+              ? call.args.candidateNumber
+              : undefined;
+          const id =
+            call.args?.candidateId != null ? call.args.candidateId : undefined;
           const requested =
             ordinal === undefined && id === undefined
               ? null
@@ -2236,11 +2313,29 @@ export async function createLiveBridge(
               voiceCurrent() &&
               requestCurrent() &&
               !cancelled();
+            const startingRequested =
+              !op ||
+              op.action === "start" ||
+              (op.action === "plan" && op.startNavigation);
+            const defaultCandidate =
+              registry?.candidates.find(
+                (c) => c.ordinal === registry?.selectedOrdinal,
+              ) ??
+              registry?.candidates[0] ??
+              null;
+            const tokenToArm =
+              requested?.token ??
+              (startingRequested &&
+              !navSession.isActive &&
+              !navSession.hasArmedRoute
+                ? (defaultCandidate?.token ?? routeContext.token ?? undefined)
+                : undefined);
             const armed =
-              !requested ||
-              (requested.token !== undefined &&
-                (requested.token === activeNavigation?.routeToken ||
-                  (await armRouteToken(requested.token, stillWanted))));
+              tokenToArm !== undefined
+                ? (tokenToArm === activeNavigation?.routeToken &&
+                    navSession.hasArmedRoute) ||
+                  (await armRouteToken(tokenToArm, stillWanted))
+                : !requested && navSession.hasArmedRoute;
             if (!voiceCurrent()) {
               if (msgEpoch === voiceEpoch)
                 answerUnexecutedCalls(
@@ -2752,6 +2847,9 @@ export async function createLiveBridge(
           .filter((turn) => turn.role === "user")
           .slice(-6, -1)
           .map((turn) => turn.text),
+        lastAssistantTurn: conversationHistory
+          .filter((turn) => turn.role === "assistant")
+          .at(-1)?.text,
       },
       completed: new Set(),
       results: [],
@@ -3712,6 +3810,8 @@ export async function createLiveBridge(
       driveNavigationSpeech();
     },
     cancelNav(): void {
+      navJustStarted = false;
+      startupSpeechText = null;
       inputArrivalRevision++;
       proposal = null;
       const idsToDelete = new Set<string>();
