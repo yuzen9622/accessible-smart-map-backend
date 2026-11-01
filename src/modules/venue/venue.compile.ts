@@ -409,6 +409,13 @@ function applyLevelTemplate(template: string, ordinal: number): string {
   return template.split("{L}").join(floor);
 }
 
+function isPlaceholderRef(ref: string | undefined): boolean {
+  return (
+    ref !== undefined &&
+    /未標(?:示|房號)|未命名|待(?:確認|量測|核對)|示意/.test(ref)
+  );
+}
+
 interface WayInstance {
   way: OsmWay;
   /** Graph node id per OSM node position. */
@@ -1753,6 +1760,19 @@ export function compileVenue(
       ]
     : [0, 0];
   if (!buildings.length) errors.push("找不到任何標了 a11ymap:id 的建築");
+
+  // Match authored refs before removing placeholders from public display fields.
+  for (const place of places) {
+    if (!isPlaceholderRef(place.ref)) continue;
+    if (place.name === place.ref)
+      place.name = place.kind === "room" ? "房間" : "空間";
+    delete place.ref;
+  }
+  for (const feature of features) {
+    if (isPlaceholderRef(feature.ref)) delete feature.ref;
+    if (isPlaceholderRef(feature.tags?.ref) && feature.tags)
+      delete feature.tags.ref;
+  }
 
   return {
     venue: {

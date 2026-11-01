@@ -115,6 +115,40 @@ describe("POST /api/v1/a11y/venues/:venueId/route", () => {
     });
   });
 
+  it("accepts optional step-free conditions and forwards them to the same venue planner", async () => {
+    vi.mocked(service.planVenueRoute).mockResolvedValue({
+      ok: true,
+      route,
+    } as never);
+    const res = await request(app).post(`${BASE}/mini/route`).send({
+      fromPlaceId: "gate-main",
+      toPlaceId: "a-room06@2F",
+      mode: "normal",
+      avoidStairs: true,
+      requireElevator: false,
+    });
+    expect(res.status).toBe(200);
+    expect(service.planVenueRoute).toHaveBeenCalledWith({
+      venueId: "mini",
+      fromPlaceId: "gate-main",
+      toPlaceId: "a-room06@2F",
+      mode: "normal",
+      lang: "zh-TW",
+      avoidStairs: true,
+      requireElevator: false,
+    });
+  });
+
+  it("rejects non-boolean accessibility conditions before planning", async () => {
+    const res = await request(app).post(`${BASE}/mini/route`).send({
+      fromPlaceId: "a",
+      toPlaceId: "b",
+      avoidStairs: "true",
+    });
+    expect(res.status).toBe(400);
+    expect(service.planVenueRoute).not.toHaveBeenCalled();
+  });
+
   it("rejects a client-supplied cost profile or an unknown mode", async () => {
     const withProfile = await request(app)
       .post(`${BASE}/mini/route`)

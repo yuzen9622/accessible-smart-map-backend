@@ -285,6 +285,30 @@ describe("planVenueRoute", () => {
     },
   );
 
+  it.each([{ avoidStairs: true }, { requireElevator: true }])(
+    "passes %j into the shared graph search and keeps normal mode",
+    async (constraints) => {
+      const result = await planVenueRoute({
+        venueId: "mini",
+        fromPlaceId: "a-room06@3F",
+        toPlaceId: "bldg-b@1F",
+        mode: "normal",
+        lang: "zh-TW",
+        ...constraints,
+      });
+      if (!result.ok) throw new Error(result.error);
+      expect(result.route.mode).toBe("normal");
+      expect(
+        result.route.steps.some((step) =>
+          ["stairs", "steps", "escalator"].includes(step.type),
+        ),
+      ).toBe(false);
+      expect(result.route.steps.some((step) => step.type === "elevator")).toBe(
+        true,
+      );
+    },
+  );
+
   it("returns the route with the version it was planned on", async () => {
     const r = await planVenueRoute({
       venueId: "mini",

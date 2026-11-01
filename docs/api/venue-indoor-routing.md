@@ -8,7 +8,8 @@
 | --- | --- | --- |
 | GET | `/api/v1/a11y/venues` | 已匯入場域摘要 |
 | GET | `/api/v1/a11y/venues/{venueId}` | 建築外框、樓層（`elevationM`）、地點 `places`、顯示用幾何 `features`、來源牆線 `walls`，一般平走路網 `walkways`，以及樓梯／階梯／坡道／手扶梯／電梯 `connections`（各點 `[lng, lat, z]` 與樓層，坡道附最大坡度） |
-| POST | `/api/v1/a11y/venues/{venueId}/route` | `{ fromPlaceId, toPlaceId, mode?, language? }` → 路徑與步驟 |
+| POST | `/api/v1/a11y/venues/{venueId}/route` | `{ fromPlaceId, toPlaceId, mode?, avoidStairs?, requireElevator?, language? }` → 路徑與步驟 |
+| POST | `/api/v1/a11y/route/instructions` | 以伺服器回傳的 `routeToken` 取得完整戶外與室內逐步指引 |
 
 - **地點 id**：教室等為 `a11ymap:id`；跨多層重複的地點為 `${id}@${levelRef}`（例 `a-room06@3F`）；每棟每層的樓層錨點為 `${buildingId}@${levelRef}`（「到中科大樓 3F」＝ `zk@3F`）。「建築＋樓層」請由前端從 `places` 換成錨點 id。
 - **空間到達點與多入口**：室內路線仍由後端 route API 計算。來源可明確對應的空間會提供 `places[].featureId`；沒有原本場所的顯示空間可由編譯器產生穩定的到達場所，請直接使用 detail 回傳的 `places[].id`，不要把 feature ID 當成 place ID。`arrivalNodeIds` 存在時，為同棟、同層的真實候選路網節點（最多 16 個，包含主要 `nodeId`）；後端依本次通行模式選擇可走且成本最低的入口。`place.location` 為主要到達點，實際路線端點以回應 `path` 為準，前端不得強迫吸附回主要點。沒有此欄位的舊場所沿用單一 `nodeId`。
@@ -25,9 +26,10 @@
   - `wheelchair`：不走樓梯／階梯／手扶梯，坡度 > 12%、寬度 < 0.9 m、`wheelchair=no` 不可通行。沒標 `width` 的路以可通過計算（與戶外步行路網相同）；坡道沒標寬度時匯入會警告。
   - `elderly`、`visual_impaired`：禁止樓梯／階梯／手扶梯，跨層需有可通行電梯或坡道；找不到時回 `NO_ACCESSIBLE_ROUTE`，不降級走樓梯。兩者保留各自步速與其他通行限制，不換成輪椅模式。舊 `VENUE_STAIRS_AVOIDANCE_MULTIPLIER` 仍接受設定以相容既有環境，但不會解除此禁行規則。
   - `normal`：最短路線。
+- **室內無階梯條件**：`avoidStairs=true` 或 `requireElevator=true` 會在原模式的同一張圖搜尋中禁止樓梯、階梯與手扶梯，選取電梯、坡道或平層替代路線。保留原模式的步速與其他限制，不改成輪椅模式；平層路段不必搭電梯。找不到符合條件路線時回 `NO_ACCESSIBLE_ROUTE`，不先選樓梯捷徑再將整段行程判定不可達。`false` 不會解除 `wheelchair`、`elderly`、`visual_impaired` 本身的禁行規則。手動規劃及助理工具使用相同 service 與搜尋條件。
 - **回應**：`path.coordinates` 為 `[lng, lat, z]`，`z` 是該點高度（公尺，相對場域基準）：平面上的點是樓板高度，樓梯／坡道中間點可能是內插值；`path.levelRefs`、`segments[]` 與 `steps[].pathStart/pathEnd` 對應同一索引。`segments` 依建築與樓層切開路線（戶外段的 `buildingId`／`levelRef` 為 null），相鄰兩段共用交界索引，供前端逐層畫線、切換樓層。步驟類型 `depart / walk / enter / exit / elevator / escalator / stairs / steps / ramp / arrive`，`walk` 可帶 `maneuver: left | right | uturn`。索引範圍兩端均包含；零長度 `enter/exit` 可在跨棟邊的前一點觸發，step 的建築是指令目標，與該點實際建築可能不同。顯示歸屬以 `path.buildingIds/levelRefs` 逐點資料為準，不以 step 覆寫。
 - **路線設施與未知高度**：設施步驟的 `connectionId` 與 detail ID 相同；只有坡度推導、沒有可識別來源設施的坡道可為 null。`heightPending` 保留來源待確認旗標，即使該坡道兩端暫時都是 z=0，仍不能當作已確認平地；未標旗標也不等於現場核實。
-- **距離與時間**：`distanceM` 為步行距離（不含電梯）；`durationS` 依模式步速計算，電梯每趟以 `VENUE_ELEVATOR_WAIT_S` + 每層 `VENUE_ELEVATOR_PER_FLOOR_S` 計（一趟只等一次）。坡道步驟除非資料標 `a11ymap:height_status=measured`，否則文字會註明「未實測」。
+- **距離與時間**：`distanceM` 為步行距離（不含電梯）；`durationS` 依模式步速計算，電梯每趟以 `VENUE_ELEVATOR_WAIT_S` + 每層 `VENUE_ELEVATOR_PER_FLOOR_S` 計（一趟只等一次）。坡道步驟只在來源標 `a11ymap:height_status=measured` 時顯示數值坡度；一般圖面與路線文字不附加推定、待確認或未實測等編輯提示，原始狀態欄位仍保留。
 
 | HTTP | 情況 |
 | --- | --- |
@@ -41,10 +43,18 @@
 既有 `POST /api/v1/a11y/accessible-route` 可用 `destinationVenuePlace: { venueId, placeId }` 取代 `destination`（需搭配 `origin`，不可同時給 `destination` 或 `query`）。
 
 - 候選校門：`normal` 可用所有校門；其他模式只用標 `wheelchair=yes` 的校門（沒標視為不可用）。系統對每個候選校門算「校門 → 地點」的符合該模式限制的校內加權成本，加上起點到校門的直線距離，選總和最小的校門；戶外路線只規劃到該校門一次。這是啟發式，不是實際戶外最短路。
-- 回應 `data.destination` 為校門，`data.venueArrival` 記錄校門與場域版本，`data.venueLeg` 為校內路線（同場域路線格式）。語音與 `nav-instructions` 只涵蓋戶外段。
-- 使用者要求無階梯（`avoidStairs`）時，校內段一律採輪椅規則。
+- 回應 `data.destination` 為校門，`data.venueArrival` 記錄校門與場域版本，`data.venueLeg` 為校內路線（同場域路線格式）。語音與 `nav-instructions` 會依序保留戶外及校內步驟。校門抵達與最終目的地分開，校內步驟標 `legType: "VENUE"`、`driver: "manual"`，由使用者確認進度；GPS 不判斷室內樓層。
+- `avoidStairs` 或 `requireElevator` 會套用相同室內無階梯搜尋條件，保留原通行模式，不轉換為輪椅模式；固定校門重算也沿用 token 中已確認的條件。
 - 校內不可達時整個請求回 422（`NO_ACCESSIBLE_ROUTE` 附 `venueAccessibility`，或 `NO_ROUTE`），不會只導到校門；場域或地點不存在回 400 `VENUE_PLACE_NOT_FOUND`（此端點不回 404）。
 - 重新規劃（reroute）固定使用原校門：校門仍在原位（≤ 1 m）就以目前場域版本重算 `venueLeg`，並把實際使用的版本寫回 token；校門被移除、移位或不再符合該模式（例如拿掉了 `wheelchair=yes`）、或目的地地點被移除，則回 410 `ROUTE_TOKEN_EXPIRED_OR_UNSUPPORTED`（訊息「場域資料已更新」），需重新規劃，不會自動換校門。
+
+## AI 與語音助理
+
+文字 AI 與語音使用相同規劃工具。`planIndoorRoute` 沿用場域 route API 的規劃服務；`planAccessibleRoute` 沿用戶外與校門轉接規劃。助理先以 `inspectVenue` 取得圖資中的地點 id，不以房號猜測樓層或拼接路線。
+
+規劃結果沿用版本 1 的路線契約，`journeyKind` 區分 `indoor`、`mixed`、`outdoor`。純室內結果提供 `indoorRoute` 與兩端場域、地點、建築、樓層和 `sourceVersion`；其路線候選的戶外 `legs` 為空，完整室內路徑由 `indoorRoute` 提供。混合路線保留 `destinationVenuePlace`、`venueArrival` 與 `venueLeg`。消費端應檢查地點、模式與版本一致，再沿用手動規劃的結果套用與導航入口，毋須重新規劃一次。
+
+`POST /api/v1/a11y/route/instructions` 的室內步驟另有 `venueStepType`、`buildingId`、`levelRef`，跨樓層時有 `fromLevelRef`／`toLevelRef`。`legIndex` 在純室內行程固定為 0，不代表有戶外 leg。戶外 GPS 導航應僅使用非 `manual` 步驟，抵達校門後接回室內確認流程；純室內行程從第一個室內步驟開始。語音中的手動確認沿用 `nav.advance`，新客戶端應一併傳送 `navigationId`、`routeVersion` 與 `fromStepIndex`，過期路線或已完成步驟的確認不會推進目前行程。
 
 ## 資料繪製規則（JOSM）
 
@@ -68,7 +78,7 @@
 | 空間走廊到達點 | 房間／區域的 way 或 relation 加 `a11ymap:arrival_node=<來源 node id>` | 指向已有同層普通走道邊的來源節點；編譯後須為相同建物與樓層，否則拒絕匯入。只描述空間的走廊到達位置，不會新增物理連線、確認門位或將無停靠井道改成電梯停靠點。到達場所由編譯器建立，不能把 `a11ymap:id` 放在面圖上代替路網點 |
 | 來源牆線 | way `indoor=wall` `level` | 開放或封閉來源線均保留為 `walls[].geometry`，不補門、井道或牆厚；樓層與發布建築規則同樣適用 |
 
-可選來源標註（建築、房間、門、樓梯、坡道、連通道、電梯都可加）：`a11ymap:source`（照片檔名或掃描 ID，不放照片本身）、`a11ymap:geometry_status=surveyed|traced|schematic`（預設 traced）、`a11ymap:height_status=measured|drawing|estimated`（預設 estimated）。`GET` 回應中，`buildings` 帶 `source`、`geometryStatus`、`heightStatus`；`features` 帶 `source`、`geometryStatus`、`heightStatus`；`connections` 帶 `source`、`geometryStatus`、`heightStatus`（取該段最不確定者）。沒標 `a11ymap:floor_height` 的建築一律視為 `estimated`；數值坡度沒標 `a11ymap:height_status` 也是 `estimated`（指示不寫數字），照平面圖量的請標 `drawing`、現場量的標 `measured`。樓高需 0–20 m，`a11ymap:ground_offset` 與 `a11ymap:ele` 絕對值需 ≤ 1000 m；數值標籤只接受純數字（空白不會被當成 0）。數值坡度溢位（不是有限數字）會匯入失敗；房間外框、門標在建築沒有的樓層也會匯入失敗。坡度為 `estimated`（例如只標 `incline=up`、由兩端高度推算）時，指示只寫「坡度未實測」，不寫數字。
+可選來源標註（建築、房間、門、樓梯、坡道、連通道、電梯都可加）：`a11ymap:source`（照片檔名或掃描 ID，不放照片本身）、`a11ymap:geometry_status=surveyed|traced|schematic`（預設 traced）、`a11ymap:height_status=measured|drawing|estimated`（預設 estimated）。`GET` 回應中，`buildings` 帶 `source`、`geometryStatus`、`heightStatus`；`features` 帶 `source`、`geometryStatus`、`heightStatus`；`connections` 帶 `source`、`geometryStatus`、`heightStatus`（取該段最不確定者）。沒標 `a11ymap:floor_height` 的建築一律視為 `estimated`；數值坡度沒標 `a11ymap:height_status` 也是 `estimated`（指示不寫數字），照平面圖量的請標 `drawing`、現場量的標 `measured`。樓高需 0–20 m，`a11ymap:ground_offset` 與 `a11ymap:ele` 絕對值需 ≤ 1000 m；數值標籤只接受純數字（空白不會被當成 0）。數值坡度溢位（不是有限數字）會匯入失敗；房間外框、門標在建築沒有的樓層也會匯入失敗。坡度為 `estimated` 或 `drawing` 時，步驟保留坡道方向與距離，不附加數值坡度或編輯提示；高度與來源狀態仍保存在結構化欄位。
 
 建築總樓層（地上＋地下）最多 200 層；`level` 範圍跨度最多 200（例 `0-200`），同一物件的 `level` 與 `repeat_on` 合計最多 201 個樓層，超過即匯入失敗。房間外框、門的 `level` 寫錯也會匯入失敗，不會被當成 1F。電梯沒標 `wheelchair` 視為可用，標 `limited` 時輪椅成本會加重。
 

@@ -39,12 +39,22 @@ export const VenueRouteBodySchema = z
       description:
         "通行模式：wheelchair / elderly / visual_impaired 均禁止樓梯、階梯及手扶梯，跨樓層使用可通行的電梯或坡道；normal 最短路線。各模式保留自己的步速與其他通行限制，不接受自訂 profile。",
     }),
+    avoidStairs: z.boolean().optional().openapi({
+      description:
+        "true 時在同一張路網搜尋中禁止樓梯、階梯及手扶梯，尋找符合原通行模式的替代路線；不降低模式本身限制",
+    }),
+    requireElevator: z.boolean().optional().openapi({
+      description:
+        "保留電梯需求，跨樓層不得以樓梯、階梯或手扶梯代替；平層及坡道仍可通行，不降低原模式限制",
+    }),
     language: z.enum(SUPPORTED_LANGS).default(DEFAULT_LANG).openapi({
       example: "zh-TW",
       description: "步驟文字語言",
     }),
   })
   .strict();
+
+export type VenueRouteBody = z.infer<typeof VenueRouteBodySchema>;
 
 const ProvenanceAnnotations = {
   heightPending: z.boolean().optional().openapi({
@@ -243,7 +253,7 @@ const ConnectionSchema = z
     geometryStatus: z.enum(["surveyed", "traced", "schematic"]),
     heightStatus: z.enum(["measured", "drawing", "estimated"]).openapi({
       description:
-        "高度與坡度的可信度（取最不確定者）；estimated 時前端應顯示「坡度未實測」，不顯示精確數字",
+        "高度與坡度的來源狀態（取最不確定者）；estimated 不顯示精確數字，圖面不附加狀態提示詞",
     }),
     source: z.string().optional(),
     ...ProvenanceAnnotations,

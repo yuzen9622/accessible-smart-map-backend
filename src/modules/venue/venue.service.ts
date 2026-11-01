@@ -31,6 +31,7 @@ import type {
   VenueDepartureResult,
 } from "../accessible-route/venue-arrival.port";
 import type { VenueArrival, VenueDocument, VenuePlace } from "./venue.types";
+import type { VenueRouteConstraints } from "../accessible-route/venue-leg.types";
 
 interface CompiledVenue {
   version: number;
@@ -151,7 +152,7 @@ export async function getVenueDetail(venueId: string) {
   };
 }
 
-export interface PlanVenueRouteInput {
+export interface PlanVenueRouteInput extends VenueRouteConstraints {
   venueId: string;
   fromPlaceId: string;
   toPlaceId: string;
@@ -202,6 +203,7 @@ export async function planVenueRoute(
     input.mode,
     getRoutingConfig().venue,
     input.lang,
+    input,
   );
   if (outcome.ok) return { ok: true, route: outcome.route };
   if (outcome.reason === "NO_ACCESSIBLE_ROUTE") {
@@ -296,7 +298,7 @@ type GateHandover =
  * the chosen gate is then planned outdoors, once.
  */
 async function resolveGateHandover(
-  input: {
+  input: VenueRouteConstraints & {
     venueId: string;
     placeId: string;
     /** The outdoor end of the trip: its origin when arriving, destination when departing. */
@@ -323,7 +325,11 @@ async function resolveGateHandover(
     };
   }
   const config = getRoutingConfig().venue;
-  const plan = (gate: VenuePlace, mode: AccessibilityMode) =>
+  const plan = (
+    gate: VenuePlace,
+    mode: AccessibilityMode,
+    constraints: VenueRouteConstraints = input,
+  ) =>
     direction === "arrive"
       ? planOnGraph(
           entry.graph,
@@ -333,6 +339,7 @@ async function resolveGateHandover(
           mode,
           config,
           input.lang,
+          constraints,
         )
       : planOnGraph(
           entry.graph,
@@ -342,6 +349,7 @@ async function resolveGateHandover(
           mode,
           config,
           input.lang,
+          constraints,
         );
   const gates = entry.venue.places.filter((p) => p.kind === "gate");
   let best: { gate: VenuePlace; leg: VenueRoute; score: number } | null = null;
@@ -361,7 +369,7 @@ async function resolveGateHandover(
   // accessible route, not as a disconnected place
   stairsOnly ||=
     !best &&
-    gates.some((g) => !gateServes(g, input.mode) && plan(g, "normal").ok);
+    gates.some((g) => !gateServes(g, input.mode) && plan(g, "normal", {}).ok);
   if (!best) {
     return stairsOnly
       ? routeFailure(
@@ -459,6 +467,7 @@ export async function isVenueArrivalCurrent(
 export async function replanVenueLeg(
   arrival: VenueArrival,
   lang: SupportedLang,
+  constraints: VenueRouteConstraints = {},
 ): Promise<ReplanVenueLegResult> {
   const entry = await getCompiledVenue(arrival.venueId);
   const places = entry?.venue.places ?? [];
@@ -481,6 +490,7 @@ export async function replanVenueLeg(
     arrival.mode,
     getRoutingConfig().venue,
     lang,
+    constraints,
   );
   if (!outcome.ok) {
     return outcome.reason === "NO_ACCESSIBLE_ROUTE"

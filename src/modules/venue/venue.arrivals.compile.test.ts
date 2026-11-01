@@ -189,6 +189,44 @@ describe("source-backed selectable feature arrivals", () => {
     expect(f.compile().venue.places).toEqual([]);
   });
 
+  it.each(["未標房號A", "6F 未標示房間（一）"])(
+    "keeps %s for source association without displaying it as a room number",
+    (ref) => {
+      const f = fixture();
+      required(f.osm.nodes.get("landing0")).tags = {
+        level: "0",
+        indoor: "room",
+        "a11ymap:id": "existing",
+        ref,
+      };
+      const before = f.compile().venue;
+      f.rectangle("room", 50, 50, 60, 60, {
+        indoor: "room",
+        level: "0",
+        ref,
+        "a11ymap:arrival_node": "landing0",
+      });
+      const { venue, errors } = f.compile();
+      expect(errors).toEqual([]);
+      expect(venue.nodes).toEqual(before.nodes);
+      expect(venue.edges).toEqual(before.edges);
+      expect(venue.places).toHaveLength(1);
+      expect(venue.places[0]).toMatchObject({
+        id: "existing",
+        name: "房間",
+        featureId: "way/room@0",
+      });
+      expect(venue.places[0]).not.toHaveProperty("ref");
+      const feature = required(
+        venue.features.find((item) => item.id === "way/room@0"),
+      );
+      expect(feature).not.toHaveProperty("ref");
+      expect(feature.tags).not.toHaveProperty("ref");
+      expect(required(f.osm.nodes.get("landing0")).tags.ref).toBe(ref);
+      expect(required(f.osm.ways.get("room")).tags.ref).toBe(ref);
+    },
+  );
+
   it("accepts a deliberate corridor arrival outside its room polygon and keeps one stable feature destination", () => {
     const f = fixture();
     f.rectangle("room", 50, 50, 60, 60, {
@@ -201,7 +239,7 @@ describe("source-backed selectable feature arrivals", () => {
     expect(venue.places).toEqual([
       expect.objectContaining({
         id: "arrival:way/room@0",
-        name: "未標房號空間",
+        name: "房間",
         kind: "room",
         featureId: "way/room@0",
         nodeId: "landing0@0",
@@ -222,6 +260,11 @@ describe("source-backed selectable feature arrivals", () => {
         .venue.places.filter((place) => place.featureId === "way/room@0")
         .map((place) => place.id),
     ).toEqual(["existing"]);
+    expect(f.compile().venue.places[0].ref).toBe("101");
+    expect(
+      f.compile().venue.features.find((feature) => feature.id === "way/room@0")
+        ?.ref,
+    ).toBe("101");
   });
 
   it.each(["missing", "lift@0", "landing1", "unconnected", "outside"])(

@@ -24,6 +24,7 @@ import { venueConnectionId } from "./venue.connection-id";
 import type {
   VenueManeuver,
   VenueRoute,
+  VenueRouteConstraints,
   VenueRouteSegment,
   VenueRouteStep,
 } from "../accessible-route/venue-leg.types";
@@ -61,14 +62,19 @@ export type VenuePlanOutcome =
 /**
  * @param mode Requested accessibility mode.
  * @param config Venue routing tunables.
- * @returns The strict server-side cost profile for that mode.
+ * @param constraints Confirmed step-free conditions.
+ * @returns The strict server-side cost profile for that mode and conditions.
  */
 export function venueProfileFor(
   mode: AccessibilityMode,
   _config: Pick<VenueRoutingConfig, "stairsAvoidanceMultiplier">,
+  constraints: VenueRouteConstraints = {},
 ): CostProfile {
   const base = profileFor(mode);
-  return mode === "elderly" || mode === "visual_impaired"
+  return mode === "elderly" ||
+    mode === "visual_impaired" ||
+    constraints.avoidStairs ||
+    constraints.requireElevator
     ? { ...base, forbidStairs: true }
     : base;
 }
@@ -126,6 +132,7 @@ const t =
  * @param mode Requested accessibility mode.
  * @param config Venue routing tunables.
  * @param lang Instruction language.
+ * @param constraints Confirmed step-free conditions used during graph search.
  * @returns The route, or why none exists.
  */
 export function planVenueRoute(
@@ -136,12 +143,13 @@ export function planVenueRoute(
   mode: AccessibilityMode,
   config: VenueRoutingConfig,
   lang: SupportedLang,
+  constraints: VenueRouteConstraints = {},
 ): VenuePlanOutcome {
   const sources = arrivalIndices(vg, from);
   const destinations = arrivalIndices(vg, to);
   if (!sources || !destinations) return { ok: false, reason: "NO_ROUTE" };
 
-  const profile = venueProfileFor(mode, config);
+  const profile = venueProfileFor(mode, config, constraints);
   const bestPath = (costProfile: CostProfile) => {
     let best: ReturnType<typeof dijkstra> = null;
     for (const src of sources)
@@ -155,7 +163,9 @@ export function planVenueRoute(
   const result = bestPath(profile);
   if (!result) {
     const anyRoute =
-      mode === "normal" ? null : bestPath(venueProfileFor("normal", config));
+      mode === "normal" && !profile.forbidStairs
+        ? null
+        : bestPath(venueProfileFor("normal", config));
     return anyRoute
       ? { ok: false, reason: "NO_ACCESSIBLE_ROUTE", levelRef: to.levelRef }
       : { ok: false, reason: "NO_ROUTE" };
@@ -513,19 +523,10 @@ function buildSteps(
       const status = leastCertain(
         run.map((r) => r.edge.slopeStatus ?? "estimated"),
       );
-      // an estimated grade is never stated as a number
       const gradeZh =
-        status === "estimated"
-          ? "（坡度未實測）"
-          : grade > 0
-            ? `（坡度約 ${grade}%${status === "measured" ? "" : "，未實測"}）`
-            : "";
+        status === "measured" && grade > 0 ? `（坡度約 ${grade}%）` : "";
       const gradeEn =
-        status === "estimated"
-          ? " (grade not surveyed)"
-          : grade > 0
-            ? ` (about ${grade}% grade${status === "measured" ? "" : ", not surveyed"})`
-            : "";
+        status === "measured" && grade > 0 ? ` (about ${grade}% grade)` : "";
       steps.push({
         ...base,
         type: "ramp",

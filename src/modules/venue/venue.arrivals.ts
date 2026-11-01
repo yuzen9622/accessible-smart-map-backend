@@ -26,13 +26,13 @@ function verticalAreaOf(feature: VenueFeature): VerticalArea | null {
 }
 
 function fallbackName(feature: VenueFeature): string {
-  if (feature.kind === "room") return "未標房號空間";
+  if (feature.kind === "room") return "房間";
   if (feature.tags?.amenity === "toilets") return "廁所";
   const area = verticalAreaOf(feature);
   if (area === "vertical-core") return "電梯／樓梯核心";
   if (area === "stairwell") return "樓梯間";
   if (area === "elevator-shaft") return "電梯井";
-  return feature.kind === "corridor" ? "走廊" : "未命名空間";
+  return feature.kind === "corridor" ? "走廊" : "空間";
 }
 
 /**

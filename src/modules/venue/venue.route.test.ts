@@ -112,6 +112,69 @@ describe("planVenueRoute on the fictional fixture", () => {
     expect(r.route.stairFlights).toBe(2);
   });
 
+  it.each([{ avoidStairs: true }, { requireElevator: true }])(
+    "uses the same graph search to find the step-free alternative for normal mode with %j",
+    (constraints) => {
+      const result = planVenueRoute(
+        vg,
+        venue,
+        place("a-room06@3F"),
+        place("bldg-b@1F"),
+        "normal",
+        CONFIG,
+        "zh-TW",
+        constraints,
+      );
+      if (!result.ok) throw new Error(result.reason);
+      expect(result.route.mode).toBe("normal");
+      const stepTypes = result.route.steps.map((step) => step.type);
+      expect(stepTypes).toContain("elevator");
+      expect(stepTypes).toContain("ramp");
+      expect(stepTypes).not.toContain("stairs");
+      expect(stepTypes).not.toContain("steps");
+      expect(stepTypes).not.toContain("escalator");
+    },
+  );
+
+  it.each([{ avoidStairs: true }, { requireElevator: true }])(
+    "reports a stairs-only destination as inaccessible for normal mode with %j",
+    (constraints) => {
+      expect(
+        planVenueRoute(
+          vg,
+          venue,
+          place("gate-main"),
+          place("b-lab"),
+          "normal",
+          CONFIG,
+          "zh-TW",
+          constraints,
+        ),
+      ).toMatchObject({
+        ok: false,
+        reason: "NO_ACCESSIBLE_ROUTE",
+        levelRef: "2F",
+      });
+    },
+  );
+
+  it("keeps the normal stairs shortcut when both optional constraints are false", () => {
+    const result = planVenueRoute(
+      vg,
+      venue,
+      place("a-room06@3F"),
+      place("bldg-b@1F"),
+      "normal",
+      CONFIG,
+      "zh-TW",
+      { avoidStairs: false, requireElevator: false },
+    );
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.route.steps.some((step) => step.type === "stairs")).toBe(
+      true,
+    );
+  });
+
   it("counts a flight drawn with a middle vertex once", () => {
     const withVertex = FIXTURE_XML.replace(
       /<nd ref='-16' \/>\n    <nd ref='-17' \/>/,
@@ -263,7 +326,7 @@ describe("planVenueRoute on the fictional fixture", () => {
       "Take the elevator from 3F to 1F",
     );
     expect(r.route.steps.find((s) => s.type === "ramp")?.instruction).toMatch(
-      /^Go up the ramp for \d+ m \(about 8% grade, not surveyed\)$/,
+      /^Go up the ramp for \d+ m$/,
     );
   });
 });
@@ -384,7 +447,7 @@ describe("ramp grades", () => {
     const r = v.plan("a-room06@3F", "bldg-b@1F", "wheelchair");
     if (!r.ok) throw new Error(r.reason);
     const ramp = r.route.steps.find((s) => s.type === "ramp");
-    expect(ramp?.instruction).toMatch(/^走坡道上行約 \d+ 公尺（坡度未實測）$/);
+    expect(ramp?.instruction).toMatch(/^走坡道上行約 \d+ 公尺$/);
     expect(ramp?.instruction).not.toContain("%");
   });
 });
@@ -415,7 +478,7 @@ describe("grade status", () => {
     const r = v.plan("a-room06@3F", "bldg-b@1F", "wheelchair");
     if (!r.ok) throw new Error(r.reason);
     expect(r.route.steps.find((s) => s.type === "ramp")?.instruction).toMatch(
-      /（坡度未實測）$/,
+      /^走坡道上行約 \d+ 公尺$/,
     );
   });
 });
@@ -494,6 +557,44 @@ function planChain(
   return result.route;
 }
 
+describe("ramp instruction display", () => {
+  it.each(["drawing", "estimated"] as const)(
+    "keeps %s source state without adding editorial grade hints",
+    (slopeStatus) => {
+      const data = chainVenue([
+        { ramp: true, slopeRatio: 0.08, slopeStatus, heightPending: true },
+      ]);
+      for (const lang of ["zh-TW", "en"] as const) {
+        const ramp = planChain(data, lang).steps.find(
+          (step) => step.type === "ramp",
+        );
+        expect(ramp).toMatchObject({ heightPending: true });
+        expect(ramp?.instruction).toBe(
+          lang === "en" ? "Go along the ramp for 10 m" : "走坡道約 10 公尺",
+        );
+      }
+      expect(data.edges[0]).toMatchObject({
+        slopeRatio: 0.08,
+        slopeStatus,
+        heightPending: true,
+      });
+    },
+  );
+
+  it("retains an authored measured grade", () => {
+    const data = chainVenue([
+      { ramp: true, slopeRatio: 0.08, slopeStatus: "measured" },
+    ]);
+    expect(
+      planChain(data).steps.find((step) => step.type === "ramp")?.instruction,
+    ).toBe("走坡道約 10 公尺（坡度約 8%）");
+    expect(
+      planChain(data, "en").steps.find((step) => step.type === "ramp")
+        ?.instruction,
+    ).toBe("Go along the ramp for 10 m (about 8% grade)");
+  });
+});
+
 describe("source-backed route metadata", () => {
   it("uses existing connection IDs and separates adjacent ramp facilities", () => {
     const data = chainVenue([
@@ -525,7 +626,7 @@ describe("source-backed route metadata", () => {
     expect(route.path.coordinates.map((point) => point[2])).toEqual([
       0, 0, 0, 0,
     ]);
-    expect(ramps[0].instruction).toBe("走坡道約 20 公尺（坡度未實測）");
+    expect(ramps[0].instruction).toBe("走坡道約 20 公尺");
     // In reverse, the true flag is still aggregated over the same source facility.
     expect(
       planChain(data, "en", true).steps.filter((s) => s.type === "ramp"),
