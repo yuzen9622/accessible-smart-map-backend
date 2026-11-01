@@ -1,9 +1,3 @@
-vi.mock("../../adapters/voice-synthesis.adapter", () => ({
-  synthesizeVoice: vi
-    .fn()
-    .mockResolvedValue({ pcm: Buffer.alloc(1920, 4), sampleRate: 24000 }),
-}));
-import { synthesizeVoice } from "../../adapters/voice-synthesis.adapter";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import {
@@ -137,9 +131,6 @@ import {
   unclearRouteOperation,
 } from "./route-operation";
 beforeEach(() => {
-  vi.mocked(synthesizeVoice)
-    .mockReset()
-    .mockResolvedValue({ pcm: Buffer.alloc(1920, 4), sampleRate: 24000 });
   testInput.synthesizeMissingUtterance = true;
   vi.mocked(resolveRouteOperation)
     .mockReset()
@@ -1759,24 +1750,102 @@ describe("createLiveBridge navigation turn arbiter", () => {
       await vi.waitFor(() =>
         expect(session.sendToolResponse).toHaveBeenCalledOnce(),
       );
-      expect(synthesizeVoice).not.toHaveBeenCalled();
-      onmessage({ serverContent: { turnComplete: true } });
-      await vi.waitFor(() => expect(synthesizeVoice).toHaveBeenCalledTimes(1));
-      expect(session.sendToolResponse.mock.invocationCallOrder[0]).toBeLessThan(
-        vi.mocked(synthesizeVoice).mock.invocationCallOrder[0],
-      );
-      expect(vi.mocked(synthesizeVoice).mock.calls[0][0]).toContain(
-        language === "en" ? "Head along 路" : "沿「路」出發",
-      );
       expect(session.sendClientContent).not.toHaveBeenCalled();
+      onmessage({ serverContent: { turnComplete: true } });
+      await vi.waitFor(() =>
+        expect(session.sendClientContent).toHaveBeenCalledOnce(),
+      );
+      expect(session.sendToolResponse.mock.invocationCallOrder[0]).toBeLessThan(
+        session.sendClientContent.mock.invocationCallOrder[0],
+      );
+      expect(session.sendClientContent.mock.calls[0][0].turns).toContain(
+        language === "en"
+          ? "請依介面語言播報以下導航指引：使用英文"
+          : "請逐字唸出以下導航指引",
+      );
       bridge.close();
     },
   );
-  it("separates authoritative navigation speech from provider output and restores natural conversation afterward", async () => {
-    vi.useFakeTimers();
-    const pending = deferred<{ pcm: Buffer; sampleRate: 24000 }>();
-    vi.mocked(synthesizeVoice).mockReturnValueOnce(pending.promise);
-    let onmessage: (m: any) => void = () => {};
+
+  it("waits for a real idle boundary while ordinary model output is active", async () => {
+    let onmessage: ((message: unknown) => void) | undefined;
+    const session = makeSession();
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      return session;
+    });
+    const bridge = await createLiveBridge({ ws: makeWs(), userId: "u" });
+    await bridge.voiceReady;
+    await bridge.armRouteToken("cap");
+    onmessage?.({
+      serverContent: { modelTurn: { parts: [{ text: "一般回覆" }] } },
+    });
+    bridge.updatePosition({ latitude: 25, longitude: 121 });
+    onmessage?.({
+      serverContent: {
+        inputTranscription: { text: "開始導航", finished: true },
+      },
+      toolCall: {
+        functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
+      },
+    });
+    await vi.waitFor(() =>
+      expect(session.sendToolResponse).toHaveBeenCalledOnce(),
+    );
+    expect(session.sendClientContent).not.toHaveBeenCalled();
+    onmessage?.({ serverContent: { turnComplete: true } });
+    await vi.waitFor(() =>
+      expect(session.sendClientContent).toHaveBeenCalledOnce(),
+    );
+  });
+
+  it("speaks queued navigation once the model turn has degraded into a trimmed silent tail", async () => {
+    let onmessage: ((message: unknown) => void) | undefined;
+    const session = makeSession();
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      return session;
+    });
+    const bridge = await createLiveBridge({
+      ws: makeWs(),
+      userId: "u",
+      userLocation: { latitude: 25, longitude: 121 },
+    });
+    await bridge.voiceReady;
+    await bridge.armRouteToken("cap");
+    onmessage?.({
+      serverContent: {
+        inputTranscription: { text: "開始導航", finished: true },
+      },
+      toolCall: {
+        functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
+      },
+    });
+    await vi.waitFor(() =>
+      expect(session.sendToolResponse).toHaveBeenCalledOnce(),
+    );
+    const oneSecondOfSilence = Buffer.alloc(48_000).toString("base64");
+    onmessage?.({
+      serverContent: {
+        modelTurn: {
+          parts: [
+            { inlineData: { data: farewell(500) } },
+            ...Array.from({ length: 30 }, () => ({
+              inlineData: { data: oneSecondOfSilence },
+            })),
+          ],
+        },
+      },
+    });
+    // Live keeps the turn open until the hidden tail would finish playing.
+    onmessage?.({ serverContent: { generationComplete: true } });
+    await vi.waitFor(() =>
+      expect(session.sendClientContent).toHaveBeenCalledOnce(),
+    );
+  });
+
+  it("does not replay or flush when its own navigation content ends a generated turn", async () => {
+    let onmessage: ((message: unknown) => void) | undefined;
     const session = makeSession();
     const ws = makeWs();
     connect.mockImplementation(async ({ callbacks }) => {
@@ -1788,146 +1857,273 @@ describe("createLiveBridge navigation turn arbiter", () => {
       userId: "u",
       userLocation: { latitude: 25, longitude: 121 },
     });
-    const frames = () =>
+    await bridge.voiceReady;
+    await bridge.armRouteToken("cap");
+    onmessage?.({
+      serverContent: {
+        inputTranscription: { text: "開始導航", finished: true },
+      },
+      toolCall: {
+        functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
+      },
+    });
+    await vi.waitFor(() =>
+      expect(session.sendToolResponse).toHaveBeenCalledOnce(),
+    );
+    onmessage?.({
+      serverContent: {
+        modelTurn: { parts: [{ inlineData: { data: farewell(500) } }] },
+        outputTranscription: { text: "好的，開始導航。" },
+      },
+    });
+    onmessage?.({ serverContent: { generationComplete: true } });
+    await vi.waitFor(() =>
+      expect(session.sendClientContent).toHaveBeenCalledOnce(),
+    );
+    const announcement = session.sendClientContent.mock.calls[0][0].turns;
+    // Live's observed order: the old turn's interrupted, then its turnComplete.
+    onmessage?.({ serverContent: { interrupted: true } });
+    onmessage?.({ serverContent: { turnComplete: true } });
+    onmessage?.({
+      serverContent: {
+        modelTurn: { parts: [{ inlineData: { data: farewell(500) } }] },
+      },
+    });
+    onmessage?.({ serverContent: { generationComplete: true } });
+    onmessage?.({ serverContent: { turnComplete: true } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const frames = vi
+      .mocked(ws.send)
+      .mock.calls.filter(([value]) => typeof value === "string")
+      .map(([value]) => JSON.parse(value as string));
+    expect(frames.some((frame) => frame.type === "interrupted")).toBe(false);
+    expect(
+      frames.filter((frame) => frame.type === "turn.complete"),
+    ).toHaveLength(2);
+    expect(
+      session.sendClientContent.mock.calls.filter(
+        ([content]) => content.turns === announcement,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("forwards a barge-in that follows its own preempting interrupt", async () => {
+    let onmessage: ((message: unknown) => void) | undefined;
+    const session = makeSession();
+    const ws = makeWs();
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      return session;
+    });
+    const bridge = await createLiveBridge({
+      ws,
+      userId: "u",
+      userLocation: { latitude: 25, longitude: 121 },
+    });
+    await bridge.voiceReady;
+    await bridge.armRouteToken("cap");
+    onmessage?.({
+      serverContent: {
+        inputTranscription: { text: "開始導航", finished: true },
+      },
+      toolCall: {
+        functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
+      },
+    });
+    await vi.waitFor(() =>
+      expect(session.sendToolResponse).toHaveBeenCalledOnce(),
+    );
+    onmessage?.({ serverContent: { generationComplete: true } });
+    await vi.waitFor(() =>
+      expect(session.sendClientContent).toHaveBeenCalledOnce(),
+    );
+    onmessage?.({ serverContent: { interrupted: true } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const interruptedFrames = () =>
       vi
         .mocked(ws.send)
-        .mock.calls.flatMap(([raw]) =>
-          typeof raw === "string" ? [JSON.parse(raw)] : [],
-        );
-    try {
-      await bridge.voiceReady;
-      await bridge.armRouteToken("cap");
-      bridge.startNavigation();
-      const old = {
-        modelTurn: {
-          parts: [
-            { inlineData: { data: Buffer.alloc(4800, 9).toString("base64") } },
-          ],
-        },
-        outputTranscription: { text: "舊回合的方向" },
-      };
-      onmessage({ serverContent: { ...old, generationComplete: true } });
-      onmessage({
-        serverContent: { ...old, interrupted: true, turnComplete: true },
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(
-        vi.mocked(ws.send).mock.calls.some(([raw]) => Buffer.isBuffer(raw)),
-      ).toBe(false);
-      expect(
-        frames().some(
-          (m) =>
-            m.type === "interrupted" ||
-            m.type === "turn.complete" ||
-            m.text === old.outputTranscription.text,
-        ),
-      ).toBe(false);
-      const pcm = Buffer.alloc(4800, 4);
-      pending.resolve({ pcm, sampleRate: 24000 });
-      await vi.advanceTimersByTimeAsync(100);
-      expect(
-        Buffer.concat(
-          vi
-            .mocked(ws.send)
-            .mock.calls.flatMap(([raw]) => (Buffer.isBuffer(raw) ? [raw] : [])),
-        ),
-      ).toEqual(pcm);
-      expect(frames().filter((m) => m.type === "turn.complete")).toHaveLength(
-        1,
-      );
-      onmessage({
-        serverContent: { inputTranscription: { text: "你好", finished: true } },
-      });
-      const answer = "您好，您可以繼續問我。";
-      onmessage({
-        serverContent: {
-          outputTranscription: { text: answer },
-          turnComplete: true,
-        },
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(frames().some((m) => m.text === answer)).toBe(true);
-      expect(resolveRouteOperation).not.toHaveBeenCalled();
-      expect(synthesizeVoice).toHaveBeenCalledTimes(1);
-    } finally {
-      bridge.close();
-      vi.useRealTimers();
-    }
+        .mock.calls.filter(([value]) => typeof value === "string")
+        .map(([value]) => JSON.parse(value as string))
+        .filter((frame) => frame.type === "interrupted");
+    expect(interruptedFrames()).toHaveLength(0);
+    onmessage?.({ serverContent: { interrupted: true } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(interruptedFrames()).toHaveLength(1);
   });
-  it.each(["partial-input", "cancel", "close", "new-route"])(
-    "cancels a pending independent synthesis after %s",
-    async (action) => {
-      const pending = deferred<{ pcm: Buffer; sampleRate: 24000 }>();
-      vi.mocked(synthesizeVoice).mockReturnValueOnce(pending.promise);
-      let onmessage: (m: any) => void = () => {};
-      const ws = makeWs();
+
+  it("finishes a navigation turn at generationComplete so its playback wait cannot time out voice", async () => {
+    vi.useFakeTimers();
+    try {
+      let onmessage: ((message: unknown) => void) | undefined;
       const session = makeSession();
+      const ws = makeWs();
       connect.mockImplementation(async ({ callbacks }) => {
         onmessage = callbacks.onmessage;
         return session;
       });
-      const bridge = await createLiveBridge({ ws, userId: "u" });
+      const bridge = await createLiveBridge({
+        ws,
+        userId: "u",
+        userLocation: { latitude: 25, longitude: 121 },
+      });
       await bridge.voiceReady;
       await bridge.armRouteToken("cap");
-      bridge.startNavigation();
-      const signal = vi.mocked(synthesizeVoice).mock.calls[0][1].signal;
-      if (action === "partial-input")
-        onmessage({
-          serverContent: {
-            inputTranscription: { text: "等等", finished: false },
-          },
-        });
-      else if (action === "cancel") bridge.cancelNav();
-      else if (action === "new-route") await bridge.armRouteToken("other");
-      else bridge.close();
-      expect(signal.aborted).toBe(true);
-      pending.resolve({ pcm: Buffer.alloc(4800, 4), sampleRate: 24000 });
-      await new Promise((resolve) => setTimeout(resolve, 30));
-      expect(
-        vi.mocked(ws.send).mock.calls.some(([raw]) => Buffer.isBuffer(raw)),
-      ).toBe(false);
-      expect(
-        vi
-          .mocked(ws.send)
-          .mock.calls.some(
-            ([raw]) =>
-              typeof raw === "string" &&
-              JSON.parse(raw).type === "turn.complete",
-          ),
-      ).toBe(false);
-      bridge.close();
-    },
-  );
-  it("cancels old synthesis when the user previews a different step", async () => {
-    const old = deferred<{ pcm: Buffer; sampleRate: 24000 }>();
-    vi.mocked(synthesizeVoice).mockReturnValueOnce(old.promise);
-    const ws = makeWs();
-    connect.mockResolvedValue(makeSession());
-    const bridge = await createLiveBridge({ ws, userId: "u" });
+      onmessage?.({
+        serverContent: {
+          inputTranscription: { text: "開始導航", finished: true },
+        },
+        toolCall: {
+          functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      onmessage?.({ serverContent: { turnComplete: true } });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(session.sendClientContent).toHaveBeenCalledOnce();
+      onmessage?.({ serverContent: { generationComplete: true } });
+      await vi.advanceTimersByTimeAsync(60_000);
+      const frames = vi
+        .mocked(ws.send)
+        .mock.calls.filter(([value]) => typeof value === "string")
+        .map(([value]) => JSON.parse(value as string));
+      expect(frames).not.toContainEqual({
+        type: "error",
+        code: "LIVE_SESSION_ENDED",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("treats a fully generated announcement as spoken, so a later barge-in does not replay it", async () => {
+    let onmessage: ((message: unknown) => void) | undefined;
+    const session = makeSession();
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      return session;
+    });
+    const bridge = await createLiveBridge({
+      ws: makeWs(),
+      userId: "u",
+      userLocation: { latitude: 25, longitude: 121 },
+    });
     await bridge.voiceReady;
     await bridge.armRouteToken("cap");
-    bridge.startNavigation();
-    const signal = vi.mocked(synthesizeVoice).mock.calls[0][1].signal;
-    bridge.previewNavStep(1);
-    expect(signal.aborted).toBe(true);
-    expect(synthesizeVoice).toHaveBeenCalledTimes(2);
-    const text = vi.mocked(synthesizeVoice).mock.calls[1][0];
-    expect(text).toBe(
-      vi
-        .mocked(ws.send)
-        .mock.calls.filter(([v]) => typeof v === "string")
-        .map(([v]) => JSON.parse(v as string))
-        .find((m) => m.type === "nav.start").steps[1].instruction,
+    onmessage?.({
+      serverContent: {
+        inputTranscription: { text: "開始導航", finished: true },
+      },
+      toolCall: {
+        functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
+      },
+    });
+    await vi.waitFor(() =>
+      expect(session.sendToolResponse).toHaveBeenCalledOnce(),
     );
-    old.resolve({ pcm: Buffer.alloc(1920, 9), sampleRate: 24000 });
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    onmessage?.({ serverContent: { turnComplete: true } });
+    await vi.waitFor(() =>
+      expect(session.sendClientContent).toHaveBeenCalledOnce(),
+    );
+    const announcement = session.sendClientContent.mock.calls[0][0].turns;
+    onmessage?.({ serverContent: { generationComplete: true } });
+    // The barge-in arrives after playback started, not in the same tick.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    onmessage?.({ serverContent: { interrupted: true } });
+    onmessage?.({ serverContent: { turnComplete: true } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
     expect(
-      vi
-        .mocked(ws.send)
-        .mock.calls.some(([v]) => Buffer.isBuffer(v) && v.includes(9)),
-    ).toBe(false);
-    bridge.close();
+      session.sendClientContent.mock.calls.filter(
+        ([content]) => content.turns === announcement,
+      ),
+    ).toHaveLength(1);
   });
+
+  it("prioritizes interrupted over turnComplete and replays the whole sentence only at a later idle boundary", async () => {
+    let onmessage: ((message: unknown) => void) | undefined;
+    const session = makeSession();
+    connect.mockImplementation(async ({ callbacks }) => {
+      onmessage = callbacks.onmessage;
+      return session;
+    });
+    const bridge = await createLiveBridge({
+      ws: makeWs(),
+      userId: "u",
+      userLocation: { latitude: 25, longitude: 121 },
+    });
+    await bridge.voiceReady;
+    await bridge.armRouteToken("cap");
+    onmessage?.({
+      serverContent: {
+        inputTranscription: { text: "開始導航", finished: true },
+      },
+      toolCall: {
+        functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
+      },
+    });
+    await vi.waitFor(() =>
+      expect(session.sendToolResponse).toHaveBeenCalledOnce(),
+    );
+    onmessage?.({ serverContent: { turnComplete: true } });
+    await vi.waitFor(() =>
+      expect(session.sendClientContent).toHaveBeenCalledOnce(),
+    );
+    onmessage?.({ serverContent: { interrupted: true, turnComplete: true } });
+    await Promise.resolve();
+    expect(session.sendClientContent).toHaveBeenCalledOnce();
+    onmessage?.({ serverContent: { turnComplete: true } });
+    await vi.waitFor(() =>
+      expect(session.sendClientContent).toHaveBeenCalledTimes(2),
+    );
+    expect(session.sendClientContent.mock.calls[1][0].turns).toBe(
+      session.sendClientContent.mock.calls[0][0].turns,
+    );
+  });
+
+  it("does not overlap turns on timeout and degrades voice after consecutive timeout strikes", async () => {
+    vi.useFakeTimers();
+    try {
+      let onmessage: ((message: unknown) => void) | undefined;
+      const session = makeSession();
+      const ws = makeWs();
+      connect.mockImplementation(async ({ callbacks }) => {
+        onmessage = callbacks.onmessage;
+        return session;
+      });
+      const bridge = await createLiveBridge({
+        ws,
+        userId: "u",
+        userLocation: { latitude: 25, longitude: 121 },
+      });
+      await bridge.voiceReady;
+      await bridge.armRouteToken("cap");
+      onmessage?.({
+        serverContent: {
+          inputTranscription: { text: "開始導航", finished: true },
+        },
+        toolCall: {
+          functionCalls: [{ id: "nav", name: "startNavigation", args: {} }],
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      onmessage?.({ serverContent: { turnComplete: true } });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(session.sendClientContent).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(session.sendClientContent).toHaveBeenCalledOnce();
+      expect(ws.close).not.toHaveBeenCalled();
+      const frames = (ws.send as unknown as ReturnType<typeof vi.fn>).mock.calls
+        .filter((c: unknown[]) => typeof c[0] === "string")
+        .map((c: unknown[]) => JSON.parse(c[0] as string));
+      expect(frames).toContainEqual({
+        type: "error",
+        code: "LIVE_SESSION_ENDED",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("blocks a new GPS narration while a user utterance is unfinished", async () => {
     let onmessage: (m: any) => void = () => {};
     const session = makeSession();
@@ -1949,7 +2145,7 @@ describe("createLiveBridge navigation turn arbiter", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     bridge.updatePosition({ latitude: 25, longitude: 121.0007 });
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(synthesizeVoice).toHaveBeenCalledTimes(1);
+    expect(session.sendClientContent).toHaveBeenCalledTimes(1);
     bridge.close();
   });
   it.each([false, true])(
@@ -2117,9 +2313,10 @@ describe("createLiveBridge navigation turn arbiter", () => {
   });
   it("waits for a finished stop utterance to be understood before starting another GPS narration", async () => {
     let onmessage: (m: any) => void = () => {};
+    const session = makeSession();
     connect.mockImplementation(async ({ callbacks }) => {
       onmessage = callbacks.onmessage;
-      return makeSession();
+      return session;
     });
     const bridge = await createLiveBridge({
       ws: makeWs(),
@@ -2140,38 +2337,12 @@ describe("createLiveBridge navigation turn arbiter", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     bridge.updatePosition({ latitude: 25, longitude: 121.0007 });
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(synthesizeVoice).toHaveBeenCalledTimes(1);
+    expect(session.sendClientContent).toHaveBeenCalledTimes(1);
     operation.resolve({
       ...unclearRouteOperation(),
       action: "stop",
       evidence: "停止導航",
     });
-    bridge.close();
-  });
-  it("cancels a pending step synthesis when GPS advances the same route", async () => {
-    const old = deferred<{ pcm: Buffer; sampleRate: 24000 }>();
-    vi.mocked(synthesizeVoice).mockReturnValueOnce(old.promise);
-    const ws = makeWs();
-    connect.mockResolvedValue(makeSession());
-    const bridge = await createLiveBridge({
-      ws,
-      userId: "u",
-      userLocation: { latitude: 25, longitude: 121 },
-    });
-    await bridge.voiceReady;
-    await bridge.armRouteToken("cap");
-    bridge.startNavigation();
-    const signal = vi.mocked(synthesizeVoice).mock.calls[0][1].signal;
-    bridge.updatePosition({ latitude: 25, longitude: 121.00099 });
-    await vi.waitFor(() => expect(signal.aborted).toBe(true));
-    expect(synthesizeVoice).toHaveBeenCalledTimes(2);
-    old.resolve({ pcm: Buffer.alloc(1920, 9), sampleRate: 24000 });
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(
-      vi
-        .mocked(ws.send)
-        .mock.calls.some(([v]) => Buffer.isBuffer(v) && v.includes(9)),
-    ).toBe(false);
     bridge.close();
   });
   it("keeps only the latest asynchronously resolved route token", async () => {
@@ -2979,29 +3150,6 @@ describe("createLiveBridge navigation resume and snapshot lifecycle", () => {
     deleteNavigationSnapshot.mockResolvedValue(undefined);
   });
 
-  it("cancels the old speech when a snapshot resume commits without a nav.step event", async () => {
-    const old = deferred<{ pcm: Buffer; sampleRate: 24000 }>();
-    vi.mocked(synthesizeVoice).mockReturnValueOnce(old.promise);
-    const { ws } = makeHarness();
-    const bridge = await createLiveBridge({ ws, userId: "u" });
-    await bridge.voiceReady;
-    await bridge.armRouteToken("token");
-    bridge.startNavigation();
-    const signal = vi.mocked(synthesizeVoice).mock.calls[0][1].signal;
-    await bridge.resumeNavigation(resumeMessage());
-    expect(frameOf(ws, "nav.resume_ok")).toMatchObject({ currentStepIndex: 1 });
-    expect(signal.aborted).toBe(true);
-    bridge.previewNavStep(1);
-    expect(synthesizeVoice).toHaveBeenCalledTimes(2);
-    old.resolve({ pcm: Buffer.alloc(1920, 9), sampleRate: 24000 });
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(
-      vi
-        .mocked(ws.send)
-        .mock.calls.some(([v]) => Buffer.isBuffer(v) && v.includes(9)),
-    ).toBe(false);
-    bridge.close();
-  });
   it("resumes from the snapshot and emits a contract-valid nav.resume_ok", async () => {
     const { ws } = makeHarness();
     const bridge = await createLiveBridge({ ws, userId: "u" });
@@ -4794,7 +4942,7 @@ describe("Live model and assistant end", () => {
       await bridge.armRouteToken("narration-token");
       bridge.updatePosition({ latitude: 25, longitude: 121 });
       bridge.startNavigation();
-      expect(synthesizeVoice).toHaveBeenCalled();
+      expect(session.sendClientContent).toHaveBeenCalled();
       const endCall = {
         id: "narration-end",
         name: "endVoiceSession",
@@ -5288,7 +5436,7 @@ describe("candidate control server guards", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(executeLocalTool).not.toHaveBeenCalled();
     expect(resolveRouteOperation).not.toHaveBeenCalled();
-    expect(synthesizeVoice).not.toHaveBeenCalled();
+    expect(session.sendClientContent).not.toHaveBeenCalled();
     tool("planAccessibleRoute", { travelMode: "drive" });
     await settle();
     expect(executeLocalTool).toHaveBeenCalledTimes(1);
@@ -5303,7 +5451,7 @@ describe("candidate control server guards", () => {
       tool("planAccessibleRoute", { travelMode: "drive" });
       await settle();
       expect(executeLocalTool).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(synthesizeVoice)).not.toHaveBeenCalled();
+      expect(session.sendClientContent).not.toHaveBeenCalled();
       expect(JSON.stringify(session.sendToolResponse.mock.calls)).not.toContain(
         "OPERATION_NOT_REQUESTED",
       );
@@ -5322,7 +5470,7 @@ describe("candidate control server guards", () => {
       expect(session.sendToolResponse).toHaveBeenCalledTimes(2),
     );
     expect(executeLocalTool).toHaveBeenCalledTimes(1);
-    expect(synthesizeVoice).not.toHaveBeenCalled();
+    expect(session.sendClientContent).not.toHaveBeenCalled();
     expect(JSON.stringify(session.sendToolResponse.mock.calls)).toContain(
       "completedResults",
     );
@@ -5341,7 +5489,7 @@ describe("candidate control server guards", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(executeLocalTool).not.toHaveBeenCalled();
-    expect(vi.mocked(synthesizeVoice)).not.toHaveBeenCalled();
+    expect(session.sendClientContent).not.toHaveBeenCalled();
   });
   it("never returns an authorization rejection for a provider-cancelled call", async () => {
     vi.mocked(resolveRouteOperation).mockResolvedValue(roadOperation());
@@ -5461,7 +5609,6 @@ describe("candidate control server guards", () => {
         ).toEqual(["planAccessibleRoute", "getNavInstructions"]);
         expect(resolveRouteOperation).toHaveBeenCalledTimes(1);
         expect(session.sendClientContent).not.toHaveBeenCalled();
-        expect(synthesizeVoice).not.toHaveBeenCalled();
         expect(messages().some((m) => m.type === "nav.start")).toBe(false);
       } finally {
         vi.useRealTimers();
@@ -5560,7 +5707,6 @@ describe("candidate control server guards", () => {
         await vi.advanceTimersByTimeAsync(10000);
         expect(resolveRouteOperation).not.toHaveBeenCalled();
         expect(session.sendClientContent).not.toHaveBeenCalled();
-        expect(synthesizeVoice).not.toHaveBeenCalled();
         expect(executeLocalTool).toHaveBeenCalledTimes(1);
       } finally {
         vi.useRealTimers();
@@ -5590,7 +5736,6 @@ describe("candidate control server guards", () => {
         await vi.advanceTimersByTimeAsync(2000);
         expect(executeLocalTool).not.toHaveBeenCalled();
         expect(session.sendClientContent).not.toHaveBeenCalled();
-        expect(synthesizeVoice).not.toHaveBeenCalled();
         expect(messages().some((m) => m.type === "nav.start")).toBe(false);
       } finally {
         vi.useRealTimers();
@@ -5621,7 +5766,6 @@ describe("candidate control server guards", () => {
       await vi.advanceTimersByTimeAsync(2000);
       expect(executeLocalTool).toHaveBeenCalledTimes(1);
       expect(session.sendClientContent).not.toHaveBeenCalled();
-      expect(synthesizeVoice).not.toHaveBeenCalled();
       expect(
         messages().some((m) => m.text === "這條開車路線已經顯示在地圖上。"),
       ).toBe(true);
@@ -5672,8 +5816,12 @@ describe("candidate control server guards", () => {
         await bridge.armRouteToken("first-token");
         bridge.startNavigation();
         await vi.advanceTimersByTimeAsync(100);
+        onmessage({
+          serverContent: { generationComplete: true, turnComplete: true },
+        });
+        await vi.advanceTimersByTimeAsync(0);
         const initial = messages().find((m) => m.type === "nav.start");
-        vi.mocked(synthesizeVoice).mockClear();
+        session.sendClientContent.mockClear();
         vi.mocked(ws.send).mockClear();
         const expected =
           stepAction === "repeat" ? "repeatNavStep" : "advanceNavStep";
@@ -5716,8 +5864,8 @@ describe("candidate control server guards", () => {
           name: expected,
           result: { ok: true },
         });
-        expect(synthesizeVoice).toHaveBeenCalledTimes(1);
-        expect(vi.mocked(synthesizeVoice).mock.calls[0][0]).toBe(
+        expect(session.sendClientContent).toHaveBeenCalledTimes(1);
+        expect(session.sendClientContent.mock.calls[0][0].turns).toContain(
           initial.steps[stepAction === "repeat" ? 0 : 1].instruction,
         );
         expect(
@@ -5725,14 +5873,13 @@ describe("candidate control server guards", () => {
             .filter((m) => m.type === "nav.step")
             .map((m) => m.currentStepIndex),
         ).toEqual(stepAction === "repeat" ? [] : [1]);
-        expect(session.sendClientContent).not.toHaveBeenCalled();
         tool(expected);
         tool(wrong);
         await vi.advanceTimersByTimeAsync(0);
         expect(messages().filter((m) => m.type === "tool_result")).toHaveLength(
           1,
         );
-        expect(synthesizeVoice).toHaveBeenCalledTimes(1);
+        expect(session.sendClientContent).toHaveBeenCalledTimes(1);
         expect(session.sendToolResponse).toHaveBeenCalledTimes(4);
         vi.mocked(resolveRouteOperation).mockResolvedValue(roadOperation());
         utter("改成開車路線，只規劃");
@@ -5760,7 +5907,7 @@ describe("candidate control server guards", () => {
         await bridge.armRouteToken("first-token");
         bridge.startNavigation();
         await vi.advanceTimersByTimeAsync(100);
-        vi.mocked(synthesizeVoice).mockClear();
+        session.sendClientContent.mockClear();
         vi.mocked(ws.send).mockClear();
         vi.mocked(resolveRouteOperation).mockResolvedValue({
           ...unclearRouteOperation(),
@@ -5783,7 +5930,7 @@ describe("candidate control server guards", () => {
           utter("先說明路線細節");
         }
         await vi.advanceTimersByTimeAsync(2000);
-        expect(synthesizeVoice).not.toHaveBeenCalled();
+        expect(session.sendClientContent).not.toHaveBeenCalled();
         expect(
           messages().some(
             (m) => m.type === "tool_result" && m.name === "repeatNavStep",
@@ -5809,8 +5956,12 @@ describe("candidate control server guards", () => {
       await bridge.armRouteToken("first-token");
       bridge.startNavigation();
       await vi.advanceTimersByTimeAsync(100);
+      onmessage({
+        serverContent: { generationComplete: true, turnComplete: true },
+      });
+      await vi.advanceTimersByTimeAsync(0);
       vi.mocked(ws.send).mockClear();
-      vi.mocked(synthesizeVoice).mockClear();
+      session.sendClientContent.mockClear();
       const operation =
         deferred<Awaited<ReturnType<typeof resolveRouteOperation>>>();
       vi.mocked(resolveRouteOperation).mockReturnValueOnce(operation.promise);
@@ -5840,8 +5991,10 @@ describe("candidate control server guards", () => {
       await vi.advanceTimersByTimeAsync(0);
       onmessage({ serverContent: { turnComplete: true } });
       await vi.advanceTimersByTimeAsync(100);
-      expect(synthesizeVoice).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(synthesizeVoice).mock.calls[0][0]).toBe("搭電梯到3樓");
+      expect(session.sendClientContent).toHaveBeenCalledTimes(1);
+      expect(session.sendClientContent.mock.calls[0][0].turns).toContain(
+        "搭電梯到3樓",
+      );
       expect(
         messages()
           .filter((m) => m.type === "nav.step")
@@ -5912,7 +6065,6 @@ describe("candidate control server guards", () => {
           ),
         ).toBe(false);
         expect(session.sendClientContent).not.toHaveBeenCalled();
-        expect(synthesizeVoice).not.toHaveBeenCalled();
       } finally {
         vi.useRealTimers();
       }
@@ -5980,7 +6132,7 @@ describe("candidate control server guards", () => {
     expect(messages().some((m) => m.type === "nav.start")).toBe(false);
     expect(executeLocalTool).toHaveBeenCalledTimes(1);
     expect(resolveRouteOperation).toHaveBeenCalledTimes(1);
-    expect(synthesizeVoice).not.toHaveBeenCalled();
+    expect(session.sendClientContent).not.toHaveBeenCalled();
   });
   it("returns both comparison results to Live and forwards its natural answer without starting navigation", async () => {
     const op = roadOperation();
@@ -6039,7 +6191,7 @@ describe("candidate control server guards", () => {
         .mock.calls.some(([raw]) => Buffer.isBuffer(raw) && raw.equals(pcm)),
     ).toBe(true);
     expect(messages().some((m) => m.type === "nav.start")).toBe(false);
-    expect(synthesizeVoice).not.toHaveBeenCalled();
+    expect(session.sendClientContent).not.toHaveBeenCalled();
     utter("所以機車快多少？");
     onmessage({
       serverContent: {
@@ -6074,7 +6226,6 @@ describe("candidate control server guards", () => {
     expect(messages().some((m) => m.text === answer)).toBe(true);
     expect(messages().some((m) => m.type === "nav.start")).toBe(false);
     expect(executeLocalTool).toHaveBeenCalledTimes(1);
-    expect(synthesizeVoice).not.toHaveBeenCalled();
     expect(session.sendClientContent).not.toHaveBeenCalled();
   });
   it("ends voice only through the requested model tool and allows a natural farewell", async () => {
@@ -6098,7 +6249,6 @@ describe("candidate control server guards", () => {
       true,
     );
     expect(messages().some((m) => m.type === "nav.stop")).toBe(false);
-    expect(synthesizeVoice).not.toHaveBeenCalled();
     expect(session.sendClientContent).not.toHaveBeenCalled();
   });
   it("reports a failed direct-start result to Live without creating navigation", async () => {
@@ -6122,7 +6272,7 @@ describe("candidate control server guards", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(messages().some((m) => m.text === answer)).toBe(true);
     expect(messages().some((m) => m.type === "nav.start")).toBe(false);
-    expect(synthesizeVoice).not.toHaveBeenCalled();
+    expect(session.sendClientContent).not.toHaveBeenCalled();
   });
   it("never repeats comparison tools or injects scripted replies on idle completions", async () => {
     const op = roadOperation();
@@ -6146,7 +6296,6 @@ describe("candidate control server guards", () => {
         await vi.advanceTimersByTimeAsync(1000);
       }
       expect(executeLocalTool).toHaveBeenCalledTimes(2);
-      expect(synthesizeVoice).not.toHaveBeenCalled();
       expect(session.sendClientContent).not.toHaveBeenCalled();
       const answer = "開車和機車都大約兩分鐘，您可以看看哪條路線比較適合。";
       onmessage({
@@ -6162,7 +6311,7 @@ describe("candidate control server guards", () => {
       }
       expect(messages().some((m) => m.text === answer)).toBe(true);
       expect(executeLocalTool).toHaveBeenCalledTimes(2);
-      expect(synthesizeVoice).not.toHaveBeenCalled();
+      expect(session.sendClientContent).not.toHaveBeenCalled();
       expect(
         messages().filter((m) => m.type === "turn.complete").length,
       ).toBeLessThanOrEqual(3);
@@ -6180,7 +6329,7 @@ describe("candidate control server guards", () => {
     try {
       onmessage({ serverContent: { turnComplete: true } });
       await vi.advanceTimersByTimeAsync(2000);
-      expect(vi.mocked(synthesizeVoice)).not.toHaveBeenCalled();
+      expect(session.sendClientContent).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
@@ -6194,10 +6343,12 @@ describe("candidate control server guards", () => {
     try {
       onmessage({ serverContent: { turnComplete: true } });
       await vi.advanceTimersByTimeAsync(2000);
-      expect(vi.mocked(synthesizeVoice)).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(synthesizeVoice).mock.calls[0][0]).toBe("已開始導航");
+      expect(session.sendClientContent).toHaveBeenCalledTimes(1);
+      expect(session.sendClientContent.mock.calls[0][0].turns).toContain(
+        "已開始導航",
+      );
       expect(
-        JSON.stringify(vi.mocked(synthesizeVoice).mock.calls),
+        JSON.stringify(session.sendClientContent.mock.calls),
       ).not.toContain("本輪操作已由伺服器執行");
     } finally {
       vi.useRealTimers();
@@ -6251,7 +6402,7 @@ describe("candidate control server guards", () => {
             (m) => m.text === "兩個方案都找到了，時間各是兩分鐘。",
           ),
         ).toBe(true);
-        expect(synthesizeVoice).not.toHaveBeenCalled();
+        expect(session.sendClientContent).not.toHaveBeenCalled();
         expect(executeLocalTool).toHaveBeenCalledTimes(2);
         utter("請說明細節");
         onmessage({
@@ -6269,7 +6420,7 @@ describe("candidate control server guards", () => {
         tool("planAccessibleRoute", { travelMode: "drive" });
         await vi.advanceTimersByTimeAsync(0);
         expect(executeLocalTool).toHaveBeenCalledTimes(3);
-        expect(synthesizeVoice).not.toHaveBeenCalled();
+        expect(session.sendClientContent).not.toHaveBeenCalled();
       } finally {
         vi.useRealTimers();
       }
@@ -6295,19 +6446,17 @@ describe("candidate control server guards", () => {
         else bridge.close();
         await vi.advanceTimersByTimeAsync(2000);
         expect(executeLocalTool).not.toHaveBeenCalled();
-        expect(vi.mocked(synthesizeVoice)).not.toHaveBeenCalled();
+        expect(session.sendClientContent).not.toHaveBeenCalled();
       } finally {
         vi.useRealTimers();
       }
     },
   );
   it("cancels pending navigation speech on stop and keeps natural voice conversation available", async () => {
-    const old = deferred<{ pcm: Buffer; sampleRate: 24000 }>();
-    vi.mocked(synthesizeVoice).mockReturnValueOnce(old.promise);
     getRouteByToken.mockResolvedValue(tokenRoute);
     await bridge.armRouteToken("first-token");
     bridge.startNavigation();
-    const signal = vi.mocked(synthesizeVoice).mock.calls[0][1].signal;
+    expect(session.sendClientContent).toHaveBeenCalledTimes(1);
     vi.mocked(resolveRouteOperation).mockResolvedValue({
       ...unclearRouteOperation(),
       action: "stop",
@@ -6316,8 +6465,6 @@ describe("candidate control server guards", () => {
     utter("停止導航，保留語音");
     tool("stopNavigation");
     await settle();
-    expect(signal.aborted).toBe(true);
-    old.resolve({ pcm: Buffer.alloc(960, 9), sampleRate: 24000 });
     const answer = "已經停下來了，您還想查什麼呢？";
     onmessage({
       serverContent: {
@@ -6327,11 +6474,6 @@ describe("candidate control server guards", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(messages().some((m) => m.text === answer)).toBe(true);
-    expect(
-      vi
-        .mocked(ws.send)
-        .mock.calls.some(([raw]) => Buffer.isBuffer(raw) && raw.includes(9)),
-    ).toBe(false);
     expect(messages().some((m) => m.type === "nav.stop")).toBe(true);
     expect(ws.close).not.toHaveBeenCalled();
     utter("你好");
@@ -6343,7 +6485,6 @@ describe("candidate control server guards", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(messages().some((m) => m.text === "您好，我還在。")).toBe(true);
-    expect(synthesizeVoice).toHaveBeenCalledTimes(1);
   });
   it.each(["startNavigation", "repeatNavStep"])(
     "waits for provider completion before queued navigation speech after successful %s",
@@ -6356,7 +6497,7 @@ describe("candidate control server guards", () => {
           serverContent: { generationComplete: true, turnComplete: true },
         });
         await new Promise((resolve) => setTimeout(resolve, 20));
-        vi.mocked(synthesizeVoice).mockClear();
+        session.sendClientContent.mockClear();
       }
       vi.mocked(resolveRouteOperation).mockResolvedValue(
         name === "startNavigation"
@@ -6376,29 +6517,18 @@ describe("candidate control server guards", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(session.sendToolResponse).toHaveBeenCalledTimes(1);
         await vi.advanceTimersByTimeAsync(1600);
-        expect(synthesizeVoice).not.toHaveBeenCalled();
+        expect(session.sendClientContent).not.toHaveBeenCalled();
         onmessage({ serverContent: { turnComplete: true } });
         await vi.advanceTimersByTimeAsync(0);
-        expect(vi.mocked(synthesizeVoice)).toHaveBeenCalledTimes(1);
-        const trustedText = vi.mocked(synthesizeVoice).mock.calls[0][0];
-        expect(trustedText).toBe(
+        expect(session.sendClientContent).toHaveBeenCalledTimes(1);
+        const trustedText =
           name === "startNavigation"
             ? "已開始導航"
             : messages().find((m) => m.type === "nav.start").steps[0]
-                .instruction,
+                .instruction;
+        expect(session.sendClientContent.mock.calls[0][0].turns).toContain(
+          trustedText,
         );
-        onmessage({ serverContent: { interrupted: true, turnComplete: true } });
-        onmessage({
-          serverContent: {
-            outputTranscription: { text: "真實導航步驟" },
-            generationComplete: true,
-            turnComplete: true,
-          },
-        });
-        await vi.advanceTimersByTimeAsync(100);
-        expect(messages().some((m) => m.text === trustedText)).toBe(true);
-        expect(messages().some((m) => m.text === "真實導航步驟")).toBe(false);
-        expect(vi.mocked(synthesizeVoice)).toHaveBeenCalledTimes(1);
       } finally {
         vi.useRealTimers();
       }
@@ -6411,9 +6541,13 @@ describe("candidate control server guards", () => {
       await bridge.armRouteToken("first-token");
       bridge.startNavigation();
       await vi.advanceTimersByTimeAsync(100);
+      onmessage({
+        serverContent: { generationComplete: true, turnComplete: true },
+      });
+      await vi.advanceTimersByTimeAsync(0);
       const currentInstruction = messages().find((m) => m.type === "nav.start")
         .steps[0].instruction;
-      vi.mocked(synthesizeVoice).mockClear();
+      session.sendClientContent.mockClear();
       vi.mocked(ws.send).mockClear();
       vi.mocked(resolveRouteOperation).mockResolvedValue({
         ...unclearRouteOperation(),
@@ -6427,38 +6561,13 @@ describe("candidate control server guards", () => {
       tool("repeatNavStep");
       await vi.advanceTimersByTimeAsync(0);
       expect(session.sendToolResponse).toHaveBeenCalledOnce();
-      expect(synthesizeVoice).not.toHaveBeenCalled();
+      expect(session.sendClientContent).not.toHaveBeenCalled();
       onmessage({ serverContent: { turnComplete: true } });
       await vi.advanceTimersByTimeAsync(0);
-      expect(synthesizeVoice).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(synthesizeVoice).mock.calls[0][0]).toBe(
+      expect(session.sendClientContent).toHaveBeenCalledTimes(1);
+      expect(session.sendClientContent.mock.calls[0][0].turns).toContain(
         currentInstruction,
       );
-      onmessage({
-        serverContent: {
-          outputTranscription: { text: "另一個回合的方向" },
-          modelTurn: {
-            parts: [
-              { inlineData: { data: Buffer.alloc(960, 9).toString("base64") } },
-            ],
-          },
-          interrupted: true,
-          turnComplete: true,
-        },
-      });
-      await vi.advanceTimersByTimeAsync(100);
-      expect(messages().some((m) => m.text === currentInstruction)).toBe(true);
-      expect(messages().some((m) => m.text === "另一個回合的方向")).toBe(false);
-      expect(
-        vi
-          .mocked(ws.send)
-          .mock.calls.some(([raw]) => Buffer.isBuffer(raw) && raw.includes(9)),
-      ).toBe(false);
-      expect(
-        messages().filter(
-          (m) => m.type === "tool_result" && m.name === "repeatNavStep",
-        ),
-      ).toHaveLength(1);
     } finally {
       vi.useRealTimers();
     }
@@ -6537,7 +6646,7 @@ describe("candidate control server guards", () => {
       },
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(synthesizeVoice).not.toHaveBeenCalled();
+    expect(session.sendClientContent).not.toHaveBeenCalled();
     const results = messages().filter((m) => m.type === "tool_result");
     expect(results).toHaveLength(2);
     expect(results.every((r) => r.result?.ok)).toBe(true);

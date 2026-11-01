@@ -1,4 +1,3 @@
-import { createTrustedSpeech } from "./trusted-speech";
 import {
   resolveRouteOperation,
   loadVoiceRoutingPreferences,
@@ -44,7 +43,10 @@ import {
 } from "../../config/voice-live";
 import { buildGeminiTools } from "../agent/tool-catalog";
 import { executeLocalTool } from "../ai/agent-tools";
-import { buildVoiceSystemPrompt } from "./voice-prompt";
+import {
+  buildVoiceSystemPrompt,
+  buildNavigationSpeechPrompt,
+} from "./voice-prompt";
 import type { AgentLanguage } from "../../types/agent";
 import { normalizeVoiceTranscript } from "./transcript-normalizer";
 import {
@@ -119,6 +121,8 @@ const REROUTE_COOLDOWN_MS = 30_000;
 const CORRIDOR_SCAN_MIN_INTERVAL_MS = 20_000;
 const SNAPSHOT_MIN_INTERVAL_MS = 5_000;
 const LIVE_CONNECT_TIMEOUT_MS = 15_000;
+const TURN_TIMEOUT_MS = 15_000;
+const TURN_TIMEOUT_STRIKES = 2;
 
 // Coordinates stop/resume races across bridge instances in this Node process;
 // Redis tombstones provide the durable cross-process boundary.
@@ -408,10 +412,13 @@ export async function createLiveBridge(
   // would end. Navigation speech goes out at generationComplete; content sent
   // in that window interrupts only the playback wait, and the old turn's
   // interrupted + turnComplete that follow must not touch the new nav turn.
+  let generationFinished = false;
   let preemptedFinishedTurn = false;
   // Only the first interrupted after a preempt is ours; later ones are barge-in.
   let preemptInterruptPending = false;
   let navSpeaking = false;
+  let turnTimeout: ReturnType<typeof setTimeout> | null = null;
+  let turnTimeoutStrikes = 0;
   let positionTimer: ReturnType<typeof setTimeout> | null = null;
   let lastPositionProcessedAt = 0;
   let latestPosition: NavPosition | null = userLocation ?? null;
@@ -764,13 +771,15 @@ export async function createLiveBridge(
     if (disposed || voiceState === "unavailable") return;
     voiceState = "unavailable";
     pendingLocation?.finish();
-    cancelTrustedSpeech();
+    turnTimeoutStrikes = 0;
+    clearTurnTimeout();
     voiceEpoch++;
     for (const cancel of pendingBootstraps) cancel();
     const ending = session;
     session = null;
     navSpeaking = false;
     liveState = "IDLE";
+    generationFinished = false;
     preemptedFinishedTurn = false;
     preemptInterruptPending = false;
     try {
@@ -821,14 +830,6 @@ export async function createLiveBridge(
   };
 
   const applyEffect = (effect: NavEffect): void => {
-    if (
-      effect.events.some((event) =>
-        ["nav.step", "nav.start", "nav.stop", "nav.arrived"].includes(
-          event.type,
-        ),
-      )
-    )
-      cancelTrustedSpeech();
     for (const event of effect.events) sendJson(event);
     if (
       effect.events.some(
@@ -962,13 +963,38 @@ export async function createLiveBridge(
     void runCorridorScan();
   });
 
+  const clearTurnTimeout = (): void => {
+    if (turnTimeout) clearTimeout(turnTimeout);
+    turnTimeout = null;
+  };
+
+  const startTurnTimeout = (): void => {
+    clearTurnTimeout();
+    turnTimeout = setTimeout(() => {
+      if (disposed || !navSpeaking || liveState === "IDLE") return;
+      turnTimeoutStrikes++;
+      console.warn(
+        "[voice] navigation turn timed out",
+        JSON.stringify({ strikes: turnTimeoutStrikes }),
+      );
+      if (turnTimeoutStrikes >= TURN_TIMEOUT_STRIKES) {
+        // A stuck model turn is a voice-quality failure. Navigation, alerts and
+        // the client socket all survive it; only playback stops. The Gemini
+        // session really is closed here, so LIVE_SESSION_ENDED is accurate and
+        // no new frame type is needed.
+        markVoiceUnavailable("LIVE_SESSION_ENDED");
+        return;
+      }
+      startTurnTimeout();
+    }, TURN_TIMEOUT_MS);
+  };
+
   const driveNavigationSpeech = (): void => {
     if (
       disposed ||
       assistantEnding ||
       liveState !== "IDLE" ||
       Boolean(userTranscriptBuffer.trim()) ||
-      controlledSpeech ||
       navSpeaking ||
       pendingToolMessages > 0
     )
@@ -977,11 +1003,31 @@ export async function createLiveBridge(
       drainNavigationSpeech();
       return;
     }
-    if (voiceState !== "ready" || ws.readyState !== WebSocket.OPEN) return;
+    if (!session || ws.readyState !== WebSocket.OPEN) return;
     const text = navSession.takeNextSpeech();
     if (!text) return;
+    try {
+      session.sendClientContent({
+        turns: buildNavigationSpeechPrompt(text, options.language),
+        turnComplete: true,
+      });
+    } catch (err) {
+      // A dead Live socket must not throw out through updatePosition() or the
+      // alert pipeline. Degrade instead; markVoiceUnavailable() releases the
+      // line we just took.
+      console.error(
+        "[voice] sendClientContent failed:",
+        summarizeError(err instanceof Error ? err.message : String(err)),
+      );
+      markVoiceUnavailable("LIVE_SESSION_ENDED");
+      return;
+    }
     navSpeaking = true;
-    startTrustedSpeech(text);
+    liveState = "AWAIT_MODEL";
+    preemptedFinishedTurn = generationFinished;
+    preemptInterruptPending = generationFinished;
+    generationFinished = false;
+    startTurnTimeout();
   };
 
   /**
@@ -1142,7 +1188,6 @@ export async function createLiveBridge(
         inFlight: false,
         lastStartedAt: now,
       });
-      cancelTrustedSpeech();
       navSession = replacement;
       activeNavigation = {
         routeToken: result.data.routeToken,
@@ -1298,93 +1343,6 @@ export async function createLiveBridge(
     }
   };
 
-  const trustedSpeech = createTrustedSpeech();
-  let providerSpeechSuppressed = false;
-  let controlledSpeech: {
-    navigation: NavigationSession;
-    audioSent: boolean;
-  } | null = null;
-  const cancelTrustedSpeech = (): void => {
-    const old = controlledSpeech;
-    controlledSpeech = null;
-    trustedSpeech.cancel();
-    providerSpeechSuppressed = false;
-    if (!old) return;
-    if (liveState === "MODEL_OUTPUT") liveState = "IDLE";
-    old.navigation.onTurnComplete();
-    navSpeaking = false;
-    if (old.audioSent) sendJson({ type: "interrupted" });
-    endTurnAudio("trusted-cancelled");
-  };
-  const startTrustedSpeech = (text: string): void => {
-    cancelTrustedSpeech();
-    const epoch = voiceEpoch;
-    const revision = inputArrivalRevision;
-    const navigationRevision = navigationGeneration;
-    const job = { navigation: navSession, audioSent: false };
-    controlledSpeech = job;
-    providerSpeechSuppressed = true;
-    navSpeaking = true;
-    console.info(
-      "[voice] trusted speech",
-      JSON.stringify({
-        kind: "navigation",
-        characters: text.length,
-        epoch,
-        revision,
-        navigationRevision,
-      }),
-    );
-    liveState = "MODEL_OUTPUT";
-    endTurnAudio("trusted-start");
-    const current = () =>
-      !disposed &&
-      voiceState === "ready" &&
-      controlledSpeech === job &&
-      epoch === voiceEpoch &&
-      revision === inputArrivalRevision &&
-      navigationRevision === navigationGeneration;
-    const finish = (spoken: string, failed: boolean) => {
-      if (!current()) return;
-      controlledSpeech = null;
-      providerSpeechSuppressed = false;
-      job.navigation.onTurnComplete();
-      navSpeaking = false;
-      conversationHistory.push({ role: "assistant", text: spoken });
-      if (conversationHistory.length > 20) conversationHistory.shift();
-      endTurnAudio(failed ? "synthesis-failed" : "synthesis-complete");
-      sendJson({ type: "turn.complete" });
-      clientCompletionSent = true;
-      liveState = "IDLE";
-      driveNavigationSpeech();
-    };
-    trustedSpeech.speak({
-      text,
-      voiceName: getLiveVoiceName() ?? "Kore",
-      isCurrent: current,
-      onText: (spoken) => {
-        if (current())
-          sendJson({ type: "transcript", role: "model", text: spoken });
-      },
-      onAudio: (pcm) => {
-        if (!current()) return false;
-        job.audioSent = true;
-        return forwardAudio(pcm.toString("base64"));
-      },
-      onComplete: () => finish(text, false),
-      onFailure: () => {
-        if (!current()) return;
-        if (job.audioSent) sendJson({ type: "interrupted" });
-        const message =
-          language === "en"
-            ? "Voice playback failed. Please check the instructions on screen."
-            : "語音播放暫時失敗，請查看畫面上的路線或導航指引。";
-        console.warn("[voice] trusted synthesis failed");
-        sendJson({ type: "transcript", role: "model", text: message });
-        finish(message, true);
-      },
-    });
-  };
   const outputTrimmer = new OutputSilenceTrimmer(getVoiceOutputTrimConfig());
   let turnAudioStartedAt: number | null = null;
   let turnBackpressureDrops = 0;
@@ -1409,22 +1367,21 @@ export async function createLiveBridge(
     turnAudioStartedAt = null;
     turnBackpressureDrops = 0;
   };
-  const forwardAudio = (base64Data: string): boolean => {
-    if (ws.readyState !== WebSocket.OPEN) return false;
+  const forwardAudio = (base64Data: string): void => {
+    if (ws.readyState !== WebSocket.OPEN) return;
     turnAudioStartedAt ??= Date.now();
     const decoded = Buffer.from(base64Data, "base64");
-    if (!outputTrimmer.accept(decoded)) return true;
+    if (!outputTrimmer.accept(decoded)) return;
     if (ws.bufferedAmount > MAX_BUFFERED_BYTES) {
       turnBackpressureDrops++;
       console.warn(
         "[voice] dropping downstream audio frame",
         JSON.stringify({ bufferedAmount: ws.bufferedAmount }),
       );
-      return false;
+      return;
     }
     ws.send(decoded, { binary: true });
     if (assistantEnding) assistantEnding.audioBytes += decoded.length;
-    return true;
   };
 
   /**
@@ -2202,7 +2159,6 @@ export async function createLiveBridge(
                   !prepared
                 )
                   return;
-                cancelTrustedSpeech();
                 navSession.dispose();
                 navSession = prepared.session;
                 activeNavigation = {
@@ -2544,7 +2500,6 @@ export async function createLiveBridge(
                           return false;
                         }
                         const old = activeNavigation;
-                        cancelTrustedSpeech();
                         navSession.dispose();
                         navSession = prepared.session;
                         activeNavigation = {
@@ -2887,9 +2842,7 @@ export async function createLiveBridge(
           });
         }
         if (content.inputTranscription.finished) {
-          const hasUtterance = Boolean(userTranscriptBuffer.trim());
           finalizeUserTranscript();
-          if (hasUtterance) providerSpeechSuppressed = false;
         }
       }
       const hasModelOutput = Boolean(
@@ -2900,7 +2853,6 @@ export async function createLiveBridge(
         !inputExplicitlyUnfinished &&
         !content.interrupted &&
         !preemptedFinishedTurn &&
-        !controlledSpeech &&
         (hasModelOutput || message.toolCall?.functionCalls?.length)
       )
         finalizeUserTranscript();
@@ -2916,19 +2868,17 @@ export async function createLiveBridge(
           );
         return;
       }
-      const ownedSpeech = providerSpeechSuppressed || controlledSpeech !== null;
-      const allowSpeech = !ownedSpeech && !navSpeaking && !content.interrupted;
-      if (allowSpeech && hasModelOutput) {
+      if (hasModelOutput) {
         liveState = "MODEL_OUTPUT";
         clientCompletionSent = false;
         if (!preemptedFinishedTurn) preemptInterruptPending = false;
       }
       for (const part of content.modelTurn?.parts ?? []) {
-        if (allowSpeech && part.inlineData?.data)
+        if (!content.interrupted && part.inlineData?.data)
           forwardAudio(part.inlineData.data);
       }
       const modelPiece =
-        allowSpeech && content.outputTranscription?.text
+        !content.interrupted && content.outputTranscription?.text
           ? filterModelTranscriptPiece(
               modelTranscriptBuffer,
               content.outputTranscription.text,
@@ -2942,23 +2892,26 @@ export async function createLiveBridge(
           text: normalizeVoiceTranscript(modelPiece),
         });
       }
-      if (content.interrupted && !ownedSpeech && preemptInterruptPending) {
+      if (content.interrupted && preemptInterruptPending) {
         preemptInterruptPending = false;
         // Our own navigation content ended a turn whose audio was already
         // complete: keep its answer and leave the new nav turn untouched.
         commitModelTranscript();
         endTurnAudio("preempted");
         if (content.turnComplete) preemptedFinishedTurn = false;
-      } else if (content.interrupted && !ownedSpeech) {
+      } else if (content.interrupted) {
+        generationFinished = false;
         modelTranscriptBuffer = "";
         endTurnAudio("interrupted");
+        if (userTranscriptBuffer.trim() && !inputExplicitlyUnfinished)
+          finalizeUserTranscript();
         navSession.onInterrupted();
         navSpeaking = false;
+        clearTurnTimeout();
         liveState = "USER_INPUT";
         sendJson({ type: "interrupted" });
       }
     }
-    if (controlledSpeech && !message.toolCall?.functionCalls?.length) return;
     if (message.toolCall?.functionCalls?.length) {
       if (content?.interrupted) {
         answerUnexecutedCalls(
@@ -2975,7 +2928,7 @@ export async function createLiveBridge(
         return;
       }
       if (!inputExplicitlyUnfinished) finalizeUserTranscript();
-      if (!controlledSpeech) endTurnAudio("tool-call");
+      endTurnAudio("tool-call");
       liveState = "TOOL_PENDING";
       await handleToolCalls(
         message.toolCall.functionCalls,
@@ -2994,21 +2947,30 @@ export async function createLiveBridge(
       preemptInterruptPending = false;
       commitModelTranscript();
       endTurnAudio("preempted-turn-complete");
+      sendJson({ type: "turn.complete" });
     } else if (
       content?.generationComplete &&
       !content.turnComplete &&
       !content.interrupted
     ) {
+      generationFinished = true;
       logTurnAudio("generation-complete", outputTrimmer.peek());
       if (navSpeaking) navSession.onTurnComplete();
       navSpeaking = false;
+      turnTimeoutStrikes = 0;
+      clearTurnTimeout();
       liveState = "IDLE";
       driveNavigationSpeech();
     } else if (content?.turnComplete && !content.interrupted) {
+      generationFinished = false;
       commitModelTranscript();
       endTurnAudio("turn-complete");
+      if (userTranscriptBuffer.trim() && !inputExplicitlyUnfinished)
+        finalizeUserTranscript();
       if (navSpeaking) navSession.onTurnComplete();
       navSpeaking = false;
+      turnTimeoutStrikes = 0;
+      clearTurnTimeout();
       liveState = "IDLE";
       if (!clientCompletionSent) {
         sendJson({ type: "turn.complete" });
@@ -3170,8 +3132,7 @@ export async function createLiveBridge(
             callbacks: {
               onmessage: (message: LiveServerMessage) => {
                 if (disposed || expectedEpoch !== voiceEpoch) return;
-                if (message.serverContent?.interrupted && !controlledSpeech)
-                  toolGeneration++;
+                if (message.serverContent?.interrupted) toolGeneration++;
                 for (const id of message.toolCallCancellation?.ids ?? [])
                   cancelledCalls.add(id);
                 const hasToolCalls = Boolean(
@@ -3190,7 +3151,6 @@ export async function createLiveBridge(
                       navSession.getSnapshotState()?.currentStepIndex ?? null,
                   };
                   liveState = "USER_INPUT";
-                  cancelTrustedSpeech();
                   clientCompletionSent = false;
                 }
                 const arrivalRevision = hasInputText
@@ -3415,7 +3375,6 @@ export async function createLiveBridge(
         registry = null;
         proposal = null;
       }
-      cancelTrustedSpeech();
       const epoch = ++voiceEpoch;
       for (const cancel of pendingBootstraps) cancel();
       const ending = session;
@@ -3473,13 +3432,11 @@ export async function createLiveBridge(
         routeToken !== pendingDirectToken
       ) {
         inputArrivalRevision++;
-        cancelTrustedSpeech();
       }
       return armRouteToken(routeToken, undefined, previewEcho);
     },
     startNavigation(): void {
       inputArrivalRevision++;
-      cancelTrustedSpeech();
       startNavigation();
     },
     async resumeNavigation(message: NavResumeMessage): Promise<void> {
@@ -3624,7 +3581,6 @@ export async function createLiveBridge(
         }
         const resumePosition =
           message.currentPosition ?? snapshot.latestPosition ?? undefined;
-        cancelTrustedSpeech();
         const committedGeneration = ++navigationGeneration;
         pruneRerouteState();
         pendingRouteArm = null;
@@ -3736,7 +3692,6 @@ export async function createLiveBridge(
     previewNavStep(index: number): void {
       if (disposed) return;
       const effect = navSession.previewStep(index);
-      if (effect.ok) cancelTrustedSpeech();
       applyEffect(effect);
       driveNavigationSpeech();
     },
@@ -3758,7 +3713,6 @@ export async function createLiveBridge(
     },
     cancelNav(): void {
       inputArrivalRevision++;
-      cancelTrustedSpeech();
       proposal = null;
       const idsToDelete = new Set<string>();
       if (activeNavigation?.navigationId)
@@ -3806,14 +3760,12 @@ export async function createLiveBridge(
       closeBridge();
     },
     close(): void {
-      cancelTrustedSpeech();
       closeBridge();
     },
     voiceReady,
   };
 
   function closeBridge(): void {
-    cancelTrustedSpeech();
     clearAssistantEndTimers();
     if (disposed) return;
     closedByGateway = true;

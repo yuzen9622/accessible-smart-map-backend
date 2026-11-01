@@ -1,9 +1,3 @@
-vi.mock("../../adapters/voice-synthesis.adapter", () => ({
-  synthesizeVoice: vi
-    .fn()
-    .mockResolvedValue({ pcm: Buffer.alloc(1920, 4), sampleRate: 24000 }),
-}));
-import { synthesizeVoice } from "../../adapters/voice-synthesis.adapter";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 
@@ -194,9 +188,6 @@ function noise() {
 describe("natural-language voice actions — frozen user acceptance", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
-    vi.mocked(synthesizeVoice)
-      .mockReset()
-      .mockResolvedValue({ pcm: Buffer.alloc(1920, 4), sampleRate: 24000 });
     authorize("none");
     io.route.mockResolvedValue(route);
     io.envelope.mockResolvedValue(envelope);
@@ -254,19 +245,15 @@ describe("natural-language voice actions — frozen user acceptance", () => {
     bridge.startNavigation();
     expect(frames().some((frame) => frame.type === "nav.start")).toBe(true);
     expect(session.sendRealtimeInput).toHaveBeenCalled();
-    expect(synthesizeVoice).toHaveBeenCalledTimes(1);
-    expect(session.sendClientContent).not.toHaveBeenCalled();
+    expect(session.sendClientContent).toHaveBeenCalledTimes(1);
   });
 
   it("accepts a new detected user command while the startup acknowledgement is speaking", async () => {
     await bridge.armRouteToken(route.routeToken);
     bridge.startNavigation();
-    expect(synthesizeVoice).toHaveBeenCalledTimes(1);
-    expect(session.sendClientContent).not.toHaveBeenCalled();
-    const initialSignal = vi.mocked(synthesizeVoice).mock.calls[0][1].signal;
+    expect(session.sendClientContent).toHaveBeenCalledTimes(1);
     authorize("stop");
     await transcript("停止導航");
-    expect(initialSignal.aborted).toBe(true);
     callbacks.onmessage({
       toolCall: {
         functionCalls: [
@@ -287,51 +274,16 @@ describe("natural-language voice actions — frozen user acceptance", () => {
     await bridge.armRouteToken(route.routeToken);
     await transcript("我正在說話，請稍等一下");
     bridge.startNavigation();
-    expect(synthesizeVoice).not.toHaveBeenCalled();
-    callbacks.onmessage({ serverContent: { turnComplete: true } });
-    await vi.waitFor(() => expect(synthesizeVoice).toHaveBeenCalledTimes(1));
     expect(session.sendClientContent).not.toHaveBeenCalled();
+    callbacks.onmessage({ serverContent: { turnComplete: true } });
+    await vi.waitFor(() =>
+      expect(session.sendClientContent).toHaveBeenCalledTimes(1),
+    );
     const firstStep = frames().find((frame) => frame.type === "nav.start")
       .steps[0].instruction;
-    expect(vi.mocked(synthesizeVoice).mock.calls[0][0]).toBe(firstStep);
-  });
-
-  it("keeps trusted speech pending despite stale Live completion or interruption", async () => {
-    let finish!: (audio: { pcm: Buffer; sampleRate: 24000 }) => void;
-    vi.mocked(synthesizeVoice).mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          finish = resolve;
-        }),
+    expect(session.sendClientContent.mock.calls[0][0].turns).toContain(
+      firstStep,
     );
-    await bridge.armRouteToken(route.routeToken);
-    bridge.startNavigation();
-    const [spoken, options] = vi.mocked(synthesizeVoice).mock.calls[0];
-    callbacks.onmessage({ serverContent: { generationComplete: true } });
-    callbacks.onmessage({ serverContent: { interrupted: true } });
-    callbacks.onmessage({ serverContent: { turnComplete: true } });
-    expect(options.signal.aborted).toBe(false);
-    expect(frames().some((frame) => frame.type === "turn.complete")).toBe(
-      false,
-    );
-    expect(
-      vi.mocked(ws.send).mock.calls.some(([frame]) => Buffer.isBuffer(frame)),
-    ).toBe(false);
-    finish({ pcm: Buffer.alloc(1920, 4), sampleRate: 24000 });
-    await vi.waitFor(() =>
-      expect(frames()).toContainEqual({
-        type: "transcript",
-        role: "model",
-        text: spoken,
-      }),
-    );
-    await vi.waitFor(() =>
-      expect(frames()).toContainEqual({ type: "turn.complete" }),
-    );
-    expect(
-      vi.mocked(ws.send).mock.calls.some(([frame]) => Buffer.isBuffer(frame)),
-    ).toBe(true);
-    expect(session.sendClientContent).not.toHaveBeenCalled();
   });
 
   it("requires a current user utterance before a model start decision", async () => {
@@ -531,10 +483,10 @@ describe("natural-language voice actions — frozen user acceptance", () => {
     callbacks.onmessage({ serverContent: { turnComplete: true } });
     await vi.waitFor(() =>
       expect(frames().filter((f) => f.type === "turn.complete")).toHaveLength(
-        2,
+        1,
       ),
     );
-    vi.mocked(synthesizeVoice).mockClear();
+    session.sendClientContent.mockClear();
     const previousSteps = frames().filter((f) => f.type === "nav.step");
     vi.mocked(resolveRouteOperation).mockResolvedValue({
       ...unclearRouteOperation(),
@@ -560,11 +512,12 @@ describe("natural-language voice actions — frozen user acceptance", () => {
       previousSteps,
     );
     callbacks.onmessage({ serverContent: { turnComplete: true } });
-    await vi.waitFor(() => expect(synthesizeVoice).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(synthesizeVoice).mock.calls[0][0]).toBe(
+    await vi.waitFor(() =>
+      expect(session.sendClientContent).toHaveBeenCalledTimes(1),
+    );
+    expect(session.sendClientContent.mock.calls[0][0].turns).toContain(
       frames().find((f) => f.type === "nav.start").steps[0].instruction,
     );
-    expect(session.sendClientContent).not.toHaveBeenCalled();
   });
 
   it.each(["none", "clarify", "advance"] as const)(
@@ -707,7 +660,7 @@ describe("natural-language voice actions — frozen user acceptance", () => {
       reason: "NO_ACTIVE_NAVIGATION",
       activeNavigation: { active: false },
     });
-    expect(synthesizeVoice).not.toHaveBeenCalled();
+    expect(session.sendClientContent).not.toHaveBeenCalled();
   });
 
   it("returns the new indoor step after advance and inactive state after arrival", async () => {
@@ -822,7 +775,7 @@ describe("natural-language voice actions — frozen user acceptance", () => {
     ).toBe(true);
     expect(resolveRouteOperation).not.toHaveBeenCalled();
     expect(io.execute).not.toHaveBeenCalled();
-    expect(synthesizeVoice).not.toHaveBeenCalled();
+    expect(session.sendClientContent).not.toHaveBeenCalled();
   });
 
   it("does not wait for route classification to answer ordinary conversation", async () => {
@@ -888,7 +841,7 @@ describe("natural-language voice actions — frozen user acceptance", () => {
           ),
       ).toBe(true);
       expect(resolveRouteOperation).toHaveBeenCalledTimes(1);
-      expect(synthesizeVoice).not.toHaveBeenCalled();
+      expect(session.sendClientContent).not.toHaveBeenCalled();
       expect(frames().some((f) => f.type === "nav.start")).toBe(false);
     },
   );
@@ -905,7 +858,6 @@ describe("natural-language voice actions — frozen user acceptance", () => {
       expect(resolveRouteOperation).not.toHaveBeenCalled();
       expect(io.execute).not.toHaveBeenCalled();
       expect(session.sendClientContent).not.toHaveBeenCalled();
-      expect(synthesizeVoice).not.toHaveBeenCalled();
       expect(frames().some((frame) => frame.type === "nav.start")).toBe(false);
     } finally {
       vi.useRealTimers();
@@ -960,10 +912,7 @@ describe("natural-language voice actions — frozen user acceptance", () => {
   it("queues a navigation announcement until the current natural answer finishes", async () => {
     await bridge.armRouteToken(route.routeToken);
     bridge.startNavigation();
-    await vi.waitFor(() =>
-      expect(frames()).toContainEqual({ type: "turn.complete" }),
-    );
-    vi.mocked(synthesizeVoice).mockClear();
+    session.sendClientContent.mockClear();
     await transcript("這條路上有什麼可以看的？");
     callbacks.onmessage({
       serverContent: {
@@ -982,7 +931,7 @@ describe("natural-language voice actions — frozen user acceptance", () => {
       longitude: 121.001,
       accuracy: 5,
     });
-    expect(synthesizeVoice).not.toHaveBeenCalled();
+    expect(session.sendClientContent).not.toHaveBeenCalled();
     callbacks.onmessage({
       serverContent: {
         outputTranscription: { text: "到了之後也能再聊附近的地點。" },
@@ -995,9 +944,11 @@ describe("natural-language voice actions — frozen user acceptance", () => {
         text: "到了之後也能再聊附近的地點。",
       }),
     );
-    expect(synthesizeVoice).not.toHaveBeenCalled();
+    expect(session.sendClientContent).not.toHaveBeenCalled();
     callbacks.onmessage({ serverContent: { turnComplete: true } });
-    await vi.waitFor(() => expect(synthesizeVoice).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() =>
+      expect(session.sendClientContent).toHaveBeenCalledTimes(1),
+    );
     expect(resolveRouteOperation).not.toHaveBeenCalled();
   });
 
@@ -1046,7 +997,7 @@ describe("natural-language voice actions — frozen user acceptance", () => {
       allowedOperation: { plans: [{ origin: "A", destination: "臺大醫院" }] },
     });
     expect(io.execute).not.toHaveBeenCalled();
-    expect(synthesizeVoice).not.toHaveBeenCalled();
+    expect(session.sendClientContent).not.toHaveBeenCalled();
   });
 
   it("terminates an uncancelled call when a new interrupted utterance overtakes its authorization", async () => {
@@ -1353,7 +1304,7 @@ describe("natural-language voice actions — frozen user acceptance", () => {
         requireElevator: true,
       });
       expect(frames().some((frame) => frame.type === "nav.start")).toBe(false);
-      expect(synthesizeVoice).not.toHaveBeenCalled();
+      expect(session.sendClientContent).not.toHaveBeenCalled();
     },
   );
 

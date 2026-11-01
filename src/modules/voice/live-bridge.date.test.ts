@@ -1,8 +1,3 @@
-vi.mock("../../adapters/voice-synthesis.adapter", () => ({
-  synthesizeVoice: vi
-    .fn()
-    .mockResolvedValue({ pcm: Buffer.alloc(1920, 4), sampleRate: 24000 }),
-}));
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const { connect } = vi.hoisted(() => ({
