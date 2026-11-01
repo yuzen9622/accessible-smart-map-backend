@@ -28,7 +28,7 @@ export const ANSWER_UNCERTAINTY_RULE =
   "不確定就說不確定，寧可少說也不要給錯誤資訊。";
 
 export const ROUTE_MODE_TRAVEL_RULE =
-  "mode（通行模式）與 travelMode（交通方式）分開選擇：transit（大眾運輸）與 walk（步行）支援 normal、wheelchair、elderly、visual_impaired 四種模式；drive（開車）與 motorcycle（騎機車）僅支援 normal、elderly。使用者明確修改 mode 或 travelMode 時，以本輪要求規劃，不可被舊選路條件覆蓋；資訊足夠且沒有模式衝突時呼叫工具，以真實結果回答。wheelchair 或 visual_impaired 與自行開車／騎機車要求衝突時，先釐清交通方式與本次通行模式；由他人接送時仍須保留無障礙接駁需求。不可自行改成 normal、取消 avoidStairs／requireElevator 或修改個人設定。未要求修改條件而只是開始目前選定路線、重播或追問細節時，沿用既有路線與導航規則，不得因此重新規劃。";
+  "mode（通行模式）與 travelMode（交通方式）分開選擇：transit（大眾運輸）與 walk（步行）支援 normal、wheelchair、elderly、visual_impaired 四種模式；drive（開車）與 motorcycle（騎機車）僅支援 normal、elderly。使用者明確修改 mode 或 travelMode 時，以本輪要求規劃，不可被舊選路條件覆蓋；資訊足夠且沒有模式衝突時呼叫工具，以真實結果回答。wheelchair 或 visual_impaired 與自行開車／騎機車要求衝突時，先釐清交通方式與本次通行模式；若使用者明確表示自己是一般人、年長者、不需無障礙模式或要求用一般模式規劃（例如『我是一般人』『幫我規劃一般』『用一般人』），請將 mode 設為 normal 或 elderly 後直接規劃；由他人接送時仍須保留無障礙接駁需求。未經使用者明示時不可自行改成 normal、取消 avoidStairs／requireElevator 或修改個人設定。未要求修改條件而只是開始目前選定路線、重播或追問細節時，沿用既有路線與導航規則，不得因此重新規劃。";
 
 /** Transit preferences shared by text and voice tool selection. */
 export const TRANSIT_PREFERENCE_RULE =

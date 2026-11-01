@@ -2432,6 +2432,34 @@ it("returns actionable LOCATION_REQUIRED without invoking the planner or inventi
   expect(mockPlanRoute).not.toHaveBeenCalled();
 });
 
+it("resolves Chinese current location phrases and unstated origin to userLocation", async () => {
+  const loc = { latitude: 24.15, longitude: 120.68 };
+  mockPlanRoute.mockResolvedValue({
+    ok: true,
+    data: {
+      routes: [{ routeId: "test-route", legs: [] }],
+      _canonicalRequest: { mode: "normal" },
+      origin: { lat: 24.15, lng: 120.68 },
+      destination: { lat: 24.13, lng: 120.67 },
+    },
+  });
+
+  for (const origin of ["目前位置", "這裡", "現在位置", undefined]) {
+    mockPlanRoute.mockClear();
+    const result = JSON.parse(
+      await executeLocalTool(
+        "planAccessibleRoute",
+        { origin, destination: "台中車站" },
+        loc,
+      ),
+    );
+    expect(result.ok).toBe(true);
+    expect(mockPlanRoute).toHaveBeenCalledWith(
+      expect.objectContaining({ origin: loc }),
+    );
+  }
+});
+
 describe("explicit Places search center", () => {
   const gps = { latitude: 25.04, longitude: 121.56 };
   const center = { latitude: 24.137, longitude: 120.686 };

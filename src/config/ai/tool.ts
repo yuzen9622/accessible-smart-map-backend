@@ -240,7 +240,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           origin: {
             type: "string",
             description:
-              "起點名稱，請『完整照抄』使用者說的地名（含校區/分館/分店/路段等後綴，例如『台中科大三民校區』不可簡化成『台中科大』）；若說「這裡/目前位置」請填 'current_location'。起點是校內某間教室時改用 originPlaceId",
+              "起點名稱，若從目前位置/這裡出發或未特別指明起點，請填 'current_location'（或省略由系統預設為目前位置）。起點為特定地名時請完整照抄（含校區/分館/分店/路段等後綴）；校內教室改用 originPlaceId",
           },
           destination: {
             type: "string",

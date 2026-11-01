@@ -819,6 +819,24 @@ function agentRoutePlan(input: {
   };
 }
 
+const CURRENT_LOCATION_ORIGIN_SET = new Set([
+  "current_location",
+  "目前位置",
+  "現在位置",
+  "這裡",
+  "這裏",
+  "我的位置",
+  "當前位置",
+  "本處",
+  "現在這裡",
+  "目前這裡",
+]);
+
+function isExplicitCurrentLocation(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  return CURRENT_LOCATION_ORIGIN_SET.has(value.trim().normalize("NFKC"));
+}
+
 export async function planAccessibleRoute(args: {
   origin?: string;
   destination?: string;
@@ -840,9 +858,15 @@ export async function planAccessibleRoute(args: {
   const { origin, destination, mode, departureTime } = args;
   const originPlaceId = args.originPlaceId?.trim() || undefined;
   const destinationPlaceId = args.destinationPlaceId?.trim() || undefined;
+  const explicitCurrentLocation = isExplicitCurrentLocation(origin);
+  const normalizedOrigin =
+    !originPlaceId &&
+    (explicitCurrentLocation || (!origin && args.userLocation))
+      ? "current_location"
+      : origin?.trim();
   if (
     (originPlaceId && destinationPlaceId) ||
-    (!originPlaceId && !origin) ||
+    (!originPlaceId && !normalizedOrigin) ||
     (!destinationPlaceId && !destination)
   ) {
     return JSON.stringify({
@@ -895,7 +919,11 @@ export async function planAccessibleRoute(args: {
     // the agent and the HTTP endpoint from ever drifting on geocoding, city
     // resolution or the transfer limit again. maxTransfers is 2 because realistic
     // cross-city trips (e.g. 雙鐵/高鐵接駁) routinely need two transfers.
-    if (!originPlaceId && origin === "current_location" && !args.userLocation) {
+    if (
+      !originPlaceId &&
+      normalizedOrigin === "current_location" &&
+      !args.userLocation
+    ) {
       return JSON.stringify({
         ok: false,
         reason: "LOCATION_REQUIRED",
@@ -903,7 +931,9 @@ export async function planAccessibleRoute(args: {
       });
     }
     const originInput =
-      origin === "current_location" ? args.userLocation : origin;
+      normalizedOrigin === "current_location"
+        ? args.userLocation
+        : normalizedOrigin;
     let venueId: string | undefined;
     if (originPlaceId || destinationPlaceId) {
       const venue = await resolveVenueQuery(args.venue);
