@@ -1017,7 +1017,9 @@ describe("generateNavInstructions", () => {
     const valid = await generateNavInstructionsFromInput({
       routeToken: "capability",
     });
-    expect(getRouteByToken).toHaveBeenCalledWith("capability");
+    expect(getRouteByToken).toHaveBeenCalledWith("capability", {
+      includeVenueLegs: true,
+    });
     expect(valid.ok).toBe(true);
 
     getRouteByToken.mockResolvedValueOnce(null);
@@ -1063,7 +1065,9 @@ describe("generateNavInstructions", () => {
       routeToken: "voice-capability",
     });
 
-    expect(getRouteByToken).toHaveBeenCalledWith("voice-capability");
+    expect(getRouteByToken).toHaveBeenCalledWith("voice-capability", {
+      includeVenueLegs: true,
+    });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.instructions.length).toBeGreaterThan(0);

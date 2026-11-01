@@ -14,7 +14,7 @@ export const NavInstructionsRequestSchema = z
   .object({
     routeToken: z.string().trim().min(1).max(256).openapi({
       description:
-        "由 /accessible-route 回傳、30 分鐘內有效的 routeToken；導航指引一律以伺服器端保存的路線產生，不接受前端回傳整包 route。",
+        "由路線規劃服務或 AI 規劃工具回傳、30 分鐘內有效的 routeToken；導航指引一律以伺服器端保存的路線產生，不接受前端回傳整包 route。",
       example: "M2F1...short-lived-capability",
     }),
     userHeading: z.number().min(0).max(359).optional().openapi({
@@ -50,7 +50,7 @@ registry.registerPath({
   tags: ["Accessibility"],
   summary: "路線逐步導航指引產生",
   description:
-    "以 /accessible-route 回傳的 routeToken 取出伺服器端路線，轉為可語音朗讀的逐步指引；不再接受前端傳入完整 route。台北 CSR-primary 的純步行路線由圖上選定的邊與設施型別（電梯／手扶梯／電動步道／閘門／進出站）推導出 turn-by-turn steps，但不含路名；transit itinerary 的 WALK legs 與 CSR fallback 的 OTP2 步行仍可帶 OTP steps，OTP2 不可用後的 Valhalla 步行也支援相同輸出。步行指引以 stairs 標示該段含樓梯並在 text 加入定性提示，不代表整段 distanceM 都是樓梯；steepSlope 以同樣方式標示坡度較陡的段落。若缺少 steps 仍回傳 200 概略指引。WALK 過渡期同時回 WALK_STEPS_UNAVAILABLE 與 legacy ORS_STEPS_UNAVAILABLE，車行回 ROAD_STEPS_UNAVAILABLE。",
+    "以路線規劃服務回傳的 routeToken 取出伺服器端完整行程，轉為可語音朗讀的逐步指引；不接受前端傳入完整 route。室內步驟為 legType=VENUE、driver=manual，保留建築與樓層，由使用者確認進度而非 GPS 推進。混合行程先抵達校門，再接校內步驟與最終目的地；純室內行程不需要戶外 legs。台北 CSR-primary 的純步行路線由圖上選定的邊與設施型別（電梯／手扶梯／電動步道／閘門／進出站）推導出 turn-by-turn steps，但不含路名；transit itinerary 的 WALK legs 與 CSR fallback 的 OTP2 步行仍可帶 OTP steps，OTP2 不可用後的 Valhalla 步行也支援相同輸出。步行指引以 stairs 標示該段含樓梯並在 text 加入定性提示，不代表整段 distanceM 都是樓梯；steepSlope 以同樣方式標示坡度較陡的段落。若缺少 steps 仍回傳 200 概略指引。WALK 過渡期同時回 WALK_STEPS_UNAVAILABLE 與 legacy ORS_STEPS_UNAVAILABLE，車行回 ROAD_STEPS_UNAVAILABLE。",
   request: {
     body: {
       content: { "application/json": { schema: NavInstructionsRequestSchema } },

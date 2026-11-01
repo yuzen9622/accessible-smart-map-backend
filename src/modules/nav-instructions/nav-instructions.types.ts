@@ -3,6 +3,7 @@
  * shapes the service produces and the result envelope it returns.
  */
 
+import type { VenueStepType } from "../accessible-route/venue-leg.types";
 import type { SupportedLang } from "../../types/lang";
 import type { ResponseCode } from "../../types/code";
 import type { WalkRelativeDirection } from "../../utils/nav-instructions-engine";
@@ -52,7 +53,13 @@ export interface NavInstruction {
   maneuver: WalkRelativeDirection | null;
   distanceM: number | null;
   streetName: string | null;
-  legType: NavLegType;
+  legType: NavLegType | "VENUE";
+  driver?: "manual";
+  venueStepType?: VenueStepType;
+  buildingId?: string | null;
+  levelRef?: string | null;
+  fromLevelRef?: string;
+  toLevelRef?: string;
   stairs: boolean;
   legIndex: number;
   polylineIndex: number | null;

@@ -69,13 +69,36 @@ const NavInstructionSchema = z
       "METRO",
       "THSR",
       "TRA",
+      "VENUE",
     ]),
+    driver: z.literal("manual").optional().openapi({
+      description: "室內步驟由使用者確認完成，GPS 不推進樓層或室內進度",
+    }),
+    venueStepType: z
+      .enum([
+        "depart",
+        "walk",
+        "enter",
+        "exit",
+        "elevator",
+        "escalator",
+        "stairs",
+        "steps",
+        "ramp",
+        "arrive",
+      ])
+      .optional(),
+    buildingId: z.string().nullable().optional(),
+    levelRef: z.string().nullable().optional(),
+    fromLevelRef: z.string().optional(),
+    toLevelRef: z.string().optional(),
     stairs: z.boolean().openapi({
       description:
         "此逐步指引對應的步行段是否含樓梯；非步行指引固定為 false。僅代表該段含樓梯，不代表整個 distanceM 都是樓梯。",
     }),
     legIndex: z.number().int().nonnegative().openapi({
-      description: "此指引來源在 route.legs 中的索引",
+      description:
+        "戶外指引來源在 route.legs 中的索引；室內沿用鄰接戶外段索引，純室內固定為 0，應以 legType=VENUE 與 driver=manual 識別",
     }),
     polylineIndex: z.number().nullable(),
     cumulativeDistanceM: z.number().nonnegative().openapi({

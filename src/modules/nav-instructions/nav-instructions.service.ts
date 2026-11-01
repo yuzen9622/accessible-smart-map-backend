@@ -1,3 +1,7 @@
+import {
+  venueGateInstruction,
+  venueNavInstructions,
+} from "../../utils/venue-nav-instructions";
 import { DEFAULT_LANG } from "../../types/lang";
 import { NAV_API_MSG } from "../../constants/messages";
 import { ResponseCode } from "../../types/code";
@@ -61,7 +65,9 @@ export async function generateNavInstructionsFromInput(
 ): Promise<GenerateNavResult> {
   const { getRouteByToken } =
     await import("../accessible-route/route-token.service");
-  const route = await getRouteByToken(input.routeToken);
+  const route = await getRouteByToken(input.routeToken, {
+    includeVenueLegs: true,
+  });
   if (!route) {
     return {
       ok: false,
@@ -70,5 +76,42 @@ export async function generateNavInstructionsFromInput(
       message: NAV_API_MSG[input.language ?? DEFAULT_LANG].INVALID_TOKEN,
     };
   }
-  return generateNavInstructions(route, input.userHeading, input.language);
+  const { venueLegs } = route;
+  if (!venueLegs?.departure && !venueLegs?.arrival)
+    return generateNavInstructions(route, input.userHeading, input.language);
+  const outdoor = route.legs.length
+    ? generateNavInstructions(route, input.userHeading, input.language)
+    : null;
+  if (outdoor && !outdoor.ok) return outdoor;
+  const lastLeg = route.legs.at(-1);
+  const instructions = [
+    ...venueNavInstructions(venueLegs.departure, 0, 0),
+    ...(outdoor?.ok
+      ? outdoor.data.instructions.map((step) =>
+          venueLegs.arrival && step.type === "arrive"
+            ? { ...step, text: venueGateInstruction(input.language) }
+            : step,
+        )
+      : []),
+    ...venueNavInstructions(
+      venueLegs.arrival,
+      Math.max(0, route.legs.length - 1),
+      Math.max(0, (lastLeg?.polyline.length ?? 1) - 1),
+    ),
+  ];
+  let cumulativeDistanceM = 0;
+  for (const instruction of instructions) {
+    instruction.cumulativeDistanceM = Math.round(cumulativeDistanceM);
+    cumulativeDistanceM += instruction.distanceM ?? 0;
+  }
+  return {
+    ok: true,
+    data: {
+      instructions,
+      initialBearing:
+        instructions.find((step) => step.bearing !== null)?.bearing ?? 0,
+      totalSteps: instructions.length,
+      warnings: outdoor?.ok ? outdoor.data.warnings : [],
+    },
+  };
 }
