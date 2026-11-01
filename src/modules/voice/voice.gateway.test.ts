@@ -218,13 +218,55 @@ describe("voice gateway", () => {
     expect(code).toBe(4401);
   });
 
-  it("closes 4401 on an oversized unauthenticated frame before creating Live", async () => {
+  it("closes 1009 when session.start exceeds the transport limit before creating Live", async () => {
     const ws = connect();
     await waitForOpen(ws);
     const closed = waitForClose(ws);
-    ws.send(
-      JSON.stringify({ type: "session.start", token: "x".repeat(9_000) }),
+    const message = JSON.stringify({
+      type: "session.start",
+      token: signToken("voice-user-over-limit"),
+      history: Array.from({ length: 8 }, () => ({
+        role: "assistant",
+        text: "測".repeat(3_000),
+      })),
+    });
+    expect(Buffer.byteLength(message)).toBeGreaterThan(64 * 1024);
+    ws.send(message);
+    expect((await closed).code).toBe(1009);
+    expect(mockCreateLiveBridge).not.toHaveBeenCalled();
+  });
+
+  it("accepts valid Chinese history above the control-frame limit without discarding it", async () => {
+    const ws = connect();
+    await waitForOpen(ws);
+    const history = [{ role: "assistant", text: "測".repeat(3_000) }];
+    const message = JSON.stringify({
+      type: "session.start",
+      token: signToken("voice-user-large-history"),
+      history,
+    });
+    expect(Buffer.byteLength(message)).toBeGreaterThan(8 * 1024);
+    expect(Buffer.byteLength(message)).toBeLessThanOrEqual(64 * 1024);
+    const ready = waitForJson(ws);
+    ws.send(message);
+    expect(await ready).toMatchObject({ type: "session.ready" });
+    expect(mockCreateLiveBridge).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "voice-user-large-history", history }),
     );
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it("rejects an invalid token even with Chinese history above the control-frame limit", async () => {
+    const ws = connect();
+    await waitForOpen(ws);
+    const message = JSON.stringify({
+      type: "session.start",
+      token: "invalid-token",
+      history: [{ role: "assistant", text: "測".repeat(3_000) }],
+    });
+    expect(Buffer.byteLength(message)).toBeGreaterThan(8 * 1024);
+    const closed = waitForClose(ws);
+    ws.send(message);
     expect((await closed).code).toBe(4401);
     expect(mockCreateLiveBridge).not.toHaveBeenCalled();
   });

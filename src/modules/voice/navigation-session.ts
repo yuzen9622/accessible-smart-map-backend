@@ -1,4 +1,5 @@
 import { DEFAULT_LANG, type SupportedLang } from "../../types/lang";
+import { venueNavInstructions } from "../../utils/venue-nav-instructions";
 import { NAVIGATION_MESSAGES } from "./navigation-messages";
 import type { AccessibleRoute, MetroLeg } from "../../types/route";
 import { taipeiSecondsOfDay } from "../../config/taipei-time";
@@ -85,6 +86,7 @@ export interface NavStepDto {
   /** Indoor steps only: advanced by the user, never by GPS. */
   driver?: "manual";
   venueStepType?: VenueStepType;
+  buildingId?: string | null;
   levelRef?: string | null;
   fromLevelRef?: string;
   toLevelRef?: string;
@@ -224,51 +226,35 @@ export interface ResolvedStep {
   bearing?: number | null;
   venue?: {
     stepType: VenueStepType;
+    buildingId: string | null;
     levelRef: string | null;
     fromLevelRef?: string;
     toLevelRef?: string;
   };
 }
 
-/** Old clients only know these step types; indoor detail rides `venueStepType`. */
-const VENUE_LEGACY_TYPE: Record<VenueStepType, NavInstructionType> = {
-  depart: "depart",
-  walk: "turn",
-  enter: "turn",
-  exit: "turn",
-  elevator: "facility",
-  escalator: "facility",
-  stairs: "facility",
-  steps: "facility",
-  ramp: "facility",
-  arrive: "arrive",
-};
-
-/**
- * Indoor steps of a venue leg. They carry no geofence point: GPS cannot tell
- * floors apart, so the user advances them.
- */
 function venueSteps(
   leg: VenueRoute | undefined,
   legIndex: number,
   polylineIndex: number,
 ): ResolvedStep[] {
-  return (leg?.steps ?? []).map((step) => ({
-    instruction: step.instruction,
-    legIndex,
-    legType: "VENUE",
-    polylineIndex,
+  return venueNavInstructions(leg, legIndex, polylineIndex).map((step) => ({
+    instruction: step.text,
+    legIndex: step.legIndex,
+    legType: step.legType,
+    polylineIndex: step.polylineIndex,
     coord: null,
     isTransit: false,
-    distanceM: step.distanceM > 0 ? Math.round(step.distanceM) : null,
+    distanceM: step.distanceM,
     kind: "venue",
-    type: VENUE_LEGACY_TYPE[step.type],
-    relativeDirection: null,
-    maneuver: null,
-    streetName: null,
-    bearing: null,
+    type: step.type,
+    relativeDirection: step.relativeDirection,
+    maneuver: step.maneuver,
+    streetName: step.streetName,
+    bearing: step.bearing,
     venue: {
-      stepType: step.type,
+      stepType: step.venueStepType,
+      buildingId: step.buildingId,
       levelRef: step.levelRef,
       ...(step.fromLevelRef ? { fromLevelRef: step.fromLevelRef } : {}),
       ...(step.toLevelRef ? { toLevelRef: step.toLevelRef } : {}),
@@ -404,7 +390,11 @@ function transitRideSec(leg: TransitLeg): number {
 }
 
 /** Seconds still to be spent waiting before boarding a not-yet-boarded leg. */
-function transitWaitSec(leg: TransitLeg, nowMs: number = Date.now()): number {
+function transitWaitSec(
+  leg: TransitLeg,
+  nowMs: number,
+  arrivalAfterSec: number,
+): number {
   const estimated = leg.estimatedWaitMinutes;
   if (
     typeof estimated === "number" &&
@@ -428,7 +418,9 @@ function transitWaitSec(leg: TransitLeg, nowMs: number = Date.now()): number {
       const nowSecFromMidnight = taipeiSecondsOfDay(new Date(nowMs));
       const depSecFromMidnight = depMins * 60;
       const waitSec = (depSecFromMidnight - nowSecFromMidnight + 86400) % 86400;
-      return waitSec;
+      // Clock times include the approach and earlier legs; duration estimates
+      // above describe the wait after arrival and must remain unchanged.
+      return Math.max(0, waitSec - arrivalAfterSec);
     }
     const parsed = Number(depStr);
     if (Number.isFinite(parsed) && parsed > 0) return parsed * 60;
@@ -1161,6 +1153,7 @@ export class NavigationSession {
         ? {
             driver: "manual" as const,
             venueStepType: step.venue.stepType,
+            buildingId: step.venue.buildingId,
             levelRef: step.venue.levelRef,
             ...(step.venue.fromLevelRef
               ? { fromLevelRef: step.venue.fromLevelRef }
@@ -1504,7 +1497,7 @@ export class NavigationSession {
     for (let i = nextIndex ?? this.steps.length; i < this.steps.length; i++) {
       remainingDistanceM += this.spans[i].distanceM;
       const leg = this.spans[i].transitLeg;
-      const waitSec = leg ? transitWaitSec(leg, now) : 0;
+      const waitSec = leg ? transitWaitSec(leg, now, remainingDurationSec) : 0;
       remainingDurationSec += this.spans[i].durationSec + waitSec;
     }
     const durationSec = Math.max(0, Math.round(remainingDurationSec));

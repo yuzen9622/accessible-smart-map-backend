@@ -1,3 +1,9 @@
+vi.mock("../../adapters/voice-synthesis.adapter", () => ({
+  synthesizeVoice: vi
+    .fn()
+    .mockResolvedValue({ pcm: Buffer.alloc(1920, 4), sampleRate: 24000 }),
+}));
+import { synthesizeVoice } from "../../adapters/voice-synthesis.adapter";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 
@@ -49,12 +55,21 @@ vi.mock("../transit/alert.service", () => ({ getTransitAlerts }));
 vi.mock("./corridor-monitor", () => ({ scanRemainingCorridor }));
 
 import { executeLocalTool } from "../ai/agent-tools";
+vi.mock("./route-operation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./route-operation")>();
+  return {
+    ...actual,
+    loadVoiceRoutingPreferences: vi.fn(
+      async (_userId, preferences) => preferences ?? {},
+    ),
+  };
+});
 import { createLiveBridge } from "./live-bridge";
 import { NavigationSession } from "./navigation-session";
 import { clearAlertStore, upsertAlertSnapshot } from "../transit/alert.store";
 
 const ALERT_KEY = "bus:city:Taipei";
-const TURN_TIMEOUT_MS = 15_000;
+const SYNTHESIS_TIMEOUT_MS = 30_000;
 
 function makeWs(): WebSocket {
   return {
@@ -180,6 +195,9 @@ const advisoriesOf = (ws: WebSocket) =>
 describe("live bridge navigation with degraded or absent voice", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(synthesizeVoice)
+      .mockReset()
+      .mockResolvedValue({ pcm: Buffer.alloc(1920, 4), sampleRate: 24000 });
     clearAlertStore();
     getRouteByToken.mockResolvedValue(transitRoute);
     getNavigationEnvelopeByToken.mockResolvedValue({
@@ -435,9 +453,12 @@ describe("live bridge navigation with degraded or absent voice", () => {
     const ws = makeWs();
 
     const bridge = await startNavigated(ws);
-    expect(session.sendClientContent).toHaveBeenCalled();
+    expect(synthesizeVoice).toHaveBeenCalled();
+    expect(session.sendClientContent).not.toHaveBeenCalled();
+    const signal = vi.mocked(synthesizeVoice).mock.calls[0][1].signal;
 
     onclose?.();
+    expect(signal.aborted).toBe(true);
 
     getTransitAlerts.mockResolvedValue(alertsResult([nonBlockingAlert]));
     upsertAlertSnapshot(ALERT_KEY, [], "mqtt");
@@ -469,22 +490,45 @@ describe("live bridge navigation with degraded or absent voice", () => {
     bridge.close();
   });
 
-  it("keeps the socket open when the model turn times out repeatedly", async () => {
+  it("reports synthesis timeout without closing Live or losing navigation", async () => {
     vi.useFakeTimers();
     try {
       const session = makeSession();
       connect.mockResolvedValue(session);
+      vi.mocked(synthesizeVoice).mockImplementation(
+        () =>
+          new Promise((_resolve, reject) => {
+            setTimeout(
+              () => reject(new Error("VOICE_SYNTHESIS_TIMEOUT")),
+              SYNTHESIS_TIMEOUT_MS,
+            );
+          }),
+      );
       const ws = makeWs();
       const bridge = await startNavigated(ws);
-      expect(session.sendClientContent).toHaveBeenCalled();
+      expect(synthesizeVoice).toHaveBeenCalled();
+      expect(session.sendClientContent).not.toHaveBeenCalled();
 
-      await vi.advanceTimersByTimeAsync(TURN_TIMEOUT_MS * 2 + 100);
+      await vi.advanceTimersByTimeAsync(SYNTHESIS_TIMEOUT_MS + 100);
 
       expect(ws.close).not.toHaveBeenCalled();
-      expect(framesOf(ws)).toContainEqual({
-        type: "error",
-        code: "LIVE_SESSION_ENDED",
-      });
+      expect(session.close).not.toHaveBeenCalled();
+      expect(framesOf(ws)).toContainEqual(
+        expect.objectContaining({
+          type: "transcript",
+          role: "model",
+          text: expect.stringContaining("語音播放暫時失敗"),
+        }),
+      );
+      expect(framesOf(ws)).toContainEqual({ type: "turn.complete" });
+      expect(framesOf(ws).some((frame) => frame.type === "nav.start")).toBe(
+        true,
+      );
+      expect(
+        framesOf(ws).some(
+          (frame) => frame.type === "nav.stop" || frame.type === "error",
+        ),
+      ).toBe(false);
 
       getTransitAlerts.mockResolvedValue(alertsResult([nonBlockingAlert]));
       upsertAlertSnapshot(ALERT_KEY, [], "mqtt");
@@ -496,11 +540,11 @@ describe("live bridge navigation with degraded or absent voice", () => {
     }
   });
 
-  it("degrades instead of throwing when sendClientContent fails", async () => {
+  it("reports synthesis failure without killing Live or navigation", async () => {
     const session = makeSession();
-    session.sendClientContent.mockImplementation(() => {
-      throw new Error("dead");
-    });
+    vi.mocked(synthesizeVoice).mockRejectedValue(
+      new Error("VOICE_SYNTHESIS_UNAVAILABLE"),
+    );
     connect.mockResolvedValue(session);
     const ws = makeWs();
 
@@ -509,11 +553,25 @@ describe("live bridge navigation with degraded or absent voice", () => {
       bridge.updatePosition({ latitude: 25, longitude: 121, accuracy: 5 }),
     ).not.toThrow();
 
+    await vi.waitFor(() =>
+      expect(framesOf(ws)).toContainEqual(
+        expect.objectContaining({
+          type: "transcript",
+          role: "model",
+          text: expect.stringContaining("語音播放暫時失敗"),
+        }),
+      ),
+    );
     expect(ws.close).not.toHaveBeenCalled();
-    expect(framesOf(ws)).toContainEqual({
-      type: "error",
-      code: "LIVE_SESSION_ENDED",
-    });
+    expect(session.close).not.toHaveBeenCalled();
+    expect(framesOf(ws)).toContainEqual({ type: "turn.complete" });
+    expect(framesOf(ws).some((frame) => frame.type === "nav.start")).toBe(true);
+    expect(
+      framesOf(ws).some(
+        (frame) => frame.type === "nav.stop" || frame.type === "error",
+      ),
+    ).toBe(false);
+    expect(session.sendClientContent).not.toHaveBeenCalled();
     bridge.close();
   });
 
@@ -559,10 +617,12 @@ describe("live bridge navigation with degraded or absent voice", () => {
     expect(framesOf(ws).some((f) => f.type === "nav.start")).toBe(true);
     expect(session.sendClientContent).not.toHaveBeenCalled();
 
+    expect(synthesizeVoice).not.toHaveBeenCalled();
     pendingConnect.resolve(session);
     await bridge.voiceReady;
 
-    expect(session.sendClientContent).toHaveBeenCalled();
+    expect(synthesizeVoice).toHaveBeenCalled();
+    expect(session.sendClientContent).not.toHaveBeenCalled();
     bridge.close();
   });
 

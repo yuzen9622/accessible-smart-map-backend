@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  NavAdvanceMessageSchema,
   NavProgressSchema,
   NavRerouteFailedMessageSchema,
   NavReroutingMessageSchema,
@@ -333,4 +334,28 @@ it("validates assistant-end session.ending frames", async () => {
       reason: "client-end",
     }).success,
   ).toBe(false);
+});
+
+describe("indoor step confirmations", () => {
+  it("accepts existing confirmations and optional route identity", () => {
+    expect(
+      NavAdvanceMessageSchema.parse({ type: "nav.advance", fromStepIndex: 0 }),
+    ).toEqual({ type: "nav.advance", fromStepIndex: 0 });
+    expect(
+      VoiceControlMessageSchema.parse({
+        type: "nav.advance",
+        fromStepIndex: 1,
+        navigationId: "nav-a",
+        routeVersion: 2,
+      }),
+    ).toMatchObject({ navigationId: "nav-a", routeVersion: 2 });
+    expect(
+      NavAdvanceMessageSchema.safeParse({
+        type: "nav.advance",
+        fromStepIndex: 1,
+        navigationId: "",
+        routeVersion: 0,
+      }).success,
+    ).toBe(false);
+  });
 });

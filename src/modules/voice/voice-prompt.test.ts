@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { VENUE_ANNOTATION_PRESENTATION_RULE } from "../../config/ai/agent-prompt-shared";
 import {
   buildVoiceSystemPrompt,
   buildNavigationSpeechPrompt,
@@ -168,4 +169,64 @@ it("requires semantic direct start and current proposal confirmation", () => {
   expect(prompt).toContain("省略 startNavigation 或設 false");
   expect(prompt).not.toContain("120 秒");
   expect(prompt).toContain("不自動導航");
+});
+
+it("uses the shared indoor annotation presentation rule without announcing unrequested editing notes", () => {
+  const prompt = buildVoiceSystemPrompt();
+  expect(prompt).toContain(VENUE_ANNOTATION_PRESENTATION_RULE);
+  expect(prompt).not.toContain("slopeMeasured 為 false 時說「坡度未實測」");
+});
+
+describe("voice conversation and tool-result boundaries", () => {
+  it("scopes duplicate lookups to one turn and grounds replay in a fresh navigation tool result", () => {
+    const prompt = buildVoiceSystemPrompt(undefined, [], {
+      history: [
+        { role: "user", text: "請重播目前這一步的導航指示。" },
+        { role: "assistant", text: "向右轉進入承德路一段。" },
+      ],
+    });
+    expect(prompt).not.toContain("同一工具配相同參數不要重複呼叫");
+    expect(prompt).toContain("同一使用者回合內，對相同結果不要無故重複查詢");
+    expect(prompt).toContain(
+      "新的使用者請求、導航步驟或狀態變更時可再次呼叫相同工具與參數",
+    );
+    expect(prompt).toContain("重播或重述目前步驟時，以本次真實工具結果為準");
+    expect(prompt).toContain("可呼叫 repeatNavStep 由導航引擎播報");
+    expect(prompt).toContain(
+      "或呼叫 getActiveNavigationContext 後忠實重述 currentStep",
+    );
+    expect(prompt).toContain("不得更改方向或距離");
+    expect(prompt).toContain("active=false 時依本次結果說明");
+    expect(prompt).toContain("不得僅依歷史推測不可用或宣稱已重播");
+    expect(prompt).not.toContain(
+      "使用者每次要求重播目前步驟時，都呼叫 repeatNavStep",
+    );
+    expect(prompt).toContain(
+      "只有 startNavigation 或 confirmNavigationCandidateSwitch 回傳 ok:true 才可說已開始導航或已切換",
+    );
+    expect(prompt).toContain(
+      "希望停止導航時呼叫 stopNavigation，不得誤呼叫 endVoiceSession 或只口頭答應",
+    );
+  });
+  it("distinguishes automatic navigation speech from route previews and context queries", () => {
+    const prompt = buildVoiceSystemPrompt();
+    expect(prompt).toContain(
+      "開始導航（含規劃後直接開始）、推進或重播成功時，導航引擎會自動播報對應的精確步驟",
+    );
+    expect(prompt).toContain("可依上下文自然確認操作結果，不要再重述同一步驟");
+    expect(prompt).toContain(
+      "只規劃未開始導航，或僅呼叫 getActiveNavigationContext 查詢時，依工具結果自然說明",
+    );
+    expect(prompt).toContain(
+      "呼叫 planIndoorRoute；僅規劃、未開始導航時，依回傳步驟口語說明",
+    );
+    expect(prompt).not.toContain("呼叫 planIndoorRoute，依回傳步驟口語說明");
+  });
+  it("allows natural conversation without requiring a route or a tool result", () => {
+    const prompt = buildVoiceSystemPrompt();
+    expect(prompt).toContain("問候、閒聊與一般對話直接自然回應，無須呼叫工具");
+    expect(prompt).toContain("依使用者本輪問題與上下文自行組織回答");
+    expect(prompt).toContain("涉及路線、班次、地點或操作結果時");
+    expect(prompt).not.toContain("開始查一件事時，先用一句話告知使用者");
+  });
 });

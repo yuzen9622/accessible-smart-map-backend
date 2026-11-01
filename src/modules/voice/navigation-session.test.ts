@@ -1157,17 +1157,120 @@ describe("NavigationSession progress and ETA pushes", () => {
         );
         return progressOf(nav.start(pos(p1)))!;
       };
-      const travelOnly = progressFor(0);
       const scheduled = progressFor(departure);
-      expect(scheduled.remainingDurationSec).toBe(
-        travelOnly.remainingDurationSec + waitSec,
-      );
+      // The walk to the station fits before departure; only the three-minute
+      // ride remains after that scheduled instant, including across midnight.
+      expect(scheduled.remainingDurationSec).toBe(waitSec + 3 * 60);
       expect(scheduled.estimatedArrivalAt).toBe(
         new Date(nowMs + scheduled.remainingDurationSec * 1000).toISOString(),
       );
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  describe("scheduled transit ETA excludes travel already spent before boarding", () => {
+    const timedWalk = (points: [number, number][], minutes: number) => ({
+      ...walkLeg(points),
+      distanceM: haversineLngLat(points[0], points[1]),
+      minutesEst: minutes,
+    });
+    const scheduledRide = (
+      points: [number, number][],
+      departure: string,
+      rideMinutes: number,
+    ) => ({
+      ...metro(points),
+      rideMinutes,
+      waitInfo: { time: departure, source: "schedule" as const },
+      estimatedWaitMinutes: undefined,
+    });
+    const startAtTen = (legs: AccessibleRoute["legs"]) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-11-01T10:00:00+08:00"));
+      const nav = new NavigationSession();
+      nav.armRoute(identified(route(legs)));
+      return nav;
+    };
+
+    afterEach(() => vi.useRealTimers());
+
+    it("walks five minutes, waits five, rides six and walks six for a 22-minute ETA", () => {
+      const a = coord(121);
+      const b = coord(121.005);
+      const c = coord(121.02);
+      const d = coord(121.026);
+      const nav = startAtTen([
+        timedWalk([a, b], 5),
+        scheduledRide([b, c], "10:10", 6),
+        timedWalk([c, d], 6),
+      ]);
+      const start = progressOf(nav.start(pos(a)))!;
+      expect(start.remainingDurationSec).toBe(22 * 60);
+      expect(start.estimatedArrivalAt).toBe("2026-11-01T02:22:00.000Z");
+      vi.advanceTimersByTime(150_000);
+      const halfway = progressOf(nav.onPosition(pos(coord(121.0025))))!;
+      expect(halfway.remainingDurationSec).toBe(19.5 * 60);
+      expect(halfway.estimatedArrivalAt).toBe(start.estimatedArrivalAt);
+    });
+
+    it("subtracts the whole accrued journey from a later transfer departure", () => {
+      const a = coord(121);
+      const b = coord(121.005);
+      const c = coord(121.02);
+      const d = coord(121.024);
+      const e = coord(121.04);
+      const f = coord(121.046);
+      const nav = startAtTen([
+        timedWalk([a, b], 5),
+        scheduledRide([b, c], "10:10", 6),
+        timedWalk([c, d], 4),
+        scheduledRide([d, e], "10:25", 3),
+        timedWalk([e, f], 6),
+      ]);
+      const progress = progressOf(nav.start(pos(a)))!;
+      expect(progress.remainingDurationSec).toBe(34 * 60);
+      expect(progress.estimatedArrivalAt).toBe("2026-11-01T02:34:00.000Z");
+    });
+
+    it("does not move the same scheduled trip to tomorrow when the approach exceeds its wait", () => {
+      const a = coord(121);
+      const b = coord(121.005);
+      const c = coord(121.02);
+      const d = coord(121.026);
+      const nav = startAtTen([
+        timedWalk([a, b], 5),
+        scheduledRide([b, c], "10:02", 6),
+        timedWalk([c, d], 6),
+      ]);
+      expect(progressOf(nav.start(pos(a)))!.remainingDurationSec).toBe(17 * 60);
+    });
+
+    it.each([
+      {
+        estimatedWaitMinutes: 3,
+        waitInfo: { time: "10:10", source: "realtime" as const },
+      },
+      {
+        estimatedWaitMinutes: undefined,
+        waitInfo: { time: 3, source: "schedule" as const },
+      },
+      {
+        estimatedWaitMinutes: undefined,
+        waitInfo: { time: "3", source: "schedule" as const },
+      },
+    ])("preserves arrival-relative wait durations: %j", (wait) => {
+      const a = coord(121);
+      const b = coord(121.005);
+      const c = coord(121.02);
+      const d = coord(121.026);
+      const nav = startAtTen([
+        timedWalk([a, b], 5),
+        { ...metro([b, c]), rideMinutes: 6, ...wait },
+        timedWalk([c, d], 6),
+      ]);
+      expect(progressOf(nav.start(pos(a)))!.remainingDurationSec).toBe(20 * 60);
+    });
   });
 
   it("reports free_flow while a road leg remains and estimated once parked", () => {

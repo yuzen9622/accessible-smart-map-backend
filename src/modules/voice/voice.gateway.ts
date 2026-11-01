@@ -267,7 +267,7 @@ function handleConnection(
       return;
     }
     const buffer = rawDataToBuffer(data);
-    if (buffer.byteLength > CONTROL_FRAME_MAX_BYTES) {
+    if (buffer.byteLength > VOICE_MAX_PAYLOAD_BYTES) {
       ws.close(4401, "unauthorized");
       return;
     }
@@ -600,7 +600,11 @@ function handleConnection(
         );
         return;
       }
-      bridge?.advanceNavStep(result.data.fromStepIndex);
+      const { fromStepIndex, navigationId, routeVersion } = result.data;
+      if (navigationId !== undefined && routeVersion !== undefined)
+        bridge?.advanceNavStep(fromStepIndex, { navigationId, routeVersion });
+      else if (navigationId === undefined && routeVersion === undefined)
+        bridge?.advanceNavStep(fromStepIndex);
       return;
     }
     if (parsed?.type === "nav.resume") {

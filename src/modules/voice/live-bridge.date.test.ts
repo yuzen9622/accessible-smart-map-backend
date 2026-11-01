@@ -1,3 +1,8 @@
+vi.mock("../../adapters/voice-synthesis.adapter", () => ({
+  synthesizeVoice: vi
+    .fn()
+    .mockResolvedValue({ pcm: Buffer.alloc(1920, 4), sampleRate: 24000 }),
+}));
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const { connect } = vi.hoisted(() => ({
@@ -9,6 +14,15 @@ vi.mock("../../config/ai", () => ({
   model: "test-model",
 }));
 
+vi.mock("./route-operation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./route-operation")>();
+  return {
+    ...actual,
+    loadVoiceRoutingPreferences: vi.fn(
+      async (_userId, preferences) => preferences ?? {},
+    ),
+  };
+});
 import { createLiveBridge } from "./live-bridge";
 
 function fakeWs(): any {

@@ -128,6 +128,8 @@ export const NavPreviewStepMessageSchema = z.object({
 export const NavAdvanceMessageSchema = z.object({
   type: z.literal("nav.advance"),
   fromStepIndex: z.number().int().nonnegative().max(10_000),
+  navigationId: z.string().trim().min(1).max(128).optional(),
+  routeVersion: z.number().int().positive().optional(),
 });
 
 /**
@@ -201,6 +203,7 @@ const NavStepDtoSchema = z
         "arrive",
       ])
       .optional(),
+    buildingId: z.string().nullable().optional(),
     levelRef: z.string().nullable().optional(),
     fromLevelRef: z.string().optional(),
     toLevelRef: z.string().optional(),
