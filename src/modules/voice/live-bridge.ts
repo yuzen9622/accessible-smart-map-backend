@@ -124,6 +124,23 @@ const LIVE_CONNECT_TIMEOUT_MS = 15_000;
 const TURN_TIMEOUT_MS = 15_000;
 const TURN_TIMEOUT_STRIKES = 2;
 
+const CURRENT_LOCATION_ALIASES = new Set([
+  "current_location",
+  "目前位置",
+  "現在位置",
+  "這裡",
+  "這裏",
+  "我的位置",
+  "當前位置",
+  "本處",
+  "現在這裡",
+  "目前這裡",
+]);
+
+const isExplicitCurrentLocation = (value: unknown): boolean =>
+  typeof value === "string" &&
+  CURRENT_LOCATION_ALIASES.has(value.trim().normalize("NFKC"));
+
 // Coordinates stop/resume races across bridge instances in this Node process;
 // Redis tombstones provide the durable cross-process boundary.
 const localNavigationStopRevisions = new Map<string, number>();
@@ -1613,13 +1630,19 @@ export async function createLiveBridge(
                       ? op.changes.travelMode
                       : plan.travelMode)),
             );
-          const placeKey = (value: unknown): string | undefined =>
-            typeof value === "string"
+          const placeKey = (value: unknown): string | undefined => {
+            if (
+              isExplicitCurrentLocation(value) ||
+              value === "current_location"
+            )
+              return "current_location";
+            return typeof value === "string"
               ? value
                   .normalize("NFKC")
                   .replace(/臺/g, "台")
                   .replace(/\s+/gu, "")
               : undefined;
+          };
           const matched = available.find(
             ({ plan }) =>
               (call.args.destination === undefined ||
@@ -1815,20 +1838,26 @@ export async function createLiveBridge(
               !["transit", "walk", "drive", "motorcycle"].includes(
                 effectiveTravel,
               );
+            const callMode =
+              typeof call.args.mode === "string" ? call.args.mode : undefined;
+            const effectiveMode = callMode ?? preferences.mode;
             const protectedRoadMode =
               roadTravel &&
-              preferences.mode !== "normal" &&
-              preferences.mode !== "elderly";
-            const preferenceMismatch = [
-              "mode",
-              "avoidStairs",
-              "requireElevator",
-            ].some(
-              (key) =>
-                call.args[key] !== undefined &&
-                preferences[key as keyof RoutingPreferences] !== undefined &&
-                call.args[key] !== preferences[key as keyof RoutingPreferences],
-            );
+              effectiveMode !== "normal" &&
+              effectiveMode !== "elderly";
+            const preferenceMismatch =
+              ["avoidStairs", "requireElevator"].some(
+                (key) =>
+                  call.args[key] !== undefined &&
+                  preferences[key as keyof RoutingPreferences] !== undefined &&
+                  call.args[key] !==
+                    preferences[key as keyof RoutingPreferences],
+              ) ||
+              (callMode !== undefined &&
+                preferences.mode !== undefined &&
+                callMode !== preferences.mode &&
+                op.changes.mode === null &&
+                !["normal", "elderly"].includes(callMode));
             const explicitTravelMismatch =
               name === "planAccessibleRoute" &&
               op.changes.travelMode !== null &&
@@ -1935,8 +1964,12 @@ export async function createLiveBridge(
                     ),
                     travelModeConstraint,
                     supportedTravelModes: ["normal", "elderly"].includes(
-                      routeOperationPreferences(op, operation!.preferences)
-                        .mode ?? "",
+                      (typeof call.args.mode === "string"
+                        ? call.args.mode
+                        : undefined) ??
+                        routeOperationPreferences(op, operation!.preferences)
+                          .mode ??
+                        "",
                     )
                       ? ["transit", "walk", "drive", "motorcycle"]
                       : ["transit", "walk"],
@@ -2489,21 +2522,24 @@ export async function createLiveBridge(
           const ownArmGeneration = armGen;
           if (
             name === "planAccessibleRoute" &&
-            call.args?.origin === "current_location" &&
             !call.args?.originPlaceId &&
-            !latestPosition
+            (isExplicitCurrentLocation(call.args?.origin) ||
+              (!call.args?.origin && latestPosition))
           ) {
-            await requestClientLocation();
-            if (!voiceCurrent()) {
-              if (msgEpoch === voiceEpoch)
-                answerUnexecutedCalls(
-                  functionCalls,
-                  "STALE_SELECTION",
-                  functionResponses,
-                );
-              return;
+            call.args.origin = "current_location";
+            if (!latestPosition) {
+              await requestClientLocation();
+              if (!voiceCurrent()) {
+                if (msgEpoch === voiceEpoch)
+                  answerUnexecutedCalls(
+                    functionCalls,
+                    "STALE_SELECTION",
+                    functionResponses,
+                  );
+                return;
+              }
+              if (cancelled()) continue;
             }
-            if (cancelled()) continue;
           }
           if (ROUTE_PLANNING_TOOLS.has(name) && !requestCurrent()) {
             result = JSON.stringify({
@@ -2830,6 +2866,21 @@ export async function createLiveBridge(
       final: true,
       utteranceId,
     });
+    const lastAssistantIndex = conversationHistory
+      .map((t) => t.role)
+      .lastIndexOf("assistant");
+    const unrepliedUserTurns = conversationHistory
+      .slice(lastAssistantIndex + 1)
+      .filter((t) => t.role === "user")
+      .map((t) => t.text);
+    const effectiveTranscript =
+      unrepliedUserTurns.length > 0 ? unrepliedUserTurns.join(" ") : raw;
+    const priorUserTurns = conversationHistory
+      .slice(0, lastAssistantIndex + 1)
+      .filter((t) => t.role === "user")
+      .slice(-6)
+      .map((t) => t.text);
+
     const preferences = routeContext.preferences;
     turnOperation = {
       revision: inputArrivalRevision,
@@ -2837,16 +2888,16 @@ export async function createLiveBridge(
         generation: navigationGeneration,
         stepIndex: navSession.getSnapshotState()?.currentStepIndex ?? null,
       },
-      transcript: raw,
+      transcript: effectiveTranscript,
       context: {
         preferences,
         selectedRoute: routeContext.prompt + candidatePrompt(),
         activeNavigation: navSession.getConversationContext(),
         candidates: candidateSummaries(),
-        recentUserTurns: conversationHistory
-          .filter((turn) => turn.role === "user")
-          .slice(-6, -1)
-          .map((turn) => turn.text),
+        recentUserTurns:
+          priorUserTurns.length > 0
+            ? priorUserTurns
+            : unrepliedUserTurns.slice(0, -1),
         lastAssistantTurn: conversationHistory
           .filter((turn) => turn.role === "assistant")
           .at(-1)?.text,
