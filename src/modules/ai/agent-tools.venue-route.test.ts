@@ -1,16 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { planAccessibleRouteFromRequest, resolveVenueQuery } = vi.hoisted(
-  () => ({
+const { planAccessibleRouteFromRequest, resolveVenueQuery, getCompiledVenue } =
+  vi.hoisted(() => ({
     planAccessibleRouteFromRequest: vi.fn(),
     resolveVenueQuery: vi.fn(),
-  }),
-);
+    getCompiledVenue: vi.fn(),
+  }));
 vi.mock("../accessible-route/accessible-route.service", () => ({
   planAccessibleRouteFromRequest,
 }));
 vi.mock("../venue/venue.service", () => ({
   resolveVenueQuery,
+  getCompiledVenue,
   inspectVenueByQuery: vi.fn(),
   planVenueRoute: vi.fn(),
 }));
@@ -74,6 +75,28 @@ const venueLeg = {
 beforeEach(() => {
   vi.resetAllMocks();
   resolveVenueQuery.mockResolvedValue({ ok: true, venueId: "nutc-sanmin" });
+  getCompiledVenue.mockResolvedValue({
+    version: 1,
+    venue: {
+      venueId: "nutc-sanmin",
+      places: [
+        {
+          id: "info-2301",
+          name: "2301",
+          location: [120.68, 24.15],
+          buildingId: "info",
+          levelRef: "3F",
+        },
+        {
+          id: "info@4F",
+          name: "資訊館四樓",
+          location: [120.68, 24.15],
+          buildingId: "info",
+          levelRef: "4F",
+        },
+      ],
+    },
+  });
   planAccessibleRouteFromRequest.mockResolvedValue({
     ok: true,
     data: {
@@ -105,7 +128,7 @@ beforeEach(() => {
 });
 
 describe("planAccessibleRoute with venue places", () => {
-  it("sends an indoor destination as destinationVenuePlace and names it by place id", async () => {
+  it("sends an indoor destination and returns its source name and version", async () => {
     const result = await plan({
       origin: "臺中車站",
       destinationPlaceId: "info-2301",
@@ -121,7 +144,15 @@ describe("planAccessibleRoute with venue places", () => {
     );
     expect(result).toMatchObject({
       ok: true,
-      destination: { name: "info-2301" },
+      journeyKind: "mixed",
+      destination: { name: "2301" },
+      destinationVenuePlace: {
+        venueId: "nutc-sanmin",
+        placeId: "info-2301",
+        sourceVersion: 1,
+        buildingId: "info",
+        levelRef: "3F",
+      },
     });
   });
 

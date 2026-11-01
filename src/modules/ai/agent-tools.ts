@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { VenueRoute } from "../accessible-route/venue-leg.types";
+import type { VenuePlace } from "../venue/venue.types";
 import type { AgentLanguage } from "../../types/agent";
 import { apiErrorMessage } from "../../constants/api-errors";
 import {
@@ -39,6 +40,7 @@ import {
 } from "../user/user.service";
 import {
   inspectVenueByQuery,
+  getCompiledVenue,
   planVenueRoute,
   resolveVenueQuery,
 } from "../venue/venue.service";
@@ -469,6 +471,7 @@ export async function inspectVenue(args: {
 }
 
 const PlanIndoorRouteArgsSchema = z.object({
+  ...AgentAccessibilityOptionsSchema.shape,
   venue: z.string().trim().min(1).max(100).optional(),
   fromPlaceId: z.string().trim().min(1).max(200),
   toPlaceId: z.string().trim().min(1).max(200),
@@ -497,6 +500,7 @@ function indoorOnlyRoute(
 
 function indoorOnlyCanonical(
   venueRoute: VenueRoute,
+  preferences: z.infer<typeof AgentAccessibilityOptionsSchema>,
 ): CanonicalPlanRouteRequest {
   const [startLng, startLat] = venueRoute.path.coordinates[0] ?? [0, 0];
   const [endLng, endLat] = venueRoute.path.coordinates.at(-1) ?? [0, 0];
@@ -510,8 +514,8 @@ function indoorOnlyCanonical(
     maxTransfers: 0,
     format: "standard",
     waypoints: [],
-    avoidStairs: stepFree,
-    requireElevator: false,
+    avoidStairs: preferences.avoidStairs ?? stepFree,
+    requireElevator: preferences.requireElevator ?? false,
     needsAccessibleToilet: false,
     needsHandrail: false,
   };
@@ -545,22 +549,66 @@ export async function planIndoorRoute(args: {
       toPlaceId: parsed.data.toPlaceId,
       mode,
       lang: args.language === "en" ? "en" : "zh-TW",
+      ...(parsed.data.avoidStairs === undefined
+        ? {}
+        : { avoidStairs: parsed.data.avoidStairs }),
+      ...(parsed.data.requireElevator === undefined
+        ? {}
+        : { requireElevator: parsed.data.requireElevator }),
     });
     if (result.ok) {
-      const [route] = await attachRouteTokens(
+      const canonical = indoorOnlyCanonical(result.route, parsed.data);
+      const entry = await getCompiledVenue(result.route.venueId);
+      const from = entry?.venue.places.find(
+        (place) => place.id === result.route.fromPlaceId,
+      );
+      const to = entry?.venue.places.find(
+        (place) => place.id === result.route.toPlaceId,
+      );
+      if (!entry || entry.version !== result.route.venueVersion || !from || !to)
+        return JSON.stringify({
+          ok: false,
+          reason: "STALE_SELECTION",
+          error: agentRouteError("STALE_SELECTION", args.language),
+        });
+      const routes = await attachRouteTokens(
         [indoorOnlyRoute(result.route, args.language)],
-        indoorOnlyCanonical(result.route),
+        canonical,
         { departure: result.route },
       );
-      return JSON.stringify({
-        ok: true,
-        venueId: result.route.venueId,
-        mode: result.route.mode,
-        // the full leg for clients to draw; the model sees it as steps only
-        venueLeg: result.route,
-        selectedRouteId: route.routeId,
-        routes: [route],
-      });
+      return JSON.stringify(
+        agentRoutePlan({
+          canonical,
+          routes,
+          origin: {
+            lat: from.location[1],
+            lng: from.location[0],
+            name: from.name,
+          },
+          destination: {
+            lat: to.location[1],
+            lng: to.location[0],
+            name: to.name,
+          },
+          data: {
+            journeyKind: "indoor",
+            city: "",
+            venueId: result.route.venueId,
+            originVenuePlace: agentVenueEndpoint(
+              result.route.venueId,
+              entry.version,
+              from,
+            ),
+            destinationVenuePlace: agentVenueEndpoint(
+              result.route.venueId,
+              entry.version,
+              to,
+            ),
+            indoorRoute: result.route,
+            venueLeg: result.route,
+          },
+        }),
+      );
     }
     if (!("data" in result))
       return JSON.stringify({
@@ -734,6 +782,43 @@ function agentEffectivePreferences(request: CanonicalPlanRouteRequest) {
   };
 }
 
+function agentVenueEndpoint(
+  venueId: string,
+  sourceVersion: number,
+  place: VenuePlace,
+) {
+  return {
+    venueId,
+    placeId: place.id,
+    sourceVersion,
+    buildingId: place.buildingId,
+    levelRef: place.levelRef,
+  };
+}
+
+function agentRoutePlan(input: {
+  canonical: CanonicalPlanRouteRequest;
+  routes: AccessibleRoute[];
+  origin: { lat: number; lng: number; name: string | undefined };
+  destination: { lat: number; lng: number; name: string | undefined };
+  data?: Record<string, unknown>;
+}) {
+  const effectivePreferences = agentEffectivePreferences(input.canonical);
+  return {
+    ...input.data,
+    ok: true,
+    routeContractVersion: AGENT_ROUTE_CONTRACT_VERSION,
+    planId: randomUUID(),
+    selectedRouteId: input.routes[0].routeId,
+    origin: input.origin,
+    destination: input.destination,
+    mode: effectivePreferences.mode,
+    transitPreference: effectivePreferences.transitPreference,
+    effectivePreferences,
+    routes: input.routes,
+  };
+}
+
 export async function planAccessibleRoute(args: {
   origin?: string;
   destination?: string;
@@ -872,38 +957,78 @@ export async function planAccessibleRoute(args: {
         reason: "ROUTE_CONTEXT_UNAVAILABLE",
         error: agentRouteError("ROUTE_CONTEXT_UNAVAILABLE", args.language),
       });
+    const entry = venueId ? await getCompiledVenue(venueId) : null;
+    const indoorPlaceId = originPlaceId ?? destinationPlaceId;
+    const indoorPlace = entry?.venue.places.find(
+      (place) => place.id === indoorPlaceId,
+    );
+    const indoorLeg = originPlaceId
+      ? result.data.venueDepartureLeg
+      : result.data.venueLeg;
+    if (
+      indoorPlaceId &&
+      (!entry ||
+        !indoorPlace ||
+        !indoorLeg ||
+        entry.version !== indoorLeg.venueVersion)
+    )
+      return JSON.stringify({
+        ok: false,
+        reason: "STALE_SELECTION",
+        error: agentRouteError("STALE_SELECTION", args.language),
+      });
     const routes = await attachRouteTokens(result.data.routes, canonical, {
       departure: result.data.venueDepartureLeg,
       arrival: result.data.venueLeg,
     });
-    const effectivePreferences = agentEffectivePreferences(canonical);
-    return JSON.stringify({
-      ...publicData,
-      ok: true,
-      routeContractVersion: AGENT_ROUTE_CONTRACT_VERSION,
-      planId: randomUUID(),
-      selectedRouteId: routes[0].routeId,
-      origin: {
-        ...result.data.origin,
-        name:
-          originPlaceId ??
-          (origin === "current_location"
-            ? args.language === "en"
-              ? "Current location"
-              : "目前位置"
-            : origin),
-      },
-      destination: {
-        ...result.data.destination,
-        name: destinationPlaceId ?? destination,
-      },
-      mode: effectivePreferences.mode,
-      transitPreference: effectivePreferences.transitPreference,
-      effectivePreferences,
-      routes,
-      metroAlerts: result.data.metroAlerts ?? [],
-      transitAlerts: result.data.transitAlerts ?? [],
-    });
+    return JSON.stringify(
+      agentRoutePlan({
+        canonical,
+        routes,
+        origin: {
+          ...result.data.origin,
+          name: originPlaceId
+            ? indoorPlace?.name
+            : origin === "current_location"
+              ? args.language === "en"
+                ? "Current location"
+                : "目前位置"
+              : origin,
+        },
+        destination: {
+          ...result.data.destination,
+          name: destinationPlaceId ? indoorPlace?.name : destination,
+        },
+        data: {
+          ...publicData,
+          journeyKind: indoorPlaceId ? "mixed" : "outdoor",
+          ...(entry && indoorPlace
+            ? {
+                ...(originPlaceId
+                  ? {
+                      originVenuePlace: agentVenueEndpoint(
+                        entry.venue.venueId,
+                        entry.version,
+                        indoorPlace,
+                      ),
+                    }
+                  : {}),
+                ...(destinationPlaceId
+                  ? {
+                      destinationVenuePlace: agentVenueEndpoint(
+                        entry.venue.venueId,
+                        entry.version,
+                        indoorPlace,
+                      ),
+                    }
+                  : {}),
+              }
+            : {}),
+          metroAlerts: result.data.metroAlerts ?? [],
+          transitAlerts: result.data.transitAlerts ?? [],
+        },
+      }),
+    );
   } catch (error: any) {
     console.error("[agent-tool:planAccessibleRoute]", error);
     return JSON.stringify({

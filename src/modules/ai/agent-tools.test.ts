@@ -2230,6 +2230,79 @@ describe("agent travel mode dispatch", () => {
 });
 
 describe("AI plan full route contract", () => {
+  it.each([
+    ["normal", "drive", "DRIVE"],
+    ["normal", "motorcycle", "MOTORCYCLE"],
+    ["elderly", "drive", "DRIVE"],
+    ["elderly", "motorcycle", "MOTORCYCLE"],
+  ] as const)(
+    "preserves %s/%s request, canonical preferences, object endpoints and %s legs",
+    async (mode, travelMode, legType) => {
+      const origin = { lat: 25.0478, lng: 121.517 };
+      const destination = { lat: 25.0492, lng: 121.5784 };
+      const canonical = {
+        mode,
+        travelMode,
+        transitPreference: "none" as const,
+        maxTransfers: 2,
+        avoidStairs: true,
+        requireElevator: true,
+      };
+      const route = {
+        routeId: `${mode}-${travelMode}`,
+        routeName: "候選路線",
+        legs: [
+          {
+            type: legType,
+            from: origin,
+            to: destination,
+            maneuvers: [
+              { instruction: "向右轉進入承德路一段", beginShapeIndex: 0 },
+            ],
+          },
+        ],
+      };
+      mockPlanRoute.mockResolvedValue({
+        ok: true,
+        data: {
+          origin,
+          destination,
+          routes: [route],
+          _canonicalRequest: canonical,
+        },
+      });
+      const result = JSON.parse(
+        await executeLocalTool("planAccessibleRoute", {
+          origin: "台北車站",
+          destination: "松山車站",
+          mode,
+          travelMode,
+          avoidStairs: true,
+          requireElevator: true,
+        }),
+      );
+      expect(mockPlanRoute).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          origin: "台北車站",
+          destination: "松山車站",
+          mode,
+          travelMode,
+          avoidStairs: true,
+          requireElevator: true,
+        }),
+      );
+      expect(result).toMatchObject({
+        ok: true,
+        origin: { ...origin, name: "台北車站" },
+        destination: { ...destination, name: "松山車站" },
+        mode,
+        effectivePreferences: canonical,
+        selectedRouteId: route.routeId,
+        routes: [{ ...route, routeToken: `token-${route.routeId}` }],
+      });
+      expect(result.routes).toHaveLength(1);
+    },
+  );
   it("plans once, preserves geometry and candidate order, and exposes only public canonical preferences", async () => {
     const routes = ["bus", "rail"].map((id, i) => ({
       routeId: id,

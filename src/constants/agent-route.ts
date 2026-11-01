@@ -1,6 +1,10 @@
 import type { SupportedLang } from "../types/lang";
 
 export const AGENT_ROUTE_CONTRACT_VERSION = 1;
+export const ROUTE_PLANNING_TOOLS: ReadonlySet<string> = new Set([
+  "planAccessibleRoute",
+  "planIndoorRoute",
+]);
 export const AGENT_ROUTE_ERRORS = {
   INVALID_ROUTE_TOKEN: "路線已過期或無效，請重新規劃。",
   ROUTE_CONTEXT_REQUIRED: "尚未選擇路線；請先規劃並選擇路線，再查詢詳細指引。",

@@ -6,6 +6,107 @@ import {
 } from "./agent-route-projection";
 
 describe("source name route projections", () => {
+  it("keeps every road incident warning but omits its extent geometry from model context", () => {
+    const incident = {
+      title: "Road closed",
+      description: "Use the detour",
+      severity: "closure",
+      locationDescription: "Section A",
+      startTime: "2026-11-01",
+      points: Array.from({ length: 2000 }, (_, n) => ({
+        lat: 25 + n / 100000,
+        lng: 121,
+      })),
+      location: { lat: 25, lng: 121 },
+    };
+    const source = {
+      ok: true,
+      routes: [
+        { routeId: "r", legs: [{ type: "DRIVE", incidents: [incident] }] },
+      ],
+    };
+    const projected = projectToolResult(source);
+    expect(projected.clientResult).toBe(source);
+    expect(source.routes[0].legs[0].incidents[0].points).toHaveLength(2000);
+    expect(projected.modelResult).toMatchObject({
+      routes: [
+        {
+          legs: [
+            {
+              incidents: [
+                {
+                  title: incident.title,
+                  description: incident.description,
+                  severity: "closure",
+                  locationDescription: "Section A",
+                  startTime: "2026-11-01",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(JSON.stringify(projected.modelResult)).not.toContain('"points"');
+    expect(
+      Buffer.byteLength(JSON.stringify(projected.modelResult)),
+    ).toBeLessThan(1000);
+  });
+
+  it.each(["DRIVE", "MOTORCYCLE"])(
+    "keeps %s road guidance for the App while sending only route facts to the model",
+    (type) => {
+      const maneuvers = [
+        { instruction: "向右轉進入承德路一段", beginShapeIndex: 0 },
+      ];
+      const payload = {
+        ok: true,
+        planId: "road-plan",
+        selectedRouteId: "road-1",
+        mode: "elderly",
+        travelMode: type === "DRIVE" ? "drive" : "motorcycle",
+        routes: [
+          {
+            routeId: "road-1",
+            warnings: ["施工路段"],
+            legs: [
+              {
+                type,
+                from: { lat: 25.04, lng: 121.51 },
+                to: { lat: 25.05, lng: 121.57 },
+                maneuvers,
+              },
+            ],
+          },
+        ],
+      };
+      const projected = projectToolResult(payload);
+      expect(projected.clientResult).toBe(payload);
+      expect(payload.routes[0].legs[0].maneuvers).toBe(maneuvers);
+      expect(projected.modelResult).toMatchObject({
+        planId: "road-plan",
+        mode: "elderly",
+        travelMode: payload.travelMode,
+        routes: [
+          {
+            warnings: ["施工路段"],
+            legs: [
+              {
+                type,
+                from: payload.routes[0].legs[0].from,
+                to: payload.routes[0].legs[0].to,
+              },
+            ],
+          },
+        ],
+      });
+      expect(JSON.stringify(projected.modelResult)).not.toContain("maneuvers");
+      expect(JSON.stringify(projected.modelResult)).not.toContain(
+        "向右轉進入承德路一段",
+      );
+    },
+  );
+
   it("retains valid JSON values and omitted optional fields", () => {
     expect(
       projectRouteForModel({ a: null, b: undefined, c: [true, 0, "原文"] }),

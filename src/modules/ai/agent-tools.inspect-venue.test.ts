@@ -2,12 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   inspectVenueByQuery,
+  getCompiledVenue,
   planVenueRoute,
   resolveVenueQuery,
   getConfig,
   getA11yProfile,
 } = vi.hoisted(() => ({
   inspectVenueByQuery: vi.fn(),
+  getCompiledVenue: vi.fn(),
   planVenueRoute: vi.fn(),
   resolveVenueQuery: vi.fn(),
   getConfig: vi.fn(),
@@ -15,6 +17,7 @@ const {
 }));
 vi.mock("../venue/venue.service", () => ({
   inspectVenueByQuery,
+  getCompiledVenue,
   planVenueRoute,
   resolveVenueQuery,
 }));
@@ -23,6 +26,7 @@ const { attachRouteTokens } = vi.hoisted(() => ({
 }));
 vi.mock("../accessible-route/route-token.service", () => ({
   attachRouteTokens,
+  getNavigationEnvelopeByToken: vi.fn(),
 }));
 vi.mock("../user/user.service", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../user/user.service")>()),
@@ -32,6 +36,10 @@ vi.mock("../user/user.service", async (importOriginal) => ({
 
 import { executeLocalTool } from "./agent-tools";
 import { projectToolResult } from "../../utils/agent-route-projection";
+import {
+  RouteConversationContext,
+  createRouteAwareExecutor,
+} from "./route-context.service";
 
 const OK = {
   ok: true,
@@ -191,6 +199,28 @@ describe("planIndoorRoute agent tool", () => {
 
   beforeEach(() => {
     resolveVenueQuery.mockResolvedValue({ ok: true, venueId: "nutc-sanmin" });
+    getCompiledVenue.mockResolvedValue({
+      version: 1,
+      venue: {
+        venueId: "nutc-sanmin",
+        places: [
+          {
+            id: "info-2606",
+            name: "2606",
+            location: [120.68, 24.15],
+            buildingId: "info",
+            levelRef: "6F",
+          },
+          {
+            id: "info-2301",
+            name: "2301",
+            location: [120.681, 24.151],
+            buildingId: "info",
+            levelRef: "3F",
+          },
+        ],
+      },
+    });
     attachRouteTokens.mockImplementation(async (routes) =>
       routes.map((r: object) => ({ ...r, routeToken: "token-1" })),
     );
@@ -213,6 +243,31 @@ describe("planIndoorRoute agent tool", () => {
     expect(result).toMatchObject({
       ok: true,
       venueId: "nutc-sanmin",
+      routeContractVersion: 1,
+      planId: expect.any(String),
+      journeyKind: "indoor",
+      origin: { lat: 24.15, lng: 120.68, name: "2606" },
+      destination: { lat: 24.151, lng: 120.681, name: "2301" },
+      originVenuePlace: {
+        venueId: "nutc-sanmin",
+        placeId: "info-2606",
+        sourceVersion: 1,
+        buildingId: "info",
+        levelRef: "6F",
+      },
+      destinationVenuePlace: {
+        venueId: "nutc-sanmin",
+        placeId: "info-2301",
+        sourceVersion: 1,
+        buildingId: "info",
+        levelRef: "3F",
+      },
+      effectivePreferences: {
+        mode: "wheelchair",
+        travelMode: "walk",
+        avoidStairs: true,
+      },
+      indoorRoute: route,
       venueLeg: route,
       routes: [{ routeToken: "token-1", legs: [] }],
     });
@@ -236,6 +291,133 @@ describe("planIndoorRoute agent tool", () => {
       },
     });
     expect(JSON.stringify(modelResult)).not.toMatch(/token-1|"path"/);
+  });
+
+  it.each(["avoidStairs", "requireElevator"] as const)(
+    "passes %s through the real route-aware executor and retains the selection when the shared planner rejects it",
+    async (requirement) => {
+      const ctx = new RouteConversationContext({
+        mode: "normal",
+        [requirement]: true,
+      });
+      ctx.adopt({
+        ok: true,
+        selectedRouteId: "previous",
+        routes: [{ routeId: "previous", routeToken: "previous-token" }],
+        effectivePreferences: {
+          mode: "normal",
+          travelMode: "drive",
+          [requirement]: true,
+        },
+      });
+      planVenueRoute.mockResolvedValue({
+        ok: false,
+        status: 422,
+        error: "找不到符合無障礙需求的路線",
+        data: { reason: "NO_ACCESSIBLE_ROUTE" },
+      });
+      const output = await createRouteAwareExecutor(ctx, executeLocalTool)(
+        "planIndoorRoute",
+        {
+          fromPlaceId: "info-2606",
+          toPlaceId: "info-2301",
+        },
+      );
+      if (typeof output === "string")
+        throw new Error("Expected projected tool output");
+      expect(output.clientResult).toMatchObject({
+        ok: false,
+        reason: "NO_ACCESSIBLE_ROUTE",
+        mode: "normal",
+      });
+      expect(planVenueRoute).toHaveBeenCalledWith(
+        expect.objectContaining({ mode: "normal", [requirement]: true }),
+      );
+      expect(attachRouteTokens).not.toHaveBeenCalled();
+      expect(ctx.token).toBe("previous-token");
+      expect(ctx.preferences).toMatchObject({
+        mode: "normal",
+        [requirement]: true,
+      });
+    },
+  );
+
+  it("keeps confirmed step-free conditions in the selected indoor plan and its navigation token", async () => {
+    const ctx = new RouteConversationContext({
+      mode: "normal",
+      avoidStairs: true,
+      requireElevator: true,
+    });
+    planVenueRoute.mockResolvedValue({
+      ok: true,
+      route: { ...route, mode: "normal" },
+    });
+    const output = await createRouteAwareExecutor(ctx, executeLocalTool)(
+      "planIndoorRoute",
+      {
+        fromPlaceId: "info-2606",
+        toPlaceId: "info-2301",
+      },
+    );
+    if (typeof output === "string")
+      throw new Error("Expected projected tool output");
+    expect(output.clientResult).toMatchObject({
+      ok: true,
+      effectivePreferences: {
+        mode: "normal",
+        travelMode: "walk",
+        avoidStairs: true,
+        requireElevator: true,
+      },
+    });
+    expect(attachRouteTokens.mock.calls[0][1]).toMatchObject({
+      mode: "normal",
+      travelMode: "walk",
+      avoidStairs: true,
+      requireElevator: true,
+    });
+    expect(ctx.preferences).toMatchObject({
+      mode: "normal",
+      travelMode: "walk",
+      avoidStairs: true,
+      requireElevator: true,
+    });
+  });
+
+  it("preserves explicit false constraints rather than rebuilding them from the route mode", async () => {
+    planVenueRoute.mockResolvedValue({ ok: true, route });
+    expect(
+      await plan({
+        fromPlaceId: "info-2606",
+        toPlaceId: "info-2301",
+        mode: "wheelchair",
+        avoidStairs: false,
+        requireElevator: false,
+      }),
+    ).toMatchObject({
+      ok: true,
+      effectivePreferences: { avoidStairs: false, requireElevator: false },
+    });
+  });
+
+  it("rejects malformed indoor constraints before invoking the planner", async () => {
+    expect(
+      await plan({
+        fromPlaceId: "info-2606",
+        toPlaceId: "info-2301",
+        avoidStairs: "yes",
+      }),
+    ).toMatchObject({ ok: false, reason: "INVALID_ARGUMENTS" });
+    expect(planVenueRoute).not.toHaveBeenCalled();
+  });
+
+  it("rejects a route when its source snapshot changed before endpoint projection", async () => {
+    planVenueRoute.mockResolvedValue({ ok: true, route });
+    getCompiledVenue.mockResolvedValue({ version: 2, venue: { places: [] } });
+    expect(
+      await plan({ fromPlaceId: "info-2606", toPlaceId: "info-2301" }),
+    ).toMatchObject({ ok: false, reason: "STALE_SELECTION" });
+    expect(attachRouteTokens).not.toHaveBeenCalled();
   });
 
   it("derives the mode from the stored profile when none is given", async () => {

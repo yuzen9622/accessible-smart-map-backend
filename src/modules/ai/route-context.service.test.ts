@@ -168,6 +168,255 @@ describe("trusted route context and projections", () => {
     expect(await running).toContain("STALE_SELECTION");
     expect(ctx.token).toBeUndefined();
   });
+  it("adopts indoor plans and retains applicable accessibility conditions from an outdoor trip", async () => {
+    const ctx = new RouteConversationContext();
+    ctx.adopt(result);
+    const indoor = {
+      ...result,
+      journeyKind: "indoor",
+      selectedRouteId: "indoor-a",
+      originVenuePlace: {
+        venueId: "v",
+        placeId: "2606",
+        sourceVersion: 2,
+        buildingId: "info",
+        levelRef: "6F",
+      },
+      destinationVenuePlace: {
+        venueId: "v",
+        placeId: "2301",
+        sourceVersion: 2,
+        buildingId: "info",
+        levelRef: "3F",
+      },
+      venueLeg: {
+        fromPlaceId: "2606",
+        toPlaceId: "2301",
+        steps: [
+          {
+            type: "elevator",
+            instruction: "搭電梯到3F",
+            fromLevelRef: "6F",
+            toLevelRef: "3F",
+          },
+        ],
+        path: { coordinates: [[120, 24, 18]] },
+      },
+      routes: [
+        { ...route, routeId: "indoor-a", routeToken: "indoor-token", legs: [] },
+      ],
+      effectivePreferences: {
+        mode: "wheelchair",
+        travelMode: "walk",
+        transitPreference: "none",
+        avoidStairs: true,
+      },
+    };
+    const raw = vi
+      .fn()
+      .mockResolvedValueOnce(JSON.stringify(indoor))
+      .mockResolvedValueOnce('{"ok":true}');
+    const exec = createRouteAwareExecutor(ctx, raw);
+    await exec("planIndoorRoute", { fromPlaceId: "2606", toPlaceId: "2301" });
+    expect(raw.mock.calls[0][1]).toEqual({
+      mode: "wheelchair",
+      avoidStairs: true,
+      fromPlaceId: "2606",
+      toPlaceId: "2301",
+    });
+    expect(ctx.token).toBe("indoor-token");
+    expect(ctx.preferences).toMatchObject({
+      mode: "wheelchair",
+      travelMode: "walk",
+    });
+    expect(ctx.prompt).toContain("搭電梯到3F");
+    expect(ctx.prompt).toContain('"sourceVersion":2');
+    expect(ctx.prompt).not.toMatch(
+      /indoor-token|coordinates|capability-secret/,
+    );
+    await exec("getNavInstructions", {});
+    expect(raw.mock.calls[1][4]).toMatchObject({ routeToken: "indoor-token" });
+  });
+
+  it.each(["avoidStairs", "requireElevator"] as const)(
+    "retains a confirmed %s requirement for indoor planning without inheriting the outdoor travel mode",
+    async (requirement) => {
+      const ctx = new RouteConversationContext();
+      ctx.adopt({
+        ...result,
+        effectivePreferences: {
+          mode: "normal",
+          travelMode: "drive",
+          [requirement]: true,
+        },
+      });
+      const raw = vi
+        .fn()
+        .mockResolvedValue('{"ok":false,"reason":"NO_ACCESSIBLE_ROUTE"}');
+      await createRouteAwareExecutor(ctx, raw)("planIndoorRoute", {
+        fromPlaceId: "a",
+        toPlaceId: "b",
+      });
+      expect(raw.mock.calls[0][1]).toEqual({
+        mode: "normal",
+        [requirement]: true,
+        fromPlaceId: "a",
+        toPlaceId: "b",
+      });
+      expect(ctx.token).toBe("capability-secret");
+      expect(ctx.preferences).toMatchObject({ [requirement]: true });
+    },
+  );
+
+  it("honors explicit false for indoor constraints while leaving the previous selection unchanged on failure", async () => {
+    const ctx = new RouteConversationContext({
+      mode: "normal",
+      avoidStairs: true,
+      requireElevator: true,
+    });
+    const raw = vi.fn().mockResolvedValue('{"ok":false}');
+    await createRouteAwareExecutor(ctx, raw)("planIndoorRoute", {
+      fromPlaceId: "a",
+      toPlaceId: "b",
+      avoidStairs: false,
+      requireElevator: false,
+    });
+    expect(raw.mock.calls[0][1]).toEqual({
+      mode: "normal",
+      avoidStairs: false,
+      requireElevator: false,
+      fromPlaceId: "a",
+      toPlaceId: "b",
+    });
+    expect(ctx.preferences).toMatchObject({
+      avoidStairs: true,
+      requireElevator: true,
+    });
+  });
+
+  it("rehydrates indoor steps and floors from the trusted token envelope", async () => {
+    lookup.mockResolvedValue({
+      route: { ...route, legs: [] },
+      navigationId: "nav-a",
+      routeVersion: 1,
+      canonicalRequest: { mode: "wheelchair", travelMode: "walk" },
+      venueLegs: {
+        departure: {
+          venueId: "nutc-sanmin",
+          venueVersion: 4,
+          fromPlaceId: "2606",
+          toPlaceId: "2301",
+          mode: "wheelchair",
+          steps: [
+            {
+              type: "elevator",
+              instruction: "搭電梯到3F",
+              fromLevelRef: "6F",
+              toLevelRef: "3F",
+            },
+          ],
+        },
+      },
+    });
+    const ctx = new RouteConversationContext();
+    expect(await ctx.set({ routeToken: "indoor-secret" })).toMatchObject({
+      ok: true,
+    });
+    expect(ctx.prompt).toContain('"fromPlaceId":"2606"');
+    expect(ctx.prompt).toContain('"floors":"6F→3F"');
+    expect(ctx.prompt).toContain('"venueId":"nutc-sanmin"');
+    expect(ctx.prompt).toContain('"venueVersion":4');
+    expect(ctx.prompt).not.toContain("indoor-secret");
+  });
+
+  it("does not replace a selected route when indoor planning fails or arrives after clearing", async () => {
+    const ctx = new RouteConversationContext();
+    ctx.adopt(result);
+    const failed = vi
+      .fn()
+      .mockResolvedValue('{"ok":false,"reason":"NO_ROUTE"}');
+    await createRouteAwareExecutor(ctx, failed)("planIndoorRoute", {
+      fromPlaceId: "a",
+      toPlaceId: "b",
+    });
+    expect(ctx.token).toBe("capability-secret");
+    let finish!: (value: string) => void;
+    const raw = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const pending = createRouteAwareExecutor(ctx, raw)("planIndoorRoute", {
+      fromPlaceId: "a",
+      toPlaceId: "b",
+    });
+    await ctx.set(null);
+    finish(JSON.stringify(result));
+    expect(await pending).toContain("STALE_SELECTION");
+    expect(ctx.token).toBeUndefined();
+  });
+
+  it.each(["normal", "elderly"] as const)(
+    "adopts a new %s motorcycle plan while retaining accessibility conditions from the previous trip",
+    async (mode) => {
+      const ctx = new RouteConversationContext({ mode: "wheelchair" });
+      ctx.adopt({
+        ...result,
+        effectivePreferences: {
+          mode: "normal",
+          travelMode: "drive",
+          avoidStairs: true,
+          requireElevator: true,
+        },
+      });
+      const next = {
+        ...result,
+        planId: "motorcycle-plan",
+        selectedRouteId: "motorcycle-b",
+        routes: [
+          {
+            ...route,
+            routeId: "motorcycle-b",
+            routeToken: "motorcycle-token",
+            legs: [{ type: "MOTORCYCLE" }],
+          },
+        ],
+        effectivePreferences: {
+          mode,
+          travelMode: "motorcycle",
+          avoidStairs: true,
+          requireElevator: true,
+        },
+      };
+      const raw = vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify(next))
+        .mockResolvedValueOnce('{"ok":true}');
+      const exec = createRouteAwareExecutor(ctx, raw);
+      await exec("planAccessibleRoute", {
+        origin: "台北車站",
+        destination: "松山車站",
+        mode,
+        travelMode: "motorcycle",
+      });
+      expect(raw.mock.calls[0][1]).toMatchObject({
+        mode,
+        travelMode: "motorcycle",
+        avoidStairs: true,
+        requireElevator: true,
+      });
+      expect(ctx.preferences).toEqual(next.effectivePreferences);
+      expect(ctx.token).toBe("motorcycle-token");
+      expect(ctx.prompt).toContain('"routeId":"motorcycle-b"');
+      expect(ctx.prompt).not.toContain('"routeId":"bus-a"');
+      await exec("getNavInstructions", {});
+      expect(raw.mock.calls[1][4]).toMatchObject({
+        routeToken: "motorcycle-token",
+      });
+    },
+  );
+
   it("keeps confirmed trip preferences but allows explicit none and false to clear them", async () => {
     const ctx = new RouteConversationContext({ mode: "normal" });
     ctx.adopt(result);

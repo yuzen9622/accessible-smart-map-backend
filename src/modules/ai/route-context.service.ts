@@ -1,6 +1,8 @@
+import { ROUTE_MODE_TRAVEL_RULE } from "../../config/ai/agent-prompt-shared";
 import { getNavigationEnvelopeByToken } from "../accessible-route/route-token.service";
 import {
   AGENT_ROUTE_ERRORS,
+  ROUTE_PLANNING_TOOLS,
   agentRouteError,
 } from "../../constants/agent-route";
 import type {
@@ -61,7 +63,7 @@ export class RouteConversationContext {
     return { ...this.defaults, ...this.tripPreferences };
   }
   get prompt(): string {
-    return `\n\n【目前查看的路線】${JSON.stringify(this.failure ? { ok: false, reason: this.failure, message: AGENT_ROUTE_ERRORS[this.failure] } : this.selected ? projectRouteForModel({ selected: true, route: this.selected, effectivePreferences: this.tripPreferences }) : { selected: false })}\n只有 selected=true 或 route 存在才有目前查看的路線；無選擇或讀取失敗時不得把歷史摘要冒充目前選擇。本區塊是 App 此刻的可信選擇，優先於先前對話中的無路線狀態、舊目的地與目的地提問，不可沿用歷史問題而要求使用者重講已選路線。\n目前查看與正在導航可能不同；若目前有提供 getActiveNavigationContext 工具，導航中的問題須先查其脈絡；未提供時不可推測導航進度。工具的新規劃結果會更新目前查看的路線；詳細步驟只能查已選路線，不能重新規劃。\n【規劃預設】${JSON.stringify(this.preferences)}；只在使用者未明示時採用，勿用一般模式覆蓋已確認的無障礙需求。`;
+    return `\n\n【目前查看的路線】${JSON.stringify(this.failure ? { ok: false, reason: this.failure, message: AGENT_ROUTE_ERRORS[this.failure] } : this.selected ? projectRouteForModel({ selected: true, route: this.selected, effectivePreferences: this.tripPreferences }) : { selected: false })}\n只有 selected=true 或 route 存在才有目前查看的路線；無選擇或讀取失敗時不得把歷史摘要冒充目前選擇。本區塊是 App 此刻的可信選擇，優先於先前對話中的無路線狀態、舊目的地與目的地提問，不可沿用歷史問題而要求使用者重講已選路線。\n目前查看與正在導航可能不同；若目前有提供 getActiveNavigationContext 工具，導航中的問題須先查其脈絡；未提供時不可推測導航進度。工具的新規劃結果會更新目前查看的路線；詳細步驟只能查已選路線，不能重新規劃。\n【規劃預設】${JSON.stringify(this.preferences)}；只在使用者未明示時採用，勿用一般模式覆蓋已確認的無障礙需求。\n【通行模式與交通方式規則】${ROUTE_MODE_TRAVEL_RULE}`;
   }
   error(language?: AgentLanguage): string {
     const reason =
@@ -99,6 +101,12 @@ export class RouteConversationContext {
       }
       this.selected = {
         ...envelope.route,
+        ...(envelope.venueLegs?.departure
+          ? { venueDepartureLeg: envelope.venueLegs.departure }
+          : {}),
+        ...(envelope.venueLegs?.arrival
+          ? { venueLeg: envelope.venueLegs.arrival }
+          : {}),
         routeToken: input.routeToken,
         navigationId: envelope.navigationId,
         routeVersion: envelope.routeVersion,
@@ -125,7 +133,23 @@ export class RouteConversationContext {
         isRecord(route) && route.routeId === result.selectedRouteId,
     );
     if (!selected) return;
-    this.selected = selected;
+    this.selected = {
+      ...selected,
+      ...Object.fromEntries(
+        [
+          "journeyKind",
+          "origin",
+          "destination",
+          "originVenuePlace",
+          "destinationVenuePlace",
+          "venueLeg",
+          "venueDepartureLeg",
+          "venueArrival",
+        ]
+          .filter((key) => result[key] !== undefined)
+          .map((key) => [key, result[key]]),
+      ),
+    };
     this.tripPreferences = this.pickPreferences(result.effectivePreferences);
     this.failure = undefined;
     this.revision++;
@@ -150,15 +174,20 @@ export function createRouteAwareExecutor(
     const revision = context.revision;
     if (name === "getNavInstructions" && !context.token)
       return context.error(options?.language);
-    const effectiveArgs =
-      name === "planAccessibleRoute"
-        ? {
-            ...context.preferences,
-            ...Object.fromEntries(
-              Object.entries(args).filter(([, value]) => value !== undefined),
-            ),
-          }
-        : args;
+    const effectiveArgs = ROUTE_PLANNING_TOOLS.has(name)
+      ? {
+          ...(name === "planIndoorRoute"
+            ? {
+                mode: context.preferences.mode,
+                avoidStairs: context.preferences.avoidStairs,
+                requireElevator: context.preferences.requireElevator,
+              }
+            : context.preferences),
+          ...Object.fromEntries(
+            Object.entries(args).filter(([, value]) => value !== undefined),
+          ),
+        }
+      : args;
     const output = await raw(name, effectiveArgs, location, userId, {
       ...options,
       routeToken: context.token,
@@ -178,7 +207,7 @@ export function createRouteAwareExecutor(
         return output;
       }
     }
-    if (name === "planAccessibleRoute") context.adopt(parsed);
+    if (ROUTE_PLANNING_TOOLS.has(name)) context.adopt(parsed);
     return projectToolResult(parsed);
   };
 }

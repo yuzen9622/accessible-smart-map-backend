@@ -11,7 +11,9 @@ const PRIVATE_OR_BULKY_KEYS = new Set([
   "encodedPolyline",
   "geometry",
   "coordinates",
+  "points",
   "steps",
+  "maneuvers",
   "stepStreetNames",
   "a11yFacilities",
   "facilities",
@@ -20,6 +22,7 @@ const PRIVATE_OR_BULKY_KEYS = new Set([
   "departureStationA11y",
   "arrivalStationA11y",
   "_canonicalRequest",
+  "indoorRoute",
   "userId",
 ]);
 
@@ -45,6 +48,10 @@ export function projectVenueLegForModel(value: unknown): ModelRouteValue {
   const steps = Array.isArray(value.steps) ? value.steps.filter(record) : [];
   const durationS = typeof value.durationS === "number" ? value.durationS : 0;
   return {
+    ...(typeof value.venueId === "string" ? { venueId: value.venueId } : {}),
+    ...(typeof value.venueVersion === "number"
+      ? { venueVersion: value.venueVersion }
+      : {}),
     fromPlaceId: value.fromPlaceId as string,
     toPlaceId: value.toPlaceId as string,
     mode: value.mode as string,

@@ -1,4 +1,5 @@
 import type OpenAI from "openai";
+import { ROUTE_MODE_TRAVEL_RULE } from "./agent-prompt-shared";
 
 export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
@@ -212,6 +213,16 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
             description:
               "通行模式；使用者明示（例如坐輪椅）時才傳，省略沿用個人設定，再省略為 normal",
           },
+          avoidStairs: {
+            type: "boolean",
+            description:
+              "避開樓梯、階梯與手扶梯；省略沿用已確認需求，只有使用者明示時才變更",
+          },
+          requireElevator: {
+            type: "boolean",
+            description:
+              "保留已確認的電梯需求，不接受樓梯、階梯或手扶梯路段；只有使用者明示時才變更",
+          },
         },
         required: ["fromPlaceId", "toPlaceId"],
       },
@@ -222,7 +233,7 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "planAccessibleRoute",
       description:
-        "規劃無障礙混合式交通路線（公車/捷運/步行/高鐵/台鐵），回傳路線**摘要**：候選路線、包含哪些公車/捷運班次、轉乘次數、預估時間、無障礙評分。用於「怎麼去/有哪些走法」的整段路線建議；也可作為「兩地間有哪些公車」的候選路線來源（之後再用公車工具查各線到站時間）。要逐步指引（每一步怎麼走）用 getNavInstructions。",
+        "規劃大眾運輸、開車、騎機車或全程步行／輪椅路線，依使用者要求選擇 travelMode（交通方式）與 mode（通行模式）。回傳路線摘要：候選路線、實際運具與班次、轉乘次數、預估時間、無障礙評分。用於「怎麼去/有哪些走法」的整段路線建議；也可作為「兩地間有哪些公車」的候選路線來源（之後再用公車工具查各線到站時間）。要逐步指引（每一步怎麼走）用 getNavInstructions。",
       parameters: {
         type: "object",
         properties: {
@@ -254,13 +265,13 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           mode: {
             type: "string",
             enum: ["wheelchair", "elderly", "visual_impaired", "normal"],
-            description: "只有使用者明示或已確認時才傳；省略沿用行程或個人設定",
+            description:
+              "通行模式：normal 一般、wheelchair 輪椅、elderly 年長、visual_impaired 視障。只有使用者明示或已確認時才傳；省略沿用行程或個人設定。交通方式應填 travelMode，不可填入 mode。",
           },
           travelMode: {
             type: "string",
             enum: ["transit", "drive", "motorcycle", "walk"],
-            description:
-              "交通方式：transit 大眾運輸、drive 開車、motorcycle 騎機車、walk 全程步行／輪椅。只有使用者明示時才傳；省略沿用已確認行程，否則為 transit。與無障礙 mode 無關",
+            description: `交通方式：transit 大眾運輸、drive 開車、motorcycle 騎機車（非自行車）、walk 全程步行／輪椅。使用者明示交通方式時必須傳入；省略沿用已確認行程，否則為 transit。搭公車／捷運／台鐵／高鐵時使用 transit 並搭配 transitPreference。${ROUTE_MODE_TRAVEL_RULE}`,
           },
           transitPreference: {
             type: "string",
