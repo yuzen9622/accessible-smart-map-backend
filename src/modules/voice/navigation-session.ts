@@ -1,4 +1,5 @@
 import { DEFAULT_LANG, type SupportedLang } from "../../types/lang";
+import { formatFriendlyDistance } from "../../utils/transit-text";
 import { venueNavInstructions } from "../../utils/venue-nav-instructions";
 import { NAVIGATION_MESSAGES } from "./navigation-messages";
 import type { AccessibleRoute, MetroLeg } from "../../types/route";
@@ -182,7 +183,28 @@ export interface NavigationConversationContext {
     index: number;
     instruction: string;
     legType: StepLegType;
+    distanceM?: number | null;
+    streetName?: string | null;
   };
+  upcomingTurn?: {
+    instruction: string;
+    distanceM: number;
+    streetName?: string | null;
+    stepIndex: number;
+  };
+  nextStep?: {
+    index: number;
+    instruction: string;
+    legType: StepLegType;
+    distanceM?: number | null;
+  };
+  upcomingSteps?: Array<{
+    index: number;
+    instruction: string;
+    distanceM?: number | null;
+  }>;
+  totalRemainingDistanceM?: number;
+  totalSteps?: number;
   destination?: string;
   transit?: NavigationTransitContext;
 }
@@ -482,6 +504,14 @@ export class NavigationSession {
   /** True between a successful `start()`/resume and stop, arrival or cancel. */
   get isActive(): boolean {
     return this.active;
+  }
+
+  get hasArmedRoute(): boolean {
+    return this.armedRoute !== null;
+  }
+
+  getInitialStepInstruction(): string | undefined {
+    return this.steps[0]?.instruction;
   }
 
   /** False while previewing or before the first fix: nothing may act on the user's position. */
@@ -828,9 +858,13 @@ export class NavigationSession {
         ? this.previewIndex
         : this.announcedIndex >= 0
           ? this.announcedIndex
-          : this.nextCoordIndex(0);
+          : (this.nextCoordIndex(0) ?? 0);
     const current =
-      currentIndex === null ? undefined : this.steps[currentIndex];
+      currentIndex !== null &&
+      currentIndex >= 0 &&
+      currentIndex < this.steps.length
+        ? this.steps[currentIndex]
+        : undefined;
     const currentTransitIndex =
       this.onVehicle && current?.kind === "transit_board" ? currentIndex : null;
     const upcomingTransitIndex =
@@ -843,17 +877,93 @@ export class NavigationSession {
     const transitIndex =
       currentTransitIndex ??
       (upcomingTransitIndex >= 0 ? upcomingTransitIndex : null);
+
+    let upcomingTurn: NavigationConversationContext["upcomingTurn"] = undefined;
+    if (currentIndex !== null && currentIndex >= 0) {
+      let accumulatedDistanceM = 0;
+      for (let i = currentIndex; i < this.steps.length; i++) {
+        const step = this.steps[i];
+        if (i > currentIndex) {
+          accumulatedDistanceM += this.steps[i - 1]?.distanceM ?? 0;
+        }
+        const isTurn =
+          step.type === "turn" ||
+          step.kind === "turn" ||
+          step.maneuver?.includes("TURN") ||
+          step.maneuver?.includes("RAMP") ||
+          step.maneuver?.includes("UTURN") ||
+          step.maneuver?.includes("FORK") ||
+          step.maneuver?.includes("ROUNDABOUT") ||
+          step.relativeDirection?.includes("LEFT") ||
+          step.relativeDirection?.includes("RIGHT") ||
+          step.relativeDirection?.includes("UTURN") ||
+          step.instruction.includes("轉") ||
+          step.instruction.includes("迴轉");
+        if (isTurn) {
+          const dist =
+            i === currentIndex ? (step.distanceM ?? 0) : accumulatedDistanceM;
+          const streetMatch = /「(.*?)」/.exec(step.instruction);
+          upcomingTurn = {
+            instruction: step.instruction,
+            distanceM: dist,
+            streetName: step.streetName ?? streetMatch?.[1] ?? undefined,
+            stepIndex: i,
+          };
+          break;
+        }
+      }
+    }
+
+    const nextIndex =
+      currentIndex !== null && currentIndex >= 0 ? currentIndex + 1 : -1;
+    const next =
+      nextIndex >= 0 && nextIndex < this.steps.length
+        ? this.steps[nextIndex]
+        : undefined;
+
+    const upcomingSteps =
+      currentIndex !== null && currentIndex >= 0
+        ? this.steps.slice(currentIndex, currentIndex + 5).map((step, idx) => ({
+            index: currentIndex + idx,
+            instruction: step.instruction,
+            distanceM: step.distanceM,
+          }))
+        : undefined;
+
+    let totalRemainingDistanceM = 0;
+    if (currentIndex !== null && currentIndex >= 0) {
+      for (let i = currentIndex; i < this.steps.length; i++) {
+        totalRemainingDistanceM += this.steps[i]?.distanceM ?? 0;
+      }
+    }
+
     return {
       active: true,
-      ...(current && currentIndex !== null
+      ...(current && currentIndex !== null && currentIndex >= 0
         ? {
             currentStep: {
               index: currentIndex,
               instruction: current.instruction,
               legType: current.legType,
+              distanceM: current.distanceM,
+              streetName: current.streetName ?? undefined,
             },
           }
         : {}),
+      ...(upcomingTurn ? { upcomingTurn } : {}),
+      ...(next
+        ? {
+            nextStep: {
+              index: nextIndex,
+              instruction: next.instruction,
+              legType: next.legType,
+              distanceM: next.distanceM,
+            },
+          }
+        : {}),
+      ...(upcomingSteps?.length ? { upcomingSteps } : {}),
+      ...(totalRemainingDistanceM > 0 ? { totalRemainingDistanceM } : {}),
+      totalSteps: this.steps.length,
       destination: this.routeDestination(this.activeRoute),
       ...(transitIndex !== null
         ? {
@@ -1277,8 +1387,22 @@ export class NavigationSession {
     ) {
       coord = leg.polyline[instruction.polylineIndex] ?? null;
     }
+    let text = instruction.text;
+    if (
+      isRoadLeg(leg) &&
+      instruction.distanceM &&
+      this.language === "zh-TW" &&
+      !text.includes("續行") &&
+      !text.includes("公尺") &&
+      !text.includes("公里")
+    ) {
+      const friendly = formatFriendlyDistance(instruction.distanceM);
+      if (friendly && friendly !== "馬上") {
+        text = `${text}，續行${friendly}`;
+      }
+    }
     return {
-      instruction: instruction.text,
+      instruction: text,
       legIndex,
       legType: instruction.legType,
       polylineIndex: instruction.polylineIndex,

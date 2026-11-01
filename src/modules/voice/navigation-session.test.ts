@@ -1962,3 +1962,34 @@ describe("NavigationSession indoor venue legs, review fixes", () => {
     expect(nav.isInDeparture()).toBe(false);
   });
 });
+
+describe("NavigationSession turn awareness and conversation context", () => {
+  const p0 = coord(121);
+  const p1 = coord(121.002);
+  const p2 = coord(121.004);
+  const p3 = coord(121.006);
+
+  it("appends distance onto Chinese road steps", () => {
+    const nav = new NavigationSession();
+    nav.armRoute(route([driveLeg([p0, p1, p2])]));
+    nav.start();
+    const firstSpeech = nav.getInitialStepInstruction();
+    expect(firstSpeech).toContain("續行約 200 公尺");
+  });
+
+  it("calculates upcoming turn and remaining distance accurately in getConversationContext", () => {
+    const nav = new NavigationSession();
+    nav.armRoute(route([driveLeg([p0, p1, p2, p3])]));
+    nav.start(pos(p0));
+    const ctx = nav.getConversationContext();
+    expect(ctx.active).toBe(true);
+    expect(ctx.currentStep?.instruction).toContain("續行約 200 公尺");
+    expect(ctx.upcomingTurn).toMatchObject({
+      distanceM: 200,
+      stepIndex: 1,
+    });
+    expect(ctx.nextStep).toBeDefined();
+    expect(ctx.upcomingSteps?.length).toBeGreaterThan(0);
+    expect(ctx.totalRemainingDistanceM).toBeGreaterThanOrEqual(400);
+  });
+});
