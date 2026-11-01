@@ -36,10 +36,26 @@ import type {
  * Kept separate from the message schema because an unusable location is
  * silently dropped rather than failing the handshake.
  */
-export const UserLocationSchema = z.object({
-  latitude: z.number().finite().min(-90).max(90),
-  longitude: z.number().finite().min(-180).max(180),
-});
+export const UserLocationSchema = z.preprocess(
+  (val: unknown) => {
+    if (typeof val === "object" && val !== null) {
+      const obj = val as Record<string, unknown>;
+      const lat = obj.latitude ?? obj.lat;
+      const lng = obj.longitude ?? obj.lng ?? obj.lon;
+      if (lat !== undefined && lng !== undefined) {
+        return {
+          latitude: typeof lat === "string" ? parseFloat(lat) : lat,
+          longitude: typeof lng === "string" ? parseFloat(lng) : lng,
+        };
+      }
+    }
+    return val;
+  },
+  z.object({
+    latitude: z.number().finite().min(-90).max(90),
+    longitude: z.number().finite().min(-180).max(180),
+  }),
+);
 
 export type UserLocation = z.infer<typeof UserLocationSchema>;
 

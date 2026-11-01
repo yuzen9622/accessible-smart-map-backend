@@ -336,6 +336,23 @@ describe("voice gateway", () => {
     );
   });
 
+  it("normalizes { lat, lng } GPS pair from mobile client", async () => {
+    const ws = connect();
+    await waitForOpen(ws);
+    const ready = waitForJson(ws);
+    sendSessionStart(ws, "voice-user-latlng", {
+      lat: 25.0478,
+      lng: 121.517,
+    } as unknown as { latitude: number; longitude: number });
+    await ready;
+
+    expect(mockCreateLiveBridge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userLocation: { latitude: 25.0478, longitude: 121.517 },
+      }),
+    );
+  });
+
   it("drops an out-of-range GPS pair before creating the Live bridge", async () => {
     const ws = connect();
     await waitForOpen(ws);
@@ -364,8 +381,8 @@ describe("voice gateway", () => {
     ws.send(
       JSON.stringify({
         type: "nav.position",
-        latitude: 25,
-        longitude: 121,
+        lat: 25,
+        lng: 121,
         accuracy: 5,
       }),
     );

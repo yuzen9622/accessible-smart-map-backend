@@ -554,7 +554,20 @@ function handleConnection(
     }
     if (parsed?.type === "nav.position") {
       if (!positionBucket.take()) return;
-      const result = NavPositionMessageSchema.safeParse(parsed);
+      const normalizedPosition =
+        typeof parsed === "object" && parsed !== null
+          ? {
+              ...parsed,
+              latitude:
+                (parsed as Record<string, unknown>).latitude ??
+                (parsed as Record<string, unknown>).lat,
+              longitude:
+                (parsed as Record<string, unknown>).longitude ??
+                (parsed as Record<string, unknown>).lng ??
+                (parsed as Record<string, unknown>).lon,
+            }
+          : parsed;
+      const result = NavPositionMessageSchema.safeParse(normalizedPosition);
       if (!result.success) {
         console.warn(
           `[voice] ignoring nav.position: ${describeIssues(result.error)}`,
