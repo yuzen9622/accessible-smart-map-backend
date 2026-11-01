@@ -6,6 +6,7 @@ import type { AccessibleRoute } from "../../types/route";
 import type {
   CanonicalPlanRouteRequest,
   NavigationRouteEnvelope,
+  NavigationRoute,
   NavigationVenueLegs,
 } from "./accessible-route.types";
 import {
@@ -60,12 +61,16 @@ export async function attachRouteTokens(
 /** Resolve a short-lived bearer capability to a server-produced route. */
 export async function getRouteByToken(
   routeToken: string,
-): Promise<AccessibleRoute | null> {
+  options: { includeVenueLegs?: boolean } = {},
+): Promise<NavigationRoute | null> {
   const raw = await redisGet(navigationTokenKey(routeToken));
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as AccessibleRoute | NavigationRouteEnvelope;
-    return isNavigationEnvelope(parsed) ? parsed.route : parsed;
+    if (!isNavigationEnvelope(parsed)) return parsed;
+    return options.includeVenueLegs && parsed.venueLegs
+      ? { ...parsed.route, venueLegs: parsed.venueLegs }
+      : parsed.route;
   } catch {
     return null;
   }

@@ -2013,21 +2013,6 @@ async function refineWalkOptionWithCsr(
 }
 
 /**
- * The venue (indoor) routing mode for a trip: a hard step-free requirement
- * uses the strict wheelchair rules indoors whatever the accessibility mode.
- *
- * @param mode Resolved accessibility mode, if any.
- * @param avoidStairs Explicit or profile-derived step-free requirement.
- * @returns The mode the venue leg is planned with.
- */
-export function venueModeFor(
-  mode: AccessibilityMode | undefined,
-  avoidStairs: boolean | undefined,
-): AccessibilityMode {
-  return avoidStairs === true ? "wheelchair" : (mode ?? "normal");
-}
-
-/**
  * Resolve a park destination to an accessible entrance. Advisory: a failed
  * lookup, or one exceeding {@link PARK_ARRIVAL_BUDGET_MS}, keeps the
  * destination the caller asked for.
@@ -2237,8 +2222,10 @@ export async function planAccessibleRouteFromRequest(
       venueId: body.destinationVenuePlace.venueId,
       placeId: body.destinationVenuePlace.placeId,
       origin: { lat: originPoint.latitude, lng: originPoint.longitude },
-      mode: venueModeFor(mode, avoidStairs),
+      mode: mode ?? "normal",
       lang: venueLang,
+      avoidStairs,
+      requireElevator,
     });
     if (!resolved.ok) {
       // This endpoint never answers 404 (engine outcomes are 422): an unknown
@@ -2267,6 +2254,7 @@ export async function planAccessibleRouteFromRequest(
     const replanned = await venueArrivalPlanner().replanVenueLeg(
       body.venueArrival,
       venueLang,
+      { avoidStairs, requireElevator },
     );
     if (!replanned.ok) {
       return "stale" in replanned
@@ -2311,8 +2299,10 @@ export async function planAccessibleRouteFromRequest(
         lat: destinationPoint.latitude,
         lng: destinationPoint.longitude,
       },
-      mode: venueModeFor(mode, avoidStairs),
+      mode: mode ?? "normal",
       lang: venueLang,
+      avoidStairs,
+      requireElevator,
     });
     if (!resolved.ok) {
       if (resolved.status === ResponseCode.NOT_FOUND) {

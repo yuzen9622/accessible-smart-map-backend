@@ -6138,7 +6138,7 @@ describe("venue destinations (destinationVenuePlace)", () => {
     expect(data._canonicalRequest).not.toHaveProperty("destinationVenuePlace");
   });
 
-  it("plans the indoor leg with wheelchair rules when the trip requires step-free access", async () => {
+  it("keeps the original mode while passing step-free conditions into the indoor planner", async () => {
     vi.mocked(resolveVenueArrival).mockResolvedValue({
       ok: true,
       venueArrival,
@@ -6151,7 +6151,7 @@ describe("venue destinations (destinationVenuePlace)", () => {
       avoidStairs: true,
     });
     expect(resolveVenueArrival).toHaveBeenCalledWith(
-      expect.objectContaining({ mode: "wheelchair" }),
+      expect.objectContaining({ mode: "elderly", avoidStairs: true }),
     );
   });
 
@@ -6281,7 +6281,10 @@ describe("venue destinations (destinationVenuePlace)", () => {
     vi.mocked(planOtpRouteDetailed).mockClear();
     const rerouted = await reroute();
     if (!rerouted.ok) throw new Error(rerouted.error);
-    expect(replanVenueLeg).toHaveBeenCalledWith(venueArrival, "zh-TW");
+    expect(replanVenueLeg).toHaveBeenCalledWith(venueArrival, "zh-TW", {
+      avoidStairs: true,
+      requireElevator: true,
+    });
     expect(resolveVenueArrival).toHaveBeenCalledTimes(1); // only the initial plan; never re-select a gate
     expect(planOtpRouteDetailed).toHaveBeenCalled();
     for (const call of vi.mocked(planOtpRouteDetailed).mock.calls) {

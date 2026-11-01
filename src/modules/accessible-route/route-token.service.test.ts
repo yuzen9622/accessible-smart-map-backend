@@ -68,7 +68,7 @@ describe("route token cache", () => {
     );
   });
 
-  it("stores indoor venue legs with the token but never returns them", async () => {
+  it("keeps indoor legs out of client routes and reads them only when requested", async () => {
     storeInitialNavigationEnvelope.mockResolvedValue(true);
     const arrival = { venueId: "nutc-sanmin", steps: [] } as never;
     const [stored] = await attachRouteTokens([sampleRoute], canonicalRequest, {
@@ -78,10 +78,16 @@ describe("route token cache", () => {
     expect(stored).not.toHaveProperty("venueLegs");
     const envelope = storeInitialNavigationEnvelope.mock.calls[0][1];
     expect(envelope.venueLegs).toEqual({ arrival });
-    // the stored route itself never carries them, so no route read back
-    // from the token and forwarded to a client can leak them
     expect(envelope.route).not.toHaveProperty("venueLegs");
     expect(storeBusPlan.mock.calls[0][1]).not.toHaveProperty("venueLegs");
+    redisGet.mockResolvedValueOnce(JSON.stringify(envelope));
+    await expect(getRouteByToken("indoor")).resolves.not.toHaveProperty(
+      "venueLegs",
+    );
+    redisGet.mockResolvedValueOnce(JSON.stringify(envelope));
+    await expect(
+      getRouteByToken("indoor", { includeVenueLegs: true }),
+    ).resolves.toMatchObject({ venueLegs: { arrival } });
   });
 
   it("stores no venue legs for an outdoor-only trip", async () => {

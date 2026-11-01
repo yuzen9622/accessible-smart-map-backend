@@ -2,7 +2,11 @@ import type { ResponseCode } from "../../types/code";
 import type { SupportedLang } from "../../types/lang";
 import type { AccessibilityMode } from "../../types/route";
 import type { RouteFailureResult } from "./accessible-route.failure";
-import type { VenueArrival, VenueRoute } from "./venue-leg.types";
+import type {
+  VenueArrival,
+  VenueRoute,
+  VenueRouteConstraints,
+} from "./venue-leg.types";
 
 /**
  * Port for leading an outdoor route into a venue (campus) place.
@@ -15,7 +19,7 @@ import type { VenueArrival, VenueRoute } from "./venue-leg.types";
  * implementation, which is registered once at the composition root
  * (src/app.ts).
  */
-export interface ResolveVenueArrivalInput {
+export interface ResolveVenueArrivalInput extends VenueRouteConstraints {
   venueId: string;
   placeId: string;
   /** Trip origin, for the straight-line part of the gate choice. */
@@ -29,7 +33,7 @@ export type VenueArrivalResult =
   | { ok: false; status: ResponseCode.NOT_FOUND; error: string }
   | RouteFailureResult;
 
-export interface ResolveVenueDepartureInput {
+export interface ResolveVenueDepartureInput extends VenueRouteConstraints {
   venueId: string;
   placeId: string;
   /** Trip destination, for the straight-line part of the gate choice. */
@@ -62,6 +66,7 @@ export interface VenueArrivalPlanner {
   replanVenueLeg(
     arrival: VenueArrival,
     lang: SupportedLang,
+    constraints?: VenueRouteConstraints,
   ): Promise<ReplanVenueLegResult>;
   /** Whether the stored gate and place are still valid for the trip's mode. */
   isVenueArrivalCurrent(arrival: VenueArrival): Promise<boolean>;

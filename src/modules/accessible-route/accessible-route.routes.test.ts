@@ -739,16 +739,61 @@ describe("POST /api/v1/a11y/accessible-route travel modes + waypoints", () => {
 });
 
 describe("accessible-route OpenAPI", () => {
-  it("publishes route failures and the Taipei CSR-primary walking contract", async () => {
+  it("documents configured walking engines and the OTP2 transit boundary", async () => {
     const res = await request(app).get("/api/v1/openapi.json");
 
     expect(res.status).toBe(200);
     const operation = res.body.paths["/a11y/accessible-route"].post;
-    const responses = operation.responses;
-    expect(operation.description).toContain("台北 CSR bbox");
-    expect(operation.description).toContain("OTP2 fallback");
-    expect(operation.description).toContain("OTP2 本來就是 primary");
-    expect(operation.description).not.toContain("walk 與所有步行銜接走 OTP");
+    expect(operation.description).toContain("ROUTE_WALK_PLANNER");
+    expect(operation.description).toContain("預設 csr（CSR 行人圖）");
+    expect(operation.description).toContain("亦可設為 otp（官方 OTP）");
+    expect(operation.description).toContain(
+      "一般行人探索候選（OTP／Valhalla）",
+    );
+    expect(operation.description).toContain(
+      "起點、所有中途點與終點皆在台北行人圖涵蓋範圍內",
+    );
+    expect(operation.description).toContain("CSR 不可用或拓樸無法連通");
+    expect(operation.description).toContain(
+      "是否執行人行道優先政策以 walkPolicy 欄位為準",
+    );
+    expect(operation.description).toContain("官方 OTP 相容回應可省略該欄位");
+    const engineDescription =
+      res.body.components.schemas.AccessibleRoute.properties.engine.description;
+    expect(engineDescription).toContain("以 walkPolicy 欄位為準");
+    expect(engineDescription).toContain("官方 OTP 相容回應可省略該欄位");
+    expect(operation.description).toContain("不會透過 OTP2 備援繞過限制");
+    expect(operation.description).toContain(
+      "travelMode=transit（預設）以 OTP2 為主引擎",
+    );
+    expect(operation.description).toContain("含乘車段的行程不替換其 WALK legs");
+    expect(operation.description).toContain(
+      "OTP2 回傳的全 WALK 候選會另套用純步行選路政策",
+    );
+
+    const properties =
+      operation.requestBody.content["application/json"].schema.properties;
+    expect(properties.travelMode).toMatchObject({
+      enum: ["transit", "drive", "motorcycle", "walk"],
+      default: "transit",
+      description: expect.stringContaining("ROUTE_WALK_PLANNER"),
+    });
+    expect(properties.mode.description).toContain(
+      "使用官方 OTP 的一般戶外純步行候選",
+    );
+    expect(properties.avoidStairs.description).toContain(
+      "使用官方 OTP 的一般戶外、無中途點純步行為軟性偏好",
+    );
+    expect(properties.avoidStairs.description).toContain(
+      "使用 CSR 的純步行會在圖搜尋時套用避樓梯條件",
+    );
+  });
+
+  it("publishes route failure responses and schemas", async () => {
+    const res = await request(app).get("/api/v1/openapi.json");
+
+    expect(res.status).toBe(200);
+    const responses = res.body.paths["/a11y/accessible-route"].post.responses;
     for (const reason of [
       ROUTE_REASON.OUT_OF_RANGE,
       ROUTE_REASON.OUT_OF_COVERAGE,

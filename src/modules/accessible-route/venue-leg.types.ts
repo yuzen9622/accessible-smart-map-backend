@@ -7,6 +7,11 @@
  */
 import type { AccessibilityMode } from "../../types/route";
 
+export interface VenueRouteConstraints {
+  avoidStairs?: boolean;
+  requireElevator?: boolean;
+}
+
 /** `[lng, lat, z]`, z in metres above the venue datum. */
 export type LngLatZ = [number, number, number];
 
