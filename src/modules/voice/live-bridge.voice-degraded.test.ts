@@ -49,15 +49,11 @@ vi.mock("../transit/alert.service", () => ({ getTransitAlerts }));
 vi.mock("./corridor-monitor", () => ({ scanRemainingCorridor }));
 
 import { executeLocalTool } from "../ai/agent-tools";
-vi.mock("./route-operation", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./route-operation")>();
-  return {
-    ...actual,
-    loadVoiceRoutingPreferences: vi.fn(
-      async (_userId, preferences) => preferences ?? {},
-    ),
-  };
-});
+vi.mock("./voice-routing-preferences", () => ({
+  loadVoiceRoutingPreferences: vi.fn(
+    async (_userId: string, preferences?: object) => preferences ?? {},
+  ),
+}));
 import { createLiveBridge } from "./live-bridge";
 import { NavigationSession } from "./navigation-session";
 import { clearAlertStore, upsertAlertSnapshot } from "../transit/alert.store";

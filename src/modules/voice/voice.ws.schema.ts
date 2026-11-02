@@ -71,6 +71,11 @@ export const SessionStartMessageSchema = z.object({
   // by PriorHistorySchema for the same reason: bad history must not fail the
   // handshake, the session just starts without it.
   history: z.unknown().optional(),
+  /**
+   * 1 = the client runs navigation itself: the server sends `ui.command`
+   * instead of driving steps, and reads `nav.state` / speaks `nav.cue`.
+   */
+  clientNavigation: z.literal(1).optional(),
   ...RouteConversationFields,
 });
 
@@ -92,6 +97,65 @@ export type RouteContextAckMessage = {
   type: "route.context.ack";
 } & Pick<RouteContextUpdate, "requestId" | "selectionVersion"> &
   RouteContextResult;
+
+/** The client executed (or refused) a `ui.command`. */
+export const UiCommandAckMessageSchema = z
+  .object({
+    type: z.literal("ui.command.ack"),
+    id: z.string().min(1).max(64),
+    ok: z.boolean(),
+    reason: z.string().max(64).optional(),
+    guidance: z.enum(["preview", "live", "indoor"]).optional(),
+  })
+  .strict();
+
+export type UiCommandAck = z.infer<typeof UiCommandAckMessageSchema>;
+
+const ClientNavStepSchema = z
+  .object({
+    index: z.number().int().nonnegative(),
+    instruction: z.string().max(500),
+    legType: z.string().max(32).optional(),
+    distanceM: z.number().finite().nonnegative().nullable().optional(),
+    streetName: z.string().max(200).nullable().optional(),
+    maneuver: z.string().max(64).nullable().optional(),
+  })
+  .strict();
+
+/** The App's navigation engine state; the source of truth for route questions. */
+export const NavStateMessageSchema = z
+  .object({
+    type: z.literal("nav.state"),
+    active: z.boolean(),
+    guidance: z.enum(["preview", "live", "indoor"]).optional(),
+    travelMode: z.string().max(32).optional(),
+    destination: z.string().max(200).nullable().optional(),
+    currentStepIndex: z.number().int().nonnegative().optional(),
+    distanceToNextM: z.number().finite().nonnegative().nullable().optional(),
+    remainingDistanceM: z.number().finite().nonnegative().nullable().optional(),
+    remainingDurationSec: z
+      .number()
+      .finite()
+      .nonnegative()
+      .nullable()
+      .optional(),
+    arrived: z.boolean().optional(),
+    steps: z.array(ClientNavStepSchema).max(400).optional(),
+  })
+  .strict();
+
+export type ClientNavState = Omit<
+  z.infer<typeof NavStateMessageSchema>,
+  "type"
+>;
+
+/** A guidance line whose timing the App's navigation engine decided. */
+export const NavCueMessageSchema = z
+  .object({
+    type: z.literal("nav.cue"),
+    text: z.string().trim().min(1).max(500),
+  })
+  .strict();
 
 /** Client-initiated teardown. */
 export const SessionEndMessageSchema = z.object({
@@ -407,9 +471,19 @@ type SessionEndingMessage = z.infer<typeof SessionEndingMessageSchema>;
 export type VoiceOutboundMessage =
   | {
       type: "session.ready";
-      capabilities: { aiRouteContractVersion: 1; routeContextSync: true };
+      capabilities: {
+        aiRouteContractVersion: 1;
+        routeContextSync: true;
+        clientNavigation: 1;
+      };
     }
   | RouteContextAckMessage
+  | {
+      type: "ui.command";
+      id: string;
+      action: "start" | "stop" | "advance" | "repeat";
+      routeToken?: string;
+    }
   | { type: "error"; code: "LIVE_CONNECT_FAILED" }
   | SessionEndingMessage
   | { type: "nav.error"; code: "NAV_ROUTE_INVALID"; message: string }

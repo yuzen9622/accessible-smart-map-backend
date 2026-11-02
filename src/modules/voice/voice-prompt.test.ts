@@ -23,16 +23,18 @@ describe("voice language preference", () => {
     expect(buildVoiceSystemPrompt()).not.toContain("目前介面語言偏好");
   });
 
-  it("translates English navigation while keeping all source facts and legacy verbatim speech", () => {
+  it("marks navigation facts for natural phrasing, asking for English when the UI is English", () => {
     const text = "向右轉，沿中山路走 50 公尺，搭乘 307 公車";
-    const english = buildNavigationSpeechPrompt(text, "en");
-    expect(english).toContain("使用英文");
-    expect(english).toContain("不得增減資訊或呼叫工具");
-    expect(english).toContain(text);
-    expect(english).not.toContain("逐字唸出");
-    expect(buildNavigationSpeechPrompt(text, "zh-TW")).toBe(
-      buildNavigationSpeechPrompt(text),
+    expect(buildNavigationSpeechPrompt(text)).toBe(`【導航提示】${text}`);
+    expect(buildNavigationSpeechPrompt(text, "en")).toBe(
+      `【導航提示】（請用英文說）${text}`,
     );
+    const prompt = buildVoiceSystemPrompt();
+    expect(prompt).toContain("收到「【導航提示】」開頭的內容時");
+    expect(prompt).toContain(
+      "方向、路名、站名、路線號碼、距離與時間都必須保留且不能更改",
+    );
+    expect(prompt).not.toContain("逐字唸出");
   });
 });
 
@@ -168,7 +170,7 @@ it("requires semantic direct start and current proposal confirmation", () => {
   expect(prompt).toContain("startNavigation:true");
   expect(prompt).toContain("省略 startNavigation 或設 false");
   expect(prompt).not.toContain("120 秒");
-  expect(prompt).toContain("不自動導航");
+  expect(prompt).toContain("等使用者要求開始導航");
 });
 
 it("uses the shared indoor annotation presentation rule without announcing unrequested editing notes", () => {
@@ -211,9 +213,9 @@ describe("voice conversation and tool-result boundaries", () => {
   it("distinguishes automatic navigation speech from route previews and context queries", () => {
     const prompt = buildVoiceSystemPrompt();
     expect(prompt).toContain(
-      "開始導航（含規劃後直接開始）、推進或重播成功時，導航引擎會自動播報對應的精確步驟",
+      "開始導航（含規劃後直接開始）、推進或重播成功時，導航引擎會另外送來導航提示播報步驟",
     );
-    expect(prompt).toContain("可依上下文自然確認操作結果，不要再重述同一步驟");
+    expect(prompt).toContain("guidance=preview 表示使用者還不在路線上");
     expect(prompt).toContain(
       "只規劃未開始導航，或僅呼叫 getActiveNavigationContext 查詢時，依工具結果自然說明",
     );

@@ -1,10 +1,4 @@
-import {
-  resolveRouteOperation,
-  loadVoiceRoutingPreferences,
-  routeOperationPreferences,
-  type RouteOperation,
-  type RouteOperationContext,
-} from "./route-operation";
+import { loadVoiceRoutingPreferences } from "./voice-routing-preferences";
 import { DEFAULT_LANG } from "../../types/lang";
 import { ROUTE_PLANNING_TOOLS } from "../../constants/agent-route";
 import { NAVIGATION_MESSAGES } from "./navigation-messages";
@@ -17,10 +11,7 @@ import type {
   RouteContextResult,
   RoutingPreferences,
 } from "../../types/agent-route";
-import {
-  projectToolResult,
-  summarizeRouteResult,
-} from "../../utils/agent-route-projection";
+import { projectToolResult } from "../../utils/agent-route-projection";
 import { WebSocket } from "ws";
 import { randomUUID } from "crypto";
 import {
@@ -105,6 +96,8 @@ import {
   type NavResumeFailedMessage,
   type NavResumeMessage,
   type VoiceRerouteOutboundMessage,
+  type ClientNavState,
+  type UiCommandAck,
 } from "./voice.ws.schema";
 
 const LIVE_MODEL = "gemini-3.8-live";
@@ -123,6 +116,15 @@ const SNAPSHOT_MIN_INTERVAL_MS = 5_000;
 const LIVE_CONNECT_TIMEOUT_MS = 15_000;
 const TURN_TIMEOUT_MS = 15_000;
 const TURN_TIMEOUT_STRIKES = 2;
+/** A `ui.command` waits this long for the App before it counts as failed. */
+const CLIENT_COMMAND_TIMEOUT_MS = 8_000;
+/** Server navigation events a client-navigated App still needs. */
+const CLIENT_NAVIGATION_EVENTS: ReadonlySet<string> = new Set([
+  "nav.advisory",
+  "nav.rerouting",
+  "nav.route_replaced",
+  "nav.reroute_failed",
+]);
 
 const CURRENT_LOCATION_ALIASES = new Set([
   "current_location",
@@ -339,9 +341,17 @@ export interface LiveBridgeOptions {
   history?: PriorTurn[];
   routeContext?: RouteContextInput;
   routingPreferences?: RoutingPreferences;
+  /** The App runs navigation; see `session.start.clientNavigation`. */
+  clientNavigation?: boolean;
 }
 
 export interface LiveBridge {
+  /** The App finished (or refused) a `ui.command`. */
+  onCommandAck(ack: UiCommandAck): void;
+  /** Latest state of the App's navigation engine. */
+  setClientNavigationState(state: ClientNavState): void;
+  /** Voices a guidance line the App's navigation engine timed. */
+  speakCue(text: string): void;
   setRouteContext(input: RouteContextInput): Promise<RouteContextResult>;
   sendAudio(data: Buffer): void;
   /** Resolves true only when the route is armed and ready to start. */
@@ -393,6 +403,7 @@ export async function createLiveBridge(
   options: LiveBridgeOptions,
 ): Promise<LiveBridge> {
   const { ws, userId, userLocation, history } = options;
+  const clientNavigation = options.clientNavigation === true;
   const language = options.language ?? DEFAULT_LANG;
   const messages = NAVIGATION_MESSAGES[language];
   const routingDefaults = { ...options.routingPreferences };
@@ -498,24 +509,7 @@ export async function createLiveBridge(
   let currentUtteranceId: string | null = null;
   let armGen = 0;
   let inputArrivalRevision = 0;
-  let utteranceNavigationScope: {
-    generation: number;
-    stepIndex: number | null;
-  } | null = null;
   let planGeneration = 0;
-  type TurnOperation = {
-    revision: number;
-    navigationScope: { generation: number; stepIndex: number | null };
-    transcript: string;
-    context: RouteOperationContext;
-    promise?: Promise<RouteOperation>;
-    value?: RouteOperation;
-    completed: Set<number | string>;
-    results: unknown[];
-    preferences: RoutingPreferences;
-    rejectedTools: Set<string>;
-  };
-  let turnOperation: TurnOperation | null = null;
   let liveSendSequence = 0;
   const traceLiveSend = (
     method: "clientContent" | "toolResponse",
@@ -533,7 +527,6 @@ export async function createLiveBridge(
         bytes: Buffer.byteLength(JSON.stringify(payload)),
         epoch: voiceEpoch,
         revision: inputArrivalRevision,
-        operation: turnOperation?.value?.action ?? null,
         pendingToolMessages,
         navigationActive: navigation.active,
         currentStepIndex: navigation.currentStep?.index ?? null,
@@ -583,45 +576,6 @@ export async function createLiveBridge(
     "advanceNavStep",
     "confirmNavigationCandidateSwitch",
   ]);
-  const NAVIGATION_SPEECH_TOOLS = new Set([
-    "startNavigation",
-    "repeatNavStep",
-    "advanceNavStep",
-    "confirmNavigationCandidateSwitch",
-    "proposeNavigationCandidate",
-  ]);
-  const canonicalStepTool = (
-    operation: RouteOperation | undefined,
-  ): "repeatNavStep" | "advanceNavStep" | null => {
-    if (operation?.action !== "delegate" || operation.delegateKind !== "step")
-      return null;
-    return operation.stepAction === "repeat"
-      ? "repeatNavStep"
-      : operation.stepAction === "advance"
-        ? "advanceNavStep"
-        : null;
-  };
-  const stepScopeCurrent = (state: TurnOperation): boolean =>
-    state.navigationScope.generation === navigationGeneration &&
-    state.navigationScope.stepIndex ===
-      (navSession.getSnapshotState()?.currentStepIndex ?? null);
-  const resolveTurnOperation = async (): Promise<TurnOperation | null> => {
-    const own = turnOperation;
-    if (!own) return null;
-    own.promise ??= resolveRouteOperation(own.transcript, own.context);
-    own.value ??= await own.promise;
-    return own === turnOperation ? own : null;
-  };
-  const routeEffects = new Set([
-    ...ROUTE_PLANNING_TOOLS,
-    "startNavigation",
-    "stopNavigation",
-    "endVoiceSession",
-    "advanceNavStep",
-    "repeatNavStep",
-    "proposeNavigationCandidate",
-    "confirmNavigationCandidateSwitch",
-  ]);
   type Candidate = {
     ordinal: number;
     id: string;
@@ -654,7 +608,7 @@ export async function createLiveBridge(
   let voiceEpoch = 0;
   let messageQueue = Promise.resolve();
   let pendingToolMessages = 0;
-  let navSession = new NavigationSession(undefined, language);
+  let navSession = new NavigationSession(undefined, language, clientNavigation);
   const navigationStateSummary = () => {
     const current = navSession.getConversationContext();
     return {
@@ -676,6 +630,70 @@ export async function createLiveBridge(
    * re-grounds the model on the selected route, so without this list it cannot
    * map "the route 30 one" back to a candidate. Tokens never reach the model.
    */
+  let clientNavState: ClientNavState | null = null;
+  const pendingCommands = new Map<string, (ack: UiCommandAck) => void>();
+  /** Asks the App to run its own button flow and waits for what it did. */
+  const sendCommand = (
+    action: "start" | "stop" | "advance" | "repeat",
+    routeToken?: string,
+  ): Promise<UiCommandAck> =>
+    new Promise((resolve) => {
+      const id = randomUUID();
+      const timer = setTimeout(() => {
+        pendingCommands.delete(id);
+        resolve({
+          type: "ui.command.ack",
+          id,
+          ok: false,
+          reason: "CLIENT_TIMEOUT",
+        });
+      }, CLIENT_COMMAND_TIMEOUT_MS);
+      pendingCommands.set(id, (ack) => {
+        clearTimeout(timer);
+        pendingCommands.delete(id);
+        resolve(ack);
+      });
+      sendJson({
+        type: "ui.command",
+        id,
+        action,
+        ...(routeToken ? { routeToken } : {}),
+      });
+    });
+  const commandResult = (ack: UiCommandAck): string =>
+    JSON.stringify(
+      ack.ok
+        ? { ok: true, ...(ack.guidance ? { guidance: ack.guidance } : {}) }
+        : { ok: false, reason: ack.reason ?? "CLIENT_REFUSED" },
+    );
+  /** Navigation context as the App's engine sees it, plus transit facts. */
+  const clientNavigationContext = () => {
+    const server = navSession.getConversationContext();
+    if (!clientNavState?.active) return { active: false };
+    const { steps = [], currentStepIndex = 0, ...rest } = clientNavState;
+    // The current step is the next maneuver, distanceToNextM ahead; each step
+    // runs distanceM to the following one, so straight steps add up.
+    let distanceM = clientNavState.distanceToNextM ?? null;
+    let upcomingTurn: Record<string, unknown> | undefined;
+    for (const step of steps.slice(currentStepIndex)) {
+      if (step.maneuver !== "CONTINUE" && step.maneuver !== "STRAIGHT") {
+        upcomingTurn = { ...step, distanceM };
+        break;
+      }
+      distanceM =
+        distanceM === null || step.distanceM == null
+          ? null
+          : distanceM + step.distanceM;
+    }
+    return {
+      ...rest,
+      currentStep: steps[currentStepIndex] ?? null,
+      upcomingSteps: steps.slice(currentStepIndex + 1, currentStepIndex + 6),
+      ...(upcomingTurn ? { upcomingTurn } : {}),
+      ...(server.transit ? { transit: server.transit } : {}),
+    };
+  };
+
   const candidateSummaries = () =>
     (registry?.candidates ?? []).map((c) => ({
       candidateNumber: c.ordinal,
@@ -849,7 +867,9 @@ export async function createLiveBridge(
   };
 
   const applyEffect = (effect: NavEffect): void => {
-    for (const event of effect.events) sendJson(event);
+    for (const event of effect.events)
+      if (!clientNavigation || CLIENT_NAVIGATION_EVENTS.has(event.type))
+        sendJson(event);
     if (
       effect.events.some(
         (e) =>
@@ -1101,6 +1121,8 @@ export async function createLiveBridge(
     // would restart the trip from wherever the building happens to be. On
     // the way out, a critical reason waits until the user is outdoors; on
     // the way in, the outdoor route is already behind them.
+    // The App's engine replans its own off-route; only alerts reroute here.
+    if (clientNavigation && reason === "OFF_ROUTE") return false;
     if (navSession.isOnManualStep()) {
       if (reason !== "OFF_ROUTE" && navSession.isInDeparture())
         pendingCriticalRerouteReason = reason;
@@ -1194,7 +1216,11 @@ export async function createLiveBridge(
         });
         return false;
       }
-      const replacement = new NavigationSession(undefined, language);
+      const replacement = new NavigationSession(
+        undefined,
+        language,
+        clientNavigation,
+      );
       const armed = replacement.armRoute(
         navigable(
           result.data.route,
@@ -1453,7 +1479,11 @@ export async function createLiveBridge(
     route: AccessibleRoute,
     legs?: NavigationVenueLegs,
   ) => {
-    const prepared = new NavigationSession(undefined, language);
+    const prepared = new NavigationSession(
+      undefined,
+      language,
+      clientNavigation,
+    );
     const armed = prepared.armRoute(navigable(route, legs));
     const effect = prepared.start(latestPosition ?? undefined);
     const startEvent = effect.events.find((e) => e.type === "nav.start");
@@ -1531,14 +1561,8 @@ export async function createLiveBridge(
         answerUnexecutedCalls(functionCalls, "INPUT_NOT_FINISHED");
       return;
     }
-    const operation = functionCalls.some((call) =>
-      routeEffects.has(call.name ?? ""),
-    )
-      ? await resolveTurnOperation()
-      : turnOperation;
     const requestCurrent = (): boolean =>
-      arrivalRevision === inputArrivalRevision &&
-      (!operation || operation.revision === arrivalRevision);
+      arrivalRevision === inputArrivalRevision;
     // Re-read through a call: voice can degrade across any await below, and a
     // tool from a dead session must not reach startNavigation/stopNavigation.
     const voiceCurrent = (): boolean =>
@@ -1551,9 +1575,6 @@ export async function createLiveBridge(
     const endCall = functionCalls.find(
       (call) =>
         call.name === "endVoiceSession" &&
-        (operation?.value?.action === "end_voice" ||
-          (operation?.value?.action === "delegate" &&
-            operation.value.delegatedTools.includes("endVoiceSession"))) &&
         !(call.id && cancelledCalls.has(call.id)),
     );
     let acceptedEndCall: FunctionCall | undefined;
@@ -1601,414 +1622,10 @@ export async function createLiveBridge(
         });
         continue;
       }
-      let operationKey: number | string | undefined;
-      let denied = routeEffects.has(name) && !operation?.value;
-      let constraintViolation = denied
-        ? "NO_CURRENT_OPERATION"
-        : "TOOL_NOT_AUTHORIZED";
-      const op = operation?.value;
-      const travelModeConstraint =
-        op?.action === "compare"
-          ? "comparison"
-          : op?.changes.travelMode != null
-            ? "explicit"
-            : "model_choice";
-      if (operation && op && routeEffects.has(name)) {
-        if (
-          ROUTE_PLANNING_TOOLS.has(name) &&
-          (op.action === "plan" || op.action === "compare")
-        ) {
-          const available = op.plans
-            .map((plan, index) => ({ plan, index }))
-            .filter(
-              ({ plan, index }) =>
-                !operation.completed.has(index) &&
-                (travelModeConstraint === "model_choice" ||
-                  call.args.travelMode === undefined ||
-                  call.args.travelMode ===
-                    (travelModeConstraint === "explicit"
-                      ? op.changes.travelMode
-                      : plan.travelMode)),
-            );
-          const placeKey = (value: unknown): string | undefined => {
-            if (
-              isExplicitCurrentLocation(value) ||
-              value === "current_location"
-            )
-              return "current_location";
-            return typeof value === "string"
-              ? value
-                  .normalize("NFKC")
-                  .replace(/臺/g, "台")
-                  .replace(/\s+/gu, "")
-              : undefined;
-          };
-          const matched = available.find(
-            ({ plan }) =>
-              (call.args.destination === undefined ||
-                placeKey(call.args.destination) ===
-                  placeKey(plan.destination)) &&
-              (call.args.origin === undefined ||
-                placeKey(call.args.origin) ===
-                  placeKey(plan.origin ?? "current_location")),
-          );
-          const index = matched?.index ?? -1;
-          denied =
-            name !== "planAccessibleRoute" ||
-            index < 0 ||
-            (call.args.startNavigation === true && !op.startNavigation);
-          constraintViolation =
-            name !== "planAccessibleRoute"
-              ? "PLANNER_TOOL_MISMATCH"
-              : index < 0
-                ? "PLAN_ARGUMENT_MISMATCH"
-                : "NAVIGATION_NOT_REQUESTED";
-          if (!denied) {
-            const plan = op.plans[index];
-            const preferences = routeOperationPreferences(
-              op,
-              operation.preferences,
-            );
-            const travelMode =
-              travelModeConstraint === "model_choice"
-                ? (call.args.travelMode ?? plan.travelMode)
-                : travelModeConstraint === "explicit"
-                  ? op.changes.travelMode
-                  : plan.travelMode;
-            const validTravelMode =
-              typeof travelMode === "string" &&
-              ["transit", "walk", "drive", "motorcycle"].includes(travelMode);
-            const protectedRoadMode =
-              (travelMode === "drive" || travelMode === "motorcycle") &&
-              preferences.mode !== "normal" &&
-              preferences.mode !== "elderly";
-            const preferenceMismatch = [
-              "mode",
-              "avoidStairs",
-              "requireElevator",
-            ].some(
-              (key) =>
-                call.args[key] !== undefined &&
-                call.args[key] !== preferences[key as keyof RoutingPreferences],
-            );
-            denied =
-              !validTravelMode || protectedRoadMode || preferenceMismatch;
-            constraintViolation = !validTravelMode
-              ? "UNSUPPORTED_TRAVEL_MODE"
-              : protectedRoadMode
-                ? "ACCESSIBILITY_TRAVEL_MODE_CONFLICT"
-                : "ACCESSIBILITY_PREFERENCE_MISMATCH";
-            call.args = {
-              ...preferences,
-              origin: plan.origin ?? "current_location",
-              destination: plan.destination,
-              travelMode,
-              ...(plan.transitPreference === null
-                ? {}
-                : { transitPreference: plan.transitPreference }),
-              startNavigation: op.startNavigation,
-            };
-            operationKey = index;
-          }
-        } else if (name === "startNavigation") {
-          const lastAssistantQuestion =
-            conversationHistory
-              .filter((turn) => turn.role === "assistant")
-              .at(-1)?.text ?? "";
-          const cleanTranscript =
-            operation?.transcript.trim().replace(/[。！!~～，,\s]/g, "") ?? "";
-          const isAffirmative =
-            /^(好|好的|好啊|好呀|可以|行|對|對的|沒問題|恩|嗯|OK|ok|走|走吧|出發|開始|開始導航|導航)$/i.test(
-              cleanTranscript,
-            ) ||
-            /^(好|可以|行|對|沒問題|ok)/i.test(
-              operation?.transcript.trim() ?? "",
-            );
-          const assistantAskedStart =
-            lastAssistantQuestion.includes("開始導航") ||
-            lastAssistantQuestion.includes("為您導航") ||
-            lastAssistantQuestion.includes("要導航嗎") ||
-            lastAssistantQuestion.includes("開始為您導航");
-          const userNegated = /(不要|別|取消|先不要|暫時不要|不|暫不)導航/.test(
-            operation?.transcript ?? "",
-          );
-          const isAuthorizedStart =
-            !userNegated &&
-            (op.action === "start" ||
-              (op.action === "plan" && op.startNavigation) ||
-              (op.action === "delegate" &&
-                op.delegatedTools?.includes("startNavigation")) ||
-              (assistantAskedStart && isAffirmative) ||
-              isAffirmative);
-
-          const number = call.args.candidateNumber ?? undefined;
-          const id = call.args.candidateId ?? undefined;
-          const explicitSelection =
-            op.candidateNumber !== null || op.candidateId !== null;
-          const suppliedSelection = number !== undefined || id !== undefined;
-          const expected = registry?.candidates.find(
-            (candidate) =>
-              (op.candidateNumber === null ||
-                candidate.ordinal === op.candidateNumber) &&
-              (op.candidateId === null || candidate.id === op.candidateId),
-          );
-          const supplied = registry?.candidates.find(
-            (candidate) =>
-              (number === undefined || candidate.ordinal === number) &&
-              (id === undefined || candidate.id === id),
-          );
-          const candidateMismatch =
-            explicitSelection &&
-            suppliedSelection &&
-            (expected
-              ? supplied?.id !== expected.id
-              : (number !== undefined && number !== op.candidateNumber) ||
-                (id !== undefined && id !== op.candidateId));
-          denied =
-            !isAuthorizedStart ||
-            operation.completed.has("start") ||
-            candidateMismatch;
-          constraintViolation = !isAuthorizedStart
-            ? "NAVIGATION_NOT_REQUESTED"
-            : operation.completed.has("start")
-              ? "DUPLICATE_START"
-              : "CANDIDATE_MISMATCH";
-          const unqualifiedStart =
-            op.action === "start" &&
-            op.candidateNumber === null &&
-            op.candidateId === null;
-          const candidateNumber =
-            op.candidateNumber !== null
-              ? op.candidateNumber
-              : !unqualifiedStart && call.args.candidateNumber !== undefined
-                ? call.args.candidateNumber
-                : undefined;
-          const candidateId =
-            op.candidateId !== null
-              ? op.candidateId
-              : !unqualifiedStart && call.args.candidateId !== undefined
-                ? call.args.candidateId
-                : undefined;
-          call.args = {
-            ...(candidateNumber !== undefined ? { candidateNumber } : {}),
-            ...(candidateId !== undefined ? { candidateId } : {}),
-          };
-          operationKey = "start";
-        } else if (name === "stopNavigation" && op.action === "stop") {
-          denied = operation.completed.has("stop");
-          operationKey = "stop";
-        } else if (name === "endVoiceSession" && op.action === "end_voice") {
-          operationKey = "end_voice";
-        } else if (name === "repeatNavStep" && op.action === "details") {
-          denied =
-            operation.completed.has(name) || !stepScopeCurrent(operation);
-          constraintViolation = operation.completed.has(name)
-            ? "DUPLICATE_REPLAY"
-            : "STALE_NAVIGATION_STEP";
-          operationKey = name;
-          call.args = {};
-        } else if (
-          op.action === "delegate" &&
-          op.delegatedTools.includes(name)
-        ) {
-          const stepTool = canonicalStepTool(op);
-          if (stepTool) {
-            denied =
-              name !== stepTool ||
-              operation.completed.has(stepTool) ||
-              !stepScopeCurrent(operation);
-            operationKey = stepTool;
-            call.args = {};
-          } else if (ROUTE_PLANNING_TOOLS.has(name)) {
-            const preferences = routeOperationPreferences(
-              op,
-              operation.preferences,
-            );
-            const effectiveTravel =
-              name === "planIndoorRoute"
-                ? "walk"
-                : (op.changes.travelMode ??
-                  call.args.travelMode ??
-                  preferences.travelMode ??
-                  "transit");
-            const roadTravel =
-              effectiveTravel === "drive" || effectiveTravel === "motorcycle";
-            const invalidTravelMode =
-              typeof effectiveTravel !== "string" ||
-              !["transit", "walk", "drive", "motorcycle"].includes(
-                effectiveTravel,
-              );
-            const callMode =
-              typeof call.args.mode === "string" ? call.args.mode : undefined;
-            const effectiveMode = callMode ?? preferences.mode;
-            const protectedRoadMode =
-              roadTravel &&
-              effectiveMode !== "normal" &&
-              effectiveMode !== "elderly";
-            const preferenceMismatch =
-              ["avoidStairs", "requireElevator"].some(
-                (key) =>
-                  call.args[key] !== undefined &&
-                  preferences[key as keyof RoutingPreferences] !== undefined &&
-                  call.args[key] !==
-                    preferences[key as keyof RoutingPreferences],
-              ) ||
-              (callMode !== undefined &&
-                preferences.mode !== undefined &&
-                callMode !== preferences.mode &&
-                op.changes.mode === null &&
-                !["normal", "elderly"].includes(callMode));
-            const explicitTravelMismatch =
-              name === "planAccessibleRoute" &&
-              op.changes.travelMode !== null &&
-              call.args.travelMode != null &&
-              call.args.travelMode !== op.changes.travelMode;
-            const indoorEndpointsMissing =
-              op.delegateKind === "indoor" &&
-              name === "planAccessibleRoute" &&
-              !call.args.originPlaceId &&
-              !call.args.destinationPlaceId;
-            const startNotRequested =
-              call.args.startNavigation === true && !op.startNavigation;
-            denied =
-              invalidTravelMode ||
-              protectedRoadMode ||
-              preferenceMismatch ||
-              explicitTravelMismatch ||
-              indoorEndpointsMissing ||
-              startNotRequested;
-            constraintViolation = invalidTravelMode
-              ? "UNSUPPORTED_TRAVEL_MODE"
-              : protectedRoadMode
-                ? "ACCESSIBILITY_TRAVEL_MODE_CONFLICT"
-                : preferenceMismatch
-                  ? "ACCESSIBILITY_PREFERENCE_MISMATCH"
-                  : explicitTravelMismatch
-                    ? "PLAN_ARGUMENT_MISMATCH"
-                    : indoorEndpointsMissing
-                      ? "INDOOR_PLACE_IDS_REQUIRED"
-                      : "NAVIGATION_NOT_REQUESTED";
-            call.args = {
-              ...Object.fromEntries(
-                Object.entries(call.args).filter(
-                  ([key]) =>
-                    ![
-                      "mode",
-                      "avoidStairs",
-                      "requireElevator",
-                      "departureTime",
-                      "travelMode",
-                    ].includes(key),
-                ),
-              ),
-              ...Object.fromEntries(
-                Object.entries(preferences).filter(
-                  ([key]) => name !== "planIndoorRoute" || key !== "travelMode",
-                ),
-              ),
-              ...(name === "planAccessibleRoute"
-                ? { travelMode: effectiveTravel }
-                : {}),
-            };
-          }
-        } else denied = true;
-      }
-      if (denied) {
-        if (!operation?.rejectedTools.has(name)) {
-          console.info(
-            "[voice] rejected operation",
-            JSON.stringify({
-              tool: name,
-              action: op?.action ?? "missing",
-              constraintViolation,
-              travelModeConstraint,
-              suppliedTravelMode: [
-                "transit",
-                "walk",
-                "drive",
-                "motorcycle",
-              ].includes(String(originalCall.args?.travelMode))
-                ? originalCall.args?.travelMode
-                : undefined,
-              requestedTravelModes: op?.plans.map((plan) => plan.travelMode),
-              explicitCandidateNumber: op?.candidateNumber ?? null,
-              explicitCandidateId: Boolean(op?.candidateId),
-              suppliedCandidateNumber: Number.isInteger(
-                originalCall.args?.candidateNumber,
-              )
-                ? originalCall.args?.candidateNumber
-                : null,
-              suppliedCandidateId:
-                typeof originalCall.args?.candidateId === "string",
-            }),
-          );
-          operation?.rejectedTools.add(name);
-        }
-        functionResponses.push({
-          id: call.id,
-          name,
-          response: {
-            output: JSON.stringify({
-              ok: false,
-              reason: "OPERATION_NOT_REQUESTED",
-              constraintViolation,
-              message:
-                "本次工具呼叫未執行，請依 allowedOperation 修正參數；completedResults 是已完成的操作。",
-              allowedOperation: op
-                ? {
-                    action: op.action,
-                    clarificationReason: op.clarificationReason,
-                    preferences: routeOperationPreferences(
-                      op,
-                      operation!.preferences,
-                    ),
-                    travelModeConstraint,
-                    supportedTravelModes: ["normal", "elderly"].includes(
-                      (typeof call.args.mode === "string"
-                        ? call.args.mode
-                        : undefined) ??
-                        routeOperationPreferences(op, operation!.preferences)
-                          .mode ??
-                        "",
-                    )
-                      ? ["transit", "walk", "drive", "motorcycle"]
-                      : ["transit", "walk"],
-                    plans:
-                      travelModeConstraint === "model_choice"
-                        ? op.plans.map(({ travelMode, ...plan }) => ({
-                            ...plan,
-                            suggestedTravelMode: travelMode,
-                          }))
-                        : op.plans.map((plan) => ({
-                            ...plan,
-                            travelMode:
-                              travelModeConstraint === "explicit"
-                                ? op.changes.travelMode
-                                : plan.travelMode,
-                          })),
-                    startNavigation:
-                      op.action === "start" || op.startNavigation,
-                    candidateNumber: op.candidateNumber,
-                    candidateId: op.candidateId,
-                    delegatedTools: op.delegatedTools,
-                  }
-                : null,
-              completedResults: operation?.results.map((result) => {
-                const summary = summarizeRouteResult(result, 3_000);
-                return summary ? JSON.parse(summary) : result;
-              }),
-            }),
-          },
-        });
-        continue;
-      }
       const callId = randomUUID();
       const turnId = liveTurnId;
       const startRequested =
         ROUTE_PLANNING_TOOLS.has(name) && call.args?.startNavigation === true;
-      if (operation && (startRequested || NAVIGATION_SPEECH_TOOLS.has(name))) {
-        operationKey ??= name;
-      }
       const action =
         startRequested ||
         [
@@ -2057,6 +1674,55 @@ export async function createLiveBridge(
           });
         } else if (!requestCurrent()) {
           result = JSON.stringify({ ok: false, reason: "STALE_SELECTION" });
+        } else if (clientNavigation && name === "startNavigation") {
+          const ordinal = call.args?.candidateNumber ?? undefined;
+          const id = call.args?.candidateId ?? undefined;
+          const chosen =
+            ordinal === undefined && id === undefined
+              ? (registry?.candidates.find(
+                  (c) => c.ordinal === registry?.selectedOrdinal,
+                ) ?? registry?.candidates[0])
+              : registry?.candidates.find(
+                  (c) =>
+                    (ordinal === undefined || c.ordinal === ordinal) &&
+                    (id === undefined || c.id === id),
+                );
+          const routeToken =
+            chosen?.token ??
+            (ordinal === undefined && id === undefined
+              ? (routeContext.token ?? undefined)
+              : undefined);
+          if (!routeToken) {
+            result = JSON.stringify({
+              ok: false,
+              reason: "CANDIDATE_UNAVAILABLE",
+              candidates: candidateSummaries(),
+            });
+          } else {
+            const ack = await sendCommand("start", routeToken);
+            if (ack.ok && chosen && registry) {
+              registry.selectedOrdinal = chosen.ordinal;
+              registry.used.add(chosen.ordinal);
+            }
+            result = commandResult(ack);
+          }
+        } else if (
+          clientNavigation &&
+          (name === "stopNavigation" ||
+            name === "advanceNavStep" ||
+            name === "repeatNavStep")
+        ) {
+          result = commandResult(
+            await sendCommand(
+              name === "stopNavigation"
+                ? "stop"
+                : name === "advanceNavStep"
+                  ? "advance"
+                  : "repeat",
+            ),
+          );
+        } else if (clientNavigation && name === "getActiveNavigationContext") {
+          result = JSON.stringify(clientNavigationContext());
         } else if (name === "proposeNavigationCandidate") {
           proposal = null;
           const candidates = registry?.candidates ?? [];
@@ -2346,22 +2012,22 @@ export async function createLiveBridge(
               voiceCurrent() &&
               requestCurrent() &&
               !cancelled();
-            const startingRequested =
-              !op ||
-              op.action === "start" ||
-              (op.action === "plan" && op.startNavigation);
             const defaultCandidate =
               registry?.candidates.find(
                 (c) => c.ordinal === registry?.selectedOrdinal,
               ) ??
               registry?.candidates[0] ??
               null;
+            // A voice plan's candidates are reset whenever the UI selects a
+            // route outside them, so while they exist they are what the user
+            // just asked for; otherwise start the route the UI has armed.
             const tokenToArm =
               requested?.token ??
-              (startingRequested &&
-              !navSession.isActive &&
-              !navSession.hasArmedRoute
-                ? (defaultCandidate?.token ?? routeContext.token ?? undefined)
+              (!navSession.isActive
+                ? (defaultCandidate?.token ??
+                  (navSession.hasArmedRoute
+                    ? undefined
+                    : (routeContext.token ?? undefined)))
                 : undefined);
             const armed =
               tokenToArm !== undefined
@@ -2592,7 +2258,7 @@ export async function createLiveBridge(
                 })),
                 used: new Set(),
               };
-              if (startRequested && requestCurrent()) {
+              if (startRequested && requestCurrent() && !clientNavigation) {
                 const first = registry.candidates[0];
                 const current = () =>
                   voiceCurrent() &&
@@ -2697,6 +2363,7 @@ export async function createLiveBridge(
           };
         }
         if (
+          !clientNavigation &&
           NAVIGATION_STATE_TOOLS.has(name) &&
           modelResult !== null &&
           typeof modelResult === "object" &&
@@ -2725,7 +2392,9 @@ export async function createLiveBridge(
                 ...planned,
                 navigationStarted: false,
                 navigationStartReason: "REQUEST_SUPERSEDED",
-                activeNavigation: navigationStateSummary(),
+                ...(clientNavigation
+                  ? {}
+                  : { activeNavigation: navigationStateSummary() }),
               }),
             };
           }
@@ -2789,7 +2458,16 @@ export async function createLiveBridge(
         summary: ok ? summarizeToolResult(toolResult) : "",
       });
       if (startRequested) {
-        const navigationStarted = directCommit?.() ?? false;
+        const first = registry?.candidates[0];
+        const navigationStarted = clientNavigation
+          ? Boolean(
+              ok &&
+              first?.token &&
+              voiceCurrent() &&
+              requestCurrent() &&
+              (await sendCommand("start", first.token)).ok,
+            )
+          : (directCommit?.() ?? false);
         let output: Record<string, unknown> = {};
         try {
           output = JSON.parse(String(response.output ?? "{}"));
@@ -2800,7 +2478,9 @@ export async function createLiveBridge(
           output: JSON.stringify({
             ...output,
             navigationStarted,
-            activeNavigation: navigationStateSummary(),
+            ...(clientNavigation
+              ? {}
+              : { activeNavigation: navigationStateSummary() }),
             ...(navigationStarted
               ? {}
               : {
@@ -2808,16 +2488,6 @@ export async function createLiveBridge(
                 }),
           }),
         };
-      }
-      if (operation && operationKey !== undefined && requestCurrent()) {
-        operation.completed.add(operationKey);
-        try {
-          const result = JSON.parse(String(response.output ?? "{}"));
-          operation.results.push(result);
-        } catch {
-          const result = { ok: false, reason: "TOOL_EXECUTION_FAILED" };
-          operation.results.push(result);
-        }
       }
       functionResponses.push({ id: call.id, name, response });
     }
@@ -2866,48 +2536,6 @@ export async function createLiveBridge(
       final: true,
       utteranceId,
     });
-    const lastAssistantIndex = conversationHistory
-      .map((t) => t.role)
-      .lastIndexOf("assistant");
-    const unrepliedUserTurns = conversationHistory
-      .slice(lastAssistantIndex + 1)
-      .filter((t) => t.role === "user")
-      .map((t) => t.text);
-    const effectiveTranscript =
-      unrepliedUserTurns.length > 0 ? unrepliedUserTurns.join(" ") : raw;
-    const priorUserTurns = conversationHistory
-      .slice(0, lastAssistantIndex + 1)
-      .filter((t) => t.role === "user")
-      .slice(-6)
-      .map((t) => t.text);
-
-    const preferences = routeContext.preferences;
-    turnOperation = {
-      revision: inputArrivalRevision,
-      navigationScope: utteranceNavigationScope ?? {
-        generation: navigationGeneration,
-        stepIndex: navSession.getSnapshotState()?.currentStepIndex ?? null,
-      },
-      transcript: effectiveTranscript,
-      context: {
-        preferences,
-        selectedRoute: routeContext.prompt + candidatePrompt(),
-        activeNavigation: navSession.getConversationContext(),
-        candidates: candidateSummaries(),
-        recentUserTurns:
-          priorUserTurns.length > 0
-            ? priorUserTurns
-            : unrepliedUserTurns.slice(0, -1),
-        lastAssistantTurn: conversationHistory
-          .filter((turn) => turn.role === "assistant")
-          .at(-1)?.text,
-      },
-      completed: new Set(),
-      results: [],
-      preferences,
-      rejectedTools: new Set(),
-    };
-    utteranceNavigationScope = null;
     void correctUserTranscript(raw)
       .then((corrected) => {
         if (disposed) return;
@@ -3294,11 +2922,6 @@ export async function createLiveBridge(
                   message.serverContent?.inputTranscription?.text?.trim(),
                 );
                 if (hasInputText) {
-                  utteranceNavigationScope ??= {
-                    generation: navigationGeneration,
-                    stepIndex:
-                      navSession.getSnapshotState()?.currentStepIndex ?? null,
-                  };
                   liveState = "USER_INPUT";
                   clientCompletionSent = false;
                 }
@@ -3449,7 +3072,11 @@ export async function createLiveBridge(
         // for the armed-but-not-started case.
         applyEffect(navSession.cancel());
         navSession.dispose();
-        navSession = new NavigationSession(undefined, language);
+        navSession = new NavigationSession(
+          undefined,
+          language,
+          clientNavigation,
+        );
         activeNavigation = null;
         navigationGeneration++;
         pruneRerouteState();
@@ -3498,6 +3125,17 @@ export async function createLiveBridge(
   };
 
   return {
+    onCommandAck(ack: UiCommandAck): void {
+      pendingCommands.get(ack.id)?.(ack);
+    },
+    setClientNavigationState(state: ClientNavState): void {
+      clientNavState = state;
+    },
+    speakCue(text: string): void {
+      if (disposed || !clientNavigation) return;
+      navSession.enqueueCue(text);
+      driveNavigationSpeech();
+    },
     async setRouteContext(
       input: RouteContextInput,
     ): Promise<RouteContextResult> {
@@ -3535,7 +3173,6 @@ export async function createLiveBridge(
       cancelledCalls.clear();
       executedActionIds.clear();
       modelTranscriptBuffer = "";
-      turnOperation = null;
       userTranscriptBuffer = "";
       currentUtteranceId = null;
       liveTurnId = randomUUID();
@@ -3571,10 +3208,7 @@ export async function createLiveBridge(
     },
     armRouteToken: (routeToken: string) => {
       const previewEcho =
-        routeToken === routeContext.token &&
-        !navSession.isActive &&
-        (turnOperation?.value?.action === "plan" ||
-          turnOperation?.value?.action === "compare");
+        routeToken === routeContext.token && !navSession.isActive;
       if (
         !previewEcho &&
         routeToken !== activeNavigation?.routeToken &&

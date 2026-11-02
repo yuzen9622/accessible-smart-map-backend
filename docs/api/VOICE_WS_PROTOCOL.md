@@ -73,6 +73,15 @@ requestId 去除空白後長度 1–128；selectionVersion 是安全範圍內非
 
 此控制不啟動／取消／重設導航，不執行規劃；nav.setRoute／nav.start 等仍管理 active navigation。nav.route_replaced 更新的若正是目前查看路線，前端另送 route.context.set；若查看不同候選，不強制改選。重連時在新的 session.start 重新傳入選中 token。
 
+### 2.2.2 App 自行導航（clientNavigation: 1）
+
+`session.start` 帶 `clientNavigation: 1`，且 `session.ready.capabilities.clientNavigation` 為 1 時，導航完全由 App 自己的導航引擎執行，助理只透過「與按鈕相同的流程」操作它。未宣告的舊 client 維持原本由後端驅動步驟的行為。
+
+- 助理要開始／停止導航、推進室內一步或重播目前步驟時，後端送 `{ "type": "ui.command", "id": "…", "action": "start" | "stop" | "advance" | "repeat", "routeToken"?: "…" }`。App 以開始導航按鈕（或結束、確認一步）同一個函式執行，完成後回 `{ "type": "ui.command.ack", "id": "…", "ok": true, "guidance"?: "preview" | "live" | "indoor" }`，失敗回 `ok: false` 與 `reason`。8 秒內沒有 ack 視為失敗（`CLIENT_TIMEOUT`）。`start` 的 routeToken 是語音剛規劃的推薦路線（或使用者指定的候選）；沒有語音規劃時是畫面選定路線。預覽或即時由 App 依使用者是否在路線上決定。
+- App 在導航開始、換步、結束及每次 `session.ready` 後送 `nav.state`：`{ active, guidance?, travelMode?, destination?, currentStepIndex?, distanceToNextM?, remainingDistanceM?, remainingDurationSec?, arrived?, steps?: [{ index, instruction, legType?, distanceM?, streetName?, maneuver? }] }`。助理回答「何時轉彎」「還有多遠」時讀它。
+- App 導航引擎到了該播報的時機（例如「200 公尺後左轉」）且語音連線可播放時，不用本地 TTS，改送 `{ "type": "nav.cue", "text": "…" }`；後端在語音空檔交給模型以自然口語轉述，忙碌時只保留最新一句。
+- App 仍以 `nav.setRoute`＋`nav.start`／`nav.position`／`nav.cancel` 告知後端目前導航的路線與位置，後端只用來偵測危險、設施中斷與交通警報；此模式下後端只送 `nav.advisory`、`nav.rerouting`、`nav.route_replaced`、`nav.reroute_failed`，不送步驟事件，也不因偏離路線自行重新規劃。
+
 ### 2.3 取得 token：登入 API
 
 ```bash

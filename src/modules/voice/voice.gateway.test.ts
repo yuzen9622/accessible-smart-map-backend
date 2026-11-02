@@ -29,6 +29,9 @@ vi.mock("./live-bridge", () => ({
     cancelNav: vi.fn(),
     endSession: vi.fn(),
     close: vi.fn(),
+    onCommandAck: vi.fn(),
+    setClientNavigationState: vi.fn(),
+    speakCue: vi.fn(),
     voiceReady: Promise.resolve(),
   })),
 }));
@@ -279,7 +282,11 @@ describe("voice gateway", () => {
     const message = await ready;
     expect(message).toEqual({
       type: "session.ready",
-      capabilities: { aiRouteContractVersion: 1, routeContextSync: true },
+      capabilities: {
+        aiRouteContractVersion: 1,
+        routeContextSync: true,
+        clientNavigation: 1,
+      },
     });
     expect(ws.readyState).toBe(WebSocket.OPEN);
   });
@@ -303,6 +310,44 @@ describe("voice gateway", () => {
       );
     },
   );
+
+  it("routes client-navigation frames to the bridge it opted into", async () => {
+    const ws = connect();
+    await waitForOpen(ws);
+    const ready = waitForJson(ws);
+    ws.send(
+      JSON.stringify({
+        type: "session.start",
+        token: signToken("voice-client-nav"),
+        clientNavigation: 1,
+      }),
+    );
+    await ready;
+    expect(mockCreateLiveBridge).toHaveBeenCalledWith(
+      expect.objectContaining({ clientNavigation: true }),
+    );
+    const bridge = await mockCreateLiveBridge.mock.results.at(-1)!.value;
+    const ack = {
+      type: "ui.command.ack",
+      id: "c1",
+      ok: true,
+      guidance: "preview",
+    };
+    const state = { type: "nav.state", active: true, currentStepIndex: 2 };
+    ws.send(JSON.stringify(ack));
+    ws.send(JSON.stringify(state));
+    ws.send(JSON.stringify({ type: "nav.cue", text: "100 公尺後左轉" }));
+    ws.send(JSON.stringify({ type: "nav.state", active: "yes" }));
+    await vi.waitFor(() =>
+      expect(bridge.speakCue).toHaveBeenCalledWith("100 公尺後左轉"),
+    );
+    expect(bridge.onCommandAck).toHaveBeenCalledWith(ack);
+    expect(bridge.setClientNavigationState).toHaveBeenCalledOnce();
+    expect(bridge.setClientNavigationState).toHaveBeenCalledWith({
+      active: true,
+      currentStepIndex: 2,
+    });
+  });
 
   it("rejects an invalid language before creating the Live bridge", async () => {
     const ws = connect();
@@ -468,7 +513,11 @@ describe("voice gateway", () => {
     resolveBridge(bridge);
     await expect(ready).resolves.toEqual({
       type: "session.ready",
-      capabilities: { aiRouteContractVersion: 1, routeContextSync: true },
+      capabilities: {
+        aiRouteContractVersion: 1,
+        routeContextSync: true,
+        clientNavigation: 1,
+      },
     });
     await vi.waitFor(() => expect(bridge.armRouteToken).toHaveBeenCalled());
     expect(bridge.startNavigation).not.toHaveBeenCalled();
@@ -677,7 +726,11 @@ describe("voice gateway", () => {
     resolveBridge(bridge);
     await expect(ready).resolves.toEqual({
       type: "session.ready",
-      capabilities: { aiRouteContractVersion: 1, routeContextSync: true },
+      capabilities: {
+        aiRouteContractVersion: 1,
+        routeContextSync: true,
+        clientNavigation: 1,
+      },
     });
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(bridge.startNavigation).not.toHaveBeenCalled();
@@ -818,7 +871,11 @@ describe("voice gateway", () => {
     resolveBridge(bridge);
     await expect(ready).resolves.toEqual({
       type: "session.ready",
-      capabilities: { aiRouteContractVersion: 1, routeContextSync: true },
+      capabilities: {
+        aiRouteContractVersion: 1,
+        routeContextSync: true,
+        clientNavigation: 1,
+      },
     });
     await vi.waitFor(() =>
       expect(bridge.armRouteToken).toHaveBeenCalledWith("latest"),

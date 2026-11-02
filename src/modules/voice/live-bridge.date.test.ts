@@ -9,15 +9,11 @@ vi.mock("../../config/ai", () => ({
   model: "test-model",
 }));
 
-vi.mock("./route-operation", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./route-operation")>();
-  return {
-    ...actual,
-    loadVoiceRoutingPreferences: vi.fn(
-      async (_userId, preferences) => preferences ?? {},
-    ),
-  };
-});
+vi.mock("./voice-routing-preferences", () => ({
+  loadVoiceRoutingPreferences: vi.fn(
+    async (_userId: string, preferences?: object) => preferences ?? {},
+  ),
+}));
 import { createLiveBridge } from "./live-bridge";
 
 function fakeWs(): any {
