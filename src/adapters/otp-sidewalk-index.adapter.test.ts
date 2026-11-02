@@ -15,13 +15,13 @@ describe("mapped sidewalk intervals", () => {
       matchSidewalkSegments(
         [
           [121, 25],
-          [121.00001, 25],
+          [121.0001, 25],
         ],
-        [["sidewalk", 121.000003, 25, 121.000007, 25, 1]],
+        [["sidewalk", 121.00002, 25, 121.00008, 25, 1]],
       ),
     ).toEqual([]);
   });
-  it("leaves competing parallel sidewalk sources unclassified", () => {
+  it("accepts parallel sidewalk sources that both describe the stretch", () => {
     expect(
       matchSidewalkSegments(
         [
@@ -33,7 +33,7 @@ describe("mapped sidewalk intervals", () => {
           ["sidewalk", 121, 25.0000045, 121.0001, 25.0000045, 2],
         ],
       ),
-    ).toEqual([]);
+    ).toEqual([{ startIndex: 0, endIndex: 1 }]);
   });
   it("accepts continuous fragments of the same source without adding route points", () => {
     expect(
@@ -133,6 +133,44 @@ describe("mapped sidewalk intervals", () => {
         ["sidewalk", 121.0002, 25, 121.0003, 25, 0],
         ["other", 121.0001, 25, 121.0002, 25, 100],
       ]),
+    ).toEqual([
+      { startIndex: 0, endIndex: 1 },
+      { startIndex: 2, endIndex: 3 },
+    ]);
+  });
+  it("tolerates polyline quantization at sidewalk joins", () => {
+    // OTP rounds vertices to 1e-5°: the turn vertex lands ~0.5 m past both
+    // mapped ends, and a connector starting at the join touches the leg.
+    expect(
+      matchSidewalkSegments(
+        [
+          [121, 25],
+          [121.0001, 25],
+          [121.0001, 25.0001],
+        ],
+        [
+          ["sidewalk", 121, 25, 121.000095, 25, 1],
+          ["sidewalk", 121.000095, 25, 121.000095, 25.0001, 2],
+          ["other", 121.000095, 25, 121.0002, 25, 100],
+        ],
+      ),
+    ).toEqual([{ startIndex: 0, endIndex: 2 }]);
+  });
+  it("keeps an unproven corner blue without dropping its neighbours", () => {
+    expect(
+      matchSidewalkSegments(
+        [
+          [121, 25],
+          [121.0001, 25],
+          [121.0002, 25],
+          [121.0003, 25],
+        ],
+        [
+          ["sidewalk", 121, 25, 121.0001, 25, 0],
+          ["sidewalk", 121.0002, 25, 121.0003, 25, 1],
+          ["other", 121.000095, 25, 121.000205, 25, 100],
+        ],
+      ),
     ).toEqual([
       { startIndex: 0, endIndex: 1 },
       { startIndex: 2, endIndex: 3 },

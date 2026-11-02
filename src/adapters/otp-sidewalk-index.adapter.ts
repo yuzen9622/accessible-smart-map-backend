@@ -8,6 +8,8 @@ import { haversineCoords } from "../utils/geo";
 
 const CELL = 0.001;
 const MAX_OFFSET_M = 1.75;
+// OTP encodes legGeometry at 1e-5°, so each vertex can sit ~0.75 m off its OSM node.
+const POLYLINE_TOLERANCE_M = 0.8;
 const Longitude = z.number().finite().min(-180).max(180);
 const Latitude = z.number().finite().min(-90).max(90);
 const Segment = z
@@ -165,29 +167,30 @@ export function matchSidewalkSegments(
     const spans = Array.from(nearby, (s) => coverage(a, b, s)).filter(
       (s) => s !== null,
     );
+    // Shorter overlaps and gaps are polyline quantization, not evidence.
+    const tolerance = Math.max(
+      POLYLINE_TOLERANCE_M / haversineCoords(a, b),
+      1e-8,
+    );
     const sidewalks = spans.filter((s) => s.kind === "sidewalk");
-    let ambiguous = false;
-    for (const sidewalk of sidewalks) {
-      if (
-        spans.some(
+    const others = spans.filter((s) => s.kind === "other");
+    if (
+      sidewalks.some((sidewalk) =>
+        others.some(
           (other) =>
             Math.min(sidewalk.end, other.end) -
               Math.max(sidewalk.start, other.start) >
-              1e-8 &&
-            (other.kind === "other" || other.wayId !== sidewalk.wayId),
-        )
-      ) {
-        ambiguous = true;
-        break;
-      }
-    }
-    if (ambiguous) continue;
+            tolerance,
+        ),
+      )
+    )
+      continue;
     let covered = 0;
     for (const span of sidewalks.sort((x, y) => x.start - y.start)) {
-      if (span.start - covered > 1e-8) break;
+      if (span.start - covered > tolerance) break;
       covered = Math.max(covered, span.end);
     }
-    if (covered < 1 - 1e-8) continue;
+    if (covered < 1 - tolerance) continue;
     const last = result[result.length - 1];
     if (last?.endIndex === i) last.endIndex = i + 1;
     else result.push({ startIndex: i, endIndex: i + 1 });
