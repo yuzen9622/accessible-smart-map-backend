@@ -1993,3 +1993,18 @@ describe("NavigationSession turn awareness and conversation context", () => {
     expect(ctx.totalRemainingDistanceM).toBeGreaterThanOrEqual(400);
   });
 });
+
+describe("NavigationSession App cues", () => {
+  it("never replays an interrupted cue over a newer one", () => {
+    const session = new NavigationSession(undefined, "zh-TW", true);
+    session.enqueueCue("300 公尺後左轉");
+    expect(session.takeNextSpeech()).toBe("300 公尺後左轉");
+    session.enqueueCue("100 公尺後左轉");
+    session.onInterrupted();
+    expect(session.takeNextSpeech()).toBe("100 公尺後左轉");
+    session.onInterrupted();
+    expect(session.takeNextSpeech()).toBe("100 公尺後左轉");
+    session.onTurnComplete();
+    expect(session.takeNextSpeech()).toBeNull();
+  });
+});

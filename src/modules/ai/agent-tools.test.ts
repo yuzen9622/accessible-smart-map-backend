@@ -2227,6 +2227,28 @@ describe("agent travel mode dispatch", () => {
     });
     expect(mockPlanRoute).not.toHaveBeenCalled();
   });
+  it.each([
+    ["wheelchair", "drive"],
+    ["wheelchair", "motorcycle"],
+    ["visual_impaired", "drive"],
+    ["visual_impaired", "motorcycle"],
+  ])("refuses %s mode with %s before planning", async (mode, travelMode) => {
+    mockPlanRoute.mockClear();
+    const result = JSON.parse(
+      await executeLocalTool(
+        "planAccessibleRoute",
+        { origin: "A", destination: "B", mode, travelMode },
+        undefined,
+      ),
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "TRAVEL_MODE_NOT_ALLOWED_FOR_MODE",
+      mode,
+      travelMode,
+    });
+    expect(mockPlanRoute).not.toHaveBeenCalled();
+  });
 });
 
 describe("AI plan full route contract", () => {
@@ -2457,6 +2479,8 @@ it("resolves Chinese current location phrases and unstated origin to userLocatio
     expect(mockPlanRoute).toHaveBeenCalledWith(
       expect.objectContaining({ origin: loc }),
     );
+    // The client route contract requires a named origin.
+    expect(result.origin.name).toBe("目前位置");
   }
 });
 
@@ -2519,5 +2543,29 @@ describe("explicit Places search center", () => {
       "locationQuery",
       expect.objectContaining({ type: "string" }),
     );
+  });
+});
+
+describe("text chat navigation controls", () => {
+  it("asks for a route before starting when nothing is selected", async () => {
+    expect(
+      JSON.parse(await executeLocalTool("startNavigation", {})),
+    ).toMatchObject({ ok: false, reason: "ROUTE_CONTEXT_REQUIRED" });
+  });
+  it("hands start and stop to the App", async () => {
+    expect(
+      JSON.parse(
+        await executeLocalTool("startNavigation", {}, undefined, undefined, {
+          routeToken: "selected",
+        }),
+      ),
+    ).toEqual({ ok: true, clientAction: "start-navigation" });
+    expect(
+      JSON.parse(await executeLocalTool("startNavigation", { routeId: "r2" })),
+    ).toEqual({ ok: true, clientAction: "start-navigation", routeId: "r2" });
+    expect(JSON.parse(await executeLocalTool("stopNavigation", {}))).toEqual({
+      ok: true,
+      clientAction: "stop-navigation",
+    });
   });
 });

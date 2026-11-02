@@ -21,6 +21,9 @@ import {
   NavStartMessageSchema,
   SessionEndMessageSchema,
   SessionStartMessageSchema,
+  UiCommandAckMessageSchema,
+  NavStateMessageSchema,
+  NavCueMessageSchema,
   RouteContextSetMessageSchema,
   UserLocationSchema,
   describeIssues,
@@ -333,6 +336,7 @@ function handleConnection(
       handshake.data.routeContext,
       handshake.data.routingPreferences,
       handshake.data.language,
+      handshake.data.clientNavigation === 1,
     );
   };
 
@@ -361,6 +365,7 @@ function handleConnection(
     routeContext: RouteContextInput | undefined,
     routingPreferences: RoutingPreferences | undefined,
     language: AgentLanguage | undefined,
+    clientNavigation: boolean,
   ): Promise<void> => {
     try {
       const createdBridge = await createLiveBridge({
@@ -371,6 +376,7 @@ function handleConnection(
         routeContext,
         routingPreferences,
         language,
+        clientNavigation,
       });
       if (
         disposed ||
@@ -402,6 +408,7 @@ function handleConnection(
       capabilities: {
         aiRouteContractVersion: AGENT_ROUTE_CONTRACT_VERSION,
         routeContextSync: true,
+        clientNavigation: 1,
       },
     });
     const readyBridge = bridge;
@@ -528,6 +535,34 @@ function handleConnection(
           });
         pendingRouteContext = update;
       }
+      return;
+    }
+    if (parsed?.type === "ui.command.ack") {
+      if (!controlBucket.take()) return;
+      const result = UiCommandAckMessageSchema.safeParse(parsed);
+      if (result.success) bridge?.onCommandAck(result.data);
+      else
+        console.warn(
+          `[voice] ignoring ui.command.ack: ${describeIssues(result.error)}`,
+        );
+      return;
+    }
+    if (parsed?.type === "nav.state") {
+      if (!positionBucket.take()) return;
+      const result = NavStateMessageSchema.safeParse(parsed);
+      if (result.success) {
+        const { type: _type, ...state } = result.data;
+        bridge?.setClientNavigationState(state);
+      } else
+        console.warn(
+          `[voice] ignoring nav.state: ${describeIssues(result.error)}`,
+        );
+      return;
+    }
+    if (parsed?.type === "nav.cue") {
+      if (!controlBucket.take()) return;
+      const result = NavCueMessageSchema.safeParse(parsed);
+      if (result.success) bridge?.speakCue(result.data.text);
       return;
     }
     if (parsed?.type === "nav.setRoute") {

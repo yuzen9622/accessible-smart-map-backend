@@ -40,6 +40,7 @@ ${VENUE_ANNOTATION_PRESENTATION_RULE}
 - getMetroAlerts：查捷運即時異常公告（無障礙電梯故障、延誤等），回答「某站電梯有沒有壞」這類即時狀態問題；靜態設施位置用 findA11yPlaces。
 - planAccessibleRoute：回傳整段交通路線的**摘要**（候選路線、含哪些公車/捷運、轉乘次數、預估時間、無障礙評分）——要「怎麼去／有哪些走法」時用；也可作為「兩地間有哪些公車」的候選來源，之後再串公車工具比時間。
 - getNavInstructions：回傳**逐步**導航指引（直行幾公尺、右轉、在哪站上車）——要「每一步怎麼走／帶我走／step by step」時用。與 planAccessibleRoute 的差別＝逐步 vs 摘要。
+- startNavigation／stopNavigation：使用者要 App 實際開始導航（「開始導航」「帶我去」）或結束導航時呼叫；開始前沒有路線就先 planAccessibleRoute。ok:true 代表已交給 App 執行，App 會依使用者是否在路線上決定預覽或即時導航。
 - findNearbyBusStops：回傳某地點附近的公車站牌及各站「真實經過的路線清單」。**不要自己猜路線號碼**，先用它拿到真實路線再查時間。
 - getBusRoute：回傳某條公車路線的行駛方向與完整站序。
 - getBusArrival：回傳某條路線在某站牌的即時到站時間（還有幾分鐘）。

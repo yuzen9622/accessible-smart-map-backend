@@ -889,6 +889,18 @@ export async function planAccessibleRoute(args: {
       error: agentRouteError("INVALID_ROUTE_ARGUMENTS", args.language),
     });
   }
+  if (
+    (travelMode.value === "drive" || travelMode.value === "motorcycle") &&
+    (mode === "wheelchair" || mode === "visual_impaired")
+  ) {
+    return JSON.stringify({
+      ok: false,
+      reason: "TRAVEL_MODE_NOT_ALLOWED_FOR_MODE",
+      mode,
+      travelMode: travelMode.value,
+      error: agentRouteError("TRAVEL_MODE_NOT_ALLOWED_FOR_MODE", args.language),
+    });
+  }
 
   const preference = TransitPreferenceSchema.optional().safeParse(
     args.transitPreference,
@@ -1019,11 +1031,11 @@ export async function planAccessibleRoute(args: {
           ...result.data.origin,
           name: originPlaceId
             ? indoorPlace?.name
-            : origin === "current_location"
+            : normalizedOrigin === "current_location"
               ? args.language === "en"
                 ? "Current location"
                 : "目前位置"
-              : origin,
+              : normalizedOrigin,
         },
         destination: {
           ...result.data.destination,
@@ -2705,6 +2717,27 @@ export async function executeLocalTool(
           typeof args.direction === "number" ? args.direction : undefined,
         userLocation,
       });
+
+    case "startNavigation": {
+      const routeId =
+        typeof args.routeId === "string" && args.routeId.trim()
+          ? args.routeId.trim()
+          : undefined;
+      if (!routeId && !options.routeToken)
+        return JSON.stringify({
+          ok: false,
+          reason: "ROUTE_CONTEXT_REQUIRED",
+          error: agentRouteError("ROUTE_CONTEXT_REQUIRED", options.language),
+        });
+      return JSON.stringify({
+        ok: true,
+        clientAction: "start-navigation",
+        ...(routeId ? { routeId } : {}),
+      });
+    }
+
+    case "stopNavigation":
+      return JSON.stringify({ ok: true, clientAction: "stop-navigation" });
 
     case "getNavInstructions": {
       const navOptions = AgentNavOptionsSchema.safeParse({

@@ -490,11 +490,18 @@ export class NavigationSession {
   private spans: StepSpan[] = [];
   private currentSpeechText: string | null = null;
   private speechQueue: string[] = [];
+  private pendingCue: string | null = null;
+  private currentSpeechIsCue = false;
   private advisoryDeduper = new AdvisoryDeduper();
 
   constructor(
     private readonly generateSteps: StepGenerator = generateNavStepsWithLegIndex,
     private readonly language: SupportedLang = DEFAULT_LANG,
+    /**
+     * The App's own navigation engine guides the user and sends its cues; this
+     * session only follows the route for alerts, so it never voices steps.
+     */
+    private readonly clientGuided = false,
   ) {}
 
   private get messages() {
@@ -977,9 +984,11 @@ export class NavigationSession {
   }
 
   takeNextSpeech(): string | null {
-    if (this.disposed || this.currentSpeechText || !this.speechQueue.length)
-      return null;
-    this.currentSpeechText = this.speechQueue.shift() ?? null;
+    if (this.disposed || this.currentSpeechText) return null;
+    const queued = this.speechQueue.shift();
+    this.currentSpeechIsCue = queued === undefined && this.pendingCue !== null;
+    this.currentSpeechText = queued ?? this.pendingCue;
+    if (this.currentSpeechIsCue) this.pendingCue = null;
     return this.currentSpeechText;
   }
 
@@ -988,7 +997,10 @@ export class NavigationSession {
   }
 
   onInterrupted(): void {
-    if (this.currentSpeechText)
+    // An interrupted cue returns only if no newer cue has replaced it.
+    if (this.currentSpeechText && this.currentSpeechIsCue)
+      this.pendingCue ??= this.currentSpeechText;
+    else if (this.currentSpeechText)
       this.speechQueue.unshift(this.currentSpeechText);
     this.currentSpeechText = null;
   }
@@ -1205,7 +1217,7 @@ export class NavigationSession {
 
     const { advisories, rerouteReason } = selectRerouteTrigger(fresh);
     const spoken = [...advisories].sort(compareAdvisorySeverity)[0];
-    this.enqueueSpeech(spoken.speech);
+    this.enqueueSpeech(spoken.speech, "advisory");
 
     return {
       ok: true,
@@ -1834,8 +1846,20 @@ export class NavigationSession {
     return { events: [], speech: [] };
   }
 
-  private enqueueSpeech(text: string): void {
+  /**
+   * A guidance line timed by the App's navigation engine. Only the newest one
+   * waits: an older distance cue is wrong by the time the line is free.
+   */
+  enqueueCue(text: string): void {
+    if (text && !this.disposed) this.pendingCue = text;
+  }
+
+  private enqueueSpeech(
+    text: string,
+    source: "step" | "advisory" = "step",
+  ): void {
     if (!text || this.disposed) return;
+    if (this.clientGuided && source === "step") return;
     if (this.speechQueue.length < SPEECH_QUEUE_MAX) this.speechQueue.push(text);
     else this.speechQueue[this.speechQueue.length - 1] += ` ${text}`;
   }
@@ -1843,6 +1867,7 @@ export class NavigationSession {
   private clearSpeech(): void {
     this.currentSpeechText = null;
     this.speechQueue = [];
+    this.pendingCue = null;
   }
 }
 

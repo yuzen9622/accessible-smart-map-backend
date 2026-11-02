@@ -14,7 +14,7 @@ vi.mock("./line-memory", () => ({
 vi.mock("../accessible-route/route-token.service", () => ({
   getNavigationEnvelopeByToken: vi.fn(),
 }));
-import { runLineAgent } from "./line-agent.service";
+import { LINE_TOOL_ALLOWLIST, runLineAgent } from "./line-agent.service";
 import { getLineLastRouteToken, setLineLastRouteToken } from "./line-memory";
 beforeEach(() => vi.resetAllMocks());
 it("keeps the planned route token for follow-up instructions while preserving LINE authorization context", async () => {
@@ -131,4 +131,9 @@ it("never offers the indoor venue lookup on LINE, typed or spoken", async () => 
     expect(call[11].toolAllowList).not.toContain("planIndoorRoute");
     expect(call[11].toolAllowList).toContain("findCampusAccessibility");
   }
+});
+
+it("never offers App navigation controls to LINE", () => {
+  expect(LINE_TOOL_ALLOWLIST).not.toContain("startNavigation");
+  expect(LINE_TOOL_ALLOWLIST).not.toContain("stopNavigation");
 });
