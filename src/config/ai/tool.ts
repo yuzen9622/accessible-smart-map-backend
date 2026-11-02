@@ -788,6 +788,45 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   },
 ];
 
+/**
+ * Navigation controls for the text chat only. The App executes them through
+ * the same start/exit functions as its buttons; voice declares its own
+ * session-bound versions and LINE has no navigation surface.
+ */
+export const textNavigationTools: OpenAI.Chat.Completions.ChatCompletionTool[] =
+  [
+    {
+      type: "function",
+      function: {
+        name: "startNavigation",
+        description:
+          "使用者要求開始導航或實際帶路時，請 App 開始導航目前選定的路線（剛規劃完時就是規劃結果的推薦路線）。使用者指定另一條候選時帶該候選的 routeId。App 會依使用者是否在路線上自行決定預覽或即時導航。沒有路線時先呼叫 planAccessibleRoute。",
+        parameters: {
+          type: "object",
+          properties: {
+            routeId: {
+              type: "string",
+              description: "要導航的候選 routeId；省略時用目前選定路線",
+            },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "stopNavigation",
+        description: "使用者要求停止或退出導航時，請 App 結束目前的導航。",
+        parameters: {
+          type: "object",
+          properties: {},
+          additionalProperties: false,
+        },
+      },
+    },
+  ];
+
 export const memoryTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",

@@ -17,6 +17,8 @@ export const AGENT_ROUTE_ERRORS = {
   LOCATION_REQUIRED:
     "目前無法取得使用者位置，請詢問出發地點，或請使用者開啟定位後再試。不要猜測起點；這不表示目的地沒有可用路線。",
   ROUTE_PLANNING_FAILED: "路線規劃失敗",
+  TRAVEL_MODE_NOT_ALLOWED_FOR_MODE:
+    "開車與騎機車只提供一般與年長模式；輪椅與視障模式不能規劃自行駕駛。請說明原因，詢問使用者要改用一般模式，或改搭大眾運輸／步行；不要自行替使用者更換模式。",
 } as const;
 
 const AGENT_ROUTE_ERRORS_EN: Record<keyof typeof AGENT_ROUTE_ERRORS, string> = {
@@ -34,6 +36,8 @@ const AGENT_ROUTE_ERRORS_EN: Record<keyof typeof AGENT_ROUTE_ERRORS, string> = {
   LOCATION_REQUIRED:
     "The current location is unavailable. Ask for a starting point or request location access; do not guess the origin or infer that no route exists.",
   ROUTE_PLANNING_FAILED: "Route planning failed. Please try again later.",
+  TRAVEL_MODE_NOT_ALLOWED_FOR_MODE:
+    "Driving and motorcycle routes are only available in normal or elderly mode, not wheelchair or visually impaired mode. Explain this and ask whether to switch to normal mode or use transit/walking; never change the mode on the user's behalf.",
 };
 
 export function agentRouteError(

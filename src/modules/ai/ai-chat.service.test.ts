@@ -47,6 +47,14 @@ describe("runChatAgent facade", () => {
     expect(runAgent).toHaveBeenCalledWith({
       ...input,
       toolPhaseMode: "explicit",
+      extraTools: [
+        expect.objectContaining({
+          function: expect.objectContaining({ name: "startNavigation" }),
+        }),
+        expect.objectContaining({
+          function: expect.objectContaining({ name: "stopNavigation" }),
+        }),
+      ],
       execTool: expect.any(Function),
       systemInstruction: expect.stringContaining("目前查看的路線"),
     });

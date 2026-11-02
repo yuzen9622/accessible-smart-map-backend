@@ -1,6 +1,7 @@
 import { runAgent } from "../agent/agent-manager.service";
 import { toInteractionInput } from "../agent/history-adapter";
 import { executeLocalTool } from "./agent-tools";
+import { textNavigationTools } from "../../config/ai/tool";
 import type { AgentInput, AgentResult } from "../../types/agent";
 import type { OAIMessage } from "../../types/openai-chat";
 import { withResponseLanguage } from "../../utils/agent-language";
@@ -31,6 +32,7 @@ export async function runChatAgent(
   return runAgent({
     ...input,
     toolPhaseMode: "explicit",
+    extraTools: [...(input.extraTools ?? []), ...textNavigationTools],
     systemInstruction: withResponseLanguage(
       (input.systemInstruction ?? "") + context.prompt,
       input.language,
