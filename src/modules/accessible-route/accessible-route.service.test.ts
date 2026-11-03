@@ -2760,6 +2760,32 @@ describe("planAccessibleRouteFromRequest — needsAccessibleToilet", () => {
     ).toBe(true);
   });
 
+  it("counts campus accessible toilets near the destination", async () => {
+    vi.mocked(findNearby).mockResolvedValue({
+      nearbyOsm: [],
+      nearbyBathroom: [],
+      nearbyMetroA11y: [
+        { source: "campus", facType: "accessible_toilet" },
+        { source: "campus", facType: "accessible_toilet" },
+        { source: "campus", facType: "elevator" },
+      ],
+    } as any);
+
+    const res = await planAccessibleRouteFromRequest({
+      ...walkRequest,
+      needsAccessibleToilet: true,
+    });
+
+    expect(res.ok).toBe(true);
+    const route = okData(res).routes[0];
+    expect(route.accessibilityHighlights).toContain(
+      "目的地附近有 2 處無障礙廁所",
+    );
+    expect(route.warnings ?? []).not.toContain(
+      ROUTE_WARNING.NO_ACCESSIBLE_TOILET_NEARBY,
+    );
+  });
+
   it("adds a warning instead when no accessible toilet is found nearby", async () => {
     vi.mocked(findNearby).mockResolvedValue({
       nearbyOsm: [],

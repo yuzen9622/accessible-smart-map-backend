@@ -578,7 +578,11 @@ async function applyExtraA11yAnnotations(
       const osmToiletCount = (near.nearbyOsm ?? []).filter(
         (p: IOsmA11y) => p.category === "toilet",
       ).length;
-      const total = (near.nearbyBathroom?.length ?? 0) + osmToiletCount;
+      const campusToiletCount = (near.nearbyMetroA11y ?? []).filter(
+        (p) => p.source === "campus" && p.facType === "accessible_toilet",
+      ).length;
+      const total =
+        (near.nearbyBathroom?.length ?? 0) + osmToiletCount + campusToiletCount;
       const note =
         total > 0
           ? `目的地附近有 ${total} 處無障礙廁所`
