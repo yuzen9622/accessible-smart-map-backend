@@ -184,6 +184,19 @@ export const agentCases: AgentCase[] = [
     query: "step by step from Taipei Main Station to Ximen",
     expectTool: "getNavInstructions",
   },
+  {
+    id: "route-waypoint",
+    query: "幫我規劃一下從台北車站到五月家台大館 再到台大綜合體育館的路線",
+    expectTool: "planAccessibleRoute",
+    expectArgs: (a) =>
+      Array.isArray(a.waypoints) &&
+      a.waypoints.length === 1 &&
+      String(a.waypoints[0]).includes("五月家") &&
+      String(a.destination ?? "").includes("體育館")
+        ? null
+        : `expected one 五月家 waypoint + 體育館 destination, got ${JSON.stringify(a)}`,
+    notes: "multi-stop trip must be one call with waypoints, not split",
+  },
 
   // D. the 5 bus tools
   {

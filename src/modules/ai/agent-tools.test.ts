@@ -2212,6 +2212,48 @@ describe("agent travel mode dispatch", () => {
       );
     }
   });
+  it("plans a multi-stop trip in one planner call with ordered waypoints", async () => {
+    mockPlanRoute.mockClear();
+    mockPlanRoute.mockResolvedValue({
+      ok: false,
+      error: "no route in fixture",
+    });
+    await executeLocalTool(
+      "planAccessibleRoute",
+      {
+        origin: "台北車站",
+        waypoints: [" 五月家青年旅舍台大館 "],
+        destination: "台大綜合體育館",
+      },
+      undefined,
+    );
+    expect(mockPlanRoute).toHaveBeenCalledTimes(1);
+    expect(mockPlanRoute).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        origin: "台北車站",
+        waypoints: ["五月家青年旅舍台大館"],
+        destination: "台大綜合體育館",
+      }),
+    );
+  });
+  it.each([[["A", "B", "C", "D", "E", "F"]], [[""]], ["五月家"]])(
+    "rejects invalid waypoints %j before planning",
+    async (waypoints) => {
+      mockPlanRoute.mockClear();
+      const result = JSON.parse(
+        await executeLocalTool(
+          "planAccessibleRoute",
+          { origin: "A", destination: "B", waypoints },
+          undefined,
+        ),
+      );
+      expect(result).toMatchObject({
+        ok: false,
+        reason: "INVALID_ROUTE_ARGUMENTS",
+      });
+      expect(mockPlanRoute).not.toHaveBeenCalled();
+    },
+  );
   it("rejects an unknown travel mode before planning", async () => {
     mockPlanRoute.mockClear();
     const result = JSON.parse(

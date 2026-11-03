@@ -36,3 +36,8 @@ export const AgentAccessibilityOptionsSchema = RoutingPreferencesSchema.pick({
   avoidStairs: true,
   requireElevator: true,
 });
+/** Ordered stop names the model may route through; mirrors the HTTP cap of 5. */
+export const AgentWaypointsSchema = z
+  .array(z.string().trim().min(1).max(200))
+  .max(5)
+  .optional();

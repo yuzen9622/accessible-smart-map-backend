@@ -247,6 +247,13 @@ export const openAiChatTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
             description:
               "終點名稱，請『完整照抄』使用者說的地名（含校區/分館/分店/路段等後綴，例如『台中科大三民校區』不可簡化成『台中科大』）。終點是校內某間教室或某棟某樓時改用 destinationPlaceId",
           },
+          waypoints: {
+            type: "array",
+            items: { type: "string" },
+            maxItems: 5,
+            description:
+              "依序經過的中途點地名（最多 5 個），地名同樣完整照抄。使用者說「先去 A 再去 B」「從 X 經過 A 到 B」時，最後一站填 destination，其餘依序填這裡，用一次呼叫規劃整趟，不要拆成多次 planAccessibleRoute。",
+          },
           originPlaceId: {
             type: "string",
             description:

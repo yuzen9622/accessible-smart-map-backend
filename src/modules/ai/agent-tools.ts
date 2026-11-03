@@ -6,6 +6,7 @@ import { apiErrorMessage } from "../../constants/api-errors";
 import {
   AgentNavOptionsSchema,
   AgentAccessibilityOptionsSchema,
+  AgentWaypointsSchema,
 } from "../../schemas/agent-route.schema";
 import { randomUUID } from "crypto";
 import { attachRouteTokens } from "../accessible-route/route-token.service";
@@ -845,6 +846,8 @@ export async function planAccessibleRoute(args: {
   /** A place inside an indoor venue the trip ends at (from inspectVenue). */
   destinationPlaceId?: string;
   venue?: string;
+  /** Ordered stop names between origin and destination (max 5). */
+  waypoints?: unknown;
   language?: AgentLanguage;
   mode?: string;
   travelMode?: string;
@@ -899,6 +902,15 @@ export async function planAccessibleRoute(args: {
       mode,
       travelMode: travelMode.value,
       error: agentRouteError("TRAVEL_MODE_NOT_ALLOWED_FOR_MODE", args.language),
+    });
+  }
+
+  const waypoints = AgentWaypointsSchema.safeParse(args.waypoints);
+  if (!waypoints.success) {
+    return JSON.stringify({
+      ok: false,
+      reason: "INVALID_ROUTE_ARGUMENTS",
+      error: agentRouteError("INVALID_ROUTE_ARGUMENTS", args.language),
     });
   }
 
@@ -966,6 +978,7 @@ export async function planAccessibleRoute(args: {
       ...(destinationPlaceId && venueId
         ? { destinationVenuePlace: { venueId, placeId: destinationPlaceId } }
         : { destination }),
+      ...(waypoints.data?.length ? { waypoints: waypoints.data } : {}),
       userLocation: args.userLocation,
       mode: validMode,
       userId: args.userId,
@@ -2571,6 +2584,7 @@ export async function executeLocalTool(
             ? args.destinationPlaceId
             : undefined,
         venue: typeof args.venue === "string" ? args.venue : undefined,
+        waypoints: args.waypoints,
         mode: args.mode,
         travelMode: args.travelMode,
         transitPreference: args.transitPreference,
