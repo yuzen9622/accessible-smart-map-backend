@@ -403,8 +403,8 @@ describe("real bus producers source-only presentation", () => {
     await bus.getBusRouteDetail({ ...params, lang: "en" });
     await bus.getBusRouteDetail({ ...params, lang: "zh-TW" });
     expect(vi.mocked(redisGet).mock.calls.map(([key]) => key)).toEqual([
-      "bus:shape:v1:Taipei:307",
-      "bus:shape:v1:Taipei:307",
+      "bus:shape:v2:Taipei:307",
+      "bus:shape:v2:Taipei:307",
     ]);
     expect(redisSet).not.toHaveBeenCalled();
   });

@@ -71,7 +71,7 @@ import type { BusLeg } from "../../types/route";
 import type { BusPlannedEtaRecord } from "../../types/transit";
 import { canMatchBusTrip, matchPlannedBus } from "./bus-trip-match";
 
-const BUS_SHAPE_CACHE_PREFIX = "bus:shape:v1:";
+const BUS_SHAPE_CACHE_PREFIX = "bus:shape:v2:";
 const BUS_SHAPE_CACHE_TTL_SEC = 24 * 60 * 60;
 import type {
   BusRouteInfoResult,
@@ -360,10 +360,12 @@ async function getBusRouteShapes(
     const { records } = await fetchRouteScoped(
       routeName,
       city,
+      // The path-segment form matches names containing the id (InterCity
+      // "21" returns 1121, 7210, …); only an exact name filter is this route.
       ({ type, routeId: id }) =>
         type === "City"
-          ? `${busUrl.cityShapeUrl}/${city}/${encodeURIComponent(id)}?$format=JSON`
-          : `${busUrl.interCityShapeUrl}/${encodeURIComponent(id)}?$format=JSON`,
+          ? `${busUrl.cityShapeUrl}/${city}?$format=JSON&$filter=RouteName/Zh_tw eq '${odataUrlLiteral(id)}'`
+          : `${busUrl.interCityShapeUrl}?$format=JSON&$filter=RouteName/Zh_tw eq '${odataUrlLiteral(id)}'`,
     );
     const shapes = normalizeBusShapes(records);
     if (shapes.length)
@@ -1108,7 +1110,16 @@ export async function getBusRouteDetail(params: {
         return {
           ...d,
           stops,
-          polyline: matchBusShape(d, shapes, routeInfoRes.directions),
+          polyline: matchBusShape(
+            d,
+            shapes,
+            routeInfoRes.directions,
+            d.stops.flatMap((stop) =>
+              Number.isFinite(stop.lng) && Number.isFinite(stop.lat)
+                ? [[stop.lng!, stop.lat!] as [number, number]]
+                : [],
+            ),
+          ),
         };
       },
     );
@@ -2246,13 +2257,9 @@ export async function getSelectedBusGeometry(
     ).length > 1
   )
     return null;
-  const shape = matchBusShape(target, shapes, info.directions);
-  return (
-    shape &&
-    trimBusShape(
-      shape,
-      stops.map((stop) => [stop.lng!, stop.lat!]),
-      spans[0],
-    )
+  const coordinates = stops.map(
+    (stop) => [stop.lng!, stop.lat!] as [number, number],
   );
+  const shape = matchBusShape(target, shapes, info.directions, coordinates);
+  return shape && trimBusShape(shape, coordinates, spans[0]);
 }
