@@ -71,7 +71,7 @@ import type { BusLeg } from "../../types/route";
 import type { BusPlannedEtaRecord } from "../../types/transit";
 import { canMatchBusTrip, matchPlannedBus } from "./bus-trip-match";
 
-const BUS_SHAPE_CACHE_PREFIX = "bus:shape:v1:";
+const BUS_SHAPE_CACHE_PREFIX = "bus:shape:v2:";
 const BUS_SHAPE_CACHE_TTL_SEC = 24 * 60 * 60;
 import type {
   BusRouteInfoResult,
@@ -360,10 +360,12 @@ async function getBusRouteShapes(
     const { records } = await fetchRouteScoped(
       routeName,
       city,
+      // The path-segment form matches names containing the id (InterCity
+      // "21" returns 1121, 7210, …); only an exact name filter is this route.
       ({ type, routeId: id }) =>
         type === "City"
-          ? `${busUrl.cityShapeUrl}/${city}/${encodeURIComponent(id)}?$format=JSON`
-          : `${busUrl.interCityShapeUrl}/${encodeURIComponent(id)}?$format=JSON`,
+          ? `${busUrl.cityShapeUrl}/${city}?$format=JSON&$filter=RouteName/Zh_tw eq '${odataUrlLiteral(id)}'`
+          : `${busUrl.interCityShapeUrl}?$format=JSON&$filter=RouteName/Zh_tw eq '${odataUrlLiteral(id)}'`,
     );
     const shapes = normalizeBusShapes(records);
     if (shapes.length)

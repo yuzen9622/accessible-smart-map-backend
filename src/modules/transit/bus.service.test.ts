@@ -1237,7 +1237,9 @@ describe("route-detail 路線線形 polyline", () => {
     expect(byDir[1]).toBeNull();
     expect(
       tdxFetchMock.mock.calls.some(([url]) =>
-        String(url).includes("/Bus/Shape/City/Taipei/307"),
+        String(url).includes(
+          "/Bus/Shape/City/Taipei?$format=JSON&$filter=RouteName/Zh_tw eq '307'",
+        ),
       ),
     ).toBe(true);
   });
