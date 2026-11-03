@@ -81,19 +81,22 @@ export function normalizeBusShapes(rows: any[]): BusShape[] {
  * Picks the shape belonging to one sub-route direction.
  *
  * Matches on SubRouteUID first. Some cities (e.g. Taipei) publish shapes per
- * RouteUID only; that fallback is used only when the RouteUID has a single
- * sub-route in this direction, since otherwise the shape could belong to a
- * different branch.
+ * RouteUID only. Such a shape is taken as is when the RouteUID has a single
+ * sub-route in this direction. With several branches it could belong to any
+ * of them, so it is taken only when it is the one route-level shape the
+ * target's own stops follow in order, trimmed to those stops.
  *
  * @param target The sub-route direction to draw.
  * @param shapes Normalized shapes for the route.
  * @param siblings Every sub-route direction of the route, for the uniqueness check.
+ * @param stops The target's ordered stop coordinates, to attribute a shared shape.
  * @returns The path, or null when no shape can be attributed safely.
  */
 export function matchBusShape(
   target: BusShapeTarget,
   shapes: BusShape[],
   siblings: BusShapeTarget[],
+  stops: BusShapePath,
 ): BusShapePath | null {
   const exact = shapes.find(
     (s) =>
@@ -102,47 +105,73 @@ export function matchBusShape(
   if (exact) return exact.path;
 
   if (!target.routeUid) return null;
-  const sameRouteDirection = siblings.filter(
-    (s) => s.routeUid === target.routeUid && s.direction === target.direction,
-  );
-  if (sameRouteDirection.length !== 1) return null;
   const byRoute = shapes.filter(
     (s) =>
       !s.subRouteUid &&
       s.routeUid === target.routeUid &&
       s.direction === target.direction,
   );
-  return byRoute.length === 1 ? byRoute[0].path : null;
+  const sameRouteDirection = siblings.filter(
+    (s) => s.routeUid === target.routeUid && s.direction === target.direction,
+  );
+  if (sameRouteDirection.length === 1)
+    return byRoute.length === 1 ? byRoute[0].path : null;
+  // A shared shape spans every branch; keep only this branch's own run.
+  const followed = byRoute
+    .map((s) => trimBusShape(s.path, stops))
+    .filter((path): path is BusShapePath => path !== null);
+  return followed.length === 1 ? followed[0] : null;
 }
 
-/** Project ordered stops onto the same directed shape, retaining road bends. */
+/** Stops can sit on the pavement beside the road, but not a different street. */
+const STOP_MAX_OFFSET_M = 75;
+/** Two stops sharing a pole or facing each other across a road may project
+ * a few metres out of order; anything further back is a different pass. */
+const STOP_BACKTRACK_SLACK_M = 30;
+
+type StopProjection = {
+  segment: number;
+  fraction: number;
+  point: [number, number];
+  /** Metres along the shape from its first vertex. */
+  along: number;
+  offset: number;
+};
+
+/**
+ * Project ordered stops onto the same directed shape, retaining road bends.
+ *
+ * A loop or out-and-back route passes the same road twice, so the nearest
+ * point is often on the wrong pass. Every stop keeps each segment within
+ * reach as a candidate, and the stops are matched together: the chosen
+ * positions move forward along the shape with the smallest total offset.
+ *
+ * @param path The directed shape.
+ * @param stops The route's stops, in order.
+ * @param range The stop indexes to trim between.
+ * @returns The trimmed path, or null when the stops do not follow the shape.
+ */
 export function trimBusShape(
   path: BusShapePath,
   stops: BusShapePath,
   range: { from: number; to: number } = { from: 0, to: stops.length - 1 },
 ): BusShapePath | null {
   if (path.length < 2 || stops.length < 2) return null;
-  const positions: {
-    segment: number;
-    fraction: number;
-    point: [number, number];
-  }[] = [];
-  let previous = 0;
-  for (const stop of stops) {
-    let best:
-      | {
-          segment: number;
-          fraction: number;
-          point: [number, number];
-          distance: number;
-        }
-      | undefined;
+  const starts = [0];
+  for (let segment = 0; segment < path.length - 1; segment++)
+    starts.push(
+      starts[segment] +
+        haversineMeters(
+          path[segment][1],
+          path[segment][0],
+          path[segment + 1][1],
+          path[segment + 1][0],
+        ),
+    );
+  const candidates = stops.map((stop) => {
     const scale = Math.cos((stop[1] * Math.PI) / 180);
-    for (
-      let segment = Math.floor(previous);
-      segment < path.length - 1;
-      segment++
-    ) {
+    const found: StopProjection[] = [];
+    for (let segment = 0; segment < path.length - 1; segment++) {
       const a = path[segment],
         b = path[segment + 1];
       const dx = (b[0] - a[0]) * scale,
@@ -150,7 +179,7 @@ export function trimBusShape(
       const length = dx * dx + dy * dy;
       if (!length) continue;
       const fraction = Math.max(
-        segment === Math.floor(previous) ? previous - segment : 0,
+        0,
         Math.min(
           1,
           ((stop[0] - a[0]) * scale * dx + (stop[1] - a[1]) * dy) / length,
@@ -160,24 +189,56 @@ export function trimBusShape(
         a[0] + fraction * (b[0] - a[0]),
         a[1] + fraction * (b[1] - a[1]),
       ];
-      const distance = haversineMeters(stop[1], stop[0], point[1], point[0]);
-      if (!best || distance < best.distance)
-        best = { segment, fraction, point, distance };
+      const offset = haversineMeters(stop[1], stop[0], point[1], point[0]);
+      if (offset > STOP_MAX_OFFSET_M) continue;
+      found.push({
+        segment,
+        fraction,
+        point,
+        along:
+          starts[segment] + fraction * (starts[segment + 1] - starts[segment]),
+        offset,
+      });
     }
-    // Stops can sit on the pavement beside the road, but not a different street.
-    if (!best || best.distance > 75) return null;
-    positions.push(best);
-    previous = best.segment + best.fraction;
+    return found;
+  });
+  // cost[i][c]: least total offset of stops 0..i ending at candidate c.
+  const cost: number[][] = [];
+  const from: number[][] = [];
+  for (const [i, options] of candidates.entries()) {
+    cost.push([]);
+    from.push([]);
+    for (const option of options) {
+      let best = i === 0 ? 0 : Infinity,
+        previous = -1;
+      if (i > 0)
+        for (const [p, before] of candidates[i - 1].entries())
+          if (
+            before.along - STOP_BACKTRACK_SLACK_M <= option.along &&
+            cost[i - 1][p] < best
+          ) {
+            best = cost[i - 1][p];
+            previous = p;
+          }
+      cost[i].push(best + option.offset);
+      from[i].push(previous);
+    }
   }
+  const last = cost.length - 1;
+  let end = -1;
+  for (const [c, value] of cost[last].entries())
+    if (Number.isFinite(value) && (end < 0 || value < cost[last][end])) end = c;
+  if (end < 0) return null;
+  const positions: StopProjection[] = new Array(stops.length);
+  for (let i = last, c = end; i >= 0; c = from[i][c], i--)
+    positions[i] = candidates[i][c];
   const first = positions[range.from],
-    last = positions[range.to];
-  if (!first || !last) return null;
-  if (last.segment + last.fraction <= first.segment + first.fraction)
-    return null;
+    final = positions[range.to];
+  if (!first || !final || final.along <= first.along) return null;
   return [
     first.point,
-    ...path.slice(first.segment + 1, last.segment + 1),
-    last.point,
+    ...path.slice(first.segment + 1, final.segment + 1),
+    final.point,
   ].filter(
     (point, index, all) =>
       index === 0 ||

@@ -86,7 +86,7 @@ describe("matchBusShape", () => {
       { routeUid: "TXG99", subRouteUid: "TXG991", direction: 0, path: pathB },
     ];
     const target = { routeUid: "TXG99", subRouteUid: "TXG991", direction: 0 };
-    expect(matchBusShape(target, shapes, [target])).toBe(pathB);
+    expect(matchBusShape(target, shapes, [target], [])).toBe(pathB);
   });
 
   it("線形只有 RouteUID（台北）且該方向只有一條子路線時，以 RouteUID 對應", () => {
@@ -104,19 +104,50 @@ describe("matchBusShape", () => {
       target,
       { routeUid: "TPE16111", subRouteUid: "TPE157462", direction: 1 },
     ];
-    expect(matchBusShape(target, shapes, siblings)).toBe(pathA);
+    expect(matchBusShape(target, shapes, siblings, [])).toBe(pathA);
   });
 
-  it("同 RouteUID 同方向有多條子路線時不猜，回 null", () => {
-    const shapes: BusShape[] = [
-      { routeUid: "TPE1", direction: 0, path: pathA },
-    ];
+  describe("同 RouteUID 同方向有多條子路線", () => {
     const target = { routeUid: "TPE1", subRouteUid: "TPE11", direction: 0 };
     const siblings = [
       target,
       { routeUid: "TPE1", subRouteUid: "TPE12", direction: 0 },
     ];
-    expect(matchBusShape(target, shapes, siblings)).toBeNull();
+    const onA: [number, number][] = [
+      [120.62, 24.12],
+      [120.68, 24.18],
+    ];
+
+    it("本身站點沿著唯一一條路線線形時採用", () => {
+      const shapes: BusShape[] = [
+        { routeUid: "TPE1", direction: 0, path: pathA },
+        { routeUid: "TPE1", direction: 0, path: pathB },
+      ];
+      const path = matchBusShape(target, shapes, siblings, onA)!;
+      // Trimmed to the branch's own stops, not the shared full shape.
+      expect(path[0][0]).toBeCloseTo(120.62);
+      expect(path.at(-1)![0]).toBeCloseTo(120.68);
+    });
+
+    it("站點不沿著線形時不猜，回 null", () => {
+      const shapes: BusShape[] = [
+        { routeUid: "TPE1", direction: 0, path: pathA },
+      ];
+      expect(
+        matchBusShape(target, shapes, siblings, [
+          [121.52, 25.02],
+          [121.58, 25.08],
+        ]),
+      ).toBeNull();
+    });
+
+    it("兩條路線線形都吻合時不猜，回 null", () => {
+      const shapes: BusShape[] = [
+        { routeUid: "TPE1", direction: 0, path: pathA },
+        { routeUid: "TPE1", direction: 0, path: [...pathA] },
+      ];
+      expect(matchBusShape(target, shapes, siblings, onA)).toBeNull();
+    });
   });
 
   it("線形帶 SubRouteUID 但對不上時，不退回 RouteUID 硬掛", () => {
@@ -124,7 +155,7 @@ describe("matchBusShape", () => {
       { routeUid: "TXG99", subRouteUid: "TXG99", direction: 0, path: pathA },
     ];
     const target = { routeUid: "TXG99", subRouteUid: "TXG991", direction: 0 };
-    expect(matchBusShape(target, shapes, [target])).toBeNull();
+    expect(matchBusShape(target, shapes, [target], [])).toBeNull();
   });
 });
 
@@ -162,6 +193,27 @@ describe("trimBusShape", () => {
         [120.1, 24.1],
       ]),
     ).toBeNull();
+  });
+  it("matches a stop on the outbound pass when the return pass is nearer", () => {
+    // Out along y=25, back along y=25.0003 (~33 m north): a stop 25 m north
+    // of the outbound road is nearest the return pass.
+    const outAndBack: [number, number][] = [
+      [121, 25],
+      [121.02, 25],
+      [121.02, 25.0003],
+      [121, 25.0003],
+    ];
+    const result = trimBusShape(outAndBack, [
+      [121.001, 25],
+      [121.005, 25.000225],
+      [121.015, 25],
+      [121.005, 25.0003],
+    ]);
+    expect(result).not.toBeNull();
+    expect(result!.slice(1, -1)).toEqual([
+      [121.02, 25],
+      [121.02, 25.0003],
+    ]);
   });
   it("passes an intermediate loop stop before the repeated terminus", () => {
     const loop: [number, number][] = [

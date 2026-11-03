@@ -1108,7 +1108,16 @@ export async function getBusRouteDetail(params: {
         return {
           ...d,
           stops,
-          polyline: matchBusShape(d, shapes, routeInfoRes.directions),
+          polyline: matchBusShape(
+            d,
+            shapes,
+            routeInfoRes.directions,
+            d.stops.flatMap((stop) =>
+              Number.isFinite(stop.lng) && Number.isFinite(stop.lat)
+                ? [[stop.lng!, stop.lat!] as [number, number]]
+                : [],
+            ),
+          ),
         };
       },
     );
@@ -2246,13 +2255,9 @@ export async function getSelectedBusGeometry(
     ).length > 1
   )
     return null;
-  const shape = matchBusShape(target, shapes, info.directions);
-  return (
-    shape &&
-    trimBusShape(
-      shape,
-      stops.map((stop) => [stop.lng!, stop.lat!]),
-      spans[0],
-    )
+  const coordinates = stops.map(
+    (stop) => [stop.lng!, stop.lat!] as [number, number],
   );
+  const shape = matchBusShape(target, shapes, info.directions, coordinates);
+  return shape && trimBusShape(shape, coordinates, spans[0]);
 }
