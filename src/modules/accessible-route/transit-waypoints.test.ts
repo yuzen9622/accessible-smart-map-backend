@@ -112,7 +112,7 @@ describe("findAccessibleRoutes transit waypoint chaining", () => {
     expect(mockPlan.mock.calls[0][1]).toEqual(waypoint);
     expect(mockPlan.mock.calls[1][0]).toEqual(waypoint);
     expect(mockPlan.mock.calls[1][1]).toEqual(destination);
-    expect(mockPlan.mock.calls[0][2]).toMatchObject({ limit: 1 });
+    expect(mockPlan.mock.calls[0][2]?.limit).toBeUndefined();
 
     // segment 1 departs at the requested time; segment 2 departs 10 min later
     // (seg1.totalMinutes) — NOT at the origin time.
@@ -135,6 +135,38 @@ describe("findAccessibleRoutes transit waypoint chaining", () => {
     expect(walk.type).toBe("WALK");
     expect(walk.distanceM).toBe(200); // 100 + 100
     expect(walk.minutesEst).toBe(22); // 10 + 12
+  });
+
+  it("takes each segment's earliest arrival, not OTP's street-first order", async () => {
+    const departureTime = new Date("2030-01-01T10:00:00Z");
+    const t0 = departureTime.getTime();
+    mockPlan
+      .mockResolvedValueOnce(
+        otpTransitOk([
+          walkOnlySegment("seg1-walk", 71, t0),
+          walkOnlySegment("seg1-metro", 33, t0),
+        ]),
+      )
+      .mockResolvedValueOnce(
+        otpTransitOk([
+          walkOnlySegment("seg2-walk", 21, t0 + 33 * 60_000),
+          walkOnlySegment("seg2-bus", 18, t0 + 33 * 60_000),
+        ]),
+      );
+
+    const routes = await findAccessibleRoutes(
+      origin,
+      destination,
+      TaiwanCityEn.Taipei,
+      { waypoints: [waypoint], departureTime },
+    );
+
+    // segment 2 departs when the chosen 33-min segment 1 arrives
+    expect(mockPlan.mock.calls[1][2]!.departureTime).toEqual(
+      new Date(t0 + 33 * 60_000),
+    );
+    expect(routes).toHaveLength(1);
+    expect(routes[0].totalMinutes).toBe(33 + 18);
   });
 
   it("merges adjacent WALK legs across multiple waypoints", async () => {

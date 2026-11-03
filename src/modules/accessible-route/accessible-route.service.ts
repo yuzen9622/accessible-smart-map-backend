@@ -3788,6 +3788,38 @@ export async function findAccessibleRoutes(
     .routes;
 }
 
+function segmentArrival(route: AccessibleRoute, departure: Date): number {
+  return typeof route._scheduledEndTime === "number"
+    ? route._scheduledEndTime
+    : departure.getTime() + route.totalMinutes * 60_000;
+}
+
+/**
+ * Choose one waypoint segment's route. OTP lists street-only itineraries first
+ * regardless of duration, so its order is not a ranking: prefer routes the
+ * constraints keep, then fewest stairs when avoiding them, then the earliest
+ * arrival, since the next segment departs from it. Ties keep OTP order.
+ */
+export function pickSegmentRoute(
+  routes: AccessibleRoute[],
+  departure: Date,
+  constraints: A11yConstraints,
+): AccessibleRoute | undefined {
+  const allowed = routes.filter((r) => !isRouteExcluded(r, constraints));
+  const pool = allowed.length ? allowed : routes;
+  const stairs = (r: AccessibleRoute) =>
+    constraints.avoidStairs ? routeStairsCount(r) : 0;
+  return pool
+    .map((route, index) => ({ route, index }))
+    .sort(
+      (a, b) =>
+        stairs(a.route) - stairs(b.route) ||
+        segmentArrival(a.route, departure) -
+          segmentArrival(b.route, departure) ||
+        a.index - b.index,
+    )[0]?.route;
+}
+
 /**
  * Plan transit routes while preserving upstream-unavailable versus genuine
  * no-route outcomes across every waypoint segment.
@@ -3910,19 +3942,14 @@ export async function findAccessibleRoutesDetailed(
       mode,
       avoidStairs: constraints.avoidStairs,
       departureTime: cursor,
-      limit: 1,
       deadline,
     });
     if (result.status !== "ok") return result;
     everySegmentWalkingBetter &&= result.walkingBetter === true;
-    const best = result.routes[0];
+    const best = pickSegmentRoute(result.routes, cursor, constraints);
     if (!best) return { status: "no_route", routes: [] };
     segments.push(best);
-    const segmentEndTime =
-      typeof best._scheduledEndTime === "number"
-        ? best._scheduledEndTime
-        : cursor.getTime() + best.totalMinutes * 60_000;
-    cursor = new Date(segmentEndTime);
+    cursor = new Date(segmentArrival(best, cursor));
   }
   console.log(
     "[route-timing] planners",
