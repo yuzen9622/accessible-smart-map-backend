@@ -12,6 +12,7 @@ import {
   type CandidateRequestBudget,
 } from "../transit/bus-stop-pair-eta.service";
 import type { BusPairRoute } from "../transit/bus.repository";
+import { getSelectedBusGeometry } from "../transit/bus.service";
 
 export interface ScheduledCandidateSeed {
   candidate: BusDepartureCandidate;
@@ -177,10 +178,17 @@ function withLiveBoarding(
         }),
   };
 }
+type RouteGeometry = Pick<BusLeg, "polyline" | "geometrySource">;
+
 /** The planned leg re-pointed at another service between the same stops,
- * with geometry from that route's own ordered stops. A different service
- * must never inherit the planned line's trip, plate or vehicle. */
-function pairLeg(base: BusLeg, route: BusPairRoute): BusLeg | null {
+ * drawn with that route's road geometry when one is known, else its ordered
+ * stops. A different service must never inherit the planned line's trip,
+ * plate or vehicle. */
+function pairLeg(
+  base: BusLeg,
+  route: BusPairRoute,
+  shaped?: RouteGeometry,
+): BusLeg | null {
   const stops = (route.stops ?? [])
     .filter((s) => s.seq >= route.board.seq && s.seq <= route.alight.seq)
     .sort((a, b) => a.seq - b.seq);
@@ -193,7 +201,7 @@ function pairLeg(base: BusLeg, route: BusPairRoute): BusLeg | null {
     return null;
   const routeName = route.routeName?.Zh_tw ?? base.routeName;
   const leg = copyWithDescriptors(base, {
-    geometrySource: "route_stops",
+    geometrySource: shaped ? shaped.geometrySource : "route_stops",
     routeName,
     subRouteUid: route.subRouteUid,
     subRouteName: route.subRouteName?.Zh_tw ?? routeName,
@@ -202,13 +210,16 @@ function pairLeg(base: BusLeg, route: BusPairRoute): BusLeg | null {
     arrivalStopId: route.alight.stopUID,
     departureStop: route.board.stopName?.Zh_tw ?? base.departureStop,
     arrivalStop: route.alight.stopName?.Zh_tw ?? base.arrivalStop,
-    polyline: stops.map((s) => [s.lng, s.lat] as [number, number]),
+    polyline: shaped
+      ? shaped.polyline
+      : stops.map((s) => [s.lng, s.lat] as [number, number]),
     intermediateStops: stops.slice(1, -1).map((s) => ({
       name: s.stopName?.Zh_tw ?? "",
       stationUid: s.stopUID,
       location: [s.lng, s.lat] as [number, number],
     })),
   });
+  if (!leg.geometrySource) delete leg.geometrySource;
   delete leg.routeNameEn;
   delete leg.routeDisplayName;
   delete leg.alerts;
@@ -256,6 +267,33 @@ export async function collectBusCandidates({
       materialized: new Map(seeds.map((s) => [s.candidate.candidateId, s.leg])),
       complete: false,
     };
+  const routeKey = (route: { subRouteUid: string; direction: number }) =>
+    `${route.subRouteUid}|${route.direction === 1 ? 1 : 0}`;
+  // Road geometry belongs to the route segment, not the trip: a planned leg
+  // of the same sub-route and direction lends its shape, any other route gets
+  // the same TDX shape a manual selection would draw.
+  const routeGeometry = async (
+    route: BusPairRoute,
+  ): Promise<RouteGeometry | undefined> => {
+    const planned = seeds.find(
+      ({ leg }) =>
+        routeKey(leg) === routeKey(route) &&
+        (leg._canonicalDepartureStopId ?? leg.departureStopId) ===
+          canonicalBoard &&
+        (leg._canonicalArrivalStopId ?? leg.arrivalStopId) === canonicalAlight,
+    )?.leg;
+    if (planned)
+      return {
+        polyline: planned.polyline,
+        geometrySource: planned.geometrySource,
+      };
+    const probe = pairLeg(base, route);
+    const shape =
+      probe && (await getSelectedBusGeometry(probe).catch(() => null));
+    return shape
+      ? { polyline: shape, geometrySource: "route_shape" }
+      : undefined;
+  };
   const key = `${city}|${canonicalBoard}>${canonicalAlight}`;
   try {
     let promise = memo.get(key);
@@ -273,6 +311,14 @@ export async function collectBusCandidates({
     }
     const data = await promise;
     complete = data.complete;
+    const geometries = new Map(
+      await Promise.all(
+        data.routes.map(
+          async ({ route }) =>
+            [routeKey(route), await routeGeometry(route)] as const,
+        ),
+      ),
+    );
     for (const { route, eta } of data.routes) {
       const departureStopId = route.board.stopUID,
         arrivalStopId = route.alight.stopUID;
@@ -316,7 +362,7 @@ export async function collectBusCandidates({
           selected: false,
         };
         candidates.push(candidate);
-        const leg = pairLeg(base, route);
+        const leg = pairLeg(base, route, geometries.get(routeKey(route)));
         if (!leg) {
           complete = false;
           continue;
@@ -331,7 +377,8 @@ export async function collectBusCandidates({
         ({ route: r }) =>
           r.subRouteUid === trip.subRouteUid && r.direction === trip.direction,
       )?.route;
-      const leg = route && pairLeg(base, route);
+      const leg =
+        route && pairLeg(base, route, geometries.get(routeKey(route)));
       if (!leg) continue;
       leg.scheduledTrip = {
         tripId: trip.tripId,

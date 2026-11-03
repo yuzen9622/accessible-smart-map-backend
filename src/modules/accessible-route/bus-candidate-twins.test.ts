@@ -2,6 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 const { getCanonicalBusPair } = vi.hoisted(() => ({
   getCanonicalBusPair: vi.fn(),
 }));
+const { getSelectedBusGeometry } = vi.hoisted(() => ({
+  getSelectedBusGeometry: vi.fn(
+    async (): Promise<[number, number][] | null> => null,
+  ),
+}));
+vi.mock("../transit/bus.service", async (original) => ({
+  ...(await original<typeof import("../transit/bus.service")>()),
+  getSelectedBusGeometry,
+}));
 vi.mock("../transit/bus-stop-pair-eta.service", async (original) => ({
   ...(await original<typeof import("../transit/bus-stop-pair-eta.service")>()),
   getCanonicalBusPair,
@@ -243,5 +252,62 @@ describe("every route between the same two stops", () => {
       ],
     });
     expect(await collect([seed(40)])).toEqual(["realtime@22", "schedule@40"]);
+  });
+});
+
+describe("geometry of re-pointed legs", () => {
+  const shaped: BusLeg = {
+    ...leg,
+    polyline: [
+      [120.64, 24.13],
+      [120.65, 24.14],
+      [120.67, 24.14],
+      [120.68, 24.13],
+    ],
+  };
+  const shapedSeed = (minute: number) => ({ ...seed(minute), leg: shaped });
+
+  it("keeps the planned road shape when a tracked bus replaces its timetable trip", async () => {
+    serveLive([{ plate: "788-U5", minute: 22 }]);
+    const result = await collectRaw([shapedSeed(22)]);
+    const [only] = result.candidates;
+    expect(only.boardingTimeSource).toBe("realtime");
+    const built = result.materialized.get(only.candidateId)!;
+    expect(built.polyline).toEqual(shaped.polyline);
+    expect(built.geometrySource).toBeUndefined();
+    expect(built.plateNumb).toBeUndefined();
+  });
+
+  it("draws a route the planner never rode with its TDX shape", async () => {
+    const tdxShape: [number, number][] = [
+      [120.64, 24.13],
+      [120.66, 24.12],
+      [120.68, 24.13],
+    ];
+    getSelectedBusGeometry.mockResolvedValueOnce(tdxShape);
+    serveLive([], {
+      trips: [timetableTrip("TXG25", 25)],
+      routes: [pairRoute("TXG25", "25")],
+    });
+    const result = await collectRaw([shapedSeed(22)]);
+    const other = result.candidates.find((c) => c.subRouteUid === "TXG25")!;
+    const built = result.materialized.get(other.candidateId)!;
+    expect(built.geometrySource).toBe("route_shape");
+    expect(built.polyline).toEqual(tdxShape);
+  });
+
+  it("joins a route without any known shape by its ordered stops", async () => {
+    serveLive([], {
+      trips: [timetableTrip("TXG25", 25)],
+      routes: [pairRoute("TXG25", "25")],
+    });
+    const result = await collectRaw([shapedSeed(22)]);
+    const other = result.candidates.find((c) => c.subRouteUid === "TXG25")!;
+    const built = result.materialized.get(other.candidateId)!;
+    expect(built.geometrySource).toBe("route_stops");
+    expect(built.polyline).toEqual([
+      [120.64, 24.13],
+      [120.68, 24.13],
+    ]);
   });
 });

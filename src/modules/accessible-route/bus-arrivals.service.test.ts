@@ -14,6 +14,15 @@ vi.mock("../../config/redis", () => ({
   redisReady: vi.fn(),
 }));
 vi.mock("../../config/fetch", () => ({ tdxFetch }));
+const { getSelectedBusGeometry } = vi.hoisted(() => ({
+  getSelectedBusGeometry: vi.fn(
+    async (): Promise<[number, number][] | null> => null,
+  ),
+}));
+vi.mock("../transit/bus.service", async (original) => ({
+  ...(await original<typeof import("../transit/bus.service")>()),
+  getSelectedBusGeometry,
+}));
 vi.mock("../transit/bus-stop-pair-eta.service", async (original) => ({
   ...(await original<typeof import("../transit/bus-stop-pair-eta.service")>()),
   getCanonicalBusPair,
