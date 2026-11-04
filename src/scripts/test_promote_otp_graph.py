@@ -48,6 +48,7 @@ class PromoteReleaseTests(unittest.TestCase):
         self.candidate.mkdir()
         (self.candidate / "graph.obj").write_text("new graph")
         (self.candidate / "taiwan-otp.osm.pbf").write_text("new pbf")
+        (self.candidate / "feed-1.gtfs.zip").write_text("new feed")
         self.index = self.root / "index.json"
         digest = hashlib.sha256(b"new pbf").hexdigest()
         self.index.write_text(json.dumps({"version": 2, "sourcePbfSha256": digest, "segments": [], "crossings": []}))
@@ -65,6 +66,10 @@ class PromoteReleaseTests(unittest.TestCase):
         }
         return subprocess.run(["bash", str(self.script), str(self.candidate)], env=full, capture_output=True, text=True)
 
+    def feed(self):
+        path = self.data / "feed-1.gtfs.zip"
+        return path.read_text() if path.exists() else None
+
     def files(self):
         return {p.name: p.read_text() for p in self.data.iterdir() if not p.name.startswith("feed-")}
 
@@ -72,6 +77,7 @@ class PromoteReleaseTests(unittest.TestCase):
         (self.data / "graph.obj").write_text("old graph")
         (self.data / "taiwan-otp.osm.pbf").write_text("old pbf")
         (self.data / "sidewalk-index.json").write_text("old index")
+        (self.data / "feed-1.gtfs.zip").write_text("old feed")
 
     def test_healthy_release_swaps_all_three_and_leaves_no_backups(self):
         self.seed_release()
@@ -81,6 +87,7 @@ class PromoteReleaseTests(unittest.TestCase):
             self.files(),
             {"graph.obj": "new graph", "taiwan-otp.osm.pbf": "new pbf", "sidewalk-index.json": self.index.read_text()},
         )
+        self.assertEqual(self.feed(), "new feed")
 
     def test_failed_start_restores_the_previous_release(self):
         self.seed_release()
@@ -90,6 +97,7 @@ class PromoteReleaseTests(unittest.TestCase):
             self.files(),
             {"graph.obj": "old graph", "taiwan-otp.osm.pbf": "old pbf", "sidewalk-index.json": "old index"},
         )
+        self.assertEqual(self.feed(), "old feed")
 
     def test_failed_healthcheck_restores_the_previous_release(self):
         self.seed_release()
@@ -97,11 +105,13 @@ class PromoteReleaseTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.files()["sidewalk-index.json"], "old index")
         self.assertEqual(self.files()["graph.obj"], "old graph")
+        self.assertEqual(self.feed(), "old feed")
 
     def test_failed_first_release_leaves_no_candidate_files(self):
         result = self.run_promote(STUB_HEALTHY="0")
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.files(), {})
+        self.assertIsNone(self.feed())
 
     def test_index_of_another_pbf_is_refused_before_any_swap(self):
         self.seed_release()

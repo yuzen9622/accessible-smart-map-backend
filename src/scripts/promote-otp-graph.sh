@@ -139,7 +139,6 @@ fi
 docker rm -f "$CANDIDATE_NAME" >/dev/null 2>&1 || true
 
 log "verification passed — swapping graph.obj into $OTP_DATA_DIR"
-cp "$CANDIDATE_DIR"/feed-*.gtfs.zip "$OTP_DATA_DIR/" 2>/dev/null || true
 # Stage every file first, so a failed copy changes nothing.
 release_source() {
   case "$1" in
@@ -172,6 +171,10 @@ for _ in $(seq 1 30); do
   if curl -fsS "http://localhost:18080/otp/actuators/health" >/dev/null 2>&1; then
     log "OTP healthy — new graph promoted"
     PROMOTED=1
+    # The feeds here are only the record of what is serving (the next run's
+    # --baseline); the graph carries the transit data. Update them only once the
+    # release is live, so a failed promote keeps auditing against the real feed.
+    cp "$CANDIDATE_DIR"/feed-*.gtfs.zip "$OTP_DATA_DIR/" 2>/dev/null || true
     for file in "${RELEASE_FILES[@]}"; do
       rm -f "$OTP_DATA_DIR/$file.prev" "$OTP_DATA_DIR/$file.absent"
     done
