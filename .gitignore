@@ -157,3 +157,5 @@ memory/
 
 # pnpm data:sync run lock
 .data-sync.lock/
+
+sidewalk-index.json
