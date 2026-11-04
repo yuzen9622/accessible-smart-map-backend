@@ -309,6 +309,19 @@ describe("classified crossings (index v2)", () => {
     ).toEqual([7]);
   });
 
+  it("matches a crossing in the middle of a long two-point leg", () => {
+    // 2.2 km straight north through the crossing, no vertex near it.
+    expect(
+      matchCrossings(
+        [
+          [121, 24.99],
+          [121, 25.01],
+        ],
+        [CROSSING],
+      ).map(([wayId]) => wayId),
+    ).toEqual([7]);
+  });
+
   it("does not match a leg that only walks past one end", () => {
     expect(
       matchCrossings(

@@ -155,12 +155,26 @@ export function matchCrossings(
 ): IndexedCrossing[] {
   const grid = index instanceof Map ? index : buildCrossingIndex(index);
   const candidates = new Map<number, IndexedCrossing>();
-  for (const point of polyline) {
-    const x = Math.floor(point[0] / CELL);
-    const y = Math.floor(point[1] / CELL);
-    for (let i = x - 1; i <= x + 1; i++) {
-      for (let j = y - 1; j <= y + 1; j++) {
-        for (const crossing of grid.get(i + "," + j) ?? []) {
+  const visited = new Set<string>();
+  // Every cell each polyline segment passes over (plus one cell of margin), so a
+  // long two-point leg still finds a crossing it walks across mid-segment.
+  for (let k = 0; k < polyline.length; k++) {
+    const a = polyline[k];
+    const b = polyline[Math.min(k + 1, polyline.length - 1)];
+    for (
+      let i = Math.floor(Math.min(a[0], b[0]) / CELL) - 1;
+      i <= Math.floor(Math.max(a[0], b[0]) / CELL) + 1;
+      i++
+    ) {
+      for (
+        let j = Math.floor(Math.min(a[1], b[1]) / CELL) - 1;
+        j <= Math.floor(Math.max(a[1], b[1]) / CELL) + 1;
+        j++
+      ) {
+        const key = i + "," + j;
+        if (visited.has(key)) continue;
+        visited.add(key);
+        for (const crossing of grid.get(key) ?? []) {
           candidates.set(crossing[0], crossing);
         }
       }
