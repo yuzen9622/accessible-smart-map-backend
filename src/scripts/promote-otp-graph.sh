@@ -24,6 +24,13 @@
 #   OTP_SERVE_XMX         candidate heap (default 12g)
 #   OTP_CANDIDATE_PORT    (default 18081)
 #   OTP_VERIFY_SKIP_AUDIT=1  passed to verify-otp-graph.py (see its audit check)
+#
+# Required env:
+#   OTP_CANDIDATE_SIDEWALK_INDEX  sidewalk-index.json built from the candidate's
+#                         taiwan-otp.osm.pbf (build-otp-graph.sh passes it). PBF,
+#                         index and graph are one release: all three are staged
+#                         before any is swapped, swapped together, and rolled back
+#                         together. The backend re-reads the index when it changes.
 set -euo pipefail
 
 CANDIDATE_DIR="${1:?usage: promote-otp-graph.sh CANDIDATE_DIR}"
@@ -44,6 +51,17 @@ die() {
 }
 
 [ -f "$CANDIDATE_DIR/graph.obj" ] || die "no graph.obj in $CANDIDATE_DIR"
+[ -f "$CANDIDATE_DIR/taiwan-otp.osm.pbf" ] || die "no taiwan-otp.osm.pbf in $CANDIDATE_DIR"
+CANDIDATE_INDEX="${OTP_CANDIDATE_SIDEWALK_INDEX:?OTP_CANDIDATE_SIDEWALK_INDEX is required (sidewalk-index.json of the candidate PBF)}"
+[ -f "$CANDIDATE_INDEX" ] || die "OTP_CANDIDATE_SIDEWALK_INDEX $CANDIDATE_INDEX does not exist"
+python3 - "$CANDIDATE_INDEX" "$CANDIDATE_DIR/taiwan-otp.osm.pbf" <<'PY' ||
+import hashlib, json, sys
+index = json.load(open(sys.argv[1]))
+with open(sys.argv[2], "rb") as stream:
+    digest = hashlib.file_digest(stream, "sha256").hexdigest()
+sys.exit(0 if index.get("version") == 2 and index.get("sourcePbfSha256") == digest else 1)
+PY
+  die "candidate sidewalk index is not a v2 index of the candidate PBF"
 [ -d "$OTP_DATA_DIR" ] || die "OTP_DATA_DIR $OTP_DATA_DIR does not exist"
 docker info >/dev/null 2>&1 || die "docker daemon is not responding"
 
@@ -99,10 +117,29 @@ docker rm -f "$CANDIDATE_NAME" >/dev/null 2>&1 || true
 
 log "verification passed — swapping graph.obj into $OTP_DATA_DIR"
 cp "$CANDIDATE_DIR"/feed-*.gtfs.zip "$OTP_DATA_DIR/" 2>/dev/null || true
-cp "$CANDIDATE_DIR/taiwan-otp.osm.pbf" "$OTP_DATA_DIR/" 2>/dev/null || true
-[ -f "$OTP_DATA_DIR/graph.obj" ] && cp "$OTP_DATA_DIR/graph.obj" "$OTP_DATA_DIR/graph.obj.prev"
-mv "$CANDIDATE_DIR/graph.obj" "$OTP_DATA_DIR/graph.obj.new"
-mv "$OTP_DATA_DIR/graph.obj.new" "$OTP_DATA_DIR/graph.obj"
+# One release unit: stage every file first, so a failed copy changes nothing.
+RELEASE_FILES=(graph.obj taiwan-otp.osm.pbf sidewalk-index.json)
+release_source() {
+  case "$1" in
+  sidewalk-index.json) echo "$CANDIDATE_INDEX" ;;
+  *) echo "$CANDIDATE_DIR/$1" ;;
+  esac
+}
+for file in "${RELEASE_FILES[@]}"; do
+  cp "$(release_source "$file")" "$OTP_DATA_DIR/$file.new" ||
+    die "could not stage $file — nothing was swapped, the old graph keeps serving"
+done
+for file in "${RELEASE_FILES[@]}"; do
+  rm -f "$OTP_DATA_DIR/$file.prev" "$OTP_DATA_DIR/$file.absent"
+  if [ -f "$OTP_DATA_DIR/$file" ]; then
+    cp "$OTP_DATA_DIR/$file" "$OTP_DATA_DIR/$file.prev" || die "could not back up $file — nothing was swapped"
+  else
+    : >"$OTP_DATA_DIR/$file.absent"
+  fi
+done
+for file in "${RELEASE_FILES[@]}"; do
+  mv "$OTP_DATA_DIR/$file.new" "$OTP_DATA_DIR/$file"
+done
 PROMOTED=1
 
 log "starting otp on the new graph"
@@ -112,7 +149,9 @@ log "waiting for healthcheck"
 for _ in $(seq 1 30); do
   if curl -fsS "http://localhost:18080/otp/actuators/health" >/dev/null 2>&1; then
     log "OTP healthy — new graph promoted"
-    rm -f "$OTP_DATA_DIR/graph.obj.prev"
+    for file in "${RELEASE_FILES[@]}"; do
+      rm -f "$OTP_DATA_DIR/$file.prev" "$OTP_DATA_DIR/$file.absent"
+    done
     exit 0
   fi
   sleep 10
@@ -120,7 +159,13 @@ done
 
 log "healthcheck failed after restart — rolling back to previous graph"
 if [ -f "$OTP_DATA_DIR/graph.obj.prev" ]; then
-  mv "$OTP_DATA_DIR/graph.obj.prev" "$OTP_DATA_DIR/graph.obj"
+  for file in "${RELEASE_FILES[@]}"; do
+    if [ -f "$OTP_DATA_DIR/$file.prev" ]; then
+      mv "$OTP_DATA_DIR/$file.prev" "$OTP_DATA_DIR/$file"
+    elif [ -f "$OTP_DATA_DIR/$file.absent" ]; then
+      rm -f "$OTP_DATA_DIR/$file" "$OTP_DATA_DIR/$file.absent"
+    fi
+  done
   start_serving || true
 fi
 die "new graph failed healthcheck (rolled back)"

@@ -41,6 +41,10 @@ OTP_OSM_PBF_URL="${OTP_OSM_PBF_URL:-https://download.geofabrik.de/asia/taiwan-la
 OTP_OSM_BBOX="${OTP_OSM_BBOX:-}" # empty = full Taiwan (no clipping)
 OTP_JAVA_XMX="${OTP_JAVA_XMX:-12g}"
 OSM_MAX_AGE_DAYS=30
+# A Taipei painted sidewalk strip becomes its own footway only when less than this
+# share of its area already lies inside an ACTIVE MOI sidewalk polygon (most strips
+# are already part of MOI; ~31 km were not, measured 2026-11-04).
+PAINTED_GAP_FILL_MAX_MOI_SHARE=0.5
 
 OTP_WORK_ROOT="${OTP_WORK_ROOT:-/tmp}"
 WORK_DIR="$(mktemp -d "$OTP_WORK_ROOT/otp-build.XXXXXX")"
@@ -321,22 +325,83 @@ mv "$OSM_WALK_SAFE" "$OSM_CLIPPED"
 # Each MOI sidewalk polygon becomes a footway=sidewalk beside its road, joined
 # to the road at its ends and junctions; the lined road piece gets
 # foot=use_sidepath so OTP prefers the sidewalk but can still walk the road.
+# Taipei painted sidewalk strips (pnpm import:taipei-painted-sidewalks) that MOI
+# does not already cover are compiled the same way (ids "tp-painted:<keyid>").
 # Runs on the host while the old OTP still serves (2026-10-26 national run:
 # 23 min, 1.8 GB peak RSS).
 SIDEWALK_EXPORT="$AUX_DIR/sidewalks.ndjson"
 OSM_SIDEWALKS="${OSM_CLIPPED%.osm.pbf}.sidewalks.osm.pbf"
-log "exporting the ACTIVE government sidewalk source from PostGIS"
+log "exporting the ACTIVE government sidewalk source + painted gap fill from PostGIS"
 docker exec postgis psql -U "$PED_PG_USER" -d ped_graph -At -v ON_ERROR_STOP=1 -c "
-  SELECT json_build_object('id', p.source_id, 'geometry', ST_AsGeoJSON(p.geom)::json)
-  FROM ped_sidewalk_polygon p
-  JOIN ped_sidewalk_source_version v ON v.id = p.source_version_id
-  WHERE v.lifecycle_status = 'ACTIVE'" > "$SIDEWALK_EXPORT" ||
-  die "sidewalk export failed — keeping old graph"
-log "adding $(wc -l < "$SIDEWALK_EXPORT" | tr -d ' ') sidewalk polygons as OTP footways"
+  WITH active AS (
+    SELECT p.* FROM ped_sidewalk_polygon p
+    JOIN ped_sidewalk_source_version v ON v.id = p.source_version_id
+    WHERE v.lifecycle_status = 'ACTIVE'
+  )
+  SELECT json_build_object('id', source_id, 'geometry', ST_AsGeoJSON(geom)::json) FROM active
+  UNION ALL
+  SELECT json_build_object('id', 'tp-painted:' || s.keyid, 'geometry', ST_AsGeoJSON(s.geom)::json)
+  FROM ped_painted_sidewalk_polygon s
+  WHERE COALESCE((
+    SELECT ST_Area(ST_Intersection(s.geom, ST_Union(a.geom))::geography)
+    FROM active a WHERE ST_Intersects(a.geom, s.geom)
+  ), 0) < $PAINTED_GAP_FILL_MAX_MOI_SHARE * ST_Area(s.geom::geography)" > "$SIDEWALK_EXPORT" ||
+  die "sidewalk export failed (painted sidewalks need pnpm import:taipei-painted-sidewalks) — keeping old graph"
+log "adding $(wc -l < "$SIDEWALK_EXPORT" | tr -d ' ') sidewalk polygons ($(grep -c '"tp-painted:' "$SIDEWALK_EXPORT" || true) painted gap fill) as OTP footways"
 python3 "$SCRIPT_DIR/otp-sidewalk-ways.py" \
   "$OSM_CLIPPED" "$SIDEWALK_EXPORT" "$OSM_SIDEWALKS" ||
   die "sidewalk footway compilation failed — keeping old graph"
 mv "$OSM_SIDEWALKS" "$OSM_CLIPPED"
+
+# ── 2d. Taipei curb ramps + sidewalk-lined roads as wheelchair tags ──
+# A crossing with an end that the government ramp inventory proves unramped gets
+# wheelchair=no (source:wheelchair=taipei_kerb_ramp): stock OTP then applies
+# inaccessibleStreetReluctance to it for wheelchair/avoidStairs requests, never a
+# block. Taipei road pieces lined with a sidewalk (foot=use_sidepath) get the same
+# soft tag (source:wheelchair=taipei_sidewalk_alongside), otherwise avoiding those
+# crossings sends wheelchair routes onto the carriageway. The CSR builder ignores
+# both provenances. See otp-kerb-ramps.py.
+RAMP_EXPORT="$AUX_DIR/ramps.ndjson"
+TAIPEI_SIDEWALK_EXPORT="$AUX_DIR/taipei-sidewalks.ndjson"
+OSM_KERB_RAMPS="${OSM_CLIPPED%.osm.pbf}.kerb-ramps.osm.pbf"
+KERB_RAMP_REPORT="$AUX_DIR/kerb-ramps-report.json"
+log "exporting Taipei curb ramps and sidewalk polygons from PostGIS"
+docker exec postgis psql -U "$PED_PG_USER" -d ped_graph -At -v ON_ERROR_STOP=1 -c "
+  SELECT json_build_object('id', objectid, 'lon', ST_X(geom), 'lat', ST_Y(geom))
+  FROM ped_ramp_point" > "$RAMP_EXPORT" ||
+  die "ramp export failed (needs pnpm import:taipei-ramps) — keeping old graph"
+docker exec postgis psql -U "$PED_PG_USER" -d ped_graph -At -v ON_ERROR_STOP=1 -c "
+  SELECT json_build_object('id', p.source_id, 'kind', 'moi',
+    'ramp_count', CASE WHEN p.ramp_status = 'recorded' THEN p.ramp_count END,
+    'geometry', ST_AsGeoJSON(p.geom)::json)
+  FROM ped_sidewalk_polygon p
+  JOIN ped_sidewalk_source_version v ON v.id = p.source_version_id
+  WHERE v.lifecycle_status = 'ACTIVE' AND p.county = '台北市'
+  UNION ALL
+  SELECT json_build_object('id', 'tp-painted:' || keyid, 'kind', 'painted',
+    'geometry', ST_AsGeoJSON(geom)::json)
+  FROM ped_painted_sidewalk_polygon" > "$TAIPEI_SIDEWALK_EXPORT" ||
+  die "Taipei sidewalk export failed — keeping old graph"
+python3 "$SCRIPT_DIR/otp-kerb-ramps.py" \
+  "$OSM_CLIPPED" "$RAMP_EXPORT" "$TAIPEI_SIDEWALK_EXPORT" "$OSM_KERB_RAMPS" \
+  --report "$KERB_RAMP_REPORT" ||
+  die "crossing kerb-ramp tagging failed — keeping old graph"
+# Any build whose area overlaps Taipei must carry the evidence; no evidence there
+# means a broken source or matcher. A clipped build (OTP_OSM_BBOX) wholly outside
+# Taipei legitimately has none.
+python3 - "$KERB_RAMP_REPORT" "$OTP_OSM_BBOX" <<'PY' ||
+import json, sys
+TAIPEI = (121.45, 24.96, 121.67, 25.21)  # min lon, min lat, max lon, max lat
+report, bbox = json.load(open(sys.argv[1])), sys.argv[2]
+if bbox:
+    w, s, e, n = (float(v) for v in bbox.split(","))
+    if e < TAIPEI[0] or w > TAIPEI[2] or n < TAIPEI[1] or s > TAIPEI[3]:
+        sys.exit(0)
+ok = all(report.get(key, 0) > 0 for key in ("tagged_wheelchair_no", "ends_ramped", "lined_roads_tagged"))
+sys.exit(0 if ok else 1)
+PY
+  die "kerb-ramp tagging produced no Taipei evidence (empty ramp/sidewalk source or matcher failure) — keeping old graph"
+mv "$OSM_KERB_RAMPS" "$OSM_CLIPPED"
 
 # ── 3. Feed validation gate (red light = abort, old graph keeps serving) ──
 # Reports MUST land outside WORK_DIR: OTP scans its data directory and classifies
@@ -369,6 +434,13 @@ cp "$OTP_DATA_DIR"/otp-config.json "$OTP_DATA_DIR"/build-config.json \
   "$OTP_DATA_DIR"/router-config.json "$WORK_DIR/" 2>/dev/null ||
   die "OTP config files missing in $OTP_DATA_DIR"
 mv "$OSM_CLIPPED" "$WORK_DIR/taiwan-otp.osm.pbf"
+# The sidewalk/crossing evidence index must describe exactly this PBF (the backend
+# checks its SHA-256), so it is built here and swapped in with the graph by
+# promote-otp-graph.sh. It lives in AUX_DIR: OTP scans WORK_DIR.
+OTP_CANDIDATE_SIDEWALK_INDEX="$AUX_DIR/sidewalk-index.json"
+python3 "$SCRIPT_DIR/export-otp-sidewalk-index.py" \
+  "$WORK_DIR/taiwan-otp.osm.pbf" "$OTP_CANDIDATE_SIDEWALK_INDEX" ||
+  die "sidewalk index export failed — keeping old graph"
 # Only the staged national DTM: OTP treats every *.tif as elevation, so a stray
 # tile in another CRS left in DEM_DIR would silently corrupt slopes.
 if [ -f "$DEM_DIR/taiwan-dtm-20m.tif" ]; then
@@ -431,7 +503,8 @@ docker run --rm \
 # ── 5. Verify the candidate on a side port; promote only if it passes ──
 # The healthcheck alone only proves OTP started — every graph that broke
 # production started fine. See promote-otp-graph.sh / verify-otp-graph.py.
-OTP_DATA_DIR="$OTP_DATA_DIR" bash "$SCRIPT_DIR/promote-otp-graph.sh" "$WORK_DIR" ||
+OTP_DATA_DIR="$OTP_DATA_DIR" OTP_CANDIDATE_SIDEWALK_INDEX="$OTP_CANDIDATE_SIDEWALK_INDEX" \
+  bash "$SCRIPT_DIR/promote-otp-graph.sh" "$WORK_DIR" ||
   die "candidate graph was not promoted — the old graph keeps serving"
 OTP_RESTART_HANDLED=1
 log "build complete"

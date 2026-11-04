@@ -138,6 +138,12 @@ else
   fail "python3 cannot import osmium — pedestrian access hardening (fatal step) would fail; pip install osmium or sudo apt install  python3-pyosmium"
 fi
 
+if python3 -c 'import shapely' 2>/dev/null; then
+  ok "shapely is importable (Taipei kerb-ramp tagging, step 2d)"
+else
+  fail "python3 cannot import shapely — Taipei kerb-ramp tagging (fatal step 2d) would fail; pip install shapely"
+fi
+
 if python3 -c 'import rasterio' 2>/dev/null; then
   ok "rasterio is importable (national DTM reprojection)"
 elif ls "$OTP_DEM_DIR"/*.tif >/dev/null 2>&1; then

@@ -130,6 +130,15 @@ class PlanTests(unittest.TestCase):
             "a run endpoint must not receive a direct nearest-junction shortcut",
         )
 
+    def test_painted_only_run_is_marked_painted(self):
+        street = road(1, [1, 2], [(0, 0), (100, 0)], highway="residential")
+        painted = MODULE.sidewalk_tags(street, MODULE.Run(1, 0, 50, 6, ["tp-painted:12", "tp-painted:3"]))
+        self.assertEqual(painted["source"], "MOI sidewalk")
+        self.assertEqual(painted["ref:moi_sidewalk"], "tp-painted:12;tp-painted:3")
+        self.assertEqual(painted["ref:tp_painted_sidewalk"], "12;3")
+        mixed = MODULE.sidewalk_tags(street, MODULE.Run(1, 0, 50, 6, ["moi-1", "tp-painted:12"]))
+        self.assertNotIn("ref:tp_painted_sidewalk", mixed)
+
     def test_explicit_foot_tag_is_kept(self):
         street = road(1, [1, 2], [(0, 0), (100, 0)], foot="yes")
         edits = MODULE.plan_edits([street], [MODULE.Run(1, 0, 100, 6, ["s"])], set(), 100, 100)
