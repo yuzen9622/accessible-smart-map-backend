@@ -86,6 +86,12 @@ export interface PromotionValidationInput {
   allowRetired: boolean;
   integrity: GraphIntegritySnapshot;
   kerbEvidence: KerbEvidenceSnapshot;
+  /**
+   * SHA-256 of the PBF OTP is serving (`$OTP_DATA_DIR/taiwan-otp.osm.pbf`).
+   * OTP and CSR are one release built from that file, so a version compiled
+   * from any other PBF may not become ACTIVE.
+   */
+  servingOtpPbfSha256: string;
   target: GraphVersionSnapshot;
 }
 
@@ -545,6 +551,14 @@ export function validatePromotion(
       );
     }
     return { kind: "already-active", activeVersionId };
+  }
+  if (
+    target.sourceHash.toLowerCase() !== input.servingOtpPbfSha256.toLowerCase()
+  ) {
+    throw new PedGraphPromotionError(
+      `pedestrian graph ${target.id} was built from PBF ${target.sourceHash}, but OTP serves ${input.servingOtpPbfSha256}; ` +
+        "CSR and OTP must be promoted as one release from the same PBF",
+    );
   }
   for (const [table, count] of [
     ["ped_ramp_node", kerbEvidence.rampNodeCount],

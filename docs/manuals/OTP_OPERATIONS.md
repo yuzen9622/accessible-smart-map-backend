@@ -10,6 +10,8 @@
 
 建圖前需先匯入 `pnpm import:sidewalks`、`pnpm import:taipei-painted-sidewalks`、`pnpm import:taipei-ramps`（`pnpm data:sync` 依此順序執行）。
 
+CSR 行人路網與 OTP 是同一個 release：`pnpm otp:rebuild` 用同一份最終 PBF 建 CSR 候選版，OTP 健康後才上線 CSR，CSR 上線失敗時 OTP 一併回復。上線順序與回滾規則見 `DEPLOY_UBUNTU.md` 的行人路網（CSR）段落。
+
 - **2c 標線型人行道補缺**：交工處標線型人行道（只取 `licode=21`，捨棄 `walkerstat=D`）中，面積不到一半落在 ACTIVE 內政部人行道內者，與內政部人行道一起編成 `footway=sidewalk`（`ref:moi_sidewalk` 以 `tp-painted:<keyid>` 標示，全部來自標線型者另加 `ref:tp_painted_sidewalk`）。其餘已被內政部涵蓋的標線型只作為「此處無路緣」的證據。
 - **2d 行穿線坡道與人行道旁車道**：`otp-kerb-ramps.py` 判斷每條行穿線兩端。端點 20 m 內有新工處坡道點（臺北斑馬線寬 6–8 m，OSM 行穿線畫在中線、坡道在邊緣，8 m 會把七成有坡道的端點誤判為沒有）、OSM `kerb=lowered/flush/no`，或位於標線型人行道上，視為有坡道。沒有上述證據、且距離「坡道清單完整」的臺北市內政部人行道（20 m 內政府坡道點數 ≥ 該段 `SW_RAMP`）3 m 內，或 OSM 標為高路緣者，視為無坡道。其餘一律未知、不處理。任一端無坡道、且 OSM 原本沒有 `wheelchair` 標籤的行穿線，整條加上 `wheelchair=no` 與 `source:wheelchair=taipei_kerb_ramp`。同一步也把臺北市已有人行道並排（`foot=use_sidepath`）的車道段加上 `wheelchair=no` 與 `source:wheelchair=taipei_sidewalk_alongside`：OTP 的輪椅成本不看步行安全係數，只罰行穿線會把輪椅路線推上車道。官方 OTP 對輪椅請求（含 `avoidStairs`）在這些路段套用 `inaccessibleStreetReluctance`（目前 ×5），只加成本、不封路；一般步行不受影響。CSR 建圖忽略這兩種來源的 `wheelchair` 值，改用自己的三級路口成本。報表（`kerb-ramps-report.json`）列出各類端點數與車道段數；全國建圖若沒有任何坡道證據會中止並保留舊圖。
 - 2026-11-04 臺北範圍實測（官方 OTP 2.9.0；300 組起訖點各跨越一條被標記的行穿線，相距 500 m；輪椅步行；對照現行圖）：經過無坡道行穿線 45 → 12 條、兩端皆有坡道的 132 → 147 條；298 條中 175 條路線改變，多走距離中位數 17 m、p90 48 m、最大 273 m；改變的路線中車道步行比例 57.6% → 49.5%、人行道 20.6% → 28.8%；一般步行 298／298 條完全相同。只標行穿線、不標車道時，車道比例反而上升（36% → 58%），因此兩者必須一起套用。

@@ -309,6 +309,7 @@ describeWithDatabase("promotePedGraph PostgreSQL transaction", () => {
         promotePedGraph(promotionClient(client), {
           versionId: 2,
           allowRetired: false,
+          servingOtpPbfSha256: VALID_SOURCE_HASH,
         }),
       ).resolves.toEqual({
         activeVersionId: 2,
@@ -345,6 +346,7 @@ describeWithDatabase("promotePedGraph PostgreSQL transaction", () => {
         promotePedGraph(promotionClient(client), {
           versionId: 3,
           allowRetired: false,
+          servingOtpPbfSha256: VALID_SOURCE_HASH,
         }),
       ).rejects.toThrow("cross-version");
 
@@ -370,6 +372,7 @@ describeWithDatabase("promotePedGraph PostgreSQL transaction", () => {
         promotePedGraph(promotionClient(client), {
           versionId: 4,
           allowRetired: false,
+          servingOtpPbfSha256: VALID_SOURCE_HASH,
         }),
       ).rejects.toThrow(
         "generated pathway edges with incompatible loader fields",
@@ -420,6 +423,7 @@ describeWithDatabase("promotePedGraph PostgreSQL transaction", () => {
           promotePedGraph(promotionClient(client), {
             versionId: invalidCandidate.versionId,
             allowRetired: false,
+            servingOtpPbfSha256: VALID_SOURCE_HASH,
           }),
         ).rejects.toThrow(invalidCandidate.expectedError);
       }
@@ -450,6 +454,7 @@ describeWithDatabase("promotePedGraph PostgreSQL transaction", () => {
         promotePedGraph(promotionClient(client), {
           versionId: 7,
           allowRetired: false,
+          servingOtpPbfSha256: VALID_SOURCE_HASH,
         }),
       ).rejects.toThrow("outdoor nodes with incompatible loader fields");
 
@@ -533,6 +538,7 @@ describeWithDatabase("promotePedGraph PostgreSQL transaction", () => {
       promotion = promotePedGraph(promotionClient(promoter), {
         versionId: 2,
         allowRetired: false,
+        servingOtpPbfSha256: VALID_SOURCE_HASH,
       });
       await waitForPendingTransactionLock(
         observer,
