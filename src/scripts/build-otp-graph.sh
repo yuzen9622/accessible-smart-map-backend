@@ -7,8 +7,10 @@
 #      + the MOI national 20 m DTM for slopes   (only when upstream changed)
 #   3. gate on gtfs-validator errors            (abort keeps the old graph)
 #   4. stop serving briefly; otp --build --save offline in a temp dir
+#   4a. build a CSR pedestrian graph CANDIDATE from the same compiled PBF
 #   5. load the candidate on a side port, verify its quality, and only then
-#      swap it in + restart + healthcheck (promote-otp-graph.sh)
+#      swap it in + restart + healthcheck, then activate the CSR candidate;
+#      either step failing keeps/restores the old OTP and CSR (promote-otp-graph.sh)
 #
 # Required env:
 #   TDX_CLIENT_ID / TDX_CLIENT_SECRET   TDX OAuth2 client credentials
@@ -441,6 +443,46 @@ OTP_CANDIDATE_SIDEWALK_INDEX="$AUX_DIR/sidewalk-index.json"
 python3 "$SCRIPT_DIR/export-otp-sidewalk-index.py" \
   "$WORK_DIR/taiwan-otp.osm.pbf" "$OTP_CANDIDATE_SIDEWALK_INDEX" ||
   die "sidewalk index export failed — keeping old graph"
+# ── 4a. CSR pedestrian graph candidate from the same PBF ──
+# OTP and CSR are one release: promote-ped-graph refuses any CSR version whose
+# source_hash is not the SHA-256 of the PBF OTP serves. The CANDIDATE is built
+# here, while the old OTP still serves (nothing written here is ACTIVE), from
+# this exact file, and activated by promote-otp-graph.sh only after the new OTP
+# is healthy. An ACTIVE version already built from an identical PBF is reused.
+CANDIDATE_PBF="$WORK_DIR/taiwan-otp.osm.pbf"
+CANDIDATE_PBF_SHA256="$(python3 -c '
+import hashlib, sys
+with open(sys.argv[1], "rb") as stream:
+    print(hashlib.file_digest(stream, "sha256").hexdigest())' "$CANDIDATE_PBF")" ||
+  die "cannot hash the candidate PBF — keeping old graph"
+ACTIVE_CSR_SHA256="$(docker exec postgis psql -U "$PED_PG_USER" -d ped_graph -At -v ON_ERROR_STOP=1 -c "
+  SELECT lower(source_hash) FROM ped_graph_version WHERE lifecycle_status = 'ACTIVE'")" ||
+  die "cannot read the ACTIVE CSR graph version — keeping old graph"
+CSR_VERSION_ID=""
+if [ "$ACTIVE_CSR_SHA256" = "$CANDIDATE_PBF_SHA256" ]; then
+  log "ACTIVE CSR graph was built from this PBF ($CANDIDATE_PBF_SHA256) — no CSR rebuild"
+else
+  log "building CSR pedestrian graph candidate from the candidate PBF"
+  CSR_BUILD_LOG="$AUX_DIR/build-ped-graph.log"
+  CSR_DEM_ARGS=()
+  if [ -f "$DEM_DIR/taiwan-dtm-20m.tif" ]; then
+    CSR_DEM_ARGS=(--dem-file "$DEM_DIR/taiwan-dtm-20m.tif")
+  fi
+  python3 "$SCRIPT_DIR/build-ped-graph.py" --pbf "$CANDIDATE_PBF" --bbox taipei \
+    ${CSR_DEM_ARGS[@]+"${CSR_DEM_ARGS[@]}"} | tee "$CSR_BUILD_LOG" ||
+    die "CSR pedestrian graph build failed — keeping old OTP and CSR"
+  CSR_VERSION_ID="$(sed -n 's/^\[build-ped-graph\] graph_version_id=\([0-9][0-9]*\)$/\1/p' "$CSR_BUILD_LOG" | tail -n 1)"
+  [ -n "$CSR_VERSION_ID" ] ||
+    die "build-ped-graph reported no graph_version_id — keeping old OTP and CSR"
+  log "CSR candidate version $CSR_VERSION_ID: injecting indoor pathways and kerb mappings"
+  python3 "$SCRIPT_DIR/inject-ped-indoor-graph.py" --version-id "$CSR_VERSION_ID" --bbox taipei ||
+    die "CSR indoor injection failed for version $CSR_VERSION_ID — keeping old OTP and CSR"
+  npx dotenvx run -- ts-node "$SCRIPT_DIR/import-taipei-ramps.ts" --mappings-only --version-id "$CSR_VERSION_ID" ||
+    die "CSR ramp mappings failed for version $CSR_VERSION_ID — keeping old OTP and CSR"
+  npx dotenvx run -- ts-node "$SCRIPT_DIR/import-taipei-painted-sidewalks.ts" --mappings-only --version-id "$CSR_VERSION_ID" ||
+    die "CSR painted-sidewalk mappings failed for version $CSR_VERSION_ID — keeping old OTP and CSR"
+fi
+
 # Only the staged national DTM: OTP treats every *.tif as elevation, so a stray
 # tile in another CRS left in DEM_DIR would silently corrupt slopes.
 if [ -f "$DEM_DIR/taiwan-dtm-20m.tif" ]; then
@@ -503,8 +545,10 @@ docker run --rm \
 # ── 5. Verify the candidate on a side port; promote only if it passes ──
 # The healthcheck alone only proves OTP started — every graph that broke
 # production started fine. See promote-otp-graph.sh / verify-otp-graph.py.
+# With a CSR candidate (4a), promote-otp-graph.sh activates it right after the
+# new OTP is healthy and rolls OTP back if that activation fails.
 OTP_DATA_DIR="$OTP_DATA_DIR" OTP_CANDIDATE_SIDEWALK_INDEX="$OTP_CANDIDATE_SIDEWALK_INDEX" \
-  bash "$SCRIPT_DIR/promote-otp-graph.sh" "$WORK_DIR" ||
+  bash "$SCRIPT_DIR/promote-otp-graph.sh" "$WORK_DIR" ${CSR_VERSION_ID:+"$CSR_VERSION_ID"} ||
   die "candidate graph was not promoted — the old graph keeps serving"
 OTP_RESTART_HANDLED=1
 log "build complete"

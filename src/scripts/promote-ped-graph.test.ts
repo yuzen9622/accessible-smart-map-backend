@@ -1,7 +1,12 @@
+import { createHash } from "node:crypto";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   parsePromotionArgs,
   promotePedGraph,
+  sha256File,
   type PedGraphPromotionClient,
 } from "./promote-ped-graph";
 
@@ -163,6 +168,7 @@ describe("promotePedGraph", () => {
       versionId: 2,
       dbUrl: "postgresql://example.test/ped_graph",
       allowRetired: true,
+      otpPbfPath: expect.stringMatching(/taiwan-otp\.osm\.pbf$/),
     });
     expect(() =>
       parsePromotionArgs(["--db-url", "postgresql://example.test/ped_graph"]),
@@ -173,7 +179,11 @@ describe("promotePedGraph", () => {
     const client = new FakePromotionClient();
 
     await expect(
-      promotePedGraph(client, { versionId: 2, allowRetired: false }),
+      promotePedGraph(client, {
+        versionId: 2,
+        allowRetired: false,
+        servingOtpPbfSha256: VALID_SOURCE_HASH,
+      }),
     ).resolves.toEqual({
       activeVersionId: 2,
       outcome: "activated",
@@ -218,7 +228,11 @@ describe("promotePedGraph", () => {
     );
 
     await expect(
-      promotePedGraph(client, { versionId: 2, allowRetired: false }),
+      promotePedGraph(client, {
+        versionId: 2,
+        allowRetired: false,
+        servingOtpPbfSha256: VALID_SOURCE_HASH,
+      }),
     ).rejects.toThrow("cross-version to_node");
 
     expect(callIndex(client.calls, "ROLLBACK")).toBeGreaterThanOrEqual(0);
@@ -235,7 +249,11 @@ describe("promotePedGraph", () => {
     );
 
     await expect(
-      promotePedGraph(client, { versionId: 2, allowRetired: false }),
+      promotePedGraph(client, {
+        versionId: 2,
+        allowRetired: false,
+        servingOtpPbfSha256: VALID_SOURCE_HASH,
+      }),
     ).rejects.toThrow("generated pathway edges with incompatible endpoints");
 
     expect(callIndex(client.calls, "ROLLBACK")).toBeGreaterThanOrEqual(0);
@@ -257,7 +275,11 @@ describe("promotePedGraph", () => {
       );
 
       await expect(
-        promotePedGraph(client, { versionId: 2, allowRetired: false }),
+        promotePedGraph(client, {
+          versionId: 2,
+          allowRetired: false,
+          servingOtpPbfSha256: VALID_SOURCE_HASH,
+        }),
       ).rejects.toThrow(expectedError);
 
       expect(callIndex(client.calls, "ROLLBACK")).toBeGreaterThanOrEqual(0);
@@ -272,12 +294,61 @@ describe("promotePedGraph", () => {
     );
 
     await expect(
-      promotePedGraph(client, { versionId: 2, allowRetired: false }),
+      promotePedGraph(client, {
+        versionId: 2,
+        allowRetired: false,
+        servingOtpPbfSha256: VALID_SOURCE_HASH,
+      }),
     ).rejects.toThrow("indoor injection is not complete");
 
     expect(callIndex(client.calls, "ROLLBACK")).toBeGreaterThanOrEqual(0);
     expect(callIndex(client.calls, "SET lifecycle_status")).toBe(-1);
     expect(callIndex(client.calls, "COMMIT")).toBe(-1);
+  });
+
+  it("refuses a candidate built from another PBF than OTP serves, without status writes", async () => {
+    const client = new FakePromotionClient(targetRow());
+
+    await expect(
+      promotePedGraph(client, {
+        versionId: 2,
+        allowRetired: false,
+        servingOtpPbfSha256: "b".repeat(64),
+      }),
+    ).rejects.toThrow("same PBF");
+
+    expect(callIndex(client.calls, "ROLLBACK")).toBeGreaterThanOrEqual(0);
+    expect(callIndex(client.calls, "SET lifecycle_status")).toBe(-1);
+    expect(callIndex(client.calls, "COMMIT")).toBe(-1);
+  });
+
+  it("hashes the OTP PBF the way build-ped-graph.py records source_hash", async () => {
+    const file = path.join(
+      mkdtempSync(path.join(tmpdir(), "otp-pbf-")),
+      "taiwan-otp.osm.pbf",
+    );
+    writeFileSync(file, "pbf bytes");
+    await expect(sha256File(file)).resolves.toBe(
+      createHash("sha256").update("pbf bytes").digest("hex"),
+    );
+  });
+
+  it("reads the OTP PBF from OTP_DATA_DIR", () => {
+    const previous = process.env.OTP_DATA_DIR;
+    process.env.OTP_DATA_DIR = "/srv/otp-release";
+    try {
+      expect(
+        parsePromotionArgs([
+          "--version-id",
+          "2",
+          "--db-url",
+          "postgresql://example.test/x",
+        ]).otpPbfPath,
+      ).toBe("/srv/otp-release/taiwan-otp.osm.pbf");
+    } finally {
+      if (previous === undefined) delete process.env.OTP_DATA_DIR;
+      else process.env.OTP_DATA_DIR = previous;
+    }
   });
 
   it("commits an already-active target without rewriting lifecycle statuses", async () => {
@@ -286,7 +357,11 @@ describe("promotePedGraph", () => {
     );
 
     await expect(
-      promotePedGraph(client, { versionId: 1, allowRetired: false }),
+      promotePedGraph(client, {
+        versionId: 1,
+        allowRetired: false,
+        servingOtpPbfSha256: VALID_SOURCE_HASH,
+      }),
     ).resolves.toEqual({
       activeVersionId: 1,
       outcome: "already-active",
