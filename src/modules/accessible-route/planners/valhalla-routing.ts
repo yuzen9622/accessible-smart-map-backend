@@ -760,8 +760,11 @@ export async function planValhallaRoute(
       wheelchair:
         opts.travelMode === "walk" &&
         (opts.avoidStairs ?? opts.mode === "wheelchair"),
-      dateTime: { type: 0 },
     };
+    // "Depart now" makes Valhalla use time-dependent search, which returns no
+    // `alternates`. Pedestrian costing has no live traffic, so walking omits
+    // it and keeps Valhalla's own alternative routes.
+    if (opts.travelMode !== "walk") params.dateTime = { type: 0 };
     if (opts.walkingCandidates) {
       params.walkingSpeedKmh = walkSpeedMps(opts.mode ?? "normal") * 3.6;
     }

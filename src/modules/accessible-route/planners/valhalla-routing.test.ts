@@ -163,6 +163,22 @@ describe("planValhallaRoute", () => {
     );
   });
 
+  it.each([false, true])(
+    "omits the departure time for walking so Valhalla keeps alternates (walkingCandidates=%s)",
+    async (walkingCandidates) => {
+      compute.mockResolvedValue({ status: "OK", trips: [normalizedTrip] });
+      await planValhallaRoute(
+        { lat: 25, lng: 121 },
+        { lat: 25.1, lng: 121.1 },
+        { travelMode: "walk", mode: "normal", walkingCandidates },
+      );
+      expect(compute.mock.calls[0][0]).not.toHaveProperty("dateTime");
+      expect(compute.mock.calls[0][0]).toMatchObject({
+        computeAlternatives: true,
+      });
+    },
+  );
+
   it.each([
     { mode: "elderly", avoidStairs: true, wheelchair: true },
     { mode: "wheelchair", avoidStairs: false, wheelchair: false },
