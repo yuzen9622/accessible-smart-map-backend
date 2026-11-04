@@ -71,13 +71,36 @@ start_serving() {
     docker compose --project-directory "$REPO_DIR" up -d otp
 }
 
+# One release unit, staged/swapped/rolled back together.
+RELEASE_FILES=(graph.obj taiwan-otp.osm.pbf sidewalk-index.json)
+
+# Put back whatever the swap replaced: `.prev` copies are restored, and files the
+# previous release did not have (`.absent` markers) are removed again.
+rollback_release() {
+  local file
+  for file in "${RELEASE_FILES[@]}"; do
+    if [ -f "$OTP_DATA_DIR/$file.prev" ]; then
+      mv "$OTP_DATA_DIR/$file.prev" "$OTP_DATA_DIR/$file"
+    elif [ -f "$OTP_DATA_DIR/$file.absent" ]; then
+      rm -f "$OTP_DATA_DIR/$file" "$OTP_DATA_DIR/$file.absent"
+    fi
+  done
+}
+
 SERVING_STOPPED_HERE=0
+SWAPPED=0
 PROMOTED=0
 cleanup() {
   status=$?
   trap - EXIT INT TERM
   docker rm -f "$CANDIDATE_NAME" >/dev/null 2>&1 || true
-  if [ "$SERVING_STOPPED_HERE" -eq 1 ] && [ "$PROMOTED" -eq 0 ]; then
+  # Any exit after the swap but before a healthy restart (start failure,
+  # healthcheck failure, signal) restores the previous release.
+  if [ "$SWAPPED" -eq 1 ] && [ "$PROMOTED" -eq 0 ]; then
+    log "rolling back the release files to the previous graph"
+    rollback_release || log "WARN: rollback incomplete — check $OTP_DATA_DIR/*.prev"
+  fi
+  if [ "$PROMOTED" -eq 0 ] && { [ "$SERVING_STOPPED_HERE" -eq 1 ] || [ "$SWAPPED" -eq 1 ]; }; then
     log "restarting otp on the old graph"
     start_serving || true
   fi
@@ -117,8 +140,7 @@ docker rm -f "$CANDIDATE_NAME" >/dev/null 2>&1 || true
 
 log "verification passed — swapping graph.obj into $OTP_DATA_DIR"
 cp "$CANDIDATE_DIR"/feed-*.gtfs.zip "$OTP_DATA_DIR/" 2>/dev/null || true
-# One release unit: stage every file first, so a failed copy changes nothing.
-RELEASE_FILES=(graph.obj taiwan-otp.osm.pbf sidewalk-index.json)
+# Stage every file first, so a failed copy changes nothing.
 release_source() {
   case "$1" in
   sidewalk-index.json) echo "$CANDIDATE_INDEX" ;;
@@ -137,18 +159,19 @@ for file in "${RELEASE_FILES[@]}"; do
     : >"$OTP_DATA_DIR/$file.absent"
   fi
 done
+SWAPPED=1
 for file in "${RELEASE_FILES[@]}"; do
   mv "$OTP_DATA_DIR/$file.new" "$OTP_DATA_DIR/$file"
 done
-PROMOTED=1
 
 log "starting otp on the new graph"
-start_serving || die "container restart failed"
+start_serving || die "container restart failed (the previous release is restored)"
 
 log "waiting for healthcheck"
 for _ in $(seq 1 30); do
   if curl -fsS "http://localhost:18080/otp/actuators/health" >/dev/null 2>&1; then
     log "OTP healthy — new graph promoted"
+    PROMOTED=1
     for file in "${RELEASE_FILES[@]}"; do
       rm -f "$OTP_DATA_DIR/$file.prev" "$OTP_DATA_DIR/$file.absent"
     done
@@ -157,15 +180,4 @@ for _ in $(seq 1 30); do
   sleep 10
 done
 
-log "healthcheck failed after restart — rolling back to previous graph"
-if [ -f "$OTP_DATA_DIR/graph.obj.prev" ]; then
-  for file in "${RELEASE_FILES[@]}"; do
-    if [ -f "$OTP_DATA_DIR/$file.prev" ]; then
-      mv "$OTP_DATA_DIR/$file.prev" "$OTP_DATA_DIR/$file"
-    elif [ -f "$OTP_DATA_DIR/$file.absent" ]; then
-      rm -f "$OTP_DATA_DIR/$file" "$OTP_DATA_DIR/$file.absent"
-    fi
-  done
-  start_serving || true
-fi
-die "new graph failed healthcheck (rolled back)"
+die "new graph failed healthcheck (the previous release is restored)"

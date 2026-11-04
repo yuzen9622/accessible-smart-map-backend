@@ -10,6 +10,7 @@ TEST_FILES = (
     "src/scripts/test_deny_foot_on_expressways.py",
     "src/scripts/test_otp_sidewalk_ways.py",
     "src/scripts/test_otp_kerb_ramps.py",
+    "src/scripts/test_promote_otp_graph.py",
     "src/scripts/test_export_otp_sidewalk_index.py",
     "src/scripts/test_audit_gtfs_feed.py",
     "src/scripts/test_serviceday_values.py",
