@@ -110,10 +110,21 @@ class CrossingTagTests(unittest.TestCase):
         self.assertEqual(tags["source:wheelchair"], "taipei_kerb_ramp")
         self.assertEqual(tags["tp:kerb_ramp_ends"], "1/1/0")
 
-    def test_existing_osm_wheelchair_tag_is_kept(self):
-        tags = MODULE.crossing_tags({"footway": "crossing", "wheelchair": "yes"}, ["unramped", "unramped"])
-        self.assertEqual(tags["wheelchair"], "yes")
-        self.assertNotIn("source:wheelchair", tags)
+    def test_existing_osm_wheelchair_tag_leaves_the_way_untouched(self):
+        self.assertIsNone(
+            MODULE.crossing_tags({"footway": "crossing", "wheelchair": "yes"}, ["unramped", "unramped"])
+        )
+
+    def test_crossings_outside_taipei_are_never_tagged(self):
+        evidence = MODULE.Evidence([lonlat(5, 0)], [moi(-50, 0, 50, 3, 1)])
+        far = lonlat(20000, 20000)
+        crossings = {
+            1: ({"footway": "crossing"}, [(10, *far), (11, far[0], far[1] + 0.0001)]),
+        }
+        node_tags = {10: {"barrier": "kerb", "kerb": "raised"}}
+        changes, report = MODULE.plan(crossings, node_tags, evidence)
+        self.assertEqual(changes, {})
+        self.assertEqual(report["crossings_outside_taipei"], 1)
 
     def test_no_evidence_leaves_the_way_untouched(self):
         self.assertIsNone(MODULE.crossing_tags({"footway": "crossing"}, ["unknown", "unknown"]))

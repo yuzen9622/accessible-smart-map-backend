@@ -181,8 +181,13 @@ class Evidence:
         return False
 
     def in_taipei(self, lon, lat):
-        """Whether a point lies within LINED_ROAD_SCOPE_M of a Taipei sidewalk polygon."""
-        return self._near(self.taipei_tree, self.taipei, *to_xy(lon, lat), LINED_ROAD_SCOPE_M)
+        """Whether a point is inside the area these Taipei sources describe: within
+        LINED_ROAD_SCOPE_M of a Taipei sidewalk polygon or RAMP_TOLERANCE_M of a
+        Taipei government ramp point. Nothing outside it is tagged."""
+        x, y = to_xy(lon, lat)
+        return self.ramps.any_within(x, y, RAMP_TOLERANCE_M) or self._near(
+            self.taipei_tree, self.taipei, x, y, LINED_ROAD_SCOPE_M
+        )
 
     def classify_end(self, lon, lat, node_tags):
         return self.classify_end_with_reason(lon, lat, node_tags)[0]
@@ -205,13 +210,16 @@ class Evidence:
 
 
 def crossing_tags(tags, ends):
-    """Return the new tag dict for a crossing way, or None to leave it untouched."""
+    """Return the new tag dict for a crossing way, or None to leave it untouched.
+    A crossing that already carries an OSM `wheelchair` tag is left exactly as mapped."""
+    if "wheelchair" in tags:
+        return None
     counts = Counter(ends)
     if counts["ramped"] + counts["unramped"] == 0:
         return None
     updated = dict(tags)
     updated["tp:kerb_ramp_ends"] = f"{counts['ramped']}/{counts['unramped']}/{counts['unknown']}"
-    if counts["unramped"] and "wheelchair" not in tags:
+    if counts["unramped"]:
         updated["wheelchair"] = "no"
         updated["source:wheelchair"] = WHEELCHAIR_TAG_SOURCE
     return updated
@@ -285,6 +293,12 @@ def plan(crossings, node_tags, evidence, lined_roads=None):
         report["lined_roads_tagged"] += 1
         changes[way_id] = updated
     for way_id, (tags, ends) in crossings.items():
+        if not any(evidence.in_taipei(lon, lat) for _, lon, lat in ends):
+            report["crossings_outside_taipei"] += 1
+            continue
+        if "wheelchair" in tags:
+            report["skipped_existing_wheelchair_tag"] += 1
+            continue
         judged = [
             evidence.classify_end_with_reason(lon, lat, node_tags.get(ref, {}))
             for ref, lon, lat in ends
@@ -301,8 +315,6 @@ def plan(crossings, node_tags, evidence, lined_roads=None):
         report["crossings_with_evidence"] += 1
         unramped = classes.count("unramped")
         report[f"crossings_unramped_{unramped}"] += 1
-        if unramped and "wheelchair" in tags:
-            report["skipped_existing_wheelchair_tag"] += 1
         if updated.get("source:wheelchair") == WHEELCHAIR_TAG_SOURCE:
             report["tagged_wheelchair_no"] += 1
         changes[way_id] = updated
