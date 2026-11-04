@@ -132,7 +132,7 @@ CSR 的角度門檻為：`|Δ| < 20°` → `CONTINUE`；`< 45°` → `SLIGHTLY_*
 | `/route/instructions` | `instructions[].type` | `depart` \| `turn` \| `facility` \| `transit_board` \| `transit_alight` \| `arrive`（步行只會出現前三個） | `nav-instructions.types.ts:18-24` |
 | `/route/instructions` | `warnings[]` | `WALK_STEPS_UNAVAILABLE` \| `ORS_STEPS_UNAVAILABLE` \| `ROAD_STEPS_UNAVAILABLE` | `nav-instructions.types.ts:29-30` |
 
-純步行回應可帶 `walkPolicy`，包含 `version: "sidewalk-priority-v1"`、`profile: "normal" | "wheelchair"`、`avoidStairs`、`maxSlopePercent`、`carriagewayMillimetres` 與 `generalizedCost`。引擎先套用通行條件，再最少化沿車道的規劃成本，最後比較原有成本；合法過街不算沿車道縱向行走。這些值是圖資搜尋成本，未知角色採保守分類，不是現場量測或無障礙認證。舊路線未帶此欄位，不代表已執行新政策。使用官方 OTP 的一般戶外、無中途點、非固定端點純步行會合併原模式查詢與同模式速度的一般行人探索候選，保留最多三條主要道路不同的路線；`avoidStairs` 為排序偏好，含樓梯候選仍保留 `steps.stairs`，不代表已確認輪椅可通行。探索候選不會偽造 `walkPolicy`。室內、精確端點、固定入口、有中途點及大眾運輸接駁維持原通行限制；CSR 仍維持其既有政策。`walkPolicy.maxSlopePercent` 只有引擎實際執行且選中邊具有所需高程證據時才提供數值，否則為 null；未知高程不能標成已執行坡度限制。此項 metadata 不需要新增使用者操作。
+純步行回應可帶 `walkPolicy`，包含 `version: "sidewalk-priority-v1"`、`profile: "normal" | "wheelchair"`、`avoidStairs`、`maxSlopePercent`、`carriagewayMillimetres` 與 `generalizedCost`。引擎先套用通行條件，再最少化沿車道的規劃成本，最後比較原有成本；合法過街不算沿車道縱向行走。這些值是圖資搜尋成本，未知角色採保守分類，不是現場量測或無障礙認證。舊路線未帶此欄位，不代表已執行新政策。使用官方 OTP 的一般戶外、無中途點、非固定端點純步行會合併原模式查詢與同模式速度的一般行人探索候選，保留最多三條主要道路不同的路線；`avoidStairs` 為 true 時引擎優先規劃無樓梯路線，有已知無樓梯候選即排除已知含樓梯候選，全部含樓梯時回傳樓梯最少者並警告；含樓梯候選仍保留 `steps.stairs`，不代表已確認輪椅可通行。探索候選不會偽造 `walkPolicy`。室內、精確端點、固定入口、有中途點及大眾運輸接駁維持原通行限制；CSR 仍維持其既有政策。`walkPolicy.maxSlopePercent` 只有引擎實際執行且選中邊具有所需高程證據時才提供數值，否則為 null；未知高程不能標成已執行坡度限制。此項 metadata 不需要新增使用者操作。
 
 ⚠️ 兩個容易寫錯的欄位名稱已在表中標注：純步行引擎欄位是 `engine`、無障礙設施分類欄位是
 `category`——本文件早期版本兩者都寫錯過。

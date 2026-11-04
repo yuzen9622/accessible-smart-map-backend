@@ -6,7 +6,7 @@
 
 綠藍步行分色使用同一 release 的人行道索引，不影響 OTP 選路。在切換新資料目錄前，以已安裝 pyosmium 的 Python 執行 `python3 src/scripts/export-otp-sidewalk-index.py <release>/taiwan-otp.osm.pbf <release>/sidewalk-index.json`。根 Compose 將同一 `OTP_DATA_DIR` 唯讀掛載到後端；後端核對索引與 PBF 的 SHA-256，缺少、損壞或版本不符時保留藍色，不猜測人行道。綠色是保守的圖資幾何比對，藍色包含未確認；不代表現地安全或無障礙認證。圖資與索引須作為同一個 release 切換，不能混用先前索引。
 
-目前 Compose 選擇 `ROUTE_WALK_PLANNER=otp`。一般戶外、無中途點且未固定精確端點的純步行，合併官方 OTP 與 Valhalla 的真實步行候選，去除高度重疊走廊後最多回傳三條。保留原模式的 OTP 主查詢，另以相同模式速度取得一般步行探索候選；探索路徑不代表已確認輪椅可通行。`avoidStairs` 在此範圍是排序偏好，含樓梯路線仍保留 `steps[].stairs`。人行道依來源證據標記，不保證全程人行道，沒有額外五分鐘的自動回退保護。
+目前 Compose 選擇 `ROUTE_WALK_PLANNER=otp`。一般戶外、無中途點且未固定精確端點的純步行，合併官方 OTP 與 Valhalla 的真實步行候選，去除高度重疊走廊後最多回傳三條。保留原模式的 OTP 主查詢，另以相同模式速度取得一般步行探索候選；探索路徑不代表已確認輪椅可通行。`avoidStairs` 為 true 時，OTP 主查詢送出輪椅旗標（官方 OTP 沒有樓梯參數，輪椅無障礙選路會以 `inaccessibleStreetReluctance` 成本避開樓梯，但仍可能經過），Valhalla 以 `type: wheelchair` 排除樓梯（並將 `max_distance` 設回 100 km）；另保留不帶輪椅旗標的一般探索查詢。後端只要有已知無樓梯的候選，就排除已知含樓梯的路線；全部含樓梯時回傳樓梯最少者並警告。步驟資料不明的路線不視為無樓梯，含樓梯路線仍保留 `steps[].stairs`。人行道依來源證據標記，不保證全程人行道，沒有額外五分鐘的自動回退保護。
 
 室內場館、固定入口、精確救援端點、中途點及轉乘接駁保留原有流程與硬性條件。未標記的設施仍屬未知。坡度設定是選路成本，API 不會將官方輪椅坡度偏好宣稱為硬性上限。
 
@@ -35,7 +35,7 @@
 
 ### 轉乘快取必須涵蓋後端送出的每一組參數
 
-OTP 依「步速＋輪椅旗標（＋其他步行偏好）」快取站間轉乘。請求的組合不在 `router-config.json` 的 `transit.transferCacheRequests` 裡時，OTP 會在請求當下重建一份快取，實測卡住 40 秒以上，而且每次重啟後都會再發生。後端的步速表在 `src/config/routing.ts`（`WALK_SPEED_MPS`，不可用環境變數改），輪椅旗標只由模式決定，避樓梯不會切換它；現有快取仍預熱每個步速的兩種旗標組合，`src/config/routing.test.ts` 會檢查兩邊一致。新增步速或改步行偏好時，兩邊一起改。
+OTP 依「步速＋輪椅旗標（＋其他步行偏好）」快取站間轉乘。請求的組合不在 `router-config.json` 的 `transit.transferCacheRequests` 裡時，OTP 會在請求當下重建一份快取，實測卡住 40 秒以上，而且每次重啟後都會再發生。後端的步速表在 `src/config/routing.ts`（`WALK_SPEED_MPS`，不可用環境變數改），純步行的輪椅旗標為「輪椅模式或避樓梯」（大眾運輸查詢仍只依模式）；現有快取仍預熱每個步速的兩種旗標組合，`src/config/routing.test.ts` 會檢查兩邊一致。新增步速或改步行偏好時，兩邊一起改。
 
 `build-config.json` 的 `transferRequests` 另含輪椅一筆：OTP 預設只替一般行人預算轉乘，沒有這筆時輪椅使用者的站間轉乘沒有保證無階梯的路徑（改動要重建圖）。
 
