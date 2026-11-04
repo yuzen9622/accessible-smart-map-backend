@@ -217,7 +217,8 @@ pnpm data:sync                # 日常更新：只跑 upsert 類步驟（不清�
   資料庫連線只從 `.env`／環境變數 `PED_GRAPH_DATABASE_URL` 讀取，不支援 `--db-url`；不要將含密碼的 URI 放進命令列，pnpm 可能回顯參數。`--url` 也只應填不含憑證的公開網址。
 
   清洗保留有效人行道存在幾何與原始屬性；無效／矛盾淨寬是未知證據，不代表可通行。報告列出 SHA256、原始／接受／隔離筆數與原因，相同 ZIP 不重複建立版本；明確重匯歷史 ZIP 時，會驗證並原子切換回該來源快照，但不切換路由圖。`ped_sidewalk_source_version`／`ped_sidewalk_polygon` 是獨立、版本化的參考來源；失敗保留舊 ACTIVE 快照。匯入本身不改變路線；下次 `pnpm otp:rebuild` 會把 ACTIVE 來源的人行道加進 OTP 步行路網：人行道接在旁邊道路的路口與端點上，有人行道的那段車道標成 `foot=use_sidepath`，OTP 會優先走人行道，車道仍可步行。建圖時讀不到 ACTIVE 人行道來源會中止並保留舊圖，所以第一次建圖前要先匯入。
-- `import:taipei-ramps` 仍需要 PostGIS 已有 ped graph（`ped_graph_version` 表）；還沒建就加 `--skip=taipei-ramps`。
+- `taipei-painted-sidewalks`（交工處標線型人行道）與 `taipei-ramps`（新工處緣石坡道）是 base 步驟，只更新來源資料（坡道點以整份快照取代，來源刪除的點會一併移除），不需要 ped graph，也不會改動線上行人路網的對應表；版本綁定的對應表（`ped_painted_node`／`ped_ramp_node`／`ped_ramp_edge`）只在發布時以 `--version-id` 指定版本重建，避免 CSR 在 OTP 換圖前先吃到新資料。
+- 行人路網（CSR）新版的上線順序：`pnpm build:ped-graph -- --pbf <本次 OTP release 的 taiwan-otp.osm.pbf> ...` 建 CANDIDATE → `pnpm inject:ped-indoor` → 為該版本建對應表 `pnpm import:taipei-ramps -- --mappings-only --version-id <id>` 與 `pnpm import:taipei-painted-sidewalks -- --mappings-only --version-id <id>` → `pnpm promote:ped-graph`。沒有坡道或標線型對應資料的版本會被拒絕上線；回滾到舊版時若缺對應表，同樣先補跑上述兩個指令。
 - 在 host 上跑時，`.env` 的 `DATABASE_URL`／`PED_GRAPH_DATABASE_URL` 要指向 compose 對外的埠（Mongo `27018`、PostGIS `5434`）。
 
 ---
