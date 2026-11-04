@@ -23,10 +23,13 @@ const PAINTED_NODE_TABLE_EXISTS_QUERY = `
   SELECT to_regclass('ped_painted_node') IS NOT NULL AS table_exists
 `;
 
+// Joined to the current source so a strip the source has since removed stops
+// counting before this version's mapping is rebuilt at the next release.
 const PAINTED_NODE_IDS_QUERY = `
-  SELECT DISTINCT node_id::text AS node_id
-  FROM ped_painted_node
-  WHERE version_id = $1
+  SELECT DISTINCT painted_node.node_id::text AS node_id
+  FROM ped_painted_node AS painted_node
+  JOIN ped_painted_sidewalk_polygon AS strip ON strip.keyid = painted_node.keyid
+  WHERE painted_node.version_id = $1
 `;
 
 /**
