@@ -78,7 +78,7 @@ class PromoteReleaseTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.root)
 
-    def run_promote(self, *extra_args, **env):
+    def run_promote(self, *extra_args, stdin=None, **env):
         full = {
             **os.environ,
             "PATH": f"{self.bin}:{os.environ['PATH']}",
@@ -91,7 +91,12 @@ class PromoteReleaseTests(unittest.TestCase):
             **env,
         }
         return subprocess.run(
-            ["bash", str(self.script), str(self.candidate), *extra_args], env=full, capture_output=True, text=True
+            ["bash", str(self.script), str(self.candidate), *extra_args],
+            env=full,
+            capture_output=True,
+            text=True,
+            stdin=stdin,
+            timeout=120,
         )
 
     def csr_active(self):
@@ -122,6 +127,42 @@ class PromoteReleaseTests(unittest.TestCase):
             {"graph.obj": "new graph", "taiwan-otp.osm.pbf": "new pbf", "sidewalk-index.json": self.index.read_text()},
         )
         self.assertEqual(self.feed(), "new feed")
+
+    def run_in_terminal(self, **env):
+        """Run with a terminal on stdin, as an operator does: mv/cp prompt only then."""
+        import pty
+
+        leader, follower = pty.openpty()
+        try:
+            return self.run_promote(stdin=follower, **env)
+        finally:
+            os.close(follower)
+            os.close(leader)
+
+    def make_read_only(self):
+        # Release files written by an OTP container are root-owned 0644: not
+        # writable by the operator, inside a directory that is.
+        for name in ("graph.obj", "taiwan-otp.osm.pbf", "sidewalk-index.json"):
+            (self.data / name).chmod(0o444)
+
+    def test_read_only_release_files_swap_without_prompting_in_a_terminal(self):
+        self.seed_release()
+        self.make_read_only()
+        result = self.run_in_terminal()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.files()["graph.obj"], "new graph")
+        self.assertNotIn("graph.obj.new", os.listdir(self.data))
+
+    def test_read_only_release_files_roll_back_without_prompting_in_a_terminal(self):
+        self.seed_release()
+        self.make_read_only()
+        (self.data / "graph.obj.prev").write_text("stale")  # a leftover from an earlier run
+        result = self.run_in_terminal(STUB_HEALTHY="0")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(
+            self.files(),
+            {"graph.obj": "old graph", "taiwan-otp.osm.pbf": "old pbf", "sidewalk-index.json": "old index"},
+        )
 
     def test_failed_start_restores_the_previous_release(self):
         self.seed_release()

@@ -109,11 +109,17 @@ RELEASE_FILES=(graph.obj taiwan-otp.osm.pbf sidewalk-index.json)
 
 # Put back whatever the swap replaced: `.prev` copies are restored, and files the
 # previous release did not have (`.absent` markers) are removed again.
+#
+# Every mv/rm here is forced: release files are often root-owned (an OTP container
+# wrote them), and without -f, mv stops to ask "replace … overriding mode 0644?"
+# whenever the script runs in a terminal — answering no aborted a promote on
+# 2026-11-04. The directory is writable, so replacing them is allowed.
 rollback_release() {
   local file
   for file in "${RELEASE_FILES[@]}"; do
+    rm -f "$OTP_DATA_DIR/$file.new"
     if [ -f "$OTP_DATA_DIR/$file.prev" ]; then
-      mv "$OTP_DATA_DIR/$file.prev" "$OTP_DATA_DIR/$file"
+      mv -f "$OTP_DATA_DIR/$file.prev" "$OTP_DATA_DIR/$file"
     elif [ -f "$OTP_DATA_DIR/$file.absent" ]; then
       rm -f "$OTP_DATA_DIR/$file" "$OTP_DATA_DIR/$file.absent"
     fi
@@ -180,6 +186,7 @@ release_source() {
   esac
 }
 for file in "${RELEASE_FILES[@]}"; do
+  rm -f "$OTP_DATA_DIR/$file.new"
   cp "$(release_source "$file")" "$OTP_DATA_DIR/$file.new" ||
     die "could not stage $file — nothing was swapped, the old graph keeps serving"
 done
@@ -193,7 +200,7 @@ for file in "${RELEASE_FILES[@]}"; do
 done
 SWAPPED=1
 for file in "${RELEASE_FILES[@]}"; do
-  mv "$OTP_DATA_DIR/$file.new" "$OTP_DATA_DIR/$file"
+  mv -f "$OTP_DATA_DIR/$file.new" "$OTP_DATA_DIR/$file"
 done
 
 log "starting otp on the new graph"
