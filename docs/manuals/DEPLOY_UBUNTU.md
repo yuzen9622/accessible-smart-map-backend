@@ -217,7 +217,17 @@ pnpm data:sync                # 日常更新：只跑 upsert 類步驟（不清�
   資料庫連線只從 `.env`／環境變數 `PED_GRAPH_DATABASE_URL` 讀取，不支援 `--db-url`；不要將含密碼的 URI 放進命令列，pnpm 可能回顯參數。`--url` 也只應填不含憑證的公開網址。
 
   清洗保留有效人行道存在幾何與原始屬性；無效／矛盾淨寬是未知證據，不代表可通行。報告列出 SHA256、原始／接受／隔離筆數與原因，相同 ZIP 不重複建立版本；明確重匯歷史 ZIP 時，會驗證並原子切換回該來源快照，但不切換路由圖。`ped_sidewalk_source_version`／`ped_sidewalk_polygon` 是獨立、版本化的參考來源；失敗保留舊 ACTIVE 快照。匯入本身不改變路線；下次 `pnpm otp:rebuild` 會把 ACTIVE 來源的人行道加進 OTP 步行路網：人行道接在旁邊道路的路口與端點上，有人行道的那段車道標成 `foot=use_sidepath`，OTP 會優先走人行道，車道仍可步行。建圖時讀不到 ACTIVE 人行道來源會中止並保留舊圖，所以第一次建圖前要先匯入。
-- `import:taipei-ramps` 仍需要 PostGIS 已有 ped graph（`ped_graph_version` 表）；還沒建就加 `--skip=taipei-ramps`。
+- `taipei-painted-sidewalks`（交工處標線型人行道）與 `taipei-ramps`（新工處緣石坡道）是 base 步驟，只更新來源資料（坡道點以整份快照取代，來源刪除的點會一併移除），不需要 ped graph，也不會改動線上行人路網的對應表；版本綁定的對應表（`ped_painted_node`／`ped_ramp_node`／`ped_ramp_edge`）只在發布時以 `--version-id` 指定版本重建，避免 CSR 在 OTP 換圖前先吃到新資料。
+- 行人路網（CSR）與 OTP 是**同一個 release**，必須由同一份編譯後的 PBF 建出，兩套路由引擎才不會各自用不同版本的地圖。`pnpm otp:rebuild` 會自動依下列順序處理，不需要手動跑 CSR 指令：
+  1. PBF 定稿後（舊 OTP 仍在服務），計算它的 SHA-256。若目前 ACTIVE 的 CSR 版本 `source_hash` 與它相同就沿用，不重建 CSR。
+  2. 否則用這份 PBF 建 CSR 候選版：`build-ped-graph.py --pbf <候選 PBF> --bbox taipei`（有 DTM 時帶 `--dem-file`）→ `inject-ped-indoor-graph.py` → `import:taipei-ramps -- --mappings-only --version-id <id>` 與 `import:taipei-painted-sidewalks -- --mappings-only --version-id <id>`。任一步失敗即中止，OTP 與 CSR 都維持舊版；候選版只是 CANDIDATE，不會被使用。
+  3. 建 OTP 圖、候選圖驗收、換檔、健康檢查（見 Phase 5）。驗收或健康檢查失敗時 OTP 回復舊 release，CSR 候選版不會上線。
+  4. OTP 健康後才執行 `promote:ped-graph -- --version-id <id>`。上線檢查要求該版本的 `source_hash` 等於 `$OTP_DATA_DIR/taiwan-otp.osm.pbf` 的 SHA-256。若 CSR 上線失敗，OTP 一併回復舊 release、重啟舊圖，兩邊都留在舊版；若 CSR 其實已提交、只是回應遺失（ACTIVE 版本已是新 PBF），則保留新 release。
+- 後端每 5 分鐘確認一次 ACTIVE 的 CSR 版本，所以 OTP 重啟上線後，CSR 最多約 5 分鐘才跟上；兩套引擎不是同一瞬間切換。
+- `promote:ped-graph` 拒絕把 PBF 與 OTP 現用 PBF 不同的版本設為 ACTIVE，包括 `--allow-retired` 回滾（指定的版本本來就是 ACTIVE 時不做任何變更）。只回滾 CSR 而 OTP 不動並不支援；要回滾就整個 release 一起退（舊 PBF／`graph.obj` 需另外保存，成功上線後 `.prev` 不保留）。手動執行 `promote-otp-graph.sh` 時，第二個參數要給由候選 PBF 建出的 CSR 版本號（版本號的 `source_hash` 不符就在停 OTP 前中止；CSR 上線後 ACTIVE 仍不是新 PBF 也會回復 OTP）；不給時，ACTIVE CSR 必須已是由候選 PBF 建出，否則什麼都不換。手動執行需要 `.env` 的 `PED_PG_USER` 在環境變數中（例如 `set -a; . ./.env; set +a`）。
+- 已知限制：CSR 上線中途收到中斷訊號，或上線失敗後查不到 ACTIVE 版本（PostGIS 暫時不通）時，腳本會回復 OTP；若 CSR 其實已提交，兩邊會不一致。這時不能用 `--allow-retired` 把 CSR 退回舊版（PBF 與 OTP 現用的不符，會被拒），請重跑 `pnpm otp:rebuild`：PBF 沒變就沿用已是 ACTIVE 的 CSR 版本、只上線 OTP；PBF 變了就建新候選版一起上線。
+- 全新安裝還沒有任何 ACTIVE CSR 版本時，`promote:ped-graph` 無法上線第一個版本（它要求恰好一個 ACTIVE），所以第一次 `pnpm otp:rebuild` 會留下 CSR 候選版並整個回復。接著執行 `pnpm migrate:ped-graph-lifecycle`，把唯一且室內注入完成的候選版設為 ACTIVE，再跑一次 `pnpm otp:rebuild`：PBF 沒變就沿用該 CSR 版本、只上線 OTP；PBF 變了就建新候選版，照正常順序一起上線。
+- 主機需能 `import psycopg2` 並設定 `PED_GRAPH_DATABASE_URL`；`otp-preflight.sh` 會先檢查，缺少就不建圖。
 - 在 host 上跑時，`.env` 的 `DATABASE_URL`／`PED_GRAPH_DATABASE_URL` 要指向 compose 對外的埠（Mongo `27018`、PostGIS `5434`）。
 
 ---
@@ -227,6 +237,8 @@ pnpm data:sync                # 日常更新：只跑 upsert 類步驟（不清�
 OTP 容器只需要 `otp-data/`（內含 `graph.obj` + 3 個 config）。`graph.obj` 與 OTP 版本綁定，務必都用 `2.9.0`。
 
 ### 路徑 A（推薦）：把本機建好的 graph 搬上去
+
+> 這條路只搬 OTP，不會切換 CSR，也不經過 PBF 一致性檢查。搬完後 ACTIVE CSR 若不是由同一份 `taiwan-otp.osm.pbf` 建出，兩套路由引擎就會用不同地圖；之後的版本更新請在伺服器上跑 `pnpm otp:rebuild`（路徑 B）。
 
 本機這次已建好含**文湖線/環狀線**的新 graph，直接搬：
 
@@ -257,7 +269,7 @@ export OTP_GTFS_URLS="<全國 GTFS zip 下載 URL>"   # 見 OTP_OPERATIONS.md §
 bash src/scripts/build-otp-graph.sh
 ```
 
-> `build-otp-graph.sh` 會自動：preflight（checkout／磁碟／Mongo／依賴，失敗就不建）→ 抓 feed → 清理 → 注入 TRA → **注入捷運(本次新增)** → 建圖 → 候選圖驗收（`verify-otp-graph.py`，不過就不換）→ 原子換檔 → 重啟 → healthcheck。
+> `build-otp-graph.sh` 會自動：preflight（checkout／磁碟／Mongo／依賴，失敗就不建）→ 抓 feed → 清理 → 注入 TRA → **注入捷運(本次新增)** → 建圖 → 建 CSR 候選版（同一份 PBF，見 Phase 4 的 CSR 說明）→ 候選圖驗收（`verify-otp-graph.py`，不過就不換）→ 原子換檔 → 重啟 → healthcheck → 上線 CSR 候選版（失敗則 OTP 一併回復）。
 > 驗證碼可選裝 `gtfs-validator`、`osmium-tool`（`sudo apt install osmium-tool`）；沒裝腳本會跳過驗證 gate。
 
 ---

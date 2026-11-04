@@ -567,6 +567,23 @@ describe("edgeCost", () => {
     expect(oneCost).toBeLessThan(neitherCost);
   });
 
+  it("treats a crossing end on a painted sidewalk like a ramped end", () => {
+    const paintedAndRamped = createGraph({
+      edgeType: EDGE_TYPE.CROSSING,
+      fromNodeFlags: NODE_FLAG.STEP_FREE_KERB,
+      toNodeFlags: NODE_FLAG.HAS_KERB_RAMP,
+    });
+    const paintedOnly = createGraph({
+      edgeType: EDGE_TYPE.CROSSING,
+      fromNodeFlags: NODE_FLAG.STEP_FREE_KERB,
+    });
+
+    expect(edgeCost(paintedAndRamped, 0, wheelchairProfile(), 0, 1)).toBe(100);
+    expect(edgeCost(paintedOnly, 0, wheelchairProfile(), 0, 1)).toBe(
+      100 * WHEELCHAIR_ONE_SIDED_KERB_RAMP_PENALTY_MULTIPLIER,
+    );
+  });
+
   it("never returns INFEASIBLE for an unramped crossing at any relaxation level", () => {
     const unramped = createGraph({ edgeType: EDGE_TYPE.CROSSING });
 

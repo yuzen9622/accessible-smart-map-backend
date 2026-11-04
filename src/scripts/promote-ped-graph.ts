@@ -1,9 +1,13 @@
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
+import path from "node:path";
 import { Client } from "pg";
 import {
   parsePedGraphLifecycleStatus,
   validatePromotion,
   type GraphIntegritySnapshot,
   type GraphVersionSnapshot,
+  type KerbEvidenceSnapshot,
 } from "./ped-graph-lifecycle";
 
 const PROMOTION_ADVISORY_LOCK = 7_346_219_941;
@@ -482,6 +486,8 @@ export interface PedGraphPromotionClient {
 
 export interface PromotionOptions {
   allowRetired: boolean;
+  /** SHA-256 of the PBF OTP serves; the target must have been built from it. */
+  servingOtpPbfSha256: string;
   versionId: number;
 }
 
@@ -491,8 +497,12 @@ export interface PromotionResult {
   previousActiveVersionId: number;
 }
 
-interface PromotionCommandOptions extends PromotionOptions {
+interface PromotionCommandOptions extends Omit<
+  PromotionOptions,
+  "servingOtpPbfSha256"
+> {
   dbUrl: string;
+  otpPbfPath: string;
 }
 
 /**
@@ -679,6 +689,36 @@ function requireOneChanged(
  * @param options Explicit target and rollback permission.
  * @returns The committed lifecycle transition outcome.
  */
+const KERB_EVIDENCE_QUERY = `
+  SELECT
+    CASE WHEN to_regclass('ped_ramp_node') IS NULL THEN 0 ELSE (
+      SELECT count(*) FROM ped_ramp_node WHERE version_id = $1
+    ) END AS ramp_node_count,
+    CASE WHEN to_regclass('ped_painted_node') IS NULL THEN 0 ELSE (
+      SELECT count(*) FROM ped_painted_node WHERE version_id = $1
+    ) END AS painted_node_count
+`;
+
+async function loadKerbEvidence(
+  client: PedGraphPromotionClient,
+  versionId: number,
+): Promise<KerbEvidenceSnapshot> {
+  const result = await client.query(KERB_EVIDENCE_QUERY, [versionId]);
+  const row = result.rows[0];
+  return {
+    rampNodeCount: databaseInteger(
+      row?.ramp_node_count ?? 0,
+      "ramp_node_count",
+      0,
+    ),
+    paintedNodeCount: databaseInteger(
+      row?.painted_node_count ?? 0,
+      "painted_node_count",
+      0,
+    ),
+  };
+}
+
 export async function promotePedGraph(
   client: PedGraphPromotionClient,
   options: PromotionOptions,
@@ -711,10 +751,13 @@ export async function promotePedGraph(
           parsePedGraphLifecycleStatus(row.lifecycle_status) === "ACTIVE",
       )
       .map((row) => databaseInteger(row.id, "active version id", 1));
+    const kerbEvidence = await loadKerbEvidence(client, options.versionId);
     const decision = validatePromotion({
       activeVersionIds,
       integrity,
+      kerbEvidence,
       allowRetired: options.allowRetired,
+      servingOtpPbfSha256: options.servingOtpPbfSha256,
       target,
     });
 
@@ -818,7 +861,24 @@ export function parsePromotionArgs(
   if (!dbUrl) {
     throw new Error("--db-url or PED_GRAPH_DATABASE_URL is required");
   }
-  return { allowRetired, dbUrl, versionId };
+  // Same OTP_DATA_DIR (and default) as build-otp-graph.sh / promote-otp-graph.sh.
+  const otpPbfPath = path.join(
+    process.env.OTP_DATA_DIR || "/var/otp",
+    "taiwan-otp.osm.pbf",
+  );
+  return { allowRetired, dbUrl, otpPbfPath, versionId };
+}
+
+/**
+ * @param filePath PBF OTP serves.
+ * @returns Lowercase SHA-256 hex digest, as build-ped-graph.py records it.
+ */
+export async function sha256File(filePath: string): Promise<string> {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(filePath)) {
+    hash.update(chunk as Buffer);
+  }
+  return hash.digest("hex");
 }
 
 /**
@@ -826,10 +886,22 @@ export function parsePromotionArgs(
  */
 async function main(): Promise<void> {
   const options = parsePromotionArgs(process.argv.slice(2));
+  const servingOtpPbfSha256 = await sha256File(options.otpPbfPath).catch(
+    (error: unknown) => {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `cannot hash the PBF OTP serves (${options.otpPbfPath}): ${reason}`,
+      );
+    },
+  );
   const client = new Client({ connectionString: options.dbUrl });
   await client.connect();
   try {
-    const result = await promotePedGraph(promotionClient(client), options);
+    const result = await promotePedGraph(promotionClient(client), {
+      allowRetired: options.allowRetired,
+      servingOtpPbfSha256,
+      versionId: options.versionId,
+    });
     console.log(
       `[promote-ped-graph] version_id=${result.activeVersionId} ` +
         `outcome=${result.outcome} previous_active_version_id=` +

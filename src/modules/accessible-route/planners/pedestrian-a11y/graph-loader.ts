@@ -10,10 +10,39 @@ const RAMP_NODE_TABLE_EXISTS_QUERY = `
   SELECT to_regclass('ped_ramp_node') IS NOT NULL AS table_exists
 `;
 
+// Joined to ped_ramp_point so a ramp the source has since removed stops
+// counting, even before this version's mapping is rebuilt.
 const RAMP_NODE_IDS_QUERY = `
-  SELECT DISTINCT node_id::text AS node_id
-  FROM ped_ramp_node
-  WHERE version_id = $1
+  SELECT DISTINCT ramp_node.node_id::text AS node_id
+  FROM ped_ramp_node AS ramp_node
+  JOIN ped_ramp_point AS ramp_point ON ramp_point.objectid = ramp_node.objectid
+  WHERE ramp_node.version_id = $1
+`;
+
+const PAINTED_NODE_TABLE_EXISTS_QUERY = `
+  SELECT to_regclass('ped_painted_node') IS NOT NULL AS table_exists
+`;
+
+// Joined to the current source so a strip the source has since removed stops
+// counting before this version's mapping is rebuilt at the next release.
+const PAINTED_NODE_IDS_QUERY = `
+  SELECT DISTINCT painted_node.node_id::text AS node_id
+  FROM ped_painted_node AS painted_node
+  JOIN ped_painted_sidewalk_polygon AS strip ON strip.keyid = painted_node.keyid
+  WHERE painted_node.version_id = $1
+`;
+
+/**
+ * `ped_node.kerb` codes (build-ped-graph.py KERB_CODES) for a step-free kerb:
+ * flush = 1, lowered = 2, no = 7. Same positive evidence otp-kerb-ramps.py
+ * reads from the OSM node, so both engines judge a ramped end alike.
+ */
+export const STEP_FREE_OSM_KERB_CODES = [1, 2, 7] as const;
+
+const OSM_KERB_RAMP_NODE_IDS_QUERY = `
+  SELECT node_id::text AS node_id
+  FROM ped_node
+  WHERE version_id = $1 AND kerb = ANY($2::smallint[])
 `;
 
 const PAGE_SIZE = 10_000;
@@ -599,18 +628,34 @@ async function rampNodeTableExists(
 
 /**
  * @param client Queryable PostgreSQL client.
- * @param versionId Resolved graph version identifier.
- * @param originalNodeId Sorted original database node identifiers, dense-index aligned.
- * @returns Dense node indexes with at least one matched curb ramp point.
+ * @returns Whether `ped_painted_node` exists yet (created by
+ * import-taipei-painted-sidewalks.ts); absence never fails the graph load.
  */
-async function loadRampNodeIndexes(
+async function paintedNodeTableExists(
   client: PedGraphQueryable,
-  versionId: number,
+): Promise<boolean> {
+  const result = await client.query<WayNameTableRow>(
+    PAINTED_NODE_TABLE_EXISTS_QUERY,
+  );
+  const row = result.rows[0];
+  if (row === undefined) return false;
+  return booleanValue(row.table_exists, "table_exists");
+}
+
+/**
+ * @param client Queryable PostgreSQL client.
+ * @param query A `node_id` query taking the version id (and any extra params).
+ * @param params Query parameters, version id first.
+ * @param originalNodeId Sorted original database node identifiers, dense-index aligned.
+ * @returns Dense node indexes for the returned node ids.
+ */
+async function loadNodeIndexes(
+  client: PedGraphQueryable,
+  query: string,
+  params: unknown[],
   originalNodeId: BigInt64Array,
 ): Promise<number[]> {
-  const result = await client.query<RampNodeIdRow>(RAMP_NODE_IDS_QUERY, [
-    versionId,
-  ]);
+  const result = await client.query<RampNodeIdRow>(query, params);
   const nodeIndexes: number[] = [];
   for (const row of result.rows) {
     const nodeId = bigintValue(row.node_id, "ramp node_id");
@@ -1119,14 +1164,40 @@ export async function loadPedGraph(
     );
   }
   if (hasRampNodeTable) {
-    const rampNodeIndexes = await loadRampNodeIndexes(
+    const rampNodeIndexes = await loadNodeIndexes(
       client,
-      version.versionId,
+      RAMP_NODE_IDS_QUERY,
+      [version.versionId],
       nodeStorage.originalNodeId,
     );
     for (const nodeIndex of rampNodeIndexes) {
       nodeStorage.nodeFlags[nodeIndex] |= NODE_FLAG.HAS_KERB_RAMP;
     }
+  }
+  const osmKerbRampIndexes = await loadNodeIndexes(
+    client,
+    OSM_KERB_RAMP_NODE_IDS_QUERY,
+    [version.versionId, [...STEP_FREE_OSM_KERB_CODES]],
+    nodeStorage.originalNodeId,
+  );
+  for (const nodeIndex of osmKerbRampIndexes) {
+    nodeStorage.nodeFlags[nodeIndex] |= NODE_FLAG.HAS_KERB_RAMP;
+  }
+
+  if (await paintedNodeTableExists(client)) {
+    const paintedNodeIndexes = await loadNodeIndexes(
+      client,
+      PAINTED_NODE_IDS_QUERY,
+      [version.versionId],
+      nodeStorage.originalNodeId,
+    );
+    for (const nodeIndex of paintedNodeIndexes) {
+      nodeStorage.nodeFlags[nodeIndex] |= NODE_FLAG.STEP_FREE_KERB;
+    }
+  } else {
+    console.warn(
+      "[graph-loader] ped_painted_node not found; painted-sidewalk kerbs disabled until the import runs",
+    );
   }
 
   return {

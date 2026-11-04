@@ -314,7 +314,9 @@ pnpm import:taipei-park-entrances
 pnpm import:taipei-aps
 pnpm import:traffic-sections
 
-# 新工處緣石坡道 → PostGIS（需已建 ped graph）
+# 交工處標線型人行道、新工處緣石坡道 → PostGIS（OTP 建圖 2c／2d 與 CSR 路口成本使用；
+# 尚無 ped graph 時只存來源資料，略過版本對應表）
+pnpm import:taipei-painted-sidewalks
 pnpm import:taipei-ramps
 
 # Valhalla 地磚（需 OSM PBF），換地磚後重建 TDX 路況對應

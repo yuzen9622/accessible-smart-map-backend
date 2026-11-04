@@ -18,6 +18,9 @@ interface GraphFixture {
   rampPoints?: FakeRow[];
   rampNodeTableExists?: boolean;
   rampNodeIds?: FakeRow[];
+  paintedNodeTableExists?: boolean;
+  paintedNodeIds?: FakeRow[];
+  osmKerbRampNodeIds?: FakeRow[];
 }
 
 interface QueryCall {
@@ -75,6 +78,19 @@ function createQueryable(fixture: GraphFixture): {
       }
       if (sql.includes("FROM ped_ramp_node")) {
         return { rows: (fixture.rampNodeIds ?? []) as R[] };
+      }
+      if (sql.includes("to_regclass('ped_painted_node')")) {
+        return {
+          rows: [
+            { table_exists: fixture.paintedNodeTableExists ?? true },
+          ] as R[],
+        };
+      }
+      if (sql.includes("FROM ped_painted_node")) {
+        return { rows: (fixture.paintedNodeIds ?? []) as R[] };
+      }
+      if (sql.includes("kerb = ANY")) {
+        return { rows: (fixture.osmKerbRampNodeIds ?? []) as R[] };
       }
       if (sql.includes("FROM ped_graph_version")) {
         if (sql.includes("WHERE lifecycle_status = 'ACTIVE'")) {
@@ -551,6 +567,50 @@ describe("loadPedGraph", () => {
     }
   });
 
+  it("derives HAS_KERB_RAMP from step-free OSM kerb codes on ped_node", async () => {
+    const fixture = coreFixture();
+    fixture.osmKerbRampNodeIds = [{ node_id: "1003992167379" }];
+    const { client, calls } = createQueryable(fixture);
+
+    const graph = await loadPedGraph(client);
+
+    expect(graph.nodeFlags[0] & NODE_FLAG.HAS_KERB_RAMP).toBe(
+      NODE_FLAG.HAS_KERB_RAMP,
+    );
+    expect(graph.nodeFlags[1] & NODE_FLAG.HAS_KERB_RAMP).toBe(0);
+    const kerbCall = calls.find((call) => call.sql.includes("kerb = ANY"));
+    expect(kerbCall?.params).toEqual([7, [1, 2, 7]]);
+  });
+
+  it("derives NODE_FLAG.STEP_FREE_KERB from ped_painted_node only", async () => {
+    const fixture = coreFixture();
+    fixture.paintedNodeIds = [{ node_id: "1003992167380" }];
+    const { client } = createQueryable(fixture);
+
+    const graph = await loadPedGraph(client);
+
+    expect(graph.nodeFlags[1] & NODE_FLAG.STEP_FREE_KERB).toBe(
+      NODE_FLAG.STEP_FREE_KERB,
+    );
+    expect(graph.nodeFlags[1] & NODE_FLAG.HAS_KERB_RAMP).toBe(0);
+    for (const index of [0, 2, 3]) {
+      expect(graph.nodeFlags[index] & NODE_FLAG.STEP_FREE_KERB).toBe(0);
+    }
+  });
+
+  it("loads without painted kerbs when ped_painted_node does not exist", async () => {
+    const fixture = coreFixture();
+    fixture.paintedNodeTableExists = false;
+    fixture.paintedNodeIds = [{ node_id: "1003992167380" }];
+    const { client } = createQueryable(fixture);
+
+    const graph = await loadPedGraph(client);
+
+    for (const flags of graph.nodeFlags) {
+      expect(flags & NODE_FLAG.STEP_FREE_KERB).toBe(0);
+    }
+  });
+
   it("loads an explicitly requested candidate version for diagnosis", async () => {
     const fixture = coreFixture();
     fixture.versions.unshift({
@@ -777,7 +837,11 @@ describe("loadPedGraph", () => {
     expect(graph.nodeCount).toBe(10_001);
     expect(graph.originalNodeId[10_000]).toBe(10001n);
     expect(
-      calls.filter((call) => call.sql.includes("FROM ped_node")),
+      calls.filter(
+        (call) =>
+          call.sql.includes("FROM ped_node") &&
+          !call.sql.includes("kerb = ANY"),
+      ),
     ).toHaveLength(2);
   });
 

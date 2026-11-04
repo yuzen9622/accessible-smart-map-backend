@@ -4,7 +4,18 @@
 
 本文件涵蓋 OTP sidecar 的完整生命週期：GTFS 資料取得 → 清理 → 台鐵班表注入 → graph 建置 → Docker 配置與啟動 → 驗證 → 故障排查。
 
-綠藍步行分色使用同一 release 的人行道索引，不影響 OTP 選路。在切換新資料目錄前，以已安裝 pyosmium 的 Python 執行 `python3 src/scripts/export-otp-sidewalk-index.py <release>/taiwan-otp.osm.pbf <release>/sidewalk-index.json`。根 Compose 將同一 `OTP_DATA_DIR` 唯讀掛載到後端；後端核對索引與 PBF 的 SHA-256，缺少、損壞或版本不符時保留藍色，不猜測人行道。綠色是保守的圖資幾何比對，藍色包含未確認；不代表現地安全或無障礙認證。圖資與索引須作為同一個 release 切換，不能混用先前索引。
+綠藍步行分色與步行段的路口坡道計數使用同一 release 的人行道索引（`sidewalk-index.json`，版本 2），索引本身不影響 OTP 選路。`pnpm otp:rebuild` 會從最終 PBF 產生索引，並由 `promote-otp-graph.sh` 與 PBF、`graph.obj` 視為同一個 release：三者先全部複製到位（任一失敗即中止、不換任何檔），再一起切換；健康檢查失敗時一併回復（原本不存在的檔案會被移除）。手動執行 `promote-otp-graph.sh` 必須設定 `OTP_CANDIDATE_SIDEWALK_INDEX` 指向該候選 PBF 的 v2 索引；後端在索引或 PBF 檔案變動時自動重讀，不需重啟。手動產生時以已安裝 pyosmium 的 Python 執行 `python3 src/scripts/export-otp-sidewalk-index.py <release>/taiwan-otp.osm.pbf <release>/sidewalk-index.json`。根 Compose 將同一 `OTP_DATA_DIR` 唯讀掛載到後端；後端核對索引與 PBF 的 SHA-256，缺少、損壞或版本不符時保留藍色，不猜測人行道。綠色是保守的圖資幾何比對，藍色包含未確認；不代表現地安全或無障礙認證。圖資與索引須作為同一個 release 切換，不能混用先前索引。
+
+### 臺北市標線型人行道與緣石坡道（建圖步驟 2c／2d）
+
+建圖前需先匯入 `pnpm import:sidewalks`、`pnpm import:taipei-painted-sidewalks`、`pnpm import:taipei-ramps`（`pnpm data:sync` 依此順序執行）。
+
+CSR 行人路網與 OTP 是同一個 release：`pnpm otp:rebuild` 用同一份最終 PBF 建 CSR 候選版，OTP 健康後才上線 CSR，CSR 上線失敗時 OTP 一併回復。上線順序與回滾規則見 `DEPLOY_UBUNTU.md` 的行人路網（CSR）段落。
+
+- **2c 標線型人行道補缺**：交工處標線型人行道（只取 `licode=21`，捨棄 `walkerstat=D`）中，面積不到一半落在 ACTIVE 內政部人行道內者，與內政部人行道一起編成 `footway=sidewalk`（`ref:moi_sidewalk` 以 `tp-painted:<keyid>` 標示，全部來自標線型者另加 `ref:tp_painted_sidewalk`）。其餘已被內政部涵蓋的標線型只作為「此處無路緣」的證據。
+- **2d 行穿線坡道與人行道旁車道**：`otp-kerb-ramps.py` 判斷每條行穿線兩端。端點 20 m 內有新工處坡道點（臺北斑馬線寬 6–8 m，OSM 行穿線畫在中線、坡道在邊緣，8 m 會把七成有坡道的端點誤判為沒有）、OSM `kerb=lowered/flush/no`，或位於標線型人行道上，視為有坡道。沒有上述證據、且距離「坡道清單完整」的臺北市內政部人行道（20 m 內政府坡道點數 ≥ 該段 `SW_RAMP`）3 m 內，或 OSM 標為高路緣者，視為無坡道。其餘一律未知、不處理。任一端無坡道、且 OSM 原本沒有 `wheelchair` 標籤的行穿線，整條加上 `wheelchair=no` 與 `source:wheelchair=taipei_kerb_ramp`。同一步也把臺北市已有人行道並排（`foot=use_sidepath`）的車道段加上 `wheelchair=no` 與 `source:wheelchair=taipei_sidewalk_alongside`：OTP 的輪椅成本不看步行安全係數，只罰行穿線會把輪椅路線推上車道。官方 OTP 對輪椅請求（含 `avoidStairs`）在這些路段套用 `inaccessibleStreetReluctance`（目前 ×5），只加成本、不封路；一般步行不受影響。CSR 建圖忽略這兩種來源的 `wheelchair` 值，改用自己的三級路口成本。報表（`kerb-ramps-report.json`）列出各類端點數與車道段數；全國建圖若沒有任何坡道證據會中止並保留舊圖。
+- 2026-11-04 臺北範圍實測（官方 OTP 2.9.0；300 組起訖點各跨越一條被標記的行穿線，相距 500 m；輪椅步行；對照現行圖）：經過無坡道行穿線 45 → 12 條、兩端皆有坡道的 132 → 147 條；298 條中 175 條路線改變，多走距離中位數 17 m、p90 48 m、最大 273 m；改變的路線中車道步行比例 57.6% → 49.5%、人行道 20.6% → 28.8%；一般步行 298／298 條完全相同。只標行穿線、不標車道時，車道比例反而上升（36% → 58%），因此兩者必須一起套用。
+- 若日後改用含 `src/otp/` 修補的映像，該修補的直接步行政策會把 `wheelchair=no` 當成禁止通行，須先重新評估 2d。
 
 目前 Compose 選擇 `ROUTE_WALK_PLANNER=otp`。一般戶外、無中途點且未固定精確端點的純步行，合併官方 OTP 與 Valhalla 的真實步行候選，去除高度重疊走廊後最多回傳三條。保留原模式的 OTP 主查詢，另以相同模式速度取得一般步行探索候選；探索路徑不代表已確認輪椅可通行。`avoidStairs` 為 true 時，OTP 主查詢送出輪椅旗標（官方 OTP 沒有樓梯參數，輪椅無障礙選路會以 `inaccessibleStreetReluctance` 成本避開樓梯，但仍可能經過），Valhalla 以 `type: wheelchair` 排除樓梯（並將 `max_distance` 設回 100 km）；另保留不帶輪椅旗標的一般探索查詢。後端只要有已知無樓梯的候選，就排除已知含樓梯的路線；全部含樓梯時回傳樓梯最少者並警告。步驟資料不明的路線不視為無樓梯，含樓梯路線仍保留 `steps[].stairs`。人行道依來源證據標記，不保證全程人行道，沒有額外五分鐘的自動回退保護。
 

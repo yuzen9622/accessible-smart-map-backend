@@ -4,6 +4,7 @@ import {
   validatePromotion,
   type GraphIntegritySnapshot,
   type GraphVersionSnapshot,
+  type KerbEvidenceSnapshot,
   type PromotionValidationInput,
 } from "./ped-graph-lifecycle";
 
@@ -13,6 +14,8 @@ interface ValidationOverrides {
   activeVersionIds?: readonly number[];
   allowRetired?: boolean;
   integrity?: Partial<GraphIntegritySnapshot>;
+  kerbEvidence?: Partial<KerbEvidenceSnapshot>;
+  servingOtpPbfSha256?: string;
   target?: Partial<GraphVersionSnapshot>;
 }
 
@@ -96,11 +99,70 @@ function candidateInput(
       ...overrides.target,
     },
     integrity,
+    kerbEvidence: {
+      rampNodeCount: 10,
+      paintedNodeCount: 5,
+      ...overrides.kerbEvidence,
+    },
     allowRetired: overrides.allowRetired ?? false,
+    servingOtpPbfSha256: overrides.servingOtpPbfSha256 ?? VALID_SOURCE_HASH,
   };
 }
 
 describe("validatePromotion", () => {
+  it("refuses a candidate built from a PBF other than the one OTP serves", () => {
+    expect(() =>
+      validatePromotion(
+        candidateInput({ servingOtpPbfSha256: "b".repeat(64) }),
+      ),
+    ).toThrow(/OTP serves b{64}/);
+  });
+
+  it("refuses a retired rollback target built from another PBF", () => {
+    expect(() =>
+      validatePromotion(
+        candidateInput({
+          allowRetired: true,
+          servingOtpPbfSha256: "b".repeat(64),
+          target: { lifecycleStatus: "RETIRED" },
+        }),
+      ),
+    ).toThrow(/same PBF/);
+  });
+
+  it("keeps an already-active target a no-op even when OTP serves another PBF", () => {
+    expect(
+      validatePromotion(
+        candidateInput({
+          servingOtpPbfSha256: "b".repeat(64),
+          target: { id: 1, lifecycleStatus: "ACTIVE" },
+        }),
+      ),
+    ).toEqual({ kind: "already-active", activeVersionId: 1 });
+  });
+
+  it("refuses a version without ramp or painted kerb mappings", () => {
+    for (const kerbEvidence of [
+      { rampNodeCount: 0 },
+      { paintedNodeCount: 0 },
+    ]) {
+      expect(() => validatePromotion(candidateInput({ kerbEvidence }))).toThrow(
+        /--mappings-only --version-id 2/,
+      );
+    }
+  });
+
+  it("keeps an already-active target a no-op even without mappings", () => {
+    expect(
+      validatePromotion(
+        candidateInput({
+          target: { id: 1, lifecycleStatus: "ACTIVE" },
+          kerbEvidence: { rampNodeCount: 0, paintedNodeCount: 0 },
+        }),
+      ),
+    ).toEqual({ kind: "already-active", activeVersionId: 1 });
+  });
+
   it("allows a complete candidate whose stored counts match actual rows", () => {
     expect(validatePromotion(candidateInput())).toEqual({
       kind: "activate",

@@ -69,10 +69,29 @@ export interface GraphVersionSnapshot extends GraphVersionCounts {
   sourceHash: string;
 }
 
+/**
+ * Version-bound kerb evidence rows for the target graph. Mappings are keyed by
+ * graph version, so a candidate has none until
+ * `pnpm import:taipei-ramps -- --mappings-only --version-id <id>` and
+ * `pnpm import:taipei-painted-sidewalks -- --mappings-only --version-id <id>`
+ * ran for it; promoting without them silently drops every curb ramp.
+ */
+export interface KerbEvidenceSnapshot {
+  rampNodeCount: number;
+  paintedNodeCount: number;
+}
+
 export interface PromotionValidationInput {
   activeVersionIds: readonly number[];
   allowRetired: boolean;
   integrity: GraphIntegritySnapshot;
+  kerbEvidence: KerbEvidenceSnapshot;
+  /**
+   * SHA-256 of the PBF OTP is serving (`$OTP_DATA_DIR/taiwan-otp.osm.pbf`).
+   * OTP and CSR are one release built from that file, so a version compiled
+   * from any other PBF may not become ACTIVE.
+   */
+  servingOtpPbfSha256: string;
   target: GraphVersionSnapshot;
 }
 
@@ -504,7 +523,8 @@ function validateGraphIntegrity(
 export function validatePromotion(
   input: PromotionValidationInput,
 ): PromotionDecision {
-  const { activeVersionIds, allowRetired, integrity, target } = input;
+  const { activeVersionIds, allowRetired, integrity, kerbEvidence, target } =
+    input;
   if (activeVersionIds.length !== 1) {
     throw new PedGraphPromotionError(
       "pedestrian graph requires exactly one active version",
@@ -531,6 +551,24 @@ export function validatePromotion(
       );
     }
     return { kind: "already-active", activeVersionId };
+  }
+  if (
+    target.sourceHash.toLowerCase() !== input.servingOtpPbfSha256.toLowerCase()
+  ) {
+    throw new PedGraphPromotionError(
+      `pedestrian graph ${target.id} was built from PBF ${target.sourceHash}, but OTP serves ${input.servingOtpPbfSha256}; ` +
+        "CSR and OTP must be promoted as one release from the same PBF",
+    );
+  }
+  for (const [table, count] of [
+    ["ped_ramp_node", kerbEvidence.rampNodeCount],
+    ["ped_painted_node", kerbEvidence.paintedNodeCount],
+  ] as const) {
+    if (!Number.isSafeInteger(count) || count <= 0) {
+      throw new PedGraphPromotionError(
+        `pedestrian graph has no ${table} rows; run the mapping import with --mappings-only --version-id ${target.id} first`,
+      );
+    }
   }
   if (target.lifecycleStatus === "CANDIDATE") {
     return { kind: "activate", activeVersionId };

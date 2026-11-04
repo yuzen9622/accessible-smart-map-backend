@@ -173,16 +173,7 @@ async function listEntries(zip: ZipFile): Promise<Entry[]> {
 export async function* readSidewalkCounties(
   file: string,
 ): AsyncGenerator<CountyEntry> {
-  const zip = await new Promise<ZipFile>((resolve, reject) =>
-    yauzl.open(
-      file,
-      { lazyEntries: true, autoClose: false, strictFileNames: true },
-      (error, archive) => {
-        if (error || !archive) reject(error ?? new Error("cannot open ZIP"));
-        else resolve(archive);
-      },
-    ),
-  );
+  const zip = await openZip(file);
   try {
     const entries = await listEntries(zip);
     const selected = new Map<string, { entry: Entry; batch: string }>();
@@ -210,41 +201,115 @@ export async function* readSidewalkCounties(
     for (const county of SIDEWALK_COUNTIES) {
       const item = selected.get(county);
       if (!item) throw new Error("missing county");
-      const stream = await new Promise<Readable>((resolve, reject) =>
-        zip.openReadStream(item.entry, (error, input) => {
-          if (error || !input)
-            reject(error ?? new Error("cannot read ZIP entry"));
-          else resolve(input);
-        }),
-      );
-      const chunks: Buffer[] = [];
-      let bytes = 0;
-      let crc = 0xffffffff;
-      for await (const chunk of stream) {
-        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        bytes += buffer.length;
-        if (
-          bytes > SIDEWALK_ARCHIVE_LIMITS.entryBytes ||
-          bytes > item.entry.uncompressedSize
-        ) {
-          stream.destroy();
-          throw new Error("ZIP streamed entry size exceeds limit");
-        }
-        crc = updateCrc(crc, buffer);
-        chunks.push(buffer);
-      }
-      if (
-        bytes !== item.entry.uncompressedSize ||
-        (crc ^ 0xffffffff) >>> 0 !== item.entry.crc32
-      )
-        throw new Error("ZIP entry size/CRC mismatch");
+      const content = await readVerifiedEntry(zip, item.entry);
       const json: unknown = JSON.parse(
-        Buffer.concat(chunks)
-          .toString("utf8")
-          .replace(/^\uFEFF/, ""),
+        content.toString("utf8").replace(/^\uFEFF/, ""),
       );
       yield { county, batch: item.batch, json };
     }
+  } finally {
+    zip.close();
+  }
+}
+
+async function openZip(file: string): Promise<ZipFile> {
+  return new Promise<ZipFile>((resolve, reject) =>
+    yauzl.open(
+      file,
+      { lazyEntries: true, autoClose: false, strictFileNames: true },
+      (error, archive) => {
+        if (error || !archive) reject(error ?? new Error("cannot open ZIP"));
+        else resolve(archive);
+      },
+    ),
+  );
+}
+
+async function readVerifiedEntry(zip: ZipFile, entry: Entry): Promise<Buffer> {
+  const stream = await new Promise<Readable>((resolve, reject) =>
+    zip.openReadStream(entry, (error, input) => {
+      if (error || !input) reject(error ?? new Error("cannot read ZIP entry"));
+      else resolve(input);
+    }),
+  );
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  let crc = 0xffffffff;
+  for await (const chunk of stream) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    bytes += buffer.length;
+    if (
+      bytes > SIDEWALK_ARCHIVE_LIMITS.entryBytes ||
+      bytes > entry.uncompressedSize
+    ) {
+      stream.destroy();
+      throw new Error("ZIP streamed entry size exceeds limit");
+    }
+    crc = updateCrc(crc, buffer);
+    chunks.push(buffer);
+  }
+  if (
+    bytes !== entry.uncompressedSize ||
+    (crc ^ 0xffffffff) >>> 0 !== entry.crc32
+  )
+    throw new Error("ZIP entry size/CRC mismatch");
+  return Buffer.concat(chunks);
+}
+
+export interface ShapefileMembers {
+  /** Base name shared by the members, without extension. */
+  name: string;
+  shp: Buffer;
+  dbf: Buffer;
+  prj: string;
+}
+
+/**
+ * Read the one shapefile in an archive, with the same ZIP safety checks as
+ * the MOI sidewalk reader.
+ *
+ * @param file Local ZIP path.
+ * @returns The `.shp`, `.dbf` and `.prj` members of its single shapefile.
+ */
+export async function readShapefileMembers(
+  file: string,
+): Promise<ShapefileMembers> {
+  const zip = await openZip(file);
+  try {
+    const entries = await listEntries(zip);
+    const byExt = new Map<string, Entry[]>();
+    for (const entry of entries) {
+      const ext = path.posix.extname(entry.fileName).toLowerCase();
+      if (![".shp", ".shx", ".dbf", ".prj"].includes(ext)) continue;
+      byExt.set(ext, [...(byExt.get(ext) ?? []), entry]);
+    }
+    for (const ext of [".shp", ".dbf", ".prj"]) {
+      if (byExt.get(ext)?.length !== 1)
+        throw new Error(`archive must hold exactly one ${ext} member`);
+    }
+    const [shpEntry] = byExt.get(".shp") ?? [];
+    const name = path.posix.basename(
+      shpEntry.fileName,
+      path.posix.extname(shpEntry.fileName),
+    );
+    for (const ext of [".dbf", ".prj"]) {
+      const [entry] = byExt.get(ext) ?? [];
+      if (
+        path.posix.basename(
+          entry.fileName,
+          path.posix.extname(entry.fileName),
+        ) !== name
+      )
+        throw new Error("shapefile members do not share one base name");
+    }
+    const [dbfEntry] = byExt.get(".dbf") ?? [];
+    const [prjEntry] = byExt.get(".prj") ?? [];
+    return {
+      name,
+      shp: await readVerifiedEntry(zip, shpEntry),
+      dbf: await readVerifiedEntry(zip, dbfEntry),
+      prj: (await readVerifiedEntry(zip, prjEntry)).toString("utf8"),
+    };
   } finally {
     zip.close();
   }

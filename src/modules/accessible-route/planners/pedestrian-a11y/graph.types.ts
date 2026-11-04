@@ -148,7 +148,17 @@ export const NODE_FLAG = {
    * corner does not make a staircase wheelchair-passable.
    */
   HAS_KERB_RAMP: 8,
+  /**
+   * The node sits on a Taipei painted (marked) sidewalk strip, level with the
+   * carriageway, so a crossing ending here has no kerb to climb. Read only by
+   * `kerbRampPenalty` and the CSR crossing count, exactly like HAS_KERB_RAMP.
+   */
+  STEP_FREE_KERB: 16,
 } as const;
+
+/** Either flag makes a crossing end step-free for the wheelchair cost. */
+export const STEP_FREE_CROSSING_END =
+  NODE_FLAG.HAS_KERB_RAMP | NODE_FLAG.STEP_FREE_KERB;
 
 export const EDGE_FLAG = {
   HAS_RAMP: 1,

@@ -50,6 +50,33 @@ class SidewalkIndexTests(unittest.TestCase):
             self.assertEqual(result["sourcePbfSha256"], hashlib.sha256(before).hexdigest())
             self.assertEqual(source.read_bytes(), before)
             self.assertEqual({segment[0] for segment in result["segments"]}, {"sidewalk", "other"})
+            self.assertEqual(result["version"], 2)
+            self.assertEqual(result["crossings"], [])
+
+    def test_kerb_ramp_ends_tag_is_parsed_strictly(self):
+        self.assertEqual(exporter.kerb_ramp_ends({"tp:kerb_ramp_ends": "1/1/0"}), [1, 1, 0])
+        for value in (None, "", "1/1", "a/b/c", "2/1/0"):
+            self.assertIsNone(exporter.kerb_ramp_ends({"tp:kerb_ramp_ends": value}))
+
+    def test_classified_crossings_are_exported_once_per_way(self):
+        try:
+            import osmium
+        except ImportError:
+            self.skipTest("pyosmium required for the actual PBF round trip")
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "tiny.osm.pbf"
+            output = Path(folder) / "index.json"
+            writer = osmium.SimpleWriter(str(source))
+            for node_id, location in enumerate(((121, 25), (121, 25.0002), (121.001, 25), (121.001, 25.0002), (121.0005, 25.0001)), 1):
+                writer.add_node(osmium.osm.mutable.Node(id=node_id, location=location))
+            writer.add_way(osmium.osm.mutable.Way(id=7, nodes=[1, 5, 2], tags={"highway": "footway", "footway": "crossing", "tp:kerb_ramp_ends": "1/1/0"}))
+            writer.add_way(osmium.osm.mutable.Way(id=8, nodes=[3, 4], tags={"highway": "footway", "footway": "crossing"}))
+            writer.close()
+            subprocess.run([sys.executable, str(SCRIPT), str(source), str(output)], check=True, capture_output=True)
+            crossings = json.loads(output.read_text())["crossings"]
+            self.assertEqual(len(crossings), 1)
+            self.assertEqual(crossings[0][:4], [7, 1, 1, 0])
+            self.assertEqual(len(crossings[0][4]), 3)
 
 
 if __name__ == "__main__":

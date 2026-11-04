@@ -15,7 +15,13 @@
  *    more crossings (63.2% at least one end, 35.7% both ends, measured on
  *    22,754 distinct ramped nodes) than edge-level matching alone (13.3%).
  *
- * Run: npm run import:taipei-ramps -- [--file <path> | --url <endpoint>] [--db-url <url>]
+ * Run: pnpm import:taipei-ramps -- [--file <path> | --url <endpoint>] [--db-url <url>]
+ *        [--version-id <id>] [--mappings-only]
+ *
+ * Mappings are graph-version-bound and rebuilt only with an explicit `--version-id`
+ * (the CSR release step, before promotion), so a routine `data:sync` refreshes the
+ * source points without changing the ACTIVE graph's mapping mid-release.
+ * `--mappings-only` skips the download and only rebuilds the mapping tables.
  */
 
 import "dotenv/config";
@@ -26,6 +32,11 @@ import {
   parseRampFeature,
   type RampFeature,
 } from "./taipei-ramps-parse";
+import {
+  graphMappingsAvailable,
+  requireMappingVersion,
+  type QueryableClient,
+} from "./ped-graph-mapping-target";
 
 const DEFAULT_SOURCE_URL =
   "https://data.taipei/api/dataset/8ab0c662-b560-4310-a825-001ae7fdc524/resource/ee522d94-daa7-4118-b52a-4bf144af2744/download";
@@ -77,7 +88,7 @@ export const NODE_RAMP_SNAP_PREFILTER_DEGREES = 0.00014;
  * write locks for 1h32m; this caps a runaway rebuild instead of letting it
  * jam the database indefinitely.
  */
-const RAMP_REBUILD_STATEMENT_TIMEOUT_SQL = `SET statement_timeout = '300s'`;
+const RAMP_REBUILD_STATEMENT_TIMEOUT_SQL = `SET LOCAL statement_timeout = '300s'`;
 
 const UPSERT_CHUNK_SIZE = 500;
 
@@ -120,14 +131,6 @@ const CREATE_RAMP_NODE_TABLE_SQL = `
  */
 const CREATE_NODE_GEOM_INDEX_SQL = `
   CREATE INDEX IF NOT EXISTS ped_node_geom_gix ON ped_node USING GIST (geom);
-`;
-
-const ACTIVE_VERSION_ID_QUERY = `
-  SELECT id
-  FROM ped_graph_version
-  WHERE lifecycle_status = 'ACTIVE'
-  ORDER BY built_at DESC, id DESC
-  LIMIT 1
 `;
 
 const DELETE_RAMP_EDGE_SQL = `
@@ -185,10 +188,8 @@ interface ImportOptions {
   filePath?: string;
   url: string;
   dbUrl: string;
-}
-
-interface QueryableClient {
-  query<R>(sql: string, params?: unknown[]): Promise<{ rows: R[] }>;
+  versionId?: number;
+  mappingsOnly?: boolean;
 }
 
 /**
@@ -199,9 +200,25 @@ export function parseImportArgs(argv: readonly string[]): ImportOptions {
   let filePath: string | undefined;
   let url = DEFAULT_SOURCE_URL;
   let dbUrl = process.env.PED_GRAPH_DATABASE_URL;
+  let versionId: number | undefined;
+  let mappingsOnly = false;
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
+    if (argument === "--") continue;
+    if (argument === "--mappings-only") {
+      mappingsOnly = true;
+      continue;
+    }
+    if (argument === "--version-id") {
+      const value = Number(argv[index + 1]);
+      if (!Number.isSafeInteger(value) || value <= 0) {
+        throw new Error("--version-id must be a positive integer");
+      }
+      versionId = value;
+      index += 1;
+      continue;
+    }
     if (
       argument === "--file" ||
       argument === "--url" ||
@@ -223,7 +240,13 @@ export function parseImportArgs(argv: readonly string[]): ImportOptions {
   if (!dbUrl) {
     throw new Error("--db-url or PED_GRAPH_DATABASE_URL is required");
   }
-  return { filePath, url, dbUrl };
+  return {
+    filePath,
+    url,
+    dbUrl,
+    ...(versionId === undefined ? {} : { versionId }),
+    ...(mappingsOnly ? { mappingsOnly } : {}),
+  };
 }
 
 /**
@@ -342,16 +365,35 @@ async function upsertRampPoints(
 }
 
 /**
+ * Replace the stored ramp points with this source snapshot in one transaction.
+ * A point the source no longer lists must disappear: ramp points are positive
+ * evidence ("this crossing end has a ramp"), so a stale one would keep a removed
+ * ramp routable.
+ *
  * @param client PostGIS client.
- * @returns The ACTIVE graph version id, or null when none exists yet.
+ * @param points Every accepted point of the new snapshot (non-empty).
+ * @param sourceVersion Label stamped onto every row of this snapshot.
+ * @returns How many stored points were removed.
  */
-async function loadActiveVersionId(
+export async function replaceRampPoints(
   client: QueryableClient,
-): Promise<number | null> {
-  const result = await client.query<{ id: unknown }>(ACTIVE_VERSION_ID_QUERY);
-  const row = result.rows[0];
-  if (row === undefined) return null;
-  return Number(row.id);
+  points: Parameters<typeof upsertRampPoints>[1],
+  sourceVersion: string,
+): Promise<number> {
+  await client.query("BEGIN");
+  try {
+    await upsertRampPoints(client, points, sourceVersion);
+    const removed = await client.query<{ count: unknown }>(
+      `WITH gone AS (DELETE FROM ped_ramp_point WHERE source_version <> $1 RETURNING 1)
+       SELECT count(*) FROM gone`,
+      [sourceVersion],
+    );
+    await client.query("COMMIT");
+    return Number(removed.rows[0]?.count ?? 0);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  }
 }
 
 /**
@@ -361,25 +403,34 @@ async function loadActiveVersionId(
  * cancellation.
  *
  * @param client PostGIS client.
- * @param activeVersionId ACTIVE graph version id to rebuild ramp edges for.
+ * @param versionId Graph version (ACTIVE or a CANDIDATE) to rebuild ramp edges for.
  * @returns The number of `ped_ramp_edge` rows now stored for that version.
  */
 export async function rebuildRampEdges(
   client: QueryableClient,
-  activeVersionId: number,
+  versionId: number,
 ): Promise<number> {
-  await client.query(DELETE_RAMP_EDGE_SQL, [activeVersionId]);
-  await client.query(RAMP_REBUILD_STATEMENT_TIMEOUT_SQL);
-  await client.query(REBUILD_RAMP_EDGE_SQL, [
-    activeVersionId,
-    RAMP_SNAP_TOLERANCE_M,
-    RAMP_SNAP_PREFILTER_DEGREES,
-  ]);
-  const matched = await client.query<{ count: unknown }>(
-    "SELECT count(*) FROM ped_ramp_edge WHERE version_id = $1",
-    [activeVersionId],
-  );
-  return Number(matched.rows[0]?.count ?? 0);
+  // DELETE + INSERT commit together, so a concurrent promotion check never
+  // sees this version with an empty mapping.
+  await client.query("BEGIN");
+  try {
+    await client.query(DELETE_RAMP_EDGE_SQL, [versionId]);
+    await client.query(RAMP_REBUILD_STATEMENT_TIMEOUT_SQL);
+    await client.query(REBUILD_RAMP_EDGE_SQL, [
+      versionId,
+      RAMP_SNAP_TOLERANCE_M,
+      RAMP_SNAP_PREFILTER_DEGREES,
+    ]);
+    const matched = await client.query<{ count: unknown }>(
+      "SELECT count(*) FROM ped_ramp_edge WHERE version_id = $1",
+      [versionId],
+    );
+    await client.query("COMMIT");
+    return Number(matched.rows[0]?.count ?? 0);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  }
 }
 
 /**
@@ -388,25 +439,34 @@ export async function rebuildRampEdges(
  * of {@link rebuildRampEdges}.
  *
  * @param client PostGIS client.
- * @param activeVersionId ACTIVE graph version id to rebuild ramp nodes for.
+ * @param versionId Graph version (ACTIVE or a CANDIDATE) to rebuild ramp nodes for.
  * @returns The number of `ped_ramp_node` rows now stored for that version.
  */
 export async function rebuildRampNodes(
   client: QueryableClient,
-  activeVersionId: number,
+  versionId: number,
 ): Promise<number> {
-  await client.query(DELETE_RAMP_NODE_SQL, [activeVersionId]);
-  await client.query(RAMP_REBUILD_STATEMENT_TIMEOUT_SQL);
-  await client.query(REBUILD_RAMP_NODE_SQL, [
-    activeVersionId,
-    RAMP_SNAP_TOLERANCE_M,
-    NODE_RAMP_SNAP_PREFILTER_DEGREES,
-  ]);
-  const matched = await client.query<{ count: unknown }>(
-    "SELECT count(DISTINCT node_id) FROM ped_ramp_node WHERE version_id = $1",
-    [activeVersionId],
-  );
-  return Number(matched.rows[0]?.count ?? 0);
+  // DELETE + INSERT commit together, so a concurrent promotion check never
+  // sees this version with an empty mapping.
+  await client.query("BEGIN");
+  try {
+    await client.query(DELETE_RAMP_NODE_SQL, [versionId]);
+    await client.query(RAMP_REBUILD_STATEMENT_TIMEOUT_SQL);
+    await client.query(REBUILD_RAMP_NODE_SQL, [
+      versionId,
+      RAMP_SNAP_TOLERANCE_M,
+      NODE_RAMP_SNAP_PREFILTER_DEGREES,
+    ]);
+    const matched = await client.query<{ count: unknown }>(
+      "SELECT count(DISTINCT node_id) FROM ped_ramp_node WHERE version_id = $1",
+      [versionId],
+    );
+    await client.query("COMMIT");
+    return Number(matched.rows[0]?.count ?? 0);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  }
 }
 
 /**
@@ -414,18 +474,6 @@ export async function rebuildRampNodes(
  */
 async function main(): Promise<void> {
   const options = parseImportArgs(process.argv.slice(2));
-  const raw = await loadRawGeoJson(options);
-  const features = parseFeatureCollection(raw);
-  const summary = filterRampFeatures(features);
-
-  console.log(
-    `[import-taipei-ramps] features=${summary.totalFeatures} ` +
-      `excluded_car_ramps=${summary.excludedCarRamps} ` +
-      `discarded_coordinate_mismatch=${summary.discardedCoordinateMismatch} ` +
-      `discarded_malformed=${summary.discardedMalformed} ` +
-      `accepted=${summary.points.length}`,
-  );
-
   const client = new Client({ connectionString: options.dbUrl });
   await client.connect();
   try {
@@ -433,35 +481,61 @@ async function main(): Promise<void> {
     await client.query(CREATE_RAMP_POINT_INDEX_SQL);
     await client.query(CREATE_RAMP_EDGE_TABLE_SQL);
     await client.query(CREATE_RAMP_NODE_TABLE_SQL);
-    await client.query(CREATE_NODE_GEOM_INDEX_SQL);
 
-    const sourceVersion = new Date().toISOString();
-    await upsertRampPoints(client, summary.points, sourceVersion);
-    console.log(
-      `[import-taipei-ramps] upserted ${summary.points.length} ramp points`,
-    );
-
-    const activeVersionId = await loadActiveVersionId(client);
-    if (activeVersionId === null) {
+    if (!options.mappingsOnly) {
+      const raw = await loadRawGeoJson(options);
+      const summary = filterRampFeatures(parseFeatureCollection(raw));
       console.log(
-        "[import-taipei-ramps] no ACTIVE ped_graph_version yet; skipping ped_ramp_edge rebuild",
+        `[import-taipei-ramps] features=${summary.totalFeatures} ` +
+          `excluded_car_ramps=${summary.excludedCarRamps} ` +
+          `discarded_coordinate_mismatch=${summary.discardedCoordinateMismatch} ` +
+          `discarded_malformed=${summary.discardedMalformed} ` +
+          `accepted=${summary.points.length}`,
+      );
+      if (summary.points.length === 0) {
+        throw new Error(
+          "no ramp points accepted; keeping the previous snapshot",
+        );
+      }
+      const removed = await replaceRampPoints(
+        client,
+        summary.points,
+        new Date().toISOString(),
+      );
+      console.log(
+        `[import-taipei-ramps] upserted ${summary.points.length} ramp points, removed ${removed} no longer in the source`,
+      );
+    }
+
+    if (options.versionId === undefined) {
+      if (options.mappingsOnly) {
+        throw new Error("--mappings-only needs --version-id <graph version>");
+      }
+      console.log(
+        "[import-taipei-ramps] source updated; mappings are rebuilt per graph release with --version-id",
       );
       return;
     }
+    if (!(await graphMappingsAvailable(client))) {
+      throw new Error("no pedestrian graph schema; cannot map --version-id");
+    }
+    await client.query(CREATE_NODE_GEOM_INDEX_SQL);
+    const versionId = await requireMappingVersion(client, options.versionId);
+    const pointCount = await client.query<{ count: unknown }>(
+      "SELECT count(*) FROM ped_ramp_point",
+    );
+    const points = Number(pointCount.rows[0]?.count ?? 0);
 
-    const matchedEdgeCount = await rebuildRampEdges(client, activeVersionId);
-    const edgeRatio =
-      summary.points.length === 0
-        ? 0
-        : (matchedEdgeCount / summary.points.length) * 100;
+    const matchedEdgeCount = await rebuildRampEdges(client, versionId);
+    const edgeRatio = points === 0 ? 0 : (matchedEdgeCount / points) * 100;
     console.log(
-      `[import-taipei-ramps] version_id=${activeVersionId} ` +
-        `edges matched=${matchedEdgeCount}/${summary.points.length} (${edgeRatio.toFixed(1)}%)`,
+      `[import-taipei-ramps] version_id=${versionId} ` +
+        `edges matched=${matchedEdgeCount}/${points} (${edgeRatio.toFixed(1)}%)`,
     );
 
-    const rampedNodeCount = await rebuildRampNodes(client, activeVersionId);
+    const rampedNodeCount = await rebuildRampNodes(client, versionId);
     console.log(
-      `[import-taipei-ramps] version_id=${activeVersionId} ` +
+      `[import-taipei-ramps] version_id=${versionId} ` +
         `distinct ramped nodes=${rampedNodeCount}`,
     );
   } finally {

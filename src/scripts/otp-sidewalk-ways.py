@@ -52,6 +52,11 @@ LINK_REACH_M = 30.0
 LINK_MAX_M = 40.0
 GRID_M = 200.0
 COPIED_ROAD_TAGS = ("name", "name:en", "name:zh")
+# Export ids of Taipei painted (marked) sidewalk strips (build-otp-graph.sh 2c).
+# Ways compiled from them keep `source=MOI sidewalk` — every later pass and the
+# sidewalk-index exporter key on that compiler marker — and a run built only from
+# painted strips also gets `ref:tp_painted_sidewalk`.
+PAINTED_SOURCE_PREFIX = "tp-painted:"
 
 
 def to_xy(lon, lat):
@@ -414,7 +419,12 @@ def split_road(road, positions, covered):
 def sidewalk_tags(road, run):
     tags = {key: road.tags[key] for key in COPIED_ROAD_TAGS if key in road.tags}
     tags.update(highway="footway", footway="sidewalk", source="MOI sidewalk")
-    tags["ref:moi_sidewalk"] = ";".join(sorted(set(run.sources)))[:255]
+    sources = sorted(set(run.sources))
+    tags["ref:moi_sidewalk"] = ";".join(sources)[:255]
+    if sources and all(source.startswith(PAINTED_SOURCE_PREFIX) for source in sources):
+        tags["ref:tp_painted_sidewalk"] = ";".join(
+            source[len(PAINTED_SOURCE_PREFIX):] for source in sources
+        )[:255]
     return tags
 
 

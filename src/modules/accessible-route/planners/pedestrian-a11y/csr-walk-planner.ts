@@ -30,7 +30,7 @@ import { findHazardEdgeIndexes } from "./hazard-edges.repository";
 import {
   EDGE_FLAG,
   EDGE_TYPE,
-  NODE_FLAG,
+  STEP_FREE_CROSSING_END,
   SURFACE,
   type PedGraph,
 } from "./graph.types";
@@ -369,8 +369,8 @@ function summarizeAccessibility(
       const fromNode = nodePath[index];
       const toNode = nodePath[index + 1];
       const bothEndpointsHaveKerbRamp =
-        (graph.nodeFlags[fromNode] & NODE_FLAG.HAS_KERB_RAMP) !== 0 &&
-        (graph.nodeFlags[toNode] & NODE_FLAG.HAS_KERB_RAMP) !== 0;
+        (graph.nodeFlags[fromNode] & STEP_FREE_CROSSING_END) !== 0 &&
+        (graph.nodeFlags[toNode] & STEP_FREE_CROSSING_END) !== 0;
       if (hasOsmRampTag || bothEndpointsHaveKerbRamp) {
         crossingsWithCurbRamp += 1;
       }

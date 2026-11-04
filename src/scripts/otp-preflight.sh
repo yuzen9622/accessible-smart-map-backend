@@ -138,6 +138,23 @@ else
   fail "python3 cannot import osmium — pedestrian access hardening (fatal step) would fail; pip install osmium or sudo apt install  python3-pyosmium"
 fi
 
+if python3 -c 'import shapely' 2>/dev/null; then
+  ok "shapely is importable (Taipei kerb-ramp tagging, step 2d)"
+else
+  fail "python3 cannot import shapely — Taipei kerb-ramp tagging (fatal step 2d) would fail; pip install shapely"
+fi
+
+if python3 -c 'import psycopg2' 2>/dev/null; then
+  ok "psycopg2 is importable (CSR pedestrian graph candidate, step 4a)"
+else
+  fail "python3 cannot import psycopg2 — the CSR pedestrian graph candidate (fatal step 4a) would fail; pip install psycopg2-binary"
+fi
+if [ -n "${PED_GRAPH_DATABASE_URL:-}" ]; then
+  ok "PED_GRAPH_DATABASE_URL is set (CSR pedestrian graph candidate, step 4a)"
+else
+  fail "PED_GRAPH_DATABASE_URL is not set — the CSR pedestrian graph candidate (fatal step 4a) needs PostGIS"
+fi
+
 if python3 -c 'import rasterio' 2>/dev/null; then
   ok "rasterio is importable (national DTM reprojection)"
 elif ls "$OTP_DEM_DIR"/*.tif >/dev/null 2>&1; then

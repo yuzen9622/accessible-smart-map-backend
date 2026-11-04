@@ -205,10 +205,23 @@ export const SYNC_STEPS: readonly SyncStep[] = [
     requiredEnv: ["PED_GRAPH_DATABASE_URL"],
   },
   {
+    // Painted strips are exported next to the MOI sidewalks for the OTP compile,
+    // and the gap-fill overlap is computed against the ACTIVE MOI version.
+    id: "taipei-painted-sidewalks",
+    group: "base",
+    command: pnpmScript("import:taipei-painted-sidewalks"),
+    backends: ["postgis"],
+    dependsOn: ["sidewalks"],
+    requiredEnv: ["PED_GRAPH_DATABASE_URL"],
+  },
+  {
+    // Ramp inventory completeness is judged per MOI sidewalk polygon at compile
+    // time, so ramps follow the sidewalk sources.
     id: "taipei-ramps",
     group: "base",
     command: pnpmScript("import:taipei-ramps"),
     backends: ["postgis"],
+    dependsOn: ["sidewalks", "taipei-painted-sidewalks"],
     requiredEnv: ["PED_GRAPH_DATABASE_URL"],
   },
 

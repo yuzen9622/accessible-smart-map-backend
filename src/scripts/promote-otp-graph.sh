@@ -3,7 +3,7 @@
 # Verify a freshly built OTP graph, then promote it — or refuse and keep the
 # old graph serving.
 #
-#   promote-otp-graph.sh CANDIDATE_DIR
+#   promote-otp-graph.sh CANDIDATE_DIR [CSR_VERSION_ID]
 #
 # CANDIDATE_DIR is an OTP build directory: graph.obj, feed-*.gtfs.zip,
 # taiwan-otp.osm.pbf and the three config files. Steps:
@@ -12,6 +12,13 @@
 #      fixed trips, and a service audit against the deployed feed)
 #   3. on PASS only: atomic swap into OTP_DATA_DIR, restart, healthcheck,
 #      roll back if the healthcheck never comes up
+#   4. with CSR_VERSION_ID: activate that CSR pedestrian graph CANDIDATE
+#      (promote-ped-graph.ts, which requires it to be built from the PBF OTP now
+#      serves); if that fails, roll OTP back to the previous release too
+#
+# OTP and CSR are one release built from one PBF. Without CSR_VERSION_ID the
+# ACTIVE CSR version must already have been built from the candidate PBF, or
+# nothing is touched — otherwise the two engines would serve different maps.
 #
 # The serving and candidate containers each need the full serve heap, and
 # this machine cannot hold both (Docker VM 15.6 GiB, 12g each), so the serving
@@ -24,9 +31,17 @@
 #   OTP_SERVE_XMX         candidate heap (default 12g)
 #   OTP_CANDIDATE_PORT    (default 18081)
 #   OTP_VERIFY_SKIP_AUDIT=1  passed to verify-otp-graph.py (see its audit check)
+#
+# Required env:
+#   OTP_CANDIDATE_SIDEWALK_INDEX  sidewalk-index.json built from the candidate's
+#                         taiwan-otp.osm.pbf (build-otp-graph.sh passes it). PBF,
+#                         index and graph are one release: all three are staged
+#                         before any is swapped, swapped together, and rolled back
+#                         together. The backend re-reads the index when it changes.
 set -euo pipefail
 
-CANDIDATE_DIR="${1:?usage: promote-otp-graph.sh CANDIDATE_DIR}"
+CANDIDATE_DIR="${1:?usage: promote-otp-graph.sh CANDIDATE_DIR [CSR_VERSION_ID]}"
+CSR_VERSION_ID="${2:-}"
 CANDIDATE_DIR="$(cd "$CANDIDATE_DIR" && pwd)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -44,8 +59,44 @@ die() {
 }
 
 [ -f "$CANDIDATE_DIR/graph.obj" ] || die "no graph.obj in $CANDIDATE_DIR"
+[ -f "$CANDIDATE_DIR/taiwan-otp.osm.pbf" ] || die "no taiwan-otp.osm.pbf in $CANDIDATE_DIR"
+CANDIDATE_INDEX="${OTP_CANDIDATE_SIDEWALK_INDEX:?OTP_CANDIDATE_SIDEWALK_INDEX is required (sidewalk-index.json of the candidate PBF)}"
+[ -f "$CANDIDATE_INDEX" ] || die "OTP_CANDIDATE_SIDEWALK_INDEX $CANDIDATE_INDEX does not exist"
+python3 - "$CANDIDATE_INDEX" "$CANDIDATE_DIR/taiwan-otp.osm.pbf" <<'PY' ||
+import hashlib, json, sys
+index = json.load(open(sys.argv[1]))
+with open(sys.argv[2], "rb") as stream:
+    digest = hashlib.file_digest(stream, "sha256").hexdigest()
+sys.exit(0 if index.get("version") == 2 and index.get("sourcePbfSha256") == digest else 1)
+PY
+  die "candidate sidewalk index is not a v2 index of the candidate PBF"
 [ -d "$OTP_DATA_DIR" ] || die "OTP_DATA_DIR $OTP_DATA_DIR does not exist"
+case "$CSR_VERSION_ID" in
+"" | *[!0-9]* | 0*) [ -z "$CSR_VERSION_ID" ] || die "CSR_VERSION_ID must be a positive integer, got $CSR_VERSION_ID" ;;
+esac
 docker info >/dev/null 2>&1 || die "docker daemon is not responding"
+
+CANDIDATE_PBF_SHA256="$(python3 -c '
+import hashlib, sys
+with open(sys.argv[1], "rb") as stream:
+    print(hashlib.file_digest(stream, "sha256").hexdigest())' "$CANDIDATE_DIR/taiwan-otp.osm.pbf")" ||
+  die "cannot hash the candidate PBF"
+active_csr_sha256() {
+  docker exec postgis psql -U "$PED_PG_USER" -d ped_graph -At -v ON_ERROR_STOP=1 -c \
+    "SELECT lower(source_hash) FROM ped_graph_version WHERE lifecycle_status = 'ACTIVE'"
+}
+if [ -z "$CSR_VERSION_ID" ]; then
+  active_hash="$(active_csr_sha256)" || die "cannot read the ACTIVE CSR graph version"
+  [ "$active_hash" = "$CANDIDATE_PBF_SHA256" ] ||
+    die "the ACTIVE CSR graph was not built from the candidate PBF — pass the CSR candidate built from it as CSR_VERSION_ID; nothing was swapped"
+else
+  # Fail before stopping OTP when the id cannot become this release's CSR graph.
+  csr_hash="$(docker exec postgis psql -U "$PED_PG_USER" -d ped_graph -At -v ON_ERROR_STOP=1 -c \
+    "SELECT lower(source_hash) FROM ped_graph_version WHERE id = $CSR_VERSION_ID")" ||
+    die "cannot read CSR graph version $CSR_VERSION_ID"
+  [ "$csr_hash" = "$CANDIDATE_PBF_SHA256" ] ||
+    die "CSR graph version $CSR_VERSION_ID was not built from the candidate PBF; nothing was swapped"
+fi
 
 start_serving() {
   docker compose --project-directory "$REPO_DIR" restart otp ||
@@ -53,13 +104,36 @@ start_serving() {
     docker compose --project-directory "$REPO_DIR" up -d otp
 }
 
+# One release unit, staged/swapped/rolled back together.
+RELEASE_FILES=(graph.obj taiwan-otp.osm.pbf sidewalk-index.json)
+
+# Put back whatever the swap replaced: `.prev` copies are restored, and files the
+# previous release did not have (`.absent` markers) are removed again.
+rollback_release() {
+  local file
+  for file in "${RELEASE_FILES[@]}"; do
+    if [ -f "$OTP_DATA_DIR/$file.prev" ]; then
+      mv "$OTP_DATA_DIR/$file.prev" "$OTP_DATA_DIR/$file"
+    elif [ -f "$OTP_DATA_DIR/$file.absent" ]; then
+      rm -f "$OTP_DATA_DIR/$file" "$OTP_DATA_DIR/$file.absent"
+    fi
+  done
+}
+
 SERVING_STOPPED_HERE=0
+SWAPPED=0
 PROMOTED=0
 cleanup() {
   status=$?
   trap - EXIT INT TERM
   docker rm -f "$CANDIDATE_NAME" >/dev/null 2>&1 || true
-  if [ "$SERVING_STOPPED_HERE" -eq 1 ] && [ "$PROMOTED" -eq 0 ]; then
+  # Any exit after the swap but before a healthy restart (start failure,
+  # healthcheck failure, signal) restores the previous release.
+  if [ "$SWAPPED" -eq 1 ] && [ "$PROMOTED" -eq 0 ]; then
+    log "rolling back the release files to the previous graph"
+    rollback_release || log "WARN: rollback incomplete — check $OTP_DATA_DIR/*.prev"
+  fi
+  if [ "$PROMOTED" -eq 0 ] && { [ "$SERVING_STOPPED_HERE" -eq 1 ] || [ "$SWAPPED" -eq 1 ]; }; then
     log "restarting otp on the old graph"
     start_serving || true
   fi
@@ -98,29 +172,63 @@ fi
 docker rm -f "$CANDIDATE_NAME" >/dev/null 2>&1 || true
 
 log "verification passed — swapping graph.obj into $OTP_DATA_DIR"
-cp "$CANDIDATE_DIR"/feed-*.gtfs.zip "$OTP_DATA_DIR/" 2>/dev/null || true
-cp "$CANDIDATE_DIR/taiwan-otp.osm.pbf" "$OTP_DATA_DIR/" 2>/dev/null || true
-[ -f "$OTP_DATA_DIR/graph.obj" ] && cp "$OTP_DATA_DIR/graph.obj" "$OTP_DATA_DIR/graph.obj.prev"
-mv "$CANDIDATE_DIR/graph.obj" "$OTP_DATA_DIR/graph.obj.new"
-mv "$OTP_DATA_DIR/graph.obj.new" "$OTP_DATA_DIR/graph.obj"
-PROMOTED=1
+# Stage every file first, so a failed copy changes nothing.
+release_source() {
+  case "$1" in
+  sidewalk-index.json) echo "$CANDIDATE_INDEX" ;;
+  *) echo "$CANDIDATE_DIR/$1" ;;
+  esac
+}
+for file in "${RELEASE_FILES[@]}"; do
+  cp "$(release_source "$file")" "$OTP_DATA_DIR/$file.new" ||
+    die "could not stage $file — nothing was swapped, the old graph keeps serving"
+done
+for file in "${RELEASE_FILES[@]}"; do
+  rm -f "$OTP_DATA_DIR/$file.prev" "$OTP_DATA_DIR/$file.absent"
+  if [ -f "$OTP_DATA_DIR/$file" ]; then
+    cp "$OTP_DATA_DIR/$file" "$OTP_DATA_DIR/$file.prev" || die "could not back up $file — nothing was swapped"
+  else
+    : >"$OTP_DATA_DIR/$file.absent"
+  fi
+done
+SWAPPED=1
+for file in "${RELEASE_FILES[@]}"; do
+  mv "$OTP_DATA_DIR/$file.new" "$OTP_DATA_DIR/$file"
+done
 
 log "starting otp on the new graph"
-start_serving || die "container restart failed"
+start_serving || die "container restart failed (the previous release is restored)"
 
 log "waiting for healthcheck"
 for _ in $(seq 1 30); do
   if curl -fsS "http://localhost:18080/otp/actuators/health" >/dev/null 2>&1; then
     log "OTP healthy — new graph promoted"
-    rm -f "$OTP_DATA_DIR/graph.obj.prev"
+    if [ -n "$CSR_VERSION_ID" ]; then
+      log "activating CSR pedestrian graph version $CSR_VERSION_ID (same PBF)"
+      if OTP_DATA_DIR="$OTP_DATA_DIR" npx dotenvx run -- ts-node "$SCRIPT_DIR/promote-ped-graph.ts" \
+        --version-id "$CSR_VERSION_ID"; then
+        [ "$(active_csr_sha256)" = "$CANDIDATE_PBF_SHA256" ] ||
+          die "promote-ped-graph succeeded but the ACTIVE CSR graph is not built from the new PBF — rolling OTP back"
+      else
+        # A commit whose reply was lost still counts: never roll OTP back from
+        # under a CSR graph that is already serving the new PBF.
+        if [ "$(active_csr_sha256 2>/dev/null || true)" != "$CANDIDATE_PBF_SHA256" ]; then
+          die "CSR version $CSR_VERSION_ID was not activated — rolling OTP back so both engines keep the previous release"
+        fi
+        log "WARN: promote-ped-graph reported an error, but the ACTIVE CSR graph is built from the new PBF — keeping the release"
+      fi
+    fi
+    PROMOTED=1
+    # The feeds here are only the record of what is serving (the next run's
+    # --baseline); the graph carries the transit data. Update them only once the
+    # release is live, so a failed promote keeps auditing against the real feed.
+    cp "$CANDIDATE_DIR"/feed-*.gtfs.zip "$OTP_DATA_DIR/" 2>/dev/null || true
+    for file in "${RELEASE_FILES[@]}"; do
+      rm -f "$OTP_DATA_DIR/$file.prev" "$OTP_DATA_DIR/$file.absent"
+    done
     exit 0
   fi
   sleep 10
 done
 
-log "healthcheck failed after restart — rolling back to previous graph"
-if [ -f "$OTP_DATA_DIR/graph.obj.prev" ]; then
-  mv "$OTP_DATA_DIR/graph.obj.prev" "$OTP_DATA_DIR/graph.obj"
-  start_serving || true
-fi
-die "new graph failed healthcheck (rolled back)"
+die "new graph failed healthcheck (the previous release is restored)"
