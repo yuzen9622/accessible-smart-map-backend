@@ -1,8 +1,8 @@
 import {
   EDGE_FLAG,
   EDGE_TYPE,
-  NODE_FLAG,
   SMOOTHNESS,
+  STEP_FREE_CROSSING_END,
   SURFACE,
   WHEELCHAIR,
   type PedGraph,
@@ -331,9 +331,9 @@ function kerbRampPenalty(
     return MINIMUM_PENALTY_MULTIPLIER;
   }
   const fromHasKerbRamp =
-    (graph.nodeFlags[fromNode] & NODE_FLAG.HAS_KERB_RAMP) !== 0;
+    (graph.nodeFlags[fromNode] & STEP_FREE_CROSSING_END) !== 0;
   const toHasKerbRamp =
-    (graph.nodeFlags[toNode] & NODE_FLAG.HAS_KERB_RAMP) !== 0;
+    (graph.nodeFlags[toNode] & STEP_FREE_CROSSING_END) !== 0;
   if (fromHasKerbRamp && toHasKerbRamp) {
     return MINIMUM_PENALTY_MULTIPLIER;
   }

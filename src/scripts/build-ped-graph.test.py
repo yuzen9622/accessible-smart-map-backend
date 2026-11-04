@@ -351,6 +351,23 @@ class DemAndSidewalkTests(unittest.TestCase):
         self.assertEqual(attributes["attr_meta"]["width_m"]["source"], "gov_sidewalk")
         self.assertEqual(attributes["attr_meta"]["sidewalk_direction"]["value"], "2")
 
+    def test_inferred_kerb_ramp_wheelchair_tag_is_not_a_csr_block(self):
+        inferred = MODULE.make_edge_attributes(
+            {"highway": "footway", "footway": "crossing", "wheelchair": "no",
+             "source:wheelchair": "taipei_kerb_ramp"}, "2026-11-04", None
+        )
+        self.assertIsNone(inferred["wheelchair"])
+        self.assertNotIn("wheelchair", inferred["attr_meta"])
+        lined = MODULE.make_edge_attributes(
+            {"highway": "residential", "foot": "use_sidepath", "wheelchair": "no",
+             "source:wheelchair": "taipei_sidewalk_alongside"}, "2026-11-04", None
+        )
+        self.assertIsNone(lined["wheelchair"])
+        mapped = MODULE.make_edge_attributes(
+            {"highway": "footway", "footway": "crossing", "wheelchair": "no"}, "2026-11-04", None
+        )
+        self.assertEqual(mapped["wheelchair"], MODULE.WHEELCHAIR_CODES["no"])
+
     def test_nearby_or_partially_overlapping_sidewalk_does_not_claim_usable_width(self):
         for ratio in (0.0, 0.1, 0.79):
             match = MODULE.SidewalkMatch("nearby", 2.0, 1.8, "2", 3,

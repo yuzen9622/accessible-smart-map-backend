@@ -4,6 +4,7 @@ import {
   validatePromotion,
   type GraphIntegritySnapshot,
   type GraphVersionSnapshot,
+  type KerbEvidenceSnapshot,
 } from "./ped-graph-lifecycle";
 
 const PROMOTION_ADVISORY_LOCK = 7_346_219_941;
@@ -679,6 +680,36 @@ function requireOneChanged(
  * @param options Explicit target and rollback permission.
  * @returns The committed lifecycle transition outcome.
  */
+const KERB_EVIDENCE_QUERY = `
+  SELECT
+    CASE WHEN to_regclass('ped_ramp_node') IS NULL THEN 0 ELSE (
+      SELECT count(*) FROM ped_ramp_node WHERE version_id = $1
+    ) END AS ramp_node_count,
+    CASE WHEN to_regclass('ped_painted_node') IS NULL THEN 0 ELSE (
+      SELECT count(*) FROM ped_painted_node WHERE version_id = $1
+    ) END AS painted_node_count
+`;
+
+async function loadKerbEvidence(
+  client: PedGraphPromotionClient,
+  versionId: number,
+): Promise<KerbEvidenceSnapshot> {
+  const result = await client.query(KERB_EVIDENCE_QUERY, [versionId]);
+  const row = result.rows[0];
+  return {
+    rampNodeCount: databaseInteger(
+      row?.ramp_node_count ?? 0,
+      "ramp_node_count",
+      0,
+    ),
+    paintedNodeCount: databaseInteger(
+      row?.painted_node_count ?? 0,
+      "painted_node_count",
+      0,
+    ),
+  };
+}
+
 export async function promotePedGraph(
   client: PedGraphPromotionClient,
   options: PromotionOptions,
@@ -711,9 +742,11 @@ export async function promotePedGraph(
           parsePedGraphLifecycleStatus(row.lifecycle_status) === "ACTIVE",
       )
       .map((row) => databaseInteger(row.id, "active version id", 1));
+    const kerbEvidence = await loadKerbEvidence(client, options.versionId);
     const decision = validatePromotion({
       activeVersionIds,
       integrity,
+      kerbEvidence,
       allowRetired: options.allowRetired,
       target,
     });

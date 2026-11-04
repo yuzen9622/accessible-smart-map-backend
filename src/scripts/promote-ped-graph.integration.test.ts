@@ -193,6 +193,10 @@ async function createPersistentPromotionTables(client: Client): Promise<void> {
       attr_meta JSONB
     )
   `);
+  await client.query(`
+    CREATE TABLE ped_ramp_node (version_id BIGINT, node_id BIGINT, objectid BIGINT);
+    CREATE TABLE ped_painted_node (version_id BIGINT, node_id BIGINT, keyid BIGINT)
+  `);
 }
 
 async function insertCompleteCandidateRows(
@@ -258,6 +262,15 @@ async function insertCompleteCandidateRows(
       baseEdgeId + 6,
     ],
   );
+  // Version-bound kerb mappings are a promotion precondition.
+  await client.query("INSERT INTO ped_ramp_node VALUES ($1, $2, 1)", [
+    versionId,
+    baseNodeId + 1,
+  ]);
+  await client.query("INSERT INTO ped_painted_node VALUES ($1, $2, 1)", [
+    versionId,
+    baseNodeId + 1,
+  ]);
 }
 
 describeWithDatabase("promotePedGraph PostgreSQL transaction", () => {

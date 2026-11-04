@@ -315,12 +315,12 @@ const WalkLegSchema = z
     crossings: z.number().int().nonnegative().nullable().openapi({
       example: null,
       description:
-        "此 WALK leg 已附帶 OSM 設施中明確標記的 crossing 數；null = 沒有可用 crossing 觀測，不能解讀為沒有路口。",
+        "此 WALK leg 經過的已觀測 crossing 數。CSR 步行路線來自其行人路網；OTP 規劃的步行段（含轉乘步行）若走過臺北市已比對政府坡道資料的行穿線，則改以該證據計數（每條 OSM 行穿線計一次），否則為已附帶 OSM 設施中明確標記的 crossing 數。null = 沒有可用 crossing 觀測，不能解讀為沒有路口。",
     }),
     crossingsWithCurbRamp: z.number().int().nonnegative().nullable().openapi({
       example: null,
       description:
-        "上述已觀測 crossing 中，判定為有坡道者：來源一為 OSM kerb_cut／dropped_kerb／坡道標籤（邊層級）；來源二為臺北市新工處坡道點位資料，且須兩端路口節點皆比對到坡道點（節點層級）才計入——僅單側有坡道時輪椅仍可能過不去，因此不計入，避免高估可通行性；null = 沒有正向的坡道觀測，不能解讀為 0。",
+        "上述已觀測 crossing 中，判定為有坡道者：來源一為 OSM kerb_cut／dropped_kerb／坡道或 kerb=lowered/flush/no 標籤；來源二為臺北市新工處坡道點位資料；端點落在臺北市標線型人行道上（與車道同高、無路緣）亦視為有坡道。須兩端皆有坡道才計入——僅單側有坡道時輪椅仍可能過不去，因此不計入，避免高估可通行性。0 = 有 crossing 觀測但沒有一條兩端皆有坡道；null = 沒有可用觀測，不能解讀為 0。",
     }),
     minPathWidthCm: z.number().positive().nullable().openapi({
       example: null,

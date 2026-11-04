@@ -126,6 +126,9 @@ class FakePromotionClient implements PedGraphPromotionClient {
       ].sort((left, right) => Number(left.id) - Number(right.id));
       return { rows, rowCount: rows.length };
     }
+    if (sql.includes("ramp_node_count")) {
+      return { rows: [{ ramp_node_count: "10", painted_node_count: "5" }] };
+    }
     if (sql.includes("target_version AS")) {
       return { rows: [this.integrity], rowCount: 1 };
     }

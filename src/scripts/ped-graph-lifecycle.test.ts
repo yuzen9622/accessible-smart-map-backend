@@ -4,6 +4,7 @@ import {
   validatePromotion,
   type GraphIntegritySnapshot,
   type GraphVersionSnapshot,
+  type KerbEvidenceSnapshot,
   type PromotionValidationInput,
 } from "./ped-graph-lifecycle";
 
@@ -13,6 +14,7 @@ interface ValidationOverrides {
   activeVersionIds?: readonly number[];
   allowRetired?: boolean;
   integrity?: Partial<GraphIntegritySnapshot>;
+  kerbEvidence?: Partial<KerbEvidenceSnapshot>;
   target?: Partial<GraphVersionSnapshot>;
 }
 
@@ -96,11 +98,38 @@ function candidateInput(
       ...overrides.target,
     },
     integrity,
+    kerbEvidence: {
+      rampNodeCount: 10,
+      paintedNodeCount: 5,
+      ...overrides.kerbEvidence,
+    },
     allowRetired: overrides.allowRetired ?? false,
   };
 }
 
 describe("validatePromotion", () => {
+  it("refuses a version without ramp or painted kerb mappings", () => {
+    for (const kerbEvidence of [
+      { rampNodeCount: 0 },
+      { paintedNodeCount: 0 },
+    ]) {
+      expect(() => validatePromotion(candidateInput({ kerbEvidence }))).toThrow(
+        /--mappings-only --version-id 2/,
+      );
+    }
+  });
+
+  it("keeps an already-active target a no-op even without mappings", () => {
+    expect(
+      validatePromotion(
+        candidateInput({
+          target: { id: 1, lifecycleStatus: "ACTIVE" },
+          kerbEvidence: { rampNodeCount: 0, paintedNodeCount: 0 },
+        }),
+      ),
+    ).toEqual({ kind: "already-active", activeVersionId: 1 });
+  });
+
   it("allows a complete candidate whose stored counts match actual rows", () => {
     expect(validatePromotion(candidateInput())).toEqual({
       kind: "activate",

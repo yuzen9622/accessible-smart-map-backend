@@ -69,10 +69,23 @@ export interface GraphVersionSnapshot extends GraphVersionCounts {
   sourceHash: string;
 }
 
+/**
+ * Version-bound kerb evidence rows for the target graph. Mappings are keyed by
+ * graph version, so a candidate has none until
+ * `pnpm import:taipei-ramps -- --mappings-only --version-id <id>` and
+ * `pnpm import:taipei-painted-sidewalks -- --mappings-only --version-id <id>`
+ * ran for it; promoting without them silently drops every curb ramp.
+ */
+export interface KerbEvidenceSnapshot {
+  rampNodeCount: number;
+  paintedNodeCount: number;
+}
+
 export interface PromotionValidationInput {
   activeVersionIds: readonly number[];
   allowRetired: boolean;
   integrity: GraphIntegritySnapshot;
+  kerbEvidence: KerbEvidenceSnapshot;
   target: GraphVersionSnapshot;
 }
 
@@ -504,7 +517,8 @@ function validateGraphIntegrity(
 export function validatePromotion(
   input: PromotionValidationInput,
 ): PromotionDecision {
-  const { activeVersionIds, allowRetired, integrity, target } = input;
+  const { activeVersionIds, allowRetired, integrity, kerbEvidence, target } =
+    input;
   if (activeVersionIds.length !== 1) {
     throw new PedGraphPromotionError(
       "pedestrian graph requires exactly one active version",
@@ -531,6 +545,16 @@ export function validatePromotion(
       );
     }
     return { kind: "already-active", activeVersionId };
+  }
+  for (const [table, count] of [
+    ["ped_ramp_node", kerbEvidence.rampNodeCount],
+    ["ped_painted_node", kerbEvidence.paintedNodeCount],
+  ] as const) {
+    if (!Number.isSafeInteger(count) || count <= 0) {
+      throw new PedGraphPromotionError(
+        `pedestrian graph has no ${table} rows; run the mapping import with --mappings-only --version-id ${target.id} first`,
+      );
+    }
   }
   if (target.lifecycleStatus === "CANDIDATE") {
     return { kind: "activate", activeVersionId };

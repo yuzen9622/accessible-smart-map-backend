@@ -54,6 +54,12 @@ RAMP_VALUES = frozenset({"yes", "designated"})
 TRUE_VALUES = frozenset({"yes", "true", "1", "designated"})
 FALSE_VALUES = frozenset({"no", "false", "0"})
 SIDEWALK_TOLERANCE_M = 10.0
+# otp-kerb-ramps.py writes wheelchair=no as a soft OTP cost on Taipei crossings it
+# infers to lack a curb ramp, and on Taipei road pieces lined with a sidewalk. CSR
+# models ramps itself (three-tier crossing cost from ped_ramp_node /
+# ped_painted_node) and reads wheelchair=no as a hard block, so it must not
+# consume either inferred value.
+INFERRED_WHEELCHAIR_SOURCES = frozenset({"taipei_kerb_ramp", "taipei_sidewalk_alongside"})
 # A nearby road centreline is not evidence for a sidewalk's usable width.
 # Require most of the segment to lie within the source polygon before using
 # its attributes; keep weaker matches as provenance for review only.
@@ -773,7 +779,12 @@ def make_edge_attributes(
     """Extract OSM and matched government attributes for one undirected segment."""
     surface = enum_code(tags.get("surface"), SURFACE_CODES)
     smoothness = enum_code(tags.get("smoothness"), SMOOTHNESS_CODES)
-    wheelchair = enum_code(tags.get("wheelchair"), WHEELCHAIR_CODES)
+    wheelchair_tag = (
+        None
+        if tags.get("source:wheelchair") in INFERRED_WHEELCHAIR_SOURCES
+        else tags.get("wheelchair")
+    )
+    wheelchair = enum_code(wheelchair_tag, WHEELCHAIR_CODES)
     width_m = parse_measurement_m(tags.get("width"))
     effective_width_m: float | None = None
     has_ramp = (
@@ -794,7 +805,7 @@ def make_edge_attributes(
     for name, raw_value, code in (
         ("surface", tags.get("surface"), surface),
         ("smoothness", tags.get("smoothness"), smoothness),
-        ("wheelchair", tags.get("wheelchair"), wheelchair),
+        ("wheelchair", wheelchair_tag, wheelchair),
     ):
         if raw_value is not None:
             meta[name] = attribute_meta(raw_value, "osm", osm_updated_at, code=code)
