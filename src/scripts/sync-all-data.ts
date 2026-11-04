@@ -142,16 +142,8 @@ async function checkBackends(steps: readonly SyncStep[]): Promise<string[]> {
     try {
       await client.connect();
       await client.query("SELECT PostGIS_Version()");
-      if (steps.some((step) => step.id === "taipei-ramps")) {
-        const { rows } = await client.query<{ exists: boolean }>(
-          "SELECT to_regclass('public.ped_graph_version') IS NOT NULL AS exists",
-        );
-        if (!rows[0]?.exists) {
-          problems.push(
-            "PostGIS has no ped_graph_version table — build the ped graph first (pnpm build:ped-graph) or --skip=taipei-ramps",
-          );
-        }
-      }
+      // taipei-ramps / taipei-painted-sidewalks store their source points without a
+      // pedestrian graph and skip the version-bound mappings until one exists.
     } catch (err) {
       problems.push(
         `PostGIS unreachable at PED_GRAPH_DATABASE_URL (${(err as Error).message}) — on the host, compose publishes PostGIS on 127.0.0.1:5434`,
