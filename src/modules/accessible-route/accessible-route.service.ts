@@ -113,6 +113,7 @@ import { attachInternalSchedule } from "./route-schedule";
 import {
   buildHazardQueryArea,
   HAZARD_PENALTY_POINTS,
+  appendAdvisoryHazards,
   matchConfirmedHazardsToRoute,
   pointToSegmentDistanceM,
   planConfirmedHazardRoutes,
@@ -124,7 +125,10 @@ import {
   routeFailure,
 } from "./accessible-route.failure";
 
-import { WALK_POLICY_VERSION } from "../../types/route";
+import {
+  OTP_WALK_REFERENCE_ROUTE_ID,
+  WALK_POLICY_VERSION,
+} from "../../types/route";
 import type {
   AccessibilityMode,
   SlimA11y,
@@ -561,6 +565,8 @@ async function applyExtraA11yAnnotations(
     maxSlopePercent?: number;
     /** True when a nominal "walk" request actually got routed via Valhalla (no elevation data) instead of OTP. */
     routedByEngineWithNoElevationData?: boolean;
+    /** Wheelchair flag sent to official OTP; defaults to `mode === "wheelchair"`. */
+    otpWheelchairRouting?: boolean;
   },
 ): Promise<{
   slopeConstraint?: {
@@ -640,6 +646,7 @@ async function applyExtraA11yAnnotations(
   if (opts.maxSlopePercent !== undefined) {
     const requestedMaxPercent = opts.maxSlopePercent;
     let slopeMessageCode: string;
+    let perRouteApplied = false;
     const hasCsrWalkRoute = routes.some(
       (route) => route.engine === "pedestrian-a11y",
     );
@@ -675,42 +682,70 @@ async function applyExtraA11yAnnotations(
           routes.every(
             (route) => route.engine === "otp-fallback" && !route.walkPolicy,
           ));
-      const wheelchairEngaged = officialOtp
-        ? mode === "wheelchair"
-        : pureWalk
-          ? routes.length > 0 &&
-            routes.every((route) => route.walkPolicy?.profile === "wheelchair")
-          : mode === "wheelchair";
-      const softWheelchairSlope = officialOtp && wheelchairEngaged;
-      const enforced =
-        wheelchairEngaged &&
-        !softWheelchairSlope &&
-        requestedMaxPercent >= serverMaxPercent;
-      slopeMessageCode = softWheelchairSlope
-        ? "ROUTE_SLOPE_SOFT_PREFERENCE"
-        : wheelchairEngaged
-          ? enforced
-            ? "ROUTE_SLOPE_SERVER_LIMIT"
-            : "ROUTE_SLOPE_SERVER_DEFAULT"
-          : "ROUTE_SLOPE_WHEELCHAIR_DISABLED";
-      slopeConstraint = {
-        requestedMaxPercent,
-        enforced,
-        note: softWheelchairSlope
-          ? ROUTE_WARNING.OTP_SOFT_SLOPE_LIMIT_NOT_ENFORCED
-          : wheelchairEngaged
-            ? enforced
-              ? `伺服器已套用 ${serverMaxPercent}% 上限（等於或寬於您的設定）`
-              : ROUTE_WARNING.SLOPE_LIMIT_STRICTER_THAN_SERVER_DEFAULT
-            : "此路線未啟用輪椅模式，伺服器未套用輪椅坡度限制",
+      // Official OTP: the wheelchair flag the planner actually sent, per
+      // route. Unconstrained browsing reference candidates never carry it.
+      const engagedFor = (route: AccessibleRoute): boolean =>
+        officialOtp
+          ? (opts.otpWheelchairRouting ?? mode === "wheelchair") &&
+            !route.routeId.includes(OTP_WALK_REFERENCE_ROUTE_ID)
+          : pureWalk
+            ? routes.length > 0 &&
+              routes.every(
+                (candidate) => candidate.walkPolicy?.profile === "wheelchair",
+              )
+            : mode === "wheelchair";
+      const slopeFor = (wheelchairEngaged: boolean) => {
+        const softWheelchairSlope = officialOtp && wheelchairEngaged;
+        const enforced =
+          wheelchairEngaged &&
+          !softWheelchairSlope &&
+          requestedMaxPercent >= serverMaxPercent;
+        return {
+          code: softWheelchairSlope
+            ? "ROUTE_SLOPE_SOFT_PREFERENCE"
+            : wheelchairEngaged
+              ? enforced
+                ? "ROUTE_SLOPE_SERVER_LIMIT"
+                : "ROUTE_SLOPE_SERVER_DEFAULT"
+              : "ROUTE_SLOPE_WHEELCHAIR_DISABLED",
+          constraint: {
+            requestedMaxPercent,
+            enforced,
+            note: softWheelchairSlope
+              ? ROUTE_WARNING.OTP_SOFT_SLOPE_LIMIT_NOT_ENFORCED
+              : wheelchairEngaged
+                ? enforced
+                  ? `伺服器已套用 ${serverMaxPercent}% 上限（等於或寬於您的設定）`
+                  : ROUTE_WARNING.SLOPE_LIMIT_STRICTER_THAN_SERVER_DEFAULT
+                : "此路線未啟用輪椅模式，伺服器未套用輪椅坡度限制",
+          },
+        };
       };
+      // Each route gets the note for its own engine policy; the response-level
+      // summary describes the top-ranked route.
+      for (const r of routes) {
+        const own = slopeFor(engagedFor(r));
+        appendRouteWarning(
+          r,
+          routeMessage(own.code, own.constraint.note, {
+            requestedMaxPercent,
+            enforced: own.constraint.enforced,
+            serverMaxPercent,
+          }),
+        );
+      }
+      const top = slopeFor(engagedFor(routes[0]));
+      slopeMessageCode = top.code;
+      slopeConstraint = top.constraint;
+      perRouteApplied = true;
     }
     const descriptor = routeMessage(slopeMessageCode, slopeConstraint.note, {
       requestedMaxPercent: slopeConstraint.requestedMaxPercent,
       enforced: slopeConstraint.enforced,
       serverMaxPercent,
     });
-    for (const r of routes) appendRouteWarning(r, descriptor);
+    if (!perRouteApplied)
+      for (const r of routes) appendRouteWarning(r, descriptor);
     slopeConstraint.note = presentRouteMessages(
       [descriptor.legacyMessage],
       [descriptor],
@@ -1074,34 +1109,46 @@ export async function loadGovernmentHazards(
           GOVERNMENT_HAZARD_PREFILTER_M,
       );
 
-    return incidents
-      .filter(
-        (i) =>
-          i.severity === "closure" ||
-          PEDESTRIAN_WORK_RE.test(
-            `${i.title} ${i.description ?? ""} ${i.locationDescription ?? ""}`,
-          ),
-      )
-      .filter((i) => (i.points ?? [i.location]).some((p) => near(p.lat, p.lng)))
-      .map((i) => {
-        const endDate = roundedEndDate(i.endTime);
-        const detail = i.locationDescription ?? i.description ?? i.roadName;
-        return {
-          id: `tdx:${i.incidentId}`,
-          hazardType: i.title.includes("施工") ? "construction" : "obstacle",
-          severity: "difficult",
-          source: "government",
-          description: `${i.title}${detail ? `｜${detail}` : ""}${
-            endDate ? `（預計至 ${endDate}）` : ""
-          }`,
-          coordinates: [i.location.lng, i.location.lat],
-          ...(i.points
-            ? {
-                points: i.points.map((p) => [p.lng, p.lat] as [number, number]),
-              }
-            : {}),
-        } satisfies ConfirmedHazardInput;
-      });
+    return (
+      incidents
+        .filter(
+          (i) =>
+            i.severity === "closure" ||
+            PEDESTRIAN_WORK_RE.test(
+              `${i.title} ${i.description ?? ""} ${i.locationDescription ?? ""}`,
+            ),
+        )
+        // One malformed event (e.g. an out-of-range point) must not drop the
+        // valid ones, so the proximity check is isolated per event.
+        .filter((i) => {
+          try {
+            return (i.points ?? [i.location]).some((p) => near(p.lat, p.lng));
+          } catch {
+            return false;
+          }
+        })
+        .map((i) => {
+          const endDate = roundedEndDate(i.endTime);
+          const detail = i.locationDescription ?? i.description ?? i.roadName;
+          return {
+            id: `tdx:${i.incidentId}`,
+            hazardType: i.title.includes("施工") ? "construction" : "obstacle",
+            severity: "difficult",
+            source: "government",
+            description: `${i.title}${detail ? `｜${detail}` : ""}${
+              endDate ? `（預計至 ${endDate}）` : ""
+            }`,
+            coordinates: [i.location.lng, i.location.lat],
+            ...(i.points
+              ? {
+                  points: i.points.map(
+                    (p) => [p.lng, p.lat] as [number, number],
+                  ),
+                }
+              : {}),
+          } satisfies ConfirmedHazardInput;
+        })
+    );
   } catch (err) {
     console.warn("[accessible-route] government hazard lookup failed", err);
     return [];
@@ -1735,7 +1782,7 @@ async function planWalkRoutes(
     const otp = await planOtpWalkSegments(
       walkPoints,
       roadMode,
-      false,
+      avoidStairs,
       deadline,
       true,
     );
@@ -1751,6 +1798,7 @@ async function planWalkRoutes(
         const alternatives = await planValhallaRoute(walkPoints[0], dest, {
           travelMode: "walk",
           mode: roadMode,
+          avoidStairs,
           walkingCandidates: true,
           deadline,
         });
@@ -2656,6 +2704,14 @@ export async function planAccessibleRouteFromRequest(
       needsHandrail,
       maxSlopePercent,
       routedByEngineWithNoElevationData,
+      // Pure walk sends wheelchair || avoidStairs to official OTP; a transit
+      // all-WALK fallback still came from the transit query (mode only).
+      otpWheelchairRouting:
+        travelMode === "walk"
+          ? mode === "wheelchair" ||
+            resolveA11yConstraints(mode ?? "normal", { avoidStairs })
+              .avoidStairs
+          : mode === "wheelchair",
       language: body.language,
     },
   );
@@ -2969,7 +3025,7 @@ async function finalizeDrivingRoutes(
     travelMode === "walk" && getRoutingConfig().walkPlanner === "otp";
   const hasWalkSteps = (route: AccessibleRoute) =>
     route.legs.every((leg) => leg.type === "WALK" && !!leg.steps?.length);
-  const input =
+  const deduped =
     walkStairPreference === undefined
       ? routes
       : dedupeRouteGeometry(
@@ -2979,6 +3035,9 @@ async function finalizeDrivingRoutes(
               Number(hasWalkSteps(b)) - Number(hasWalkSteps(a)),
           ),
         );
+  const input = walkStairPreference
+    ? selectByStairEvidence(deduped, hasWalkSteps)
+    : deduped;
   const policyRanked = [...input].sort((a, b) => {
     if (walkStairPreference !== undefined) {
       if (walkStairPreference) {
@@ -3011,13 +3070,17 @@ async function finalizeDrivingRoutes(
       knownHazards,
     )
   ).routes;
-  const ranked =
+  const selected =
     travelMode === "walk"
       ? selectDiverseWalkRoutes(
           dedupeRouteGeometry(hazardRanked),
           walkStairPreference !== undefined,
         )
       : dedupeRouteGeometry(hazardRanked);
+  const ranked =
+    travelMode === "walk"
+      ? await attachGovernmentWalkHazards(selected)
+      : selected;
   attachWalkA11yDetails(ranked);
   try {
     await attachDrivingA11yHighlights(
@@ -3030,6 +3093,64 @@ async function finalizeDrivingRoutes(
     console.warn("[accessible-route] driving a11y hook failed", err);
   }
   return ranked;
+}
+
+/**
+ * Step-free selection for walking candidates the engines were asked to plan
+ * step-free. Evidence has three states: known stairs (a labelled stair step),
+ * known step-free (every leg has steps and none is a stair) and unknown (no
+ * step data, which never counts as step-free). When at least one known
+ * step-free candidate exists, known-stairs candidates are dropped. Otherwise
+ * every candidate is kept for the stair-count ranking and the ones with known
+ * stairs carry the unsatisfied-constraint warning, so the user still gets a
+ * route instead of NO_ACCESSIBLE_ROUTE.
+ *
+ * @param routes Candidates after positive-stair-evidence geometry dedupe.
+ * @param hasWalkSteps Whether every leg of a route carries step data.
+ * @returns The candidates to rank.
+ */
+function selectByStairEvidence(
+  routes: AccessibleRoute[],
+  hasWalkSteps: (route: AccessibleRoute) => boolean,
+): AccessibleRoute[] {
+  const knownStairs = (route: AccessibleRoute) => routeStairsCount(route) > 0;
+  if (routes.some((route) => hasWalkSteps(route) && !knownStairs(route)))
+    return routes.filter((route) => !knownStairs(route));
+  for (const route of routes) {
+    if (!knownStairs(route)) continue;
+    route.degraded = true;
+    appendRouteWarning(
+      route,
+      routeMessage(
+        "ROUTE_STAIRS_CONSTRAINT_UNSATISFIED",
+        ROUTE_WARNING.STAIRS_CONSTRAINT_UNSATISFIED,
+      ),
+    );
+  }
+  return routes;
+}
+
+/**
+ * Attach government road events (closures and footway works) to walking
+ * routes whose rank is already final. Advisory only: order, candidate set and
+ * degraded state never change. Driving routes already receive these events as
+ * Valhalla exclusions and incident advisories. Fail-soft end to end: any
+ * lookup or matching failure returns the routes unchanged.
+ *
+ * @param routes Selected walking routes.
+ * @returns The routes, with government hazards added to matching ones.
+ */
+async function attachGovernmentWalkHazards(
+  routes: AccessibleRoute[],
+): Promise<AccessibleRoute[]> {
+  try {
+    const government = await loadGovernmentHazards(routes);
+    if (!government.length) return routes;
+    return routes.map((route) => appendAdvisoryHazards(route, government));
+  } catch (err) {
+    console.warn("[accessible-route] government walk hazards skipped", err);
+    return routes;
+  }
 }
 
 type DrivingOutcome =
@@ -3667,7 +3788,11 @@ async function planOtpWalkSegments(
   if (results.some((result) => result.status === "no_route")) {
     return { status: "no_route", routes: [] };
   }
-  const constraints = resolveA11yConstraints(mode, { avoidStairs });
+  // Browsing keeps stair candidates for the service-level evidence selection
+  // in finalizeDrivingRoutes; every other caller keeps the hard filter.
+  const constraints = resolveA11yConstraints(mode, {
+    avoidStairs: includeWalkingAlternatives ? false : avoidStairs,
+  });
   const eligibleSegments = results.map((result) => {
     const eligible = result.routes
       .filter((route) => !isRouteExcluded(route, constraints))

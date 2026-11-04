@@ -85,6 +85,7 @@ import { buildTestApp } from "../../../tests/helpers/test-helpers";
 import { planOtpWalkDetailed } from "./planners/otp-routing";
 import { findConfirmedHazardsWithin } from "../hazard-report/hazard-report.service";
 import { planAccessibleRouteFromRequest } from "./accessible-route.service";
+import { ROUTE_WARNING } from "../../constants/messages";
 
 const app = buildTestApp();
 const URL = "/api/v1/a11y/accessible-route";
@@ -146,7 +147,7 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("POST /api/v1/a11y/accessible-route stairs restrictions", () => {
-  it("keeps labelled stairs when outdoor walking avoidance is a preference", async () => {
+  it("asks the engine for step-free walking and warns when only stairs remain", async () => {
     const response = await request(app)
       .post(URL)
       .send({
@@ -163,15 +164,18 @@ describe("POST /api/v1/a11y/accessible-route stairs restrictions", () => {
       { lat: 25.03, lng: 121.55 },
       expect.objectContaining({
         mode: "wheelchair",
-        avoidStairs: false,
+        avoidStairs: true,
         includeWalkingAlternatives: true,
       }),
     );
+    const [first] = response.body.data.routes;
     expect(
-      response.body.data.routes[0].legs[0].steps.some(
-        (step: { stairs?: boolean }) => step.stairs,
-      ),
+      first.legs[0].steps.some((step: { stairs?: boolean }) => step.stairs),
     ).toBe(true);
+    expect(first.degraded).toBe(true);
+    expect(first.warnings).toContain(
+      ROUTE_WARNING.STAIRS_CONSTRAINT_UNSATISFIED,
+    );
   });
 
   it("keeps the hard condition for an internal exact destination", async () => {

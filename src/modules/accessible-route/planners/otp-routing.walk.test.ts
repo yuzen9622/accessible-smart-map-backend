@@ -350,11 +350,12 @@ describe("official OTP walking", () => {
 
   it.each([
     { mode: "normal", avoidStairs: false, wheelchair: false },
-    { mode: "normal", avoidStairs: true, wheelchair: false },
+    { mode: "normal", avoidStairs: true, wheelchair: true },
+    { mode: "elderly", avoidStairs: true, wheelchair: true },
     { mode: "wheelchair", avoidStairs: false, wheelchair: true },
     { mode: "wheelchair", avoidStairs: true, wheelchair: true },
   ] as const)(
-    "keeps mobility independent from stairs for $mode / $avoidStairs",
+    "sends the OTP wheelchair flag for wheelchair mode or avoidStairs: $mode / $avoidStairs",
     async ({ mode, avoidStairs, wheelchair }) => {
       post.mockResolvedValue(okResp([]));
       await planOtpWalkDetailed(origin, destination, { mode, avoidStairs });
@@ -414,7 +415,38 @@ describe("official OTP walking", () => {
     expect(result.status).toBe("ok");
     expect(result.routes).toHaveLength(1);
     expect(result.routes[0].totalMinutes).toBe(15);
-    expect(post.mock.calls[0][1].variables.wheelchair).toBe(false);
+    expect(post.mock.calls[0][1].variables.wheelchair).toBe(true);
+  });
+
+  it("keeps every bounded browsing candidate for service-level stair selection", async () => {
+    const stairs = () => {
+      const itinerary = walkItin();
+      Object.assign(itinerary.legs[0].steps[0], {
+        feature: { __typename: "StairsUse" },
+      });
+      Reflect.deleteProperty(itinerary.legs[0], "walkPolicy");
+      return itinerary;
+    };
+    const stepFree = walkItin();
+    Reflect.deleteProperty(stepFree.legs[0], "walkPolicy");
+    post
+      .mockResolvedValueOnce(okResp([stairs(), stairs(), stairs()]))
+      .mockResolvedValueOnce(okResp([stepFree]));
+
+    const result = await planOtpWalkDetailed(origin, destination, {
+      mode: "normal",
+      avoidStairs: true,
+      includeWalkingAlternatives: true,
+    });
+
+    expect(post.mock.calls[0][1].variables.wheelchair).toBe(true);
+    expect(post.mock.calls[1][1].variables.wheelchair).toBe(false);
+    expect(result.routes.map((route) => route.routeId)).toEqual([
+      "walk-profile-0",
+      "walk-profile-1",
+      "walk-profile-2",
+      "walk-reference-3",
+    ]);
   });
 
   it("reports no route when every official candidate has forbidden stairs", async () => {

@@ -181,6 +181,7 @@ describe("computeValhallaRoutes", () => {
         pedestrian: {
           type: "wheelchair",
           step_penalty: 600,
+          max_distance: 100_000,
           exclude_ferries: true,
           use_ferry: 0,
         },

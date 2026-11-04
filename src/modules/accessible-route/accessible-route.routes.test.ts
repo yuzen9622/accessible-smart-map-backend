@@ -782,7 +782,7 @@ describe("accessible-route OpenAPI", () => {
       "使用官方 OTP 的一般戶外純步行候選",
     );
     expect(properties.avoidStairs.description).toContain(
-      "使用官方 OTP 的一般戶外、無中途點純步行為軟性偏好",
+      "使用官方 OTP 的一般戶外、無中途點純步行：true 時由引擎優先規劃無樓梯路線",
     );
     expect(properties.avoidStairs.description).toContain(
       "使用 CSR 的純步行會在圖搜尋時套用避樓梯條件",

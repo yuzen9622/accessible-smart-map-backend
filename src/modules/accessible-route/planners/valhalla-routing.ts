@@ -754,9 +754,11 @@ export async function planValhallaRoute(
       waypoints: opts.waypoints,
       costing: COSTING[opts.travelMode],
       computeAlternatives,
+      // Valhalla's wheelchair pedestrian type excludes steps at the access
+      // level (also surface/access limits), so walking candidates that must
+      // avoid stairs are planned step-free by the engine itself.
       wheelchair:
         opts.travelMode === "walk" &&
-        !opts.walkingCandidates &&
         (opts.avoidStairs ?? opts.mode === "wheelchair"),
       dateTime: { type: 0 },
     };

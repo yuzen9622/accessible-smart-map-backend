@@ -1536,14 +1536,16 @@ describe("planAccessibleRouteFromRequest official OTP walking", () => {
   });
 
   it.each([
-    ["wheelchair", false, 8.3, "ROUTE_SLOPE_SOFT_PREFERENCE"],
-    ["wheelchair", false, 10, "ROUTE_SLOPE_SOFT_PREFERENCE"],
-    ["wheelchair", true, 3, "ROUTE_SLOPE_SOFT_PREFERENCE"],
-    ["normal", true, 10, "ROUTE_SLOPE_WHEELCHAIR_DISABLED"],
+    ["wheelchair", false, 8.3, "walk-profile-0", "ROUTE_SLOPE_SOFT_PREFERENCE"],
+    ["wheelchair", false, 10, "walk-profile-0", "ROUTE_SLOPE_SOFT_PREFERENCE"],
+    ["wheelchair", true, 3, "walk-profile-0", "ROUTE_SLOPE_SOFT_PREFERENCE"],
+    ["normal", true, 10, "walk-profile-0", "ROUTE_SLOPE_SOFT_PREFERENCE"],
+    ["normal", false, 10, "walk-profile-0", "ROUTE_SLOPE_WHEELCHAIR_DISABLED"],
+    ["normal", true, 10, "walk-reference-1", "ROUTE_SLOPE_WHEELCHAIR_DISABLED"],
   ] as const)(
-    "reports %s mode independently of avoidStairs=%s without claiming a hard %s%% slope limit",
-    async (mode, avoidStairs, maxSlopePercent, code) => {
-      const route = walkRoute();
+    "reports the engine policy actually sent for %s / avoidStairs=%s / %s%% on %s",
+    async (mode, avoidStairs, maxSlopePercent, routeId, code) => {
+      const route = { ...walkRoute(), routeId };
       delete route.walkPolicy;
       vi.mocked(planOtpWalkDetailed).mockResolvedValue({
         status: "ok",
@@ -1563,7 +1565,7 @@ describe("planAccessibleRouteFromRequest official OTP walking", () => {
         expect.anything(),
         expect.objectContaining({
           mode,
-          avoidStairs: false,
+          avoidStairs,
           includeWalkingAlternatives: true,
         }),
       );
@@ -1574,12 +1576,80 @@ describe("planAccessibleRouteFromRequest official OTP walking", () => {
         requestedMaxPercent: maxSlopePercent,
         enforced: false,
       });
-      if (mode === "wheelchair")
+      if (code === "ROUTE_SLOPE_SOFT_PREFERENCE")
         expect(okData(result).slopeConstraint?.note).toBe(
           ROUTE_WARNING.OTP_SOFT_SLOPE_LIMIT_NOT_ENFORCED,
         );
     },
   );
+
+  it("labels mixed profile and reference candidates with their own slope policy", async () => {
+    const profile = { ...walkRoute(), routeId: "walk-profile-0" };
+    const reference = walkRoute();
+    reference.routeId = "walk-reference-1";
+    reference.totalMinutes = 14;
+    reference.legs[0].polyline = [
+      [121.56, 25.04],
+      [121.575, 25.036],
+      [121.55, 25.03],
+    ];
+    reference.legs[0].steps = reference.legs[0].steps?.map((step) => ({
+      ...step,
+      streetName: "忠孝東路",
+    }));
+    delete profile.walkPolicy;
+    delete reference.walkPolicy;
+    vi.mocked(planOtpWalkDetailed).mockResolvedValue({
+      status: "ok",
+      routes: [profile, reference],
+    });
+
+    const result = await planAccessibleRouteFromRequest({
+      ...walkRequest,
+      mode: "elderly",
+      avoidStairs: true,
+      maxSlopePercent: 5,
+    });
+
+    const routes = okData(result).routes;
+    expect(routes).toHaveLength(2);
+    const codes = routes.map((route) =>
+      route.warningDetails
+        ?.map((detail) => detail.code)
+        .filter((code) => code.startsWith("ROUTE_SLOPE_")),
+    );
+    expect(codes).toEqual([
+      ["ROUTE_SLOPE_SOFT_PREFERENCE"],
+      ["ROUTE_SLOPE_WHEELCHAIR_DISABLED"],
+    ]);
+    expect(okData(result).slopeConstraint?.note).toBe(
+      ROUTE_WARNING.OTP_SOFT_SLOPE_LIMIT_NOT_ENFORCED,
+    );
+  });
+
+  it("keeps the transit-query policy for an all-WALK transit fallback", async () => {
+    const route = walkRoute();
+    delete route.walkPolicy;
+    vi.mocked(planOtpRouteDetailed).mockResolvedValue({
+      status: "ok",
+      routes: [route],
+    });
+
+    const result = await planAccessibleRouteFromRequest({
+      ...walkRequest,
+      travelMode: "transit",
+      mode: "normal",
+      avoidStairs: true,
+      maxSlopePercent: 5,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(okData(result).routes[0].warningDetails).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "ROUTE_SLOPE_WHEELCHAIR_DISABLED" }),
+      ]),
+    );
+  });
 
   it("preserves upstream unavailable as 503 without trying CSR", async () => {
     vi.mocked(planOtpWalkDetailed).mockResolvedValue({

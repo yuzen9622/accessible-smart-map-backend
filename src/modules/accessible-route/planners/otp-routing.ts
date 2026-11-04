@@ -15,7 +15,11 @@
 import { decode } from "@googlemaps/polyline-codec";
 import axios from "axios";
 import { z } from "zod";
-import { WALK_POLICY_VERSION, type WalkPolicy } from "../../../types/route";
+import {
+  OTP_WALK_REFERENCE_ROUTE_ID,
+  WALK_POLICY_VERSION,
+  type WalkPolicy,
+} from "../../../types/route";
 import { createHash } from "crypto";
 import http from "http";
 import https from "https";
@@ -782,11 +786,19 @@ async function queryOtpWalk(
     walkSpeed,
     numItineraries: OTP_NUM_ITINERARIES,
   };
+  // Official OTP has no stairs argument; its wheelchair accessibility routing
+  // is the engine-level way to prefer step-free streets (stairs stay possible
+  // at inaccessibleStreetReluctance cost). Walk speed stays mode-based, and
+  // every speed x wheelchair pair is pre-warmed in router-config.json.
+  const officialVariables = {
+    ...variables,
+    wheelchair: wheelchair || avoidStairs,
+  };
   if (getRoutingConfig().walkPlanner === "otp") {
     return {
       source: "official",
       itineraries: (
-        await postOtpPlan(variables, planQuery([]), timeoutMs, true)
+        await postOtpPlan(officialVariables, planQuery([]), timeoutMs, true)
       ).itineraries,
     };
   }
@@ -822,7 +834,7 @@ async function queryOtpWalk(
     return {
       source: "official",
       itineraries: (
-        await postOtpPlan(variables, planQuery([]), remainingMs, true)
+        await postOtpPlan(officialVariables, planQuery([]), remainingMs, true)
       ).itineraries,
     };
   }
@@ -934,6 +946,8 @@ export async function planOtpWalkDetailed(
   const browsing =
     opts?.includeWalkingAlternatives === true &&
     getRoutingConfig().walkPlanner === "otp";
+  // Browsing asks the engine to prefer step-free streets but keeps every
+  // bounded candidate; the service selects on stair evidence afterwards.
   const hardAvoidStairs = browsing ? false : avoidStairs;
   const walkSpeed = walkSpeedMps(mode);
   const departure = new Date();
@@ -946,7 +960,7 @@ export async function planOtpWalkDetailed(
       departure,
       wheelchair,
       walkSpeed,
-      hardAvoidStairs,
+      avoidStairs,
       opts?.deadline === undefined
         ? undefined
         : Math.max(1, opts.deadline - Date.now()),
@@ -964,7 +978,7 @@ export async function planOtpWalkDetailed(
   const officialWalk = queryResult.source === "official";
   if (
     browsing &&
-    wheelchair &&
+    (wheelchair || avoidStairs) &&
     (opts?.deadline === undefined || Date.now() < opts.deadline)
   ) {
     try {
@@ -1008,7 +1022,7 @@ export async function planOtpWalkDetailed(
       : Math.round(legs.reduce((sum, l) => sum + l.distanceM, 0));
     const route: AccessibleRoute = {
       routeId: browsing
-        ? `walk-${index < primaryCount ? "profile" : "reference"}-${index}`
+        ? `${index < primaryCount ? "walk-profile-" : OTP_WALK_REFERENCE_ROUTE_ID}${index}`
         : `walk-${out.length}`,
       routeName: "步行",
       totalMinutes: Math.max(1, Math.round(it.duration / 60)),
@@ -1051,7 +1065,7 @@ export async function planOtpWalkDetailed(
             (a.walkPolicy?.generalizedCost ?? Infinity) -
               (b.walkPolicy?.generalizedCost ?? Infinity),
         )
-  ).slice(0, 3);
+  ).slice(0, browsing ? undefined : 3);
   return selected.length
     ? { status: "ok", routes: selected }
     : { status: "no_route", routes: [] };

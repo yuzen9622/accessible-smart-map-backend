@@ -56,6 +56,9 @@ vi.mock("./route-token.service", async (importActual) => ({
 vi.mock("../hazard-report/hazard-report.service", () => ({
   findConfirmedHazardsWithin: vi.fn().mockResolvedValue([]),
 }));
+vi.mock("../traffic/road-incident.service", () => ({
+  getActiveRoadIncidents: vi.fn().mockResolvedValue([]),
+}));
 vi.mock("./route-elevation-enrichment", () => ({
   attachWalkElevationProfiles: vi.fn(),
 }));
@@ -66,9 +69,12 @@ vi.mock("../../adapters/otp-sidewalk-index.adapter", () => ({
 import { planAccessibleRouteFromRequest } from "./accessible-route.service";
 import { planOtpWalkDetailed } from "./planners/otp-routing";
 import { planValhallaRoute } from "./planners/valhalla-routing";
+import { getActiveRoadIncidents } from "../traffic/road-incident.service";
+import type { RoadIncident } from "../../types/traffic";
 
 const otp = vi.mocked(planOtpWalkDetailed);
 const valhalla = vi.mocked(planValhallaRoute);
+const incidents = vi.mocked(getActiveRoadIncidents);
 const request = {
   origin: { latitude: 25.04, longitude: 121.56 },
   destination: { latitude: 25.03, longitude: 121.55 },
@@ -158,11 +164,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   otp.mockResolvedValue({ status: "ok", routes: [route("有樓梯", 8, 0, 2)] });
   valhalla.mockResolvedValue([]);
+  incidents.mockResolvedValue([]);
 });
 afterEach(() => vi.unstubAllEnvs());
 
 describe("outdoor walking candidates", () => {
-  it("prefers fewer stairs while retaining labelled alternatives from both engines", async () => {
+  it("drops known-stairs candidates when a known step-free one exists", async () => {
     otp.mockResolvedValue({
       status: "ok",
       routes: [route("東路", 8, 0, 2), route("中路", 12, 1)],
@@ -171,17 +178,49 @@ describe("outdoor walking candidates", () => {
 
     const routes = await candidates();
 
-    expect(routes.map((candidate) => candidate.totalMinutes)).toEqual([
-      12, 10, 8,
+    expect(routes.map((candidate) => candidate.routeId)).toEqual([
+      "otp-walk-中路",
     ]);
-    expect(stairCounts(routes)).toEqual([0, 1, 2]);
-    expect(new Set(routes.map((candidate) => candidate.routeId)).size).toBe(3);
-    expect(
-      routes.some((candidate) => candidate.routeId.startsWith("otp-")),
-    ).toBe(true);
-    expect(
-      routes.some((candidate) => candidate.routeId.startsWith("valhalla-")),
-    ).toBe(true);
+    expect(stairCounts(routes)).toEqual([0]);
+    expect(otp).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        avoidStairs: true,
+        includeWalkingAlternatives: true,
+      }),
+    );
+    expect(valhalla).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ avoidStairs: true, walkingCandidates: true }),
+    );
+  });
+
+  it("returns the least-stairs candidate with a warning when every candidate has stairs", async () => {
+    otp.mockResolvedValue({
+      status: "ok",
+      routes: [route("東路", 8, 0, 2)],
+    });
+    valhalla.mockResolvedValue([route("西路", 10, 2, 1)]);
+
+    const routes = await candidates();
+
+    expect(stairCounts(routes)).toEqual([1, 2]);
+    for (const candidate of routes) {
+      expect(candidate.degraded).toBe(true);
+      expect(candidate.warnings?.join("|")).toContain("樓梯");
+    }
+  });
+
+  it("keeps stair candidates when OTP is empty and Valhalla has none step-free", async () => {
+    otp.mockResolvedValue({ status: "ok", routes: [route("東路", 8, 0, 2)] });
+    valhalla.mockResolvedValue([]);
+
+    const routes = await candidates();
+
+    expect(stairCounts(routes)).toEqual([2]);
+    expect(routes[0].degraded).toBe(true);
   });
 
   it("orders by time when the stairs preference is off without excluding stairs", async () => {
@@ -280,5 +319,108 @@ describe("outdoor walking candidates", () => {
       expect(options).toMatchObject({ mode: "wheelchair", avoidStairs: true });
       expect(options).not.toHaveProperty("includeWalkingAlternatives");
     }
+  });
+});
+
+describe("government road events on walking routes", () => {
+  const sidewalkWork = (
+    points?: RoadIncident["points"],
+    overrides: Partial<RoadIncident> = {},
+  ): RoadIncident => ({
+    incidentId: "work-1",
+    title: "道路施工",
+    description: "人行道更新工程",
+    severity: "advisory",
+    location: { lat: 25.035, lng: 121.56 },
+    ...(points ? { points } : {}),
+    ...overrides,
+  });
+
+  async function twoStepFreeCorridors() {
+    otp.mockResolvedValue({ status: "ok", routes: [route("中路", 12, 1)] });
+    valhalla.mockResolvedValue([route("西路", 10, 2)]);
+    return candidates();
+  }
+
+  it("adds an advisory without changing order, candidates or degraded state", async () => {
+    const baseline = await twoStepFreeCorridors();
+    incidents.mockResolvedValue([sidewalkWork()]);
+
+    const routes = await twoStepFreeCorridors();
+
+    expect(routes.map((candidate) => candidate.routeId)).toEqual(
+      baseline.map((candidate) => candidate.routeId),
+    );
+    const hit = routes.find((candidate) => candidate.routeId.includes("中路"));
+    expect(hit?.hazardAdvisory?.onRoute).toEqual([
+      expect.objectContaining({
+        id: "tdx:work-1",
+        source: "government",
+        severity: "difficult",
+      }),
+    ]);
+    expect(hit?.hazardAdvisory?.avoided).toEqual([]);
+    expect(hit?.degraded).toBeUndefined();
+    const miss = routes.find(
+      (candidate) => !candidate.routeId.includes("中路"),
+    );
+    expect(miss).toBeDefined();
+    expect(miss?.hazardAdvisory).toBeUndefined();
+  });
+
+  it("ignores carriageway-only advisories", async () => {
+    incidents.mockResolvedValue([
+      sidewalkWork(undefined, { title: "路面養護", description: "車道刨鋪" }),
+    ]);
+
+    const routes = await twoStepFreeCorridors();
+
+    expect(routes.every((candidate) => !candidate.hazardAdvisory)).toBe(true);
+  });
+
+  it("skips a malformed multi-point event without failing the request", async () => {
+    incidents.mockResolvedValue([
+      sidewalkWork([
+        { lat: 25.035, lng: 121.56 },
+        { lat: 95, lng: 121.56 },
+      ]),
+    ]);
+
+    const routes = await twoStepFreeCorridors();
+
+    expect(routes.length).toBeGreaterThan(0);
+    expect(routes.every((candidate) => !candidate.hazardAdvisory)).toBe(true);
+  });
+
+  it("keeps valid events when another event is malformed", async () => {
+    incidents.mockResolvedValue([
+      sidewalkWork(
+        [
+          { lat: 95, lng: 121.56 },
+          { lat: 25.035, lng: 121.56 },
+        ],
+        { incidentId: "broken" },
+      ),
+      sidewalkWork(undefined, { incidentId: "valid" }),
+    ]);
+
+    const routes = await twoStepFreeCorridors();
+
+    const hit = routes.find((candidate) => candidate.routeId.includes("中路"));
+    expect(hit?.hazardAdvisory?.onRoute.map((hazard) => hazard.id)).toEqual([
+      "tdx:valid",
+    ]);
+  });
+
+  it("returns the routes unchanged when the incident lookup fails", async () => {
+    const baseline = await twoStepFreeCorridors();
+    incidents.mockRejectedValue(new Error("TDX down"));
+
+    const routes = await twoStepFreeCorridors();
+
+    expect(routes.map((candidate) => candidate.routeId)).toEqual(
+      baseline.map((candidate) => candidate.routeId),
+    );
+    expect(routes.every((candidate) => !candidate.hazardAdvisory)).toBe(true);
   });
 });

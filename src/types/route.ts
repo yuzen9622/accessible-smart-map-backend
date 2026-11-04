@@ -520,6 +520,12 @@ export interface ScoreFactor {
 
 export const WALK_POLICY_VERSION = "sidewalk-priority-v1";
 
+/**
+ * routeId marker of an official-OTP browsing candidate from the unconstrained
+ * reference query (no wheelchair flag), as opposed to the profile query.
+ */
+export const OTP_WALK_REFERENCE_ROUTE_ID = "walk-reference-";
+
 /** Search costs and executed conditions, not surveyed carriageway measurements. */
 export interface WalkPolicy {
   version: typeof WALK_POLICY_VERSION;

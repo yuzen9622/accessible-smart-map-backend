@@ -527,3 +527,44 @@ export function planConfirmedHazardRoutes(
     allCandidatesAffected,
   };
 }
+
+/**
+ * Add advisory hazards to an already selected route without re-ranking it.
+ * Used for government road events on walking routes: they are point samples
+ * of a works area, so they inform the user but never reorder, re-select or
+ * degrade a candidate. Invalid inputs are skipped one by one, so a malformed
+ * event cannot hide the valid ones. Existing advisory entries (including
+ * `avoided`) are preserved and deduplicated by hazard id.
+ *
+ * @param route A route whose rank is final.
+ * @param hazards Advisory hazards to match against the route geometry.
+ * @returns The same route when nothing new matched, else a decorated copy.
+ */
+export function appendAdvisoryHazards(
+  route: AccessibleRoute,
+  hazards: readonly ConfirmedHazardInput[],
+): AccessibleRoute {
+  const valid = hazards.filter((hazard) => {
+    try {
+      normalizeHazards([hazard]);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  if (!valid.length) return route;
+  const existing = route.hazardAdvisory;
+  const known = new Set(existing?.onRoute.map((hazard) => hazard.id));
+  const added = matchRouteHazards(route, valid).filter(
+    (hazard) => !known.has(hazard.id),
+  );
+  if (!added.length) return route;
+  const advisory = advisoryFor(
+    sortRouteHazards([...(existing?.onRoute ?? []), ...added]),
+  );
+  return appendWarning(
+    route,
+    routeMessage("ROUTE_HAZARD_ON_ROUTE", ROUTE_WARNING.HAZARD_ON_ROUTE),
+    { hazardAdvisory: { ...advisory, avoided: existing?.avoided ?? [] } },
+  );
+}

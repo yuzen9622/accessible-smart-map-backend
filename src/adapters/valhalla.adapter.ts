@@ -4,6 +4,7 @@ import {
   VALHALLA_MAX_EXCLUDE_LOCATIONS,
   VALHALLA_ROUTE_PATH,
   VALHALLA_TIMEOUT_MS,
+  VALHALLA_WHEELCHAIR_MAX_DISTANCE_M,
 } from "../config/valhalla";
 
 export type ValhallaCosting = "auto" | "motorcycle" | "pedestrian";
@@ -176,6 +177,9 @@ export async function computeValhallaRoutes(
   if (params.costing === "pedestrian" && params.wheelchair) {
     costingOptions.type = "wheelchair";
     costingOptions.step_penalty = 600;
+    // The wheelchair type defaults max_distance to 10 km (foot: 100 km);
+    // restore the foot limit so step-free walks are not dropped for length.
+    costingOptions.max_distance = VALHALLA_WHEELCHAIR_MAX_DISTANCE_M;
   }
   if (params.costing === "pedestrian" && params.walkingSpeedKmh !== undefined) {
     costingOptions.walking_speed = params.walkingSpeedKmh;

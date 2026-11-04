@@ -156,12 +156,31 @@ describe("planValhallaRoute", () => {
     );
     expect(compute).toHaveBeenCalledWith(
       expect.objectContaining({
-        wheelchair: false,
+        wheelchair: true,
         walkingSpeedKmh: expect.closeTo(2.88),
         computeAlternatives: true,
       }),
     );
   });
+
+  it.each([
+    { mode: "elderly", avoidStairs: true, wheelchair: true },
+    { mode: "wheelchair", avoidStairs: false, wheelchair: false },
+    { mode: "normal", avoidStairs: false, wheelchair: false },
+  ] as const)(
+    "plans walking candidates step-free only when stairs are avoided: $mode / $avoidStairs",
+    async ({ mode, avoidStairs, wheelchair }) => {
+      compute.mockResolvedValue({ status: "OK", trips: [normalizedTrip] });
+      await planValhallaRoute(
+        { lat: 25, lng: 121 },
+        { lat: 25.1, lng: 121.1 },
+        { travelMode: "walk", mode, avoidStairs, walkingCandidates: true },
+      );
+      expect(compute).toHaveBeenCalledWith(
+        expect.objectContaining({ wheelchair }),
+      );
+    },
+  );
 
   it("marks stairs in Valhalla pedestrian guidance", async () => {
     const stairManeuver = {
