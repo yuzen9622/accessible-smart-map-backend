@@ -1796,37 +1796,11 @@ async function planWalkRoutes(
       ...route,
       routeId: `otp-${route.routeId}`,
     }));
-    let unavailable = otp.status === "unavailable";
-    if (Date.now() < deadline) {
-      try {
-        const { planValhallaRoute } =
-          await import("./planners/valhalla-routing");
-        const alternatives = await planValhallaRoute(walkPoints[0], dest, {
-          travelMode: "walk",
-          mode: roadMode,
-          avoidStairs,
-          walkingCandidates: true,
-          deadline,
-        });
-        candidates.push(
-          ...alternatives.map((route) => ({
-            ...route,
-            routeId: `valhalla-${route.routeId}`,
-          })),
-        );
-      } catch (error) {
-        unavailable = true;
-        console.warn(
-          "[accessible-route] optional walking candidates unavailable",
-          error,
-        );
-      }
-    }
     if (!candidates.length)
       return {
         ok: false,
         failure: routeFailure(
-          unavailable || Date.now() >= deadline
+          otp.status === "unavailable" || Date.now() >= deadline
             ? ROUTE_REASON.UPSTREAM_TIMEOUT
             : ROUTE_REASON.NO_ROUTE,
         ),
@@ -1843,9 +1817,7 @@ async function planWalkRoutes(
       ok: true,
       routes,
       trafficMs: 0,
-      routedByEngineWithNoElevationData: routes.some((route) =>
-        route.routeId.startsWith("valhalla-"),
-      ),
+      routedByEngineWithNoElevationData: false,
     };
   }
 

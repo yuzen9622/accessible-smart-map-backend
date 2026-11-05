@@ -129,8 +129,6 @@ export interface PlanRoadRouteOptions {
   departureTime?: Date;
   mode?: AccessibilityMode;
   avoidStairs?: boolean;
-  /** General walking exploration, with the requested mode's speed. */
-  walkingCandidates?: boolean;
   deadline?: number;
   /** True destination for the tail walk when the drive routes to a proxy arrival point (e.g. disabled parking). */
   finalWalkTarget?: LatLng;

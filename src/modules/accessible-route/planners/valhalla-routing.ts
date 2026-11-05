@@ -29,7 +29,6 @@ import { normalizeRelativeDirection } from "../../../utils/nav-instructions-engi
 import { ValhallaRoutingError } from "./valhalla-routing.types";
 import { planOtpWalkDetailed } from "./otp-routing";
 import { unknownWalkA11yDetails } from "./walk-a11y";
-import { walkSpeedMps } from "../scoring";
 
 export { ValhallaRoutingError } from "./valhalla-routing.types";
 
@@ -765,9 +764,6 @@ export async function planValhallaRoute(
     // `alternates`. Pedestrian costing has no live traffic, so walking omits
     // it and keeps Valhalla's own alternative routes.
     if (opts.travelMode !== "walk") params.dateTime = { type: 0 };
-    if (opts.walkingCandidates) {
-      params.walkingSpeedKmh = walkSpeedMps(opts.mode ?? "normal") * 3.6;
-    }
     if (opts.deadline !== undefined) {
       if (opts.deadline <= Date.now())
         return Promise.resolve({ status: "NO_ROUTE", trips: [] });

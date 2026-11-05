@@ -181,54 +181,31 @@ describe("planValhallaRoute", () => {
     expect(step).not.toHaveProperty("maneuver");
   });
 
-  it("estimates exploratory walking candidates at the requested wheelchair speed", async () => {
+  it("omits the departure time for walking so Valhalla keeps alternates", async () => {
     compute.mockResolvedValue({ status: "OK", trips: [normalizedTrip] });
     await planValhallaRoute(
       { lat: 25, lng: 121 },
       { lat: 25.1, lng: 121.1 },
-      {
-        travelMode: "walk",
-        mode: "wheelchair",
-        walkingCandidates: true,
-      },
+      { travelMode: "walk", mode: "normal" },
     );
-    expect(compute).toHaveBeenCalledWith(
-      expect.objectContaining({
-        wheelchair: true,
-        walkingSpeedKmh: expect.closeTo(2.88),
-        computeAlternatives: true,
-      }),
-    );
+    expect(compute.mock.calls[0][0]).not.toHaveProperty("dateTime");
+    expect(compute.mock.calls[0][0]).toMatchObject({
+      computeAlternatives: true,
+    });
   });
-
-  it.each([false, true])(
-    "omits the departure time for walking so Valhalla keeps alternates (walkingCandidates=%s)",
-    async (walkingCandidates) => {
-      compute.mockResolvedValue({ status: "OK", trips: [normalizedTrip] });
-      await planValhallaRoute(
-        { lat: 25, lng: 121 },
-        { lat: 25.1, lng: 121.1 },
-        { travelMode: "walk", mode: "normal", walkingCandidates },
-      );
-      expect(compute.mock.calls[0][0]).not.toHaveProperty("dateTime");
-      expect(compute.mock.calls[0][0]).toMatchObject({
-        computeAlternatives: true,
-      });
-    },
-  );
 
   it.each([
     { mode: "elderly", avoidStairs: true, wheelchair: true },
     { mode: "wheelchair", avoidStairs: false, wheelchair: false },
     { mode: "normal", avoidStairs: false, wheelchair: false },
   ] as const)(
-    "plans walking candidates step-free only when stairs are avoided: $mode / $avoidStairs",
+    "plans walks step-free only when stairs are avoided: $mode / $avoidStairs",
     async ({ mode, avoidStairs, wheelchair }) => {
       compute.mockResolvedValue({ status: "OK", trips: [normalizedTrip] });
       await planValhallaRoute(
         { lat: 25, lng: 121 },
         { lat: 25.1, lng: 121.1 },
-        { travelMode: "walk", mode, avoidStairs, walkingCandidates: true },
+        { travelMode: "walk", mode, avoidStairs },
       );
       expect(compute).toHaveBeenCalledWith(
         expect.objectContaining({ wheelchair }),

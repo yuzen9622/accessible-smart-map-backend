@@ -748,7 +748,7 @@ describe("accessible-route OpenAPI", () => {
     expect(operation.description).toContain("預設 csr（CSR 行人圖）");
     expect(operation.description).toContain("亦可設為 otp（官方 OTP）");
     expect(operation.description).toContain(
-      "一般行人探索候選（OTP／Valhalla）",
+      "OTP 一般行人探索候選（不使用 Valhalla）",
     );
     expect(operation.description).toContain(
       "起點、所有中途點與終點皆在台北行人圖涵蓋範圍內",

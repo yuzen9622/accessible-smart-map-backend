@@ -172,9 +172,12 @@ describe("outdoor walking candidates", () => {
   it("drops known-stairs candidates when a known step-free one exists", async () => {
     otp.mockResolvedValue({
       status: "ok",
-      routes: [route("東路", 8, 0, 2), route("中路", 12, 1)],
+      routes: [
+        route("東路", 8, 0, 2),
+        route("中路", 12, 1),
+        route("西路", 10, 2, 1),
+      ],
     });
-    valhalla.mockResolvedValue([route("西路", 10, 2, 1)]);
 
     const routes = await candidates();
 
@@ -190,19 +193,14 @@ describe("outdoor walking candidates", () => {
         includeWalkingAlternatives: true,
       }),
     );
-    expect(valhalla).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.anything(),
-      expect.objectContaining({ avoidStairs: true, walkingCandidates: true }),
-    );
+    expect(valhalla).not.toHaveBeenCalled();
   });
 
   it("returns the least-stairs candidate with a warning when every candidate has stairs", async () => {
     otp.mockResolvedValue({
       status: "ok",
-      routes: [route("東路", 8, 0, 2)],
+      routes: [route("東路", 8, 0, 2), route("西路", 10, 2, 1)],
     });
-    valhalla.mockResolvedValue([route("西路", 10, 2, 1)]);
 
     const routes = await candidates();
 
@@ -213,9 +211,8 @@ describe("outdoor walking candidates", () => {
     }
   });
 
-  it("keeps stair candidates when OTP is empty and Valhalla has none step-free", async () => {
+  it("keeps stair candidates when none is step-free", async () => {
     otp.mockResolvedValue({ status: "ok", routes: [route("東路", 8, 0, 2)] });
-    valhalla.mockResolvedValue([]);
 
     const routes = await candidates();
 
@@ -224,8 +221,10 @@ describe("outdoor walking candidates", () => {
   });
 
   it("orders by time when the stairs preference is off without excluding stairs", async () => {
-    otp.mockResolvedValue({ status: "ok", routes: [route("慢路", 12, 1)] });
-    valhalla.mockResolvedValue([route("快路", 8, 0, 2)]);
+    otp.mockResolvedValue({
+      status: "ok",
+      routes: [route("慢路", 12, 1), route("快路", 8, 0, 2)],
+    });
 
     const routes = await candidates(false);
 
@@ -236,9 +235,8 @@ describe("outdoor walking candidates", () => {
   it("does not treat missing steps as evidence of a stair-free route", async () => {
     otp.mockResolvedValue({
       status: "ok",
-      routes: [route("步驟未知", 5, 0, null)],
+      routes: [route("步驟未知", 5, 0, null), route("步驟完整", 10, 1, 1)],
     });
-    valhalla.mockResolvedValue([route("步驟完整", 10, 1, 1)]);
 
     const routes = await candidates();
 
@@ -246,30 +244,8 @@ describe("outdoor walking candidates", () => {
     expect(stairCounts(routes)[0]).toBe(1);
   });
 
-  it("keeps Valhalla candidates when OTP is unavailable", async () => {
+  it("reports upstream unavailability without asking Valhalla when OTP is unavailable", async () => {
     otp.mockResolvedValue({ status: "unavailable", routes: [] });
-    valhalla.mockResolvedValue([route("仍可規劃", 10, 1, 1)]);
-
-    const routes = await candidates();
-
-    expect(routes).toHaveLength(1);
-    expect(routes[0].routeId).toContain("仍可規劃");
-    expect(stairCounts(routes)).toEqual([1]);
-  });
-
-  it("keeps OTP candidates when the optional Valhalla query times out", async () => {
-    valhalla.mockRejectedValue(new Error("Valhalla timeout"));
-
-    const routes = await candidates();
-
-    expect(routes).toHaveLength(1);
-    expect(routes[0].routeId).toContain("有樓梯");
-    expect(stairCounts(routes)).toEqual([2]);
-  });
-
-  it("reports upstream unavailability when OTP is empty and Valhalla times out", async () => {
-    otp.mockResolvedValue({ status: "no_route", routes: [] });
-    valhalla.mockRejectedValue(new Error("Valhalla timeout"));
 
     const result = await planAccessibleRouteFromRequest(request);
 
@@ -277,14 +253,27 @@ describe("outdoor walking candidates", () => {
       ok: false,
       data: { reason: "UPSTREAM_TIMEOUT" },
     });
+    expect(valhalla).not.toHaveBeenCalled();
   });
 
-  it("retains positive stairs evidence when engines return the same geometry", async () => {
+  it("reports no route when OTP finds none", async () => {
+    otp.mockResolvedValue({ status: "no_route", routes: [] });
+
+    const result = await planAccessibleRouteFromRequest(request);
+
+    expect(result).toMatchObject({ ok: false, data: { reason: "NO_ROUTE" } });
+    expect(valhalla).not.toHaveBeenCalled();
+  });
+
+  it("retains positive stairs evidence when candidates share the same geometry", async () => {
     otp.mockResolvedValue({
       status: "ok",
-      routes: [route("未報樓梯", 8, 0), route("確有樓梯", 12, 0, 1)],
+      routes: [
+        route("未報樓梯", 8, 0),
+        route("確有樓梯", 12, 0, 1),
+        route("另一候選未報樓梯", 7, 0),
+      ],
     });
-    valhalla.mockResolvedValue([route("另一引擎未報樓梯", 7, 0)]);
 
     const routes = await candidates();
 
@@ -337,8 +326,10 @@ describe("government road events on walking routes", () => {
   });
 
   async function twoStepFreeCorridors() {
-    otp.mockResolvedValue({ status: "ok", routes: [route("中路", 12, 1)] });
-    valhalla.mockResolvedValue([route("西路", 10, 2)]);
+    otp.mockResolvedValue({
+      status: "ok",
+      routes: [route("中路", 12, 1), route("西路", 10, 2)],
+    });
     return candidates();
   }
 

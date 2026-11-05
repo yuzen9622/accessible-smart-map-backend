@@ -46,8 +46,6 @@ export interface ComputeValhallaRoutesParams {
   /** Blend distance into road route costing without disabling other penalties. */
   distanceWeight?: 0.7;
   wheelchair?: boolean;
-  /** Requested profile speed, in kilometres per hour, for walking candidates. */
-  walkingSpeedKmh?: number;
   /** Remaining shared request budget. */
   timeoutMs?: number;
   /** Points the route must not pass through, e.g. closed-road incidents. */
@@ -180,9 +178,6 @@ export async function computeValhallaRoutes(
     // The wheelchair type defaults max_distance to 10 km (foot: 100 km);
     // restore the foot limit so step-free walks are not dropped for length.
     costingOptions.max_distance = VALHALLA_WHEELCHAIR_MAX_DISTANCE_M;
-  }
-  if (params.costing === "pedestrian" && params.walkingSpeedKmh !== undefined) {
-    costingOptions.walking_speed = params.walkingSpeedKmh;
   }
   const body: Record<string, unknown> = {
     locations,

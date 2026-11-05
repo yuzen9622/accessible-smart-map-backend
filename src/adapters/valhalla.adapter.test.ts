@@ -62,25 +62,6 @@ describe("computeValhallaRoutes", () => {
     }
   });
 
-  it("sends the requested walking speed without enabling wheelchair access for exploration", async () => {
-    post.mockResolvedValue({ data: { trip } });
-    await computeValhallaRoutes({
-      origin: { lat: 25, lng: 121 },
-      destination: { lat: 25.1, lng: 121.1 },
-      costing: "pedestrian",
-      walkingSpeedKmh: 2.88,
-      computeAlternatives: true,
-      timeoutMs: 1000,
-    });
-    expect(post.mock.calls[0][1]).toMatchObject({
-      costing_options: { pedestrian: { walking_speed: 2.88 } },
-      alternates: 2,
-    });
-    expect(post.mock.calls[0][1]).not.toMatchObject({
-      costing_options: { pedestrian: { type: "wheelchair" } },
-    });
-  });
-
   it("preserves identifiable stair maneuvers from Valhalla", async () => {
     const leg = trip.legs[0];
     post.mockResolvedValue({
