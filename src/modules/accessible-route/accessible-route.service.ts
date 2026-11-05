@@ -64,7 +64,10 @@ import type { TaiwanCityEn } from "../../types/transit";
 import { slimRoutes, compactRoutes } from "./facility-slim";
 import { attachWalkElevationProfiles } from "./route-elevation-enrichment";
 import { slimRouteGeometry } from "./geometry-slim";
-import { getRoutingConfig } from "../../config/routing";
+import {
+  getRoutingConfig,
+  STEP_FREE_WALK_SIDEWALK_MAX_DETOUR,
+} from "../../config/routing";
 import { restoreRouteStopIds } from "./stop-aliases";
 import { matchAudioSignals, paddedBbox } from "./planners/audio-signals";
 import {
@@ -104,7 +107,10 @@ import {
 } from "./planners/route-geometry-dedupe";
 import { selectDiverseWalkRoutes } from "./planners/walk-route-diversity";
 import { selectRoadCandidates } from "./planners/road-candidate-selection";
-import { annotateSidewalkSegments } from "../../adapters/otp-sidewalk-index.adapter";
+import {
+  annotateSidewalkSegments,
+  walkSidewalkEvidence,
+} from "../../adapters/otp-sidewalk-index.adapter";
 import { normalizeWalkLegSteps } from "../../utils/nav-instructions-engine";
 import {
   localizeRouteDetails,
@@ -3016,6 +3022,18 @@ async function finalizeDrivingRoutes(
   const input = walkStairPreference
     ? selectByStairEvidence(deduped, hasWalkSteps)
     : deduped;
+  // Step-free walks: among candidates within the detour cap of the fastest,
+  // avoid proven-unramped crossings, then take the most confirmed sidewalk.
+  // The OTP walking reference (the general walk) is one of the candidates, so
+  // the pick never has less sidewalk than it unless the reference has stairs,
+  // an unramped crossing or exceeds the cap.
+  const sidewalk = walkStairPreference
+    ? await walkSidewalkEvidence(input)
+    : undefined;
+  const fastestMinutes = Math.min(...input.map((route) => route.totalMinutes));
+  const withinDetour = (route: AccessibleRoute) =>
+    route.totalMinutes <=
+    fastestMinutes * (1 + STEP_FREE_WALK_SIDEWALK_MAX_DETOUR);
   const policyRanked = [...input].sort((a, b) => {
     if (walkStairPreference !== undefined) {
       if (walkStairPreference) {
@@ -3023,6 +3041,16 @@ async function finalizeDrivingRoutes(
         if (evidence) return evidence;
         const stairs = routeStairsCount(a) - routeStairsCount(b);
         if (stairs) return stairs;
+        const detour = Number(withinDetour(b)) - Number(withinDetour(a));
+        if (detour) return detour;
+        const ea = sidewalk?.get(a);
+        const eb = sidewalk?.get(b);
+        if (withinDetour(a) && ea && eb) {
+          const unramped = ea.unrampedCrossings - eb.unrampedCrossings;
+          if (unramped) return unramped;
+          const share = eb.sidewalkShare - ea.sidewalkShare;
+          if (share) return share;
+        }
       }
       return (
         a.totalMinutes - b.totalMinutes ||

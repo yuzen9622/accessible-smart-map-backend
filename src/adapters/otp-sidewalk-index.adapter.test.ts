@@ -487,6 +487,93 @@ describe("crossing evidence on deployed routes", () => {
     } as AccessibleRoute;
   }
 
+  async function withIndex(
+    segments: unknown[],
+    crossings: IndexedCrossing[],
+    body: (
+      adapter: typeof import("./otp-sidewalk-index.adapter"),
+    ) => Promise<void>,
+  ) {
+    const dir = await mkdtemp(join(tmpdir(), "sidewalk-index-evidence-"));
+    try {
+      const source = "pbf fixture";
+      await writeFile(join(dir, "taiwan-otp.osm.pbf"), source);
+      await writeFile(
+        join(dir, "sidewalk-index.json"),
+        JSON.stringify({
+          version: 2,
+          sourcePbfSha256: createHash("sha256").update(source).digest("hex"),
+          segments,
+          crossings,
+        }),
+      );
+      vi.stubEnv("OTP_SIDEWALK_INDEX_PATH", join(dir, "sidewalk-index.json"));
+      vi.resetModules();
+      await body(await import("./otp-sidewalk-index.adapter"));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("reports the share of a route on confirmed sidewalk", async () => {
+    await withIndex(
+      [["sidewalk", 121, 25, 121.0005, 25, 1]],
+      [],
+      async ({ walkSidewalkEvidence }) => {
+        const route = walkRoute();
+        route.legs[0].polyline = [
+          [121, 25],
+          [121.0005, 25],
+          [121.001, 25],
+        ];
+        const evidence = (await walkSidewalkEvidence([route])).get(route);
+        expect(evidence?.sidewalkShare).toBeCloseTo(0.5, 2);
+        expect(evidence?.unrampedCrossings).toBe(0);
+      },
+    );
+  });
+
+  it("counts only crossings with a proven-unramped end", async () => {
+    await withIndex(
+      [],
+      [
+        CROSSING,
+        [
+          9,
+          2,
+          0,
+          0,
+          [
+            [121, 25.00005],
+            [121, 25.000105],
+          ],
+        ],
+      ],
+      async ({ walkSidewalkEvidence }) => {
+        const route = walkRoute();
+        const csr = walkRoute("pedestrian-a11y");
+        const evidence = await walkSidewalkEvidence([route, csr]);
+        expect(evidence.get(route)).toEqual({
+          sidewalkShare: 0,
+          unrampedCrossings: 1,
+        });
+        expect(evidence.get(csr)?.unrampedCrossings).toBe(0);
+      },
+    );
+  });
+
+  it("gives every route zero without a deployed index", async () => {
+    vi.stubEnv("OTP_SIDEWALK_INDEX_PATH", "");
+    vi.resetModules();
+    const { walkSidewalkEvidence } =
+      await import("./otp-sidewalk-index.adapter");
+    const route = walkRoute();
+    expect((await walkSidewalkEvidence([route])).get(route)).toEqual({
+      sidewalkShare: 0,
+      unrampedCrossings: 0,
+    });
+  });
+
   it("replaces OSM counts on OTP legs, leaves CSR legs, and reloads a new release", async () => {
     const dir = await mkdtemp(join(tmpdir(), "sidewalk-index-crossing-"));
     try {

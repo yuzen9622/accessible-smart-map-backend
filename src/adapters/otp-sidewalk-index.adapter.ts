@@ -423,6 +423,75 @@ function applyCrossingEvidence(leg: WalkLeg, crossings: CrossingIndex): void {
   ).length;
 }
 
+const NOT_SIDEWALK_FEATURES = [
+  "stairs",
+  "crossing",
+  "curb_ramp_crossing",
+  "elevator",
+  "escalator",
+];
+
+function notSidewalkSegments(
+  leg: WalkLeg,
+): NonNullable<WalkLeg["a11ySegments"]> {
+  return (leg.a11ySegments ?? []).filter(
+    (s) => s.indoor || NOT_SIDEWALK_FEATURES.includes(s.feature),
+  );
+}
+
+/** Sidewalk coverage and curb-ramp evidence of one walking route. */
+export interface WalkSidewalkEvidence {
+  /** Fraction (0–1) of the walked length the index confirms as sidewalk. */
+  sidewalkShare: number;
+  /** Crossings walked across that have at least one end proven unramped. */
+  unrampedCrossings: number;
+}
+
+/**
+ * The same sidewalk evidence the response's `sidewalkSegments` carry, as a
+ * per-route number for ranking. Without a loaded index every route gets zero,
+ * so ranking on it changes nothing.
+ *
+ * @param routes Walking candidates.
+ * @returns Evidence per route.
+ */
+export async function walkSidewalkEvidence(
+  routes: readonly AccessibleRoute[],
+): Promise<Map<AccessibleRoute, WalkSidewalkEvidence>> {
+  const result = new Map<AccessibleRoute, WalkSidewalkEvidence>();
+  const index = await currentIndex();
+  for (const route of routes) {
+    let sidewalkM = 0;
+    let lengthM = 0;
+    let unrampedCrossings = 0;
+    for (const leg of route.legs) {
+      if (leg.type !== "WALK") continue;
+      const points = leg.polyline;
+      for (let i = 0; i + 1 < points.length; i++)
+        lengthM += haversineCoords(points[i], points[i + 1]);
+      if (!index) continue;
+      for (const span of matchSidewalkSegments(
+        points,
+        index.segments,
+        notSidewalkSegments(leg),
+      )) {
+        for (let i = span.startIndex; i < span.endIndex; i++)
+          sidewalkM += haversineCoords(points[i], points[i + 1]);
+      }
+      if (route.engine !== "pedestrian-a11y" && index.crossings.size > 0) {
+        unrampedCrossings += matchCrossings(points, index.crossings).filter(
+          ([, , unramped]) => unramped > 0,
+        ).length;
+      }
+    }
+    result.set(route, {
+      sidewalkShare: lengthM > 0 ? sidewalkM / lengthM : 0,
+      unrampedCrossings,
+    });
+  }
+  return result;
+}
+
 export async function annotateSidewalkSegments(
   routes: AccessibleRoute[],
 ): Promise<void> {
@@ -432,19 +501,12 @@ export async function annotateSidewalkSegments(
   for (const route of routes) {
     for (const leg of route.legs) {
       if (leg.type !== "WALK") continue;
-      const excluded = (leg.a11ySegments ?? []).filter(
-        (s) =>
-          s.indoor ||
-          [
-            "stairs",
-            "crossing",
-            "curb_ramp_crossing",
-            "elevator",
-            "escalator",
-          ].includes(s.feature),
-      );
       leg.sidewalkSegments = index
-        ? matchSidewalkSegments(leg.polyline, index.segments, excluded)
+        ? matchSidewalkSegments(
+            leg.polyline,
+            index.segments,
+            notSidewalkSegments(leg),
+          )
         : [];
       if (index && route.engine !== "pedestrian-a11y") {
         applyCrossingEvidence(leg, index.crossings);

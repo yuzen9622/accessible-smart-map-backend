@@ -64,7 +64,7 @@ afterEach(() => {
 });
 
 describe("official OTP walking candidates with a stair preference", () => {
-  it("retains wheelchair routing and adds a same-speed walking reference without dropping stairs", async () => {
+  it("retains wheelchair routing and adds the normal-walk reference without dropping stairs", async () => {
     post
       .mockResolvedValueOnce(response([itinerary(primaryShape)]))
       .mockResolvedValueOnce(response([itinerary(referenceShape)]));
@@ -88,10 +88,24 @@ describe("official OTP walking candidates with a stair preference", () => {
       wheelchair: true,
       walkSpeed: 0.8,
     });
+    // Exactly the normal-mode walk query, so the reference is the route
+    // normal users get; its time is rescaled to the wheelchair speed.
     expect(reference.variables).toEqual({
       ...primary.variables,
       wheelchair: false,
+      walkSpeed: 1.3,
     });
+    const minutes = Object.fromEntries(
+      result.routes.map((route) => [route.routeId, route.totalMinutes]),
+    );
+    expect(Object.values(minutes).sort((a, b) => a - b)).toEqual([
+      100,
+      Math.round((6000 * 1.3) / 0.8 / 60),
+    ]);
+    for (const route of result.routes) {
+      const leg = route.legs[0];
+      if (leg.type === "WALK") expect(leg.minutesEst).toBe(route.totalMinutes);
+    }
     expect(new Set(result.routes.map((route) => route.routeId)).size).toBe(2);
     expect(result.routes.map((route) => route.legs[0].polyline)).toEqual(
       expect.arrayContaining([

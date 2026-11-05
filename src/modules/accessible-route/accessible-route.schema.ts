@@ -84,12 +84,12 @@ export const AccessibleRouteBodySchema = z
       .optional()
       .openapi({
         description:
-          "無障礙模式。調整評分權重（elderly 提升 Tier 1+2；visual_impaired 將導盲磚／語音號誌列為關鍵）、轉乘懲罰（wheelchair ×2、elderly ×1.5）與輪椅 Tier-1 路線排除。使用官方 OTP 的一般戶外純步行候選可加入同模式速度的一般行人探索，不保證每條候選輪椅可通行；室內與固定端點仍維持原限制。未填時沿用 query 解析結果；若仍未定且帶有效 Bearer token，改用登入者已儲存的無障礙偏好（GET /user/a11y-profile）推導；最後退回 normal。",
+          "無障礙模式。調整評分權重（elderly 提升 Tier 1+2；visual_impaired 將導盲磚／語音號誌列為關鍵）、轉乘懲罰（wheelchair ×2、elderly ×1.5）與輪椅 Tier-1 路線排除。使用官方 OTP 的一般戶外純步行候選可加入一般步行模式的探索路線（以該模式速度計時），不保證每條候選輪椅可通行；室內與固定端點仍維持原限制。未填時沿用 query 解析結果；若仍未定且帶有效 Bearer token，改用登入者已儲存的無障礙偏好（GET /user/a11y-profile）推導；最後退回 normal。",
         example: "wheelchair",
       }),
     avoidStairs: z.boolean().optional().openapi({
       description:
-        "使用官方 OTP 的一般戶外、無中途點純步行：true 時由引擎優先規劃無樓梯路線（OTP 以輪椅無障礙選路），並保留同速一般探索候選；只要有已知無樓梯（步驟資料完整且無樓梯）的候選，就不回傳已知含樓梯的路線；全部候選都有樓梯時回傳樓梯最少者，標記 degraded 並附避樓梯條件未滿足警告。步驟資料不明的路線不視為無樓梯；不保證輪椅可通行。使用 CSR 的純步行會在圖搜尋時套用避樓梯條件；室內場域、固定／精確端點、中途點與轉乘接駁保留原通行限制。此欄位不改變 mode 與步速。未填時依登入者 canUseStairs 設定推導，否則預設 mode==='wheelchair'。",
+        "使用官方 OTP 的一般戶外、無中途點純步行：true 時由引擎優先規劃無樓梯路線（OTP 以輪椅無障礙選路），並保留一般步行模式的探索候選（以該模式速度計時）；只要有已知無樓梯（步驟資料完整且無樓梯）的候選，就不回傳已知含樓梯的路線；全部候選都有樓梯時回傳樓梯最少者，標記 degraded 並附避樓梯條件未滿足警告。步驟資料不明的路線不視為無樓梯；不保證輪椅可通行。樓梯條件之後，在時間不超過最快候選 30% 的候選中，先避開已證實沒有坡道的行穿線（目前僅臺北有坡道資料），再選 sidewalkSegments 人行道比例最高者；一般步行模式的路線也參與比較，因此只要它無樓梯、無已證實無坡道的行穿線且在時間上限內，回傳路線的人行道比例不會低於它。使用 CSR 的純步行會在圖搜尋時套用避樓梯條件；室內場域、固定／精確端點、中途點與轉乘接駁保留原通行限制。此欄位不改變 mode 與步速。未填時依登入者 canUseStairs 設定推導，否則預設 mode==='wheelchair'。",
       example: true,
     }),
     requireElevator: z.boolean().optional().openapi({
@@ -137,7 +137,7 @@ export const AccessibleRouteBodySchema = z
       .default("transit")
       .openapi({
         description:
-          "交通工具（與無障礙 mode 正交）：transit（預設，大眾運輸及其轉乘 WALK legs 由 OTP2 規劃）、drive（開車）、motorcycle（騎車）、walk（純步行）。戶外純步行由部署設定 ROUTE_WALK_PLANNER 選擇 otp 或 csr，選路與備援條件詳見端點說明。官方 OTP 的一般戶外、無中途點、非固定端點純步行會保留原模式與同速一般行人探索候選；avoidStairs 時引擎優先規劃無樓梯路線，有已知無樓梯候選即排除已知含樓梯路線，否則回傳樓梯最少者並警告；樓梯仍以 steps.stairs 標示，未保證輪椅可通行、全程人行道或最大繞行時間。CSR 明確判定無障礙條件不符或票區政策阻擋時不啟用備援。上游不可用時回 503。車行時間為自由流估計，不含即時路況。",
+          "交通工具（與無障礙 mode 正交）：transit（預設，大眾運輸及其轉乘 WALK legs 由 OTP2 規劃）、drive（開車）、motorcycle（騎車）、walk（純步行）。戶外純步行由部署設定 ROUTE_WALK_PLANNER 選擇 otp 或 csr，選路與備援條件詳見端點說明。官方 OTP 的一般戶外、無中途點、非固定端點純步行會保留原模式與一般步行模式的探索候選；avoidStairs 時引擎優先規劃無樓梯路線，有已知無樓梯候選即排除已知含樓梯路線，否則回傳樓梯最少者並警告；樓梯仍以 steps.stairs 標示，未保證輪椅可通行、全程人行道或最大繞行時間。CSR 明確判定無障礙條件不符或票區政策阻擋時不啟用備援。上游不可用時回 503。車行時間為自由流估計，不含即時路況。",
         example: "drive",
       }),
     waypoints: z
@@ -1683,7 +1683,7 @@ registry.registerPath({
   tags: ["Accessibility"],
   summary: "無障礙路線規劃",
   description:
-    "規劃起訖點間候選路線。travelMode=transit（預設）以 OTP2 為主引擎，並行搜尋公車、捷運、高鐵與台鐵；含乘車段的行程不替換其 WALK legs。在 CSR 設定下，OTP2 回傳的全 WALK 候選會另套用純步行選路政策。純步行引擎由部署設定 ROUTE_WALK_PLANNER 選擇，預設 csr（CSR 行人圖），亦可設為 otp（官方 OTP）。使用官方 OTP 的一般戶外、無中途點、非固定端點純步行，合併原模式 OTP 與同模式速度的 OTP 一般行人探索候選（不使用 Valhalla），保留最多 3 條主要走廊不同的路線；avoidStairs 為 true 時引擎優先規劃無樓梯路線；有已知無樓梯候選即排除已知含樓梯候選，全部含樓梯時回傳樓梯最少者並標記 degraded 與警告，不代表已確認輪椅可通行。步行路線另附政府人行道／騎樓施工與封路事件的 hazardAdvisory 提示，只提醒不改變排序。室內、精確端點、固定入口及有中途點的請求保留原通行限制。使用 CSR 時，起點、所有中途點與終點皆在台北行人圖涵蓋範圍內才先由 CSR 選路；範圍外、CSR 不可用或拓樸無法連通時，改由 OTP2 規劃；是否執行人行道優先政策以 walkPolicy 欄位為準，官方 OTP 相容回應可省略該欄位。CSR 明確判定無障礙條件不符或票區政策阻擋時，不會透過 OTP2 備援繞過限制。drive／motorcycle 主體走自架 Valhalla（自由流時間、不含即時路況）。支援最多 5 個中途點（waypoints），回傳最多 3 筆。選填帶 Bearer token：帶時，未明確傳入的 mode/avoidStairs/requireElevator/needsAccessibleToilet/needsHandrail/maxSlopePercent 會從登入者已儲存的 a11y-profile 推導；不帶則完全公開不受影響；帶但無效/過期回 401/403。",
+    "規劃起訖點間候選路線。travelMode=transit（預設）以 OTP2 為主引擎，並行搜尋公車、捷運、高鐵與台鐵；含乘車段的行程不替換其 WALK legs。在 CSR 設定下，OTP2 回傳的全 WALK 候選會另套用純步行選路政策。純步行引擎由部署設定 ROUTE_WALK_PLANNER 選擇，預設 csr（CSR 行人圖），亦可設為 otp（官方 OTP）。使用官方 OTP 的一般戶外、無中途點、非固定端點純步行，合併原模式 OTP 與以該模式速度計時的 OTP 一般行人探索候選（不使用 Valhalla），保留最多 3 條主要走廊不同的路線；avoidStairs 為 true 時引擎優先規劃無樓梯路線；有已知無樓梯候選即排除已知含樓梯候選，全部含樓梯時回傳樓梯最少者並標記 degraded 與警告，不代表已確認輪椅可通行。步行路線另附政府人行道／騎樓施工與封路事件的 hazardAdvisory 提示，只提醒不改變排序。室內、精確端點、固定入口及有中途點的請求保留原通行限制。使用 CSR 時，起點、所有中途點與終點皆在台北行人圖涵蓋範圍內才先由 CSR 選路；範圍外、CSR 不可用或拓樸無法連通時，改由 OTP2 規劃；是否執行人行道優先政策以 walkPolicy 欄位為準，官方 OTP 相容回應可省略該欄位。CSR 明確判定無障礙條件不符或票區政策阻擋時，不會透過 OTP2 備援繞過限制。drive／motorcycle 主體走自架 Valhalla（自由流時間、不含即時路況）。支援最多 5 個中途點（waypoints），回傳最多 3 筆。選填帶 Bearer token：帶時，未明確傳入的 mode/avoidStairs/requireElevator/needsAccessibleToilet/needsHandrail/maxSlopePercent 會從登入者已儲存的 a11y-profile 推導；不帶則完全公開不受影響；帶但無效/過期回 401/403。",
   security: [{ bearerAuth: [] }, {}],
   request: {
     body: {

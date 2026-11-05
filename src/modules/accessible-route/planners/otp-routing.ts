@@ -941,6 +941,19 @@ export type OtpWalkPlanResult =
  * @param opts Accessibility mode and optional step-free override.
  * @returns The route result with an explicit planner status.
  */
+/** A walk-only itinerary with every duration stretched by `scale`. */
+function atWalkSpeed(it: OtpItinerary, scale: number): OtpItinerary {
+  return {
+    ...it,
+    duration: it.duration * scale,
+    legs: it.legs.map((leg) => {
+      const duration =
+        (leg.duration ?? (leg.endTime - leg.startTime) / 1000) * scale;
+      return { ...leg, duration, endTime: leg.startTime + duration * 1000 };
+    }),
+  };
+}
+
 export async function planOtpWalkDetailed(
   origin: { lat: number; lng: number },
   destination: { lat: number; lng: number },
@@ -996,19 +1009,28 @@ export async function planOtpWalkDetailed(
     (opts?.deadline === undefined || Date.now() < opts.deadline)
   ) {
     try {
+      // The reference is the exact query a normal-mode walk sends, so it is
+      // the route normal users get: OTP's choice depends on speed (fixed
+      // per-intersection seconds), so a query at this mode's slower speed is
+      // a different route. Its durations are rescaled to this mode's speed.
+      const referenceSpeed = walkSpeedMps("normal");
       const reference = await queryOtpWalk(
         origin,
         destination,
         departure,
         false,
-        walkSpeed,
+        referenceSpeed,
         false,
         opts?.deadline === undefined
           ? undefined
           : Math.max(1, opts.deadline - Date.now()),
       );
       if (reference.source === "official")
-        itineraries.push(...reference.itineraries);
+        itineraries.push(
+          ...reference.itineraries.map((it) =>
+            atWalkSpeed(it, referenceSpeed / walkSpeed),
+          ),
+        );
     } catch (error) {
       console.warn(
         "[otp-routing] optional walking reference unavailable",

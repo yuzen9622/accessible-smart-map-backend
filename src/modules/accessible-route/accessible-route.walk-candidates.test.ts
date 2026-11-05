@@ -64,15 +64,20 @@ vi.mock("./route-elevation-enrichment", () => ({
 }));
 vi.mock("../../adapters/otp-sidewalk-index.adapter", () => ({
   annotateSidewalkSegments: vi.fn(),
+  walkSidewalkEvidence: vi.fn(),
 }));
 
 import { planAccessibleRouteFromRequest } from "./accessible-route.service";
 import { planOtpWalkDetailed } from "./planners/otp-routing";
+import { walkSidewalkEvidence } from "../../adapters/otp-sidewalk-index.adapter";
 import { planValhallaRoute } from "./planners/valhalla-routing";
 import { getActiveRoadIncidents } from "../traffic/road-incident.service";
 import type { RoadIncident } from "../../types/traffic";
 
 const otp = vi.mocked(planOtpWalkDetailed);
+const sidewalkEvidence = vi.mocked(walkSidewalkEvidence);
+/** Sidewalk evidence per candidate name; unnamed candidates have none. */
+let evidenceByName: Record<string, { share: number; unramped?: number }> = {};
 const valhalla = vi.mocked(planValhallaRoute);
 const incidents = vi.mocked(getActiveRoadIncidents);
 const request = {
@@ -165,6 +170,21 @@ beforeEach(() => {
   otp.mockResolvedValue({ status: "ok", routes: [route("有樓梯", 8, 0, 2)] });
   valhalla.mockResolvedValue([]);
   incidents.mockResolvedValue([]);
+  evidenceByName = {};
+  sidewalkEvidence.mockImplementation(async (routes) => {
+    const result = new Map();
+    for (const candidate of routes) {
+      const name = Object.keys(evidenceByName).find((key) =>
+        candidate.routeId.includes(key),
+      );
+      const evidence = name ? evidenceByName[name] : { share: 0 };
+      result.set(candidate, {
+        sidewalkShare: evidence.share,
+        unrampedCrossings: evidence.unramped ?? 0,
+      });
+    }
+    return result;
+  });
 });
 afterEach(() => vi.unstubAllEnvs());
 
@@ -308,6 +328,73 @@ describe("outdoor walking candidates", () => {
       expect(options).toMatchObject({ mode: "wheelchair", avoidStairs: true });
       expect(options).not.toHaveProperty("includeWalkingAlternatives");
     }
+  });
+});
+
+describe("step-free walks prefer confirmed sidewalk", () => {
+  it("takes the step-free candidate with more sidewalk within the detour cap", async () => {
+    otp.mockResolvedValue({
+      status: "ok",
+      routes: [route("車道", 8, 0), route("人行道", 10, 1)],
+    });
+    evidenceByName = { 車道: { share: 0.2 }, 人行道: { share: 0.8 } };
+
+    const routes = await candidates();
+
+    expect(routes[0].routeId).toContain("人行道");
+  });
+
+  it("keeps the faster candidate when the sidewalk one exceeds the detour cap", async () => {
+    otp.mockResolvedValue({
+      status: "ok",
+      routes: [route("車道", 8, 0), route("人行道", 11, 1)],
+    });
+    evidenceByName = { 車道: { share: 0.2 }, 人行道: { share: 0.8 } };
+
+    const routes = await candidates();
+
+    expect(routes[0].routeId).toContain("車道");
+  });
+
+  it("avoids proven-unramped crossings before comparing sidewalk", async () => {
+    otp.mockResolvedValue({
+      status: "ok",
+      routes: [route("無坡道", 8, 0), route("有坡道", 9, 1)],
+    });
+    evidenceByName = {
+      無坡道: { share: 0.9, unramped: 1 },
+      有坡道: { share: 0.3 },
+    };
+
+    const routes = await candidates();
+
+    expect(routes[0].routeId).toContain("有坡道");
+  });
+
+  it("still drops known stairs before looking at sidewalk", async () => {
+    otp.mockResolvedValue({
+      status: "ok",
+      routes: [route("樓梯人行道", 8, 0, 1), route("平路", 9, 1)],
+    });
+    evidenceByName = { 樓梯人行道: { share: 1 }, 平路: { share: 0 } };
+
+    const routes = await candidates();
+
+    expect(routes[0].routeId).toContain("平路");
+    expect(stairCounts(routes)).toEqual([0]);
+  });
+
+  it("leaves walks without the stairs preference ordered by time", async () => {
+    otp.mockResolvedValue({
+      status: "ok",
+      routes: [route("人行道", 10, 1), route("車道", 8, 0)],
+    });
+    evidenceByName = { 車道: { share: 0 }, 人行道: { share: 1 } };
+
+    const routes = await candidates(false);
+
+    expect(routes[0].routeId).toContain("車道");
+    expect(sidewalkEvidence).not.toHaveBeenCalled();
   });
 });
 

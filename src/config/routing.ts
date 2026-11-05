@@ -82,6 +82,13 @@ export const ACCESSIBLE_RANKING: Readonly<
 };
 
 /**
+ * Step-free (wheelchair or avoidStairs) outdoor walks prefer the candidate with
+ * more confirmed sidewalk, but only among candidates whose duration is within
+ * this fraction of the fastest one, so sidewalk never buys an unbounded detour.
+ */
+export const STEP_FREE_WALK_SIDEWALK_MAX_DETOUR = 0.3;
+
+/**
  * Indoor venue fact lookups for the AI `inspectVenue` tool. Costs are the
  * venue planner's weighted metres-equivalent, not walking distance: an
  * elevator ride has zero length but a positive cost.
