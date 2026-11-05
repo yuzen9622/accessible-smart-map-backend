@@ -1,10 +1,13 @@
 import {
   groupRoutesByTransitSkeleton,
   resolveCandidateGroup,
-  compareRoutesByArrival,
   compareRouteEligibility,
   type PairSearchMemo,
 } from "./bus-stop-pair-candidates";
+import {
+  accessibleRankingWeights,
+  rankRoutesForMode,
+} from "./accessible-ranking";
 import { createCandidateRequestBudget } from "../transit/bus-stop-pair-eta.service";
 import { nextTaipeiClock, taipeiIsoOffset } from "../../config/taipei-time";
 import { copyWithDescriptors } from "../../utils/route-source-names";
@@ -1376,13 +1379,16 @@ async function finalizeRoutes(
   }
   const scored = scoreAndRank(feasible, mode, env, transitPreference, language);
   const ordered = groupRoutesByTransitSkeleton(
-    scored.sort(compareRoutesByArrival),
+    rankRoutesForMode(scored, mode),
   ).map((group) => group.members[0]);
   const top = ordered.slice(0, 3);
   const isWalkOnly = (route: AccessibleRoute) =>
     route.legs.every((leg) => leg.type === "WALK");
   const walk = ordered.find(isWalkOnly);
+  // Earliest-arrival modes always offer the walk as a third choice; weighted
+  // modes already rank it on the same effort cost as transit.
   if (
+    !accessibleRankingWeights(mode) &&
     walk &&
     top.length === 3 &&
     !top.some(isWalkOnly) &&

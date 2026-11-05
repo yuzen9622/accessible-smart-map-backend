@@ -6,6 +6,7 @@ import type {
   BusVehicleAccessibility,
 } from "../../types/route";
 import { taipeiIsoOffset, taipeiHHmm } from "../../config/taipei-time";
+import { ACCESSIBLE_RANKING } from "../../config/routing";
 import { copyWithDescriptors } from "../../utils/route-source-names";
 import {
   getCanonicalBusPair,
@@ -624,9 +625,6 @@ export async function resolveCandidateGroup({
     }
     contexts.set(route, context);
     Object.defineProperty(route, "_busCandidateContext", { value: context });
-    Object.defineProperty(route, "_vehicleEligibilityTier", {
-      value: chain.vehicleTier,
-    });
     resolved.push(route);
   }
   // The finalizer scores the assembled geometries before choosing one member
@@ -653,7 +651,8 @@ export interface BusCandidateChain {
   selected: Map<number, BusDepartureCandidate>;
   ready: Map<number, number>;
   arrivalAt: number;
-  vehicleTier: number;
+  /** Boardings on buses confirmed as low-floor. */
+  lowFloorBoardings: number;
 }
 const normalized = (v: unknown): boolean | undefined =>
   v === 1 || v === true ? true : v === 0 || v === false ? false : undefined;
@@ -719,20 +718,25 @@ export function projectPublicCandidates(
 function identity(s: BusCandidateChain): string {
   return [...s.selected.values()].map((c) => c.candidateId).join("|");
 }
-/** Exact dominance: for each vehicle tier the earlier cursor can reach every
- * suffix that a later cursor can reach. Never truncate boarding candidates. */
+/** Exact dominance: for each count of low-floor boardings the earlier cursor
+ * can reach every suffix that a later cursor can reach. Never truncate
+ * boarding candidates. The chain picked arrives earliest once each confirmed
+ * low-floor boarding is credited with the mode's
+ * `stepFreeBoardingCreditMinutes`. */
 export function selectFeasibleBusChain(
   timeline: CandidateTimeline,
   candidates: Map<number, BusDepartureCandidate[]>,
   startAt: number,
   mode: AccessibilityMode,
 ): BusCandidateChain | null {
+  const creditMs =
+    (ACCESSIBLE_RANKING[mode]?.stepFreeBoardingCreditMinutes ?? 0) * 60_000;
   let states: BusCandidateChain[] = [
     {
       selected: new Map(),
       ready: new Map(),
       arrivalAt: startAt,
-      vehicleTier: 0,
+      lowFloorBoardings: 0,
     },
   ];
   for (const leg of timeline) {
@@ -764,12 +768,9 @@ export function selectFeasibleBusChain(
             continue;
           next.push({
             arrivalAt: alight,
-            vehicleTier: Math.max(
-              state.vehicleTier,
-              mode === "wheelchair" && c.vehicleAccessibility !== "low_floor"
-                ? 1
-                : 0,
-            ),
+            lowFloorBoardings:
+              state.lowFloorBoardings +
+              Number(c.vehicleAccessibility === "low_floor"),
             selected: new Map(state.selected).set(leg.legIndex, c),
             ready: new Map(state.ready).set(leg.legIndex, ready),
           });
@@ -778,14 +779,14 @@ export function selectFeasibleBusChain(
     }
     const dominant = new Map<number, BusCandidateChain>();
     for (const state of next) {
-      const old = dominant.get(state.vehicleTier);
+      const old = dominant.get(state.lowFloorBoardings);
       if (
         !old ||
         state.arrivalAt < old.arrivalAt ||
         (state.arrivalAt === old.arrivalAt &&
           identity(state).localeCompare(identity(old)) < 0)
       )
-        dominant.set(state.vehicleTier, state);
+        dominant.set(state.lowFloorBoardings, state);
     }
     states = [...dominant.values()];
     if (!states.length) return null;
@@ -793,7 +794,9 @@ export function selectFeasibleBusChain(
   return (
     states.sort(
       (a, b) =>
-        a.vehicleTier - b.vehicleTier ||
+        a.arrivalAt -
+          a.lowFloorBoardings * creditMs -
+          (b.arrivalAt - b.lowFloorBoardings * creditMs) ||
         a.arrivalAt - b.arrivalAt ||
         identity(a).localeCompare(identity(b)),
     )[0] ?? null
@@ -852,10 +855,6 @@ export function compareRoutesByArrival(
     compareRouteEligibility(a, b) ||
     Number(a.legs.every((leg) => leg.type === "WALK")) -
       Number(b.legs.every((leg) => leg.type === "WALK")) ||
-    (Object.getOwnPropertyDescriptor(a, "_vehicleEligibilityTier")?.value ??
-      0) -
-      (Object.getOwnPropertyDescriptor(b, "_vehicleEligibilityTier")?.value ??
-        0) ||
     candidateEpoch(a.arrivalTime ?? null) -
       candidateEpoch(b.arrivalTime ?? null) ||
     0 ||

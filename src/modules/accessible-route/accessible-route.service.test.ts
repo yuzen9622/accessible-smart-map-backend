@@ -3738,9 +3738,12 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
       });
     });
 
-    it.each([115, 10])(
-      "keeps transit ahead of a %i-minute walk when bus accessibility is unknown",
-      async (walkMinutes) => {
+    it.each([
+      { walkMinutes: 115, walkFirst: false },
+      { walkMinutes: 10, walkFirst: true },
+    ])(
+      "ranks a $walkMinutes-minute wheelchair walk against a 58-minute bus by effort cost",
+      async ({ walkMinutes, walkFirst }) => {
         vi.mocked(planOtpRouteDetailed).mockResolvedValue(
           otpTransitOk([
             { ...rooseveltBusRoute, totalMinutes: 58 },
@@ -3764,18 +3767,28 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
 
         const routes = okData(result).routes;
         expect(routes).toHaveLength(2);
-        const bus = routes[0].legs.find((leg) => leg.type === "BUS");
+        // A 5.3 km roll loses to the bus; an 800 m roll that arrives 48 min
+        // earlier wins, since walking competes on the same effort cost.
+        const [busRoute, walkRoute] = walkFirst
+          ? [routes[1], routes[0]]
+          : [routes[0], routes[1]];
+        const bus = busRoute.legs.find((leg) => leg.type === "BUS");
         expect(bus).toBeDefined();
         expect(bus).not.toHaveProperty("isLowFloor");
-        expect(routes[0].totalMinutes).toBe(58);
-        expect(routes[1].legs.every((leg) => leg.type === "WALK")).toBe(true);
-        expect(routes[1].totalMinutes).toBe(walkMinutes);
+        expect(busRoute.totalMinutes).toBe(58);
+        expect(walkRoute.legs.every((leg) => leg.type === "WALK")).toBe(true);
+        expect(walkRoute.totalMinutes).toBe(walkMinutes);
       },
     );
 
-    it.each([false, true])(
-      "handles a walking alternative with three transit routes when blocked=%s",
-      async (blocked) => {
+    it.each([
+      { mode: "normal" as const, blocked: false, walkSlot: true },
+      { mode: "normal" as const, blocked: true, walkSlot: false },
+      { mode: "wheelchair" as const, blocked: false, walkSlot: false },
+      { mode: "wheelchair" as const, blocked: true, walkSlot: false },
+    ])(
+      "handles a walking alternative with three transit routes ($mode, blocked=$blocked)",
+      async ({ mode, blocked, walkSlot }) => {
         const buses = [20, 30, 40].map((minutes, index) => {
           const route = structuredClone(rooseveltBusRoute);
           route.routeId = `bus-${index}`;
@@ -3808,7 +3821,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
 
         const result = await planAccessibleRouteFromRequest({
           travelMode: "transit",
-          mode: "wheelchair",
+          mode,
           origin: taipeiStation,
           destination: nationalMuseum,
         });
@@ -3820,7 +3833,9 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
             .slice(0, 2)
             .every((route) => route.legs.some((leg) => leg.type === "BUS")),
         ).toBe(true);
-        if (blocked) {
+        // Only earliest-arrival modes force the walk into the third slot;
+        // wheelchair ranks the 115-minute roll on cost, behind every bus.
+        if (!walkSlot) {
           expect(routes[2].legs.some((leg) => leg.type === "BUS")).toBe(true);
           expect(routes.map((route) => route.totalMinutes)).toEqual([
             20, 30, 40,

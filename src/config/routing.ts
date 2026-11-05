@@ -31,6 +31,57 @@ export const WALK_RELUCTANCE: Readonly<
 };
 
 /**
+ * Transit ranking for modes whose users trade arrival time for less effort.
+ * A route's ranking cost, in minutes, is its arrival plus the extra weight of
+ * its walking, a penalty per transfer, minus a credit per step-free boarding. Modes without an entry rank by earliest arrival.
+ */
+export interface AccessibleRankingWeights {
+  /**
+   * Walking minutes count this many times (1 = like riding). General
+   * appraisal values walking at 1.8–2.4× in-vehicle time (ITF/OECD).
+   */
+  walkTimeMultiplier: number;
+  /**
+   * Each transfer costs this share of the trip's duration, at least
+   * `transferMinMinutes`. People with physical impairments chose a transfer
+   * route only when it saved about 25% of travel time (JPT 2022, k = 0.255).
+   */
+  transferShareOfTrip: number;
+  transferMinMinutes: number;
+  /**
+   * Minutes credited per boarding known to be step-free: a bus confirmed as
+   * low-floor, a metro or a high-speed rail train (both level boarding; a
+   * station with an elevator outage is excluded before ranking). Unknown-floor
+   * buses and TRA trains, whose platform heights vary, earn none.
+   */
+  stepFreeBoardingCreditMinutes: number;
+  /**
+   * Routes arriving more than this many minutes after the earliest arrival
+   * rank behind every route within it, however little they walk.
+   */
+  maxExtraMinutes: number;
+}
+
+export const ACCESSIBLE_RANKING: Readonly<
+  Partial<Record<AccessibilityMode, AccessibleRankingWeights>>
+> = {
+  wheelchair: {
+    walkTimeMultiplier: 2.5,
+    transferShareOfTrip: 0.25,
+    transferMinMinutes: 8,
+    stepFreeBoardingCreditMinutes: 10,
+    maxExtraMinutes: 20,
+  },
+  elderly: {
+    walkTimeMultiplier: 2.0,
+    transferShareOfTrip: 0.2,
+    transferMinMinutes: 6,
+    stepFreeBoardingCreditMinutes: 5,
+    maxExtraMinutes: 15,
+  },
+};
+
+/**
  * Indoor venue fact lookups for the AI `inspectVenue` tool. Costs are the
  * venue planner's weighted metres-equivalent, not walking distance: an
  * elevator ride has zero length but a positive cost.

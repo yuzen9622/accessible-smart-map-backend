@@ -34,19 +34,62 @@ describe("absolute candidate chain", () => {
     );
     expect(chain?.selected.get(2)?.candidateId).toBe("next");
   });
-  it("prefers a feasible full low-floor chain before faster unknown", () => {
-    const chain = selectFeasibleBusChain(
+  const lowFloorChoice = (
+    lowAlightMin: number,
+    mode: "wheelchair" | "elderly" | "normal",
+  ) =>
+    selectFeasibleBusChain(
       [{ type: "BUS", legIndex: 0, minimumBoardingSlackMs: 0 }],
       new Map([
         [
           0,
-          [candidate("unknown", 1, 10), candidate("low", 2, 40, "low_floor")],
+          [
+            candidate("unknown", 1, 10),
+            candidate("low", 2, lowAlightMin, "low_floor"),
+          ],
+        ],
+      ]),
+      start,
+      mode,
+    )?.selected.get(0)?.candidateId;
+  it("waits for a low-floor bus only within the mode's credit", () => {
+    // Wheelchair credits 10 min, elderly 5 min, normal nothing.
+    expect(lowFloorChoice(19, "wheelchair")).toBe("low");
+    expect(lowFloorChoice(21, "wheelchair")).toBe("unknown");
+    expect(lowFloorChoice(40, "wheelchair")).toBe("unknown");
+    expect(lowFloorChoice(14, "elderly")).toBe("low");
+    expect(lowFloorChoice(16, "elderly")).toBe("unknown");
+    expect(lowFloorChoice(11, "normal")).toBe("unknown");
+  });
+  it("credits every low-floor boarding of a chain", () => {
+    const chain = selectFeasibleBusChain(
+      [
+        { type: "BUS", legIndex: 0, minimumBoardingSlackMs: 0 },
+        { type: "BUS", legIndex: 1, minimumBoardingSlackMs: 0 },
+      ],
+      new Map([
+        [
+          0,
+          [
+            candidate("a-unknown", 1, 10),
+            candidate("a-low", 1, 10, "low_floor"),
+          ],
+        ],
+        [
+          1,
+          [
+            candidate("b-unknown", 11, 20),
+            candidate("b-low", 12, 29, "low_floor"),
+          ],
         ],
       ]),
       start,
       "wheelchair",
     );
-    expect(chain?.selected.get(0)?.candidateId).toBe("low");
+    // a-low + b-low arrives 9 min later but earns two 10-min credits.
+    expect(chain?.selected.get(0)?.candidateId).toBe("a-low");
+    expect(chain?.selected.get(1)?.candidateId).toBe("b-low");
+    expect(chain?.lowFloorBoardings).toBe(2);
   });
   it("checks fixed rail absolute departure after bus delay", () => {
     expect(
