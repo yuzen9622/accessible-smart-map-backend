@@ -59,7 +59,7 @@ SIDEWALK_TOLERANCE_M = 10.0
 # models ramps itself (three-tier crossing cost from ped_ramp_node /
 # ped_painted_node) and reads wheelchair=no as a hard block, so it must not
 # consume either inferred value.
-INFERRED_WHEELCHAIR_SOURCES = frozenset({"taipei_kerb_ramp", "taipei_sidewalk_alongside"})
+INFERRED_WHEELCHAIR_SOURCES = frozenset({"taipei_kerb_ramp", "sidewalk_alongside"})
 # A nearby road centreline is not evidence for a sidewalk's usable width.
 # Require most of the segment to lie within the source polygon before using
 # its attributes; keep weaker matches as provenance for review only.

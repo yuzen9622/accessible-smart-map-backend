@@ -22,13 +22,13 @@ gets `wheelchair=no` plus `source:wheelchair=taipei_kerb_ramp`. Ways are never
 split, so a crossing stays one OSM way. Every crossing with any evidence gets
 `tp:kerb_ramp_ends=<ramped>/<unramped>/<unknown>`.
 
-Taipei road pieces that otp-sidewalk-ways.py lined with a sidewalk
-(`foot=use_sidepath`) also get `wheelchair=no` plus
-`source:wheelchair=taipei_sidewalk_alongside`. OTP's wheelchair cost ignores walk
-safety, so without this, penalising unramped crossings pushed wheelchair routes
-onto the carriageway instead (Taipei OTP comparison 2026-11-04: carriageway
-share 36% → 58% on changed routes; with lined roads tagged it fell to 46% from
-58% while confidently unramped crossings walked fell 19 → 4).
+Every road piece lined with a sidewalk (`foot=use_sidepath`), anywhere in
+Taiwan, also gets `wheelchair=no` plus `source:wheelchair=sidewalk_alongside`.
+OTP's wheelchair cost ignores walk safety, so without this a wheelchair route
+treats the carriageway beside a sidewalk as equal to the sidewalk and takes it
+whenever it is a little shorter. The crossing evidence above stays Taipei-only;
+this tag only needs the sidewalk that otp-sidewalk-ways.py lined the road from
+(Taipei OTP comparison 2026-11-04: carriageway share on changed routes 58% → 46%).
 
 The CSR graph builder ignores wheelchair values with either provenance (CSR keeps
 its own three-tier ramp cost and reads wheelchair=no as a block).
@@ -64,11 +64,10 @@ SIDEWALK_END_TOLERANCE_M = 3.0
 STEP_FREE_KERBS = frozenset({"lowered", "flush", "no"})
 RAISED_KERBS = frozenset({"raised", "regular", "rolled"})
 WHEELCHAIR_TAG_SOURCE = "taipei_kerb_ramp"
-LINED_ROAD_WHEELCHAIR_SOURCE = "taipei_sidewalk_alongside"
-# A use_sidepath road piece is Taipei's when its middle lies this close to a Taipei
-# MOI/painted polygon: otp-sidewalk-ways.py lines a road from a polygon at most
-# ROAD_MAX_OFFSET_M (30 m) away.
-LINED_ROAD_SCOPE_M = 30.0
+LINED_ROAD_WHEELCHAIR_SOURCE = "sidewalk_alongside"
+# Taipei scope for crossing evidence: within this distance of a Taipei MOI/painted
+# polygon (otp-sidewalk-ways.py lines a road from a polygon at most 30 m away).
+TAIPEI_SCOPE_M = 30.0
 GRID_M = 50.0
 
 
@@ -182,11 +181,11 @@ class Evidence:
 
     def in_taipei(self, lon, lat):
         """Whether a point is inside the area these Taipei sources describe: within
-        LINED_ROAD_SCOPE_M of a Taipei sidewalk polygon or RAMP_TOLERANCE_M of a
+        TAIPEI_SCOPE_M of a Taipei sidewalk polygon or RAMP_TOLERANCE_M of a
         Taipei government ramp point. Nothing outside it is tagged."""
         x, y = to_xy(lon, lat)
         return self.ramps.any_within(x, y, RAMP_TOLERANCE_M) or self._near(
-            self.taipei_tree, self.taipei, x, y, LINED_ROAD_SCOPE_M
+            self.taipei_tree, self.taipei, x, y, TAIPEI_SCOPE_M
         )
 
     def classify_end(self, lon, lat, node_tags):
@@ -229,8 +228,10 @@ def lined_road_tags(tags):
     """Return new tags for a sidewalk-lined road piece, or None to leave it.
 
     A junction-box piece otp-sidewalk-ways.py tagged only to bridge two lined
-    pieces (`source:foot=sidewalk_junction_gap`) has no sidewalk alongside, so
-    it does not get this provenance.
+    pieces (`source:foot=sidewalk_junction_gap`) has no sidewalk alongside and is
+    left alone: tagging it sends wheelchair routes around junctions without a
+    mapped crosswalk onto side streets that have no sidewalk (national A/B
+    2026-11-05: wheelchair sidewalk share 39.3% → 37.3%).
     """
     if tags.get("foot") != "use_sidepath" or "wheelchair" in tags:
         return None
@@ -240,8 +241,8 @@ def lined_road_tags(tags):
 
 
 def collect_crossings(osmium, pbf):
-    """Pass 1: crossing ways with end locations, lined road pieces with their
-    middle location; pass 2: end-node tags."""
+    """Pass 1: crossing ways with end locations and lined road pieces' tags;
+    pass 2: end-node tags."""
 
     class Ways(osmium.SimpleHandler):
         def __init__(self):
@@ -251,12 +252,8 @@ def collect_crossings(osmium, pbf):
 
         def way(self, way):
             tags = {tag.k: tag.v for tag in way.tags}
-            if tags.get("foot") == "use_sidepath" and len(way.nodes) >= 2:
-                try:
-                    middle = way.nodes[len(way.nodes) // 2]
-                    self.lined_roads[way.id] = (tags, (middle.lon, middle.lat))
-                except osmium.InvalidLocationError:
-                    pass
+            if tags.get("foot") == "use_sidepath":
+                self.lined_roads[way.id] = tags
                 return
             if not is_crossing(tags) or len(way.nodes) < 2:
                 return
@@ -289,10 +286,8 @@ def plan(crossings, node_tags, evidence, lined_roads=None):
     """Return ({way_id: new_tags}, report)."""
     changes = {}
     report = Counter()
-    for way_id, (tags, (lon, lat)) in (lined_roads or {}).items():
+    for way_id, tags in (lined_roads or {}).items():
         report["lined_road_pieces"] += 1
-        if not evidence.in_taipei(lon, lat):
-            continue
         updated = lined_road_tags(tags)
         if updated is None:
             report["lined_roads_skipped_existing_wheelchair_tag"] += 1

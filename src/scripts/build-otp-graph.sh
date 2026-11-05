@@ -359,14 +359,15 @@ python3 "$SCRIPT_DIR/otp-sidewalk-ways.py" \
   die "sidewalk footway compilation failed — keeping old graph"
 mv "$OSM_SIDEWALKS" "$OSM_CLIPPED"
 
-# ── 2d. Taipei curb ramps + sidewalk-lined roads as wheelchair tags ──
+# ── 2d. Taipei curb ramps + sidewalk-lined roads (all Taiwan) as wheelchair tags ──
 # A crossing with an end that the government ramp inventory proves unramped gets
 # wheelchair=no (source:wheelchair=taipei_kerb_ramp): stock OTP then applies
 # inaccessibleStreetReluctance to it for wheelchair/avoidStairs requests, never a
-# block. Taipei road pieces lined with a sidewalk (foot=use_sidepath) get the same
-# soft tag (source:wheelchair=taipei_sidewalk_alongside), otherwise avoiding those
-# crossings sends wheelchair routes onto the carriageway. The CSR builder ignores
-# both provenances. See otp-kerb-ramps.py.
+# block. Road pieces anywhere in Taiwan lined with a sidewalk (foot=use_sidepath)
+# get the same soft tag (source:wheelchair=sidewalk_alongside): OTP's wheelchair
+# cost ignores foot=use_sidepath, so without it wheelchair routes walk the
+# carriageway beside the sidewalk. The CSR builder ignores both provenances. See
+# otp-kerb-ramps.py.
 RAMP_EXPORT="$AUX_DIR/ramps.ndjson"
 TAIPEI_SIDEWALK_EXPORT="$AUX_DIR/taipei-sidewalks.ndjson"
 OSM_KERB_RAMPS="${OSM_CLIPPED%.osm.pbf}.kerb-ramps.osm.pbf"

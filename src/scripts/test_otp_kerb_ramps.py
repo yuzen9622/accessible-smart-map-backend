@@ -78,7 +78,7 @@ class LinedRoadTests(unittest.TestCase):
     def test_lined_road_gets_soft_wheelchair_tag(self):
         tags = MODULE.lined_road_tags({"highway": "residential", "foot": "use_sidepath"})
         self.assertEqual(tags["wheelchair"], "no")
-        self.assertEqual(tags["source:wheelchair"], "taipei_sidewalk_alongside")
+        self.assertEqual(tags["source:wheelchair"], "sidewalk_alongside")
 
     def test_unlined_or_already_tagged_roads_are_left_alone(self):
         self.assertIsNone(MODULE.lined_road_tags({"highway": "residential"}))
@@ -93,16 +93,18 @@ class LinedRoadTests(unittest.TestCase):
             )
         )
 
-    def test_only_taipei_lined_roads_are_tagged(self):
+    def test_lined_roads_are_tagged_without_any_taipei_evidence_nearby(self):
         evidence = MODULE.Evidence([lonlat(500, 500)], [moi(-50, 0, 50, 3, 0)])
         lined = {
-            1: ({"highway": "residential", "foot": "use_sidepath"}, lonlat(0, -8)),
-            2: ({"highway": "residential", "foot": "use_sidepath"}, lonlat(0, -500)),
+            1: {"highway": "residential", "foot": "use_sidepath"},
+            2: {"highway": "residential", "foot": "use_sidepath", "wheelchair": "yes"},
+            3: {"highway": "residential", "foot": "use_sidepath", "source:foot": "sidewalk_junction_gap"},
         }
         changes, report = MODULE.plan({}, {}, evidence, lined)
         self.assertEqual(sorted(changes), [1])
+        self.assertEqual(changes[1]["source:wheelchair"], "sidewalk_alongside")
         self.assertEqual(report["lined_roads_tagged"], 1)
-        self.assertEqual(report["lined_road_pieces"], 2)
+        self.assertEqual(report["lined_road_pieces"], 3)
 
 
 class CrossingTagTests(unittest.TestCase):
@@ -170,7 +172,7 @@ class PbfRoundTripTests(unittest.TestCase):
 
             Reader().apply_file(output)
             self.assertEqual(sorted(seen), [10, 11, 12])
-            self.assertEqual(seen[12][1]["source:wheelchair"], "taipei_sidewalk_alongside")
+            self.assertEqual(seen[12][1]["source:wheelchair"], "sidewalk_alongside")
             self.assertEqual(seen[10][0], [1, 2])
             self.assertEqual(seen[10][1]["wheelchair"], "no")
             self.assertEqual(seen[10][1]["tp:kerb_ramp_ends"], "0/1/1")

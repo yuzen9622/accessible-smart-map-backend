@@ -360,7 +360,7 @@ class DemAndSidewalkTests(unittest.TestCase):
         self.assertNotIn("wheelchair", inferred["attr_meta"])
         lined = MODULE.make_edge_attributes(
             {"highway": "residential", "foot": "use_sidepath", "wheelchair": "no",
-             "source:wheelchair": "taipei_sidewalk_alongside"}, "2026-11-04", None
+             "source:wheelchair": "sidewalk_alongside"}, "2026-11-04", None
         )
         self.assertIsNone(lined["wheelchair"])
         mapped = MODULE.make_edge_attributes(
