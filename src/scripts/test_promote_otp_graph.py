@@ -78,7 +78,7 @@ class PromoteReleaseTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.root)
 
-    def run_promote(self, *extra_args, stdin=None, **env):
+    def run_promote(self, *extra_args, stdin=None, umask=None, **env):
         full = {
             **os.environ,
             "PATH": f"{self.bin}:{os.environ['PATH']}",
@@ -97,6 +97,7 @@ class PromoteReleaseTests(unittest.TestCase):
             text=True,
             stdin=stdin,
             timeout=120,
+            preexec_fn=(lambda: os.umask(umask)) if umask is not None else None,
         )
 
     def csr_active(self):
@@ -163,6 +164,15 @@ class PromoteReleaseTests(unittest.TestCase):
             self.files(),
             {"graph.obj": "old graph", "taiwan-otp.osm.pbf": "old pbf", "sidewalk-index.json": "old index"},
         )
+
+    def test_release_files_are_readable_by_other_users_under_a_private_umask(self):
+        self.seed_release()
+        self.index.chmod(0o600)
+        result = self.run_promote(umask=0o077)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for name in ("graph.obj", "taiwan-otp.osm.pbf", "sidewalk-index.json"):
+            mode = (self.data / name).stat().st_mode & 0o777
+            self.assertEqual(mode, 0o644, name)
 
     def test_failed_start_restores_the_previous_release(self):
         self.seed_release()

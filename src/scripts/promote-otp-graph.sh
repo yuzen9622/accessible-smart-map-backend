@@ -189,6 +189,10 @@ for file in "${RELEASE_FILES[@]}"; do
   rm -f "$OTP_DATA_DIR/$file.new"
   cp "$(release_source "$file")" "$OTP_DATA_DIR/$file.new" ||
     die "could not stage $file — nothing was swapped, the old graph keeps serving"
+  # Other containers read these (the backend checks the index against the PBF as
+  # a different user); a restrictive operator umask must not make them private.
+  chmod 0644 "$OTP_DATA_DIR/$file.new" ||
+    die "could not make $file readable — nothing was swapped, the old graph keeps serving"
 done
 for file in "${RELEASE_FILES[@]}"; do
   rm -f "$OTP_DATA_DIR/$file.prev" "$OTP_DATA_DIR/$file.absent"
