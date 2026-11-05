@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { computeValhallaRoutes } from "../../../adapters/valhalla.adapter";
 import { TRAFFIC_MSG } from "../../../constants/messages";
 import { VALHALLA_MAX_EXCLUDE_LOCATIONS } from "../../../config/valhalla";
+import { generateNavInstructions } from "../../../utils/nav-instructions-engine";
 import { presentRouteMessages } from "../../../utils/route-messages";
 import { planOtpWalkDetailed } from "./otp-routing";
 import {
@@ -98,6 +99,43 @@ describe("planValhallaRoute", () => {
       }),
     );
   });
+
+  it.each(["walk", "drive", "motorcycle"] as const)(
+    "%s keeps short maneuver guidance concise and preserves navigation distances",
+    async (travelMode) => {
+      const trip = structuredClone(normalizedTrip);
+      trip.legs[0].maneuvers[0].lengthKm = 0.4;
+      trip.legs[0].maneuvers[1].lengthKm = 0.012;
+      trip.summary.lengthKm = 0.412;
+      trip.legs[0].summary.lengthKm = 0.412;
+      compute.mockResolvedValue({ status: "OK", trips: [trip] });
+      const routes = await planValhallaRoute(
+        { lat: 25, lng: 121 },
+        { lat: 25.1, lng: 121.1 },
+        { travelMode },
+      );
+      const result = generateNavInstructions(routes[0]);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error(result.message);
+      const turn = result.data.instructions.find(
+        (step) => step.type === "turn",
+      );
+      expect(turn).toMatchObject({
+        text: "向左轉",
+        legType: travelMode.toUpperCase(),
+        distanceM: 12,
+        cumulativeDistanceM: 400,
+        polylineIndex: 1,
+      });
+      expect(result.data.instructions[0].distanceM).toBe(400);
+      expect(result.data.instructions.at(-1)?.cumulativeDistanceM).toBe(412);
+      expect(
+        result.data.instructions.every(
+          (step) => !step.text.includes("馬上接續下一步"),
+        ),
+      ).toBe(true);
+    },
+  );
 
   it("maps walk steps using true shape locations", async () => {
     compute.mockResolvedValue({ status: "OK", trips: [normalizedTrip] });

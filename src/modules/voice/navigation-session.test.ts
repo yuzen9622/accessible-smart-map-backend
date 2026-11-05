@@ -322,7 +322,7 @@ describe("NavigationSession pure domain state", () => {
     nav.onTurnComplete();
     nav.onPosition(pos(start));
     expect(nav.takeNextSpeech()).toBe(
-      "沿「道路0」出發，續行約 20 公尺，方位約 90 度（東）",
+      "沿「道路0」出發，繼續直行約 20 公尺，方位約 90 度（東）",
     );
   });
 
@@ -1974,7 +1974,7 @@ describe("NavigationSession turn awareness and conversation context", () => {
     nav.armRoute(route([driveLeg([p0, p1, p2])]));
     nav.start();
     const firstSpeech = nav.getInitialStepInstruction();
-    expect(firstSpeech).toContain("續行約 200 公尺");
+    expect(firstSpeech).toContain("繼續直行約 200 公尺");
   });
 
   it("calculates upcoming turn and remaining distance accurately in getConversationContext", () => {
@@ -1983,7 +1983,7 @@ describe("NavigationSession turn awareness and conversation context", () => {
     nav.start(pos(p0));
     const ctx = nav.getConversationContext();
     expect(ctx.active).toBe(true);
-    expect(ctx.currentStep?.instruction).toContain("續行約 200 公尺");
+    expect(ctx.currentStep?.instruction).toContain("繼續直行約 200 公尺");
     expect(ctx.upcomingTurn).toMatchObject({
       distanceM: 200,
       stepIndex: 1,

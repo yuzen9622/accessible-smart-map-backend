@@ -21,7 +21,7 @@ beforeEach(() => {
     data: {
       instructions: [
         {
-          text: "沿測試路線前進，續行約 100 公尺",
+          text: "沿測試路線前進，繼續直行約 100 公尺",
           type: "depart",
           maneuver: "DEPART",
           bearing: 90,

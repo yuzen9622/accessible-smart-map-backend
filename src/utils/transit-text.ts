@@ -250,23 +250,23 @@ export function formatWalkStepInstruction(step: {
   const target = step.targetStreetName?.trim() ?? "";
   const dir = (step.relativeDirection ?? "CONTINUE").toUpperCase();
   const friendlyDistance = formatFriendlyDistance(step.distanceM);
-  const suffix = !friendlyDistance
-    ? ""
-    : friendlyDistance === "馬上"
-      ? "，馬上接續下一步"
-      : `，續行${friendlyDistance}`;
+  const straightDistance =
+    !friendlyDistance || friendlyDistance === "馬上" ? "" : friendlyDistance;
+  const suffix = straightDistance ? `，繼續直行${straightDistance}` : "";
   const unnamedContinue =
     target && friendlyDistance
       ? friendlyDistance === "馬上"
         ? `直行後馬上抵達「${target}」`
         : `直行${friendlyDistance}至「${target}」`
-      : `請繼續直行${suffix}`;
+      : `請繼續直行${straightDistance}`;
   switch (dir) {
     case "DEPART":
       return named ? `沿「${street}」出發${suffix}` : `請出發${suffix}`;
     case "CONTINUE":
     case "STRAIGHT":
-      return named ? `沿「${street}」繼續直行${suffix}` : unnamedContinue;
+      return named
+        ? `沿「${street}」繼續直行${straightDistance}`
+        : unnamedContinue;
     case "LEFT":
       return named ? `向左轉進入「${street}」${suffix}` : `向左轉${suffix}`;
     case "RIGHT":

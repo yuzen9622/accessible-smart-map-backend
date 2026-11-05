@@ -115,6 +115,19 @@ describe("formatWalkStepInstruction", () => {
     ).toBe("沿「忠孝東路」繼續直行");
   });
 
+  it.each([
+    ["", "請繼續直行約 400 公尺"],
+    ["信義路", "沿「信義路」繼續直行約 400 公尺"],
+  ])("keeps straight guidance concise for %s", (streetName, expected) => {
+    expect(
+      formatWalkStepInstruction({
+        relativeDirection: "CONTINUE",
+        streetName,
+        distanceM: 400,
+      }),
+    ).toBe(expected);
+  });
+
   it("formats all six facility tokens from NAV_MSG", () => {
     expect(formatWalkStepInstruction({ relativeDirection: "ELEVATOR" })).toBe(
       NAV_MSG.ELEVATOR,
@@ -155,7 +168,7 @@ describe("formatWalkStepInstruction", () => {
         bogusName: false,
         distanceM: 1011,
       }),
-    ).toBe("向右轉進入「民族西路」，續行約 1.0 公里");
+    ).toBe("向右轉進入「民族西路」，繼續直行約 1.0 公里");
   });
 });
 

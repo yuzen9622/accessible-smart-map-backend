@@ -1410,7 +1410,9 @@ export class NavigationSession {
     ) {
       const friendly = formatFriendlyDistance(instruction.distanceM);
       if (friendly && friendly !== "馬上") {
-        text = `${text}，續行${friendly}`;
+        text = text.endsWith("繼續直行")
+          ? `${text}${friendly}`
+          : `${text}，繼續直行${friendly}`;
       }
     }
     return {
