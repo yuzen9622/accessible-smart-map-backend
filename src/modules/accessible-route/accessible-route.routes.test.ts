@@ -942,7 +942,9 @@ describe("GET planned bus arrivals", () => {
       .get(`${URL}/bus-arrivals`)
       .query({ routeToken: "plan", legIndex: "2" });
     expect(res.status).toBe(200);
-    expect(getPlannedBusArrivals).toHaveBeenCalledWith("plan", 2);
+    expect(getPlannedBusArrivals).toHaveBeenCalledWith("plan", 2, {
+      readyInSeconds: undefined,
+    });
     expect(res.body).toMatchObject({
       ok: true,
       code: 200,
@@ -956,10 +958,29 @@ describe("GET planned bus arrivals", () => {
     { routeToken: "plan", legIndex: -1 },
     { routeToken: "plan", legIndex: 1.5 },
     { routeToken: "plan", legIndex: 1, departureTime: "10:00" },
+    { routeToken: "plan", legIndex: 1, readyInSeconds: -1 },
+    { routeToken: "plan", legIndex: 1, readyInSeconds: 10801 },
+    { routeToken: "plan", legIndex: 1, readyInSeconds: 2.5 },
   ])("rejects malformed or client-authored plan data: %j", async (query) => {
     const res = await request(app).get(`${URL}/bus-arrivals`).query(query);
     expect(res.status).toBe(400);
     expect(getPlannedBusArrivals).not.toHaveBeenCalled();
+  });
+  it("passes the navigating rider's readiness through validation", async () => {
+    vi.mocked(getPlannedBusArrivals).mockResolvedValue({
+      ok: true,
+      routeName: "307",
+      city: TaiwanCityEn.Taipei,
+      operators: [],
+      directions: [],
+    });
+    const res = await request(app)
+      .get(`${URL}/bus-arrivals`)
+      .query({ routeToken: "plan", legIndex: "2", readyInSeconds: "0" });
+    expect(res.status).toBe(200);
+    expect(getPlannedBusArrivals).toHaveBeenCalledWith("plan", 2, {
+      readyInSeconds: 0,
+    });
   });
   it("returns expired capabilities as 404", async () => {
     vi.mocked(getPlannedBusArrivals).mockResolvedValue({

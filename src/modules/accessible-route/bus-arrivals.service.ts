@@ -84,10 +84,13 @@ async function rideDetail(
   return getCandidateBusRouteDetail(leg, city, times, now);
 }
 
+/** `readyAt` is when the navigating rider will actually be at the boarding
+ * stop; without it the planner's stored prediction stands. */
 async function refreshPair(
   snapshot: BusPlanSnapshotV2,
   legIndex: number,
   now: number,
+  readyAt?: number,
 ): Promise<BusRouteDetailResult> {
   const stored = snapshot.legs[legIndex];
   if (!stored) return missing();
@@ -130,7 +133,7 @@ async function refreshPair(
   const timeline = snapshot.timeline
     .slice(first)
     .map((l) => (l.type === "BUS" ? { ...l, readyAt: undefined } : { ...l }));
-  const ready = Math.max(stored.effectiveBoardingReadyAt, now);
+  const ready = readyAt ?? Math.max(stored.effectiveBoardingReadyAt, now);
   const budget = createCandidateRequestBudget();
   const memo: PairSearchMemo = new Map();
   const collections = new Map<
@@ -232,6 +235,7 @@ async function refreshPair(
 export async function getPlannedBusArrivals(
   routeToken: string,
   legIndex: number,
+  rider: { readyInSeconds?: number } = {},
 ): Promise<BusRouteDetailResult> {
   // A live navigation envelope never bypasses the longer-lived v2 context.
   const [route, busPlan] = await Promise.all([
@@ -245,7 +249,15 @@ export async function getPlannedBusArrivals(
       error: TRANSIT_MSG.PLAN_EXPIRED,
     };
   if (busPlan && "schemaVersion" in busPlan && busPlan.schemaVersion === 2) {
-    const result = await refreshPair(busPlan, legIndex, Date.now());
+    const now = Date.now();
+    const result = await refreshPair(
+      busPlan,
+      legIndex,
+      now,
+      rider.readyInSeconds === undefined
+        ? undefined
+        : now + rider.readyInSeconds * 1000,
+    );
     if (result.ok && result.departureCandidates)
       await storeOfferedBusCandidates(
         routeToken,
