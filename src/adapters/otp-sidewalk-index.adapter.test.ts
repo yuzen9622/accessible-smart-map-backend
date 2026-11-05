@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { chmod, mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -368,6 +368,82 @@ describe("classified crossings (index v2)", () => {
           crossings: [bad],
         }).success,
       ).toBe(false);
+    }
+  });
+});
+
+describe("index reload after a failed load", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+    vi.useRealTimers();
+  });
+
+  it("retries an unchanged but now readable index after the retry interval", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sidewalk-index-retry-"));
+    try {
+      const source = "pbf fixture";
+      const sha = createHash("sha256").update(source).digest("hex");
+      await writeFile(join(dir, "taiwan-otp.osm.pbf"), source);
+      const indexFile = join(dir, "sidewalk-index.json");
+      await writeFile(
+        indexFile,
+        JSON.stringify({
+          version: 2,
+          sourcePbfSha256: sha,
+          segments: [],
+          crossings: [CROSSING],
+        }),
+      );
+      await chmod(indexFile, 0o000);
+      vi.stubEnv("OTP_SIDEWALK_INDEX_PATH", indexFile);
+      vi.resetModules();
+      vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const adapter = await import("./otp-sidewalk-index.adapter");
+      const route = () => {
+        const r = {
+          routeId: "r",
+          routeName: "walk",
+          totalMinutes: 1,
+          transferCount: 0,
+          accessibilityHighlights: [],
+          legs: [
+            {
+              type: "WALK",
+              from: "a",
+              to: "b",
+              distanceM: 12,
+              minutesEst: 1,
+              polyline: [
+                [121, 24.99999],
+                [121, 25.00011],
+              ],
+              a11yFacilities: [],
+              maxSlopePercent: null,
+              crossings: null,
+              crossingsWithCurbRamp: null,
+              minPathWidthCm: null,
+              surfaceType: "unknown",
+              restPoints: [],
+            },
+          ],
+        } as AccessibleRoute;
+        return r;
+      };
+      const unreadable = route();
+      await adapter.annotateSidewalkSegments([unreadable]);
+      expect(unreadable.legs[0]).toMatchObject({ crossings: null });
+
+      await chmod(indexFile, 0o644); // mtime and size unchanged
+      const now = Date.now();
+      vi.spyOn(Date, "now").mockReturnValue(
+        now + adapter.INDEX_RETRY_AFTER_FAILURE_MS + 1,
+      );
+      const readable = route();
+      await adapter.annotateSidewalkSegments([readable]);
+      expect(readable.legs[0]).toMatchObject({ crossings: 1 });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
     }
   });
 });

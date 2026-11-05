@@ -94,7 +94,15 @@ interface LoadedIndex {
   segments: SpatialIndex;
   crossings: CrossingIndex;
 }
-let cache: { key: string; index: Promise<LoadedIndex | null> } | undefined;
+/**
+ * A failed load (unreadable file, SHA mismatch, bad shape) is retried after this
+ * long even when the files did not change: fixing permissions, for example,
+ * leaves mtime and size alone.
+ */
+export const INDEX_RETRY_AFTER_FAILURE_MS = 60_000;
+let cache:
+  | { key: string; index: Promise<LoadedIndex | null>; failedAt?: number }
+  | undefined;
 
 function cellKey([lng, lat]:
   readonly [number, number] | readonly number[]): string {
@@ -385,7 +393,16 @@ async function currentIndex(): Promise<LoadedIndex | null> {
   } catch {
     // loadIndex reports the missing file.
   }
-  if (cache?.key !== key) cache = { key, index: loadIndex(file) };
+  const retry =
+    cache?.failedAt !== undefined &&
+    Date.now() - cache.failedAt >= INDEX_RETRY_AFTER_FAILURE_MS;
+  if (cache?.key !== key || retry) {
+    const entry: NonNullable<typeof cache> = { key, index: loadIndex(file) };
+    cache = entry;
+    void entry.index.then((loaded) => {
+      if (loaded === null) entry.failedAt = Date.now();
+    });
+  }
   return cache.index;
 }
 
