@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getRoutingConfig, WALK_SPEED_MPS } from "./routing";
+import { getRoutingConfig, WALK_RELUCTANCE, WALK_SPEED_MPS } from "./routing";
 
 interface CacheRequest {
   modes: string;
@@ -19,19 +19,23 @@ const routerConfig = JSON.parse(
 describe("OTP transfer cache coverage", () => {
   const entries = routerConfig.transit.transferCacheRequests;
 
-  // Keep both wheelchair flags warm for every supported walking speed.
-  // A cold speed/flag pair blocks OTP while its transfer cache is built.
+  // Keep both wheelchair flags warm for every supported walking speed, with the
+  // walk reluctance the backend sends for that mode (undefined = OTP default).
+  // A cold speed/reluctance/flag combination blocks OTP while its transfer
+  // cache is built.
   it.each(
     Object.entries(WALK_SPEED_MPS).flatMap(([mode, speed]) =>
       [true, false].map((wheelchair) => ({ mode, speed, wheelchair })),
     ),
   )(
     "pre-warms $mode at $speed m/s with wheelchair=$wheelchair",
-    ({ speed, wheelchair }) => {
+    ({ mode, speed, wheelchair }) => {
+      const reluctance = WALK_RELUCTANCE[mode as keyof typeof WALK_SPEED_MPS];
       const match = entries.filter(
         (e) =>
           e.modes === "WALK" &&
           e.walk?.speed === speed &&
+          e.walk?.reluctance === reluctance &&
           (e.wheelchairAccessibility?.enabled ?? false) === wheelchair,
       );
       expect(match).toHaveLength(1);
@@ -42,8 +46,13 @@ describe("OTP transfer cache coverage", () => {
     expect(entries).toContainEqual({ modes: "WALK" });
   });
 
-  it("never pre-warms a per-request walk reluctance the backend does not send", () => {
-    expect(entries.every((e) => e.walk?.reluctance === undefined)).toBe(true);
+  it("never pre-warms a walk reluctance the backend does not send", () => {
+    const sent = new Set(Object.values(WALK_RELUCTANCE));
+    expect(
+      entries.every(
+        (e) => e.walk?.reluctance === undefined || sent.has(e.walk.reluctance),
+      ),
+    ).toBe(true);
   });
 });
 

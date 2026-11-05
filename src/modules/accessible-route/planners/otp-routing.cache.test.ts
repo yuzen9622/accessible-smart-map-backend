@@ -132,7 +132,11 @@ describe("OTP plan result cache", () => {
       toLat: 25.0332,
       toLon: 121.5643,
       time: "09:00",
+      walkSpeed: 1.3,
     });
+    // Modes without an override keep router-config's default reluctance, so
+    // their transfer-cache key is unchanged.
+    expect(variables.walkReluctance).toBeUndefined();
   });
 
   it("drops cached itineraries that start before the real departure", async () => {
@@ -337,6 +341,8 @@ describe("OTP transit preferences", () => {
     for (const call of plans) {
       expect(call[1].variables).toMatchObject({
         wheelchair: true,
+        walkSpeed: 0.8,
+        walkReluctance: 2.5,
         modeWeight: { BUS: 1.5, RAIL: 1 },
       });
     }

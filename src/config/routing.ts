@@ -16,6 +16,21 @@ export const WALK_SPEED_MPS: Readonly<Record<AccessibilityMode, number>> = {
 };
 
 /**
+ * Per-mode OTP `walkReluctance` for transit planning, where a mode differs
+ * from router-config's default (`routingDefaults.walk.reluctance` = 2.0).
+ * Wheelchair users weigh rolling heavier than the general 1.8–2.4× walk-time
+ * multiplier, and at 2.0 OTP's "transit costlier than walking is dropped" rule
+ * deleted every short bus trip once wheelchair unknown-data costs were added.
+ * Like the walk speeds it is part of OTP's transfer cache key, so it is not
+ * env-tunable and routing.test.ts keeps router-config.json in step.
+ */
+export const WALK_RELUCTANCE: Readonly<
+  Partial<Record<AccessibilityMode, number>>
+> = {
+  wheelchair: 2.5,
+};
+
+/**
  * Indoor venue fact lookups for the AI `inspectVenue` tool. Costs are the
  * venue planner's weighted metres-equivalent, not walking distance: an
  * elevator ride has zero length but a positive cost.

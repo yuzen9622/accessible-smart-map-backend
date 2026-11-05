@@ -42,7 +42,7 @@ import {
   transitModeWeights,
 } from "./transit-preference";
 import { walkSpeedMps } from "../scoring";
-import { getRoutingConfig } from "../../../config/routing";
+import { getRoutingConfig, WALK_RELUCTANCE } from "../../../config/routing";
 import {
   attachInternalSchedule,
   attachBusSchedule,
@@ -323,6 +323,7 @@ query Plan(
   $toLat: Float!, $toLon: Float!,
   $date: String!, $time: String!,
   $wheelchair: Boolean!, $numItineraries: Int!, $walkSpeed: Float,
+  $walkReluctance: Float,
   $searchWindow: Long, $maxTransfers: Int, $modeWeight: InputModeWeight
 ) {
   plan(
@@ -332,6 +333,7 @@ query Plan(
     time: $time
     wheelchair: $wheelchair
     walkSpeed: $walkSpeed
+    walkReluctance: $walkReluctance
     numItineraries: $numItineraries
     searchWindow: $searchWindow
     maxTransfers: $maxTransfers
@@ -373,6 +375,16 @@ query Plan(
 }
 
 export const PLAN_QUERY = planQuery(SUPPORTED_TRANSIT_MODES);
+
+interface OtpWalkPreferences {
+  speed: number;
+  /** Omitted when the mode uses router-config's default reluctance. */
+  reluctance?: number;
+}
+
+function otpWalkPreferences(mode: AccessibilityMode): OtpWalkPreferences {
+  return { speed: walkSpeedMps(mode), reluctance: WALK_RELUCTANCE[mode] };
+}
 
 function otpPlanCacheEnabled(): boolean {
   return OTP_PLAN_CACHE_TTL_S > 0 && redisClient !== null;
@@ -587,7 +599,8 @@ async function cachedOtpPlan(
  * @param destination The destination point.
  * @param departure The requested departure time.
  * @param wheelchair Whether to request wheelchair-accessible routing.
- * @param walkSpeed Walking speed in m/s.
+ * @param walk Walking speed (m/s) and, when the mode overrides OTP's default,
+ *   walk reluctance.
  * @param numItineraries How many itineraries to request.
  * @param searchWindowSec The search window in seconds.
  * @param maxTransfers The transfer cap OTP searches up to, or undefined for
@@ -606,7 +619,7 @@ async function queryOtpPlan(
   destination: { lat: number; lng: number },
   departure: Date,
   wheelchair: boolean,
-  walkSpeed: number,
+  walk: OtpWalkPreferences,
   numItineraries: number,
   searchWindowSec: number,
   maxTransfers?: number,
@@ -631,7 +644,8 @@ async function queryOtpPlan(
     date: ymdDash(queryTime),
     time: hhmm(queryTime.getTime()),
     wheelchair,
-    walkSpeed,
+    walkSpeed: walk.speed,
+    walkReluctance: walk.reluctance,
     numItineraries,
     searchWindow: searchWindowSec,
     maxTransfers: maxTransfers === undefined ? undefined : maxTransfers + 1,
@@ -1648,7 +1662,7 @@ export async function planOtpRouteDetailed(
   const wheelchair = mode === "wheelchair";
   const avoidStairs = opts?.avoidStairs ?? wheelchair;
   const officialWalk = getRoutingConfig().walkPlanner === "otp";
-  const walkSpeed = walkSpeedMps(mode);
+  const walk = otpWalkPreferences(mode);
   const maxTransfers = opts?.maxTransfers;
   const initialWindowSec = Math.min(OTP_SEARCH_WINDOW_S, OTP_SEARCH_HORIZON_S);
   const wideWindowSec = Math.min(
@@ -1690,7 +1704,7 @@ export async function planOtpRouteDetailed(
       destination,
       departure,
       wheelchair,
-      walkSpeed,
+      walk,
       OTP_NUM_ITINERARIES,
       initialWindowSec,
       maxTransfers,
@@ -1834,7 +1848,7 @@ export async function planOtpRouteDetailed(
       destination,
       departure,
       wheelchair,
-      walkSpeed,
+      walk,
       OTP_PREFERRED_NUM_ITINERARIES,
       OTP_PREFERRED_SEARCH_WINDOW_S,
       maxTransfers,
@@ -1885,7 +1899,7 @@ export async function planOtpRouteDetailed(
           destination,
           departure,
           wheelchair,
-          walkSpeed,
+          walk,
           OTP_NUM_ITINERARIES_WIDE,
           wideWindowSec,
           maxTransfers,
@@ -1991,7 +2005,7 @@ export async function planOtpRouteDetailed(
           snappedDestination,
           departure,
           wheelchair,
-          walkSpeed,
+          walk,
           OTP_NUM_ITINERARIES,
           effectiveWindowSec,
           maxTransfers,
@@ -2071,7 +2085,7 @@ export async function planOtpRouteDetailed(
           destination,
           nextAnchor,
           wheelchair,
-          walkSpeed,
+          walk,
           OTP_NUM_ITINERARIES_WIDE,
           continuationWindowSec,
           maxTransfers,
@@ -2104,7 +2118,7 @@ export async function planOtpRouteDetailed(
             snappedDestination,
             nextAnchor,
             wheelchair,
-            walkSpeed,
+            walk,
             OTP_NUM_ITINERARIES_WIDE,
             continuationWindowSec,
             maxTransfers,
