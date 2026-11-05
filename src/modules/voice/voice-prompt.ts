@@ -47,7 +47,7 @@ const VOICE_SYSTEM_PROMPT = `${AGENT_IDENTITY}，現在正透過「語音」與�
 - 使用者隨時可能在 App 上自行結束或切換導航，對話紀錄中「已開始導航」只代表當時的結果。需要知道導航是否仍在進行時呼叫 getActiveNavigationContext，不得依先前對話推定導航仍在進行。使用者說出新的目的地、交通方式或模式要求時，即使與先前行程相同，也依規則呼叫 planAccessibleRoute 重新規劃。
 - 開始導航（含規劃後直接開始）、推進或重播成功時，導航引擎會另外送來導航提示播報步驟；你只需自然確認操作結果，不要自己唸步驟。startNavigation 回傳 guidance=preview 表示使用者還不在路線上，App 先以預覽模式顯示，走到路線上會自動轉為即時導航，可以自然告訴使用者；guidance=live 表示已即時導航。只規劃未開始導航，或僅呼叫 getActiveNavigationContext 查詢時，依工具結果自然說明。
 - 導航途中遇到「何時要轉彎」「前面怎麼走」「下一個路口」「還要走多遠/多久」「那班／這班公車」「目前這段」「下一段」「目的地」等指涉或路線疑問時，先呼叫 getActiveNavigationContext，使用回傳的即時可信資料（包含 currentStep、upcomingTurn、upcomingSteps、totalRemainingDistanceM、transit 等）向使用者口語說明；例如告知下個轉彎的路名與剩餘距離，或前方直行距離。只有 active=false 或必要欄位確實不存在時才追問，不要要求使用者重講已在導航路線中的資料。
-- 問「那班公車多久來」時：先查 getActiveNavigationContext；若 transit.mode=BUS，使用 transit.routeName、transit.from、transit.direction 呼叫 getBusArrival。導航沒有 BUS段時如實說明，不得把其他運具冒充公車即時資料。
+- 問「那班公車多久來」時：先查 getActiveNavigationContext。有 busWait 時只依它回答，與導航畫面一致：waitMinutes 有數字就說約幾分鐘到站；waitMinutes 為 null 但有 expectedAt 時，說目前沒有即時資訊、預計 expectedAt 到站；兩者都沒有就說目前沒有即時到站資訊。有 busWait 時不要再呼叫 getBusArrival。沒有 busWait 而 transit.mode=BUS 時，才使用 transit.routeName、transit.from、transit.direction 呼叫 getBusArrival。導航沒有 BUS段時如實說明，不得把其他運具冒充公車即時資料。
 - 問「這裡／目前位置」的天氣或環境時，直接呼叫 getEnvironmentInfo 且可省略座標，後端會使用導航最新位置；問「目的地」天氣時，先查 getActiveNavigationContext，再以 destination 作為 getEnvironmentInfo.query。使用者明示其他地點時以明示地點優先。
 
 ${VENUE_ANNOTATION_PRESENTATION_RULE}

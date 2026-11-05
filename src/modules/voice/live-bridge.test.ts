@@ -5957,6 +5957,35 @@ describe("client-navigated sessions", () => {
     });
   });
 
+  it("answers a bus-wait question with what the App's waiting card shows", async () => {
+    bridge.setClientNavigationState({
+      active: true,
+      guidance: "live",
+      currentStepIndex: 1,
+      steps: [
+        { index: 0, instruction: "向北出發", distanceM: 50, maneuver: null },
+        { index: 1, instruction: "搭乘 26", distanceM: 0, maneuver: null },
+      ],
+      busWait: {
+        routeName: "26",
+        stop: "黎明文心南五路口",
+        waitMinutes: null,
+        expectedAt: "10:30",
+      },
+    });
+    utter("那班公車多久來");
+    tool("getActiveNavigationContext");
+    await vi.waitFor(() => expect(session.sendToolResponse).toHaveBeenCalled());
+    expect(output()).toMatchObject({
+      busWait: {
+        routeName: "26",
+        stop: "黎明文心南五路口",
+        waitMinutes: null,
+        expectedAt: "10:30",
+      },
+    });
+  });
+
   it("voices the App's cues naturally, keeping only the newest one while the line is busy", async () => {
     utter("今天天氣如何");
     bridge.speakCue("300 公尺後左轉");

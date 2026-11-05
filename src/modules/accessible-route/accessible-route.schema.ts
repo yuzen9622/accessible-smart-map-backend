@@ -1785,6 +1785,16 @@ export const PlannedBusArrivalsQuerySchema = z
   .object({
     routeToken: z.string().trim().min(1).max(256),
     legIndex: z.coerce.number().int().nonnegative(),
+    readyInSeconds: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(3 * 60 * 60)
+      .optional()
+      .openapi({
+        description:
+          "導航中的客戶端估計使用者還要幾秒抵達這段公車的上車站（0＝已在站牌）。有帶時，以伺服器現在時間加上此秒數挑選趕得上的班次，取代規劃當下預估的到站時間；未帶時維持原行為。已鎖定班次與舊版快照會忽略此值，也不會被保存。",
+      }),
   })
   .strict();
 

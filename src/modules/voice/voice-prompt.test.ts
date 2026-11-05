@@ -103,6 +103,8 @@ describe("buildVoiceSystemPrompt active-navigation context", () => {
       "transit.routeName、transit.from、transit.direction",
     );
     expect(prompt).toContain("呼叫 getBusArrival");
+    expect(prompt).toContain("有 busWait 時只依它回答");
+    expect(prompt).toContain("預計 expectedAt 到站");
     expect(prompt).toContain("後端會使用導航最新位置");
     expect(prompt).toContain("只有 active=false 或必要欄位確實不存在時才追問");
     expect(prompt).toContain("不得把其他運具冒充公車即時資料");

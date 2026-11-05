@@ -287,6 +287,19 @@ describe("locked bus refresh", () => {
     });
     expect(getCanonicalBusPair).not.toHaveBeenCalled();
   });
+  it("keeps a locked departure when the navigating rider reports readiness", async () => {
+    const result = await getPlannedBusArrivals("plan", 0, {
+      readyInSeconds: 0,
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      departureCandidates: [
+        { candidateId: "original", plateNumb: "CHOSEN", selected: true },
+        {},
+      ],
+    });
+    expect(getCanonicalBusPair).not.toHaveBeenCalled();
+  });
   it("shows per-stop timetable labels during an outage and marks endpoint times as schedule", async () => {
     getBusVehicleStopTimes.mockRejectedValue(new Error("outage"));
     expect(await getPlannedBusArrivals("plan", 0)).toMatchObject({

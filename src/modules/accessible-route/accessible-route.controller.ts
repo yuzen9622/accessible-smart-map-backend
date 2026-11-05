@@ -58,11 +58,14 @@ export async function plannedBusArrivalsHttp(
 ) {
   res.setHeader("Cache-Control", "private, no-store");
   try {
-    const { routeToken, legIndex } = req.validated?.query as {
+    const { routeToken, legIndex, readyInSeconds } = req.validated?.query as {
       routeToken: string;
       legIndex: number;
+      readyInSeconds?: number;
     };
-    const result = await getPlannedBusArrivals(routeToken, legIndex);
+    const result = await getPlannedBusArrivals(routeToken, legIndex, {
+      readyInSeconds,
+    });
     if (!result.ok)
       return sendResponse(res, false, "error", result.status, result.error);
     const { ok, ...data } = result;

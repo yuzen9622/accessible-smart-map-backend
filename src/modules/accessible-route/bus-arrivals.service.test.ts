@@ -799,6 +799,84 @@ describe("stop-by-stop arrivals for the adopted departure candidate", () => {
     });
   });
 
+  describe("rider readiness reported by the navigating client", () => {
+    // Stored plan: rider predicted at the stop 09:58. A live bus boards 09:57
+    // (the rider is already there) and the next service is timetable-only.
+    const timetableOnly = () => {
+      const seed = scheduledSeed();
+      return {
+        leg: plan("10:30").legs[1],
+        candidate: {
+          ...seed.candidate,
+          candidateId: "TPE307|0|trip-1030|seed",
+          tripId: "trip-1030",
+          boardingTime: "2030-01-01T10:30:00+08:00",
+          alightingTime: "2030-01-01T10:50:00+08:00",
+          estimatedWaitMinutes: 35,
+        },
+      };
+    };
+    beforeEach(() => {
+      v2([timetableOnly()]);
+      getCanonicalBusPair.mockResolvedValue(
+        pairResult("early", at("09:57"), at("10:10")),
+      );
+      tdxFetch.mockResolvedValue({
+        ok: true,
+        json: async () => [
+          {
+            SubRouteUID: "early",
+            StopUID: "earlyA",
+            Direction: 0,
+            PlateNumb: "early",
+            EstimateTime: 120,
+            StopStatus: 0,
+            UpdateTime: new Date().toISOString(),
+          },
+        ],
+      });
+    });
+
+    it("without a hint, the stored planning readiness drops the catchable live bus", async () => {
+      const result = await getPlannedBusArrivals("plan", 1);
+      if (!result.ok) throw new Error(result.error);
+      expect(result.departureCandidates?.find((c) => c.selected)).toMatchObject(
+        { tripId: "trip-1030", boardingTimeSource: "schedule" },
+      );
+      expect(result.directions[0].stops[0]).toMatchObject({
+        estimateMinutes: null,
+      });
+    });
+
+    it("a rider at the stop gets the live bus they can still catch", async () => {
+      const result = await getPlannedBusArrivals("plan", 1, {
+        readyInSeconds: 0,
+      });
+      if (!result.ok) throw new Error(result.error);
+      expect(result.departureCandidates?.find((c) => c.selected)).toMatchObject(
+        { plateNumb: "early", boardingTimeSource: "realtime" },
+      );
+      expect(result.directions[0].stops[0]).toMatchObject({
+        estimateMinutes: 2,
+        plateNumb: "early",
+      });
+    });
+
+    it("a late rider is not shown a bus they will miss", async () => {
+      vi.setSystemTime(at("09:50"));
+      getCanonicalBusPair.mockResolvedValue(
+        pairResult("early", at("09:57"), at("10:10")),
+      );
+      const result = await getPlannedBusArrivals("plan", 1, {
+        readyInSeconds: 10 * 60,
+      });
+      if (!result.ok) throw new Error(result.error);
+      expect(result.departureCandidates?.find((c) => c.selected)).toMatchObject(
+        { tripId: "trip-1030" },
+      );
+    });
+  });
+
   it("still matches the planned bus live when no candidate can be adopted", async () => {
     v2();
     getCanonicalBusPair.mockResolvedValue(noLiveVehicles);

@@ -8,6 +8,7 @@ import {
   NavResumeMessageSchema,
   NavResumeOkMessageSchema,
   NavStartMessageSchema,
+  NavStateMessageSchema,
   SessionStartMessageSchema,
   VoiceControlMessageSchema,
 } from "./voice.ws.schema";
@@ -357,5 +358,36 @@ describe("indoor step confirmations", () => {
         routeVersion: 0,
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("nav.state bus wait", () => {
+  const state = (busWait: unknown) =>
+    NavStateMessageSchema.safeParse({
+      type: "nav.state",
+      active: true,
+      busWait,
+    });
+  it("accepts live minutes, or no live minutes with an expected HH:mm", () => {
+    expect(state({ routeName: "26", stop: "A", waitMinutes: 4 }).success).toBe(
+      true,
+    );
+    expect(
+      state({
+        routeName: "26",
+        stop: "A",
+        waitMinutes: null,
+        expectedAt: "10:30",
+      }).success,
+    ).toBe(true);
+  });
+  it.each([
+    { routeName: "26", stop: "A", waitMinutes: -1 },
+    { routeName: "26", stop: "A", waitMinutes: null, expectedAt: "25:00" },
+    { routeName: "26", stop: "A", waitMinutes: null, expectedAt: "明日 06:00" },
+    { routeName: "", stop: "A", waitMinutes: null },
+    { routeName: "26", stop: "A", waitMinutes: null, extra: true },
+  ])("rejects malformed bus wait %j", (busWait) => {
+    expect(state(busWait).success).toBe(false);
   });
 });
