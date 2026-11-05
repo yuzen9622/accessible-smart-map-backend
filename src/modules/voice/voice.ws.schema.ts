@@ -122,6 +122,20 @@ const ClientNavStepSchema = z
   })
   .strict();
 
+/** What the App's waiting-for-bus card shows right now: live minutes, or the
+ * selected trip's expected time (HH:mm) when there is no live data. */
+const ClientBusWaitSchema = z
+  .object({
+    routeName: z.string().trim().min(1).max(64),
+    stop: z.string().trim().min(1).max(200),
+    waitMinutes: z.number().int().nonnegative().max(1440).nullable(),
+    expectedAt: z
+      .string()
+      .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
+      .optional(),
+  })
+  .strict();
+
 /** The App's navigation engine state; the source of truth for route questions. */
 export const NavStateMessageSchema = z
   .object({
@@ -141,6 +155,8 @@ export const NavStateMessageSchema = z
       .optional(),
     arrived: z.boolean().optional(),
     steps: z.array(ClientNavStepSchema).max(400).optional(),
+    /** Present while the rider is heading to or waiting at a bus stop. */
+    busWait: ClientBusWaitSchema.optional(),
   })
   .strict();
 
