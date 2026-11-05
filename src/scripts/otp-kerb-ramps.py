@@ -226,8 +226,15 @@ def crossing_tags(tags, ends):
 
 
 def lined_road_tags(tags):
-    """Return new tags for a sidewalk-lined road piece, or None to leave it."""
+    """Return new tags for a sidewalk-lined road piece, or None to leave it.
+
+    A junction-box piece otp-sidewalk-ways.py tagged only to bridge two lined
+    pieces (`source:foot=sidewalk_junction_gap`) has no sidewalk alongside, so
+    it does not get this provenance.
+    """
     if tags.get("foot") != "use_sidepath" or "wheelchair" in tags:
+        return None
+    if tags.get("source:foot") == "sidewalk_junction_gap":
         return None
     return {**tags, "wheelchair": "no", "source:wheelchair": LINED_ROAD_WHEELCHAIR_SOURCE}
 

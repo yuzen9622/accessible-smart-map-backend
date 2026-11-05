@@ -327,6 +327,10 @@ mv "$OSM_WALK_SAFE" "$OSM_CLIPPED"
 # Each MOI sidewalk polygon becomes a footway=sidewalk beside its road, joined
 # to the road at its ends and junctions; the lined road piece gets
 # foot=use_sidepath so OTP prefers the sidewalk but can still walk the road.
+# Bus-route and turn-restriction members are split too (relations point at the
+# pieces), roads OSM tags sidewalk*=separate get the same tag, and short
+# junction-box pieces between two lined pieces of one road are bridged, so a
+# walker crosses on the crosswalk instead of the junction centre.
 # Taipei painted sidewalk strips (pnpm import:taipei-painted-sidewalks) that MOI
 # does not already cover are compiled the same way (ids "tp-painted:<keyid>").
 # Runs on the host while the old OTP still serves (2026-10-26 national run:

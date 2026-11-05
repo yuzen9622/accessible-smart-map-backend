@@ -57,6 +57,14 @@ COPIED_ROAD_TAGS = ("name", "name:en", "name:zh")
 # sidewalk-index exporter key on that compiler marker — and a run built only from
 # painted strips also gets `ref:tp_painted_sidewalk`.
 PAINTED_SOURCE_PREFIX = "tp-painted:"
+# Junction gap fill (plan_junction_gaps): road classes a gap may belong to,
+# the longest single piece and chain it bridges, how parallel the chain must
+# run to the lined pieces it joins, and the provenance tag it writes.
+GAP_HIGHWAYS = {"trunk", "primary", "secondary", "tertiary", "unclassified", "residential"}
+GAP_PIECE_MAX_M = 25.0
+GAP_COMPONENT_MAX_M = 80.0
+GAP_ALIGN_COS = 0.85
+GAP_SOURCE = "sidewalk_junction_gap"
 
 
 def to_xy(lon, lat):
@@ -99,6 +107,24 @@ def make_road(way_id, node_ids, lonlats, tags):
     for (ax, ay), (bx, by) in zip(xy, xy[1:]):
         cum.append(cum[-1] + math.hypot(bx - ax, by - ay))
     return Road(way_id, tuple(node_ids), xy, tuple(cum), dict(tags))
+
+
+SEPARATE_SIDEWALK_KEYS = ("sidewalk", "sidewalk:both", "sidewalk:left", "sidewalk:right")
+SEPARATE_SOURCE = "osm_sidewalk_separate"
+
+
+def separate_sidewalk_road(tags, node_ids):
+    """A road whose OSM tags say its sidewalk is drawn as its own way.
+
+    The compiler adds no MOI sidewalk beside it (OSM already has one), but the
+    road still needs `foot=use_sidepath`, or walking its centreline costs the
+    same as the mapped sidewalk.
+    """
+    if not any(tags.get(key) == "separate" for key in SEPARATE_SIDEWALK_KEYS):
+        return False
+    if tags.get("highway") not in ROAD_MAX_OFFSET_M or "foot" in tags or tags.get("area") == "yes":
+        return False
+    return len(node_ids) >= 2 and safe_walk_tags(tags, road=True)
 
 
 def eligible_road(tags, node_ids):
@@ -296,10 +322,21 @@ class Edits:
     new_nodes: dict = field(default_factory=dict)
     road_pieces: dict = field(default_factory=dict)
     new_ways: list = field(default_factory=list)
+    # Original way id -> ids of its pieces in way order (first keeps the id).
+    splits: dict = field(default_factory=dict)
+    # Relation id -> replacement member list [(type, ref, role)].
+    relation_members: dict = field(default_factory=dict)
 
 
 def plan_edits(roads, runs, junctions, next_node_id, next_way_id, relation_ways=()):
-    """Plan the PBF edits: inserted road nodes, sidewalks, connectors, tags."""
+    """Plan the PBF edits: inserted road nodes, sidewalks, connectors, tags.
+
+    `relation_ways` are ways that must stay whole: members of relations other
+    than route/restriction/connectivity, and the turn-relation members
+    `classify_turn_members` cannot rewrite. They keep their original tags.
+    Every other road is split; `rewrite_route_members` and
+    `rewrite_turn_members` then point the relations at the pieces.
+    """
     by_way = defaultdict(list)
     for run in runs:
         by_way[run.way_id].append(run)
@@ -363,10 +400,210 @@ def plan_edits(roads, runs, junctions, next_node_id, next_way_id, relation_ways=
         pieces = split_road(road, positions, covered)
         first_nodes, first_tags = pieces[0]
         edits.road_pieces[way_id] = (first_nodes, first_tags)
+        ids = [way_id]
         for nodes, tags in pieces[1:]:
             edits.new_ways.append((next_way_id, nodes, tags))
+            ids.append(next_way_id)
             next_way_id += 1
+        edits.splits[way_id] = ids
     return edits
+
+
+def piece_nodes(edits):
+    """Node list of every road piece the edits produce, keyed by way id."""
+    nodes = {way_id: piece[0] for way_id, piece in edits.road_pieces.items()}
+    nodes.update((way_id, way_nodes) for way_id, way_nodes, _ in edits.new_ways)
+    return nodes
+
+
+def rewrite_route_members(route_relations, edits, way_ends):
+    """Expand split ways inside route relations, in the route's travel order.
+
+    A split member is replaced at its position, with its role, by its pieces.
+    The pieces go in reverse when the route walks the way backwards: the
+    member's role is `backward`, or the chain only connects to its neighbour
+    members through its last/first node. `way_ends` maps the neighbour way
+    ids to their (first, last) node after the edits.
+    """
+    nodes = piece_nodes(edits)
+
+    def ends(way_id):
+        if way_id in edits.splits:
+            ids = edits.splits[way_id]
+            return nodes[ids[0]][0], nodes[ids[-1]][-1]
+        return way_ends.get(way_id)
+
+    for relation_id, members in route_relations.items():
+        if not any(t == "w" and ref in edits.splits for t, ref, _ in members):
+            continue
+        rewritten = []
+        for i, (kind, ref, role) in enumerate(members):
+            if kind != "w" or ref not in edits.splits:
+                rewritten.append((kind, ref, role))
+                continue
+            first, last = ends(ref)
+            prev = ends(members[i - 1][1]) if i > 0 and members[i - 1][0] == "w" else None
+            following = ends(members[i + 1][1]) if i + 1 < len(members) and members[i + 1][0] == "w" else None
+            forward_fit = (prev is not None and first in prev) or (following is not None and last in following)
+            backward_fit = (prev is not None and last in prev) or (following is not None and first in following)
+            reverse = backward_fit and not forward_fit if forward_fit or backward_fit else role == "backward"
+            pieces = edits.splits[ref][::-1] if reverse else edits.splits[ref]
+            rewritten.extend(("w", piece, role) for piece in pieces)
+        edits.relation_members[relation_id] = rewritten
+
+
+def is_turn_relation(relation_type):
+    """Relations whose from/via/to members describe a turn at a via node."""
+    return relation_type in ("restriction", "connectivity") or relation_type.startswith("restriction:")
+
+
+def classify_turn_members(turn_relations, roads):
+    """Split which turn-relation members may be split.
+
+    A turn happens at its via: one node, or a chain of via ways. A `from`/`to`
+    member may be split when one of its ends is the via node or an end of a
+    via way: `rewrite_turn_members` then keeps the piece ending there, as JOSM
+    does when it splits such a way. Via ways, members whose end is not on the
+    via, and relations with an unknown via stay whole. Returns (protected way
+    ids, relation id -> set of anchor nodes for the rewritable relations).
+    """
+    ends = {road.way_id: (road.node_ids[0], road.node_ids[-1]) for road in roads}
+    protected, anchors_by_relation = set(), {}
+    for relation_id, members in turn_relations.items():
+        via = [(kind, ref) for kind, ref, role in members if role == "via"]
+        anchors = None
+        if len(via) == 1 and via[0][0] == "n":
+            anchors = {via[0][1]}
+        elif via and all(kind == "w" and ref in ends for kind, ref in via):
+            anchors = {node for _, ref in via for node in ends[ref]}
+        for kind, ref, role in members:
+            if kind != "w":
+                continue
+            if anchors is None or role not in ("from", "to") or not anchors & set(ends.get(ref, ())):
+                protected.add(ref)
+        if anchors is not None:
+            anchors_by_relation[relation_id] = anchors
+    return protected, anchors_by_relation
+
+
+def rewrite_turn_members(turn_relations, anchors_by_relation, edits):
+    """Replace each split from/to member with its piece that ends on the via."""
+    nodes = piece_nodes(edits)
+    for relation_id, anchors in anchors_by_relation.items():
+        members = turn_relations[relation_id]
+        if not any(kind == "w" and ref in edits.splits for kind, ref, _ in members):
+            continue
+        rewritten = []
+        for kind, ref, role in members:
+            if kind == "w" and ref in edits.splits:
+                ref = next(
+                    piece for piece in edits.splits[ref]
+                    if anchors & {nodes[piece][0], nodes[piece][-1]}
+                )
+            rewritten.append((kind, ref, role))
+        edits.relation_members[relation_id] = rewritten
+
+
+def base_name(name):
+    """Road name without its numbered section, e.g. 信義路三段 → 信義路."""
+    stripped = name.rstrip("段")
+    if stripped != name:
+        stripped = stripped.rstrip("一二三四五六七八九十0123456789")
+    return stripped or name
+
+
+def plan_junction_gaps(pieces, seeds, node_xy, protected=()):
+    """Tag short unlined carriageway runs between two lined pieces of one road.
+
+    A junction box is drawn as short road pieces no sidewalk polygon runs
+    along, so they stay 1x and a walker crosses there instead of on the
+    crosswalk. `pieces` maps way id -> (nodes, tags) for every road piece near
+    a sidewalk after the compile; `seeds` are the ids this compile lined.
+    A candidate is ground-level, walkable, unlined, short and named, in a
+    through class. Candidates of one road (base name + highway) joined by
+    shared nodes form a chain; it is tagged only when two different seed
+    pieces of that same road touch it at two distinct nodes and the chain runs
+    along them, so a side spur or a loop on one seed is left alone.
+
+    Ways in `protected` (non-route relation members) are never candidates.
+
+    Returns way id -> new tags.
+    """
+    def length(nodes):
+        return sum(math.dist(node_xy[a], node_xy[b]) for a, b in zip(nodes, nodes[1:]))
+
+    def road_key(tags):
+        return base_name(tags["name"]), tags["highway"]
+
+    candidates = {}
+    for way_id, (nodes, tags) in pieces.items():
+        if way_id in seeds or way_id in protected or "foot" in tags:
+            continue
+        if tags.get("highway") not in GAP_HIGHWAYS:
+            continue
+        if not tags.get("name") or tags.get("level", "0") != "0":
+            continue
+        if not safe_walk_tags(tags, road=True) or "sidewalk:foot" in tags:
+            continue
+        if any(n not in node_xy for n in nodes) or length(nodes) > GAP_PIECE_MAX_M:
+            continue
+        candidates[way_id] = road_key(tags)
+    seed_at = defaultdict(list)
+    for way_id in seeds:
+        nodes, tags = pieces[way_id]
+        if tags.get("name"):
+            for n in nodes:
+                seed_at[n].append((way_id, road_key(tags)))
+    by_node = defaultdict(list)
+    for way_id in candidates:
+        for n in pieces[way_id][0]:
+            by_node[n].append(way_id)
+
+    def direction(nodes):
+        (ax, ay), (bx, by) = node_xy[nodes[0]], node_xy[nodes[-1]]
+        d = math.hypot(bx - ax, by - ay) or 1.0
+        return (bx - ax) / d, (by - ay) / d
+
+    tagged = {}
+    seen = set()
+    for start in candidates:
+        if start in seen:
+            continue
+        key = candidates[start]
+        chain, todo = [], [start]
+        seen.add(start)
+        while todo:
+            way_id = todo.pop()
+            chain.append(way_id)
+            for n in pieces[way_id][0]:
+                for other in by_node[n]:
+                    if other not in seen and candidates[other] == key:
+                        seen.add(other)
+                        todo.append(other)
+        if sum(length(pieces[w][0]) for w in chain) > GAP_COMPONENT_MAX_M:
+            continue
+        chain_nodes = {n for w in chain for n in pieces[w][0]}
+        attachments = defaultdict(set)
+        for n in chain_nodes:
+            for seed, seed_key in seed_at.get(n, ()):
+                if seed_key == key:
+                    attachments[seed].add(n)
+        nodes_used = set().union(*attachments.values()) if attachments else set()
+        if len(attachments) < 2 or len(nodes_used) < 2:
+            continue
+        a, b = max(
+            ((p, q) for p in nodes_used for q in nodes_used if p < q),
+            key=lambda pair: math.dist(node_xy[pair[0]], node_xy[pair[1]]),
+        )
+        span = direction([a, b])
+        if not all(
+            abs(span[0] * dx + span[1] * dy) >= GAP_ALIGN_COS
+            for dx, dy in (direction(pieces[s][0]) for s in attachments)
+        ):
+            continue
+        for way_id in chain:
+            tagged[way_id] = {**pieces[way_id][1], "foot": "use_sidepath", "source:foot": GAP_SOURCE}
+    return tagged
 
 
 def junction_links(ends):
@@ -449,7 +686,11 @@ def collect_roads(osmium, pbf, polygons):
         def __init__(self):
             super().__init__()
             self.roads = []
+            self.short_roads = []
+            self.separate_roads = []
             self.relation_ways = set()
+            self.route_relations = {}
+            self.turn_relations = {}
             self.max_node = 0
             self.max_way = 0
 
@@ -460,6 +701,13 @@ def collect_roads(osmium, pbf, polygons):
             self.max_way = max(self.max_way, way.id)
             tags = {tag.k: tag.v for tag in way.tags}
             node_ids = [n.ref for n in way.nodes]
+            if separate_sidewalk_road(tags, node_ids):
+                try:
+                    lonlats = [(n.lon, n.lat) for n in way.nodes]
+                except osmium.InvalidLocationError:
+                    return
+                self.separate_roads.append(make_road(way.id, node_ids, lonlats, tags))
+                return
             if not eligible_road(tags, node_ids):
                 return
             try:
@@ -472,9 +720,18 @@ def collect_roads(osmium, pbf, polygons):
             road = make_road(way.id, node_ids, lonlats, tags)
             if road.length >= MIN_RUN_M:
                 self.roads.append(road)
+            else:
+                self.short_roads.append(road)
 
         def relation(self, relation):
-            self.relation_ways.update(member.ref for member in relation.members if member.type == "w")
+            members = [(m.type, m.ref, m.role) for m in relation.members]
+            kind_tag = relation.tags.get("type", "")
+            if kind_tag == "route":
+                self.route_relations[relation.id] = members
+            elif is_turn_relation(kind_tag):
+                self.turn_relations[relation.id] = members
+            else:
+                self.relation_ways.update(ref for kind, ref, _ in members if kind == "w")
 
     collector = Collector()
     collector.apply_file(pbf, locations=True)
@@ -495,6 +752,67 @@ def count_junctions(osmium, pbf, wanted):
 
     Counter().apply_file(pbf)
     return {node_id for node_id, count in counts.items() if count >= 2}
+
+
+def read_way_ends(osmium, pbf, wanted):
+    """Pass 3: (first, last) node of each wanted way."""
+    ends = {}
+
+    class Ends(osmium.SimpleHandler):
+        def way(self, way):
+            if way.id in wanted and len(way.nodes) >= 2:
+                ends[way.id] = (way.nodes[0].ref, way.nodes[-1].ref)
+
+    if wanted:
+        Ends().apply_file(pbf)
+    return ends
+
+
+def route_member_ways(route_relations):
+    """Every way id that is a member of some route relation."""
+    return {ref for members in route_relations.values() for kind, ref, _ in members if kind == "w"}
+
+
+def fill_junction_gaps(edits, roads, relation_ways=()):
+    """Apply plan_junction_gaps to the edited road pieces; return the count.
+
+    Members of `relation_ways` (relations other than route, restriction and
+    connectivity) are never gap-filled. Turn-relation members may be: a gap
+    edit only adds a tag, so the way id, nodes and turn stay as mapped.
+    """
+    node_xy = {}
+    pieces = {}
+    seeds = set()
+    for road in roads:
+        node_xy.update(zip(road.node_ids, road.xy))
+    node_xy.update((node_id, to_xy(*lonlat)) for node_id, lonlat in edits.new_nodes.items())
+    all_nodes = piece_nodes(edits)
+    new_index = {way_id: i for i, (way_id, _, _) in enumerate(edits.new_ways)}
+    for road in roads:
+        ids = edits.splits.get(road.way_id)
+        if ids is None:
+            nodes, tags = edits.road_pieces.get(road.way_id, (road.node_ids, road.tags))
+            pieces[road.way_id] = (list(nodes), tags)
+            if "foot" not in road.tags and tags.get("foot") == "use_sidepath":
+                seeds.add(road.way_id)
+            continue
+        for way_id in ids:
+            tags = (
+                edits.road_pieces[way_id][1]
+                if way_id == road.way_id
+                else edits.new_ways[new_index[way_id]][2]
+            )
+            pieces[way_id] = (list(all_nodes[way_id]), tags)
+            if "foot" not in road.tags and tags.get("foot") == "use_sidepath":
+                seeds.add(way_id)
+    tagged = plan_junction_gaps(pieces, seeds, node_xy, protected=relation_ways)
+    for way_id, tags in tagged.items():
+        if way_id in new_index:
+            wid, nodes, _ = edits.new_ways[new_index[way_id]]
+            edits.new_ways[new_index[way_id]] = (wid, nodes, tags)
+        else:
+            edits.road_pieces[way_id] = (pieces[way_id][0], tags)
+    return len(tagged)
 
 
 def open_writer(osmium, output_pbf):
@@ -546,7 +864,11 @@ def write_pbf(osmium, pbf, output_pbf, edits):
 
         def relation(self, relation):
             self.flush_ways()
-            writer.add_relation(relation)
+            members = edits.relation_members.get(relation.id)
+            if members is None:
+                writer.add_relation(relation)
+            else:
+                writer.add_relation(relation.replace(members=members))
 
     handler = Writer()
     try:
@@ -1069,11 +1391,40 @@ def main(argv=None):
         for node_id in road.node_ids
     }
     junctions = count_junctions(osmium, input_pbf, wanted)
+    turn_protected, turn_vias = classify_turn_members(
+        collected.turn_relations, collected.roads + collected.short_roads + collected.separate_roads
+    )
     edits = plan_edits(
         collected.roads, runs, junctions, collected.max_node + 1, collected.max_way + 1,
-        relation_ways=collected.relation_ways,
+        relation_ways=collected.relation_ways | turn_protected,
+    )
+    rewrite_turn_members(collected.turn_relations, turn_vias, edits)
+    # Turn members keep their ids and nodes under a tag-only gap edit, so only
+    # members of other relation types are shielded from the gap fill.
+    for road in collected.separate_roads:
+        if road.way_id in collected.relation_ways:
+            continue
+        edits.road_pieces[road.way_id] = (
+            list(road.node_ids),
+            {**road.tags, "foot": "use_sidepath", "source:foot": SEPARATE_SOURCE},
+        )
+    gaps = fill_junction_gaps(
+        edits,
+        collected.roads + collected.short_roads + collected.separate_roads,
+        collected.relation_ways,
+    )
+    neighbours = {
+        ref
+        for members in collected.route_relations.values()
+        if any(kind == "w" and ref in edits.splits for kind, ref, _ in members)
+        for kind, ref, _ in members
+        if kind == "w" and ref not in edits.splits
+    }
+    rewrite_route_members(
+        collected.route_relations, edits, read_way_ends(osmium, input_pbf, neighbours)
     )
     write_pbf(osmium, input_pbf, output_pbf, edits)
+    route_ways = route_member_ways(collected.route_relations)
     matched = {source for run in runs for source in run.sources}
     added = [tags for _, _, tags in edits.new_ways if tags.get("source") == "MOI sidewalk"]
     pieces = [tags for _, tags in edits.road_pieces.values()]
@@ -1084,7 +1435,10 @@ def main(argv=None):
         f"sidewalk_km={sum(run.length for run in runs) / 1000:.1f} "
         f"sidewalk_ways={sum(1 for tags in added if tags.get('footway') == 'sidewalk')} "
         f"connectors={sum(1 for tags in added if 'footway' not in tags)} "
-        f"use_sidepath_pieces={sum(1 for tags in pieces if tags.get('foot') == 'use_sidepath')}"
+        f"use_sidepath_pieces={sum(1 for tags in pieces if tags.get('foot') == 'use_sidepath')} "
+        f"route_members_split={sum(1 for way_id, ids in edits.splits.items() if len(ids) > 1 and way_id in route_ways)} "
+        f"relations_rewritten={len(edits.relation_members)} junction_gap_pieces={gaps} "
+        f"osm_separate_sidewalk_roads={len(collected.separate_roads)}"
     )
 
 

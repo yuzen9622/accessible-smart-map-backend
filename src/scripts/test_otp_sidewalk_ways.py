@@ -191,7 +191,7 @@ class EligibilityTests(unittest.TestCase):
 
 @unittest.skipIf(osmium is None, "pyosmium is not installed")
 class PbfTests(unittest.TestCase):
-    def test_raw_regeneration_keeps_full_relation_way_direction_and_access_tags(self):
+    def test_restriction_member_is_split_and_restriction_keeps_the_via_piece(self):
         with tempfile.TemporaryDirectory() as tmp:
             source=os.path.join(tmp,"relation-in.osm.pbf")
             output=os.path.join(tmp,"relation-out.osm.pbf")
@@ -216,15 +216,25 @@ class PbfTests(unittest.TestCase):
                 def way(self,w):ways[w.id]=([n.ref for n in w.nodes],dict(w.tags))
                 def relation(self,r):relations[r.id]=([(m.type,m.ref,m.role) for m in r.members],dict(r.tags))
             Read().apply_file(output)
-            self.assertEqual(ways[10][1],tags)
+            pieces={wid:v for wid,v in ways.items() if v[1].get("name")=="關聯道路" and v[1].get("highway")=="residential"}
+            self.assertEqual(len(pieces),3)
+            for nodes_,piece_tags in pieces.values():
+                self.assertEqual({k:v for k,v in piece_tags.items() if k!="foot"},tags)
+                for nid in nodes_:
+                    self.assertAlmostEqual(nodes[nid][1],LAT0,delta=1e-7)
             self.assertEqual(ways[10][0][0],1)
-            self.assertEqual(ways[10][0][-1],2)
-            self.assertGreater(len(ways[10][0]),2)
-            for nid in ways[10][0]:
-                self.assertAlmostEqual(nodes[nid][1],LAT0,delta=1e-7)
-            self.assertEqual(relations[900],(members,{"type":"restriction","restriction":"no_right_turn"}))
-            self.assertEqual(relations[901],(route_members,{"type":"route","route":"bicycle"}))
-            self.assertEqual({wid for wid,(_,t) in ways.items() if t.get("highway")in("residential","service")},{10,11})
+            self.assertEqual(sum(t.get("foot")=="use_sidepath" for _,t in pieces.values()),1)
+            restriction,rtags=relations[900]
+            self.assertEqual(rtags,{"type":"restriction","restriction":"no_right_turn"})
+            self.assertEqual(restriction[1:],members[1:])
+            self.assertEqual(restriction[0][2],"from")
+            self.assertEqual(pieces[restriction[0][1]][0][-1],2)
+            route,route_tags=relations[901]
+            self.assertEqual(route_tags,{"type":"route","route":"bicycle"})
+            self.assertEqual([m for m in route if m[1]==11],[("w",11,"backward")])
+            chain=[pieces[ref][0] for _,ref,role in route if ref!=11]
+            self.assertEqual((chain[0][0],chain[-1][-1]),(1,2))
+            self.assertEqual(ways[11],([2,3],{"highway":"service"}))
             self.assertTrue(any(t.get("footway")=="sidewalk" for _,t in ways.values()))
 
     def test_compiled_pbf_contains_connected_sidewalk_and_lined_road(self):
@@ -776,7 +786,288 @@ class ExistingRepairTests(unittest.TestCase):
         self.assert_no_native_edits(self.plan(ways, coverage=[("s1", strip(-6, -2, 2, 6))]))
 
 
+@unittest.skipIf(osmium is None, "osmium not installed")
+class RouteRelationTests(unittest.TestCase):
+    """Route members are split; the route lists the pieces in travel order."""
 
+    def compile(self, relations, extra_ways=()):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "in.osm.pbf")
+            output = os.path.join(tmp, "out.osm.pbf")
+            sidewalks = os.path.join(tmp, "sidewalks.ndjson")
+            writer = osmium.SimpleWriter(source)
+            for nid, p in {1: (0, 0), 2: (100, 0), 3: (100, 100), 4: (-100, 0)}.items():
+                writer.add_node(osmium.osm.mutable.Node(id=nid, location=lonlat(*p)))
+            writer.add_way(osmium.osm.mutable.Way(id=10, nodes=[1, 2], tags={"highway": "residential", "name": "幹道"}))
+            writer.add_way(osmium.osm.mutable.Way(id=11, nodes=[2, 3], tags={"highway": "service"}))
+            writer.add_way(osmium.osm.mutable.Way(id=12, nodes=[4, 1], tags={"highway": "service"}))
+            for wid, nodes_, tags_ in extra_ways:
+                writer.add_way(osmium.osm.mutable.Way(id=wid, nodes=nodes_, tags=tags_))
+            for rid, members, tags in relations:
+                writer.add_relation(osmium.osm.mutable.Relation(id=rid, members=members, tags=tags))
+            writer.close()
+            with open(sidewalks, "w") as handle:
+                handle.write(json.dumps({"id": "s1", "geometry": strip(20, 80, 4, 8)}) + "\n")
+            MODULE.main([source, sidewalks, output])
+            ways, relations = {}, {}
+
+            class Read(osmium.SimpleHandler):
+                def way(self, w):
+                    ways[w.id] = ([n.ref for n in w.nodes], dict(w.tags))
+
+                def relation(self, r):
+                    relations[r.id] = ([(m.type, m.ref, m.role) for m in r.members], dict(r.tags))
+
+            Read().apply_file(output)
+            return ways, relations
+
+    def road_pieces(self, ways):
+        return {wid: v for wid, v in ways.items() if v[1].get("name") == "幹道" and v[1].get("highway") == "residential"}
+
+    def test_route_member_is_split_and_only_the_lined_piece_is_tagged(self):
+        route = {"type": "route", "route": "bus"}
+        ways, relations = self.compile([(900, [("w", 12, ""), ("w", 10, ""), ("w", 11, "")], route)])
+        pieces = self.road_pieces(ways)
+        self.assertEqual(len(pieces), 3)
+        self.assertEqual([t.get("foot") for _, t in sorted(pieces.values(), key=lambda v: v[0][0] != 1)].count("use_sidepath"), 1)
+        members, tags = relations[900]
+        self.assertEqual(tags, route)
+        middle = [ref for _, ref, _ in members[1:-1]]
+        self.assertEqual(middle[0], 10)
+        chain = [pieces[ref][0] for ref in middle]
+        self.assertEqual(chain[0][0], 1)
+        for left, right in zip(chain, chain[1:]):
+            self.assertEqual(left[-1], right[0])
+        self.assertEqual(chain[-1][-1], 2)
+        self.assertEqual((members[0][1], members[-1][1]), (12, 11))
+
+    def test_route_walking_the_way_backwards_gets_reversed_pieces(self):
+        route = {"type": "route", "route": "bus"}
+        ways, relations = self.compile([(900, [("w", 11, ""), ("w", 10, ""), ("w", 12, "")], route)])
+        pieces = self.road_pieces(ways)
+        members = relations[900][0]
+        chain = [pieces[ref][0] for _, ref, _ in members[1:-1]]
+        self.assertEqual(chain[0][-1], 2)
+        self.assertEqual(chain[-1][0], 1)
+
+    def test_lone_backward_member_is_reversed_by_role(self):
+        route = {"type": "route", "route": "bicycle"}
+        ways, relations = self.compile([(900, [("w", 10, "backward")], route)])
+        pieces = self.road_pieces(ways)
+        members = relations[900][0]
+        self.assertTrue(all(role == "backward" for _, _, role in members))
+        self.assertEqual(pieces[members[0][1]][0][-1], 2)
+
+    def test_route_without_a_split_member_is_unchanged(self):
+        members = [("w", 11, ""), ("w", 12, "")]
+        route = {"type": "route", "route": "bus"}
+        _, relations = self.compile([(900, members, route), (901, [("w", 10, "")], route)])
+        self.assertEqual(relations[900], (members, route))
+
+    def test_connectivity_from_member_becomes_the_piece_at_the_via_node(self):
+        members = [("w", 10, "from"), ("n", 2, "via"), ("w", 11, "to")]
+        tags = {"type": "connectivity", "connectivity": "1:1"}
+        ways, relations = self.compile([(900, members, tags)])
+        rewritten, rtags = relations[900]
+        self.assertEqual(rtags, tags)
+        self.assertEqual(rewritten[1:], members[1:])
+        self.assertEqual(ways[rewritten[0][1]][0][-1], 2)
+        self.assertEqual(len(self.road_pieces(ways)), 3)
+
+    def test_turn_member_whose_via_is_not_its_end_stays_whole(self):
+        # via node 1 is an end of way 10 but way 11 does not touch it.
+        members = [("w", 10, "from"), ("n", 1, "via"), ("w", 12, "to")]
+        tags = {"type": "restriction", "restriction": "no_u_turn"}
+        ways, relations = self.compile([(900, members, tags)])
+        self.assertEqual(len(self.road_pieces(ways)), 3)
+        self.assertEqual(ways[relations[900][0][0][1]][0][0], 1)
+        members = [("w", 10, "from"), ("n", 3, "via"), ("w", 11, "to")]
+        ways, relations = self.compile([(900, members, tags)])
+        self.assertEqual(relations[900], (members, tags))
+        self.assertEqual(ways[10][1], {"highway": "residential", "name": "幹道"})
+        self.assertEqual(len(self.road_pieces(ways)), 1)
+
+    def test_from_member_ending_on_a_via_way_keeps_the_piece_at_the_via(self):
+        members = [("w", 10, "from"), ("w", 11, "via"), ("w", 12, "to")]
+        tags = {"type": "restriction", "restriction": "no_left_turn"}
+        ways, relations = self.compile([(900, members, tags)])
+        rewritten, rtags = relations[900]
+        self.assertEqual(rtags, tags)
+        self.assertEqual(rewritten[1:], members[1:])
+        self.assertEqual(rewritten[0][2], "from")
+        self.assertEqual(ways[rewritten[0][1]][0][-1], 2)
+        self.assertEqual(len(self.road_pieces(ways)), 3)
+
+    def test_via_way_member_stays_whole(self):
+        members = [("w", 12, "from"), ("w", 10, "via"), ("w", 11, "to")]
+        tags = {"type": "restriction", "restriction": "no_u_turn"}
+        ways, relations = self.compile([(900, members, tags)])
+        self.assertEqual(relations[900], (members, tags))
+        self.assertEqual(len(self.road_pieces(ways)), 1)
+
+    def test_other_relation_type_member_stays_whole(self):
+        members = [("w", 10, "outer")]
+        tags = {"type": "multipolygon", "landuse": "residential"}
+        ways, relations = self.compile([(900, members, tags)])
+        self.assertEqual(relations[900], (members, tags))
+        self.assertEqual(len(self.road_pieces(ways)), 1)
+        self.assertEqual((ways[10][0][0], ways[10][0][-1]), (1, 2))
+        self.assertEqual(ways[10][1], {"highway": "residential", "name": "幹道"})
+
+    def test_osm_separate_sidewalk_road_is_tagged_whole_unless_in_another_relation(self):
+        separate = {"highway": "secondary", "name": "外環", "sidewalk:right": "separate"}
+        extra = [(20, [3, 4], dict(separate)), (21, [4, 2], dict(separate))]
+        street = {"type": "associatedStreet"}
+        ways, relations = self.compile([(900, [("w", 21, "street")], street)], extra_ways=extra)
+        self.assertEqual(ways[20][0], [3, 4])
+        self.assertEqual(ways[20][1], {**separate, "foot": "use_sidepath", "source:foot": "osm_sidewalk_separate"})
+        self.assertEqual(ways[21], ([4, 2], separate))
+        self.assertEqual(relations[900], ([("w", 21, "street")], street))
+
+    def test_way_in_a_restriction_and_another_relation_stays_whole(self):
+        restriction = [("w", 10, "from"), ("n", 2, "via"), ("w", 11, "to")]
+        rtags = {"type": "restriction", "restriction": "no_left_turn"}
+        ways, relations = self.compile([(900, restriction, rtags), (901, [("w", 10, "outer")], {"type": "multipolygon"})])
+        self.assertEqual(relations[900], (restriction, rtags))
+        self.assertEqual((ways[10][0][0], ways[10][0][-1]), (1, 2))
+        self.assertEqual(ways[10][1], {"highway": "residential", "name": "幹道"})
+        self.assertEqual(len(self.road_pieces(ways)), 1)
+
+
+class JunctionGapTests(unittest.TestCase):
+    """plan_junction_gaps on a synthetic east-west road with a junction box."""
+
+    def setUp(self):
+        # West lined piece 1-2, junction pieces 2-3 and 3-4, east lined piece 4-5.
+        self.node_xy = {1: (-100, 0), 2: (-10, 0), 3: (0, 0), 4: (10, 0), 5: (100, 0),
+                        6: (0, 10), 7: (0, 30), 8: (-10, 5)}
+        self.road = {"highway": "secondary", "name": "信義路三段"}
+        self.pieces = {
+            1: ([1, 2], {**self.road, "foot": "use_sidepath"}),
+            2: ([2, 3], dict(self.road)),
+            3: ([3, 4], {"highway": "secondary", "name": "信義路二段"}),
+            4: ([4, 5], {"highway": "secondary", "name": "信義路二段", "foot": "use_sidepath"}),
+        }
+        self.seeds = {1, 4}
+
+    def gaps(self):
+        return MODULE.plan_junction_gaps(self.pieces, self.seeds, self.node_xy)
+
+    def test_junction_box_between_two_lined_pieces_is_tagged(self):
+        tagged = self.gaps()
+        self.assertEqual(set(tagged), {2, 3})
+        self.assertEqual(tagged[2]["foot"], "use_sidepath")
+        self.assertEqual(tagged[2]["source:foot"], "sidewalk_junction_gap")
+        self.assertEqual(tagged[3]["name"], "信義路二段")
+
+    def test_raw_osm_use_sidepath_is_not_a_seed(self):
+        self.seeds = {1}
+        self.assertEqual(self.gaps(), {})
+
+    def test_dead_end_touching_one_seed_is_not_tagged(self):
+        del self.pieces[4]
+        self.seeds = {1}
+        self.assertEqual(self.gaps(), {})
+
+    def test_same_name_link_service_and_upper_level_are_not_tagged(self):
+        for tags in ({"highway": "secondary_link"}, {"highway": "service"}, {"level": "1"}):
+            with self.subTest(tags=tags):
+                self.setUp()
+                self.pieces[2] = ([2, 3], {**self.road, **tags})
+                self.pieces[3] = ([3, 4], {**self.road, **tags, "name": "信義路二段"})
+                self.assertEqual(self.gaps(), {})
+
+    def test_access_restricted_piece_is_not_tagged(self):
+        for tags in ({"access": "private"}, {"foot:conditional": "no @ (22:00-06:00)"}, {"oneway:foot": "yes"}):
+            with self.subTest(tags=tags):
+                self.setUp()
+                self.pieces[2] = ([2, 3], {**self.road, **tags})
+                self.assertNotIn(2, self.gaps())
+
+    def test_other_road_name_is_not_tagged(self):
+        self.pieces[2] = ([2, 3], {"highway": "secondary", "name": "新生南路一段"})
+        self.pieces[3] = ([3, 4], {"highway": "secondary", "name": "新生南路一段"})
+        self.assertEqual(self.gaps(), {})
+
+    def test_chain_over_the_length_cap_is_not_tagged(self):
+        self.node_xy.update({3: (0, 0), 4: (90, 0), 5: (200, 0)})
+        self.node_xy[2] = (-10, 0)
+        self.pieces[3] = ([3, 4], {"highway": "secondary", "name": "信義路二段"})
+        self.assertNotIn(3, self.gaps())
+
+    def test_perpendicular_spur_between_two_seeds_is_not_tagged(self):
+        # A same-name spur 3-6-7 touching the west seed at 2 and a north seed.
+        self.pieces = {
+            1: ([1, 2], {**self.road, "foot": "use_sidepath"}),
+            2: ([2, 8], dict(self.road)),
+            5: ([8, 6], dict(self.road)),
+            6: ([6, 7], {**self.road, "foot": "use_sidepath"}),
+        }
+        self.seeds = {1, 6}
+        self.assertEqual(self.gaps(), {})
+
+    def test_loop_on_one_seed_is_not_tagged(self):
+        self.pieces[2] = ([2, 8, 1], dict(self.road))
+        del self.pieces[3]
+        self.seeds = {1, 4}
+        self.assertNotIn(2, self.gaps())
+
+    def test_non_route_relation_member_is_not_tagged(self):
+        tagged = MODULE.plan_junction_gaps(self.pieces, self.seeds, self.node_xy, protected={2})
+        self.assertNotIn(2, tagged)
+
+    def test_piece_over_25_m_unnamed_or_with_foot_is_not_tagged(self):
+        cases = {
+            "long": ({**self.road}, {3: (30, 0), 4: (40, 0), 5: (130, 0)}),
+            "unnamed": ({"highway": "secondary"}, {}),
+            "foot": ({**self.road, "foot": "yes"}, {}),
+        }
+        for label, (tags, moved) in cases.items():
+            with self.subTest(label):
+                self.setUp()
+                self.node_xy.update(moved)
+                self.pieces[2] = ([2, 3], tags)
+                self.assertNotIn(2, self.gaps())
+
+    def test_gap_fill_keeps_node_lists_and_uses_only_compiled_seeds(self):
+        # Road 20 already carries foot=use_sidepath in OSM: never a seed.
+        lined = road(10, [1, 2], [(-100, 0), (-10, 0)], name="信義路")
+        gap = road(11, [2, 3], [(-10, 0), (0, 0)], name="信義路")
+        raw = road(20, [3, 4], [(0, 0), (100, 0)], name="信義路", foot="use_sidepath")
+        edits = MODULE.Edits()
+        edits.road_pieces[10] = ([1, 2], {**lined.tags, "foot": "use_sidepath"})
+        edits.splits[10] = [10]
+        self.assertEqual(MODULE.fill_junction_gaps(edits, [lined, gap, raw]), 0)
+        raw_compiled = road(20, [3, 4], [(0, 0), (100, 0)], name="信義路")
+        edits.road_pieces[20] = ([3, 4], {**raw_compiled.tags, "foot": "use_sidepath"})
+        edits.splits[20] = [20]
+        self.assertEqual(MODULE.fill_junction_gaps(edits, [lined, gap, raw_compiled]), 1)
+        self.assertEqual(edits.road_pieces[11][0], [2, 3])
+        self.assertEqual(edits.road_pieces[11][1]["source:foot"], "sidewalk_junction_gap")
+
+    def test_osm_separate_sidewalk_road_qualifies_only_when_walkable_and_untagged(self):
+        base = {"highway": "secondary", "sidewalk:right": "separate", "sidewalk:left": "no", "oneway": "yes"}
+        self.assertTrue(MODULE.separate_sidewalk_road(base, [1, 2]))
+        for extra in ({"foot": "yes"}, {"bridge": "yes"}, {"access": "private"}, {"sidewalk:right": "yes"}):
+            with self.subTest(extra=extra):
+                self.assertFalse(MODULE.separate_sidewalk_road({**base, **extra}, [1, 2]))
+        self.assertFalse(MODULE.separate_sidewalk_road({**base, "highway": "footway"}, [1, 2]))
+
+    def test_osm_separate_sidewalk_road_seeds_the_gap_fill(self):
+        west = road(10, [1, 2], [(-100, 0), (-10, 0)], name="新生南路", **{"sidewalk:right": "separate"})
+        gap = road(11, [2, 3], [(-10, 0), (0, 0)], name="新生南路")
+        east = road(12, [3, 4], [(0, 0), (100, 0)], name="新生南路")
+        edits = MODULE.Edits()
+        edits.road_pieces[10] = ([1, 2], {**west.tags, "foot": "use_sidepath", "source:foot": "osm_sidewalk_separate"})
+        edits.road_pieces[12] = ([3, 4], {**east.tags, "foot": "use_sidepath"})
+        edits.splits[12] = [12]
+        self.assertEqual(MODULE.fill_junction_gaps(edits, [west, gap, east]), 1)
+        self.assertEqual(edits.road_pieces[11][1]["source:foot"], "sidewalk_junction_gap")
+
+    def test_base_name_drops_section_only(self):
+        self.assertEqual(MODULE.base_name("信義路三段"), "信義路")
+        self.assertEqual(MODULE.base_name("中山路"), "中山路")
+        self.assertEqual(MODULE.base_name("環中路10段"), "環中路")
 
 
 if __name__ == "__main__":

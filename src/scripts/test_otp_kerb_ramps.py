@@ -86,6 +86,13 @@ class LinedRoadTests(unittest.TestCase):
             MODULE.lined_road_tags({"highway": "residential", "foot": "use_sidepath", "wheelchair": "yes"})
         )
 
+    def test_junction_gap_piece_has_no_sidewalk_alongside_provenance(self):
+        self.assertIsNone(
+            MODULE.lined_road_tags(
+                {"highway": "secondary", "foot": "use_sidepath", "source:foot": "sidewalk_junction_gap"}
+            )
+        )
+
     def test_only_taipei_lined_roads_are_tagged(self):
         evidence = MODULE.Evidence([lonlat(500, 500)], [moi(-50, 0, 50, 3, 0)])
         lined = {
