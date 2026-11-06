@@ -257,7 +257,7 @@ export const BusStopArrivalsQuerySchema = z
       .openapi({ example: "臺北車站(忠孝)", description: "站牌中文名稱" }),
     city: z.string().min(1).openapi({
       example: "Taipei",
-      description: "站牌所在縣市（中文或英文）；不支援 InterCity",
+      description: "站牌所在縣市（中文或英文），公路客運站牌用 InterCity",
     }),
     lat: LatQuery.openapi({
       description: "站牌（或使用者附近）緯度，用於區分同名站牌",
@@ -1224,7 +1224,7 @@ registry.registerPath({
   tags: ["Transit"],
   summary: "站牌層級的公車到站（含低底盤）",
   description:
-    "以站名 + 座標解析實體站牌，單次 TDX 查詢回傳行經該站所有路線的下一班預估到站分鐘數，並標註該班是否低底盤／有升降台。同站牌結果於伺服器快取 20 秒。不支援 InterCity。",
+    "以站名 + 座標解析實體站牌，單次 TDX 查詢回傳行經該站所有路線的下一班預估到站分鐘數，並標註該班是否低底盤／有升降台。同站牌結果於伺服器快取 20 秒。公路客運站牌以 city=InterCity 查詢。",
   request: { query: BusStopArrivalsQuerySchema },
   responses: {
     200: {

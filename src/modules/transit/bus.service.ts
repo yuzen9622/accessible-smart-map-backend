@@ -1967,7 +1967,7 @@ async function headsignMap(
 async function loadStopArrivals(params: {
   lang?: SupportedLang;
   stopName: string;
-  city: TaiwanCityEn;
+  city: TaiwanCityEn | "InterCity";
   lat: number;
   lng: number;
 }): Promise<BusStopArrivalsResult> {
@@ -1996,8 +1996,12 @@ async function loadStopArrivals(params: {
     const filter = stopUids
       .map((uid) => `StopUID eq '${escapeODataLiteral(uid)}'`)
       .join(" or ");
+    const etaBase =
+      city === "InterCity"
+        ? busUrl.interCityEstimatedTimeOfArrivalUrl
+        : `${busUrl.cityEstimatedTimeOfArrivalUrl}/${city}`;
     const records = await fetchTdxArray(
-      `${busUrl.cityEstimatedTimeOfArrivalUrl}/${city}?$filter=${encodeURIComponent(filter)}&$format=JSON`,
+      `${etaBase}?$filter=${encodeURIComponent(filter)}&$format=JSON`,
     );
 
     const nowMs = Date.now();
@@ -2120,10 +2124,8 @@ function flagOrNull(code?: number): boolean | null {
  * Next-bus ETA of every route at ONE physical stop, plus whether that next bus
  * is low-floor / has a lift. Replaces the per-route fan-out of
  * route-detail + positions + arrival with a single TDX ETA call, cached for
- * 20 s and shared by concurrent callers of the same stop.
- *
- * InterCity is unsupported: its ETA endpoint is the per-route
- * `Streaming/InterCity/{RouteName}` form with no city-wide StopUID listing.
+ * 20 s and shared by concurrent callers of the same stop. InterCity stops use
+ * the same StopUID filter on the nationwide InterCity ETA endpoint.
  */
 export async function getBusStopArrivals(params: {
   lang?: SupportedLang;
@@ -2133,14 +2135,6 @@ export async function getBusStopArrivals(params: {
   lng: number;
 }): Promise<BusStopArrivalsResult> {
   const { stopName, city, lat, lng } = params;
-  if (city === "InterCity") {
-    return {
-      ok: false,
-      error: TRANSIT_MSG.STOP_ARRIVALS_INTERCITY_UNSUPPORTED,
-      status: 400,
-    };
-  }
-
   const key = `${stopArrivalsKey(city, stopName, lat, lng)}|${params.lang ?? "legacy"}`;
   const now = Date.now();
   const cached = stopArrivalsCache.get(key);
@@ -2167,7 +2161,7 @@ async function loadAndCacheStopArrivals(
   params: {
     lang?: SupportedLang;
     stopName: string;
-    city: TaiwanCityEn;
+    city: TaiwanCityEn | "InterCity";
     lat: number;
     lng: number;
   },

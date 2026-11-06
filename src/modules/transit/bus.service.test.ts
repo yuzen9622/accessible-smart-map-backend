@@ -1125,12 +1125,44 @@ describe("getBusStopArrivals — 站牌層級到站 + 低底盤 join", () => {
     expect(tdxFetchMock).not.toHaveBeenCalled();
   });
 
-  it("InterCity 不支援 → 400，不查 DB 也不打 TDX", async () => {
-    const result = await getBusStopArrivals({ ...params, city: "InterCity" });
+  it("InterCity 站牌：查公路客運站牌並以 StopUID 過濾全國 InterCity ETA", async () => {
+    stopAggregateMock.mockResolvedValue([
+      { ...stopDoc("THB284375", "水源市場站"), city: "InterCity" },
+    ]);
+    mockTdxJson([
+      {
+        StopUID: "THB284375",
+        RouteName: { Zh_tw: "1550" },
+        SubRouteUID: "THB155001",
+        SubRouteName: { Zh_tw: "1550" },
+        Direction: 0,
+        EstimateTime: 699,
+        StopStatus: 0,
+        PlateNumb: "KKA-0879",
+      },
+    ]);
+    mockVehicles([]);
+    mockRouteMap([]);
 
-    expect(result).toMatchObject({ ok: false, status: 400 });
-    expect(stopAggregateMock).not.toHaveBeenCalled();
-    expect(tdxFetchMock).not.toHaveBeenCalled();
+    const result = await getBusStopArrivals({
+      ...params,
+      stopName: "水源市場站",
+      city: "InterCity",
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.city).toBe("InterCity");
+    expect(result.arrivals).toMatchObject([
+      { routeName: "1550", direction: 0, estimateMinutes: 12 },
+    ]);
+    expect(stopAggregateMock.mock.calls[0][0][0].$geoNear.query).toEqual({
+      city: "InterCity",
+    });
+    const url = decodeURIComponent(tdxFetchMock.mock.calls[0][0] as string);
+    expect(url).toContain(
+      "/EstimatedTimeOfArrival/Streaming/InterCity?$filter=StopUID eq 'THB284375'",
+    );
   });
 
   it("TTL 內命中快取，不再打 TDX；併發請求共用同一次呼叫", async () => {
