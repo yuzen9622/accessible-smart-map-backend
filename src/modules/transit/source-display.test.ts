@@ -403,10 +403,22 @@ describe("real bus producers source-only presentation", () => {
     await bus.getBusRouteDetail({ ...params, lang: "en" });
     await bus.getBusRouteDetail({ ...params, lang: "zh-TW" });
     expect(vi.mocked(redisGet).mock.calls.map(([key]) => key)).toEqual([
-      "bus:shape:v2:Taipei:307",
-      "bus:shape:v2:Taipei:307",
+      "bus:shape:v3:Taipei:307",
+      "bus:shape:v3:Taipei:307",
     ]);
     expect(redisSet).not.toHaveBeenCalled();
+  });
+  it("trunk routes keep separate geometry cache entries", async () => {
+    await bus.getBusRouteDetail({ ...params, routeName: "松江新生幹線" });
+    await bus.getBusRouteDetail({ ...params, routeName: "南京幹線" });
+    const keys = vi
+      .mocked(redisGet)
+      .mock.calls.map(([key]) => key)
+      .filter((key) => key.startsWith("bus:shape:"));
+    expect(keys).toEqual([
+      "bus:shape:v3:Taipei:松江新生幹線",
+      "bus:shape:v3:Taipei:南京幹線",
+    ]);
   });
 });
 

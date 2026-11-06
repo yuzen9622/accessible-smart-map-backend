@@ -71,7 +71,7 @@ import type { BusLeg } from "../../types/route";
 import type { BusPlannedEtaRecord } from "../../types/transit";
 import { canMatchBusTrip, matchPlannedBus } from "./bus-trip-match";
 
-const BUS_SHAPE_CACHE_PREFIX = "bus:shape:v2:";
+const BUS_SHAPE_CACHE_PREFIX = "bus:shape:v3:";
 const BUS_SHAPE_CACHE_TTL_SEC = 24 * 60 * 60;
 import type {
   BusRouteInfoResult,
@@ -339,6 +339,9 @@ function buildDirections(records: NormalizedRoute[]): BusRouteDirection[] {
  * TDX quota is tight. Failures degrade to no shapes so the caller can still
  * answer with stops only.
  *
+ * Keyed by the full trimmed name, not `formatRouteName`: that reduces every
+ * "XX幹線" to "幹", so all trunk routes would share one cache entry.
+ *
  * @param routeName The user-supplied route name.
  * @param city The caller's city scope, or "InterCity".
  * @returns The normalized shapes, possibly empty.
@@ -347,7 +350,7 @@ async function getBusRouteShapes(
   routeName: string,
   city: TaiwanCityEn | "InterCity",
 ): Promise<BusShape[]> {
-  const cacheKey = `${BUS_SHAPE_CACHE_PREFIX}${city}:${formatRouteName(routeName)}`;
+  const cacheKey = `${BUS_SHAPE_CACHE_PREFIX}${city}:${routeName.trim()}`;
   const cached = await redisGet(cacheKey);
   if (cached) {
     try {
