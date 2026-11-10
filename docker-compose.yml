@@ -17,7 +17,7 @@ services:
     env_file: .env
     environment:
       OTP_BASE_URL: http://otp:8080
-      ROUTE_WALK_PLANNER: otp
+      ROUTE_WALK_PLANNER: csr
       OTP_PLAN_CACHE_TTL_S: "0"
       OTP_SIDEWALK_INDEX_PATH: /data/otp/sidewalk-index.json
       ROUTE_ELEVATION_DTM_PATH: /data/dtm/taiwan-dtm-20m.tif
