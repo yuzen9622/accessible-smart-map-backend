@@ -1,3 +1,7 @@
+import {
+  attachRoadMatchingData,
+  getRoadMatchingData,
+} from "../../utils/road-matching-data";
 import { randomBytes } from "crypto";
 import { DEFAULT_LANG } from "../../types/lang";
 import type { AgentLanguage } from "../../types/agent";
@@ -165,6 +169,9 @@ export async function switchNavigationCandidate(
       routeVersion,
       routeToken,
     };
+    if (candidate.value.roadMatching) {
+      attachRoadMatchingData(route, candidate.value.roadMatching);
+    }
     const instructions = generateNavInstructions(route, undefined, language);
     const steps = generateNavStepsWithLegIndex(route, language);
     if (!instructions.ok || !steps.ok) {
@@ -200,6 +207,9 @@ export async function switchNavigationCandidate(
     };
     const envelope: NavigationRouteEnvelope = {
       schemaVersion: 1,
+      ...(getRoadMatchingData(route)
+        ? { roadMatching: getRoadMatchingData(route) }
+        : {}),
       navigationId: previous.navigationId,
       routeVersion,
       route,

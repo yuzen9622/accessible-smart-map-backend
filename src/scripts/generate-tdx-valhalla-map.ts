@@ -14,6 +14,11 @@
 import "dotenv/config";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
+import {
+  getValhallaReleaseSnapshot,
+  isValhallaReleaseCurrent,
+} from "../adapters/valhalla-release.adapter";
 import mongoose from "mongoose";
 import {
   TDX_SUPPORTED_CITIES,
@@ -43,6 +48,8 @@ export interface TdxValhallaEdgeMap {
   version: string;
   generatedAt: string;
   valhallaTilesetVersion?: number | string;
+  valhallaTilesetId?: string;
+  valhallaSourcePbfSha256?: string | null;
   totalSections: number;
   mappedSections: number;
   unmappedSections: number;
@@ -136,7 +143,16 @@ async function matchSectionToEdges(
 
   const mappedEdges: MappedEdge[] = [];
   for (const edge of data.edges) {
-    if (edge.id == null) continue;
+    if (
+      typeof edge.id === "number" &&
+      (!Number.isSafeInteger(edge.id) || edge.id <= 0)
+    )
+      return null;
+    if (
+      typeof edge.id !== "number" &&
+      (typeof edge.id !== "string" || !/^[1-9]\d*$/.test(edge.id))
+    )
+      return null;
     const rawId = BigInt(edge.id);
     const level = Number(rawId & 7n);
     const tileIdx = Number((rawId & 0x1fffff8n) >> 3n);
@@ -180,6 +196,8 @@ export async function runGenerateMap(
     ...opts,
   };
 
+  const release = await getValhallaReleaseSnapshot();
+  if (!release) throw new Error("Valhalla serving identity unavailable");
   const dbUrl = process.env.DATABASE_URL;
   if (!dbUrl) {
     throw new Error("DATABASE_URL is not set in environment");
@@ -268,6 +286,8 @@ export async function runGenerateMap(
     version: "1.0.0",
     generatedAt: new Date().toISOString(),
     valhallaTilesetVersion: status?.tileset_last_modified,
+    valhallaTilesetId: release.roadNetwork.tilesetId,
+    valhallaSourcePbfSha256: release.roadNetwork.sourcePbfSha256,
     totalSections: sections.length,
     mappedSections: mappedCount,
     unmappedSections: unmappedCount,
@@ -277,7 +297,15 @@ export async function runGenerateMap(
 
   const resolvedOutPath = path.resolve(process.cwd(), options.outPath);
   await fs.mkdir(path.dirname(resolvedOutPath), { recursive: true });
-  await fs.writeFile(resolvedOutPath, JSON.stringify(output, null, 2), "utf8");
+  const temporaryPath = `${resolvedOutPath}.${randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(temporaryPath, JSON.stringify(output, null, 2), "utf8");
+    if (!(await isValhallaReleaseCurrent(release)))
+      throw new Error("Valhalla release changed during edge mapping");
+    await fs.rename(temporaryPath, resolvedOutPath);
+  } finally {
+    await fs.rm(temporaryPath, { force: true });
+  }
 
   console.log(
     `[generate-tdx-valhalla-map] Successfully wrote ${mappedCount} mappings (${totalEdges} edges) to ${resolvedOutPath}`,

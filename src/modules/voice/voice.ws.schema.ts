@@ -1,3 +1,4 @@
+import { RoadGuidanceSchema } from "../../schemas/road-guidance.schema";
 import { z } from "zod";
 import { AgentLanguageSchema } from "../../schemas/agent-language.schema";
 import { NavManeuverSchema } from "../../schemas/nav-instructions-data.schema";
@@ -136,6 +137,23 @@ const ClientBusWaitSchema = z
   })
   .strict();
 
+/** The speed limit the App's HUD shows for the road segment it places the
+ * vehicle on (`DriveLeg.speedLimits` at the current leg-local progress). */
+const ClientSpeedLimitSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("known"),
+      limitKph: z.number().int().positive().max(200),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.enum(["unlimited", "unknown"]),
+      limitKph: z.null(),
+    })
+    .strict(),
+]);
+
 /** The App's navigation engine state; the source of truth for route questions. */
 export const NavStateMessageSchema = z
   .object({
@@ -157,6 +175,8 @@ export const NavStateMessageSchema = z
     steps: z.array(ClientNavStepSchema).max(400).optional(),
     /** Present while the rider is heading to or waiting at a bus stop. */
     busWait: ClientBusWaitSchema.optional(),
+    /** Present while a DRIVE/MOTORCYCLE leg is being guided. */
+    speedLimit: ClientSpeedLimitSchema.optional(),
   })
   .strict();
 
@@ -264,6 +284,8 @@ export type SessionStartMessage = z.infer<typeof SessionStartMessageSchema>;
 /** Server-to-client frames emitted by the gateway itself. */
 const NavStepDtoSchema = z
   .object({
+    polylineIndex: z.number().int().nonnegative().nullable().optional(),
+    roadGuidance: RoadGuidanceSchema.optional(),
     index: z.number().int().nonnegative(),
     instruction: z.string(),
     legIndex: z.number().int().nonnegative(),

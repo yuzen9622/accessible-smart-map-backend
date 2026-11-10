@@ -5986,6 +5986,35 @@ describe("client-navigated sessions", () => {
     });
   });
 
+  it("answers speed-limit and lane questions from the App's drive HUD state", async () => {
+    bridge.setClientNavigationState({
+      active: true,
+      guidance: "live",
+      travelMode: "drive",
+      currentStepIndex: 0,
+      distanceToNextM: 180,
+      steps: [
+        {
+          index: 0,
+          instruction: "右轉進入「民生東路」，請靠右側兩個車道",
+          distanceM: 400,
+          maneuver: "TURN_RIGHT",
+        },
+      ],
+      speedLimit: { kind: "known", limitKph: 50 },
+    });
+    utter("這段限速多少，要走哪個車道");
+    tool("getActiveNavigationContext");
+    await vi.waitFor(() => expect(session.sendToolResponse).toHaveBeenCalled());
+    expect(output()).toMatchObject({
+      speedLimit: { kind: "known", limitKph: 50 },
+      upcomingTurn: {
+        instruction: "右轉進入「民生東路」，請靠右側兩個車道",
+        distanceM: 180,
+      },
+    });
+  });
+
   it("voices the App's cues naturally, keeping only the newest one while the line is busy", async () => {
     utter("今天天氣如何");
     bridge.speakCue("300 公尺後左轉");

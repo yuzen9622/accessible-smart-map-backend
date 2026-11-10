@@ -1,3 +1,7 @@
+import {
+  getRoadMatchingData,
+  validateRoadMatchingData,
+} from "../../utils/road-matching-data";
 import { redisClient, redisReady } from "../../config/redis";
 import type {
   NavigationRouteEnvelope,
@@ -170,6 +174,28 @@ async function strictClient() {
   return redisClient;
 }
 
+export async function readNavigationVersion(
+  navigationId: string,
+): Promise<number | null> {
+  const raw = await (await strictClient()).get(headKey(navigationId));
+  if (!raw || !/^[1-9]\d*$/.test(raw)) return null;
+  const version = Number(raw);
+  return Number.isSafeInteger(version) ? version : null;
+}
+
+function serializeNavigationEnvelope(
+  envelope: NavigationRouteEnvelope,
+): string {
+  const { roadMatching, ...publicEnvelope } = envelope;
+  const data = roadMatching ?? getRoadMatchingData(envelope.route);
+  return JSON.stringify({
+    ...publicEnvelope,
+    ...(data && validateRoadMatchingData(envelope.route, data)
+      ? { roadMatching: data }
+      : {}),
+  });
+}
+
 export async function storeInitialNavigationEnvelope(
   token: string,
   envelope: NavigationRouteEnvelope,
@@ -181,7 +207,7 @@ export async function storeInitialNavigationEnvelope(
       2,
       navigationTokenKey(token),
       headKey(envelope.navigationId),
-      JSON.stringify(envelope),
+      serializeNavigationEnvelope(envelope),
       String(ROUTE_TOKEN_TTL_SEC),
     );
     return true;
@@ -286,7 +312,7 @@ export async function finalizeReroute(
       resumeLockKey(envelope.navigationId),
       clientRequestId,
       String(previousVersion),
-      JSON.stringify(envelope),
+      serializeNavigationEnvelope(envelope),
       String(ROUTE_TOKEN_TTL_SEC),
       String(envelope.routeVersion),
       JSON.stringify(data),
@@ -605,7 +631,7 @@ export async function resolveCandidateDecision(
       snapshotKey(decision.navigationId),
       `voice-nav:stopped:${decision.navigationId}`,
       JSON.stringify(decision),
-      JSON.stringify(envelope),
+      serializeNavigationEnvelope(envelope),
       JSON.stringify(data),
       action,
       JSON.stringify(snapshot ?? null),

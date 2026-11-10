@@ -1,3 +1,4 @@
+import type { RoadGuidance } from "../../types/road-guidance";
 /**
  * nav-instructions module type declarations — the turn-by-turn instruction
  * shapes the service produces and the result envelope it returns.
@@ -63,6 +64,7 @@ export interface NavInstruction {
   stairs: boolean;
   legIndex: number;
   polylineIndex: number | null;
+  roadGuidance?: RoadGuidance;
   cumulativeDistanceM: number;
 }
 

@@ -391,3 +391,30 @@ describe("nav.state bus wait", () => {
     expect(state(busWait).success).toBe(false);
   });
 });
+
+describe("nav.state speed limit", () => {
+  const state = (speedLimit: unknown) =>
+    NavStateMessageSchema.safeParse({
+      type: "nav.state",
+      active: true,
+      travelMode: "drive",
+      speedLimit,
+    });
+  it.each([
+    { kind: "known", limitKph: 50 },
+    { kind: "unlimited", limitKph: null },
+    { kind: "unknown", limitKph: null },
+  ])("accepts %j", (speedLimit) => {
+    expect(state(speedLimit).success).toBe(true);
+  });
+  it.each([
+    { kind: "known", limitKph: null },
+    { kind: "known", limitKph: 0 },
+    { kind: "known", limitKph: 255 },
+    { kind: "unknown", limitKph: 50 },
+    { kind: "known", limitKph: 50, source: "valhalla" },
+    { kind: "posted", limitKph: 50 },
+  ])("rejects %j", (speedLimit) => {
+    expect(state(speedLimit).success).toBe(false);
+  });
+});

@@ -22,6 +22,7 @@ services:
       OTP_SIDEWALK_INDEX_PATH: /data/otp/sidewalk-index.json
       ROUTE_ELEVATION_DTM_PATH: /data/dtm/taiwan-dtm-20m.tif
       VALHALLA_BASE_URL: http://valhalla:8002
+      VALHALLA_DATA_DIR: /app/valhalla-data
       DATABASE_URL: >-
         mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongo:27017/accessible_map?authSource=admin&replicaSet=rs0
       # 容器內走服務名；.env 的 127.0.0.1:5433 是給 host 腳本與測試用
@@ -139,7 +140,8 @@ services:
     # Pin the minor version (spec §4.1) — never `latest`.
     # 2.9.0 (Java 25): planConnection supports stop-location origins, which
     # bypasses broken street linking at station plazas (e.g. 台中車站 island).
-    image: opentripplanner/opentripplanner:2.9.0@sha256:a7eac7da397faa9ec9dee407d4204895d24df4981500662fa6793aae0e71fd8f
+    image: >-
+      opentripplanner/opentripplanner:2.9.0@sha256:a7eac7da397faa9ec9dee407d4204895d24df4981500662fa6793aae0e71fd8f
     container_name: otp
     # The official image's entrypoint hardcodes /var/opentripplanner as the
     # data directory — pass flags only, never a path.
@@ -170,12 +172,87 @@ services:
     command:
       - bash
       - -lc
-      - >-
-        test -f /custom_files/active/valhalla.json ||
-        { echo 'Valhalla config missing: run pnpm build:valhalla-tiles first'
-        >&2; exit 78; };
-        exec valhalla_service /custom_files/active/valhalla.json
-        ${VALHALLA_THREADS:-2}
+      - |
+        set -Eeuo pipefail
+        marker=/custom_files/serving-release.json
+        rm -f "$$marker"
+        release=$$(readlink -f /custom_files/active)
+        release_pattern='^/custom_files/releases/[A-Za-z0-9][A-Za-z0-9_-]{0,95}$$'
+        [[ "$$release" =~ $$release_pattern ]] || exit 78
+        test -f "$$release/valhalla.json" || exit 78
+        test -d "$$release/valhalla_tiles" || exit 78
+        build_id=$${release##*/}
+        manifest_hash=null
+        if [ -f "$$release/manifest.json" ]; then
+          hash=$$(sha256sum "$$release/manifest.json" | cut -d ' ' -f 1)
+          manifest_hash=\"$$hash\"
+        fi
+        instance_id=$$(cat /proc/sys/kernel/random/uuid)
+        runtime_config=/tmp/valhalla-$$instance_id.json
+        pid=
+        cleanup() {
+          trap - EXIT TERM INT
+          if grep -Fq "$$instance_id" "$$marker" 2>/dev/null; then
+            rm -f "$$marker"
+          fi
+          rm -f "$$marker.$$instance_id.tmp" "$$runtime_config"
+          if [ -n "$$pid" ]; then
+            kill -TERM "$$pid" 2>/dev/null || true
+            wait "$$pid" || true
+          fi
+        }
+        trap cleanup EXIT
+        trap 'exit 143' TERM
+        trap 'exit 130' INT
+        python3 - "$$release" "$$runtime_config" <<'PY'
+        import json, sys
+        from pathlib import Path
+        release = Path(sys.argv[1])
+        tiles = release / "valhalla_tiles"
+        if not tiles.is_dir():
+            raise SystemExit("Immutable tile directory missing")
+        config = json.loads((release / "valhalla.json").read_text())
+        config.setdefault("mjolnir", {}).update(
+            tile_dir=str(tiles), tile_extract="",
+            traffic_extract=str(release / "traffic" / "traffic.tar"))
+        with open(sys.argv[2], "x", encoding="utf-8") as output:
+            json.dump(config, output)
+        PY
+        valhalla_service "$$runtime_config" ${VALHALLA_THREADS:-2} &
+        pid=$$!
+        route_request='{"locations":[{"lat":25.0478,"lon":121.5170},'
+        route_request+='{"lat":25.0421,"lon":121.5079}],"costing":"auto"}'
+        route_check='import json,sys; t=json.load(sys.stdin).get("trip",{});'
+        route_check+='s=t.get("legs",[{}])[0].get("shape");'
+        route_check+='sys.exit(not(isinstance(s,str) and len(s)>0))'
+        ready=false
+        for ((attempt=0; attempt<120; attempt++)); do
+          kill -0 "$$pid" || exit 1
+          if curl -fsS --max-time 2 \
+            http://127.0.0.1:8002/status >/dev/null &&
+            curl -fsS --max-time 10 -H 'Content-Type: application/json' \
+              http://127.0.0.1:8002/route -d "$$route_request" |
+              python3 -c "$$route_check"; then
+            ready=true
+            break
+          fi
+          sleep 1
+        done
+        [ "$$ready" = true ] || exit 1
+        if [ "$$manifest_hash" != null ]; then
+          hash=$$(sha256sum "$$release/manifest.json" | cut -d ' ' -f 1)
+          [ "$$manifest_hash" = \"$$hash\" ] || exit 1
+        fi
+        format='{"buildId":"%s","manifestSha256":%s,'
+        format+='"valhallaImageDigest":"%s","startedAt":"%s","instanceId":"%s"}\n'
+        printf "$$format" "$$build_id" "$$manifest_hash" \
+          "$$VALHALLA_IMAGE_DIGEST" "$$(date -u +%FT%TZ)" "$$instance_id" \
+          >"$$marker.$$instance_id.tmp"
+        mv -f "$$marker.$$instance_id.tmp" "$$marker"
+        wait "$$pid"
+    environment:
+      VALHALLA_IMAGE_DIGEST: >-
+        sha256:4fd114eb1d26b8fc2f43bcb3df234c1b63a0bf13c277405e5943d5361dc575de
     ports:
       - "127.0.0.1:8002:8002"
     volumes:
@@ -195,6 +272,35 @@ services:
     volumes:
       - ${VALHALLA_DATA_DIR:-./valhalla-data}:/custom_files
       - ${VALHALLA_PBF_PATH:-./otp-data/taiwan-latest.osm.pbf}:/data/input.osm.pbf:ro
+
+  road-speed-rules:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: road-speed-rules
+    profiles: ["valhalla-build"]
+    network_mode: none
+    volumes:
+      - ${VALHALLA_DATA_DIR:-./valhalla-data}:/custom_files
+      - ${VALHALLA_PBF_PATH:-./otp-data/taiwan-latest.osm.pbf}:/data/input.osm.pbf:ro
+
+  valhalla-candidate:
+    image: >-
+      ghcr.io/valhalla/valhalla:3.9.1@sha256:4fd114eb1d26b8fc2f43bcb3df234c1b63a0bf13c277405e5943d5361dc575de
+    profiles: ["valhalla-build"]
+    network_mode: bridge
+    read_only: true
+    tmpfs:
+      - /tmp
+    entrypoint: ["bash", "-lc"]
+    command:
+      - >-
+        config=/custom_files/${VALHALLA_CANDIDATE_RELEASE:-candidate-not-selected};
+        exec valhalla_service "$$config/valhalla.json" ${VALHALLA_THREADS:-2}
+    ports:
+      - "127.0.0.1:${VALHALLA_CANDIDATE_PORT:-18002}:8002"
+    volumes:
+      - ${VALHALLA_DATA_DIR:-./valhalla-data}:/custom_files:ro
 
   chroma:
     image: chromadb/chroma:latest

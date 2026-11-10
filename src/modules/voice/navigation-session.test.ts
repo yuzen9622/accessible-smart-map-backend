@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AccessibleRoute, DriveLeg, WalkLeg } from "../../types/route";
 import {
+  NavRouteReplacedMessageSchema,
   NavProgressSchema,
   NavResumeOkMessageSchema,
   type NavProgressEvent,
@@ -143,6 +144,107 @@ const pos = (p: [number, number], accuracy?: number) => ({
 });
 
 describe("NavigationSession pure domain state", () => {
+  it("preserves road guidance and geometry anchors across start, replacement DTO and reconnect resume", () => {
+    const points = [coord(121), coord(121.001), coord(121), coord(121.002)];
+    const leg = driveLeg(points, "DRIVE", {
+      steps: [
+        {
+          instruction: "出口",
+          maneuver: "EXIT_RIGHT",
+          maneuverIndex: 1,
+          distanceM: 100,
+          durationMin: 1,
+          polyline: [points[2], points[3]],
+        },
+      ],
+      maneuvers: [
+        {
+          type: 4,
+          lengthKm: 0,
+          timeSec: 0,
+          instruction: "arrive",
+          beginShapeIndex: 0,
+          endShapeIndex: 0,
+        },
+        {
+          type: 20,
+          lengthKm: 0.1,
+          timeSec: 20,
+          instruction: "exit",
+          streetNames: ["國道1"],
+          beginShapeIndex: 2,
+          endShapeIndex: 3,
+          bearingBefore: 90,
+          bearingAfter: 120,
+          signs: {
+            exitNumbers: ["8"],
+            branches: ["1"],
+            destinations: ["台北（北）", "中壢（南）"],
+            exitNames: [],
+          },
+          lanes: [
+            {
+              directions: ["slight_right"],
+              recommendation: "preferred",
+              maneuverDirection: "slight_right",
+            },
+          ],
+          laneApproachRange: { fromIndex: 1, toIndex: 2 },
+        },
+      ],
+    });
+    const trip = { ...route([leg]), navigationId: "nav", routeVersion: 2 };
+    const nav = new NavigationSession();
+    nav.armRoute(trip);
+    const start = nav
+      .start()
+      .events.find((event) => event.type === "nav.start");
+    if (start?.type !== "nav.start") throw new Error("missing start");
+    expect(start.steps[0]).toMatchObject({
+      polylineIndex: 2,
+      maneuver: null,
+      roadGuidance: {
+        maneuverIndex: 1,
+        endPolylineIndex: 3,
+        signs: leg.maneuvers![1].signs,
+        lanes: leg.maneuvers![1].lanes,
+        laneApproachRange: { fromIndex: 1, toIndex: 2 },
+      },
+    });
+    const replacement = {
+      type: "nav.route_replaced",
+      navigationId: "nav",
+      previousRouteVersion: 1,
+      routeVersion: 2,
+      routeToken: "token",
+      route: trip,
+      steps: start.steps,
+      warnings: [],
+      currentStepIndex: 0,
+    };
+    expect(
+      NavRouteReplacedMessageSchema.parse(
+        JSON.parse(JSON.stringify(replacement)),
+      ),
+    ).toEqual(replacement);
+    const resumed = new NavigationSession()
+      .resume(trip, {
+        navigationId: "nav",
+        routeVersion: 2,
+        routeToken: "token",
+        userId: "user",
+        currentStepIndex: 0,
+        onVehicle: false,
+        latestPosition: null,
+        updatedAt: Date.now(),
+      })
+      .events.find((event) => event.type === "nav.resume_ok");
+    if (resumed?.type !== "nav.resume_ok") throw new Error("missing resume");
+    expect(
+      NavResumeOkMessageSchema.parse(JSON.parse(JSON.stringify(resumed))),
+    ).toEqual(resumed);
+    expect(resumed.steps).toEqual(start.steps);
+  });
   it("returns NO_ROUTE_ARMED without nav.start", () => {
     const effect = new NavigationSession().start();
     expect(effect.ok).toBe(false);
@@ -312,6 +414,7 @@ describe("NavigationSession pure domain state", () => {
         "legIndex",
         "legType",
         "maneuver",
+        "polylineIndex",
         "relativeDirection",
         "streetName",
         "type",

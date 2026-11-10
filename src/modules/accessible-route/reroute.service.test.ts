@@ -1,3 +1,9 @@
+import {
+  attachRoadMatchingData,
+  getRoadMatchingData,
+  geometrySha256,
+} from "../../utils/road-matching-data";
+import type { AccessibleRoute } from "../../types/route";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ResponseCode } from "../../types/code";
 
@@ -78,6 +84,64 @@ const request = {
   clientRequestId: "11111111-1111-4111-8111-111111111111",
 };
 
+function metadataRoute(edge: string): AccessibleRoute {
+  const route: AccessibleRoute = {
+    routeId: "road",
+    routeName: "road",
+    totalMinutes: 1,
+    transferCount: 0,
+    accessibilityHighlights: [],
+    roadNetwork: {
+      tilesetId: "tiles",
+      sourcePbfSha256: null,
+      provenance: "unverified",
+    },
+    legs: [
+      {
+        type: "DRIVE",
+        from: { lat: 25, lng: 121 },
+        to: { lat: 25, lng: 121.001 },
+        distanceM: 100,
+        durationMin: 1,
+        polyline: [
+          [121, 25],
+          [121.001, 25],
+        ],
+        steps: [
+          {
+            instruction: "出發",
+            maneuver: "DEPART",
+            distanceM: 100,
+            durationMin: 1,
+            polyline: [
+              [121, 25],
+              [121.001, 25],
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  attachRoadMatchingData(route, {
+    tilesetId: "tiles",
+    legs: [
+      {
+        legIndex: 0,
+        geometrySha256: geometrySha256(route.legs[0].polyline),
+        spans: [
+          {
+            fromIndex: 0,
+            toIndex: 1,
+            directedEdgeId: edge,
+            osmWayId: "456",
+            osmForward: true,
+          },
+        ],
+      },
+    ],
+  });
+  return route;
+}
 describe("rerouteAccessibleRoute", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -94,6 +158,32 @@ describe("rerouteAccessibleRoute", () => {
     });
   });
 
+  it.each([true, false])(
+    "uses only newly planned private data (new metadata=%s)",
+    async (hasNew) => {
+      const oldRoute = metadataRoute("111");
+      readNavigationTokenStrict.mockResolvedValueOnce({
+        status: "ok",
+        value: {
+          ...envelope,
+          route: oldRoute,
+          roadMatching: getRoadMatchingData(oldRoute),
+        },
+      });
+      const fresh = metadataRoute("222");
+      const selected = hasNew ? fresh : JSON.parse(JSON.stringify(fresh));
+      planAccessibleRouteFromRequest.mockResolvedValueOnce({
+        ok: true,
+        data: { routes: [selected] },
+      });
+      expect((await rerouteAccessibleRoute(request)).ok).toBe(true);
+      const saved = finalizeReroute.mock.calls[0][3];
+      expect(saved.roadMatching).toEqual(
+        hasNew ? getRoadMatchingData(fresh) : undefined,
+      );
+      expect(JSON.stringify(saved.route)).not.toContain("directedEdgeId");
+    },
+  );
   it("never reroutes an indoor-only trip and keeps only the venue leg still ahead", async () => {
     readNavigationTokenStrict.mockResolvedValueOnce({
       status: "ok",

@@ -9,6 +9,11 @@ import {
 } from "../../schemas/nav-instructions-data.schema";
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
+import {
+  RoadManeuverMetadataFields,
+  RoadNetworkInfoSchema,
+  RoadSpeedLimitsSchema,
+} from "../../schemas/road-guidance.schema";
 import { TaiwanCityEn } from "../../types/transit";
 import { TransitPreferenceSchema } from "../../schemas/transit-preference.schema";
 import { registry } from "../../openapi/registry";
@@ -944,12 +949,14 @@ const DriveStepSchema = z
       ],
     }),
     maneuver: z.string().optional().openapi({ example: "TURN_LEFT" }),
+    maneuverIndex: z.number().int().nonnegative().optional(),
   })
   .strict()
   .openapi("DriveStep");
 
 const DriveManeuverSchema = z
   .object({
+    ...RoadManeuverMetadataFields,
     instruction: z.string().optional(),
     type: z.number(),
     lengthKm: z.number(),
@@ -994,6 +1001,7 @@ const DriveLegSchema = z
     }),
     steps: z.array(DriveStepSchema).optional(),
     maneuvers: z.array(DriveManeuverSchema).optional(),
+    speedLimits: RoadSpeedLimitsSchema.optional(),
     incidents: z.array(RoadIncidentSchema).optional().openapi({
       description:
         "本路段上的 TDX 即時路況事件；缺值＝未比對到事件（不代表沒有事件）",
@@ -1243,6 +1251,7 @@ export const AccessibleRouteSchema = z
         "Feasible full-chain destination arrival, full ISO date and timezone (+08:00 for Taiwan)",
     }),
     routeId: z.string().openapi({ example: "route-001" }),
+    roadNetwork: RoadNetworkInfoSchema.optional(),
     navigationId: z.string().uuid().optional().openapi({
       description: "同一次導航的穩定 UUID；只有成功 tokenized 的路線提供。",
     }),

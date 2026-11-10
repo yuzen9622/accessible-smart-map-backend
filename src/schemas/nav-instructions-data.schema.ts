@@ -1,3 +1,4 @@
+import { RoadGuidanceSchema } from "./road-guidance.schema";
 import { extendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 import { WALK_RELATIVE_DIRECTION_VALUES } from "../utils/nav-instructions-engine";
@@ -101,6 +102,7 @@ const NavInstructionSchema = z
         "戶外指引來源在 route.legs 中的索引；室內沿用鄰接戶外段索引，純室內固定為 0，應以 legType=VENUE 與 driver=manual 識別",
     }),
     polylineIndex: z.number().nullable(),
+    roadGuidance: RoadGuidanceSchema.optional(),
     cumulativeDistanceM: z.number().nonnegative().openapi({
       description: "抵達此 maneuver 起點前已累積的可量測行進距離（公尺）",
     }),

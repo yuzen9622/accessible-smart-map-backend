@@ -1,7 +1,7 @@
 /**
  * Valhalla Native Live Traffic Worker.
  *
- * Periodically generates `traffic.tar` for Valhalla 3.8.2 dynamic cost-aware routing:
+ * Periodically generates release-bound `traffic.tar` for dynamic cost-aware routing:
  * 1. Coordinates across multi-instance deployments using Redis distributed lock (`traffic:tar:lock`).
  * 2. Reads the offline-generated TDX Section -> Valhalla Directed Edge mapping.
  * 3. Collects latest speed observations from Redis SWR cache (and TDX if empty).
@@ -14,13 +14,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { redisSetNx } from "../../config/redis";
 import {
+  getValhallaReleaseSnapshot,
+  isValhallaReleaseCurrent,
+} from "../../adapters/valhalla-release.adapter";
+import {
   TRAFFIC_LIVE_BASE_TICK_MS,
   TRAFFIC_LIVE_TARGET_CITIES,
   TRAFFIC_TAR_LOCK_KEY,
   TRAFFIC_TAR_LOCK_TTL_SEC,
   VALHALLA_EDGE_MAP_PATH,
-  VALHALLA_TILES_DIR,
-  VALHALLA_TRAFFIC_EXTRACT_PATH,
 } from "../../config/traffic";
 import { getLiveTrafficsSwr } from "./traffic-cache.repository";
 import { refreshCityLiveTraffics } from "./traffic-flow.service";
@@ -52,6 +54,8 @@ export interface TdxValhallaEdgeMap {
   version: string;
   generatedAt: string;
   valhallaTilesetVersion?: number | string;
+  valhallaTilesetId?: string;
+  valhallaSourcePbfSha256?: string | null;
   totalSections: number;
   mappedSections: number;
   unmappedSections: number;
@@ -70,12 +74,12 @@ export interface ValhallaTrafficWorkerResult {
 }
 
 interface CachedEdgeMap {
-  mtimeMs: number;
+  signature: string;
   map: TdxValhallaEdgeMap;
 }
 
 let edgeMapCache: CachedEdgeMap | null = null;
-const tileEdgeCountCache = new Map<number, number>();
+const tileEdgeCountCache = new Map<string, number>();
 
 /**
  * Resets in-memory caches (used in unit tests).
@@ -97,7 +101,8 @@ export function loadEdgeMap(
       return null;
     }
     const stat = fs.statSync(resolvedPath);
-    if (edgeMapCache && edgeMapCache.mtimeMs === stat.mtimeMs) {
+    const signature = `${resolvedPath}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+    if (edgeMapCache && edgeMapCache.signature === signature) {
       return edgeMapCache.map;
     }
     const raw = fs.readFileSync(resolvedPath, "utf8");
@@ -109,7 +114,7 @@ export function loadEdgeMap(
       return null;
     }
     edgeMapCache = {
-      mtimeMs: stat.mtimeMs,
+      signature,
       map: parsed,
     };
     return parsed;
@@ -128,13 +133,12 @@ export function loadEdgeMap(
  */
 export function getDirectedEdgeCountForTile(
   tileId: number,
-  tilesDir = VALHALLA_TILES_DIR,
+  tilesDir: string,
 ): number {
-  const cached = tileEdgeCountCache.get(tileId);
-  if (cached !== undefined) return cached;
-
   const tileRelPath = tileIdToPath(tileId);
   const fullPath = path.resolve(process.cwd(), tilesDir, tileRelPath);
+  const cached = tileEdgeCountCache.get(fullPath);
+  if (cached !== undefined) return cached;
   try {
     if (fs.existsSync(fullPath)) {
       const fd = fs.openSync(fullPath, "r");
@@ -142,7 +146,7 @@ export function getDirectedEdgeCountForTile(
       fs.readSync(fd, buf, 0, 48, 0);
       fs.closeSync(fd);
       const count = readDirectedEdgeCount(buf);
-      tileEdgeCountCache.set(tileId, count);
+      tileEdgeCountCache.set(fullPath, count);
       return count;
     }
   } catch (err) {
@@ -236,6 +240,20 @@ export async function generateValhallaTrafficTar(
     };
   }
 
+  const release = await getValhallaReleaseSnapshot();
+  if (
+    !release ||
+    edgeMap.valhallaTilesetId !== release.roadNetwork.tilesetId ||
+    edgeMap.valhallaSourcePbfSha256 !== release.roadNetwork.sourcePbfSha256
+  ) {
+    return { generated: false, skipped: true, reason: "TILESET_MISMATCH" };
+  }
+  const releaseDir = path.resolve(
+    process.env.VALHALLA_DATA_DIR ?? "valhalla-data",
+    "releases",
+    release.roadNetwork.tilesetId,
+  );
+  const tilesDir = options.tilesDir ?? path.join(releaseDir, "valhalla_tiles");
   const speedMap = await collectSectionSpeeds();
   const tileEdgesMap = new Map<number, EdgeSpeedInput[]>();
   let totalUpdatedEdges = 0;
@@ -272,7 +290,7 @@ export async function generateValhallaTrafficTar(
   const tileBuffers = new Map<number, Buffer>();
 
   for (const [tileId, edges] of tileEdgesMap) {
-    const edgeCount = getDirectedEdgeCountForTile(tileId, options.tilesDir);
+    const edgeCount = getDirectedEdgeCountForTile(tileId, tilesDir);
     if (edgeCount <= 0) {
       console.warn(
         `[valhalla-traffic-worker] Skip tile ${tileId}: .gph file missing or cannot determine directed edge count.`,
@@ -315,9 +333,12 @@ export async function generateValhallaTrafficTar(
   }
 
   const tarBuffer = packTrafficTar(tileBuffers);
+  if (!(await isValhallaReleaseCurrent(release))) {
+    return { generated: false, skipped: true, reason: "TILESET_CHANGED" };
+  }
   const outPath = path.resolve(
     process.cwd(),
-    options.outTarPath ?? VALHALLA_TRAFFIC_EXTRACT_PATH,
+    options.outTarPath ?? path.join(releaseDir, "traffic", "traffic.tar"),
   );
   const uniqueId = Math.random().toString(36).slice(2, 8);
   const tmpPath = `${outPath}.${process.pid}.${Date.now()}.${uniqueId}.tmp`;

@@ -1,3 +1,7 @@
+import {
+  attachRoadMatchingData,
+  getRoadMatchingData,
+} from "../../utils/road-matching-data";
 import { copyWithDescriptors } from "../../utils/route-source-names";
 import { randomBytes, randomUUID } from "crypto";
 import { storeBusPlan } from "./bus-plan.repository";
@@ -40,9 +44,14 @@ export async function attachRouteTokens(
         navigationId,
         routeVersion,
       });
+      const roadMatching = getRoadMatchingData(route);
+      if (roadMatching) attachRoadMatchingData(navigationRoute, roadMatching);
       const stored = await storeInitialNavigationEnvelope(routeToken, {
         schemaVersion: 1,
         route: navigationRoute,
+        ...(getRoadMatchingData(navigationRoute)
+          ? { roadMatching: getRoadMatchingData(navigationRoute) }
+          : {}),
         ...(legs ? { venueLegs: legs } : {}),
         navigationId,
         routeVersion,
@@ -53,7 +62,11 @@ export async function attachRouteTokens(
         return route;
       }
       await storeBusPlan(routeToken, navigationRoute);
-      return copyWithDescriptors(navigationRoute, { routeToken });
+      const tokenizedRoute = copyWithDescriptors(navigationRoute, {
+        routeToken,
+      });
+      if (roadMatching) attachRoadMatchingData(tokenizedRoute, roadMatching);
+      return tokenizedRoute;
     }),
   );
 }

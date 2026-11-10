@@ -1,0 +1,119 @@
+{
+  "trip": {
+    "locations": [
+      {
+        "type": "break",
+        "lat": 22.735,
+        "lon": 120.2929,
+        "original_index": 0
+      },
+      {
+        "type": "break",
+        "lat": 22.738,
+        "lon": 120.295,
+        "side_of_street": "right",
+        "original_index": 1
+      }
+    ],
+    "legs": [
+      {
+        "maneuvers": [
+          {
+            "type": 1,
+            "instruction": "Drive north on 甲昌路.",
+            "verbal_succinct_transition_instruction": "Drive north. Then, in 200 meters, Bear right onto 甲樹路.",
+            "verbal_pre_transition_instruction": "Drive north on 甲昌路. Then, in 200 meters, Bear right onto 甲樹路.",
+            "verbal_post_transition_instruction": "Continue for 200 meters.",
+            "street_names": [
+              "甲昌路"
+            ],
+            "bearing_after": 23,
+            "time": 20.667,
+            "length": 0.229,
+            "cost": 39.451,
+            "begin_shape_index": 0,
+            "end_shape_index": 8,
+            "verbal_multi_cue": true,
+            "travel_mode": "drive",
+            "travel_type": "car"
+          },
+          {
+            "type": 9,
+            "instruction": "Bear right onto 甲樹路/高36-2.",
+            "verbal_transition_alert_instruction": "Bear right onto 甲樹路.",
+            "verbal_succinct_transition_instruction": "Bear right.",
+            "verbal_pre_transition_instruction": "Bear right onto 甲樹路, 高36-2.",
+            "verbal_post_transition_instruction": "Continue for 200 meters.",
+            "street_names": [
+              "甲樹路",
+              "高36-2"
+            ],
+            "bearing_before": 13,
+            "bearing_after": 51,
+            "time": 16.447,
+            "length": 0.178,
+            "cost": 40.028,
+            "begin_shape_index": 8,
+            "end_shape_index": 14,
+            "travel_mode": "drive",
+            "travel_type": "car",
+            "lanes": [
+              {
+                "directions": 16
+              },
+              {
+                "directions": 32,
+                "active": 32
+              }
+            ]
+          },
+          {
+            "type": 5,
+            "instruction": "Your destination is on the right.",
+            "verbal_transition_alert_instruction": "Your destination will be on the right.",
+            "verbal_pre_transition_instruction": "Your destination is on the right.",
+            "bearing_before": 41,
+            "time": 0.0,
+            "length": 0.0,
+            "cost": 0.0,
+            "begin_shape_index": 14,
+            "end_shape_index": 14,
+            "travel_mode": "drive",
+            "travel_type": "car"
+          }
+        ],
+        "summary": {
+          "has_time_restrictions": false,
+          "has_toll": false,
+          "has_highway": false,
+          "has_ferry": false,
+          "min_lat": 22.735008,
+          "min_lon": 120.292876,
+          "max_lat": 22.738077,
+          "max_lon": 120.294905,
+          "time": 37.115,
+          "length": 0.408,
+          "cost": 79.479
+        },
+        "shape": "aisjj@w_bmdFUIcp@mUa]wL_V_Iw@Wm@SqCaAwGw@uAsBwAuB{@_Aob@oc@_SeSqHcH"
+      }
+    ],
+    "summary": {
+      "has_time_restrictions": false,
+      "has_toll": false,
+      "has_highway": false,
+      "has_ferry": false,
+      "min_lat": 22.735008,
+      "min_lon": 120.292876,
+      "max_lat": 22.738077,
+      "max_lon": 120.294905,
+      "time": 37.115,
+      "length": 0.408,
+      "cost": 79.479
+    },
+    "status_message": "Found route between points",
+    "status": 0,
+    "units": "kilometers",
+    "language": "en-US"
+  }
+}

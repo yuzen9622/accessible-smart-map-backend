@@ -72,6 +72,7 @@ type StepKind = NavInstructionType | "leg_end" | "venue";
 type StepLegType = NavLegType | "VENUE";
 
 export interface NavStepDto {
+  polylineIndex?: number | null;
   index: number;
   instruction: string;
   /** Index into the armed route's `legs`, so clients rebuild transit state on resume. */
@@ -81,6 +82,7 @@ export interface NavStepDto {
   isTransit: boolean;
   type?: string;
   relativeDirection?: string | null;
+  roadGuidance?: NavInstruction["roadGuidance"];
   maneuver?: NavInstruction["maneuver"];
   streetName?: string | null;
   bearing?: number | null;
@@ -243,6 +245,7 @@ export interface ResolvedStep {
   kind: StepKind;
   type?: string;
   relativeDirection?: string | null;
+  roadGuidance?: NavInstruction["roadGuidance"];
   maneuver?: NavInstruction["maneuver"];
   streetName?: string | null;
   bearing?: number | null;
@@ -1261,6 +1264,8 @@ export class NavigationSession {
   private stepDtos(): NavStepDto[] {
     return this.steps.map((step, index) => ({
       index,
+      polylineIndex: step.polylineIndex,
+      ...(step.roadGuidance ? { roadGuidance: step.roadGuidance } : {}),
       instruction: step.instruction,
       legIndex: step.legIndex,
       legType: step.legType,
@@ -1426,6 +1431,9 @@ export class NavigationSession {
       kind: instruction.type,
       type: instruction.type,
       relativeDirection: instruction.relativeDirection ?? null,
+      ...(instruction.roadGuidance
+        ? { roadGuidance: instruction.roadGuidance }
+        : {}),
       maneuver: instruction.maneuver,
       streetName: instruction.streetName ?? null,
       bearing: instruction.bearing ?? null,

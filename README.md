@@ -319,8 +319,10 @@ pnpm import:traffic-sections
 pnpm import:taipei-painted-sidewalks
 pnpm import:taipei-ramps
 
-# Valhalla 地磚（需 OSM PBF），換地磚後重建 TDX 路況對應
+# Valhalla 地磚（需 OSM PBF）：預設只驗證隔離 candidate，不切換現役
 pnpm build:valhalla-tiles
+# 獲准發布時才執行（會重新建置 candidate、切換並重啟）；之後重建路況對應
+pnpm build:valhalla-tiles --promote-authorized
 pnpm build:traffic-map
 pnpm build:traffic-tar
 ```
@@ -334,7 +336,7 @@ pnpm dev
 ```
 
 伺服器預設運行於 `http://localhost:5000`。
-非生產環境可瀏覽 `http://localhost:5000/docs` 開啟 Scalar 互動式 API 文件。
+非生產環境可瀏覽 `http://localhost:5000/docs` 開啟 Scalar 互動式 API 文件。車行新增欄位、速限分段與 App 接入限制見 [車行導航資料與 App 相容性](docs/api/DRIVING_NAVIGATION.md)。
 
 ### 6. 使用 Docker Compose 部署
 

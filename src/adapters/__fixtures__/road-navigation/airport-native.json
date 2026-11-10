@@ -1,0 +1,171 @@
+{
+  "trip": {
+    "locations": [
+      {
+        "type": "break",
+        "lat": 25.007901,
+        "lon": 121.281634,
+        "heading": 345,
+        "original_index": 0
+      },
+      {
+        "type": "break",
+        "lat": 25.017129,
+        "lon": 121.276472,
+        "original_index": 1
+      }
+    ],
+    "legs": [
+      {
+        "maneuvers": [
+          {
+            "type": 1,
+            "instruction": "Drive northwest on 2/桃園環線.",
+            "verbal_succinct_transition_instruction": "Drive northwest. Then Take exit 8 on the right.",
+            "verbal_pre_transition_instruction": "Drive northwest on 2, 桃園環線. Then Take exit 8 on the right.",
+            "verbal_post_transition_instruction": "Continue for 600 meters.",
+            "street_names": [
+              "2",
+              "桃園環線"
+            ],
+            "bearing_after": 335,
+            "time": 21.892,
+            "length": 0.608,
+            "cost": 24.629,
+            "begin_shape_index": 0,
+            "end_shape_index": 7,
+            "highway": true,
+            "verbal_multi_cue": true,
+            "travel_mode": "drive",
+            "travel_type": "car"
+          },
+          {
+            "type": 20,
+            "instruction": "Take exit 8 on the right onto 1 toward 台北（北）.",
+            "verbal_transition_alert_instruction": "Take exit 8 on the right.",
+            "verbal_pre_transition_instruction": "Take exit 8 on the right onto 1 toward 台北（北）.",
+            "street_names": [
+              "機場系統交流道"
+            ],
+            "bearing_before": 322,
+            "bearing_after": 330,
+            "time": 36.87,
+            "length": 0.364,
+            "cost": 39.569,
+            "begin_shape_index": 7,
+            "end_shape_index": 17,
+            "toll": true,
+            "sign": {
+              "exit_number_elements": [
+                {
+                  "text": "8"
+                }
+              ],
+              "exit_branch_elements": [
+                {
+                  "text": "1",
+                  "consecutive_count": 1
+                }
+              ],
+              "exit_toward_elements": [
+                {
+                  "text": "台北（北）",
+                  "consecutive_count": 1
+                },
+                {
+                  "text": "中壢（南）"
+                }
+              ],
+              "exit_name_elements": [
+                {
+                  "text": "機場系統交流道"
+                }
+              ]
+            },
+            "travel_mode": "drive",
+            "travel_type": "car"
+          },
+          {
+            "type": 23,
+            "instruction": "Keep right to take 1 toward 台北（北）.",
+            "verbal_transition_alert_instruction": "Keep right to take 1.",
+            "verbal_pre_transition_instruction": "Keep right to take 1 toward 台北（北）. Then You will arrive at your destination.",
+            "street_names": [
+              "機場系統交流道"
+            ],
+            "bearing_before": 336,
+            "bearing_after": 337,
+            "time": 11.375,
+            "length": 0.189,
+            "cost": 12.493,
+            "begin_shape_index": 17,
+            "end_shape_index": 22,
+            "toll": true,
+            "sign": {
+              "exit_branch_elements": [
+                {
+                  "text": "1",
+                  "consecutive_count": 1
+                }
+              ],
+              "exit_toward_elements": [
+                {
+                  "text": "台北（北）",
+                  "consecutive_count": 1
+                }
+              ]
+            },
+            "verbal_multi_cue": true,
+            "travel_mode": "drive",
+            "travel_type": "car"
+          },
+          {
+            "type": 4,
+            "instruction": "You have arrived at your destination.",
+            "verbal_transition_alert_instruction": "You will arrive at your destination.",
+            "verbal_pre_transition_instruction": "You have arrived at your destination.",
+            "bearing_before": 345,
+            "time": 0.0,
+            "length": 0.0,
+            "cost": 0.0,
+            "begin_shape_index": 22,
+            "end_shape_index": 22,
+            "travel_mode": "drive",
+            "travel_type": "car"
+          }
+        ],
+        "summary": {
+          "has_time_restrictions": false,
+          "has_toll": true,
+          "has_highway": true,
+          "has_ferry": false,
+          "min_lat": 25.007901,
+          "min_lon": 121.276471,
+          "max_lat": 25.017129,
+          "max_lon": 121.281634,
+          "time": 70.138,
+          "length": 1.161,
+          "cost": 76.693
+        },
+        "shape": "ypjun@cemifFo^zNs{@~a@ky@xc@}\\`T_m@jb@kd@t]eYfUcQrJk[|PiMjH_OjFiLxC}WnEsW|CkTxCwNfDwKhEsf@lQmTfLsSfIoNtC??"
+      }
+    ],
+    "summary": {
+      "has_time_restrictions": false,
+      "has_toll": true,
+      "has_highway": true,
+      "has_ferry": false,
+      "min_lat": 25.007901,
+      "min_lon": 121.276471,
+      "max_lat": 25.017129,
+      "max_lon": 121.281634,
+      "time": 70.138,
+      "length": 1.161,
+      "cost": 76.693
+    },
+    "status_message": "Found route between points",
+    "status": 0,
+    "units": "kilometers",
+    "language": "en-US"
+  }
+}

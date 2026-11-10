@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 TEST_FILES = (
+    "src/scripts/test_extract_road_speed_rules.py",
     "src/scripts/test_eval_route_quality.py",
     "src/scripts/test_deny_foot_on_expressways.py",
     "src/scripts/test_otp_sidewalk_ways.py",

@@ -1,4 +1,6 @@
 import { selectDisplayText } from "./source-display";
+import { roadSignSuffix } from "./road-sign-text";
+import { roadLaneHint, withLaneHint } from "./road-lane-hint";
 import { validStreetNames } from "./route-source-names";
 import type { WalkStepStreetName } from "../types/route";
 import { ResponseCode } from "../types/code";
@@ -467,23 +469,64 @@ function roadLegToInstructions(
     if (language === "en" && !hasEnglishRoadManeuver(step)) {
       pushWarning(warnings, WARN_ROAD_STEPS_UNAVAILABLE);
     }
+    const maneuver =
+      step.maneuverIndex === undefined
+        ? undefined
+        : leg.maneuvers?.[step.maneuverIndex];
     const bearing =
       step.polyline.length >= 2
         ? Math.round(calcBearing(step.polyline[0], step.polyline[1]))
         : null;
     const polylineIndex =
-      step.polyline[0] && leg.polyline.length
-        ? nearestPolylineIndex(leg.polyline, step.polyline[0], searchIndex)
-        : null;
+      step.maneuverIndex !== undefined
+        ? (maneuver?.beginShapeIndex ?? null)
+        : step.polyline[0] && leg.polyline.length
+          ? nearestPolylineIndex(leg.polyline, step.polyline[0], searchIndex)
+          : null;
     if (polylineIndex !== null) searchIndex = polylineIndex;
+    const baseText =
+      language === "en"
+        ? englishRoadInstruction(
+            step,
+            (maneuver ?? maneuvers?.[index])?.streetNames?.[0]?.trim(),
+          )
+        : step.instruction.trim() || "請沿道路繼續前行";
+    const signs = maneuver?.signs;
+    const laneHint = roadLaneHint(maneuver?.lanes, language);
+    // Routes cached before lane hints carry the sign suffix already; the hint
+    // goes before it so the signs stay last and appear once.
+    const signSuffix = roadSignSuffix(signs, language);
+    const withoutSigns =
+      signSuffix && baseText.endsWith(signSuffix)
+        ? baseText.slice(0, -signSuffix.length)
+        : baseText;
     return {
-      text:
-        language === "en"
-          ? englishRoadInstruction(
-              step,
-              maneuvers?.[index]?.streetNames?.[0]?.trim(),
-            )
-          : step.instruction.trim() || "請沿道路繼續前行",
+      text: withLaneHint(withoutSigns, laneHint, language) + signSuffix,
+      ...(maneuver && step.maneuver && step.maneuverIndex !== undefined
+        ? {
+            roadGuidance: {
+              maneuverIndex: step.maneuverIndex,
+              maneuver: step.maneuver,
+              endPolylineIndex: maneuver.endShapeIndex,
+              streetNames: maneuver.streetNames ?? [],
+              ...(maneuver.beginStreetNames
+                ? { beginStreetNames: maneuver.beginStreetNames }
+                : {}),
+              ...(maneuver.bearingBefore !== undefined
+                ? { bearingBefore: maneuver.bearingBefore }
+                : {}),
+              ...(maneuver.bearingAfter !== undefined
+                ? { bearingAfter: maneuver.bearingAfter }
+                : {}),
+              ...(signs ? { signs } : {}),
+              ...(maneuver.lanes ? { lanes: maneuver.lanes } : {}),
+              ...(maneuver.laneApproachRange
+                ? { laneApproachRange: maneuver.laneApproachRange }
+                : {}),
+              ...(laneHint ? { laneHint } : {}),
+            },
+          }
+        : {}),
       type: roadStepType(step.maneuver),
       bearing,
       relativeDirection: null,

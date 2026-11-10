@@ -241,7 +241,7 @@ export const SYNC_STEPS: readonly SyncStep[] = [
     requiredEnv: [...MONGO_ENV, "MOENV_API_KEY"],
   },
 
-  // --- valhalla: new tile release + restart, then re-derive the traffic edge map ---
+  // The opt-in Valhalla sync publishes before rebuilding its traffic edge map.
   {
     id: "valhalla-pbf",
     group: "valhalla",
@@ -252,9 +252,18 @@ export const SYNC_STEPS: readonly SyncStep[] = [
   {
     id: "valhalla-tiles",
     group: "valhalla",
-    command: pnpmScript("build:valhalla-tiles"),
+    command: pnpmScript("build:valhalla-tiles", "--promote-authorized"),
     backends: ["docker"],
     dependsOn: ["valhalla-pbf"],
+    requiredCommands: ["curl", "jq", "shasum", "pnpm"],
+    requiredFiles: [
+      "Dockerfile",
+      "docker-compose.yml",
+      "src/scripts/extract-road-speed-rules.py",
+      "src/scripts/verify-valhalla-release.ts",
+    ],
+    partialFailureNote:
+      "explicit opt-in Valhalla sync validates and promotes the candidate, restarts Valhalla, then refreshes traffic mapping; use build:valhalla-tiles directly for candidate-only builds",
   },
   {
     // Edge ids change with every tile build, so the TDX→Valhalla map is stale.

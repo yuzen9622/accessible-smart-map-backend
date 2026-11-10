@@ -78,9 +78,20 @@ requestId 去除空白後長度 1–128；selectionVersion 是安全範圍內非
 `session.start` 帶 `clientNavigation: 1`，且 `session.ready.capabilities.clientNavigation` 為 1 時，導航完全由 App 自己的導航引擎執行，助理只透過「與按鈕相同的流程」操作它。未宣告的舊 client 維持原本由後端驅動步驟的行為。
 
 - 助理要開始／停止導航、推進室內一步或重播目前步驟時，後端送 `{ "type": "ui.command", "id": "…", "action": "start" | "stop" | "advance" | "repeat", "routeToken"?: "…" }`。App 以開始導航按鈕（或結束、確認一步）同一個函式執行，完成後回 `{ "type": "ui.command.ack", "id": "…", "ok": true, "guidance"?: "preview" | "live" | "indoor" }`，失敗回 `ok: false` 與 `reason`。8 秒內沒有 ack 視為失敗（`CLIENT_TIMEOUT`）。`start` 的 routeToken 是語音剛規劃的推薦路線（或使用者指定的候選）；沒有語音規劃時是畫面選定路線。預覽或即時由 App 依使用者是否在路線上決定。
-- App 在導航開始、換步、結束及每次 `session.ready` 後送 `nav.state`：`{ active, guidance?, travelMode?, destination?, currentStepIndex?, distanceToNextM?, remainingDistanceM?, remainingDurationSec?, arrived?, steps?: [{ index, instruction, legType?, distanceM?, streetName?, maneuver? }], busWait?: { routeName, stop, waitMinutes: number|null, expectedAt?: "HH:mm" } }`。助理回答「何時轉彎」「還有多遠」時讀它。`busWait` 只在前往或等候公車時帶，內容與 App 等車卡片相同：有即時分鐘數就放 `waitMinutes`；沒有即時資料時 `waitMinutes` 為 null，若後端選定的同路線班次只有時刻表則附 `expectedAt`。助理回答「那班公車多久來」時以它為準，不另查下一班。等車卡片內容改變時 App 也會重送 `nav.state`。
+- App 在導航開始、換步、結束及每次 `session.ready` 後送 `nav.state`：`{ active, guidance?, travelMode?, destination?, currentStepIndex?, distanceToNextM?, remainingDistanceM?, remainingDurationSec?, arrived?, steps?: [{ index, instruction, legType?, distanceM?, streetName?, maneuver? }], busWait?: { routeName, stop, waitMinutes: number|null, expectedAt?: "HH:mm" }, speedLimit?: { kind: "known", limitKph } | { kind: "unlimited" | "unknown", limitKph: null } }`。助理回答「何時轉彎」「還有多遠」時讀它。`busWait` 只在前往或等候公車時帶，內容與 App 等車卡片相同：有即時分鐘數就放 `waitMinutes`；沒有即時資料時 `waitMinutes` 為 null，若後端選定的同路線班次只有時刻表則附 `expectedAt`。助理回答「那班公車多久來」時以它為準，不另查下一班。等車卡片內容改變時 App 也會重送 `nav.state`。`speedLimit` 只在車行 leg 導航中帶，是 HUD 上目前路段的速限（由 `speedLimits` 依有效路線進度選出），速限改變時重送；助理回答「這段限速多少」時以它為準，沒有就說沒有資料。
 - App 導航引擎到了該播報的時機（例如「200 公尺後左轉」）且語音連線可播放時，不用本地 TTS，改送 `{ "type": "nav.cue", "text": "…" }`；後端在語音空檔交給模型以自然口語轉述，忙碌時只保留最新一句。
 - App 仍以 `nav.setRoute`＋`nav.start`／`nav.position`／`nav.cancel` 告知後端目前導航的路線與位置，後端只用來偵測危險、設施中斷與交通警報；此模式下後端只送 `nav.advisory`、`nav.rerouting`、`nav.route_replaced`、`nav.reroute_failed`，不送步驟事件，也不因偏離路線自行重新規劃。
+
+### 2.2.3 車行結構化道路指引（加值欄位）
+
+後端產生的 `nav.start`、`nav.resume_ok`、`nav.route_replaced` 步驟新增 optional `polylineIndex` 與 `roadGuidance`。後者保留原始 `maneuverIndex`、車行轉向 code、`endPolylineIndex`、道路名稱、路牌、方位及車道；索引均相對該步驟 `legIndex` 所屬 leg 的原始 polyline。外層 `maneuver` 仍是既有 WALK 契約，車行仍為 null，不能拿它取代 `roadGuidance.maneuver`。
+
+- 舊 client 可忽略新欄位；新版 client 遇到舊訊息沒有它們時，維持基本文字導航。
+- `roadGuidance.signs.destinations` 是原始路牌內容，不是全部都屬於本次選定分支。顯示時與本次轉向分開。
+- `roadGuidance.laneHint` 與步驟 `text` 末尾的車道建議（例如「，請靠右側兩個車道」）同源；App 轉彎前的 `nav.cue` 沿用含它的步驟文字，助理轉述時保留。
+- 車道依有效 leg-local 路線進度及下一 maneuver 的 `laneApproachRange` 顯示，駛過路口即清除；缺 lanes／range 保留一般轉向，不生成假圖。四車道右轉時左兩條僅直行不推薦，右側 `usable`／`preferred` 都保留；這是建議選道，不是實際車道定位。`not_recommended` 不表示法律禁止。
+- 速限唯一來源為完整 route 各車行 leg 的 `speedLimits` 幾何分段，以有效 `legIndex/segmentIndex` 選用，不放在每個語音 step；voice step index／`nav.progress` 不是速限分段索引，不要求額外 GPS 道路匹配。
+- 換線／候選或版本變更先清舊進度與指引；恢復時檢查 `navigationId/routeVersion/routeToken`、完整 route 及進度有效性。GPS 只協助沿選定路線估計進度，飄到鄰路不換資料；無有效進度不宣稱目前段。沒有也不需要 `/route/match`，這些欄位不要求新增 WS progress 訊息。接入與相容方式見 [車行導航資料與 App 相容性](DRIVING_NAVIGATION.md)；詳細 HTTP 欄位以 `/api/v1/openapi.json` 為準，客戶端仍需整合並驗證路線進度與顯示。
 
 ### 2.3 取得 token：登入 API
 

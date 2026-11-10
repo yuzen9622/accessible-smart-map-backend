@@ -446,6 +446,7 @@ export interface TraLeg extends RouteSourceNames, TransitAbsoluteSchedule {
 }
 
 export interface DriveStep {
+  maneuverIndex?: number;
   instruction: string;
   distanceM: number;
   durationMin: number;
@@ -454,6 +455,12 @@ export interface DriveStep {
 }
 
 export interface DriveManeuver {
+  beginStreetNames?: string[];
+  bearingBefore?: number;
+  bearingAfter?: number;
+  signs?: import("./road-guidance").RoadSigns;
+  lanes?: import("./road-guidance").RoadLane[];
+  laneApproachRange?: import("./road-guidance").RoadRange;
   instruction?: string;
   type: number;
   lengthKm: number;
@@ -484,6 +491,7 @@ export interface DriveLeg {
   polyline: [number, number][];
   steps?: DriveStep[];
   maneuvers?: DriveManeuver[];
+  speedLimits?: import("./road-guidance").RoadSpeedLimits;
   modeFallback?: "DRIVE";
   /** Active TDX road events on this leg; absent means none were matched. */
   incidents?: RoadIncident[];
@@ -538,6 +546,7 @@ export interface WalkPolicy {
 }
 
 export interface AccessibleRoute {
+  roadNetwork?: import("./road-guidance").RoadNetworkInfo;
   departureTime?: string;
   arrivalTime?: string;
   routeId: string;

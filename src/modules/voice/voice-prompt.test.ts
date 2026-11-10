@@ -32,7 +32,7 @@ describe("voice language preference", () => {
     const prompt = buildVoiceSystemPrompt();
     expect(prompt).toContain("收到「【導航提示】」開頭的內容時");
     expect(prompt).toContain(
-      "方向、路名、站名、路線號碼、距離與時間都必須保留且不能更改",
+      "方向、路名、站名、路線號碼、距離、時間、車道建議（例如「請靠右側兩個車道」）與限速都必須保留且不能更改",
     );
     expect(prompt).not.toContain("逐字唸出");
   });

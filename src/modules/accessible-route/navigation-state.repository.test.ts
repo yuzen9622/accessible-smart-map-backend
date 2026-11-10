@@ -31,6 +31,7 @@ vi.mock("../../config/redis", () => ({
 }));
 
 import {
+  readNavigationVersion,
   beginNavigationResume,
   beginReroute,
   commitNavigationResume,
@@ -92,6 +93,25 @@ const envelope = {
 describe("navigation-state repository Lua tri-state", () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it.each([
+    ["2", 2],
+    [null, null],
+    ["0", null],
+    ["-1", null],
+    ["1.5", null],
+    ["2x", null],
+    ["9007199254740992", null],
+  ])("reads current head %s as %s", async (raw, expected) => {
+    getRedis.mockResolvedValueOnce(raw);
+    await expect(readNavigationVersion("nav")).resolves.toBe(expected);
+    expect(getRedis).toHaveBeenCalledWith("voice-nav:head:nav");
+  });
+  it("throws rather than treating unavailable Redis as a missing head", async () => {
+    redisReady.mockRejectedValueOnce(new Error("down"));
+    await expect(readNavigationVersion("nav")).rejects.toThrow("down");
+    getRedis.mockRejectedValueOnce(new Error("get down"));
+    await expect(readNavigationVersion("nav")).rejects.toThrow("get down");
+  });
   it("fails closed when adopted resume proof is unavailable or malformed", async () => {
     evalRedis.mockRejectedValueOnce(new Error("offline"));
     expect(await getAdoptedCandidateReplacement(snapshot, "old", 1)).toBeNull();

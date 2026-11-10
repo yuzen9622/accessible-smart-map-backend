@@ -1,3 +1,8 @@
+import { copyWithDescriptors } from "../../utils/route-source-names";
+import {
+  attachRoadMatchingData,
+  getRoadMatchingData,
+} from "../../utils/road-matching-data";
 import { randomBytes } from "crypto";
 import { storeBusPlan } from "./bus-plan.repository";
 import { ResponseCode } from "../../types/code";
@@ -191,11 +196,12 @@ export async function rerouteAccessibleRoute(
       };
     }
     const routeVersion = request.previousRouteVersion + 1;
-    const route = {
-      ...selected,
+    const route = copyWithDescriptors(selected, {
       navigationId: previous.navigationId,
       routeVersion,
-    };
+    });
+    const roadMatching = getRoadMatchingData(selected);
+    if (roadMatching) attachRoadMatchingData(route, roadMatching);
     const instructionsResult = generateNavInstructions(
       route,
       undefined,
@@ -252,6 +258,9 @@ export async function rerouteAccessibleRoute(
     };
     const envelope: NavigationRouteEnvelope = {
       schemaVersion: 1,
+      ...(getRoadMatchingData(route)
+        ? { roadMatching: getRoadMatchingData(route) }
+        : {}),
       route,
       // a reroute starts from the user's position outdoors, so only the leg
       // into the destination venue (rebuilt on this replan) still lies ahead

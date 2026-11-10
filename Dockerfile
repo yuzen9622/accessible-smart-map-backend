@@ -40,6 +40,12 @@ FROM otp-upstream AS otp-runtime
 COPY --from=otp-compile /opt/overrides/classes /app/classes
 COPY --from=otp-compile /opt/overrides/resources /app/resources
 
+FROM python:3.12.13-slim-bookworm AS road-speed-rules
+RUN pip install --no-cache-dir osmium==4.1.1
+WORKDIR /app
+COPY src/scripts/extract-road-speed-rules.py /app/extract-road-speed-rules.py
+ENTRYPOINT ["python3", "/app/extract-road-speed-rules.py"]
+
 # ── builder: full deps + compile TS → dist ──────────────────────────────────
 FROM node:22-bookworm-slim AS builder
 # pnpm is the package manager (package.json "scripts" call `pnpm run`); corepack

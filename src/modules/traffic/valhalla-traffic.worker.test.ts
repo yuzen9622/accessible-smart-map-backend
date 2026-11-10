@@ -14,6 +14,23 @@ import {
   type TdxValhallaEdgeMap,
 } from "./valhalla-traffic.worker";
 import { tileIdToPath } from "./valhalla-traffic-packer";
+import {
+  getValhallaReleaseSnapshot,
+  isValhallaReleaseCurrent,
+} from "../../adapters/valhalla-release.adapter";
+
+vi.mock("../../adapters/valhalla-release.adapter", () => ({
+  getValhallaReleaseSnapshot: vi.fn(),
+  isValhallaReleaseCurrent: vi.fn(),
+}));
+const release = {
+  roadNetwork: {
+    tilesetId: "release-new",
+    sourcePbfSha256: "a".repeat(64),
+    provenance: "verified" as const,
+  },
+  identity: "instance-new",
+};
 
 vi.mock("../../config/redis", () => ({
   redisSetNx: vi.fn(),
@@ -39,6 +56,8 @@ describe("valhalla-traffic.worker", () => {
   const sampleEdgeMap: TdxValhallaEdgeMap = {
     version: "1.0.0",
     generatedAt: "2026-09-03T12:00:00.000Z",
+    valhallaTilesetId: "release-new",
+    valhallaSourcePbfSha256: "a".repeat(64),
     totalSections: 2,
     mappedSections: 2,
     unmappedSections: 0,
@@ -81,6 +100,8 @@ describe("valhalla-traffic.worker", () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.mocked(getValhallaReleaseSnapshot).mockResolvedValue(release);
+    vi.mocked(isValhallaReleaseCurrent).mockResolvedValue(true);
     resetValhallaTrafficWorkerCache();
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "valhalla-worker-test-"));
     sampleEdgeMapPath = path.join(tmpDir, "tdx-valhalla-edge-map.json");
@@ -104,6 +125,7 @@ describe("valhalla-traffic.worker", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     resetValhallaTrafficWorkerCache();
     try {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -130,6 +152,16 @@ describe("valhalla-traffic.worker", () => {
   });
 
   describe("getDirectedEdgeCountForTile", () => {
+    it("does not reuse a tile header from another release", () => {
+      expect(getDirectedEdgeCountForTile(333609, tmpDir)).toBe(100);
+      const second = path.join(tmpDir, "new-release");
+      const tile = path.join(second, tileIdToPath(333609));
+      fs.mkdirSync(path.dirname(tile), { recursive: true });
+      const buffer = Buffer.alloc(48);
+      buffer.writeBigUInt64LE(5n << 21n, 40);
+      fs.writeFileSync(tile, buffer);
+      expect(getDirectedEdgeCountForTile(333609, second)).toBe(5);
+    });
     it("returns 0 if tile gph file does not exist", () => {
       expect(getDirectedEdgeCountForTile(999999, tmpDir)).toBe(0);
     });
@@ -152,6 +184,92 @@ describe("valhalla-traffic.worker", () => {
   });
 
   describe("generateValhallaTrafficTar", () => {
+    it("writes only to the immutable release traffic path by default", async () => {
+      vi.stubEnv("VALHALLA_DATA_DIR", tmpDir);
+      const releaseDir = path.join(tmpDir, "releases", "release-new");
+      const tile = path.join(
+        releaseDir,
+        "valhalla_tiles",
+        tileIdToPath(333609),
+      );
+      fs.mkdirSync(path.dirname(tile), { recursive: true });
+      fs.copyFileSync(path.join(tmpDir, tileIdToPath(333609)), tile);
+      mockedGetLiveTrafficsSwr.mockResolvedValue({
+        state: "fresh",
+        data: [{ sectionId: "SEC-001", speedKmh: 50, congestionLevel: 1 }],
+        ageMs: 0,
+      });
+      const result = await generateValhallaTrafficTar({
+        mapPath: sampleEdgeMapPath,
+        force: true,
+      });
+      expect(result.generated).toBe(true);
+      expect(
+        fs.existsSync(path.join(releaseDir, "traffic", "traffic.tar")),
+      ).toBe(true);
+      expect(fs.existsSync(path.join(tmpDir, "traffic", "traffic.tar"))).toBe(
+        false,
+      );
+    });
+
+    it("rejects an old graph mapping even when force bypasses the lock", async () => {
+      fs.writeFileSync(
+        sampleEdgeMapPath,
+        JSON.stringify({ ...sampleEdgeMap, valhallaTilesetId: "old-release" }),
+      );
+      mockedGetLiveTrafficsSwr.mockResolvedValue({
+        state: "fresh",
+        data: [{ sectionId: "SEC-001", speedKmh: 50, congestionLevel: 1 }],
+        ageMs: 0,
+      });
+      const result = await generateValhallaTrafficTar({
+        mapPath: sampleEdgeMapPath,
+        tilesDir: tmpDir,
+        outTarPath: sampleTarPath,
+        force: true,
+      });
+      expect(result).toMatchObject({
+        generated: false,
+        reason: "TILESET_MISMATCH",
+      });
+      expect(mockedGetLiveTrafficsSwr).not.toHaveBeenCalled();
+      expect(fs.existsSync(sampleTarPath)).toBe(false);
+    });
+
+    it("does not publish if the serving release changes while fetching speeds", async () => {
+      mockedGetLiveTrafficsSwr.mockResolvedValue({
+        state: "fresh",
+        data: [{ sectionId: "SEC-001", speedKmh: 50, congestionLevel: 1 }],
+        ageMs: 0,
+      });
+      vi.mocked(isValhallaReleaseCurrent).mockResolvedValue(false);
+      const result = await generateValhallaTrafficTar({
+        mapPath: sampleEdgeMapPath,
+        tilesDir: tmpDir,
+        outTarPath: sampleTarPath,
+        force: true,
+      });
+      expect(result).toMatchObject({
+        generated: false,
+        reason: "TILESET_CHANGED",
+      });
+      expect(fs.existsSync(sampleTarPath)).toBe(false);
+    });
+
+    it("fails closed when a serving identity cannot be obtained", async () => {
+      vi.mocked(getValhallaReleaseSnapshot).mockResolvedValue(null);
+      const result = await generateValhallaTrafficTar({
+        mapPath: sampleEdgeMapPath,
+        tilesDir: tmpDir,
+        outTarPath: sampleTarPath,
+        force: true,
+      });
+      expect(result).toMatchObject({
+        generated: false,
+        reason: "TILESET_MISMATCH",
+      });
+      expect(mockedGetLiveTrafficsSwr).not.toHaveBeenCalled();
+    });
     it("skips generation if redis lock is held", async () => {
       mockedRedisSetNx.mockResolvedValueOnce(false);
 
@@ -253,6 +371,35 @@ describe("valhalla-traffic.worker", () => {
       expect(mockedRefreshCity).toHaveBeenCalled();
       expect(result.generated).toBe(true);
       expect(result.tileCount).toBe(1);
+    });
+
+    it("gives concurrent forced writers distinct temporary files", async () => {
+      mockedGetLiveTrafficsSwr.mockResolvedValue({
+        state: "fresh",
+        data: [{ sectionId: "SEC-001", speedKmh: 50, congestionLevel: 1 }],
+        ageMs: 0,
+      });
+      const writes = vi.spyOn(fs, "writeFileSync");
+      try {
+        const options = {
+          mapPath: sampleEdgeMapPath,
+          tilesDir: tmpDir,
+          outTarPath: sampleTarPath,
+          force: true,
+        };
+        const results = await Promise.all([
+          generateValhallaTrafficTar(options),
+          generateValhallaTrafficTar(options),
+        ]);
+        expect(results.every((result) => result.generated)).toBe(true);
+        const temporaryPaths = writes.mock.calls
+          .map(([file]) => String(file))
+          .filter((file) => file.startsWith(`${sampleTarPath}.`));
+        expect(new Set(temporaryPaths).size).toBe(2);
+        expect(temporaryPaths.every((file) => !fs.existsSync(file))).toBe(true);
+      } finally {
+        writes.mockRestore();
+      }
     });
 
     it("supports force=true to bypass redis lock", async () => {

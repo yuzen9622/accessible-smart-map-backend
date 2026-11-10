@@ -1,3 +1,4 @@
+import type { RoadMatchingData } from "../../types/road-guidance";
 import type { SupportedLang } from "../../types/lang";
 /**
  * accessible-route module type declarations — the shapes used across the
@@ -235,6 +236,7 @@ export type NavigationRoute = AccessibleRoute & {
 };
 
 export interface NavigationRouteEnvelope {
+  roadMatching?: RoadMatchingData;
   schemaVersion: 1;
   route: AccessibleRoute;
   venueLegs?: NavigationVenueLegs;

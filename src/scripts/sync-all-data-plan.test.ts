@@ -49,7 +49,29 @@ describe("SYNC_STEPS registry", () => {
     );
   });
 
-  it("rebuilds the traffic map and tar after new Valhalla tiles", () => {
+  it("preserves explicit opt-in publication before traffic remapping", () => {
+    const step = SYNC_STEPS.find((entry) => entry.id === "valhalla-tiles")!;
+    expect(step.command).toContain("--promote-authorized");
+    expect(select([])).not.toContain("valhalla-tiles");
+    expect(step.requiredCommands).toEqual(["curl", "jq", "shasum", "pnpm"]);
+    expect(step.requiredFiles).toContain(
+      "src/scripts/extract-road-speed-rules.py",
+    );
+    expect(step.requiredFiles).toContain(
+      "src/scripts/verify-valhalla-release.ts",
+    );
+    expect(step.partialFailureNote).toContain("restarts Valhalla");
+    expect(
+      findStepBlockers(
+        step,
+        {},
+        () => false,
+        () => false,
+      ),
+    ).toContain("jq is not installed");
+  });
+
+  it("orders validated promotion before traffic refresh of the active tiles", () => {
     const order = ids(SYNC_STEPS);
     expect(order.indexOf("valhalla-tiles")).toBeLessThan(
       order.indexOf("traffic-map"),

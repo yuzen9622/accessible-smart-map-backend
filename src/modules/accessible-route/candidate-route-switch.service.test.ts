@@ -1,3 +1,9 @@
+import {
+  attachRoadMatchingData,
+  getRoadMatchingData,
+  geometrySha256,
+} from "../../utils/road-matching-data";
+import type { AccessibleRoute } from "../../types/route";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   read: vi.fn(),
@@ -50,6 +56,67 @@ const snapshot = {
   latestPosition: null,
   updatedAt: 1,
 };
+
+function metadataRoute(edge: string): AccessibleRoute {
+  const route: AccessibleRoute = {
+    routeId: "road",
+    navigationId: "n",
+    routeVersion: 1,
+    routeName: "road",
+    totalMinutes: 1,
+    transferCount: 0,
+    accessibilityHighlights: [],
+    roadNetwork: {
+      tilesetId: "tiles",
+      sourcePbfSha256: null,
+      provenance: "unverified",
+    },
+    legs: [
+      {
+        type: "DRIVE",
+        from: { lat: 25, lng: 121 },
+        to: { lat: 25, lng: 121.001 },
+        distanceM: 100,
+        durationMin: 1,
+        polyline: [
+          [121, 25],
+          [121.001, 25],
+        ],
+        steps: [
+          {
+            instruction: "出發",
+            maneuver: "DEPART",
+            distanceM: 100,
+            durationMin: 1,
+            polyline: [
+              [121, 25],
+              [121.001, 25],
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  attachRoadMatchingData(route, {
+    tilesetId: "tiles",
+    legs: [
+      {
+        legIndex: 0,
+        geometrySha256: geometrySha256(route.legs[0].polyline),
+        spans: [
+          {
+            fromIndex: 0,
+            toIndex: 1,
+            directedEdgeId: edge,
+            osmWayId: "456",
+            osmForward: true,
+          },
+        ],
+      },
+    ],
+  });
+  return route;
+}
 describe("candidate switch transaction", () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -76,6 +143,40 @@ describe("candidate switch transaction", () => {
       adopt: vi.fn(),
       ...overrides,
     });
+  it.each([true, false])(
+    "restores only candidate private data from JSON (candidate metadata=%s)",
+    async (hasNew) => {
+      const oldRoute = metadataRoute("111");
+      const fresh = metadataRoute("222");
+      mocks.read.mockResolvedValueOnce({
+        status: "ok",
+        value: {
+          ...envelope,
+          route: oldRoute,
+          roadMatching: getRoadMatchingData(oldRoute),
+        },
+      });
+      mocks.read.mockResolvedValueOnce({
+        status: "ok",
+        value: JSON.parse(
+          JSON.stringify({
+            ...envelope,
+            route: fresh,
+            ...(hasNew ? { roadMatching: getRoadMatchingData(fresh) } : {}),
+          }),
+        ),
+      });
+      const prepare = vi.fn(() => true);
+      expect((await run({ prepare })).status).toBe("adopted");
+      const saved = mocks.finalize.mock.calls[0][3];
+      expect(saved.roadMatching).toEqual(
+        hasNew ? getRoadMatchingData(fresh) : undefined,
+      );
+      expect(getRoadMatchingData(saved.route)).toEqual(saved.roadMatching);
+      expect(prepare.mock.calls.length).toBe(1);
+      expect(JSON.stringify(saved.route)).not.toContain("directedEdgeId");
+    },
+  );
   it("publishes durable ADOPTED despite a newer utterance", async () => {
     let authorized = true;
     const adopt = vi.fn();

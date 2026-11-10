@@ -204,7 +204,12 @@ pnpm data:sync                # 日常更新：只跑 upsert 類步驟（不清�
 - `--skip=<id,...>` 排除步驟；`--only=<id,...>` 只跑指定步驟（忽略群組旗標）；前置步驟沒選到會直接報錯。另有 `--fail-fast`（第一個失敗就停）、`--tdx-gap=<秒>`（TDX 步驟間隔，預設 10）。
 - 公開資料每次同步都直接從官方來源下載，不需要預先放檔案：GTFS（`gtfs-feed` 步驟，TDX 全國 feed 約 470 MB，需要 `unzip`；只解出 levels／stops／trips／pathways 到 `data/gtfs`）、捷運無障礙出入口（data.taipei）、無障礙廁所（環境部 `fac_p_07`，需要 `MOENV_API_KEY`）、身障福利機構（衛福部）。下載或驗證失敗時保留舊資料。
 - 仍需本地檔案的只有非公開資料：`data/rag`（paid）與 `data/venues/nutc-sanmin.osm`（snapshot）。缺檔時 preflight 會擋下，什麼都不執行。
-- Valhalla 的 PBF 只在檔案不存在時下載；要更新 OSM 就先刪掉舊的 PBF 再跑。
+- Valhalla 的 PBF 只在檔案不存在時下載；要更新 OSM，先保存舊來源備份並準備新 PBF，再指定 `VALHALLA_PBF_PATH`。不要覆寫正在建置的來源。
+- `pnpm build:valhalla-tiles` 預設只建立、驗證隔離 candidate，不切換 `active`。建置會固定 PBF snapshot，同時產生方向速限規則與來源 manifest，candidate 測試入口只綁 localhost。正式容器仍使用根 `Dockerfile`／`docker-compose.yml`，不需在 host 手動安裝 pyosmium。
+- **發布會重啟服務**：確認授權及維護時段後，`pnpm build:valhalla-tiles --promote-authorized` 才在 candidate 驗證通過後切換並檢查 serving identity，失敗回復舊 release。這個指令會重新建立 candidate，不是直接發布先前 candidate。`data:sync --with-valhalla`／`data:sync:all`／明確選入 `valhalla-tiles` 延續既有發布行為，會傳入此旗標，再依新 active tiles 重建 traffic map/tar；只想測 candidate 時不要用這些同步模式。
+- traffic map 現在記錄 serving release ID 與來源 hash；舊 map 需在發布後重跑 `pnpm build:traffic-map`。worker 遇版本不符或建置期間換圖會停止寫入；每個 release 的 `traffic/traffic.tar` 分開保存，新 candidate 不讀舊圖的共享 overlay。沒有可信的新版流量時保留基本路由，不套舊 edge IDs。舊 `VALHALLA_TILES_DIR`／`VALHALLA_TRAFFIC_EXTRACT_PATH` 不再覆寫 worker 目標，路徑由 `VALHALLA_DATA_DIR` 與 serving release 決定。
+- 維運請依序產生 traffic map／tar，避免並行手動建置。跨版本 map 會被拒絕，但較舊工作若最後發布，仍可能需要重跑新版本產生器以恢復更新；同版強制產生 tar 也採最後寫入結果。
+- runtime 以獨立 `/tmp` config 固定 immutable tiles 與 release-specific traffic 路徑，不改原始 release config；舊設定中的 `active`／共用 tar 路徑也不再沿用。健康後產生 `serving-release.json`。後端比對該身分、manifest 與速限索引 hash；舊 release 沒來源 manifest 只能標 unverified，不得補寫現在的 PBF hash 偽裝歷史來源。切換／rollback 應整組處理 tiles、manifest、規則；不要單獨替換規則檔。車行 API 的資料限制見 [車行導航資料與 App 相容性](../api/DRIVING_NAVIGATION.md)。
 - `traffic-tar` 和 `traffic-map` 即使沒產出也可能 exit 0，結束時摘要會列出提醒，請看該步驟的 Result 行。
 - 全台人行道 `sidewalks` 是 base 步驟，只需 `PED_GRAPH_DATABASE_URL` 指向可用的 PostGIS，首次匯入不需 `ped_graph_version`。預設每次從[內政部官方 ZIP](https://opdadm.moi.gov.tw/api/v1/no-auth/resource/api/dataset/11D38E3D-F980-40BF-B714-4E0DB8AA1252/resource/673E16B8-66BC-4DD6-BA39-767BE3324F5C/download) 下載；可用 `SIDEWALK_SOURCE_URL` 或 `--url <URL>` 指定來源。
 

@@ -1,5 +1,10 @@
 import { decode } from "@googlemaps/polyline-codec";
 import {
+  getValhallaReleaseSnapshot,
+  readValhallaReleaseIdentity,
+} from "../../../adapters/valhalla-release.adapter";
+import { enrichRoadRoutes } from "./road-guidance";
+import {
   computeValhallaRoutes,
   type NormalizedValhallaLeg,
   type NormalizedValhallaManeuver,
@@ -8,6 +13,7 @@ import {
 } from "../../../adapters/valhalla.adapter";
 import {
   VALHALLA_MAX_EXCLUDE_LOCATIONS,
+  VALHALLA_METADATA_BUDGET_MS,
   VALHALLA_OSM_ATTRIBUTION,
 } from "../../../config/valhalla";
 import { TRAFFIC_MSG } from "../../../constants/messages";
@@ -25,6 +31,8 @@ import type {
 } from "../accessible-route.types";
 import { haversineCoords, haversineMeters } from "../../../utils/geo";
 import { routeMessage } from "../../../utils/route-messages";
+import { withRoadSignText } from "../../../utils/road-sign-text";
+import { roadLaneHint, withLaneHint } from "../../../utils/road-lane-hint";
 import { normalizeRelativeDirection } from "../../../utils/nav-instructions-engine";
 import { ValhallaRoutingError } from "./valhalla-routing.types";
 import { planOtpWalkDetailed } from "./otp-routing";
@@ -234,11 +242,19 @@ function driveSteps(
 ): DriveStep[] | undefined {
   if (!guidanceFits(leg.maneuvers, points)) return undefined;
   return leg
-    .maneuvers!.filter((m) => maneuverCode(m) !== "ARRIVE")
-    .map((m) => {
+    .maneuvers!.map((m, maneuverIndex) => ({ m, maneuverIndex }))
+    .filter(({ m }) => maneuverCode(m) !== "ARRIVE")
+    .map(({ m, maneuverIndex }) => {
       const maneuver = maneuverCode(m);
       return {
-        instruction: localizedInstruction(m, maneuver),
+        maneuverIndex,
+        instruction: withRoadSignText(
+          withLaneHint(
+            localizedInstruction(m, maneuver),
+            roadLaneHint(m.lanes),
+          ),
+          m.signs,
+        ),
         maneuver,
         distanceM: Math.round(m.lengthKm * 1000),
         durationMin: minutes(m.timeSec),
@@ -742,6 +758,26 @@ export async function planValhallaRoute(
   destination: LatLng,
   opts: PlanRoadRouteOptions,
 ): Promise<AccessibleRoute[]> {
+  const initialReleaseIdentity =
+    opts.travelMode === "walk" ? null : readValhallaReleaseIdentity();
+  const snapshotStarted = Date.now();
+  const snapshotDeadline = Math.min(
+    snapshotStarted + VALHALLA_METADATA_BUDGET_MS,
+    opts.deadline ?? Infinity,
+  );
+  const snapshotPromise = initialReleaseIdentity
+    ? Promise.resolve()
+        .then(() =>
+          getValhallaReleaseSnapshot(
+            Math.max(0, snapshotDeadline - Date.now()),
+          ),
+        )
+        .catch(() => null)
+        .then((snapshot) => ({
+          snapshot,
+          elapsedMs: Date.now() - snapshotStarted,
+        }))
+    : Promise.resolve({ snapshot: null, elapsedMs: 0 });
   const callValhalla = (
     excludeLocations?: LatLng[],
     computeAlternatives = true,
@@ -875,7 +911,7 @@ export async function planValhallaRoute(
     }
   }
   if (opts.travelMode === "walk" || routes.length === 0) return routes;
-  return attachWalkAccessLegs(
+  const finalRoutes = await attachWalkAccessLegs(
     routes,
     origin,
     destination,
@@ -884,4 +920,17 @@ export async function planValhallaRoute(
     opts.mode,
     opts.avoidStairs === true || opts.mode === "wheelchair",
   );
+  const loaded = await snapshotPromise;
+  const releaseSnapshot =
+    loaded.snapshot?.identity === initialReleaseIdentity
+      ? loaded.snapshot
+      : null;
+  await enrichRoadRoutes(
+    finalRoutes,
+    COSTING[opts.travelMode],
+    releaseSnapshot,
+    opts.deadline,
+    Math.max(0, VALHALLA_METADATA_BUDGET_MS - loaded.elapsedMs),
+  );
+  return finalRoutes;
 }
