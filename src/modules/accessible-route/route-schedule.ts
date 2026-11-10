@@ -9,7 +9,8 @@ export function attachBusSchedule(
 ): void {
   Object.defineProperties(leg, {
     _scheduledDepartureTime: { value: departureTime },
-    _boardingReadyTime: { value: boardingReadyTime },
+    // Writable: a re-planned access walk (CSR) shifts when the rider is ready.
+    _boardingReadyTime: { value: boardingReadyTime, writable: true },
     _scheduledTripId: { value: tripId },
   });
 }

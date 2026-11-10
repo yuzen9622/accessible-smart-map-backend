@@ -30,6 +30,10 @@ export const EDGE_TYPE = {
   INDOOR_ELEVATOR: 24,
   INDOOR_FARE_GATE: 25,
   INDOOR_EXIT_GATE: 26,
+  /** highway=trunk without motorroad/expressway marks (build-ped-graph.py). */
+  TRUNK: 27,
+  /** highway=trunk_link with explicit foot permission. */
+  TRUNK_LINK: 28,
   OTHER: 255,
 } as const;
 

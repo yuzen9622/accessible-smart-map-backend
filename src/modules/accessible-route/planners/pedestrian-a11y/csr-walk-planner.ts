@@ -12,6 +12,7 @@ import {
   PED_GRAPH_MAX_SNAP_TOLERANCE_M,
   isWithinPedGraphCoverage,
 } from "../../../../config/ped-graph";
+import { CSR_STAIRS_COST_MULTIPLIER } from "../../../../config/routing";
 import {
   WALK_POLICY_VERSION,
   type AccessibilityMode,
@@ -834,6 +835,9 @@ export async function planCsrWalkRoute(
     ...profileFor(options.mode),
     forbidStairs: avoidStairs,
     preferSidewalks: true,
+    ...(options.mode === "wheelchair"
+      ? {}
+      : { stairsAvoidanceMultiplier: CSR_STAIRS_COST_MULTIPLIER }),
   };
   let excludedEdges: ReadonlySet<number> = new Set();
   if (options.avoidPoints?.length) {

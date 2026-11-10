@@ -508,7 +508,12 @@ export async function annotateSidewalkSegments(
             notSidewalkSegments(leg),
           )
         : [];
-      if (index && route.engine !== "pedestrian-a11y") {
+      // CSR walks (whole routes, or transit legs re-planned by CSR) already
+      // carry the graph's own crossing counts.
+      const csrPlanned =
+        route.engine === "pedestrian-a11y" ||
+        Object.getOwnPropertyDescriptor(leg, "_csrPlanned")?.value === true;
+      if (index && !csrPlanned) {
         applyCrossingEvidence(leg, index.crossings);
       }
     }

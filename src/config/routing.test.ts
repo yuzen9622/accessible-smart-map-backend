@@ -1,7 +1,13 @@
 import fs from "fs";
 import path from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getRoutingConfig, WALK_RELUCTANCE, WALK_SPEED_MPS } from "./routing";
+import {
+  CSR_CARRIAGEWAY_COST_MULTIPLIER,
+  CSR_STAIRS_COST_MULTIPLIER,
+  getRoutingConfig,
+  WALK_RELUCTANCE,
+  WALK_SPEED_MPS,
+} from "./routing";
 
 interface CacheRequest {
   modes: string;
@@ -124,4 +130,16 @@ describe("getRoutingConfig", () => {
       expect(() => getRoutingConfig()).toThrow(`Invalid ${name}`);
     },
   );
+});
+
+describe("CSR_CARRIAGEWAY_COST_MULTIPLIER", () => {
+  it("is a finite multiplier of at least 1, so it never rewards carriageway", () => {
+    expect(Number.isFinite(CSR_CARRIAGEWAY_COST_MULTIPLIER)).toBe(true);
+    expect(CSR_CARRIAGEWAY_COST_MULTIPLIER).toBeGreaterThanOrEqual(1);
+  });
+
+  it("keeps the stairs multiplier finite and at least 1", () => {
+    expect(Number.isFinite(CSR_STAIRS_COST_MULTIPLIER)).toBe(true);
+    expect(CSR_STAIRS_COST_MULTIPLIER).toBeGreaterThanOrEqual(1);
+  });
 });

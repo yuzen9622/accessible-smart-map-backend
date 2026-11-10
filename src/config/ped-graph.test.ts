@@ -62,10 +62,16 @@ describe("getPedGraphConfig", () => {
 });
 
 describe("isWithinPedGraphCoverage", () => {
-  it("includes Taipei bbox boundaries and rejects outside or non-finite coordinates", () => {
-    expect(isWithinPedGraphCoverage({ lat: 24.95, lng: 121.43 })).toBe(true);
-    expect(isWithinPedGraphCoverage({ lat: 25.22, lng: 121.68 })).toBe(true);
-    expect(isWithinPedGraphCoverage({ lat: 25.23, lng: 121.55 })).toBe(false);
+  it("covers Taiwan including outlying islands and rejects outside or non-finite coordinates", () => {
+    expect(isWithinPedGraphCoverage({ lat: 25.04, lng: 121.55 })).toBe(true); // Taipei
+    expect(isWithinPedGraphCoverage({ lat: 24.15, lng: 120.68 })).toBe(true); // Taichung
+    expect(isWithinPedGraphCoverage({ lat: 22.63, lng: 120.3 })).toBe(true); // Kaohsiung
+    expect(isWithinPedGraphCoverage({ lat: 24.43, lng: 118.32 })).toBe(true); // Kinmen
+    expect(isWithinPedGraphCoverage({ lat: 22.04, lng: 121.55 })).toBe(true); // Lanyu
+    expect(isWithinPedGraphCoverage({ lat: 21.8, lng: 118.0 })).toBe(true);
+    expect(isWithinPedGraphCoverage({ lat: 26.5, lng: 122.1 })).toBe(true);
+    expect(isWithinPedGraphCoverage({ lat: 26.51, lng: 121.55 })).toBe(false);
+    expect(isWithinPedGraphCoverage({ lat: 26.2, lng: 127.68 })).toBe(false); // Okinawa
     expect(isWithinPedGraphCoverage({ lat: 25.04, lng: Number.NaN })).toBe(
       false,
     );

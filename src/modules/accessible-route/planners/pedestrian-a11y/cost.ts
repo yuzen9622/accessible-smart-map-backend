@@ -1,3 +1,4 @@
+import { CSR_CARRIAGEWAY_COST_MULTIPLIER } from "../../../../config/routing";
 import {
   EDGE_FLAG,
   EDGE_TYPE,
@@ -71,7 +72,7 @@ export interface CostProfile {
   name: "wheelchair" | "elderly" | "visual_impaired" | "normal";
   walkSpeedMps: number;
   relaxationLevel: number;
-  /** Prefer less non-exclusive/unknown ground before comparing normal cost. */
+  /** Weight non-exclusive/unknown ground by CSR_CARRIAGEWAY_COST_MULTIPLIER in the search cost. */
   preferSidewalks?: boolean;
   /**
    * Multiplier on STEPS / INDOOR_STAIRS for a non-wheelchair profile that
@@ -463,11 +464,16 @@ export function edgeCost(
 }
 
 /**
- * Conservative non-exclusive-ground priority cost, including unknown roles.
- * This is a planning upper bound, not a surveyed carriageway measurement.
- * Explicit pedestrian and indoor passage types are the only zero-cost roles.
+ * Conservative non-exclusive-ground metres, including unknown roles. This is a
+ * planning upper bound, not a surveyed carriageway measurement. Explicit
+ * pedestrian and indoor passage types are the only zero roles.
+ *
+ * @param graph CSR pedestrian graph.
+ * @param attrIdx Edge attribute index.
+ * @param profile Requested accessibility cost profile.
+ * @returns Unrounded carriageway metres the edge counts as.
  */
-export function edgeCarriagewayMillimetres(
+export function edgeCarriagewayMetres(
   graph: PedGraph,
   attrIdx: number,
   profile: CostProfile,
@@ -491,5 +497,50 @@ export function edgeCarriagewayMillimetres(
     case EDGE_TYPE.INDOOR_EXIT_GATE:
       return 0;
   }
-  return Math.round(baseCost(graph, attrIdx, profile) * 1000);
+  return baseCost(graph, attrIdx, profile);
+}
+
+/**
+ * Reported form of {@link edgeCarriagewayMetres}; the search uses the
+ * unrounded metres.
+ *
+ * @param graph CSR pedestrian graph.
+ * @param attrIdx Edge attribute index.
+ * @param profile Requested accessibility cost profile.
+ * @returns Carriageway millimetres, rounded per edge.
+ */
+export function edgeCarriagewayMillimetres(
+  graph: PedGraph,
+  attrIdx: number,
+  profile: CostProfile,
+): number {
+  return Math.round(edgeCarriagewayMetres(graph, attrIdx, profile) * 1000);
+}
+
+/**
+ * Search cost of one edge: {@link edgeCost}, plus, for a profile that prefers
+ * sidewalks, the extra weight on non-pedestrian ground. See
+ * CSR_CARRIAGEWAY_COST_MULTIPLIER for what this bounds.
+ *
+ * @param graph CSR pedestrian graph.
+ * @param attrIdx Edge attribute index.
+ * @param profile Requested accessibility cost profile.
+ * @param fromNode Dense node index of the edge's start endpoint.
+ * @param toNode Dense node index of the edge's end endpoint.
+ * @returns A finite weighted-metre cost or INFEASIBLE.
+ */
+export function searchEdgeCost(
+  graph: PedGraph,
+  attrIdx: number,
+  profile: CostProfile,
+  fromNode: number,
+  toNode: number,
+): number {
+  const cost = edgeCost(graph, attrIdx, profile, fromNode, toNode);
+  if (!Number.isFinite(cost) || !profile.preferSidewalks) return cost;
+  return (
+    cost +
+    (CSR_CARRIAGEWAY_COST_MULTIPLIER - 1) *
+      edgeCarriagewayMetres(graph, attrIdx, profile)
+  );
 }

@@ -751,8 +751,9 @@ describe("accessible-route OpenAPI", () => {
       "OTP 一般行人探索候選（不使用 Valhalla）",
     );
     expect(operation.description).toContain(
-      "起點、所有中途點與終點皆在台北行人圖涵蓋範圍內",
+      "起點、所有中途點與終點皆在 CSR 行人圖涵蓋範圍（台灣本島與離島）內",
     );
+    expect(operation.description).toContain("仍趕得上原班車時才替換");
     expect(operation.description).toContain("CSR 不可用或拓樸無法連通");
     expect(operation.description).toContain(
       "是否執行人行道優先政策以 walkPolicy 欄位為準",
@@ -766,7 +767,9 @@ describe("accessible-route OpenAPI", () => {
     expect(operation.description).toContain(
       "travelMode=transit（預設）以 OTP2 為主引擎",
     );
-    expect(operation.description).toContain("含乘車段的行程不替換其 WALK legs");
+    expect(operation.description).toContain(
+      "同站軌道轉乘與 CSR 無法規劃的步行段維持 OTP2 結果",
+    );
     expect(operation.description).toContain(
       "OTP2 回傳的全 WALK 候選會另套用純步行選路政策",
     );

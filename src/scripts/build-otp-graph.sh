@@ -473,14 +473,14 @@ else
   if [ -f "$DEM_DIR/taiwan-dtm-20m.tif" ]; then
     CSR_DEM_ARGS=(--dem-file "$DEM_DIR/taiwan-dtm-20m.tif")
   fi
-  python3 "$SCRIPT_DIR/build-ped-graph.py" --pbf "$CANDIDATE_PBF" --bbox taipei \
+  python3 "$SCRIPT_DIR/build-ped-graph.py" --pbf "$CANDIDATE_PBF" --bbox taiwan \
     ${CSR_DEM_ARGS[@]+"${CSR_DEM_ARGS[@]}"} | tee "$CSR_BUILD_LOG" ||
     die "CSR pedestrian graph build failed — keeping old OTP and CSR"
   CSR_VERSION_ID="$(sed -n 's/^\[build-ped-graph\] graph_version_id=\([0-9][0-9]*\)$/\1/p' "$CSR_BUILD_LOG" | tail -n 1)"
   [ -n "$CSR_VERSION_ID" ] ||
     die "build-ped-graph reported no graph_version_id — keeping old OTP and CSR"
   log "CSR candidate version $CSR_VERSION_ID: injecting indoor pathways and kerb mappings"
-  python3 "$SCRIPT_DIR/inject-ped-indoor-graph.py" --version-id "$CSR_VERSION_ID" --bbox taipei ||
+  python3 "$SCRIPT_DIR/inject-ped-indoor-graph.py" --version-id "$CSR_VERSION_ID" --bbox taiwan ||
     die "CSR indoor injection failed for version $CSR_VERSION_ID — keeping old OTP and CSR"
   npx dotenvx run -- ts-node "$SCRIPT_DIR/import-taipei-ramps.ts" --mappings-only --version-id "$CSR_VERSION_ID" ||
     die "CSR ramp mappings failed for version $CSR_VERSION_ID — keeping old OTP and CSR"

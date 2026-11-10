@@ -3,6 +3,7 @@
 
 import importlib.util
 import json
+import math
 import subprocess
 import sys
 import tempfile
@@ -71,6 +72,32 @@ class EligibleWayTests(unittest.TestCase):
         ):
             with self.subTest(tags=tags):
                 self.assertFalse(MODULE.should_include_way(tags))
+
+    def test_includes_walkable_trunks_and_excludes_motor_only_trunks(self):
+        for tags in (
+            {"highway": "trunk"},
+            {"highway": "trunk", "foot": "yes"},
+            {"highway": "trunk", "bridge": "yes", "foot": "yes"},
+            {"highway": "trunk_link", "foot": "designated"},
+        ):
+            with self.subTest(tags=tags):
+                self.assertTrue(MODULE.should_include_way(tags))
+        for tags in (
+            {"highway": "trunk", "motorroad": "yes"},
+            {"highway": "trunk", "motorroad": "yes", "foot": "yes"},
+            {"highway": "trunk", "expressway": "yes"},
+            {"highway": "trunk", "foot": "no"},
+            {"highway": "trunk", "access": "private"},
+            {"highway": "trunk", "sidewalk": "no"},
+            {"highway": "trunk_link"},
+            {"highway": "trunk_link", "foot": "no"},
+        ):
+            with self.subTest(tags=tags):
+                self.assertFalse(MODULE.should_include_way(tags))
+
+    def test_trunk_edges_get_their_own_edge_types(self):
+        self.assertEqual(MODULE.edge_type_for_tags({"highway": "trunk"}), 27)
+        self.assertEqual(MODULE.edge_type_for_tags({"highway": "trunk_link"}), 28)
 
     def test_eligibility_uses_tags_not_way_names(self):
         self.assertTrue(
@@ -150,9 +177,9 @@ class GeometryAndDirectionTests(unittest.TestCase):
             {"highway": "footway"},
             (
                 way_node(1, 121.5500, 25.0500),
-                way_node(2, 121.5503, 25.0500),
-                way_node(3, 121.5506, 25.0503),
-                way_node(4, 121.5509, 25.0500),
+                way_node(2, 121.5501, 25.0500),
+                way_node(3, 121.5502, 25.0501),
+                way_node(4, 121.5503, 25.0500),
             ),
         )
         pieces = MODULE.split_way_into_segments(way, {1: 1, 2: 2, 3: 1, 4: 1})
@@ -161,6 +188,76 @@ class GeometryAndDirectionTests(unittest.TestCase):
             [(1, 2), (2, 4)],
         )
         self.assertEqual(len(pieces[1].coordinates), 3)
+
+    def test_cuts_long_runs_at_existing_vertices_only(self):
+        # Vertices about 25 m apart (0.00025 deg longitude at 25 N); none shared.
+        nodes = tuple(
+            way_node(index + 1, 121.5500 + 0.00025 * index, 25.0500)
+            for index in range(6)
+        )
+        way = MODULE.WalkWay(101, {"highway": "footway", "surface": "asphalt"}, nodes)
+        pieces = MODULE.split_way_into_segments(way, {node.osm_id: 1 for node in nodes})
+        self.assertEqual(
+            [(piece.from_osm_node, piece.to_osm_node) for piece in pieces],
+            [(1, 3), (3, 5), (5, 6)],
+        )
+        for piece in pieces:
+            self.assertLess(MODULE.polyline_length_m(piece.coordinates), 2 * MODULE.MAX_SEGMENT_M)
+            self.assertEqual(piece.tags, way.tags)
+            self.assertEqual(piece.osm_way_id, 101)
+        # A straight run with no intermediate vertex stays one piece.
+        straight = MODULE.WalkWay(
+            102,
+            {"highway": "footway"},
+            (way_node(20, 121.5500, 25.0500), way_node(21, 121.5520, 25.0500)),
+        )
+        self.assertEqual(
+            len(MODULE.split_way_into_segments(straight, {20: 1, 21: 1})), 1
+        )
+
+    def test_densifies_long_straight_spans_with_synthetic_vertices(self):
+        # One 200 m straight span (0.002 deg longitude at 25 N) and one 10 m span.
+        way = MODULE.WalkWay(
+            103,
+            {"highway": "footway", "footway": "sidewalk"},
+            (
+                way_node(30, 121.5500, 25.0500),
+                way_node(31, 121.5520, 25.0500),
+                way_node(32, 121.5521, 25.0500),
+            ),
+        )
+        ids = iter(range(MODULE.SYNTHETIC_NODE_ID_START, MODULE.SYNTHETIC_NODE_ID_START + 100))
+        dense = MODULE.densify_walk_way(way, ids)
+        self.assertEqual([n.osm_id for n in dense.nodes[:1]], [30])
+        self.assertEqual(dense.nodes[-2].osm_id, 31)
+        self.assertEqual(dense.nodes[-1].osm_id, 32)
+        synthetic = [n for n in dense.nodes if MODULE.is_synthetic_node_id(n.osm_id)]
+        span = MODULE.haversine_m((121.5500, 25.0500), (121.5520, 25.0500))
+        self.assertEqual(len(synthetic), math.ceil(span / MODULE.MAX_SEGMENT_M) - 1)
+        coords = [(n.lon, n.lat) for n in dense.nodes]
+        for a, b in zip(coords, coords[1:]):
+            self.assertLessEqual(MODULE.haversine_m(a, b), MODULE.MAX_SEGMENT_M + 1e-6)
+        self.assertAlmostEqual(
+            MODULE.polyline_length_m(coords),
+            MODULE.polyline_length_m(tuple((n.lon, n.lat) for n in way.nodes)),
+            places=6,
+        )
+        self.assertEqual(dense.tags, way.tags)
+        # Already short spans are returned unchanged.
+        short = MODULE.WalkWay(104, {"highway": "footway"}, way.nodes[1:])
+        self.assertIs(MODULE.densify_walk_way(short, ids), short)
+
+    def test_rejects_real_node_ids_inside_the_synthetic_range(self):
+        way = MODULE.WalkWay(
+            105,
+            {"highway": "footway"},
+            (
+                way_node(MODULE.SYNTHETIC_NODE_ID_START, 121.55, 25.05),
+                way_node(1, 121.5501, 25.05),
+            ),
+        )
+        with self.assertRaises(SystemExit):
+            MODULE.densify_walk_way(way, iter(range(10**12, 10**12 + 5)))
 
     def test_general_walking_is_bidirectional_and_reverses_geometry(self):
         edges = MODULE.build_directed_edges([segment()])

@@ -30,12 +30,13 @@ export interface PedGraphConfig {
 }
 
 /**
- * CSR coverage bbox, mirroring `TAIPEI_BBOX` in src/scripts/build-ped-graph.py.
- * Requests reaching outside it are planned by OTP2 as the primary engine, not
- * as a degraded fallback: the CSR graph simply does not describe that ground.
+ * CSR coverage bbox, mirroring `TAIWAN_BBOX` in src/scripts/build-ped-graph.py
+ * (the graph build in build-otp-graph.sh uses `--bbox taiwan`). Requests
+ * reaching outside it are planned by OTP2 as the primary engine, not as a
+ * degraded fallback: the CSR graph simply does not describe that ground.
  */
 export const PED_GRAPH_COVERAGE_BBOX: PedGraphCoverageBbox = [
-  121.43, 24.95, 121.68, 25.22,
+  118.0, 21.8, 122.1, 26.5,
 ];
 
 /**

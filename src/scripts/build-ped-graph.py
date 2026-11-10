@@ -9,6 +9,7 @@ import hashlib
 import importlib.util
 import inspect
 import json
+import itertools
 import math
 import numbers
 import os
@@ -16,7 +17,7 @@ import random
 import re
 import sys
 from collections import Counter, defaultdict, deque
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from operator import methodcaller
@@ -24,7 +25,9 @@ from pathlib import Path
 from typing import Any
 
 TAIPEI_BBOX = (121.43, 24.95, 121.68, 25.22)
-BBOXES = {"taipei": TAIPEI_BBOX}
+# Main island plus Penghu, Kinmen, Matsu, Green Island and Lanyu.
+TAIWAN_BBOX = (118.0, 21.8, 122.1, 26.5)
+BBOXES = {"taipei": TAIPEI_BBOX, "taiwan": TAIWAN_BBOX}
 INCLUDED_HIGHWAYS = frozenset(
     {
         "footway",
@@ -46,6 +49,8 @@ INCLUDED_HIGHWAYS = frozenset(
     }
 )
 EXPRESSWAY_HIGHWAYS = frozenset({"motorway", "motorway_link"})
+# Included only when trunk_allows_pedestrians() holds.
+TRUNK_HIGHWAYS = frozenset({"trunk", "trunk_link"})
 DENIED_ACCESS_VALUES = frozenset({"no", "private"})
 EXPLICIT_PEDESTRIAN_PERMISSION_VALUES = frozenset({"yes", "designated", "permissive"})
 FORWARD_ONEWAY_VALUES = frozenset({"yes", "true", "1"})
@@ -65,6 +70,13 @@ INFERRED_WHEELCHAIR_SOURCES = frozenset({"taipei_kerb_ramp", "sidewalk_alongside
 # its attributes; keep weaker matches as provenance for review only.
 SIDEWALK_MIN_ATTRIBUTE_OVERLAP_RATIO = 0.8
 CONNECTIVITY_SAMPLE_SIZE = 100
+# Longest outdoor piece before a cut at the next existing vertex; keeps every
+# point on a mapped way within the runtime's 50 m endpoint-snap tolerance.
+MAX_SEGMENT_M = 40.0
+# Interpolated vertices on long straight spans get synthetic node ids from this
+# reserved range, far above any real OSM node id (about 1.3e10 in 2026) and
+# below NODE_ID_SCALE.
+SYNTHETIC_NODE_ID_START = 900_000_000_000
 CONNECTIVITY_MIN_DISTANCE_M = 300.0
 CONNECTIVITY_MAX_DISTANCE_M = 3000.0
 CONNECTIVITY_SEED = 20260820
@@ -88,6 +100,8 @@ EDGE_TYPE_CODES = {
     "primary": 17,
     "primary_link": 18,
     "elevator": 19,
+    "trunk": 27,
+    "trunk_link": 28,
 }
 # Explicitly permitted cycleways use the existing path-like edge type rather than
 # falling through to the unknown-edge code.
@@ -456,6 +470,26 @@ def has_explicit_pedestrian_permission(tags: Mapping[str, str]) -> bool:
     return normalized_tag(tags.get("foot")) in EXPLICIT_PEDESTRIAN_PERMISSION_VALUES
 
 
+def trunk_allows_pedestrians(tags: Mapping[str, str]) -> bool:
+    """Return whether a trunk-class way is walkable rather than a motor-only 快速公路.
+
+    Most Taiwan trunk ways are expressways tagged motorroad=yes (1,410 of 2,175 on
+    2026-11-09), so a trunk is kept only without motorroad/expressway marks, and
+    a trunk_link (overwhelmingly an expressway ramp) only with explicit foot
+    permission. Shared foot/access denial and expressway hardening still apply
+    in should_include_way.
+    """
+    highway = normalized_tag(tags.get("highway"))
+    if highway == "trunk_link":
+        return (
+            normalized_tag(tags.get("foot")) in EXPLICIT_PEDESTRIAN_PERMISSION_VALUES
+        )
+    return (
+        normalized_tag(tags.get("motorroad")) not in TRUE_VALUES
+        and normalized_tag(tags.get("expressway")) not in TRUE_VALUES
+    )
+
+
 def should_include_way(tags: Mapping[str, str]) -> bool:
     """Apply WP-2's walking-way eligibility rules using the shared expressway hardener."""
     highway = normalized_tag(tags.get("highway"))
@@ -463,6 +497,8 @@ def should_include_way(tags: Mapping[str, str]) -> bool:
         return has_explicit_pedestrian_permission(tags)
     if highway in EXPRESSWAY_HIGHWAYS or pedestrian_access_is_denied(tags):
         return False
+    if highway in TRUNK_HIGHWAYS:
+        return trunk_allows_pedestrians(tags)
     return highway in INCLUDED_HIGHWAYS
 
 
@@ -557,6 +593,42 @@ def polyline_intersects_bbox(
     )
 
 
+def densify_walk_way(way: WalkWay, next_synthetic_id: Iterator[int]) -> WalkWay:
+    """Insert evenly spaced vertices into straight spans longer than MAX_SEGMENT_M.
+
+    Compiled MOI sidewalks are often a few hundred metres of straight line with
+    no intermediate vertex, so cutting at existing vertices cannot bring every
+    point of the line within the runtime's endpoint-snap tolerance. Synthetic
+    vertices carry no tags and are never shared, so they only add cut points.
+    """
+    if len(way.nodes) < 2:
+        return way
+    nodes: list[WayNode] = [way.nodes[0]]
+    for previous, node in zip(way.nodes, way.nodes[1:]):
+        if max(previous.osm_id, node.osm_id) >= SYNTHETIC_NODE_ID_START:
+            raise SystemExit(
+                f"OSM node id reaches the synthetic range in way {way.osm_id}"
+            )
+        span_m = haversine_m((previous.lon, previous.lat), (node.lon, node.lat))
+        pieces = math.ceil(span_m / MAX_SEGMENT_M)
+        for step in range(1, pieces):
+            fraction = step / pieces
+            nodes.append(
+                WayNode(
+                    next(next_synthetic_id),
+                    previous.lon + (node.lon - previous.lon) * fraction,
+                    previous.lat + (node.lat - previous.lat) * fraction,
+                )
+            )
+        nodes.append(node)
+    return way if len(nodes) == len(way.nodes) else WalkWay(way.osm_id, way.tags, tuple(nodes))
+
+
+def is_synthetic_node_id(osm_node_id: int) -> bool:
+    """Return whether a node id was allocated by densify_walk_way."""
+    return osm_node_id >= SYNTHETIC_NODE_ID_START
+
+
 def count_way_node_references(ways: Sequence[WalkWay]) -> Counter[int]:
     """Count each OSM node once per eligible way, as required for intersection cuts."""
     counts: Counter[int] = Counter()
@@ -568,7 +640,14 @@ def count_way_node_references(ways: Sequence[WalkWay]) -> Counter[int]:
 def split_way_into_segments(
     way: WalkWay, reference_counts: Mapping[int, int]
 ) -> list[Segment]:
-    """Cut one way at its endpoints and at nodes shared by at least two eligible ways."""
+    """Cut one way at its endpoints, at nodes shared by at least two eligible
+    ways, and at existing vertices so no piece runs past MAX_SEGMENT_M.
+
+    The runtime snaps a request point only to a graph node within its tolerance,
+    so a long uncut segment leaves points right beside the line unroutable. The
+    extra cuts use real OSM vertices only; a straight run without vertices stays
+    one piece.
+    """
     if len(way.nodes) < 2:
         return []
     cut_indexes = {0, len(way.nodes) - 1}
@@ -577,6 +656,15 @@ def split_way_into_segments(
         for index, node in enumerate(way.nodes)
         if reference_counts.get(node.osm_id, 0) >= 2
     )
+    run_m = 0.0
+    for index in range(1, len(way.nodes) - 1):
+        previous, node = way.nodes[index - 1], way.nodes[index]
+        run_m += haversine_m((previous.lon, previous.lat), (node.lon, node.lat))
+        if index in cut_indexes:
+            run_m = 0.0
+        elif run_m >= MAX_SEGMENT_M:
+            cut_indexes.add(index)
+            run_m = 0.0
     ordered_cuts = sorted(cut_indexes)
     segments: list[Segment] = []
     for start_index, end_index in zip(ordered_cuts, ordered_cuts[1:], strict=False):
@@ -1142,7 +1230,11 @@ def build_node_records(
             tactile_paving=tactile_paving,
             traffic_signal=traffic_signal,
             audible_signal=audible_signal,
-            source_ref=f"osm:node/{osm_node_id}",
+            source_ref=(
+                f"interpolated:{osm_node_id}"
+                if is_synthetic_node_id(osm_node_id)
+                else f"osm:node/{osm_node_id}"
+            ),
             attr_meta=meta,
         )
     return records
@@ -1301,6 +1393,13 @@ def build_graph(
     if not ways:
         raise SystemExit(f"No eligible walking ways found in bbox {bbox}")
     reference_counts = count_way_node_references(ways)
+    synthetic_ids = itertools.count(SYNTHETIC_NODE_ID_START)
+    ways = [densify_walk_way(way, synthetic_ids) for way in ways]
+    print(
+        "[build-ped-graph] interpolated_vertices="
+        f"{next(synthetic_ids) - SYNTHETIC_NODE_ID_START}",
+        flush=True,
+    )
     segments = [
         segment
         for way in ways

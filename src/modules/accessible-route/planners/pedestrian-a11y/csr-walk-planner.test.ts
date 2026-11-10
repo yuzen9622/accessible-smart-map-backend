@@ -5,6 +5,7 @@ vi.mock("./graph-runtime", () => ({
   getPedGraphClient: vi.fn(),
 }));
 
+import { CSR_STAIRS_COST_MULTIPLIER } from "../../../../config/routing";
 import { planCsrWalkRoute, isTopologyReachable } from "./csr-walk-planner";
 import type { PedGraphQueryable } from "./graph-loader";
 import { getPedGraphClient, getPedGraphRuntime } from "./graph-runtime";
@@ -270,11 +271,11 @@ afterEach(() => {
 });
 
 describe("planCsrWalkRoute coverage and enablement", () => {
-  it("skips CSR as outside coverage when a point is outside the Taipei bbox", async () => {
+  it("skips CSR as outside coverage when a point is outside the Taiwan bbox", async () => {
     serveGraph(corridorGraph());
 
     const result = await planCsrWalkRoute(
-      [originPoint, { lat: 24.15, lng: 120.68 }],
+      [originPoint, { lat: 26.2, lng: 127.68 }],
       { mode: "normal", avoidStairs: true },
     );
 
@@ -1018,6 +1019,55 @@ describe("planCsrWalkRoute mode profiles", () => {
       expect(result.status).toBe("ok");
       if (result.status !== "ok") return;
       expect(result.plans[0].diagnostics.relaxationLevel).toBe(0);
+    },
+  );
+
+  it.each(["normal", "elderly", "visual_impaired"] as const)(
+    "weights stairs for %s so a level detour within the stairs multiplier wins",
+    async (mode) => {
+      // Steps A-C are 20 m (200 weighted at x10); the level path A-B-C is
+      // 120 m, so it wins only because stairs are weighted.
+      expect(CSR_STAIRS_COST_MULTIPLIER).toBe(10);
+      const eastLng = TAIPEI_LNG + 0.0004;
+      serveGraph(
+        graphFromEdges({
+          nodeLon: [TAIPEI_LNG, eastLng, TAIPEI_LNG],
+          nodeLat: [A_LAT, B_LAT, C_LAT],
+          edges: [
+            { from: 0, to: 2, lengthM: 20, edgeType: EDGE_TYPE.STEPS },
+            { from: 2, to: 0, lengthM: 20, edgeType: EDGE_TYPE.STEPS },
+            { from: 0, to: 1, lengthM: 60, edgeType: EDGE_TYPE.SIDEWALK },
+            { from: 1, to: 0, lengthM: 60, edgeType: EDGE_TYPE.SIDEWALK },
+            { from: 1, to: 2, lengthM: 60, edgeType: EDGE_TYPE.SIDEWALK },
+            { from: 2, to: 1, lengthM: 60, edgeType: EDGE_TYPE.SIDEWALK },
+          ],
+        }),
+      );
+      vi.mocked(getPedGraphClient).mockResolvedValue(
+        geometryClient({
+          "1000": lineString([
+            [TAIPEI_LNG, A_LAT],
+            [TAIPEI_LNG, C_LAT],
+          ]),
+          "1002": lineString([
+            [TAIPEI_LNG, A_LAT],
+            [eastLng, B_LAT],
+          ]),
+          "1004": lineString([
+            [eastLng, B_LAT],
+            [TAIPEI_LNG, C_LAT],
+          ]),
+        }),
+      );
+
+      const result = await planCsrWalkRoute([originPoint, destinationPoint], {
+        mode,
+      });
+
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.plans[0].steps.some((step) => step.stairs)).toBe(false);
+      expect(result.plans[0].distanceM).toBeGreaterThan(100);
     },
   );
 

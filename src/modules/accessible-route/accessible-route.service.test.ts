@@ -168,7 +168,7 @@ import {
 } from "./accessible-route.service";
 import { registerRouteIntentParser } from "./route-intent.port";
 import { normalizeWalkLegSteps } from "../../utils/nav-instructions-engine";
-import { attachInternalSchedule } from "./route-schedule";
+import { attachBusSchedule, attachInternalSchedule } from "./route-schedule";
 import {
   planValhallaRoute,
   ValhallaRoutingError,
@@ -1705,8 +1705,18 @@ describe("planAccessibleRouteFromRequest walk mode CSR selection", () => {
     expect(vi.mocked(planValhallaRoute)).not.toHaveBeenCalled();
   });
 
-  it("returns distinct CSR alternatives with lower-quality paths ranked after the primary", async () => {
-    const primary = csrWalkPlan();
+  it("ranks CSR alternatives by generalized cost, not by carriageway first", async () => {
+    // The primary walks more carriageway but has the lowest search cost; the
+    // search already weighted those metres, so re-ranking on carriageway
+    // would undo its detour bound.
+    const primary = {
+      ...csrWalkPlan(),
+      walkPolicy: {
+        ...csrWalkPlan().walkPolicy,
+        carriagewayMillimetres: 5000,
+        generalizedCost: 800,
+      },
+    };
     const alternative = {
       ...csrWalkPlan(),
       polyline: [
@@ -1714,7 +1724,11 @@ describe("planAccessibleRouteFromRequest walk mode CSR selection", () => {
         [121.56, 25.03],
         [121.55, 25.03],
       ] as [number, number][],
-      walkPolicy: { ...primary.walkPolicy, carriagewayMillimetres: 1000 },
+      walkPolicy: {
+        ...primary.walkPolicy,
+        carriagewayMillimetres: 0,
+        generalizedCost: 900,
+      },
     };
     const other = {
       ...csrWalkPlan(),
@@ -1723,7 +1737,11 @@ describe("planAccessibleRouteFromRequest walk mode CSR selection", () => {
         [121.55, 25.04],
         [121.55, 25.03],
       ] as [number, number][],
-      walkPolicy: { ...primary.walkPolicy, carriagewayMillimetres: 2000 },
+      walkPolicy: {
+        ...primary.walkPolicy,
+        carriagewayMillimetres: 1000,
+        generalizedCost: 1000,
+      },
     };
     vi.mocked(planCsrWalkRoute).mockResolvedValue({
       status: "ok",
@@ -1735,10 +1753,15 @@ describe("planAccessibleRouteFromRequest walk mode CSR selection", () => {
 
     expect(result.ok).toBe(true);
     expect(
-      okData(result).routes.map(
-        (route) => route.walkPolicy?.carriagewayMillimetres,
-      ),
-    ).toEqual([0, 1000, 2000]);
+      okData(result).routes.map((route) => [
+        route.walkPolicy?.generalizedCost,
+        route.walkPolicy?.carriagewayMillimetres,
+      ]),
+    ).toEqual([
+      [800, 5000],
+      [900, 0],
+      [1000, 1000],
+    ]);
     expect(
       new Set(okData(result).routes.map((route) => route.routeId)).size,
     ).toBe(3);
@@ -3570,9 +3593,189 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
     });
   });
 
+  describe("transit walk legs re-planned on CSR", () => {
+    const accessStart: [number, number] = [121.5762, 24.9868];
+    const egressStart: [number, number] = [121.517, 25.0478];
+    const transferStart: [number, number] = [121.53, 25.03];
+    /** Bus leaves 10 min after the route start; arrives after 30 min. */
+    const scheduledBusRoute = (busLeavesAfterMs = 10 * 60_000) => {
+      const raw = structuredClone(rooseveltBusRoute) as any;
+      const start = Date.now() + 60_000;
+      const bus = raw.legs[1];
+      attachInternalSchedule(raw, start, start + 34 * 60_000, false);
+      attachBusSchedule(
+        bus,
+        start + busLeavesAfterMs,
+        start + 3 * 60_000,
+        "t1",
+      );
+      Object.defineProperty(bus, "_scheduledArrivalTime", {
+        value: start + 30 * 60_000,
+        writable: true,
+      });
+      return raw;
+    };
+    const sameAs = (
+      point: { lat: number; lng: number },
+      at: [number, number],
+    ) =>
+      Math.abs(point.lng - at[0]) < 1e-9 && Math.abs(point.lat - at[1]) < 1e-9;
+    /** CSR answers 800 m walks; the access walk takes `accessS` seconds. */
+    const mockCsrWalks = (accessS = 300) =>
+      vi.mocked(planCsrWalkRoute).mockImplementation(async (points) => {
+        const first = points[0];
+        const last = points[points.length - 1];
+        return {
+          status: "ok",
+          plans: [
+            {
+              ...csrWalkPlan([first.lng, first.lat], [last.lng, last.lat]),
+              durationS: sameAs(first, accessStart) ? accessS : 300,
+            },
+          ],
+        };
+      });
+    const request = {
+      travelMode: "transit" as const,
+      origin: nccuOrigin,
+      destination: mainStationDest,
+    };
+    const walkDistances = (
+      res: Awaited<ReturnType<typeof planAccessibleRouteFromRequest>>,
+    ) =>
+      okData(res)
+        .routes.find((route) => route.legs.some((leg) => leg.type === "BUS"))!
+        .legs.filter((leg) => leg.type === "WALK")
+        .map((leg) => leg.distanceM);
+
+    it("replaces the access and egress walks when the rider still catches the bus", async () => {
+      vi.mocked(planOtpRouteDetailed).mockResolvedValue(
+        otpTransitOk([scheduledBusRoute()] as any),
+      );
+      mockCsrWalks(300);
+      const res = await planAccessibleRouteFromRequest(request);
+      expect(res.ok).toBe(true);
+      expect(walkDistances(res)).toEqual([800, 800]);
+    });
+
+    it("keeps OTP's access walk when the CSR walk would miss the bus", async () => {
+      vi.mocked(planOtpRouteDetailed).mockResolvedValue(
+        otpTransitOk([scheduledBusRoute(10 * 60_000)] as any),
+      );
+      mockCsrWalks(15 * 60);
+      const res = await planAccessibleRouteFromRequest(request);
+      expect(res.ok).toBe(true);
+      expect(walkDistances(res)).toEqual([150, 800]);
+    });
+
+    it.each([
+      "fare_policy_blocked",
+      "outside_coverage",
+      "topology_disconnected",
+    ] as const)("keeps OTP's walks when CSR answers %s", async (status) => {
+      vi.mocked(planOtpRouteDetailed).mockResolvedValue(
+        otpTransitOk([scheduledBusRoute()] as any),
+      );
+      vi.mocked(planCsrWalkRoute).mockResolvedValue({ status });
+      const res = await planAccessibleRouteFromRequest(request);
+      expect(res.ok).toBe(true);
+      expect(walkDistances(res)).toEqual([150, 250]);
+    });
+
+    it("does not re-plan a same-station rail transfer", async () => {
+      const raw = scheduledBusRoute() as any;
+      const metro = (from: string, to: string) => ({
+        type: "METRO",
+        departureStation: from,
+        arrivalStation: to,
+        departureStationUid: from,
+        arrivalStationUid: to,
+        departureStationA11y: [],
+        arrivalStationA11y: [],
+        facilityHighlights: [],
+        polyline: [transferStart, transferStart],
+      });
+      raw.legs.splice(
+        2,
+        0,
+        metro("BL01", "BL12"),
+        {
+          type: "WALK",
+          from: "BL12",
+          to: "BL12",
+          distanceM: 120,
+          minutesEst: 2,
+          polyline: [transferStart, [121.531, 25.031]],
+          a11yFacilities: [],
+        },
+        metro("BL12", "BR01"),
+      );
+      vi.mocked(planOtpRouteDetailed).mockResolvedValue(
+        otpTransitOk([raw] as any),
+      );
+      mockCsrWalks(300);
+      await planAccessibleRouteFromRequest(request);
+      const starts = vi
+        .mocked(planCsrWalkRoute)
+        .mock.calls.map(([points]) => points[0]);
+      expect(starts.some((point) => sameAs(point, transferStart))).toBe(false);
+      expect(starts.some((point) => sameAs(point, egressStart))).toBe(true);
+    });
+
+    it("leaves transit walks to OTP when the walk planner is OTP", async () => {
+      process.env.ROUTE_WALK_PLANNER = "otp";
+      try {
+        vi.mocked(planOtpRouteDetailed).mockResolvedValue(
+          otpTransitOk([scheduledBusRoute()] as any),
+        );
+        mockCsrWalks(300);
+        const res = await planAccessibleRouteFromRequest(request);
+        expect(res.ok).toBe(true);
+        expect(vi.mocked(planCsrWalkRoute)).not.toHaveBeenCalled();
+        expect(walkDistances(res)).toEqual([150, 250]);
+      } finally {
+        delete process.env.ROUTE_WALK_PLANNER;
+      }
+    });
+  });
+
   describe("short trips: walking competes inside the transit answer", () => {
     const taipeiStation = { latitude: 25.0478, longitude: 121.517 };
     const nationalMuseum = { latitude: 25.0429, longitude: 121.515 };
+    // These tests rank the whole-trip walk option. Transit walk legs are also
+    // re-planned on CSR in CSR mode; that has its own describe, so here only
+    // the whole-trip call (both request endpoints) gets the mocked answer.
+    const requestEndpoints = [
+      taipeiStation,
+      nationalMuseum,
+      nccuOrigin,
+      mainStationDest,
+    ];
+    const isRequestEndpoint = (point: { lat: number; lng: number }) =>
+      requestEndpoints.some(
+        (endpoint) =>
+          Math.abs(endpoint.latitude - point.lat) < 1e-9 &&
+          Math.abs(endpoint.longitude - point.lng) < 1e-9,
+      );
+    const isWholeTripCall = (points: readonly { lat: number; lng: number }[]) =>
+      points.length >= 2 &&
+      isRequestEndpoint(points[0]) &&
+      isRequestEndpoint(points[points.length - 1]);
+    const wholeTripCsrCalls = () =>
+      vi
+        .mocked(planCsrWalkRoute)
+        .mock.calls.filter(([points]) => isWholeTripCall(points));
+    const mockWholeTripCsr = (value: unknown) =>
+      vi
+        .mocked(planCsrWalkRoute)
+        .mockImplementation(async (points) =>
+          isWholeTripCall(points)
+            ? (value as Awaited<ReturnType<typeof planCsrWalkRoute>>)
+            : { status: "outside_coverage" },
+        );
+    beforeEach(() => {
+      mockWholeTripCsr({ status: "outside_coverage" });
+    });
     const otpWalkOnly = (minutes = 12) =>
       ({
         routeId: "otp-0-walk",
@@ -3610,7 +3813,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
         vi.mocked(planOtpRouteDetailed).mockResolvedValue(
           otpTransitOk([otpWalkOnly()]),
         );
-        vi.mocked(planCsrWalkRoute).mockResolvedValue({ status });
+        mockWholeTripCsr({ status });
         const result = await planAccessibleRouteFromRequest({
           travelMode: "transit",
           origin: taipeiStation,
@@ -3630,7 +3833,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
         vi.mocked(planOtpRouteDetailed).mockImplementation(async () =>
           otpTransitOk([otpWalkOnly()]),
         );
-        vi.mocked(planCsrWalkRoute).mockResolvedValue({ status });
+        mockWholeTripCsr({ status });
         const result = await planAccessibleRouteFromRequest({
           travelMode: "transit",
           origin: taipeiStation,
@@ -3648,7 +3851,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
         vi.mocked(planOtpRouteDetailed).mockResolvedValue(
           otpTransitOk([rooseveltBusRoute, otpWalkOnly()]),
         );
-        vi.mocked(planCsrWalkRoute).mockResolvedValue({ status });
+        mockWholeTripCsr({ status });
         const result = await planAccessibleRouteFromRequest({
           travelMode: "transit",
           origin: taipeiStation,
@@ -3668,7 +3871,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
       vi.mocked(planOtpRouteDetailed).mockResolvedValue(
         otpTransitOk([otpWalkOnly()]),
       );
-      vi.mocked(planCsrWalkRoute).mockResolvedValue({
+      mockWholeTripCsr({
         status: "topology_disconnected",
       });
       const official = walkRoute();
@@ -3720,7 +3923,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
       });
       const sidewalk = csrWalkPlan();
       sidewalk.durationS = 3600;
-      vi.mocked(planCsrWalkRoute).mockResolvedValue({
+      mockWholeTripCsr({
         status: "ok",
         plans: [sidewalk],
       });
@@ -3753,7 +3956,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
         const sidewalk = csrWalkPlan();
         sidewalk.durationS = walkMinutes * 60;
         sidewalk.distanceM = walkMinutes === 115 ? 5300 : 800;
-        vi.mocked(planCsrWalkRoute).mockResolvedValue({
+        mockWholeTripCsr({
           status: "ok",
           plans: [sidewalk],
         });
@@ -3814,7 +4017,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
             },
           ]);
         }
-        vi.mocked(planCsrWalkRoute).mockResolvedValue({
+        mockWholeTripCsr({
           status: "ok",
           plans: [sidewalk],
         });
@@ -3853,7 +4056,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
       vi.mocked(planOtpRouteDetailed).mockResolvedValue(
         otpTransitOk([rooseveltBusRoute, otpWalkOnly(12)]),
       );
-      vi.mocked(planCsrWalkRoute).mockResolvedValue({
+      mockWholeTripCsr({
         status: "ok",
         plans: [csrWalkPlan([121.56, 25.04], [121.561, 25.04])],
       });
@@ -3887,7 +4090,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
       );
       const sidewalk = csrWalkPlan();
       sidewalk.durationS = 3600;
-      vi.mocked(planCsrWalkRoute).mockResolvedValue({
+      mockWholeTripCsr({
         status: "ok",
         plans: [sidewalk],
       });
@@ -3935,7 +4138,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
         if (engine === "csr") {
           const sidewalk = csrWalkPlan(from, to);
           sidewalk.durationS = 120;
-          vi.mocked(planCsrWalkRoute).mockResolvedValue({
+          mockWholeTripCsr({
             status: "ok",
             plans: [sidewalk],
           });
@@ -4013,7 +4216,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
         expect(res.ok).toBe(true);
         expect(okData(res).fallback).toBeUndefined();
         expect(okData(res).routes[0].routeName).toContain("羅斯福路幹線");
-        expect(vi.mocked(planCsrWalkRoute)).not.toHaveBeenCalled();
+        expect(wholeTripCsrCalls()).toHaveLength(0);
       } finally {
         vi.useRealTimers();
       }
@@ -4042,7 +4245,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
         status: "unavailable",
         routes: [],
       });
-      vi.mocked(planCsrWalkRoute).mockResolvedValue({
+      mockWholeTripCsr({
         status: "ok",
         plans: [csrWalkPlan([121.517, 25.0478], [121.515, 25.0429])],
       });
@@ -4058,7 +4261,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
         status: 503,
         data: { reason: ROUTE_REASON.UPSTREAM_TIMEOUT },
       });
-      expect(vi.mocked(planCsrWalkRoute)).not.toHaveBeenCalled();
+      expect(wholeTripCsrCalls()).toHaveLength(0);
     });
 
     it("keeps the accessibility diagnosis for a short wheelchair no-route", async () => {
@@ -4078,7 +4281,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
         data: { reason: ROUTE_REASON.NO_ACCESSIBLE_ROUTE },
       });
       expect(vi.mocked(planOtpRouteDetailed)).toHaveBeenCalledTimes(2);
-      expect(vi.mocked(planCsrWalkRoute)).not.toHaveBeenCalled();
+      expect(wholeTripCsrCalls()).toHaveLength(0);
     });
 
     it("skips the diagnostic retry once the request budget is spent", async () => {
@@ -4121,7 +4324,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
       vi.mocked(planOtpRouteDetailed).mockResolvedValue(
         otpTransitOk([rooseveltBusRoute, oldWalk] as any),
       );
-      vi.mocked(planCsrWalkRoute).mockResolvedValue({
+      mockWholeTripCsr({
         status: "ok",
         plans: [csrWalkPlan([121.517, 25.0478], [121.515, 25.0429])],
       });
@@ -4134,7 +4337,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
       });
 
       const routes = okData(res).routes;
-      expect(vi.mocked(planCsrWalkRoute)).toHaveBeenCalledTimes(1);
+      expect(wholeTripCsrCalls()).toHaveLength(1);
       expect(routes.some((r) => r.routeName === "步行路線")).toBe(false);
       const walk = routes.find((r) => r.legs.every((l) => l.type === "WALK"));
       expect(walk).toMatchObject({ engine: "pedestrian-a11y" });
@@ -4155,7 +4358,7 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
         destination: nationalMuseum,
       });
 
-      expect(vi.mocked(planCsrWalkRoute)).toHaveBeenCalledTimes(1);
+      expect(wholeTripCsrCalls()).toHaveLength(1);
       expect(okData(res).routes.some((r) => r.routeName === "步行路線")).toBe(
         false,
       );

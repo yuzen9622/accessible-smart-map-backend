@@ -33,9 +33,13 @@ import {
   WHEELCHAIR_WALK_SPEED_MPS,
   WHEELCHAIR_WIDE_WIDTH_M,
   WHEELCHAIR_WIDE_WIDTH_PENALTY_MULTIPLIER,
+  edgeCarriagewayMetres,
+  edgeCarriagewayMillimetres,
   edgeCost,
+  searchEdgeCost,
   type CostProfile,
 } from "./cost";
+import { CSR_CARRIAGEWAY_COST_MULTIPLIER } from "../../../../config/routing";
 import {
   EDGE_FLAG,
   EDGE_TYPE,
@@ -814,5 +818,74 @@ describe("edgeCost", () => {
     }
     expect(MINIMUM_ADDITIVE_PENALTY_M).toBeGreaterThanOrEqual(0);
     expect(WHEELCHAIR_EXTREME_SLOPE_PERCENT).toBeGreaterThan(0);
+  });
+});
+
+describe("searchEdgeCost", () => {
+  const modes: CostProfile["name"][] = [
+    "normal",
+    "elderly",
+    "visual_impaired",
+    "wheelchair",
+  ];
+  const profile = (name: CostProfile["name"], preferSidewalks: boolean) => ({
+    name,
+    walkSpeedMps: WHEELCHAIR_WALK_SPEED_MPS,
+    relaxationLevel: 0,
+    preferSidewalks,
+  });
+
+  it.each(modes)(
+    "adds (M - 1) x carriageway metres only for %s profiles that prefer sidewalks",
+    (name) => {
+      const cases: [Partial<EdgeFixture>, boolean][] = [
+        [{ edgeType: EDGE_TYPE.SIDEWALK, lengthM: 40 }, false],
+        [{ edgeType: EDGE_TYPE.FOOTWAY, lengthM: 40 }, false],
+        [{ edgeType: EDGE_TYPE.RESIDENTIAL, lengthM: 40 }, true],
+        [{ edgeType: EDGE_TYPE.UNKNOWN, lengthM: 40.0004 }, true],
+        // Wheelchair penalties stay in edgeCost; the weight uses plain metres.
+        [{ edgeType: EDGE_TYPE.PRIMARY, lengthM: 40, slopeRatio: 0.06 }, true],
+        // GTFS partial link: indoor-flagged footway counts, by traversal time.
+        [
+          {
+            edgeType: EDGE_TYPE.FOOTWAY,
+            flags: EDGE_FLAG.INDOOR,
+            lengthM: 40,
+            traversalTimeS: 30,
+          },
+          true,
+        ],
+      ];
+      for (const [edge, counts] of cases) {
+        const graph = createGraph(edge);
+        const weighted = profile(name, true);
+        const base = edgeCost(graph, 0, weighted, 0, 1);
+        const metres = edgeCarriagewayMetres(graph, 0, weighted);
+        expect(metres > 0).toBe(counts);
+        expect(edgeCarriagewayMillimetres(graph, 0, weighted)).toBe(
+          Math.round(metres * 1000),
+        );
+        expect(searchEdgeCost(graph, 0, weighted, 0, 1)).toBeCloseTo(
+          base + (CSR_CARRIAGEWAY_COST_MULTIPLIER - 1) * metres,
+          9,
+        );
+        expect(searchEdgeCost(graph, 0, profile(name, false), 0, 1)).toBe(
+          edgeCost(graph, 0, profile(name, false), 0, 1),
+        );
+      }
+    },
+  );
+
+  it("keeps infeasible edges infeasible", () => {
+    const graph = createGraph({ edgeType: EDGE_TYPE.STEPS, lengthM: 10 });
+    expect(
+      searchEdgeCost(
+        graph,
+        0,
+        { ...profile("normal", true), forbidStairs: true },
+        0,
+        1,
+      ),
+    ).toBe(INFEASIBLE);
   });
 });

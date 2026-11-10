@@ -1968,6 +1968,147 @@ function isWalkOnlyAnswer(routes: AccessibleRoute[]): boolean {
   );
 }
 
+type TransitLeg = Exclude<AccessibleRoute["legs"][number], WalkLeg | DriveLeg>;
+
+const isRailLeg = (leg: AccessibleRoute["legs"][number] | undefined) =>
+  leg?.type === "METRO" || leg?.type === "THSR" || leg?.type === "TRA";
+
+/** Station identity of a rail leg's end, for spotting in-station transfers. */
+function railStationKey(
+  leg: AccessibleRoute["legs"][number],
+  end: "arrival" | "departure",
+): string | undefined {
+  if (leg.type === "METRO")
+    return end === "arrival" ? leg.arrivalStationUid : leg.departureStationUid;
+  if (leg.type === "THSR" || leg.type === "TRA")
+    return end === "arrival" ? leg.arrivalStationUID : leg.departureStationUID;
+  return undefined;
+}
+
+/** Exact walking time of an OTP walk leg, as the bus timeline reads it. */
+function walkLegDurationMs(leg: WalkLeg): number {
+  const exact: unknown = Object.getOwnPropertyDescriptor(
+    leg,
+    "_durationMs",
+  )?.value;
+  return typeof exact === "number" ? exact : leg.minutesEst * 60_000;
+}
+
+/**
+ * Re-plan the street walks of transit itineraries on the CSR graph (CSR mode).
+ *
+ * OTP's itinerary stays the timed source of truth: each run of consecutive
+ * WALK legs (an access walk with its snap connector, an egress walk, or a
+ * street transfer) is replaced by one CSR walk between the same two points
+ * only when the rider still reaches the next vehicle by its scheduled
+ * departure. Same-station rail transfers come from GTFS pathways and are left
+ * alone; so is any walk CSR cannot plan, which keeps OTP's leg.
+ *
+ * @param routes OTP candidates, mutated in place.
+ * @param mode Accessibility mode for the CSR walk.
+ * @param avoidStairs Resolved stair constraint.
+ * @param deadline Request budget; remaining walks keep OTP once it is spent.
+ * @returns Nothing.
+ */
+async function refineTransitWalkLegsWithCsr(
+  routes: AccessibleRoute[],
+  mode: AccessibilityMode,
+  avoidStairs: boolean,
+  deadline?: number,
+): Promise<void> {
+  if (getRoutingConfig().walkPlanner !== "csr") return;
+  await Promise.all(
+    routes.map(async (route) => {
+      if (route.legs.every((leg) => leg.type === "WALK")) return;
+      const spans: [number, number][] = [];
+      for (let i = 0; i < route.legs.length; i++) {
+        if (route.legs[i].type !== "WALK") continue;
+        let end = i;
+        while (route.legs[end + 1]?.type === "WALK") end++;
+        spans.push([i, end]);
+        i = end;
+      }
+      // Right to left so earlier indices stay valid after each splice.
+      for (const [start, end] of spans.reverse()) {
+        if (deadline !== undefined && Date.now() >= deadline) return;
+        const walks = route.legs.slice(start, end + 1) as WalkLeg[];
+        const prev = route.legs[start - 1] as TransitLeg | undefined;
+        const next = route.legs[end + 1] as TransitLeg | undefined;
+        if (
+          prev &&
+          next &&
+          isRailLeg(prev) &&
+          isRailLeg(next) &&
+          railStationKey(prev, "arrival") === railStationKey(next, "departure")
+        )
+          continue;
+        const first = walks[0].polyline[0];
+        const lastPolyline = walks[walks.length - 1].polyline;
+        const last = lastPolyline[lastPolyline.length - 1];
+        if (!first || !last) continue;
+        const csr = await planCsrWalkForRequest(
+          [
+            { lat: first[1], lng: first[0] },
+            { lat: last[1], lng: last[0] },
+          ],
+          mode,
+          avoidStairs,
+        );
+        if (csr.status !== "ok") continue;
+        const plan = csr.plans[0];
+        const csrMs = plan.durationS * 1000;
+        const deltaMs =
+          csrMs - walks.reduce((sum, leg) => sum + walkLegDurationMs(leg), 0);
+        if (next) {
+          const walkStart = prev
+            ? prev._scheduledArrivalTime
+            : route._scheduledDepartureTime;
+          const departure = next._scheduledDepartureTime;
+          if (
+            walkStart === undefined ||
+            departure === undefined ||
+            walkStart + csrMs > departure
+          )
+            continue;
+        }
+        const leg: WalkLeg = {
+          ...buildCsrWalkRoute([plan]).legs[0],
+          from: walks[0].from,
+          to: walks[walks.length - 1].to,
+        } as WalkLeg;
+        for (const key of ["fromNameEn", "fromDisplayName"] as const) {
+          if (walks[0][key] !== undefined) leg[key] = walks[0][key];
+        }
+        for (const key of ["toNameEn", "toDisplayName"] as const) {
+          const value = walks[walks.length - 1][key];
+          if (value !== undefined) leg[key] = value;
+        }
+        Object.defineProperties(leg, {
+          _durationMs: { value: csrMs, writable: true },
+          _csrPlanned: { value: true },
+        });
+        route.legs.splice(start, end - start + 1, leg);
+        if (next?.type === "BUS") {
+          if (next._boardingReadyTime !== undefined)
+            next._boardingReadyTime += deltaMs;
+          if (next.scheduledTrip) next.scheduledTrip.boardingReadyAt += deltaMs;
+        }
+        if (!next && route._scheduledEndTime !== undefined) {
+          route._scheduledEndTime += deltaMs;
+          route.totalMinutes = Math.max(
+            1,
+            Math.round(route.totalMinutes + deltaMs / 60_000),
+          );
+        }
+      }
+      route.totalWalkDistanceM = route.legs.reduce(
+        (sum, leg) => (leg.type === "WALK" ? sum + leg.distanceM : sum),
+        0,
+      );
+    }),
+  );
+}
+
 /** Replace whole-walk candidates in CSR mode before the transit finalizer. */
 async function refineWalkOptionWithCsr(
   routes: AccessibleRoute[],
@@ -2991,6 +3132,11 @@ async function attachDrivingA11yHighlights(
 
 function compareWalkPolicy(a: AccessibleRoute, b: AccessibleRoute): number {
   if (!a.walkPolicy || !b.walkPolicy) return 0;
+  // The CSR search cost already weights carriageway metres
+  // (CSR_CARRIAGEWAY_COST_MULTIPLIER); ranking on carriageway first would undo
+  // its detour bound. The native OTP fork's policy keeps its own ordering.
+  if (a.engine === "pedestrian-a11y" && b.engine === "pedestrian-a11y")
+    return a.walkPolicy.generalizedCost - b.walkPolicy.generalizedCost;
   return (
     a.walkPolicy.carriagewayMillimetres - b.walkPolicy.carriagewayMillimetres ||
     a.walkPolicy.generalizedCost - b.walkPolicy.generalizedCost
@@ -4032,6 +4178,12 @@ export async function findAccessibleRoutesDetailed(
     const walkingBetter =
       otp.walkingBetter &&
       otp.routes.every((route) => originalWalks.has(route));
+    await refineTransitWalkLegsWithCsr(
+      otp.routes,
+      mode,
+      constraints.avoidStairs,
+      deadline,
+    );
     await restoreRouteStopIds(otp.routes);
     const routes = await finalizeRoutes(
       otp.routes,
@@ -4077,6 +4229,12 @@ export async function findAccessibleRoutesDetailed(
     });
     if (result.status !== "ok") return result;
     everySegmentWalkingBetter &&= result.walkingBetter === true;
+    await refineTransitWalkLegsWithCsr(
+      result.routes,
+      mode,
+      constraints.avoidStairs,
+      deadline,
+    );
     const best = pickSegmentRoute(result.routes, cursor, constraints);
     if (!best) return { status: "no_route", routes: [] };
     segments.push(best);

@@ -45,6 +45,10 @@ const OSM_KERB_RAMP_NODE_IDS_QUERY = `
   WHERE version_id = $1 AND kerb = ANY($2::smallint[])
 `;
 
+// Keyset pages must ORDER BY the qualified bigint column: the SELECT aliases
+// `edge_id::text AS edge_id`, and an unqualified ORDER BY binds to that text
+// alias, which cannot use the primary key and re-sorts every remaining row on
+// each page (quadratic; a national graph never finished loading).
 const PAGE_SIZE = 10_000;
 const MIN_BIGINT = "-9223372036854775808";
 const MAX_INT32 = 2_147_483_647;
@@ -130,7 +134,7 @@ const NODE_PAGE_QUERY = `
     geom IS NOT NULL AS has_real_geom
   FROM ped_node
   WHERE version_id = $1 AND node_id > $2
-  ORDER BY node_id
+  ORDER BY ped_node.node_id
   LIMIT $3
 `;
 
@@ -142,7 +146,7 @@ const EDGE_COUNT_PAGE_QUERY = `
     is_bidirectional
   FROM ped_edge
   WHERE version_id = $1 AND edge_id > $2
-  ORDER BY edge_id
+  ORDER BY ped_edge.edge_id
   LIMIT $3
 `;
 
@@ -167,7 +171,7 @@ const EDGE_PAGE_QUERY = `
     attr_meta->'sidewalk_ramp_count'->>'value' AS sidewalk_ramp_count
   FROM ped_edge
   WHERE version_id = $1 AND edge_id > $2
-  ORDER BY edge_id
+  ORDER BY ped_edge.edge_id
   LIMIT $3
 `;
 

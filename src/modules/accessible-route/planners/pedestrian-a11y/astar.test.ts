@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { BinaryMinHeap, aStar, heuristicCost } from "./astar";
+import { CSR_CARRIAGEWAY_COST_MULTIPLIER } from "../../../../config/routing";
 import {
   WHEELCHAIR_MAX_RELAXATION_LEVEL,
   WHEELCHAIR_WALK_SPEED_MPS,
+  edgeCost,
   type CostProfile,
 } from "./cost";
 import { dijkstra } from "./dijkstra";
@@ -319,17 +321,22 @@ describe("BinaryMinHeap", () => {
   });
 });
 
-describe("BinaryMinHeap sidewalk priority", () => {
-  it("orders less carriageway before shorter distance while growing", () => {
+describe("BinaryMinHeap scalar ordering", () => {
+  it("pops by key then node for any insertion order while growing", () => {
+    const random = seededRandom(20_261_109);
+    const entries = Array.from({ length: 200 }, (_, node) => ({
+      node,
+      key: Math.floor(random() * 20),
+    }));
     const heap = new BinaryMinHeap(1);
-    heap.push(1, 100, 0);
-    heap.push(2, 1, 1);
-    heap.push(3, 5, 0);
-    heap.push(4, 0, 2);
-    expect([heap.pop(), heap.pop(), heap.pop(), heap.pop()]).toEqual([
-      3, 1, 2, 4,
-    ]);
-    expect(heap.lastCarriagewayMillimetres).toBe(2);
+    for (const { node, key } of entries) heap.push(node, key);
+    const popped: number[] = [];
+    while (heap.size > 0) popped.push(heap.pop());
+    expect(popped).toEqual(
+      [...entries]
+        .sort((a, b) => a.key - b.key || a.node - b.node)
+        .map((entry) => entry.node),
+    );
   });
 });
 
@@ -582,19 +589,25 @@ describe("outdoor sidewalk priority", () => {
     { ...wheelchairProfile(), preferSidewalks: true, forbidStairs: false },
   ];
 
+  // Road 1→3 is 100 m (search cost 100 × M = 150); the sidewalk branch is
+  // `sidewalkLegM` twice. M = CSR_CARRIAGEWAY_COST_MULTIPLIER.
+  const detourGraph = (sidewalkLegM: number) =>
+    graphFromEdges({
+      nodeLon: [121.5, 121.5001, 121.5002, 121.5003],
+      nodeLat: [25.05, 25.05, 25.05, 25.05],
+      edges: [
+        { from: 0, to: 1, lengthM: 5, edgeType: EDGE_TYPE.ROAD },
+        { from: 1, to: 3, lengthM: 100, edgeType: EDGE_TYPE.ROAD },
+        { from: 1, to: 2, lengthM: sidewalkLegM, edgeType: EDGE_TYPE.SIDEWALK },
+        { from: 2, to: 3, lengthM: sidewalkLegM, edgeType: EDGE_TYPE.SIDEWALK },
+      ],
+    });
+
   it.each(profiles)(
-    "keeps the longer connected sidewalk for $name, stairs=$forbidStairs",
+    "takes a sidewalk detour within the multiplier for $name, stairs=$forbidStairs",
     (profile) => {
-      const graph = graphFromEdges({
-        nodeLon: [121.5, 121.5001, 121.5002, 121.5003],
-        nodeLat: [25.05, 25.05, 25.05, 25.05],
-        edges: [
-          { from: 0, to: 1, lengthM: 5, edgeType: EDGE_TYPE.ROAD },
-          { from: 1, to: 3, lengthM: 10, edgeType: EDGE_TYPE.ROAD },
-          { from: 1, to: 2, lengthM: 500, edgeType: EDGE_TYPE.SIDEWALK },
-          { from: 2, to: 3, lengthM: 500, edgeType: EDGE_TYPE.CROSSING },
-        ],
-      });
+      expect(CSR_CARRIAGEWAY_COST_MULTIPLIER).toBe(1.5);
+      const graph = detourGraph(60);
       for (const search of [aStar, dijkstra]) {
         const route = search(graph, 0, 3, profile);
         expect(Array.from(route?.nodePath ?? [])).toEqual([0, 1, 2, 3]);
@@ -602,6 +615,114 @@ describe("outdoor sidewalk priority", () => {
       }
     },
   );
+
+  it.each(profiles)(
+    "takes the road when the sidewalk detour exceeds the multiplier for $name, stairs=$forbidStairs",
+    (profile) => {
+      const graph = detourGraph(80);
+      for (const search of [aStar, dijkstra]) {
+        const route = search(graph, 0, 3, profile);
+        expect(Array.from(route?.nodePath ?? [])).toEqual([0, 1, 3]);
+        expect(route?.carriagewayMillimetres).toBe(105_000);
+      }
+    },
+  );
+
+  it("bounds the chosen plain edge cost by the multiplier and agrees across searches", () => {
+    const random = seededRandom(20_261_110);
+    const types = [
+      EDGE_TYPE.SIDEWALK,
+      EDGE_TYPE.FOOTWAY,
+      EDGE_TYPE.CROSSING,
+      EDGE_TYPE.RESIDENTIAL,
+      EDGE_TYPE.SERVICE,
+      EDGE_TYPE.PRIMARY,
+      EDGE_TYPE.UNKNOWN,
+    ];
+    const plain = (
+      graph: PedGraph,
+      route: { nodePath: Int32Array; edgeAttrPath: Int32Array },
+      profile: CostProfile,
+    ) =>
+      Array.from(route.edgeAttrPath).reduce(
+        (sum, attrIdx, step) =>
+          sum +
+          edgeCost(
+            graph,
+            attrIdx,
+            profile,
+            route.nodePath[step],
+            route.nodePath[step + 1],
+          ),
+        0,
+      );
+    const side = 6;
+    const nodeCount = side * side;
+    let compared = 0;
+    for (let trial = 0; trial < 40; trial += 1) {
+      const edges: EdgeDefinition[] = [];
+      for (let node = 0; node < nodeCount; node += 1) {
+        const right = node % side < side - 1 ? node + 1 : -1;
+        const down = node + side < nodeCount ? node + side : -1;
+        for (const to of [right, down]) {
+          if (to < 0) continue;
+          edges.push({
+            from: node,
+            to,
+            lengthM: 10 + Math.floor(random() * 90),
+            edgeType: types[Math.floor(random() * types.length)],
+          });
+        }
+      }
+      const graph = graphFromEdges({
+        nodeLon: Array.from(
+          { length: nodeCount },
+          (_, n) => 121.5 + (n % side) * 0.001,
+        ),
+        nodeLat: Array.from(
+          { length: nodeCount },
+          (_, n) => 25.05 + Math.floor(n / side) * 0.001,
+        ),
+        edges,
+      });
+      const weighted = profiles[0];
+      const scalar: CostProfile = { ...weighted, preferSidewalks: false };
+      const to = nodeCount - 1 - Math.floor(random() * side);
+      const chosen = aStar(graph, 0, to, weighted);
+      const reference = dijkstra(graph, 0, to, weighted);
+      const shortest = dijkstra(graph, 0, to, scalar);
+      if (!chosen || !reference || !shortest)
+        throw new Error("grid lost a path");
+      expect(
+        relativeError(chosen.totalCost, reference.totalCost),
+      ).toBeLessThanOrEqual(1e-9);
+      expect(plain(graph, chosen, weighted)).toBeLessThanOrEqual(
+        CSR_CARRIAGEWAY_COST_MULTIPLIER * shortest.totalCost + 1e-9,
+      );
+      compared += 1;
+    }
+    expect(compared).toBe(40);
+  });
+
+  it("terminates on a zero-cost cycle and skips stale queue entries", () => {
+    const graph = graphFromEdges({
+      nodeLon: [121.5, 121.5001, 121.5002, 121.5003],
+      nodeLat: [25.05, 25.05, 25.05, 25.05],
+      edges: [
+        { from: 0, to: 1, lengthM: 0, edgeType: EDGE_TYPE.SIDEWALK },
+        { from: 1, to: 0, lengthM: 0, edgeType: EDGE_TYPE.SIDEWALK },
+        // 3 is first queued at 50, then improved to 2 through node 2.
+        { from: 1, to: 3, lengthM: 50, edgeType: EDGE_TYPE.SIDEWALK },
+        { from: 1, to: 2, lengthM: 1, edgeType: EDGE_TYPE.SIDEWALK },
+        { from: 2, to: 3, lengthM: 1, edgeType: EDGE_TYPE.SIDEWALK },
+      ],
+    });
+    for (const search of [aStar, dijkstra]) {
+      const route = search(graph, 0, 3, profiles[0]);
+      expect(Array.from(route?.nodePath ?? [])).toEqual([0, 1, 2, 3]);
+      expect(route?.totalCost).toBe(2);
+    }
+  });
 
   it("preserves necessary road travel when a sidewalk branch is disconnected", () => {
     const graph = graphFromEdges({
@@ -618,19 +739,27 @@ describe("outdoor sidewalk priority", () => {
     expect(route?.carriagewayMillimetres).toBe(15000);
   });
 
-  it("does not give an unknown connector zero-carriageway priority", () => {
+  it("weights an unknown connector as carriageway", () => {
+    // Unknown 100 m costs 150 weighted, the pedestrian pair 120; without the
+    // weight (venue-style profile) the unknown connector is shorter.
     const graph = graphFromEdges({
       nodeLon: [121.5, 121.5001, 121.5002],
       nodeLat: [25.05, 25.05, 25.05],
       edges: [
-        { from: 0, to: 2, lengthM: 1, edgeType: EDGE_TYPE.UNKNOWN },
-        { from: 0, to: 1, lengthM: 100, edgeType: EDGE_TYPE.FOOTWAY },
-        { from: 1, to: 2, lengthM: 100, edgeType: EDGE_TYPE.SIDEWALK },
+        { from: 0, to: 2, lengthM: 100, edgeType: EDGE_TYPE.UNKNOWN },
+        { from: 0, to: 1, lengthM: 60, edgeType: EDGE_TYPE.FOOTWAY },
+        { from: 1, to: 2, lengthM: 60, edgeType: EDGE_TYPE.SIDEWALK },
       ],
     });
     expect(Array.from(aStar(graph, 0, 2, profiles[0])?.nodePath ?? [])).toEqual(
       [0, 1, 2],
     );
+    expect(
+      Array.from(
+        aStar(graph, 0, 2, { ...profiles[0], preferSidewalks: false })
+          ?.nodePath ?? [],
+      ),
+    ).toEqual([0, 2]);
   });
 
   it("applies stairs and wheelchair exclusions before sidewalk preference", () => {
@@ -663,9 +792,12 @@ describe("outdoor sidewalk priority", () => {
         { from: 1, to: 2, lengthM: 100, edgeType: EDGE_TYPE.SIDEWALK },
       ],
     });
-    expect(
-      Array.from(aStar(graph, 0, 2, wheelchairProfile())?.nodePath ?? []),
-    ).toEqual([0, 2]);
+    for (const search of [aStar, dijkstra]) {
+      const route = search(graph, 0, 2, wheelchairProfile());
+      expect(Array.from(route?.nodePath ?? [])).toEqual([0, 2]);
+      expect(route?.totalCost).toBe(10);
+      expect(route?.carriagewayMillimetres).toBe(0);
+    }
   });
   it.each(profiles)(
     "counts GTFS-generated road partial links for $name, stairs=$forbidStairs",
@@ -675,15 +807,17 @@ describe("outdoor sidewalk priority", () => {
       )
         ? EDGE_FLAG.INDOOR
         : 0;
+      // Partial links 2 × 5 m weigh 15 when counted as carriageway (10 if
+      // not); the sidewalk pair is 14, the road 20 m (30).
       const graph = graphFromEdges({
         nodeLon: [121.5, 121.5001, 121.50005, 121.50005],
         nodeLat: [25.05, 25.05, 25.05, 25.051],
         edges: [
-          { from: 0, to: 1, lengthM: 10, edgeType: EDGE_TYPE.ROAD },
+          { from: 0, to: 1, lengthM: 20, edgeType: EDGE_TYPE.ROAD },
           { from: 0, to: 2, lengthM: 5, edgeType: EDGE_TYPE.FOOTWAY, flags },
           { from: 2, to: 1, lengthM: 5, edgeType: EDGE_TYPE.FOOTWAY, flags },
-          { from: 0, to: 3, lengthM: 100, edgeType: EDGE_TYPE.SIDEWALK },
-          { from: 3, to: 1, lengthM: 100, edgeType: EDGE_TYPE.FOOTWAY },
+          { from: 0, to: 3, lengthM: 7, edgeType: EDGE_TYPE.SIDEWALK },
+          { from: 3, to: 1, lengthM: 7, edgeType: EDGE_TYPE.FOOTWAY },
         ],
       });
       for (const search of [aStar, dijkstra]) {
@@ -722,23 +856,25 @@ describe("outdoor sidewalk priority", () => {
     }
   });
 
-  it("keeps explicit GTFS indoor walkway roles at zero priority cost", () => {
+  it("keeps explicit GTFS indoor walkway roles at zero carriageway weight", () => {
+    // Road 100 m weighs 150; the walkways total 120, or 180 if they were
+    // wrongly weighted as carriageway.
     const graph = graphFromEdges({
       nodeLon: [121.5, 121.50005, 121.5001],
       nodeLat: [25.05, 25.05, 25.05],
       edges: [
-        { from: 0, to: 2, lengthM: 1, edgeType: EDGE_TYPE.ROAD },
+        { from: 0, to: 2, lengthM: 100, edgeType: EDGE_TYPE.ROAD },
         {
           from: 0,
           to: 1,
-          lengthM: 100,
+          lengthM: 60,
           edgeType: EDGE_TYPE.INDOOR_WALKWAY,
           flags: EDGE_FLAG.INDOOR,
         },
         {
           from: 1,
           to: 2,
-          lengthM: 100,
+          lengthM: 60,
           edgeType: EDGE_TYPE.INDOOR_WALKWAY,
           flags: EDGE_FLAG.INDOOR,
         },

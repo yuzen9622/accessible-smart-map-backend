@@ -89,6 +89,31 @@ export const ACCESSIBLE_RANKING: Readonly<
 export const STEP_FREE_WALK_SIDEWALK_MAX_DETOUR = 0.3;
 
 /**
+ * CSR walk search cost per metre of non-pedestrian ground (lanes, roads,
+ * untyped connectors), relative to the same metre of sidewalk. Applied only
+ * when the cost profile prefers sidewalks.
+ *
+ * Every path's search cost lies between its plain edge cost C and this
+ * multiple of C, so the chosen path's plain edge cost is at most this multiple
+ * of the cheapest one. For normal, elderly and visual-impaired walks outdoors
+ * the plain edge cost is the length, so that is also a ground-length bound.
+ * Wheelchair multipliers, indoor traversal-time costs and
+ * {@link CSR_STAIRS_COST_MULTIPLIER} make it a cost bound only: a steep
+ * sidewalk may lose to a longer flat road, and a staircase to a longer ramp.
+ */
+export const CSR_CARRIAGEWAY_COST_MULTIPLIER = 1.5;
+
+/**
+ * CSR outdoor walk cost per metre of stairs (steps and indoor stairs) for
+ * every non-wheelchair mode, relative to the same metre of level ground.
+ * Stairs edges are only a few metres long, so weaker values barely change the
+ * route: on 112 Taipei ODs, x1/x5/x10 gave 18/12/6 normal routes with stairs
+ * (OTP 9) at an unchanged median length. Wheelchair routing never uses it;
+ * venue routing keeps its own venue.stairsAvoidanceMultiplier.
+ */
+export const CSR_STAIRS_COST_MULTIPLIER = 10;
+
+/**
  * Indoor venue fact lookups for the AI `inspectVenue` tool. Costs are the
  * venue planner's weighted metres-equivalent, not walking distance: an
  * elevator ride has zero length but a positive cost.

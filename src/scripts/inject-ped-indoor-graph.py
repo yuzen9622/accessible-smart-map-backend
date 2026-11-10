@@ -15,7 +15,9 @@ from importlib import import_module
 from typing import Any
 
 TAIPEI_BBOX = (121.43, 24.95, 121.68, 25.22)
-BBOXES = {"taipei": TAIPEI_BBOX}
+# Main island plus Penghu, Kinmen, Matsu, Green Island and Lanyu.
+TAIWAN_BBOX = (118.0, 21.8, 122.1, 26.5)
+BBOXES = {"taipei": TAIPEI_BBOX, "taiwan": TAIWAN_BBOX}
 GTFS_SOURCE = "gtfs_pathways"
 GENERATED_SOURCE_PREFIX = f"{GTFS_SOURCE}:"
 GENERATED_ID_SCALE = 1_000_000_000_000

@@ -1,5 +1,10 @@
-import { BinaryMinHeap, buildRouteResult, type RouteResult } from "./astar";
-import { edgeCarriagewayMillimetres, edgeCost, type CostProfile } from "./cost";
+import {
+  BinaryMinHeap,
+  buildRouteResult,
+  reportedCarriageway,
+  type RouteResult,
+} from "./astar";
+import { searchEdgeCost, type CostProfile } from "./cost";
 import {
   FORBID_FARE_ACCESS,
   canTraverseFareGate,
@@ -68,11 +73,7 @@ export function dijkstra(
     if (node === -1) {
       break;
     }
-    if (
-      priority !== gScore[node] ||
-      open.lastCarriagewayMillimetres !== carriagewayScore[node] ||
-      closed[node] !== 0
-    ) {
+    if (priority !== gScore[node] || closed[node] !== 0) {
       continue;
     }
     closed[node] = 1;
@@ -101,23 +102,12 @@ export function dijkstra(
       ) {
         continue;
       }
-      const edgeCostM = edgeCost(graph, attrIdx, profile, node, target);
+      const edgeCostM = searchEdgeCost(graph, attrIdx, profile, node, target);
       if (!Number.isFinite(edgeCostM)) {
         continue;
       }
       const tentativeCost = gScore[node] + edgeCostM;
-      const tentativeCarriageway =
-        carriagewayScore[node] +
-        (profile.preferSidewalks
-          ? edgeCarriagewayMillimetres(graph, attrIdx, profile)
-          : 0);
-      if (
-        !Number.isFinite(tentativeCost) ||
-        !Number.isFinite(tentativeCarriageway) ||
-        tentativeCarriageway > carriagewayScore[target] ||
-        (tentativeCarriageway === carriagewayScore[target] &&
-          tentativeCost >= gScore[target])
-      ) {
+      if (!Number.isFinite(tentativeCost) || tentativeCost >= gScore[target]) {
         continue;
       }
       if (closed[target] !== 0) {
@@ -125,10 +115,11 @@ export function dijkstra(
         reopenedNodes += 1;
       }
       gScore[target] = tentativeCost;
-      carriagewayScore[target] = tentativeCarriageway;
+      carriagewayScore[target] =
+        carriagewayScore[node] + reportedCarriageway(graph, attrIdx, profile);
       parent[target] = node;
       parentEdgeAttr[target] = attrIdx;
-      open.push(target, tentativeCost, tentativeCarriageway);
+      open.push(target, tentativeCost);
     }
   }
   return null;

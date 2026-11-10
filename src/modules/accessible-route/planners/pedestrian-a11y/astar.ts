@@ -1,4 +1,8 @@
-import { edgeCarriagewayMillimetres, edgeCost, type CostProfile } from "./cost";
+import {
+  edgeCarriagewayMillimetres,
+  searchEdgeCost,
+  type CostProfile,
+} from "./cost";
 import {
   FORBID_FARE_ACCESS,
   canTraverseFareGate,
@@ -36,23 +40,15 @@ function hasHigherPriority(
   nodeA: number,
   keyB: number,
   nodeB: number,
-  carriagewayA = 0,
-  carriagewayB = 0,
 ): boolean {
-  return (
-    carriagewayA < carriagewayB ||
-    (carriagewayA === carriagewayB &&
-      (keyA < keyB || (keyA === keyB && nodeA < nodeB)))
-  );
+  return keyA < keyB || (keyA === keyB && nodeA < nodeB);
 }
 
 export class BinaryMinHeap {
   private keys: Float64Array;
   private nodes: Int32Array;
-  private carriageways: Float64Array;
   private count = 0;
   private mostRecentKey = Number.NaN;
-  private mostRecentCarriageway = Number.NaN;
 
   /**
    * @param initialCapacity Number of entries to preallocate.
@@ -61,7 +57,6 @@ export class BinaryMinHeap {
     const capacity = Math.max(1, initialCapacity);
     this.keys = new Float64Array(capacity);
     this.nodes = new Int32Array(capacity);
-    this.carriageways = new Float64Array(capacity);
   }
 
   /**
@@ -78,18 +73,13 @@ export class BinaryMinHeap {
     return this.mostRecentKey;
   }
 
-  get lastCarriagewayMillimetres(): number {
-    return this.mostRecentCarriageway;
-  }
-
   /**
    * @param node Dense graph node identifier.
    * @param key Finite priority key.
-   * @param carriagewayMillimetres Primary non-exclusive-ground priority cost.
    * @returns Nothing.
    */
-  push(node: number, key: number, carriagewayMillimetres = 0): void {
-    if (!Number.isFinite(key) || !Number.isFinite(carriagewayMillimetres)) {
+  push(node: number, key: number): void {
+    if (!Number.isFinite(key)) {
       throw new Error("binary heap key must be finite");
     }
     this.ensureCapacity();
@@ -99,26 +89,15 @@ export class BinaryMinHeap {
       const parentIndex = Math.floor((index - 1) / 2);
       const parentKey = this.keys[parentIndex];
       const parentNode = this.nodes[parentIndex];
-      if (
-        !hasHigherPriority(
-          key,
-          node,
-          parentKey,
-          parentNode,
-          carriagewayMillimetres,
-          this.carriageways[parentIndex],
-        )
-      ) {
+      if (!hasHigherPriority(key, node, parentKey, parentNode)) {
         break;
       }
       this.keys[index] = parentKey;
       this.nodes[index] = parentNode;
-      this.carriageways[index] = this.carriageways[parentIndex];
       index = parentIndex;
     }
     this.keys[index] = key;
     this.nodes[index] = node;
-    this.carriageways[index] = carriagewayMillimetres;
   }
 
   /**
@@ -127,19 +106,16 @@ export class BinaryMinHeap {
   pop(): number {
     if (this.count === 0) {
       this.mostRecentKey = Number.NaN;
-      this.mostRecentCarriageway = Number.NaN;
       return -1;
     }
     const node = this.nodes[0];
     this.mostRecentKey = this.keys[0];
-    this.mostRecentCarriageway = this.carriageways[0];
     this.count -= 1;
     if (this.count === 0) {
       return node;
     }
     const tailKey = this.keys[this.count];
     const tailNode = this.nodes[this.count];
-    const tailCarriageway = this.carriageways[this.count];
     let index = 0;
     while (true) {
       const leftChild = index * 2 + 1;
@@ -154,8 +130,6 @@ export class BinaryMinHeap {
           this.nodes[rightChild],
           this.keys[leftChild],
           this.nodes[leftChild],
-          this.carriageways[rightChild],
-          this.carriageways[leftChild],
         )
           ? rightChild
           : leftChild;
@@ -165,20 +139,16 @@ export class BinaryMinHeap {
           tailNode,
           this.keys[childIndex],
           this.nodes[childIndex],
-          tailCarriageway,
-          this.carriageways[childIndex],
         )
       ) {
         break;
       }
       this.keys[index] = this.keys[childIndex];
       this.nodes[index] = this.nodes[childIndex];
-      this.carriageways[index] = this.carriageways[childIndex];
       index = childIndex;
     }
     this.keys[index] = tailKey;
     this.nodes[index] = tailNode;
-    this.carriageways[index] = tailCarriageway;
     return node;
   }
 
@@ -191,14 +161,30 @@ export class BinaryMinHeap {
     }
     const nextKeys = new Float64Array(this.keys.length * 2);
     const nextNodes = new Int32Array(this.nodes.length * 2);
-    const nextCarriageways = new Float64Array(this.carriageways.length * 2);
     nextKeys.set(this.keys);
     nextNodes.set(this.nodes);
-    nextCarriageways.set(this.carriageways);
     this.keys = nextKeys;
     this.nodes = nextNodes;
-    this.carriageways = nextCarriageways;
   }
+}
+
+/**
+ * Carriageway millimetres an edge adds to the reported route total. It is a
+ * by-product of the chosen path; the search orders only by the scalar cost.
+ *
+ * @param graph CSR pedestrian graph.
+ * @param attrIdx Edge attribute index.
+ * @param profile Requested accessibility cost profile.
+ * @returns Millimetres to add, or 0 when the profile does not track them.
+ */
+export function reportedCarriageway(
+  graph: PedGraph,
+  attrIdx: number,
+  profile: CostProfile,
+): number {
+  return profile.preferSidewalks
+    ? edgeCarriagewayMillimetres(graph, attrIdx, profile)
+    : 0;
 }
 
 /**
@@ -327,11 +313,7 @@ export function aStar(
       break;
     }
     const expectedPriority = gScore[node] + heuristicCost(graph, node, to);
-    if (
-      priority !== expectedPriority ||
-      open.lastCarriagewayMillimetres !== carriagewayScore[node] ||
-      closed[node] !== 0
-    ) {
+    if (priority !== expectedPriority || closed[node] !== 0) {
       continue;
     }
     closed[node] = 1;
@@ -361,23 +343,12 @@ export function aStar(
         continue;
       }
       if (excludedEdges.has(attrIdx)) continue;
-      const edgeCostM = edgeCost(graph, attrIdx, profile, node, target);
+      const edgeCostM = searchEdgeCost(graph, attrIdx, profile, node, target);
       if (!Number.isFinite(edgeCostM)) {
         continue;
       }
       const tentativeCost = gScore[node] + edgeCostM;
-      const tentativeCarriageway =
-        carriagewayScore[node] +
-        (profile.preferSidewalks
-          ? edgeCarriagewayMillimetres(graph, attrIdx, profile)
-          : 0);
-      if (
-        !Number.isFinite(tentativeCost) ||
-        !Number.isFinite(tentativeCarriageway) ||
-        tentativeCarriageway > carriagewayScore[target] ||
-        (tentativeCarriageway === carriagewayScore[target] &&
-          tentativeCost >= gScore[target])
-      ) {
+      if (!Number.isFinite(tentativeCost) || tentativeCost >= gScore[target]) {
         continue;
       }
       if (closed[target] !== 0) {
@@ -385,14 +356,15 @@ export function aStar(
         reopenedNodes += 1;
       }
       gScore[target] = tentativeCost;
-      carriagewayScore[target] = tentativeCarriageway;
+      carriagewayScore[target] =
+        carriagewayScore[node] + reportedCarriageway(graph, attrIdx, profile);
       parent[target] = node;
       parentEdgeAttr[target] = attrIdx;
       const priorityKey = tentativeCost + heuristicCost(graph, target, to);
       if (!Number.isFinite(priorityKey)) {
         continue;
       }
-      open.push(target, priorityKey, tentativeCarriageway);
+      open.push(target, priorityKey);
     }
   }
   return null;
