@@ -519,13 +519,33 @@ describe("edgeCost", () => {
     ).toBe(100);
   });
 
-  it("penalizes an unramped crossing and leaves a both-ends-ramped crossing neutral for wheelchairs", () => {
-    const unramped = createGraph({ edgeType: EDGE_TYPE.CROSSING });
-    const bothRamped = createGraph({
+  /** Marks both ends as lying inside the curb ramp survey. */
+  const surveyed = (graph: PedGraph): PedGraph => {
+    graph.nodeFlags[0] |= NODE_FLAG.KERB_RAMP_SURVEYED;
+    graph.nodeFlags[1] |= NODE_FLAG.KERB_RAMP_SURVEYED;
+    return graph;
+  };
+
+  it("leaves a crossing outside the curb ramp survey neutral for wheelchairs", () => {
+    const unobserved = createGraph({ edgeType: EDGE_TYPE.CROSSING });
+    const oneObserved = createGraph({
       edgeType: EDGE_TYPE.CROSSING,
       fromNodeFlags: NODE_FLAG.HAS_KERB_RAMP,
-      toNodeFlags: NODE_FLAG.HAS_KERB_RAMP,
     });
+
+    expect(edgeCost(unobserved, 0, wheelchairProfile(), 0, 1)).toBe(100);
+    expect(edgeCost(oneObserved, 0, wheelchairProfile(), 0, 1)).toBe(100);
+  });
+
+  it("penalizes an unramped crossing and leaves a both-ends-ramped crossing neutral for wheelchairs", () => {
+    const unramped = surveyed(createGraph({ edgeType: EDGE_TYPE.CROSSING }));
+    const bothRamped = surveyed(
+      createGraph({
+        edgeType: EDGE_TYPE.CROSSING,
+        fromNodeFlags: NODE_FLAG.HAS_KERB_RAMP,
+        toNodeFlags: NODE_FLAG.HAS_KERB_RAMP,
+      }),
+    );
 
     expect(edgeCost(unramped, 0, wheelchairProfile(), 0, 1)).toBe(
       100 * WHEELCHAIR_UNRAMPED_CROSSING_PENALTY_MULTIPLIER,
@@ -534,14 +554,18 @@ describe("edgeCost", () => {
   });
 
   it("applies a middle penalty when only one endpoint of a crossing has an observed kerb ramp", () => {
-    const rampedFromOnly = createGraph({
-      edgeType: EDGE_TYPE.CROSSING,
-      fromNodeFlags: NODE_FLAG.HAS_KERB_RAMP,
-    });
-    const rampedToOnly = createGraph({
-      edgeType: EDGE_TYPE.CROSSING,
-      toNodeFlags: NODE_FLAG.HAS_KERB_RAMP,
-    });
+    const rampedFromOnly = surveyed(
+      createGraph({
+        edgeType: EDGE_TYPE.CROSSING,
+        fromNodeFlags: NODE_FLAG.HAS_KERB_RAMP,
+      }),
+    );
+    const rampedToOnly = surveyed(
+      createGraph({
+        edgeType: EDGE_TYPE.CROSSING,
+        toNodeFlags: NODE_FLAG.HAS_KERB_RAMP,
+      }),
+    );
 
     expect(edgeCost(rampedFromOnly, 0, wheelchairProfile(), 0, 1)).toBe(
       100 * WHEELCHAIR_ONE_SIDED_KERB_RAMP_PENALTY_MULTIPLIER,
@@ -552,16 +576,20 @@ describe("edgeCost", () => {
   });
 
   it("strictly orders crossing cost by endpoint ramp observation: both < one < neither", () => {
-    const both = createGraph({
-      edgeType: EDGE_TYPE.CROSSING,
-      fromNodeFlags: NODE_FLAG.HAS_KERB_RAMP,
-      toNodeFlags: NODE_FLAG.HAS_KERB_RAMP,
-    });
-    const one = createGraph({
-      edgeType: EDGE_TYPE.CROSSING,
-      fromNodeFlags: NODE_FLAG.HAS_KERB_RAMP,
-    });
-    const neither = createGraph({ edgeType: EDGE_TYPE.CROSSING });
+    const both = surveyed(
+      createGraph({
+        edgeType: EDGE_TYPE.CROSSING,
+        fromNodeFlags: NODE_FLAG.HAS_KERB_RAMP,
+        toNodeFlags: NODE_FLAG.HAS_KERB_RAMP,
+      }),
+    );
+    const one = surveyed(
+      createGraph({
+        edgeType: EDGE_TYPE.CROSSING,
+        fromNodeFlags: NODE_FLAG.HAS_KERB_RAMP,
+      }),
+    );
+    const neither = surveyed(createGraph({ edgeType: EDGE_TYPE.CROSSING }));
 
     const bothCost = edgeCost(both, 0, wheelchairProfile(), 0, 1);
     const oneCost = edgeCost(one, 0, wheelchairProfile(), 0, 1);
@@ -572,15 +600,19 @@ describe("edgeCost", () => {
   });
 
   it("treats a crossing end on a painted sidewalk like a ramped end", () => {
-    const paintedAndRamped = createGraph({
-      edgeType: EDGE_TYPE.CROSSING,
-      fromNodeFlags: NODE_FLAG.STEP_FREE_KERB,
-      toNodeFlags: NODE_FLAG.HAS_KERB_RAMP,
-    });
-    const paintedOnly = createGraph({
-      edgeType: EDGE_TYPE.CROSSING,
-      fromNodeFlags: NODE_FLAG.STEP_FREE_KERB,
-    });
+    const paintedAndRamped = surveyed(
+      createGraph({
+        edgeType: EDGE_TYPE.CROSSING,
+        fromNodeFlags: NODE_FLAG.STEP_FREE_KERB,
+        toNodeFlags: NODE_FLAG.HAS_KERB_RAMP,
+      }),
+    );
+    const paintedOnly = surveyed(
+      createGraph({
+        edgeType: EDGE_TYPE.CROSSING,
+        fromNodeFlags: NODE_FLAG.STEP_FREE_KERB,
+      }),
+    );
 
     expect(edgeCost(paintedAndRamped, 0, wheelchairProfile(), 0, 1)).toBe(100);
     expect(edgeCost(paintedOnly, 0, wheelchairProfile(), 0, 1)).toBe(

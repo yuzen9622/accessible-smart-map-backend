@@ -223,3 +223,103 @@ describe("nearestOutdoorPoint", () => {
     ).toBeNull();
   });
 });
+
+/**
+ * A straight west-to-east chain of two-way edges about one metre apart, plus
+ * extra two-way edges between any listed node pairs.
+ */
+function chainGraph(
+  chainLength: number,
+  extraNodes: { lon: number; lat: number }[],
+  extraEdges: { from: number; to: number; type?: number }[],
+): PedGraph {
+  const nodeLon = Array.from({ length: chainLength }, (_, i) => 121 + i * 1e-5);
+  const nodeLat = Array.from({ length: chainLength }, () => 25);
+  for (const node of extraNodes) {
+    nodeLon.push(node.lon);
+    nodeLat.push(node.lat);
+  }
+  const pairs: { from: number; to: number; type: number }[] = [];
+  for (let i = 0; i + 1 < chainLength; i += 1) {
+    pairs.push({ from: i, to: i + 1, type: EDGE_TYPE.FOOTWAY });
+  }
+  for (const edge of extraEdges) {
+    pairs.push({ ...edge, type: edge.type ?? EDGE_TYPE.FOOTWAY });
+  }
+  const neighbours: { to: number; type: number }[][] = nodeLon.map(() => []);
+  for (const { from, to, type } of pairs) {
+    neighbours[from].push({ to, type });
+    neighbours[to].push({ to: from, type });
+  }
+  const adjOffset = [0];
+  const adjTarget: number[] = [];
+  const types: number[] = [];
+  for (const list of neighbours) {
+    for (const { to, type } of list) {
+      adjTarget.push(to);
+      types.push(type);
+    }
+    adjOffset.push(adjTarget.length);
+  }
+  const graph = graphFromAdjacency({
+    nodeLon,
+    nodeLat,
+    nodeFlags: nodeLon.map(() => NODE_FLAG.HAS_REAL_GEOM),
+    adjOffset,
+    adjTarget,
+    adjAttr: adjTarget.map((_, i) => i),
+  });
+  graph.edgeType.set(types);
+  return graph;
+}
+
+describe("snapToGraph endpoint preference", () => {
+  it("prefers a farther endpoint on the main network over a nearer isolated fragment", () => {
+    const graph = chainGraph(
+      60,
+      [
+        { lon: 121.0003, lat: 25.00005 },
+        { lon: 121.00031, lat: 25.00005 },
+      ],
+      [{ from: 60, to: 61 }],
+    );
+    const index = buildEdgeIndex(graph);
+
+    expect(index.nodeComponentSize[30]).toBe(60);
+    expect(index.nodeComponentSize[60]).toBe(2);
+    expect(snapToGraph(index, 25.00004, 121.0003, 50)?.nodeId).toBe(30);
+  });
+
+  it("still snaps to a fragment when nothing larger is within tolerance", () => {
+    const graph = chainGraph(
+      60,
+      [
+        { lon: 121.0003, lat: 25.00005 },
+        { lon: 121.00031, lat: 25.00005 },
+      ],
+      [{ from: 60, to: 61 }],
+    );
+
+    expect(
+      snapToGraph(buildEdgeIndex(graph), 25.00004, 121.0003, 3)?.nodeId,
+    ).toBe(60);
+  });
+
+  it("keeps a stairs-only endpoint as a last resort when stairs are barred", () => {
+    const graph = chainGraph(
+      60,
+      [{ lon: 121 + 62 * 1e-5, lat: 25 }],
+      [{ from: 59, to: 60, type: EDGE_TYPE.STEPS }],
+    );
+    const index = buildEdgeIndex(graph);
+    const lon = 121 + 62 * 1e-5;
+
+    expect(snapToGraph(index, 25, lon, 50)?.nodeId).toBe(60);
+    expect(snapToGraph(index, 25, lon, 50, { avoidStairs: true })?.nodeId).toBe(
+      59,
+    );
+    expect(snapToGraph(index, 25, lon, 1, { avoidStairs: true })?.nodeId).toBe(
+      60,
+    );
+  });
+});

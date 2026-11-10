@@ -4,7 +4,11 @@ import {
   canTraverseFareGate,
   createTransitAuthorizedFareAccess,
 } from "./fare-access";
-import { loadPedGraph, type PedGraphQueryable } from "./graph-loader";
+import {
+  loadPedGraph,
+  markKerbRampSurveyedNodes,
+  type PedGraphQueryable,
+} from "./graph-loader";
 import { sumSidewalkRampCount } from "./sidewalk-ramp-count";
 
 type FakeRow = Record<string, unknown>;
@@ -947,4 +951,30 @@ it("does not let an unqualified sidewalk match hide a qualified count in either 
   expect(graph.edgeSidewalkId[0]).toBe(-1);
   expect(sumSidewalkRampCount(graph, Int32Array.from([0, 1]))).toBe(3);
   expect(sumSidewalkRampCount(graph, Int32Array.from([1, 0]))).toBe(3);
+});
+
+describe("markKerbRampSurveyedNodes", () => {
+  it("flags nodes sharing a grid cell with a surveyed ramp and leaves distant nodes alone", () => {
+    // Node 1 is about 20 m from the surveyed ramp at node 0; node 2 is 100 km away.
+    const nodeLat = Float64Array.from([25.0401, 25.0402, 24.1401]);
+    const nodeLon = Float64Array.from([121.5401, 121.5402, 120.6401]);
+    const nodeFlags = new Uint8Array(3);
+
+    markKerbRampSurveyedNodes(nodeLat, nodeLon, nodeFlags, [0]);
+
+    expect(nodeFlags[0] & NODE_FLAG.KERB_RAMP_SURVEYED).not.toBe(0);
+    expect(nodeFlags[1] & NODE_FLAG.KERB_RAMP_SURVEYED).not.toBe(0);
+    expect(nodeFlags[2] & NODE_FLAG.KERB_RAMP_SURVEYED).toBe(0);
+  });
+
+  it("flags nothing when no ramp was surveyed", () => {
+    const nodeFlags = new Uint8Array(2);
+    markKerbRampSurveyedNodes(
+      Float64Array.from([25, 25]),
+      Float64Array.from([121, 121]),
+      nodeFlags,
+      [],
+    );
+    expect(Array.from(nodeFlags)).toEqual([0, 0]);
+  });
 });

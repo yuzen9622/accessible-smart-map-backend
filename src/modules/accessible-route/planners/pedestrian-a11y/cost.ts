@@ -2,6 +2,7 @@ import { CSR_CARRIAGEWAY_COST_MULTIPLIER } from "../../../../config/routing";
 import {
   EDGE_FLAG,
   EDGE_TYPE,
+  NODE_FLAG,
   SMOOTHNESS,
   STEP_FREE_CROSSING_END,
   SURFACE,
@@ -319,7 +320,8 @@ function stepsPenalty(
  * crossing carry an observed curb ramp: neutral when both do, a middle
  * multiplier when only one does, and the full unramped multiplier when
  * neither does. The neutral multiplier applies to every non-`CROSSING` edge
- * type. Never INFEASIBLE: missing curb ramp data means the corner was not
+ * type, and to a crossing outside the curb ramp survey (see
+ * NODE_FLAG.KERB_RAMP_SURVEYED). Never INFEASIBLE: missing curb ramp data means the corner was not
  * observed, not that it is impassable.
  */
 function kerbRampPenalty(
@@ -336,6 +338,16 @@ function kerbRampPenalty(
   const toHasKerbRamp =
     (graph.nodeFlags[toNode] & STEP_FREE_CROSSING_END) !== 0;
   if (fromHasKerbRamp && toHasKerbRamp) {
+    return MINIMUM_PENALTY_MULTIPLIER;
+  }
+  // Outside the ramp survey a missing observation says nothing, and the
+  // carriageway through the same junction climbs the same kerbs, so the
+  // crossing must not be made dearer than the road beside it.
+  if (
+    ((graph.nodeFlags[fromNode] | graph.nodeFlags[toNode]) &
+      NODE_FLAG.KERB_RAMP_SURVEYED) ===
+    0
+  ) {
     return MINIMUM_PENALTY_MULTIPLIER;
   }
   if (fromHasKerbRamp || toHasKerbRamp) {

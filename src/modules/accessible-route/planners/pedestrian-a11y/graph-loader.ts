@@ -1,3 +1,4 @@
+import { KERB_RAMP_SURVEY_CELL_M } from "../../../../config/ped-graph";
 import {
   EDGE_FLAG,
   isGtfsIndoorEdge,
@@ -38,6 +39,37 @@ const PAINTED_NODE_IDS_QUERY = `
  * reads from the OSM node, so both engines judge a ramped end alike.
  */
 export const STEP_FREE_OSM_KERB_CODES = [1, 2, 7] as const;
+
+const METRES_PER_DEGREE_LATITUDE = 110_900;
+/** Longitude degree at Taiwan's latitude; cell membership needs no more precision. */
+const METRES_PER_DEGREE_LONGITUDE = 101_400;
+
+/**
+ * Flag every node sharing a grid cell with a government-surveyed curb ramp.
+ *
+ * @param nodeLat Node latitudes.
+ * @param nodeLon Node longitudes.
+ * @param nodeFlags Node flags, mutated in place.
+ * @param surveyedRampNodes Dense indexes of nodes carrying a surveyed ramp.
+ * @returns Nothing.
+ */
+export function markKerbRampSurveyedNodes(
+  nodeLat: Float64Array,
+  nodeLon: Float64Array,
+  nodeFlags: Uint8Array,
+  surveyedRampNodes: Iterable<number>,
+): void {
+  const cellOf = (node: number): string =>
+    `${Math.floor((nodeLat[node] * METRES_PER_DEGREE_LATITUDE) / KERB_RAMP_SURVEY_CELL_M)}:${Math.floor((nodeLon[node] * METRES_PER_DEGREE_LONGITUDE) / KERB_RAMP_SURVEY_CELL_M)}`;
+  const surveyedCells = new Set<string>();
+  for (const node of surveyedRampNodes) surveyedCells.add(cellOf(node));
+  if (surveyedCells.size === 0) return;
+  for (let node = 0; node < nodeFlags.length; node += 1) {
+    if (surveyedCells.has(cellOf(node))) {
+      nodeFlags[node] |= NODE_FLAG.KERB_RAMP_SURVEYED;
+    }
+  }
+}
 
 const OSM_KERB_RAMP_NODE_IDS_QUERY = `
   SELECT node_id::text AS node_id
@@ -1177,6 +1209,12 @@ export async function loadPedGraph(
     for (const nodeIndex of rampNodeIndexes) {
       nodeStorage.nodeFlags[nodeIndex] |= NODE_FLAG.HAS_KERB_RAMP;
     }
+    markKerbRampSurveyedNodes(
+      nodeStorage.nodeLat,
+      nodeStorage.nodeLon,
+      nodeStorage.nodeFlags,
+      rampNodeIndexes,
+    );
   }
   const osmKerbRampIndexes = await loadNodeIndexes(
     client,

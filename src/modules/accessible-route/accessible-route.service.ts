@@ -2017,6 +2017,13 @@ async function refineTransitWalkLegsWithCsr(
   deadline?: number,
 ): Promise<void> {
   if (getRoutingConfig().walkPlanner !== "csr") return;
+  const outcome = {
+    replanned: 0,
+    keptSameStation: 0,
+    keptOutOfBudget: 0,
+    keptNoCsrRoute: 0,
+    keptWouldMissVehicle: 0,
+  };
   await Promise.all(
     routes.map(async (route) => {
       if (route.legs.every((leg) => leg.type === "WALK")) return;
@@ -2030,7 +2037,10 @@ async function refineTransitWalkLegsWithCsr(
       }
       // Right to left so earlier indices stay valid after each splice.
       for (const [start, end] of spans.reverse()) {
-        if (deadline !== undefined && Date.now() >= deadline) return;
+        if (deadline !== undefined && Date.now() >= deadline) {
+          outcome.keptOutOfBudget++;
+          continue;
+        }
         const walks = route.legs.slice(start, end + 1) as WalkLeg[];
         const prev = route.legs[start - 1] as TransitLeg | undefined;
         const next = route.legs[end + 1] as TransitLeg | undefined;
@@ -2040,8 +2050,10 @@ async function refineTransitWalkLegsWithCsr(
           isRailLeg(prev) &&
           isRailLeg(next) &&
           railStationKey(prev, "arrival") === railStationKey(next, "departure")
-        )
+        ) {
+          outcome.keptSameStation++;
           continue;
+        }
         const first = walks[0].polyline[0];
         const lastPolyline = walks[walks.length - 1].polyline;
         const last = lastPolyline[lastPolyline.length - 1];
@@ -2054,7 +2066,10 @@ async function refineTransitWalkLegsWithCsr(
           mode,
           avoidStairs,
         );
-        if (csr.status !== "ok") continue;
+        if (csr.status !== "ok") {
+          outcome.keptNoCsrRoute++;
+          continue;
+        }
         const plan = csr.plans[0];
         const csrMs = plan.durationS * 1000;
         const deltaMs =
@@ -2068,8 +2083,10 @@ async function refineTransitWalkLegsWithCsr(
             walkStart === undefined ||
             departure === undefined ||
             walkStart + csrMs > departure
-          )
+          ) {
+            outcome.keptWouldMissVehicle++;
             continue;
+          }
         }
         const leg: WalkLeg = {
           ...buildCsrWalkRoute([plan]).legs[0],
@@ -2088,6 +2105,7 @@ async function refineTransitWalkLegsWithCsr(
           _csrPlanned: { value: true },
         });
         route.legs.splice(start, end - start + 1, leg);
+        outcome.replanned++;
         if (next?.type === "BUS") {
           if (next._boardingReadyTime !== undefined)
             next._boardingReadyTime += deltaMs;
@@ -2106,6 +2124,10 @@ async function refineTransitWalkLegsWithCsr(
         0,
       );
     }),
+  );
+  console.log(
+    "[csr-walk] transit walk legs",
+    JSON.stringify({ mode, ...outcome }),
   );
 }
 

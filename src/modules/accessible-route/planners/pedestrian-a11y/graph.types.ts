@@ -158,6 +158,13 @@ export const NODE_FLAG = {
    * `kerbRampPenalty` and the CSR crossing count, exactly like HAS_KERB_RAMP.
    */
   STEP_FREE_KERB: 16,
+  /**
+   * The node lies where the government curb ramp survey has data (see
+   * KERB_RAMP_SURVEY_CELL_M). Only there does a crossing end without an
+   * observed ramp count against a wheelchair route; elsewhere nobody looked,
+   * so the crossing is costed like any other.
+   */
+  KERB_RAMP_SURVEYED: 32,
 } as const;
 
 /** Either flag makes a crossing end step-free for the wheelchair cost. */

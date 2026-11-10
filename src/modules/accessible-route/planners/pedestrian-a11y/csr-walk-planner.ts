@@ -505,6 +505,7 @@ function planSegment(
     from.lat,
     from.lng,
     PED_GRAPH_MAX_SNAP_TOLERANCE_M,
+    { avoidStairs: profile.forbidStairs === true },
   );
   if (origin === null) {
     return {
@@ -517,6 +518,7 @@ function planSegment(
     to.lat,
     to.lng,
     PED_GRAPH_MAX_SNAP_TOLERANCE_M,
+    { avoidStairs: profile.forbidStairs === true },
   );
   if (destination === null) {
     return {

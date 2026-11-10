@@ -1,4 +1,5 @@
 import Flatbush from "flatbush";
+import { PED_GRAPH_SNAP_MIN_COMPONENT_NODES } from "../../../../config/ped-graph";
 import { haversineMeters } from "../../../../utils/geo";
 import { EDGE_TYPE, NODE_FLAG, type PedGraph } from "./graph.types";
 
@@ -20,6 +21,46 @@ export interface EdgeIndex {
   edgeToNode: Int32Array;
   edgeAttrIdx: Int32Array;
   indexedEdgeCount: number;
+  /** Node count of the connected piece each node belongs to, ignoring edge direction. */
+  nodeComponentSize: Int32Array;
+}
+
+/**
+ * @param graph CSR pedestrian graph.
+ * @returns For every node, the node count of its connected piece, with
+ * one-way edges treated as two-way.
+ */
+function componentSizes(graph: PedGraph): Int32Array {
+  const parent = new Int32Array(graph.nodeCount);
+  for (let node = 0; node < graph.nodeCount; node += 1) parent[node] = node;
+  const find = (node: number): number => {
+    let root = node;
+    while (parent[root] !== root) {
+      parent[root] = parent[parent[root]];
+      root = parent[root];
+    }
+    return root;
+  };
+  for (let fromNode = 0; fromNode < graph.nodeCount; fromNode += 1) {
+    for (
+      let adjacencyIndex = graph.adjOffset[fromNode];
+      adjacencyIndex < graph.adjOffset[fromNode + 1];
+      adjacencyIndex += 1
+    ) {
+      const a = find(fromNode);
+      const b = find(graph.adjTarget[adjacencyIndex]);
+      if (a !== b) parent[a] = b;
+    }
+  }
+  const rootSize = new Int32Array(graph.nodeCount);
+  for (let node = 0; node < graph.nodeCount; node += 1) {
+    rootSize[find(node)] += 1;
+  }
+  const sizes = new Int32Array(graph.nodeCount);
+  for (let node = 0; node < graph.nodeCount; node += 1) {
+    sizes[node] = rootSize[find(node)];
+  }
+  return sizes;
 }
 
 /**
@@ -94,6 +135,7 @@ export function buildEdgeIndex(graph: PedGraph): EdgeIndex {
   const edgeFromNode = new Int32Array(indexedEdgeCount);
   const edgeToNode = new Int32Array(indexedEdgeCount);
   const edgeAttrIdx = new Int32Array(indexedEdgeCount);
+  const nodeComponentSize = componentSizes(graph);
   if (indexedEdgeCount === 0) {
     return {
       graph,
@@ -102,6 +144,7 @@ export function buildEdgeIndex(graph: PedGraph): EdgeIndex {
       edgeToNode,
       edgeAttrIdx,
       indexedEdgeCount,
+      nodeComponentSize,
     };
   }
   const flatbush = new Flatbush(indexedEdgeCount);
@@ -142,6 +185,7 @@ export function buildEdgeIndex(graph: PedGraph): EdgeIndex {
     edgeToNode,
     edgeAttrIdx,
     indexedEdgeCount,
+    nodeComponentSize,
   };
 }
 
@@ -202,18 +246,37 @@ function closestEndpoint(
     : { nodeId: toNode, distanceM: toDistance };
 }
 
+export interface SnapOptions {
+  /** The walk may not use stairs, so an endpoint reached only by a stairs edge is a last resort. */
+  avoidStairs?: boolean;
+}
+
+const STAIRS_EDGE_TYPES: ReadonlySet<number> = new Set([
+  EDGE_TYPE.STEPS,
+  EDGE_TYPE.INDOOR_STAIRS,
+]);
+
 /**
+ * Picks the endpoint a route starts or ends at. Within the tolerance the
+ * nearest endpoint wins among the best-ranked candidates: first those on a
+ * piece of the graph large enough to route across and, when stairs are barred,
+ * not found through a stairs edge; then stairs-only endpoints; then endpoints
+ * on a fragment (see PED_GRAPH_SNAP_MIN_COMPONENT_NODES), which a route can
+ * never leave.
+ *
  * @param index Flatbush-backed physical edge index.
  * @param lat Query latitude in degrees.
  * @param lon Query longitude in degrees.
  * @param toleranceM Maximum snapping distance in metres.
- * @returns The closest routable endpoint and attribute index, or null outside tolerance.
+ * @param options Request constraints that affect which endpoint is usable.
+ * @returns The chosen routable endpoint and attribute index, or null outside tolerance.
  */
 export function snapToGraph(
   index: EdgeIndex,
   lat: number,
   lon: number,
   toleranceM: number,
+  options?: SnapOptions,
 ): SnapResult | null {
   if (
     !Number.isFinite(lat) ||
@@ -230,21 +293,31 @@ export function snapToGraph(
     ...queryBounds(lat, lon, toleranceM),
   );
   let result: SnapResult | null = null;
+  let resultRank = Number.POSITIVE_INFINITY;
 
   for (const candidate of candidates) {
     const fromNode = index.edgeFromNode[candidate];
     const toNode = index.edgeToNode[candidate];
     const endpoint = closestEndpoint(index.graph, fromNode, toNode, lat, lon);
+    if (endpoint.distanceM > toleranceM) continue;
+    const attrIdx = index.edgeAttrIdx[candidate];
+    const rank =
+      index.nodeComponentSize[endpoint.nodeId] <
+      PED_GRAPH_SNAP_MIN_COMPONENT_NODES
+        ? 2
+        : options?.avoidStairs &&
+            STAIRS_EDGE_TYPES.has(index.graph.edgeType[attrIdx])
+          ? 1
+          : 0;
     if (
-      endpoint.distanceM > toleranceM ||
-      (result !== null && endpoint.distanceM >= result.distanceM)
+      result !== null &&
+      (rank > resultRank ||
+        (rank === resultRank && endpoint.distanceM >= result.distanceM))
     ) {
       continue;
     }
-    result = {
-      ...endpoint,
-      edgeAttrIdx: index.edgeAttrIdx[candidate],
-    };
+    result = { ...endpoint, edgeAttrIdx: attrIdx };
+    resultRank = rank;
   }
 
   return result;

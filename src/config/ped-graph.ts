@@ -47,8 +47,31 @@ export const PED_GRAPH_COVERAGE_BBOX: PedGraphCoverageBbox = [
  * graph coverage, never as a satisfied accessibility or fare-policy decision.
  * Historical Phase 0 projection-snap metrics do not describe this release's
  * stricter endpoint-based behavior.
+ *
+ * 60 m rather than 50 m because the middle of a large station hall (Taipei
+ * Main Station) sits 51-55 m from the nearest connected walkway: at 50 m those
+ * points reached only an isolated platform staircase and every walk from them
+ * failed. On 464 sample points the wider radius snaps 8 more, all 50-57 m out.
  */
-export const PED_GRAPH_MAX_SNAP_TOLERANCE_M = 50;
+export const PED_GRAPH_MAX_SNAP_TOLERANCE_M = 60;
+
+/**
+ * A connected piece of the graph with fewer nodes than this is a fragment:
+ * an isolated platform staircase, a footpath stub, a severed service road.
+ * A request point prefers an endpoint on a larger piece when one lies within
+ * the snap tolerance, because a route can never leave a fragment. Graph v34
+ * has about 5,900 pieces under 50 nodes and about 100 above, the smallest real ones being
+ * offshore islands of a few hundred nodes.
+ */
+export const PED_GRAPH_SNAP_MIN_COMPONENT_NODES = 50;
+
+/**
+ * Side of the grid cells, in metres, that mark where the government curb ramp
+ * survey has data: a cell holding at least one surveyed ramp is surveyed.
+ * The survey covers Taipei only, where ramps sit at most junctions, so a
+ * junction-sized cell follows the city edge without leaving holes inside it.
+ */
+export const KERB_RAMP_SURVEY_CELL_M = 200;
 
 export const DEFAULT_PED_GRAPH_LOAD_TIMEOUT_MS = 120_000;
 export const DEFAULT_PED_GRAPH_REFRESH_INTERVAL_MS = 300_000;
