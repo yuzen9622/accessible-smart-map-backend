@@ -13,6 +13,60 @@ import type { PedGraph } from "./graph.types";
 
 const INITIAL_HEAP_CAPACITY = 64;
 
+interface SearchWorkspace {
+  gScore: Float64Array;
+  carriagewayScore: Float64Array;
+  parent: Int32Array;
+  parentEdgeAttr: Int32Array;
+  closed: Uint8Array;
+  touched: Int32Array;
+  touchedCount: number;
+  inUse: boolean;
+}
+
+let reusableWorkspace: SearchWorkspace | undefined;
+
+function createWorkspace(nodeCount: number): SearchWorkspace {
+  return {
+    gScore: new Float64Array(nodeCount).fill(Number.POSITIVE_INFINITY),
+    carriagewayScore: new Float64Array(nodeCount).fill(
+      Number.POSITIVE_INFINITY,
+    ),
+    parent: new Int32Array(nodeCount).fill(-1),
+    parentEdgeAttr: new Int32Array(nodeCount).fill(-1),
+    closed: new Uint8Array(nodeCount),
+    touched: new Int32Array(nodeCount),
+    touchedCount: 0,
+    inUse: false,
+  };
+}
+
+function borrowWorkspace(nodeCount: number): SearchWorkspace {
+  if (reusableWorkspace?.inUse) {
+    const temporary = createWorkspace(nodeCount);
+    temporary.inUse = true;
+    return temporary;
+  }
+  if (reusableWorkspace?.gScore.length !== nodeCount) {
+    reusableWorkspace = createWorkspace(nodeCount);
+  }
+  reusableWorkspace.inUse = true;
+  return reusableWorkspace;
+}
+
+function releaseWorkspace(workspace: SearchWorkspace): void {
+  for (let index = 0; index < workspace.touchedCount; index += 1) {
+    const node = workspace.touched[index];
+    workspace.gScore[node] = Number.POSITIVE_INFINITY;
+    workspace.carriagewayScore[node] = Number.POSITIVE_INFINITY;
+    workspace.parent[node] = -1;
+    workspace.parentEdgeAttr[node] = -1;
+    workspace.closed[node] = 0;
+  }
+  workspace.touchedCount = 0;
+  workspace.inUse = false;
+}
+
 export interface RouteResult {
   nodePath: Int32Array;
   /**
@@ -290,82 +344,93 @@ export function aStar(
       reopenedNodes: 0,
     };
   }
-  const gScore = new Float64Array(graph.nodeCount);
-  gScore.fill(Number.POSITIVE_INFINITY);
-  const carriagewayScore = new Float64Array(graph.nodeCount);
-  carriagewayScore.fill(Number.POSITIVE_INFINITY);
-  carriagewayScore[from] = 0;
-  const parent = new Int32Array(graph.nodeCount);
-  parent.fill(-1);
-  const parentEdgeAttr = new Int32Array(graph.nodeCount);
-  parentEdgeAttr.fill(-1);
-  const closed = new Uint8Array(graph.nodeCount);
-  const open = new BinaryMinHeap();
-  gScore[from] = 0;
-  open.push(from, heuristicCost(graph, from, to));
-  let expandedNodes = 0;
-  let reopenedNodes = 0;
+  const workspace = borrowWorkspace(graph.nodeCount);
+  const { gScore, carriagewayScore, parent, parentEdgeAttr, closed, touched } =
+    workspace;
+  try {
+    touched[workspace.touchedCount++] = from;
+    carriagewayScore[from] = 0;
+    const open = new BinaryMinHeap();
+    gScore[from] = 0;
+    open.push(from, heuristicCost(graph, from, to));
+    let expandedNodes = 0;
+    let reopenedNodes = 0;
 
-  while (open.size > 0) {
-    const node = open.pop();
-    const priority = open.lastKey;
-    if (node === -1) {
-      break;
-    }
-    const expectedPriority = gScore[node] + heuristicCost(graph, node, to);
-    if (priority !== expectedPriority || closed[node] !== 0) {
-      continue;
-    }
-    closed[node] = 1;
-    expandedNodes += 1;
-    if (node === to) {
-      return buildRouteResult(
-        parent,
-        parentEdgeAttr,
-        from,
-        to,
-        gScore[to],
-        expandedNodes,
-        reopenedNodes,
-        carriagewayScore[to],
-      );
-    }
-    for (
-      let adjacencyIndex = graph.adjOffset[node];
-      adjacencyIndex < graph.adjOffset[node + 1];
-      adjacencyIndex += 1
-    ) {
-      const attrIdx = graph.adjAttr[adjacencyIndex];
-      const target = graph.adjTarget[adjacencyIndex];
-      if (
-        !canTraverseFareGate(graph, node, target, attrIdx, normalizedFareAccess)
+    while (open.size > 0) {
+      const node = open.pop();
+      const priority = open.lastKey;
+      if (node === -1) {
+        break;
+      }
+      const expectedPriority = gScore[node] + heuristicCost(graph, node, to);
+      if (priority !== expectedPriority || closed[node] !== 0) {
+        continue;
+      }
+      closed[node] = 1;
+      expandedNodes += 1;
+      if (node === to) {
+        return buildRouteResult(
+          parent,
+          parentEdgeAttr,
+          from,
+          to,
+          gScore[to],
+          expandedNodes,
+          reopenedNodes,
+          carriagewayScore[to],
+        );
+      }
+      for (
+        let adjacencyIndex = graph.adjOffset[node];
+        adjacencyIndex < graph.adjOffset[node + 1];
+        adjacencyIndex += 1
       ) {
-        continue;
+        const attrIdx = graph.adjAttr[adjacencyIndex];
+        const target = graph.adjTarget[adjacencyIndex];
+        if (
+          !canTraverseFareGate(
+            graph,
+            node,
+            target,
+            attrIdx,
+            normalizedFareAccess,
+          )
+        ) {
+          continue;
+        }
+        if (excludedEdges.has(attrIdx)) continue;
+        const edgeCostM = searchEdgeCost(graph, attrIdx, profile, node, target);
+        if (!Number.isFinite(edgeCostM)) {
+          continue;
+        }
+        const tentativeCost = gScore[node] + edgeCostM;
+        if (
+          !Number.isFinite(tentativeCost) ||
+          tentativeCost >= gScore[target]
+        ) {
+          continue;
+        }
+        if (closed[target] !== 0) {
+          closed[target] = 0;
+          reopenedNodes += 1;
+        }
+        if (gScore[target] === Number.POSITIVE_INFINITY) {
+          touched[workspace.touchedCount++] = target;
+        }
+        gScore[target] = tentativeCost;
+        carriagewayScore[target] =
+          carriagewayScore[node] + reportedCarriageway(graph, attrIdx, profile);
+        parent[target] = node;
+        parentEdgeAttr[target] = attrIdx;
+        const priorityKey = tentativeCost + heuristicCost(graph, target, to);
+        if (!Number.isFinite(priorityKey)) {
+          continue;
+        }
+        open.push(target, priorityKey);
       }
-      if (excludedEdges.has(attrIdx)) continue;
-      const edgeCostM = searchEdgeCost(graph, attrIdx, profile, node, target);
-      if (!Number.isFinite(edgeCostM)) {
-        continue;
-      }
-      const tentativeCost = gScore[node] + edgeCostM;
-      if (!Number.isFinite(tentativeCost) || tentativeCost >= gScore[target]) {
-        continue;
-      }
-      if (closed[target] !== 0) {
-        closed[target] = 0;
-        reopenedNodes += 1;
-      }
-      gScore[target] = tentativeCost;
-      carriagewayScore[target] =
-        carriagewayScore[node] + reportedCarriageway(graph, attrIdx, profile);
-      parent[target] = node;
-      parentEdgeAttr[target] = attrIdx;
-      const priorityKey = tentativeCost + heuristicCost(graph, target, to);
-      if (!Number.isFinite(priorityKey)) {
-        continue;
-      }
-      open.push(target, priorityKey);
     }
+    return null;
+  } finally {
+    releaseWorkspace(workspace);
   }
-  return null;
 }
