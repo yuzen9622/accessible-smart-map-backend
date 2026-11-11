@@ -73,6 +73,7 @@ import { canMatchBusTrip, matchPlannedBus } from "./bus-trip-match";
 
 const BUS_SHAPE_CACHE_PREFIX = "bus:shape:v3:";
 const BUS_SHAPE_CACHE_TTL_SEC = 24 * 60 * 60;
+const busShapeInFlight = new Map<string, Promise<BusShape[]>>();
 import type {
   BusRouteInfoResult,
   BusRouteDirection,
@@ -360,20 +361,31 @@ async function getBusRouteShapes(
     }
   }
   try {
-    const { records } = await fetchRouteScoped(
-      routeName,
-      city,
-      // The path-segment form matches names containing the id (InterCity
-      // "21" returns 1121, 7210, …); only an exact name filter is this route.
-      ({ type, routeId: id }) =>
-        type === "City"
-          ? `${busUrl.cityShapeUrl}/${city}?$format=JSON&$filter=RouteName/Zh_tw eq '${odataUrlLiteral(id)}'`
-          : `${busUrl.interCityShapeUrl}?$format=JSON&$filter=RouteName/Zh_tw eq '${odataUrlLiteral(id)}'`,
-    );
-    const shapes = normalizeBusShapes(records);
-    if (shapes.length)
-      await redisSet(cacheKey, JSON.stringify(shapes), BUS_SHAPE_CACHE_TTL_SEC);
-    return shapes;
+    let inFlight = busShapeInFlight.get(cacheKey);
+    if (!inFlight) {
+      inFlight = (async () => {
+        const { records } = await fetchRouteScoped(
+          routeName,
+          city,
+          // The path-segment form matches names containing the id (InterCity
+          // "21" returns 1121, 7210, …); only an exact name filter is this route.
+          ({ type, routeId: id }) =>
+            type === "City"
+              ? `${busUrl.cityShapeUrl}/${city}?$format=JSON&$filter=RouteName/Zh_tw eq '${odataUrlLiteral(id)}'`
+              : `${busUrl.interCityShapeUrl}?$format=JSON&$filter=RouteName/Zh_tw eq '${odataUrlLiteral(id)}'`,
+        );
+        const shapes = normalizeBusShapes(records);
+        if (shapes.length)
+          await redisSet(
+            cacheKey,
+            JSON.stringify(shapes),
+            BUS_SHAPE_CACHE_TTL_SEC,
+          );
+        return shapes;
+      })().finally(() => busShapeInFlight.delete(cacheKey));
+      busShapeInFlight.set(cacheKey, inFlight);
+    }
+    return structuredClone(await inFlight);
   } catch (e) {
     console.error("Failed to fetch bus shape in getBusRouteDetail", e);
     return [];
