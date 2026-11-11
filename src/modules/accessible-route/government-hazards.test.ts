@@ -9,6 +9,7 @@ import { getActiveRoadIncidents } from "../traffic/road-incident.service";
 import type { AccessibleRoute } from "../../types/route";
 import type { RoadIncident } from "../../types/traffic";
 import { loadGovernmentHazards } from "./accessible-route.service";
+import { pointToSegmentDistanceM } from "./planners/hazard-routing";
 
 const route = {
   routeId: "r1",
@@ -37,6 +38,46 @@ beforeEach(() => {
 });
 
 describe("loadGovernmentHazards", () => {
+  it("reuses segment calculations while keeping every nearby government event", async () => {
+    const incidents = Array.from({ length: 48 }, (_, index) =>
+      incident({
+        incidentId: `closure-${index}`,
+        location: { lat: 25.00001 + index * 0.000001, lng: 121.501 },
+      }),
+    );
+    vi.mocked(getActiveRoadIncidents).mockResolvedValue(incidents);
+    const sin = vi.spyOn(Math, "sin");
+    try {
+      for (const item of incidents)
+        pointToSegmentDistanceM(
+          [item.location.lng, item.location.lat],
+          route.legs[0].polyline[0],
+          route.legs[0].polyline[1],
+        );
+      const independentCalls = sin.mock.calls.length;
+      sin.mockClear();
+      const matched = await loadGovernmentHazards([route]);
+      const sharedCalls = sin.mock.calls.length;
+      expect(matched.map((item) => item.id)).toEqual(
+        incidents.map((item) => `tdx:${item.incidentId}`),
+      );
+      expect(independentCalls).toBeGreaterThan(0);
+      expect(sharedCalls).toBeLessThan(independentCalls);
+    } finally {
+      sin.mockRestore();
+    }
+  });
+
+  it("isolates an invalid event point without losing a later valid event", async () => {
+    vi.mocked(getActiveRoadIncidents).mockResolvedValue([
+      incident({ incidentId: "invalid", points: [{ lat: 95, lng: 121.501 }] }),
+      incident({ incidentId: "valid" }),
+    ]);
+    expect(
+      (await loadGovernmentHazards([route])).map((item) => item.id),
+    ).toEqual(["tdx:valid"]);
+  });
+
   it("turns a nearby closure into a government construction hazard", async () => {
     vi.mocked(getActiveRoadIncidents).mockResolvedValue([
       incident({

@@ -134,8 +134,39 @@ export function pointToSegmentDistanceM(
   assertLngLat(point, "hazard point");
   assertLngLat(start, "segment start");
   assertLngLat(end, "segment end");
+  return distanceToSegmentM(point, start, end, angularDistance(start, end));
+}
 
-  const segmentAngularLength = angularDistance(start, end);
+export function preparePointToSegmentDistanceM(
+  start: LngLat,
+  end: LngLat,
+): (point: LngLat) => number {
+  assertLngLat(start, "segment start");
+  assertLngLat(end, "segment end");
+  const fixedStart: LngLat = [start[0], start[1]];
+  const fixedEnd: LngLat = [end[0], end[1]];
+  const angularLength = angularDistance(fixedStart, fixedEnd);
+  const bearing =
+    angularLength <= Number.EPSILON ? 0 : initialBearing(fixedStart, fixedEnd);
+  return (point) => {
+    assertLngLat(point, "hazard point");
+    return distanceToSegmentM(
+      point,
+      fixedStart,
+      fixedEnd,
+      angularLength,
+      bearing,
+    );
+  };
+}
+
+function distanceToSegmentM(
+  point: LngLat,
+  start: LngLat,
+  end: LngLat,
+  segmentAngularLength: number,
+  segmentBearing?: number,
+): number {
   if (segmentAngularLength <= Number.EPSILON) {
     return haversineDistanceM(point, start);
   }
@@ -144,16 +175,14 @@ export function pointToSegmentDistanceM(
   if (pointAngularDistance <= Number.EPSILON) return 0;
 
   const pointBearing = initialBearing(start, point);
-  const segmentBearing = initialBearing(start, end);
-  const bearingDelta = pointBearing - segmentBearing;
+  const bearingDelta =
+    pointBearing - (segmentBearing ?? initialBearing(start, end));
+  const pointAngularSine = Math.sin(pointAngularDistance);
   const crossTrackAngular = Math.asin(
-    Math.max(
-      -1,
-      Math.min(1, Math.sin(pointAngularDistance) * Math.sin(bearingDelta)),
-    ),
+    Math.max(-1, Math.min(1, pointAngularSine * Math.sin(bearingDelta))),
   );
   const alongTrackAngular = Math.atan2(
-    Math.sin(pointAngularDistance) * Math.cos(bearingDelta),
+    pointAngularSine * Math.cos(bearingDelta),
     Math.cos(pointAngularDistance),
   );
 
@@ -161,7 +190,7 @@ export function pointToSegmentDistanceM(
     return Math.abs(crossTrackAngular) * EARTH_RADIUS_M;
   }
   return Math.min(
-    haversineDistanceM(point, start),
+    pointAngularDistance * EARTH_RADIUS_M,
     haversineDistanceM(point, end),
   );
 }
@@ -322,6 +351,15 @@ function matchRouteHazards(
   polylines = groundPolylines(route),
 ): RouteHazard[] {
   const matches: RouteHazard[] = [];
+  const segmentDistances = hazards.length
+    ? polylines.flatMap((polyline) =>
+        polyline
+          .slice(1)
+          .map((end, index) =>
+            preparePointToSegmentDistanceM(polyline[index], end),
+          ),
+      )
+    : [];
   for (const hazard of hazards) {
     let nearestDistanceM = Infinity;
     let nearestPoint: LngLat = hazard.coordinates;
@@ -329,17 +367,11 @@ function matchRouteHazards(
       ? hazard.points
       : [hazard.coordinates];
     for (const position of positions) {
-      for (const polyline of polylines) {
-        for (let index = 1; index < polyline.length; index++) {
-          const distanceM = pointToSegmentDistanceM(
-            position,
-            polyline[index - 1],
-            polyline[index],
-          );
-          if (distanceM < nearestDistanceM) {
-            nearestDistanceM = distanceM;
-            nearestPoint = position;
-          }
+      for (const distanceToSegment of segmentDistances) {
+        const distanceM = distanceToSegment(position);
+        if (distanceM < nearestDistanceM) {
+          nearestDistanceM = distanceM;
+          nearestPoint = position;
         }
       }
     }

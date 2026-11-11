@@ -124,7 +124,7 @@ import {
   HAZARD_PENALTY_POINTS,
   appendAdvisoryHazards,
   matchConfirmedHazardsToRoute,
-  pointToSegmentDistanceM,
+  preparePointToSegmentDistanceM,
   planConfirmedHazardRoutes,
   type ConfirmedHazardInput,
   type HazardRoutePlan,
@@ -1114,12 +1114,17 @@ export async function loadGovernmentHazards(
           l.polyline.slice(1).map((end, k) => [l.polyline[k], end] as const),
         ),
     );
-    const near = (lat: number, lng: number) =>
-      segments.some(
-        ([a, b]) =>
-          pointToSegmentDistanceM([lng, lat], a, b) <=
-          GOVERNMENT_HAZARD_PREFILTER_M,
-      );
+    const segmentDistances: Array<
+      ReturnType<typeof preparePointToSegmentDistanceM>
+    > = [];
+    const near = (lat: number, lng: number) => {
+      const point: readonly [number, number] = [lng, lat];
+      return segments.some(([start, end], index) => {
+        const distance = (segmentDistances[index] ??=
+          preparePointToSegmentDistanceM(start, end));
+        return distance(point) <= GOVERNMENT_HAZARD_PREFILTER_M;
+      });
+    };
 
     return (
       incidents

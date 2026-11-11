@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ROUTE_WARNING } from "../../../constants/messages";
 import type { AccessibleRoute, BusLeg, WalkLeg } from "../../../types/route";
 import { attachInternalSchedule } from "../route-schedule";
@@ -9,6 +9,7 @@ import {
   matchConfirmedHazardsToRoute,
   planConfirmedHazardRoutes,
   pointToSegmentDistanceM,
+  preparePointToSegmentDistanceM,
   type ConfirmedHazardInput,
 } from "./hazard-routing";
 
@@ -53,6 +54,72 @@ const hazard = (
 });
 
 describe("confirmed hazard ground-geometry matching", () => {
+  it("owns prepared endpoints without caching mutable hazard positions", () => {
+    const start: [number, number] = [121, 25];
+    const end: [number, number] = [121.001, 25];
+    const point: [number, number] = [121.0005, 25.0001];
+    const original = preparePointToSegmentDistanceM(start, end);
+    const before = original(point);
+    start[0] = 122;
+    end[1] = 26;
+    const changed = preparePointToSegmentDistanceM(start, end);
+    expect(original(point)).toBe(before);
+    expect(changed(point)).not.toBe(before);
+    point[1] += 0.001;
+    expect(original(point)).toBeGreaterThan(before);
+  });
+
+  it("rejects invalid prepared coordinates without poisoning later queries", () => {
+    expect(() => preparePointToSegmentDistanceM([181, 0], [0, 0])).toThrow(
+      "Invalid segment start",
+    );
+    expect(() => preparePointToSegmentDistanceM([0, 0], [0, 91])).toThrow(
+      "Invalid segment end",
+    );
+    const distance = preparePointToSegmentDistanceM([0, 0], [0, 1]);
+    const before = distance([0.001, 0.5]);
+    expect(() => distance([NaN, 0])).toThrow("Invalid hazard point");
+    expect(distance([0.001, 0.5])).toBe(before);
+  });
+
+  it("reuses segment calculations without dropping or moving matched hazards", () => {
+    const route = walkRoute("repeated-segment", [
+      [121, 25],
+      [121.001, 25],
+    ]);
+    const hazards = Array.from({ length: 32 }, (_, index) =>
+      hazard(`near-${index}`, [121.0005, 25.00001 + index * 0.000001]),
+    );
+    const sin = vi.spyOn(Math, "sin");
+    try {
+      const expectedDistances = new Map(
+        hazards.map((item) => [
+          item.id,
+          Math.round(
+            pointToSegmentDistanceM(
+              item.coordinates,
+              route.legs[0].polyline[0],
+              route.legs[0].polyline[1],
+            ) * 10,
+          ) / 10,
+        ]),
+      );
+      const independentCalls = sin.mock.calls.length;
+      sin.mockClear();
+      const matched = matchConfirmedHazardsToRoute(route, hazards);
+      const sharedCalls = sin.mock.calls.length;
+      expect(matched.map((item) => item.id).sort()).toEqual(
+        hazards.map((item) => item.id).sort(),
+      );
+      for (const item of matched)
+        expect(item.distanceM).toBe(expectedDistances.get(item.id));
+      expect(independentCalls).toBeGreaterThan(0);
+      expect(sharedCalls).toBeLessThan(independentCalls);
+    } finally {
+      sin.mockRestore();
+    }
+  });
+
   it("uses actual point-to-segment distance inside the small corridor", () => {
     const route = walkRoute("on-line", [
       [121, 25],
