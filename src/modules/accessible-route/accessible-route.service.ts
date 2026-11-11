@@ -2305,8 +2305,49 @@ function annotateParkArrival(
   }
 }
 
+type CityLookup = {
+  elapsedMs: number;
+  outcome: Promise<PromiseSettledResult<TaiwanCityEn | null>>;
+};
+
+async function settleRouteWork<T>(
+  work: Promise<T>,
+): Promise<PromiseSettledResult<T>> {
+  try {
+    return { status: "fulfilled", value: await work };
+  } catch (reason) {
+    return { status: "rejected", reason };
+  }
+}
+
 export async function planAccessibleRouteFromRequest(
   body: PlanRouteRequest,
+): Promise<PlanRouteResult> {
+  let cityLookup: CityLookup | undefined;
+  const planning = await settleRouteWork(
+    planAccessibleRouteWithCityLookup(body, (lat, lng) => {
+      const startedAt = Date.now();
+      const lookup: CityLookup = {
+        elapsedMs: 0,
+        outcome: settleRouteWork(resolveCity(lat, lng)).then((outcome) => {
+          lookup.elapsedMs = Date.now() - startedAt;
+          return outcome;
+        }),
+      };
+      cityLookup = lookup;
+      return lookup;
+    }),
+  );
+  const city = await cityLookup?.outcome;
+  if (city?.status === "rejected") throw city.reason;
+  if (planning.status === "rejected") throw planning.reason;
+  if (city && planning.value.ok) planning.value.data.city = city.value;
+  return planning.value;
+}
+
+async function planAccessibleRouteWithCityLookup(
+  body: PlanRouteRequest,
+  startCityLookup: (lat: number, lng: number) => CityLookup,
 ): Promise<PlanRouteResult> {
   const planningNow = Date.now();
   let { origin, destination } = body;
@@ -2621,9 +2662,12 @@ export async function planAccessibleRouteFromRequest(
   );
   if (!preflight.ok) return preflight;
 
-  const tCity = Date.now();
-  const city = await resolveCity(lat, lng);
-  const cityMs = Date.now() - tCity;
+  const cityLookup = startCityLookup(lat, lng);
+  if (departureTime) {
+    const cityOutcome = await cityLookup.outcome;
+    if (cityOutcome.status === "rejected") throw cityOutcome.reason;
+  }
+  const city = null;
 
   // Offset-free ISO datetimes and bare "HH:mm" from AI tools are Taipei
   // wall-clock times; a bare clock already past today means tomorrow.
@@ -2664,16 +2708,18 @@ export async function planAccessibleRouteFromRequest(
     !arrivalEntrance;
   const logRequestTiming = () => {
     const planTotal = Date.now() - tPlan;
-    console.log(
-      "[route-timing] request",
-      JSON.stringify({
-        geocode: geocodeMs,
-        city: cityMs,
-        "plan.total": planTotal,
-        "plan.routing": Math.max(planTotal - trafficHookMs, 0),
-        "plan.traffic.total": trafficHookMs,
-      }),
-    );
+    const timing = {
+      geocode: geocodeMs,
+      "plan.total": planTotal,
+      "plan.routing": Math.max(planTotal - trafficHookMs, 0),
+      "plan.traffic.total": trafficHookMs,
+    };
+    void cityLookup.outcome.then(() => {
+      console.log(
+        "[route-timing] request",
+        JSON.stringify({ ...timing, city: cityLookup.elapsedMs }),
+      );
+    });
   };
 
   if (travelMode === "transit") {

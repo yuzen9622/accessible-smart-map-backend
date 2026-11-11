@@ -6958,3 +6958,110 @@ describe("FROZEN walking terrain elevation API", () => {
       expect(route).not.toHaveProperty("elevationProfile");
   });
 });
+
+describe("city lookup scheduling", () => {
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason: unknown) => void;
+    const promise = new Promise<T>((accept, fail) => {
+      resolve = accept;
+      reject = fail;
+    });
+    return { promise, resolve, reject };
+  }
+
+  beforeEach(() => {
+    vi.mocked(findNearbyParking).mockResolvedValue([]);
+    vi.mocked(planValhallaRoute).mockResolvedValue([]);
+  });
+
+  it.each(["transit", "walk", "drive", "motorcycle"] as const)(
+    "starts %s planning while city is pending but waits before responding",
+    async (travelMode) => {
+      const city = deferred<TaiwanCityEn | null>();
+      vi.mocked(getCity).mockReturnValue(city.promise);
+      const planner =
+        travelMode === "transit"
+          ? planOtpRouteDetailed
+          : travelMode === "walk"
+            ? planCsrWalkRoute
+            : planValhallaRoute;
+      let completed = false;
+      const pending = planAccessibleRouteFromRequest({
+        ...driveRequest,
+        travelMode,
+        mode: "normal",
+      }).then((result) => {
+        completed = true;
+        return result;
+      });
+      try {
+        await vi.waitFor(() => expect(planner).toHaveBeenCalled(), {
+          timeout: 200,
+          interval: 5,
+        });
+        expect(completed).toBe(false);
+      } finally {
+        city.resolve(TaiwanCityEn.Taipei);
+        await pending;
+      }
+    },
+  );
+
+  it("preserves city and the canonical request on a successful response", async () => {
+    vi.mocked(planValhallaRoute).mockResolvedValue([driveRoute([])]);
+    const result = await planAccessibleRouteFromRequest(driveRequest);
+    expect(result.ok).toBe(true);
+    expect(okData(result).city).toBe(TaiwanCityEn.Taipei);
+    expect(okData(result)._canonicalRequest).toMatchObject({
+      travelMode: "drive",
+      origin: driveRequest.origin,
+      destination: driveRequest.destination,
+    });
+    expect(Object.keys(okData(result))).not.toContain("_canonicalRequest");
+  });
+
+  it("does not start city lookup when coverage preflight rejects the request", async () => {
+    const result = await planAccessibleRouteFromRequest({
+      ...driveRequest,
+      origin: { latitude: 0, longitude: 0 },
+    });
+    expect(result.ok).toBe(false);
+    expect(getNlscAdministrativeArea).not.toHaveBeenCalled();
+    expect(getCity).not.toHaveBeenCalled();
+    expect(planValhallaRoute).not.toHaveBeenCalled();
+  });
+
+  it("retains the city failure when both city and the planner fail", async () => {
+    const city = deferred<TaiwanCityEn | null>();
+    const cityError = new Error("city unavailable");
+    vi.mocked(getCity).mockReturnValue(city.promise);
+    vi.mocked(planValhallaRoute).mockRejectedValue(
+      new Error("planner unavailable"),
+    );
+    const pending = planAccessibleRouteFromRequest(driveRequest);
+    const rejected = expect(pending).rejects.toBe(cityError);
+    await vi.waitFor(() => expect(getCity).toHaveBeenCalled());
+    city.reject(cityError);
+    await rejected;
+  });
+
+  it("keeps departure-time classification after city lookup at the future/past boundary", async () => {
+    const city = deferred<TaiwanCityEn | null>();
+    vi.mocked(getCity).mockReturnValue(city.promise);
+    const pending = planAccessibleRouteFromRequest({
+      ...driveRequest,
+      departureTime: new Date(FIXTURE_NOW + 500).toISOString(),
+    });
+    await vi.waitFor(() => expect(getCity).toHaveBeenCalled());
+    expect(planValhallaRoute).not.toHaveBeenCalled();
+    vi.setSystemTime(FIXTURE_NOW + 1000);
+    city.resolve(TaiwanCityEn.Taipei);
+    await pending;
+    expect(planValhallaRoute).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ departureTime: undefined }),
+    );
+  });
+});
