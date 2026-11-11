@@ -888,6 +888,8 @@ async function enrichTopRoutes(
     deriveHighlightMessages,
     enrichLegIndoor,
   } = await import("./planners/route-a11y");
+  const { createStationAccessLookup } = await import("./planners/indoor-graph");
+  const lookup = createStationAccessLookup();
 
   const originCoords: [number, number] = [origin.lng, origin.lat];
   const destCoords: [number, number] = [destination.lng, destination.lat];
@@ -941,6 +943,7 @@ async function enrichTopRoutes(
               boardCoords,
               alightCoords,
               mode,
+              lookup,
             );
           }
           return undefined;

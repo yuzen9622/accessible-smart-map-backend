@@ -509,3 +509,18 @@ export async function getStationAccess(
     return null;
   }
 }
+
+export function createStationAccessLookup(): typeof getStationAccess {
+  const pending = new Map<string, ReturnType<typeof getStationAccess>>();
+  return async (...args: Parameters<typeof getStationAccess>) => {
+    const key = JSON.stringify(args);
+    let result = pending.get(key);
+    if (!result) {
+      result = getStationAccess(...args).finally(() => {
+        pending.delete(key);
+      });
+      pending.set(key, result);
+    }
+    return structuredClone(await result);
+  };
+}

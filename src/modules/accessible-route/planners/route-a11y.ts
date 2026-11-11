@@ -312,17 +312,14 @@ export async function enrichLegIndoor(
   boardCoords: [number, number],
   alightCoords: [number, number],
   mode: AccessibilityMode = "wheelchair",
+  lookup: typeof getStationAccess = getStationAccess,
 ): Promise<void> {
   const boardName = leg.departureStation;
   const alightName = leg.arrivalStation;
 
   const [board, alight] = await Promise.all([
-    getStationAccess(
-      { name: boardName, coords: boardCoords },
-      originCoords,
-      mode,
-    ),
-    getStationAccess(
+    lookup({ name: boardName, coords: boardCoords }, originCoords, mode),
+    lookup(
       { name: alightName, coords: alightCoords },
       destCoords,
       mode,
