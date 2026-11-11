@@ -50,6 +50,7 @@ import { createLineRouter } from "./modules/line";
 import { createVoiceRouter } from "./modules/voice";
 import { generateOpenAPIDocument } from "./openapi/document";
 import { getTransitDataFreshness } from "./modules/accessible-route/planners/otp-freshness";
+import { preloadOtpSidewalkIndex } from "./adapters/otp-sidewalk-index.adapter";
 
 // Composition root: the planner declares a route-intent port and the `ai`
 // module supplies the implementation, so the dependency stays one-way
@@ -59,6 +60,7 @@ registerRouteIntentParser(parseRouteIntent);
 // planner declares a venue-arrival port and `venue` implements it.
 registerVenueArrivalPlanner(venueArrivalPlanner);
 
+preloadOtpSidewalkIndex();
 const app: Express = express();
 
 // Number of reverse proxies in front of the app. Rate limiters key on req.ip,

@@ -1,5 +1,12 @@
 import { readFile, stat } from "node:fs/promises";
-import { createReadStream } from "node:fs";
+import {
+  closeSync,
+  createReadStream,
+  openSync,
+  readFileSync,
+  readSync,
+  statSync,
+} from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { z } from "zod";
@@ -7,6 +14,7 @@ import type { AccessibleRoute, WalkLeg } from "../types/route";
 import { haversineCoords } from "../utils/geo";
 
 const CELL = 0.001;
+const MAX_INDEX_BYTES = 256 * 1024 * 1024;
 const MAX_OFFSET_M = 1.75;
 // OTP encodes legGeometry at 1e-5°, so each vertex can sit ~0.75 m off its OSM node.
 const POLYLINE_TOLERANCE_M = 0.8;
@@ -342,9 +350,69 @@ export function matchSidewalkSegments(
   return result;
 }
 
+function verifiedIndex(
+  parsed: z.infer<typeof OtpSidewalkIndexSchema>,
+  digest: string,
+): LoadedIndex {
+  if (digest !== parsed.sourcePbfSha256)
+    throw new Error("Index source differs from the deployed PBF");
+  return {
+    segments: buildIndex(parsed.segments),
+    crossings: buildCrossingIndex(parsed.version === 2 ? parsed.crossings : []),
+  };
+}
+
+function unavailableIndex(error: unknown): null {
+  console.warn(
+    "[otp-sidewalk-index] unavailable; sidewalk coverage remains unknown",
+    error instanceof z.ZodError
+      ? "invalid index shape"
+      : error instanceof Error
+        ? error.message.slice(0, 200)
+        : "invalid index",
+  );
+  return null;
+}
+
+/** Complete the initial integrity check before the application can listen. */
+export function preloadOtpSidewalkIndex(): void {
+  const file = process.env.OTP_SIDEWALK_INDEX_PATH;
+  if (!file || cache) return;
+  try {
+    const indexStat = statSync(file);
+    if (indexStat.size > MAX_INDEX_BYTES)
+      throw new Error("Index exceeds size limit");
+    const parsed = OtpSidewalkIndexSchema.parse(
+      JSON.parse(readFileSync(file, "utf8")),
+    );
+    const pbfFile = join(dirname(file), "taiwan-otp.osm.pbf");
+    const pbfStat = statSync(pbfFile);
+    const hash = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    const descriptor = openSync(pbfFile, "r");
+    try {
+      let bytes: number;
+      while (
+        (bytes = readSync(descriptor, buffer, 0, buffer.length, null)) > 0
+      ) {
+        hash.update(buffer.subarray(0, bytes));
+      }
+    } finally {
+      closeSync(descriptor);
+    }
+    const index = verifiedIndex(parsed, hash.digest("hex"));
+    cache = {
+      key: `${indexStat.mtimeMs}:${indexStat.size}:${pbfStat.mtimeMs}:${pbfStat.size}`,
+      index: Promise.resolve(index),
+    };
+  } catch (error) {
+    unavailableIndex(error);
+  }
+}
+
 async function loadIndex(file: string): Promise<LoadedIndex | null> {
   try {
-    if ((await stat(file)).size > 256 * 1024 * 1024)
+    if ((await stat(file)).size > MAX_INDEX_BYTES)
       throw new Error("Index exceeds size limit");
     const parsed = OtpSidewalkIndexSchema.parse(
       JSON.parse(await readFile(file, "utf8")),
@@ -354,24 +422,9 @@ async function loadIndex(file: string): Promise<LoadedIndex | null> {
       join(dirname(file), "taiwan-otp.osm.pbf"),
     ))
       hash.update(chunk);
-    if (hash.digest("hex") !== parsed.sourcePbfSha256)
-      throw new Error("Index source differs from the deployed PBF");
-    return {
-      segments: buildIndex(parsed.segments),
-      crossings: buildCrossingIndex(
-        parsed.version === 2 ? parsed.crossings : [],
-      ),
-    };
+    return verifiedIndex(parsed, hash.digest("hex"));
   } catch (error) {
-    console.warn(
-      "[otp-sidewalk-index] unavailable; sidewalk coverage remains unknown",
-      error instanceof z.ZodError
-        ? "invalid index shape"
-        : error instanceof Error
-          ? error.message.slice(0, 200)
-          : "invalid index",
-    );
-    return null;
+    return unavailableIndex(error);
   }
 }
 
