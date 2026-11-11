@@ -121,7 +121,15 @@ describe("road navigation metadata", () => {
       const leg: DriveLeg = {
         ...roadLeg,
         maneuvers: roadLeg.maneuvers!.map((m, i) =>
-          i === 1 ? { ...m, lanes: lanes.map((l) => ({ ...l })) } : m,
+          i === 1
+            ? {
+                ...m,
+                lanes: lanes.map((l) => ({
+                  ...l,
+                  directions: [...l.directions],
+                })),
+              }
+            : m,
         ),
         steps: roadLeg.steps!.map((step) => ({ ...step, instruction: cached })),
       };
