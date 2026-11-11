@@ -2025,6 +2025,7 @@ async function refineTransitWalkLegsWithCsr(
   deadline?: number,
 ): Promise<void> {
   if (getRoutingConfig().walkPlanner !== "csr") return;
+  const inFlight = new Map<string, Promise<CsrWalkResult>>();
   const outcome = {
     replanned: 0,
     keptSameStation: 0,
@@ -2066,14 +2067,19 @@ async function refineTransitWalkLegsWithCsr(
         const lastPolyline = walks[walks.length - 1].polyline;
         const last = lastPolyline[lastPolyline.length - 1];
         if (!first || !last) continue;
-        const csr = await planCsrWalkForRequest(
-          [
-            { lat: first[1], lng: first[0] },
-            { lat: last[1], lng: last[0] },
-          ],
-          mode,
-          avoidStairs,
-        );
+        const points = [
+          { lat: first[1], lng: first[0] },
+          { lat: last[1], lng: last[0] },
+        ];
+        const key = JSON.stringify(points);
+        let pending = inFlight.get(key);
+        if (!pending) {
+          pending = planCsrWalkForRequest(points, mode, avoidStairs).finally(
+            () => inFlight.delete(key),
+          );
+          inFlight.set(key, pending);
+        }
+        const csr = structuredClone(await pending);
         if (csr.status !== "ok") {
           outcome.keptNoCsrRoute++;
           continue;

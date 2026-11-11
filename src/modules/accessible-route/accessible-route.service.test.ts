@@ -3737,6 +3737,166 @@ describe("planAccessibleRouteFromRequest — 台北市公車與大眾運輸路�
         delete process.env.ROUTE_WALK_PLANNER;
       }
     });
+    describe("in-flight CSR spans", () => {
+      type CsrResult = Awaited<ReturnType<typeof planCsrWalkRoute>>;
+      beforeEach(async () => {
+        const actual = await vi.importActual<
+          typeof import("./planners/pedestrian-a11y/csr-walk-planner")
+        >("./planners/pedestrian-a11y/csr-walk-planner");
+        const spy = vi
+          .spyOn(actual, "planCsrWalkRoute")
+          .mockImplementation((...args) => planCsrWalkRoute(...args));
+        return () => spy.mockRestore();
+      });
+      const candidates = () =>
+        [0, 1].map((index) => {
+          const route = scheduledBusRoute();
+          route.routeId = `in-flight-${index}`;
+          route.legs[1].routeName = `Bus ${index}`;
+          return route;
+        });
+      const deferred = <T>() => {
+        let resolve!: (value: T) => void;
+        const promise = new Promise<T>((done) => {
+          resolve = done;
+        });
+        return { promise, resolve };
+      };
+      const busRoutes = (
+        res: Awaited<ReturnType<typeof planAccessibleRouteFromRequest>>,
+      ) =>
+        okData(res).routes.filter((route) =>
+          route.legs.some((leg) => leg.type === "BUS"),
+        );
+
+      it("shares overlapping identical spans but gives candidates independent nested results", async () => {
+        vi.mocked(planOtpRouteDetailed).mockResolvedValue(
+          otpTransitOk(candidates()),
+        );
+        const gate = deferred<CsrResult>();
+        const entered = deferred<void>();
+        mockCsrWalks(300);
+        const fallback = vi.mocked(planCsrWalkRoute).getMockImplementation()!;
+        vi.mocked(planCsrWalkRoute).mockImplementation((points, options) => {
+          if (!sameAs(points[0], egressStart)) return fallback(points, options);
+          entered.resolve();
+          return gate.promise;
+        });
+        const pending = planAccessibleRouteFromRequest(request);
+        await entered.promise;
+        await vi.dynamicImportSettled();
+        const plan = csrWalkPlan(egressStart, [121.5175, 25.048]);
+        plan.durationS = 300;
+        gate.resolve({ status: "ok", plans: [plan] });
+        const res = await pending;
+        expect(
+          vi
+            .mocked(planCsrWalkRoute)
+            .mock.calls.filter(([points]) => sameAs(points[0], egressStart)),
+        ).toHaveLength(1);
+        const routes = busRoutes(res);
+        expect(routes).toHaveLength(2);
+        const left = routes[0].legs.at(-1)! as WalkLeg;
+        const right = routes[1].legs.at(-1)! as WalkLeg;
+        expect(left).toEqual(right);
+        expect(left).not.toBe(right);
+        expect(left.polyline).not.toBe(right.polyline);
+        expect(left.polyline[0]).not.toBe(right.polyline[0]);
+        expect(left.steps).not.toBe(right.steps);
+        expect(left.steps![0]).not.toBe(right.steps![0]);
+        left.polyline[0][0] = 0;
+        expect(right.polyline[0][0]).toBe(egressStart[0]);
+        expect(plan.polyline[0][0]).toBe(egressStart[0]);
+      });
+
+      it("does not merge endpoints that differ below rounded-coordinate precision", async () => {
+        const routes = candidates();
+        routes[1].legs[2].polyline[0][0] += 1e-10;
+        vi.mocked(planOtpRouteDetailed).mockResolvedValue(otpTransitOk(routes));
+        const gate = deferred<CsrResult>();
+        const entered = deferred<void>();
+        mockCsrWalks(300);
+        const fallback = vi.mocked(planCsrWalkRoute).getMockImplementation()!;
+        vi.mocked(planCsrWalkRoute).mockImplementation((points, options) => {
+          if (!sameAs(points[0], egressStart)) return fallback(points, options);
+          entered.resolve();
+          return gate.promise;
+        });
+        const pending = planAccessibleRouteFromRequest(request);
+        await entered.promise;
+        await vi.dynamicImportSettled();
+        gate.resolve({ status: "outside_coverage" });
+        expect((await pending).ok).toBe(true);
+        expect(
+          vi
+            .mocked(planCsrWalkRoute)
+            .mock.calls.filter(([points]) => sameAs(points[0], egressStart)),
+        ).toHaveLength(2);
+      });
+
+      it("replans a settled span in a later phase and in the next complete request", async () => {
+        vi.mocked(planOtpRouteDetailed).mockImplementation(async () => {
+          const route = scheduledBusRoute();
+          route.legs[0].polyline = structuredClone(route.legs[2].polyline);
+          return otpTransitOk([route]);
+        });
+        mockCsrWalks(300);
+        for (const expected of [2, 4]) {
+          expect((await planAccessibleRouteFromRequest(request)).ok).toBe(true);
+          expect(
+            vi
+              .mocked(planCsrWalkRoute)
+              .mock.calls.filter(([points]) => sameAs(points[0], egressStart)),
+          ).toHaveLength(expected);
+        }
+      });
+
+      it("shares unavailable work without fallback, keeps OTP legs and retries after settlement", async () => {
+        vi.mocked(planOtpRouteDetailed).mockImplementation(async () =>
+          otpTransitOk(candidates()),
+        );
+        const gate = deferred<CsrResult>();
+        const entered = deferred<void>();
+        vi.mocked(planCsrWalkRoute).mockImplementation((points) => {
+          if (!sameAs(points[0], egressStart))
+            return Promise.resolve({ status: "outside_coverage" });
+          entered.resolve();
+          return gate.promise;
+        });
+        const pending = planAccessibleRouteFromRequest(request);
+        await entered.promise;
+        await vi.dynamicImportSettled();
+        gate.resolve({
+          status: "unavailable",
+          reason: "temporary graph failure",
+        });
+        const res = await pending;
+        expect(
+          vi
+            .mocked(planCsrWalkRoute)
+            .mock.calls.filter(([points]) => sameAs(points[0], egressStart)),
+        ).toHaveLength(1);
+        expect(busRoutes(res)).toHaveLength(2);
+        for (const route of busRoutes(res)) {
+          expect(
+            route.legs
+              .filter((leg) => leg.type === "WALK")
+              .map((leg) => leg.distanceM),
+          ).toEqual([150, 250]);
+          expect(route.degraded).toBeUndefined();
+        }
+        expect(planOtpWalkDetailed).not.toHaveBeenCalled();
+        mockCsrWalks(300);
+        const retried = await planAccessibleRouteFromRequest(request);
+        expect(walkDistances(retried)).toEqual([800, 800]);
+        expect(
+          vi
+            .mocked(planCsrWalkRoute)
+            .mock.calls.filter(([points]) => sameAs(points[0], egressStart))
+            .length,
+        ).toBeGreaterThan(1);
+      });
+    });
   });
 
   describe("short trips: walking competes inside the transit answer", () => {
